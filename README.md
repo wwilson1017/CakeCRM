@@ -42,4 +42,6 @@ there first, get daily production use, and flow here through an AI-assisted sync
 
 ## License
 
-TBD before public launch (AGPL-3.0 planned).
+[AGPL-3.0](LICENSE) — free to use, self-host, and modify. If you host a modified
+version as a service, you share your modifications. Contributions are accepted
+under the DCO (`Signed-off-by`).
