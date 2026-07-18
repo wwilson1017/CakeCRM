@@ -1,0 +1,62 @@
+@import "tailwindcss";
+
+/*
+ * CakeCRM — neutral light theme.
+ * The accent is driven by --brand-color so the branding settings
+ * (logo / company name / accent color) restyle the whole app.
+ */
+
+@theme {
+  --color-ck-bg: #FAF9F7;
+  --color-ck-card: #FFFFFF;
+  --color-ck-raised: #F3F1EE;
+
+  --color-ck-line: #E7E4DF;
+  --color-ck-line-strong: #D8D4CD;
+
+  --color-ck-ink: #1F2328;
+  --color-ck-ink-mute: #5A6069;
+  --color-ck-ink-soft: #878D96;
+
+  --color-ck-accent: var(--brand-color, #B03A52);
+  --color-ck-accent-soft: var(--brand-color-soft, rgba(176, 58, 82, 0.09));
+  --color-ck-accent-ink: #FFFFFF;
+
+  --color-ck-green: #2E7D4F;
+  --color-ck-amber: #B07C2E;
+  --color-ck-red: #C24141;
+
+  --font-display: 'Fraunces', Georgia, serif;
+  --font-sans: 'Inter', system-ui, sans-serif;
+}
+
+:root {
+  --brand-color: #B03A52;
+  --brand-color-soft: rgba(176, 58, 82, 0.09);
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background: #FAF9F7;
+  color: #1F2328;
+}
+
+button, input, select, textarea, option {
+  font-family: inherit;
+}
+
+#root {
+  min-height: 100svh;
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #D8D4CD; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #C5C0B8; }
+
+input:focus, textarea:focus, select:focus {
+  border-color: var(--brand-color) !important;
+  outline: none;
+}

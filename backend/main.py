@@ -1,0 +1,179 @@
+"""
+CakeCRM — FastAPI entry point.
+
+Mounts routers, initializes databases, sets up CORS, and serves the built
+frontend in production. The CRM core mounts here as it lands (issue #3);
+this shell carries auth, 2FA, branding, and health.
+"""
+
+import contextvars
+import logging
+import os
+import uuid as _uuid
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from pathlib import Path
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+
+from core.config import settings
+from core.storage import atomic_write
+from core.auth import router as auth_router
+from core.auth_2fa import router as auth_2fa_router
+from branding.router import router as branding_router
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
+VERSION = "0.1.0"
+
+# Request-ID context variable for log tracing
+request_id_ctx: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "request_id", default="",
+)
+
+
+# ---------------------------------------------------------------------------
+# Per-DB safe initialization
+# ---------------------------------------------------------------------------
+
+db_statuses: dict[str, str] = {}
+
+
+def _safe_init(name: str, fn, *, critical: bool = False) -> None:
+    """Initialize a database with error isolation and status tracking."""
+    try:
+        result = fn()
+        status = result.get("status", "ok") if isinstance(result, dict) else "ok"
+        db_statuses[name] = status
+        if status not in ("ok", "fresh"):
+            logger.warning("DB %s initialized with status: %s", name, status)
+    except Exception:
+        logger.exception("DB init failed: %s", name)
+        db_statuses[name] = "error"
+        if critical:
+            raise
+        return
+
+    if critical and db_statuses[name] not in ("ok", "fresh"):
+        raise RuntimeError(f"Critical DB {name} init returned: {db_statuses[name]}")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize required directories and databases on startup."""
+    data_root = Path(__file__).resolve().parent / "data"
+    for subdir in ("branding",):
+        (data_root / subdir).mkdir(parents=True, exist_ok=True)
+
+    from core.auth_2fa import init_db as init_auth_2fa_db
+    _safe_init("auth_2fa", init_auth_2fa_db, critical=True)
+
+    app.state.db_statuses = db_statuses
+
+    # ── Railway environment logging ─────────────────────────────────────────
+    if settings.is_railway:
+        from core.config import RAILWAY_PUBLIC_URL
+        logger.info("Running on Railway: %s", RAILWAY_PUBLIC_URL)
+    else:
+        logger.info("Running locally (no RAILWAY_PUBLIC_DOMAIN detected)")
+
+    if settings.jwt_secret_is_auto:
+        logger.warning(
+            "JWT_SECRET not set — using auto-generated secret. "
+            "Sessions will reset on redeploy. Set JWT_SECRET env var for persistent sessions."
+        )
+
+    if not os.environ.get("ENCRYPTION_KEY"):
+        logger.info(
+            "ENCRYPTION_KEY not set — will auto-generate and store in %s",
+            data_root / ".encryption-key",
+        )
+
+    # ── Volume health check ──────────────────────────────────────────────
+    volume_marker = data_root / ".volume-marker"
+    if volume_marker.exists():
+        logger.info("Persistent volume verified (marker file present)")
+    else:
+        atomic_write(volume_marker, f"cakecrm:{datetime.now(timezone.utc).isoformat()}")
+        if settings.is_railway:
+            logger.info(
+                "First boot — wrote volume marker to %s. "
+                "If this message appears on every deploy, your persistent volume may not be configured. "
+                "Mount a volume at /app/backend/data in Railway settings.",
+                volume_marker,
+            )
+
+    logger.info("CakeCRM backend started. Data dir: %s", data_root)
+    yield
+    logger.info("CakeCRM backend shutting down.")
+
+
+app = FastAPI(
+    title="CakeCRM",
+    description="Free, open-source, self-hostable CRM with an AI sales assistant built in",
+    version=VERSION,
+    lifespan=lifespan,
+)
+
+
+# ── Request-ID middleware ────────────────────────────────────────────────────
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    rid = _uuid.uuid4().hex[:12]
+    request_id_ctx.set(rid)
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = rid
+    return response
+
+
+# ── CORS ──────────────────────────────────────────────────────────────────────
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
+app.include_router(auth_router, prefix="/api")
+app.include_router(auth_2fa_router, prefix="/api", tags=["auth-2fa"])
+app.include_router(branding_router, prefix="/api/branding", tags=["branding"])
+
+
+# ── Health endpoints ──────────────────────────────────────────────────────────
+
+@app.get("/api/health")
+async def health(request: Request):
+    statuses = getattr(request.app.state, "db_statuses", {})
+    degraded = any(v not in ("ok", "fresh") for v in statuses.values())
+    return {"status": "degraded" if degraded else "ok", "version": VERSION, "databases": statuses}
+
+
+@app.get("/api/health/live")
+async def health_live():
+    return {"status": "ok"}
+
+
+# ── Static files (production frontend build) ──────────────────────────────────
+# Assets served directly; every other non-API path falls back to index.html so
+# client-side routes (/login, /contacts/42) survive a hard refresh.
+
+_frontend_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if _frontend_dist.exists():
+    app.mount("/assets", StaticFiles(directory=str(_frontend_dist / "assets")), name="assets")
+
+    from fastapi.responses import FileResponse
+
+    @app.get("/{path:path}", include_in_schema=False)
+    async def spa_fallback(path: str):
+        candidate = (_frontend_dist / path).resolve()
+        if path and candidate.is_relative_to(_frontend_dist) and candidate.is_file():
+            return FileResponse(str(candidate))
+        return FileResponse(str(_frontend_dist / "index.html"))
