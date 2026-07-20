@@ -121,6 +121,59 @@ def install_deps():
     (VENV / "deps_installed").touch()
 
 
+def _database_url() -> str:
+    """Read DATABASE_URL from the environment or the .env file."""
+    if os.environ.get("DATABASE_URL"):
+        return os.environ["DATABASE_URL"]
+    if ENV_FILE.exists():
+        for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("DATABASE_URL="):
+                return line.split("=", 1)[1].strip().strip("'\"")
+    return "postgresql://cakecrm:cakecrm_dev@localhost:5432/cakecrm"
+
+
+def _postgres_reachable(url: str, timeout: float = 2.0) -> bool:
+    import socket
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 5432
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def ensure_postgres():
+    """Make sure PostgreSQL is reachable, starting docker compose if needed."""
+    import time
+
+    url = _database_url()
+    if _postgres_reachable(url):
+        print("  PostgreSQL is reachable.")
+        return
+
+    if shutil.which("docker"):
+        print("  PostgreSQL not reachable — starting docker compose...")
+        subprocess.run(["docker", "compose", "up", "-d"], cwd=str(ROOT), check=True)
+        for _ in range(30):
+            if _postgres_reachable(url):
+                print("  PostgreSQL is up.")
+                return
+            time.sleep(1)
+        print("Error: PostgreSQL did not become reachable after docker compose up.")
+        sys.exit(1)
+
+    print("Error: PostgreSQL is not reachable and Docker is not installed.")
+    print("CakeCRM requires PostgreSQL. Either:")
+    print("  - Install Docker Desktop (https://docker.com) and re-run: python run.py")
+    print("  - Or point DATABASE_URL in .env at an existing PostgreSQL server.")
+    sys.exit(1)
+
+
 def setup_frontend():
     if not (FRONTEND / "node_modules").exists():
         print("  Installing frontend dependencies...")
@@ -165,6 +218,9 @@ def main():
     print("\nSetting up Python...")
     setup_venv()
     install_deps()
+
+    print("\nChecking PostgreSQL...")
+    ensure_postgres()
 
     print("\nSetting up frontend...")
     setup_frontend()

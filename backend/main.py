@@ -1,9 +1,11 @@
 """
 CakeCRM — FastAPI entry point.
 
-Mounts routers, initializes databases, sets up CORS, and serves the built
-frontend in production. The CRM core mounts here as it lands (issue #3);
-this shell carries auth, 2FA, branding, and health.
+Mounts routers, initializes the Postgres pool and applies migrations, sets up
+CORS, and serves the built frontend in production. The CRM core mounts here
+as it lands (issue #3); this shell carries auth, 2FA, branding, and health.
+
+Postgres is mandatory — startup fails loudly without DATABASE_URL.
 """
 
 import contextvars
@@ -18,6 +20,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from core import postgres
 from core.config import settings
 from core.storage import atomic_write
 from core.auth import router as auth_router
@@ -35,43 +38,22 @@ request_id_ctx: contextvars.ContextVar[str] = contextvars.ContextVar(
 )
 
 
-# ---------------------------------------------------------------------------
-# Per-DB safe initialization
-# ---------------------------------------------------------------------------
-
-db_statuses: dict[str, str] = {}
-
-
-def _safe_init(name: str, fn, *, critical: bool = False) -> None:
-    """Initialize a database with error isolation and status tracking."""
-    try:
-        result = fn()
-        status = result.get("status", "ok") if isinstance(result, dict) else "ok"
-        db_statuses[name] = status
-        if status not in ("ok", "fresh"):
-            logger.warning("DB %s initialized with status: %s", name, status)
-    except Exception:
-        logger.exception("DB init failed: %s", name)
-        db_statuses[name] = "error"
-        if critical:
-            raise
-        return
-
-    if critical and db_statuses[name] not in ("ok", "fresh"):
-        raise RuntimeError(f"Critical DB {name} init returned: {db_statuses[name]}")
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize required directories and databases on startup."""
+    """Initialize directories, the Postgres pool, and migrations on startup."""
     data_root = Path(__file__).resolve().parent / "data"
     for subdir in ("branding",):
         (data_root / subdir).mkdir(parents=True, exist_ok=True)
 
-    from core.auth_2fa import init_db as init_auth_2fa_db
-    _safe_init("auth_2fa", init_auth_2fa_db, critical=True)
+    if not postgres.is_configured():
+        raise RuntimeError(
+            "DATABASE_URL is not set — CakeCRM requires PostgreSQL.\n"
+            "  Local:   docker compose up -d   (then use the DATABASE_URL from .env.example)\n"
+            "  Railway: add a PostgreSQL service and reference its DATABASE_URL variable."
+        )
 
-    app.state.db_statuses = db_statuses
+    postgres.init_pool()
+    postgres.run_migrations()
 
     # ── Railway environment logging ─────────────────────────────────────────
     if settings.is_railway:
@@ -108,6 +90,8 @@ async def lifespan(app: FastAPI):
 
     logger.info("CakeCRM backend started. Data dir: %s", data_root)
     yield
+
+    postgres.close_pool()
     logger.info("CakeCRM backend shutting down.")
 
 
@@ -150,10 +134,10 @@ app.include_router(branding_router, prefix="/api/branding", tags=["branding"])
 # ── Health endpoints ──────────────────────────────────────────────────────────
 
 @app.get("/api/health")
-async def health(request: Request):
-    statuses = getattr(request.app.state, "db_statuses", {})
-    degraded = any(v not in ("ok", "fresh") for v in statuses.values())
-    return {"status": "degraded" if degraded else "ok", "version": VERSION, "databases": statuses}
+async def health():
+    pg_status = postgres.health_check()
+    status = "ok" if pg_status == "ok" else "degraded"
+    return {"status": status, "version": VERSION, "databases": {"postgres": pg_status}}
 
 
 @app.get("/api/health/live")

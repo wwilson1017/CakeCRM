@@ -4,7 +4,10 @@ CakeCRM — Two-factor authentication (TOTP).
 Opt-in TOTP via authenticator apps (Google Authenticator, Authy, 1Password).
 Includes backup codes, trusted device cookies, and rate limiting.
 
-Database: data/auth.db (SQLite).
+Storage: Postgres (totp_config single-row table + trusted_devices), schema in
+backend/migrations/. State-changing checks (TOTP replay slot, backup-code
+consumption) run as SELECT ... FOR UPDATE + UPDATE in one transaction so two
+concurrent logins can't reuse the same code.
 """
 
 import base64
@@ -13,13 +16,10 @@ import io
 import json
 import logging
 import secrets
-import sqlite3
 import string
-import threading
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import pyotp
 import qrcode
@@ -30,15 +30,9 @@ from pydantic import BaseModel
 
 from core.auth import create_access_token, decode_access_token, get_current_user, verify_password
 from core.encryption import encrypt_value, decrypt_value
-from core.storage import safe_init_sqlite
+from core.postgres import get_connection, pg_execute, pg_fetchone, row_to_dict
 
 logger = logging.getLogger(__name__)
-
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-DB_PATH = DATA_DIR / "auth.db"
-
-_connection: sqlite3.Connection | None = None
-_write_lock = threading.Lock()
 
 TOTP_ISSUER = "CakeCRM"
 TRUST_COOKIE_NAME = "cakecrm_2fa_trust"
@@ -62,53 +56,10 @@ def _check_rate_limit(key: str, max_attempts: int, window_seconds: int) -> bool:
     return True
 
 
-# ── Database layer ───────────────────────────────────────────────────────────
-
-def _get_db() -> sqlite3.Connection:
-    if _connection is None:
-        raise RuntimeError("Auth 2FA DB not initialized — call init_db() first")
-    return _connection
-
-
-def _setup_connection() -> None:
-    global _connection
-    _connection = sqlite3.connect(str(DB_PATH), check_same_thread=False)
-    _connection.row_factory = sqlite3.Row
-    _connection.execute("PRAGMA journal_mode=WAL")
-    _connection.execute("PRAGMA foreign_keys=ON")
-    _connection.execute("PRAGMA busy_timeout=5000")
-    _connection.execute("PRAGMA synchronous=FULL")
-    _connection.execute("PRAGMA secure_delete=ON")
-
-    _connection.executescript("""
-        CREATE TABLE IF NOT EXISTS totp_config (
-            id           INTEGER PRIMARY KEY CHECK (id = 1),
-            enabled      INTEGER NOT NULL DEFAULT 0,
-            secret_enc   TEXT NOT NULL DEFAULT '',
-            backup_codes TEXT NOT NULL DEFAULT '[]',
-            last_used_at TEXT NOT NULL DEFAULT '',
-            created_at   TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS trusted_devices (
-            token_hash  TEXT PRIMARY KEY,
-            label       TEXT NOT NULL DEFAULT '',
-            expires_at  TEXT NOT NULL,
-            created_at  TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-    """)
-    _connection.commit()
-    logger.info("Auth 2FA DB initialized at %s", DB_PATH)
-
-
-def init_db() -> dict:
-    return safe_init_sqlite(DB_PATH, "auth.db", init_fn=_setup_connection)
-
+# ── Storage layer ────────────────────────────────────────────────────────────
 
 def get_totp_config() -> dict | None:
-    row = _get_db().execute("SELECT * FROM totp_config WHERE id = 1").fetchone()
-    return dict(row) if row else None
+    return pg_fetchone("SELECT * FROM totp_config WHERE id = 1")
 
 
 def is_2fa_enabled() -> bool:
@@ -117,53 +68,41 @@ def is_2fa_enabled() -> bool:
 
 
 def save_totp_config(secret_enc: str, backup_codes_json: str) -> None:
-    with _write_lock:
-        _get_db().execute(
-            """INSERT INTO totp_config (id, enabled, secret_enc, backup_codes, updated_at)
-               VALUES (1, 1, ?, ?, datetime('now'))
-               ON CONFLICT(id) DO UPDATE SET
-                   enabled = 1, secret_enc = excluded.secret_enc,
-                   backup_codes = excluded.backup_codes,
-                   updated_at = datetime('now')""",
-            (secret_enc, backup_codes_json),
-        )
-        _get_db().commit()
+    pg_execute(
+        """INSERT INTO totp_config (id, enabled, secret_enc, backup_codes, updated_at)
+           VALUES (1, TRUE, %s, %s, now())
+           ON CONFLICT (id) DO UPDATE SET
+               enabled = TRUE, secret_enc = excluded.secret_enc,
+               backup_codes = excluded.backup_codes,
+               updated_at = now()""",
+        (secret_enc, backup_codes_json),
+    )
 
 
 def disable_totp() -> None:
-    with _write_lock:
-        _get_db().execute(
-            """UPDATE totp_config SET enabled = 0, secret_enc = '', backup_codes = '[]',
-               last_used_at = '', updated_at = datetime('now') WHERE id = 1"""
-        )
-        _get_db().commit()
+    pg_execute(
+        """UPDATE totp_config SET enabled = FALSE, secret_enc = '', backup_codes = '[]',
+           last_used_at = '', updated_at = now() WHERE id = 1"""
+    )
     revoke_all_trusted_devices()
-
-
-def update_last_used(timestamp: str) -> None:
-    with _write_lock:
-        _get_db().execute(
-            "UPDATE totp_config SET last_used_at = ?, updated_at = datetime('now') WHERE id = 1",
-            (timestamp,),
-        )
-        _get_db().commit()
 
 
 def consume_backup_code(code: str) -> bool:
     normalized = code.strip().upper().replace("-", "").encode()
-    with _write_lock:
-        config = get_totp_config()
-        if not config:
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT backup_codes FROM totp_config WHERE id = 1 FOR UPDATE")
+        row = cur.fetchone()
+        if not row:
             return False
-        hashes: list[str] = json.loads(config["backup_codes"])
+        hashes: list[str] = json.loads(row[0])
         for i, h in enumerate(hashes):
             if _bcrypt.checkpw(normalized, h.encode()):
                 hashes.pop(i)
-                _get_db().execute(
-                    "UPDATE totp_config SET backup_codes = ?, updated_at = datetime('now') WHERE id = 1",
+                cur.execute(
+                    "UPDATE totp_config SET backup_codes = %s, updated_at = now() WHERE id = 1",
                     (json.dumps(hashes),),
                 )
-                _get_db().commit()
                 return True
     return False
 
@@ -174,40 +113,32 @@ def _hash_device_token(token: str) -> str:
 
 def add_trusted_device(token: str, label: str, expires_at: str) -> None:
     token_hash = _hash_device_token(token)
-    with _write_lock:
-        _get_db().execute(
-            "INSERT OR REPLACE INTO trusted_devices (token_hash, label, expires_at) VALUES (?, ?, ?)",
-            (token_hash, label, expires_at),
-        )
-        _get_db().commit()
+    pg_execute(
+        """INSERT INTO trusted_devices (token_hash, label, expires_at)
+           VALUES (%s, %s, %s)
+           ON CONFLICT (token_hash) DO UPDATE SET
+               label = excluded.label, expires_at = excluded.expires_at""",
+        (token_hash, label, expires_at),
+    )
 
 
 def is_device_trusted(token: str) -> bool:
     if not token:
         return False
     token_hash = _hash_device_token(token)
-    row = _get_db().execute(
-        "SELECT expires_at FROM trusted_devices WHERE token_hash = ?", (token_hash,)
-    ).fetchone()
-    if not row:
-        return False
-    expires = datetime.fromisoformat(row["expires_at"])
-    if expires.tzinfo is None:
-        expires = expires.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) < expires
+    row = pg_fetchone(
+        "SELECT 1 AS trusted FROM trusted_devices WHERE token_hash = %s AND expires_at > now()",
+        (token_hash,),
+    )
+    return row is not None
 
 
 def revoke_all_trusted_devices() -> None:
-    with _write_lock:
-        _get_db().execute("DELETE FROM trusted_devices")
-        _get_db().commit()
+    pg_execute("DELETE FROM trusted_devices")
 
 
 def cleanup_expired_devices() -> None:
-    now = datetime.now(timezone.utc).isoformat()
-    with _write_lock:
-        _get_db().execute("DELETE FROM trusted_devices WHERE expires_at < ?", (now,))
-        _get_db().commit()
+    pg_execute("DELETE FROM trusted_devices WHERE expires_at < now()")
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -235,9 +166,14 @@ def _generate_qr_data_uri(provisioning_uri: str) -> str:
 
 def verify_totp_code(code: str) -> bool:
     """Verify a TOTP code against the stored secret. Returns True on valid code."""
-    with _write_lock:
-        config = get_totp_config()
-        if not config or not config["secret_enc"]:
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM totp_config WHERE id = 1 FOR UPDATE")
+        row = cur.fetchone()
+        if row is None:
+            return False
+        config = row_to_dict(cur, row)
+        if not config["secret_enc"]:
             return False
 
         secret = decrypt_value(config["secret_enc"])
@@ -262,11 +198,10 @@ def verify_totp_code(code: str) -> bool:
         if config["last_used_at"] and int(config["last_used_at"]) >= matched_slot:
             return False
 
-        _get_db().execute(
-            "UPDATE totp_config SET last_used_at = ?, updated_at = datetime('now') WHERE id = 1",
+        cur.execute(
+            "UPDATE totp_config SET last_used_at = %s, updated_at = now() WHERE id = 1",
             (str(matched_slot),),
         )
-        _get_db().commit()
         return True
 
 
@@ -297,10 +232,10 @@ async def get_2fa_status(user: dict = Depends(get_current_user)):
         return {"enabled": False, "has_backup_codes": False, "trusted_device_count": 0}
 
     backup_hashes = json.loads(config["backup_codes"])
-    device_count = _get_db().execute(
-        "SELECT COUNT(*) as cnt FROM trusted_devices WHERE expires_at > ?",
-        (datetime.now(timezone.utc).isoformat(),),
-    ).fetchone()["cnt"]
+    device_row = pg_fetchone(
+        "SELECT COUNT(*) AS cnt FROM trusted_devices WHERE expires_at > now()"
+    )
+    device_count = device_row["cnt"] if device_row else 0
 
     return {
         "enabled": bool(config["enabled"]),
@@ -357,12 +292,10 @@ async def regenerate_backup_codes(body: PasswordConfirmRequest, user: dict = Dep
         raise HTTPException(status_code=400, detail="2FA is not enabled")
 
     plaintext_codes, hashed_codes = _generate_backup_codes()
-    with _write_lock:
-        _get_db().execute(
-            "UPDATE totp_config SET backup_codes = ?, updated_at = datetime('now') WHERE id = 1",
-            (json.dumps(hashed_codes),),
-        )
-        _get_db().commit()
+    pg_execute(
+        "UPDATE totp_config SET backup_codes = %s, updated_at = now() WHERE id = 1",
+        (json.dumps(hashed_codes),),
+    )
 
     return {"backup_codes": plaintext_codes}
 

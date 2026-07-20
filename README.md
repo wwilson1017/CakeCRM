@@ -16,8 +16,8 @@ that works your pipeline for you.
 - Contacts, companies, deals, and tasks with an activity timeline
 - Kanban pipeline with drag-and-drop stages and per-stage value totals
 - CSV import, custom fields, lead scoring, analytics dashboard
-- Single-binary simplicity: SQLite storage, one required env var, one-click Railway
-  deploy or `python run.py` locally
+- PostgreSQL storage — the Railway template provisions it automatically; locally
+  `python run.py` starts it via Docker Compose. Built to grow into multi-user
 
 **The assistant** (bring any AI API key):
 - Chats in a context-aware drawer inside the CRM — it knows which deal or contact

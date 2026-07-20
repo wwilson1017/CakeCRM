@@ -5,8 +5,9 @@
 Free, open-source, self-hostable CRM with a built-in AI sales assistant. Seeded from
 Chatty's product shell and agent engine; CRM features ported from the CAKE OS CRM;
 assistant capability bar is Casey (CAKE OS's sales agent). Single-user for v1
-(multi-user/seats is the headline roadmap item). SQLite, FastAPI, React/Vite.
-Deploy targets: `python run.py` locally, Railway one-click in the cloud.
+(multi-user/seats is the headline roadmap item). PostgreSQL, FastAPI, React/Vite.
+Deploy targets: `python run.py` locally (Postgres via Docker Compose), Railway
+one-click in the cloud (the template provisions a PostgreSQL service).
 
 - **Repo**: `wwilson1017/CakeCRM`, default branch `main`. **Private until launch.**
 - **Local convention (Will's machine)**: this repo lives at `~/ai/CakeCRM`.
@@ -33,15 +34,26 @@ Deploy targets: `python run.py` locally, Railway one-click in the cloud.
   Together). Never call a provider SDK directly from feature code. Cheap background
   AI work (touch counts, classification) uses the light tier via
   `resolve_tier_model()`.
-- **Keep deployment simple**: SQLite only — no Postgres, Redis, or external
-  services. `AUTH_PASSWORD` is the only required env var; `JWT_SECRET` and
-  `ENCRYPTION_KEY` auto-generate. API keys are entered in-app, encrypted at rest
-  (Fernet).
+- **One database: PostgreSQL, and it's mandatory** — the backend refuses to start
+  without `DATABASE_URL` (decided 2026-07-18; single engine, ready for multi-user
+  growth). Locally `docker compose up -d`; on Railway the template provisions
+  Postgres and injects `DATABASE_URL`. No Redis or other external services.
+  Required env vars: `AUTH_PASSWORD` + `DATABASE_URL`; `JWT_SECRET` and
+  `ENCRYPTION_KEY` auto-generate. Schema is owned by `backend/migrations/*.sql`,
+  applied automatically at startup in lexicographic order — name migrations
+  `YYYYMMDDHHMMSS_<name>.sql` (use `date +%Y%m%d%H%M%S`), never sequential
+  prefixes. Access Postgres through `core/postgres.py` helpers
+  (`pg_fetchall`/`pg_fetchone`/`pg_execute`/`get_connection`/`row_to_dict`).
+- **API keys are entered in-app, encrypted at rest** (Fernet; key from env →
+  OS keychain → file fallback) — never as env vars.
 
 ## Don't Do This
 
 - Never add an email-send tool or widen Gmail scopes/capabilities beyond read +
   create-draft (see above).
+- Never create runtime SQLite stores or ad-hoc schema — Postgres migrations own
+  the schema. When a check-then-write spans reads and updates, do it in one
+  transaction with `SELECT ... FOR UPDATE` (see `core/auth_2fa.py`).
 - Never commit TN Cheesecake internals: no real prospect/customer data, no TNC
   staff/product names, no internal hostnames or secrets. Ported prompts (Casey's)
   must be genericized. This repo goes public at launch and history is forever.
@@ -71,6 +83,7 @@ Deploy targets: `python run.py` locally, Railway one-click in the cloud.
 | CakeCRM area | Source |
 |---|---|
 | Product shell (run.py, auth, 2FA, encryption, config, Railway) | `chatty/backend/` + `chatty/run.py` |
+| Postgres pool + migration runner | `cake_os/backend/core/postgres.py` |
 | AI providers + pricing + setup wizard | `chatty/backend/core/providers/`, `chatty/frontend/src/setup/` |
 | CRM core (schema, router, tools, smart import) | `chatty/backend/integrations/crm_lite/`, `chatty/frontend/src/crm/` |
 | Assistant engine (chat loop, tools, memory, dreaming, heartbeat, reminders, notifications) | `chatty/backend/core/agents/` |
