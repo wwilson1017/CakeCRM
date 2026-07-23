@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Environment & secrets
+.env
+backend/.env
+
+# Runtime data (SQLite DBs, encryption key, branding uploads)
+backend/data/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# OS / editor
+.DS_Store
+*.swp

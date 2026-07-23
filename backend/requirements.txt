@@ -1,0 +1,11 @@
+fastapi==0.135.3
+psycopg2-binary==2.9.10
+uvicorn[standard]==0.42.0
+python-dotenv==1.2.2
+python-jose[cryptography]==3.5.0
+bcrypt==4.3.0
+cryptography==46.0.6
+keyring==25.7.0
+python-multipart==0.0.22
+pyotp==2.9.0
+qrcode[pil]==8.2
