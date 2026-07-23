@@ -135,3 +135,19 @@ def test_set_active_returns_persisted_model(monkeypatch, fake_conn):
     persisted = store.set_active("anthropic", "")
     assert persisted == "claude-opus-4-8"
     assert store.data["active_model"] == "claude-opus-4-8"
+
+
+def test_set_ollama_writes_local_profile(monkeypatch, fake_conn):
+    conn = fake_conn(monkeypatch, cred_mod, fetchone_results=[None], fetchall_results=[[]])
+    store = CredentialStore()
+    store.set_ollama("http://localhost:11434", model="llama3.1")
+    writes = [(s, p) for (s, p) in conn.executed if "ai_providers" in s]
+    assert writes, "expected an ai_providers UPSERT"
+    sql, params = writes[-1]
+    assert "ollama_local" in sql            # auth_type literal in the UPSERT
+    assert params == ("http://localhost:11434",)  # base_url is the only bound param (no key)
+    assert any("ai_settings" in s for s, _ in conn.executed)
+    assert store.data["profiles"]["ollama:default"] == {
+        "type": "ollama_local", "base_url": "http://localhost:11434"}
+    assert store.data["active_provider"] == "ollama"
+    assert store.data["active_model"] == "llama3.1"

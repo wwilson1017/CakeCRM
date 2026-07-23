@@ -62,3 +62,22 @@ def test_derive_tier_labels_short_label():
     labels = tiers.derive_tier_labels("together", {"top": "Qwen/Qwen3.5-32B", "mid": "", "light": ""})
     # slugs are shortened to the last path segment
     assert labels["top"] == "Qwen3.5-32B"
+
+
+def test_infer_together_size_ranking():
+    got = tiers.infer_tier_models(
+        "together", ["Qwen/Qwen3.5-32B", "Qwen/Qwen3.5-14B", "Qwen/Qwen3.5-7B"]
+    )
+    assert got["top"] == "Qwen/Qwen3.5-32B"    # largest by param count
+    assert got["light"] == "Qwen/Qwen3.5-7B"   # smallest
+
+
+def test_infer_never_returns_a_model_absent_from_the_catalog():
+    # anthropic catalog with NO opus: the 'top' heuristic/hardcoded fallback would
+    # otherwise point at claude-opus-4-8 (absent) — the substitution block must
+    # keep every returned tier inside the live catalog.
+    catalog = ["claude-sonnet-4-6", "claude-haiku-4-5"]
+    got = tiers.infer_tier_models("anthropic", catalog)
+    for tier, model in got.items():
+        if model:
+            assert model in catalog, f"tier {tier}={model!r} is not in the live catalog"

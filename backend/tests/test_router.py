@@ -3,12 +3,16 @@ coupling), store + factory mocked. Covers status, connect, disconnect, active,
 models, tiers, unknown-provider 404s, malformed bodies, and the auth dependency."""
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from core.auth import get_current_user
 from providers import router as router_mod
-from providers.router import router as providers_router, setup_router
+from providers.router import (
+    _validated_ollama_url,
+    router as providers_router,
+    setup_router,
+)
 
 
 @pytest.fixture
@@ -181,3 +185,162 @@ def test_every_route_requires_auth():
             continue
         dep_names = [d.call.__name__ for d in dependant.dependencies]
         assert "get_current_user" in dep_names, f"{route.path} is missing the auth dependency"
+
+
+class FakeProvider:
+    def __init__(self, models):
+        self._models = models
+
+    async def list_models(self):
+        return list(self._models)
+
+
+class FakeOllama:
+    def __init__(self, reachable, models):
+        self._reachable = reachable
+        self._models = models
+
+    async def validate(self):
+        return self._reachable
+
+    async def list_models(self):
+        return list(self._models)
+
+
+def _patch_ollama(monkeypatch, *, reachable, models):
+    monkeypatch.setattr(
+        "providers.ollama_provider.OllamaProvider",
+        lambda base_url="http://localhost:11434": FakeOllama(reachable, models),
+    )
+
+
+# ── PUT /tiers ─────────────────────────────────────────────────────────────────
+
+def test_set_tiers_unknown_provider_400(client, monkeypatch):
+    _use_store(monkeypatch, FakeStore())
+    assert client.put("/api/providers/tiers",
+                      json={"provider": "nope", "models": {"top": "x"}}).status_code == 400
+
+
+def test_set_tiers_bad_tier_key_400(client, monkeypatch):
+    _use_store(monkeypatch, FakeStore())
+    assert client.put("/api/providers/tiers",
+                      json={"provider": "anthropic", "models": {"bogus": "x"}}).status_code == 400
+
+
+def test_set_tiers_provider_not_configured_400(client, monkeypatch):
+    _use_store(monkeypatch, FakeStore())
+    monkeypatch.setattr("providers.get_ai_provider", lambda *a, **k: None)
+    assert client.put("/api/providers/tiers",
+                      json={"provider": "anthropic", "models": {"top": "claude-opus-4-8"}}).status_code == 400
+
+
+def test_set_tiers_oversized_model_400(client, monkeypatch):
+    _use_store(monkeypatch, FakeStore())
+    monkeypatch.setattr("providers.get_ai_provider", lambda *a, **k: FakeProvider(["x" * 201]))
+    assert client.put("/api/providers/tiers",
+                      json={"provider": "anthropic", "models": {"top": "x" * 201}}).status_code == 400
+
+
+def test_set_tiers_model_not_in_catalog_400(client, monkeypatch):
+    _use_store(monkeypatch, FakeStore())
+    monkeypatch.setattr("providers.get_ai_provider", lambda *a, **k: FakeProvider(["claude-opus-4-8"]))
+    r = client.put("/api/providers/tiers", json={"provider": "anthropic", "models": {"top": "not-real"}})
+    assert r.status_code == 400
+    assert "not an available" in r.json()["detail"]
+
+
+def test_set_tiers_success(client, monkeypatch):
+    _use_store(monkeypatch, FakeStore())
+    monkeypatch.setattr("providers.get_ai_provider", lambda *a, **k: FakeProvider(["claude-opus-4-8"]))
+    import providers.model_tiers as mt
+    called = {}
+    monkeypatch.setattr(mt, "set_overrides", lambda p, m: called.update(provider=p, models=m))
+    monkeypatch.setattr(mt, "get_resolved", lambda p: {"top": "claude-opus-4-8", "mid": "", "light": ""})
+    r = client.put("/api/providers/tiers", json={"provider": "anthropic", "models": {"top": "claude-opus-4-8"}})
+    assert r.status_code == 200
+    assert called == {"provider": "anthropic", "models": {"top": "claude-opus-4-8"}}
+    assert r.json()["tier_models"]["top"] == "claude-opus-4-8"
+
+
+# ── SSRF guard (_validated_ollama_url) ─────────────────────────────────────────
+
+def test_validated_ollama_url_accepts_localhost():
+    assert _validated_ollama_url("http://localhost:11434") == "http://localhost:11434"
+
+
+def test_validated_ollama_url_accepts_lan():
+    assert _validated_ollama_url("http://192.168.1.50:11434") == "http://192.168.1.50:11434"
+
+
+@pytest.mark.parametrize("bad", [
+    "ftp://host:11434",       # non-http(s) scheme
+    "file:///etc/passwd",     # non-http(s) scheme
+    "http://",                # missing host
+    "http://user:pass@host",  # embedded credentials
+    "http://host:11434/#f",   # fragment
+    "   ",                    # empty
+])
+def test_validated_ollama_url_rejects(bad):
+    with pytest.raises(HTTPException) as exc:
+        _validated_ollama_url(bad)
+    assert exc.value.status_code == 400
+
+
+# ── Ollama connect / status ────────────────────────────────────────────────────
+
+def test_ollama_connect_unreachable_400(client, monkeypatch):
+    _use_store(monkeypatch, FakeStore())
+    _patch_ollama(monkeypatch, reachable=False, models=[])
+    assert client.post("/api/providers/ollama/connect",
+                       json={"base_url": "http://localhost:11434"}).status_code == 400
+
+
+def test_ollama_connect_no_models_400(client, monkeypatch):
+    _use_store(monkeypatch, FakeStore())
+    _patch_ollama(monkeypatch, reachable=True, models=[])
+    assert client.post("/api/providers/ollama/connect",
+                       json={"base_url": "http://localhost:11434"}).status_code == 400
+
+
+def test_ollama_connect_success(client, monkeypatch):
+    _use_store(monkeypatch, FakeStore())
+    _patch_ollama(monkeypatch, reachable=True, models=["llama3.1", "qwen3.5"])
+    r = client.post("/api/providers/ollama/connect",
+                    json={"base_url": "http://localhost:11434", "model": "qwen3.5"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True and body["model"] == "qwen3.5" and "llama3.1" in body["models"]
+
+
+def test_ollama_connect_ssrf_rejected_before_fetch(client, monkeypatch):
+    _use_store(monkeypatch, FakeStore())
+    assert client.post("/api/providers/ollama/connect",
+                       json={"base_url": "ftp://evil"}).status_code == 400
+
+
+def test_ollama_status(client, monkeypatch):
+    _use_store(monkeypatch, FakeStore())
+    _patch_ollama(monkeypatch, reachable=True, models=["llama3.1"])
+    body = client.get("/api/providers/ollama/status").json()
+    assert body["reachable"] is True and body["models"] == ["llama3.1"]
+
+
+# ── set_active: catalog reset (key provider) + Ollama installed-model pick ──────
+
+def test_active_resets_model_not_in_catalog(client, monkeypatch):
+    _use_store(monkeypatch, FakeStore(usable={"anthropic"}))
+    monkeypatch.setattr("providers.get_ai_provider", lambda *a, **k: FakeProvider(["claude-opus-4-8"]))
+    r = client.put("/api/providers/active", json={"provider": "anthropic", "model": "not-in-catalog"})
+    assert r.status_code == 200
+    # requested model isn't in the catalog → reset to "" → FakeStore derives a default
+    assert r.json()["model"] == "resolved-default"
+
+
+def test_active_ollama_picks_installed_model(client, monkeypatch):
+    # Regression for the "Set as active blanks Ollama's model" bug.
+    _use_store(monkeypatch, FakeStore(usable={"ollama"}))
+    monkeypatch.setattr("providers.get_ai_provider", lambda *a, **k: FakeProvider(["llama3.1", "qwen3.5"]))
+    r = client.put("/api/providers/active", json={"provider": "ollama", "model": ""})
+    assert r.status_code == 200
+    assert r.json()["model"] == "llama3.1"  # first installed model, never blanked to ""

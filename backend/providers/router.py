@@ -15,7 +15,7 @@ import logging
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from core.auth import get_current_user
 from core.config import settings
@@ -157,8 +157,8 @@ async def _materialize_inferred_tiers(provider_name: str, requested_model: str =
 # ── Connect a key-based provider (normalized across all four) ──────────────────
 
 class ConnectKeyRequest(BaseModel):
-    api_key: str
-    model: str = ""
+    api_key: str = Field(max_length=8192)   # bound the write to PG / Fernet / the SDK
+    model: str = Field(default="", max_length=256)
 
 
 @router.post("/{provider}/connect-key")
@@ -191,8 +191,8 @@ async def connect_key(provider: str, body: ConnectKeyRequest, user=Depends(get_c
 # ── Connect Ollama (local, keyless) ───────────────────────────────────────────
 
 class OllamaConnectRequest(BaseModel):
-    base_url: str = "http://localhost:11434"
-    model: str = ""
+    base_url: str = Field(default="http://localhost:11434", max_length=2048)
+    model: str = Field(default="", max_length=256)
 
 
 def _validated_ollama_url(raw: str) -> str:
@@ -268,7 +268,7 @@ async def disconnect_provider(provider: str, user=Depends(get_current_user)):
 
 class SetActiveRequest(BaseModel):
     provider: str
-    model: str
+    model: str = Field(max_length=256)
 
 
 @router.put("/active")
@@ -290,8 +290,15 @@ async def set_active(body: SetActiveRequest, user=Depends(get_current_user)):
         available = await p.list_models() if p else []
     except Exception:
         available = []
-    if model and available and model not in available:
-        model = ""  # not in this provider's catalog → let set_active resolve a default
+
+    if body.provider == "ollama":
+        # Ollama has no tier defaults — its "default" is whatever is locally
+        # installed. Pick an installed model rather than blanking active_model when
+        # the request omits one (or names one that isn't installed).
+        if available and model not in available:
+            model = available[0]
+    elif model and available and model not in available:
+        model = ""  # not in this key provider's catalog → set_active resolves the top-tier default
 
     persisted = store.set_active(body.provider, model)
     return {"ok": True, "provider": body.provider, "model": persisted}

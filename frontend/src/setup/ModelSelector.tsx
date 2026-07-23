@@ -17,7 +17,16 @@ interface Props {
 export function ModelSelector({ provider, currentModel, onChanged }: Props) {
   const [models, setModels] = useState<string[]>([]);
   const [selected, setSelected] = useState(currentModel);
+  const [syncedModel, setSyncedModel] = useState(currentModel);
   const [saving, setSaving] = useState(false);
+
+  // Reset the local selection when the active model changes underneath us (e.g.
+  // after another card's "Set as active" reload). React's sanctioned "adjust
+  // state during render" pattern — no effect, so no cascading-render.
+  if (currentModel !== syncedModel) {
+    setSyncedModel(currentModel);
+    setSelected(currentModel);
+  }
 
   useEffect(() => {
     api<ModelsResponse>(`/api/providers/${provider}/models`)

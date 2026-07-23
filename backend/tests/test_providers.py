@@ -184,3 +184,31 @@ def test_factory_override_provider(monkeypatch):
     })
     p = get_ai_provider(agent_provider="together")
     assert isinstance(p, TogetherProvider)
+    # overriding to a non-active provider must NOT carry the active provider's model
+    # id — it falls through to Together's own default (regression for the model leak).
+    assert p.model == "Qwen/Qwen3.5-7B"
+    assert p.model != "claude-opus-4-8"
+
+
+def test_ollama_is_tool_capable():
+    from providers.ollama_provider import _is_tool_capable
+    assert _is_tool_capable("llama3.1:8b") is True
+    assert _is_tool_capable("qwen3.5") is True
+    assert _is_tool_capable("gemma2") is False
+
+
+def test_google_clean_schema_strips_unsupported_fields():
+    from providers.google_provider import _clean_schema
+    schema = {
+        "type": "object",
+        "default": {},
+        "properties": {
+            "x": {"type": "string", "examples": ["a"]},
+            "y": {"type": "array", "items": {"type": "number", "additionalProperties": False}},
+        },
+    }
+    cleaned = _clean_schema(schema)
+    assert "default" not in cleaned
+    assert "examples" not in cleaned["properties"]["x"]
+    assert "additionalProperties" not in cleaned["properties"]["y"]["items"]
+    assert cleaned["type"] == "object"  # supported fields preserved

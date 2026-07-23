@@ -8,6 +8,7 @@ missing package or absent key never breaks import or startup.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncGenerator
@@ -15,6 +16,12 @@ from collections.abc import AsyncGenerator
 from providers.base import AIProvider
 
 logger = logging.getLogger(__name__)
+
+# google-generativeai 0.8.6 has no per-instance client — genai.configure() sets
+# PROCESS-GLOBAL state. Serialize configure()+call on the live paths so two
+# concurrent Google operations with different keys can't redirect each other's
+# in-flight request to the wrong key.
+_configure_lock = asyncio.Lock()
 
 # Fields not supported by Gemini's Schema protobuf
 _UNSUPPORTED_SCHEMA_FIELDS = {"default", "examples", "additionalProperties"}
@@ -249,10 +256,7 @@ class GoogleProvider(AIProvider):
         return messages + [assistant_msg, user_msg]
 
     async def _fetch_models(self) -> list[str]:
-        import asyncio
-
         import google.generativeai as genai
-        genai.configure(api_key=self.api_key)
 
         def _list() -> list[str]:
             out = []
@@ -264,7 +268,9 @@ class GoogleProvider(AIProvider):
                 out.append(name.removeprefix("models/"))
             return out
 
-        return await asyncio.to_thread(_list)
+        async with _configure_lock:
+            genai.configure(api_key=self.api_key)
+            return await asyncio.to_thread(_list)
 
     async def list_models(self) -> list[str]:
         from providers.model_listing import (
@@ -281,8 +287,9 @@ class GoogleProvider(AIProvider):
         """Listing models needs only a valid key — auth-oriented validation."""
         try:
             import google.generativeai as genai
-            genai.configure(api_key=self.api_key)
-            list(genai.list_models())
+            async with _configure_lock:
+                genai.configure(api_key=self.api_key)
+                await asyncio.to_thread(lambda: list(genai.list_models()))
             return True
         except Exception as e:
             logger.error("Google validation failed: %s", e)

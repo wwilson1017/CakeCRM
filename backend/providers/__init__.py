@@ -63,7 +63,11 @@ def get_ai_provider(
         else:
             raw_model = resolve_tier_model(provider_key, tier) or ""
     else:
-        raw_model = store.data.get("active_model", "")
+        # Inherit the global active_model ONLY when the resolved provider is the
+        # active one. An override to a different provider must fall through to that
+        # provider's own default (below), never carry the active provider's model id.
+        active_provider = store.data.get("active_provider", "")
+        raw_model = store.data.get("active_model", "") if provider_key == active_provider else ""
     model = raw_model if raw_model and raw_model != "default" else ""
 
     if profile_name.startswith("anthropic:"):
