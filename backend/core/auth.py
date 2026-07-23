@@ -15,9 +15,9 @@ import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Request, HTTPException, status
-from fastapi.responses import JSONResponse
 import bcrypt as _bcrypt
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from jose import JWTError, jwt
 from pydantic import BaseModel
 
@@ -125,7 +125,7 @@ async def login(body: LoginRequest, request: Request):
         )
 
     try:
-        from core.auth_2fa import is_2fa_enabled, is_device_trusted, TRUST_COOKIE_NAME
+        from core.auth_2fa import TRUST_COOKIE_NAME, is_2fa_enabled, is_device_trusted
         if is_2fa_enabled():
             trust_token = request.cookies.get(TRUST_COOKIE_NAME, "")
             if not is_device_trusted(trust_token):

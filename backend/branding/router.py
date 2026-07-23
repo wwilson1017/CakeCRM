@@ -10,11 +10,12 @@ GET  /api/branding/logo      — serve logo image
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from core.auth import get_current_user
+
 from . import storage
 
 logger = logging.getLogger(__name__)

@@ -21,15 +21,20 @@ import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
+import bcrypt as _bcrypt
 import pyotp
 import qrcode
-import bcrypt as _bcrypt
-from fastapi import APIRouter, Depends, Request, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from jose import JWTError
 from pydantic import BaseModel
 
-from core.auth import create_access_token, decode_access_token, get_current_user, verify_password
-from core.encryption import encrypt_value, decrypt_value
+from core.auth import (
+    create_access_token,
+    decode_access_token,
+    get_current_user,
+    verify_password,
+)
+from core.encryption import decrypt_value, encrypt_value
 from core.postgres import get_connection, pg_execute, pg_fetchone, row_to_dict
 
 logger = logging.getLogger(__name__)

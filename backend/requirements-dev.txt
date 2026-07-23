@@ -1,0 +1,6 @@
+# Development / CI toolchain for the CakeCRM backend.
+# Installed alongside requirements.txt in CI (.github/workflows/ci.yml) and
+# locally for linting and running tests. Runtime deps live in requirements.txt.
+
+ruff==0.15.11      # linter + import sorter; config in backend/ruff.toml
+pytest==9.1.1      # test runner; tests live in backend/tests/

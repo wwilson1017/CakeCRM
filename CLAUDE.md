@@ -78,6 +78,21 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 - Keep this CLAUDE.md updated in the same PR as any change to architecture,
   conventions, or the rules above.
 
+## CI & Contributing
+
+- **CI** (`.github/workflows/ci.yml`) runs on every PR to `main` and on `push` to
+  `main`, in three jobs: **backend** (`ruff check .` → import check → `python -m
+  pytest -q`, from `backend/`), **frontend** (`npm ci` → `npm run build` → `npm run
+  lint`), and **secret-scan** (gitleaks). Backend lint config is `backend/ruff.toml`
+  (select `F,E,W,I`; `E501` ignored); dev/CI tooling is pinned in
+  `backend/requirements-dev.txt`; tests live in `backend/tests/`. The import check
+  imports the app with no `DATABASE_URL` (the Postgres pool inits in the lifespan
+  handler), so CI needs no database.
+- **Contributing** — `CONTRIBUTING.md` covers dev setup and the checks. Contributions
+  are under the **DCO** (`Signed-off-by`, via `git commit -s`), not a CLA, licensed
+  AGPL-3.0 (inbound = outbound). DCO enforcement is the DCO GitHub App (installed once,
+  manually, on the repo). Issue/PR templates live in `.github/`.
+
 ## Source Map (where ported things come from)
 
 | CakeCRM area | Source |
