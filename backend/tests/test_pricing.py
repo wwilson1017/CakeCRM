@@ -20,6 +20,13 @@ def test_unknown_model_is_unpriced_not_zero_dollars():
     assert pricing.is_priced("totally-unknown-model") is False
 
 
+def test_prefix_match_requires_a_delimiter():
+    # A superstring that is NOT a dated snapshot must NOT inherit the base price
+    # (guards against e.g. "claude-sonnet-4-60" borrowing "claude-sonnet-4-6").
+    assert pricing.get_model_pricing("claude-sonnet-4-60") is None
+    assert pricing.is_priced("claude-sonnet-4-60") is False
+
+
 def test_priced_model_flagged_priced():
     assert pricing.is_priced("claude-sonnet-4-6") is True
 

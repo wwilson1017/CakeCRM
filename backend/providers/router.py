@@ -133,27 +133,6 @@ async def set_tiers(body: SetTiersRequest, user=Depends(get_current_user)):
     }
 
 
-# ── Inferred default model after a credential save ────────────────────────────
-
-async def _materialize_inferred_tiers(provider_name: str, requested_model: str = "") -> str:
-    """After credentials are saved: live-list models so the inferred tier defaults
-    get materialized into the tier store (list_models persists them on a live fetch),
-    giving the tier picker good defaults.
-
-    Deliberately does NOT change the user's active model — that was set by the
-    preceding store.set_*() to the requested/curated model. Returns the model to
-    echo in the response body.
-    """
-    from providers import get_ai_provider
-    try:
-        provider = get_ai_provider(agent_provider=provider_name)
-        if provider is not None:
-            await provider.list_models()  # live fetch -> materialize inferred tiers
-    except Exception as e:
-        logger.warning("Tier materialization for %s failed: %s", provider_name, e)
-    return requested_model or CredentialStore().data.get("active_model", "")
-
-
 # ── Connect a key-based provider (normalized across all four) ──────────────────
 
 class ConnectKeyRequest(BaseModel):
@@ -163,16 +142,19 @@ class ConnectKeyRequest(BaseModel):
 
 @router.post("/{provider}/connect-key")
 async def connect_key(provider: str, body: ConnectKeyRequest, user=Depends(get_current_user)):
-    """Validate and store an API key for a key-based provider, then materialize
-    inferred tier defaults. Validation is inline (there is no separate test route)."""
+    """Validate and store an API key for a key-based provider. Validation is inline
+    (no separate test route). The NEW key's live catalog is fetched — warming the
+    model cache and materializing inferred tier defaults — and the active model is
+    reconciled against it so a key with different entitlements can never leave
+    active_model pointing at a model it can't actually access."""
     if provider not in KEY_PROVIDERS:
         raise HTTPException(status_code=404, detail="Unknown provider")
     api_key = body.api_key.strip()
     if not api_key:
         raise HTTPException(status_code=400, detail="API key is required")
 
-    model = body.model or DEFAULT_MODELS[provider]
-    prov = _make_key_provider(provider, api_key, model)
+    requested = body.model.strip()
+    prov = _make_key_provider(provider, api_key, requested or DEFAULT_MODELS[provider])
     if not await prov.validate():
         raise HTTPException(
             status_code=400,
@@ -182,10 +164,31 @@ async def connect_key(provider: str, body: ConnectKeyRequest, user=Depends(get_c
             ),
         )
 
+    # Live catalog for THIS key (also materializes inferred tiers via list_models).
+    try:
+        catalog = await prov.list_models()
+    except Exception as e:
+        logger.warning("Model listing after connect for %s failed: %s", provider, e)
+        catalog = []
+    if requested and catalog and requested not in catalog:
+        raise HTTPException(
+            status_code=400,
+            detail=f"'{requested}' is not an available {DISPLAY_NAMES[provider]} model",
+        )
+
     store = CredentialStore()
-    store.set_api_key(provider, api_key, model=body.model or None)
-    resolved = await _materialize_inferred_tiers(provider, body.model)
-    return {"ok": True, "provider": provider, "model": resolved}
+    store.set_api_key(provider, api_key, model=requested or None)
+
+    active_model = store.data.get("active_model", "")
+    if catalog and active_model not in catalog:
+        # The stale/default resolution landed outside this key's catalog — pin to
+        # the freshly-inferred top tier, else the first available model.
+        from providers.tiers import resolve_tier_model
+        active_model = resolve_tier_model(provider, "top") or ""
+        if active_model not in catalog:
+            active_model = catalog[0]
+        store.set_active_model(active_model)
+    return {"ok": True, "provider": provider, "model": active_model}
 
 
 # ── Connect Ollama (local, keyless) ───────────────────────────────────────────
@@ -197,9 +200,14 @@ class OllamaConnectRequest(BaseModel):
 
 def _validated_ollama_url(raw: str) -> str:
     """Validate a user-supplied Ollama base URL before the server fetches it (SSRF
-    guard). Local/LAN targets are intentionally ALLOWED — a self-hosted Ollama on
-    localhost or the LAN is the legitimate use case — but the scheme must be
-    http(s), the host must be present, and credentials/fragments are rejected."""
+    guard). Constrained to an ORIGIN (scheme://host[:port]) with an http(s) scheme
+    and no credentials/fragment/path/query — so a crafted path or query can't
+    redirect the server's ``{base_url}/api/tags`` fetch to an arbitrary endpoint.
+
+    Threat model: CakeCRM is single-tenant, admin-global — the one authenticated
+    user owns the self-hosted box, so localhost/LAN targets (where Ollama actually
+    runs) are intentionally ALLOWED; this guard blocks scheme/credential/path
+    abuse, not owner-reachable hosts."""
     url = (raw or "").strip()
     if not url:
         raise HTTPException(status_code=400, detail="Ollama base URL is required")
@@ -212,6 +220,10 @@ def _validated_ollama_url(raw: str) -> str:
         raise HTTPException(status_code=400, detail="Ollama base URL must not contain credentials")
     if parsed.fragment:
         raise HTTPException(status_code=400, detail="Ollama base URL must not contain a fragment")
+    if parsed.path not in ("", "/"):
+        raise HTTPException(status_code=400, detail="Ollama base URL must be an origin (no path)")
+    if parsed.query:
+        raise HTTPException(status_code=400, detail="Ollama base URL must not contain a query string")
     return url
 
 
@@ -293,10 +305,17 @@ async def set_active(body: SetActiveRequest, user=Depends(get_current_user)):
 
     if body.provider == "ollama":
         # Ollama has no tier defaults — its "default" is whatever is locally
-        # installed. Pick an installed model rather than blanking active_model when
-        # the request omits one (or names one that isn't installed).
-        if available and model not in available:
-            model = available[0]
+        # installed. Pick an installed model rather than blanking active_model.
+        if available:
+            if model not in available:
+                model = available[0]
+        elif not model:
+            # Ollama is unreachable and no model was given — refuse rather than
+            # persist a blank active_model (a transient outage must not corrupt it).
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot reach Ollama to select a model — make sure it's running.",
+            )
     elif model and available and model not in available:
         model = ""  # not in this key provider's catalog → set_active resolves the top-tier default
 

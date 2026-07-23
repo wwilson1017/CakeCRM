@@ -69,15 +69,19 @@ class CredentialStore:
         self.data = self._load()
 
     def _load(self) -> dict:
-        """Load active settings + provider profiles in ONE transaction/cursor so a
-        concurrent connect/disconnect can't split the snapshot. On ANY DB error,
-        log and return the empty shape (store reads never raise). Each row is
-        decoded defensively so one malformed/undecryptable row can't sink the load
-        (decrypt_value already returns "" on tamper/key-mismatch, which the factory
-        then treats as unconfigured)."""
+        """Load active settings + provider profiles under a single REPEATABLE READ
+        snapshot so a concurrent connect/disconnect can't split the two SELECTs
+        (Postgres' default READ COMMITTED gives each statement its own snapshot).
+        On ANY DB error, log and return the empty shape (store reads never raise).
+        Each row is decoded defensively so one malformed/undecryptable row can't
+        sink the load (decrypt_value already returns "" on tamper/key-mismatch,
+        which the factory then treats as unconfigured)."""
         try:
             with get_connection() as conn:
                 cur = conn.cursor()
+                # First statement of the transaction — sets the snapshot for both
+                # reads; resets when the connection returns to the pool.
+                cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
                 cur.execute(
                     "SELECT active_provider, active_model FROM ai_settings WHERE id = 1"
                 )
@@ -246,8 +250,14 @@ class CredentialStore:
         self.data["active_model"] = resolved_model
 
     def set_active_provider(self, provider: str) -> None:
-        """Switch active provider (fills active_model only if currently empty)."""
-        new_model = self.data.get("active_model") or _resolved_default_model(provider)
+        """Switch active provider, resolving a model that belongs to THAT provider.
+
+        Never inherit the previous provider's active_model — the factory attributes
+        active_model to active_provider, so keeping e.g. a Claude id while switching
+        to Together would mis-point Together at an Anthropic model. Prefer set_active()
+        when the caller already knows the model.
+        """
+        new_model = _resolved_default_model(provider)
         with get_connection() as conn:
             cur = conn.cursor()
             cur.execute(

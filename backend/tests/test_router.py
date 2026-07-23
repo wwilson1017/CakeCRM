@@ -54,6 +54,9 @@ class FakeStore:
     def set_active(self, provider, model):
         return model or "resolved-default"
 
+    def set_active_model(self, model):
+        self.data["active_model"] = model
+
     def remove_provider(self, *a, **k):
         pass
 
@@ -92,21 +95,59 @@ def test_connect_key_invalid_returns_400(client, monkeypatch):
 
 
 def test_connect_key_valid(client, monkeypatch):
+    _use_store(monkeypatch, FakeStore(
+        data={"active_provider": "anthropic", "active_model": "claude-opus-4-8", "profiles": {}}))
+
+    class FakeProv:
+        async def validate(self):
+            return True
+
+        async def list_models(self):
+            return ["claude-opus-4-8", "claude-sonnet-4-6"]
+
+    monkeypatch.setattr(router_mod, "_make_key_provider", lambda p, k, m: FakeProv())
+    r = client.post("/api/providers/anthropic/connect-key",
+                    json={"api_key": "good", "model": "claude-opus-4-8"})
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "provider": "anthropic", "model": "claude-opus-4-8"}
+
+
+def test_connect_key_rejects_model_not_in_catalog(client, monkeypatch):
     _use_store(monkeypatch, FakeStore())
 
     class FakeProv:
         async def validate(self):
             return True
 
-    async def fake_mat(provider, requested):
-        return requested or "resolved"
+        async def list_models(self):
+            return ["gpt-5.5", "gpt-5.4"]
 
     monkeypatch.setattr(router_mod, "_make_key_provider", lambda p, k, m: FakeProv())
-    monkeypatch.setattr(router_mod, "_materialize_inferred_tiers", fake_mat)
-    r = client.post("/api/providers/anthropic/connect-key",
-                    json={"api_key": "good", "model": "claude-opus-4-8"})
+    r = client.post("/api/providers/openai/connect-key",
+                    json={"api_key": "good", "model": "not-a-real-model"})
+    assert r.status_code == 400
+    assert "not an available" in r.json()["detail"]
+
+
+def test_connect_key_reconciles_inaccessible_active_model(client, monkeypatch):
+    # set_api_key leaves active_model at a value outside the new key's catalog;
+    # connect must reconcile it to a model the key can actually access.
+    _use_store(monkeypatch, FakeStore(
+        data={"active_provider": "openai", "active_model": "gpt-old-retired", "profiles": {}}))
+
+    class FakeProv:
+        async def validate(self):
+            return True
+
+        async def list_models(self):
+            return ["gpt-5.5", "gpt-5.4"]
+
+    monkeypatch.setattr(router_mod, "_make_key_provider", lambda p, k, m: FakeProv())
+    import providers.tiers as t
+    monkeypatch.setattr(t, "resolve_tier_model", lambda p, tier: "")  # force fallback to catalog[0]
+    r = client.post("/api/providers/openai/connect-key", json={"api_key": "good"})
     assert r.status_code == 200
-    assert r.json() == {"ok": True, "provider": "anthropic", "model": "claude-opus-4-8"}
+    assert r.json()["model"] in ("gpt-5.5", "gpt-5.4")
 
 
 def test_connect_key_unknown_provider_404(client, monkeypatch):
@@ -344,3 +385,12 @@ def test_active_ollama_picks_installed_model(client, monkeypatch):
     r = client.put("/api/providers/active", json={"provider": "ollama", "model": ""})
     assert r.status_code == 200
     assert r.json()["model"] == "llama3.1"  # first installed model, never blanked to ""
+
+
+def test_active_ollama_unreachable_rejects_without_blanking(client, monkeypatch):
+    # A transient Ollama outage must refuse the switch, not persist a blank model.
+    _use_store(monkeypatch, FakeStore(usable={"ollama"}))
+    monkeypatch.setattr("providers.get_ai_provider", lambda *a, **k: FakeProvider([]))
+    r = client.put("/api/providers/active", json={"provider": "ollama", "model": ""})
+    assert r.status_code == 400
+    assert "Cannot reach Ollama" in r.json()["detail"]

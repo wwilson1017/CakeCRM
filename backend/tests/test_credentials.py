@@ -137,6 +137,19 @@ def test_set_active_returns_persisted_model(monkeypatch, fake_conn):
     assert store.data["active_model"] == "claude-opus-4-8"
 
 
+def test_set_active_provider_resolves_target_default(monkeypatch, fake_conn):
+    # Switching providers must resolve the TARGET provider's default, never inherit
+    # the previous provider's model (which the factory would mis-attribute).
+    fake_conn(monkeypatch, cred_mod,
+              fetchone_results=[("anthropic", "claude-opus-4-8")], fetchall_results=[[]])
+    monkeypatch.setattr(cred_mod, "_resolved_default_model", lambda p: "Qwen/Qwen3.5-7B")
+    store = CredentialStore()
+    assert store.data["active_model"] == "claude-opus-4-8"
+    store.set_active_provider("together")
+    assert store.data["active_provider"] == "together"
+    assert store.data["active_model"] == "Qwen/Qwen3.5-7B"  # target default, not the Claude id
+
+
 def test_set_ollama_writes_local_profile(monkeypatch, fake_conn):
     conn = fake_conn(monkeypatch, cred_mod, fetchone_results=[None], fetchall_results=[[]])
     store = CredentialStore()

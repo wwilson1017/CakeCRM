@@ -69,9 +69,12 @@ def get_model_pricing(model: str) -> tuple[float, float] | None:
     exact = MODEL_PRICING.get(model)
     if exact is not None:
         return exact
+    # Prefix match requires a "-" boundary so a base id only matches a dated
+    # SNAPSHOT (e.g. "claude-haiku-4-5" -> "claude-haiku-4-5-20251001"), never an
+    # unrelated longer id ("gpt-5.4" must NOT price "gpt-5.40").
     best_key = None
     for key in MODEL_PRICING:
-        if model.startswith(key) and (best_key is None or len(key) > len(best_key)):
+        if model.startswith(key + "-") and (best_key is None or len(key) > len(best_key)):
             best_key = key
     return MODEL_PRICING[best_key] if best_key else None
 
