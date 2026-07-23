@@ -164,7 +164,13 @@ async def connect_key(provider: str, body: ConnectKeyRequest, user=Depends(get_c
             ),
         )
 
-    # Live catalog for THIS key (also materializes inferred tiers via list_models).
+    # Force a fresh catalog for THIS key — drop any stale/other-key cache entry so
+    # the reject/reconcile below decide on the new key's real entitlements, not a
+    # 12h-cached list. list_models() also materializes inferred tiers as a side
+    # effect; that runs before the credential write, but tiers are keyed by provider
+    # (not key) and a failed set_api_key leaves only tier DEFAULTS behind, no creds.
+    from providers import model_listing
+    model_listing.invalidate(model_listing.cache_key(provider, api_key))
     try:
         catalog = await prov.list_models()
     except Exception as e:
@@ -224,7 +230,10 @@ def _validated_ollama_url(raw: str) -> str:
         raise HTTPException(status_code=400, detail="Ollama base URL must be an origin (no path)")
     if parsed.query:
         raise HTTPException(status_code=400, detail="Ollama base URL must not contain a query string")
-    return url
+    # Return the NORMALIZED origin, not the raw input — so a trailing "?"/"#"
+    # (which urlparse leaves as empty path/query and would pass the checks above)
+    # can't survive into the stored base_url and break "{base_url}/api/tags".
+    return f"{parsed.scheme}://{parsed.netloc}"
 
 
 @router.post("/ollama/connect")

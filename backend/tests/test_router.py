@@ -314,6 +314,13 @@ def test_validated_ollama_url_accepts_lan():
     assert _validated_ollama_url("http://192.168.1.50:11434") == "http://192.168.1.50:11434"
 
 
+def test_validated_ollama_url_normalizes_to_origin():
+    # a trailing "?"/"/" passes urlparse's checks but must not survive into the
+    # stored base_url (it would break "{base_url}/api/tags").
+    assert _validated_ollama_url("http://localhost:11434?") == "http://localhost:11434"
+    assert _validated_ollama_url("http://localhost:11434/") == "http://localhost:11434"
+
+
 @pytest.mark.parametrize("bad", [
     "ftp://host:11434",       # non-http(s) scheme
     "file:///etc/passwd",     # non-http(s) scheme

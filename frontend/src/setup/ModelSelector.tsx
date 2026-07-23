@@ -56,11 +56,12 @@ export function ModelSelector({ provider, currentModel, onChanged }: Props) {
     <div>
       <label className="block text-xs uppercase tracking-wider text-ck-ink-soft mb-1.5">Model</label>
       <select
-        value={selected || models[0] || ''}
+        value={selected}
         onChange={e => save(e.target.value)}
         disabled={saving}
         className="w-full box-border border border-ck-line-strong rounded-md bg-ck-card px-3 py-2 text-sm text-ck-ink disabled:opacity-50"
       >
+        {!selected && <option value="" disabled>Select a model…</option>}
         {models.map(m => <option key={m} value={m}>{m}</option>)}
       </select>
     </div>

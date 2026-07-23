@@ -197,6 +197,72 @@ def test_ollama_is_tool_capable():
     assert _is_tool_capable("gemma2") is False
 
 
+@pytest.mark.asyncio
+async def test_together_validate_and_list_via_httpx(monkeypatch):
+    # Together's /v1/models is a BARE ARRAY — the OpenAI SDK raises on it, so the
+    # provider must call httpx directly. Regression for the broken validate().
+    from providers.together_provider import TogetherProvider
+
+    def handler(request):
+        assert request.headers["Authorization"] == "Bearer k"
+        return httpx.Response(200, json=[
+            {"id": "Qwen/Qwen3.5-32B", "type": "chat"},
+            {"id": "some-embedding-model", "type": "embedding"},
+        ])
+
+    real_client = httpx.AsyncClient  # capture before patching to avoid recursion
+    monkeypatch.setattr(
+        httpx, "AsyncClient",
+        lambda *a, **k: real_client(transport=httpx.MockTransport(handler)),
+    )
+    p = TogetherProvider(api_key="k")
+    assert await p.validate() is True
+    models = await p._fetch_models()
+    assert "Qwen/Qwen3.5-32B" in models
+    assert "some-embedding-model" not in models  # non-chat filtered out
+
+
+@pytest.mark.asyncio
+async def test_together_validate_false_on_401(monkeypatch):
+    from providers.together_provider import TogetherProvider
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx, "AsyncClient",
+        lambda *a, **k: real_client(
+            transport=httpx.MockTransport(lambda req: httpx.Response(401, json={"error": "bad key"}))),
+    )
+    assert await TogetherProvider(api_key="bad").validate() is False
+
+
+@pytest.mark.asyncio
+async def test_google_fetch_models_excludes_tts_and_image(monkeypatch):
+    import sys
+    import types
+
+    from providers.google_provider import GoogleProvider
+
+    class FakeModel:
+        def __init__(self, name):
+            self.name = name
+            self.supported_generation_methods = ["generateContent"]
+
+    fake_genai = types.SimpleNamespace(
+        configure=lambda **k: None,
+        list_models=lambda: [
+            FakeModel("models/gemini-2.5-pro"),
+            FakeModel("models/gemini-2.5-pro-preview-tts"),  # TTS preview -> excluded
+            FakeModel("models/gemini-2.5-flash"),
+            FakeModel("models/imagen-3.0"),                  # image -> excluded
+        ],
+    )
+    monkeypatch.setitem(sys.modules, "google.generativeai", fake_genai)
+    models = await GoogleProvider(api_key="k")._fetch_models()
+    assert "gemini-2.5-pro" in models
+    assert "gemini-2.5-flash" in models
+    assert all("tts" not in m and "imagen" not in m for m in models)
+
+
 def test_google_clean_schema_strips_unsupported_fields():
     from providers.google_provider import _clean_schema
     schema = {

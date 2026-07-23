@@ -51,6 +51,11 @@ GOOGLE_MODELS = [
     "gemini-2.0-flash-lite",
 ]
 
+# Non-text-chat model ids to keep OUT of the catalog: many support
+# generateContent (so pass the method filter) but are TTS/image/audio/preview
+# variants that must never be picked as a tier default or active model.
+_GOOGLE_NON_CHAT = ("tts", "image", "audio", "embedding", "aqa", "-exp", "preview", "thinking", "-live")
+
 
 class GoogleProvider(AIProvider):
     def __init__(self, api_key: str = "", model: str = "gemini-2.5-flash"):
@@ -264,8 +269,10 @@ class GoogleProvider(AIProvider):
                 methods = getattr(m, "supported_generation_methods", []) or []
                 if "generateContent" not in methods:
                     continue
-                name = m.name
-                out.append(name.removeprefix("models/"))
+                name = m.name.removeprefix("models/")
+                if any(token in name.lower() for token in _GOOGLE_NON_CHAT):
+                    continue  # skip TTS/image/audio/preview variants
+                out.append(name)
             return out
 
         async with _configure_lock:

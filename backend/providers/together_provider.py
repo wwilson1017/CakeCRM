@@ -44,14 +44,11 @@ _TOGETHER_NON_CHAT = (
 )
 
 
-def _is_together_chat(model) -> bool:
-    mtype = getattr(model, "type", None)
-    if mtype is None:
-        extra = getattr(model, "model_extra", None) or {}
-        mtype = extra.get("type")
+def _is_together_chat(m: dict) -> bool:
+    mtype = m.get("type")
     if mtype:
         return mtype in ("chat", "language")
-    low = model.id.lower()
+    low = (m.get("id") or "").lower()
     return not any(token in low for token in _TOGETHER_NON_CHAT)
 
 
@@ -105,11 +102,26 @@ class TogetherProvider(AIProvider):
         return build_openai_tool_results(messages, tool_calls, results)
 
     async def _fetch_models(self) -> list[str]:
-        import openai
+        # Together's GET /v1/models returns a TOP-LEVEL ARRAY, not OpenAI's
+        # {"data": [...]} envelope — the OpenAI SDK's models.list() raises on it.
+        # So list (and validate) via httpx directly; chat streaming still uses the
+        # OpenAI-compatible /chat/completions endpoint via the SDK.
+        import httpx
 
-        client = openai.AsyncOpenAI(api_key=self.api_key, base_url=TOGETHER_BASE_URL)
-        resp = await client.models.list()
-        return sorted(m.id for m in resp.data if _is_together_chat(m))
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{TOGETHER_BASE_URL}/models",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        items = data.get("data", []) if isinstance(data, dict) else data
+        ids = [
+            m["id"]
+            for m in items
+            if isinstance(m, dict) and m.get("id") and _is_together_chat(m)
+        ]
+        return sorted(ids)
 
     async def list_models(self) -> list[str]:
         from providers.model_listing import (
@@ -123,16 +135,18 @@ class TogetherProvider(AIProvider):
         return models
 
     async def validate(self) -> bool:
-        """Auth-oriented validation: listing models needs only a valid key."""
-        import openai
+        """Auth-oriented validation: a 200 from the (bare-array) /models endpoint
+        means the key is valid. Called via httpx, not the OpenAI SDK (see
+        _fetch_models)."""
+        import httpx
 
         try:
-            client = openai.AsyncOpenAI(
-                api_key=self.api_key,
-                base_url=TOGETHER_BASE_URL,
-            )
-            await client.models.list()
-            return True
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    f"{TOGETHER_BASE_URL}/models",
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                )
+            return resp.status_code == 200
         except Exception as e:
             logger.error("Together validation failed: %s", e)
             return False
