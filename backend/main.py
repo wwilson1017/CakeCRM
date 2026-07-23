@@ -26,6 +26,7 @@ from core.auth import router as auth_router
 from core.auth_2fa import router as auth_2fa_router
 from core.config import settings
 from core.storage import atomic_write
+from providers.router import router as providers_router, setup_router as ai_setup_router
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -129,6 +130,8 @@ app.add_middleware(
 app.include_router(auth_router, prefix="/api")
 app.include_router(auth_2fa_router, prefix="/api", tags=["auth-2fa"])
 app.include_router(branding_router, prefix="/api/branding", tags=["branding"])
+app.include_router(providers_router, prefix="/api/providers", tags=["providers"])
+app.include_router(ai_setup_router, prefix="/api/setup", tags=["setup"])
 
 
 # ── Health endpoints ──────────────────────────────────────────────────────────
