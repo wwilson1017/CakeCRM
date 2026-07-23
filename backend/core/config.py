@@ -7,6 +7,7 @@ Auto-detects Railway environment via RAILWAY_PUBLIC_DOMAIN.
 
 import os
 import secrets
+
 from dotenv import load_dotenv
 
 _backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

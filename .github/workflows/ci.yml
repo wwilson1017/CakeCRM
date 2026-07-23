@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend (ruff + import check + tests)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+
+      # Installed into the job's Python env; explicit paths from the repo root.
+      - name: Install dependencies
+        run: pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+
+      - name: Lint (ruff)
+        working-directory: backend
+        run: ruff check .
+
+      - name: Import check — verify modules load without a database
+        working-directory: backend
+        run: |
+          python -c "
+          import importlib, sys
+
+          # These import cleanly with no DATABASE_URL: the Postgres pool is
+          # initialized in the FastAPI lifespan handler, not at import time.
+          modules = [
+              'main',
+              'core.config', 'core.auth', 'core.auth_2fa',
+              'core.storage', 'core.postgres', 'core.encryption',
+              'branding.router',
+          ]
+          failures = []
+          for mod in modules:
+              try:
+                  importlib.import_module(mod)
+                  print(f'  {mod}: OK')
+              except Exception as e:  # report every failure, not just the first
+                  failures.append(f'  {mod}: {e}')
+                  print(f'  {mod}: FAIL — {e}')
+          if failures:
+              print(f'\nFAIL: {len(failures)} module(s) failed to import')
+              sys.exit(1)
+          print(f'\nOK: all {len(modules)} modules imported successfully')
+          "
+
+      - name: Tests (pytest)
+        working-directory: backend
+        # Run from backend/ so the CWD is on sys.path and `import main` resolves.
+        run: python -m pytest -q
+
+  frontend:
+    name: Frontend (build + lint)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build (tsc + vite)
+        working-directory: frontend
+        run: npm run build
+
+      - name: Lint (eslint)
+        working-directory: frontend
+        run: npm run lint
+
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Full history so gitleaks scans every commit, not just the tip.
+          fetch-depth: 0
+
+      # Run the pinned gitleaks binary directly (verified by SHA-256) rather than
+      # the marketplace action: no org-license gate, no GitHub-API permissions,
+      # and no PR-comment write access needed — just a hard pass/fail gate.
+      - name: Run gitleaks
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+          GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+        run: |
+          set -euo pipefail
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o gitleaks.tar.gz
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          ./gitleaks git . --redact --verbose

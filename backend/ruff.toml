@@ -1,0 +1,20 @@
+# Ruff configuration for the CakeCRM backend.
+# Ported from the CAKE OS sibling repo so the seeded shell lints cleanly and
+# future code follows the same conventions.
+
+target-version = "py312"
+exclude = [".venv", "data", "static", "node_modules", "__pycache__"]
+
+[lint]
+select = ["F", "E", "W", "I"]
+# E501 (line-too-long) intentionally ignored — modern editors wrap, GitHub
+# diffs render fine well past 88 chars, and enforcing a hard width would mean
+# rewrapping the seeded shell for no real readability gain.
+ignore = ["E501"]
+
+[lint.isort]
+known-first-party = ["core", "branding"]
+# Keep multiple aliased imports from the same module in one block (the default
+# splits each `as` alias into its own block — noisy for files like main.py).
+combine-as-imports = true
+force-wrap-aliases = false

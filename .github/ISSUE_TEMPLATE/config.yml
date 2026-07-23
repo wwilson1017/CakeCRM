@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Contributing guidelines
+    url: https://github.com/wwilson1017/CakeCRM/blob/main/CONTRIBUTING.md
+    about: How to set up a dev environment, run the checks, and sign off commits (DCO) before opening a PR.

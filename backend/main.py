@@ -20,12 +20,12 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from branding.router import router as branding_router
 from core import postgres
-from core.config import settings
-from core.storage import atomic_write
 from core.auth import router as auth_router
 from core.auth_2fa import router as auth_2fa_router
-from branding.router import router as branding_router
+from core.config import settings
+from core.storage import atomic_write
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
