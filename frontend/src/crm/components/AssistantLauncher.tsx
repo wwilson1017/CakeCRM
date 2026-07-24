@@ -7,17 +7,17 @@
  * never an error:
  *   • aiReady === null   → unknown/loading: rendered but inert.
  *   • aiReady === false  → no key: routes to /setup ("hire your assistant").
- *   • aiReady === true   → opens a panel whose BODY is the mount slot for the
- *                          assistant chat surface (issue #4). #9 ships only the
- *                          launcher + panel shell + a placeholder body; #4 fills
- *                          the marked region on rebase after #9 lands.
+ *   • aiReady === true   → opens a panel whose BODY is the assistant chat
+ *                          surface (AssistantPanelBody, issue #4), mounted in
+ *                          the region #9 reserved for it.
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
+import { AssistantPanelBody } from '../../assistant';
 import { IconBot, IconX } from '../../shared/icons';
 import {
-  INK, INK_MUTE, LINE, BG_CARD, ACCENT, ACCENT_INK, FONT_DISPLAY, FONT_SANS,
+  INK, INK_MUTE, LINE, BG_CARD, ACCENT, ACCENT_INK, FONT_DISPLAY,
 } from '../../shared/styles';
 
 export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
@@ -89,16 +89,10 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
             ><IconX size={16} /></button>
           </div>
 
-          {/* ASSISTANT-PANEL-BODY: issue #4 mounts the chat surface here.
-              Until then, this placeholder confirms the assistant is available. */}
-          <div style={{ padding: '18px 16px' }}>
-            <p style={{
-              fontFamily: FONT_SANS, fontSize: 13, color: INK_MUTE,
-              lineHeight: 1.6, margin: 0,
-            }}>
-              Your assistant is ready. Chat is coming soon — meanwhile you can
-              tune its model in <Link to="/setup" style={{ color: ACCENT }}>AI Setup</Link>.
-            </p>
+          {/* ASSISTANT-PANEL-BODY: the chat surface (issue #4). The wrapper
+              bounds the panel's height; the body fills it (height: 100%). */}
+          <div style={{ height: 480, maxHeight: 'calc(100vh - 140px)', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            <AssistantPanelBody />
           </div>
         </div>
       )}

@@ -20,6 +20,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from assistant.router import router as assistant_router
 from branding.router import router as branding_router
 from core import postgres
 from core.auth import router as auth_router
@@ -134,6 +135,7 @@ app.include_router(branding_router, prefix="/api/branding", tags=["branding"])
 app.include_router(providers_router, prefix="/api/providers", tags=["providers"])
 app.include_router(ai_setup_router, prefix="/api/setup", tags=["setup"])
 app.include_router(crm_router, prefix="/api/crm", tags=["crm"])
+app.include_router(assistant_router, prefix="/api/assistant", tags=["assistant"])
 
 
 # ── Health endpoints ──────────────────────────────────────────────────────────
