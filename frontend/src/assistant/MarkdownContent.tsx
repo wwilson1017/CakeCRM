@@ -16,6 +16,12 @@ const components: Components = {
       {children}
     </a>
   ),
+  // Never fetch remote images: the browser would request the URL on render, which
+  // a prompt-injected upload could use to exfiltrate CRM data in the query string
+  // with zero clicks. Render the alt text instead (CRM tool results have no images).
+  img: ({ alt }: ComponentPropsWithoutRef<'img'>) => (
+    <span style={{ color: INK_MUTE, fontStyle: 'italic' }}>{alt ? `🖼️ ${alt}` : '🖼️ [image]'}</span>
+  ),
   p: ({ children }) => <p style={{ margin: '0 0 8px' }}>{children}</p>,
   ul: ({ children }) => <ul style={{ margin: '0 0 8px', paddingLeft: 20 }}>{children}</ul>,
   ol: ({ children }) => <ol style={{ margin: '0 0 8px', paddingLeft: 20 }}>{children}</ol>,

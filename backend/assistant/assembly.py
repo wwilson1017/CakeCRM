@@ -86,11 +86,23 @@ def _row_to_messages(provider, row, max_row_chars):
 def _coalesce_consecutive(messages):
     """Merge consecutive same-role user/assistant messages so providers that require
     strict turn alternation (Anthropic, Gemini) never see two in a row. Role 'tool'
-    (OpenAI) is left untouched — those stay one-per-tool_call."""
+    (OpenAI) is left untouched — those stay one-per-tool_call.
+
+    NEVER merge a message that carries an OpenAI-style top-level ``tool_calls`` key:
+    ``_merge_content`` keeps only ``content``, so merging would silently drop the
+    tool_calls and orphan the following ``role:'tool'`` result messages (OpenAI /
+    Ollama / Together then 400 on the whole conversation). OpenAI does not require
+    strict alternation, so leaving two consecutive assistant messages is valid
+    there. Anthropic/Gemini embed tool calls inside ``content`` (no top-level
+    ``tool_calls`` key), so they still coalesce and stay alternation-valid."""
     out: list[dict] = []
     for m in messages:
         role = m.get("role")
-        if out and role in ("user", "assistant") and out[-1].get("role") == role:
+        can_merge = (
+            out and role in ("user", "assistant") and out[-1].get("role") == role
+            and "tool_calls" not in m and "tool_calls" not in out[-1]
+        )
+        if can_merge:
             out[-1] = {**out[-1], "content": _merge_content(out[-1].get("content"), m.get("content"))}
             continue
         out.append(dict(m))

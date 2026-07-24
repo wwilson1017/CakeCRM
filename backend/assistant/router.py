@@ -109,6 +109,10 @@ async def chat_upload(
     messages = data.get("messages")
     if not isinstance(messages, list) or not messages or not all(isinstance(m, dict) for m in messages):
         raise HTTPException(status_code=400, detail="messages must be a non-empty list of objects.")
+    # The upload path concatenates onto the last message's content, so it must be a
+    # string (or absent) — otherwise the join below would 500 instead of 400.
+    if not isinstance(messages[-1].get("content"), (str, type(None))):
+        raise HTTPException(status_code=400, detail="message content must be text.")
     conversation_id = data.get("conversation_id")
     tool_mode = data.get("tool_mode", "normal")
 
@@ -233,10 +237,15 @@ def _message_for_ui(msg: dict) -> dict:
         preview = None
         if r is not None:
             content = r.get("content") or ""
-            try:
-                preview = json.loads(content)
-            except (ValueError, TypeError):
-                preview = content[:_UI_RESULT_PREVIEW_CAP]
+            # Cap BEFORE parsing — a valid-JSON crm_list_contacts result can be
+            # arbitrarily large; the raw/uncapped result must never cross the wire.
+            if len(content) > _UI_RESULT_PREVIEW_CAP:
+                preview = content[:_UI_RESULT_PREVIEW_CAP] + "…(truncated)"
+            else:
+                try:
+                    preview = json.loads(content)
+                except (ValueError, TypeError):
+                    preview = content
         merged_calls.append({**c, "result": preview})
     msg = {**msg, "tool_calls": merged_calls}
     msg.pop("tool_results", None)

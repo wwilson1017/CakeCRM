@@ -43,12 +43,20 @@ _UNTRUSTED_MARKER = "<untrusted_file_content"
 
 
 def _context_has_untrusted_upload(messages: list[dict]) -> bool:
-    """True if any message content carries wrapped uploaded-file text (the marker
-    lives in user-turn string content)."""
+    """True if any message content carries wrapped uploaded-file text.
+
+    The marker normally lives in user-turn string content, but coalescing can fold
+    an upload user row into a block list (e.g. merged with a trailing tool-result
+    message), so also scan text blocks inside list content — otherwise the
+    power→normal downgrade would silently miss it."""
     for m in messages:
         content = m.get("content")
         if isinstance(content, str) and _UNTRUSTED_MARKER in content:
             return True
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and _UNTRUSTED_MARKER in str(block.get("text") or ""):
+                    return True
     return False
 
 
@@ -299,10 +307,25 @@ async def _chat_impl(
             t0 = time.monotonic()
             result = await registry.execute_tool(name, args)
             elapsed_ms = int((time.monotonic() - t0) * 1000)
-            async for line in _record_result(
-                conversation_id, iter_msg_id, name, tool_use_id, results, result, elapsed_ms,
-            ):
-                yield line
+            content = json.dumps(result, default=str)
+            results.append({"tool_use_id": tool_use_id, "tool_name": name, "content": content})
+            persisted = True
+            try:
+                await asyncio.to_thread(history.merge_tool_result, iter_msg_id, tool_use_id, name, content)
+            except Exception as e:
+                persisted = False
+                logger.warning("assistant.chat: failed to persist tool result for %s: %s", name, e)
+            yield _sse({
+                "type": "tool_end", "tool": name, "tool_use_id": tool_use_id,
+                "result": result, "elapsed_ms": elapsed_ms,
+            })
+            if is_write and not persisted:
+                # A write executed but its result couldn't be recorded. Fail closed:
+                # end the turn with an error so a later rebuild can't show the
+                # stubbed "result not recorded" and tempt the model to redo the
+                # mutation (especially in power mode).
+                yield _sse({"type": "error", "error": "A change was made but could not be fully saved — please reload the conversation."})
+                return
 
         # Rebuild history for the next turn using build_tool_turn (keeps the
         # assistant text; add_tool_results would drop it).
@@ -313,11 +336,15 @@ async def _chat_impl(
             return
 
         if has_pending:
-            # One narration-only wrap-up turn (tools=[]) so the model can say what
-            # it's about to do; it cannot emit new tool calls here.
+            # One narration wrap-up turn so the model can say what it's about to do.
+            # Pass provider_tools (NOT []): current_messages carries the just-added
+            # tool_use/tool_result blocks, and Anthropic REJECTS tool_use/tool_result
+            # history when no `tools` param is defined (empty list → NOT_GIVEN → 400).
+            # We still ignore any tool_start/tool_args and discard tool_calls below,
+            # so the turn stays narration-only.
             wrap_text = ""
             wrap_completed = False
-            async for event in provider.stream_turn(current_messages, [], system_prompt):
+            async for event in provider.stream_turn(current_messages, provider_tools, system_prompt):
                 etype = event.get("type")
                 if etype == "text":
                     wrap_text += event.get("text", "")

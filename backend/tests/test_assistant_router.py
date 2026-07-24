@@ -129,6 +129,13 @@ def test_upload_rejects_non_dict_messages(client, with_provider):
     assert r.status_code == 400  # clean 400, not a 500 on messages[-1].get
 
 
+def test_upload_rejects_non_string_content(client, with_provider):
+    payload = json.dumps({"messages": [{"role": "user", "content": {"nested": "obj"}}]})
+    r = client.post("/api/assistant/chat/upload", data={"payload": payload},
+                    files=[("files", ("a.txt", b"x", "text/plain"))])
+    assert r.status_code == 400  # clean 400, not a 500 on the content concat
+
+
 # ── Confirm ───────────────────────────────────────────────────────────────────
 
 def test_confirm_invalid_decision_400(client):
@@ -173,6 +180,22 @@ def test_get_conversation_merges_previews_and_strips_results(client, monkeypatch
     msg = r.json()["messages"][0]
     assert "tool_results" not in msg
     assert msg["tool_calls"][0]["result"] == {"n": 3}  # preview folded in, parsed
+
+
+def test_get_conversation_ui_preview_caps_large_result(client, monkeypatch):
+    big = '{"data": "' + "x" * 5000 + '"}'  # valid JSON, large
+    conv = {
+        "id": "c1",
+        "messages": [{
+            "id": "m1", "role": "assistant", "content": "",
+            "tool_calls": [{"tool": "crm_list_contacts", "tool_use_id": "t1", "args": {}}],
+            "tool_results": [{"tool_use_id": "t1", "tool_name": "crm_list_contacts", "content": big}],
+        }],
+    }
+    monkeypatch.setattr(router_mod.history, "get_conversation", lambda cid: conv)
+    r = client.get("/api/assistant/conversations/c1")
+    result = r.json()["messages"][0]["tool_calls"][0]["result"]
+    assert isinstance(result, str) and len(result) < len(big)  # capped, not shipped whole
 
 
 def test_get_conversation_ui_preview_non_json_fallback(client, monkeypatch):

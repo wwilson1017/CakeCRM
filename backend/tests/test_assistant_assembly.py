@@ -59,6 +59,24 @@ def test_coalesce_leaves_tool_role_untouched():
     assert len(out) == 3  # tool rows are one-per-tool_call, never merged
 
 
+def test_coalesce_never_drops_tool_calls_openai_shape():
+    """A narration assistant row followed by an OpenAI-shaped tool-call assistant
+    row must NOT merge (which would drop tool_calls and orphan the tool message →
+    OpenAI/Ollama/Together 400 the whole conversation)."""
+    msgs = [
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "a"}]},
+        {"role": "tool", "content": "ra", "tool_call_id": "a"},
+        {"role": "assistant", "content": "narration"},  # wrap-up narration row
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "b"}]},  # continuation tool row
+        {"role": "tool", "content": "rb", "tool_call_id": "b"},
+    ]
+    out = assembly._coalesce_consecutive(msgs)
+    # every role:'tool' must be immediately preceded by an assistant carrying tool_calls
+    for i, m in enumerate(out):
+        if m.get("role") == "tool":
+            assert i > 0 and "tool_calls" in out[i - 1], f"orphaned tool message at {i}"
+
+
 class _Provider:
     context_window = None
 
