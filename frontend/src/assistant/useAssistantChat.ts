@@ -202,14 +202,28 @@ export function useAssistantChat() {
     if (!isForm) headers['Content-Type'] = 'application/json';
     if (token) headers['Authorization'] = `Bearer ${token}`;
 
+    // Terminate THIS stream: show the error only if we still own the controller
+    // and the user didn't stop us; relinquish global state only if we own it (a
+    // stop()+new send may have installed a newer controller we must not clobber).
+    const failStream = (errText: string) => {
+      const owns = abortRef.current === controller;
+      if (owns && !userAbortedRef.current) {
+        updateMessage(asstId, (m) => ({ ...m, content: errText, streaming: false, error: true }));
+      } else {
+        updateMessage(asstId, (m) => (m.streaming ? { ...m, streaming: false } : m));
+      }
+      if (owns) {
+        abortRef.current = null;
+        setIsStreaming(false);
+      }
+    };
+
     const endpoint = isForm ? `${API}/chat/upload` : `${API}/chat`;
     let res: Response;
     try {
       res = await fetch(endpoint, { method: 'POST', headers, body, signal: controller.signal });
     } catch {
-      updateMessage(asstId, (m) => ({ ...m, content: '⚠️ Network error — is the server running?', streaming: false, error: true }));
-      setIsStreaming(false);
-      abortRef.current = null;
+      failStream('⚠️ Network error — is the server running?');
       return;
     }
 
@@ -224,9 +238,7 @@ export function useAssistantChat() {
         const b = await res.json();
         if (b?.detail) detail = String(b.detail);
       } catch { /* not JSON */ }
-      updateMessage(asstId, (m) => ({ ...m, content: `⚠️ ${detail}`, streaming: false, error: true }));
-      setIsStreaming(false);
-      abortRef.current = null;
+      failStream(`⚠️ ${detail}`);
       return;
     }
 
