@@ -358,7 +358,8 @@ async def _chat_impl(
                         yield _sse(wu)
                     wrap_completed = True
                     break
-                # stray tool_start/tool_args ignored — tools=[] means none expected
+                # stray tool_start/tool_args ignored — the wrap-up is narration-only
+                # even though the toolset is passed (needed for Anthropic; see above)
             if not wrap_completed:
                 yield _sse({"type": "error", "error": "The model response ended unexpectedly."})
                 return
