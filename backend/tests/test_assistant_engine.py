@@ -22,9 +22,11 @@ class FakeProvider:
         self._scripts = scripts
         self._i = 0
         self.captured_tools: list[list] = []
+        self.captured_messages: list[list] = []
 
     async def stream_turn(self, messages, tools, system_prompt):
         self.captured_tools.append(tools)
+        self.captured_messages.append(messages)
         script = self._scripts[self._i] if self._i < len(self._scripts) else self._scripts[-1]
         self._i += 1
         for event in script:
@@ -244,6 +246,25 @@ async def test_continuation_saves_no_user_row(store):
     prov = FakeProvider([[{"type": "text", "text": "continuing"}, _complete()]])
     await _run(prov, Registry(), [], conversation_id="conv-x")
     assert all(row["role"] != "user" for row in s.saved)  # no user row on continuation
+
+
+@pytest.mark.asyncio
+async def test_continuation_appends_user_ack_when_history_ends_on_assistant(store, monkeypatch):
+    """The persisted wrap-up narration makes a resumed sequence end on an assistant
+    turn; the engine must append a user ack so the provider never sees a trailing
+    assistant turn (Anthropic mis-prefills, Gemini rejects)."""
+    store.convs["conv-x"] = {"id": "conv-x", "messages": []}
+    # assembled history ends on an assistant row (the pending-confirmation narration)
+    monkeypatch.setattr(assembly, "assemble_messages", lambda provider, cid: [
+        {"role": "user", "content": "add X"},
+        {"role": "assistant", "content": "tool"},
+        {"role": "user", "content": "tool result"},
+        {"role": "assistant", "content": "Shall I create X?"},
+    ])
+    prov = FakeProvider([[{"type": "text", "text": "Done."}, _complete()]])
+    await _run(prov, Registry(), [], conversation_id="conv-x")
+    # the messages the provider actually received must NOT end on an assistant turn
+    assert prov.captured_messages[0][-1]["role"] == "user"
 
 
 # ── Confirm resolver (server-authoritative, idempotent) ───────────────────────

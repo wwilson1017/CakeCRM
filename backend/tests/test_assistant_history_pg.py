@@ -158,6 +158,35 @@ def test_claim_pending_tool_is_once_only(pg_db):
     assert out2 == {"status": "already_resolved"}
 
 
+class _AsmProvider:
+    """Minimal provider for the assembler: Anthropic-style build_tool_turn."""
+
+    context_window = None
+    model = "fake"
+
+    def build_tool_turn(self, text, tool_calls, results):
+        msgs = [{"role": "assistant", "content": text or "(tool)"}]
+        msgs.append({"role": "user", "content": "tool_result"})
+        return msgs
+
+
+def test_real_assemble_ends_on_assistant_after_pending_wrapup(pg_db):
+    """Reproduces the resume scenario against real Postgres: an assistant tool row
+    (result resolved) followed by the persisted wrap-up narration row makes the
+    assembled sequence END ON AN ASSISTANT TURN — which is exactly why the engine
+    appends a user ack before resuming."""
+    from assistant import assembly, history
+    conv = history.create_conversation()
+    m1 = str(uuid.uuid4())
+    history.save_message(conv["id"], m1, "assistant", "",
+                        tool_calls=[{"tool": "crm_create_contact", "tool_use_id": "t1", "args": {"name": "Z"}}])
+    history.merge_tool_result(m1, "t1", "crm_create_contact", '{"ok": true}')
+    history.save_message(conv["id"], str(uuid.uuid4()), "assistant", "Shall I create Z?")
+
+    assembled = assembly.assemble_messages(_AsmProvider(), conv["id"])
+    assert assembled[-1]["role"] == "assistant"  # the bug scenario the engine ack guards
+
+
 def test_deny_records_denied_status(pg_db):
     from assistant import engine, history
     conv = history.create_conversation()

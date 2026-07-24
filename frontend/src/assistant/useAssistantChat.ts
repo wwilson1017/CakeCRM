@@ -52,6 +52,10 @@ function addConfirm(m: ChatMessage, evt: SSEEvent): ChatMessage {
   if (existing.some((c) => c.toolUseId === toolUseId)) return m;
   return {
     ...m,
+    // The provider streams the tool_use block (tool_start/tool_args) BEFORE the
+    // engine decides to gate it, so a "running…" tool card was already added.
+    // The confirmation card now represents this call — drop the spinning card.
+    toolCalls: (m.toolCalls ?? []).filter((c) => c.toolUseId !== toolUseId),
     pendingConfirmations: [
       ...existing,
       {

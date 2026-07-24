@@ -102,6 +102,20 @@ async def chat(
         yield _sse({"type": "error", "error": "No conversation content to send."})
         return
 
+    # A resumed (continuation) turn can end on an assistant row — the persisted
+    # pending-confirmation wrap-up narration ("Shall I create X?") is saved as its
+    # own assistant message, so after an out-of-band approval the rebuilt sequence
+    # is [… assistant(tool_use), tool_result, assistant(narration)]. Providers
+    # reject / mis-prefill a trailing assistant turn (Anthropic would continue the
+    # narration; Gemini rejects it), so append a transient user ack to keep the
+    # sequence valid. A normal turn always ends on the just-saved user row, so this
+    # only fires on resume.
+    if current_messages[-1].get("role") == "assistant":
+        current_messages = current_messages + [{
+            "role": "user",
+            "content": "The pending action was resolved and its result is shown above. Please continue.",
+        }]
+
     # ── Main tool-execution loop ───────────────────────────────────────────────
     iteration = 0
     while iteration < MAX_ITERATIONS:
