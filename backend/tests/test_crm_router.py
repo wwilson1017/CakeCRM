@@ -215,14 +215,20 @@ def test_task_update_can_clear_contact(client, monkeypatch):
 
 def test_demo_status_shape(client, monkeypatch):
     monkeypatch.setattr(service, "get_demo_status",
-                        lambda: {"empty": True, "sample_data_loaded": False, "show_onboarding": True})
+                        lambda: {"empty": True, "sample_data_loaded": False,
+                                 "show_onboarding": True, "ai_key_prompt_dismissed": False})
     body = client.get("/api/crm/demo-status").json()
-    assert set(body) == {"empty", "sample_data_loaded", "show_onboarding"}
+    assert set(body) == {"empty", "sample_data_loaded", "show_onboarding", "ai_key_prompt_dismissed"}
 
 
 def test_load_sample_data_passthrough(client, monkeypatch):
     monkeypatch.setattr(service, "load_sample_data", lambda: {"ok": True, "seeded": True})
     assert client.post("/api/crm/load-sample-data").json() == {"ok": True, "seeded": True}
+
+
+def test_dismiss_ai_prompt_passthrough(client, monkeypatch):
+    monkeypatch.setattr(service, "dismiss_ai_prompt", lambda: {"ok": True})
+    assert client.post("/api/crm/dismiss-ai-prompt").json() == {"ok": True}
 
 
 def test_clear_all_requires_confirmation_phrase(client, monkeypatch):

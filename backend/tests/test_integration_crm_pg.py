@@ -64,7 +64,8 @@ def _clean_crm(pg_db):
     from core.postgres import pg_execute
     pg_execute("TRUNCATE activity_log, tasks, deals, contacts RESTART IDENTITY")
     pg_execute(
-        "UPDATE crm_meta SET sample_data_loaded = FALSE, onboarding_dismissed = FALSE WHERE id = 1"
+        "UPDATE crm_meta SET sample_data_loaded = FALSE, onboarding_dismissed = FALSE, "
+        "ai_key_prompt_dismissed = FALSE WHERE id = 1"
     )
     yield
 
@@ -91,6 +92,8 @@ def test_migration_created_tables_and_singleton(pg_db):
     assert {"contacts", "deals", "tasks", "activity_log", "crm_meta"} <= names
     meta = pg_fetchone("SELECT * FROM crm_meta WHERE id = 1")
     assert meta and meta["sample_data_loaded"] is False
+    # issue #9 migration: durable AI-key-nudge dismissal, default FALSE
+    assert meta["ai_key_prompt_dismissed"] is False
 
 
 # ── Fresh empty install (the acceptance clause, at the data layer) ────────────
@@ -175,12 +178,14 @@ def test_demo_state_machine_over_http(pg_db):
     client = _client()
 
     status = client.get("/api/crm/demo-status").json()
-    assert status == {"empty": True, "sample_data_loaded": False, "show_onboarding": True}
+    assert status == {"empty": True, "sample_data_loaded": False, "show_onboarding": True,
+                      "ai_key_prompt_dismissed": False}
 
     seeded = client.post("/api/crm/load-sample-data").json()
     assert seeded["seeded"] is True
     after = client.get("/api/crm/demo-status").json()
-    assert after == {"empty": False, "sample_data_loaded": True, "show_onboarding": False}
+    assert after == {"empty": False, "sample_data_loaded": True, "show_onboarding": False,
+                     "ai_key_prompt_dismissed": False}
 
     # guarded clear wipes example data and restarts identities
     cleared = client.post("/api/crm/demo-clear").json()
@@ -203,6 +208,22 @@ def test_demo_clear_guarded_when_no_sample(pg_db):
     resp = client.post("/api/crm/demo-clear").json()
     assert resp == {"ok": True, "cleared": False}
     assert service.get_dashboard_stats()["total_contacts"] == 1
+
+
+def test_dismiss_ai_prompt_persists(pg_db):
+    from crm import service
+    client = _client()
+    before = service.get_crm_meta()
+    assert client.get("/api/crm/demo-status").json()["ai_key_prompt_dismissed"] is False
+    assert client.post("/api/crm/dismiss-ai-prompt").json() == {"ok": True}
+    # durable: reflected in a fresh read
+    assert client.get("/api/crm/demo-status").json()["ai_key_prompt_dismissed"] is True
+    after = service.get_crm_meta()
+    assert after["ai_key_prompt_dismissed"] is True
+    # independent of the onboarding flags — dismiss-ai-prompt must not touch them
+    assert after["onboarding_dismissed"] == before["onboarding_dismissed"]
+    assert after["sample_data_loaded"] == before["sample_data_loaded"]
+    assert client.get("/api/crm/demo-status").json()["show_onboarding"] is True
 
 
 def test_search_pagination_and_contact_unlink(pg_db):

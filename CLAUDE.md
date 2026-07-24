@@ -65,7 +65,15 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   import is keyless for CSV/vCard; the AI smart-import path (`get_ai_provider()`)
   degrades to a warning when no provider is configured and its UI affordance keys off
   `ai_ready`. First-run offers to load fictional sample data (prompt tracked on the
-  `crm_meta` singleton, not a per-integration flag).
+  `crm_meta` singleton, not a per-integration flag). The **CRM-first shell** (#9) leads
+  nav with Dashboard/Pipeline/Contacts/Tasks, surfaces the assistant as a persistent
+  launcher (never the home page), and shows a **dismissible** "add an AI key" nudge —
+  never a gate, gated on `!credentials_present`, dismissal tracked on
+  `crm_meta.ai_key_prompt_dismissed`. Branding (company name / accent / logo) is edited
+  at `/crm/settings`, consuming the existing `/api/branding`; the accent is applied
+  app-wide by setting the `--brand-color` CSS variable (`index.css` routes the whole
+  theme's accent through it), so the CRM stays fully usable — and re-themable — with
+  zero AI keys.
 - **API keys are entered in-app, encrypted at rest** (Fernet; key from env →
   OS keychain → file fallback) — never as env vars.
 - **Backend tests** live in `backend/tests/` (config in `backend/pytest.ini`,
