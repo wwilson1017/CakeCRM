@@ -256,7 +256,7 @@ export function CrmDashboardPage() {
           deal={selectedDeal}
           isMobile={isMobile}
           onClose={() => setSelectedDeal(null)}
-          onEdit={setEditDeal}
+          onEdit={(d) => { setSelectedDeal(null); setEditDeal(d); }}
           onStageChange={updateDealStage}
         />
       )}

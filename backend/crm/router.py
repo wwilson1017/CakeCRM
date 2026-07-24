@@ -443,7 +443,7 @@ async def import_csv(file: UploadFile = File(...), user=Depends(get_current_user
     errors = []
 
     for i, row in enumerate(reader, start=2):  # Row 2+ (after header)
-        if imported + skipped >= MAX_IMPORT_ROWS:
+        if i - 2 >= MAX_IMPORT_ROWS:  # count every row read (imported/skipped/errored)
             errors.append(f"Import capped at {MAX_IMPORT_ROWS} rows — split the file and import the rest.")
             break
         name = (row.get(name_col) or "").strip()

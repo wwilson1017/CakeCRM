@@ -219,7 +219,7 @@ export function PipelinePage() {
           deal={selectedDeal}
           isMobile={isMobile}
           onClose={() => setSelectedDeal(null)}
-          onEdit={setEditDeal}
+          onEdit={(d) => { setSelectedDeal(null); setEditDeal(d); }}
           onStageChange={updateDealStage}
         />
       )}

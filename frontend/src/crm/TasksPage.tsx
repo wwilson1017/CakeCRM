@@ -263,7 +263,7 @@ export function TasksPage() {
                 }}
               >Close</button>
               <button
-                onClick={() => setEditTask(selectedTask)}
+                onClick={() => { setSelectedTask(null); setEditTask(selectedTask); }}
                 style={{
                   padding: '10px 16px', borderRadius: 6,
                   border: `1px solid ${LINE_STRONG}`, background: 'transparent',
