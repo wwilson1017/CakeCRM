@@ -1,5 +1,5 @@
 /**
- * Chatty — toast store.
+ * CakeCRM — toast store.
  *
  * Module-level singleton so toast() is callable from anywhere — hooks,
  * fire-and-forget .catch() handlers — without threading React context.

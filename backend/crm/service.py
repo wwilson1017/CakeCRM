@@ -45,6 +45,8 @@ def create_contact(
     title: str = "", source: str = "", status: str = "active",
     tags: str = "", notes: str = "",
 ) -> dict:
+    if status not in CONTACT_STATUSES:
+        status = "active"  # unknown status would hide the contact from every status tab
     row = pg_fetchone(
         """INSERT INTO contacts (name, email, phone, company, title, source, status, tags, notes)
            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
@@ -141,6 +143,8 @@ def update_contact(contact_id: int, **fields) -> dict | None:
     filtered = {k: v for k, v in fields.items() if k in allowed}
     if "tags" in filtered:
         filtered["tags"] = _normalize_tags(filtered["tags"] or "")
+    if "status" in filtered and filtered["status"] not in CONTACT_STATUSES:
+        filtered["status"] = "active"
     if not filtered:
         return get_contact(contact_id)
     set_clause = ", ".join(f"{k} = %s" for k in filtered)
@@ -199,6 +203,7 @@ def create_deal(
     # value but never render in any Kanban column.
     if stage not in DEAL_STAGES:
         stage = "lead"
+    probability = max(0, min(100, probability))  # keep the percentage in range
     row = pg_fetchone(
         """INSERT INTO deals (title, contact_id, stage, value, notes, expected_close_date, probability, currency)
            VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
@@ -277,6 +282,8 @@ def update_deal(deal_id: int, **fields) -> dict | None:
     filtered = {k: v for k, v in fields.items() if k in allowed}
     if "stage" in filtered and filtered["stage"] not in DEAL_STAGES:
         return None
+    if "probability" in filtered and filtered["probability"] is not None:
+        filtered["probability"] = max(0, min(100, filtered["probability"]))
     if not filtered:
         return get_deal(deal_id)
     set_clause = ", ".join(f"{k} = %s" for k in filtered)
@@ -303,6 +310,8 @@ def create_task(
     contact_id: int | None = None, deal_id: int | None = None,
     priority: str = "medium",
 ) -> dict:
+    if priority not in TASK_PRIORITIES:
+        priority = "medium"
     row = pg_fetchone(
         """INSERT INTO tasks (title, description, due_date, contact_id, deal_id, priority)
            VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
@@ -366,6 +375,8 @@ def update_task(task_id: int, **fields) -> dict | None:
     # the UI but matches neither `completed = 0` nor `= 1` filters).
     if "completed" in filtered:
         filtered["completed"] = 1 if filtered["completed"] else 0
+    if "priority" in filtered and filtered["priority"] not in TASK_PRIORITIES:
+        filtered["priority"] = "medium"
     if not filtered:
         return get_task(task_id)
     set_clause = ", ".join(f"{k} = %s" for k in filtered)

@@ -46,6 +46,7 @@ export function SmartImportModal({ onClose, onImported }: Props) {
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const [error, setError] = useState('');
   const [aiReady, setAiReady] = useState(false);
+  const [importing, setImporting] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -83,24 +84,34 @@ export function SmartImportModal({ onClose, onImported }: Props) {
   }
 
   async function handleImport() {
-    if (!parseResult) return;
+    if (!parseResult || importing) return;  // guard against double-submit
     setError('');
     const contacts = parseResult.contacts.filter((_, i) => selected.has(i));
     if (contacts.length === 0) {
       setError('No contacts selected');
       return;
     }
+    setImporting(true);
     try {
       const data = await api<ImportResult>('/api/crm/smart-import/confirm', {
         method: 'POST', body: JSON.stringify({ contacts }),
       });
       setImportResult(data);
       setStep('result');
-      if (data.imported > 0) setTimeout(onImported, 1500);
+      // Only auto-close on a clean run; if anything was skipped or errored, leave
+      // the result up so the user can read it (they Close manually).
+      if (data.imported > 0 && data.skipped === 0 && data.errors.length === 0) {
+        setTimeout(onImported, 1500);
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Import failed');
+    } finally {
+      setImporting(false);
     }
   }
+
+  // After any import, closing should refresh the list; before importing it's a plain cancel.
+  const closeAfterResult = () => (importResult && importResult.imported > 0 ? onImported() : onClose());
 
   function toggleAll() {
     if (!parseResult) return;
@@ -238,9 +249,9 @@ export function SmartImportModal({ onClose, onImported }: Props) {
               <button onClick={onClose} style={{ ...btnSecondary, flex: 1, justifyContent: 'center', display: 'flex' }}>Cancel</button>
               <button
                 onClick={handleImport}
-                disabled={selected.size === 0}
-                style={{ ...btnPrimary, flex: 1, justifyContent: 'center', opacity: selected.size ? 1 : 0.5, cursor: selected.size ? 'pointer' : 'not-allowed' }}
-              >Import Selected ({selected.size})</button>
+                disabled={selected.size === 0 || importing}
+                style={{ ...btnPrimary, flex: 1, justifyContent: 'center', opacity: (selected.size && !importing) ? 1 : 0.5, cursor: (selected.size && !importing) ? 'pointer' : 'not-allowed' }}
+              >{importing ? 'Importing…' : `Import Selected (${selected.size})`}</button>
             </div>
           </>
         )}
@@ -265,7 +276,7 @@ export function SmartImportModal({ onClose, onImported }: Props) {
                 </div>
               )}
             </div>
-            <button onClick={onClose} style={{ ...btnSecondary, width: '100%', justifyContent: 'center', display: 'flex' }}>Close</button>
+            <button onClick={closeAfterResult} style={{ ...btnSecondary, width: '100%', justifyContent: 'center', display: 'flex' }}>Close</button>
           </>
         )}
       </div>

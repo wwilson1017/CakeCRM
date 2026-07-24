@@ -47,7 +47,9 @@ import csv
 import io
 import logging
 
+import psycopg2
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, field_validator
 
 from core.auth import get_current_user
@@ -240,7 +242,10 @@ async def get_deal(deal_id: int, user=Depends(get_current_user)):
 async def create_deal(body: DealCreate, user=Depends(get_current_user)):
     if not body.title.strip():
         raise HTTPException(status_code=400, detail="Title is required")
-    return crm.create_deal(**body.model_dump())
+    try:
+        return crm.create_deal(**body.model_dump())
+    except psycopg2.errors.ForeignKeyViolation:
+        raise HTTPException(status_code=400, detail="Referenced contact does not exist") from None
 
 
 @router.put("/deals/{deal_id}")
@@ -281,7 +286,10 @@ async def list_tasks(
 async def create_task(body: TaskCreate, user=Depends(get_current_user)):
     if not body.title.strip():
         raise HTTPException(status_code=400, detail="Title is required")
-    return crm.create_task(**body.model_dump())
+    try:
+        return crm.create_task(**body.model_dump())
+    except psycopg2.errors.ForeignKeyViolation:
+        raise HTTPException(status_code=400, detail="Referenced contact or deal does not exist") from None
 
 
 @router.put("/tasks/{task_id}")
@@ -330,7 +338,10 @@ async def get_activity(
 async def log_activity(body: ActivityCreate, user=Depends(get_current_user)):
     if not body.activity.strip():
         raise HTTPException(status_code=400, detail="Activity type is required")
-    return crm.log_activity(**body.model_dump())
+    try:
+        return crm.log_activity(**body.model_dump())
+    except psycopg2.errors.ForeignKeyViolation:
+        raise HTTPException(status_code=400, detail="Referenced contact or deal does not exist") from None
 
 
 @router.put("/activity/{activity_id}")
@@ -438,36 +449,40 @@ async def import_csv(file: UploadFile = File(...), user=Depends(get_current_user
     if not name_col:
         raise HTTPException(status_code=400, detail="CSV must have a 'name' column")
 
-    imported = 0
-    skipped = 0
-    errors = []
-
-    for i, row in enumerate(reader, start=2):  # Row 2+ (after header)
-        if i - 2 >= MAX_IMPORT_ROWS:  # count every row read (imported/skipped/errored)
-            errors.append(f"Import capped at {MAX_IMPORT_ROWS} rows — split the file and import the rest.")
-            break
-        name = (row.get(name_col) or "").strip()
-        if not name:
-            skipped += 1
-            continue
-        try:
-            crm.create_contact(
-                name=name,
-                email=(row.get(_resolve("email") or "", "") or "").strip(),
-                phone=(row.get(_resolve("phone") or "", "") or "").strip(),
-                company=(row.get(_resolve("company") or "", "") or "").strip(),
-                title=(row.get(_resolve("title") or "", "") or "").strip(),
-                source=(row.get(_resolve("source") or "", "") or "").strip(),
-                tags=(row.get(_resolve("tags") or "", "") or "").strip(),
-                notes=(row.get(_resolve("notes") or "", "") or "").strip(),
-            )
-            imported += 1
-        except Exception as e:
-            logger.debug("CSV import row %d failed: %s", i, e)
-            errors.append(f"Row {i}: could not import — check the data and try again")
-            if len(errors) > 50:
+    # The row loop is synchronous psycopg2 (two round-trips per contact); run it
+    # off the event loop so a large import can't freeze the single-process app
+    # (and its health checks) on the Railway deploy target.
+    def _import_rows() -> tuple[int, int, list[str]]:
+        imported = skipped = 0
+        errors: list[str] = []
+        for i, row in enumerate(reader, start=2):  # Row 2+ (after header)
+            if i - 2 >= MAX_IMPORT_ROWS:  # count every row read (imported/skipped/errored)
+                errors.append(f"Import capped at {MAX_IMPORT_ROWS} rows — split the file and import the rest.")
                 break
+            name = (row.get(name_col) or "").strip()
+            if not name:
+                skipped += 1
+                continue
+            try:
+                crm.create_contact(
+                    name=name,
+                    email=(row.get(_resolve("email") or "", "") or "").strip(),
+                    phone=(row.get(_resolve("phone") or "", "") or "").strip(),
+                    company=(row.get(_resolve("company") or "", "") or "").strip(),
+                    title=(row.get(_resolve("title") or "", "") or "").strip(),
+                    source=(row.get(_resolve("source") or "", "") or "").strip(),
+                    tags=(row.get(_resolve("tags") or "", "") or "").strip(),
+                    notes=(row.get(_resolve("notes") or "", "") or "").strip(),
+                )
+                imported += 1
+            except Exception as e:
+                logger.debug("CSV import row %d failed: %s", i, e)
+                errors.append(f"Row {i}: could not import — check the data and try again")
+                if len(errors) > 50:
+                    break
+        return imported, skipped, errors
 
+    imported, skipped, errors = await run_in_threadpool(_import_rows)
     return {"imported": imported, "skipped": skipped, "errors": errors}
 
 
@@ -501,31 +516,38 @@ async def smart_import_parse(file: UploadFile = File(...), user=Depends(get_curr
 @router.post("/smart-import/confirm")
 async def smart_import_confirm(body: SmartImportConfirm, user=Depends(get_current_user)):
     """Import previously parsed contacts into the CRM."""
-    imported = 0
-    skipped = 0
-    errors = []
+    contacts = body.contacts
 
-    for i, entry in enumerate(body.contacts):
-        name = str(entry.get("name", "") or "").strip()
-        if not name:
-            skipped += 1
-            continue
-        try:
-            crm.create_contact(
-                name=name,
-                email=str(entry.get("email", "") or "").strip(),
-                phone=str(entry.get("phone", "") or "").strip(),
-                company=str(entry.get("company", "") or "").strip(),
-                title=str(entry.get("title", "") or "").strip(),
-                source=str(entry.get("source", "") or "").strip(),
-                tags=str(entry.get("tags", "") or "").strip(),
-                notes=str(entry.get("notes", "") or "").strip(),
-            )
-            imported += 1
-        except Exception as e:
-            logger.debug("Smart import contact %d failed: %s", i + 1, e)
-            errors.append(f"Contact {i + 1}: could not import — check the data and try again")
-            if len(errors) > 50:
-                break
+    def _confirm_rows() -> tuple[int, int, list[str]]:
+        imported = skipped = 0
+        errors: list[str] = []
+        for i, entry in enumerate(contacts):
+            # Fall back to email/phone as the name so email-only entries the
+            # parser kept (and showed in the preview) are actually importable,
+            # not silently dropped — the preview→confirm contract.
+            name = str(entry.get("name") or entry.get("email") or entry.get("phone") or "").strip()
+            if not name:
+                skipped += 1
+                continue
+            try:
+                crm.create_contact(
+                    name=name,
+                    email=str(entry.get("email", "") or "").strip(),
+                    phone=str(entry.get("phone", "") or "").strip(),
+                    company=str(entry.get("company", "") or "").strip(),
+                    title=str(entry.get("title", "") or "").strip(),
+                    source=str(entry.get("source", "") or "").strip(),
+                    tags=str(entry.get("tags", "") or "").strip(),
+                    notes=str(entry.get("notes", "") or "").strip(),
+                )
+                imported += 1
+            except Exception as e:
+                logger.debug("Smart import contact %d failed: %s", i + 1, e)
+                errors.append(f"Contact {i + 1}: could not import — check the data and try again")
+                if len(errors) > 50:
+                    break
+        return imported, skipped, errors
 
+    # Off the event loop — see /import.
+    imported, skipped, errors = await run_in_threadpool(_confirm_rows)
     return {"imported": imported, "skipped": skipped, "errors": errors}

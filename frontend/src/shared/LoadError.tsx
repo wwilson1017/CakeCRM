@@ -1,5 +1,5 @@
 /**
- * Chatty — inline "Couldn't load — Retry" callout for primary data loads
+ * CakeCRM — inline "Couldn't load — Retry" callout for primary data loads
  * that failed. Lives where the content would be (errors belong where the
  * user is looking); toasts are reserved for failed mutations.
  */

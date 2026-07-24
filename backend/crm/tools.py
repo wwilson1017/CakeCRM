@@ -27,7 +27,7 @@ CRM_TOOL_DEFS = [
             "properties": {
                 "query": {"type": "string", "description": "Search term (name, email, company, or keyword)"},
                 "status": {"type": "string", "description": "Filter by status: active, inactive, archived"},
-                "tags": {"type": "string", "description": "Filter by tag (partial match)"},
+                "tags": {"type": "string", "description": "Exact tag label, case-insensitive; comma-separate multiple tags"},
             },
             "required": ["query"],
         },

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../core/api/client';
 import type { CrmContact } from '../core/types';
@@ -36,13 +36,22 @@ export function ContactDetailPage() {
   const [logNote, setLogNote] = useState('');
   const [logging, setLogging] = useState(false);
 
+  const loadIdRef = useRef(0);
   const load = useCallback(async () => {
+    // Guard against a slow response for a previous contact overwriting the
+    // current one when navigating quickly between contacts (the delete confirm
+    // would otherwise name one contact while deleting the URL's contact).
+    const reqId = ++loadIdRef.current;
     setLoading(true);
     try {
       const data = await api<CrmContact>(`/api/crm/contacts/${id}`);
+      if (reqId !== loadIdRef.current) return;
       setContact(data);
-    } catch { setContact(null); }
-    setLoading(false);
+    } catch {
+      if (reqId !== loadIdRef.current) return;
+      setContact(null);
+    }
+    if (reqId === loadIdRef.current) setLoading(false);
   }, [id]);
 
   useEffect(() => { queueMicrotask(load); }, [load]);

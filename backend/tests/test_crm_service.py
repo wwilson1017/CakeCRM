@@ -245,6 +245,36 @@ def test_create_deal_keeps_valid_stage(rec):
     assert "proposal" in rec.params_for("INSERT INTO deals")
 
 
+def test_create_deal_clamps_probability(rec):
+    rec.fetchone_queue = [{"id": 5}, {"id": 5}]
+    service.create_deal("Deal", probability=500)
+    assert 100 in rec.params_for("INSERT INTO deals") and 500 not in rec.params_for("INSERT INTO deals")
+
+
+# ── enum coercion (mirrors the create_deal stage fix; protects the tool surface) ──
+
+def test_create_contact_coerces_unknown_status(rec):
+    rec.fetchone_queue = [{"id": 1}, {"id": 1}]
+    service.create_contact("Ana", status="prospect")  # not a real status
+    assert "active" in rec.params_for("INSERT INTO contacts")
+    assert "prospect" not in rec.params_for("INSERT INTO contacts")
+
+
+def test_update_contact_coerces_unknown_status(rec):
+    rec.fetchone_queue = [{"id": 1}]
+    service.update_contact(1, status="prospect")
+    sql = rec.sql_containing("UPDATE contacts SET")
+    assert "status = %s" in sql
+    assert "active" in rec.params_for("UPDATE contacts SET")
+
+
+def test_create_task_coerces_unknown_priority(rec):
+    rec.fetchone_queue = [{"id": 1}, {"id": 1}]
+    service.create_task("T", priority="urgent")  # not a real priority
+    assert "medium" in rec.params_for("INSERT INTO tasks")
+    assert "urgent" not in rec.params_for("INSERT INTO tasks")
+
+
 # ── search pagination: offset + accurate total ────────────────────────────────
 
 def test_search_contacts_forwards_offset(rec):

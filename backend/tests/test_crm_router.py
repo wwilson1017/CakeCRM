@@ -154,6 +154,25 @@ def test_smart_import_confirm_happy_and_validator(client, monkeypatch):
     assert client.post("/api/crm/smart-import/confirm", json={"contacts": []}).status_code == 422
 
 
+def test_smart_import_confirm_falls_back_to_email_as_name(client, monkeypatch):
+    created = []
+    monkeypatch.setattr(service, "create_contact",
+                        lambda **kw: created.append(kw) or {"id": len(created)})
+    # a nameless-but-emailed entry (kept by the vCard/AI parsers) must import, not be skipped
+    resp = client.post("/api/crm/smart-import/confirm", json={"contacts": [{"email": "ada@x.io"}]})
+    assert resp.status_code == 200 and resp.json()["imported"] == 1
+    assert created[0]["name"] == "ada@x.io"
+
+
+def test_create_deal_fk_violation_returns_400(client, monkeypatch):
+    import psycopg2
+    def _boom(**kw):
+        raise psycopg2.errors.ForeignKeyViolation("dead contact")
+    monkeypatch.setattr(service, "create_deal", _boom)
+    resp = client.post("/api/crm/deals", json={"title": "Deal", "contact_id": 999999})
+    assert resp.status_code == 400  # not a raw 500
+
+
 # ── Search pagination is forwarded (fixes the silent 20-row cap) ──────────────
 
 def test_contacts_search_forwards_limit_offset_and_total(client, monkeypatch):

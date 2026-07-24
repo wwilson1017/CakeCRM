@@ -78,6 +78,10 @@ export function ContactsPage() {
       if (tagData) setAvailableTags(tagData.tags);
     } catch {
       if (id !== loadIdRef.current) return;
+      // Clear so the error state actually renders (it keys off contacts.length===0)
+      // and a later loadMore can't append new-filter rows onto stale ones.
+      setContacts([]);
+      setTotal(0);
       setLoadFailed(true);
     } finally {
       // Guarded: a stale request must not clear the loading flag set by a newer one.

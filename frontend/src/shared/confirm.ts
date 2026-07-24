@@ -1,5 +1,5 @@
 /**
- * Chatty — styled confirm store, a drop-in replacement for native confirm():
+ * CakeCRM — styled confirm store, a drop-in replacement for native confirm():
  *
  *   if (!await confirmDialog({ title: 'Delete report', message: '...', danger: true })) return;
  *

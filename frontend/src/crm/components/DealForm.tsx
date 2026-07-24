@@ -76,7 +76,7 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
                 {STAGE_ORDER.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
-            <div><label style={labelStyle}>Value ($)</label><input type="number" value={value} onChange={e => setValue(e.target.value)} style={inputStyle} /></div>
+            <div><label style={labelStyle}>Value ($)</label><input type="number" step="any" min="0" value={value} onChange={e => setValue(e.target.value)} style={inputStyle} /></div>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div><label style={labelStyle}>Probability (%)</label><input type="number" min="0" max="100" value={probability} onChange={e => setProbability(e.target.value)} style={inputStyle} /></div>
