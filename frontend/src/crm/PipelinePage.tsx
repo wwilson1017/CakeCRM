@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../core/api/client';
 import type { CrmDeal } from '../core/types';
@@ -13,11 +13,8 @@ import {
   INK, INK_MUTE, INK_DIM, LINE, BG_CARD,
   FONT_DISPLAY, mono, formatNumber,
 } from '../shared/styles';
-import {
-  pageHeading, filterBar, filterTab, tableHeader, tableRow,
-  btnPrimary, stageCard,
-} from './styles';
-
+import { pageHeading, btnPrimary, stageCard } from './styles';
+import { KanbanBoard, type MoveEvent } from '../shared/dnd';
 
 interface PipelineData {
   deals: CrmDeal[];
@@ -25,27 +22,22 @@ interface PipelineData {
   total_pipeline_value: number;
 }
 
+// Open stages drive the header subtitle; won/lost are terminal and excluded so
+// the "open pipeline" total stays correct as deals are dragged in and out.
+const OPEN_STAGES = STAGE_ORDER.filter(s => s !== 'won' && s !== 'lost');
+
 export function PipelinePage() {
   const [data, setData] = useState<PipelineData | null>(null);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [editDeal, setEditDeal] = useState<CrmDeal | null>(null);
-  const [searchParams, setSearchParams] = useSearchParams();
-  const [stageFilter, setStageFilter] = useState<string>(() => {
-    const s = searchParams.get('stage');
-    return s && STAGE_ORDER.includes(s) ? s : '';
-  });
   const [selectedDeal, setSelectedDeal] = useState<CrmDeal | null>(null);
+  const [moving, setMoving] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
   const isMobile = useIsMobile();
 
-  useEffect(() => {
-    const s = searchParams.get('stage');
-    if (s && STAGE_ORDER.includes(s)) {
-      queueMicrotask(() => setStageFilter(s));
-      searchParams.delete('stage');
-      setSearchParams(searchParams, { replace: true });
-    }
-  }, [searchParams, setSearchParams]);
+  const columnRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const deepLinkDone = useRef(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -58,18 +50,93 @@ export function PipelinePage() {
 
   useEffect(() => { queueMicrotask(load); }, [load]);
 
-  async function updateDealStage(deal: CrmDeal, stage: string) {
+  // Persist a stage change and optimistically fold it into `data` so column
+  // counts/totals refresh without a spinner rebuild. Uses the PUT response (the
+  // canonical deal incl. new updated_at + joined contact/company names) and
+  // moves it to the front so grouped order matches a future updated_at-DESC
+  // reload. Throws on failure — the caller decides how to react.
+  const persistStageChange = useCallback(async (deal: CrmDeal, stage: string): Promise<CrmDeal> => {
+    const updated = await api<CrmDeal>(`/api/crm/deals/${deal.id}`, {
+      method: 'PUT', body: JSON.stringify({ stage }),
+    });
+    const merged = { ...deal, ...updated };
+    setData(prev => prev ? {
+      ...prev,
+      deals: [merged, ...prev.deals.filter(d => d.id !== merged.id)],
+    } : prev);
+    return merged;
+  }, []);
+
+  // Drag handler: re-throws on failure so the Kanban hook rolls the card back to
+  // its origin column. `moving` blocks a second drag until this PUT settles, so
+  // the hook's single rollback snapshot can't be clobbered mid-flight.
+  const handleKanbanMove = useCallback(async (event: MoveEvent<CrmDeal>) => {
+    // Stage-only board: deals carry no rank column, so a same-stage reorder is
+    // not persisted (it would reset on reload anyway).
+    if (String(event.fromColumnId) === String(event.toColumnId)) return;
+    setMoving(true);
     try {
-      await api(`/api/crm/deals/${deal.id}`, {
-        method: 'PUT', body: JSON.stringify({ stage }),
-      });
+      await persistStageChange(event.item, String(event.toColumnId));
+    } catch (err) {
+      console.error('Failed to move deal:', err);
+      toast.error('Failed to move deal.');
+      throw err; // drive the Kanban optimistic rollback
+    } finally {
+      setMoving(false);
+    }
+  }, [persistStageChange]);
+
+  // Detail-sheet handler (fire-and-forget `void`): toast on failure, never
+  // re-throw — a rejection here would be unhandled.
+  const updateDealStage = useCallback(async (deal: CrmDeal, stage: string) => {
+    try {
+      await persistStageChange(deal, stage);
       setSelectedDeal(null);
-      load();
     } catch (err) {
       console.error('Failed to update deal stage:', err);
       toast.error('Failed to move deal.');
     }
-  }
+  }, [persistStageChange]);
+
+  const deals = useMemo(() => data?.deals ?? [], [data]);
+
+  const grouped = useMemo(
+    () => STAGE_ORDER.reduce<Record<string, CrmDeal[]>>((acc, stage) => {
+      acc[stage] = deals.filter(d => d.stage === stage);
+      return acc;
+    }, {}),
+    [deals],
+  );
+
+  const kanbanColumns = useMemo(
+    () => STAGE_ORDER.map(stage => ({ id: stage, data: { stage } })),
+    [],
+  );
+
+  const openTotal = useMemo(
+    () => deals.filter(d => OPEN_STAGES.includes(d.stage)).reduce((s, d) => s + (d.value || 0), 0),
+    [deals],
+  );
+  const openCount = useMemo(
+    () => deals.filter(d => OPEN_STAGES.includes(d.stage)).length,
+    [deals],
+  );
+
+  // Dashboard deep-link (/crm/pipeline?stage=X): once `data` has rendered the
+  // columns (refs populated), scroll the requested column into view, then clear
+  // only the `stage` param (preserving any others). Runs once.
+  useEffect(() => {
+    if (!data || deepLinkDone.current) return;
+    const s = searchParams.get('stage');
+    if (!s) return;
+    deepLinkDone.current = true;
+    if (STAGE_ORDER.includes(s)) {
+      columnRefs.current.get(s)?.scrollIntoView({ behavior: 'smooth', inline: 'start', block: 'nearest' });
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete('stage');
+    setSearchParams(next, { replace: true });
+  }, [data, searchParams, setSearchParams]);
 
   if (loading) {
     return (
@@ -81,24 +148,14 @@ export function PipelinePage() {
 
   if (!data) return <LoadError label="Couldn't load pipeline" onRetry={load} />;
 
-  const deals = data?.deals || [];
-  const grouped = STAGE_ORDER.reduce<Record<string, CrmDeal[]>>((acc, stage) => {
-    acc[stage] = deals.filter(d => d.stage === stage);
-    return acc;
-  }, {});
-
-  const filteredStages = stageFilter ? [stageFilter] : STAGE_ORDER;
-
   return (
-    <div style={{ padding: isMobile ? '20px 16px' : '32px 44px', maxWidth: 1000 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, padding: isMobile ? '20px 16px' : '32px 44px' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: isMobile ? 16 : 24 }}>
         <div>
           <h1 style={pageHeading(isMobile)}>Pipeline</h1>
-          {data && (
-            <p style={{ fontSize: isMobile ? 14 : 20, color: INK_MUTE, marginTop: 6 }}>
-              ${formatNumber(data.total_pipeline_value)} total · {deals.filter(d => !['won', 'lost'].includes(d.stage)).length} open deals
-            </p>
-          )}
+          <p style={{ fontSize: isMobile ? 14 : 20, color: INK_MUTE, marginTop: 6 }}>
+            ${formatNumber(openTotal)} open · {openCount} open deal{openCount !== 1 ? 's' : ''}
+          </p>
         </div>
         <button onClick={() => setShowCreate(true)} style={{
           ...btnPrimary,
@@ -109,107 +166,45 @@ export function PipelinePage() {
         </button>
       </div>
 
-      {/* Stage filter */}
-      <div style={filterBar(isMobile)}>
-        {[{ stage: '', label: 'All' }, ...STAGE_ORDER.map(s => ({ stage: s, label: s }))].map(({ stage, label }) => {
-          const isActive = stageFilter === stage;
-          const stageColor = stage ? (STAGE_COLORS[stage]?.color || INK_DIM) : undefined;
+      <KanbanBoard<CrmDeal, { stage: string }>
+        columns={kanbanColumns}
+        items={grouped}
+        onMove={handleKanbanMove}
+        // Drag off on touch (fiddly) and while a move is in flight (protects the
+        // single rollback snapshot). Mobile stage changes go through the sheet.
+        dragDisabled={isMobile || moving}
+        className={`flex gap-4 overflow-x-auto pb-3 pt-1${isMobile ? ' snap-x snap-mandatory' : ''}`}
+        columnClassName="flex flex-col gap-2 overflow-y-auto max-h-[70vh] min-h-[80px] pr-1"
+        renderColumn={(col, children) => {
+          const stage = String(col.id);
+          const colDeals = grouped[stage] || [];
+          const total = colDeals.reduce((s, d) => s + (d.value || 0), 0);
           return (
-            <button key={label} onClick={() => setStageFilter(stage === stageFilter ? '' : stage)} style={filterTab(isMobile, isActive, stageColor)}>
-              <span style={{ color: isActive ? (stageColor || INK) : INK_MUTE }}>{label}</span>
-              {stage && (
-                <span style={{ marginLeft: 6, fontSize: 12, color: isActive ? INK_MUTE : INK_DIM }}>
-                  {grouped[stage]?.length || 0}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Grouped deals */}
-      {filteredStages.map(stage => {
-        const stageDeals = grouped[stage] || [];
-        if (stageDeals.length === 0 && stageFilter) return null;
-
-        const stageBg = STAGE_COLORS[stage]?.bg || BG_CARD;
-        const stageColor = STAGE_COLORS[stage]?.color || INK_DIM;
-
-        return (
-          <div key={stage} style={{ marginBottom: 24 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-              <span style={{
-                width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                background: stageColor,
-              }} />
-              <span style={{
-                fontFamily: FONT_DISPLAY,
-                fontSize: isMobile ? 16 : 18, letterSpacing: '-0.01em', textTransform: 'capitalize',
-                color: INK,
-              }}>{stage}</span>
-              <span style={{ ...mono(10, INK_DIM) }}>
-                {stageDeals.length} deal{stageDeals.length !== 1 ? 's' : ''} · ${formatNumber(stageDeals.reduce((s, d) => s + d.value, 0))}
-              </span>
+            <div
+              key={col.id}
+              data-stage={stage}
+              ref={el => { if (el) columnRefs.current.set(stage, el); else columnRefs.current.delete(stage); }}
+              style={{
+                flexShrink: 0,
+                width: isMobile ? '85vw' : 288,
+                scrollSnapAlign: isMobile ? 'center' : undefined,
+              }}
+            >
+              <StageHeader stage={stage} count={colDeals.length} total={total} />
+              {children}
             </div>
-
-            {stageDeals.length === 0 ? (
-              <p style={{ color: INK_DIM, fontSize: 12, marginLeft: 8, marginBottom: 16 }}>No deals</p>
-            ) : isMobile ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 8 }}>
-                {stageDeals.map(deal => (
-                  <div key={deal.id} onClick={() => setSelectedDeal(deal)}
-                    style={{
-                      padding: '12px 14px', cursor: 'pointer',
-                      ...stageCard(stageBg, stageColor),
-                    }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
-                      <span style={{ fontSize: 14, color: INK }}>{deal.title}</span>
-                      <span style={{
-                        fontFamily: FONT_DISPLAY,
-                        fontSize: 15, color: INK, flexShrink: 0, marginLeft: 8,
-                      }}>${deal.value.toLocaleString()}</span>
-                    </div>
-                    <div style={{ display: 'flex', gap: 12, fontSize: 12, color: INK_DIM }}>
-                      {deal.contact_name && <span>{deal.contact_name}</span>}
-                      {deal.probability > 0 && <span>{deal.probability}%</span>}
-                      {deal.expected_close_date && <span>{deal.expected_close_date}</span>}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div style={{ borderTop: `1px solid ${LINE}`, marginBottom: 8 }}>
-                <div style={tableHeader('2fr 1.5fr 1fr 80px 1fr')}>
-                  <span>Deal</span><span>Contact</span><span style={{ textAlign: 'right' }}>Value</span>
-                  <span style={{ textAlign: 'right' }}>Prob.</span><span>Close Date</span>
-                </div>
-                {stageDeals.map(deal => (
-                  <div key={deal.id} onClick={() => setSelectedDeal(deal)}
-                    style={{
-                      ...tableRow('2fr 1.5fr 1fr 80px 1fr'),
-                      borderLeft: `3px solid ${stageColor}`,
-                    }}
-                    onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = stageBg; }}
-                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-                  >
-                    <span style={{ fontSize: 14, color: INK }}>{deal.title}</span>
-                    <span style={{ fontSize: 13, color: INK_MUTE }}>{deal.contact_name || '—'}</span>
-                    <span style={{
-                      fontFamily: FONT_DISPLAY,
-                      fontSize: 15, color: INK, textAlign: 'right',
-                    }}>${deal.value.toLocaleString()}</span>
-                    <span style={{ fontSize: 13, color: INK_DIM, textAlign: 'right' }}>
-                      {deal.probability > 0 ? `${deal.probability}%` : '—'}
-                    </span>
-                    <span style={{ fontSize: 13, color: INK_DIM }}>{deal.expected_close_date || '—'}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        );
-      })}
+          );
+        }}
+        renderCard={(deal) => (
+          <DealBoardCard deal={deal} onOpen={() => setSelectedDeal(deal)} />
+        )}
+        renderEmptyColumn={() => (
+          <div style={{
+            fontSize: 12, color: INK_DIM, textAlign: 'center',
+            padding: '16px 8px', border: `1px dashed ${LINE}`, borderRadius: 6,
+          }}>No deals</div>
+        )}
+      />
 
       {showCreate && <DealForm onClose={() => setShowCreate(false)} onSaved={() => { setShowCreate(false); load(); }} />}
       {editDeal && <DealForm deal={editDeal} onClose={() => setEditDeal(null)} onSaved={() => { setEditDeal(null); setSelectedDeal(null); load(); }} />}
@@ -224,6 +219,49 @@ export function PipelinePage() {
           onStageChange={updateDealStage}
         />
       )}
+    </div>
+  );
+}
+
+function StageHeader({ stage, count, total }: { stage: string; count: number; total: number }) {
+  const color = STAGE_COLORS[stage]?.color || INK_DIM;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, padding: '0 2px' }}>
+      <span style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: color }} />
+      <span style={{
+        fontFamily: FONT_DISPLAY,
+        fontSize: 15, letterSpacing: '-0.01em', textTransform: 'capitalize',
+        color: INK,
+      }}>{stage}</span>
+      <span style={mono(10, INK_DIM)}>{count}</span>
+      <span style={{ ...mono(10, INK_MUTE), marginLeft: 'auto' }}>${total.toLocaleString()}</span>
+    </div>
+  );
+}
+
+function DealBoardCard({ deal, onOpen }: { deal: CrmDeal; onOpen: () => void }) {
+  const color = STAGE_COLORS[deal.stage]?.color || INK_DIM;
+  const bg = STAGE_COLORS[deal.stage]?.bg || BG_CARD;
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); } }}
+      style={{ ...stageCard(bg, color), padding: '10px 12px', cursor: 'pointer' }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
+        <span style={{ fontSize: 13, color: INK, lineHeight: 1.3 }}>{deal.title}</span>
+        <span style={{
+          fontFamily: FONT_DISPLAY,
+          fontSize: 14, color: INK, flexShrink: 0,
+        }}>${deal.value.toLocaleString()}</span>
+      </div>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 11, color: INK_DIM }}>
+        {deal.contact_name && <span>{deal.contact_name}</span>}
+        {deal.probability > 0 && <span>{deal.probability}%</span>}
+        {deal.expected_close_date && <span>{deal.expected_close_date}</span>}
+      </div>
     </div>
   );
 }
