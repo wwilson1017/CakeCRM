@@ -31,6 +31,17 @@ export function ContactForm({ contact, onClose, onSaved }: Props) {
       .then(d => setCompanies(d.companies)).catch(() => {});
   }, []);
 
+  // Keep the legacy free-text `company` in sync with the linked company so the two
+  // can't contradict (link to Beta while the text still says Acme). Selecting a
+  // company overwrites the text; "No company" leaves the text for free-form entry.
+  function pickCompany(id: number | null) {
+    setCompanyId(id);
+    if (id != null) {
+      const co = companies.find(c => c.id === id);
+      if (co) setCompany(co.name);
+    }
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim()) { setError('Name is required'); return; }
@@ -63,7 +74,7 @@ export function ContactForm({ contact, onClose, onSaved }: Props) {
           <div><label style={labelStyle}>Company</label><input value={company} onChange={e => setCompany(e.target.value)} style={inputStyle} /></div>
           <div>
             <label style={labelStyle}>Linked Company</label>
-            <select value={companyId ?? ''} onChange={e => setCompanyId(e.target.value ? Number(e.target.value) : null)} style={inputStyle}>
+            <select value={companyId ?? ''} onChange={e => pickCompany(e.target.value ? Number(e.target.value) : null)} style={inputStyle}>
               <option value="">No company</option>
               {companies.map(co => <option key={co.id} value={co.id}>{co.name}</option>)}
             </select>

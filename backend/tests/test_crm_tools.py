@@ -32,13 +32,16 @@ def test_company_tools_present():
 
 
 def test_contact_and_deal_tools_accept_company_id():
-    """company_id is exposed on the create/update contact + deal tool schemas."""
+    """company_id is exposed on the create/update contact + deal tool schemas.
+
+    Create tools take a plain integer; update tools accept null so an agent can
+    unlink a contact/deal from its company (parity with the HTTP update path).
+    """
     by_name = {d["name"]: d for d in CRM_TOOL_DEFS}
-    for name in ("crm_create_contact", "crm_update_contact",
-                 "crm_create_deal", "crm_update_deal"):
-        props = by_name[name]["input_schema"]["properties"]
-        assert "company_id" in props, name
-        assert props["company_id"]["type"] == "integer"
+    for name in ("crm_create_contact", "crm_create_deal"):
+        assert by_name[name]["input_schema"]["properties"]["company_id"]["type"] == "integer", name
+    for name in ("crm_update_contact", "crm_update_deal"):
+        assert by_name[name]["input_schema"]["properties"]["company_id"]["type"] == ["integer", "null"], name
 
 
 def test_def_names_unique_prefixed_and_schema_shaped():
@@ -126,3 +129,18 @@ def test_crm_search_and_list_companies_pass_through(monkeypatch):
     monkeypatch.setattr(service, "list_companies", lambda **kw: {"companies": [{"id": 1}], "total": 1})
     assert tools.crm_search_companies("acme") == {"companies": [{"id": 1}, {"id": 2}], "count": 2}
     assert tools.crm_list_companies(status="active") == {"companies": [{"id": 1}], "total": 1}
+
+
+def test_contact_deal_tools_translate_fk_violation(monkeypatch):
+    """An invalid company_id (or contact_id) through the tool path returns a
+    structured error rather than raising a raw psycopg2 error."""
+    def raise_fk(*a, **kw):
+        raise psycopg2.errors.ForeignKeyViolation()
+    monkeypatch.setattr(service, "create_contact", raise_fk)
+    monkeypatch.setattr(service, "update_contact", raise_fk)
+    monkeypatch.setattr(service, "create_deal", raise_fk)
+    monkeypatch.setattr(service, "update_deal", raise_fk)
+    assert tools.crm_create_contact("Ana", company_id=999) == {"error": "Referenced company does not exist"}
+    assert tools.crm_update_contact(1, company_id=999) == {"error": "Referenced company does not exist"}
+    assert tools.crm_create_deal("D", company_id=999) == {"error": "Referenced contact or company does not exist"}
+    assert tools.crm_update_deal(1, company_id=999) == {"error": "Referenced contact or company does not exist"}

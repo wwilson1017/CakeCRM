@@ -78,7 +78,7 @@ CRM_TOOL_DEFS = [
                 "status": {"type": "string", "description": "active, inactive, or archived"},
                 "tags": {"type": "string"},
                 "notes": {"type": "string"},
-                "company_id": {"type": "integer", "description": "ID of a linked company. Set to link this contact to a company."},
+                "company_id": {"type": ["integer", "null"], "description": "ID of a linked company; pass null to unlink this contact from its company."},
             },
             "required": ["contact_id"],
         },
@@ -188,7 +188,7 @@ CRM_TOOL_DEFS = [
                 "probability": {"type": "integer", "description": "0-100"},
                 "currency": {"type": "string"},
                 "contact_id": {"type": "integer"},
-                "company_id": {"type": "integer", "description": "ID of a linked company."},
+                "company_id": {"type": ["integer", "null"], "description": "ID of a linked company; pass null to unlink this deal from its company."},
             },
             "required": ["deal_id"],
         },
@@ -436,11 +436,19 @@ def crm_find_contact(query: str, status: str | None = None, tags: str | None = N
 
 
 def crm_create_contact(name: str, **kwargs) -> dict:
-    return crm.create_contact(name=name, **kwargs)
+    # An invalid company_id would raise a raw FK error; translate it (the HTTP
+    # route returns 400 for the same case).
+    try:
+        return crm.create_contact(name=name, **kwargs)
+    except psycopg2.errors.ForeignKeyViolation:
+        return {"error": "Referenced company does not exist"}
 
 
 def crm_update_contact(contact_id: int, **kwargs) -> dict:
-    result = crm.update_contact(contact_id, **kwargs)
+    try:
+        result = crm.update_contact(contact_id, **kwargs)
+    except psycopg2.errors.ForeignKeyViolation:
+        return {"error": "Referenced company does not exist"}
     if not result:
         return {"error": f"Contact {contact_id} not found"}
     return result
@@ -470,11 +478,17 @@ def crm_get_pipeline(stage: str | None = None) -> dict:
 
 
 def crm_create_deal(title: str, **kwargs) -> dict:
-    return crm.create_deal(title=title, **kwargs)
+    try:
+        return crm.create_deal(title=title, **kwargs)
+    except psycopg2.errors.ForeignKeyViolation:
+        return {"error": "Referenced contact or company does not exist"}
 
 
 def crm_update_deal(deal_id: int, **kwargs) -> dict:
-    result = crm.update_deal(deal_id, **kwargs)
+    try:
+        result = crm.update_deal(deal_id, **kwargs)
+    except psycopg2.errors.ForeignKeyViolation:
+        return {"error": "Referenced contact or company does not exist"}
     if not result:
         return {"error": f"Deal {deal_id} not found or invalid stage"}
     return result

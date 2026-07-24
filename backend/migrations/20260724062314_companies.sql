@@ -27,11 +27,13 @@ CREATE TABLE IF NOT EXISTS companies (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Uniqueness rule: one company per case-insensitive, whitespace-trimmed name.
--- regexp_replace(x, '^\s+|\s+$', '', 'g') is the SINGLE normalization used
--- everywhere in this migration; Postgres \s = [ \t\n\r\f\v], matching Python
--- str.strip() (the service stores name.strip()) so backfill + service writes
--- can never disagree on what counts as a duplicate.
+-- Uniqueness rule: one company per case-insensitive, ASCII-whitespace-trimmed
+-- name. regexp_replace(x, '^\s+|\s+$', '', 'g') is the SINGLE normalization used
+-- everywhere in this migration. Postgres \s trims the ASCII whitespace set
+-- [ \t\n\r\f\v]; the service trims the SAME set (service._WS) rather than
+-- Python's Unicode-aware str.strip(), so backfill and later writes can never
+-- disagree about what counts as a duplicate (a non-ASCII space like NBSP is
+-- preserved verbatim on both sides — treated as part of the name).
 CREATE UNIQUE INDEX IF NOT EXISTS uq_companies_name_ci
     ON companies (LOWER(regexp_replace(name, '^\s+|\s+$', '', 'g')));
 CREATE INDEX IF NOT EXISTS idx_companies_name   ON companies(name);

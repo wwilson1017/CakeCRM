@@ -30,10 +30,29 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
 
   useEffect(() => {
     api<{ contacts: CrmContact[] }>('/api/crm/contacts?limit=200')
-      .then(d => setContacts(d.contacts)).catch(() => {});
+      .then(d => {
+        setContacts(d.contacts);
+        // Deal opened from a contact (create mode): default its company to that
+        // contact's company so the deal shows up in the company's rollups. The
+        // user can still change the Company select below.
+        if (!deal && contactId != null) {
+          const c = d.contacts.find(x => x.id === contactId);
+          if (c && c.company_id != null) setSelectedCompany(prev => prev ?? c.company_id);
+        }
+      }).catch(() => {});
     api<{ companies: CrmCompany[] }>('/api/crm/companies?limit=200')
       .then(d => setCompanies(d.companies)).catch(() => {});
-  }, []);
+  }, [deal, contactId]);
+
+  // Picking a contact auto-fills the company from that contact (the common flow);
+  // the Company select remains editable for the exceptions.
+  function pickContact(id: number | null) {
+    setSelectedContact(id);
+    if (id != null) {
+      const c = contacts.find(x => x.id === id);
+      if (c) setSelectedCompany(c.company_id ?? null);
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -69,7 +88,7 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
           <div><label style={labelStyle}>Title *</label><input value={title} onChange={e => setTitle(e.target.value)} style={inputStyle} /></div>
           <div>
             <label style={labelStyle}>Contact</label>
-            <select value={selectedContact ?? ''} onChange={e => setSelectedContact(e.target.value ? Number(e.target.value) : null)} style={inputStyle}>
+            <select value={selectedContact ?? ''} onChange={e => pickContact(e.target.value ? Number(e.target.value) : null)} style={inputStyle}>
               <option value="">No contact</option>
               {contacts.map(c => <option key={c.id} value={c.id}>{c.name}{c.company ? ` (${c.company})` : ''}</option>)}
             </select>

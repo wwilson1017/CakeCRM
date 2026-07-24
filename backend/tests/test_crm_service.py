@@ -313,6 +313,18 @@ def test_create_company_coerces_unknown_status(rec):
     assert "active" in rec.params_for("INSERT INTO companies")
 
 
+def test_create_company_trims_only_ascii_whitespace(rec):
+    # Matches the migration's regexp_replace(\\s) so backfill + service agree:
+    # ASCII whitespace is trimmed; a non-ASCII NBSP is preserved verbatim.
+    rec.fetchone_queue = [{"id": 1}, {"id": 1}]
+    service.create_company("  Acme  ")
+    assert rec.params_for("INSERT INTO companies")[0] == "Acme"
+    rec.calls.clear()
+    rec.fetchone_queue = [{"id": 2}, {"id": 2}]
+    service.create_company("\u00a0Acme\u00a0")  # NBSP-wrapped: preserved, not stripped
+    assert rec.params_for("INSERT INTO companies")[0] == "\u00a0Acme\u00a0"
+
+
 def test_list_companies_count_alias_and_sort_whitelist(rec):
     rec.fetchone_queue = [{"cnt": 3}]
     rec.fetchall_queue = [[{"id": 1, "name": "Acme"}]]

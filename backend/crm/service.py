@@ -21,6 +21,12 @@ CONTACT_STATUSES = ["active", "inactive", "archived"]
 TASK_PRIORITIES = ["low", "medium", "high"]
 COMPANY_STATUSES = ["active", "archived"]
 
+# ASCII whitespace set matching Postgres regex \s ([ \t\n\r\f\v]). Company names
+# are trimmed with THIS set (not Python's Unicode-aware str.strip()) so the value
+# the service stores normalizes identically to the companies migration's backfill
+# + unique index, which use regexp_replace(name, '^\s+|\s+$', '', 'g').
+_WS = " \t\n\r\f\v"
+
 # SQL fragment for whitespace-tolerant boundary matching against the comma-separated
 # tags column. Strips whitespace adjacent to commas so the filter survives free-form
 # input like "PT, ET, MT". Valid Postgres (|| concat + REPLACE).
@@ -216,7 +222,7 @@ def create_company(
     row = pg_fetchone(
         """INSERT INTO companies (name, domain, industry, phone, address, notes, source, status)
            VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-        (name.strip(), domain, industry, phone, address, notes, source, status),
+        (name.strip(_WS), domain, industry, phone, address, notes, source, status),
     )
     return get_company(row["id"])
 
@@ -284,7 +290,7 @@ def update_company(company_id: int, **fields) -> dict | None:
     allowed = {"name", "domain", "industry", "phone", "address", "notes", "source", "status"}
     filtered = {k: v for k, v in fields.items() if k in allowed}
     if "name" in filtered:
-        stripped = (filtered["name"] or "").strip()
+        stripped = (filtered["name"] or "").strip(_WS)
         if stripped:
             filtered["name"] = stripped
         else:
