@@ -138,7 +138,8 @@ def _parse_vcf(content: str) -> list[dict]:
 
         key_part, value = line.split(":", 1)
         parts = key_part.split(";")
-        prop = parts[0].upper()
+        # Strip an optional group prefix (Apple/iOS exports emit "item1.EMAIL").
+        prop = parts[0].split(".")[-1].upper()
         params = ";".join(parts[1:])
         value = _decode_value(value, params)
 

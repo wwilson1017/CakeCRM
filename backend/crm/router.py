@@ -57,6 +57,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 MAX_UPLOAD_BYTES = 1_048_576  # 1 MB cap on uploaded files (CSV + smart-import)
+MAX_IMPORT_ROWS = 5000  # cap CSV rows processed per request (matches smart-import's contact cap)
 
 
 # ── Request models ────────────────────────────────────────────────────────────
@@ -442,6 +443,9 @@ async def import_csv(file: UploadFile = File(...), user=Depends(get_current_user
     errors = []
 
     for i, row in enumerate(reader, start=2):  # Row 2+ (after header)
+        if imported + skipped >= MAX_IMPORT_ROWS:
+            errors.append(f"Import capped at {MAX_IMPORT_ROWS} rows — split the file and import the rest.")
+            break
         name = (row.get(name_col) or "").strip()
         if not name:
             skipped += 1

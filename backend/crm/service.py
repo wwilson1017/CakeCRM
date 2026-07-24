@@ -362,6 +362,10 @@ def complete_task(task_id: int) -> dict | None:
 def update_task(task_id: int, **fields) -> dict | None:
     allowed = {"title", "description", "due_date", "contact_id", "deal_id", "priority", "completed"}
     filtered = {k: v for k, v in fields.items() if k in allowed}
+    # Normalize the flag to the 0/1 invariant (a stray value like 2 is truthy in
+    # the UI but matches neither `completed = 0` nor `= 1` filters).
+    if "completed" in filtered:
+        filtered["completed"] = 1 if filtered["completed"] else 0
     if not filtered:
         return get_task(task_id)
     set_clause = ", ".join(f"{k} = %s" for k in filtered)

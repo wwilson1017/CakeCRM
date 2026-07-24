@@ -63,6 +63,8 @@ export function ContactsPage() {
   const reload = useCallback(async () => {
     const id = ++loadIdRef.current;
     setLoading(true);
+    setLoadingMore(false);  // a fresh load supersedes any in-flight loadMore, whose
+                            // guarded finally won't clear this flag (stale id)
     setLoadFailed(false);
     try {
       const [data, tagData] = await Promise.all([

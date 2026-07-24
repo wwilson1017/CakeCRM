@@ -33,7 +33,9 @@ CREATE TABLE IF NOT EXISTS deals (
     contact_id          INTEGER REFERENCES contacts(id) ON DELETE SET NULL,
     title               TEXT NOT NULL,
     stage               TEXT NOT NULL DEFAULT 'lead',
-    value               REAL NOT NULL DEFAULT 0,
+    -- DOUBLE PRECISION (float8) preserves chatty's SQLite REAL semantics; float4
+    -- (Postgres REAL) would lose cents on larger deal values.
+    value               DOUBLE PRECISION NOT NULL DEFAULT 0,
     expected_close_date TEXT NOT NULL DEFAULT '',
     probability         INTEGER NOT NULL DEFAULT 0,
     currency            TEXT NOT NULL DEFAULT 'USD',
@@ -52,7 +54,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     title       TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
     due_date    TEXT NOT NULL DEFAULT '',
-    completed   INTEGER NOT NULL DEFAULT 0,
+    completed   INTEGER NOT NULL DEFAULT 0 CHECK (completed IN (0, 1)),
     priority    TEXT NOT NULL DEFAULT 'medium',
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()

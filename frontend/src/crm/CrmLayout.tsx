@@ -4,6 +4,7 @@ import { api } from '../core/api/client';
 import { useAuth } from '../core/auth/AuthContext';
 import { useIsMobile } from '../shared/useIsMobile';
 import { MobileMenuDrawer } from '../shared/MobileMenuDrawer';
+import { confirmDialog } from '../shared/confirm';
 import { INK, INK_SOFT, INK_MUTE, LINE, LINE_STRONG, ACCENT, GOLD, FONT_DISPLAY, FONT_SANS } from '../shared/styles';
 import { modalOverlay, modalContent, btnPrimary, btnSecondary } from './styles';
 
@@ -78,6 +79,15 @@ function DemoBanner({ onClear, isMobile }: {
   const [error, setError] = useState(false);
 
   async function handleClear() {
+    // The sample flag stays set while the user may have added real records, so
+    // clearing wipes the whole CRM — confirm before the destructive action.
+    const ok = await confirmDialog({
+      title: 'Clear all CRM data?',
+      message: "This removes the example data — and anything you've added since. This can't be undone.",
+      confirmLabel: 'Clear everything',
+      danger: true,
+    });
+    if (!ok) return;
     setClearing(true);
     setError(false);
     try {

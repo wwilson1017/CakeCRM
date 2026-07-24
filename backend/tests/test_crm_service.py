@@ -131,6 +131,13 @@ def test_list_tasks_completed_as_int_and_due_before_guard(rec):
     assert "2026-01-01" in params
 
 
+def test_update_task_coerces_completed_to_0_or_1(rec):
+    rec.fetchone_queue = [{"id": 1, "completed": 1}]
+    service.update_task(1, completed=2)  # stray truthy value must normalize to 1
+    params = rec.params_for("UPDATE tasks SET")
+    assert params[0] == 1 and 2 not in params
+
+
 def test_complete_task_uses_returning_and_none_when_missing(rec):
     rec.fetchone_queue = [None]  # UPDATE ... RETURNING id finds nothing
     assert service.complete_task(999) is None

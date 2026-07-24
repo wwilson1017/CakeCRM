@@ -111,6 +111,14 @@ async def test_vcard_quoted_printable_decodes():
     assert result.contacts[0]["notes"] == "café"
 
 
+async def test_vcard_grouped_property_captured():
+    # Apple/iOS exports emit grouped props like "item1.EMAIL" — the group prefix
+    # must be stripped so the value isn't silently dropped.
+    vcf = "BEGIN:VCARD\nFN:Ada\nitem1.EMAIL;type=INTERNET:ada@x.io\nEND:VCARD\n"
+    result = await smart_import.parse_contacts(vcf, "c.vcf")
+    assert result.contacts[0]["email"] == "ada@x.io"
+
+
 async def test_vcard_malformed_line_skipped_not_raised():
     vcf = "BEGIN:VCARD\nthislinehasnocolon\nFN:Ada\nEMAIL:ada@x.io\nEND:VCARD\n"
     result = await smart_import.parse_contacts(vcf, "c.vcf")
