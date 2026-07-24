@@ -314,8 +314,9 @@ def test_create_company_coerces_unknown_status(rec):
 
 
 def test_create_company_trims_only_ascii_whitespace(rec):
-    # Matches the migration's regexp_replace(\\s) so backfill + service agree:
-    # ASCII whitespace is trimmed; a non-ASCII NBSP is preserved verbatim.
+    # Matches the migration's btrim(x, E' \\t\\n\\r\\f\\x0b') so backfill + service
+    # agree: the six ASCII whitespace bytes are trimmed; a non-ASCII NBSP is
+    # preserved verbatim (a fixed byte set, deterministic across libc/locale).
     rec.fetchone_queue = [{"id": 1}, {"id": 1}]
     service.create_company("  Acme  ")
     assert rec.params_for("INSERT INTO companies")[0] == "Acme"
