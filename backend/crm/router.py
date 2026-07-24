@@ -31,6 +31,13 @@ Activity:
   PUT    /api/crm/activity/:id          — edit
   DELETE /api/crm/activity/:id          — delete
 
+Chatter (notes threads on a deal or contact):
+  GET    /api/crm/chatter/:type/:id     — notes for an entity (?include_archived)
+  POST   /api/crm/chatter/:type/:id/note        — append a note
+  PATCH  /api/crm/chatter/note/:id      — edit a note
+  POST   /api/crm/chatter/note/:id/archive      — soft-archive a note
+  POST   /api/crm/chatter/note/:id/unarchive    — restore an archived note
+
 Other:
   GET    /api/crm/dashboard             — summary stats
   GET    /api/crm/demo-status           — first-run onboarding / sample-data state
@@ -53,7 +60,7 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, field_validator
 
 from core.auth import get_current_user
-from crm import service as crm
+from crm import chatter_service, service as crm
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -139,6 +146,14 @@ class ActivityCreate(BaseModel):
 class ActivityUpdate(BaseModel):
     activity: str | None = None
     note: str | None = None
+
+
+class ChatterNoteBody(BaseModel):
+    message: str
+
+
+class ChatterNoteUpdate(BaseModel):
+    message: str
 
 
 class ClearAllBody(BaseModel):
@@ -557,3 +572,61 @@ async def smart_import_confirm(body: SmartImportConfirm, user=Depends(get_curren
     # Off the event loop — see /import.
     imported, skipped, errors = await run_in_threadpool(_confirm_rows)
     return {"imported": imported, "skipped": skipped, "errors": errors}
+
+
+# ── Chatter / notes ───────────────────────────────────────────────────────────
+# Threaded free-text notes on a deal or contact, rendered alongside the activity
+# timeline. Validation (entity type/existence, non-empty message) lives in
+# chatter_service and surfaces here as ValueError → 400.
+
+@router.get("/chatter/{entity_type}/{entity_id}")
+async def get_chatter(
+    entity_type: str,
+    entity_id: int,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    include_archived: bool = False,
+    user=Depends(get_current_user),
+):
+    try:
+        notes = chatter_service.get_chatter(
+            entity_type, entity_id, limit=limit, offset=offset, include_archived=include_archived,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    return {"notes": notes, "count": len(notes)}
+
+
+@router.post("/chatter/{entity_type}/{entity_id}/note")
+async def add_chatter_note(
+    entity_type: str, entity_id: int, body: ChatterNoteBody, user=Depends(get_current_user),
+):
+    try:
+        return chatter_service.log_note(entity_type, entity_id, body.message)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+
+
+@router.patch("/chatter/note/{note_id}")
+async def update_chatter_note(note_id: int, body: ChatterNoteUpdate, user=Depends(get_current_user)):
+    try:
+        result = chatter_service.update_note(note_id, body.message)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    if not result:
+        raise HTTPException(status_code=404, detail="Note not found")
+    return result
+
+
+@router.post("/chatter/note/{note_id}/archive")
+async def archive_chatter_note(note_id: int, user=Depends(get_current_user)):
+    if not chatter_service.archive_note(note_id):
+        raise HTTPException(status_code=404, detail="Note not found")
+    return {"ok": True}
+
+
+@router.post("/chatter/note/{note_id}/unarchive")
+async def unarchive_chatter_note(note_id: int, user=Depends(get_current_user)):
+    if not chatter_service.unarchive_note(note_id):
+        raise HTTPException(status_code=404, detail="Note not found")
+    return {"ok": True}

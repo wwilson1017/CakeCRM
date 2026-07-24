@@ -168,6 +168,12 @@ def delete_contact(contact_id: int) -> bool:
             return False
         cur.execute("DELETE FROM activity_log WHERE contact_id = %s", (contact_id,))
         cur.execute("DELETE FROM tasks WHERE contact_id = %s", (contact_id,))
+        # crm_chatter is polymorphic (no FK), so its notes are dropped explicitly —
+        # otherwise a reused contact SERIAL id would inherit this contact's notes.
+        cur.execute(
+            "DELETE FROM crm_chatter WHERE entity_type = 'contact' AND entity_id = %s",
+            (contact_id,),
+        )
         cur.execute("DELETE FROM contacts WHERE id = %s", (contact_id,))
     return True
 
@@ -499,7 +505,7 @@ def get_dashboard_stats() -> dict:
 
 # ── First-run / sample-data state (crm_meta singleton) ────────────────────────
 
-_CRM_TABLES = ("contacts", "deals", "tasks", "activity_log")
+_CRM_TABLES = ("contacts", "deals", "tasks", "activity_log", "crm_chatter")
 
 
 def get_crm_meta() -> dict:
@@ -510,16 +516,18 @@ def get_crm_meta() -> dict:
 
 
 def is_crm_empty() -> bool:
-    """True only when ALL CRM tables are empty (contacts, deals, tasks, activity_log).
+    """True only when ALL CRM tables are empty (contacts, deals, tasks, activity_log, crm_chatter).
 
-    Checking every table matters: deals/tasks/activity can exist without contacts,
-    and the fixed-id demo seed must never be inserted into a partially-populated CRM.
+    Checking every table matters: deals/tasks/activity/chatter can exist without
+    contacts, and the fixed-id demo seed must never be inserted into a
+    partially-populated CRM.
     """
     row = pg_fetchone(
         """SELECT (SELECT COUNT(*) FROM contacts)
                 + (SELECT COUNT(*) FROM deals)
                 + (SELECT COUNT(*) FROM tasks)
-                + (SELECT COUNT(*) FROM activity_log) AS total"""
+                + (SELECT COUNT(*) FROM activity_log)
+                + (SELECT COUNT(*) FROM crm_chatter) AS total"""
     )
     return bool(row) and row["total"] == 0
 
@@ -530,7 +538,8 @@ def _crm_empty_in_txn(cur) -> bool:
         """SELECT (SELECT COUNT(*) FROM contacts)
                 + (SELECT COUNT(*) FROM deals)
                 + (SELECT COUNT(*) FROM tasks)
-                + (SELECT COUNT(*) FROM activity_log) AS total"""
+                + (SELECT COUNT(*) FROM activity_log)
+                + (SELECT COUNT(*) FROM crm_chatter) AS total"""
     )
     return cur.fetchone()[0] == 0
 
@@ -580,7 +589,7 @@ def dismiss_onboarding() -> dict:
 
 
 def _truncate_all(cur) -> None:
-    cur.execute("TRUNCATE activity_log, tasks, deals, contacts RESTART IDENTITY")
+    cur.execute("TRUNCATE crm_chatter, activity_log, tasks, deals, contacts RESTART IDENTITY")
 
 
 def clear_demo_data() -> dict:

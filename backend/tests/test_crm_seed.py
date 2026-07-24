@@ -32,4 +32,4 @@ def test_seed_row_counts_match_the_dataset():
     # FakeCursor.executemany isn't defined on the fake; the seed uses executemany,
     # so assert the row batches indirectly by the recorded INSERT statements.
     inserts = [sql for sql, _ in conn.executed if "INSERT INTO" in sql]
-    assert len(inserts) == 4  # one executemany per table
+    assert len(inserts) == 5  # one executemany per table (contacts/deals/tasks/activity_log/crm_chatter)

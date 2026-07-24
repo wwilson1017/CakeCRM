@@ -62,7 +62,7 @@ def pg_db():
 def _clean_crm(pg_db):
     """Reset all CRM state between tests so scenarios stay isolated."""
     from core.postgres import pg_execute
-    pg_execute("TRUNCATE activity_log, tasks, deals, contacts RESTART IDENTITY")
+    pg_execute("TRUNCATE crm_chatter, activity_log, tasks, deals, contacts RESTART IDENTITY")
     pg_execute(
         "UPDATE crm_meta SET sample_data_loaded = FALSE, onboarding_dismissed = FALSE WHERE id = 1"
     )
@@ -88,7 +88,7 @@ def test_migration_created_tables_and_singleton(pg_db):
             "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
         )
     }
-    assert {"contacts", "deals", "tasks", "activity_log", "crm_meta"} <= names
+    assert {"contacts", "deals", "tasks", "activity_log", "crm_meta", "crm_chatter"} <= names
     meta = pg_fetchone("SELECT * FROM crm_meta WHERE id = 1")
     assert meta and meta["sample_data_loaded"] is False
 
@@ -222,3 +222,86 @@ def test_search_pagination_and_contact_unlink(pg_db):
     assert service.get_deal(d["id"])["contact_id"] == c["id"]
     service.update_deal(d["id"], contact_id=None)
     assert service.get_deal(d["id"])["contact_id"] is None
+
+
+# ── Chatter / notes (issue #15) ───────────────────────────────────────────────
+
+def test_chatter_crud_archive_restore_roundtrip(pg_db):
+    from crm import chatter_service, service
+
+    d = service.create_deal("Chatter deal", value=1000)
+    n1 = chatter_service.log_note("deal", d["id"], "  first note  ")
+    n2 = chatter_service.log_note("deal", d["id"], "second note")
+    assert n1["message"] == "first note" and n1["updated_at"] is None and n1["archived"] == 0
+
+    # newest first, deterministic
+    notes = chatter_service.get_chatter("deal", d["id"])
+    assert [n["id"] for n in notes] == [n2["id"], n1["id"]]
+
+    # edit stamps updated_at
+    edited = chatter_service.update_note(n1["id"], "first note (edited)")
+    assert edited["message"] == "first note (edited)" and edited["updated_at"] is not None
+
+    # archive hides from the default list; include_archived shows it; restore brings it back
+    assert chatter_service.archive_note(n1["id"]) is True
+    assert [n["id"] for n in chatter_service.get_chatter("deal", d["id"])] == [n2["id"]]
+    assert len(chatter_service.get_chatter("deal", d["id"], include_archived=True)) == 2
+    assert chatter_service.unarchive_note(n1["id"]) is True
+    assert len(chatter_service.get_chatter("deal", d["id"])) == 2
+
+    # missing note ids are falsy, not errors
+    assert chatter_service.update_note(999999, "x") is None
+    assert chatter_service.archive_note(999999) is None
+
+
+def test_chatter_rejects_invalid_and_nonexistent_targets(pg_db):
+    from crm import chatter_service, service
+
+    with pytest.raises(ValueError):
+        chatter_service.log_note("company", 1, "hi")       # bad type
+    with pytest.raises(ValueError):
+        chatter_service.log_note("deal", 999999, "hi")     # target does not exist
+    c = service.create_contact("Has notes")
+    with pytest.raises(ValueError):
+        chatter_service.log_note("contact", c["id"], "   ")  # blank message
+
+
+def test_chatter_dropped_on_contact_delete_and_clear(pg_db):
+    from core.postgres import pg_fetchone
+    from crm import chatter_service, service
+
+    c = service.create_contact("Doomed")
+    chatter_service.log_note("contact", c["id"], "note that must not outlive the contact")
+    assert pg_fetchone("SELECT COUNT(*) AS n FROM crm_chatter")["n"] == 1
+    service.delete_contact(c["id"])
+    assert pg_fetchone("SELECT COUNT(*) AS n FROM crm_chatter")["n"] == 0
+
+    # ID reuse after clear_all: a new deal reusing id 1 inherits no old notes
+    d = service.create_deal("First deal")
+    chatter_service.log_note("deal", d["id"], "old deal-1 note")
+    service.clear_all()
+    d2 = service.create_deal("New deal reusing id 1")
+    assert d2["id"] == d["id"]  # SERIAL restarted
+    assert chatter_service.get_chatter("deal", d2["id"]) == []
+
+
+def test_chatter_http_roundtrip(pg_db):
+    from crm import service
+
+    d = service.create_deal("HTTP deal")
+    client = _client()
+    r = client.post(f"/api/crm/chatter/deal/{d['id']}/note", json={"message": "via http"})
+    assert r.status_code == 200
+    note_id = r.json()["id"]
+
+    listed = client.get(f"/api/crm/chatter/deal/{d['id']}").json()
+    assert listed["count"] == 1 and listed["notes"][0]["message"] == "via http"
+
+    assert client.patch(f"/api/crm/chatter/note/{note_id}", json={"message": "edited"}).status_code == 200
+    assert client.post(f"/api/crm/chatter/note/{note_id}/archive").json() == {"ok": True}
+    assert client.get(f"/api/crm/chatter/deal/{d['id']}").json()["count"] == 0
+    assert client.get(f"/api/crm/chatter/deal/{d['id']}?include_archived=true").json()["count"] == 1
+    # blank + missing + bad-type contract at the HTTP layer
+    assert client.post(f"/api/crm/chatter/deal/{d['id']}/note", json={"message": " "}).status_code == 400
+    assert client.patch("/api/crm/chatter/note/999999", json={"message": "x"}).status_code == 404
+    assert client.get("/api/crm/chatter/company/1").status_code == 400

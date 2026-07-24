@@ -1,14 +1,14 @@
-"""CakeCRM — CRM agent tools (17 tools).
+"""CakeCRM — CRM agent tools (19 tools).
 
-Contacts, deals, tasks, activities, and analytics — all accessible to the AI
-assistant for managing customer relationships conversationally. The CRM is
-first-class core, so these tools are collected UNCONDITIONALLY (no enable gate);
+Contacts, deals, tasks, activities, chatter/notes, and analytics — all accessible
+to the AI assistant for managing customer relationships conversationally. The CRM
+is first-class core, so these tools are collected UNCONDITIONALLY (no enable gate);
 the assistant engine (a later issue) consumes them via get_crm_tools().
 """
 
 from collections.abc import Callable
 
-from crm import service as crm
+from crm import chatter_service, service as crm
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Tool Definitions (schema only — sent to the AI provider)
@@ -218,8 +218,9 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_log_activity",
         "description": (
-            "Log a note or activity (call, email, meeting, note, follow_up) against a contact or deal. "
-            "Use this after the user mentions an interaction with a customer."
+            "Log a touchpoint (call, email, meeting, follow_up) against a contact or deal — a dated "
+            "record of an interaction. Use after the user mentions interacting with a customer. For "
+            "free-form commentary you may later edit or archive (a notes thread), use crm_add_note."
         ),
         "input_schema": {
             "type": "object",
@@ -314,6 +315,41 @@ CRM_TOOL_DEFS = [
             "type": "object",
             "properties": {},
             "required": [],
+        },
+        "kind": "integration",
+    },
+
+    # ── Chatter / notes (2 tools) ─────────────────────────────────────────────
+    {
+        "name": "crm_add_note",
+        "description": (
+            "Add a free-form note to a deal or contact — editable, archivable commentary shown "
+            "in the entity's notes thread alongside its activity timeline. Use for observations, "
+            "context, or reminders about the record (not a dated interaction — that's crm_log_activity)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "entity_type": {"type": "string", "enum": ["deal", "contact"], "description": "'deal' or 'contact'"},
+                "entity_id": {"type": "integer", "description": "ID of the deal or contact"},
+                "message": {"type": "string", "description": "The note text"},
+            },
+            "required": ["entity_type", "entity_id", "message"],
+        },
+        "kind": "integration",
+    },
+    {
+        "name": "crm_get_chatter",
+        "description": "Read the notes thread for a deal or contact (newest first).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "entity_type": {"type": "string", "enum": ["deal", "contact"], "description": "'deal' or 'contact'"},
+                "entity_id": {"type": "integer", "description": "ID of the deal or contact"},
+                "limit": {"type": "integer", "description": "Max notes (default 50)", "default": 50, "minimum": 1, "maximum": 200},
+                "include_archived": {"type": "boolean", "description": "Include archived notes", "default": False},
+            },
+            "required": ["entity_type", "entity_id"],
         },
         "kind": "integration",
     },
@@ -432,8 +468,30 @@ def crm_dashboard() -> dict:
     return crm.get_dashboard_stats()
 
 
+# ── Chatter / notes ───────────────────────────────────────────────────────────
+
+def crm_add_note(entity_type: str, entity_id: int, message: str) -> dict:
+    try:
+        note = chatter_service.log_note(entity_type, entity_id, message)
+    except ValueError as e:
+        return {"error": str(e)}
+    return {"ok": True, "note": note}
+
+
+def crm_get_chatter(
+    entity_type: str, entity_id: int, limit: int = 50, include_archived: bool = False,
+) -> dict:
+    try:
+        notes = chatter_service.get_chatter(
+            entity_type, entity_id, limit=limit, include_archived=include_archived,
+        )
+    except ValueError as e:
+        return {"error": str(e)}
+    return {"notes": notes, "count": len(notes)}
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
-# Executor Mapping (name -> callable(**kwargs) -> dict). 18 entries: the 17
+# Executor Mapping (name -> callable(**kwargs) -> dict). 20 entries: the 19
 # schema'd tools plus the crm_log_note back-compat alias (no schema def).
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -460,7 +518,11 @@ TOOL_EXECUTORS = {
     "crm_complete_task": crm_complete_task,
     # Analytics
     "crm_dashboard": crm_dashboard,
-    # Backwards compat alias
+    # Chatter / notes
+    "crm_add_note": crm_add_note,
+    "crm_get_chatter": crm_get_chatter,
+    # Backwards compat alias — a legacy 'note' logs an activity (unchanged); the
+    # editable notes thread is crm_add_note.
     "crm_log_note": crm_log_activity,
 }
 

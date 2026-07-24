@@ -1,9 +1,9 @@
 """CRM agent-tools contract: unconditional, complete, well-formed.
 
-The issue requires the ~18 crm_* tools to be collected unconditionally (no
-enable gate). This pins that: 17 schema defs, 18 executors (incl. the
-crm_log_note back-compat alias), every def has an executor, and get_crm_tools()
-returns the full set with no gating.
+The issue requires the crm_* tools to be collected unconditionally (no enable
+gate). This pins that: 19 schema defs, 20 executors (incl. the crm_log_note
+back-compat alias), every def has an executor, and get_crm_tools() returns the
+full set with no gating.
 """
 
 import inspect
@@ -12,9 +12,9 @@ from crm import tools
 from crm.tools import CRM_TOOL_DEFS, TOOL_EXECUTORS, get_crm_tools
 
 
-def test_seventeen_defs_eighteen_executors():
-    assert len(CRM_TOOL_DEFS) == 17
-    assert len(TOOL_EXECUTORS) == 18
+def test_nineteen_defs_twenty_executors():
+    assert len(CRM_TOOL_DEFS) == 19
+    assert len(TOOL_EXECUTORS) == 20
 
 
 def test_def_names_unique_prefixed_and_schema_shaped():
@@ -52,3 +52,19 @@ def test_get_crm_tools_returns_full_set_unconditionally():
 def test_no_enable_gate_in_source():
     src = inspect.getsource(tools)
     assert "is_enabled" not in src  # chatty's crm_lite gate must not survive the port
+
+
+def test_chatter_tools_present_and_shaped():
+    by_name = {d["name"]: d for d in CRM_TOOL_DEFS}
+    assert {"crm_add_note", "crm_get_chatter"} <= set(by_name)
+    for name in ("crm_add_note", "crm_get_chatter"):
+        props = by_name[name]["input_schema"]["properties"]
+        assert props["entity_type"]["enum"] == ["deal", "contact"]
+    assert by_name["crm_add_note"]["input_schema"]["required"] == ["entity_type", "entity_id", "message"]
+
+
+def test_chatter_executors_wrap_validation_errors():
+    # A bad entity_type is rejected in the service before any DB call; the tool
+    # surfaces it as {"error": ...} rather than raising.
+    assert "error" in tools.crm_add_note("company", 1, "hi")
+    assert "error" in tools.crm_get_chatter("company", 1)

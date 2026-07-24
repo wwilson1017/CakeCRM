@@ -58,8 +58,9 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 - **The CRM is first-class core** (`backend/crm/`, mounted at `/api/crm`; frontend
   `frontend/src/crm/` + `frontend/src/shared/`) — always-on, no enable flag. Ported
   from chatty's `crm_lite` and translated to Postgres (contacts/deals/tasks/
-  activity_log; query idioms follow the matching `cake_os/backend/apps/crm` services
-  so later feature ports diff cleanly). The ~17 `crm_*` agent tools + executors are
+  activity_log, plus `crm_chatter` — editable/archivable notes threads on deals and
+  contacts, landed #15; query idioms follow the matching `cake_os/backend/apps/crm`
+  services so later feature ports diff cleanly). The ~19 `crm_*` agent tools + executors are
   collected UNCONDITIONALLY via `crm.tools.get_crm_tools()` — the (dormant) assistant
   engine consumes them in a later issue; there is no `ToolRegistry` class yet. Contact
   import is keyless for CSV/vCard; the AI smart-import path (`get_ai_provider()`)
@@ -144,6 +145,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Telegram | `chatty/backend/integrations/telegram/` |
 | Gmail (reduced to read + draft) | `chatty/backend/integrations/google/` |
 | Kanban drag-and-drop | `cake_os/frontend/src/shared/dnd/` |
-| Companies, chatter, scoring, custom fields, analytics, provenance, touch counts | `cake_os/backend/apps/crm/*_service.py` |
+| Chatter/notes (`crm_chatter`) — **landed #15** as `backend/crm/chatter_service.py` + `frontend/src/crm/components/NotesThread.tsx` | `cake_os/backend/apps/crm/chatter_service.py` |
+| Companies, scoring, custom fields, analytics, provenance, touch counts | `cake_os/backend/apps/crm/*_service.py` |
 | Assistant tool set (~43 tools) + sales behaviors | `cake_os/backend/apps/crm/tools/` + Casey's agent config |
 | Pipeline facet filtering | `cake_os/docs/CRM_FILTER_DESIGN.md` |
