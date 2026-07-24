@@ -327,6 +327,7 @@ CRM_TOOL_DEFS = [
     # ── Companies (5 tools) ───────────────────────────────────────────────────
     {
         "name": "crm_search_companies",
+        "writes": False,
         "description": (
             "Search CRM companies by name, domain, industry, or notes. "
             "Use when the user mentions a company/organization and you need to look it up."
@@ -343,6 +344,7 @@ CRM_TOOL_DEFS = [
     },
     {
         "name": "crm_get_company",
+        "writes": False,
         "description": (
             "Get a company's full profile including its contacts, deals, open pipeline value, "
             "and recent activity. Use this to see everything about a specific organization."
@@ -358,6 +360,7 @@ CRM_TOOL_DEFS = [
     },
     {
         "name": "crm_list_companies",
+        "writes": False,
         "description": "List companies with optional status filtering. Use to browse the organization list.",
         "input_schema": {
             "type": "object",
@@ -372,6 +375,7 @@ CRM_TOOL_DEFS = [
     },
     {
         "name": "crm_create_company",
+        "writes": True,
         "description": (
             "Create a new company/organization in the CRM. Use when the user mentions a business "
             "they want to track, or to group contacts and deals under an organization."
@@ -394,9 +398,11 @@ CRM_TOOL_DEFS = [
     },
     {
         "name": "crm_update_company",
+        "writes": True,
         "description": (
             "Update an existing company's details — name, domain, industry, phone, address, notes, "
-            "or status. Archive a company by setting status to 'archived'."
+            "or status. Archive a company by setting status to 'archived' (agent-initiated hard "
+            "deletes are intentionally not exposed as a tool — archive instead)."
         ),
         "input_schema": {
             "type": "object",
@@ -543,8 +549,12 @@ def crm_list_companies(status: str | None = None, limit: int = 50, offset: int =
 
 
 def crm_create_company(name: str, **kwargs) -> dict:
-    # Tools bypass the router's 400 mapping, so translate the unique-name
-    # violation here (the assistant engine that consumes this is still dormant).
+    # Tools bypass the router's validation, so guard blank names and translate the
+    # unique-name violation here (the assistant engine that consumes this is dormant).
+    # There is deliberately no crm_delete_company tool — hard deletes are a human/UI
+    # action; the assistant archives via crm_update_company(status="archived").
+    if not name.strip():
+        return {"error": "Name is required"}
     try:
         return crm.create_company(name=name, **kwargs)
     except psycopg2.errors.UniqueViolation:
@@ -593,14 +603,14 @@ TOOL_EXECUTORS = {
     "crm_create_task": crm_create_task,
     "crm_list_tasks": crm_list_tasks,
     "crm_complete_task": crm_complete_task,
-    # Companies
+    # Analytics
+    "crm_dashboard": crm_dashboard,
+    # Companies (kept last to match CRM_TOOL_DEFS' section order)
     "crm_search_companies": crm_search_companies,
     "crm_get_company": crm_get_company,
     "crm_list_companies": crm_list_companies,
     "crm_create_company": crm_create_company,
     "crm_update_company": crm_update_company,
-    # Analytics
-    "crm_dashboard": crm_dashboard,
     # Backwards compat alias
     "crm_log_note": crm_log_activity,
 }

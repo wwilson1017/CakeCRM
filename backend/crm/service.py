@@ -283,8 +283,14 @@ def list_companies(
 def update_company(company_id: int, **fields) -> dict | None:
     allowed = {"name", "domain", "industry", "phone", "address", "notes", "source", "status"}
     filtered = {k: v for k, v in fields.items() if k in allowed}
-    if "name" in filtered and filtered["name"] is not None:
-        filtered["name"] = filtered["name"].strip()
+    if "name" in filtered:
+        stripped = (filtered["name"] or "").strip()
+        if stripped:
+            filtered["name"] = stripped
+        else:
+            # Never persist a blank company name. The router 400s the API path;
+            # this guards the tool path (crm_update_company), which bypasses it.
+            del filtered["name"]
     if "status" in filtered and filtered["status"] not in COMPANY_STATUSES:
         filtered["status"] = "active"
     if not filtered:

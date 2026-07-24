@@ -644,6 +644,8 @@ async def create_company(body: CompanyCreate, user=Depends(get_current_user)):
 async def update_company(company_id: int, body: CompanyUpdate, user=Depends(get_current_user)):
     # All company columns are NOT NULL, so drop nulls (clear a field by sending "").
     updates = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
+    if "name" in updates and not updates["name"].strip():
+        raise HTTPException(status_code=400, detail="Name is required")
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
     try:

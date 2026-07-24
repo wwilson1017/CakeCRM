@@ -8,7 +8,9 @@ full set with no gating.
 
 import inspect
 
-from crm import tools
+import psycopg2
+
+from crm import service, tools
 from crm.tools import CRM_TOOL_DEFS, TOOL_EXECUTORS, get_crm_tools
 
 
@@ -74,3 +76,53 @@ def test_get_crm_tools_returns_full_set_unconditionally():
 def test_no_enable_gate_in_source():
     src = inspect.getsource(tools)
     assert "is_enabled" not in src  # chatty's crm_lite gate must not survive the port
+
+
+def test_company_tool_defs_declare_writes_flag():
+    """The 5 company defs carry the writes flag (#4 convention): reads false, writes true."""
+    by_name = {d["name"]: d for d in CRM_TOOL_DEFS}
+    for name in ("crm_search_companies", "crm_get_company", "crm_list_companies"):
+        assert by_name[name]["writes"] is False, name
+    for name in ("crm_create_company", "crm_update_company"):
+        assert by_name[name]["writes"] is True, name
+
+
+# ── Company tool executors (the new UniqueViolation/blank-name/not-found branches) ──
+
+def test_crm_create_company_translates_unique_violation(monkeypatch):
+    def raise_unique(name, **kw):
+        raise psycopg2.errors.UniqueViolation()
+    monkeypatch.setattr(service, "create_company", raise_unique)
+    out = tools.crm_create_company("Acme")
+    assert out == {"error": "A company with that name already exists"}
+
+
+def test_crm_create_company_rejects_blank_name(monkeypatch):
+    called = []
+    monkeypatch.setattr(service, "create_company", lambda name, **kw: called.append(name) or {"id": 1})
+    assert tools.crm_create_company("   ") == {"error": "Name is required"}
+    assert called == []  # service never reached
+
+
+def test_crm_update_company_translates_unique_violation(monkeypatch):
+    def raise_unique(cid, **kw):
+        raise psycopg2.errors.UniqueViolation()
+    monkeypatch.setattr(service, "update_company", raise_unique)
+    assert tools.crm_update_company(1, name="Acme") == {"error": "A company with that name already exists"}
+
+
+def test_crm_update_company_missing_returns_error(monkeypatch):
+    monkeypatch.setattr(service, "update_company", lambda cid, **kw: None)
+    assert tools.crm_update_company(999, name="X") == {"error": "Company 999 not found"}
+
+
+def test_crm_get_company_missing_returns_error(monkeypatch):
+    monkeypatch.setattr(service, "get_company_detail", lambda cid: None)
+    assert tools.crm_get_company(999) == {"error": "Company 999 not found"}
+
+
+def test_crm_search_and_list_companies_pass_through(monkeypatch):
+    monkeypatch.setattr(service, "search_companies", lambda q, **kw: [{"id": 1}, {"id": 2}])
+    monkeypatch.setattr(service, "list_companies", lambda **kw: {"companies": [{"id": 1}], "total": 1})
+    assert tools.crm_search_companies("acme") == {"companies": [{"id": 1}, {"id": 2}], "count": 2}
+    assert tools.crm_list_companies(status="active") == {"companies": [{"id": 1}], "total": 1}

@@ -432,3 +432,34 @@ def test_get_deal_joins_company_name(rec):
     service.get_deal(1)
     sql = rec.sql_containing("FROM deals d")
     assert "co.name AS company_name" in sql and "LEFT JOIN companies co" in sql
+
+
+def test_search_companies_status_filter(rec):
+    service.search_companies("acme", status="active")
+    sql = rec.sql_containing("FROM companies WHERE")
+    assert "status = %s" in sql
+    assert "active" in rec.params_for("FROM companies WHERE")
+
+
+def test_list_companies_status_filter(rec):
+    rec.fetchone_queue = [{"cnt": 0}]
+    rec.fetchall_queue = [[]]
+    service.list_companies(status="archived")
+    sql = rec.sql_containing("SELECT * FROM companies")
+    assert "status = %s" in sql
+    assert "archived" in rec.params_for("SELECT * FROM companies")
+
+
+def test_update_company_coerces_unknown_status(rec):
+    rec.fetchone_queue = [{"id": 1, "name": "Acme"}]
+    service.update_company(1, status="bogus")
+    assert "active" in rec.params_for("UPDATE companies SET")
+
+
+def test_update_company_drops_blank_name(rec):
+    rec.fetchone_queue = [{"id": 1, "name": "Acme"}]
+    # A blank name must never be persisted (guards the tool path that bypasses the router).
+    service.update_company(1, name="   ", domain="x.io")
+    sql = rec.sql_containing("UPDATE companies SET")
+    assert "name = %s" not in sql  # blank name dropped
+    assert "domain = %s" in sql

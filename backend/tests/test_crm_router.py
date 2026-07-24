@@ -262,6 +262,11 @@ def test_company_update_empty_400(client):
     assert client.put("/api/crm/companies/1", json={}).status_code == 400
 
 
+def test_company_update_blank_name_400(client):
+    # A whitespace-only name is truthy but empty — must 400, not silently blank the record.
+    assert client.put("/api/crm/companies/1", json={"name": "   "}).status_code == 400
+
+
 def test_companies_query_routes_to_search(client, monkeypatch):
     calls = []
     monkeypatch.setattr(service, "search_companies",

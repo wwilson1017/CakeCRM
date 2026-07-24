@@ -43,8 +43,11 @@ ALTER TABLE contacts ADD COLUMN IF NOT EXISTS
     company_id INTEGER REFERENCES companies(id) ON DELETE SET NULL;
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS
     company_id INTEGER REFERENCES companies(id) ON DELETE SET NULL;
+-- idx_contacts_company_id keeps the _id suffix (idx_contacts_company already
+-- exists on the free-text company column); idx_deals_company drops it to match
+-- the crm_core convention (idx_deals_contact, idx_tasks_contact, …).
 CREATE INDEX IF NOT EXISTS idx_contacts_company_id ON contacts(company_id);
-CREATE INDEX IF NOT EXISTS idx_deals_company_id    ON deals(company_id);
+CREATE INDEX IF NOT EXISTS idx_deals_company       ON deals(company_id);
 
 -- ── One-shot backfill ────────────────────────────────────────────────────────
 -- 1) One company per distinct non-empty normalized company name. The display
