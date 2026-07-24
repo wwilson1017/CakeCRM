@@ -128,7 +128,9 @@ async def chat_upload(
         if not raw:
             continue
         try:
-            blocks.append(uploads.extract_upload(f.filename or "upload", raw))
+            # Offload the (synchronous, CPU-bound) parse so a large PDF/DOCX/XLSX
+            # can't block the async event loop / other concurrent SSE streams.
+            blocks.append(await asyncio.to_thread(uploads.extract_upload, f.filename or "upload", raw))
         except uploads.UploadError as e:
             raise HTTPException(status_code=400, detail=str(e))
 

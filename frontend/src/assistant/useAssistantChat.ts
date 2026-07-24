@@ -10,6 +10,7 @@
 import { useCallback, useRef, useState } from 'react';
 
 import { getToken, TOKEN_KEY } from '../core/auth/tokenUtils';
+import { toast } from '../shared/toast';
 import type {
   ChatMessage,
   ContextUsage,
@@ -38,24 +39,49 @@ function addToolCall(m: ChatMessage, evt: SSEEvent): ChatMessage {
 }
 
 function patchCall(m: ChatMessage, toolUseId: string, patch: Partial<ToolCallInfo>): ChatMessage {
-  return {
-    ...m,
-    toolCalls: (m.toolCalls ?? []).map((c) =>
-      c.toolUseId === toolUseId ? { ...c, ...patch } : c,
-    ),
-  };
+  const calls = m.toolCalls ?? [];
+  // A positional-id provider (Gemini) reuses tool_use_id across iterations that
+  // all stream into this one message, so patch only the LAST still-running card
+  // with that id (the one this tool_args/tool_end belongs to), not every match.
+  let target = -1;
+  for (let i = calls.length - 1; i >= 0; i--) {
+    if (calls[i].toolUseId === toolUseId && calls[i].status === 'running') {
+      target = i;
+      break;
+    }
+  }
+  if (target === -1) {
+    for (let i = calls.length - 1; i >= 0; i--) {
+      if (calls[i].toolUseId === toolUseId) {
+        target = i;
+        break;
+      }
+    }
+  }
+  if (target === -1) return m;
+  return { ...m, toolCalls: calls.map((c, i) => (i === target ? { ...c, ...patch } : c)) };
 }
 
 function addConfirm(m: ChatMessage, evt: SSEEvent): ChatMessage {
   const existing = m.pendingConfirmations ?? [];
   const toolUseId = String(evt.tool_use_id ?? '');
-  if (existing.some((c) => c.toolUseId === toolUseId)) return m;
+  if (existing.some((c) => c.toolUseId === toolUseId && c.status === 'pending')) return m;
+  // The provider streams the tool_use block (tool_start/tool_args) BEFORE the
+  // engine decides to gate it, so a "running…" tool card was already added. The
+  // confirmation card now represents this call — drop that ONE spinning card
+  // (last running with this id; earlier same-id cards from a positional-id
+  // provider stay).
+  const calls = m.toolCalls ?? [];
+  let drop = -1;
+  for (let i = calls.length - 1; i >= 0; i--) {
+    if (calls[i].toolUseId === toolUseId && calls[i].status === 'running') {
+      drop = i;
+      break;
+    }
+  }
   return {
     ...m,
-    // The provider streams the tool_use block (tool_start/tool_args) BEFORE the
-    // engine decides to gate it, so a "running…" tool card was already added.
-    // The confirmation card now represents this call — drop the spinning card.
-    toolCalls: (m.toolCalls ?? []).filter((c) => c.toolUseId !== toolUseId),
+    toolCalls: drop === -1 ? calls : calls.filter((_, i) => i !== drop),
     pendingConfirmations: [
       ...existing,
       {
@@ -153,18 +179,20 @@ export function useAssistantChat() {
       case 'done':
         updateMessage(asstId, (m) => ({ ...m, model: evt.model ? String(evt.model) : m.model, streaming: false }));
         break;
-      case 'error':
-        updateMessage(asstId, (m) => ({
-          ...m,
-          content: (m.content ? m.content + '\n\n' : '') + `⚠️ ${String(evt.error ?? 'Something went wrong.')}`,
-          streaming: false,
-          error: true,
-        }));
+      case 'error': {
+        // Append the error INTO the text buffer so the final flush (which sets
+        // content = buffer) can't overwrite it — an error before any text would
+        // otherwise render as an empty bubble.
+        const prefix = textBufRef.current[asstId] ? textBufRef.current[asstId] + '\n\n' : '';
+        textBufRef.current[asstId] = prefix + `⚠️ ${String(evt.error ?? 'Something went wrong.')}`;
+        flushText(asstId);
+        updateMessage(asstId, (m) => ({ ...m, streaming: false, error: true }));
         break;
+      }
       default:
         break;
     }
-  }, [scheduleFlush, updateMessage]);
+  }, [flushText, scheduleFlush, updateMessage]);
 
   const runStream = useCallback(async (body: BodyInit, isForm: boolean, asstId: string) => {
     const controller = new AbortController();
@@ -304,10 +332,15 @@ export function useAssistantChat() {
         window.location.href = '/login';
         return;
       }
-      if (res.ok) {
-        const body = await res.json();
-        result = body?.result;
+      if (!res.ok) {
+        // The server may have claimed/executed the write but failed to persist —
+        // do NOT mark the card resolved or start a continuation. Leave it pending
+        // so the user can retry (the resolve is idempotent server-side).
+        toast.error('Could not complete that action. Please try again.');
+        return;
       }
+      const body = await res.json();
+      result = body?.result;
     } catch { /* leave the card pending; the user can retry */ return; }
 
     updateMessage(msgId, (m) => ({

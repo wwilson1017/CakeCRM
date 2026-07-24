@@ -171,12 +171,14 @@ export function MessageBubble({
         ) : (
           message.content && <MarkdownContent content={message.content} />
         )}
-        {message.toolCalls?.map((c) => (
-          <ToolCallCard key={c.toolUseId} call={c} />
+        {message.toolCalls?.map((c, i) => (
+          // index key, not toolUseId — positional-id providers (Gemini) reuse ids
+          // within one message, which would collide as React keys.
+          <ToolCallCard key={i} call={c} />
         ))}
-        {message.pendingConfirmations?.map((c) => (
+        {message.pendingConfirmations?.map((c, i) => (
           <ConfirmationCard
-            key={c.toolUseId}
+            key={`${c.toolUseId}-${i}`}
             confirm={c}
             onApprove={() => onApprove(message.id, c.toolUseId)}
             onDeny={() => onDeny(message.id, c.toolUseId)}

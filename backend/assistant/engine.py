@@ -39,6 +39,17 @@ logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 20
 _VALID_MODES = {"read-only", "normal", "power"}
+_UNTRUSTED_MARKER = "<untrusted_file_content"
+
+
+def _context_has_untrusted_upload(messages: list[dict]) -> bool:
+    """True if any message content carries wrapped uploaded-file text (the marker
+    lives in user-turn string content)."""
+    for m in messages:
+        content = m.get("content")
+        if isinstance(content, str) and _UNTRUSTED_MARKER in content:
+            return True
+    return False
 
 
 async def chat(
@@ -89,6 +100,7 @@ async def _chat_impl(
 
     # ── Resolve / validate the conversation, persist the user row ──────────────
     try:
+        new_conversation = False
         if conversation_id:
             if not await asyncio.to_thread(history.conversation_exists, conversation_id):
                 yield _sse({"type": "error", "error": "Conversation not found."})
@@ -99,6 +111,7 @@ async def _chat_impl(
                 return
             conv = await asyncio.to_thread(history.create_conversation)
             conversation_id = conv["id"]
+            new_conversation = True
 
         if not is_continuation:
             last = messages[-1]
@@ -109,9 +122,12 @@ async def _chat_impl(
             await asyncio.to_thread(
                 history.save_message, conversation_id, user_msg_id, "user", user_text
             )
-            await asyncio.to_thread(
-                history.auto_title, conversation_id, (title_hint or user_text)
-            )
+            # Title only from the FIRST message of a brand-new conversation — never
+            # rewrite an already-titled thread on every subsequent message.
+            if new_conversation:
+                await asyncio.to_thread(
+                    history.auto_title, conversation_id, (title_hint or user_text)
+                )
     except Exception as e:  # DB down / unknown conversation — fail loud, never half-run
         logger.warning("assistant.chat setup failed: %s", e)
         yield _sse({"type": "error", "error": "Could not start the assistant turn."})
@@ -124,6 +140,17 @@ async def _chat_impl(
         yield _sse({"type": "error", "error": "No conversation content to send."})
         return
 
+    # Uploaded-document text is the untrusted-content channel. The upload endpoint
+    # downgrades power→normal for the turn a file is attached, but the file text
+    # stays in context, so a LATER turn (a continuation after approval, or the next
+    # message) in power mode could still auto-execute a write the model proposed
+    # from injected instructions. Enforce it here for EVERY turn: if the assembled
+    # context carries untrusted upload content, writes route through confirmation
+    # regardless of the client-selected mode.
+    if tool_mode == "power" and _context_has_untrusted_upload(current_messages):
+        logger.info("assistant.chat: untrusted upload content present — forcing normal mode")
+        tool_mode = "normal"
+
     # A resumed (continuation) turn can end on an assistant row — the persisted
     # pending-confirmation wrap-up narration ("Shall I create X?") is saved as its
     # own assistant message, so after an out-of-band approval the rebuilt sequence
@@ -135,7 +162,7 @@ async def _chat_impl(
     if current_messages[-1].get("role") == "assistant":
         current_messages = current_messages + [{
             "role": "user",
-            "content": "The pending action was resolved and its result is shown above. Please continue.",
+            "content": "Please continue based on the results shown above.",
         }]
 
     # ── Main tool-execution loop ───────────────────────────────────────────────
@@ -146,6 +173,7 @@ async def _chat_impl(
         tool_calls: list[dict] = []
         stop_reason: str | None = None
         usage: dict = {}
+        completed = False
 
         async for event in provider.stream_turn(current_messages, provider_tools, system_prompt):
             etype = event.get("type")
@@ -169,7 +197,14 @@ async def _chat_impl(
                 tool_calls = event.get("tool_calls", []) or []
                 stop_reason = event.get("stop_reason")
                 usage = event.get("usage") or {}
+                completed = True
                 break
+
+        # A stream that ended without _turn_complete died mid-turn — never report it
+        # as a clean `done`.
+        if not completed:
+            yield _sse({"type": "error", "error": "The model response ended unexpectedly."})
+            return
 
         ue = context_usage_event(usage, getattr(provider, "context_window", None))
         if ue:
@@ -321,6 +356,13 @@ def resolve_confirmation(registry, conversation_id: str, tool_use_id: str, decis
     onto the persisted iteration. A second call for an already-resolved call is a
     no-op (``already_resolved``), so a double-click or replay can never execute a
     write twice. Synchronous — the router runs it in a worker thread.
+
+    Durability note (deliberate): the claim marks the result ``executing`` and
+    commits BEFORE the tool runs, so a crash between claim and result-merge leaves
+    a recoverable ``executing`` marker rather than re-running the write. This trades
+    a rare, inspectable stuck state for a guarantee of NO double-execution — the
+    safer failure mode for non-idempotent CRM mutations (create/delete). Full
+    exactly-once recovery would need idempotency keys on the CRM ops (future work).
     """
     claimed = history.claim_pending_tool(conversation_id, tool_use_id, msg_id=msg_id)
     if claimed is None:
