@@ -71,8 +71,9 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 
 - Work starts from a GitHub issue. Branch `feature/issue-N-<slug>` from `main`, PR
   back to `main`, human merge only.
-- Issue eligibility for the automated loop: open, unassigned, no `no-auto` label.
-  Self-assign (or label `no-auto`) before working an issue manually.
+- Issue eligibility for the automated loop: open, unassigned, no `no-auto` label, and
+  human-approved via the `greenlit` label (default-deny — an un-`greenlit` issue never
+  enters the loop). Self-assign (or label `no-auto`) before working an issue manually.
 - Respect "Blocked by: #N" lines in issue bodies — don't start an issue whose
   blockers aren't merged.
 - See `docs/AUTO_ISSUES.md` for the operator guide (label vocabulary, terminal

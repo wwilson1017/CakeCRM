@@ -23,8 +23,10 @@ vocabulary), so you can start a backlog with one and finish with the other:
 Issue eligibility, branch naming, PR target, and the human-merge rule are defined once in
 **`CLAUDE.md` → "Issue Loop Conventions"**. In brief: work starts from a GitHub issue;
 branch `feature/issue-N-<slug>` off `main`; PR back to `main`; human merge only;
-eligibility is *open, unassigned, no `no-auto` label*; respect `Blocked by: #N` lines.
-See `CLAUDE.md` for the authoritative wording — it is not duplicated here.
+eligibility is *open, unassigned, no `no-auto` label, and human-approved via the
+`greenlit` label* (default-deny — an un-`greenlit` issue never enters the loop); respect
+`Blocked by: #N` lines. See `CLAUDE.md` for the authoritative wording — it is not
+duplicated here.
 
 ## Label vocabulary
 

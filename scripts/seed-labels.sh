@@ -4,13 +4,14 @@
 #
 # The /auto-issues loop reads and writes a small vocabulary of labels (eligibility,
 # lane, park state, settle state, evidence state). This script makes that vocabulary
-# reproducible on a fresh clone or fork and enforces canonical descriptions on labels
-# that already exist. It is idempotent and safe to re-run.
+# reproducible on a fresh clone or fork and enforces the canonical color + description
+# on labels that already exist, so the documented color scheme actually holds. It is
+# idempotent and safe to re-run.
 #
 # Behavior per label:
 #   - missing  -> created with the canonical color + description
-#   - existing -> its description is set to the canonical text (color is left as-is,
-#                 to avoid churning any color a maintainer chose)
+#   - existing -> its color AND description are set to the canonical values (so the
+#                 loop's color convention converges even on pre-existing labels)
 #
 # Target repo: inferred from the current directory's `gh` context (so running it inside
 # a fork targets the fork), overridable with --repo <owner/name>.
@@ -27,7 +28,11 @@ REPO=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo)
-      REPO="${2:-}"
+      if [ $# -lt 2 ]; then
+        echo "error: --repo requires a value (e.g. --repo owner/name)" >&2
+        exit 2
+      fi
+      REPO="$2"
       shift 2
       ;;
     -h|--help)
@@ -80,7 +85,7 @@ updated=0
 for entry in "${LABELS[@]}"; do
   IFS='|' read -r name color desc <<<"$entry"
   if printf '%s\n' "$EXISTING" | grep -Fxq "$name"; then
-    gh label edit "$name" --repo "$REPO" --description "$desc" >/dev/null
+    gh label edit "$name" --repo "$REPO" --color "$color" --description "$desc" >/dev/null
     echo "  updated: $name"
     updated=$((updated + 1))
   else

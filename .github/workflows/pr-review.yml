@@ -71,10 +71,13 @@ jobs:
           echo "empty=false" >> "$GITHUB_OUTPUT"
 
           # Paginate the file list so a large PR whose first page is docs and later
-          # pages are code is not wrongly skipped.
-          CHANGED_FILES=$(gh api \
+          # pages are code is not wrongly skipped. Keep the API call separate from the
+          # grep so a real gh failure aborts the step (surfaced by the guard) instead of
+          # being masked as "no reviewable files" by a trailing `|| true`.
+          FILES_JSON=$(gh api \
             "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
-            --paginate --jq '.[].filename' | grep -E '\.(py|ts|tsx|js|jsx|css|yml|yaml|sh)$|Dockerfile$' || true)
+            --paginate --jq '.[].filename')
+          CHANGED_FILES=$(printf '%s\n' "$FILES_JSON" | grep -E '\.(py|ts|tsx|js|jsx|css|yml|yaml|sh)$|Dockerfile$' || true)
 
           if [ -z "$CHANGED_FILES" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
@@ -107,7 +110,9 @@ jobs:
           echo "truncated=$TRUNCATED" >> "$GITHUB_OUTPUT"
           echo "diff_status=$DIFF_STATUS" >> "$GITHUB_OUTPUT"
 
-          printf '%s' "$DIFF" > /tmp/pr_diff.txt
+          # Drop any trailing partial UTF-8 sequence left by the character-count
+          # truncation above, so jq --rawfile downstream can't choke on invalid bytes.
+          printf '%s' "$DIFF" | iconv -f UTF-8 -t UTF-8//IGNORE > /tmp/pr_diff.txt
 
           gh api \
             "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
@@ -269,7 +274,7 @@ jobs:
           - Recommendation: Approve / Approve with changes / Request revisions
 
           Step 9: Action Items Table
-          End with a markdown table of ALL findings from Steps 2-7 (consumed by tooling — be precise):
+          End with a markdown table of ALL findings from Steps 2-7 (advisory — a human decides what to act on; be precise and specific):
           | Severity | File | Finding | Verified | Suggested Fix |
           - Severity: BLOCKER / HIGH / MEDIUM / LOW
           - File: the specific path from the diff; use general only if it truly spans files.
@@ -311,13 +316,17 @@ jobs:
               ]
             }' > /tmp/payload.json
 
+          # `|| RESPONSE=$'\n000'` routes a curl TRANSPORT failure (DNS/TLS/timeout —
+          # which exits non-zero, unlike an HTTP 4xx/5xx that exits 0) into the existing
+          # HTTP_CODE != 200 branch below, so it posts an error notice instead of dying
+          # silently under `set -e` + continue-on-error.
           RESPONSE=$(curl -s -w "\n%{http_code}" \
             --max-time 180 \
             -X POST https://api.anthropic.com/v1/messages \
             -H "content-type: application/json" \
             -H "x-api-key: $ANTHROPIC_API_KEY" \
             -H "anthropic-version: 2023-06-01" \
-            --data-binary @/tmp/payload.json)
+            --data-binary @/tmp/payload.json) || RESPONSE=$'\n000'
 
           HTTP_CODE=$(echo "$RESPONSE" | tail -1)
           BODY=$(echo "$RESPONSE" | sed '$d')
@@ -330,10 +339,11 @@ jobs:
           fi
 
           echo "api_error=false" >> "$GITHUB_OUTPUT"
-          echo "$BODY" | jq -r '.content[0].text' > /tmp/review.txt
+          echo "$BODY" | jq -r '.content[0].text // "(AI review returned no text content)"' > /tmp/review.txt
 
       # ── Post or update the review comment ──
       - name: Post or update review comment
+        id: post_comment
         if: steps.gate.outputs.has_key == 'true' && steps.diff.outputs.empty != 'true' && steps.diff.outputs.skip != 'true' && steps.diff.outputs.diff_status != 'too_large' && steps.review.outputs.api_error != 'true'
         continue-on-error: true
         env:
@@ -356,6 +366,15 @@ jobs:
           ---
           *Automated AI code review — advisory only; use your judgment on the suggestions.*"
 
+          # GitHub rejects comment bodies over 65536 chars (422). A verbose review can
+          # approach that, so cap it with a visible note rather than losing the comment.
+          if [ "${#COMMENT}" -gt 65000 ]; then
+            COMMENT="${COMMENT:0:64500}
+
+          ---
+          > _Review truncated to fit GitHub's comment size limit._"
+          fi
+
           # Match by marker AND bot author, so a user-posted comment sharing the marker
           # can neither be overwritten nor break the upsert.
           EXISTING_ID=$(gh api \
@@ -372,14 +391,8 @@ jobs:
 
       # ── Post a skip / error / too-large notice ──
       - name: Post skip or error notice
-        if: >-
-          steps.gate.outputs.has_key == 'true' &&
-          (
-            steps.diff.outputs.empty == 'true' ||
-            steps.diff.outputs.skip == 'true' ||
-            steps.diff.outputs.diff_status == 'too_large' ||
-            steps.review.outputs.api_error == 'true'
-          )
+        id: post_notice
+        if: "steps.gate.outputs.has_key == 'true' && (steps.diff.outputs.empty == 'true' || steps.diff.outputs.skip == 'true' || steps.diff.outputs.diff_status == 'too_large' || steps.review.outputs.api_error == 'true')"
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -426,4 +439,21 @@ jobs:
             gh api "repos/${{ github.repository }}/issues/comments/$EXISTING_ID" -X PATCH -f body="$BODY"
           else
             gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" -f body="$BODY"
+          fi
+
+      # ── Observability guard ──
+      # Every step above is continue-on-error, so a transient gh/curl/jq failure keeps the
+      # advisory check green — but a green check with no comment looks identical to "no
+      # findings". This always-run, green-preserving step surfaces that silent-failure case
+      # in the run log and the job summary so it isn't invisible. It posts no comment (the
+      # log/summary signal is reliable even when comment posting itself is what failed).
+      - name: Review outcome guard
+        if: always() && steps.gate.outputs.has_key == 'true'
+        run: |
+          if [ "${{ steps.post_comment.outcome }}" = "success" ] || [ "${{ steps.post_notice.outcome }}" = "success" ]; then
+            echo "AI review reached a terminal outcome (review comment or notice posted)."
+          else
+            MSG="AI Code Review did not complete — no review comment or notice was posted (likely a transient gh/curl/jq failure). The check stays green because the review is advisory; inspect this run's logs."
+            echo "::warning::$MSG"
+            echo "⚠️ $MSG" >> "$GITHUB_STEP_SUMMARY"
           fi
