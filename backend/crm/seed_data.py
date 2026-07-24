@@ -32,7 +32,8 @@ def seed_demo_data(conn) -> bool:
         """SELECT (SELECT COUNT(*) FROM contacts)
                 + (SELECT COUNT(*) FROM deals)
                 + (SELECT COUNT(*) FROM tasks)
-                + (SELECT COUNT(*) FROM activity_log)"""
+                + (SELECT COUNT(*) FROM activity_log)
+                + (SELECT COUNT(*) FROM crm_chatter)"""
     )
     if cur.fetchone()[0] > 0:
         logger.info("CRM already has data — skipping demo seed")
@@ -221,9 +222,37 @@ def seed_demo_data(conn) -> bool:
         ],
     )
 
+    # ── Chatter / notes ──────────────────────────────────────────────────────
+    # Editable notes threaded on deals + contacts, shown alongside the activity
+    # timeline. Polymorphic (entity_type, entity_id) — see chatter_service.
+    cur.executemany(
+        """INSERT INTO crm_chatter
+           (id, entity_type, entity_id, message, created_at)
+           VALUES (%s, %s, %s, %s, %s)""",
+        [
+            (1, "deal", 3,
+             "David is comparing us against two other caterers — price is the sticking point. "
+             "Lead with the dedicated account manager and flexible weekly menu swaps.",
+             _ts(2, 12)),
+
+            (2, "deal", 2,
+             "Couple is leaning toward buttercream over fondant. Confirm the finish at the tasting.",
+             _ts(1, 15)),
+
+            (3, "deal", 4,
+             "Rachel needs final box counts by Nov 1 to hit holiday production — flag early if we slip.",
+             _ts(3, 11)),
+
+            (4, "contact", 1,
+             "Maria hinted at a second Green Table location opening in the fall — could double the "
+             "standing bread order. Worth a proactive proposal.",
+             _ts(2, 13)),
+        ],
+    )
+
     # Advance the SERIAL sequences past the fixed demo ids so the next real
     # insert gets id 9+ (fresh DB only — the empty guard above ensures this).
-    for table in ("contacts", "deals", "tasks", "activity_log"):
+    for table in ("contacts", "deals", "tasks", "activity_log", "crm_chatter"):
         cur.execute(
             f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), "
             f"(SELECT COALESCE(MAX(id), 1) FROM {table}))"
