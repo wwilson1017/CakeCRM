@@ -28,14 +28,16 @@ CREATE TABLE IF NOT EXISTS companies (
 );
 
 -- Uniqueness rule: one company per case-insensitive, ASCII-whitespace-trimmed
--- name. regexp_replace(x, '^\s+|\s+$', '', 'g') is the SINGLE normalization used
--- everywhere in this migration. Postgres \s trims the ASCII whitespace set
--- [ \t\n\r\f\v]; the service trims the SAME set (service._WS) rather than
--- Python's Unicode-aware str.strip(), so backfill and later writes can never
--- disagree about what counts as a duplicate (a non-ASCII space like NBSP is
--- preserved verbatim on both sides — treated as part of the name).
+-- name. btrim(x, E' \t\n\r\f\x0b') is the SINGLE normalization used everywhere
+-- in this migration. It trims EXACTLY the six ASCII whitespace bytes (space, tab,
+-- LF, CR, FF, VT) — a fixed byte set, so it is locale-/libc-independent (unlike
+-- regex \s, which trims Unicode whitespace such as NBSP on musl/alpine builds).
+-- The service trims the SAME set (service._WS) rather than Python's Unicode-aware
+-- str.strip(), so backfill and later writes can never disagree about what counts
+-- as a duplicate (a non-ASCII space like NBSP is preserved verbatim on both sides
+-- and treated as part of the name).
 CREATE UNIQUE INDEX IF NOT EXISTS uq_companies_name_ci
-    ON companies (LOWER(regexp_replace(name, '^\s+|\s+$', '', 'g')));
+    ON companies (LOWER(btrim(name, E' \t\n\r\f\x0b')));
 CREATE INDEX IF NOT EXISTS idx_companies_name   ON companies(name);
 CREATE INDEX IF NOT EXISTS idx_companies_status ON companies(status);
 
@@ -58,20 +60,20 @@ CREATE INDEX IF NOT EXISTS idx_deals_company       ON deals(company_id);
 --    table is brand-new and DISTINCT ON already emits one row per unique-index
 --    key, so any conflict here signals real corruption and should fail loudly.
 INSERT INTO companies (name)
-SELECT DISTINCT ON (LOWER(regexp_replace(company, '^\s+|\s+$', '', 'g')))
-       regexp_replace(company, '^\s+|\s+$', '', 'g')
+SELECT DISTINCT ON (LOWER(btrim(company, E' \t\n\r\f\x0b')))
+       btrim(company, E' \t\n\r\f\x0b')
 FROM contacts
-WHERE regexp_replace(company, '^\s+|\s+$', '', 'g') != ''
-ORDER BY LOWER(regexp_replace(company, '^\s+|\s+$', '', 'g')), id;
+WHERE btrim(company, E' \t\n\r\f\x0b') != ''
+ORDER BY LOWER(btrim(company, E' \t\n\r\f\x0b')), id;
 
 -- 2) Link each contact to its company (only where not already linked).
 --    Deliberately does NOT bump contacts.updated_at (a backfill is not an edit).
 UPDATE contacts SET company_id = co.id
 FROM companies co
 WHERE contacts.company_id IS NULL
-  AND regexp_replace(contacts.company, '^\s+|\s+$', '', 'g') != ''
-  AND LOWER(regexp_replace(contacts.company, '^\s+|\s+$', '', 'g'))
-    = LOWER(regexp_replace(co.name, '^\s+|\s+$', '', 'g'));
+  AND btrim(contacts.company, E' \t\n\r\f\x0b') != ''
+  AND LOWER(btrim(contacts.company, E' \t\n\r\f\x0b'))
+    = LOWER(btrim(co.name, E' \t\n\r\f\x0b'));
 
 -- 3) Deals inherit their contact's company (runs after step 2 so company_id is
 --    populated). One-shot: later user re-links to a different company stick.

@@ -46,8 +46,13 @@ export function ContactForm({ contact, onClose, onSaved }: Props) {
     e.preventDefault();
     if (!name.trim()) { setError('Name is required'); return; }
     setSaving(true); setError('');
-    // company_id always sent (null unlinks — the update endpoint keeps explicit nulls for FKs)
-    const body = JSON.stringify({ name, email, phone, company, title, source, status, tags, notes, company_id: companyId });
+    // When a company is linked it is authoritative: submit its name as the legacy
+    // free-text `company` too, so the two can't contradict regardless of the order
+    // the user touched the fields. company_id is always sent (null unlinks — the
+    // update endpoint keeps explicit nulls for FKs).
+    const linked = companyId != null ? companies.find(c => c.id === companyId) : undefined;
+    const companyText = linked ? linked.name : company;
+    const body = JSON.stringify({ name, email, phone, company: companyText, title, source, status, tags, notes, company_id: companyId });
     try {
       if (isEdit) {
         await api(`/api/crm/contacts/${contact.id}`, { method: 'PUT', body });
@@ -76,7 +81,7 @@ export function ContactForm({ contact, onClose, onSaved }: Props) {
             <label style={labelStyle}>Linked Company</label>
             <select value={companyId ?? ''} onChange={e => pickCompany(e.target.value ? Number(e.target.value) : null)} style={inputStyle}>
               <option value="">No company</option>
-              {companies.map(co => <option key={co.id} value={co.id}>{co.name}</option>)}
+              {companies.map(co => <option key={co.id} value={co.id}>{co.name}{co.status === 'archived' ? ' (archived)' : ''}</option>)}
             </select>
           </div>
           <div><label style={labelStyle}>Job Title</label><input value={title} onChange={e => setTitle(e.target.value)} style={inputStyle} /></div>

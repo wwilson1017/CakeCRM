@@ -21,10 +21,11 @@ CONTACT_STATUSES = ["active", "inactive", "archived"]
 TASK_PRIORITIES = ["low", "medium", "high"]
 COMPANY_STATUSES = ["active", "archived"]
 
-# ASCII whitespace set matching Postgres regex \s ([ \t\n\r\f\v]). Company names
-# are trimmed with THIS set (not Python's Unicode-aware str.strip()) so the value
-# the service stores normalizes identically to the companies migration's backfill
-# + unique index, which use regexp_replace(name, '^\s+|\s+$', '', 'g').
+# The six ASCII whitespace bytes (space, tab, LF, CR, FF, VT). Company names are
+# trimmed with THIS set (not Python's Unicode-aware str.strip()) so the value the
+# service stores normalizes identically to the companies migration's backfill +
+# unique index, which use btrim(name, E' \t\n\r\f\x0b') — a fixed byte set, so both
+# sides agree regardless of the database's libc/locale.
 _WS = " \t\n\r\f\v"
 
 # SQL fragment for whitespace-tolerant boundary matching against the comma-separated
@@ -288,14 +289,17 @@ def list_companies(
 
 def update_company(company_id: int, **fields) -> dict | None:
     allowed = {"name", "domain", "industry", "phone", "address", "notes", "source", "status"}
-    filtered = {k: v for k, v in fields.items() if k in allowed}
+    # Drop None values: every company column is NOT NULL, and a tool call sending
+    # an explicit null (the HTTP route already filters these out) would otherwise
+    # raise a NotNullViolation. None means "field not provided" here.
+    filtered = {k: v for k, v in fields.items() if k in allowed and v is not None}
     if "name" in filtered:
-        stripped = (filtered["name"] or "").strip(_WS)
-        if stripped:
-            filtered["name"] = stripped
+        # Reject a name that is blank once ALL whitespace is ignored (guards the
+        # tool path, which bypasses the router's 400). Store it trimmed of the
+        # ASCII whitespace set only (_WS), matching the migration's btrim.
+        if filtered["name"].strip():
+            filtered["name"] = filtered["name"].strip(_WS)
         else:
-            # Never persist a blank company name. The router 400s the API path;
-            # this guards the tool path (crm_update_company), which bypasses it.
             del filtered["name"]
     if "status" in filtered and filtered["status"] not in COMPANY_STATUSES:
         filtered["status"] = "active"

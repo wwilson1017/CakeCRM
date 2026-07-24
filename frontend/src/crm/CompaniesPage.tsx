@@ -27,6 +27,7 @@ export function CompaniesPage() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
+  const [loadMoreFailed, setLoadMoreFailed] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const navigate = useNavigate();
   const isMobile = useIsMobile();
@@ -48,6 +49,7 @@ export function CompaniesPage() {
     setLoading(true);
     setLoadingMore(false);
     setLoadFailed(false);
+    setLoadMoreFailed(false);
     try {
       const data = await fetchPage(0);
       if (id !== loadIdRef.current) return;
@@ -74,6 +76,9 @@ export function CompaniesPage() {
       setTotal(data.total);
     } catch {
       if (id !== loadIdRef.current) return;
+      // Stop the observer from re-firing loadMore in a tight loop on a persistent
+      // backend error (which would also spam the toast); the sentinel offers Retry.
+      setLoadMoreFailed(true);
       toast.error('Failed to load more companies.');
     } finally {
       if (id === loadIdRef.current) setLoadingMore(false);
@@ -87,6 +92,7 @@ export function CompaniesPage() {
 
   useEffect(() => {
     if (loading) return;
+    if (loadMoreFailed) return;  // don't auto-retry a failed page; wait for Retry
     if (companies.length >= total) return;
     const el = sentinelRef.current;
     if (!el) return;
@@ -96,7 +102,7 @@ export function CompaniesPage() {
     );
     observer.observe(el);
     return () => observer.disconnect();
-  }, [loading, loadingMore, companies.length, total, loadMore]);
+  }, [loading, loadingMore, loadMoreFailed, companies.length, total, loadMore]);
 
   return (
     <div style={{ padding: isMobile ? '20px 16px' : '32px 44px', maxWidth: 1000 }}>
@@ -184,7 +190,11 @@ export function CompaniesPage() {
           )}
           {companies.length < total && (
             <div ref={sentinelRef} style={{ display: 'flex', justifyContent: 'center', padding: '20px 0', ...mono(12), color: INK_DIM }}>
-              {loadingMore ? 'Loading more…' : `${total - companies.length} more`}
+              {loadMoreFailed ? (
+                <button onClick={() => setLoadMoreFailed(false)} style={{
+                  background: 'none', border: 'none', color: INK_MUTE, cursor: 'pointer', ...mono(12),
+                }}>Couldn't load more — Retry</button>
+              ) : loadingMore ? 'Loading more…' : `${total - companies.length} more`}
             </div>
           )}
         </>

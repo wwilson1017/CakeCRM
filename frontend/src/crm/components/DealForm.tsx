@@ -44,13 +44,14 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
       .then(d => setCompanies(d.companies)).catch(() => {});
   }, [deal, contactId]);
 
-  // Picking a contact auto-fills the company from that contact (the common flow);
-  // the Company select remains editable for the exceptions.
+  // Picking a contact fills the company from that contact ONLY when no company is
+  // set yet — deal↔company links are independent, so we never overwrite (or null)
+  // a company the user chose deliberately just because they changed the contact.
   function pickContact(id: number | null) {
     setSelectedContact(id);
     if (id != null) {
       const c = contacts.find(x => x.id === id);
-      if (c) setSelectedCompany(c.company_id ?? null);
+      if (c && c.company_id != null) setSelectedCompany(prev => prev ?? c.company_id);
     }
   }
 
@@ -97,7 +98,7 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
             <label style={labelStyle}>Company</label>
             <select value={selectedCompany ?? ''} onChange={e => setSelectedCompany(e.target.value ? Number(e.target.value) : null)} style={inputStyle}>
               <option value="">No company</option>
-              {companies.map(co => <option key={co.id} value={co.id}>{co.name}</option>)}
+              {companies.map(co => <option key={co.id} value={co.id}>{co.name}{co.status === 'archived' ? ' (archived)' : ''}</option>)}
             </select>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>

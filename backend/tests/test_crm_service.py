@@ -475,3 +475,24 @@ def test_update_company_drops_blank_name(rec):
     sql = rec.sql_containing("UPDATE companies SET")
     assert "name = %s" not in sql  # blank name dropped
     assert "domain = %s" in sql
+
+
+def test_update_company_drops_none_values(rec):
+    # A tool call sending explicit None for a NOT NULL text column must be dropped,
+    # not passed to SQL (which would NotNullViolation). The HTTP route filters None
+    # already; this guards the tool path.
+    rec.fetchone_queue = [{"id": 1, "name": "Acme"}]
+    service.update_company(1, domain="x.io", phone=None, notes=None)
+    sql = rec.sql_containing("UPDATE companies SET")
+    assert "domain = %s" in sql
+    assert "phone = %s" not in sql and "notes = %s" not in sql
+
+
+def test_update_company_rejects_unicode_blank_name(rec):
+    # A name that is blank once ALL whitespace is stripped (e.g. a lone NBSP) is
+    # dropped, so it can't create a visually-blank company via the tool path.
+    rec.fetchone_queue = [{"id": 1, "name": "Acme"}]
+    service.update_company(1, name="\u00a0", domain="x.io")  # NBSP-only name
+    sql = rec.sql_containing("UPDATE companies SET")
+    assert "name = %s" not in sql
+    assert "domain = %s" in sql
