@@ -213,11 +213,17 @@ def test_demo_clear_guarded_when_no_sample(pg_db):
 def test_dismiss_ai_prompt_persists(pg_db):
     from crm import service
     client = _client()
+    before = service.get_crm_meta()
     assert client.get("/api/crm/demo-status").json()["ai_key_prompt_dismissed"] is False
     assert client.post("/api/crm/dismiss-ai-prompt").json() == {"ok": True}
-    # durable: reflected in a fresh read and independent of the onboarding flag
+    # durable: reflected in a fresh read
     assert client.get("/api/crm/demo-status").json()["ai_key_prompt_dismissed"] is True
-    assert service.get_crm_meta()["ai_key_prompt_dismissed"] is True
+    after = service.get_crm_meta()
+    assert after["ai_key_prompt_dismissed"] is True
+    # independent of the onboarding flags — dismiss-ai-prompt must not touch them
+    assert after["onboarding_dismissed"] == before["onboarding_dismissed"]
+    assert after["sample_data_loaded"] == before["sample_data_loaded"]
+    assert client.get("/api/crm/demo-status").json()["show_onboarding"] is True
 
 
 def test_search_pagination_and_contact_unlink(pg_db):

@@ -3,10 +3,11 @@
  *
  * Consumes the already-built /api/branding backend: company name, accent color,
  * and logo. Saves push through BrandingContext so the shell (wordmark + accent)
- * restyles live. Mutations stay disabled until the branding fetch resolves, so
- * we never spread a null config. Form fields fall back to the fetched branding
- * until the user edits them (no seeding effect). Ported in shape from chatty's
- * SettingsPanel Branding tab, restyled with the existing CakeCRM form tokens.
+ * restyles live. Mutations stay disabled until the branding fetch resolves.
+ * Form fields fall back to the fetched branding until the user edits them (no
+ * seeding effect). Logo mutations use patchBranding (functional) so an in-flight
+ * name/accent save can't be clobbered by an out-of-order logo response. Ported in
+ * shape from chatty's SettingsPanel Branding tab, restyled with CakeCRM tokens.
  */
 
 import { useState } from 'react';
@@ -25,12 +26,14 @@ import {
 import {
   pagePadding, pageHeading, sectionHeading, cardStyle, btnPrimary, btnSecondary, btnDanger,
 } from './styles';
+import { BrandLogo } from './components/BrandLogo';
 
 const ALLOWED_LOGO_TYPES = 'image/png,image/jpeg,image/gif,image/webp,image/svg+xml';
+const MAX_LOGO_BYTES = 2 * 1024 * 1024; // 2 MB — mirrors the backend cap
 
 export function SettingsPage() {
   const isMobile = useIsMobile();
-  const { branding, applyBranding, logoVersion, bumpLogoVersion } = useBranding();
+  const { branding, setBranding, patchBranding, logoVersion, bumpLogoVersion } = useBranding();
   const loaded = branding !== null;
 
   // Edits override the fetched value; until edited, fields mirror `branding`.
@@ -49,7 +52,7 @@ export function SettingsPage() {
         method: 'PUT',
         body: JSON.stringify({ company_name: nameVal.trim(), accent_color: accentVal }),
       });
-      applyBranding(updated);
+      setBranding(updated);
       toast.success('Branding saved.');
     } catch {
       toast.error('Failed to save branding.');
@@ -62,16 +65,20 @@ export function SettingsPage() {
     const file = e.target.files?.[0];
     e.target.value = ''; // allow re-selecting the same file after an error
     if (!file) return;
+    if (file.size > MAX_LOGO_BYTES) {
+      toast.error('Logo must be under 2 MB.');
+      return;
+    }
     setLogoBusy(true);
     try {
       const form = new FormData();
       form.append('file', file);
       await api('/api/branding/logo', { method: 'POST', body: form });
-      applyBranding({ ...(branding ?? DEFAULT_BRANDING), has_logo: true });
+      patchBranding({ has_logo: true });
       bumpLogoVersion();
       toast.success('Logo updated.');
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to upload logo.');
+    } catch {
+      toast.error('Failed to upload logo.');
     } finally {
       setLogoBusy(false);
     }
@@ -81,7 +88,7 @@ export function SettingsPage() {
     setLogoBusy(true);
     try {
       await api('/api/branding/logo', { method: 'DELETE' });
-      applyBranding({ ...(branding ?? DEFAULT_BRANDING), has_logo: false });
+      patchBranding({ has_logo: false });
       bumpLogoVersion();
     } catch {
       toast.error('Failed to remove logo.');
@@ -138,10 +145,12 @@ export function SettingsPage() {
           <label style={labelStyle}>Logo</label>
           {branding?.has_logo && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
-              <img
+              <BrandLogo
+                key={logoVersion}
                 src={`/api/branding/logo?v=${logoVersion}`}
                 alt="Current logo"
                 style={{ height: 44, maxWidth: 160, objectFit: 'contain' }}
+                fallback={<span style={{ fontFamily: FONT_SANS, fontSize: 13, color: INK_MUTE }}>Logo unavailable</span>}
               />
               <button
                 onClick={handleLogoRemove}

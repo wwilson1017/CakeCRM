@@ -10,6 +10,7 @@ import { INK, INK_SOFT, INK_MUTE, LINE, LINE_STRONG, ACCENT, GOLD, FONT_DISPLAY,
 import { modalOverlay, modalContent, btnPrimary, btnSecondary } from './styles';
 import { AiKeyNudge } from './components/AiKeyNudge';
 import { AssistantLauncher } from './components/AssistantLauncher';
+import { BrandLogo } from './components/BrandLogo';
 
 const NAV_ITEMS = [
   { to: '/crm', label: 'Dashboard', end: true },
@@ -170,11 +171,11 @@ export function CrmLayout() {
   }, []);
 
   useEffect(() => {
-    // best-effort: on failure, treat AI as unconfigured but keep the nudge suppressed
-    // until we actually know (setup stays null → launcher inert, nudge hidden).
+    // best-effort: on failure keep setup unknown (null) — the launcher stays inert
+    // and the nudge stays suppressed, so we never misroute a user who may have a key.
     api<SetupStatus>('/api/setup/status')
       .then(setSetup)
-      .catch(() => setSetup({ ai_ready: false, credentials_present: true }));
+      .catch(() => { /* keep unknown */ });
   }, []);
 
   const handleLoadSample = useCallback(async () => {
@@ -238,10 +239,12 @@ export function CrmLayout() {
               display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none',
             }}>
               {branding?.has_logo ? (
-                <img
+                <BrandLogo
+                  key={logoVersion}
                   src={`/api/branding/logo?v=${logoVersion}`}
                   alt=""
                   style={{ height: 26, maxWidth: 120, objectFit: 'contain' }}
+                  fallback={<span style={{ fontSize: 22 }}>🍰</span>}
                 />
               ) : (
                 <span style={{ fontSize: 22 }}>🍰</span>

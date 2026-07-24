@@ -10,7 +10,7 @@
 
 import { Link } from 'react-router-dom';
 import { IconSparkle, IconX } from '../../shared/icons';
-import { INK, INK_MUTE, ACCENT, ACCENT_SOFT, FONT_SANS } from '../../shared/styles';
+import { INK, INK_MUTE, ACCENT, ACCENT_INK, ACCENT_SOFT, LINE, FONT_SANS } from '../../shared/styles';
 
 export function AiKeyNudge({ onDismiss, isMobile }: {
   onDismiss: () => void; isMobile: boolean;
@@ -18,7 +18,7 @@ export function AiKeyNudge({ onDismiss, isMobile }: {
   return (
     <div style={{
       background: ACCENT_SOFT,
-      borderBottom: `1px solid ${ACCENT_SOFT}`,
+      borderBottom: `1px solid ${LINE}`,
       padding: isMobile ? '10px 16px' : '8px 28px',
       display: 'flex',
       flexDirection: isMobile ? 'column' : 'row',
@@ -38,7 +38,7 @@ export function AiKeyNudge({ onDismiss, isMobile }: {
       </span>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
         <Link to="/setup" style={{
-          background: ACCENT, color: 'var(--color-ck-accent-ink, #FFFFFF)',
+          background: ACCENT, color: ACCENT_INK,
           border: 'none', borderRadius: 4, padding: '5px 14px',
           fontSize: 12, fontFamily: FONT_SANS, fontWeight: 600,
           textDecoration: 'none', whiteSpace: 'nowrap',

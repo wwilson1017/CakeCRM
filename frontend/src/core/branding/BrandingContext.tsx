@@ -3,24 +3,30 @@
  *
  * Fetches the admin-global branding config once for the authenticated shell and
  * drives the theme's accent through the `--brand-color` / `--brand-color-soft`
- * CSS custom properties (see brandingConfig.ts). Vars are set on
- * `document.documentElement` (not a subtree) so App-level portals (ConfirmHost /
- * ToastViewport) stay on-brand. The provider wraps the /crm subtree only, so
- * /login and /setup keep the CSS defaults — the vars are removed on unmount, and
- * a late fetch is ignored after unmount (StrictMode-safe).
+ * CSS custom properties (see brandingConfig.ts).
+ *
+ * All DOM mutation lives in a provider-owned effect keyed on `branding`, so a
+ * late save/upload that resolves AFTER the provider unmounts only touches React
+ * state (ignored on an unmounted tree) and can never re-apply the accent to
+ * /login or /setup. The vars are set on `document.documentElement` (not a
+ * subtree) so App-level portals (ConfirmHost / ToastViewport) stay on-brand, and
+ * removed on unmount so /login and /setup keep the CSS defaults. A failed initial
+ * fetch falls back to DEFAULT_BRANDING so the shell (and Settings) stays usable.
  */
 
 import { createContext, useContext, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { api } from '../api/client';
-import { applyAccentVars, clearAccentVars } from './brandingConfig';
+import { applyAccentVars, clearAccentVars, DEFAULT_BRANDING } from './brandingConfig';
 import type { BrandingConfig } from './brandingConfig';
 
 interface BrandingContextValue {
   /** null until the initial fetch resolves — consumers render defaults meanwhile. */
   branding: BrandingConfig | null;
-  /** Push a config (e.g. a PUT/logo result) into the shell and re-apply the accent live. */
-  applyBranding: (b: BrandingConfig) => void;
+  /** Replace the whole config (e.g. a PUT response) — re-applies the accent live. */
+  setBranding: (b: BrandingConfig) => void;
+  /** Merge a partial (e.g. {has_logo}) via a functional update — no stale-closure clobber. */
+  patchBranding: (patch: Partial<BrandingConfig>) => void;
   /** Cache-buster bumped on logo upload/remove so <img src=".../logo?v="> refreshes. */
   logoVersion: number;
   bumpLogoVersion: () => void;
@@ -32,29 +38,26 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
   const [branding, setBranding] = useState<BrandingConfig | null>(null);
   const [logoVersion, setLogoVersion] = useState(0);
 
+  // Fetch once; state-only. Fall back to defaults on failure so the shell stays
+  // fully usable (Settings editable, default accent) rather than blank/disabled.
   useEffect(() => {
     let cancelled = false;
     api<BrandingConfig>('/api/branding')
-      .then(b => {
-        if (cancelled) return;
-        setBranding(b);
-        applyAccentVars(b.accent_color);
-      })
-      .catch(() => { /* best-effort: CSS defaults stay in effect */ });
-    return () => {
-      // Guard the async race (a late fetch must not re-apply after unmount /
-      // StrictMode remount) and restore the CSS defaults for /login and /setup.
-      cancelled = true;
-      clearAccentVars();
-    };
+      .then(b => { if (!cancelled) setBranding(b); })
+      .catch(() => { if (!cancelled) setBranding(DEFAULT_BRANDING); });
+    return () => { cancelled = true; };
   }, []);
+
+  // Apply the accent whenever branding changes; remove it only on unmount.
+  useEffect(() => {
+    if (branding) applyAccentVars(branding.accent_color);
+  }, [branding]);
+  useEffect(() => () => clearAccentVars(), []);
 
   const value: BrandingContextValue = {
     branding,
-    applyBranding: (b: BrandingConfig) => {
-      setBranding(b);
-      applyAccentVars(b.accent_color);
-    },
+    setBranding,
+    patchBranding: patch => setBranding(prev => ({ ...(prev ?? DEFAULT_BRANDING), ...patch })),
     logoVersion,
     bumpLogoVersion: () => setLogoVersion(v => v + 1),
   };
