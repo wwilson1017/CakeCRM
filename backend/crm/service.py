@@ -594,10 +594,12 @@ def dismiss_onboarding() -> dict:
 
 
 def _truncate_all(cur) -> None:
-    # crm_chatter is listed LAST so TRUNCATE locks it after deals/contacts —
-    # the same order chatter_service.add_note takes (lock target row, then write
-    # crm_chatter), which avoids a lock-order-inversion deadlock between them.
-    cur.execute("TRUNCATE activity_log, tasks, deals, contacts, crm_chatter RESTART IDENTITY")
+    # Lock order matters: the other writers (delete_contact's SELECT ... FOR
+    # UPDATE, add_note's target lock) both take contacts/deals FIRST and touch
+    # crm_chatter LAST. TRUNCATE must acquire its ACCESS EXCLUSIVE locks in that
+    # same order — contacts, deals, then the dependent tables, crm_chatter last —
+    # or the two transactions can deadlock. (The exact string is pinned by a test.)
+    cur.execute("TRUNCATE contacts, deals, activity_log, tasks, crm_chatter RESTART IDENTITY")
 
 
 def clear_demo_data() -> dict:
