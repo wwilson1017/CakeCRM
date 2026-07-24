@@ -30,18 +30,18 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
 
   useEffect(() => {
     api<{ contacts: CrmContact[] }>('/api/crm/contacts?limit=200')
-      .then(d => {
-        setContacts(d.contacts);
-        // Deal opened from a contact (create mode): default its company to that
-        // contact's company so the deal shows up in the company's rollups. The
-        // user can still change the Company select below.
-        if (!deal && contactId != null) {
-          const c = d.contacts.find(x => x.id === contactId);
-          if (c && c.company_id != null) setSelectedCompany(prev => prev ?? c.company_id);
-        }
-      }).catch(() => {});
+      .then(d => setContacts(d.contacts)).catch(() => {});
     api<{ companies: CrmCompany[] }>('/api/crm/companies?limit=200')
       .then(d => setCompanies(d.companies)).catch(() => {});
+    // Deal opened from a contact (create mode): default the company to THAT
+    // contact's company so the deal lands in its rollups. Fetch the contact
+    // directly rather than searching the capped 200-row list — an older linked
+    // contact may fall outside that page, which would silently skip the default.
+    if (!deal && contactId != null) {
+      api<CrmContact>(`/api/crm/contacts/${contactId}`)
+        .then(c => { if (c.company_id != null) setSelectedCompany(prev => prev ?? c.company_id); })
+        .catch(() => {});
+    }
   }, [deal, contactId]);
 
   // Picking a contact fills the company from that contact ONLY when no company is
