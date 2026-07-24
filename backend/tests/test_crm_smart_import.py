@@ -77,3 +77,54 @@ async def test_csv_branch_never_calls_ai(monkeypatch):
 async def test_empty_content_warns(monkeypatch):
     result = await smart_import.parse_contacts("   ", "empty.txt")
     assert result.contacts == [] and result.warnings
+
+
+# ── vCard edge cases (keyless path used by real address-book exports) ──────────
+
+async def test_vcard_n_fallback_when_no_fn():
+    vcf = "BEGIN:VCARD\nVERSION:3.0\nN:Hopper;Grace;;;\nEMAIL:grace@navy.mil\nEND:VCARD\n"
+    result = await smart_import.parse_contacts(vcf, "c.vcf")
+    assert result.contacts[0]["name"] == "Grace Hopper"
+
+
+async def test_vcard_multiple_entries():
+    vcf = (
+        "BEGIN:VCARD\nFN:Ada Lovelace\nEMAIL:ada@x.io\nEND:VCARD\n"
+        "BEGIN:VCARD\nFN:Alan Turing\nEMAIL:alan@x.io\nEND:VCARD\n"
+    )
+    result = await smart_import.parse_contacts(vcf, "c.vcf")
+    assert {c["name"] for c in result.contacts} == {"Ada Lovelace", "Alan Turing"}
+
+
+async def test_vcard_line_folding_reconstructs_value():
+    # RFC 6350 folding: a continuation line begins with a space; unfolding joins
+    # it back (the fold marker space is consumed), so "Gr\n ace" -> "Grace".
+    vcf = "BEGIN:VCARD\nFN:Gr\n ace Hopper\nEMAIL:g@x.io\nEND:VCARD\n"
+    result = await smart_import.parse_contacts(vcf, "c.vcf")
+    assert result.contacts[0]["name"] == "Grace Hopper"
+
+
+async def test_vcard_quoted_printable_decodes():
+    vcf = ("BEGIN:VCARD\nFN:Test\nNOTE;ENCODING=QUOTED-PRINTABLE:caf=C3=A9\n"
+           "EMAIL:t@x.io\nEND:VCARD\n")
+    result = await smart_import.parse_contacts(vcf, "c.vcf")
+    assert result.contacts[0]["notes"] == "café"
+
+
+async def test_vcard_malformed_line_skipped_not_raised():
+    vcf = "BEGIN:VCARD\nthislinehasnocolon\nFN:Ada\nEMAIL:ada@x.io\nEND:VCARD\n"
+    result = await smart_import.parse_contacts(vcf, "c.vcf")
+    assert result.contacts[0]["name"] == "Ada"  # bad line ignored, contact still parsed
+
+
+async def test_ai_failure_degrades_to_warning(monkeypatch):
+    class BoomProvider:
+        async def stream_turn(self, messages, tools, system_prompt):
+            raise RuntimeError("provider exploded")
+            yield  # pragma: no cover  (make it an async generator)
+
+    monkeypatch.setattr(smart_import, "get_ai_provider", lambda *a, **k: BoomProvider())
+    # A configured-but-failing provider must NOT raise → clean warning result.
+    result = await smart_import.parse_contacts("some unknown format", "data.dat")
+    assert result.contacts == []
+    assert result.warnings and "AI parsing failed" in result.warnings[0]

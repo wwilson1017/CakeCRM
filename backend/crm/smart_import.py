@@ -250,7 +250,15 @@ async def _parse_with_ai(content: str, filename: str) -> SmartImportResult:
     user_message = f"Filename: {filename}\n\nFile content:\n{content}"
     messages = [{"role": "user", "content": user_message}]
 
-    raw_text = await _call_ai(provider, messages)
+    try:
+        raw_text = await _call_ai(provider, messages)
+    except Exception as e:
+        # Degrade gracefully: a configured-but-failing provider (bad key, network,
+        # rate limit that raises) must not 500 — return a friendly warning.
+        logger.warning("Smart-import AI call failed: %s", e)
+        return SmartImportResult(warnings=[
+            "AI parsing failed. Try a CSV or vCard (.vcf) file instead."
+        ])
 
     contacts, parse_warnings = _extract_contacts_from_ai_response(raw_text)
 

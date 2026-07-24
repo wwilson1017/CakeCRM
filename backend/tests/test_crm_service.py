@@ -79,7 +79,7 @@ def test_search_contacts_ilike_and_tag_boundary(rec):
     assert params[:4] == ["%acme%"] * 4
     assert "active" in params
     assert "%,vip,%" in params and "%,lead,%" in params
-    assert params[-1] == 15  # LIMIT is last
+    assert params[-2:] == [15, 0]  # LIMIT %s OFFSET %s (default offset 0)
 
 
 def test_list_contacts_count_alias_and_sort_whitelist(rec):
@@ -201,3 +201,55 @@ def test_load_sample_data_noop_when_not_empty(monkeypatch, fake_conn):
     out = service.load_sample_data()
     assert out == {"ok": True, "seeded": False}
     assert not any("INSERT INTO contacts" in s for s, _ in conn.executed)
+
+
+def test_load_sample_data_seeds_and_flips_meta_when_empty(monkeypatch, fake_conn):
+    # Two count fetches read (0,): load_sample_data's empty-check and
+    # seed_demo_data's own idempotence guard → seeds, then flips the meta flags.
+    conn = fake_conn(monkeypatch, service, fetchone_results=[(0,), (0,)])
+    out = service.load_sample_data()
+    assert out == {"ok": True, "seeded": True}
+    stmts = [s for s, _ in conn.executed]
+    assert any("INSERT INTO contacts" in s for s in stmts)  # seed ran
+    assert any("sample_data_loaded = TRUE, onboarding_dismissed = TRUE" in s for s in stmts)
+
+
+def test_clear_all_truncates_and_resets_flag(monkeypatch, fake_conn):
+    conn = fake_conn(monkeypatch, service)
+    assert service.clear_all() == {"ok": True}
+    stmts = [s for s, _ in conn.executed]
+    assert any("TRUNCATE activity_log, tasks, deals, contacts RESTART IDENTITY" in s for s in stmts)
+    assert any("sample_data_loaded = FALSE" in s for s in stmts)
+
+
+# ── create_deal coerces an unknown stage (2 reviewers) ────────────────────────
+
+def test_create_deal_coerces_unknown_stage_to_lead(rec):
+    rec.fetchone_queue = [{"id": 3}, {"id": 3, "stage": "lead"}]
+    service.create_deal("Big deal", stage="not-a-real-stage")
+    # the INSERT binds 'lead', not the bogus stage → deal stays visible in the pipeline
+    assert "lead" in rec.params_for("INSERT INTO deals")
+    assert "not-a-real-stage" not in rec.params_for("INSERT INTO deals")
+
+
+def test_create_deal_keeps_valid_stage(rec):
+    rec.fetchone_queue = [{"id": 4}, {"id": 4, "stage": "proposal"}]
+    service.create_deal("Deal", stage="proposal")
+    assert "proposal" in rec.params_for("INSERT INTO deals")
+
+
+# ── search pagination: offset + accurate total ────────────────────────────────
+
+def test_search_contacts_forwards_offset(rec):
+    service.search_contacts("acme", limit=50, offset=100)
+    sql = rec.sql_containing("FROM contacts WHERE")
+    assert "LIMIT %s OFFSET %s" in sql
+    assert rec.params_for("FROM contacts WHERE")[-2:] == [50, 100]
+
+
+def test_count_search_contacts_uses_count_and_same_where(rec):
+    rec.fetchone_queue = [{"cnt": 42}]
+    assert service.count_search_contacts("acme", status="active") == 42
+    sql = rec.sql_containing("COUNT(*) AS cnt")
+    assert "ILIKE" in sql and "status = %s" in sql
+    assert "LIMIT" not in sql  # count has no pagination

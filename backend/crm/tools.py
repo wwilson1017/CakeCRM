@@ -439,29 +439,29 @@ def crm_dashboard() -> dict:
 
 TOOL_EXECUTORS = {
     # Contacts
-    "crm_find_contact": lambda **kw: crm_find_contact(**kw),
-    "crm_create_contact": lambda **kw: crm_create_contact(**kw),
-    "crm_update_contact": lambda **kw: crm_update_contact(**kw),
-    "crm_get_contact": lambda **kw: crm_get_contact(**kw),
-    "crm_list_contacts": lambda **kw: crm_list_contacts(**kw),
-    "crm_delete_contact": lambda **kw: crm_delete_contact(**kw),
+    "crm_find_contact": crm_find_contact,
+    "crm_create_contact": crm_create_contact,
+    "crm_update_contact": crm_update_contact,
+    "crm_get_contact": crm_get_contact,
+    "crm_list_contacts": crm_list_contacts,
+    "crm_delete_contact": crm_delete_contact,
     # Deals
-    "crm_get_pipeline": lambda **kw: crm_get_pipeline(**kw),
-    "crm_create_deal": lambda **kw: crm_create_deal(**kw),
-    "crm_update_deal": lambda **kw: crm_update_deal(**kw),
-    "crm_update_deal_stage": lambda **kw: crm_update_deal_stage(**kw),
-    "crm_get_deal": lambda **kw: crm_get_deal(**kw),
+    "crm_get_pipeline": crm_get_pipeline,
+    "crm_create_deal": crm_create_deal,
+    "crm_update_deal": crm_update_deal,
+    "crm_update_deal_stage": crm_update_deal_stage,
+    "crm_get_deal": crm_get_deal,
     # Activities
-    "crm_log_activity": lambda **kw: crm_log_activity(**kw),
-    "crm_get_activity_log": lambda **kw: crm_get_activity_log(**kw),
+    "crm_log_activity": crm_log_activity,
+    "crm_get_activity_log": crm_get_activity_log,
     # Tasks
-    "crm_create_task": lambda **kw: crm_create_task(**kw),
-    "crm_list_tasks": lambda **kw: crm_list_tasks(**kw),
-    "crm_complete_task": lambda **kw: crm_complete_task(**kw),
+    "crm_create_task": crm_create_task,
+    "crm_list_tasks": crm_list_tasks,
+    "crm_complete_task": crm_complete_task,
     # Analytics
-    "crm_dashboard": lambda **kw: crm_dashboard(**kw),
+    "crm_dashboard": crm_dashboard,
     # Backwards compat alias
-    "crm_log_note": lambda **kw: crm_log_activity(**kw),
+    "crm_log_note": crm_log_activity,
 }
 
 

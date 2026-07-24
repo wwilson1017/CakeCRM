@@ -18,7 +18,6 @@ import {
   btnPrimary, stageCard,
 } from './styles';
 
-const STAGES = ['lead', 'qualified', 'proposal', 'negotiation', 'won', 'lost'];
 
 interface PipelineData {
   deals: CrmDeal[];
@@ -34,14 +33,14 @@ export function PipelinePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [stageFilter, setStageFilter] = useState<string>(() => {
     const s = searchParams.get('stage');
-    return s && STAGES.includes(s) ? s : '';
+    return s && STAGE_ORDER.includes(s) ? s : '';
   });
   const [selectedDeal, setSelectedDeal] = useState<CrmDeal | null>(null);
   const isMobile = useIsMobile();
 
   useEffect(() => {
     const s = searchParams.get('stage');
-    if (s && STAGES.includes(s)) {
+    if (s && STAGE_ORDER.includes(s)) {
       queueMicrotask(() => setStageFilter(s));
       searchParams.delete('stage');
       setSearchParams(searchParams, { replace: true });
@@ -83,12 +82,12 @@ export function PipelinePage() {
   if (!data) return <LoadError label="Couldn't load pipeline" onRetry={load} />;
 
   const deals = data?.deals || [];
-  const grouped = STAGES.reduce<Record<string, CrmDeal[]>>((acc, stage) => {
+  const grouped = STAGE_ORDER.reduce<Record<string, CrmDeal[]>>((acc, stage) => {
     acc[stage] = deals.filter(d => d.stage === stage);
     return acc;
   }, {});
 
-  const filteredStages = stageFilter ? [stageFilter] : STAGES;
+  const filteredStages = stageFilter ? [stageFilter] : STAGE_ORDER;
 
   return (
     <div style={{ padding: isMobile ? '20px 16px' : '32px 44px', maxWidth: 1000 }}>

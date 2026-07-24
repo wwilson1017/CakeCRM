@@ -57,7 +57,8 @@ def get_contact(contact_id: int) -> dict | None:
     return pg_fetchone("SELECT * FROM contacts WHERE id = %s", (contact_id,))
 
 
-def search_contacts(query: str, status: str | None = None, tags: str | None = None, limit: int = 20) -> list[dict]:
+def _contact_search_where(query: str, status: str | None, tags: str | None) -> tuple[str, list]:
+    """Build the shared WHERE clause + params for contact free-text search."""
     like = f"%{query}%"
     conditions = ["(name ILIKE %s OR email ILIKE %s OR company ILIKE %s OR notes ILIKE %s)"]
     params: list = [like, like, like, like]
@@ -70,12 +71,25 @@ def search_contacts(query: str, status: str | None = None, tags: str | None = No
             tag_clauses = " OR ".join(f"{_TAGS_NORMALIZED_SQL} ILIKE %s" for _ in labels)
             conditions.append(f"({tag_clauses})")
             params.extend(f"%,{label},%" for label in labels)
-    params.append(limit)
-    where = " AND ".join(conditions)
+    return " AND ".join(conditions), params
+
+
+def search_contacts(
+    query: str, status: str | None = None, tags: str | None = None,
+    limit: int = 20, offset: int = 0,
+) -> list[dict]:
+    where, params = _contact_search_where(query, status, tags)
     return pg_fetchall(
-        f"SELECT * FROM contacts WHERE {where} ORDER BY updated_at DESC LIMIT %s",
-        params,
+        f"SELECT * FROM contacts WHERE {where} ORDER BY updated_at DESC LIMIT %s OFFSET %s",
+        params + [limit, offset],
     )
+
+
+def count_search_contacts(query: str, status: str | None = None, tags: str | None = None) -> int:
+    """Total number of contacts matching a search (for accurate pagination totals)."""
+    where, params = _contact_search_where(query, status, tags)
+    row = pg_fetchone(f"SELECT COUNT(*) AS cnt FROM contacts WHERE {where}", params)
+    return row["cnt"] if row else 0
 
 
 def list_contacts(
@@ -180,6 +194,11 @@ def create_deal(
     value: float = 0, notes: str = "", expected_close_date: str = "",
     probability: int = 0, currency: str = "USD",
 ) -> dict:
+    # Coerce an unknown stage to 'lead' (mirrors update_deal's validation): a
+    # deal with a stage outside DEAL_STAGES would be summed into the pipeline
+    # value but never render in any Kanban column.
+    if stage not in DEAL_STAGES:
+        stage = "lead"
     row = pg_fetchone(
         """INSERT INTO deals (title, contact_id, stage, value, notes, expected_close_date, probability, currency)
            VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",

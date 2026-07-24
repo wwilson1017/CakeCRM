@@ -74,6 +74,7 @@ def test_contacts_query_routes_to_search(client, monkeypatch):
     calls = []
     monkeypatch.setattr(service, "search_contacts",
                         lambda q, **kw: calls.append(("search", q)) or [{"id": 1}])
+    monkeypatch.setattr(service, "count_search_contacts", lambda q, **kw: 1)
     monkeypatch.setattr(service, "list_contacts",
                         lambda **kw: calls.append(("list", None)) or {"contacts": []})
     client.get("/api/crm/contacts?q=acme")
@@ -123,6 +124,72 @@ def test_smart_import_rejects_oversized_upload(client):
         files={"file": ("big.txt", big, "text/plain")},
     )
     assert resp.status_code == 400
+
+
+def test_smart_import_parse_csv_keyless(client, monkeypatch):
+    # No provider is configured anywhere; a CSV with a name column parses
+    # deterministically and never touches AI (keyless acceptance, UI path).
+    from crm import smart_import
+    monkeypatch.setattr(smart_import, "get_ai_provider",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("AI called")))
+    csv_text = "Name,Email\nAda,ada@x.io\n"
+    resp = client.post(
+        "/api/crm/smart-import/parse",
+        files={"file": ("c.csv", io.BytesIO(csv_text.encode()), "text/csv")},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ai_used"] is False
+    assert any(c["name"] == "Ada" for c in body["contacts"])
+
+
+def test_smart_import_confirm_happy_and_validator(client, monkeypatch):
+    created = []
+    monkeypatch.setattr(service, "create_contact",
+                        lambda **kw: created.append(kw) or {"id": len(created)})
+    ok = client.post("/api/crm/smart-import/confirm",
+                     json={"contacts": [{"name": "Ada", "email": "a@x.io"}]})
+    assert ok.status_code == 200 and ok.json()["imported"] == 1
+    # empty list rejected by the SmartImportConfirm validator (422)
+    assert client.post("/api/crm/smart-import/confirm", json={"contacts": []}).status_code == 422
+
+
+# ── Search pagination is forwarded (fixes the silent 20-row cap) ──────────────
+
+def test_contacts_search_forwards_limit_offset_and_total(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(service, "search_contacts",
+                        lambda q, **kw: seen.update(kw) or [{"id": 1}])
+    monkeypatch.setattr(service, "count_search_contacts", lambda q, **kw: 137)
+    body = client.get("/api/crm/contacts?q=acme&limit=50&offset=100").json()
+    assert seen["limit"] == 50 and seen["offset"] == 100  # forwarded, not defaulted to 20
+    assert body["total"] == 137  # real count, not len(contacts)
+
+
+# ── Unlinking a contact: explicit null reaches the service ────────────────────
+
+def test_deal_update_can_clear_contact(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(service, "update_deal",
+                        lambda did, **kw: seen.update(kw) or {"id": did})
+    client.put("/api/crm/deals/5", json={"contact_id": None})
+    assert "contact_id" in seen and seen["contact_id"] is None  # explicit null survives
+
+
+def test_deal_update_omitted_contact_not_touched(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(service, "update_deal",
+                        lambda did, **kw: seen.update(kw) or {"id": did})
+    client.put("/api/crm/deals/5", json={"title": "Renamed"})
+    assert seen == {"title": "Renamed"}  # contact_id not sent → not in the update
+
+
+def test_task_update_can_clear_contact(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(service, "update_task",
+                        lambda tid, **kw: seen.update(kw) or {"id": tid})
+    client.put("/api/crm/tasks/9", json={"contact_id": None})
+    assert seen.get("contact_id") is None and "contact_id" in seen
 
 
 # ── Demo / first-run endpoints ────────────────────────────────────────────────

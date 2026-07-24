@@ -164,8 +164,11 @@ async def list_contacts(
     user=Depends(get_current_user),
 ):
     if q:
-        contacts = crm.search_contacts(q, status=status or None, tags=tags or None)
-        return {"contacts": contacts, "total": len(contacts)}
+        contacts = crm.search_contacts(
+            q, status=status or None, tags=tags or None, limit=limit, offset=offset,
+        )
+        total = crm.count_search_contacts(q, status=status or None, tags=tags or None)
+        return {"contacts": contacts, "total": total}
     return crm.list_contacts(
         offset=offset, limit=limit,
         status=status or None, tags=tags or None,
@@ -241,7 +244,13 @@ async def create_deal(body: DealCreate, user=Depends(get_current_user)):
 
 @router.put("/deals/{deal_id}")
 async def update_deal(deal_id: int, body: DealUpdate, user=Depends(get_current_user)):
-    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    # exclude_unset so only fields the client actually sent are updated; allow an
+    # explicit null ONLY for the nullable FK (contact_id) so a deal can be
+    # unlinked from its contact. Other columns are NOT NULL — dropping their nulls.
+    updates = {
+        k: v for k, v in body.model_dump(exclude_unset=True).items()
+        if v is not None or k == "contact_id"
+    }
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
     result = crm.update_deal(deal_id, **updates)
@@ -276,7 +285,12 @@ async def create_task(body: TaskCreate, user=Depends(get_current_user)):
 
 @router.put("/tasks/{task_id}")
 async def update_task(task_id: int, body: TaskUpdate, user=Depends(get_current_user)):
-    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    # exclude_unset + allow explicit null only for the nullable FKs so a task can
+    # be unlinked from its contact/deal. Other columns are NOT NULL.
+    updates = {
+        k: v for k, v in body.model_dump(exclude_unset=True).items()
+        if v is not None or k in ("contact_id", "deal_id")
+    }
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
     result = crm.update_task(task_id, **updates)
@@ -386,7 +400,7 @@ async def import_csv(file: UploadFile = File(...), user=Depends(get_current_user
     if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="File must be a .csv")
 
-    content = await file.read()
+    content = await file.read(MAX_UPLOAD_BYTES + 1)  # bounded — don't buffer oversized uploads
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=400, detail="File too large (max 1MB)")
     try:
@@ -463,7 +477,7 @@ async def smart_import_parse(file: UploadFile = File(...), user=Depends(get_curr
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
 
-    content = await file.read()
+    content = await file.read(MAX_UPLOAD_BYTES + 1)  # bounded — don't buffer oversized uploads
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=400, detail="File too large (max 1MB)")
 

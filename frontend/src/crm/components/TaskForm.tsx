@@ -36,7 +36,7 @@ export function TaskForm({ task, contactId, dealId, onClose, onSaved }: Props) {
     setSaving(true); setError('');
     try {
       const body: Record<string, unknown> = { title, description, due_date: dueDate, priority };
-      if (selectedContact) body.contact_id = selectedContact;
+      body.contact_id = selectedContact;  // always send (null unlinks the contact)
       if (dealId) body.deal_id = dealId;
 
       if (isEdit) {

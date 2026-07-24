@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { api } from '../../core/api/client';
 import { labelStyle, inputStyle, CORAL } from '../../shared/styles';
 import { formModalOverlay, formModalContent, formTitle, btnPrimary, btnSecondary } from '../styles';
+import { STAGE_ORDER } from '../constants';
 import type { CrmDeal, CrmContact } from '../../core/types';
 
 interface Props {
@@ -11,7 +12,6 @@ interface Props {
   onSaved: () => void;
 }
 
-const STAGES = ['lead', 'qualified', 'proposal', 'negotiation', 'won', 'lost'];
 
 export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
   const isEdit = !!deal;
@@ -41,7 +41,7 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
         probability: parseInt(probability) || 0,
         expected_close_date: expectedClose, notes,
       };
-      if (selectedContact) body.contact_id = selectedContact;
+      body.contact_id = selectedContact;  // always send (null unlinks the contact)
       if (isEdit) {
         await api(`/api/crm/deals/${deal.id}`, { method: 'PUT', body: JSON.stringify(body) });
       } else {
@@ -73,7 +73,7 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
             <div>
               <label style={labelStyle}>Stage</label>
               <select value={stage} onChange={e => setStage(e.target.value)} style={{ ...inputStyle, textTransform: 'capitalize' }}>
-                {STAGES.map(s => <option key={s} value={s}>{s}</option>)}
+                {STAGE_ORDER.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
             <div><label style={labelStyle}>Value ($)</label><input type="number" value={value} onChange={e => setValue(e.target.value)} style={inputStyle} /></div>

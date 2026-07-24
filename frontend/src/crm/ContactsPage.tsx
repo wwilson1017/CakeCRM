@@ -9,7 +9,7 @@ import { IconPlus, IconSearch } from '../shared/icons';
 import { useIsMobile } from '../shared/useIsMobile';
 import { LoadError } from '../shared/LoadError';
 import { toast } from '../shared/toast';
-import { INK, INK_MUTE, INK_DIM, LINE, BG_RAISED, FONT_SANS, mono } from '../shared/styles';
+import { INK, INK_MUTE, INK_DIM, LINE, BG_RAISED, ACCENT, FONT_SANS, mono } from '../shared/styles';
 import {
   pageHeading, cardStyle, filterTab,
   tableHeader, tableRow, btnPrimary, btnSecondary, btnSmall,
@@ -165,7 +165,7 @@ export function ContactsPage() {
             <button onClick={() => setTagDropdownOpen(v => !v)} style={{
               background: tagFilter.length ? 'var(--color-ck-accent-soft, rgba(176,58,82,0.09))' : 'rgba(31,35,40,0.045)',
               border: `1px solid ${tagFilter.length ? 'var(--color-ck-accent, #B03A52)' : LINE}`,
-              color: tagFilter.length ? '#7ec8f0' : INK_MUTE,
+              color: tagFilter.length ? ACCENT : INK_MUTE,
               borderRadius: 4, padding: isMobile ? '10px 30px 10px 12px' : '12px 32px 12px 16px',
               fontSize: 14, fontWeight: 500,
               fontFamily: FONT_SANS, cursor: 'pointer', outline: 'none',
@@ -206,7 +206,7 @@ export function ContactsPage() {
                     >
                       <input type="checkbox" checked={checked} onChange={() => setTagFilter(prev =>
                         checked ? prev.filter(x => x !== t) : [...prev, t]
-                      )} style={{ accentColor: '#63b3ed' }} />
+                      )} style={{ accentColor: 'var(--color-ck-accent, #B03A52)' }} />
                       {t}
                     </label>
                   );

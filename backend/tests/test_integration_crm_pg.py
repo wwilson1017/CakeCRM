@@ -203,3 +203,22 @@ def test_demo_clear_guarded_when_no_sample(pg_db):
     resp = client.post("/api/crm/demo-clear").json()
     assert resp == {"ok": True, "cleared": False}
     assert service.get_dashboard_stats()["total_contacts"] == 1
+
+
+def test_search_pagination_and_contact_unlink(pg_db):
+    from crm import service
+    for i in range(3):
+        service.create_contact(f"Person {i}", company="Acme Corp")
+    # accurate total + real pagination (fixes the silent 20-row cap)
+    assert service.count_search_contacts("acme") == 3
+    page1 = service.search_contacts("acme", limit=2, offset=0)
+    page2 = service.search_contacts("acme", limit=2, offset=2)
+    assert len(page1) == 2 and len(page2) == 1
+    assert {c["id"] for c in page1}.isdisjoint({c["id"] for c in page2})
+
+    # unlink: update_deal with contact_id=None clears the FK
+    c = service.create_contact("Linked")
+    d = service.create_deal("Deal", contact_id=c["id"])
+    assert service.get_deal(d["id"])["contact_id"] == c["id"]
+    service.update_deal(d["id"], contact_id=None)
+    assert service.get_deal(d["id"])["contact_id"] is None

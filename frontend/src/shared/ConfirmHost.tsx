@@ -27,9 +27,8 @@ function ConfirmCard({ options }: { options: ConfirmOptions }) {
     // otherwise Confirm gets focus to match native confirm()'s Enter ≈ OK.
     (danger ? cancelRef.current : confirmRef.current)?.focus();
 
-    // Capture phase: runs before the bubble-phase document Escape listeners
-    // in AvatarMenu/ConversationSidebar/HeartbeatChecklist, so Escape closes
-    // only the confirm — not a popover underneath it.
+    // Capture phase: runs before any bubble-phase document-level Escape
+    // listener, so Escape closes only the confirm — not a popover underneath it.
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') {
         e.preventDefault();
