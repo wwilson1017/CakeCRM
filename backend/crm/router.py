@@ -36,6 +36,7 @@ Other:
   GET    /api/crm/demo-status           — first-run onboarding / sample-data state
   POST   /api/crm/load-sample-data      — seed fictional demo data (first run)
   POST   /api/crm/dismiss-onboarding    — dismiss the first-run prompt
+  POST   /api/crm/dismiss-ai-prompt     — dismiss the 'add an AI key' nudge
   POST   /api/crm/demo-clear            — clear example data (guarded)
   POST   /api/crm/clear-all             — wipe ALL CRM data (confirmation phrase)
   POST   /api/crm/import                — CSV import (contacts, keyless)
@@ -390,6 +391,12 @@ async def load_sample_data(user=Depends(get_current_user)):
 async def dismiss_onboarding(user=Depends(get_current_user)):
     """User chose to start fresh — stop showing the first-run prompt."""
     return crm.dismiss_onboarding()
+
+
+@router.post("/dismiss-ai-prompt")
+async def dismiss_ai_prompt(user=Depends(get_current_user)):
+    """Dismiss the 'add an AI key to hire your assistant' nudge (durable)."""
+    return crm.dismiss_ai_prompt()
 
 
 @router.post("/demo-clear")

@@ -229,6 +229,36 @@ def test_clear_all_truncates_and_resets_flag(monkeypatch, fake_conn):
     assert any("sample_data_loaded = FALSE" in s for s in stmts)
 
 
+# ── AI-key nudge dismissal (issue #9) ─────────────────────────────────────────
+
+def test_dismiss_ai_prompt_sets_flag(rec):
+    # Single-statement blind write via pg_execute (the rec fixture patches it).
+    assert service.dismiss_ai_prompt() == {"ok": True}
+    assert "ai_key_prompt_dismissed = TRUE" in rec.sql_containing("ai_key_prompt_dismissed")
+
+
+def test_demo_status_includes_ai_prompt_flag(rec):
+    # get_demo_status → get_crm_meta (1st fetchone) then is_crm_empty count (2nd).
+    rec.fetchone_queue = [
+        {"id": 1, "sample_data_loaded": False, "onboarding_dismissed": False,
+         "ai_key_prompt_dismissed": True},
+        {"total": 5},
+    ]
+    body = service.get_demo_status()
+    assert body["ai_key_prompt_dismissed"] is True
+
+
+def test_demo_status_ai_prompt_flag_defaults_false_when_absent(rec):
+    # Pre-migration/None row shape: the key is absent → bool(get(...)) must be False,
+    # NOT a KeyError (the model_dump/get-returns-None footgun).
+    rec.fetchone_queue = [
+        {"id": 1, "sample_data_loaded": False, "onboarding_dismissed": False},
+        {"total": 5},
+    ]
+    body = service.get_demo_status()
+    assert body["ai_key_prompt_dismissed"] is False
+
+
 # ── create_deal coerces an unknown stage (2 reviewers) ────────────────────────
 
 def test_create_deal_coerces_unknown_stage_to_lead(rec):

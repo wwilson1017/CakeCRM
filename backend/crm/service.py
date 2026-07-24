@@ -503,9 +503,11 @@ _CRM_TABLES = ("contacts", "deals", "tasks", "activity_log")
 
 
 def get_crm_meta() -> dict:
-    """Return the crm_meta singleton row (sample_data_loaded / onboarding_dismissed)."""
+    """Return the crm_meta singleton row (sample_data_loaded / onboarding_dismissed /
+    ai_key_prompt_dismissed)."""
     return pg_fetchone("SELECT * FROM crm_meta WHERE id = 1") or {
         "id": 1, "sample_data_loaded": False, "onboarding_dismissed": False,
+        "ai_key_prompt_dismissed": False,
     }
 
 
@@ -545,6 +547,7 @@ def get_demo_status() -> dict:
         "empty": empty,
         "sample_data_loaded": sample_loaded,
         "show_onboarding": empty and not sample_loaded and not dismissed,
+        "ai_key_prompt_dismissed": bool(meta.get("ai_key_prompt_dismissed")),
     }
 
 
@@ -574,6 +577,19 @@ def load_sample_data() -> dict:
 def dismiss_onboarding() -> dict:
     pg_execute(
         "UPDATE crm_meta SET onboarding_dismissed = TRUE, updated_at = %s WHERE id = 1",
+        (_now(),),
+    )
+    return {"ok": True}
+
+
+def dismiss_ai_prompt() -> dict:
+    """Durably dismiss the first-run 'add an AI key' nudge (cross-device).
+
+    Single-statement blind write like dismiss_onboarding — no check-then-write,
+    so no FOR UPDATE lock is needed.
+    """
+    pg_execute(
+        "UPDATE crm_meta SET ai_key_prompt_dismissed = TRUE, updated_at = %s WHERE id = 1",
         (_now(),),
     )
     return {"ok": True}
