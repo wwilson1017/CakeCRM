@@ -337,6 +337,7 @@ CRM_TOOL_DEFS = [
             "required": ["entity_type", "entity_id", "message"],
         },
         "kind": "integration",
+        "writes": True,
     },
     {
         "name": "crm_get_chatter",
@@ -352,6 +353,7 @@ CRM_TOOL_DEFS = [
             "required": ["entity_type", "entity_id"],
         },
         "kind": "integration",
+        "writes": False,
     },
 ]
 
