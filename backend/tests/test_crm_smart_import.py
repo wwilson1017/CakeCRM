@@ -125,6 +125,14 @@ async def test_vcard_malformed_line_skipped_not_raised():
     assert result.contacts[0]["name"] == "Ada"  # bad line ignored, contact still parsed
 
 
+async def test_csv_parse_caps_preview_contacts(monkeypatch):
+    # A huge CSV must not build an unbounded preview list (browser/JSON blowup).
+    monkeypatch.setattr(smart_import, "MAX_PARSE_CONTACTS", 2)
+    result = await smart_import.parse_contacts("Name\nA\nB\nC\nD\n", "big.csv")
+    assert len(result.contacts) == 2
+    assert any("Showing the first 2" in w for w in result.warnings)
+
+
 async def test_ai_failure_degrades_to_warning(monkeypatch):
     class BoomProvider:
         async def stream_turn(self, messages, tools, system_prompt):

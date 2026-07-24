@@ -17,6 +17,7 @@ from providers import get_ai_provider
 logger = logging.getLogger(__name__)
 
 MAX_AI_CONTENT_BYTES = 200_000
+MAX_PARSE_CONTACTS = 5000  # cap parsed preview contacts (matches the confirm cap)
 
 CONTACT_FIELDS = ("name", "email", "phone", "company", "title", "source", "tags", "notes")
 
@@ -75,6 +76,8 @@ async def parse_contacts(content: str, filename: str) -> SmartImportResult:
         result = SmartImportResult(contacts=contacts, ai_used=False)
         if not contacts:
             result.warnings.append("No contacts found in vCard file")
+        elif len(contacts) >= MAX_PARSE_CONTACTS:
+            result.warnings.append(f"Showing the first {MAX_PARSE_CONTACTS} contacts — split the file to import more.")
         return result
 
     if filename.lower().endswith(".csv"):
@@ -83,6 +86,8 @@ async def parse_contacts(content: str, filename: str) -> SmartImportResult:
             result = SmartImportResult(contacts=csv_result, ai_used=False)
             if not csv_result:
                 result.warnings.append("No contacts found in CSV file")
+            elif len(csv_result) >= MAX_PARSE_CONTACTS:
+                result.warnings.append(f"Showing the first {MAX_PARSE_CONTACTS} contacts — split the file to import more.")
             return result
 
     return await _parse_with_ai(content, filename)
@@ -128,6 +133,8 @@ def _parse_vcf(content: str) -> list[dict]:
                 if contact:
                     contacts.append(contact)
             current = None
+            if len(contacts) >= MAX_PARSE_CONTACTS:
+                break
             continue
 
         if current is None:
@@ -213,6 +220,8 @@ def _try_csv_deterministic(content: str) -> list[dict] | None:
 
     contacts = []
     for row in reader:
+        if len(contacts) >= MAX_PARSE_CONTACTS:
+            break
         name = (row.get(name_col) or "").strip()
         if not name:
             continue
@@ -329,5 +338,9 @@ def _extract_contacts_from_ai_response(raw: str) -> tuple[list[dict], list[str]]
 
     if skipped:
         warnings.append(f"{skipped} entries skipped (no name, email, or phone)")
+
+    if len(contacts) > MAX_PARSE_CONTACTS:
+        contacts = contacts[:MAX_PARSE_CONTACTS]
+        warnings.append(f"Showing the first {MAX_PARSE_CONTACTS} contacts — split the file to import more.")
 
     return contacts, warnings
