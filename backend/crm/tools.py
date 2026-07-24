@@ -3,7 +3,13 @@
 Contacts, deals, tasks, activities, and analytics — all accessible to the AI
 assistant for managing customer relationships conversationally. The CRM is
 first-class core, so these tools are collected UNCONDITIONALLY (no enable gate);
-the assistant engine (a later issue) consumes them via get_crm_tools().
+the assistant engine (backend/assistant/) consumes them via get_crm_tools().
+
+Every def carries a boolean ``"writes"`` flag — the single source of truth for
+the assistant's confirmation gate (``backend/assistant/registry.ToolRegistry``):
+mutating tools (create/update/delete/log/complete) are ``True`` and prompt for
+confirmation in normal mode; read tools are ``False``. Any def added here MUST
+carry a ``"writes"`` flag — ``tests/test_crm_tools.py`` fails loudly otherwise.
 """
 
 from collections.abc import Callable
@@ -18,6 +24,7 @@ CRM_TOOL_DEFS = [
     # ── Contacts (6 tools) ────────────────────────────────────────────────────
     {
         "name": "crm_find_contact",
+        "writes": False,
         "description": (
             "Search CRM contacts by name, email, company, or notes. "
             "Use this when the user mentions a person or company and you need to look them up."
@@ -35,6 +42,7 @@ CRM_TOOL_DEFS = [
     },
     {
         "name": "crm_create_contact",
+        "writes": True,
         "description": (
             "Create a new contact in the CRM. Use when the user mentions a new customer, prospect, "
             "or person they want to track."
@@ -58,6 +66,7 @@ CRM_TOOL_DEFS = [
     },
     {
         "name": "crm_update_contact",
+        "writes": True,
         "description": (
             "Update an existing contact's information. Use when the user wants to change a "
             "contact's details like email, phone, company, status, or tags."
@@ -82,6 +91,7 @@ CRM_TOOL_DEFS = [
     },
     {
         "name": "crm_get_contact",
+        "writes": False,
         "description": (
             "Get a contact's full profile including their deals, tasks, and recent activity. "
             "Use this to see everything about a specific customer."
@@ -97,6 +107,7 @@ CRM_TOOL_DEFS = [
     },
     {
         "name": "crm_list_contacts",
+        "writes": False,
         "description": (
             "List contacts with optional filtering. Use to browse the customer list or "
             "see contacts by status."
@@ -114,6 +125,7 @@ CRM_TOOL_DEFS = [
     },
     {
         "name": "crm_delete_contact",
+        "writes": True,
         "description": "Delete a contact and all their associated activities and tasks.",
         "input_schema": {
             "type": "object",
@@ -128,6 +140,7 @@ CRM_TOOL_DEFS = [
     # ── Deals (5 tools) ──────────────────────────────────────────────────────
     {
         "name": "crm_get_pipeline",
+        "writes": False,
         "description": (
             "Get the deal pipeline with value summaries per stage. "
             "Use when the user asks about their pipeline, deals, or sales status."
@@ -146,6 +159,7 @@ CRM_TOOL_DEFS = [
     },
     {
         "name": "crm_create_deal",
+        "writes": True,
         "description": (
             "Create a new deal/opportunity. Use when the user mentions a potential sale, "
             "project, or business opportunity with a customer."
@@ -168,6 +182,7 @@ CRM_TOOL_DEFS = [
     },
     {
         "name": "crm_update_deal",
+        "writes": True,
         "description": (
             "Update a deal's details — value, stage, close date, probability, notes, etc."
         ),
@@ -190,6 +205,7 @@ CRM_TOOL_DEFS = [
     },
     {
         "name": "crm_update_deal_stage",
+        "writes": True,
         "description": "Move a deal to a new pipeline stage. Quick way to advance or close a deal.",
         "input_schema": {
             "type": "object",
@@ -203,6 +219,7 @@ CRM_TOOL_DEFS = [
     },
     {
         "name": "crm_get_deal",
+        "writes": False,
         "description": "Get full details for a specific deal including contact info and activity history.",
         "input_schema": {
             "type": "object",
@@ -217,6 +234,7 @@ CRM_TOOL_DEFS = [
     # ── Activities (2 tools) ──────────────────────────────────────────────────
     {
         "name": "crm_log_activity",
+        "writes": True,
         "description": (
             "Log a note or activity (call, email, meeting, note, follow_up) against a contact or deal. "
             "Use this after the user mentions an interaction with a customer."
@@ -235,6 +253,7 @@ CRM_TOOL_DEFS = [
     },
     {
         "name": "crm_get_activity_log",
+        "writes": False,
         "description": "Get the activity history for a contact or deal, or recent activity across the CRM.",
         "input_schema": {
             "type": "object",
@@ -251,6 +270,7 @@ CRM_TOOL_DEFS = [
     # ── Tasks (3 tools) ──────────────────────────────────────────────────────
     {
         "name": "crm_create_task",
+        "writes": True,
         "description": (
             "Create a follow-up task or reminder. Use when the user mentions needing to "
             "follow up, check in, or do something by a certain date for a customer or deal."
@@ -271,6 +291,7 @@ CRM_TOOL_DEFS = [
     },
     {
         "name": "crm_list_tasks",
+        "writes": False,
         "description": (
             "List CRM tasks with filters. Use to check what follow-ups are due, "
             "what's overdue, or what tasks exist for a customer."
@@ -291,6 +312,7 @@ CRM_TOOL_DEFS = [
     },
     {
         "name": "crm_complete_task",
+        "writes": True,
         "description": "Mark a CRM task as completed.",
         "input_schema": {
             "type": "object",
@@ -305,6 +327,7 @@ CRM_TOOL_DEFS = [
     # ── Analytics (1 tool) ────────────────────────────────────────────────────
     {
         "name": "crm_dashboard",
+        "writes": False,
         "description": (
             "Get a CRM summary dashboard with pipeline value, contact counts, overdue tasks, "
             "recent activity, and top deals. Use when the user asks for an overview, summary, "

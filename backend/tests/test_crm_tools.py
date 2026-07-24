@@ -52,3 +52,35 @@ def test_get_crm_tools_returns_full_set_unconditionally():
 def test_no_enable_gate_in_source():
     src = inspect.getsource(tools)
     assert "is_enabled" not in src  # chatty's crm_lite gate must not survive the port
+
+
+# ── writes flags (issue #4 — the assistant confirmation-gate linchpin) ────────
+# INVARIANT, not a count: every def (including ones later issues append) must
+# self-classify as a write or a read, or the confirmation gate silently lets a
+# mutation through. Deliberately no exact-count / exact-set assertions here so
+# sibling issues adding tools (companies, chatter) pass through untouched.
+
+_OWNED_WRITE_TOOLS = {
+    "crm_create_contact", "crm_update_contact", "crm_delete_contact",
+    "crm_create_deal", "crm_update_deal", "crm_update_deal_stage",
+    "crm_log_activity", "crm_create_task", "crm_complete_task",
+}
+_OWNED_READ_TOOLS = {
+    "crm_find_contact", "crm_get_contact", "crm_list_contacts", "crm_get_pipeline",
+    "crm_get_deal", "crm_get_activity_log", "crm_list_tasks", "crm_dashboard",
+}
+
+
+def test_every_def_declares_a_boolean_writes_flag():
+    """Fail loud if ANY tool def is missing a boolean ``writes`` — a missing flag
+    defaults to read-only and would bypass the assistant's confirmation gate."""
+    missing = [d["name"] for d in CRM_TOOL_DEFS if not isinstance(d.get("writes"), bool)]
+    assert not missing, f"tool defs missing a boolean 'writes' flag: {missing}"
+
+
+def test_owned_write_and_read_tools_are_classified_correctly():
+    writes = {d["name"]: d.get("writes") for d in CRM_TOOL_DEFS}
+    for name in _OWNED_WRITE_TOOLS:
+        assert writes.get(name) is True, f"{name} must be writes=True"
+    for name in _OWNED_READ_TOOLS:
+        assert writes.get(name) is False, f"{name} must be writes=False"
