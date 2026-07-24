@@ -15,6 +15,7 @@ export interface ToolCallInfo {
 export interface PendingConfirmation {
   tool: string;
   toolUseId: string;
+  msgId?: string; // the persisted assistant row; disambiguates reused tool_use_ids
   args: Record<string, unknown>;
   description?: string;
   status: 'pending' | 'approved' | 'denied';

@@ -54,7 +54,29 @@ async def chat(
     ``messages`` carries only the newest user message (history lives server-side).
     An EMPTY ``messages`` with a ``conversation_id`` is a *continuation* — used to
     resume after a write was approved out-of-band — and saves no new user row.
+
+    Thin catch-all wrapper: the SSE response has already started (200 + bytes
+    flushed), so any unexpected exception in the loop must still terminate with a
+    proper ``error`` event rather than dropping the connection with no terminal
+    event (which the frontend would otherwise render as a silent, successful-looking
+    stop).
     """
+    try:
+        async for line in _chat_impl(provider, registry, messages, tool_mode, conversation_id, title_hint):
+            yield line
+    except Exception:
+        logger.exception("assistant.chat crashed mid-stream")
+        yield _sse({"type": "error", "error": "The assistant hit an unexpected error and stopped."})
+
+
+async def _chat_impl(
+    provider: AIProvider,
+    registry,
+    messages: list[dict],
+    tool_mode: str = "normal",
+    conversation_id: str | None = None,
+    title_hint: str | None = None,
+) -> AsyncGenerator[str, None]:
     if tool_mode not in _VALID_MODES:
         tool_mode = "normal"
 
@@ -141,7 +163,7 @@ async def chat(
                     "description": registry.descriptions.get(event.get("tool"), ""),
                 })
             elif etype == "error":
-                yield _sse({"type": "error", "error": event.get("error", "Provider error")})
+                yield _sse({"type": "error", "error": str(event.get("error") or "Provider error")[:500]})
                 return
             elif etype == "_turn_complete":
                 tool_calls = event.get("tool_calls", []) or []
@@ -289,25 +311,31 @@ async def chat(
     yield _sse({"type": "error", "error": "Tool loop exceeded maximum iterations."})
 
 
-def resolve_confirmation(registry, conversation_id: str, tool_use_id: str, decision: str) -> dict:
+def resolve_confirmation(registry, conversation_id: str, tool_use_id: str, decision: str,
+                         msg_id: str | None = None) -> dict:
     """Approve or deny a pending write — server-authoritative and idempotent.
 
     Atomically claims the pending call (loading its canonical tool + args from the
-    DB, NOT from the client), executes it (approve) or records a denial (deny), and
-    merges the result onto the persisted iteration. A second call for an
-    already-resolved tool_use_id is a no-op (``already_resolved``), so a
-    double-click or replay can never execute a write twice. Synchronous — the
-    router runs it in a worker thread.
+    DB, NOT from the client — ``msg_id`` disambiguates positional-id providers like
+    Gemini), executes it (approve) or records a denial (deny), and merges the result
+    onto the persisted iteration. A second call for an already-resolved call is a
+    no-op (``already_resolved``), so a double-click or replay can never execute a
+    write twice. Synchronous — the router runs it in a worker thread.
     """
-    claimed = history.claim_pending_tool(conversation_id, tool_use_id)
+    claimed = history.claim_pending_tool(conversation_id, tool_use_id, msg_id=msg_id)
     if claimed is None:
         return {"status": "already_resolved"}
-    msg_id, tool, args = claimed["msg_id"], claimed["tool"], claimed["args"]
-    if decision == "approve":
+    claimed_msg_id, tool, args = claimed["msg_id"], claimed["tool"], claimed["args"]
+    # Defense-in-depth: only a write should ever have been marked pending. If a
+    # non-write somehow got here (a future bug in the gate), refuse rather than
+    # execute an unconfirmed action — is_write is the single source of truth.
+    if decision == "approve" and not registry.is_write(tool):
+        result = {"error": "Not a confirmable write action."}
+    elif decision == "approve":
         result = registry.execute_tool_sync(tool, args)
     else:  # deny
         result = {"status": history.DENIED_STATUS}
-    history.merge_tool_result(msg_id, tool_use_id, tool, json.dumps(result, default=str))
+    history.merge_tool_result(claimed_msg_id, tool_use_id, tool, json.dumps(result, default=str))
     return {"tool": tool, "decision": decision, "result": result}
 
 

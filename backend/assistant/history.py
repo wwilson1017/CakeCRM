@@ -225,32 +225,45 @@ def merge_tool_result(msg_id: str, tool_use_id: str, tool_name: str, content: st
         )
 
 
-def claim_pending_tool(conversation_id: str, tool_use_id: str) -> dict | None:
+def claim_pending_tool(conversation_id: str, tool_use_id: str, msg_id: str | None = None) -> dict | None:
     """Atomically claim a pending write awaiting user approval.
 
-    Finds the newest assistant message in the conversation whose ``tool_calls``
-    contains ``tool_use_id`` and whose stored result for it is the pending
-    placeholder, marks that result ``executing`` under ``FOR UPDATE`` (so a
-    concurrent double-approval sees it already claimed), and returns the canonical
-    ``{"msg_id", "tool", "args"}`` from the persisted call. Returns None when
-    nothing pending matches (already approved/denied/executing, or unknown) — the
-    caller treats that as an idempotent no-op. The tool/args come from the DB, not
-    the client, so an approval cannot execute an attacker-chosen tool.
+    When ``msg_id`` is given (the confirm SSE event always carries it), the search
+    is scoped to that exact message row — critical because a positional-id provider
+    (Gemini reuses ``call_0`` every stream_turn) can leave two distinct pending
+    writes sharing one ``tool_use_id``, and a tool_use_id-only match could resolve
+    the wrong one. Without ``msg_id`` it falls back to scanning the conversation's
+    assistant rows newest-first. Marks the matched result ``executing`` under
+    ``FOR UPDATE`` (so a concurrent double-approval sees it already claimed) and
+    returns the canonical ``{"msg_id", "tool", "args"}`` from the persisted call.
+    Returns None when nothing pending matches (already approved/denied/executing,
+    unknown, or the row was deleted) — the caller treats that as an idempotent
+    no-op. The tool/args come from the DB, not the client, so an approval cannot
+    execute an attacker-chosen tool.
     """
-    candidates = pg_fetchall(
-        "SELECT id FROM assistant_messages "
-        "WHERE conversation_id = %s AND role = 'assistant' AND tool_calls IS NOT NULL "
-        "ORDER BY seq DESC",
-        (conversation_id,),
-    )
+    if msg_id:
+        candidates = [{"id": msg_id}]
+    else:
+        candidates = pg_fetchall(
+            "SELECT id FROM assistant_messages "
+            "WHERE conversation_id = %s AND role = 'assistant' AND tool_calls IS NOT NULL "
+            "ORDER BY seq DESC",
+            (conversation_id,),
+        )
     with get_connection() as conn:
         cur = conn.cursor()
         for cand in candidates:
+            # Scope by conversation_id too, so a caller-supplied msg_id can't reach
+            # another conversation's row; a concurrently-deleted row → None → skip.
             cur.execute(
-                "SELECT tool_calls, tool_results FROM assistant_messages WHERE id = %s FOR UPDATE",
-                (cand["id"],),
+                "SELECT tool_calls, tool_results FROM assistant_messages "
+                "WHERE id = %s AND conversation_id = %s FOR UPDATE",
+                (cand["id"], conversation_id),
             )
-            locked = row_to_dict(cur, cur.fetchone())
+            row = cur.fetchone()
+            if row is None:
+                continue
+            locked = row_to_dict(cur, row)
             calls = locked.get("tool_calls") or []
             call = next((c for c in calls if c.get("tool_use_id") == tool_use_id), None)
             if call is None:

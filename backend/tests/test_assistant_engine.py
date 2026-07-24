@@ -267,12 +267,77 @@ async def test_continuation_appends_user_ack_when_history_ends_on_assistant(stor
     assert prov.captured_messages[0][-1]["role"] == "user"
 
 
+@pytest.mark.asyncio
+async def test_write_budget_rejects_then_terminates(store, monkeypatch):
+    """Over-budget writes in one turn get REJECTed then TERMINATE the turn — the
+    runaway-mutation backstop, exercised end-to-end through the engine."""
+    monkeypatch.setattr(engine, "WRITE_BUDGET_PER_TURN", 1)
+    reg = Registry(writes={"crm_create_contact"})
+    prov = FakeProvider([[_complete([
+        _tc("crm_create_contact", tid="a", args={"n": 1}),
+        _tc("crm_create_contact", tid="b", args={"n": 2}),
+        _tc("crm_create_contact", tid="c", args={"n": 3}),
+    ], stop="tool_use")]])
+    events = await _run(prov, reg, [{"role": "user", "content": "add three"}], tool_mode="power")
+    assert len(reg.calls) == 1  # only the first write executed; budget stopped the rest
+    ends = [e for e in events if e["type"] == "tool_end"]
+    assert any("budget" in (e["result"].get("error", "").lower()) for e in ends)
+    assert events[-1]["type"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_setup_persist_failure_fails_closed(store, monkeypatch):
+    monkeypatch.setattr(history, "save_message",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("db down")))
+    prov = FakeProvider([[{"type": "text", "text": "hi"}, _complete()]])
+    events = await _run(prov, Registry(), [{"role": "user", "content": "hi"}])
+    assert events[-1]["type"] == "error"  # never half-runs
+
+
+@pytest.mark.asyncio
+async def test_tool_iteration_persist_failure_fails_closed(store, monkeypatch):
+    """If persisting a tool-using iteration fails, the engine must NOT execute the
+    tool (the confirm flow keys off that row)."""
+    reg = Registry(writes={"crm_create_contact"})
+    prov = FakeProvider([[_complete([_tc("crm_create_contact")], stop="tool_use")]])
+
+    def _save(cid, mid, role, content, tool_calls=None, model=""):
+        if tool_calls is not None:
+            raise RuntimeError("db down")
+        store.save_message(cid, mid, role, content, tool_calls, model)
+
+    monkeypatch.setattr(history, "save_message", _save)
+    events = await _run(prov, reg, [{"role": "user", "content": "add"}], tool_mode="power")
+    assert events[-1]["type"] == "error"
+    assert reg.calls == []  # fail-closed: no execution
+
+
+@pytest.mark.asyncio
+async def test_pending_persist_failure_emits_no_confirm(store, monkeypatch):
+    reg = Registry(writes={"crm_create_contact"})
+    prov = FakeProvider([[_complete([_tc("crm_create_contact")], stop="tool_use")]])
+    monkeypatch.setattr(history, "merge_tool_result",
+                        lambda *a: (_ for _ in ()).throw(RuntimeError("db down")))
+    events = await _run(prov, reg, [{"role": "user", "content": "add"}], tool_mode="normal")
+    assert events[-1]["type"] == "error"
+    assert "confirm" not in _types(events)  # no confirm for an unrecorded pending action
+
+
+@pytest.mark.asyncio
+async def test_top_level_catch_all_emits_error(store, monkeypatch):
+    monkeypatch.setattr(identity, "get_identity",
+                        lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    prov = FakeProvider([[{"type": "text", "text": "hi"}, _complete()]])
+    events = await _run(prov, Registry(), [{"role": "user", "content": "hi"}])
+    assert events[-1] == {"type": "error", "error": "The assistant hit an unexpected error and stopped."}
+
+
 # ── Confirm resolver (server-authoritative, idempotent) ───────────────────────
 
 def test_resolve_confirmation_approve_executes_and_merges(monkeypatch):
     reg = Registry(writes={"crm_create_contact"})
     monkeypatch.setattr(history, "claim_pending_tool",
-                        lambda cid, tuid: {"msg_id": "m1", "tool": "crm_create_contact", "args": {"name": "Y"}})
+                        lambda cid, tuid, msg_id=None: {"msg_id": "m1", "tool": "crm_create_contact", "args": {"name": "Y"}})
     merged = {}
     monkeypatch.setattr(history, "merge_tool_result",
                         lambda mid, tuid, tname, content: merged.update({"content": content}))
@@ -282,10 +347,40 @@ def test_resolve_confirmation_approve_executes_and_merges(monkeypatch):
     assert '"ok": true' in merged["content"]
 
 
+def test_resolve_confirmation_threads_msg_id_to_claim(monkeypatch):
+    """msg_id must reach claim_pending_tool so a reused tool_use_id resolves the
+    correct pending row (Gemini positional-id collision)."""
+    reg = Registry(writes={"crm_create_contact"})
+    seen = {}
+
+    def _claim(cid, tuid, msg_id=None):
+        seen["msg_id"] = msg_id
+        return {"msg_id": msg_id or "m1", "tool": "crm_create_contact", "args": {}}
+
+    monkeypatch.setattr(history, "claim_pending_tool", _claim)
+    monkeypatch.setattr(history, "merge_tool_result", lambda *a: None)
+    engine.resolve_confirmation(reg, "c1", "call_0", "approve", msg_id="row-42")
+    assert seen["msg_id"] == "row-42"
+
+
+def test_resolve_confirmation_refuses_non_write(monkeypatch):
+    """Defense-in-depth: if a non-write somehow got marked pending, approving it
+    must NOT execute it."""
+    reg = Registry(writes=set())  # crm_dashboard is a read
+    monkeypatch.setattr(history, "claim_pending_tool",
+                        lambda cid, tuid, msg_id=None: {"msg_id": "m1", "tool": "crm_dashboard", "args": {}})
+    merged = {}
+    monkeypatch.setattr(history, "merge_tool_result",
+                        lambda mid, tuid, tname, content: merged.update({"content": content}))
+    out = engine.resolve_confirmation(reg, "c1", "t1", "approve")
+    assert reg.calls == []  # not executed
+    assert "error" in out["result"]
+
+
 def test_resolve_confirmation_deny_records_denied(monkeypatch):
     reg = Registry(writes={"crm_create_contact"})
     monkeypatch.setattr(history, "claim_pending_tool",
-                        lambda cid, tuid: {"msg_id": "m1", "tool": "crm_create_contact", "args": {}})
+                        lambda cid, tuid, msg_id=None: {"msg_id": "m1", "tool": "crm_create_contact", "args": {}})
     merged = {}
     monkeypatch.setattr(history, "merge_tool_result",
                         lambda mid, tuid, tname, content: merged.update({"content": content}))
@@ -297,7 +392,7 @@ def test_resolve_confirmation_deny_records_denied(monkeypatch):
 
 def test_resolve_confirmation_idempotent_noop(monkeypatch):
     reg = Registry(writes={"crm_create_contact"})
-    monkeypatch.setattr(history, "claim_pending_tool", lambda cid, tuid: None)  # already resolved
+    monkeypatch.setattr(history, "claim_pending_tool", lambda cid, tuid, msg_id=None: None)  # already resolved
     out = engine.resolve_confirmation(reg, "c1", "t1", "approve")
     assert out == {"status": "already_resolved"}
     assert reg.calls == []  # never double-executes

@@ -13,8 +13,11 @@ thread so a tool call never blocks the async SSE event loop.
 """
 
 import asyncio
+import logging
 
 from crm.tools import get_crm_tools
+
+logger = logging.getLogger(__name__)
 
 # Internal bookkeeping keys stripped before tool defs reach a provider (providers
 # only understand name/description/input_schema).
@@ -45,13 +48,22 @@ class ToolRegistry:
         return out
 
     def execute_tool_sync(self, name: str, args: dict | None) -> dict:
+        # Fail closed: only DECLARED tools (those with a def, hence a writes flag)
+        # are executable. This keeps executor-only aliases like crm_log_note — which
+        # have no def and no writes classification — from ever running unconfirmed.
+        if name not in self.writes_map:
+            return {"error": f"Unknown tool: {name}"}
         fn = self.executors.get(name)
         if fn is None:
             return {"error": f"Unknown tool: {name}"}
         try:
             return fn(**(args or {}))
-        except Exception as e:  # bad args, DB error — surface to the model as a result
-            return {"error": f"Tool error: {e}"}
+        except TypeError as e:  # LLM passed bad/unexpected arguments
+            logger.warning("assistant tool %s bad args: %s", name, e)
+            return {"error": f"The tool '{name}' could not run with those arguments."}
+        except Exception:  # DB / service failure — log detail, return a generic message
+            logger.exception("assistant tool %s failed", name)
+            return {"error": f"The tool '{name}' failed. Please try again."}
 
     async def execute_tool(self, name: str, args: dict | None) -> dict:
         return await asyncio.to_thread(self.execute_tool_sync, name, args)

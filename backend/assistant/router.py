@@ -56,6 +56,7 @@ class ConfirmRequest(BaseModel):
     conversation_id: str
     tool_use_id: str
     decision: str  # "approve" | "deny"
+    msg_id: str | None = None  # disambiguates positional-id providers (Gemini call_0 reuse)
 
 
 class TitleRequest(BaseModel):
@@ -101,14 +102,19 @@ async def chat_upload(
         data = json.loads(payload)
     except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail="Invalid payload JSON.")
+    # Validate the same shape /chat gets from Pydantic: a non-empty list of dict
+    # messages. Without this, a non-dict message element 500s on messages[-1].get.
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Invalid payload.")
-
-    messages = data.get("messages") or []
+    messages = data.get("messages")
+    if not isinstance(messages, list) or not messages or not all(isinstance(m, dict) for m in messages):
+        raise HTTPException(status_code=400, detail="messages must be a non-empty list of objects.")
     conversation_id = data.get("conversation_id")
     tool_mode = data.get("tool_mode", "normal")
-    if not messages:
-        raise HTTPException(status_code=400, detail="messages is required for an upload turn.")
+
+    # Reject when no provider is configured BEFORE parsing any file — a keyless
+    # instance must not burn CPU extracting arbitrary PDF/DOCX/XLSX content.
+    provider = await asyncio.to_thread(_require_provider)
 
     if len(files) > uploads.MAX_FILES:
         raise HTTPException(status_code=400, detail=f"At most {uploads.MAX_FILES} files per message.")
@@ -130,8 +136,14 @@ async def chat_upload(
     original_text = messages[-1].get("content") or ""
     if blocks:
         messages[-1] = {**messages[-1], "content": "\n\n".join(blocks) + "\n\n" + original_text}
+        # Uploaded documents are the untrusted-content channel. A prompt-injected
+        # file could ask the model to run a destructive write; in power ("Auto")
+        # mode that would execute with no human check. Downgrade this turn to
+        # normal so any write the model proposes after reading an upload still
+        # routes through the confirmation gate. (No files → unchanged.)
+        if tool_mode == "power":
+            tool_mode = "normal"
 
-    provider = await asyncio.to_thread(_require_provider)
     stream = engine.chat(
         provider, ToolRegistry(), messages,
         tool_mode=tool_mode, conversation_id=conversation_id, title_hint=original_text,
@@ -145,7 +157,9 @@ async def chat_upload(
 def confirm(req: ConfirmRequest, user=Depends(get_current_user)):
     if req.decision not in ("approve", "deny"):
         raise HTTPException(status_code=400, detail="decision must be 'approve' or 'deny'.")
-    return engine.resolve_confirmation(ToolRegistry(), req.conversation_id, req.tool_use_id, req.decision)
+    return engine.resolve_confirmation(
+        ToolRegistry(), req.conversation_id, req.tool_use_id, req.decision, msg_id=req.msg_id,
+    )
 
 
 # ── Conversations ──────────────────────────────────────────────────────────

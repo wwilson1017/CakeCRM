@@ -61,6 +61,7 @@ function addConfirm(m: ChatMessage, evt: SSEEvent): ChatMessage {
       {
         tool: String(evt.tool ?? ''),
         toolUseId,
+        msgId: evt.msg_id ? String(evt.msg_id) : undefined,
         args: (evt.args as Record<string, unknown>) ?? {},
         description: evt.description ? String(evt.description) : undefined,
         status: 'pending',
@@ -80,6 +81,7 @@ export function useAssistantChat() {
   const convIdRef = useRef<string | null>(null);
   const toolModeRef = useRef<ToolMode>('normal');
   const abortRef = useRef<AbortController | null>(null);
+  const userAbortedRef = useRef(false);
   const textBufRef = useRef<Record<string, string>>({});
   const rafRef = useRef<number | null>(null);
 
@@ -221,13 +223,27 @@ export function useAssistantChat() {
     } catch { /* aborted or connection dropped */ }
 
     flushText(asstId);
-    updateMessage(asstId, (m) => (m.streaming ? { ...m, streaming: false } : m));
+    // If the stream ended without a terminal `done`/`error` event (both clear
+    // `streaming`) and the user didn't stop it, the connection died abnormally —
+    // surface it rather than rendering a silent, successful-looking stop.
+    const stillStreaming = messagesRef.current.find((m) => m.id === asstId)?.streaming;
+    if (stillStreaming && !userAbortedRef.current) {
+      updateMessage(asstId, (m) => ({
+        ...m,
+        content: (m.content ? m.content + '\n\n' : '') + '⚠️ The connection ended unexpectedly.',
+        streaming: false,
+        error: true,
+      }));
+    } else {
+      updateMessage(asstId, (m) => (m.streaming ? { ...m, streaming: false } : m));
+    }
     setIsStreaming(false);
     abortRef.current = null;
   }, [flushText, handleEvent, updateMessage]);
 
   const startAssistant = useCallback((extra: ChatMessage[]) => {
     const asstId = newId();
+    userAbortedRef.current = false;
     textBufRef.current[asstId] = '';
     commit([...messagesRef.current, ...extra, { id: asstId, role: 'assistant', content: '', streaming: true }]);
     setIsStreaming(true);
@@ -265,12 +281,23 @@ export function useAssistantChat() {
 
   const resolve = useCallback(async (msgId: string, toolUseId: string, decision: 'approve' | 'deny') => {
     const token = getToken();
+    // Send the server-side row id (msgId on the pending card) so the backend
+    // resolves THIS pending write even if a positional-id provider reused the
+    // tool_use_id across turns.
+    const card = messagesRef.current
+      .find((m) => m.id === msgId)?.pendingConfirmations
+      ?.find((c) => c.toolUseId === toolUseId);
     let result: unknown;
     try {
       const res = await fetch(`${API}/confirm`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ conversation_id: convIdRef.current, tool_use_id: toolUseId, decision }),
+        body: JSON.stringify({
+          conversation_id: convIdRef.current,
+          tool_use_id: toolUseId,
+          decision,
+          msg_id: card?.msgId,
+        }),
       });
       if (res.status === 401) {
         sessionStorage.removeItem(TOKEN_KEY);
@@ -301,6 +328,7 @@ export function useAssistantChat() {
   const denyAction = useCallback((msgId: string, toolUseId: string) => resolve(msgId, toolUseId, 'deny'), [resolve]);
 
   const stop = useCallback(() => {
+    userAbortedRef.current = true;
     abortRef.current?.abort();
     abortRef.current = null;
     setIsStreaming(false);
@@ -314,19 +342,36 @@ export function useAssistantChat() {
   }, [commit]);
 
   const loadMessages = useCallback((serverMsgs: ServerMessage[], convId: string) => {
-    const mapped: ChatMessage[] = serverMsgs.map((sm) => ({
-      id: sm.id,
-      role: sm.role,
-      content: sm.content,
-      model: sm.model,
-      toolCalls: (sm.tool_calls ?? []).map((tc) => ({
-        tool: tc.tool,
-        toolUseId: tc.tool_use_id,
-        args: tc.args,
-        result: tc.result,
-        status: 'done' as const,
-      })),
-    }));
+    const isPending = (r: unknown): boolean =>
+      !!r && typeof r === 'object' && (r as { status?: string }).status === 'pending_user_approval';
+    const mapped: ChatMessage[] = serverMsgs.map((sm) => {
+      const calls = sm.tool_calls ?? [];
+      return {
+        id: sm.id,
+        role: sm.role,
+        content: sm.content,
+        model: sm.model,
+        // A still-pending write reloads as a re-approvable confirmation card.
+        pendingConfirmations: calls
+          .filter((tc) => isPending(tc.result))
+          .map((tc) => ({
+            tool: tc.tool,
+            toolUseId: tc.tool_use_id,
+            msgId: sm.id,
+            args: tc.args ?? {},
+            status: 'pending' as const,
+          })),
+        toolCalls: calls
+          .filter((tc) => !isPending(tc.result))
+          .map((tc) => ({
+            tool: tc.tool,
+            toolUseId: tc.tool_use_id,
+            args: tc.args,
+            result: tc.result,
+            status: 'done' as const,
+          })),
+      };
+    });
     convIdRef.current = convId;
     setConversationId(convId);
     commit(mapped);

@@ -141,6 +141,9 @@ def test_claim_pending_tool_is_once_only(pg_db):
         def __init__(self):
             self.n = 0
 
+        def is_write(self, name):
+            return True
+
         def execute_tool_sync(self, name, args):
             self.n += 1
             return {"ok": True}

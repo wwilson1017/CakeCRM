@@ -47,21 +47,32 @@ def test_execute_tool_sync_unknown_returns_error():
     assert reg.execute_tool_sync("nope_not_a_tool", {}) == {"error": "Unknown tool: nope_not_a_tool"}
 
 
+def test_execute_tool_sync_rejects_undeclared_executor_alias():
+    """crm_log_note is an executor-only alias with no def — it must NOT be
+    executable via the assistant (fail closed on anything without a writes flag)."""
+    reg = ToolRegistry()
+    assert "crm_log_note" in reg.executors  # the alias exists in the executor map
+    assert reg.execute_tool_sync("crm_log_note", {}) == {"error": "Unknown tool: crm_log_note"}
+
+
 def test_execute_tool_sync_wraps_executor_exceptions():
     reg = ToolRegistry()
-    reg.executors = {"boom": lambda **k: (_ for _ in ()).throw(RuntimeError("kaboom"))}
-    out = reg.execute_tool_sync("boom", {})
-    assert out["error"].startswith("Tool error: ") and "kaboom" in out["error"]
+    # Override a DECLARED tool's executor so the exception path (not the
+    # undeclared-name guard) is exercised.
+    reg.executors["crm_create_contact"] = lambda **k: (_ for _ in ()).throw(ValueError("boom"))
+    out = reg.execute_tool_sync("crm_create_contact", {})
+    assert "error" in out and "crm_create_contact" in out["error"]
+    assert "boom" not in out["error"]  # internal detail not leaked
 
 
 def test_execute_tool_sync_success_passes_args():
     reg = ToolRegistry()
-    reg.executors = {"echo": lambda **k: {"ok": True, "got": k}}
-    assert reg.execute_tool_sync("echo", {"a": 1}) == {"ok": True, "got": {"a": 1}}
+    reg.executors["crm_create_contact"] = lambda **k: {"ok": True, "got": k}
+    assert reg.execute_tool_sync("crm_create_contact", {"a": 1}) == {"ok": True, "got": {"a": 1}}
 
 
 @pytest.mark.asyncio
 async def test_execute_tool_offloads_to_thread():
     reg = ToolRegistry()
-    reg.executors = {"echo": lambda **k: {"ran": True}}
-    assert await reg.execute_tool("echo", {}) == {"ran": True}
+    reg.executors["crm_create_contact"] = lambda **k: {"ran": True}
+    assert await reg.execute_tool("crm_create_contact", {}) == {"ran": True}

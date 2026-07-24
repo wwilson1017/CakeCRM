@@ -108,6 +108,27 @@ def test_upload_rejects_oversize_file(client, with_provider):
     assert r.status_code == 400
 
 
+def test_upload_without_provider_400_before_extraction(client, monkeypatch):
+    """Degradation + resource guard: a keyless instance rejects the upload without
+    parsing any file."""
+    monkeypatch.setattr(router_mod, "get_ai_provider", lambda: None)
+    called = {"n": 0}
+    monkeypatch.setattr(router_mod.uploads, "extract_upload",
+                        lambda *a, **k: called.__setitem__("n", called["n"] + 1))
+    payload = json.dumps({"messages": [{"role": "user", "content": "hi"}]})
+    r = client.post("/api/assistant/chat/upload", data={"payload": payload},
+                    files=[("files", ("a.txt", b"data", "text/plain"))])
+    assert r.status_code == 400
+    assert called["n"] == 0  # never parsed the file
+
+
+def test_upload_rejects_non_dict_messages(client, with_provider):
+    payload = json.dumps({"messages": ["not-an-object"]})
+    r = client.post("/api/assistant/chat/upload", data={"payload": payload},
+                    files=[("files", ("a.txt", b"x", "text/plain"))])
+    assert r.status_code == 400  # clean 400, not a 500 on messages[-1].get
+
+
 # ── Confirm ───────────────────────────────────────────────────────────────────
 
 def test_confirm_invalid_decision_400(client):
@@ -117,11 +138,17 @@ def test_confirm_invalid_decision_400(client):
 
 
 def test_confirm_delegates_to_resolver(client, monkeypatch):
-    monkeypatch.setattr(router_mod.engine, "resolve_confirmation",
-                        lambda reg, cid, tuid, decision: {"tool": "crm_create_contact", "decision": decision})
+    seen = {}
+
+    def _resolve(reg, cid, tuid, decision, msg_id=None):
+        seen["msg_id"] = msg_id
+        return {"tool": "crm_create_contact", "decision": decision}
+
+    monkeypatch.setattr(router_mod.engine, "resolve_confirmation", _resolve)
     r = client.post("/api/assistant/confirm",
-                    json={"conversation_id": "c1", "tool_use_id": "t1", "decision": "approve"})
+                    json={"conversation_id": "c1", "tool_use_id": "t1", "decision": "approve", "msg_id": "row-9"})
     assert r.status_code == 200 and r.json()["decision"] == "approve"
+    assert seen["msg_id"] == "row-9"  # msg_id threaded through
 
 
 # ── Conversations ─────────────────────────────────────────────────────────────
@@ -146,6 +173,20 @@ def test_get_conversation_merges_previews_and_strips_results(client, monkeypatch
     msg = r.json()["messages"][0]
     assert "tool_results" not in msg
     assert msg["tool_calls"][0]["result"] == {"n": 3}  # preview folded in, parsed
+
+
+def test_get_conversation_ui_preview_non_json_fallback(client, monkeypatch):
+    conv = {
+        "id": "c1",
+        "messages": [{
+            "id": "m1", "role": "assistant", "content": "",
+            "tool_calls": [{"tool": "x", "tool_use_id": "t1", "args": {}}],
+            "tool_results": [{"tool_use_id": "t1", "tool_name": "x", "content": "not valid json {"}],
+        }],
+    }
+    monkeypatch.setattr(router_mod.history, "get_conversation", lambda cid: conv)
+    r = client.get("/api/assistant/conversations/c1")
+    assert r.json()["messages"][0]["tool_calls"][0]["result"] == "not valid json {"  # raw fallback
 
 
 def test_get_conversation_404(client, monkeypatch):

@@ -161,3 +161,34 @@ def test_merge_tool_result_replaces_same_id(fake_conn, monkeypatch):
     upd = next(p for s, p in conn.executed if "UPDATE assistant_messages SET tool_results" in s)
     written = json.loads(upd[0])
     assert len(written) == 1 and written[0]["content"] == '{"done": true}'
+
+
+def test_merge_tool_result_missing_row_raises(fake_conn, monkeypatch):
+    fake_conn(monkeypatch, history, fetchone_results=[])  # row lookup → None
+    with pytest.raises(KeyError):
+        history.merge_tool_result("gone", "t1", "x", "{}")
+
+
+def test_claim_pending_tool_by_msg_id_marks_executing(fake_conn, monkeypatch):
+    """The msg_id path (used by /confirm) locks the exact row, verifies it's pending,
+    and returns the DB-canonical tool/args. Patches row_to_dict since FakeCursor
+    has no .description."""
+    calls = [{"tool": "crm_create_contact", "tool_use_id": "t1", "args": {"n": 1}}]
+    results = [{"tool_use_id": "t1", "tool_name": "crm_create_contact", "content": history.PENDING_RESULT_JSON}]
+    conn = fake_conn(monkeypatch, history, fetchone_results=[(calls, results)])
+    monkeypatch.setattr(history, "row_to_dict", lambda cur, row: {"tool_calls": row[0], "tool_results": row[1]})
+    out = history.claim_pending_tool("c1", "t1", msg_id="m1")
+    assert out == {"msg_id": "m1", "tool": "crm_create_contact", "args": {"n": 1}}
+    # scoped the lock to the row AND conversation, and marked the result executing
+    sqls = " || ".join(s for s, _ in conn.executed)
+    assert "WHERE id = %s AND conversation_id = %s FOR UPDATE" in sqls
+    upd = next(p for s, p in conn.executed if "UPDATE assistant_messages SET tool_results" in s)
+    assert history.EXECUTING_STATUS in upd[0]
+
+
+def test_claim_pending_tool_returns_none_when_not_pending(fake_conn, monkeypatch):
+    calls = [{"tool": "crm_create_contact", "tool_use_id": "t1", "args": {}}]
+    results = [{"tool_use_id": "t1", "tool_name": "crm_create_contact", "content": '{"ok": true}'}]  # already resolved
+    fake_conn(monkeypatch, history, fetchone_results=[(calls, results)])
+    monkeypatch.setattr(history, "row_to_dict", lambda cur, row: {"tool_calls": row[0], "tool_results": row[1]})
+    assert history.claim_pending_tool("c1", "t1", msg_id="m1") is None
