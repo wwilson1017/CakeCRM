@@ -228,8 +228,17 @@ export function useAssistantChat() {
     }
 
     if (res.status === 401) {
-      sessionStorage.removeItem(TOKEN_KEY);
-      window.location.href = '/login';
+      // Only the owning stream drives the logout/redirect; a superseded stream
+      // just stops quietly (the active stream will hit its own 401 if the token
+      // is truly dead).
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+        setIsStreaming(false);
+        sessionStorage.removeItem(TOKEN_KEY);
+        window.location.href = '/login';
+      } else {
+        updateMessage(asstId, (m) => (m.streaming ? { ...m, streaming: false } : m));
+      }
       return;
     }
     if (!res.ok || !res.body) {
