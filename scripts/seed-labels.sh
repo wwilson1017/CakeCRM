@@ -77,8 +77,11 @@ LABELS=(
   "reporter-greenlit|0e8a16|Reporter approved the verification evidence"
 )
 
-# One list call, reused for every existence check.
-EXISTING="$(gh label list --repo "$REPO" --limit 500 --json name -q '.[].name')"
+# One list call, reused for the create/update messaging. The high limit + `--force` on
+# create below mean the script stays correct even if a repo has more labels than the
+# snapshot returns (a snapshot miss just downgrades a label to a create --force, which
+# upserts rather than erroring "already exists").
+EXISTING="$(gh label list --repo "$REPO" --limit 1000 --json name -q '.[].name')"
 
 created=0
 updated=0
@@ -89,7 +92,8 @@ for entry in "${LABELS[@]}"; do
     echo "  updated: $name"
     updated=$((updated + 1))
   else
-    gh label create "$name" --repo "$REPO" --color "$color" --description "$desc" >/dev/null
+    # --force = create-or-update, so a label missing from the snapshot doesn't crash.
+    gh label create "$name" --force --repo "$REPO" --color "$color" --description "$desc" >/dev/null
     echo "  created: $name"
     created=$((created + 1))
   fi

@@ -31,6 +31,8 @@ jobs:
   review:
     name: AI Code Review
     runs-on: ubuntu-latest
+    # Bound the job so a hung gh/curl call can't hold a runner to the 360-min default.
+    timeout-minutes: 10
     if: github.event.pull_request.draft == false
 
     steps:
@@ -77,7 +79,7 @@ jobs:
           FILES_JSON=$(gh api \
             "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
             --paginate --jq '.[].filename')
-          CHANGED_FILES=$(printf '%s\n' "$FILES_JSON" | grep -E '\.(py|ts|tsx|js|jsx|css|yml|yaml|sh)$|Dockerfile$' || true)
+          CHANGED_FILES=$(printf '%s\n' "$FILES_JSON" | grep -E '\.(py|ts|tsx|js|jsx|css|sql|yml|yaml|sh)$|Dockerfile$' || true)
 
           if [ -z "$CHANGED_FILES" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
@@ -121,7 +123,7 @@ jobs:
 
       # ── Get PR metadata ──
       - name: Get PR info
-        if: steps.gate.outputs.has_key == 'true' && steps.diff.outputs.empty != 'true' && steps.diff.outputs.skip != 'true' && steps.diff.outputs.diff_status != 'too_large'
+        if: steps.gate.outputs.has_key == 'true' && steps.diff.outcome == 'success' && steps.diff.outputs.empty != 'true' && steps.diff.outputs.skip != 'true' && steps.diff.outputs.diff_status != 'too_large'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -135,7 +137,7 @@ jobs:
 
       # ── Write system prompt (generic — CakeCRM, no internal/product-specific data) ──
       - name: Write system prompt
-        if: steps.gate.outputs.has_key == 'true' && steps.diff.outputs.empty != 'true' && steps.diff.outputs.skip != 'true' && steps.diff.outputs.diff_status != 'too_large'
+        if: steps.gate.outputs.has_key == 'true' && steps.diff.outcome == 'success' && steps.diff.outputs.empty != 'true' && steps.diff.outputs.skip != 'true' && steps.diff.outputs.diff_status != 'too_large'
         continue-on-error: true
         run: |
           cat > /tmp/system_prompt.txt <<'SYSPROMPT'
@@ -199,7 +201,7 @@ jobs:
 
       # ── Build user message ──
       - name: Build user message
-        if: steps.gate.outputs.has_key == 'true' && steps.diff.outputs.empty != 'true' && steps.diff.outputs.skip != 'true' && steps.diff.outputs.diff_status != 'too_large'
+        if: steps.gate.outputs.has_key == 'true' && steps.diff.outcome == 'success' && steps.diff.outputs.empty != 'true' && steps.diff.outputs.skip != 'true' && steps.diff.outputs.diff_status != 'too_large'
         continue-on-error: true
         run: |
           TRUNCATED="${{ steps.diff.outputs.truncated }}"
@@ -293,7 +295,7 @@ jobs:
       # ── Call the Anthropic Messages API ──
       - name: Run AI review
         id: review
-        if: steps.gate.outputs.has_key == 'true' && steps.diff.outputs.empty != 'true' && steps.diff.outputs.skip != 'true' && steps.diff.outputs.diff_status != 'too_large'
+        if: steps.gate.outputs.has_key == 'true' && steps.diff.outcome == 'success' && steps.diff.outputs.empty != 'true' && steps.diff.outputs.skip != 'true' && steps.diff.outputs.diff_status != 'too_large'
         continue-on-error: true
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -338,13 +340,22 @@ jobs:
             exit 0
           fi
 
+          # Parse and validate the review text BEFORE declaring success, so a malformed
+          # or text-less response can't post an empty "successful" review comment.
+          REVIEW_TEXT=$(echo "$BODY" | jq -r '.content[0].text // empty')
+          if [ -z "$REVIEW_TEXT" ]; then
+            echo "::warning::Anthropic response contained no text content"
+            echo "api_error=true" >> "$GITHUB_OUTPUT"
+            printf '%s' "$BODY" > /tmp/api_error.txt
+            exit 0
+          fi
+          printf '%s' "$REVIEW_TEXT" > /tmp/review.txt
           echo "api_error=false" >> "$GITHUB_OUTPUT"
-          echo "$BODY" | jq -r '.content[0].text // "(AI review returned no text content)"' > /tmp/review.txt
 
       # ── Post or update the review comment ──
       - name: Post or update review comment
         id: post_comment
-        if: steps.gate.outputs.has_key == 'true' && steps.diff.outputs.empty != 'true' && steps.diff.outputs.skip != 'true' && steps.diff.outputs.diff_status != 'too_large' && steps.review.outputs.api_error != 'true'
+        if: steps.gate.outputs.has_key == 'true' && steps.diff.outcome == 'success' && steps.review.outcome == 'success' && steps.diff.outputs.empty != 'true' && steps.diff.outputs.skip != 'true' && steps.diff.outputs.diff_status != 'too_large' && steps.review.outputs.api_error != 'true'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
