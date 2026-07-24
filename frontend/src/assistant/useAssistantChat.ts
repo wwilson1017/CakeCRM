@@ -421,6 +421,13 @@ export function useAssistantChat() {
   }, [commit]);
 
   const loadMessages = useCallback((serverMsgs: ServerMessage[], convId: string) => {
+    // Abort any in-flight turn before switching conversations — otherwise the old
+    // turn (incl. an Auto-mode write) keeps running invisibly and the UI stays
+    // blocked, same hazard clear() guards against.
+    userAbortedRef.current = true;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setIsStreaming(false);
     const isPending = (r: unknown): boolean =>
       !!r && typeof r === 'object' && (r as { status?: string }).status === 'pending_user_approval';
     const mapped: ChatMessage[] = serverMsgs.map((sm) => {
