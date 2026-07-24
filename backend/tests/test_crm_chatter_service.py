@@ -47,15 +47,17 @@ def rec(monkeypatch):
 # ── add_note (transactional: existence-check + INSERT in one txn) ───────────────
 
 def test_add_note_locks_target_then_inserts_in_one_txn(monkeypatch, fake_conn):
-    # In-txn: existence check returns a row, then INSERT ... RETURNING id → (5,).
-    conn = fake_conn(monkeypatch, chatter_service, fetchone_results=[(1,), (5,)])
-    monkeypatch.setattr(chatter_service, "pg_fetchone", lambda sql, params=(): {"id": 5, "message": "hi"})
+    # In-txn: existence check returns a row, then INSERT ... RETURNING * → row tuple,
+    # hydrated via row_to_dict before the transaction commits (no post-commit re-select).
+    row = (5, "deal", 3, "hi", "2026-01-01T00:00:00+00:00", None, 0)
+    conn = fake_conn(monkeypatch, chatter_service, fetchone_results=[(1,), row])
+    monkeypatch.setattr(chatter_service, "row_to_dict", lambda cur, r: {"id": r[0], "message": r[3]})
     result = chatter_service.add_note("deal", 3, "  hi  ")
     stmts = [s for s, _ in conn.executed]
     # existence check locks the target row in the same transaction as the insert
     assert any("SELECT 1 FROM deals WHERE id = %s FOR UPDATE" in s for s in stmts)
     insert_sql = next(s for s in stmts if "INSERT INTO crm_chatter" in s)
-    assert "RETURNING id" in insert_sql
+    assert "RETURNING *" in insert_sql
     assert "%s" in insert_sql and "?" not in insert_sql
     insert_params = next(p for s, p in conn.executed if "INSERT INTO crm_chatter" in s)
     assert insert_params[0] == "deal" and insert_params[1] == 3 and insert_params[2] == "hi"  # trimmed
@@ -63,8 +65,9 @@ def test_add_note_locks_target_then_inserts_in_one_txn(monkeypatch, fake_conn):
 
 
 def test_add_note_contact_locks_contacts_table(monkeypatch, fake_conn):
-    conn = fake_conn(monkeypatch, chatter_service, fetchone_results=[(1,), (9,)])
-    monkeypatch.setattr(chatter_service, "pg_fetchone", lambda sql, params=(): {"id": 9})
+    row = (9, "contact", 7, "note", "2026-01-01T00:00:00+00:00", None, 0)
+    conn = fake_conn(monkeypatch, chatter_service, fetchone_results=[(1,), row])
+    monkeypatch.setattr(chatter_service, "row_to_dict", lambda cur, r: {"id": r[0]})
     chatter_service.add_note("contact", 7, "note")
     assert any("FROM contacts WHERE id = %s FOR UPDATE" in s for s, _ in conn.executed)
 

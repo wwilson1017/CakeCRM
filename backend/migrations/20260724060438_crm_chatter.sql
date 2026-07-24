@@ -26,5 +26,7 @@ CREATE TABLE IF NOT EXISTS crm_chatter (
     updated_at  TIMESTAMPTZ,                 -- set on edit; NULL means never edited
     archived    INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1))
 );
--- Composite index serves the only read shape: notes for one entity, newest first.
-CREATE INDEX IF NOT EXISTS idx_crm_chatter_entity ON crm_chatter(entity_type, entity_id, created_at DESC);
+-- Composite index serves the only read shape: notes for one entity, newest
+-- first. Includes the id DESC tiebreaker so it matches get_chatter's exact
+-- ORDER BY (created_at DESC, id DESC).
+CREATE INDEX IF NOT EXISTS idx_crm_chatter_entity ON crm_chatter(entity_type, entity_id, created_at DESC, id DESC);

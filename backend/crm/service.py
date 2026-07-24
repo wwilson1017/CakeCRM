@@ -173,6 +173,8 @@ def delete_contact(contact_id: int) -> bool:
         cur.execute("DELETE FROM tasks WHERE contact_id = %s", (contact_id,))
         # crm_chatter is polymorphic (no FK), so its notes are dropped explicitly —
         # otherwise a reused contact SERIAL id would inherit this contact's notes.
+        # NOTE: deals have no delete path today; if a delete_deal is ever added it
+        # MUST do the same FOR UPDATE lock + this DELETE for entity_type='deal'.
         cur.execute(
             "DELETE FROM crm_chatter WHERE entity_type = 'contact' AND entity_id = %s",
             (contact_id,),
@@ -592,7 +594,10 @@ def dismiss_onboarding() -> dict:
 
 
 def _truncate_all(cur) -> None:
-    cur.execute("TRUNCATE crm_chatter, activity_log, tasks, deals, contacts RESTART IDENTITY")
+    # crm_chatter is listed LAST so TRUNCATE locks it after deals/contacts —
+    # the same order chatter_service.add_note takes (lock target row, then write
+    # crm_chatter), which avoids a lock-order-inversion deadlock between them.
+    cur.execute("TRUNCATE activity_log, tasks, deals, contacts, crm_chatter RESTART IDENTITY")
 
 
 def clear_demo_data() -> dict:

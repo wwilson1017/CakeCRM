@@ -20,7 +20,7 @@ never reused except by ``TRUNCATE ... RESTART IDENTITY``, which also wipes
 
 from datetime import datetime, timezone
 
-from core.postgres import get_connection, pg_fetchall, pg_fetchone
+from core.postgres import get_connection, pg_fetchall, pg_fetchone, row_to_dict
 
 CHATTER_ENTITY_TYPES = ("deal", "contact")
 _ENTITY_TABLE = {"deal": "deals", "contact": "contacts"}
@@ -91,11 +91,12 @@ def add_note(entity_type: str, entity_id: int, message: str) -> dict:
             raise ValueError(f"No {entity_type} with id {entity_id}")
         cur.execute(
             """INSERT INTO crm_chatter (entity_type, entity_id, message, created_at)
-               VALUES (%s, %s, %s, %s) RETURNING id""",
+               VALUES (%s, %s, %s, %s) RETURNING *""",
             (entity_type, entity_id, text, now),
         )
-        note_id = cur.fetchone()[0]
-    return pg_fetchone("SELECT * FROM crm_chatter WHERE id = %s", (note_id,))
+        # Hydrate from the INSERT's own row, inside the transaction — a post-commit
+        # re-select could return None if a concurrent delete removes the row first.
+        return row_to_dict(cur, cur.fetchone())
 
 
 def get_chatter(
