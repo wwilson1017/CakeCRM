@@ -3,6 +3,7 @@ import { api } from '../../core/api/client';
 import type { CrmNote } from '../../core/types';
 import { mono, INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, ACCENT, ACCENT_INK, inputStyle } from '../../shared/styles';
 import { toast } from '../../shared/toast';
+import { formatDate } from '../../shared/formatDate';
 
 interface Props {
   entityType: 'deal' | 'contact';
@@ -88,8 +89,6 @@ export function NotesThread({ entityType, entityId }: Props) {
     }
   }
 
-  const archivedCount = notes.filter(n => n.archived).length;
-
   return (
     <div>
       {/* Composer */}
@@ -110,13 +109,13 @@ export function NotesThread({ entityType, entityId }: Props) {
         }}>{submitting ? 'Saving…' : 'Add'}</button>
       </div>
 
-      {/* Show-archived toggle */}
-      {(showArchived || archivedCount > 0 || notes.length > 0) && (
-        <button onClick={() => setShowArchived(v => !v)} style={{
-          background: 'none', border: 'none', color: INK_DIM,
-          fontSize: 12, cursor: 'pointer', padding: 0, marginBottom: 10,
-        }}>{showArchived ? 'Hide archived' : 'Show archived'}</button>
-      )}
+      {/* Show-archived toggle — always rendered so archived notes stay reachable
+          even when every active note has been archived (which would otherwise
+          leave the current filter's `notes` empty and hide the toggle). */}
+      <button onClick={() => setShowArchived(v => !v)} style={{
+        background: 'none', border: 'none', color: INK_DIM,
+        fontSize: 12, cursor: 'pointer', padding: 0, marginBottom: 10,
+      }}>{showArchived ? 'Hide archived' : 'Show archived'}</button>
 
       {/* List */}
       {loading && notes.length === 0 ? (
@@ -153,7 +152,7 @@ export function NotesThread({ entityType, entityId }: Props) {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 4, flexWrap: 'wrap' }}>
                     <span style={{ ...mono(10), color: INK_DIM }}>{formatDate(n.created_at)}</span>
                     {n.updated_at && <span style={{ ...mono(10), color: INK_DIM }}>· edited</span>}
-                    {n.archived === 1 && <span style={{ ...mono(10), color: INK_DIM }}>· archived</span>}
+                    {!!n.archived && <span style={{ ...mono(10), color: INK_DIM }}>· archived</span>}
                     {!n.archived && (
                       <button onClick={() => { setEditingId(n.id); setEditText(n.message); }} style={linkBtn}>Edit</button>
                     )}
@@ -183,14 +182,4 @@ function miniBtn(primary: boolean) {
     background: primary ? ACCENT : 'transparent',
     color: primary ? ACCENT_INK : INK_MUTE,
   } as const;
-}
-
-function formatDate(iso: string): string {
-  try {
-    const hasZone = /[Zz]|[+-]\d\d:?\d\d$/.test(iso);
-    const d = new Date(hasZone ? iso : iso + 'Z');
-    if (isNaN(d.getTime())) return iso;
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) +
-      ' ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-  } catch { return iso; }
 }

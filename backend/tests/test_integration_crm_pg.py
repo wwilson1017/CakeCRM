@@ -160,6 +160,7 @@ def test_seed_idempotent_and_sequences_advance(pg_db):
     assert pg_fetchone("SELECT COUNT(*) AS c FROM deals")["c"] == 7
     assert pg_fetchone("SELECT COUNT(*) AS c FROM tasks")["c"] == 8
     assert pg_fetchone("SELECT COUNT(*) AS c FROM activity_log")["c"] == 11
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM crm_chatter")["c"] == 4
     assert service.get_crm_meta()["sample_data_loaded"] is True
 
     # second call is a clean no-op (CRM no longer empty)
@@ -230,8 +231,8 @@ def test_chatter_crud_archive_restore_roundtrip(pg_db):
     from crm import chatter_service, service
 
     d = service.create_deal("Chatter deal", value=1000)
-    n1 = chatter_service.log_note("deal", d["id"], "  first note  ")
-    n2 = chatter_service.log_note("deal", d["id"], "second note")
+    n1 = chatter_service.add_note("deal", d["id"], "  first note  ")
+    n2 = chatter_service.add_note("deal", d["id"], "second note")
     assert n1["message"] == "first note" and n1["updated_at"] is None and n1["archived"] == 0
 
     # newest first, deterministic
@@ -258,12 +259,12 @@ def test_chatter_rejects_invalid_and_nonexistent_targets(pg_db):
     from crm import chatter_service, service
 
     with pytest.raises(ValueError):
-        chatter_service.log_note("company", 1, "hi")       # bad type
+        chatter_service.add_note("company", 1, "hi")       # bad type
     with pytest.raises(ValueError):
-        chatter_service.log_note("deal", 999999, "hi")     # target does not exist
+        chatter_service.add_note("deal", 999999, "hi")     # target does not exist
     c = service.create_contact("Has notes")
     with pytest.raises(ValueError):
-        chatter_service.log_note("contact", c["id"], "   ")  # blank message
+        chatter_service.add_note("contact", c["id"], "   ")  # blank message
 
 
 def test_chatter_dropped_on_contact_delete_and_clear(pg_db):
@@ -271,14 +272,14 @@ def test_chatter_dropped_on_contact_delete_and_clear(pg_db):
     from crm import chatter_service, service
 
     c = service.create_contact("Doomed")
-    chatter_service.log_note("contact", c["id"], "note that must not outlive the contact")
+    chatter_service.add_note("contact", c["id"], "note that must not outlive the contact")
     assert pg_fetchone("SELECT COUNT(*) AS n FROM crm_chatter")["n"] == 1
     service.delete_contact(c["id"])
     assert pg_fetchone("SELECT COUNT(*) AS n FROM crm_chatter")["n"] == 0
 
     # ID reuse after clear_all: a new deal reusing id 1 inherits no old notes
     d = service.create_deal("First deal")
-    chatter_service.log_note("deal", d["id"], "old deal-1 note")
+    chatter_service.add_note("deal", d["id"], "old deal-1 note")
     service.clear_all()
     d2 = service.create_deal("New deal reusing id 1")
     assert d2["id"] == d["id"]  # SERIAL restarted

@@ -583,6 +583,8 @@ async def smart_import_confirm(body: SmartImportConfirm, user=Depends(get_curren
 async def get_chatter(
     entity_type: str,
     entity_id: int,
+    # Tighter cap (200) than the contacts/deals lists (1000): a single entity's
+    # notes thread is a bounded, human-authored feed, not a bulk dataset.
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     include_archived: bool = False,
@@ -602,7 +604,7 @@ async def add_chatter_note(
     entity_type: str, entity_id: int, body: ChatterNoteBody, user=Depends(get_current_user),
 ):
     try:
-        return chatter_service.log_note(entity_type, entity_id, body.message)
+        return chatter_service.add_note(entity_type, entity_id, body.message)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
 

@@ -44,57 +44,56 @@ def rec(monkeypatch):
     return r
 
 
-# ── log_note ──────────────────────────────────────────────────────────────────
+# ── add_note (transactional: existence-check + INSERT in one txn) ───────────────
 
-def test_log_note_validates_target_then_inserts_returning(rec):
-    # existence check returns a row, then the INSERT returns the new note
-    rec.fetchone_queue = [{"?column?": 1}, {"id": 5, "message": "hi"}]
-    result = chatter_service.log_note("deal", 3, "  hi  ")
-    # existence check hit the deals table
-    exist_sql = rec.sql_containing("FROM deals WHERE id = %s")
-    assert "SELECT 1" in exist_sql
-    assert rec.params_for("FROM deals WHERE id = %s") == [3]
-    # insert used %s, RETURNING *, and the trimmed message
-    insert_sql = rec.sql_containing("INSERT INTO crm_chatter")
-    assert "RETURNING *" in insert_sql
+def test_add_note_locks_target_then_inserts_in_one_txn(monkeypatch, fake_conn):
+    # In-txn: existence check returns a row, then INSERT ... RETURNING id → (5,).
+    conn = fake_conn(monkeypatch, chatter_service, fetchone_results=[(1,), (5,)])
+    monkeypatch.setattr(chatter_service, "pg_fetchone", lambda sql, params=(): {"id": 5, "message": "hi"})
+    result = chatter_service.add_note("deal", 3, "  hi  ")
+    stmts = [s for s, _ in conn.executed]
+    # existence check locks the target row in the same transaction as the insert
+    assert any("SELECT 1 FROM deals WHERE id = %s FOR UPDATE" in s for s in stmts)
+    insert_sql = next(s for s in stmts if "INSERT INTO crm_chatter" in s)
+    assert "RETURNING id" in insert_sql
     assert "%s" in insert_sql and "?" not in insert_sql
-    params = rec.params_for("INSERT INTO crm_chatter")
-    assert params[0] == "deal" and params[1] == 3 and params[2] == "hi"
+    insert_params = next(p for s, p in conn.executed if "INSERT INTO crm_chatter" in s)
+    assert insert_params[0] == "deal" and insert_params[1] == 3 and insert_params[2] == "hi"  # trimmed
     assert result == {"id": 5, "message": "hi"}
 
 
-def test_log_note_contact_checks_contacts_table(rec):
-    rec.fetchone_queue = [{"?column?": 1}, {"id": 9}]
-    chatter_service.log_note("contact", 7, "note")
-    assert rec.params_for("FROM contacts WHERE id = %s") == [7]
+def test_add_note_contact_locks_contacts_table(monkeypatch, fake_conn):
+    conn = fake_conn(monkeypatch, chatter_service, fetchone_results=[(1,), (9,)])
+    monkeypatch.setattr(chatter_service, "pg_fetchone", lambda sql, params=(): {"id": 9})
+    chatter_service.add_note("contact", 7, "note")
+    assert any("FROM contacts WHERE id = %s FOR UPDATE" in s for s, _ in conn.executed)
 
 
-def test_log_note_blank_message_raises(rec):
-    with pytest.raises(ValueError, match="Message is required"):
-        chatter_service.log_note("deal", 3, "   ")
-
-
-def test_log_note_too_long_raises(rec):
-    with pytest.raises(ValueError, match="too long"):
-        chatter_service.log_note("deal", 3, "x" * (chatter_service.MAX_MESSAGE_LEN + 1))
-
-
-def test_log_note_bad_entity_type_raises(rec):
-    with pytest.raises(ValueError, match="Invalid entity_type"):
-        chatter_service.log_note("company", 3, "hi")
-
-
-def test_log_note_nonexistent_target_raises(rec):
-    rec.fetchone_queue = [None]  # existence check misses
+def test_add_note_nonexistent_target_raises_no_insert(monkeypatch, fake_conn):
+    conn = fake_conn(monkeypatch, chatter_service, fetchone_results=[None])  # existence check misses
     with pytest.raises(ValueError, match="No deal with id 999"):
-        chatter_service.log_note("deal", 999, "hi")
-    # never reached the insert
-    assert not any("INSERT INTO crm_chatter" in s for s, _ in rec.calls)
+        chatter_service.add_note("deal", 999, "hi")
+    assert not any("INSERT INTO crm_chatter" in s for s, _ in conn.executed)
 
 
-def test_log_note_nonpositive_id_raises(rec):
+def test_add_note_blank_message_raises():
+    with pytest.raises(ValueError, match="Message is required"):
+        chatter_service.add_note("deal", 3, "   ")
+
+
+def test_add_note_too_long_raises():
+    with pytest.raises(ValueError, match="too long"):
+        chatter_service.add_note("deal", 3, "x" * (chatter_service.MAX_MESSAGE_LEN + 1))
+
+
+def test_add_note_bad_entity_type_raises():
+    with pytest.raises(ValueError, match="Invalid entity_type"):
+        chatter_service.add_note("company", 3, "hi")
+
+
+def test_add_note_nonpositive_id_raises():
     with pytest.raises(ValueError, match="positive integer"):
-        chatter_service.log_note("deal", 0, "hi")
+        chatter_service.add_note("deal", 0, "hi")
 
 
 # ── get_chatter ───────────────────────────────────────────────────────────────
@@ -126,6 +125,31 @@ def test_get_chatter_bad_type_raises(rec):
         chatter_service.get_chatter("company", 3)
 
 
+def test_get_chatter_passes_bounded_offset(rec):
+    rec.fetchall_queue = [[]]
+    chatter_service.get_chatter("deal", 3, limit=10, offset=25)
+    params = rec.params_for("FROM crm_chatter")
+    assert params[-2:] == [10, 25]  # LIMIT then OFFSET
+
+
+def test_get_chatter_returns_empty_for_nonexistent_entity(rec):
+    # get_chatter is type-only (no existence check) — a well-typed but unknown id
+    # yields [] rather than raising, so the notes panel degrades gracefully if its
+    # entity was deleted underneath it.
+    rec.fetchall_queue = [[]]
+    assert chatter_service.get_chatter("deal", 999999) == []
+
+
+def test_bounded_limit_and_offset_edges():
+    assert chatter_service._bounded_limit(0) == 1
+    assert chatter_service._bounded_limit(-5) == 1
+    assert chatter_service._bounded_limit(9999) == 200
+    assert chatter_service._bounded_limit("abc") == 50
+    assert chatter_service._bounded_offset(-10) == 0
+    assert chatter_service._bounded_offset("xyz") == 0
+    assert chatter_service._bounded_offset(7) == 7
+
+
 # ── update / archive / unarchive ────────────────────────────────────────────────
 
 def test_update_note_sets_updated_at_returning(rec):
@@ -146,6 +170,11 @@ def test_update_note_missing_returns_none(rec):
 def test_update_note_blank_raises(rec):
     with pytest.raises(ValueError, match="Message is required"):
         chatter_service.update_note(5, "")
+
+
+def test_update_note_too_long_raises(rec):
+    with pytest.raises(ValueError, match="too long"):
+        chatter_service.update_note(5, "x" * (chatter_service.MAX_MESSAGE_LEN + 1))
 
 
 def test_archive_note_returns_true_when_row(rec):

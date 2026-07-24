@@ -10,14 +10,17 @@ non-empty bounded message, and bounded list windows. Invalid input raises ``Valu
 (the router maps it to 400; the tools wrap it as ``{"error": ...}``).
 
 Storage is polymorphic ``(entity_type, entity_id)`` with no FK, so orphan safety is
-enforced in two places: this module refuses to write a note against a non-existent
-target, and ``service.py`` clears chatter in ``delete_contact`` and every CRM-truncate
-path — a reused SERIAL id can never inherit a deleted entity's notes.
+enforced structurally: ``add_note`` checks the target exists and inserts in ONE
+transaction (``SELECT ... FOR UPDATE`` on the target row, per the check-then-write
+rule in CLAUDE.md), and ``service.py`` clears chatter in ``delete_contact`` (which
+also locks the target ``FOR UPDATE``) and every CRM-truncate path. A SERIAL id is
+never reused except by ``TRUNCATE ... RESTART IDENTITY``, which also wipes
+``crm_chatter`` — so a reused id can never inherit a deleted entity's notes.
 """
 
 from datetime import datetime, timezone
 
-from core.postgres import pg_fetchall, pg_fetchone
+from core.postgres import get_connection, pg_fetchall, pg_fetchone
 
 CHATTER_ENTITY_TYPES = ("deal", "contact")
 _ENTITY_TABLE = {"deal": "deals", "contact": "contacts"}
@@ -44,14 +47,12 @@ def _check_entity_type(entity_type: str) -> None:
         raise ValueError(f"Invalid entity_type: {entity_type!r}. Must be one of: {allowed}.")
 
 
-def _validate_target(entity_type: str, entity_id: int) -> None:
-    """Reject a bad type, a non-positive id, or a target row that does not exist."""
+def _check_type_and_id(entity_type: str, entity_id: int) -> None:
+    """Reject a bad type or a non-positive id (no DB access — the target-row
+    existence check happens transactionally inside add_note)."""
     _check_entity_type(entity_type)
     if not isinstance(entity_id, int) or entity_id <= 0:
         raise ValueError("entity_id must be a positive integer")
-    table = _ENTITY_TABLE[entity_type]
-    if pg_fetchone(f"SELECT 1 FROM {table} WHERE id = %s", (entity_id,)) is None:
-        raise ValueError(f"No {entity_type} with id {entity_id}")
 
 
 def _bounded_limit(limit: int) -> int:
@@ -70,15 +71,31 @@ def _bounded_offset(offset: int) -> int:
     return max(0, offset)
 
 
-def log_note(entity_type: str, entity_id: int, message: str) -> dict:
-    """Append a note to a deal or contact. Raises ValueError on invalid input."""
+def add_note(entity_type: str, entity_id: int, message: str) -> dict:
+    """Append a note to a deal or contact. Raises ValueError on invalid input or a
+    non-existent target.
+
+    The existence check and the INSERT run in one transaction with the target row
+    locked FOR UPDATE (CLAUDE.md: check-then-write spans reads and updates → one
+    transaction). This serializes against delete_contact (which also locks the row
+    first), so a note can never be inserted against a concurrently-deleted target.
+    """
     text = _clean_message(message)
-    _validate_target(entity_type, entity_id)
-    return pg_fetchone(
-        """INSERT INTO crm_chatter (entity_type, entity_id, message, created_at)
-           VALUES (%s, %s, %s, %s) RETURNING *""",
-        (entity_type, entity_id, text, _now()),
-    )
+    _check_type_and_id(entity_type, entity_id)
+    table = _ENTITY_TABLE[entity_type]
+    now = _now()
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(f"SELECT 1 FROM {table} WHERE id = %s FOR UPDATE", (entity_id,))
+        if cur.fetchone() is None:
+            raise ValueError(f"No {entity_type} with id {entity_id}")
+        cur.execute(
+            """INSERT INTO crm_chatter (entity_type, entity_id, message, created_at)
+               VALUES (%s, %s, %s, %s) RETURNING id""",
+            (entity_type, entity_id, text, now),
+        )
+        note_id = cur.fetchone()[0]
+    return pg_fetchone("SELECT * FROM crm_chatter WHERE id = %s", (note_id,))
 
 
 def get_chatter(
@@ -125,11 +142,3 @@ def unarchive_note(note_id: int) -> bool | None:
         "UPDATE crm_chatter SET archived = 0 WHERE id = %s RETURNING id", (note_id,)
     )
     return True if row else None
-
-
-def delete_chatter_for(cur, entity_type: str, entity_id: int) -> None:
-    """Cascade helper: drop an entity's notes inside a caller-supplied transaction."""
-    cur.execute(
-        "DELETE FROM crm_chatter WHERE entity_type = %s AND entity_id = %s",
-        (entity_type, entity_id),
-    )

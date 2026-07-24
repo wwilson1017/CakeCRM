@@ -51,7 +51,7 @@ def test_get_chatter_passes_include_archived(client, monkeypatch):
 # ── POST /chatter/{type}/{id}/note ──────────────────────────────────────────────
 
 def test_add_note_returns_created(client, monkeypatch):
-    monkeypatch.setattr(chatter_service, "log_note", lambda t, i, m: {"id": 7, "message": m})
+    monkeypatch.setattr(chatter_service, "add_note", lambda t, i, m: {"id": 7, "message": m})
     r = client.post("/api/crm/chatter/deal/3/note", json={"message": "hello"})
     assert r.status_code == 200
     assert r.json() == {"id": 7, "message": "hello"}

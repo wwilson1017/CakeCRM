@@ -68,3 +68,12 @@ def test_chatter_executors_wrap_validation_errors():
     # surfaces it as {"error": ...} rather than raising.
     assert "error" in tools.crm_add_note("company", 1, "hi")
     assert "error" in tools.crm_get_chatter("company", 1)
+
+
+def test_chatter_executors_happy_path_shapes(monkeypatch):
+    # The tool return shape is the contract the assistant engine consumes; pin it.
+    from crm import chatter_service
+    monkeypatch.setattr(chatter_service, "add_note", lambda t, i, m: {"id": 1, "message": m})
+    monkeypatch.setattr(chatter_service, "get_chatter", lambda *a, **k: [{"id": 1}, {"id": 2}])
+    assert tools.crm_add_note("deal", 3, "hi") == {"ok": True, "note": {"id": 1, "message": "hi"}}
+    assert tools.crm_get_chatter("deal", 3) == {"notes": [{"id": 1}, {"id": 2}], "count": 2}

@@ -474,7 +474,7 @@ def crm_dashboard() -> dict:
 
 def crm_add_note(entity_type: str, entity_id: int, message: str) -> dict:
     try:
-        note = chatter_service.log_note(entity_type, entity_id, message)
+        note = chatter_service.add_note(entity_type, entity_id, message)
     except ValueError as e:
         return {"error": str(e)}
     return {"ok": True, "note": note}

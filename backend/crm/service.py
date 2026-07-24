@@ -163,7 +163,10 @@ def delete_contact(contact_id: int) -> bool:
     """
     with get_connection() as conn:
         cur = conn.cursor()
-        cur.execute("SELECT id FROM contacts WHERE id = %s", (contact_id,))
+        # FOR UPDATE serializes against chatter_service.add_note (which locks the
+        # same row before inserting), so a note can't be added to a contact that
+        # this transaction is deleting — no orphaned crm_chatter rows.
+        cur.execute("SELECT id FROM contacts WHERE id = %s FOR UPDATE", (contact_id,))
         if cur.fetchone() is None:
             return False
         cur.execute("DELETE FROM activity_log WHERE contact_id = %s", (contact_id,))

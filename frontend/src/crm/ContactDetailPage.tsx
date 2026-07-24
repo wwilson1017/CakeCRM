@@ -294,7 +294,7 @@ export function ContactDetailPage() {
       {/* Chatter — editable notes thread */}
       <div style={{ marginTop: 24, borderTop: `1px solid ${LINE}`, paddingTop: 24 }}>
         <span style={{ ...mono(10, INK_DIM), display: 'block', marginBottom: 12 }}>Chatter</span>
-        <NotesThread entityType="contact" entityId={contact.id} />
+        <NotesThread key={`contact-${contact.id}`} entityType="contact" entityId={contact.id} />
       </div>
 
       {showEdit && <ContactForm contact={contact} onClose={() => setShowEdit(false)} onSaved={() => { setShowEdit(false); load(); }} />}

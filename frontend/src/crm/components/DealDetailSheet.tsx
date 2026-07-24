@@ -103,7 +103,7 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
         {/* Chatter — editable notes thread */}
         <div style={{ borderTop: `1px solid ${LINE}`, paddingTop: 16, marginBottom: 20 }}>
           <span style={{ ...mono(10, INK_DIM), display: 'block', marginBottom: 12 }}>Chatter</span>
-          <NotesThread entityType="deal" entityId={deal.id} />
+          <NotesThread key={`deal-${deal.id}`} entityType="deal" entityId={deal.id} />
         </div>
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
