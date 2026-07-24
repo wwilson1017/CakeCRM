@@ -1,0 +1,47 @@
+# Coach Lessons — CakeCRM
+
+> Instincts extracted from development sessions in this repo. Evidence: `[✓confirmed ✗violated · last-event]`.
+> Scan this index; grep the quoted phrase for the full instinct.
+
+## Index
+
+- [Providers] Together `/v1/models` returns a bare array: `httpx` direct, not SDK `models.list()`
+- [Testing] per-provider wire-shape test: mock the HTTP `transport`, not the SDK object
+- [Testing] multi-SELECT snapshot reads: `REPEATABLE READ` as first statement
+- [Testing] monkeypatched factory wrapping the patched symbol: capture the original first
+- [Tooling] sibling PR owns the lint config: `ruff --config <its file>`, scoped, never tree-wide `--fix`
+- [Auto-Issues] pipeline skills on this repo: pin `origin/main`, no cake_os PR bots
+- [Auto-Issues] `Merge-After: #N` settle: rebase-and-fold — keep-both + fold sibling tooling (dev deps, ruff first-party)
+- [GitHub Actions] advisory AI workflow patterns: has-key green gate, `always()` outcome guard, `outcome ==` chaining, curl transport fallback, one-line `if:`, iconv-safe truncation, display-name required checks, `pull-requests: write` suffices
+
+## Providers
+
+- `[✓1 ✗0 · 2026-07-23]` **When** validating or listing a provider's models via the OpenAI SDK's `client.models.list()` against an OpenAI-compatible endpoint → **do** verify the provider's `/v1/models` actually returns OpenAI's `{"data": [...]}` envelope before relying on the SDK → **because** Together AI returns a **bare top-level array**, and `openai==2.30.0`'s `models.list()` raises on it — which silently turned every valid Together key into a 400 at the connect gate. Fix: list/validate such providers via `httpx` directly, accepting bare-array or enveloped (found by review-super on #2/PR #28).
+
+## Testing
+
+- `[✓1 ✗0 · 2026-07-23]` **When** a test suite mocks a provider **SDK object** (returning envelope-shaped fakes) → **do** add at least one test per provider that mocks the HTTP **transport** with the REAL wire shape (e.g. `httpx.MockTransport` returning Together's bare array) → **because** SDK-object mocks can't catch wire-format mismatches or catalog-content bugs (Google returning TTS/image models that name-based tier inference then picks as defaults) — both were caught on #2 only by running the real pinned SDK against a mocked transport.
+- `[✓1 ✗0 · 2026-07-23]` **When** a service does two SELECTs in one transaction and treats them as one consistent snapshot → **do** issue `SET TRANSACTION ISOLATION LEVEL REPEATABLE READ` as the FIRST statement of that transaction → **because** Postgres' default READ COMMITTED takes a new snapshot per statement, so the pair can see different states; the transaction-scoped form resets at commit and is safe on a pooled connection, unlike `SET SESSION`, which leaks across checkouts (CredentialStore, #2).
+- `[✓1 ✗0 · 2026-07-23]` **When** a monkeypatched factory wraps the very symbol it patches (e.g. `monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **k: httpx.AsyncClient(...))`) → **do** capture the original into a local first (`real = httpx.AsyncClient`) and call that → **because** the lambda body resolves the patched name → infinite recursion (#2).
+
+## Tooling
+
+- `[✓1 ✗0 · 2026-07-23]` **When** running `ruff` while a sibling PR owns the repo's lint config (`ruff.toml` not yet merged) → **do** run `ruff check --config <that file>` scoped to YOUR files, never `ruff check . --fix` tree-wide → **because** default ruff selects far more rules than the repo config (`F,E,W,I` here), and a tree-wide `--fix` re-sorts imports in files outside your change, creating spurious diffs that conflict with the sibling PR. Revert any out-of-scope files ruff touches (#2 vs #10/PR #27).
+
+## Auto-Issues
+
+- `[✓2 ✗0 · 2026-07-23]` **(Auto-Issues)** **When** running review-super / `/pr` / settle+evidence steps on this repo (`wwilson1017/CakeCRM`, default branch `main`) → **do** pin the diff base to `origin/main` explicitly (pass it as review-super's arg, `gh pr create --base main`) and swap the skills' hardcoded `tncheesecake/cake_os` + `master` in `gh api`/graphql calls → **because** those skills default to a nonexistent `master` (and a stale local `main` balloons three-dot diffs to the whole product shell), and this repo has none of cake_os's PR bots — verbatim runs review an empty/ballooned diff, poll the wrong repo, and return a false "0 threads → clean" (verified on #10/PR #27; re-confirmed on #11/PR #30 — the Step 8.5 settle graphql/`gh api` commands were substituted to `wwilson1017/CakeCRM` + `main` before querying, and `auto-issues-pr-evidence.md` also hardcodes cake_os + a GCS bucket). See `docs/solutions/workflow-issues/cakecrm-ci-hygiene-and-cakeos-pipeline-adaptation.md`.
+- `[✓1 ✗0 · 2026-07-23]` **(Auto-Issues)** **When** settling a CakeCRM auto-issues PR whose only blocker was a `Merge-After: #N` line (0 unresolved review findings) and #N has now merged → **do** treat the settle as a rebase-and-fold, not a code fix: rebase the branch onto the updated `main`, keep-both the additive conflicts (`backend/main.py` router imports/includes, `CLAUDE.md` sections), then fold the sibling's build tooling — append the branch's test deps to *its* `backend/requirements-dev.txt` (e.g. `pytest-asyncio==1.4.0`) and add any new top-level package to `backend/ruff.toml` `known-first-party` (else `ruff` I001 on `from <pkg>.*`) → **because** the feature branch was cut before the sibling's CI/lint files existed, so until you fold them the branch's imports won't sort first-party and its `asyncio_mode=auto` tests have no runner — and the missing `.github/workflows/ci.yml` is exactly why the PR's check rollup was empty (verified: PR #28 — after the fold, `ruff check .` + `pytest -q` + all 3 CI jobs went green at the rebased head).
+
+## GitHub Actions
+
+Learned building `pr-review.yml` (#11/PR #30): a genericized, optional, advisory AI-review workflow. All exercised in that PR's review-super + settle.
+
+- `[✓1 ✗0 · 2026-07-23]` **When** shipping an OPTIONAL AI/CI workflow that needs a secret → **do** add an explicit has-key gate that exits green when the secret is absent, and never make it a required check → **because** fork PRs never receive secrets, and the auto-issues loop's "required checks green" gate would otherwise hang forever / red-X every fork PR (#11/PR #30).
+- `[✓1 ✗0 · 2026-07-23]` **When** adding `continue-on-error: true` to keep an advisory GitHub Actions check green → **do** also add an `if: always()` terminal-outcome guard that emits `::warning::` + `$GITHUB_STEP_SUMMARY` when no success path ran → **because** `continue-on-error` alone converts a real failure (transient gh/curl/jq death) into a silent green check, indistinguishable from "no findings" (#11/PR #30).
+- `[✓1 ✗0 · 2026-07-23]` **When** gating downstream GitHub Actions steps on a prior step's OUTPUTS with `!= 'value'` → **do** gate on `steps.<id>.outcome == 'success'` and chain each consumer to its DIRECT prerequisite → **because** an unset output (from a failed step) satisfies every `!=` check, so downstream steps fail-OPEN and run against missing/empty files, potentially posting a misleading result (#11/PR #30).
+- `[✓1 ✗0 · 2026-07-23]` **When** capturing `RESPONSE=$(curl ...)` under Actions' default `set -eo pipefail` and branching on the HTTP status → **do** add `|| RESPONSE=$'\n000'` → **because** curl exits non-zero only on TRANSPORT failure (DNS/TLS/timeout), not HTTP 4xx/5xx, so a network blip aborts the step before the status-code handling ever runs (#11/PR #30).
+- `[✓1 ✗0 · 2026-07-23]` **When** writing a multi-clause GitHub Actions `if:` with `||`/`&&` → **do** keep it on ONE physical line, not a YAML `>-` folded block with deeper-indented inner lines → **because** deeper indentation suppresses YAML folding and embeds literal newlines into the expression string — works by luck, brittle (#11/PR #30).
+- `[✓1 ✗0 · 2026-07-23]` **When** truncating a string with `${var:0:N}` that then feeds `jq --rawfile` / JSON → **do** sanitize with `iconv -f UTF-8 -t UTF-8//IGNORE` → **because** the cut can split a multi-byte codepoint, producing invalid UTF-8 that jq rejects — fails only on large non-ASCII inputs, easy to miss (#11/PR #30).
+- `[✓1 ✗0 · 2026-07-23]` **When** documenting GitHub branch-protection required checks → **do** use each job's `name:` DISPLAY value, not the job ID → **because** required-status contexts match the displayed check name (#11/PR #30).
+- **Verified fact:** GitHub's `GITHUB_TOKEN` posts issue/PR comments (`POST /repos/{o}/{r}/issues/{n}/comments`) with `permissions: pull-requests: write` alone — `issues: write` is NOT additionally required for a PR's comments (confirmed against the working cake_os blueprint + two reviewers on #11/PR #30). Don't cargo-cult `issues: write` onto PR-comment workflows.
