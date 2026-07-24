@@ -75,6 +75,9 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   Self-assign (or label `no-auto`) before working an issue manually.
 - Respect "Blocked by: #N" lines in issue bodies — don't start an issue whose
   blockers aren't merged.
+- See `docs/AUTO_ISSUES.md` for the operator guide (label vocabulary, terminal
+  outcomes, bring-up sequence, and repo prerequisites like branch protection).
+  `scripts/seed-labels.sh` idempotently creates/normalizes the loop's labels.
 - Keep this CLAUDE.md updated in the same PR as any change to architecture,
   conventions, or the rules above.
 
@@ -88,6 +91,12 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `backend/requirements-dev.txt`; tests live in `backend/tests/`. The import check
   imports the app with no `DATABASE_URL` (the Postgres pool inits in the lifespan
   handler), so CI needs no database.
+- **AI Code Review** (`.github/workflows/pr-review.yml`) is an **optional, advisory**
+  check on PRs to `main`: it posts a review comment (marker `<!-- ai-code-review-bot -->`)
+  when an `ANTHROPIC_API_KEY` Actions secret is set (model overridable via the
+  `AI_REVIEW_MODEL` repo variable), and is a **green no-op** otherwise (forks, keyless
+  repos). It must **not** be configured as a required check. It uses only the GitHub API
+  (no checkout) and `on: pull_request` (never `pull_request_target`).
 - **Contributing** — `CONTRIBUTING.md` covers dev setup and the checks. Contributions
   are under the **DCO** (`Signed-off-by`, via `git commit -s`), not a CLA, licensed
   AGPL-3.0 (inbound = outbound). DCO enforcement is the DCO GitHub App (installed once,

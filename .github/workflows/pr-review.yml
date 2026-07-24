@@ -1,0 +1,429 @@
+name: AI Code Review
+
+# Optional, advisory-only AI review of pull requests.
+#
+# - Posts a single review comment (marker `<!-- ai-code-review-bot -->`) when an
+#   `ANTHROPIC_API_KEY` Actions secret is configured, and is a green no-op otherwise:
+#   fork PRs never receive secrets, and a repo that has not set the key simply skips.
+# - This check is ADVISORY. It MUST NOT be configured as a required status check
+#   (a repo admin can require it, but doing so would let a transient AI outage block
+#   merges). The auto-issues loop treats it as informational.
+# - Uses only the GitHub REST API + files under /tmp, so no `checkout` is needed —
+#   this keeps the untrusted PR tree off the runner that holds the Anthropic secret.
+# - `pull_request` (never `pull_request_target`): under `pull_request`, fork PRs run
+#   with a read-only token and no secrets, so there is no secret-exfiltration surface.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# Cancel an in-progress review when new commits are pushed (cost control).
+concurrency:
+  group: pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    name: AI Code Review
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+
+    steps:
+      # ── Gate: only run the review when an API key is configured ──
+      # This step always SUCCEEDS. When no key is set, every downstream step skips and
+      # the job still concludes `success` (green) — the behavior forks and the loop rely on.
+      - name: Check for API key
+        id: gate
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -n "$(printf '%s' "$ANTHROPIC_API_KEY" | tr -d '[:space:]')" ]; then
+            echo "has_key=true" >> "$GITHUB_OUTPUT"
+            echo "ANTHROPIC_API_KEY is set — running AI review."
+          else
+            echo "has_key=false" >> "$GITHUB_OUTPUT"
+            echo "No ANTHROPIC_API_KEY secret set — skipping AI review (expected on forks and when AI review is not configured)."
+          fi
+
+      # ── Get PR diff (via API — no checkout) ──
+      - name: Get PR diff
+        id: diff
+        if: steps.gate.outputs.has_key == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          DIFF=$(gh api \
+            "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}" \
+            -H "Accept: application/vnd.github.diff" \
+            --cache 0)
+
+          if [ -z "$DIFF" ]; then
+            echo "empty=true" >> "$GITHUB_OUTPUT"
+            echo "No changes detected in PR diff."
+            exit 0
+          fi
+          echo "empty=false" >> "$GITHUB_OUTPUT"
+
+          # Paginate the file list so a large PR whose first page is docs and later
+          # pages are code is not wrongly skipped.
+          CHANGED_FILES=$(gh api \
+            "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
+            --paginate --jq '.[].filename' | grep -E '\.(py|ts|tsx|js|jsx|css|yml|yaml|sh)$|Dockerfile$' || true)
+
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "PR only contains non-reviewable file types."
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+          # Size tiering. Thresholds defined once here and echoed so notice text can
+          # reference the real value (no drift between limit and message).
+          SKIP_LIMIT=500000       # >500K chars: skip AI review entirely
+          TRUNCATE_LIMIT=300000   # >300K chars: truncate the diff sent to the model
+          echo "truncate_limit=$TRUNCATE_LIMIT" >> "$GITHUB_OUTPUT"
+
+          DIFF_CHARS=${#DIFF}
+          echo "diff_chars=$DIFF_CHARS" >> "$GITHUB_OUTPUT"
+
+          TRUNCATED="false"
+          DIFF_STATUS="normal"   # normal | large | too_large
+
+          if [ "$DIFF_CHARS" -gt "$SKIP_LIMIT" ]; then
+            echo "diff_status=too_large" >> "$GITHUB_OUTPUT"
+            echo "Diff is $DIFF_CHARS chars (>${SKIP_LIMIT}). Skipping AI review."
+            exit 0
+          elif [ "$DIFF_CHARS" -gt "$TRUNCATE_LIMIT" ]; then
+            DIFF="${DIFF:0:$TRUNCATE_LIMIT}"
+            TRUNCATED="true"
+            DIFF_STATUS="large"
+          fi
+          echo "truncated=$TRUNCATED" >> "$GITHUB_OUTPUT"
+          echo "diff_status=$DIFF_STATUS" >> "$GITHUB_OUTPUT"
+
+          printf '%s' "$DIFF" > /tmp/pr_diff.txt
+
+          gh api \
+            "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
+            --paginate --jq '.[] | "- \(.filename) (+\(.additions)/-\(.deletions)) [\(.status)]"' \
+            > /tmp/pr_file_summary.txt
+
+      # ── Get PR metadata ──
+      - name: Get PR info
+        if: steps.gate.outputs.has_key == 'true' && steps.diff.outputs.empty != 'true' && steps.diff.outputs.skip != 'true' && steps.diff.outputs.diff_status != 'too_large'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}" \
+            --jq '.title' > /tmp/pr_title.txt
+          gh api \
+            "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}" \
+            --jq '.body // ""' > /tmp/pr_body.txt
+
+      # ── Write system prompt (generic — CakeCRM, no internal/product-specific data) ──
+      - name: Write system prompt
+        if: steps.gate.outputs.has_key == 'true' && steps.diff.outputs.empty != 'true' && steps.diff.outputs.skip != 'true' && steps.diff.outputs.diff_status != 'too_large'
+        continue-on-error: true
+        run: |
+          cat > /tmp/system_prompt.txt <<'SYSPROMPT'
+          You are a senior reviewer evaluating a pull request for CakeCRM — a free,
+          open-source, self-hostable CRM with a built-in AI sales assistant. Explain
+          findings clearly without oversimplifying.
+
+          ## Project architecture (key patterns)
+
+          - Monorepo: Python 3.12 FastAPI backend + React / TypeScript / Vite frontend.
+          - Database: PostgreSQL is mandatory and the single engine. The schema is owned
+            by SQL migrations under `backend/migrations/*.sql`, applied at startup in
+            lexicographic order. Access Postgres through `core/postgres.py` helpers
+            (`pg_fetchall`/`pg_fetchone`/`pg_execute`/`get_connection`/`row_to_dict`).
+            Never introduce a runtime SQLite store or ad-hoc schema.
+          - The Postgres pool initializes in the FastAPI lifespan handler, not at import
+            time, so modules import cleanly with no DATABASE_URL.
+          - Service-layer separation: business logic lives in `*_service.py` modules, not
+            in router handlers.
+          - Multi-provider AI via an `AIProvider` ABC (Anthropic, OpenAI, Gemini, Ollama,
+            Together). Feature code must never call a provider SDK directly.
+          - Every AI feature degrades gracefully when no provider is configured — hidden
+            affordances, never errors. The CRM must be fully usable with zero AI keys.
+          - Gmail integration is READ + CREATE-DRAFT ONLY. There is no email-send tool and
+            none may be added; Google scopes/capabilities must not widen beyond that.
+          - API keys are entered in-app and encrypted at rest (Fernet) — never as env vars.
+          - Single-user for v1 (multi-user is roadmap).
+
+          ## Review philosophy
+
+          Focus on issues that would actually break production, introduce a security
+          vulnerability, or create a real maintainability problem. Do NOT flag:
+          - Code that follows established patterns in the codebase, even if you'd design it
+            differently.
+          - Theoretical performance concerns rather than measured ones (e.g. "N+1" on an
+            interactive tool with small result sets).
+          - Missing validation on internal-only code paths that don't face user input.
+          - "Could be improved" suggestions that don't address a real problem.
+
+          Before flagging anything BLOCKER or HIGH RISK, trace the full code path to
+          confirm the issue is real — not merely an unfamiliar pattern. A false BLOCKER
+          wastes more time than a missed SUGGESTION.
+
+          ## Diff-only constraint
+
+          You can see only the PR diff and the architecture above — not files outside the
+          diff. When a code path leads into code not in the diff:
+          - Do NOT speculate about what that code does. State what you can and cannot see.
+          - Cap findings you cannot verify from the diff at MEDIUM and label them
+            "(unverified — code not in diff)".
+          - Do NOT assume one module follows another's pattern.
+
+          ## CakeCRM-specific rules to enforce (flag violations as BLOCKER)
+
+          - Any new email-send capability, or widening Gmail beyond read + create-draft.
+          - Any runtime SQLite store or ad-hoc schema instead of a Postgres migration.
+          - A provider SDK called directly from feature code instead of via `AIProvider`.
+          - An AI feature that errors (rather than degrading gracefully) when no provider
+            is configured.
+          SYSPROMPT
+
+      # ── Build user message ──
+      - name: Build user message
+        if: steps.gate.outputs.has_key == 'true' && steps.diff.outputs.empty != 'true' && steps.diff.outputs.skip != 'true' && steps.diff.outputs.diff_status != 'too_large'
+        continue-on-error: true
+        run: |
+          TRUNCATED="${{ steps.diff.outputs.truncated }}"
+          TRUNCATE_LIMIT="${{ steps.diff.outputs.truncate_limit }}"
+          TRUNCATION_NOTE=""
+          if [ "$TRUNCATED" = "true" ]; then
+            TRUNCATION_NOTE="NOTE: This diff was truncated to ${TRUNCATE_LIMIT} characters. Focus your review on what is visible."
+          fi
+
+          # jq --rawfile handles large inputs without "Argument list too long".
+          jq -n -r \
+            --rawfile title /tmp/pr_title.txt \
+            --rawfile body /tmp/pr_body.txt \
+            --rawfile diff /tmp/pr_diff.txt \
+            --rawfile files /tmp/pr_file_summary.txt \
+            --arg note "$TRUNCATION_NOTE" \
+            '"Review this pull request. Follow the steps below exactly.
+
+          PR Title: \($title)
+          PR Description: \($body)
+
+          Files changed (full list):
+          \($files)
+
+          Step 1: High-Level Summary
+          - What does this PR change?
+          - What user-facing behavior is impacted?
+          - What backend behavior is impacted?
+
+          Step 2: Behavioral Risk Analysis
+          Identify real bugs, unhandled edge cases, failure modes, and breaking changes. Before flagging anything BLOCKER or HIGH RISK, trace the full code path to confirm the issue is real — not just an unfamiliar pattern. If the code path leads outside the diff, cap the finding at MEDIUM and note it as unverified. Classify each:
+          - BLOCKER (must fix before merge — confirmed bug or will break production; verified from the diff)
+          - HIGH RISK (likely to cause issues in realistic usage; verified from the diff)
+          - MEDIUM RISK (edge case worth noting but unlikely, OR a finding not fully verifiable from the diff)
+          - LOW RISK / SUGGESTION (improvement ideas, not blocking)
+
+          Do NOT flag: theoretical performance concerns on small-scale interactive tools, missing validation on internal code paths, or patterns that match existing codebase conventions.
+
+          Step 3: Security Review
+          Look for: auth bypass, exposed secrets, SQL/command injection, XSS, missing auth guards on new endpoints, overly permissive CORS. Only flag input-validation issues on code paths facing external or untrusted input. Be explicit and severity-ranked.
+
+          Step 4: CakeCRM Invariants
+          Flag as BLOCKER any of: a new email-send tool or a Gmail scope/capability widened beyond read + create-draft; a runtime SQLite store or ad-hoc schema instead of a Postgres migration; a provider SDK called directly from feature code instead of via the AIProvider ABC; an AI feature that errors instead of degrading gracefully when no provider is configured.
+
+          Step 5: Data and API Integrity
+          Are request/response models consistent? Could this break existing consumers? Are nullable vs required fields handled correctly?
+
+          Step 6: Maintainability & Code Quality
+          Focus on duplicated logic that should be shared, overly complex code, and misleading names. Do not flag verbose-but-clear code or refactors that add abstraction without solving a real problem.
+
+          Pay special attention to changes that will break the CI pipeline:
+
+          Frontend (fails `npm run build` or `npm run lint`):
+          - Unused variables/imports/types (TS6133/TS6196, @typescript-eslint/no-unused-vars), especially when the code that consumed them was removed.
+          - Type mismatches from partial refactors; missing/extraneous exports after moving code.
+          - React hook-rule violations (exhaustive-deps, refs during render, purity).
+
+          Backend (fails `ruff check`, config select F,E,W,I):
+          - F401 unused-import, F841 unused-variable — remove stale code after refactors.
+          - F821 undefined-name — missing import or typo.
+          - I001 unsorted-imports — run `ruff check --fix`.
+          - E741 ambiguous variable name; E402 import-not-at-top (unless a circular-import comment explains why).
+
+          Flag these as BLOCKER since they will fail the CI build.
+
+          Step 7: Testing & Verification Gaps
+          What specific manual test cases should be run before merge? Do not ask for unit tests on code that merely wraps external APIs.
+
+          Step 8: Executive Risk Summary
+          - Overall risk score: Low / Moderate / High / Critical
+          - Top 3 concerns (real issues only)
+          - Recommendation: Approve / Approve with changes / Request revisions
+
+          Step 9: Action Items Table
+          End with a markdown table of ALL findings from Steps 2-7 (consumed by tooling — be precise):
+          | Severity | File | Finding | Verified | Suggested Fix |
+          - Severity: BLOCKER / HIGH / MEDIUM / LOW
+          - File: the specific path from the diff; use general only if it truly spans files.
+          - Finding: one sentence.
+          - Verified: YES if you traced and confirmed from the diff; NO if pattern/heuristic.
+          - Suggested Fix: brief, or n/a.
+          If there are no findings, write: No action items identified.
+
+          \($note)
+
+          Diff:
+          ```diff
+          \($diff)
+          ```"' > /tmp/user_message.txt
+
+      # ── Call the Anthropic Messages API ──
+      - name: Run AI review
+        id: review
+        if: steps.gate.outputs.has_key == 'true' && steps.diff.outputs.empty != 'true' && steps.diff.outputs.skip != 'true' && steps.diff.outputs.diff_status != 'too_large'
+        continue-on-error: true
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Model is overridable via the AI_REVIEW_MODEL repo variable; the `||` default
+          # resolves in the Actions expression engine, then reaches jq via --arg.
+          AI_REVIEW_MODEL: ${{ vars.AI_REVIEW_MODEL || 'claude-opus-4-8' }}
+        run: |
+          ANTHROPIC_API_KEY=$(printf '%s' "$ANTHROPIC_API_KEY" | tr -d '[:space:]')
+
+          jq -n \
+            --arg model "$AI_REVIEW_MODEL" \
+            --rawfile system /tmp/system_prompt.txt \
+            --rawfile user /tmp/user_message.txt \
+            '{
+              model: $model,
+              max_tokens: 16384,
+              system: $system,
+              messages: [
+                {role: "user", content: $user}
+              ]
+            }' > /tmp/payload.json
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            --max-time 180 \
+            -X POST https://api.anthropic.com/v1/messages \
+            -H "content-type: application/json" \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            --data-binary @/tmp/payload.json)
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::warning::Anthropic API returned HTTP $HTTP_CODE"
+            echo "api_error=true" >> "$GITHUB_OUTPUT"
+            printf '%s' "$BODY" > /tmp/api_error.txt
+            exit 0
+          fi
+
+          echo "api_error=false" >> "$GITHUB_OUTPUT"
+          echo "$BODY" | jq -r '.content[0].text' > /tmp/review.txt
+
+      # ── Post or update the review comment ──
+      - name: Post or update review comment
+        if: steps.gate.outputs.has_key == 'true' && steps.diff.outputs.empty != 'true' && steps.diff.outputs.skip != 'true' && steps.diff.outputs.diff_status != 'too_large' && steps.review.outputs.api_error != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          REVIEW=$(cat /tmp/review.txt)
+          TRUNCATED="${{ steps.diff.outputs.truncated }}"
+
+          BANNER=""
+          if [ "$TRUNCATED" = "true" ]; then
+            BANNER=$'\n> **Note:** This diff was truncated to fit the model limit. Some changes may not be covered.\n'
+          fi
+
+          MARKER="<!-- ai-code-review-bot -->"
+          COMMENT="${MARKER}
+          ## AI Code Review
+          ${BANNER}
+          ${REVIEW}
+
+          ---
+          *Automated AI code review — advisory only; use your judgment on the suggestions.*"
+
+          # Match by marker AND bot author, so a user-posted comment sharing the marker
+          # can neither be overwritten nor break the upsert.
+          EXISTING_ID=$(gh api \
+            "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+            --paginate \
+            --jq '.[] | select((.body | startswith("<!-- ai-code-review-bot -->")) and .user.login == "github-actions[bot]") | .id' \
+            | head -1)
+
+          if [ -n "$EXISTING_ID" ]; then
+            gh api "repos/${{ github.repository }}/issues/comments/$EXISTING_ID" -X PATCH -f body="$COMMENT"
+          else
+            gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" -f body="$COMMENT"
+          fi
+
+      # ── Post a skip / error / too-large notice ──
+      - name: Post skip or error notice
+        if: >-
+          steps.gate.outputs.has_key == 'true' &&
+          (
+            steps.diff.outputs.empty == 'true' ||
+            steps.diff.outputs.skip == 'true' ||
+            steps.diff.outputs.diff_status == 'too_large' ||
+            steps.review.outputs.api_error == 'true'
+          )
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          MARKER="<!-- ai-code-review-bot -->"
+
+          if [ "${{ steps.diff.outputs.empty }}" = "true" ] || [ "${{ steps.diff.outputs.skip }}" = "true" ]; then
+            BODY="${MARKER}
+          ## AI Code Review
+
+          No reviewable code changes detected. Skipping AI review."
+          elif [ "${{ steps.diff.outputs.diff_status }}" = "too_large" ]; then
+            DIFF_CHARS="${{ steps.diff.outputs.diff_chars }}"
+            BODY="${MARKER}
+          ## AI Code Review
+
+          :information_source: This PR is too large for automated review (**${DIFF_CHARS}** characters) and exceeds the size limit. Please review manually or split it into smaller PRs."
+          elif [ "${{ steps.review.outputs.api_error }}" = "true" ]; then
+            ERROR_DETAIL=""
+            if [ -f /tmp/api_error.txt ]; then
+              ERROR_DETAIL=$(jq -r '.error.message // .error // "Unknown error"' /tmp/api_error.txt 2>/dev/null || cat /tmp/api_error.txt)
+              ERROR_DETAIL="${ERROR_DETAIL:0:500}"
+            fi
+            BODY="${MARKER}
+          ## AI Code Review
+
+          :warning: The AI review could not be completed due to an API error. Please review manually.
+
+          <details><summary>Error details</summary>
+
+          \`\`\`
+          ${ERROR_DETAIL}
+          \`\`\`
+          </details>"
+          fi
+
+          EXISTING_ID=$(gh api \
+            "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+            --paginate \
+            --jq '.[] | select((.body | startswith("<!-- ai-code-review-bot -->")) and .user.login == "github-actions[bot]") | .id' \
+            | head -1)
+
+          if [ -n "$EXISTING_ID" ]; then
+            gh api "repos/${{ github.repository }}/issues/comments/$EXISTING_ID" -X PATCH -f body="$BODY"
+          else
+            gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" -f body="$BODY"
+          fi
