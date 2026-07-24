@@ -251,22 +251,27 @@ export function useAssistantChat() {
     } catch { /* aborted or connection dropped */ }
 
     flushText(asstId);
-    // If the stream ended without a terminal `done`/`error` event (both clear
-    // `streaming`) and the user didn't stop it, the connection died abnormally —
-    // surface it rather than rendering a silent, successful-looking stop.
-    const stillStreaming = messagesRef.current.find((m) => m.id === asstId)?.streaming;
-    if (stillStreaming && !userAbortedRef.current) {
-      updateMessage(asstId, (m) => ({
-        ...m,
-        content: (m.content ? m.content + '\n\n' : '') + '⚠️ The connection ended unexpectedly.',
-        streaming: false,
-        error: true,
-      }));
-    } else {
-      updateMessage(asstId, (m) => (m.streaming ? { ...m, streaming: false } : m));
+    // Only THIS stream may relinquish global control — a stop()+new send can have
+    // installed a newer controller, and clobbering it would strand the new turn.
+    const owns = abortRef.current === controller;
+    const msgStreaming = messagesRef.current.find((m) => m.id === asstId)?.streaming;
+    if (msgStreaming) {
+      if (owns && !userAbortedRef.current) {
+        // ended without a terminal done/error and not user-stopped → abnormal
+        updateMessage(asstId, (m) => ({
+          ...m,
+          content: (m.content ? m.content + '\n\n' : '') + '⚠️ The connection ended unexpectedly.',
+          streaming: false,
+          error: true,
+        }));
+      } else {
+        updateMessage(asstId, (m) => ({ ...m, streaming: false }));
+      }
     }
-    setIsStreaming(false);
-    abortRef.current = null;
+    if (owns) {
+      abortRef.current = null;
+      setIsStreaming(false);
+    }
   }, [flushText, handleEvent, updateMessage]);
 
   const startAssistant = useCallback((extra: ChatMessage[]) => {
@@ -341,20 +346,34 @@ export function useAssistantChat() {
       }
       const body = await res.json();
       result = body?.result;
-    } catch { /* leave the card pending; the user can retry */ return; }
+      // Derive the card's TRUE status from the server's canonical outcome, not
+      // from our own click — the response may report already_resolved (an
+      // approve/deny race the other click won) or still-executing.
+      const rstatus =
+        result && typeof result === 'object' ? (result as { status?: string }).status : undefined;
+      let cardStatus: 'approved' | 'denied' | 'pending';
+      if (rstatus === 'executing') {
+        cardStatus = 'pending'; // resolved elsewhere but not yet finalized — stay pending
+      } else if (rstatus === 'denied_by_user') {
+        cardStatus = 'denied';
+      } else if (body?.status === 'already_resolved') {
+        cardStatus = 'approved'; // resolved by a prior action and not a denial
+      } else {
+        cardStatus = decision === 'approve' ? 'approved' : 'denied';
+      }
 
-    updateMessage(msgId, (m) => ({
-      ...m,
-      pendingConfirmations: (m.pendingConfirmations ?? []).map((c) =>
-        c.toolUseId === toolUseId
-          ? { ...c, status: decision === 'approve' ? 'approved' : 'denied', result }
-          : c,
-      ),
-    }));
+      updateMessage(msgId, (m) => ({
+        ...m,
+        pendingConfirmations: (m.pendingConfirmations ?? []).map((c) =>
+          c.toolUseId === toolUseId ? { ...c, status: cardStatus, result } : c,
+        ),
+      }));
 
-    const msg = messagesRef.current.find((m) => m.id === msgId);
-    const allResolved = (msg?.pendingConfirmations ?? []).every((c) => c.status !== 'pending');
-    if (allResolved) continueTurn();
+      // Continue only once EVERY card on this message reached a final state.
+      const msg = messagesRef.current.find((m) => m.id === msgId);
+      const allFinal = (msg?.pendingConfirmations ?? []).every((c) => c.status === 'approved' || c.status === 'denied');
+      if (allFinal) continueTurn();
+    } catch { /* leave the card pending; the user can retry */ }
   }, [continueTurn, updateMessage]);
 
   const approveAction = useCallback((msgId: string, toolUseId: string) => resolve(msgId, toolUseId, 'approve'), [resolve]);
@@ -368,6 +387,12 @@ export function useAssistantChat() {
   }, []);
 
   const clear = useCallback(() => {
+    // Abort any in-flight turn before discarding the UI — otherwise an Auto-mode
+    // write could keep running invisibly after the user starts a new chat.
+    userAbortedRef.current = true;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setIsStreaming(false);
     convIdRef.current = null;
     setConversationId(null);
     setContextUsage(null);

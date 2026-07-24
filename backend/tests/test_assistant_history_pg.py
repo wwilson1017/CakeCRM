@@ -158,7 +158,8 @@ def test_claim_pending_tool_is_once_only(pg_db):
     out2 = engine.resolve_confirmation(reg, conv["id"], "t2", "approve")
     assert reg.n == 1  # executed exactly once
     assert out1["result"] == {"ok": True}
-    assert out2 == {"status": "already_resolved"}
+    assert out2["status"] == "already_resolved"
+    assert out2["result"] == {"ok": True}  # reports the canonical persisted outcome
 
 
 class _AsmProvider:

@@ -124,6 +124,16 @@ def test_delete_conversation_reports_rowcount(rec):
     assert history.delete_conversation("c1") is True
 
 
+def test_get_tool_result_by_msg_id_parses_content(rec):
+    rec.fetchone_queue = [{"tool_results": [{"tool_use_id": "t1", "content": '{"ok": true}'}]}]
+    assert history.get_tool_result("c1", "t1", msg_id="m1") == {"ok": True}
+
+
+def test_get_tool_result_missing_returns_none(rec):
+    rec.fetchone_queue = [{"tool_results": [{"tool_use_id": "other", "content": "{}"}]}]
+    assert history.get_tool_result("c1", "t1", msg_id="m1") is None
+
+
 # ── Transactional functions (SQL shape via fake_conn) ─────────────────────────
 
 def test_save_message_locks_and_allocates_seq(fake_conn, monkeypatch):

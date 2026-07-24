@@ -431,9 +431,24 @@ def test_resolve_confirmation_deny_records_denied(monkeypatch):
     assert out["decision"] == "deny"
 
 
-def test_resolve_confirmation_idempotent_noop(monkeypatch):
+def test_resolve_confirmation_idempotent_noop_returns_canonical_result(monkeypatch):
     reg = Registry(writes={"crm_create_contact"})
     monkeypatch.setattr(history, "claim_pending_tool", lambda cid, tuid, msg_id=None: None)  # already resolved
+    monkeypatch.setattr(history, "get_tool_result", lambda cid, tuid, msg_id=None: {"ok": True})
     out = engine.resolve_confirmation(reg, "c1", "t1", "approve")
-    assert out == {"status": "already_resolved"}
+    # reports the CANONICAL persisted outcome, not the caller's assumed decision
+    assert out == {"status": "already_resolved", "result": {"ok": True}}
     assert reg.calls == []  # never double-executes
+
+
+@pytest.mark.asyncio
+async def test_wrap_up_stream_without_turn_complete_errors(store):
+    """The narration wrap-up after a confirmation must also error (not done) if its
+    stream ends without _turn_complete."""
+    reg = Registry(writes={"crm_create_contact"})
+    prov = FakeProvider([
+        [_complete([_tc("crm_create_contact", args={"n": 1})], stop="tool_use")],
+        [{"type": "text", "text": "partial narration"}],  # no _turn_complete
+    ])
+    events = await _run(prov, reg, [{"role": "user", "content": "add"}], tool_mode="normal")
+    assert events[-1]["type"] == "error"

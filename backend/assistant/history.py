@@ -225,6 +225,38 @@ def merge_tool_result(msg_id: str, tool_use_id: str, tool_name: str, content: st
         )
 
 
+def get_tool_result(conversation_id: str, tool_use_id: str, msg_id: str | None = None) -> dict | None:
+    """Return the parsed stored result for a tool call (or None if not recorded).
+
+    Lets ``/confirm`` report the canonical outcome when a call is already resolved,
+    so the UI reflects the real state (approved / denied / still-executing) rather
+    than assuming its own click won.
+    """
+    if msg_id:
+        row = pg_fetchone(
+            "SELECT tool_results FROM assistant_messages WHERE id = %s AND conversation_id = %s",
+            (msg_id, conversation_id),
+        )
+        rows = [row] if row else []
+    else:
+        rows = pg_fetchall(
+            "SELECT tool_results FROM assistant_messages "
+            "WHERE conversation_id = %s AND tool_calls IS NOT NULL ORDER BY seq DESC",
+            (conversation_id,),
+        )
+    for r in rows:
+        for res in (r.get("tool_results") or []):
+            if res.get("tool_use_id") == tool_use_id:
+                content = res.get("content")
+                if not isinstance(content, str):
+                    return content
+                try:
+                    return json.loads(content)
+                except (ValueError, TypeError):
+                    return {"raw": content}
+    return None
+
+
 def claim_pending_tool(conversation_id: str, tool_use_id: str, msg_id: str | None = None) -> dict | None:
     """Atomically claim a pending write awaiting user approval.
 

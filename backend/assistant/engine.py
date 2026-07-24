@@ -316,20 +316,25 @@ async def _chat_impl(
             # One narration-only wrap-up turn (tools=[]) so the model can say what
             # it's about to do; it cannot emit new tool calls here.
             wrap_text = ""
+            wrap_completed = False
             async for event in provider.stream_turn(current_messages, [], system_prompt):
                 etype = event.get("type")
                 if etype == "text":
                     wrap_text += event.get("text", "")
                     yield _sse({"type": "text", "text": event.get("text", "")})
                 elif etype == "error":
-                    yield _sse({"type": "error", "error": event.get("error", "Provider error")})
+                    yield _sse({"type": "error", "error": str(event.get("error") or "Provider error")[:500]})
                     return
                 elif etype == "_turn_complete":
                     wu = context_usage_event(event.get("usage") or {}, getattr(provider, "context_window", None), meter_only=True)
                     if wu:
                         yield _sse(wu)
+                    wrap_completed = True
                     break
                 # stray tool_start/tool_args ignored — tools=[] means none expected
+            if not wrap_completed:
+                yield _sse({"type": "error", "error": "The model response ended unexpectedly."})
+                return
             if wrap_text.strip():
                 try:
                     await asyncio.to_thread(
@@ -366,7 +371,11 @@ def resolve_confirmation(registry, conversation_id: str, tool_use_id: str, decis
     """
     claimed = history.claim_pending_tool(conversation_id, tool_use_id, msg_id=msg_id)
     if claimed is None:
-        return {"status": "already_resolved"}
+        # Already resolved (or executing) by a prior call — return the CANONICAL
+        # persisted outcome so the client reflects reality instead of assuming its
+        # own click won an approve/deny race.
+        existing = history.get_tool_result(conversation_id, tool_use_id, msg_id=msg_id)
+        return {"status": "already_resolved", "result": existing}
     claimed_msg_id, tool, args = claimed["msg_id"], claimed["tool"], claimed["args"]
     # Defense-in-depth: only a write should ever have been marked pending. If a
     # non-write somehow got here (a future bug in the gate), refuse rather than
