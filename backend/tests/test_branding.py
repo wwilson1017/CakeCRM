@@ -71,6 +71,10 @@ def test_get_derives_has_logo_when_config_corrupt(client, tmp_path):
 def test_logo_upload_rejects_bad_type(client):
     r = client.post("/api/branding/logo", files={"file": ("x.txt", b"nope", "text/plain")})
     assert r.status_code == 400
+    # SVG is deliberately rejected — it renders as image/png (never displays) and is
+    # an XSS surface on the unauthenticated logo endpoint.
+    svg = client.post("/api/branding/logo", files={"file": ("x.svg", b"<svg/>", "image/svg+xml")})
+    assert svg.status_code == 400
 
 
 def test_logo_upload_rejects_oversize(client):

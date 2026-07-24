@@ -21,14 +21,17 @@ import { useIsMobile } from '../shared/useIsMobile';
 import { toast } from '../shared/toast';
 import { IconX } from '../shared/icons';
 import {
-  INK, INK_MUTE, LINE_STRONG, FONT_SANS, FONT_MONO, labelStyle, inputStyle,
+  INK, INK_MUTE, LINE_STRONG, CORAL, FONT_SANS, FONT_MONO, labelStyle, inputStyle,
 } from '../shared/styles';
 import {
   pagePadding, pageHeading, sectionHeading, cardStyle, btnPrimary, btnSecondary, btnDanger,
 } from './styles';
 import { BrandLogo } from './components/BrandLogo';
 
-const ALLOWED_LOGO_TYPES = 'image/png,image/jpeg,image/gif,image/webp,image/svg+xml';
+// SVG is excluded: all logos are stored/served as image/png, and browsers don't
+// content-sniff SVG, so an SVG would silently never render. (Serving real SVG from
+// the unauthenticated logo endpoint would also be a stored-XSS surface.)
+const ALLOWED_LOGO_TYPES = 'image/png,image/jpeg,image/gif,image/webp';
 const MAX_LOGO_BYTES = 2 * 1024 * 1024; // 2 MB — mirrors the backend cap
 
 // Visually hidden but still in the a11y tree and keyboard-focusable (unlike
@@ -40,7 +43,7 @@ const srOnly: React.CSSProperties = {
 
 export function SettingsPage() {
   const isMobile = useIsMobile();
-  const { branding, patchBranding, logoVersion, bumpLogoVersion } = useBranding();
+  const { branding, loadError, patchBranding, logoVersion, bumpLogoVersion } = useBranding();
   const loaded = branding !== null;
 
   // Edits override the fetched value; until edited, fields mirror `branding`.
@@ -122,6 +125,16 @@ export function SettingsPage() {
           restyle the whole app.
         </p>
 
+        {loadError && (
+          <p style={{
+            fontFamily: FONT_SANS, fontSize: 13, color: CORAL, lineHeight: 1.5,
+            margin: '0 0 20px',
+          }}>
+            Couldn't load your current branding. Reload the page before editing —
+            saving now would overwrite it with defaults.
+          </p>
+        )}
+
         <div style={fieldWrap}>
           <label htmlFor="branding-company-name" style={labelStyle}>Company name</label>
           <input
@@ -181,7 +194,7 @@ export function SettingsPage() {
             />
           </label>
           <p style={{ fontFamily: FONT_SANS, fontSize: 12, color: INK_MUTE, margin: '8px 0 0' }}>
-            PNG, JPEG, GIF, WebP, or SVG — up to 2&nbsp;MB.
+            PNG, JPEG, GIF, or WebP — up to 2&nbsp;MB.
           </p>
         </div>
 

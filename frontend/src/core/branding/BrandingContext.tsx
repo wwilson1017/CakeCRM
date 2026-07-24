@@ -21,8 +21,15 @@ import { applyAccentVars, clearAccentVars, DEFAULT_BRANDING } from './brandingCo
 import type { BrandingConfig } from './brandingConfig';
 
 interface BrandingContextValue {
-  /** null until the initial fetch resolves — consumers render defaults meanwhile. */
+  /** null until the initial fetch resolves (or if it failed — see loadError). */
   branding: BrandingConfig | null;
+  /**
+   * True if the initial GET /api/branding failed. The shell still renders defaults
+   * (branding stays null → null-coalescing in consumers), but Settings must NOT let
+   * the user save — saving the default form values would overwrite real branding it
+   * never managed to load.
+   */
+  loadError: boolean;
   /**
    * Merge a partial config via a functional update — used for BOTH a settings save
    * ({company_name, accent_color}) and logo ops ({has_logo}). Each caller patches
@@ -39,18 +46,20 @@ const BrandingCtx = createContext<BrandingContextValue | null>(null);
 
 export function BrandingProvider({ children }: { children: ReactNode }) {
   const [branding, setBranding] = useState<BrandingConfig | null>(null);
+  const [loadError, setLoadError] = useState(false);
   // Seed from a timestamp so the cache-buster never resets to a value a prior
   // logo response was cached under (a plain 0 would re-serve a stale logo after
   // a remount/reload following a logo replace).
   const [logoVersion, setLogoVersion] = useState(() => Date.now());
 
-  // Fetch once; state-only. Fall back to defaults on failure so the shell stays
-  // fully usable (Settings editable, default accent) rather than blank/disabled.
+  // Fetch once; state-only. On failure leave branding null (the shell degrades to
+  // defaults via null-coalescing) and flag loadError so Settings blocks a save that
+  // would clobber branding we couldn't load.
   useEffect(() => {
     let cancelled = false;
     api<BrandingConfig>('/api/branding')
       .then(b => { if (!cancelled) setBranding(b); })
-      .catch(() => { if (!cancelled) setBranding(DEFAULT_BRANDING); });
+      .catch(() => { if (!cancelled) setLoadError(true); });
     return () => { cancelled = true; };
   }, []);
 
@@ -62,6 +71,7 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
 
   const value: BrandingContextValue = {
     branding,
+    loadError,
     patchBranding: patch => setBranding(prev => ({ ...(prev ?? DEFAULT_BRANDING), ...patch })),
     logoVersion,
     bumpLogoVersion: () => setLogoVersion(v => v + 1),

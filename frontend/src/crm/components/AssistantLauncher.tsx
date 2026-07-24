@@ -2,8 +2,9 @@
  * AssistantLauncher — the persistent assistant affordance (issue #9).
  *
  * The assistant is a persistent affordance, not the home page: a fixed
- * bottom-right button always present in the CRM shell. It degrades gracefully
- * with zero AI keys — never an error:
+ * bottom-LEFT button always present in the CRM shell (bottom-left keeps it clear
+ * of the bottom-right toast column). It degrades gracefully with zero AI keys —
+ * never an error:
  *   • aiReady === null   → unknown/loading: rendered but inert.
  *   • aiReady === false  → no key: routes to /setup ("hire your assistant").
  *   • aiReady === true   → opens a panel whose BODY is the mount slot for the
@@ -12,7 +13,7 @@
  *                          the marked region on rebase after #9 lands.
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { IconBot, IconX } from '../../shared/icons';
 import {
@@ -22,9 +23,30 @@ import {
 export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   const loading = aiReady === null;
   const ready = aiReady === true;
+
+  // Dialog dismissal: Escape (returns focus to the button) and outside-click.
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') { setOpen(false); btnRef.current?.focus(); }
+    }
+    function onDown(e: MouseEvent) {
+      const t = e.target as Node;
+      if (panelRef.current?.contains(t) || btnRef.current?.contains(t)) return;
+      setOpen(false);
+    }
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('mousedown', onDown);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('mousedown', onDown);
+    };
+  }, [open]);
 
   function handleClick() {
     if (loading) return;
@@ -36,10 +58,11 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
     <>
       {ready && open && (
         <div
+          ref={panelRef}
           role="dialog"
           aria-label="Assistant"
           style={{
-            position: 'fixed', right: 24, bottom: 84, zIndex: 45,
+            position: 'fixed', left: 24, bottom: 84, zIndex: 45,
             width: 320, maxWidth: 'calc(100vw - 48px)',
             background: BG_CARD, border: `1px solid ${LINE}`, borderRadius: 10,
             boxShadow: '0 12px 32px rgba(31,35,40,0.16)',
@@ -57,7 +80,7 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
               <IconBot size={17} style={{ color: ACCENT }} /> Assistant
             </span>
             <button
-              onClick={() => setOpen(false)}
+              onClick={() => { setOpen(false); btnRef.current?.focus(); }}
               aria-label="Close assistant"
               style={{
                 background: 'transparent', border: 'none', cursor: 'pointer',
@@ -81,12 +104,15 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
       )}
 
       <button
+        ref={btnRef}
         onClick={handleClick}
         aria-label="Assistant"
+        aria-haspopup="dialog"
+        aria-expanded={ready ? open : undefined}
         title={ready ? 'Assistant' : loading ? 'Assistant' : 'Hire your assistant'}
         disabled={loading}
         style={{
-          position: 'fixed', right: 24, bottom: 24, zIndex: 40,
+          position: 'fixed', left: 24, bottom: 24, zIndex: 40,
           width: 52, height: 52, borderRadius: '50%',
           background: ACCENT, color: ACCENT_INK, border: 'none',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
