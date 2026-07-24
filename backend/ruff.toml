@@ -13,7 +13,7 @@ select = ["F", "E", "W", "I"]
 ignore = ["E501"]
 
 [lint.isort]
-known-first-party = ["core", "branding", "providers"]
+known-first-party = ["core", "branding", "crm", "providers"]
 # Keep multiple aliased imports from the same module in one block (the default
 # splits each `as` alias into its own block — noisy for files like main.py).
 combine-as-imports = true

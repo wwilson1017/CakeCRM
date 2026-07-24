@@ -17,6 +17,7 @@
   --color-ck-ink: #1F2328;
   --color-ck-ink-mute: #5A6069;
   --color-ck-ink-soft: #878D96;
+  --color-ck-ink-dim: #9AA0A8;
 
   --color-ck-accent: var(--brand-color, #B03A52);
   --color-ck-accent-soft: var(--brand-color-soft, rgba(176, 58, 82, 0.09));
@@ -59,4 +60,10 @@ button, input, select, textarea, option {
 input:focus, textarea:focus, select:focus {
   border-color: var(--brand-color) !important;
   outline: none;
+}
+
+/* Toast slide-in (used by shared/ToastViewport). */
+@keyframes ck-toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
 }

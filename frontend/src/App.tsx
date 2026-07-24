@@ -1,9 +1,16 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './core/auth/AuthContext';
 import { ProtectedRoute } from './core/auth/ProtectedRoute';
 import { LoginPage } from './login/LoginPage';
-import { HomePage } from './home/HomePage';
 import { SetupPage } from './setup/SetupPage';
+import { CrmLayout } from './crm/CrmLayout';
+import { CrmDashboardPage } from './crm/CrmDashboardPage';
+import { ContactsPage } from './crm/ContactsPage';
+import { ContactDetailPage } from './crm/ContactDetailPage';
+import { PipelinePage } from './crm/PipelinePage';
+import { TasksPage } from './crm/TasksPage';
+import { ToastViewport } from './shared/ToastViewport';
+import { ConfirmHost } from './shared/ConfirmHost';
 
 export default function App() {
   return (
@@ -20,14 +27,23 @@ export default function App() {
             }
           />
           <Route
-            path="/*"
+            path="/crm"
             element={
               <ProtectedRoute>
-                <HomePage />
+                <CrmLayout />
               </ProtectedRoute>
             }
-          />
+          >
+            <Route index element={<CrmDashboardPage />} />
+            <Route path="contacts" element={<ContactsPage />} />
+            <Route path="contacts/:id" element={<ContactDetailPage />} />
+            <Route path="pipeline" element={<PipelinePage />} />
+            <Route path="tasks" element={<TasksPage />} />
+          </Route>
+          <Route path="*" element={<Navigate to="/crm" replace />} />
         </Routes>
+        <ConfirmHost />
+        <ToastViewport />
       </BrowserRouter>
     </AuthProvider>
   );
