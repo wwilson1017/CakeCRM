@@ -1,5 +1,5 @@
 import type { ComponentType, ReactNode } from 'react';
-import { IconChart, IconUsers, IconFunnel, IconCheck, IconSettings, IconSparkle, IconLock } from './icons';
+import { IconChart, IconUsers, IconBuilding, IconFunnel, IconCheck, IconSettings, IconSparkle, IconLock } from './icons';
 import { BG_CARD, INK, INK_MUTE, LINE, ACCENT, FONT_DISPLAY } from './styles';
 
 interface MobileMenuDrawerProps {
@@ -21,6 +21,7 @@ export function MobileMenuDrawer({ onClose, navigate, onSignOut, children }: Mob
     { icon: IconChart, label: 'Dashboard', action: go('/crm') },
     { icon: IconFunnel, label: 'Pipeline', action: go('/crm/pipeline') },
     { icon: IconUsers, label: 'Contacts', action: go('/crm/contacts') },
+    { icon: IconBuilding, label: 'Companies', action: go('/crm/companies') },
     { icon: IconCheck, label: 'Tasks', action: go('/crm/tasks') },
     { icon: IconSettings, label: 'Settings', action: go('/crm/settings') },
     { icon: IconSparkle, label: 'AI Setup', action: go('/setup') },

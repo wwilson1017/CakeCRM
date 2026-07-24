@@ -19,6 +19,14 @@ logger = logging.getLogger(__name__)
 DEAL_STAGES = ["lead", "qualified", "proposal", "negotiation", "won", "lost"]
 CONTACT_STATUSES = ["active", "inactive", "archived"]
 TASK_PRIORITIES = ["low", "medium", "high"]
+COMPANY_STATUSES = ["active", "archived"]
+
+# The six ASCII whitespace bytes (space, tab, LF, CR, FF, VT). Company names are
+# trimmed with THIS set (not Python's Unicode-aware str.strip()) so the value the
+# service stores normalizes identically to the companies migration's backfill +
+# unique index, which use btrim(name, E' \t\n\r\f\x0b') — a fixed byte set, so both
+# sides agree regardless of the database's libc/locale.
+_WS = " \t\n\r\f\v"
 
 # SQL fragment for whitespace-tolerant boundary matching against the comma-separated
 # tags column. Strips whitespace adjacent to commas so the filter survives free-form
@@ -43,14 +51,17 @@ def _normalize_tags(raw: str) -> str:
 def create_contact(
     name: str, email: str = "", phone: str = "", company: str = "",
     title: str = "", source: str = "", status: str = "active",
-    tags: str = "", notes: str = "",
+    tags: str = "", notes: str = "", company_id: int | None = None,
 ) -> dict:
     if status not in CONTACT_STATUSES:
         status = "active"  # unknown status would hide the contact from every status tab
+    # company_id is appended last so the existing INSERT-param assertions (which
+    # check the leading columns) stay valid; a bad FK raises ForeignKeyViolation
+    # which the router maps to 400.
     row = pg_fetchone(
-        """INSERT INTO contacts (name, email, phone, company, title, source, status, tags, notes)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-        (name, email, phone, company, title, source, status, _normalize_tags(tags), notes),
+        """INSERT INTO contacts (name, email, phone, company, title, source, status, tags, notes, company_id)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+        (name, email, phone, company, title, source, status, _normalize_tags(tags), notes, company_id),
     )
     return get_contact(row["id"])
 
@@ -139,7 +150,7 @@ def list_distinct_tags() -> list[str]:
 
 
 def update_contact(contact_id: int, **fields) -> dict | None:
-    allowed = {"name", "email", "phone", "company", "title", "source", "status", "tags", "notes"}
+    allowed = {"name", "email", "phone", "company", "title", "source", "status", "tags", "notes", "company_id"}
     filtered = {k: v for k, v in fields.items() if k in allowed}
     if "tags" in filtered:
         filtered["tags"] = _normalize_tags(filtered["tags"] or "")
@@ -184,8 +195,18 @@ def delete_contact(contact_id: int) -> bool:
 
 
 def get_contact_detail(contact_id: int) -> dict | None:
-    """Full contact profile with associated deals, tasks, and recent activity."""
-    contact = get_contact(contact_id)
+    """Full contact profile with associated deals, tasks, and recent activity.
+
+    The company_name join is inlined here (not in get_contact) so the linked
+    company can be shown/linked on the detail page without changing get_contact's
+    exact SQL.
+    """
+    contact = pg_fetchone(
+        """SELECT ct.*, co.name AS company_name
+           FROM contacts ct LEFT JOIN companies co ON ct.company_id = co.id
+           WHERE ct.id = %s""",
+        (contact_id,),
+    )
     if not contact:
         return None
     deals = pg_fetchall(
@@ -202,12 +223,153 @@ def get_contact_detail(contact_id: int) -> dict | None:
     return {**contact, "deals": deals, "tasks": tasks, "activity": activity}
 
 
+# ── Companies ─────────────────────────────────────────────────────────────────
+
+def create_company(
+    name: str, domain: str = "", industry: str = "", phone: str = "",
+    address: str = "", notes: str = "", source: str = "", status: str = "active",
+) -> dict:
+    if status not in COMPANY_STATUSES:
+        status = "active"
+    row = pg_fetchone(
+        """INSERT INTO companies (name, domain, industry, phone, address, notes, source, status)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+        (name.strip(_WS), domain, industry, phone, address, notes, source, status),
+    )
+    return get_company(row["id"])
+
+
+def get_company(company_id: int) -> dict | None:
+    return pg_fetchone("SELECT * FROM companies WHERE id = %s", (company_id,))
+
+
+def _company_search_where(query: str, status: str | None) -> tuple[str, list]:
+    """Build the shared WHERE clause + params for company free-text search."""
+    like = f"%{query}%"
+    conditions = ["(name ILIKE %s OR domain ILIKE %s OR industry ILIKE %s OR notes ILIKE %s)"]
+    params: list = [like, like, like, like]
+    if status:
+        conditions.append("status = %s")
+        params.append(status)
+    return " AND ".join(conditions), params
+
+
+def search_companies(
+    query: str, status: str | None = None, limit: int = 20, offset: int = 0,
+) -> list[dict]:
+    where, params = _company_search_where(query, status)
+    return pg_fetchall(
+        f"SELECT * FROM companies WHERE {where} ORDER BY updated_at DESC, id DESC LIMIT %s OFFSET %s",
+        params + [limit, offset],
+    )
+
+
+def count_search_companies(query: str, status: str | None = None) -> int:
+    """Total number of companies matching a search (for accurate pagination totals)."""
+    where, params = _company_search_where(query, status)
+    row = pg_fetchone(f"SELECT COUNT(*) AS cnt FROM companies WHERE {where}", params)
+    return row["cnt"] if row else 0
+
+
+def list_companies(
+    offset: int = 0, limit: int = 50, status: str | None = None, sort: str = "name",
+) -> dict:
+    allowed_sorts = {"name", "industry", "created_at", "updated_at"}
+    sort_col = sort if sort in allowed_sorts else "name"
+    # Names/industry read best ascending; timestamps newest-first. Append an id
+    # tie-breaker so offset/infinite-scroll pagination is stable.
+    direction = "ASC" if sort_col in ("name", "industry") else "DESC"
+
+    conditions = []
+    params: list = []
+    if status:
+        conditions.append("status = %s")
+        params.append(status)
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+    total_row = pg_fetchone(f"SELECT COUNT(*) AS cnt FROM companies {where}", params)
+    total = total_row["cnt"] if total_row else 0
+
+    params.extend([limit, offset])
+    rows = pg_fetchall(
+        f"SELECT * FROM companies {where} ORDER BY {sort_col} {direction}, id {direction} LIMIT %s OFFSET %s",
+        params,
+    )
+    return {"companies": rows, "total": total, "limit": limit, "offset": offset}
+
+
+def update_company(company_id: int, **fields) -> dict | None:
+    allowed = {"name", "domain", "industry", "phone", "address", "notes", "source", "status"}
+    # Drop None values: every company column is NOT NULL, and a tool call sending
+    # an explicit null (the HTTP route already filters these out) would otherwise
+    # raise a NotNullViolation. None means "field not provided" here.
+    filtered = {k: v for k, v in fields.items() if k in allowed and v is not None}
+    if "name" in filtered:
+        # Reject a name that is blank once ALL whitespace is ignored (guards the
+        # tool path, which bypasses the router's 400). Store it trimmed of the
+        # ASCII whitespace set only (_WS), matching the migration's btrim.
+        if filtered["name"].strip():
+            filtered["name"] = filtered["name"].strip(_WS)
+        else:
+            del filtered["name"]
+    if "status" in filtered and filtered["status"] not in COMPANY_STATUSES:
+        filtered["status"] = "active"
+    if not filtered:
+        return get_company(company_id)
+    set_clause = ", ".join(f"{k} = %s" for k in filtered)
+    values = list(filtered.values()) + [_now(), company_id]
+    pg_execute(
+        f"UPDATE companies SET {set_clause}, updated_at = %s WHERE id = %s", values
+    )
+    return get_company(company_id)
+
+
+def delete_company(company_id: int) -> bool:
+    """Delete a company. Its contacts/deals are kept — the FK is ON DELETE SET
+    NULL, so they simply unlink (unlike delete_contact, which cascades)."""
+    return pg_execute("DELETE FROM companies WHERE id = %s", (company_id,)) > 0
+
+
+def get_company_detail(company_id: int) -> dict | None:
+    """Full company profile with rolled-up contacts, deals, and activity.
+
+    Activity has no company_id column, so it's rolled up by joining through the
+    company's own contacts and deals.
+    """
+    company = get_company(company_id)
+    if not company:
+        return None
+    contacts = pg_fetchall(
+        "SELECT * FROM contacts WHERE company_id = %s ORDER BY name ASC", (company_id,)
+    )
+    deals = pg_fetchall(
+        """SELECT d.*, c.name AS contact_name
+           FROM deals d LEFT JOIN contacts c ON d.contact_id = c.id
+           WHERE d.company_id = %s ORDER BY d.updated_at DESC""",
+        (company_id,),
+    )
+    activity = pg_fetchall(
+        """SELECT a.*, c.name AS contact_name, d.title AS deal_title
+           FROM activity_log a
+           LEFT JOIN contacts c ON a.contact_id = c.id
+           LEFT JOIN deals d ON a.deal_id = d.id
+           WHERE a.contact_id IN (SELECT id FROM contacts WHERE company_id = %s)
+              OR a.deal_id IN (SELECT id FROM deals WHERE company_id = %s)
+           ORDER BY a.created_at DESC LIMIT 20""",
+        (company_id, company_id),
+    )
+    # Single-currency (USD) sum, matching the rest of the app's hardcoded '$'.
+    open_deal_value = sum(d["value"] for d in deals if d["stage"] not in ("won", "lost"))
+    return {**company, "contacts": contacts, "deals": deals, "activity": activity,
+            "open_deal_value": open_deal_value}
+
+
 # ── Deals ─────────────────────────────────────────────────────────────────────
 
 def create_deal(
     title: str, contact_id: int | None = None, stage: str = "lead",
     value: float = 0, notes: str = "", expected_close_date: str = "",
-    probability: int = 0, currency: str = "USD",
+    probability: int = 0, currency: str = "USD", company_id: int | None = None,
 ) -> dict:
     # Coerce an unknown stage to 'lead' (mirrors update_deal's validation): a
     # deal with a stage outside DEAL_STAGES would be summed into the pipeline
@@ -215,18 +377,21 @@ def create_deal(
     if stage not in DEAL_STAGES:
         stage = "lead"
     probability = max(0, min(100, probability))  # keep the percentage in range
+    # company_id appended last (see create_contact); a bad FK -> ForeignKeyViolation.
     row = pg_fetchone(
-        """INSERT INTO deals (title, contact_id, stage, value, notes, expected_close_date, probability, currency)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-        (title, contact_id, stage, value, notes, expected_close_date, probability, currency),
+        """INSERT INTO deals (title, contact_id, stage, value, notes, expected_close_date, probability, currency, company_id)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+        (title, contact_id, stage, value, notes, expected_close_date, probability, currency, company_id),
     )
     return get_deal(row["id"])
 
 
 def get_deal(deal_id: int) -> dict | None:
     return pg_fetchone(
-        """SELECT d.*, c.name AS contact_name
-           FROM deals d LEFT JOIN contacts c ON d.contact_id = c.id
+        """SELECT d.*, c.name AS contact_name, co.name AS company_name
+           FROM deals d
+           LEFT JOIN contacts c ON d.contact_id = c.id
+           LEFT JOIN companies co ON d.company_id = co.id
            WHERE d.id = %s""",
         (deal_id,),
     )
@@ -289,7 +454,7 @@ def list_deals(stage: str | None = None, contact_id: int | None = None, limit: i
 
 
 def update_deal(deal_id: int, **fields) -> dict | None:
-    allowed = {"title", "stage", "value", "notes", "expected_close_date", "probability", "currency", "contact_id"}
+    allowed = {"title", "stage", "value", "notes", "expected_close_date", "probability", "currency", "contact_id", "company_id"}
     filtered = {k: v for k, v in fields.items() if k in allowed}
     if "stage" in filtered and filtered["stage"] not in DEAL_STAGES:
         return None
@@ -510,7 +675,7 @@ def get_dashboard_stats() -> dict:
 
 # ── First-run / sample-data state (crm_meta singleton) ────────────────────────
 
-_CRM_TABLES = ("contacts", "deals", "tasks", "activity_log", "crm_chatter")
+_CRM_TABLES = ("companies", "contacts", "deals", "tasks", "activity_log", "crm_chatter")
 
 
 def get_crm_meta() -> dict:
@@ -523,14 +688,15 @@ def get_crm_meta() -> dict:
 
 
 def is_crm_empty() -> bool:
-    """True only when ALL CRM tables are empty (contacts, deals, tasks, activity_log, crm_chatter).
+    """True only when ALL CRM tables are empty (companies, contacts, deals, tasks, activity_log, crm_chatter).
 
     Checking every table matters: deals/tasks/activity/chatter can exist without
     contacts, and the fixed-id demo seed must never be inserted into a
     partially-populated CRM.
     """
     row = pg_fetchone(
-        """SELECT (SELECT COUNT(*) FROM contacts)
+        """SELECT (SELECT COUNT(*) FROM companies)
+                + (SELECT COUNT(*) FROM contacts)
                 + (SELECT COUNT(*) FROM deals)
                 + (SELECT COUNT(*) FROM tasks)
                 + (SELECT COUNT(*) FROM activity_log)
@@ -542,7 +708,8 @@ def is_crm_empty() -> bool:
 def _crm_empty_in_txn(cur) -> bool:
     """All-tables-empty check on a caller-supplied cursor (inside a lock/transaction)."""
     cur.execute(
-        """SELECT (SELECT COUNT(*) FROM contacts)
+        """SELECT (SELECT COUNT(*) FROM companies)
+                + (SELECT COUNT(*) FROM contacts)
                 + (SELECT COUNT(*) FROM deals)
                 + (SELECT COUNT(*) FROM tasks)
                 + (SELECT COUNT(*) FROM activity_log)
@@ -614,10 +781,12 @@ def _truncate_all(cur) -> None:
     # UPDATE on contacts, then deletes) and add_note (locks its target, then writes
     # crm_chatter) both take contacts/deals FIRST and crm_chatter LAST, so TRUNCATE
     # acquires its ACCESS EXCLUSIVE locks in the same order and can't invert against
-    # them. (A residual microsecond-window inversion with FK-checking INSERTs
+    # them. companies leads because delete_company's ON DELETE SET NULL locks
+    # companies then contact/deal rows (parent-then-child) inside one statement.
+    # (A residual microsecond-window inversion with FK-checking INSERTs
     # — child-then-parent lock order — is unavoidable by any single table order and
     # is left to Postgres's deadlock detector.) The exact string is pinned by a test.
-    cur.execute("TRUNCATE contacts, deals, activity_log, tasks, crm_chatter RESTART IDENTITY")
+    cur.execute("TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter RESTART IDENTITY")
 
 
 def clear_demo_data() -> dict:

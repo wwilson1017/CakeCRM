@@ -198,7 +198,7 @@ def test_clear_demo_data_truncates_when_sample_loaded(monkeypatch, fake_conn):
     conn = fake_conn(monkeypatch, service, fetchone_results=[(True,)])
     out = service.clear_demo_data()
     assert out == {"ok": True, "cleared": True}
-    assert any("TRUNCATE contacts, deals, activity_log, tasks, crm_chatter RESTART IDENTITY" in s
+    assert any("TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter RESTART IDENTITY" in s
                for s, _ in conn.executed)
 
 
@@ -226,7 +226,7 @@ def test_clear_all_truncates_and_resets_flag(monkeypatch, fake_conn):
     conn = fake_conn(monkeypatch, service)
     assert service.clear_all() == {"ok": True}
     stmts = [s for s, _ in conn.executed]
-    assert any("TRUNCATE contacts, deals, activity_log, tasks, crm_chatter RESTART IDENTITY" in s for s in stmts)
+    assert any("TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter RESTART IDENTITY" in s for s in stmts)
     assert any("sample_data_loaded = FALSE" in s for s in stmts)
 
 
@@ -321,3 +321,210 @@ def test_count_search_contacts_uses_count_and_same_where(rec):
     sql = rec.sql_containing("COUNT(*) AS cnt")
     assert "ILIKE" in sql and "status = %s" in sql
     assert "LIMIT" not in sql  # count has no pagination
+
+
+# ── Companies (issue #13) ─────────────────────────────────────────────────────
+
+def test_create_company_insert_returning_and_name_trim(rec):
+    rec.fetchone_queue = [{"id": 9}, {"id": 9, "name": "Acme"}]
+    result = service.create_company("  Acme  ", industry="Tech")
+    insert_sql = rec.sql_containing("INSERT INTO companies")
+    assert "RETURNING id" in insert_sql
+    assert "%s" in insert_sql and "?" not in insert_sql
+    params = rec.params_for("INSERT INTO companies")
+    assert params[0] == "Acme"  # name stripped
+    assert "Tech" in params
+    assert rec.params_for("SELECT * FROM companies WHERE id = %s") == [9]
+    assert result == {"id": 9, "name": "Acme"}
+
+
+def test_create_company_coerces_unknown_status(rec):
+    rec.fetchone_queue = [{"id": 1}, {"id": 1}]
+    service.create_company("Acme", status="bogus")
+    assert "active" in rec.params_for("INSERT INTO companies")
+
+
+def test_create_company_trims_only_ascii_whitespace(rec):
+    # Matches the migration's btrim(x, E' \\t\\n\\r\\f\\x0b') so backfill + service
+    # agree: the six ASCII whitespace bytes are trimmed; a non-ASCII NBSP is
+    # preserved verbatim (a fixed byte set, deterministic across libc/locale).
+    rec.fetchone_queue = [{"id": 1}, {"id": 1}]
+    service.create_company("  Acme  ")
+    assert rec.params_for("INSERT INTO companies")[0] == "Acme"
+    rec.calls.clear()
+    rec.fetchone_queue = [{"id": 2}, {"id": 2}]
+    service.create_company("\u00a0Acme\u00a0")  # NBSP-wrapped: preserved, not stripped
+    assert rec.params_for("INSERT INTO companies")[0] == "\u00a0Acme\u00a0"
+
+
+def test_list_companies_count_alias_and_sort_whitelist(rec):
+    rec.fetchone_queue = [{"cnt": 3}]
+    rec.fetchall_queue = [[{"id": 1, "name": "Acme"}]]
+    out = service.list_companies(limit=10, offset=5, sort="bogus")
+    assert out["total"] == 3
+    list_sql = rec.sql_containing("SELECT * FROM companies")
+    # unknown sort falls back to name ASC, with an id tie-breaker for stable paging
+    assert "ORDER BY name ASC, id ASC" in list_sql
+    assert rec.params_for("SELECT * FROM companies")[-2:] == [10, 5]
+
+
+def test_list_companies_timestamp_sort_is_desc(rec):
+    rec.fetchone_queue = [{"cnt": 0}]
+    rec.fetchall_queue = [[]]
+    service.list_companies(sort="updated_at")
+    assert "ORDER BY updated_at DESC, id DESC" in rec.sql_containing("SELECT * FROM companies")
+
+
+def test_search_companies_four_ilike_and_pagination(rec):
+    service.search_companies("acme", limit=20, offset=40)
+    sql = rec.sql_containing("FROM companies WHERE")
+    assert sql.count("ILIKE") == 4  # name, domain, industry, notes
+    assert "LIMIT %s OFFSET %s" in sql
+    assert rec.params_for("FROM companies WHERE")[-2:] == [20, 40]
+
+
+def test_count_search_companies_no_pagination(rec):
+    rec.fetchone_queue = [{"cnt": 7}]
+    assert service.count_search_companies("acme") == 7
+    sql = rec.sql_containing("COUNT(*) AS cnt")
+    assert "FROM companies" in sql and "LIMIT" not in sql
+
+
+def test_update_company_appends_updated_at_and_filters_unknown(rec):
+    rec.fetchone_queue = [{"id": 1, "name": "Acme"}]
+    service.update_company(1, name="  Acme  ", bogus="x")
+    sql = rec.sql_containing("UPDATE companies SET")
+    assert "updated_at = %s" in sql and "bogus" not in sql
+    params = rec.params_for("UPDATE companies SET")
+    assert "Acme" in params  # trimmed
+    assert params[-1] == 1  # id last
+
+
+def test_delete_company_returns_rowcount_bool(rec):
+    rec.execute_rowcount = 1
+    assert service.delete_company(5) is True
+    rec.execute_rowcount = 0
+    assert service.delete_company(5) is False
+
+
+def test_get_company_detail_rolls_up_activity_and_open_value(rec):
+    rec.fetchone_queue = [{"id": 1, "name": "Acme"}]  # get_company
+    rec.fetchall_queue = [
+        [{"id": 10, "name": "Contact"}],  # contacts
+        [{"id": 20, "stage": "won", "value": 5000}, {"id": 21, "stage": "lead", "value": 300}],  # deals
+        [{"id": 30, "activity": "call"}],  # activity
+    ]
+    out = service.get_company_detail(1)
+    # activity rollup joins through the company's contacts AND deals
+    act_sql = rec.sql_containing("FROM activity_log")
+    assert "IN (SELECT id FROM contacts WHERE company_id = %s)" in act_sql
+    assert "IN (SELECT id FROM deals WHERE company_id = %s)" in act_sql
+    # open_deal_value excludes won/lost
+    assert out["open_deal_value"] == 300
+    assert out["contacts"] and out["deals"] and out["activity"]
+
+
+def test_get_company_detail_missing_returns_none(rec):
+    rec.fetchone_queue = [None]
+    assert service.get_company_detail(999) is None
+
+
+def test_create_contact_forwards_company_id(rec):
+    rec.fetchone_queue = [{"id": 1}, {"id": 1}]
+    service.create_contact("Ana", company_id=7)
+    insert_sql = rec.sql_containing("INSERT INTO contacts")
+    assert "company_id" in insert_sql
+    assert 7 in rec.params_for("INSERT INTO contacts")
+
+
+def test_create_deal_forwards_company_id(rec):
+    rec.fetchone_queue = [{"id": 1}, {"id": 1}]
+    service.create_deal("D", company_id=7)
+    insert_sql = rec.sql_containing("INSERT INTO deals")
+    assert "company_id" in insert_sql
+    assert 7 in rec.params_for("INSERT INTO deals")
+
+
+def test_update_contact_accepts_explicit_null_company_id(rec):
+    rec.fetchone_queue = [{"id": 1}]
+    service.update_contact(1, company_id=None)
+    sql = rec.sql_containing("UPDATE contacts SET")
+    assert "company_id = %s" in sql
+    # explicit None reaches the SQL params (unlink)
+    assert None in rec.params_for("UPDATE contacts SET")
+
+
+def test_update_deal_accepts_company_id(rec):
+    rec.fetchone_queue = [{"id": 1}]
+    service.update_deal(1, company_id=None)
+    sql = rec.sql_containing("UPDATE deals SET")
+    assert "company_id = %s" in sql
+    assert None in rec.params_for("UPDATE deals SET")
+
+
+def test_get_contact_detail_joins_company_name(rec):
+    rec.fetchone_queue = [{"id": 1, "name": "Ana", "company_name": "Acme"}]
+    rec.fetchall_queue = [[], [], []]  # deals, tasks, activity
+    out = service.get_contact_detail(1)
+    join_sql = rec.sql_containing("company_name")
+    assert "LEFT JOIN companies" in join_sql
+    assert out["company_name"] == "Acme"
+
+
+def test_get_deal_joins_company_name(rec):
+    rec.fetchone_queue = [{"id": 1, "company_name": "Acme"}]
+    service.get_deal(1)
+    sql = rec.sql_containing("FROM deals d")
+    assert "co.name AS company_name" in sql and "LEFT JOIN companies co" in sql
+
+
+def test_search_companies_status_filter(rec):
+    service.search_companies("acme", status="active")
+    sql = rec.sql_containing("FROM companies WHERE")
+    assert "status = %s" in sql
+    assert "active" in rec.params_for("FROM companies WHERE")
+
+
+def test_list_companies_status_filter(rec):
+    rec.fetchone_queue = [{"cnt": 0}]
+    rec.fetchall_queue = [[]]
+    service.list_companies(status="archived")
+    sql = rec.sql_containing("SELECT * FROM companies")
+    assert "status = %s" in sql
+    assert "archived" in rec.params_for("SELECT * FROM companies")
+
+
+def test_update_company_coerces_unknown_status(rec):
+    rec.fetchone_queue = [{"id": 1, "name": "Acme"}]
+    service.update_company(1, status="bogus")
+    assert "active" in rec.params_for("UPDATE companies SET")
+
+
+def test_update_company_drops_blank_name(rec):
+    rec.fetchone_queue = [{"id": 1, "name": "Acme"}]
+    # A blank name must never be persisted (guards the tool path that bypasses the router).
+    service.update_company(1, name="   ", domain="x.io")
+    sql = rec.sql_containing("UPDATE companies SET")
+    assert "name = %s" not in sql  # blank name dropped
+    assert "domain = %s" in sql
+
+
+def test_update_company_drops_none_values(rec):
+    # A tool call sending explicit None for a NOT NULL text column must be dropped,
+    # not passed to SQL (which would NotNullViolation). The HTTP route filters None
+    # already; this guards the tool path.
+    rec.fetchone_queue = [{"id": 1, "name": "Acme"}]
+    service.update_company(1, domain="x.io", phone=None, notes=None)
+    sql = rec.sql_containing("UPDATE companies SET")
+    assert "domain = %s" in sql
+    assert "phone = %s" not in sql and "notes = %s" not in sql
+
+
+def test_update_company_rejects_unicode_blank_name(rec):
+    # A name that is blank once ALL whitespace is stripped (e.g. a lone NBSP) is
+    # dropped, so it can't create a visually-blank company via the tool path.
+    rec.fetchone_queue = [{"id": 1, "name": "Acme"}]
+    service.update_company(1, name="\u00a0", domain="x.io")  # NBSP-only name
+    sql = rec.sql_containing("UPDATE companies SET")
+    assert "name = %s" not in sql
+    assert "domain = %s" in sql

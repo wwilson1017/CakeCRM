@@ -16,6 +16,7 @@ const NAV_ITEMS = [
   { to: '/crm', label: 'Dashboard', end: true },
   { to: '/crm/pipeline', label: 'Pipeline' },
   { to: '/crm/contacts', label: 'Contacts' },
+  { to: '/crm/companies', label: 'Companies' },
   { to: '/crm/tasks', label: 'Tasks' },
 ];
 

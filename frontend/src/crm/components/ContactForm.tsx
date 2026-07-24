@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { api } from '../../core/api/client';
 import { labelStyle, inputStyle, CORAL } from '../../shared/styles';
 import { formModalOverlay, formModalContent, formTitle, btnPrimary, btnSecondary } from '../styles';
-import type { CrmContact } from '../../core/types';
+import type { CrmContact, CrmCompany } from '../../core/types';
 
 interface Props {
   contact?: CrmContact;
@@ -21,22 +21,43 @@ export function ContactForm({ contact, onClose, onSaved }: Props) {
   const [status, setStatus] = useState(contact?.status || 'active');
   const [tags, setTags] = useState(contact?.tags || '');
   const [notes, setNotes] = useState(contact?.notes || '');
+  const [companyId, setCompanyId] = useState<number | null>(contact?.company_id ?? null);
+  const [companies, setCompanies] = useState<CrmCompany[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    api<{ companies: CrmCompany[] }>('/api/crm/companies?limit=200')
+      .then(d => setCompanies(d.companies)).catch(() => {});
+  }, []);
+
+  // Keep the legacy free-text `company` in sync with the linked company so the two
+  // can't contradict (link to Beta while the text still says Acme). Selecting a
+  // company overwrites the text; "No company" leaves the text for free-form entry.
+  function pickCompany(id: number | null) {
+    setCompanyId(id);
+    if (id != null) {
+      const co = companies.find(c => c.id === id);
+      if (co) setCompany(co.name);
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim()) { setError('Name is required'); return; }
     setSaving(true); setError('');
+    // When a company is linked it is authoritative: submit its name as the legacy
+    // free-text `company` too, so the two can't contradict regardless of the order
+    // the user touched the fields. company_id is always sent (null unlinks — the
+    // update endpoint keeps explicit nulls for FKs).
+    const linked = companyId != null ? companies.find(c => c.id === companyId) : undefined;
+    const companyText = linked ? linked.name : company;
+    const body = JSON.stringify({ name, email, phone, company: companyText, title, source, status, tags, notes, company_id: companyId });
     try {
       if (isEdit) {
-        await api(`/api/crm/contacts/${contact.id}`, {
-          method: 'PUT', body: JSON.stringify({ name, email, phone, company, title, source, status, tags, notes }),
-        });
+        await api(`/api/crm/contacts/${contact.id}`, { method: 'PUT', body });
       } else {
-        await api('/api/crm/contacts', {
-          method: 'POST', body: JSON.stringify({ name, email, phone, company, title, source, status, tags, notes }),
-        });
+        await api('/api/crm/contacts', { method: 'POST', body });
       }
       onSaved();
     } catch (err: unknown) { setError(err instanceof Error ? err.message : 'Failed to save'); }
@@ -56,6 +77,13 @@ export function ContactForm({ contact, onClose, onSaved }: Props) {
           <div><label style={labelStyle}>Email</label><input type="email" value={email} onChange={e => setEmail(e.target.value)} style={inputStyle} /></div>
           <div><label style={labelStyle}>Phone</label><input type="tel" value={phone} onChange={e => setPhone(e.target.value)} style={inputStyle} /></div>
           <div><label style={labelStyle}>Company</label><input value={company} onChange={e => setCompany(e.target.value)} style={inputStyle} /></div>
+          <div>
+            <label style={labelStyle}>Linked Company</label>
+            <select value={companyId ?? ''} onChange={e => pickCompany(e.target.value ? Number(e.target.value) : null)} style={inputStyle}>
+              <option value="">No company</option>
+              {companies.map(co => <option key={co.id} value={co.id}>{co.name}{co.status === 'archived' ? ' (archived)' : ''}</option>)}
+            </select>
+          </div>
           <div><label style={labelStyle}>Job Title</label><input value={title} onChange={e => setTitle(e.target.value)} style={inputStyle} /></div>
           <div>
             <label style={labelStyle}>Source</label>

@@ -1,4 +1,4 @@
-"""CakeCRM — CRM agent tools (19 tools).
+"""CakeCRM — CRM agent tools (24 tools).
 
 Contacts, deals, tasks, activities, chatter/notes, and analytics — all accessible
 to the AI assistant for managing customer relationships conversationally. The CRM
@@ -7,6 +7,8 @@ the assistant engine (a later issue) consumes them via get_crm_tools().
 """
 
 from collections.abc import Callable
+
+import psycopg2
 
 from crm import chatter_service, service as crm
 
@@ -51,6 +53,7 @@ CRM_TOOL_DEFS = [
                 "status": {"type": "string", "description": "active, inactive, or archived", "default": "active"},
                 "tags": {"type": "string", "description": "Comma-separated tags", "default": ""},
                 "notes": {"type": "string", "default": ""},
+                "company_id": {"type": "integer", "description": "ID of a linked company (optional). Set to link this contact to a company."},
             },
             "required": ["name"],
         },
@@ -75,6 +78,7 @@ CRM_TOOL_DEFS = [
                 "status": {"type": "string", "description": "active, inactive, or archived"},
                 "tags": {"type": "string"},
                 "notes": {"type": "string"},
+                "company_id": {"type": ["integer", "null"], "description": "ID of a linked company; pass null to unlink this contact from its company."},
             },
             "required": ["contact_id"],
         },
@@ -161,6 +165,7 @@ CRM_TOOL_DEFS = [
                 "expected_close_date": {"type": "string", "description": "Expected close date (YYYY-MM-DD)", "default": ""},
                 "probability": {"type": "integer", "description": "Win probability 0-100%", "default": 0},
                 "currency": {"type": "string", "default": "USD"},
+                "company_id": {"type": "integer", "description": "ID of a linked company (optional)."},
             },
             "required": ["title"],
         },
@@ -183,6 +188,7 @@ CRM_TOOL_DEFS = [
                 "probability": {"type": "integer", "description": "0-100"},
                 "currency": {"type": "string"},
                 "contact_id": {"type": "integer"},
+                "company_id": {"type": ["integer", "null"], "description": "ID of a linked company; pass null to unlink this deal from its company."},
             },
             "required": ["deal_id"],
         },
@@ -355,6 +361,103 @@ CRM_TOOL_DEFS = [
         "kind": "integration",
         "writes": False,
     },
+    # ── Companies (5 tools) ───────────────────────────────────────────────────
+    {
+        "name": "crm_search_companies",
+        "writes": False,
+        "description": (
+            "Search CRM companies by name, domain, industry, or notes. "
+            "Use when the user mentions a company/organization and you need to look it up."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search term (name, domain, industry, or keyword)"},
+                "status": {"type": "string", "description": "Filter by status: active, archived"},
+            },
+            "required": ["query"],
+        },
+        "kind": "integration",
+    },
+    {
+        "name": "crm_get_company",
+        "writes": False,
+        "description": (
+            "Get a company's full profile including its contacts, deals, open pipeline value, "
+            "and recent activity. Use this to see everything about a specific organization."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "company_id": {"type": "integer", "description": "Company ID"},
+            },
+            "required": ["company_id"],
+        },
+        "kind": "integration",
+    },
+    {
+        "name": "crm_list_companies",
+        "writes": False,
+        "description": "List companies with optional status filtering. Use to browse the organization list.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "description": "Filter: active, archived"},
+                "limit": {"type": "integer", "description": "Max results (default 50)", "default": 50},
+                "offset": {"type": "integer", "description": "Pagination offset", "default": 0},
+            },
+            "required": [],
+        },
+        "kind": "integration",
+    },
+    {
+        "name": "crm_create_company",
+        "writes": True,
+        "description": (
+            "Create a new company/organization in the CRM. Use when the user mentions a business "
+            "they want to track, or to group contacts and deals under an organization."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Company name"},
+                "domain": {"type": "string", "description": "Website domain", "default": ""},
+                "industry": {"type": "string", "default": ""},
+                "phone": {"type": "string", "default": ""},
+                "address": {"type": "string", "default": ""},
+                "notes": {"type": "string", "default": ""},
+                "source": {"type": "string", "default": ""},
+                "status": {"type": "string", "description": "active or archived", "default": "active"},
+            },
+            "required": ["name"],
+        },
+        "kind": "integration",
+    },
+    {
+        "name": "crm_update_company",
+        "writes": True,
+        "description": (
+            "Update an existing company's details — name, domain, industry, phone, address, notes, "
+            "or status. Archive a company by setting status to 'archived' (agent-initiated hard "
+            "deletes are intentionally not exposed as a tool — archive instead)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "company_id": {"type": "integer", "description": "Company ID to update"},
+                "name": {"type": "string"},
+                "domain": {"type": "string"},
+                "industry": {"type": "string"},
+                "phone": {"type": "string"},
+                "address": {"type": "string"},
+                "notes": {"type": "string"},
+                "source": {"type": "string"},
+                "status": {"type": "string", "description": "active or archived"},
+            },
+            "required": ["company_id"],
+        },
+        "kind": "integration",
+    },
 ]
 
 
@@ -370,11 +473,19 @@ def crm_find_contact(query: str, status: str | None = None, tags: str | None = N
 
 
 def crm_create_contact(name: str, **kwargs) -> dict:
-    return crm.create_contact(name=name, **kwargs)
+    # An invalid company_id would raise a raw FK error; translate it (the HTTP
+    # route returns 400 for the same case).
+    try:
+        return crm.create_contact(name=name, **kwargs)
+    except psycopg2.errors.ForeignKeyViolation:
+        return {"error": "Referenced company does not exist"}
 
 
 def crm_update_contact(contact_id: int, **kwargs) -> dict:
-    result = crm.update_contact(contact_id, **kwargs)
+    try:
+        result = crm.update_contact(contact_id, **kwargs)
+    except psycopg2.errors.ForeignKeyViolation:
+        return {"error": "Referenced company does not exist"}
     if not result:
         return {"error": f"Contact {contact_id} not found"}
     return result
@@ -404,11 +515,17 @@ def crm_get_pipeline(stage: str | None = None) -> dict:
 
 
 def crm_create_deal(title: str, **kwargs) -> dict:
-    return crm.create_deal(title=title, **kwargs)
+    try:
+        return crm.create_deal(title=title, **kwargs)
+    except psycopg2.errors.ForeignKeyViolation:
+        return {"error": "Referenced contact or company does not exist"}
 
 
 def crm_update_deal(deal_id: int, **kwargs) -> dict:
-    result = crm.update_deal(deal_id, **kwargs)
+    try:
+        result = crm.update_deal(deal_id, **kwargs)
+    except psycopg2.errors.ForeignKeyViolation:
+        return {"error": "Referenced contact or company does not exist"}
     if not result:
         return {"error": f"Deal {deal_id} not found or invalid stage"}
     return result
@@ -464,6 +581,47 @@ def crm_complete_task(task_id: int) -> dict:
     return result
 
 
+# ── Companies ─────────────────────────────────────────────────────────────────
+
+def crm_search_companies(query: str, status: str | None = None) -> dict:
+    companies = crm.search_companies(query, status=status)
+    return {"companies": companies, "count": len(companies)}
+
+
+def crm_get_company(company_id: int) -> dict:
+    result = crm.get_company_detail(company_id)
+    if not result:
+        return {"error": f"Company {company_id} not found"}
+    return result
+
+
+def crm_list_companies(status: str | None = None, limit: int = 50, offset: int = 0) -> dict:
+    return crm.list_companies(offset=offset, limit=limit, status=status)
+
+
+def crm_create_company(name: str, **kwargs) -> dict:
+    # Tools bypass the router's validation, so guard blank names and translate the
+    # unique-name violation here (the assistant engine that consumes this is dormant).
+    # There is deliberately no crm_delete_company tool — hard deletes are a human/UI
+    # action; the assistant archives via crm_update_company(status="archived").
+    if not name.strip():
+        return {"error": "Name is required"}
+    try:
+        return crm.create_company(name=name, **kwargs)
+    except psycopg2.errors.UniqueViolation:
+        return {"error": "A company with that name already exists"}
+
+
+def crm_update_company(company_id: int, **kwargs) -> dict:
+    try:
+        result = crm.update_company(company_id, **kwargs)
+    except psycopg2.errors.UniqueViolation:
+        return {"error": "A company with that name already exists"}
+    if not result:
+        return {"error": f"Company {company_id} not found"}
+    return result
+
+
 # ── Analytics ─────────────────────────────────────────────────────────────────
 
 def crm_dashboard() -> dict:
@@ -493,7 +651,7 @@ def crm_get_chatter(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Executor Mapping (name -> callable(**kwargs) -> dict). 20 entries: the 19
+# Executor Mapping (name -> callable(**kwargs) -> dict). 25 entries: the 24
 # schema'd tools plus the crm_log_note back-compat alias (no schema def).
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -523,6 +681,12 @@ TOOL_EXECUTORS = {
     # Chatter / notes
     "crm_add_note": crm_add_note,
     "crm_get_chatter": crm_get_chatter,
+    # Companies (kept last to match CRM_TOOL_DEFS' section order)
+    "crm_search_companies": crm_search_companies,
+    "crm_get_company": crm_get_company,
+    "crm_list_companies": crm_list_companies,
+    "crm_create_company": crm_create_company,
+    "crm_update_company": crm_update_company,
     # Backwards compat alias — a legacy 'note' logs an activity (unchanged); the
     # editable notes thread is crm_add_note.
     "crm_log_note": crm_log_activity,
