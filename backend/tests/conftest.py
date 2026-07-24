@@ -71,6 +71,9 @@ class FakeCursor:
     def execute(self, sql, params=()):
         self._conn.executed.append((" ".join(sql.split()), params))
 
+    def executemany(self, sql, seq_of_params):
+        self._conn.executed.append((" ".join(sql.split()), list(seq_of_params)))
+
     def fetchone(self):
         return self._conn.fetchone_results.pop(0) if self._conn.fetchone_results else None
 

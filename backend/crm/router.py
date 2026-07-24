@@ -1,0 +1,513 @@
+"""
+CakeCRM — CRM REST API for the frontend.
+
+All endpoints require JWT auth (Depends(get_current_user)). The CRM is
+first-class core — there is no enable gate and no lazy DB init (the schema is
+owned by backend/migrations). Ported from chatty's crm_lite router.
+
+Contacts:
+  GET    /api/crm/contacts              — paginated list / search (?q=)
+  GET    /api/crm/contacts/:id          — full detail
+  POST   /api/crm/contacts              — create
+  PUT    /api/crm/contacts/:id          — update
+  DELETE /api/crm/contacts/:id          — delete
+
+Deals:
+  GET    /api/crm/deals                 — pipeline list / filtered
+  GET    /api/crm/deals/:id             — detail
+  POST   /api/crm/deals                 — create
+  PUT    /api/crm/deals/:id             — update
+
+Tasks:
+  GET    /api/crm/tasks                 — filtered list
+  POST   /api/crm/tasks                 — create
+  PUT    /api/crm/tasks/:id             — update
+  PUT    /api/crm/tasks/:id/complete    — mark done
+  DELETE /api/crm/tasks/:id             — delete
+
+Activity:
+  GET    /api/crm/activity              — log
+  POST   /api/crm/activity              — log new
+  PUT    /api/crm/activity/:id          — edit
+  DELETE /api/crm/activity/:id          — delete
+
+Other:
+  GET    /api/crm/dashboard             — summary stats
+  GET    /api/crm/demo-status           — first-run onboarding / sample-data state
+  POST   /api/crm/load-sample-data      — seed fictional demo data (first run)
+  POST   /api/crm/dismiss-onboarding    — dismiss the first-run prompt
+  POST   /api/crm/demo-clear            — clear example data (guarded)
+  POST   /api/crm/clear-all             — wipe ALL CRM data (confirmation phrase)
+  POST   /api/crm/import                — CSV import (contacts, keyless)
+  POST   /api/crm/smart-import/parse    — AI-powered parse (any format)
+  POST   /api/crm/smart-import/confirm  — confirm & insert parsed contacts
+"""
+
+import csv
+import io
+import logging
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from pydantic import BaseModel, field_validator
+
+from core.auth import get_current_user
+from crm import service as crm
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+MAX_UPLOAD_BYTES = 1_048_576  # 1 MB cap on uploaded files (CSV + smart-import)
+
+
+# ── Request models ────────────────────────────────────────────────────────────
+
+class ContactCreate(BaseModel):
+    name: str
+    email: str = ""
+    phone: str = ""
+    company: str = ""
+    title: str = ""
+    source: str = ""
+    status: str = "active"
+    tags: str = ""
+    notes: str = ""
+
+
+class ContactUpdate(BaseModel):
+    name: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    company: str | None = None
+    title: str | None = None
+    source: str | None = None
+    status: str | None = None
+    tags: str | None = None
+    notes: str | None = None
+
+
+class DealCreate(BaseModel):
+    title: str
+    contact_id: int | None = None
+    stage: str = "lead"
+    value: float = 0
+    notes: str = ""
+    expected_close_date: str = ""
+    probability: int = 0
+    currency: str = "USD"
+
+
+class DealUpdate(BaseModel):
+    title: str | None = None
+    contact_id: int | None = None
+    stage: str | None = None
+    value: float | None = None
+    notes: str | None = None
+    expected_close_date: str | None = None
+    probability: int | None = None
+    currency: str | None = None
+
+
+class TaskCreate(BaseModel):
+    title: str
+    description: str = ""
+    due_date: str = ""
+    contact_id: int | None = None
+    deal_id: int | None = None
+    priority: str = "medium"
+
+
+class TaskUpdate(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    due_date: str | None = None
+    contact_id: int | None = None
+    deal_id: int | None = None
+    priority: str | None = None
+    completed: int | None = None
+
+
+class ActivityCreate(BaseModel):
+    activity: str
+    note: str = ""
+    contact_id: int | None = None
+    deal_id: int | None = None
+
+
+class ActivityUpdate(BaseModel):
+    activity: str | None = None
+    note: str | None = None
+
+
+class ClearAllBody(BaseModel):
+    confirmation: str
+
+
+class SmartImportConfirm(BaseModel):
+    contacts: list[dict]
+
+    @field_validator("contacts")
+    @classmethod
+    def validate_contacts(cls, v):
+        if not v:
+            raise ValueError("No contacts to import")
+        if len(v) > 5000:
+            raise ValueError("Too many contacts (max 5000)")
+        return v
+
+
+# ── Contacts ──────────────────────────────────────────────────────────────────
+
+@router.get("/contacts")
+async def list_contacts(
+    q: str = "", status: str = "", tags: str = "",
+    limit: int = Query(50, ge=1, le=1000), offset: int = Query(0, ge=0),
+    user=Depends(get_current_user),
+):
+    if q:
+        contacts = crm.search_contacts(q, status=status or None, tags=tags or None)
+        return {"contacts": contacts, "total": len(contacts)}
+    return crm.list_contacts(
+        offset=offset, limit=limit,
+        status=status or None, tags=tags or None,
+    )
+
+
+@router.get("/tags")
+async def list_tags(user=Depends(get_current_user)):
+    """Return all distinct tag labels currently used by contacts."""
+    return {"tags": crm.list_distinct_tags()}
+
+
+@router.get("/contacts/{contact_id}")
+async def get_contact(contact_id: int, user=Depends(get_current_user)):
+    result = crm.get_contact_detail(contact_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    return result
+
+
+@router.post("/contacts")
+async def create_contact(body: ContactCreate, user=Depends(get_current_user)):
+    if not body.name.strip():
+        raise HTTPException(status_code=400, detail="Name is required")
+    return crm.create_contact(**body.model_dump())
+
+
+@router.put("/contacts/{contact_id}")
+async def update_contact(contact_id: int, body: ContactUpdate, user=Depends(get_current_user)):
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    result = crm.update_contact(contact_id, **updates)
+    if not result:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    return result
+
+
+@router.delete("/contacts/{contact_id}")
+async def delete_contact(contact_id: int, user=Depends(get_current_user)):
+    if not crm.delete_contact(contact_id):
+        raise HTTPException(status_code=404, detail="Contact not found")
+    return {"deleted": True, "contact_id": contact_id}
+
+
+# ── Deals ─────────────────────────────────────────────────────────────────────
+
+@router.get("/deals")
+async def list_deals(
+    stage: str = "", contact_id: int | None = None,
+    user=Depends(get_current_user),
+):
+    if stage or contact_id:
+        deals = crm.list_deals(stage=stage or None, contact_id=contact_id)
+        return {"deals": deals, "count": len(deals)}
+    return crm.get_pipeline()
+
+
+@router.get("/deals/{deal_id}")
+async def get_deal(deal_id: int, user=Depends(get_current_user)):
+    result = crm.get_deal_detail(deal_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    return result
+
+
+@router.post("/deals")
+async def create_deal(body: DealCreate, user=Depends(get_current_user)):
+    if not body.title.strip():
+        raise HTTPException(status_code=400, detail="Title is required")
+    return crm.create_deal(**body.model_dump())
+
+
+@router.put("/deals/{deal_id}")
+async def update_deal(deal_id: int, body: DealUpdate, user=Depends(get_current_user)):
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    result = crm.update_deal(deal_id, **updates)
+    if not result:
+        raise HTTPException(status_code=404, detail="Deal not found or invalid stage")
+    return result
+
+
+# ── Tasks ─────────────────────────────────────────────────────────────────────
+
+@router.get("/tasks")
+async def list_tasks(
+    contact_id: int | None = None, deal_id: int | None = None,
+    completed: bool | None = None, due_before: str = "",
+    priority: str = "", limit: int = Query(50, ge=1, le=1000),
+    user=Depends(get_current_user),
+):
+    tasks = crm.list_tasks(
+        contact_id=contact_id, deal_id=deal_id,
+        completed=completed, due_before=due_before or None,
+        priority=priority or None, limit=limit,
+    )
+    return {"tasks": tasks, "count": len(tasks)}
+
+
+@router.post("/tasks")
+async def create_task(body: TaskCreate, user=Depends(get_current_user)):
+    if not body.title.strip():
+        raise HTTPException(status_code=400, detail="Title is required")
+    return crm.create_task(**body.model_dump())
+
+
+@router.put("/tasks/{task_id}")
+async def update_task(task_id: int, body: TaskUpdate, user=Depends(get_current_user)):
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    result = crm.update_task(task_id, **updates)
+    if not result:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return result
+
+
+@router.put("/tasks/{task_id}/complete")
+async def complete_task(task_id: int, user=Depends(get_current_user)):
+    result = crm.complete_task(task_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return result
+
+
+@router.delete("/tasks/{task_id}")
+async def delete_task(task_id: int, user=Depends(get_current_user)):
+    if not crm.delete_task(task_id):
+        raise HTTPException(status_code=404, detail="Task not found")
+    return {"deleted": True, "task_id": task_id}
+
+
+# ── Activity ──────────────────────────────────────────────────────────────────
+
+@router.get("/activity")
+async def get_activity(
+    contact_id: int | None = None, deal_id: int | None = None,
+    limit: int = Query(20, ge=1, le=1000), user=Depends(get_current_user),
+):
+    activities = crm.get_activity_log(contact_id=contact_id, deal_id=deal_id, limit=limit)
+    return {"activities": activities, "count": len(activities)}
+
+
+@router.post("/activity")
+async def log_activity(body: ActivityCreate, user=Depends(get_current_user)):
+    if not body.activity.strip():
+        raise HTTPException(status_code=400, detail="Activity type is required")
+    return crm.log_activity(**body.model_dump())
+
+
+@router.put("/activity/{activity_id}")
+async def update_activity(activity_id: int, body: ActivityUpdate, user=Depends(get_current_user)):
+    result = crm.update_activity(activity_id, activity=body.activity, note=body.note)
+    if not result:
+        raise HTTPException(status_code=404, detail="Activity not found")
+    return result
+
+
+@router.delete("/activity/{activity_id}")
+async def delete_activity(activity_id: int, user=Depends(get_current_user)):
+    if not crm.delete_activity(activity_id):
+        raise HTTPException(status_code=404, detail="Activity not found")
+    return {"ok": True}
+
+
+# ── Dashboard ─────────────────────────────────────────────────────────────────
+
+@router.get("/dashboard")
+async def dashboard(user=Depends(get_current_user)):
+    return crm.get_dashboard_stats()
+
+
+# ── First-run / sample data ───────────────────────────────────────────────────
+
+@router.get("/demo-status")
+async def demo_status(user=Depends(get_current_user)):
+    """Drive the first-run 'load sample data?' prompt and the example-data banner."""
+    return crm.get_demo_status()
+
+
+@router.post("/load-sample-data")
+async def load_sample_data(user=Depends(get_current_user)):
+    """Seed fictional demo data on first run (idempotent — no-op if CRM has data)."""
+    return crm.load_sample_data()
+
+
+@router.post("/dismiss-onboarding")
+async def dismiss_onboarding(user=Depends(get_current_user)):
+    """User chose to start fresh — stop showing the first-run prompt."""
+    return crm.dismiss_onboarding()
+
+
+@router.post("/demo-clear")
+async def demo_clear(user=Depends(get_current_user)):
+    """Clear example data (guarded: no-op unless sample data was loaded)."""
+    return crm.clear_demo_data()
+
+
+@router.post("/clear-all")
+async def clear_all(body: ClearAllBody, user=Depends(get_current_user)):
+    """Wipe ALL CRM data — deliberate real-data reset, gated by a confirmation phrase."""
+    if body.confirmation != "clear crm":
+        raise HTTPException(status_code=400, detail="Invalid confirmation phrase")
+    return crm.clear_all()
+
+
+# ── CSV Import (keyless — no AI provider needed) ──────────────────────────────
+
+@router.post("/import")
+async def import_csv(file: UploadFile = File(...), user=Depends(get_current_user)):
+    """Import contacts from a CSV file.
+
+    Expected columns (case-insensitive, flexible matching):
+    name (required), email, phone, company, title, source, tags, notes
+    """
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="File must be a .csv")
+
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="File too large (max 1MB)")
+    try:
+        text = content.decode("utf-8-sig")  # Handle BOM
+    except UnicodeDecodeError:
+        text = content.decode("latin-1")
+
+    reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames:
+        raise HTTPException(status_code=400, detail="CSV has no headers")
+
+    # Normalize headers to lowercase
+    field_map = {f.strip().lower(): f for f in reader.fieldnames}
+
+    # Map common column name variations
+    column_aliases = {
+        "name": ["name", "full_name", "full name", "contact_name", "contact name"],
+        "email": ["email", "email_address", "email address", "e-mail"],
+        "phone": ["phone", "phone_number", "phone number", "tel", "telephone"],
+        "company": ["company", "company_name", "company name", "organization", "org"],
+        "title": ["title", "job_title", "job title", "position", "role"],
+        "source": ["source", "lead_source", "lead source", "origin"],
+        "tags": ["tags", "labels", "categories"],
+        "notes": ["notes", "note", "comments", "description"],
+    }
+
+    def _resolve(target: str) -> str | None:
+        for alias in column_aliases.get(target, []):
+            if alias in field_map:
+                return field_map[alias]
+        return None
+
+    name_col = _resolve("name")
+    if not name_col:
+        raise HTTPException(status_code=400, detail="CSV must have a 'name' column")
+
+    imported = 0
+    skipped = 0
+    errors = []
+
+    for i, row in enumerate(reader, start=2):  # Row 2+ (after header)
+        name = (row.get(name_col) or "").strip()
+        if not name:
+            skipped += 1
+            continue
+        try:
+            crm.create_contact(
+                name=name,
+                email=(row.get(_resolve("email") or "", "") or "").strip(),
+                phone=(row.get(_resolve("phone") or "", "") or "").strip(),
+                company=(row.get(_resolve("company") or "", "") or "").strip(),
+                title=(row.get(_resolve("title") or "", "") or "").strip(),
+                source=(row.get(_resolve("source") or "", "") or "").strip(),
+                tags=(row.get(_resolve("tags") or "", "") or "").strip(),
+                notes=(row.get(_resolve("notes") or "", "") or "").strip(),
+            )
+            imported += 1
+        except Exception as e:
+            logger.debug("CSV import row %d failed: %s", i, e)
+            errors.append(f"Row {i}: could not import — check the data and try again")
+            if len(errors) > 50:
+                break
+
+    return {"imported": imported, "skipped": skipped, "errors": errors}
+
+
+# ── Smart Import (AI-powered; degrades gracefully with no provider) ───────────
+
+@router.post("/smart-import/parse")
+async def smart_import_parse(file: UploadFile = File(...), user=Depends(get_current_user)):
+    """Parse contacts from any file format, using AI only when needed."""
+    from crm.smart_import import parse_contacts
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="File too large (max 1MB)")
+
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = content.decode("latin-1")
+
+    result = await parse_contacts(text, file.filename)
+    return {
+        "contacts": result.contacts,
+        "ai_used": result.ai_used,
+        "warnings": result.warnings,
+    }
+
+
+@router.post("/smart-import/confirm")
+async def smart_import_confirm(body: SmartImportConfirm, user=Depends(get_current_user)):
+    """Import previously parsed contacts into the CRM."""
+    imported = 0
+    skipped = 0
+    errors = []
+
+    for i, entry in enumerate(body.contacts):
+        name = str(entry.get("name", "") or "").strip()
+        if not name:
+            skipped += 1
+            continue
+        try:
+            crm.create_contact(
+                name=name,
+                email=str(entry.get("email", "") or "").strip(),
+                phone=str(entry.get("phone", "") or "").strip(),
+                company=str(entry.get("company", "") or "").strip(),
+                title=str(entry.get("title", "") or "").strip(),
+                source=str(entry.get("source", "") or "").strip(),
+                tags=str(entry.get("tags", "") or "").strip(),
+                notes=str(entry.get("notes", "") or "").strip(),
+            )
+            imported += 1
+        except Exception as e:
+            logger.debug("Smart import contact %d failed: %s", i + 1, e)
+            errors.append(f"Contact {i + 1}: could not import — check the data and try again")
+            if len(errors) > 50:
+                break
+
+    return {"imported": imported, "skipped": skipped, "errors": errors}

@@ -55,6 +55,17 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `YYYYMMDDHHMMSS_<name>.sql` (use `date +%Y%m%d%H%M%S`), never sequential
   prefixes. Access Postgres through `core/postgres.py` helpers
   (`pg_fetchall`/`pg_fetchone`/`pg_execute`/`get_connection`/`row_to_dict`).
+- **The CRM is first-class core** (`backend/crm/`, mounted at `/api/crm`; frontend
+  `frontend/src/crm/` + `frontend/src/shared/`) — always-on, no enable flag. Ported
+  from chatty's `crm_lite` and translated to Postgres (contacts/deals/tasks/
+  activity_log; query idioms follow the matching `cake_os/backend/apps/crm` services
+  so later feature ports diff cleanly). The ~17 `crm_*` agent tools + executors are
+  collected UNCONDITIONALLY via `crm.tools.get_crm_tools()` — the (dormant) assistant
+  engine consumes them in a later issue; there is no `ToolRegistry` class yet. Contact
+  import is keyless for CSV/vCard; the AI smart-import path (`get_ai_provider()`)
+  degrades to a warning when no provider is configured and its UI affordance keys off
+  `ai_ready`. First-run offers to load fictional sample data (prompt tracked on the
+  `crm_meta` singleton, not a per-integration flag).
 - **API keys are entered in-app, encrypted at rest** (Fernet; key from env →
   OS keychain → file fallback) — never as env vars.
 - **Backend tests** live in `backend/tests/` (config in `backend/pytest.ini`,
@@ -128,7 +139,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Product shell (run.py, auth, 2FA, encryption, config, Railway) | `chatty/backend/` + `chatty/run.py` |
 | Postgres pool + migration runner | `cake_os/backend/core/postgres.py` |
 | AI providers + pricing + setup wizard | `chatty/backend/core/providers/`, `chatty/frontend/src/setup/` |
-| CRM core (schema, router, tools, smart import) | `chatty/backend/integrations/crm_lite/`, `chatty/frontend/src/crm/` |
+| CRM core (schema, router, tools, smart import) — **landed #3** as `backend/crm/` + `frontend/src/crm/` + `frontend/src/shared/` | `chatty/backend/integrations/crm_lite/`, `chatty/frontend/src/crm/` |
 | Assistant engine (chat loop, tools, memory, dreaming, heartbeat, reminders, notifications) | `chatty/backend/core/agents/` |
 | Telegram | `chatty/backend/integrations/telegram/` |
 | Gmail (reduced to read + draft) | `chatty/backend/integrations/google/` |

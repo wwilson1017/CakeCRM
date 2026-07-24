@@ -2,8 +2,8 @@
 CakeCRM — FastAPI entry point.
 
 Mounts routers, initializes the Postgres pool and applies migrations, sets up
-CORS, and serves the built frontend in production. The CRM core mounts here
-as it lands (issue #3); this shell carries auth, 2FA, branding, and health.
+CORS, and serves the built frontend in production. The CRM core is mounted at
+/api/crm (issue #3); this shell also carries auth, 2FA, branding, and health.
 
 Postgres is mandatory — startup fails loudly without DATABASE_URL.
 """
@@ -26,6 +26,7 @@ from core.auth import router as auth_router
 from core.auth_2fa import router as auth_2fa_router
 from core.config import settings
 from core.storage import atomic_write
+from crm.router import router as crm_router
 from providers.router import router as providers_router, setup_router as ai_setup_router
 
 logger = logging.getLogger(__name__)
@@ -132,6 +133,7 @@ app.include_router(auth_2fa_router, prefix="/api", tags=["auth-2fa"])
 app.include_router(branding_router, prefix="/api/branding", tags=["branding"])
 app.include_router(providers_router, prefix="/api/providers", tags=["providers"])
 app.include_router(ai_setup_router, prefix="/api/setup", tags=["setup"])
+app.include_router(crm_router, prefix="/api/crm", tags=["crm"])
 
 
 # ── Health endpoints ──────────────────────────────────────────────────────────
