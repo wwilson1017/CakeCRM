@@ -8,6 +8,7 @@ import { mono, INK, INK_MUTE, INK_SOFT, INK_DIM, LINE, LINE_STRONG, BG_RAISED, A
 import { modalOverlay, modalContent, mobileDragHandle, btnDanger } from '../styles';
 import { confirmDialog } from '../../shared/confirm';
 import { toast } from '../../shared/toast';
+import { formatDate } from '../../shared/formatDate';
 
 const ACTIVITY_ICONS: Record<string, React.ComponentType<{ size?: number; strokeWidth?: number }>> = {
   call: IconPhone,
@@ -215,15 +216,3 @@ export function ActivityTimeline({ activities, onUpdate }: Props) {
   );
 }
 
-function formatDate(iso: string): string {
-  try {
-    // Postgres TIMESTAMPTZ already serializes with an offset (e.g. ...+00:00);
-    // only append 'Z' for a bare naive string that carries no zone, so we never
-    // produce an invalid "...+00:00Z".
-    const hasZone = /[Zz]|[+-]\d\d:?\d\d$/.test(iso);
-    const d = new Date(hasZone ? iso : iso + 'Z');
-    if (isNaN(d.getTime())) return iso;
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) +
-      ' ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-  } catch { return iso; }
-}

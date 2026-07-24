@@ -1,5 +1,5 @@
 import type { ComponentType, ReactNode } from 'react';
-import { IconChart, IconUsers, IconBuilding, IconFunnel, IconCheck, IconSettings, IconLock } from './icons';
+import { IconChart, IconUsers, IconBuilding, IconFunnel, IconCheck, IconSettings, IconSparkle, IconLock } from './icons';
 import { BG_CARD, INK, INK_MUTE, LINE, ACCENT, FONT_DISPLAY } from './styles';
 
 interface MobileMenuDrawerProps {
@@ -19,11 +19,12 @@ export function MobileMenuDrawer({ onClose, navigate, onSignOut, children }: Mob
   const go = (path: string) => () => { onClose(); navigate(path); };
   const items: NavItem[] = [
     { icon: IconChart, label: 'Dashboard', action: go('/crm') },
+    { icon: IconFunnel, label: 'Pipeline', action: go('/crm/pipeline') },
     { icon: IconUsers, label: 'Contacts', action: go('/crm/contacts') },
     { icon: IconBuilding, label: 'Companies', action: go('/crm/companies') },
-    { icon: IconFunnel, label: 'Pipeline', action: go('/crm/pipeline') },
     { icon: IconCheck, label: 'Tasks', action: go('/crm/tasks') },
-    { icon: IconSettings, label: 'AI Setup', action: go('/setup') },
+    { icon: IconSettings, label: 'Settings', action: go('/crm/settings') },
+    { icon: IconSparkle, label: 'AI Setup', action: go('/setup') },
   ];
   if (onSignOut) {
     items.push({ icon: IconLock, label: 'Sign out', action: () => { onClose(); onSignOut(); } });

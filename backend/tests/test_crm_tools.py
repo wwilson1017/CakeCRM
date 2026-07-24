@@ -1,7 +1,7 @@
 """CRM agent-tools contract: unconditional, complete, well-formed.
 
 The issue requires the crm_* tools to be collected unconditionally (no enable
-gate). This pins that: 22 schema defs, 23 executors (incl. the crm_log_note
+gate). This pins that: 24 schema defs, 25 executors (incl. the crm_log_note
 back-compat alias), every def has an executor, and get_crm_tools() returns the
 full set with no gating.
 """
@@ -14,9 +14,9 @@ from crm import service, tools
 from crm.tools import CRM_TOOL_DEFS, TOOL_EXECUTORS, get_crm_tools
 
 
-def test_twentytwo_defs_twentythree_executors():
-    assert len(CRM_TOOL_DEFS) == 22
-    assert len(TOOL_EXECUTORS) == 23
+def test_twentyfour_defs_twentyfive_executors():
+    assert len(CRM_TOOL_DEFS) == 24
+    assert len(TOOL_EXECUTORS) == 25
 
 
 def test_company_tools_present():
@@ -144,3 +144,28 @@ def test_contact_deal_tools_translate_fk_violation(monkeypatch):
     assert tools.crm_update_contact(1, company_id=999) == {"error": "Referenced company does not exist"}
     assert tools.crm_create_deal("D", company_id=999) == {"error": "Referenced contact or company does not exist"}
     assert tools.crm_update_deal(1, company_id=999) == {"error": "Referenced contact or company does not exist"}
+
+
+def test_chatter_tools_present_and_shaped():
+    by_name = {d["name"]: d for d in CRM_TOOL_DEFS}
+    assert {"crm_add_note", "crm_get_chatter"} <= set(by_name)
+    for name in ("crm_add_note", "crm_get_chatter"):
+        props = by_name[name]["input_schema"]["properties"]
+        assert props["entity_type"]["enum"] == ["deal", "contact"]
+    assert by_name["crm_add_note"]["input_schema"]["required"] == ["entity_type", "entity_id", "message"]
+
+
+def test_chatter_executors_wrap_validation_errors():
+    # A bad entity_type is rejected in the service before any DB call; the tool
+    # surfaces it as {"error": ...} rather than raising.
+    assert "error" in tools.crm_add_note("company", 1, "hi")
+    assert "error" in tools.crm_get_chatter("company", 1)
+
+
+def test_chatter_executors_happy_path_shapes(monkeypatch):
+    # The tool return shape is the contract the assistant engine consumes; pin it.
+    from crm import chatter_service
+    monkeypatch.setattr(chatter_service, "add_note", lambda t, i, m: {"id": 1, "message": m})
+    monkeypatch.setattr(chatter_service, "get_chatter", lambda *a, **k: [{"id": 1}, {"id": 2}])
+    assert tools.crm_add_note("deal", 3, "hi") == {"ok": True, "note": {"id": 1, "message": "hi"}}
+    assert tools.crm_get_chatter("deal", 3) == {"notes": [{"id": 1}, {"id": 2}], "count": 2}

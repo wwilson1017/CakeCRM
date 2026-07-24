@@ -62,9 +62,10 @@ def pg_db():
 def _clean_crm(pg_db):
     """Reset all CRM state between tests so scenarios stay isolated."""
     from core.postgres import pg_execute
-    pg_execute("TRUNCATE activity_log, tasks, deals, contacts, companies RESTART IDENTITY")
+    pg_execute("TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter RESTART IDENTITY")
     pg_execute(
-        "UPDATE crm_meta SET sample_data_loaded = FALSE, onboarding_dismissed = FALSE WHERE id = 1"
+        "UPDATE crm_meta SET sample_data_loaded = FALSE, onboarding_dismissed = FALSE, "
+        "ai_key_prompt_dismissed = FALSE WHERE id = 1"
     )
     yield
 
@@ -88,9 +89,11 @@ def test_migration_created_tables_and_singleton(pg_db):
             "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
         )
     }
-    assert {"companies", "contacts", "deals", "tasks", "activity_log", "crm_meta"} <= names
+    assert {"companies", "contacts", "deals", "tasks", "activity_log", "crm_meta", "crm_chatter"} <= names
     meta = pg_fetchone("SELECT * FROM crm_meta WHERE id = 1")
     assert meta and meta["sample_data_loaded"] is False
+    # issue #9 migration: durable AI-key-nudge dismissal, default FALSE
+    assert meta["ai_key_prompt_dismissed"] is False
 
 
 # ── Fresh empty install (the acceptance clause, at the data layer) ────────────
@@ -161,6 +164,7 @@ def test_seed_idempotent_and_sequences_advance(pg_db):
     assert pg_fetchone("SELECT COUNT(*) AS c FROM deals")["c"] == 7
     assert pg_fetchone("SELECT COUNT(*) AS c FROM tasks")["c"] == 8
     assert pg_fetchone("SELECT COUNT(*) AS c FROM activity_log")["c"] == 11
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM crm_chatter")["c"] == 4
     assert service.get_crm_meta()["sample_data_loaded"] is True
 
     # seeded contacts/deals are linked to their companies (rollup demos on day one)
@@ -185,12 +189,14 @@ def test_demo_state_machine_over_http(pg_db):
     client = _client()
 
     status = client.get("/api/crm/demo-status").json()
-    assert status == {"empty": True, "sample_data_loaded": False, "show_onboarding": True}
+    assert status == {"empty": True, "sample_data_loaded": False, "show_onboarding": True,
+                      "ai_key_prompt_dismissed": False}
 
     seeded = client.post("/api/crm/load-sample-data").json()
     assert seeded["seeded"] is True
     after = client.get("/api/crm/demo-status").json()
-    assert after == {"empty": False, "sample_data_loaded": True, "show_onboarding": False}
+    assert after == {"empty": False, "sample_data_loaded": True, "show_onboarding": False,
+                     "ai_key_prompt_dismissed": False}
 
     # guarded clear wipes example data and restarts identities
     cleared = client.post("/api/crm/demo-clear").json()
@@ -213,6 +219,22 @@ def test_demo_clear_guarded_when_no_sample(pg_db):
     resp = client.post("/api/crm/demo-clear").json()
     assert resp == {"ok": True, "cleared": False}
     assert service.get_dashboard_stats()["total_contacts"] == 1
+
+
+def test_dismiss_ai_prompt_persists(pg_db):
+    from crm import service
+    client = _client()
+    before = service.get_crm_meta()
+    assert client.get("/api/crm/demo-status").json()["ai_key_prompt_dismissed"] is False
+    assert client.post("/api/crm/dismiss-ai-prompt").json() == {"ok": True}
+    # durable: reflected in a fresh read
+    assert client.get("/api/crm/demo-status").json()["ai_key_prompt_dismissed"] is True
+    after = service.get_crm_meta()
+    assert after["ai_key_prompt_dismissed"] is True
+    # independent of the onboarding flags — dismiss-ai-prompt must not touch them
+    assert after["onboarding_dismissed"] == before["onboarding_dismissed"]
+    assert after["sample_data_loaded"] == before["sample_data_loaded"]
+    assert client.get("/api/crm/demo-status").json()["show_onboarding"] is True
 
 
 def test_search_pagination_and_contact_unlink(pg_db):
@@ -339,3 +361,86 @@ def test_companies_backfill_migration(pg_db):
             )
             cur.execute(f'DROP DATABASE IF EXISTS "{dbname}"')
         admin.close()
+
+
+# ── Chatter / notes (issue #15) ───────────────────────────────────────────────
+
+def test_chatter_crud_archive_restore_roundtrip(pg_db):
+    from crm import chatter_service, service
+
+    d = service.create_deal("Chatter deal", value=1000)
+    n1 = chatter_service.add_note("deal", d["id"], "  first note  ")
+    n2 = chatter_service.add_note("deal", d["id"], "second note")
+    assert n1["message"] == "first note" and n1["updated_at"] is None and n1["archived"] == 0
+
+    # newest first, deterministic
+    notes = chatter_service.get_chatter("deal", d["id"])
+    assert [n["id"] for n in notes] == [n2["id"], n1["id"]]
+
+    # edit stamps updated_at
+    edited = chatter_service.update_note(n1["id"], "first note (edited)")
+    assert edited["message"] == "first note (edited)" and edited["updated_at"] is not None
+
+    # archive hides from the default list; include_archived shows it; restore brings it back
+    assert chatter_service.archive_note(n1["id"]) is True
+    assert [n["id"] for n in chatter_service.get_chatter("deal", d["id"])] == [n2["id"]]
+    assert len(chatter_service.get_chatter("deal", d["id"], include_archived=True)) == 2
+    assert chatter_service.unarchive_note(n1["id"]) is True
+    assert len(chatter_service.get_chatter("deal", d["id"])) == 2
+
+    # missing note ids are falsy, not errors
+    assert chatter_service.update_note(999999, "x") is None
+    assert chatter_service.archive_note(999999) is None
+
+
+def test_chatter_rejects_invalid_and_nonexistent_targets(pg_db):
+    from crm import chatter_service, service
+
+    with pytest.raises(ValueError):
+        chatter_service.add_note("company", 1, "hi")       # bad type
+    with pytest.raises(ValueError):
+        chatter_service.add_note("deal", 999999, "hi")     # target does not exist
+    c = service.create_contact("Has notes")
+    with pytest.raises(ValueError):
+        chatter_service.add_note("contact", c["id"], "   ")  # blank message
+
+
+def test_chatter_dropped_on_contact_delete_and_clear(pg_db):
+    from core.postgres import pg_fetchone
+    from crm import chatter_service, service
+
+    c = service.create_contact("Doomed")
+    chatter_service.add_note("contact", c["id"], "note that must not outlive the contact")
+    assert pg_fetchone("SELECT COUNT(*) AS n FROM crm_chatter")["n"] == 1
+    service.delete_contact(c["id"])
+    assert pg_fetchone("SELECT COUNT(*) AS n FROM crm_chatter")["n"] == 0
+
+    # ID reuse after clear_all: a new deal reusing id 1 inherits no old notes
+    d = service.create_deal("First deal")
+    chatter_service.add_note("deal", d["id"], "old deal-1 note")
+    service.clear_all()
+    d2 = service.create_deal("New deal reusing id 1")
+    assert d2["id"] == d["id"]  # SERIAL restarted
+    assert chatter_service.get_chatter("deal", d2["id"]) == []
+
+
+def test_chatter_http_roundtrip(pg_db):
+    from crm import service
+
+    d = service.create_deal("HTTP deal")
+    client = _client()
+    r = client.post(f"/api/crm/chatter/deal/{d['id']}/note", json={"message": "via http"})
+    assert r.status_code == 200
+    note_id = r.json()["id"]
+
+    listed = client.get(f"/api/crm/chatter/deal/{d['id']}").json()
+    assert listed["count"] == 1 and listed["notes"][0]["message"] == "via http"
+
+    assert client.patch(f"/api/crm/chatter/note/{note_id}", json={"message": "edited"}).status_code == 200
+    assert client.post(f"/api/crm/chatter/note/{note_id}/archive").json() == {"ok": True}
+    assert client.get(f"/api/crm/chatter/deal/{d['id']}").json()["count"] == 0
+    assert client.get(f"/api/crm/chatter/deal/{d['id']}?include_archived=true").json()["count"] == 1
+    # blank + missing + bad-type contract at the HTTP layer
+    assert client.post(f"/api/crm/chatter/deal/{d['id']}/note", json={"message": " "}).status_code == 400
+    assert client.patch("/api/crm/chatter/note/999999", json={"message": "x"}).status_code == 404
+    assert client.get("/api/crm/chatter/company/1").status_code == 400

@@ -3,6 +3,7 @@ import { AuthProvider } from './core/auth/AuthContext';
 import { ProtectedRoute } from './core/auth/ProtectedRoute';
 import { LoginPage } from './login/LoginPage';
 import { SetupPage } from './setup/SetupPage';
+import { BrandingProvider } from './core/branding/BrandingContext';
 import { CrmLayout } from './crm/CrmLayout';
 import { CrmDashboardPage } from './crm/CrmDashboardPage';
 import { ContactsPage } from './crm/ContactsPage';
@@ -11,6 +12,7 @@ import { CompaniesPage } from './crm/CompaniesPage';
 import { CompanyDetailPage } from './crm/CompanyDetailPage';
 import { PipelinePage } from './crm/PipelinePage';
 import { TasksPage } from './crm/TasksPage';
+import { SettingsPage } from './crm/SettingsPage';
 import { ToastViewport } from './shared/ToastViewport';
 import { ConfirmHost } from './shared/ConfirmHost';
 
@@ -32,7 +34,9 @@ export default function App() {
             path="/crm"
             element={
               <ProtectedRoute>
-                <CrmLayout />
+                <BrandingProvider>
+                  <CrmLayout />
+                </BrandingProvider>
               </ProtectedRoute>
             }
           >
@@ -43,6 +47,7 @@ export default function App() {
             <Route path="companies/:id" element={<CompanyDetailPage />} />
             <Route path="pipeline" element={<PipelinePage />} />
             <Route path="tasks" element={<TasksPage />} />
+            <Route path="settings" element={<SettingsPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/crm" replace />} />
         </Routes>

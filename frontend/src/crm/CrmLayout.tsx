@@ -2,17 +2,21 @@ import { useState, useEffect, useCallback } from 'react';
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { api } from '../core/api/client';
 import { useAuth } from '../core/auth/AuthContext';
+import { useBranding } from '../core/branding/BrandingContext';
 import { useIsMobile } from '../shared/useIsMobile';
 import { MobileMenuDrawer } from '../shared/MobileMenuDrawer';
 import { confirmDialog } from '../shared/confirm';
 import { INK, INK_SOFT, INK_MUTE, LINE, LINE_STRONG, ACCENT, GOLD, FONT_DISPLAY, FONT_SANS } from '../shared/styles';
 import { modalOverlay, modalContent, btnPrimary, btnSecondary } from './styles';
+import { AiKeyNudge } from './components/AiKeyNudge';
+import { AssistantLauncher } from './components/AssistantLauncher';
+import { BrandLogo } from './components/BrandLogo';
 
 const NAV_ITEMS = [
   { to: '/crm', label: 'Dashboard', end: true },
+  { to: '/crm/pipeline', label: 'Pipeline' },
   { to: '/crm/contacts', label: 'Contacts' },
   { to: '/crm/companies', label: 'Companies' },
-  { to: '/crm/pipeline', label: 'Pipeline' },
   { to: '/crm/tasks', label: 'Tasks' },
 ];
 
@@ -20,6 +24,7 @@ interface DemoStatus {
   empty: boolean;
   sample_data_loaded: boolean;
   show_onboarding: boolean;
+  ai_key_prompt_dismissed: boolean;
 }
 
 /** First-run prompt: offer to load fictional sample data (or start fresh). */
@@ -138,25 +143,45 @@ const actionLink: React.CSSProperties = {
   background: 'transparent', cursor: 'pointer', fontFamily: FONT_SANS,
 };
 
+// Fail-closed demo-status: prompt nothing (incl. the AI nudge) when the fetch fails.
+const DEMO_STATUS_UNKNOWN: DemoStatus = {
+  empty: false, sample_data_loaded: false, show_onboarding: false, ai_key_prompt_dismissed: true,
+};
+
+interface SetupStatus { ai_ready: boolean; credentials_present: boolean; }
+
 export function CrmLayout() {
   const isMobile = useIsMobile();
   const navigate = useNavigate();
   const { logout } = useAuth();
+  const { branding, logoVersion } = useBranding();
   const [showMenu, setShowMenu] = useState(false);
   const [status, setStatus] = useState<DemoStatus | null>(null);
   const [onboardDone, setOnboardDone] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  // AI state: null = unknown (render nothing AI-flavored yet). credentials_present
+  // gates the "add a key" nudge; ai_ready drives the assistant launcher.
+  const [setup, setSetup] = useState<SetupStatus | null>(null);
+  const [aiPromptDone, setAiPromptDone] = useState(false);
 
   useEffect(() => {
-    // best-effort: assume nothing to prompt on failure
+    // best-effort: assume nothing to prompt on failure (fail-closed)
     api<DemoStatus>('/api/crm/demo-status')
       .then(setStatus)
-      .catch(() => setStatus({ empty: false, sample_data_loaded: false, show_onboarding: false }));
+      .catch(() => setStatus(DEMO_STATUS_UNKNOWN));
+  }, []);
+
+  useEffect(() => {
+    // best-effort: on failure keep setup unknown (null) — the launcher stays inert
+    // and the nudge stays suppressed, so we never misroute a user who may have a key.
+    api<SetupStatus>('/api/setup/status')
+      .then(setSetup)
+      .catch(() => { /* keep unknown */ });
   }, []);
 
   const handleLoadSample = useCallback(async () => {
     await api('/api/crm/load-sample-data', { method: 'POST' });
-    setStatus({ empty: false, sample_data_loaded: true, show_onboarding: false });
+    setStatus(s => ({ ...(s ?? DEMO_STATUS_UNKNOWN), empty: false, sample_data_loaded: true, show_onboarding: false }));
     setOnboardDone(true);
     setRefreshKey(k => k + 1);
   }, []);
@@ -177,6 +202,25 @@ export function CrmLayout() {
     setRefreshKey(k => k + 1);
   }, []);
 
+  const handleDismissAiPrompt = useCallback(async () => {
+    setAiPromptDone(true);
+    try {
+      await api('/api/crm/dismiss-ai-prompt', { method: 'POST' });
+    } catch {
+      // non-fatal — the nudge is already closed for this session
+    }
+    setStatus(s => (s ? { ...s, ai_key_prompt_dismissed: true } : s));
+  }, []);
+
+  // Distinct AI affordances: (1) dismissible first-run nudge — only when NO key is
+  // configured and it hasn't been dismissed, and not while the onboarding dialog is up;
+  // (2) the persistent launcher, always rendered below.
+  const showAiNudge =
+    setup !== null && !setup.credentials_present &&
+    status !== null && !status.ai_key_prompt_dismissed && !aiPromptDone &&
+    !(status.show_onboarding && !onboardDone);
+  const aiReady = setup === null ? null : setup.ai_ready;
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       <div style={{ borderBottom: `1px solid ${LINE}` }}>
@@ -195,11 +239,21 @@ export function CrmLayout() {
             <Link to="/crm" style={{
               display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none',
             }}>
-              <span style={{ fontSize: 22 }}>🍰</span>
+              {branding?.has_logo ? (
+                <BrandLogo
+                  key={logoVersion}
+                  src={`/api/branding/logo?v=${logoVersion}`}
+                  alt=""
+                  style={{ height: 26, maxWidth: 120, objectFit: 'contain' }}
+                  fallback={<span style={{ fontSize: 22 }}>🍰</span>}
+                />
+              ) : (
+                <span style={{ fontSize: 22 }}>🍰</span>
+              )}
               <span style={{
                 fontFamily: FONT_DISPLAY,
                 fontSize: isMobile ? 19 : 18, letterSpacing: '-0.01em', color: INK,
-              }}>CakeCRM</span>
+              }}>{branding?.company_name || 'CakeCRM'}</span>
             </Link>
           </div>
           {!isMobile && (
@@ -224,6 +278,7 @@ export function CrmLayout() {
               </div>
               <div style={{ flex: 1 }} />
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Link to="/crm/settings" style={actionLink}>Settings</Link>
                 <Link to="/setup" style={actionLink}>AI Setup</Link>
                 <button onClick={logout} style={actionLink}>Sign out</button>
               </div>
@@ -269,9 +324,16 @@ export function CrmLayout() {
         <DemoBanner onClear={handleClearDemo} isMobile={isMobile} />
       )}
 
+      {showAiNudge && (
+        <AiKeyNudge onDismiss={handleDismissAiPrompt} isMobile={isMobile} />
+      )}
+
       <div key={refreshKey} style={{ flex: 1, overflow: 'auto', position: 'relative' }}>
         <Outlet />
       </div>
+
+      {/* Persistent assistant affordance — always present, degrades gracefully. */}
+      <AssistantLauncher aiReady={aiReady} />
     </div>
   );
 }

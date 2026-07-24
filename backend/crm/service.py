@@ -174,11 +174,22 @@ def delete_contact(contact_id: int) -> bool:
     """
     with get_connection() as conn:
         cur = conn.cursor()
-        cur.execute("SELECT id FROM contacts WHERE id = %s", (contact_id,))
+        # FOR UPDATE serializes against chatter_service.add_note (which locks the
+        # same row before inserting), so a note can't be added to a contact that
+        # this transaction is deleting — no orphaned crm_chatter rows.
+        cur.execute("SELECT id FROM contacts WHERE id = %s FOR UPDATE", (contact_id,))
         if cur.fetchone() is None:
             return False
         cur.execute("DELETE FROM activity_log WHERE contact_id = %s", (contact_id,))
         cur.execute("DELETE FROM tasks WHERE contact_id = %s", (contact_id,))
+        # crm_chatter is polymorphic (no FK), so its notes are dropped explicitly —
+        # otherwise a reused contact SERIAL id would inherit this contact's notes.
+        # NOTE: deals have no delete path today; if a delete_deal is ever added it
+        # MUST do the same FOR UPDATE lock + this DELETE for entity_type='deal'.
+        cur.execute(
+            "DELETE FROM crm_chatter WHERE entity_type = 'contact' AND entity_id = %s",
+            (contact_id,),
+        )
         cur.execute("DELETE FROM contacts WHERE id = %s", (contact_id,))
     return True
 
@@ -664,28 +675,32 @@ def get_dashboard_stats() -> dict:
 
 # ── First-run / sample-data state (crm_meta singleton) ────────────────────────
 
-_CRM_TABLES = ("companies", "contacts", "deals", "tasks", "activity_log")
+_CRM_TABLES = ("companies", "contacts", "deals", "tasks", "activity_log", "crm_chatter")
 
 
 def get_crm_meta() -> dict:
-    """Return the crm_meta singleton row (sample_data_loaded / onboarding_dismissed)."""
+    """Return the crm_meta singleton row (sample_data_loaded / onboarding_dismissed /
+    ai_key_prompt_dismissed)."""
     return pg_fetchone("SELECT * FROM crm_meta WHERE id = 1") or {
         "id": 1, "sample_data_loaded": False, "onboarding_dismissed": False,
+        "ai_key_prompt_dismissed": False,
     }
 
 
 def is_crm_empty() -> bool:
-    """True only when ALL CRM tables are empty (companies, contacts, deals, tasks, activity_log).
+    """True only when ALL CRM tables are empty (companies, contacts, deals, tasks, activity_log, crm_chatter).
 
-    Checking every table matters: deals/tasks/activity can exist without contacts,
-    and the fixed-id demo seed must never be inserted into a partially-populated CRM.
+    Checking every table matters: deals/tasks/activity/chatter can exist without
+    contacts, and the fixed-id demo seed must never be inserted into a
+    partially-populated CRM.
     """
     row = pg_fetchone(
         """SELECT (SELECT COUNT(*) FROM companies)
                 + (SELECT COUNT(*) FROM contacts)
                 + (SELECT COUNT(*) FROM deals)
                 + (SELECT COUNT(*) FROM tasks)
-                + (SELECT COUNT(*) FROM activity_log) AS total"""
+                + (SELECT COUNT(*) FROM activity_log)
+                + (SELECT COUNT(*) FROM crm_chatter) AS total"""
     )
     return bool(row) and row["total"] == 0
 
@@ -697,7 +712,8 @@ def _crm_empty_in_txn(cur) -> bool:
                 + (SELECT COUNT(*) FROM contacts)
                 + (SELECT COUNT(*) FROM deals)
                 + (SELECT COUNT(*) FROM tasks)
-                + (SELECT COUNT(*) FROM activity_log) AS total"""
+                + (SELECT COUNT(*) FROM activity_log)
+                + (SELECT COUNT(*) FROM crm_chatter) AS total"""
     )
     return cur.fetchone()[0] == 0
 
@@ -712,6 +728,7 @@ def get_demo_status() -> dict:
         "empty": empty,
         "sample_data_loaded": sample_loaded,
         "show_onboarding": empty and not sample_loaded and not dismissed,
+        "ai_key_prompt_dismissed": bool(meta.get("ai_key_prompt_dismissed")),
     }
 
 
@@ -746,8 +763,30 @@ def dismiss_onboarding() -> dict:
     return {"ok": True}
 
 
+def dismiss_ai_prompt() -> dict:
+    """Durably dismiss the first-run 'add an AI key' nudge (cross-device).
+
+    Single-statement blind write like dismiss_onboarding — no check-then-write,
+    so no FOR UPDATE lock is needed.
+    """
+    pg_execute(
+        "UPDATE crm_meta SET ai_key_prompt_dismissed = TRUE, updated_at = %s WHERE id = 1",
+        (_now(),),
+    )
+    return {"ok": True}
+
+
 def _truncate_all(cur) -> None:
-    cur.execute("TRUNCATE activity_log, tasks, deals, contacts, companies RESTART IDENTITY")
+    # Order chosen for the multi-statement writers: delete_contact (SELECT ... FOR
+    # UPDATE on contacts, then deletes) and add_note (locks its target, then writes
+    # crm_chatter) both take contacts/deals FIRST and crm_chatter LAST, so TRUNCATE
+    # acquires its ACCESS EXCLUSIVE locks in the same order and can't invert against
+    # them. companies leads because delete_company's ON DELETE SET NULL locks
+    # companies then contact/deal rows (parent-then-child) inside one statement.
+    # (A residual microsecond-window inversion with FK-checking INSERTs
+    # — child-then-parent lock order — is unavoidable by any single table order and
+    # is left to Postgres's deadlock detector.) The exact string is pinned by a test.
+    cur.execute("TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter RESTART IDENTITY")
 
 
 def clear_demo_data() -> dict:
@@ -775,6 +814,11 @@ def clear_all() -> dict:
     """Wipe ALL CRM data (the confirmation-gated real-data reset)."""
     with get_connection() as conn:
         cur = conn.cursor()
+        # Lock the crm_meta singleton FIRST, before truncating — same order as
+        # clear_demo_data / load_sample_data, so all three demo-state writers
+        # serialize on this row instead of deadlocking (truncate-then-update here
+        # vs lock-then-count there would otherwise invert).
+        cur.execute("SELECT id FROM crm_meta WHERE id = 1 FOR UPDATE")
         _truncate_all(cur)
         cur.execute(
             "UPDATE crm_meta SET sample_data_loaded = FALSE, updated_at = %s WHERE id = 1",

@@ -253,6 +253,7 @@ export function CrmDashboardPage() {
 
       {selectedDeal && (
         <DealDetailSheet
+          key={selectedDeal.id}
           deal={selectedDeal}
           isMobile={isMobile}
           onClose={() => setSelectedDeal(null)}

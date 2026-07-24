@@ -176,7 +176,8 @@ def test_delete_contact_existence_check_and_cascade_one_txn(monkeypatch, fake_co
     assert service.delete_contact(42) is True
     stmts = [sql for sql, _ in conn.executed]
     assert any("SELECT id FROM contacts WHERE id" in s for s in stmts)
-    assert sum("DELETE FROM" in s for s in stmts) == 3  # activity_log, tasks, contacts
+    assert sum("DELETE FROM" in s for s in stmts) == 4  # activity_log, tasks, crm_chatter, contacts
+    assert any("DELETE FROM crm_chatter WHERE entity_type = 'contact'" in s for s in stmts)
     assert "DELETE FROM contacts WHERE id" in stmts[-1]
 
 
@@ -197,7 +198,7 @@ def test_clear_demo_data_truncates_when_sample_loaded(monkeypatch, fake_conn):
     conn = fake_conn(monkeypatch, service, fetchone_results=[(True,)])
     out = service.clear_demo_data()
     assert out == {"ok": True, "cleared": True}
-    assert any("TRUNCATE activity_log, tasks, deals, contacts, companies RESTART IDENTITY" in s
+    assert any("TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter RESTART IDENTITY" in s
                for s, _ in conn.executed)
 
 
@@ -225,8 +226,38 @@ def test_clear_all_truncates_and_resets_flag(monkeypatch, fake_conn):
     conn = fake_conn(monkeypatch, service)
     assert service.clear_all() == {"ok": True}
     stmts = [s for s, _ in conn.executed]
-    assert any("TRUNCATE activity_log, tasks, deals, contacts, companies RESTART IDENTITY" in s for s in stmts)
+    assert any("TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter RESTART IDENTITY" in s for s in stmts)
     assert any("sample_data_loaded = FALSE" in s for s in stmts)
+
+
+# ── AI-key nudge dismissal (issue #9) ─────────────────────────────────────────
+
+def test_dismiss_ai_prompt_sets_flag(rec):
+    # Single-statement blind write via pg_execute (the rec fixture patches it).
+    assert service.dismiss_ai_prompt() == {"ok": True}
+    assert "ai_key_prompt_dismissed = TRUE" in rec.sql_containing("ai_key_prompt_dismissed")
+
+
+def test_demo_status_includes_ai_prompt_flag(rec):
+    # get_demo_status → get_crm_meta (1st fetchone) then is_crm_empty count (2nd).
+    rec.fetchone_queue = [
+        {"id": 1, "sample_data_loaded": False, "onboarding_dismissed": False,
+         "ai_key_prompt_dismissed": True},
+        {"total": 5},
+    ]
+    body = service.get_demo_status()
+    assert body["ai_key_prompt_dismissed"] is True
+
+
+def test_demo_status_ai_prompt_flag_defaults_false_when_absent(rec):
+    # Pre-migration/None row shape: the key is absent → bool(get(...)) must be False,
+    # NOT a KeyError (the model_dump/get-returns-None footgun).
+    rec.fetchone_queue = [
+        {"id": 1, "sample_data_loaded": False, "onboarding_dismissed": False},
+        {"total": 5},
+    ]
+    body = service.get_demo_status()
+    assert body["ai_key_prompt_dismissed"] is False
 
 
 # ── create_deal coerces an unknown stage (2 reviewers) ────────────────────────

@@ -28,16 +28,22 @@ def ensure_dir():
 
 
 def load_config() -> dict:
-    """Load branding config. Returns defaults if file doesn't exist."""
+    """Load branding config. Returns defaults if the config file doesn't exist.
+
+    ``has_logo`` is always derived from the logo file's existence — never from the
+    persisted config — because a logo can be uploaded before any config write
+    (POST /logo touches only the image file). Deriving it here keeps GET /api/branding
+    honest after a reload on a fresh install.
+    """
     ensure_dir()
     if not CONFIG_FILE.exists():
-        return dict(DEFAULT_CONFIG)
+        return {**DEFAULT_CONFIG, "has_logo": LOGO_FILE.exists()}
     try:
         data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
         return {**DEFAULT_CONFIG, **data, "has_logo": LOGO_FILE.exists()}
     except Exception as e:
         logger.warning("Failed to load branding config: %s", e)
-        return dict(DEFAULT_CONFIG)
+        return {**DEFAULT_CONFIG, "has_logo": LOGO_FILE.exists()}
 
 
 def save_config(company_name: str | None = None, accent_color: str | None = None) -> dict:

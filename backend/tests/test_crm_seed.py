@@ -31,7 +31,7 @@ def test_seed_row_counts_match_the_dataset():
     conn = FakeConn(fetchone_results=[(0,)])
     seed_demo_data(conn)
     inserts = [sql for sql, _ in conn.executed if "INSERT INTO" in sql]
-    assert len(inserts) == 5  # one executemany per table (companies + the original 4)
+    assert len(inserts) == 6  # one executemany per table (companies + the original 4 + crm_chatter)
 
 
 def test_seed_inserts_companies_before_contacts_before_deals():

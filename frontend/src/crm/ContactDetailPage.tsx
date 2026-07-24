@@ -6,6 +6,7 @@ import { ContactForm } from './components/ContactForm';
 import { DealForm } from './components/DealForm';
 import { TaskForm } from './components/TaskForm';
 import { ActivityTimeline } from './components/ActivityTimeline';
+import { NotesThread } from './components/NotesThread';
 import { PriorityBadge } from './components/badges';
 import { STAGE_COLORS } from './constants';
 import { IconArrowLeft } from '../shared/icons';
@@ -296,6 +297,12 @@ export function ContactDetailPage() {
       <div style={{ marginTop: 24, borderTop: `1px solid ${LINE}`, paddingTop: 24 }}>
         <span style={{ ...mono(10, INK_DIM), display: 'block', marginBottom: 12 }}>Activity History</span>
         <ActivityTimeline activities={contact.activity || []} onUpdate={load} />
+      </div>
+
+      {/* Chatter — editable notes thread */}
+      <div style={{ marginTop: 24, borderTop: `1px solid ${LINE}`, paddingTop: 24 }}>
+        <span style={{ ...mono(10, INK_DIM), display: 'block', marginBottom: 12 }}>Chatter</span>
+        <NotesThread key={`contact-${contact.id}`} entityType="contact" entityId={contact.id} />
       </div>
 
       {showEdit && <ContactForm contact={contact} onClose={() => setShowEdit(false)} onSaved={() => { setShowEdit(false); load(); }} />}

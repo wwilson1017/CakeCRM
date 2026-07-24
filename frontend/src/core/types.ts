@@ -84,6 +84,16 @@ export interface CrmActivity {
   created_at: string;
 }
 
+export interface CrmNote {
+  id: number;
+  entity_type: string;
+  entity_id: number;
+  message: string;
+  created_at: string;
+  updated_at: string | null;
+  archived: number;
+}
+
 export interface CrmDashboard {
   total_contacts: number;
   contacts_by_status: Record<string, number>;
