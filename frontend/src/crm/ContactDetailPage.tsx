@@ -129,13 +129,21 @@ export function ContactDetailPage() {
             }}>Delete</button>
           </div>
         </div>
-        {contact.title && (
+        {(contact.title || contact.company_id || contact.company) && (
           <p style={{ fontSize: 14, color: INK_MUTE, marginTop: 4 }}>
-            {contact.title}{contact.company ? ` at ${contact.company}` : ''}
+            {contact.title}
+            {(contact.company_id || contact.company) && (
+              <>
+                {contact.title ? ' at ' : ''}
+                {contact.company_id ? (
+                  <span
+                    onClick={() => navigate(`/crm/companies/${contact.company_id}`)}
+                    style={{ color: ACCENT, cursor: 'pointer' }}
+                  >{contact.company_name || contact.company}</span>
+                ) : contact.company}
+              </>
+            )}
           </p>
-        )}
-        {!contact.title && contact.company && (
-          <p style={{ fontSize: 14, color: INK_MUTE, marginTop: 4 }}>{contact.company}</p>
         )}
         <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? 4 : 16, marginTop: 8, fontSize: 13, color: INK_MUTE }}>
           {contact.email && <span>{contact.email}</span>}

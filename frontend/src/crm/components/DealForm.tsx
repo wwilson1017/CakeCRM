@@ -3,7 +3,7 @@ import { api } from '../../core/api/client';
 import { labelStyle, inputStyle, CORAL } from '../../shared/styles';
 import { formModalOverlay, formModalContent, formTitle, btnPrimary, btnSecondary } from '../styles';
 import { STAGE_ORDER } from '../constants';
-import type { CrmDeal, CrmContact } from '../../core/types';
+import type { CrmDeal, CrmContact, CrmCompany } from '../../core/types';
 
 interface Props {
   deal?: CrmDeal;
@@ -22,13 +22,17 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
   const [expectedClose, setExpectedClose] = useState(deal?.expected_close_date || '');
   const [notes, setNotes] = useState(deal?.notes || '');
   const [selectedContact, setSelectedContact] = useState<number | null>(deal?.contact_id ?? contactId ?? null);
+  const [selectedCompany, setSelectedCompany] = useState<number | null>(deal?.company_id ?? null);
   const [contacts, setContacts] = useState<CrmContact[]>([]);
+  const [companies, setCompanies] = useState<CrmCompany[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
     api<{ contacts: CrmContact[] }>('/api/crm/contacts?limit=200')
       .then(d => setContacts(d.contacts)).catch(() => {});
+    api<{ companies: CrmCompany[] }>('/api/crm/companies?limit=200')
+      .then(d => setCompanies(d.companies)).catch(() => {});
   }, []);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -42,6 +46,7 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
         expected_close_date: expectedClose, notes,
       };
       body.contact_id = selectedContact;  // always send (null unlinks the contact)
+      body.company_id = selectedCompany;  // always send (null unlinks the company)
       if (isEdit) {
         await api(`/api/crm/deals/${deal.id}`, { method: 'PUT', body: JSON.stringify(body) });
       } else {
@@ -67,6 +72,13 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
             <select value={selectedContact ?? ''} onChange={e => setSelectedContact(e.target.value ? Number(e.target.value) : null)} style={inputStyle}>
               <option value="">No contact</option>
               {contacts.map(c => <option key={c.id} value={c.id}>{c.name}{c.company ? ` (${c.company})` : ''}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={labelStyle}>Company</label>
+            <select value={selectedCompany ?? ''} onChange={e => setSelectedCompany(e.target.value ? Number(e.target.value) : null)} style={inputStyle}>
+              <option value="">No company</option>
+              {companies.map(co => <option key={co.id} value={co.id}>{co.name}</option>)}
             </select>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>

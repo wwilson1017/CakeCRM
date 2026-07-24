@@ -62,7 +62,7 @@ def pg_db():
 def _clean_crm(pg_db):
     """Reset all CRM state between tests so scenarios stay isolated."""
     from core.postgres import pg_execute
-    pg_execute("TRUNCATE activity_log, tasks, deals, contacts RESTART IDENTITY")
+    pg_execute("TRUNCATE activity_log, tasks, deals, contacts, companies RESTART IDENTITY")
     pg_execute(
         "UPDATE crm_meta SET sample_data_loaded = FALSE, onboarding_dismissed = FALSE WHERE id = 1"
     )
@@ -88,7 +88,7 @@ def test_migration_created_tables_and_singleton(pg_db):
             "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
         )
     }
-    assert {"contacts", "deals", "tasks", "activity_log", "crm_meta"} <= names
+    assert {"companies", "contacts", "deals", "tasks", "activity_log", "crm_meta"} <= names
     meta = pg_fetchone("SELECT * FROM crm_meta WHERE id = 1")
     assert meta and meta["sample_data_loaded"] is False
 
@@ -156,17 +156,27 @@ def test_seed_idempotent_and_sequences_advance(pg_db):
 
     out = service.load_sample_data()
     assert out == {"ok": True, "seeded": True}
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM companies")["c"] == 6
     assert pg_fetchone("SELECT COUNT(*) AS c FROM contacts")["c"] == 8
     assert pg_fetchone("SELECT COUNT(*) AS c FROM deals")["c"] == 7
     assert pg_fetchone("SELECT COUNT(*) AS c FROM tasks")["c"] == 8
     assert pg_fetchone("SELECT COUNT(*) AS c FROM activity_log")["c"] == 11
     assert service.get_crm_meta()["sample_data_loaded"] is True
 
+    # seeded contacts/deals are linked to their companies (rollup demos on day one)
+    assert pg_fetchone(
+        "SELECT company_id FROM contacts WHERE name = %s", ("Maria Santos",)
+    )["company_id"] == 1
+    assert pg_fetchone(
+        "SELECT company_id FROM deals WHERE title LIKE %s", ("Weekly bread%",)
+    )["company_id"] == 1
+
     # second call is a clean no-op (CRM no longer empty)
     assert service.load_sample_data() == {"ok": True, "seeded": False}
 
-    # the next real insert gets id 9 — sequence advanced past the fixed demo ids
+    # the next real inserts get fresh ids — sequences advanced past the fixed demo ids
     assert service.create_contact("New Person")["id"] == 9
+    assert service.create_company("New Company")["id"] == 7
 
 
 # ── First-run demo state machine via the HTTP surface ─────────────────────────
@@ -222,3 +232,110 @@ def test_search_pagination_and_contact_unlink(pg_db):
     assert service.get_deal(d["id"])["contact_id"] == c["id"]
     service.update_deal(d["id"], contact_id=None)
     assert service.get_deal(d["id"])["contact_id"] is None
+
+
+# ── Companies: CRUD, rollup, uniqueness, delete-unlink (issue #13) ────────────
+
+def test_company_crud_rollup_and_unlink(pg_db):
+    from crm import service
+
+    co = service.create_company("Acme", industry="Tech", domain="acme.com")
+    assert co["id"] == 1 and co["status"] == "active"
+
+    c = service.create_contact("Ada", company_id=co["id"])
+    d = service.create_deal("Big deal", contact_id=c["id"], company_id=co["id"],
+                            stage="proposal", value=1000)
+    won = service.create_deal("Closed", company_id=co["id"], stage="won", value=9999)
+    service.log_activity("call", note="hi", contact_id=c["id"])
+
+    detail = service.get_company_detail(co["id"])
+    assert [x["id"] for x in detail["contacts"]] == [c["id"]]
+    assert {x["id"] for x in detail["deals"]} == {d["id"], won["id"]}
+    assert detail["open_deal_value"] == 1000  # won excluded
+    # activity rolled up through the company's contact (activity has no company_id)
+    assert any(a["activity"] == "call" for a in detail["activity"])
+
+    # detail joins expose the linked company name
+    assert service.get_contact_detail(c["id"])["company_name"] == "Acme"
+    assert service.get_deal(d["id"])["company_name"] == "Acme"
+
+    # case/whitespace-insensitive uniqueness is DB-enforced
+    with pytest.raises(psycopg2.errors.UniqueViolation):
+        service.create_company("  acme ")
+
+    # delete company: contacts/deals are kept but unlinked (ON DELETE SET NULL)
+    assert service.delete_company(co["id"]) is True
+    assert service.get_contact(c["id"]) is not None
+    assert service.get_contact_detail(c["id"])["company_id"] is None
+    assert service.get_deal(d["id"])["company_id"] is None
+
+
+def test_companies_backfill_migration(pg_db):
+    """One-shot backfill on its OWN throwaway DB + raw connection (guaranteed
+    teardown; never touches the module-global pool that pg_db owns): distinct
+    case/whitespace-insensitive company names become companies (lowest-id
+    spelling wins), contacts link, deals inherit, empties stay NULL."""
+    from pathlib import Path
+
+    migrations = Path(__file__).resolve().parent.parent / "migrations"
+    crm_core = (migrations / "20260723221920_crm_core.sql").read_text()
+    companies_sql = (migrations / "20260724062314_companies.sql").read_text()
+
+    dbname = f"cakecrm_it_backfill_{os.getpid()}"
+    admin = psycopg2.connect(ADMIN_DSN)
+    admin.autocommit = True
+    with admin.cursor() as cur:
+        cur.execute(f'DROP DATABASE IF EXISTS "{dbname}"')
+        cur.execute(f'CREATE DATABASE "{dbname}"')
+    admin.close()
+
+    dsn = ADMIN_DSN.rsplit("/", 1)[0] + f"/{dbname}"
+    conn = None
+    try:
+        conn = psycopg2.connect(dsn)
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute(crm_core)
+        # legacy company text: case + tab/newline variants + empty/whitespace-only
+        cur.executemany(
+            "INSERT INTO contacts (name, company) VALUES (%s, %s)",
+            [("A", "Acme"), ("B", "\tAcme\n"), ("C", "ACME"),
+             ("D", "Beta Corp"), ("E", ""), ("F", "   ")],
+        )
+        # a deal on a linked contact (A) and one on the empty-company contact (E)
+        cur.execute(
+            "INSERT INTO deals (contact_id, title) VALUES "
+            "((SELECT id FROM contacts WHERE name='A'), 'DealA'), "
+            "((SELECT id FROM contacts WHERE name='E'), 'DealE')"
+        )
+        cur.execute(companies_sql)
+
+        # exactly 2 companies; Acme keeps the lowest-id (contact A) spelling
+        cur.execute("SELECT name FROM companies ORDER BY id")
+        assert [r[0] for r in cur.fetchall()] == ["Acme", "Beta Corp"]
+
+        # A, B, C collapse to the Acme id; D to Beta; E, F stay NULL
+        cur.execute("SELECT name, company_id FROM contacts ORDER BY name")
+        links = dict(cur.fetchall())
+        assert links["A"] == links["B"] == links["C"] and links["A"] is not None
+        assert links["D"] is not None and links["D"] != links["A"]
+        assert links["E"] is None and links["F"] is None
+
+        # DealA inherited A's company; DealE (empty-company contact) stays NULL
+        cur.execute("SELECT title, company_id FROM deals ORDER BY title")
+        deal_links = dict(cur.fetchall())
+        assert deal_links["DealA"] == links["A"]
+        assert deal_links["DealE"] is None
+    finally:
+        if conn is not None:
+            conn.close()
+        admin = psycopg2.connect(ADMIN_DSN)
+        admin.autocommit = True
+        with admin.cursor() as cur:
+            cur.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE datname = %s AND pid <> pg_backend_pid()",
+                (dbname,),
+            )
+            cur.execute(f'DROP DATABASE IF EXISTS "{dbname}"')
+        admin.close()

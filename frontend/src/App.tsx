@@ -7,6 +7,8 @@ import { CrmLayout } from './crm/CrmLayout';
 import { CrmDashboardPage } from './crm/CrmDashboardPage';
 import { ContactsPage } from './crm/ContactsPage';
 import { ContactDetailPage } from './crm/ContactDetailPage';
+import { CompaniesPage } from './crm/CompaniesPage';
+import { CompanyDetailPage } from './crm/CompanyDetailPage';
 import { PipelinePage } from './crm/PipelinePage';
 import { TasksPage } from './crm/TasksPage';
 import { ToastViewport } from './shared/ToastViewport';
@@ -37,6 +39,8 @@ export default function App() {
             <Route index element={<CrmDashboardPage />} />
             <Route path="contacts" element={<ContactsPage />} />
             <Route path="contacts/:id" element={<ContactDetailPage />} />
+            <Route path="companies" element={<CompaniesPage />} />
+            <Route path="companies/:id" element={<CompanyDetailPage />} />
             <Route path="pipeline" element={<PipelinePage />} />
             <Route path="tasks" element={<TasksPage />} />
           </Route>

@@ -11,6 +11,7 @@ import { modalOverlay, modalContent, btnPrimary, btnSecondary } from './styles';
 const NAV_ITEMS = [
   { to: '/crm', label: 'Dashboard', end: true },
   { to: '/crm/contacts', label: 'Contacts' },
+  { to: '/crm/companies', label: 'Companies' },
   { to: '/crm/pipeline', label: 'Pipeline' },
   { to: '/crm/tasks', label: 'Tasks' },
 ];

@@ -1,9 +1,9 @@
 """CRM agent-tools contract: unconditional, complete, well-formed.
 
-The issue requires the ~18 crm_* tools to be collected unconditionally (no
-enable gate). This pins that: 17 schema defs, 18 executors (incl. the
-crm_log_note back-compat alias), every def has an executor, and get_crm_tools()
-returns the full set with no gating.
+The issue requires the crm_* tools to be collected unconditionally (no enable
+gate). This pins that: 22 schema defs, 23 executors (incl. the crm_log_note
+back-compat alias), every def has an executor, and get_crm_tools() returns the
+full set with no gating.
 """
 
 import inspect
@@ -12,9 +12,31 @@ from crm import tools
 from crm.tools import CRM_TOOL_DEFS, TOOL_EXECUTORS, get_crm_tools
 
 
-def test_seventeen_defs_eighteen_executors():
-    assert len(CRM_TOOL_DEFS) == 17
-    assert len(TOOL_EXECUTORS) == 18
+def test_twentytwo_defs_twentythree_executors():
+    assert len(CRM_TOOL_DEFS) == 22
+    assert len(TOOL_EXECUTORS) == 23
+
+
+def test_company_tools_present():
+    """The 5 company tools (issue #13) are all defined with executors."""
+    names = {d["name"] for d in CRM_TOOL_DEFS}
+    company_tools = {
+        "crm_search_companies", "crm_get_company", "crm_list_companies",
+        "crm_create_company", "crm_update_company",
+    }
+    assert company_tools <= names
+    for name in company_tools:
+        assert name in TOOL_EXECUTORS and callable(TOOL_EXECUTORS[name])
+
+
+def test_contact_and_deal_tools_accept_company_id():
+    """company_id is exposed on the create/update contact + deal tool schemas."""
+    by_name = {d["name"]: d for d in CRM_TOOL_DEFS}
+    for name in ("crm_create_contact", "crm_update_contact",
+                 "crm_create_deal", "crm_update_deal"):
+        props = by_name[name]["input_schema"]["properties"]
+        assert "company_id" in props, name
+        assert props["company_id"]["type"] == "integer"
 
 
 def test_def_names_unique_prefixed_and_schema_shaped():
