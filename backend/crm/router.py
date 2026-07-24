@@ -259,7 +259,10 @@ async def update_deal(deal_id: int, body: DealUpdate, user=Depends(get_current_u
     }
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
-    result = crm.update_deal(deal_id, **updates)
+    try:
+        result = crm.update_deal(deal_id, **updates)
+    except psycopg2.errors.ForeignKeyViolation:
+        raise HTTPException(status_code=400, detail="Referenced contact does not exist") from None
     if not result:
         raise HTTPException(status_code=404, detail="Deal not found or invalid stage")
     return result
@@ -302,7 +305,10 @@ async def update_task(task_id: int, body: TaskUpdate, user=Depends(get_current_u
     }
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
-    result = crm.update_task(task_id, **updates)
+    try:
+        result = crm.update_task(task_id, **updates)
+    except psycopg2.errors.ForeignKeyViolation:
+        raise HTTPException(status_code=400, detail="Referenced contact or deal does not exist") from None
     if not result:
         raise HTTPException(status_code=404, detail="Task not found")
     return result
