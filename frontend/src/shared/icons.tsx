@@ -62,3 +62,4 @@ export function IconMoon(p: IconProps) { return <Ico d="M21 12.8A9 9 0 1 1 11.2 
 export function IconSun(p: IconProps) { return <Ico {...p}><circle cx="12" cy="12" r="4" /><path d="M12 3v2M12 19v2M5 12H3M21 12h-2M6 6l1.5 1.5M16.5 16.5 18 18M6 18l1.5-1.5M16.5 7.5 18 6" /></Ico>; }
 export function IconCircle(p: IconProps) { return <Ico {...p}><circle cx="12" cy="12" r="9" /></Ico>; }
 export function IconTarget(p: IconProps) { return <Ico {...p}><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="5" /><circle cx="12" cy="12" r="1" fill="currentColor" /></Ico>; }
+export function IconBuilding(p: IconProps) { return <Ico {...p}><rect x="4" y="3" width="16" height="18" rx="1" /><path d="M9 21v-4h6v4M8 7h2M14 7h2M8 11h2M14 11h2M8 15h2M14 15h2" /></Ico>; }

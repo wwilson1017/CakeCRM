@@ -12,6 +12,13 @@ Contacts:
   PUT    /api/crm/contacts/:id          — update
   DELETE /api/crm/contacts/:id          — delete
 
+Companies:
+  GET    /api/crm/companies             — paginated list / search (?q=)
+  GET    /api/crm/companies/:id         — full detail (rolled-up contacts/deals/activity)
+  POST   /api/crm/companies             — create
+  PUT    /api/crm/companies/:id         — update
+  DELETE /api/crm/companies/:id         — delete (contacts/deals unlink, not deleted)
+
 Deals:
   GET    /api/crm/deals                 — pipeline list / filtered
   GET    /api/crm/deals/:id             — detail
@@ -31,11 +38,19 @@ Activity:
   PUT    /api/crm/activity/:id          — edit
   DELETE /api/crm/activity/:id          — delete
 
+Chatter (notes threads on a deal or contact):
+  GET    /api/crm/chatter/:type/:id     — notes for an entity (?include_archived)
+  POST   /api/crm/chatter/:type/:id/note        — append a note
+  PATCH  /api/crm/chatter/note/:id      — edit a note
+  POST   /api/crm/chatter/note/:id/archive      — soft-archive a note
+  POST   /api/crm/chatter/note/:id/unarchive    — restore an archived note
+
 Other:
   GET    /api/crm/dashboard             — summary stats
   GET    /api/crm/demo-status           — first-run onboarding / sample-data state
   POST   /api/crm/load-sample-data      — seed fictional demo data (first run)
   POST   /api/crm/dismiss-onboarding    — dismiss the first-run prompt
+  POST   /api/crm/dismiss-ai-prompt     — dismiss the 'add an AI key' nudge
   POST   /api/crm/demo-clear            — clear example data (guarded)
   POST   /api/crm/clear-all             — wipe ALL CRM data (confirmation phrase)
   POST   /api/crm/import                — CSV import (contacts, keyless)
@@ -53,7 +68,7 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, field_validator
 
 from core.auth import get_current_user
-from crm import service as crm
+from crm import chatter_service, service as crm
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -74,6 +89,7 @@ class ContactCreate(BaseModel):
     status: str = "active"
     tags: str = ""
     notes: str = ""
+    company_id: int | None = None
 
 
 class ContactUpdate(BaseModel):
@@ -86,6 +102,7 @@ class ContactUpdate(BaseModel):
     status: str | None = None
     tags: str | None = None
     notes: str | None = None
+    company_id: int | None = None
 
 
 class DealCreate(BaseModel):
@@ -97,6 +114,7 @@ class DealCreate(BaseModel):
     expected_close_date: str = ""
     probability: int = 0
     currency: str = "USD"
+    company_id: int | None = None
 
 
 class DealUpdate(BaseModel):
@@ -108,6 +126,29 @@ class DealUpdate(BaseModel):
     expected_close_date: str | None = None
     probability: int | None = None
     currency: str | None = None
+    company_id: int | None = None
+
+
+class CompanyCreate(BaseModel):
+    name: str
+    domain: str = ""
+    industry: str = ""
+    phone: str = ""
+    address: str = ""
+    notes: str = ""
+    source: str = ""
+    status: str = "active"
+
+
+class CompanyUpdate(BaseModel):
+    name: str | None = None
+    domain: str | None = None
+    industry: str | None = None
+    phone: str | None = None
+    address: str | None = None
+    notes: str | None = None
+    source: str | None = None
+    status: str | None = None
 
 
 class TaskCreate(BaseModel):
@@ -139,6 +180,14 @@ class ActivityCreate(BaseModel):
 class ActivityUpdate(BaseModel):
     activity: str | None = None
     note: str | None = None
+
+
+class ChatterNoteBody(BaseModel):
+    message: str
+
+
+class ChatterNoteUpdate(BaseModel):
+    message: str
 
 
 class ClearAllBody(BaseModel):
@@ -196,15 +245,27 @@ async def get_contact(contact_id: int, user=Depends(get_current_user)):
 async def create_contact(body: ContactCreate, user=Depends(get_current_user)):
     if not body.name.strip():
         raise HTTPException(status_code=400, detail="Name is required")
-    return crm.create_contact(**body.model_dump())
+    try:
+        return crm.create_contact(**body.model_dump())
+    except psycopg2.errors.ForeignKeyViolation:
+        raise HTTPException(status_code=400, detail="Referenced company does not exist") from None
 
 
 @router.put("/contacts/{contact_id}")
 async def update_contact(contact_id: int, body: ContactUpdate, user=Depends(get_current_user)):
-    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    # exclude_unset so only fields the client actually sent are updated; allow an
+    # explicit null ONLY for the nullable FK (company_id) so a contact can be
+    # unlinked from its company. Other columns are NOT NULL — dropping their nulls.
+    updates = {
+        k: v for k, v in body.model_dump(exclude_unset=True).items()
+        if v is not None or k == "company_id"
+    }
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
-    result = crm.update_contact(contact_id, **updates)
+    try:
+        result = crm.update_contact(contact_id, **updates)
+    except psycopg2.errors.ForeignKeyViolation:
+        raise HTTPException(status_code=400, detail="Referenced company does not exist") from None
     if not result:
         raise HTTPException(status_code=404, detail="Contact not found")
     return result
@@ -245,24 +306,24 @@ async def create_deal(body: DealCreate, user=Depends(get_current_user)):
     try:
         return crm.create_deal(**body.model_dump())
     except psycopg2.errors.ForeignKeyViolation:
-        raise HTTPException(status_code=400, detail="Referenced contact does not exist") from None
+        raise HTTPException(status_code=400, detail="Referenced contact or company does not exist") from None
 
 
 @router.put("/deals/{deal_id}")
 async def update_deal(deal_id: int, body: DealUpdate, user=Depends(get_current_user)):
     # exclude_unset so only fields the client actually sent are updated; allow an
-    # explicit null ONLY for the nullable FK (contact_id) so a deal can be
-    # unlinked from its contact. Other columns are NOT NULL — dropping their nulls.
+    # explicit null ONLY for the nullable FKs (contact_id, company_id) so a deal
+    # can be unlinked. Other columns are NOT NULL — dropping their nulls.
     updates = {
         k: v for k, v in body.model_dump(exclude_unset=True).items()
-        if v is not None or k == "contact_id"
+        if v is not None or k in ("contact_id", "company_id")
     }
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
     try:
         result = crm.update_deal(deal_id, **updates)
     except psycopg2.errors.ForeignKeyViolation:
-        raise HTTPException(status_code=400, detail="Referenced contact does not exist") from None
+        raise HTTPException(status_code=400, detail="Referenced contact or company does not exist") from None
     if not result:
         raise HTTPException(status_code=404, detail="Deal not found or invalid stage")
     return result
@@ -390,6 +451,12 @@ async def load_sample_data(user=Depends(get_current_user)):
 async def dismiss_onboarding(user=Depends(get_current_user)):
     """User chose to start fresh — stop showing the first-run prompt."""
     return crm.dismiss_onboarding()
+
+
+@router.post("/dismiss-ai-prompt")
+async def dismiss_ai_prompt(user=Depends(get_current_user)):
+    """Dismiss the 'add an AI key to hire your assistant' nudge (durable)."""
+    return crm.dismiss_ai_prompt()
 
 
 @router.post("/demo-clear")
@@ -557,3 +624,123 @@ async def smart_import_confirm(body: SmartImportConfirm, user=Depends(get_curren
     # Off the event loop — see /import.
     imported, skipped, errors = await run_in_threadpool(_confirm_rows)
     return {"imported": imported, "skipped": skipped, "errors": errors}
+
+
+# ── Chatter / notes ───────────────────────────────────────────────────────────
+# Threaded free-text notes on a deal or contact, rendered alongside the activity
+# timeline. Validation (entity type/existence, non-empty message) lives in
+# chatter_service and surfaces here as ValueError → 400.
+
+@router.get("/chatter/{entity_type}/{entity_id}")
+async def get_chatter(
+    entity_type: str,
+    entity_id: int,
+    # Tighter cap (200) than the contacts/deals lists (1000): a single entity's
+    # notes thread is a bounded, human-authored feed, not a bulk dataset.
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    include_archived: bool = False,
+    user=Depends(get_current_user),
+):
+    try:
+        notes = chatter_service.get_chatter(
+            entity_type, entity_id, limit=limit, offset=offset, include_archived=include_archived,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    return {"notes": notes, "count": len(notes)}
+
+
+@router.post("/chatter/{entity_type}/{entity_id}/note")
+async def add_chatter_note(
+    entity_type: str, entity_id: int, body: ChatterNoteBody, user=Depends(get_current_user),
+):
+    try:
+        return chatter_service.add_note(entity_type, entity_id, body.message)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+
+
+@router.patch("/chatter/note/{note_id}")
+async def update_chatter_note(note_id: int, body: ChatterNoteUpdate, user=Depends(get_current_user)):
+    try:
+        result = chatter_service.update_note(note_id, body.message)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    if not result:
+        raise HTTPException(status_code=404, detail="Note not found")
+    return result
+
+
+@router.post("/chatter/note/{note_id}/archive")
+async def archive_chatter_note(note_id: int, user=Depends(get_current_user)):
+    if not chatter_service.archive_note(note_id):
+        raise HTTPException(status_code=404, detail="Note not found")
+    return {"ok": True}
+
+
+@router.post("/chatter/note/{note_id}/unarchive")
+async def unarchive_chatter_note(note_id: int, user=Depends(get_current_user)):
+    if not chatter_service.unarchive_note(note_id):
+        raise HTTPException(status_code=404, detail="Note not found")
+    return {"ok": True}
+
+
+# ── Companies ─────────────────────────────────────────────────────────────────
+# Appended as a self-contained block so a keep-both merge with the frontend-shell
+# work stays trivial. Each endpoint declares its own get_current_user dependency
+# (the blanket auth test iterates every route and asserts it).
+
+@router.get("/companies")
+async def list_companies(
+    q: str = "", status: str = "", sort: str = "name",
+    limit: int = Query(50, ge=1, le=1000), offset: int = Query(0, ge=0),
+    user=Depends(get_current_user),
+):
+    if q:
+        companies = crm.search_companies(q, status=status or None, limit=limit, offset=offset)
+        total = crm.count_search_companies(q, status=status or None)
+        return {"companies": companies, "total": total}
+    return crm.list_companies(offset=offset, limit=limit, status=status or None, sort=sort)
+
+
+@router.get("/companies/{company_id}")
+async def get_company(company_id: int, user=Depends(get_current_user)):
+    result = crm.get_company_detail(company_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return result
+
+
+@router.post("/companies")
+async def create_company(body: CompanyCreate, user=Depends(get_current_user)):
+    if not body.name.strip():
+        raise HTTPException(status_code=400, detail="Name is required")
+    try:
+        return crm.create_company(**body.model_dump())
+    except psycopg2.errors.UniqueViolation:
+        raise HTTPException(status_code=400, detail="A company with that name already exists") from None
+
+
+@router.put("/companies/{company_id}")
+async def update_company(company_id: int, body: CompanyUpdate, user=Depends(get_current_user)):
+    # All company columns are NOT NULL, so drop nulls (clear a field by sending "").
+    updates = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
+    if "name" in updates and not updates["name"].strip():
+        raise HTTPException(status_code=400, detail="Name is required")
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    try:
+        result = crm.update_company(company_id, **updates)
+    except psycopg2.errors.UniqueViolation:
+        raise HTTPException(status_code=400, detail="A company with that name already exists") from None
+    if not result:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return result
+
+
+@router.delete("/companies/{company_id}")
+async def delete_company(company_id: int, user=Depends(get_current_user)):
+    if not crm.delete_company(company_id):
+        raise HTTPException(status_code=404, detail="Company not found")
+    return {"deleted": True, "company_id": company_id}

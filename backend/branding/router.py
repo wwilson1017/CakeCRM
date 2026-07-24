@@ -21,7 +21,10 @@ from . import storage
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-ALLOWED_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml"}
+# SVG excluded: logos are stored/served as image/png and browsers don't content-sniff
+# SVG (so it would never render), and serving real SVG from the unauthenticated logo
+# endpoint would be a stored-XSS surface. Raster formats survive the png content-type.
+ALLOWED_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 MAX_LOGO_BYTES = 2 * 1024 * 1024  # 2 MB
 
 

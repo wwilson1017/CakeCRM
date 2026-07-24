@@ -60,16 +60,27 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   (`pg_fetchall`/`pg_fetchone`/`pg_execute`/`get_connection`/`row_to_dict`).
 - **The CRM is first-class core** (`backend/crm/`, mounted at `/api/crm`; frontend
   `frontend/src/crm/` + `frontend/src/shared/`) — always-on, no enable flag. Ported
-  from chatty's `crm_lite` and translated to Postgres (contacts/deals/tasks/
-  activity_log; query idioms follow the matching `cake_os/backend/apps/crm` services
-  so later feature ports diff cleanly). The ~17 `crm_*` agent tools + executors are
+  from chatty's `crm_lite` and translated to Postgres (companies/contacts/deals/tasks/
+  activity_log, plus `crm_chatter` — editable/archivable notes threads on deals and
+  contacts, landed #15; query idioms follow the matching `cake_os/backend/apps/crm`
+  services so later feature ports diff cleanly). Companies are a first-class entity (#13):
+  contacts/deals carry a nullable `company_id` FK and a company detail page rolls up
+  the linked contacts/deals/activity. The ~24 `crm_*` agent tools + executors are
   collected UNCONDITIONALLY via `crm.tools.get_crm_tools()` — each def carries a
   `"writes"` flag (the single source of truth for the assistant's confirmation gate),
   consumed by `assistant.registry.ToolRegistry` (landed #4). Contact
   import is keyless for CSV/vCard; the AI smart-import path (`get_ai_provider()`)
   degrades to a warning when no provider is configured and its UI affordance keys off
   `ai_ready`. First-run offers to load fictional sample data (prompt tracked on the
-  `crm_meta` singleton, not a per-integration flag).
+  `crm_meta` singleton, not a per-integration flag). The **CRM-first shell** (#9) leads
+  nav with Dashboard/Pipeline/Contacts/Tasks, surfaces the assistant as a persistent
+  launcher (never the home page), and shows a **dismissible** "add an AI key" nudge —
+  never a gate, gated on `!credentials_present`, dismissal tracked on
+  `crm_meta.ai_key_prompt_dismissed`. Branding (company name / accent / logo) is edited
+  at `/crm/settings`, consuming the existing `/api/branding`; the accent is applied
+  app-wide by setting the `--brand-color` CSS variable (`index.css` routes the whole
+  theme's accent through it), so the CRM stays fully usable — and re-themable — with
+  zero AI keys.
 - **API keys are entered in-app, encrypted at rest** (Fernet; key from env →
   OS keychain → file fallback) — never as env vars.
 - **Backend tests** live in `backend/tests/` (config in `backend/pytest.ini`,
@@ -148,6 +159,8 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Telegram | `chatty/backend/integrations/telegram/` |
 | Gmail (reduced to read + draft) | `chatty/backend/integrations/google/` |
 | Kanban drag-and-drop | `cake_os/frontend/src/shared/dnd/` |
-| Companies, chatter, scoring, custom fields, analytics, provenance, touch counts | `cake_os/backend/apps/crm/*_service.py` |
+| Companies (first-class entity: `companies` table, `company_id` FKs, rollup detail page, text→FK backfill migration) — **landed #13** | `cake_os/backend/apps/crm/company_service.py` |
+| Chatter/notes (`crm_chatter`) — **landed #15** as `backend/crm/chatter_service.py` + `frontend/src/crm/components/NotesThread.tsx` | `cake_os/backend/apps/crm/chatter_service.py` |
+| Scoring, custom fields, analytics, provenance, touch counts | `cake_os/backend/apps/crm/*_service.py` |
 | Assistant tool set (~43 tools) + sales behaviors | `cake_os/backend/apps/crm/tools/` + Casey's agent config |
 | Pipeline facet filtering | `cake_os/docs/CRM_FILTER_DESIGN.md` |

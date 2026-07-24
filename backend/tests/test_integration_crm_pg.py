@@ -62,9 +62,10 @@ def pg_db():
 def _clean_crm(pg_db):
     """Reset all CRM state between tests so scenarios stay isolated."""
     from core.postgres import pg_execute
-    pg_execute("TRUNCATE activity_log, tasks, deals, contacts RESTART IDENTITY")
+    pg_execute("TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter RESTART IDENTITY")
     pg_execute(
-        "UPDATE crm_meta SET sample_data_loaded = FALSE, onboarding_dismissed = FALSE WHERE id = 1"
+        "UPDATE crm_meta SET sample_data_loaded = FALSE, onboarding_dismissed = FALSE, "
+        "ai_key_prompt_dismissed = FALSE WHERE id = 1"
     )
     yield
 
@@ -88,9 +89,11 @@ def test_migration_created_tables_and_singleton(pg_db):
             "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
         )
     }
-    assert {"contacts", "deals", "tasks", "activity_log", "crm_meta"} <= names
+    assert {"companies", "contacts", "deals", "tasks", "activity_log", "crm_meta", "crm_chatter"} <= names
     meta = pg_fetchone("SELECT * FROM crm_meta WHERE id = 1")
     assert meta and meta["sample_data_loaded"] is False
+    # issue #9 migration: durable AI-key-nudge dismissal, default FALSE
+    assert meta["ai_key_prompt_dismissed"] is False
 
 
 # ── Fresh empty install (the acceptance clause, at the data layer) ────────────
@@ -156,17 +159,28 @@ def test_seed_idempotent_and_sequences_advance(pg_db):
 
     out = service.load_sample_data()
     assert out == {"ok": True, "seeded": True}
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM companies")["c"] == 6
     assert pg_fetchone("SELECT COUNT(*) AS c FROM contacts")["c"] == 8
     assert pg_fetchone("SELECT COUNT(*) AS c FROM deals")["c"] == 7
     assert pg_fetchone("SELECT COUNT(*) AS c FROM tasks")["c"] == 8
     assert pg_fetchone("SELECT COUNT(*) AS c FROM activity_log")["c"] == 11
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM crm_chatter")["c"] == 4
     assert service.get_crm_meta()["sample_data_loaded"] is True
+
+    # seeded contacts/deals are linked to their companies (rollup demos on day one)
+    assert pg_fetchone(
+        "SELECT company_id FROM contacts WHERE name = %s", ("Maria Santos",)
+    )["company_id"] == 1
+    assert pg_fetchone(
+        "SELECT company_id FROM deals WHERE title LIKE %s", ("Weekly bread%",)
+    )["company_id"] == 1
 
     # second call is a clean no-op (CRM no longer empty)
     assert service.load_sample_data() == {"ok": True, "seeded": False}
 
-    # the next real insert gets id 9 — sequence advanced past the fixed demo ids
+    # the next real inserts get fresh ids — sequences advanced past the fixed demo ids
     assert service.create_contact("New Person")["id"] == 9
+    assert service.create_company("New Company")["id"] == 7
 
 
 # ── First-run demo state machine via the HTTP surface ─────────────────────────
@@ -175,12 +189,14 @@ def test_demo_state_machine_over_http(pg_db):
     client = _client()
 
     status = client.get("/api/crm/demo-status").json()
-    assert status == {"empty": True, "sample_data_loaded": False, "show_onboarding": True}
+    assert status == {"empty": True, "sample_data_loaded": False, "show_onboarding": True,
+                      "ai_key_prompt_dismissed": False}
 
     seeded = client.post("/api/crm/load-sample-data").json()
     assert seeded["seeded"] is True
     after = client.get("/api/crm/demo-status").json()
-    assert after == {"empty": False, "sample_data_loaded": True, "show_onboarding": False}
+    assert after == {"empty": False, "sample_data_loaded": True, "show_onboarding": False,
+                     "ai_key_prompt_dismissed": False}
 
     # guarded clear wipes example data and restarts identities
     cleared = client.post("/api/crm/demo-clear").json()
@@ -205,6 +221,22 @@ def test_demo_clear_guarded_when_no_sample(pg_db):
     assert service.get_dashboard_stats()["total_contacts"] == 1
 
 
+def test_dismiss_ai_prompt_persists(pg_db):
+    from crm import service
+    client = _client()
+    before = service.get_crm_meta()
+    assert client.get("/api/crm/demo-status").json()["ai_key_prompt_dismissed"] is False
+    assert client.post("/api/crm/dismiss-ai-prompt").json() == {"ok": True}
+    # durable: reflected in a fresh read
+    assert client.get("/api/crm/demo-status").json()["ai_key_prompt_dismissed"] is True
+    after = service.get_crm_meta()
+    assert after["ai_key_prompt_dismissed"] is True
+    # independent of the onboarding flags — dismiss-ai-prompt must not touch them
+    assert after["onboarding_dismissed"] == before["onboarding_dismissed"]
+    assert after["sample_data_loaded"] == before["sample_data_loaded"]
+    assert client.get("/api/crm/demo-status").json()["show_onboarding"] is True
+
+
 def test_search_pagination_and_contact_unlink(pg_db):
     from crm import service
     for i in range(3):
@@ -222,3 +254,193 @@ def test_search_pagination_and_contact_unlink(pg_db):
     assert service.get_deal(d["id"])["contact_id"] == c["id"]
     service.update_deal(d["id"], contact_id=None)
     assert service.get_deal(d["id"])["contact_id"] is None
+
+
+# ── Companies: CRUD, rollup, uniqueness, delete-unlink (issue #13) ────────────
+
+def test_company_crud_rollup_and_unlink(pg_db):
+    from crm import service
+
+    co = service.create_company("Acme", industry="Tech", domain="acme.com")
+    assert co["id"] == 1 and co["status"] == "active"
+
+    c = service.create_contact("Ada", company_id=co["id"])
+    d = service.create_deal("Big deal", contact_id=c["id"], company_id=co["id"],
+                            stage="proposal", value=1000)
+    won = service.create_deal("Closed", company_id=co["id"], stage="won", value=9999)
+    service.log_activity("call", note="hi", contact_id=c["id"])
+
+    detail = service.get_company_detail(co["id"])
+    assert [x["id"] for x in detail["contacts"]] == [c["id"]]
+    assert {x["id"] for x in detail["deals"]} == {d["id"], won["id"]}
+    assert detail["open_deal_value"] == 1000  # won excluded
+    # activity rolled up through the company's contact (activity has no company_id)
+    assert any(a["activity"] == "call" for a in detail["activity"])
+
+    # detail joins expose the linked company name
+    assert service.get_contact_detail(c["id"])["company_name"] == "Acme"
+    assert service.get_deal(d["id"])["company_name"] == "Acme"
+
+    # case/whitespace-insensitive uniqueness is DB-enforced
+    with pytest.raises(psycopg2.errors.UniqueViolation):
+        service.create_company("  acme ")
+
+    # delete company: contacts/deals are kept but unlinked (ON DELETE SET NULL)
+    assert service.delete_company(co["id"]) is True
+    assert service.get_contact(c["id"]) is not None
+    assert service.get_contact_detail(c["id"])["company_id"] is None
+    assert service.get_deal(d["id"])["company_id"] is None
+
+
+def test_companies_backfill_migration(pg_db):
+    """One-shot backfill on its OWN throwaway DB + raw connection (guaranteed
+    teardown; never touches the module-global pool that pg_db owns): distinct
+    case/whitespace-insensitive company names become companies (lowest-id
+    spelling wins), contacts link, deals inherit, empties stay NULL."""
+    from pathlib import Path
+
+    migrations = Path(__file__).resolve().parent.parent / "migrations"
+    crm_core = (migrations / "20260723221920_crm_core.sql").read_text()
+    companies_sql = (migrations / "20260724062314_companies.sql").read_text()
+
+    dbname = f"cakecrm_it_backfill_{os.getpid()}"
+    admin = psycopg2.connect(ADMIN_DSN)
+    admin.autocommit = True
+    with admin.cursor() as cur:
+        cur.execute(f'DROP DATABASE IF EXISTS "{dbname}"')
+        cur.execute(f'CREATE DATABASE "{dbname}"')
+    admin.close()
+
+    dsn = ADMIN_DSN.rsplit("/", 1)[0] + f"/{dbname}"
+    conn = None
+    try:
+        conn = psycopg2.connect(dsn)
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute(crm_core)
+        # legacy company text: case + tab/newline variants + empty/whitespace-only
+        cur.executemany(
+            "INSERT INTO contacts (name, company) VALUES (%s, %s)",
+            [("A", "Acme"), ("B", "\tAcme\n"), ("C", "ACME"),
+             ("D", "Beta Corp"), ("E", ""), ("F", "   ")],
+        )
+        # a deal on a linked contact (A) and one on the empty-company contact (E)
+        cur.execute(
+            "INSERT INTO deals (contact_id, title) VALUES "
+            "((SELECT id FROM contacts WHERE name='A'), 'DealA'), "
+            "((SELECT id FROM contacts WHERE name='E'), 'DealE')"
+        )
+        cur.execute(companies_sql)
+
+        # exactly 2 companies; Acme keeps the lowest-id (contact A) spelling
+        cur.execute("SELECT name FROM companies ORDER BY id")
+        assert [r[0] for r in cur.fetchall()] == ["Acme", "Beta Corp"]
+
+        # A, B, C collapse to the Acme id; D to Beta; E, F stay NULL
+        cur.execute("SELECT name, company_id FROM contacts ORDER BY name")
+        links = dict(cur.fetchall())
+        assert links["A"] == links["B"] == links["C"] and links["A"] is not None
+        assert links["D"] is not None and links["D"] != links["A"]
+        assert links["E"] is None and links["F"] is None
+
+        # DealA inherited A's company; DealE (empty-company contact) stays NULL
+        cur.execute("SELECT title, company_id FROM deals ORDER BY title")
+        deal_links = dict(cur.fetchall())
+        assert deal_links["DealA"] == links["A"]
+        assert deal_links["DealE"] is None
+    finally:
+        if conn is not None:
+            conn.close()
+        admin = psycopg2.connect(ADMIN_DSN)
+        admin.autocommit = True
+        with admin.cursor() as cur:
+            cur.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE datname = %s AND pid <> pg_backend_pid()",
+                (dbname,),
+            )
+            cur.execute(f'DROP DATABASE IF EXISTS "{dbname}"')
+        admin.close()
+
+
+# ── Chatter / notes (issue #15) ───────────────────────────────────────────────
+
+def test_chatter_crud_archive_restore_roundtrip(pg_db):
+    from crm import chatter_service, service
+
+    d = service.create_deal("Chatter deal", value=1000)
+    n1 = chatter_service.add_note("deal", d["id"], "  first note  ")
+    n2 = chatter_service.add_note("deal", d["id"], "second note")
+    assert n1["message"] == "first note" and n1["updated_at"] is None and n1["archived"] == 0
+
+    # newest first, deterministic
+    notes = chatter_service.get_chatter("deal", d["id"])
+    assert [n["id"] for n in notes] == [n2["id"], n1["id"]]
+
+    # edit stamps updated_at
+    edited = chatter_service.update_note(n1["id"], "first note (edited)")
+    assert edited["message"] == "first note (edited)" and edited["updated_at"] is not None
+
+    # archive hides from the default list; include_archived shows it; restore brings it back
+    assert chatter_service.archive_note(n1["id"]) is True
+    assert [n["id"] for n in chatter_service.get_chatter("deal", d["id"])] == [n2["id"]]
+    assert len(chatter_service.get_chatter("deal", d["id"], include_archived=True)) == 2
+    assert chatter_service.unarchive_note(n1["id"]) is True
+    assert len(chatter_service.get_chatter("deal", d["id"])) == 2
+
+    # missing note ids are falsy, not errors
+    assert chatter_service.update_note(999999, "x") is None
+    assert chatter_service.archive_note(999999) is None
+
+
+def test_chatter_rejects_invalid_and_nonexistent_targets(pg_db):
+    from crm import chatter_service, service
+
+    with pytest.raises(ValueError):
+        chatter_service.add_note("company", 1, "hi")       # bad type
+    with pytest.raises(ValueError):
+        chatter_service.add_note("deal", 999999, "hi")     # target does not exist
+    c = service.create_contact("Has notes")
+    with pytest.raises(ValueError):
+        chatter_service.add_note("contact", c["id"], "   ")  # blank message
+
+
+def test_chatter_dropped_on_contact_delete_and_clear(pg_db):
+    from core.postgres import pg_fetchone
+    from crm import chatter_service, service
+
+    c = service.create_contact("Doomed")
+    chatter_service.add_note("contact", c["id"], "note that must not outlive the contact")
+    assert pg_fetchone("SELECT COUNT(*) AS n FROM crm_chatter")["n"] == 1
+    service.delete_contact(c["id"])
+    assert pg_fetchone("SELECT COUNT(*) AS n FROM crm_chatter")["n"] == 0
+
+    # ID reuse after clear_all: a new deal reusing id 1 inherits no old notes
+    d = service.create_deal("First deal")
+    chatter_service.add_note("deal", d["id"], "old deal-1 note")
+    service.clear_all()
+    d2 = service.create_deal("New deal reusing id 1")
+    assert d2["id"] == d["id"]  # SERIAL restarted
+    assert chatter_service.get_chatter("deal", d2["id"]) == []
+
+
+def test_chatter_http_roundtrip(pg_db):
+    from crm import service
+
+    d = service.create_deal("HTTP deal")
+    client = _client()
+    r = client.post(f"/api/crm/chatter/deal/{d['id']}/note", json={"message": "via http"})
+    assert r.status_code == 200
+    note_id = r.json()["id"]
+
+    listed = client.get(f"/api/crm/chatter/deal/{d['id']}").json()
+    assert listed["count"] == 1 and listed["notes"][0]["message"] == "via http"
+
+    assert client.patch(f"/api/crm/chatter/note/{note_id}", json={"message": "edited"}).status_code == 200
+    assert client.post(f"/api/crm/chatter/note/{note_id}/archive").json() == {"ok": True}
+    assert client.get(f"/api/crm/chatter/deal/{d['id']}").json()["count"] == 0
+    assert client.get(f"/api/crm/chatter/deal/{d['id']}?include_archived=true").json()["count"] == 1
+    # blank + missing + bad-type contract at the HTTP layer
+    assert client.post(f"/api/crm/chatter/deal/{d['id']}/note", json={"message": " "}).status_code == 400
+    assert client.patch("/api/crm/chatter/note/999999", json={"message": "x"}).status_code == 404
+    assert client.get("/api/crm/chatter/company/1").status_code == 400

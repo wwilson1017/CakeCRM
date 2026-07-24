@@ -8,6 +8,7 @@ one). Auth is a dependency-override, mirroring tests/test_router.py.
 
 import io
 
+import psycopg2
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -215,14 +216,20 @@ def test_task_update_can_clear_contact(client, monkeypatch):
 
 def test_demo_status_shape(client, monkeypatch):
     monkeypatch.setattr(service, "get_demo_status",
-                        lambda: {"empty": True, "sample_data_loaded": False, "show_onboarding": True})
+                        lambda: {"empty": True, "sample_data_loaded": False,
+                                 "show_onboarding": True, "ai_key_prompt_dismissed": False})
     body = client.get("/api/crm/demo-status").json()
-    assert set(body) == {"empty", "sample_data_loaded", "show_onboarding"}
+    assert set(body) == {"empty", "sample_data_loaded", "show_onboarding", "ai_key_prompt_dismissed"}
 
 
 def test_load_sample_data_passthrough(client, monkeypatch):
     monkeypatch.setattr(service, "load_sample_data", lambda: {"ok": True, "seeded": True})
     assert client.post("/api/crm/load-sample-data").json() == {"ok": True, "seeded": True}
+
+
+def test_dismiss_ai_prompt_passthrough(client, monkeypatch):
+    monkeypatch.setattr(service, "dismiss_ai_prompt", lambda: {"ok": True})
+    assert client.post("/api/crm/dismiss-ai-prompt").json() == {"ok": True}
 
 
 def test_clear_all_requires_confirmation_phrase(client, monkeypatch):
@@ -240,3 +247,124 @@ def test_every_route_requires_auth():
             continue
         dep_names = [d.call.__name__ for d in dependant.dependencies]
         assert "get_current_user" in dep_names, f"{route.path} is missing the auth dependency"
+
+
+# ── Companies (issue #13) ─────────────────────────────────────────────────────
+
+def test_company_missing_404s(client, monkeypatch):
+    monkeypatch.setattr(service, "get_company_detail", lambda cid: None)
+    monkeypatch.setattr(service, "update_company", lambda cid, **kw: None)
+    monkeypatch.setattr(service, "delete_company", lambda cid: False)
+    assert client.get("/api/crm/companies/999").status_code == 404
+    assert client.put("/api/crm/companies/999", json={"name": "X"}).status_code == 404
+    assert client.delete("/api/crm/companies/999").status_code == 404
+
+
+def test_company_create_blank_name_400(client):
+    assert client.post("/api/crm/companies", json={"name": "  "}).status_code == 400
+
+
+def test_company_update_empty_400(client):
+    assert client.put("/api/crm/companies/1", json={}).status_code == 400
+
+
+def test_company_update_blank_name_400(client):
+    # A whitespace-only name is truthy but empty — must 400, not silently blank the record.
+    assert client.put("/api/crm/companies/1", json={"name": "   "}).status_code == 400
+
+
+def test_companies_query_routes_to_search(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(service, "search_companies",
+                        lambda q, **kw: calls.append(("search", q, kw.get("limit"), kw.get("offset"))) or [{"id": 1}])
+    monkeypatch.setattr(service, "count_search_companies", lambda q, **kw: 1)
+    monkeypatch.setattr(service, "list_companies",
+                        lambda **kw: calls.append(("list", None, None, None)) or {"companies": []})
+    client.get("/api/crm/companies?q=acme&limit=5&offset=10")
+    client.get("/api/crm/companies")
+    # search forwards pagination (no silent 20-row cap)
+    assert ("search", "acme", 5, 10) in calls
+    assert ("list", None, None, None) in calls
+
+
+def test_company_create_duplicate_name_400(client, monkeypatch):
+    def raise_unique(**kw):
+        raise psycopg2.errors.UniqueViolation()
+    monkeypatch.setattr(service, "create_company", raise_unique)
+    resp = client.post("/api/crm/companies", json={"name": "Acme"})
+    assert resp.status_code == 400
+    assert "already exists" in resp.json()["detail"]
+
+
+def test_company_update_duplicate_name_400(client, monkeypatch):
+    def raise_unique(cid, **kw):
+        raise psycopg2.errors.UniqueViolation()
+    monkeypatch.setattr(service, "update_company", raise_unique)
+    assert client.put("/api/crm/companies/1", json={"name": "Acme"}).status_code == 400
+
+
+def test_contact_create_invalid_company_400(client, monkeypatch):
+    def raise_fk(**kw):
+        raise psycopg2.errors.ForeignKeyViolation()
+    monkeypatch.setattr(service, "create_contact", raise_fk)
+    resp = client.post("/api/crm/contacts", json={"name": "Ana", "company_id": 999})
+    assert resp.status_code == 400
+    assert "company" in resp.json()["detail"].lower()
+
+
+def test_contact_update_invalid_company_400(client, monkeypatch):
+    def raise_fk(cid, **kw):
+        raise psycopg2.errors.ForeignKeyViolation()
+    monkeypatch.setattr(service, "update_contact", raise_fk)
+    assert client.put("/api/crm/contacts/1", json={"company_id": 999}).status_code == 400
+
+
+def test_deal_create_invalid_company_400(client, monkeypatch):
+    def raise_fk(**kw):
+        raise psycopg2.errors.ForeignKeyViolation()
+    monkeypatch.setattr(service, "create_deal", raise_fk)
+    resp = client.post("/api/crm/deals", json={"title": "D", "company_id": 999})
+    assert resp.status_code == 400
+
+
+def test_deal_update_invalid_company_400(client, monkeypatch):
+    def raise_fk(did, **kw):
+        raise psycopg2.errors.ForeignKeyViolation()
+    monkeypatch.setattr(service, "update_deal", raise_fk)
+    assert client.put("/api/crm/deals/1", json={"company_id": 999}).status_code == 400
+
+
+def test_contact_update_unlink_company_explicit_null(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(service, "update_contact",
+                        lambda cid, **kw: seen.update(kw) or {"id": cid})
+    resp = client.put("/api/crm/contacts/1", json={"company_id": None})
+    assert resp.status_code == 200
+    # explicit null survives the exclude_unset filter → unlinks
+    assert seen == {"company_id": None}
+
+
+def test_deal_update_unlink_company_explicit_null(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(service, "update_deal",
+                        lambda did, **kw: seen.update(kw) or {"id": did})
+    resp = client.put("/api/crm/deals/1", json={"company_id": None})
+    assert resp.status_code == 200
+    assert seen == {"company_id": None}
+
+
+def test_contact_update_omitted_company_id_not_sent(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(service, "update_contact",
+                        lambda cid, **kw: seen.update(kw) or {"id": cid})
+    client.put("/api/crm/contacts/1", json={"name": "Ana"})
+    # omission != explicit null: company_id is absent when the client didn't send it
+    assert "company_id" not in seen and seen == {"name": "Ana"}
+
+
+def test_deal_update_omitted_company_id_not_sent(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(service, "update_deal",
+                        lambda did, **kw: seen.update(kw) or {"id": did})
+    client.put("/api/crm/deals/1", json={"title": "D"})
+    assert "company_id" not in seen and seen == {"title": "D"}

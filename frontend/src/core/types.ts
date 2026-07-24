@@ -6,6 +6,8 @@ export interface CrmContact {
   email: string;
   phone: string;
   company: string;
+  company_id: number | null;
+  company_name?: string; // detail joins only (LEFT JOIN companies)
   title: string;
   source: string;
   status: string;
@@ -23,6 +25,8 @@ export interface CrmDeal {
   id: number;
   contact_id: number | null;
   contact_name?: string;
+  company_id: number | null;
+  company_name?: string; // detail joins only (LEFT JOIN companies)
   title: string;
   stage: string;
   value: number;
@@ -33,6 +37,25 @@ export interface CrmDeal {
   created_at: string;
   updated_at: string;
   activity?: CrmActivity[];
+}
+
+export interface CrmCompany {
+  id: number;
+  name: string;
+  domain: string;
+  industry: string;
+  phone: string;
+  address: string;
+  notes: string;
+  source: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  // Detail view extras (rolled-up)
+  contacts?: CrmContact[];
+  deals?: CrmDeal[];
+  activity?: CrmActivity[];
+  open_deal_value?: number;
 }
 
 export interface CrmTask {
@@ -59,6 +82,16 @@ export interface CrmActivity {
   activity: string;
   note: string;
   created_at: string;
+}
+
+export interface CrmNote {
+  id: number;
+  entity_type: string;
+  entity_id: number;
+  message: string;
+  created_at: string;
+  updated_at: string | null;
+  archived: number;
 }
 
 export interface CrmDashboard {

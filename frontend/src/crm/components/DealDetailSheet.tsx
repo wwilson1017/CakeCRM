@@ -1,7 +1,11 @@
-import type { CrmDeal } from '../../core/types';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { api } from '../../core/api/client';
+import type { CrmDeal, CrmActivity } from '../../core/types';
 import { STAGE_COLORS } from '../constants';
-import { mono, INK, INK_MUTE, INK_DIM, LINE_STRONG, ACCENT_INK, GOLD, SAGE, FONT_DISPLAY } from '../../shared/styles';
+import { mono, INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, ACCENT_INK, GOLD, SAGE, FONT_DISPLAY } from '../../shared/styles';
 import { modalOverlay, modalContent, mobileDragHandle, btnDanger } from '../styles';
+import { ActivityTimeline } from './ActivityTimeline';
+import { NotesThread } from './NotesThread';
 
 interface DealDetailSheetProps {
   deal: CrmDeal;
@@ -12,6 +16,23 @@ interface DealDetailSheetProps {
 }
 
 export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange }: DealDetailSheetProps) {
+  // The pipeline passes a plain list-row deal (no activity). Fetch the detail so
+  // the sheet can show the activity timeline alongside the chatter thread.
+  const [activity, setActivity] = useState<CrmActivity[]>(deal.activity || []);
+  const reqRef = useRef(0);
+  const loadDetail = useCallback(async () => {
+    const reqId = ++reqRef.current;
+    try {
+      const detail = await api<CrmDeal>(`/api/crm/deals/${deal.id}`);
+      if (reqId !== reqRef.current) return;
+      setActivity(detail.activity || []);
+    } catch {
+      // Non-fatal: the sheet still shows deal fields + chatter; leave activity as-is.
+    }
+  }, [deal.id]);
+
+  useEffect(() => { queueMicrotask(loadDetail); }, [loadDetail]);
+
   return (
     <div
       onClick={onClose}
@@ -19,7 +40,7 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
     >
       <div
         onClick={e => e.stopPropagation()}
-        style={modalContent(isMobile)}
+        style={{ ...modalContent(isMobile), maxHeight: '85vh', overflowY: 'auto' }}
       >
         {isMobile && (
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 16 }}>
@@ -71,6 +92,18 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
               <span style={{ fontSize: 13, color: INK }}>{deal.expected_close_date}</span>
             </div>
           )}
+        </div>
+
+        {/* Activity timeline */}
+        <div style={{ borderTop: `1px solid ${LINE}`, paddingTop: 16, marginBottom: 20 }}>
+          <span style={{ ...mono(10, INK_DIM), display: 'block', marginBottom: 12 }}>Activity History</span>
+          <ActivityTimeline activities={activity} onUpdate={loadDetail} />
+        </div>
+
+        {/* Chatter — editable notes thread */}
+        <div style={{ borderTop: `1px solid ${LINE}`, paddingTop: 16, marginBottom: 20 }}>
+          <span style={{ ...mono(10, INK_DIM), display: 'block', marginBottom: 12 }}>Chatter</span>
+          <NotesThread key={`deal-${deal.id}`} entityType="deal" entityId={deal.id} />
         </div>
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>

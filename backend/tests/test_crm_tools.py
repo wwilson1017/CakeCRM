@@ -1,20 +1,47 @@
 """CRM agent-tools contract: unconditional, complete, well-formed.
 
-The issue requires the ~18 crm_* tools to be collected unconditionally (no
-enable gate). This pins that: 17 schema defs, 18 executors (incl. the
-crm_log_note back-compat alias), every def has an executor, and get_crm_tools()
-returns the full set with no gating.
+The issue requires the crm_* tools to be collected unconditionally (no enable
+gate). This pins that: 24 schema defs, 25 executors (incl. the crm_log_note
+back-compat alias), every def has an executor, and get_crm_tools() returns the
+full set with no gating.
 """
 
 import inspect
 
-from crm import tools
+import psycopg2
+
+from crm import service, tools
 from crm.tools import CRM_TOOL_DEFS, TOOL_EXECUTORS, get_crm_tools
 
 
-def test_seventeen_defs_eighteen_executors():
-    assert len(CRM_TOOL_DEFS) == 17
-    assert len(TOOL_EXECUTORS) == 18
+def test_twentyfour_defs_twentyfive_executors():
+    assert len(CRM_TOOL_DEFS) == 24
+    assert len(TOOL_EXECUTORS) == 25
+
+
+def test_company_tools_present():
+    """The 5 company tools (issue #13) are all defined with executors."""
+    names = {d["name"] for d in CRM_TOOL_DEFS}
+    company_tools = {
+        "crm_search_companies", "crm_get_company", "crm_list_companies",
+        "crm_create_company", "crm_update_company",
+    }
+    assert company_tools <= names
+    for name in company_tools:
+        assert name in TOOL_EXECUTORS and callable(TOOL_EXECUTORS[name])
+
+
+def test_contact_and_deal_tools_accept_company_id():
+    """company_id is exposed on the create/update contact + deal tool schemas.
+
+    Create tools take a plain integer; update tools accept null so an agent can
+    unlink a contact/deal from its company (parity with the HTTP update path).
+    """
+    by_name = {d["name"]: d for d in CRM_TOOL_DEFS}
+    for name in ("crm_create_contact", "crm_create_deal"):
+        assert by_name[name]["input_schema"]["properties"]["company_id"]["type"] == "integer", name
+    for name in ("crm_update_contact", "crm_update_deal"):
+        assert by_name[name]["input_schema"]["properties"]["company_id"]["type"] == ["integer", "null"], name
 
 
 def test_def_names_unique_prefixed_and_schema_shaped():
@@ -84,3 +111,93 @@ def test_owned_write_and_read_tools_are_classified_correctly():
         assert writes.get(name) is True, f"{name} must be writes=True"
     for name in _OWNED_READ_TOOLS:
         assert writes.get(name) is False, f"{name} must be writes=False"
+
+
+def test_company_tool_defs_declare_writes_flag():
+    """The 5 company defs carry the writes flag (#4 convention): reads false, writes true."""
+    by_name = {d["name"]: d for d in CRM_TOOL_DEFS}
+    for name in ("crm_search_companies", "crm_get_company", "crm_list_companies"):
+        assert by_name[name]["writes"] is False, name
+    for name in ("crm_create_company", "crm_update_company"):
+        assert by_name[name]["writes"] is True, name
+
+
+# ── Company tool executors (the new UniqueViolation/blank-name/not-found branches) ──
+
+def test_crm_create_company_translates_unique_violation(monkeypatch):
+    def raise_unique(name, **kw):
+        raise psycopg2.errors.UniqueViolation()
+    monkeypatch.setattr(service, "create_company", raise_unique)
+    out = tools.crm_create_company("Acme")
+    assert out == {"error": "A company with that name already exists"}
+
+
+def test_crm_create_company_rejects_blank_name(monkeypatch):
+    called = []
+    monkeypatch.setattr(service, "create_company", lambda name, **kw: called.append(name) or {"id": 1})
+    assert tools.crm_create_company("   ") == {"error": "Name is required"}
+    assert called == []  # service never reached
+
+
+def test_crm_update_company_translates_unique_violation(monkeypatch):
+    def raise_unique(cid, **kw):
+        raise psycopg2.errors.UniqueViolation()
+    monkeypatch.setattr(service, "update_company", raise_unique)
+    assert tools.crm_update_company(1, name="Acme") == {"error": "A company with that name already exists"}
+
+
+def test_crm_update_company_missing_returns_error(monkeypatch):
+    monkeypatch.setattr(service, "update_company", lambda cid, **kw: None)
+    assert tools.crm_update_company(999, name="X") == {"error": "Company 999 not found"}
+
+
+def test_crm_get_company_missing_returns_error(monkeypatch):
+    monkeypatch.setattr(service, "get_company_detail", lambda cid: None)
+    assert tools.crm_get_company(999) == {"error": "Company 999 not found"}
+
+
+def test_crm_search_and_list_companies_pass_through(monkeypatch):
+    monkeypatch.setattr(service, "search_companies", lambda q, **kw: [{"id": 1}, {"id": 2}])
+    monkeypatch.setattr(service, "list_companies", lambda **kw: {"companies": [{"id": 1}], "total": 1})
+    assert tools.crm_search_companies("acme") == {"companies": [{"id": 1}, {"id": 2}], "count": 2}
+    assert tools.crm_list_companies(status="active") == {"companies": [{"id": 1}], "total": 1}
+
+
+def test_contact_deal_tools_translate_fk_violation(monkeypatch):
+    """An invalid company_id (or contact_id) through the tool path returns a
+    structured error rather than raising a raw psycopg2 error."""
+    def raise_fk(*a, **kw):
+        raise psycopg2.errors.ForeignKeyViolation()
+    monkeypatch.setattr(service, "create_contact", raise_fk)
+    monkeypatch.setattr(service, "update_contact", raise_fk)
+    monkeypatch.setattr(service, "create_deal", raise_fk)
+    monkeypatch.setattr(service, "update_deal", raise_fk)
+    assert tools.crm_create_contact("Ana", company_id=999) == {"error": "Referenced company does not exist"}
+    assert tools.crm_update_contact(1, company_id=999) == {"error": "Referenced company does not exist"}
+    assert tools.crm_create_deal("D", company_id=999) == {"error": "Referenced contact or company does not exist"}
+    assert tools.crm_update_deal(1, company_id=999) == {"error": "Referenced contact or company does not exist"}
+
+
+def test_chatter_tools_present_and_shaped():
+    by_name = {d["name"]: d for d in CRM_TOOL_DEFS}
+    assert {"crm_add_note", "crm_get_chatter"} <= set(by_name)
+    for name in ("crm_add_note", "crm_get_chatter"):
+        props = by_name[name]["input_schema"]["properties"]
+        assert props["entity_type"]["enum"] == ["deal", "contact"]
+    assert by_name["crm_add_note"]["input_schema"]["required"] == ["entity_type", "entity_id", "message"]
+
+
+def test_chatter_executors_wrap_validation_errors():
+    # A bad entity_type is rejected in the service before any DB call; the tool
+    # surfaces it as {"error": ...} rather than raising.
+    assert "error" in tools.crm_add_note("company", 1, "hi")
+    assert "error" in tools.crm_get_chatter("company", 1)
+
+
+def test_chatter_executors_happy_path_shapes(monkeypatch):
+    # The tool return shape is the contract the assistant engine consumes; pin it.
+    from crm import chatter_service
+    monkeypatch.setattr(chatter_service, "add_note", lambda t, i, m: {"id": 1, "message": m})
+    monkeypatch.setattr(chatter_service, "get_chatter", lambda *a, **k: [{"id": 1}, {"id": 2}])
+    assert tools.crm_add_note("deal", 3, "hi") == {"ok": True, "note": {"id": 1, "message": "hi"}}
+    assert tools.crm_get_chatter("deal", 3) == {"notes": [{"id": 1}, {"id": 2}], "count": 2}
