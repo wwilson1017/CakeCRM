@@ -10,6 +10,10 @@ interface Props {
   entityId: number;
 }
 
+// Mirrors chatter_service.MAX_MESSAGE_LEN — caps input client-side so an oversized
+// paste is prevented rather than round-tripping to a 400.
+const MAX_NOTE_LEN = 10000;
+
 /**
  * Chatter — the editable, archivable notes thread for a deal or contact, shown
  * alongside the activity timeline. Self-fetches from /api/crm/chatter and owns
@@ -99,6 +103,7 @@ export function NotesThread({ entityType, entityId }: Props) {
           onChange={e => setDraft(e.target.value)}
           onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') addNote(); }}
           rows={2}
+          maxLength={MAX_NOTE_LEN}
           style={{ ...inputStyle, flex: 1, width: undefined, fontSize: 13, resize: 'vertical', minHeight: 38 }}
         />
         <button onClick={addNote} disabled={submitting || !draft.trim()} style={{
@@ -137,6 +142,7 @@ export function NotesThread({ entityType, entityId }: Props) {
                     value={editText}
                     onChange={e => setEditText(e.target.value)}
                     rows={2}
+                    maxLength={MAX_NOTE_LEN}
                     style={{ ...inputStyle, width: undefined, fontSize: 13, resize: 'vertical' }}
                   />
                   <div style={{ display: 'flex', gap: 8 }}>

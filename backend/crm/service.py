@@ -594,11 +594,13 @@ def dismiss_onboarding() -> dict:
 
 
 def _truncate_all(cur) -> None:
-    # Lock order matters: the other writers (delete_contact's SELECT ... FOR
-    # UPDATE, add_note's target lock) both take contacts/deals FIRST and touch
-    # crm_chatter LAST. TRUNCATE must acquire its ACCESS EXCLUSIVE locks in that
-    # same order — contacts, deals, then the dependent tables, crm_chatter last —
-    # or the two transactions can deadlock. (The exact string is pinned by a test.)
+    # Order chosen for the multi-statement writers: delete_contact (SELECT ... FOR
+    # UPDATE on contacts, then deletes) and add_note (locks its target, then writes
+    # crm_chatter) both take contacts/deals FIRST and crm_chatter LAST, so TRUNCATE
+    # acquires its ACCESS EXCLUSIVE locks in the same order and can't invert against
+    # them. (A residual microsecond-window inversion with FK-checking INSERTs
+    # — child-then-parent lock order — is unavoidable by any single table order and
+    # is left to Postgres's deadlock detector.) The exact string is pinned by a test.
     cur.execute("TRUNCATE contacts, deals, activity_log, tasks, crm_chatter RESTART IDENTITY")
 
 
@@ -627,6 +629,11 @@ def clear_all() -> dict:
     """Wipe ALL CRM data (the confirmation-gated real-data reset)."""
     with get_connection() as conn:
         cur = conn.cursor()
+        # Lock the crm_meta singleton FIRST, before truncating — same order as
+        # clear_demo_data / load_sample_data, so all three demo-state writers
+        # serialize on this row instead of deadlocking (truncate-then-update here
+        # vs lock-then-count there would otherwise invert).
+        cur.execute("SELECT id FROM crm_meta WHERE id = 1 FOR UPDATE")
         _truncate_all(cur)
         cur.execute(
             "UPDATE crm_meta SET sample_data_loaded = FALSE, updated_at = %s WHERE id = 1",
