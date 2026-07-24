@@ -5,6 +5,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../core/api/client';
 import { useAuth } from '../core/auth/AuthContext';
 
@@ -32,12 +33,20 @@ export function HomePage() {
           <span className="text-2xl">🍰</span>
           <span className="font-display text-xl text-ck-ink">CakeCRM</span>
         </div>
-        <button
-          onClick={logout}
-          className="bg-transparent border border-ck-line-strong rounded-md text-sm text-ck-ink-mute px-3.5 py-1.5 cursor-pointer hover:text-ck-ink"
-        >
-          Sign out
-        </button>
+        <div className="flex items-center gap-2">
+          <Link
+            to="/setup"
+            className="border border-ck-line-strong rounded-md text-sm text-ck-ink-mute px-3.5 py-1.5 no-underline hover:text-ck-ink"
+          >
+            AI Setup
+          </Link>
+          <button
+            onClick={logout}
+            className="bg-transparent border border-ck-line-strong rounded-md text-sm text-ck-ink-mute px-3.5 py-1.5 cursor-pointer hover:text-ck-ink"
+          >
+            Sign out
+          </button>
+        </div>
       </header>
 
       <main className="max-w-2xl mx-auto px-6 py-16">

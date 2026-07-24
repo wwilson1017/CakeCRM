@@ -4,3 +4,4 @@
 
 ruff==0.15.11      # linter + import sorter; config in backend/ruff.toml
 pytest==9.1.1      # test runner; tests live in backend/tests/
+pytest-asyncio==1.4.0  # async test support (backend/pytest.ini: asyncio_mode = auto)

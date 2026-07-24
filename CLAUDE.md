@@ -33,7 +33,18 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 - **Multi-provider AI** via the `AIProvider` ABC (Anthropic, OpenAI, Gemini, Ollama,
   Together). Never call a provider SDK directly from feature code. Cheap background
   AI work (touch counts, classification) uses the light tier via
-  `resolve_tier_model()`.
+  `resolve_tier_model()`. The layer lives in `backend/providers/` (ABC
+  `providers/base.py`, factory `providers.get_ai_provider()`, key-based only — no
+  OAuth). Provider SDKs (`anthropic`/`openai`/`google-generativeai`/`httpx`) are
+  imported **lazily inside methods only, never at module top level**, so a missing
+  SDK or absent key never breaks import/startup. Keys are stored **single-tenant,
+  admin-global** in Postgres — `ai_providers` (Fernet-encrypted `api_key_enc`),
+  `ai_settings` (active provider/model singleton), `ai_model_tiers`
+  (overrides/inferred JSONB). Keys enter in-app via `POST /api/providers/{provider}/
+  connect-key` (validated live); `GET /api/setup/status` returns `ai_ready` — the
+  degradation gate the CRM UI keys AI affordances off. The chat-loop surface
+  (`stream_turn`/`add_tool_results`) is ported but DORMANT until the assistant engine
+  lands. Multi-user is future work (authz/ownership), not just a `user_id` column.
 - **One database: PostgreSQL, and it's mandatory** — the backend refuses to start
   without `DATABASE_URL` (decided 2026-07-18; single engine, ready for multi-user
   growth). Locally `docker compose up -d`; on Railway the template provisions
@@ -46,6 +57,13 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   (`pg_fetchall`/`pg_fetchone`/`pg_execute`/`get_connection`/`row_to_dict`).
 - **API keys are entered in-app, encrypted at rest** (Fernet; key from env →
   OS keychain → file fallback) — never as env vars.
+- **Backend tests** live in `backend/tests/` (config in `backend/pytest.ini`,
+  `asyncio_mode = auto`). The default `pytest` run is **hermetic** — pg helpers and
+  provider SDKs are mocked, encryption runs against a per-test key — so the CI gate
+  needs no database. Tests that need a real PostgreSQL are marked
+  `@pytest.mark.integration` and deselected by default (`addopts = -m "not
+  integration"`); run them with `pytest -m integration` and a reachable
+  `TEST_ADMIN_DSN`. No `skip`/`xfail`/`# noqa`/`eslint-disable` — fix root causes.
 
 ## Don't Do This
 

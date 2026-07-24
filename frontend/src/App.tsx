@@ -3,6 +3,7 @@ import { AuthProvider } from './core/auth/AuthContext';
 import { ProtectedRoute } from './core/auth/ProtectedRoute';
 import { LoginPage } from './login/LoginPage';
 import { HomePage } from './home/HomePage';
+import { SetupPage } from './setup/SetupPage';
 
 export default function App() {
   return (
@@ -10,6 +11,14 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route
+            path="/setup"
+            element={
+              <ProtectedRoute>
+                <SetupPage />
+              </ProtectedRoute>
+            }
+          />
           <Route
             path="/*"
             element={

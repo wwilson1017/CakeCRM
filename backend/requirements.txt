@@ -9,3 +9,11 @@ keyring==25.7.0
 python-multipart==0.0.22
 pyotp==2.9.0
 qrcode[pil]==8.2
+
+# AI provider SDKs (issue #2). Pinned to the versions the ported provider layer
+# targets (chatty source 2a0f10c); all imported lazily so a missing SDK never
+# breaks import/startup. google-generativeai is the SDK chatty uses (NOT google-genai).
+httpx==0.28.1
+anthropic==0.88.0
+openai==2.30.0
+google-generativeai==0.8.6
