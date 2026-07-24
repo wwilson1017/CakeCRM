@@ -23,9 +23,12 @@ import type { BrandingConfig } from './brandingConfig';
 interface BrandingContextValue {
   /** null until the initial fetch resolves — consumers render defaults meanwhile. */
   branding: BrandingConfig | null;
-  /** Replace the whole config (e.g. a PUT response) — re-applies the accent live. */
-  setBranding: (b: BrandingConfig) => void;
-  /** Merge a partial (e.g. {has_logo}) via a functional update — no stale-closure clobber. */
+  /**
+   * Merge a partial config via a functional update — used for BOTH a settings save
+   * ({company_name, accent_color}) and logo ops ({has_logo}). Each caller patches
+   * only the fields it owns, so overlapping/out-of-order requests can't clobber each
+   * other (a delayed save can't restore a stale has_logo, and vice versa).
+   */
   patchBranding: (patch: Partial<BrandingConfig>) => void;
   /** Cache-buster bumped on logo upload/remove so <img src=".../logo?v="> refreshes. */
   logoVersion: number;
@@ -36,7 +39,10 @@ const BrandingCtx = createContext<BrandingContextValue | null>(null);
 
 export function BrandingProvider({ children }: { children: ReactNode }) {
   const [branding, setBranding] = useState<BrandingConfig | null>(null);
-  const [logoVersion, setLogoVersion] = useState(0);
+  // Seed from a timestamp so the cache-buster never resets to a value a prior
+  // logo response was cached under (a plain 0 would re-serve a stale logo after
+  // a remount/reload following a logo replace).
+  const [logoVersion, setLogoVersion] = useState(() => Date.now());
 
   // Fetch once; state-only. Fall back to defaults on failure so the shell stays
   // fully usable (Settings editable, default accent) rather than blank/disabled.
@@ -56,7 +62,6 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
 
   const value: BrandingContextValue = {
     branding,
-    setBranding,
     patchBranding: patch => setBranding(prev => ({ ...(prev ?? DEFAULT_BRANDING), ...patch })),
     logoVersion,
     bumpLogoVersion: () => setLogoVersion(v => v + 1),

@@ -31,9 +31,16 @@ import { BrandLogo } from './components/BrandLogo';
 const ALLOWED_LOGO_TYPES = 'image/png,image/jpeg,image/gif,image/webp,image/svg+xml';
 const MAX_LOGO_BYTES = 2 * 1024 * 1024; // 2 MB — mirrors the backend cap
 
+// Visually hidden but still in the a11y tree and keyboard-focusable (unlike
+// display:none), so the file input is reachable by Tab and operable by Enter.
+const srOnly: React.CSSProperties = {
+  position: 'absolute', width: 1, height: 1, padding: 0, margin: -1,
+  overflow: 'hidden', clip: 'rect(0,0,0,0)', border: 0,
+};
+
 export function SettingsPage() {
   const isMobile = useIsMobile();
-  const { branding, setBranding, patchBranding, logoVersion, bumpLogoVersion } = useBranding();
+  const { branding, patchBranding, logoVersion, bumpLogoVersion } = useBranding();
   const loaded = branding !== null;
 
   // Edits override the fetched value; until edited, fields mirror `branding`.
@@ -52,7 +59,9 @@ export function SettingsPage() {
         method: 'PUT',
         body: JSON.stringify({ company_name: nameVal.trim(), accent_color: accentVal }),
       });
-      setBranding(updated);
+      // Patch only the fields this save owns — never has_logo — so a slow save
+      // can't clobber a logo uploaded/removed while it was in flight.
+      patchBranding({ company_name: updated.company_name, accent_color: updated.accent_color });
       toast.success('Branding saved.');
     } catch {
       toast.error('Failed to save branding.');
@@ -114,8 +123,9 @@ export function SettingsPage() {
         </p>
 
         <div style={fieldWrap}>
-          <label style={labelStyle}>Company name</label>
+          <label htmlFor="branding-company-name" style={labelStyle}>Company name</label>
           <input
+            id="branding-company-name"
             style={inputStyle}
             value={nameVal}
             disabled={!loaded}
@@ -125,9 +135,10 @@ export function SettingsPage() {
         </div>
 
         <div style={fieldWrap}>
-          <label style={labelStyle}>Accent color</label>
+          <label htmlFor="branding-accent" style={labelStyle}>Accent color</label>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <input
+              id="branding-accent"
               type="color"
               value={accentVal}
               disabled={!loaded}
@@ -159,14 +170,14 @@ export function SettingsPage() {
               ><IconX size={14} /> Remove</button>
             </div>
           )}
-          <label style={{ ...btnSecondary, display: 'inline-flex', cursor: loaded && !logoBusy ? 'pointer' : 'default', opacity: loaded && !logoBusy ? 1 : 0.6 }}>
+          <label style={{ ...btnSecondary, position: 'relative', display: 'inline-flex', cursor: loaded && !logoBusy ? 'pointer' : 'default', opacity: loaded && !logoBusy ? 1 : 0.6 }}>
             {logoBusy ? 'Uploading…' : branding?.has_logo ? 'Replace logo' : 'Upload logo'}
             <input
               type="file"
               accept={ALLOWED_LOGO_TYPES}
               disabled={!loaded || logoBusy}
               onChange={handleLogoUpload}
-              style={{ display: 'none' }}
+              style={srOnly}
             />
           </label>
           <p style={{ fontFamily: FONT_SANS, fontSize: 12, color: INK_MUTE, margin: '8px 0 0' }}>
