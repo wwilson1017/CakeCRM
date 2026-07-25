@@ -156,7 +156,7 @@ async def _handle_callback(cb: dict) -> None:
         await asyncio.to_thread(client.answer_callback_query, cb_id, token, "Not authorized.")
         return
 
-    decision, tool_use_id = _parse_callback_data(data)
+    decision, batch, tool_use_id = _parse_callback_data(data)
     if not decision:
         await asyncio.to_thread(client.answer_callback_query, cb_id, token, "Unknown action.")
         return
@@ -165,6 +165,14 @@ async def _handle_callback(cb: dict) -> None:
     pending_msg_id = s.get("pending_msg_id")
     if not conv or not pending_msg_id:
         await asyncio.to_thread(client.answer_callback_query, cb_id, token, "This confirmation has expired.")
+        await _strip_keyboard(msg_chat_id, message_id, token)
+        return
+
+    # Reject a button whose batch is no longer the active one (a superseded/stale
+    # keyboard). Resolving it against the current pending_msg_id could hit a different
+    # write under a positional-id provider (Gemini reuses call_0 across turns).
+    if not str(pending_msg_id).startswith(batch):
+        await asyncio.to_thread(client.answer_callback_query, cb_id, token, "This confirmation is no longer active.")
         await _strip_keyboard(msg_chat_id, message_id, token)
         return
 
@@ -283,10 +291,16 @@ async def _send_confirm(chat_id, token: str, evt: dict) -> None:
     if args_str:
         body += f"\n\n{args_str}"
     body += "\n\nApprove this action?"
+    # Bind the button to its originating batch via an 8-char msg_id prefix. On a press
+    # we require this to still match the singleton's pending_msg_id, so a stale button
+    # from a superseded batch is rejected — otherwise it would resolve against the
+    # CURRENT batch's msg_id, and a positional-id provider (Gemini reuses call_0 across
+    # turns) could then approve the wrong write. Fits Telegram's 64-byte callback cap.
+    batch = msg_id[:8]
     markup = {
         "inline_keyboard": [[
-            {"text": "✅ Approve", "callback_data": f"a:{tool_use_id}"},
-            {"text": "❌ Deny", "callback_data": f"d:{tool_use_id}"},
+            {"text": "✅ Approve", "callback_data": f"a:{batch}:{tool_use_id}"},
+            {"text": "❌ Deny", "callback_data": f"d:{batch}:{tool_use_id}"},
         ]]
     }
     if msg_id:
@@ -318,13 +332,14 @@ def _parse_command_arg(text: str) -> str:
     return parts[1].strip()[:128]
 
 
-def _parse_callback_data(data: str) -> tuple[str | None, str]:
-    """Parse ``a:<tuid>`` / ``d:<tuid>`` → (decision, tool_use_id)."""
-    if data.startswith("a:"):
-        return "approve", data[2:]
-    if data.startswith("d:"):
-        return "deny", data[2:]
-    return None, ""
+def _parse_callback_data(data: str) -> tuple[str | None, str, str]:
+    """Parse ``a:<batch8>:<tuid>`` / ``d:<batch8>:<tuid>`` → (decision, batch8, tuid)."""
+    if data.startswith(("a:", "d:")):
+        decision = "approve" if data[0] == "a" else "deny"
+        batch, _, tuid = data[2:].partition(":")
+        if tuid:
+            return decision, batch, tuid
+    return None, "", ""
 
 
 def _outcome_text(decision: str, result: dict) -> str:

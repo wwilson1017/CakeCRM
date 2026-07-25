@@ -177,7 +177,7 @@ async def test_confirm_event_sends_keyboard_and_marks_batch(monkeypatch):
     kb_sends = [s for s in h.sent if s[0] == "text" and s[3] and "inline_keyboard" in s[3]]
     assert kb_sends, "expected an inline-keyboard confirm message"
     buttons = kb_sends[0][3]["inline_keyboard"][0]
-    assert {b["callback_data"] for b in buttons} == {"a:tu1", "d:tu1"}
+    assert {b["callback_data"] for b in buttons} == {"a:m1:tu1", "d:m1:tu1"}
     assert "Create a task" in kb_sends[0][2]  # server-derived description, not narration
     assert h.pending_sets == ["m1"]
 
@@ -189,7 +189,7 @@ async def test_callback_approve_resolves_and_continues(monkeypatch):
     _install(monkeypatch, h,
              chat_scripts=[[{"type": "text", "text": "Done — task created."}, {"type": "done"}]],
              consume=[True])
-    await service.handle_update(_callback("a:tu1"))
+    await service.handle_update(_callback("a:m1:tu1"))
     assert h.resolve_calls == [("conv1", "tu1", "approve", "m1")]
     assert h.answers and "Done" in h.answers[0][1]
     assert h.edits and h.edits[0][2] is None  # keyboard stripped
@@ -205,9 +205,9 @@ async def test_two_confirms_continue_only_after_both_resolved(monkeypatch):
     _install(monkeypatch, h,
              chat_scripts=[[{"type": "text", "text": "All set."}, {"type": "done"}]],
              consume=[False, True])
-    await service.handle_update(_callback("a:tu1"))
+    await service.handle_update(_callback("a:m1:tu1"))
     assert h.chat_calls == []  # no continuation yet — sibling still pending
-    await service.handle_update(_callback("d:tu2"))
+    await service.handle_update(_callback("d:m1:tu2"))
     assert h.resolve_calls == [("conv1", "tu1", "approve", "m1"), ("conv1", "tu2", "deny", "m1")]
     assert h.chat_calls == [[]]  # continuation ran exactly once, after the second
 
@@ -216,7 +216,7 @@ async def test_unauthorized_callback_rejected(monkeypatch):
     h = Harness()
     h.settings["pending_msg_id"] = "m1"
     _install(monkeypatch, h)
-    await service.handle_update(_callback("a:tu1", user_id="intruder"))
+    await service.handle_update(_callback("a:m1:tu1", user_id="intruder"))
     assert h.answers and "authorized" in h.answers[0][1].lower()
     assert h.resolve_calls == []  # the intruder never triggered a write
 
@@ -225,9 +225,20 @@ async def test_expired_callback_when_no_pending(monkeypatch):
     h = Harness()
     h.settings["pending_msg_id"] = ""  # nothing pending
     _install(monkeypatch, h)
-    await service.handle_update(_callback("a:tu1"))
+    await service.handle_update(_callback("a:m1:tu1"))
     assert h.resolve_calls == []
     assert h.answers and "expired" in h.answers[0][1].lower()
+
+
+async def test_stale_batch_button_is_rejected_not_resolved(monkeypatch):
+    # The current pending batch is m2 (a superseded turn); a leftover m1 button must NOT
+    # resolve against m2 — critical for Gemini's reused positional tool ids.
+    h = Harness()
+    h.settings["pending_msg_id"] = "m2deadbe"
+    _install(monkeypatch, h)
+    await service.handle_update(_callback("a:m1:tu1"))  # batch prefix "m1" != "m2deadbe"
+    assert h.resolve_calls == []
+    assert h.answers and "no longer active" in h.answers[0][1].lower()
 
 
 async def test_no_provider_degrades_gracefully(monkeypatch):
