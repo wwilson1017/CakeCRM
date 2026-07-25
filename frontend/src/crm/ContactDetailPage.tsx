@@ -39,9 +39,12 @@ export function ContactDetailPage() {
   const [logging, setLogging] = useState(false);
 
   // Publish this contact as the open record for the assistant drawer (issue #14).
-  // type+id come from the route param (always current, even mid-load); the loaded
-  // name is display-only.
-  usePublishActiveRecord('contact', id ? Number(id) : null, contact?.name);
+  // type+id come from the route param (always current, even mid-load); the loaded name
+  // is display-only and only used once it belongs to the CURRENT route — otherwise the
+  // chip would show the previous contact's name while its id already points at the new
+  // one during a navigation fetch. Falls back to "contact #N" until B loads.
+  usePublishActiveRecord('contact', id ? Number(id) : null,
+    contact && contact.id === Number(id) ? contact.name : undefined);
 
   const loadIdRef = useRef(0);
   const load = useCallback(async () => {

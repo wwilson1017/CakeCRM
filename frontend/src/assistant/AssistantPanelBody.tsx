@@ -121,7 +121,10 @@ export default function AssistantPanelBody({ recordContext = null }: AssistantPa
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 10px', borderBottom: `1px solid ${LINE}` }}>
         <button
-          onClick={() => setShowHistory((s) => !s)}
+          // Refetch on OPEN: the drawer now stays mounted for the whole session
+          // (issue #14), so the mount-time load() no longer runs per open — without
+          // this the list would miss conversations created since the shell loaded.
+          onClick={() => { if (!showHistory) void loadConversations(); setShowHistory((s) => !s); }}
           style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', color: INK, fontSize: 13, fontWeight: 600, padding: 4, minWidth: 0 }}
         >
           <IconBot size={16} />

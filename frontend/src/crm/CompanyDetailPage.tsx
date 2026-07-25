@@ -30,8 +30,11 @@ export function CompanyDetailPage() {
   const [showEdit, setShowEdit] = useState(false);
 
   // Publish this company as the open record for the assistant drawer (issue #14).
-  // type+id come from the route param (always current, even mid-load).
-  usePublishActiveRecord('company', id ? Number(id) : null, company?.name);
+  // type+id come from the route param (always current, even mid-load); the label is
+  // only used once the loaded company matches the current route (else "company #N"
+  // until it loads — avoids showing the previous company's name during a nav fetch).
+  usePublishActiveRecord('company', id ? Number(id) : null,
+    company && company.id === Number(id) ? company.name : undefined);
 
   const loadIdRef = useRef(0);
   const load = useCallback(async () => {

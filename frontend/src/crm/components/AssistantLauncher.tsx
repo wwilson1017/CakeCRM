@@ -64,6 +64,29 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
     if (open) panelRef.current?.focus();
   }, [open]);
 
+  // Focus containment: the scrim makes the drawer pointer-modal, so keep keyboard
+  // focus inside it too (wrap Tab / Shift+Tab at the ends) — otherwise a keyboard user
+  // could Tab into scrim-obscured page controls. Paired with aria-modal on the dialog.
+  useEffect(() => {
+    if (!open) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== 'Tab') return;
+      const panel = panelRef.current;
+      if (!panel) return;
+      const focusables = panel.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      if (focusables.length === 0) { e.preventDefault(); panel.focus(); return; }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || active === panel)) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && active === last) { e.preventDefault(); first.focus(); }
+    }
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [open]);
+
   function handleClick() {
     if (loading) return;
     if (ready) setOpen(o => !o);
@@ -92,6 +115,7 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
           <div
             ref={panelRef}
             role="dialog"
+            aria-modal="true"
             aria-label="Assistant"
             aria-hidden={!open}
             tabIndex={-1}

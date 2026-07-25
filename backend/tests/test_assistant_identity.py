@@ -113,3 +113,19 @@ def test_build_context_note_rejects_invalid_values():
     # Bad record_id (non-positive, non-int, and bool — an int subclass) → None.
     for bad_id in (0, -3, "7", 7.5, None, True, False):
         assert identity.build_context_note("deal", bad_id) is None
+
+
+def test_context_tools_match_the_real_crm_registry():
+    """The note tells the model to call a specific tool with a specific arg — those
+    must exist in the CRM registry as READ tools, or a registry rename would silently
+    point every context-aware turn at a nonexistent tool. Ties the two modules together
+    so drift fails a test instead of degrading transcripts."""
+    from crm.tools import CRM_TOOL_DEFS
+    by_name = {d["name"]: d for d in CRM_TOOL_DEFS}
+    for record_type, (tool, arg) in identity._CONTEXT_TOOLS.items():
+        assert tool in by_name, f"{record_type}: {tool} missing from CRM_TOOL_DEFS"
+        d = by_name[tool]
+        assert d["writes"] is False, f"{tool} must be a read tool"
+        props = d["input_schema"]["properties"]
+        assert arg in props, f"{tool} has no '{arg}' parameter"
+        assert arg in d["input_schema"].get("required", []), f"{tool}.{arg} must be required"
