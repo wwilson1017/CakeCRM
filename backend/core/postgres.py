@@ -167,6 +167,7 @@ def pg_execute(sql: str, params: tuple | list | dict = ()) -> int:
 
 # Advisory lock registry (keep in sync when adding locks):
 #   pg_advisory_lock(1) — migration runner (below)
+#   pg_try_advisory_xact_lock(20260705) — dreaming cycle (dreaming/processor.run_dreaming_if_due)
 
 
 def run_migrations() -> None:
