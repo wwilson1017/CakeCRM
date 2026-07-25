@@ -16,10 +16,12 @@ import {
 import { pageHeading, btnPrimary, stageCard } from './styles';
 import { KanbanBoard, type MoveEvent } from '../shared/dnd';
 
+// The /api/crm/deals payload also carries server-computed `stage_summary` and
+// `total_pipeline_value`, but the board derives every total client-side from
+// `deals` so they stay correct under optimistic moves — we intentionally read
+// only `deals` here rather than trust aggregates the optimistic path can't update.
 interface PipelineData {
   deals: CrmDeal[];
-  stage_summary: { stage: string; count: number; total_value: number }[];
-  total_pipeline_value: number;
 }
 
 // Open stages drive the header subtitle; won/lost are terminal and excluded so
@@ -67,6 +69,15 @@ export function PipelinePage() {
     return merged;
   }, []);
 
+  // Background reconcile to server truth, WITHOUT the loading spinner. A stage
+  // change made through another path (detail sheet, new deal) while a drag PUT is
+  // in flight is skipped by the Kanban hook's resync (it ignores external updates
+  // mid-drag); re-fetching once the drag settles converges the board on both the
+  // successful and the rolled-back branch.
+  const silentRefresh = useCallback(() => {
+    api<PipelineData>('/api/crm/deals').then(setData).catch(() => { /* keep current state */ });
+  }, []);
+
   // Drag handler: re-throws on failure so the Kanban hook rolls the card back to
   // its origin column. `moving` blocks a second drag until this PUT settles, so
   // the hook's single rollback snapshot can't be clobbered mid-flight.
@@ -83,8 +94,9 @@ export function PipelinePage() {
       throw err; // drive the Kanban optimistic rollback
     } finally {
       setMoving(false);
+      silentRefresh(); // reconcile against anything that changed during the PUT
     }
-  }, [persistStageChange]);
+  }, [persistStageChange, silentRefresh]);
 
   // Detail-sheet handler (fire-and-forget `void`): toast on failure, never
   // re-throw — a rejection here would be unhandled.
@@ -113,14 +125,10 @@ export function PipelinePage() {
     [],
   );
 
-  const openTotal = useMemo(
-    () => deals.filter(d => OPEN_STAGES.includes(d.stage)).reduce((s, d) => s + (d.value || 0), 0),
-    [deals],
-  );
-  const openCount = useMemo(
-    () => deals.filter(d => OPEN_STAGES.includes(d.stage)).length,
-    [deals],
-  );
+  const { openTotal, openCount } = useMemo(() => {
+    const open = deals.filter(d => OPEN_STAGES.includes(d.stage));
+    return { openTotal: open.reduce((s, d) => s + (d.value || 0), 0), openCount: open.length };
+  }, [deals]);
 
   // Dashboard deep-link (/crm/pipeline?stage=X): once `data` has rendered the
   // columns (refs populated), scroll the requested column into view, then clear
@@ -173,10 +181,13 @@ export function PipelinePage() {
         // Drag off on touch (fiddly) and while a move is in flight (protects the
         // single rollback snapshot). Mobile stage changes go through the sheet.
         dragDisabled={isMobile || moving}
+        // The ported KanbanBoard/KanbanColumn expose only className hooks (no style
+        // prop), so board-scroller and column-body layout use Tailwind here; the
+        // card and header visuals below use the CRM's inline design tokens.
         className={`flex gap-4 overflow-x-auto pb-3 pt-1${isMobile ? ' snap-x snap-mandatory' : ''}`}
         columnClassName="flex flex-col gap-2 overflow-y-auto max-h-[70vh] min-h-[80px] pr-1"
         renderColumn={(col, children) => {
-          const stage = String(col.id);
+          const stage = col.data.stage;
           const colDeals = grouped[stage] || [];
           const total = colDeals.reduce((s, d) => s + (d.value || 0), 0);
           return (
@@ -195,8 +206,8 @@ export function PipelinePage() {
             </div>
           );
         }}
-        renderCard={(deal) => (
-          <DealBoardCard deal={deal} onOpen={() => setSelectedDeal(deal)} />
+        renderCard={(deal, columnId) => (
+          <DealBoardCard deal={deal} columnStage={String(columnId)} onOpen={() => setSelectedDeal(deal)} />
         )}
         renderEmptyColumn={() => (
           <div style={{
@@ -239,9 +250,12 @@ function StageHeader({ stage, count, total }: { stage: string; count: number; to
   );
 }
 
-function DealBoardCard({ deal, onOpen }: { deal: CrmDeal; onOpen: () => void }) {
-  const color = STAGE_COLORS[deal.stage]?.color || INK_DIM;
-  const bg = STAGE_COLORS[deal.stage]?.bg || BG_CARD;
+function DealBoardCard({ deal, columnStage, onOpen }: { deal: CrmDeal; columnStage: string; onOpen: () => void }) {
+  // Colour from the column the card currently sits in (its bucket) rather than
+  // deal.stage — during an optimistic drop the bucket updates before the deal's
+  // own stage field does, so this keeps the accent correct instantly.
+  const color = STAGE_COLORS[columnStage]?.color || INK_DIM;
+  const bg = STAGE_COLORS[columnStage]?.bg || BG_CARD;
   return (
     <div
       role="button"
