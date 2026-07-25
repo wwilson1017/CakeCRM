@@ -50,14 +50,20 @@ def _last_user_text(messages: list[dict]) -> str | None:
 
     Used to FTS-match long-term memory for this turn. Scans from the end so a normal
     turn picks the just-saved user row and a continuation picks the last real user
-    message. build_memory_context bounds/tokenizes it, so upload-blob content is
-    harmless noise rather than a match hazard.
+    message. Skips the synthetic resume ack, and — on an upload turn — the wrapped
+    untrusted file blob, so attacker-controlled file text never chooses which facts
+    surface; memory matching only ever uses genuinely-typed text.
     """
     for m in reversed(messages):
         if m.get("role") == "user":
             content = m.get("content")
-            if isinstance(content, str) and content.strip() and content != _CONTINUATION_ACK:
-                return content  # skip the synthetic resume ack — match the real prompt
+            if (
+                isinstance(content, str)
+                and content.strip()
+                and content != _CONTINUATION_ACK
+                and _UNTRUSTED_MARKER not in content
+            ):
+                return content
     return None
 
 
@@ -119,7 +125,6 @@ async def _chat_impl(
         tool_mode = "normal"
 
     ident = await asyncio.to_thread(identity.get_identity)
-    system_prompt = identity.build_system_prompt(ident)
     provider_tools = registry.provider_tools(tool_mode)
     budget = BudgetState(limit=WRITE_BUDGET_PER_TURN)
 

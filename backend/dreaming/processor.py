@@ -52,7 +52,7 @@ _ARCHIVE = """
     WHERE id = ANY(%s)
       AND archived_at IS NULL AND valid_to IS NULL
       AND (memory_type IS NULL OR memory_type != ALL(%s))
-      AND created_at < now() - make_interval(days => %s)
+      AND created_at <= now() - make_interval(days => %s)
     RETURNING id
 """
 

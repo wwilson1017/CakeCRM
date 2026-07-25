@@ -33,3 +33,9 @@ def test_validate_normalizes_and_rejects():
     assert validate_memory_type("bogus") is None
     assert validate_memory_type("") is None
     assert validate_memory_type(None) is None
+
+
+def test_validate_rejects_non_string():
+    assert validate_memory_type(123) is None
+    assert validate_memory_type(["decision"]) is None
+    assert validate_memory_type({"x": 1}) is None

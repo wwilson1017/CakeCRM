@@ -44,8 +44,11 @@ for _t in TIER_4_DROP_WHEN_RESOLVED:
 
 
 def validate_memory_type(memory_type: str | None) -> str | None:
-    """Normalize and validate a memory type.  Returns *None* if invalid."""
-    if not memory_type:
+    """Normalize and validate a memory type.  Returns *None* if invalid.
+
+    Tolerates non-string input (returns None) — the tool boundary can pass a bad type.
+    """
+    if not memory_type or not isinstance(memory_type, str):
         return None
     normalized = memory_type.strip().lower()
     return normalized if normalized in MEMORY_TYPES else None

@@ -166,3 +166,15 @@ def test_if_due_never_raises_on_failure(install, monkeypatch):
     out = processor.run_dreaming_if_due()
     assert out["status"] == "error"
     assert any("'error'" in sql for sql in conn.sql_matching("INSERT INTO dreaming_runs"))
+
+
+def test_young_dormant_fact_is_not_a_candidate(install, monkeypatch):
+    # A fact scored dormant but younger than MIN_AGE_DAYS_FOR_ARCHIVE must never be
+    # archived (belt-and-suspenders guard against a future scorer-weight change).
+    young = (5, "Young", "p", "o", None, 0, 1.0, None, 10.0)  # 10 days old
+    conn = install(FakeConn(live_rows=[young]))
+    monkeypatch.setattr(processor.scorer, "score_fact",
+                        lambda *a, **k: {"score": 0.0, "classification": "dormant", "signals": {}})
+    out = processor.run_dreaming_cycle()
+    assert out["facts_archived"] == 0
+    assert conn.sql_matching("RETURNING id") == []   # no archive UPDATE issued

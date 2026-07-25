@@ -21,6 +21,7 @@ Design notes:
 """
 
 import logging
+from datetime import date
 
 from core.postgres import pg_execute, pg_fetchall, pg_fetchone
 from memory.types import validate_memory_type
@@ -34,6 +35,21 @@ _QUERY_LIMIT_CAP = 500    # chatty's query_facts cap
 
 # Columns returned to callers (never expose search_tsv).
 _FACT_COLS = "id, subject, predicate, object, valid_from, valid_to, confidence, memory_type, created_at"
+
+
+def _date_error(value, field: str) -> dict | None:
+    """Return an ``{"error": ...}`` dict if *value* is a non-ISO-date string, else None.
+
+    Gives the model a clear, actionable message (vs a generic caught psycopg2 cast
+    error) on the write paths. Empty/None means "use the DB default" and is fine.
+    """
+    if value in (None, ""):
+        return None
+    try:
+        date.fromisoformat(str(value))
+        return None
+    except (TypeError, ValueError):
+        return {"error": f"{field} must be a date in YYYY-MM-DD format"}
 
 
 def _clean_field(value: str) -> str:
@@ -76,6 +92,9 @@ def add_fact(
         return {"error": "predicate is required"}
     if not object_:
         return {"error": "object is required"}
+    date_err = _date_error(valid_from, "valid_from")
+    if date_err:
+        return date_err
 
     memory_type = validate_memory_type(memory_type)
     confidence = _clamp_confidence(confidence)
@@ -208,6 +227,9 @@ def invalidate_fact(fact_id: int, valid_to: str | None = None) -> dict:
         fact_id = int(fact_id)
     except (TypeError, ValueError):
         return {"error": "fact_id must be an integer"}
+    date_err = _date_error(valid_to, "valid_to")
+    if date_err:
+        return date_err
 
     row = pg_fetchone(
         """
@@ -247,4 +269,6 @@ def track_retrieval_for(fact_ids: list[int]) -> None:
             (list(fact_ids),),
         )
     except Exception:
-        logger.debug("retrieval tracking failed", exc_info=True)
+        # Warning, not debug: silent tracking failure makes every fact look
+        # never-retrieved, which would make the dreaming job over-archive.
+        logger.warning("retrieval tracking failed", exc_info=True)

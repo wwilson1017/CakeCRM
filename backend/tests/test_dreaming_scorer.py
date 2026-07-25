@@ -69,11 +69,21 @@ def test_frequency_is_recency_gated():
     assert stale < 0.1
 
 
-def test_boundary_classifications_use_gte():
-    # Exactly at a threshold rounds up to the more-durable class (chatty's >=).
-    assert scorer._f(0)  is not None  # sanity: helper exists
-    at_stale = scorer.score_fact(None, 0, 90, 1.0)  # 0.05 dormant boundary below 0.1
-    assert at_stale["classification"] == "dormant"
+def test_dormant_stale_boundary_direction():
+    # Bracket the ARCHIVE_THRESHOLD (0.1): just above → stale, just below → dormant.
+    # Verifies the threshold direction without relying on float-exact equality at 0.1.
+    # never-retrieved: score = 0.25*age + 0.05  (age = 1 - days_old/90)
+    above = scorer.score_fact(None, 0, 60, 1.0)   # age .333 → .0833+.05 = .133 (> 0.1)
+    below = scorer.score_fact(None, 0, 85, 1.0)   # age .056 → .0139+.05 = .064 (< 0.1)
+    assert above["classification"] == "stale"
+    assert below["classification"] == "dormant"
+
+
+def test_stale_active_boundary_direction():
+    # Bracket the STALE_THRESHOLD (0.4): a recently+frequently retrieved fact is active.
+    active = scorer.score_fact(0, 8, 0, 1.0)      # recency 1, freq high, age 1 → > 0.4
+    assert active["classification"] == "active"
+    assert active["score"] > scorer.STALE_THRESHOLD
 
 
 def test_negative_day_deltas_are_clamped():

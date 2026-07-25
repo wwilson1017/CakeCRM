@@ -210,3 +210,37 @@ def test_run_dreaming_if_due_runs_then_noops(pg_db):
     # A status='ok' run now exists at ~now, which is at/after the most-recent slot,
     # so the due-guard blocks the immediate re-run regardless of wall-clock time.
     assert run_dreaming_if_due() is None
+
+
+def test_cycle_failure_rolls_back_and_records_error(pg_db, monkeypatch):
+    from core.postgres import pg_fetchone
+    from dreaming import processor
+    from memory import service
+
+    f = service.add_fact("Rollback Co", "note", "should stay live")
+    _age_fact(f["id"], 200)   # old + dormant → would be archived on a clean cycle
+    monkeypatch.setattr(processor.scorer, "score_fact",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    with pytest.raises(RuntimeError):
+        processor.run_dreaming_cycle()
+
+    # Rollback: the archive UPDATE and the 'ok' audit INSERT are both undone.
+    assert pg_fetchone("SELECT archived_at FROM memory_facts WHERE id = %s", (f["id"],))["archived_at"] is None
+    assert pg_fetchone("SELECT count(*) AS n FROM dreaming_runs WHERE status = 'ok'")["n"] == 0
+    # The failure is recorded on a separate transaction.
+    assert pg_fetchone("SELECT count(*) AS n FROM dreaming_runs WHERE status = 'error'")["n"] == 1
+
+
+def test_error_run_does_not_suppress_next_due(pg_db, monkeypatch):
+    from dreaming import processor
+    from memory import service
+
+    service.add_fact("Trigger Co", "note", "a live row so scoring actually runs")
+    monkeypatch.setattr(processor.scorer, "score_fact",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    first = processor.run_dreaming_if_due()          # fails → status='error', no 'ok' run
+    assert first.get("status") == "error"
+
+    monkeypatch.undo()                               # remove the failure
+    second = processor.run_dreaming_if_due()         # error row must NOT count as 'ok' → still due
+    assert second is not None and second.get("status") != "error"

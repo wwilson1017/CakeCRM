@@ -206,3 +206,23 @@ def test_track_retrieval_empty_is_noop(rec):
     r = rec()
     service.track_retrieval_for([])
     assert r.calls == []
+
+
+def test_add_fact_rejects_malformed_date(rec):
+    r = rec(fetchone={"id": 1})
+    assert service.add_fact("s", "p", "o", valid_from="not-a-date") == {
+        "error": "valid_from must be a date in YYYY-MM-DD format"}
+    assert r.calls == []   # rejected before any DB call
+
+
+def test_add_fact_accepts_iso_date(rec):
+    rec(fetchone={"id": 1, "subject": "s", "predicate": "p", "object": "o",
+                  "valid_from": "2026-01-02", "memory_type": None})
+    assert service.add_fact("s", "p", "o", valid_from="2026-01-02")["ok"] is True
+
+
+def test_invalidate_fact_rejects_malformed_date(rec):
+    r = rec(fetchone={"id": 1, "valid_to": "x"})
+    assert service.invalidate_fact(5, valid_to="nope") == {
+        "error": "valid_to must be a date in YYYY-MM-DD format"}
+    assert r.calls == []

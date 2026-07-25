@@ -134,3 +134,15 @@ def test_non_bool_writes_flag_raises(monkeypatch):
     monkeypatch.setattr(reg_mod, "get_memory_tools", lambda: bad)
     with pytest.raises(RuntimeError, match="missing a boolean 'writes'"):
         reg_mod.ToolRegistry()
+
+
+def test_duplicate_executor_across_sources_raises(monkeypatch):
+    from assistant import registry as reg_mod
+    # A unique def name but an executor key colliding with an existing CRM executor
+    # (the alias crm_log_note) exercises the executor-collision branch specifically.
+    defs = [{"name": "memory_probe", "writes": False, "kind": "memory", "description": "x",
+             "input_schema": {"type": "object", "properties": {}}}]
+    execs = {"memory_probe": (lambda **k: {}), "crm_log_note": (lambda **k: {})}
+    monkeypatch.setattr(reg_mod, "get_memory_tools", lambda: (defs, execs))
+    with pytest.raises(RuntimeError, match="Duplicate tool executor"):
+        reg_mod.ToolRegistry()
