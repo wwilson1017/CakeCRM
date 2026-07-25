@@ -13,18 +13,15 @@ from crm import field_service
 
 # ── create_field_definition ───────────────────────────────────────────────────
 
-def _capture_create(monkeypatch, *, existing_max=0):
-    """Monkeypatch pg_fetchone for create_field_definition; return a dict that will
-    hold the captured INSERT params under 'insert'."""
+def _capture_create(monkeypatch):
+    """Monkeypatch pg_fetchone for create_field_definition (one INSERT ... RETURNING *);
+    return a dict holding the captured INSERT params under 'insert' and SQL under 'sql'."""
     captured: dict = {}
 
     def fake_fetchone(sql, params=()):
-        if "COALESCE(MAX(display_order)" in sql:
-            return {"next": existing_max + 10}
         if sql.lstrip().startswith("INSERT INTO crm_field_definitions"):
             captured["insert"] = params
-            return {"id": 1}
-        if "SELECT * FROM crm_field_definitions WHERE id" in sql:
+            captured["sql"] = sql
             return {"id": 1, "dropdown_options": None}
         return None
 
@@ -74,7 +71,7 @@ def test_create_all_symbol_name_raises(monkeypatch):
 
 
 def test_create_serializes_options_and_int_required_and_server_order(monkeypatch):
-    cap = _capture_create(monkeypatch, existing_max=20)
+    cap = _capture_create(monkeypatch)
     field_service.create_field_definition({
         "entity_type": "deal", "name": "Tier", "field_type": "select",
         "dropdown_options": ["A", "B"], "is_required": True,
@@ -82,7 +79,27 @@ def test_create_serializes_options_and_int_required_and_server_order(monkeypatch
     p = cap["insert"]
     assert json.loads(p[4]) == ["A", "B"]      # options serialized to JSON string
     assert p[5] == 1                            # is_required bool -> int
-    assert p[6] == 30                           # display_order = max(20) + 10, server-assigned
+    # display_order is assigned atomically in SQL (max+10), and the full row is
+    # returned in one statement — no separate MAX query or re-select.
+    assert "MAX(display_order)" in cap["sql"]
+    assert "RETURNING *" in cap["sql"]
+
+
+def test_create_select_requires_at_least_one_option(monkeypatch):
+    _capture_create(monkeypatch)
+    with pytest.raises(ValueError):
+        field_service.create_field_definition(
+            {"entity_type": "contact", "name": "Tier", "field_type": "select"}
+        )
+
+
+def test_options_reject_duplicates(monkeypatch):
+    _capture_create(monkeypatch)
+    with pytest.raises(ValueError):
+        field_service.create_field_definition({
+            "entity_type": "deal", "name": "Tier", "field_type": "select",
+            "dropdown_options": ["A", "A"],
+        })
 
 
 # ── update_field_definition ───────────────────────────────────────────────────
@@ -261,3 +278,108 @@ def test_get_field_values_batch_guards(monkeypatch):
 def test_list_invalid_entity_type_raises():
     with pytest.raises(ValueError):
         field_service.list_field_definitions("widget")
+
+
+# ── Added coverage (review-super stage 1) ─────────────────────────────────────
+
+def test_create_reslugifies_client_supplied_key(monkeypatch):
+    cap = _capture_create(monkeypatch)
+    field_service.create_field_definition(
+        {"entity_type": "contact", "name": "Tier", "field_type": "text", "field_key": "My Key!!"}
+    )
+    # The SUPPLIED key is slugified (never trusted verbatim), not the name.
+    assert cap["insert"][2] == "my_key"
+
+
+def test_create_rejects_overlong_name(monkeypatch):
+    _capture_create(monkeypatch)
+    with pytest.raises(ValueError):
+        field_service.create_field_definition(
+            {"entity_type": "contact", "name": "x" * (field_service._MAX_NAME_LEN + 1), "field_type": "text"}
+        )
+
+
+def test_create_rejects_too_many_and_overlong_options(monkeypatch):
+    _capture_create(monkeypatch)
+    with pytest.raises(ValueError):
+        field_service.create_field_definition({
+            "entity_type": "deal", "name": "Tier", "field_type": "select",
+            "dropdown_options": ["o"] * (field_service._MAX_OPTIONS + 1),
+        })
+    with pytest.raises(ValueError):
+        field_service.create_field_definition({
+            "entity_type": "deal", "name": "Tier2", "field_type": "select",
+            "dropdown_options": ["x" * (field_service._MAX_OPTION_LEN + 1)],
+        })
+
+
+def test_update_display_order_coerced_to_int(monkeypatch):
+    cap = _capture_update(monkeypatch)
+    field_service.update_field_definition(1, {"display_order": "5"})
+    sql, params = cap["execute"]
+    assert "display_order = %s" in sql
+    assert params[0] == 5 and isinstance(params[0], int)
+
+
+def test_validate_rejects_overlong_value():
+    with pytest.raises(ValueError):
+        field_service.validate_field_value(
+            {"field_type": "text", "name": "N"}, "x" * (field_service._MAX_VALUE_LEN + 1)
+        )
+
+
+def test_set_values_non_integer_key_collected_not_raised(monkeypatch, fake_conn):
+    conn = fake_conn(monkeypatch, field_service, fetchone_results=[(5,)])
+    out = field_service.set_field_values("contact", 5, {"abc": "x"}, "u")
+    assert out["updated"] == 0
+    assert out["errors"] == ["Invalid field id: 'abc'"]
+    assert not any("ON CONFLICT" in e[0] for e in conn.executed)  # no upsert
+
+
+def test_get_field_values_batch_aggregates_by_entity(monkeypatch):
+    monkeypatch.setattr(field_service, "pg_fetchall", lambda sql, params=(): [
+        {"entity_id": 1, "field_key": "a", "value": "x"},
+        {"entity_id": 1, "field_key": "b", "value": "y"},
+        {"entity_id": 2, "field_key": "a", "value": "z"},
+    ])
+    out = field_service.get_field_values_batch("contact", [1, 2])
+    assert out == {1: {"a": "x", "b": "y"}, 2: {"a": "z"}}
+
+
+def test_entity_exists(monkeypatch):
+    monkeypatch.setattr(field_service, "pg_fetchone", lambda sql, params=(): {"id": 5})
+    assert field_service.entity_exists("contact", 5) is True
+    monkeypatch.setattr(field_service, "pg_fetchone", lambda sql, params=(): None)
+    assert field_service.entity_exists("deal", 999) is False
+    assert field_service.entity_exists("widget", 1) is False  # unknown type, no query
+
+
+def test_validate_number_rejects_non_finite():
+    for bad in ("nan", "inf", "-inf", "Infinity"):
+        with pytest.raises(ValueError):
+            field_service.validate_field_value({"field_type": "number", "name": "N"}, bad)
+
+
+def test_validate_date_requires_iso():
+    field_service.validate_field_value({"field_type": "date", "name": "D"}, "2026-07-24")
+    with pytest.raises(ValueError):
+        field_service.validate_field_value({"field_type": "date", "name": "D"}, "July 24")
+
+
+def test_delete_field_definition_returns_rowcount(monkeypatch):
+    monkeypatch.setattr(field_service, "pg_execute", lambda sql, params=(): 1)
+    assert field_service.delete_field_definition(1) is True
+    monkeypatch.setattr(field_service, "pg_execute", lambda sql, params=(): 0)
+    assert field_service.delete_field_definition(999) is False
+
+
+def test_set_values_duplicate_normalized_id_reported(monkeypatch, fake_conn):
+    conn = fake_conn(
+        monkeypatch, field_service,
+        fetchone_results=[(5,)],
+        fetchall_results=[[(1, "F", "text", None)]],
+    )
+    # "1" and "01" normalize to the same id → one is reported as a duplicate.
+    out = field_service.set_field_values("contact", 5, {"1": "a", "01": "b"}, "u")
+    assert any("Duplicate field id" in e for e in out["errors"])
+    assert sum("ON CONFLICT" in e[0] for e in conn.executed) == 1  # only one upsert

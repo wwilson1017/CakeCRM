@@ -235,10 +235,12 @@ def test_clear_all_truncates_and_resets_flag(monkeypatch, fake_conn):
     assert service.clear_all() == {"ok": True}
     stmts = [s for s, _ in conn.executed]
     # clear_all is the deliberate full reset: it ALSO wipes crm_field_definitions,
-    # listed FIRST (parent-then-child lock order, matching delete_field_definition).
+    # placed after the entity tables but before crm_field_values (lock order
+    # consistent with both set_field_values entity→defs and delete_field_definition
+    # defs→values).
     assert any(
-        "TRUNCATE crm_field_definitions, companies, contacts, deals, activity_log, "
-        "tasks, crm_chatter, crm_field_values RESTART IDENTITY" in s for s in stmts
+        "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
+        "crm_field_definitions, crm_field_values RESTART IDENTITY" in s for s in stmts
     )
     assert any("sample_data_loaded = FALSE" in s for s in stmts)
 

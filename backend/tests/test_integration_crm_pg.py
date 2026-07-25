@@ -63,8 +63,8 @@ def _clean_crm(pg_db):
     """Reset all CRM state between tests so scenarios stay isolated."""
     from core.postgres import pg_execute
     pg_execute(
-        "TRUNCATE crm_field_definitions, companies, contacts, deals, activity_log, "
-        "tasks, crm_chatter, crm_field_values RESTART IDENTITY"
+        "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
+        "crm_field_definitions, crm_field_values RESTART IDENTITY"
     )
     pg_execute(
         "UPDATE crm_meta SET sample_data_loaded = FALSE, onboarding_dismissed = FALSE, "

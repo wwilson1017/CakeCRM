@@ -28,8 +28,9 @@ Deliberate divergences from the blueprint (all documented in the PR):
 
 import json
 import logging
+import math
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from core.postgres import get_connection, pg_execute, pg_fetchall, pg_fetchone
 
@@ -43,6 +44,17 @@ FIELD_TYPES = {"text", "number", "boolean", "date", "select"}
 # Guard against an oversized request holding the entity lock while doing N upserts
 # (mirrors chatter_service._MAX_LIMIT). No real field schema approaches this.
 _MAX_FIELDS_PER_WRITE = 200
+
+# Bounds on user/assistant-supplied strings. The value cap mirrors chatter's
+# MAX_MESSAGE_LEN; without these an authenticated caller (including the assistant via
+# crm_set_*_fields) could write unbounded TEXT that then flows back through the read
+# tools into the model's context. Enforced in the service (the single source of truth,
+# since the assistant tools bypass the router's Pydantic layer).
+_MAX_NAME_LEN = 100
+_MAX_KEY_LEN = 64
+_MAX_OPTION_LEN = 200
+_MAX_OPTIONS = 100
+_MAX_VALUE_LEN = 10000
 
 
 def _now() -> str:
@@ -67,6 +79,31 @@ def _parse_dropdown(row: dict | None) -> dict | None:
         except (json.JSONDecodeError, TypeError):
             row["dropdown_options"] = []
     return row
+
+
+def _options_json(options) -> str | None:
+    """Validate + JSON-encode dropdown options (bounded, unique, non-blank), or None."""
+    if not options:
+        return None
+    if len(options) > _MAX_OPTIONS:
+        raise ValueError(f"Too many dropdown options (max {_MAX_OPTIONS})")
+    cleaned = [str(o).strip() for o in options]
+    if any(not o for o in cleaned):
+        raise ValueError("Dropdown options cannot be blank")
+    if any(len(o) > _MAX_OPTION_LEN for o in cleaned):
+        raise ValueError(f"Dropdown option too long (max {_MAX_OPTION_LEN} chars)")
+    if len(set(cleaned)) != len(cleaned):
+        raise ValueError("Dropdown options must be unique")
+    return json.dumps(cleaned)
+
+
+def entity_exists(entity_type: str, entity_id: int) -> bool:
+    """True if the given contact/company/deal row exists. Kept in the service layer
+    so callers (router, tools) don't hand-roll raw entity-table SQL."""
+    table = ENTITY_TABLE_MAP.get(entity_type)
+    if not table:
+        return False
+    return pg_fetchone(f"SELECT id FROM {table} WHERE id = %s", (entity_id,)) is not None
 
 
 # ── Definitions ───────────────────────────────────────────────────────────────
@@ -107,36 +144,42 @@ def create_field_definition(data: dict) -> dict:
     name = (data.get("name") or "").strip()
     if not name:
         raise ValueError("Field name is required")
+    if len(name) > _MAX_NAME_LEN:
+        raise ValueError(f"Field name too long (max {_MAX_NAME_LEN} chars)")
 
     # Always slugify — a client-supplied key is normalized, never trusted verbatim.
     field_key = _slugify_key((data.get("field_key") or "").strip() or name)
     if not field_key:
         raise ValueError("Could not derive a field key from the name")
+    if len(field_key) > _MAX_KEY_LEN:
+        raise ValueError(f"Field key too long (max {_MAX_KEY_LEN} chars)")
 
-    options_json = json.dumps(data["dropdown_options"]) if data.get("dropdown_options") else None
+    options_json = _options_json(data.get("dropdown_options"))
+    if field_type == "select" and not options_json:
+        # A select with no options would otherwise accept ANY value (validate skips
+        # the membership check when the list is empty) — require at least one.
+        raise ValueError("A select field requires at least one option")
     now = _now()
 
-    # Server-assigned order: max+10 within the entity type (stable across deletes,
-    # unlike a count-based value which can collide after a middle field is removed).
-    order_row = pg_fetchone(
-        "SELECT COALESCE(MAX(display_order), 0) + 10 AS next FROM crm_field_definitions "
-        "WHERE entity_type = %s",
-        (entity_type,),
-    )
-    display_order = order_row["next"] if order_row else 10
-
+    # Single statement: the display_order (server-assigned max+10 within the entity
+    # type) is computed inline and the full row is returned atomically, so a
+    # concurrent clear_all can't delete the row between insert and re-select (which
+    # would return None), and there is no separate MAX round-trip.
     row = pg_fetchone(
         """INSERT INTO crm_field_definitions
            (entity_type, name, field_key, field_type, dropdown_options,
             is_required, display_order, created_at, updated_at)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+           VALUES (%s, %s, %s, %s, %s, %s,
+                   COALESCE((SELECT MAX(display_order) FROM crm_field_definitions
+                             WHERE entity_type = %s), 0) + 10,
+                   %s, %s)
+           RETURNING *""",
         (
             entity_type, name, field_key, field_type, options_json,
-            int(bool(data.get("is_required", False))), display_order, now, now,
+            int(bool(data.get("is_required", False))), entity_type, now, now,
         ),
     )
-    result = pg_fetchone("SELECT * FROM crm_field_definitions WHERE id = %s", (row["id"],))
-    return _parse_dropdown(result)
+    return _parse_dropdown(row)
 
 
 def update_field_definition(field_id: int, data: dict) -> dict | None:
@@ -153,11 +196,13 @@ def update_field_definition(field_id: int, data: dict) -> dict | None:
         name = data["name"].strip()
         if not name:
             raise ValueError("Field name cannot be blank")
+        if len(name) > _MAX_NAME_LEN:
+            raise ValueError(f"Field name too long (max {_MAX_NAME_LEN} chars)")
         fields.append("name = %s")
         params.append(name)
     if "dropdown_options" in data:
         fields.append("dropdown_options = %s")
-        params.append(json.dumps(data["dropdown_options"]) if data["dropdown_options"] else None)
+        params.append(_options_json(data["dropdown_options"]))
     if "is_required" in data and data["is_required"] is not None:
         fields.append("is_required = %s")
         params.append(int(bool(data["is_required"])))
@@ -180,12 +225,10 @@ def update_field_definition(field_id: int, data: dict) -> dict | None:
 
 
 def delete_field_definition(field_id: int) -> bool:
-    """Hard-delete a definition; its crm_field_values rows cascade via the FK."""
-    existing = pg_fetchone("SELECT id FROM crm_field_definitions WHERE id = %s", (field_id,))
-    if not existing:
-        return False
-    pg_execute("DELETE FROM crm_field_definitions WHERE id = %s", (field_id,))
-    return True
+    """Hard-delete a definition; its crm_field_values rows cascade via the FK. Returns
+    the DELETE's own rowcount (matching delete_task/delete_activity), so a racing
+    double-delete reports 404 rather than a misleading 200 from a stale pre-check."""
+    return pg_execute("DELETE FROM crm_field_definitions WHERE id = %s", (field_id,)) > 0
 
 
 # ── Values ────────────────────────────────────────────────────────────────────
@@ -252,12 +295,19 @@ def set_field_values(
     errors: list[str] = []
 
     # Parse the field-id keys up front; non-integer keys are reported, not fatal.
-    id_to_key: dict[int, str] = {}
+    id_to_raw: dict[int, str] = {}
     for field_id_str in values:
         try:
-            id_to_key[int(field_id_str)] = field_id_str
+            fid = int(field_id_str)
         except (ValueError, TypeError):
             errors.append(f"Invalid field id: {field_id_str!r}")
+            continue
+        # "1"/"01"/"+1" normalize to the same id — surface the collision instead of
+        # letting one value silently overwrite the other.
+        if fid in id_to_raw:
+            errors.append(f"Duplicate field id: {field_id_str!r}")
+            continue
+        id_to_raw[fid] = field_id_str
 
     with get_connection() as conn:
         cur = conn.cursor()
@@ -266,21 +316,21 @@ def set_field_values(
             raise ValueError(f"{entity_type} with id {entity_id} not found")
 
         defs_by_id: dict[int, dict] = {}
-        if id_to_key:
-            placeholders = ",".join("%s" for _ in id_to_key)
+        if id_to_raw:
+            placeholders = ",".join("%s" for _ in id_to_raw)
             cur.execute(
                 f"""SELECT id, name, field_type, dropdown_options
                     FROM crm_field_definitions
                     WHERE entity_type = %s AND id IN ({placeholders})
                     ORDER BY id ASC FOR SHARE""",
-                [entity_type, *id_to_key.keys()],
+                [entity_type, *id_to_raw.keys()],
             )
             for r in cur.fetchall():
                 defs_by_id[r[0]] = {"name": r[1], "field_type": r[2], "dropdown_options": r[3]}
 
         # Validate everything first (a raise here rolls back the whole txn), then upsert.
         writes: list[tuple[int, str]] = []
-        for field_id, field_id_str in id_to_key.items():
+        for field_id, field_id_str in id_to_raw.items():
             field_def = defs_by_id.get(field_id)
             if field_def is None:
                 errors.append(f"Field {field_id} not found for {entity_type}")
@@ -309,15 +359,28 @@ def validate_field_value(field_def: dict, value: str) -> None:
     validation (fixes a source bug where clearing a number/select field raised)."""
     if value is None or value == "":
         return
+    if len(value) > _MAX_VALUE_LEN:
+        raise ValueError(f"Field '{field_def['name']}' value too long (max {_MAX_VALUE_LEN} chars)")
     field_type = field_def["field_type"]
     if field_type == "number":
         try:
-            float(value)
+            parsed = float(value)
         except (ValueError, TypeError):
             raise ValueError(f"Field '{field_def['name']}' requires a number, got '{value}'") from None
+        # float() also accepts 'nan'/'inf' — reject those; a field can't hold them.
+        if not math.isfinite(parsed):
+            raise ValueError(f"Field '{field_def['name']}' requires a finite number, got '{value}'")
     elif field_type == "boolean":
         if value not in ("0", "1"):
             raise ValueError(f"Field '{field_def['name']}' requires '0' or '1', got '{value}'")
+    elif field_type == "date":
+        # Frontend sends YYYY-MM-DD; reject arbitrary text so stored dates are real.
+        try:
+            date.fromisoformat(value)
+        except ValueError:
+            raise ValueError(
+                f"Field '{field_def['name']}' requires an ISO date (YYYY-MM-DD), got '{value}'"
+            ) from None
     elif field_type == "select":
         options = json.loads(field_def["dropdown_options"]) if field_def.get("dropdown_options") else []
         if options and value not in options:

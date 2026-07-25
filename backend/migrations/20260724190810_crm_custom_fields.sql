@@ -42,3 +42,7 @@ CREATE TABLE IF NOT EXISTS crm_field_values (
 );
 
 CREATE INDEX IF NOT EXISTS idx_crm_field_values_entity ON crm_field_values(entity_type, entity_id);
+-- Supports the ON DELETE CASCADE FK lookup: deleting a definition must find its
+-- values by field_id without scanning the whole table (the unique index above leads
+-- with entity_type, so it can't serve a field_id-only lookup).
+CREATE INDEX IF NOT EXISTS idx_crm_field_values_field ON crm_field_values(field_id);

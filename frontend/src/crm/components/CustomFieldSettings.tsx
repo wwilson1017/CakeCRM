@@ -39,16 +39,21 @@ export function CustomFieldSettings() {
   const [required, setRequired] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  // Track the live tab so a mutation handler's captured (stale) load — fired after
+  // the user switched tabs — can't apply the old type's defs under the new tab.
+  const activeTypeRef = useRef(activeType);
+  useEffect(() => { activeTypeRef.current = activeType; }, [activeType]);
   const reqRef = useRef(0);
   const load = useCallback(async () => {
     const reqId = ++reqRef.current;
+    const forType = activeType;
     try {
       const data = await api<CrmFieldDefinition[]>(`/api/crm/fields?entity_type=${activeType}`);
-      if (reqId !== reqRef.current) return;
+      if (reqId !== reqRef.current || forType !== activeTypeRef.current) return;
       setDefs(data);
       setLoadError(false);
     } catch {
-      if (reqId !== reqRef.current) return;
+      if (reqId !== reqRef.current || forType !== activeTypeRef.current) return;
       setLoadError(true);
     }
   }, [activeType]);

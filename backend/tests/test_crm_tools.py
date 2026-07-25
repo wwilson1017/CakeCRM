@@ -245,12 +245,12 @@ def test_get_fields_no_id_lists_definitions(monkeypatch):
 
 
 def test_get_fields_with_missing_entity_returns_error(monkeypatch):
-    monkeypatch.setattr(tools, "pg_fetchone", lambda *a, **k: None)
+    monkeypatch.setattr(field_service, "entity_exists", lambda et, eid: False)
     assert tools.crm_get_contact_fields(999) == {"error": "contact 999 not found"}
 
 
 def test_get_fields_with_id_returns_values(monkeypatch):
-    monkeypatch.setattr(tools, "pg_fetchone", lambda *a, **k: {"id": 5})
+    monkeypatch.setattr(field_service, "entity_exists", lambda et, eid: True)
     monkeypatch.setattr(field_service, "get_field_values",
                         lambda et, eid: [{"field_id": 1, "field_key": "tier", "value": "A"}])
     out = tools.crm_get_deal_fields(5)
@@ -258,7 +258,7 @@ def test_get_fields_with_id_returns_values(monkeypatch):
 
 
 def test_set_fields_normalizes_and_reports_unknown(monkeypatch):
-    monkeypatch.setattr(tools, "pg_fetchone", lambda *a, **k: {"id": 5})
+    monkeypatch.setattr(field_service, "entity_exists", lambda et, eid: True)
     monkeypatch.setattr(field_service, "list_field_definitions",
                         lambda et: [{"id": 9, "field_key": "vip"}])
     captured = {}
@@ -273,7 +273,7 @@ def test_set_fields_normalizes_and_reports_unknown(monkeypatch):
 
 
 def test_set_fields_rejects_none_with_clear_hint(monkeypatch):
-    monkeypatch.setattr(tools, "pg_fetchone", lambda *a, **k: {"id": 5})
+    monkeypatch.setattr(field_service, "entity_exists", lambda et, eid: True)
     monkeypatch.setattr(field_service, "list_field_definitions", lambda et: [{"id": 9, "field_key": "vip"}])
     # Only a None value → nothing valid to set → single error mentioning the clear contract.
     out = tools.crm_set_contact_fields(5, {"vip": None})
@@ -281,10 +281,29 @@ def test_set_fields_rejects_none_with_clear_hint(monkeypatch):
 
 
 def test_set_fields_translates_service_valueerror(monkeypatch):
-    monkeypatch.setattr(tools, "pg_fetchone", lambda *a, **k: {"id": 5})
+    monkeypatch.setattr(field_service, "entity_exists", lambda et, eid: True)
     monkeypatch.setattr(field_service, "list_field_definitions", lambda et: [{"id": 9, "field_key": "amount"}])
     def raise_ve(*a, **k):
         raise ValueError("Field 'Amount' requires a number, got 'abc'")
     monkeypatch.setattr(field_service, "set_field_values", raise_ve)
     out = tools.crm_set_deal_fields(5, {"amount": "abc"})
     assert out == {"error": "Field 'Amount' requires a number, got 'abc'"}
+
+
+def test_set_fields_missing_entity_returns_error(monkeypatch):
+    monkeypatch.setattr(field_service, "entity_exists", lambda et, eid: False)
+    assert tools.crm_set_contact_fields(999, {"vip": "1"}) == {"error": "contact 999 not found"}
+
+
+def test_set_fields_empty_map_returns_error():
+    assert tools.crm_set_contact_fields(5, {}) == {"error": "No fields provided"}
+
+
+def test_set_fields_empty_string_clear_forwards(monkeypatch):
+    monkeypatch.setattr(field_service, "entity_exists", lambda et, eid: True)
+    monkeypatch.setattr(field_service, "list_field_definitions", lambda et: [{"id": 9, "field_key": "vip"}])
+    captured = {}
+    monkeypatch.setattr(field_service, "set_field_values",
+                        lambda et, eid, vals, email: captured.update(vals=vals) or {"ok": True, "updated": 1, "errors": []})
+    tools.crm_set_contact_fields(5, {"vip": ""})
+    assert captured["vals"] == {"9": ""}   # empty string forwarded (clears downstream)

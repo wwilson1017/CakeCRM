@@ -828,13 +828,15 @@ def _truncate_all(cur, include_definitions: bool = False) -> None:
     # is left to Postgres's deadlock detector.) The exact string is pinned by a test.
     #
     # include_definitions=True (clear_all only) additionally wipes the GLOBAL custom-
-    # field schema. Definitions lead the list so TRUNCATE locks the parent before the
-    # child crm_field_values — matching delete_field_definition's parent-then-cascade
-    # lock order. demo-clear leaves definitions intact (user config survives it).
+    # field schema. crm_field_definitions is placed AFTER the entity tables but BEFORE
+    # crm_field_values so the lock order is consistent with BOTH concurrent writers:
+    # set_field_values locks entity→definitions, and delete_field_definition locks
+    # definitions→values — entity, then definitions, then values satisfies both and
+    # can't invert against either. demo-clear leaves definitions intact (user config).
     if include_definitions:
         cur.execute(
-            "TRUNCATE crm_field_definitions, companies, contacts, deals, activity_log, "
-            "tasks, crm_chatter, crm_field_values RESTART IDENTITY"
+            "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
+            "crm_field_definitions, crm_field_values RESTART IDENTITY"
         )
     else:
         cur.execute(

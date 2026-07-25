@@ -846,8 +846,12 @@ async def set_field_values(
 ):
     # No email claim in CakeCRM JWTs (payload is {"sub","role"}); fall back to sub.
     editor = user.get("email") or user.get("sub") or ""
+    # Offloaded to a thread (like the bulk CSV import): this write holds an entity
+    # FOR UPDATE lock while doing up to 200 upserts, so it must not block the loop.
     try:
-        return field_service.set_field_values(entity_type, entity_id, body.values, editor)
+        return await run_in_threadpool(
+            field_service.set_field_values, entity_type, entity_id, body.values, editor
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
     except psycopg2.errors.ForeignKeyViolation:

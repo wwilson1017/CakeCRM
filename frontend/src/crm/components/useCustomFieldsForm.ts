@@ -46,7 +46,9 @@ export function useCustomFieldsForm(entityType: 'contact' | 'company' | 'deal', 
       .then(rows => {
         const seed: Record<string, string> = {};
         for (const r of rows) seed[String(r.field_id)] = r.value ?? '';
-        setValues(seed);
+        // Merge with prev so a slow values response can't clobber edits the user
+        // already typed (prev wins per key); original stays the fetched baseline.
+        setValues(prev => ({ ...seed, ...prev }));
         setOriginal(seed);
       })
       .catch(() => {});

@@ -17,7 +17,6 @@ from collections.abc import Callable
 
 import psycopg2
 
-from core.postgres import pg_fetchone
 from crm import chatter_service, field_service, service as crm
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -817,13 +816,6 @@ def _normalize_field_value(value) -> str:
     return str(value)
 
 
-def _entity_exists(entity_type: str, entity_id: int) -> bool:
-    table = field_service.ENTITY_TABLE_MAP.get(entity_type)
-    if not table:
-        return False
-    return pg_fetchone(f"SELECT id FROM {table} WHERE id = %s", (entity_id,)) is not None
-
-
 def _get_entity_fields(entity_type: str, entity_id: int | None) -> dict:
     """No id → list the definitions (schema discovery). With an id → that entity's
     values (every definition, unset ones with value=None)."""
@@ -841,7 +833,7 @@ def _get_entity_fields(entity_type: str, entity_id: int | None) -> dict:
             for d in defs
         ]
         return {"fields": fields, "total": len(fields)}
-    if not _entity_exists(entity_type, entity_id):
+    if not field_service.entity_exists(entity_type, entity_id):
         return {"error": f"{entity_type} {entity_id} not found"}
     try:
         rows = field_service.get_field_values(entity_type, entity_id)
@@ -855,7 +847,7 @@ def _set_entity_fields(entity_type: str, entity_id: int, fields: dict) -> dict:
     None values are rejected (send "" to clear); unknown keys are reported, not set."""
     if not isinstance(fields, dict) or not fields:
         return {"error": "No fields provided"}
-    if not _entity_exists(entity_type, entity_id):
+    if not field_service.entity_exists(entity_type, entity_id):
         return {"error": f"{entity_type} {entity_id} not found"}
     try:
         defs = field_service.list_field_definitions(entity_type)
