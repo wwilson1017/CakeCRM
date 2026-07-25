@@ -567,6 +567,24 @@ async def test_continuation_turn_carries_context(store):
 
 
 @pytest.mark.asyncio
+async def test_context_reaches_confirmation_wrapup_turn(store):
+    """The realistic record path — act on "this deal" → confirmation gate → narration
+    wrap-up — makes a SECOND stream_turn call. The record note must be present in BOTH
+    the main turn and the wrap-up turn (a future refactor that rebuilds the volatile
+    half for the wrap-up without threading context would regress this)."""
+    reg = Registry(writes={"crm_create_contact"}, descriptions={"crm_create_contact": "Create a contact"})
+    prov = FakeProvider([
+        [_complete([_tc("crm_create_contact", args={"name": "X"})], stop="tool_use")],
+        [{"type": "text", "text": "I'll add that."}, _complete()],
+    ])
+    events = await _run(prov, reg, [{"role": "user", "content": "add X for this deal"}],
+                        tool_mode="normal", context={"record_type": "deal", "record_id": 8})
+    assert "confirm" in _types(events)
+    assert len(prov.captured_system_prompts) >= 2  # main turn + wrap-up narration turn
+    assert all(_NOTE_MARK in vol and "deal #8" in vol for (_, vol) in prov.captured_system_prompts[:2])
+
+
+@pytest.mark.asyncio
 async def test_no_context_no_note(store):
     prov = FakeProvider([[{"type": "text", "text": "Hi"}, _complete()]])
     await _run(prov, Registry(), [{"role": "user", "content": "hello"}])

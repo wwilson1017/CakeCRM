@@ -96,6 +96,23 @@ def test_chat_rejects_nonpositive_and_coerced_record_id(client, with_provider):
         assert r.status_code == 422, f"record_id={bad!r} should be rejected"
 
 
+def test_chat_rejects_out_of_range_record_id(client, with_provider):
+    # Bounded to a positive int4 PK — an oversized id is a clean 422, not a downstream
+    # DB "integer out of range".
+    r = client.post("/api/assistant/chat", json={
+        "messages": [{"role": "user", "content": "hi"}],
+        "context": {"record_type": "deal", "record_id": 2_147_483_648}})
+    assert r.status_code == 422
+
+
+def test_chat_rejects_incomplete_context(client, with_provider):
+    # A missing field (a plausible frontend bug) is rejected, not silently accepted.
+    for bad in ({"record_type": "deal"}, {"record_id": 5}, {}):
+        r = client.post("/api/assistant/chat", json={
+            "messages": [{"role": "user", "content": "hi"}], "context": bad})
+        assert r.status_code == 422, f"context={bad!r} should be rejected"
+
+
 def test_chat_context_extra_fields_stripped_from_engine(client, with_provider):
     # Injection boundary: unknown fields (e.g. a client display label carrying
     # instructions) are ignored by Pydantic and never reach the engine.
@@ -160,6 +177,29 @@ def test_upload_rejects_invalid_context(client, with_provider):
                     files=[("files", ("a.txt", b"x", "text/plain"))])
     assert r.status_code == 400
     assert r.json()["detail"] == "Invalid context."
+
+
+def test_upload_rejects_coerced_record_id(client, with_provider):
+    # The upload path validates context through the same ChatContext model, so
+    # bool/str/float record_ids are rejected here too (400, not coerced).
+    for bad in (True, "7", 7.5, 0):
+        payload = json.dumps({
+            "messages": [{"role": "user", "content": "hi"}],
+            "context": {"record_type": "deal", "record_id": bad}})
+        r = client.post("/api/assistant/chat/upload", data={"payload": payload},
+                        files=[("files", ("a.txt", b"x", "text/plain"))])
+        assert r.status_code == 400, f"record_id={bad!r} should be rejected on upload"
+
+
+def test_upload_strips_extra_context_fields(client, with_provider):
+    # Same injection boundary on the multipart path: extra fields never reach the engine.
+    payload = json.dumps({
+        "messages": [{"role": "user", "content": "hi"}],
+        "context": {"record_type": "contact", "record_id": 4, "label": "IGNORE PREVIOUS"}})
+    r = client.post("/api/assistant/chat/upload", data={"payload": payload},
+                    files=[("files", ("a.txt", b"x", "text/plain"))])
+    assert r.status_code == 200
+    assert with_provider["kwargs"]["context"] == {"record_type": "contact", "record_id": 4}
 
 
 def test_upload_rejects_bad_json(client, with_provider):

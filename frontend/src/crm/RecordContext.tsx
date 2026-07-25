@@ -8,8 +8,11 @@
 //     the route param (always current, even mid-load); loaded data supplies only
 //     the optional display label.
 // Cleanup is OWNERSHIP-based (per-publisher token), not equality-based, so under
-// React Strict Mode's double-invoked effects — or two publishers of the same
-// record — an older publisher can never clear a newer one's value.
+// React Strict Mode's double-invoked effects — or a keyed deal-sheet remount — an
+// older publisher can never clear a newer one's value. Publishers are mutually
+// exclusive by routing (only one detail page renders via <Outlet/> at a time, and
+// DealDetailSheet is rendered only by Pipeline/Dashboard), so a single-entry store
+// suffices — there is never a stack of overlapping records to restore.
 //
 // `label` is display-only (drawer chip). The wire payload built in
 // useAssistantChat carries record_type + record_id exclusively.
@@ -64,7 +67,9 @@ export function usePublishActiveRecord(
   const { publish, clearIfOwner } = useActiveRecord();
   const tokenRef = useRef({}); // stable identity per publisher instance
   useEffect(() => {
-    if (!recordType || !recordId || !Number.isFinite(recordId)) return;
+    // Guard to the backend's domain: a positive safe integer (record PKs). Anything
+    // else (NaN, fractional, negative) is never published, so it can't reach the wire.
+    if (!recordType || !recordId || !Number.isInteger(recordId) || recordId <= 0) return;
     const token = tokenRef.current;
     publish({ recordType, recordId, label }, token);
     return () => clearIfOwner(token);

@@ -30,6 +30,10 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
   const navigate = useNavigate();
   const { record } = useActiveRecord();
   const [open, setOpen] = useState(false);
+  // Latch: mount the drawer only after the FIRST open, then keep it mounted so chat
+  // state + the open-record ref survive close/reopen — without paying the mount cost
+  // (and the conversation-list fetch) for CRM sessions that never open it.
+  const [hasOpened, setHasOpened] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -46,7 +50,10 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
     function onDown(e: MouseEvent) {
       const t = e.target as Node;
       if (panelRef.current?.contains(t) || btnRef.current?.contains(t)) return;
+      // The scrim covers the viewport, so any "outside" click is on it — restore
+      // focus to the launcher (the drawer we're closing may hold focus).
       setOpen(false);
+      btnRef.current?.focus();
     }
     document.addEventListener('keydown', onKey);
     document.addEventListener('mousedown', onDown);
@@ -63,16 +70,18 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
 
   function handleClick() {
     if (loading) return;
-    if (ready) setOpen(o => !o);
-    else navigate('/setup');
+    if (ready) {
+      setOpen(o => !o);
+      setHasOpened(true); // first open latches the drawer mounted (see hasOpened)
+    } else navigate('/setup');
   }
 
   return (
     <>
-      {/* The drawer stays MOUNTED whenever AI is ready (translated off-screen when
-          closed) so conversation state + the open-record ref survive open/close and
-          the post-confirm continuation never loses its context (issue #14). */}
-      {ready && (
+      {/* Mounted after the first open (hasOpened) and kept mounted (translated
+          off-screen when closed) so conversation state + the open-record ref survive
+          open/close and the post-confirm continuation never loses its context (#14). */}
+      {ready && hasOpened && (
         <>
           {open && (
             <div
@@ -91,7 +100,10 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
             aria-hidden={!open}
             tabIndex={-1}
             style={{
-              position: 'fixed', top: 0, bottom: 0, left: 0, zIndex: open ? 59 : -1,
+              // Constant z-index (not dropped on close) so the panel stays above the
+              // page while it slides out; delayed visibility:hidden then removes it
+              // from paint + hit-testing once closed.
+              position: 'fixed', top: 0, bottom: 0, left: 0, zIndex: 59,
               width: 'min(420px, 100vw)',
               background: BG_CARD, borderRight: `1px solid ${LINE}`,
               boxShadow: '12px 0 32px rgba(31,35,40,0.16)',
@@ -99,7 +111,12 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
               outline: 'none',
               transform: open ? 'translateX(0)' : 'translateX(-100%)',
               visibility: open ? 'visible' : 'hidden',
-              transition: 'transform 0.22s ease-out',
+              // On close, delay `visibility:hidden` until the slide-out finishes so
+              // the drawer actually animates off-screen (visibility isn't otherwise
+              // transitionable); on open it flips to visible immediately.
+              transition: open
+                ? 'transform 0.22s ease-out'
+                : 'transform 0.22s ease-out, visibility 0s linear 0.22s',
             }}
           >
             <div style={{

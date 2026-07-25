@@ -58,7 +58,10 @@ class ChatContext(BaseModel):
     are ignored by Pydantic's default and never reach the engine.
     """
     record_type: Literal["deal", "contact", "company"]
-    record_id: Annotated[int, Field(strict=True, gt=0)]
+    # StrictInt (bool/str/float rejected, not coerced) + bounded to a positive int4 PK
+    # (le) so an out-of-range id is a clean 422, never a downstream "integer out of
+    # range" from the crm_get_* tools.
+    record_id: Annotated[int, Field(strict=True, gt=0, le=2_147_483_647)]
 
 
 class ChatRequest(BaseModel):

@@ -7,7 +7,7 @@
 // POST /confirm, and once a message's last pending card resolves we re-POST an
 // empty-messages continuation so the model finishes the turn.
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 
 import { getToken, TOKEN_KEY } from '../core/auth/tokenUtils';
 import { toast } from '../shared/toast';
@@ -112,12 +112,21 @@ export function useAssistantChat(recordContext?: ActiveRecordContext | null) {
   const textBufRef = useRef<Record<string, string>>({});
   const rafRef = useRef<number | null>(null);
 
-  // Latest-value ref for the open CRM record. Written during render (idempotent)
-  // — the same stale-closure guard as convIdRef/toolModeRef, but with NO committed-
-  // render window: a send/continuation always reads the record open RIGHT NOW, so
-  // navigating deal → contact while the drawer is open updates the next turn.
+  // Latest-value ref for the open CRM record, mirrored in the COMMIT phase
+  // (useLayoutEffect runs after commit, before paint and before any event handler
+  // can fire), so a send/continuation fired from a click always reads the record
+  // currently on screen — with no render-phase side effect and no committed-render
+  // window. (convIdRef/toolModeRef are assigned imperatively at their own call
+  // sites; this ref tracks a prop, hence the layout-effect mirror.)
   const recordCtxRef = useRef<ActiveRecordContext | null>(null);
-  recordCtxRef.current = recordContext ?? null;
+  useLayoutEffect(() => { recordCtxRef.current = recordContext ?? null; }, [recordContext]);
+
+  // Snapshot of the context for the currently-active turn. A post-confirm
+  // continuation must reuse the record that STARTED the turn, not whatever record is
+  // open when the user finally approves — otherwise "update this deal" begun on deal
+  // 3 would resume bound to deal 4 if the user navigated away mid-confirmation. null
+  // = no active snapshot (e.g. a reload-resumed conversation) → fall back to live.
+  const turnCtxRef = useRef<{ value: { record_type: string; record_id: number } | undefined } | null>(null);
 
   // Only type + id cross the wire — label is display-only (injection boundary).
   const wireContext = useCallback((): { record_type: string; record_id: number } | undefined => {
@@ -322,13 +331,16 @@ export function useAssistantChat(recordContext?: ActiveRecordContext | null) {
     if (abortRef.current) return; // a turn is already streaming
     const userMsg: ChatMessage = { id: newId(), role: 'user', content: text };
     const asstId = startAssistant([userMsg]);
+    // Snapshot the record for THIS turn so its post-confirm continuation reuses it.
+    const turnContext = wireContext();
+    turnCtxRef.current = { value: turnContext };
     const payload = {
       messages: [{ role: 'user', content: text }],
       conversation_id: convIdRef.current,
       tool_mode: toolModeRef.current,
       // JSON.stringify drops an `undefined` value, so no key is added when no
       // record is open — the wire shape stays back-compatible.
-      context: wireContext(),
+      context: turnContext,
     };
     if (files && files.length) {
       const fd = new FormData();
@@ -344,14 +356,16 @@ export function useAssistantChat(recordContext?: ActiveRecordContext | null) {
     if (!convIdRef.current || abortRef.current) return;
     const asstId = startAssistant([]);
     // A continuation is a fresh HTTP request that rebuilds the system prompt, so it
-    // must carry the record open NOW (ref) — otherwise the post-confirm resumed turn
-    // silently loses the record context.
+    // must carry the STARTING turn's record (turnCtxRef snapshot) — not whatever
+    // record is open now. Fall back to the live record only for a reload-resumed
+    // conversation that has no snapshot.
+    const context = turnCtxRef.current ? turnCtxRef.current.value : wireContext();
     void runStream(
       JSON.stringify({
         messages: [],
         conversation_id: convIdRef.current,
         tool_mode: toolModeRef.current,
-        context: wireContext(),
+        context,
       }),
       false,
       asstId,
@@ -440,6 +454,7 @@ export function useAssistantChat(recordContext?: ActiveRecordContext | null) {
     abortRef.current = null;
     setIsStreaming(false);
     convIdRef.current = null;
+    turnCtxRef.current = null; // discard any active-turn context snapshot
     setConversationId(null);
     setContextUsage(null);
     commit([]);
@@ -484,6 +499,7 @@ export function useAssistantChat(recordContext?: ActiveRecordContext | null) {
       };
     });
     convIdRef.current = convId;
+    turnCtxRef.current = null; // a reloaded conversation has no active-turn snapshot
     setConversationId(convId);
     commit(mapped);
   }, [commit]);
