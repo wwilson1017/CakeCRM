@@ -46,12 +46,18 @@ export function PipelinePage() {
   // write so the SERVER applies moves in the user's action order (ending at the
   // latest intent), never racing two concurrent writes for the same deal.
   const dealWriteChain = useRef<Map<number, Promise<void>>>(new Map());
+  // Per-deal last server-CONFIRMED stage — the ground truth a failed move reverts
+  // to. Seeded from each load and advanced on every successful PUT (even when the
+  // display reconcile is superseded), so a rolled-back move restores the real
+  // server stage rather than an optimistic intermediate that itself never persisted.
+  const dealConfirmedStage = useRef<Map<number, string>>(new Map());
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const d = await api<PipelineData>('/api/crm/deals');
       setData(d);
+      dealConfirmedStage.current = new Map(d.deals.map(deal => [deal.id, deal.stage]));
     } catch { /* data stays null → LoadError below */ }
     finally { setLoading(false); }
   }, []);
@@ -63,17 +69,20 @@ export function PipelinePage() {
   // untouched, so a failed move needs no position bookkeeping) — so the card,
   // column counts, and totals all move together at drop time. Persistence runs in
   // the background: on success we reconcile with the canonical PUT response (new
-  // updated_at, joined names); on failure we revert just this deal's stage and
-  // toast. The ported Kanban hook mirrors `data` between gestures, so it re-syncs
-  // to whichever branch wins — there is no separate rollback snapshot, and a
+  // updated_at, joined names); on failure we revert this deal's stage to its last
+  // server-confirmed value and toast. The ported Kanban hook mirrors `data` between
+  // gestures, so it re-syncs to whichever branch wins — the only extra state is a
+  // per-deal last-confirmed stage (server truth, not a board snapshot), and a
   // concurrent change made elsewhere (detail sheet, new deal) is never clobbered.
   //
-  // Rapid moves of the SAME deal are made safe two ways: (1) the PUTs are chained
+  // Rapid moves of the SAME deal are made safe three ways: (1) the PUTs are chained
   // per deal so the server applies them in action order; (2) a per-deal op sequence
   // means only the latest op reconciles/reverts the client (no intermediate flicker
-  // from an earlier op's response). NOTE: if two chained writes for one deal BOTH
-  // fail, the client is left at the later op's intermediate stage — a rare double-
-  // failure that self-heals on the next load; the deal always holds a valid stage.
+  // from an earlier op's response); (3) a failed move reverts to the deal's last
+  // server-CONFIRMED stage (seeded on load, advanced on every successful PUT), not
+  // its optimistic fromStage — so even if two chained writes for one deal BOTH fail,
+  // the board rolls back to the true server stage instead of an intermediate stage
+  // that never persisted.
   const moveDealStage = useCallback((deal: CrmDeal, toStage: string, fromStage: string) => {
     const dealId = deal.id;
     const seq = (dealOpSeq.current.get(dealId) ?? 0) + 1;
@@ -90,6 +99,11 @@ export function PipelinePage() {
         const updated = await api<CrmDeal>(`/api/crm/deals/${dealId}`, {
           method: 'PUT', body: JSON.stringify({ stage: toStage }),
         });
+        // Record server truth for THIS write regardless of supersession — a later
+        // failed move in the same chain reverts to a real confirmed stage, not an
+        // optimistic intermediate. Use the response's stage, not toStage, so the
+        // ground truth is whatever the server actually stored.
+        dealConfirmedStage.current.set(dealId, updated.stage);
         if (dealOpSeq.current.get(dealId) !== seq) return; // a newer move superseded this one
         setData(prev => prev ? {
           ...prev,
@@ -99,9 +113,15 @@ export function PipelinePage() {
         if (dealOpSeq.current.get(dealId) !== seq) return; // superseded — leave the newer state
         console.error('Failed to move deal:', err);
         toast.error('Failed to move deal.');
+        // Revert to the last server-confirmed stage, not this op's optimistic
+        // fromStage: if an earlier chained write for this deal also failed, fromStage
+        // is an intermediate the server never stored, so it would leave the board out
+        // of sync until the next load. `?? fromStage` covers a deal with no confirmed
+        // entry yet (a first move, where fromStage IS the confirmed stage).
+        const confirmed = dealConfirmedStage.current.get(dealId) ?? fromStage;
         setData(prev => prev ? {
           ...prev,
-          deals: prev.deals.map(d => d.id === dealId ? { ...d, stage: fromStage } : d),
+          deals: prev.deals.map(d => d.id === dealId ? { ...d, stage: confirmed } : d),
         } : prev);
       }
     });
