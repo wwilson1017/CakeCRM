@@ -28,3 +28,27 @@ export function StatusBadge({ status }: { status: string }) {
   const c = STATUS_COLORS[status] || STATUS_COLORS.inactive;
   return <span style={{ ...badgeBase, background: c.bg, color: c.color }}>{status}</span>;
 }
+
+// AI-estimated touch count (issue #16). Three "12-touches" bands: 0-4 dead zone (amber),
+// 5-12 closing window (green), 13+ long-cycle (blue). A NULL count renders nothing — the
+// zero-keys degradation rule holds by construction (no count is written without a provider).
+const TOUCH_COLORS = {
+  low: { bg: 'rgba(176,124,46,0.12)', color: GOLD },       // 0-4
+  mid: { bg: 'rgba(46,125,79,0.12)', color: SAGE },        // 5-12
+  high: { bg: 'rgba(58,108,176,0.12)', color: '#3A6CB0' }, // 13+
+} as const;
+
+export function TouchCountPill({ count }: { count?: number | null }) {
+  if (count == null) return null;
+  const band = count <= 4 ? 'low' : count <= 12 ? 'mid' : 'high';
+  const c = TOUCH_COLORS[band];
+  const label = count === 1 ? '1 touch' : `${count} touches`;
+  return (
+    <span
+      title="AI-estimated touches, from recent notes & activities. Most deals close between touch 5 and 12."
+      style={{ ...badgeBase, textTransform: 'none', padding: '2px 8px', background: c.bg, color: c.color }}
+    >
+      {label}
+    </span>
+  );
+}

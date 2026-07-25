@@ -21,6 +21,7 @@ never reused except by ``TRUNCATE ... RESTART IDENTITY``, which also wipes
 from datetime import datetime, timezone
 
 from core.postgres import get_connection, pg_fetchall, pg_fetchone, row_to_dict
+from crm import touch_count_service
 
 CHATTER_ENTITY_TYPES = ("deal", "contact")
 _ENTITY_TABLE = {"deal": "deals", "contact": "contacts"}
@@ -96,7 +97,13 @@ def add_note(entity_type: str, entity_id: int, message: str) -> dict:
         )
         # Hydrate from the INSERT's own row, inside the transaction — a post-commit
         # re-select could return None if a concurrent delete removes the row first.
-        return row_to_dict(cur, cur.fetchone())
+        note = row_to_dict(cur, cur.fetchone())
+    # A note on a deal is fresh touch-count evidence. Schedule AFTER the transaction
+    # commits (block exit) so the worker can actually read the note; schedule_recompute is
+    # O(1) and never raises, so it can't break a note write. Contact notes don't trigger.
+    if entity_type == "deal":
+        touch_count_service.schedule_recompute(entity_id)
+    return note
 
 
 def get_chatter(
@@ -132,14 +139,28 @@ def update_note(note_id: int, message: str) -> dict | None:
 def archive_note(note_id: int) -> bool | None:
     """Soft-hide a note (no hard delete). Returns None if the note does not exist."""
     row = pg_fetchone(
-        "UPDATE crm_chatter SET archived = 1 WHERE id = %s RETURNING id", (note_id,)
+        "UPDATE crm_chatter SET archived = 1 WHERE id = %s RETURNING id, entity_type, entity_id",
+        (note_id,),
     )
-    return True if row else None
+    if not row:
+        return None
+    # Archiving removes a note from the touch-count evidence set and usually LOWERS the
+    # watermark (it's often the newest note), so force_write lets the CAS repair the count.
+    if row.get("entity_type") == "deal":
+        touch_count_service.schedule_recompute(row["entity_id"], force_write=True)
+    return True
 
 
 def unarchive_note(note_id: int) -> bool | None:
     """Restore an archived note. Returns None if the note does not exist."""
     row = pg_fetchone(
-        "UPDATE crm_chatter SET archived = 0 WHERE id = %s RETURNING id", (note_id,)
+        "UPDATE crm_chatter SET archived = 0 WHERE id = %s RETURNING id, entity_type, entity_id",
+        (note_id,),
     )
-    return True if row else None
+    if not row:
+        return None
+    # Restoring a note adds it back to the evidence set — force_write so the CAS repair
+    # applies even though the watermark/count may not advance.
+    if row.get("entity_type") == "deal":
+        touch_count_service.schedule_recompute(row["entity_id"], force_write=True)
+    return True

@@ -59,6 +59,25 @@ def reset_model_listing_cache():
     model_listing._locks.clear()
 
 
+@pytest.fixture(autouse=True)
+def _no_touch_count_daemon(monkeypatch):
+    """Keep the hermetic suite from spawning the real touch-count daemon thread (issue #16):
+    any test that adds a deal note/activity hits schedule_recompute, which would lazily start
+    a background thread. No-op the lazy worker start and give each test a fresh queue/pending/
+    worker so module-level state never leaks between tests. Tests that exercise the worker
+    directly call _process_one or re-patch _ensure_worker themselves (last patch wins)."""
+    import queue as _q
+
+    from crm import touch_count_service as tcs
+
+    monkeypatch.setattr(tcs, "_ensure_worker", lambda: None)
+    monkeypatch.setattr(tcs, "_queue", _q.Queue(maxsize=tcs.QUEUE_MAX))
+    monkeypatch.setattr(tcs, "_pending", {})
+    monkeypatch.setattr(tcs, "_worker", None)
+    monkeypatch.setattr(tcs, "_last_backfill_at", None)
+    yield
+
+
 class FakeCursor:
     """Raw-cursor stand-in. execute() records normalized SQL + params; fetchone/
     fetchall pop from queues seeded on the owning FakeConn. Mirrors the REAL

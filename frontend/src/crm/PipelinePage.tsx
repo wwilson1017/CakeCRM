@@ -4,6 +4,7 @@ import { api } from '../core/api/client';
 import type { CrmDeal } from '../core/types';
 import { DealForm } from './components/DealForm';
 import { DealDetailSheet } from './components/DealDetailSheet';
+import { TouchCountPill } from './components/badges';
 import { STAGE_COLORS, STAGE_ORDER } from './constants';
 import { IconPlus } from '../shared/icons';
 import { useIsMobile } from '../shared/useIsMobile';
@@ -170,10 +171,11 @@ export function PipelinePage() {
                         fontSize: 15, color: INK, flexShrink: 0, marginLeft: 8,
                       }}>${deal.value.toLocaleString()}</span>
                     </div>
-                    <div style={{ display: 'flex', gap: 12, fontSize: 12, color: INK_DIM }}>
+                    <div style={{ display: 'flex', gap: 12, alignItems: 'center', fontSize: 12, color: INK_DIM }}>
                       {deal.contact_name && <span>{deal.contact_name}</span>}
                       {deal.probability > 0 && <span>{deal.probability}%</span>}
                       {deal.expected_close_date && <span>{deal.expected_close_date}</span>}
+                      <TouchCountPill count={deal.ai_touch_count} />
                     </div>
                   </div>
                 ))}
@@ -193,7 +195,10 @@ export function PipelinePage() {
                     onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = stageBg; }}
                     onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
                   >
-                    <span style={{ fontSize: 14, color: INK }}>{deal.title}</span>
+                    <span style={{ fontSize: 14, color: INK, display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{deal.title}</span>
+                      <TouchCountPill count={deal.ai_touch_count} />
+                    </span>
                     <span style={{ fontSize: 13, color: INK_MUTE }}>{deal.contact_name || '—'}</span>
                     <span style={{
                       fontFamily: FONT_DISPLAY,

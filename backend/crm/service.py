@@ -13,6 +13,7 @@ import logging
 from datetime import datetime, timezone
 
 from core.postgres import get_connection, pg_execute, pg_fetchall, pg_fetchone
+from crm import touch_count_service
 
 logger = logging.getLogger(__name__)
 
@@ -182,12 +183,17 @@ def delete_contact(contact_id: int) -> bool:
             return False
         cur.execute("DELETE FROM activity_log WHERE contact_id = %s", (contact_id,))
         cur.execute("DELETE FROM tasks WHERE contact_id = %s", (contact_id,))
-        # crm_chatter is polymorphic (no FK), so its notes are dropped explicitly —
-        # otherwise a reused contact SERIAL id would inherit this contact's notes.
-        # NOTE: deals have no delete path today; if a delete_deal is ever added it
-        # MUST do the same FOR UPDATE lock + this DELETE for entity_type='deal'.
+        # crm_chatter and crm_field_provenance are polymorphic (no FK), so their rows are
+        # dropped explicitly — otherwise a reused contact SERIAL id would inherit this
+        # contact's notes / AI badges.
+        # NOTE: deals have no delete path today; if a delete_deal is ever added it MUST do
+        # the same FOR UPDATE lock + these DELETEs for entity_type='deal'.
         cur.execute(
             "DELETE FROM crm_chatter WHERE entity_type = 'contact' AND entity_id = %s",
+            (contact_id,),
+        )
+        cur.execute(
+            "DELETE FROM crm_field_provenance WHERE entity_type = 'contact' AND entity_id = %s",
             (contact_id,),
         )
         cur.execute("DELETE FROM contacts WHERE id = %s", (contact_id,))
@@ -576,7 +582,12 @@ def log_activity(activity: str, note: str = "", contact_id: int | None = None,
            VALUES (%s, %s, %s, %s) RETURNING id""",
         (activity, note, contact_id, deal_id),
     )
-    return pg_fetchone("SELECT * FROM activity_log WHERE id = %s", (row["id"],)) or {}
+    result = pg_fetchone("SELECT * FROM activity_log WHERE id = %s", (row["id"],)) or {}
+    # An activity on a deal is fresh touch-count evidence — queue a recompute (O(1), never
+    # raises; the insert has already committed via the pg_fetchone helpers).
+    if deal_id:
+        touch_count_service.schedule_recompute(deal_id)
+    return result
 
 
 def get_activity_log(contact_id: int | None = None, deal_id: int | None = None, limit: int = 20) -> list[dict]:
@@ -675,7 +686,8 @@ def get_dashboard_stats() -> dict:
 
 # ── First-run / sample-data state (crm_meta singleton) ────────────────────────
 
-_CRM_TABLES = ("companies", "contacts", "deals", "tasks", "activity_log", "crm_chatter")
+_CRM_TABLES = ("companies", "contacts", "deals", "tasks", "activity_log", "crm_chatter",
+               "crm_field_provenance")
 
 
 def get_crm_meta() -> dict:
@@ -700,7 +712,8 @@ def is_crm_empty() -> bool:
                 + (SELECT COUNT(*) FROM deals)
                 + (SELECT COUNT(*) FROM tasks)
                 + (SELECT COUNT(*) FROM activity_log)
-                + (SELECT COUNT(*) FROM crm_chatter) AS total"""
+                + (SELECT COUNT(*) FROM crm_chatter)
+                + (SELECT COUNT(*) FROM crm_field_provenance) AS total"""
     )
     return bool(row) and row["total"] == 0
 
@@ -713,7 +726,8 @@ def _crm_empty_in_txn(cur) -> bool:
                 + (SELECT COUNT(*) FROM deals)
                 + (SELECT COUNT(*) FROM tasks)
                 + (SELECT COUNT(*) FROM activity_log)
-                + (SELECT COUNT(*) FROM crm_chatter) AS total"""
+                + (SELECT COUNT(*) FROM crm_chatter)
+                + (SELECT COUNT(*) FROM crm_field_provenance) AS total"""
     )
     return cur.fetchone()[0] == 0
 
@@ -785,8 +799,10 @@ def _truncate_all(cur) -> None:
     # companies then contact/deal rows (parent-then-child) inside one statement.
     # (A residual microsecond-window inversion with FK-checking INSERTs
     # — child-then-parent lock order — is unavoidable by any single table order and
-    # is left to Postgres's deadlock detector.) The exact string is pinned by a test.
-    cur.execute("TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter RESTART IDENTITY")
+    # is left to Postgres's deadlock detector.) crm_field_provenance is last, matching
+    # the entity-tables-first order its writers take (record_fields/confirm lock the
+    # entity row FOR UPDATE before touching provenance). The exact string is pinned by a test.
+    cur.execute("TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, crm_field_provenance RESTART IDENTITY")
 
 
 def clear_demo_data() -> dict:

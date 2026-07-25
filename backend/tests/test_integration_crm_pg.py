@@ -62,7 +62,7 @@ def pg_db():
 def _clean_crm(pg_db):
     """Reset all CRM state between tests so scenarios stay isolated."""
     from core.postgres import pg_execute
-    pg_execute("TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter RESTART IDENTITY")
+    pg_execute("TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, crm_field_provenance RESTART IDENTITY")
     pg_execute(
         "UPDATE crm_meta SET sample_data_loaded = FALSE, onboarding_dismissed = FALSE, "
         "ai_key_prompt_dismissed = FALSE WHERE id = 1"
@@ -89,11 +89,21 @@ def test_migration_created_tables_and_singleton(pg_db):
             "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
         )
     }
-    assert {"companies", "contacts", "deals", "tasks", "activity_log", "crm_meta", "crm_chatter"} <= names
+    assert {"companies", "contacts", "deals", "tasks", "activity_log", "crm_meta",
+            "crm_chatter", "crm_field_provenance"} <= names
     meta = pg_fetchone("SELECT * FROM crm_meta WHERE id = 1")
     assert meta and meta["sample_data_loaded"] is False
     # issue #9 migration: durable AI-key-nudge dismissal, default FALSE
     assert meta["ai_key_prompt_dismissed"] is False
+    # issue #16 migration: the three AI-touch-count columns on deals (NULL by default)
+    deal_cols = {
+        r["column_name"]
+        for r in pg_fetchall(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = 'deals'"
+        )
+    }
+    assert {"ai_touch_count", "ai_touch_count_at", "ai_touch_evidence_count"} <= deal_cols
 
 
 # ── Fresh empty install (the acceptance clause, at the data layer) ────────────

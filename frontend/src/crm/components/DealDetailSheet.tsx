@@ -6,6 +6,9 @@ import { mono, INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, ACCENT_INK, GOLD, SAGE
 import { modalOverlay, modalContent, mobileDragHandle, btnDanger } from '../styles';
 import { ActivityTimeline } from './ActivityTimeline';
 import { NotesThread } from './NotesThread';
+import { TouchCountPill } from './badges';
+import { ProvenanceBadge } from './ProvenanceBadge';
+import { useProvenance } from '../hooks/useProvenance';
 
 interface DealDetailSheetProps {
   deal: CrmDeal;
@@ -19,6 +22,10 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
   // The pipeline passes a plain list-row deal (no activity). Fetch the detail so
   // the sheet can show the activity timeline alongside the chatter thread.
   const [activity, setActivity] = useState<CrmActivity[]>(deal.activity || []);
+  const { byField, confirm, confirming } = useProvenance('deal', deal.id);
+  const badge = (f: string) => (
+    <ProvenanceBadge prov={byField[f]} onConfirm={() => confirm(f)} confirming={confirming === f} />
+  );
   const reqRef = useRef(0);
   const loadDetail = useCallback(async () => {
     const reqId = ++reqRef.current;
@@ -55,21 +62,29 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
             color: INK, margin: 0, flex: 1,
           }}>{deal.title}</h3>
           <span style={{
-            fontFamily: FONT_DISPLAY,
-            fontSize: 20, color: GOLD, flexShrink: 0, marginLeft: 12,
-          }}>${deal.value.toLocaleString()}</span>
+            display: 'inline-flex', alignItems: 'center', gap: 8, flexShrink: 0, marginLeft: 12,
+          }}>
+            <span style={{ fontFamily: FONT_DISPLAY, fontSize: 20, color: GOLD }}>
+              ${deal.value.toLocaleString()}
+            </span>
+            {badge('value')}
+          </span>
         </div>
 
         <div style={{
+          display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
           fontSize: 12, color: INK_MUTE, marginBottom: 16,
-          textTransform: 'capitalize',
         }}>
-          Stage: <span style={{ color: STAGE_COLORS[deal.stage]?.color || INK }}>{deal.stage}</span>
+          <span style={{ textTransform: 'capitalize' }}>
+            Stage: <span style={{ color: STAGE_COLORS[deal.stage]?.color || INK }}>{deal.stage}</span>
+          </span>
+          {badge('stage')}
+          <TouchCountPill count={deal.ai_touch_count} />
         </div>
 
         {deal.notes && (
           <p style={{ fontSize: 14, color: INK_MUTE, marginBottom: 16, lineHeight: 1.5 }}>
-            {deal.notes}
+            {deal.notes} {badge('notes')}
           </p>
         )}
 
@@ -81,15 +96,21 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
             </div>
           )}
           {deal.probability > 0 && (
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ ...mono(10), color: INK_DIM }}>Probability</span>
-              <span style={{ fontSize: 13, color: INK }}>{deal.probability}%</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 13, color: INK }}>{deal.probability}%</span>
+                {badge('probability')}
+              </span>
             </div>
           )}
           {deal.expected_close_date && (
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ ...mono(10), color: INK_DIM }}>Expected Close</span>
-              <span style={{ fontSize: 13, color: INK }}>{deal.expected_close_date}</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 13, color: INK }}>{deal.expected_close_date}</span>
+                {badge('expected_close_date')}
+              </span>
             </div>
           )}
         </div>
