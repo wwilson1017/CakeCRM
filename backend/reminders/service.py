@@ -228,25 +228,27 @@ def get_due_reminders(limit: int = 50) -> list[dict]:
     )]
 
 
-def claim_reminder(reminder: dict) -> bool:
+def claim_reminder(reminder: dict) -> dict | None:
     """Atomically claim a due reminder for firing, creating its next recurring
     occurrence in the SAME transaction.
 
-    Returns True iff this call won the claim (rowcount 1). A concurrent tick /
-    run-now loses cleanly (rowcount 0 → no double-fire). Marking the row
-    ``fired`` with ``result='processing'`` BEFORE delivery makes delivery
-    at-most-once (external push can't be exactly-once); creating the successor
-    inside the claim tx means a crash during delivery leaves an inspectable
-    ``processing`` row but never terminates a recurring series. The
-    ``uq_reminders_series_due`` index makes the successor insert idempotent.
+    Returns the FRESH claimed row (``{id, message, context, due_at,
+    recurrence_rule, series_id}``) iff this call won the claim, else None. A
+    concurrent tick / run-now loses cleanly (rowcount 0 → no double-fire).
+    Returning the fresh row (not just a bool) means the caller delivers and
+    enhances the CURRENT content — a PATCH between get_due_reminders and the claim
+    can no longer make the baseline notification use stale text while the successor
+    uses new text. Marking ``fired``/``processing`` BEFORE delivery makes delivery
+    at-most-once; the ``uq_reminders_series_due`` index makes the successor insert
+    idempotent.
     """
     rid = reminder["id"]
     with get_connection() as conn:
         cur = conn.cursor()
         # Re-check due_at <= now() inside the claim: a PATCH between get_due_reminders
         # and here could have rescheduled the reminder into the future or changed its
-        # rule/content. RETURNING gives the FRESH row so the successor is built from
-        # current data, never the stale snapshot the caller passed in.
+        # rule/content. RETURNING gives the FRESH row for both the successor AND the
+        # caller's delivery/enhancement.
         cur.execute(
             "UPDATE reminders SET status = 'fired', fired_at = now(), result = 'processing' "
             "WHERE id = %s AND status = 'pending' AND due_at <= now() "
@@ -254,8 +256,9 @@ def claim_reminder(reminder: dict) -> bool:
             (rid,),
         )
         if cur.rowcount != 1:
-            return False  # lost the claim, or the reminder was rescheduled to the future
+            return None  # lost the claim, or the reminder was rescheduled to the future
         row = row_to_dict(cur, cur.fetchone())
+        row["id"] = rid
         rule = row.get("recurrence_rule")   # fresh JSONB → dict | None
         if rule:
             try:
@@ -271,7 +274,7 @@ def claim_reminder(reminder: dict) -> bool:
                     (str(uuid.uuid4()), row["message"], row.get("context", ""),
                      nxt, Json(rule), row.get("series_id") or rid),
                 )
-    return True
+    return row
 
 
 def finish_reminder(reminder_id: str, result: str) -> None:

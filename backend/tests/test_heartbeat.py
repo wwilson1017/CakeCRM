@@ -45,7 +45,7 @@ def _reminder(rid="r1"):
 
 def test_baseline_delivery_always_then_ai(monkeypatch, mocks):
     monkeypatch.setattr(service.reminders_service, "get_due_reminders", lambda n: [_reminder()])
-    monkeypatch.setattr(service.reminders_service, "claim_reminder", lambda r: True)
+    monkeypatch.setattr(service.reminders_service, "claim_reminder", lambda r: r)  # fresh row
     monkeypatch.setattr(service.background, "run_background_turn",
                         lambda *a, **k: BackgroundResult(text="did something", error=False))
     out = service.process_due_reminders(run_ai_enhancement=True)
@@ -57,7 +57,7 @@ def test_baseline_delivery_always_then_ai(monkeypatch, mocks):
 
 def test_claim_loss_skips(monkeypatch, mocks):
     monkeypatch.setattr(service.reminders_service, "get_due_reminders", lambda n: [_reminder()])
-    monkeypatch.setattr(service.reminders_service, "claim_reminder", lambda r: False)  # lost
+    monkeypatch.setattr(service.reminders_service, "claim_reminder", lambda r: None)  # lost
     called = {"turn": False}
     monkeypatch.setattr(service.background, "run_background_turn",
                         lambda *a, **k: called.__setitem__("turn", True))
@@ -69,7 +69,7 @@ def test_claim_loss_skips(monkeypatch, mocks):
 
 def test_no_provider_reminder_delivers_no_alert(monkeypatch, mocks):
     monkeypatch.setattr(service.reminders_service, "get_due_reminders", lambda n: [_reminder()])
-    monkeypatch.setattr(service.reminders_service, "claim_reminder", lambda r: True)
+    monkeypatch.setattr(service.reminders_service, "claim_reminder", lambda r: r)  # fresh row
     monkeypatch.setattr(service.background, "run_background_turn",
                         lambda *a, **k: BackgroundResult(text="No AI provider configured", error=True))
     out = service.process_due_reminders()
@@ -81,7 +81,7 @@ def test_no_provider_reminder_delivers_no_alert(monkeypatch, mocks):
 def test_ai_error_after_delivery_no_alert(monkeypatch, mocks):
     # R11: baseline delivered → an AI-enhancement failure is recorded, NOT alerted.
     monkeypatch.setattr(service.reminders_service, "get_due_reminders", lambda n: [_reminder()])
-    monkeypatch.setattr(service.reminders_service, "claim_reminder", lambda r: True)
+    monkeypatch.setattr(service.reminders_service, "claim_reminder", lambda r: r)  # fresh row
     monkeypatch.setattr(service.background, "run_background_turn",
                         lambda *a, **k: BackgroundResult(text="rate limited", error=True))
     out = service.process_due_reminders()
@@ -94,7 +94,7 @@ def test_enhancement_exception_after_delivery_no_alert(monkeypatch, mocks):
     # An exception in the enhancement PHASE (setup or the turn) after the baseline
     # was delivered is recorded as delivered_ai_error, NEVER a false failure alert.
     monkeypatch.setattr(service.reminders_service, "get_due_reminders", lambda n: [_reminder()])
-    monkeypatch.setattr(service.reminders_service, "claim_reminder", lambda r: True)
+    monkeypatch.setattr(service.reminders_service, "claim_reminder", lambda r: r)  # fresh row
 
     def boom(*a, **k):
         raise RuntimeError("enhancement setup exploded")
@@ -110,7 +110,7 @@ def test_baseline_delivery_failure_alerts(monkeypatch, mocks):
     # A genuine post-claim failure (baseline delivery itself) alerts, since the row
     # is already 'fired' and won't retry.
     monkeypatch.setattr(service.reminders_service, "get_due_reminders", lambda n: [_reminder()])
-    monkeypatch.setattr(service.reminders_service, "claim_reminder", lambda r: True)
+    monkeypatch.setattr(service.reminders_service, "claim_reminder", lambda r: r)  # fresh row
 
     calls = {"n": 0}
 
@@ -118,6 +118,37 @@ def test_baseline_delivery_failure_alerts(monkeypatch, mocks):
         calls["n"] += 1
         if calls["n"] == 1:   # the baseline call raises; the alert's own deliver is fine
             raise RuntimeError("push subsystem down")
+
+    monkeypatch.setattr(service.delivery, "deliver_notification", deliver)
+    out = service.process_due_reminders(run_ai_enhancement=False)
+    assert out[0]["status"] == "error"
+    assert mocks["alerts"] and mocks["alerts"][0]["source"] == "reminder"
+
+
+def test_baseline_uses_fresh_claimed_row(monkeypatch, mocks):
+    # A PATCH between get_due_reminders and the claim changes the content; the fresh
+    # row returned by claim_reminder must drive delivery, not the stale snapshot.
+    stale = {"id": "r1", "message": "STALE text", "context": "", "due_at": "2026-07-24T09:00:00+00:00",
+             "recurrence_rule": None, "series_id": None}
+    fresh = {"id": "r1", "message": "FRESH text", "context": "", "due_at": "2026-07-24T09:00:00+00:00",
+             "recurrence_rule": None, "series_id": None}
+    monkeypatch.setattr(service.reminders_service, "get_due_reminders", lambda n: [stale])
+    monkeypatch.setattr(service.reminders_service, "claim_reminder", lambda r: fresh)
+    service.process_due_reminders(run_ai_enhancement=False)
+    titles = [t for t, _ in mocks["delivered"]]
+    assert any("FRESH text" in t for t in titles)
+    assert not any("STALE text" in t for t in titles)
+
+
+def test_zero_channel_delivery_alerts(monkeypatch, mocks):
+    # deliver_notification returns zero-channel (in-app row insert failed AND no
+    # channel) → the fired reminder reached nobody → error + reminder alert.
+    monkeypatch.setattr(service.reminders_service, "get_due_reminders", lambda n: [_reminder()])
+    monkeypatch.setattr(service.reminders_service, "claim_reminder", lambda r: r)
+
+    def deliver(title, message):
+        mocks["delivered"].append((title, message))
+        return {"ok": True, "notification_id": "x", "channels_sent": [], "web_push": False, "logged": False}
 
     monkeypatch.setattr(service.delivery, "deliver_notification", deliver)
     out = service.process_due_reminders(run_ai_enhancement=False)
@@ -141,7 +172,7 @@ def test_claim_failure_no_alert_stays_pending(monkeypatch, mocks):
 
 def test_run_ai_enhancement_false_skips_turn(monkeypatch, mocks):
     monkeypatch.setattr(service.reminders_service, "get_due_reminders", lambda n: [_reminder()])
-    monkeypatch.setattr(service.reminders_service, "claim_reminder", lambda r: True)
+    monkeypatch.setattr(service.reminders_service, "claim_reminder", lambda r: r)  # fresh row
     ran = {"n": 0}
     monkeypatch.setattr(service.background, "run_background_turn",
                         lambda *a, **k: ran.__setitem__("n", ran["n"] + 1))

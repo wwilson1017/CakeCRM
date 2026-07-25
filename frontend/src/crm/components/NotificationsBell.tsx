@@ -56,8 +56,10 @@ export function NotificationsBell() {
   useEffect(() => {
     let active = true;
     const poll = () => {
-      api<{ notifications: NotificationRow[] }>('/api/notifications?status=active&limit=20')
-        .then(res => { if (active) setCount(res.notifications.length); })
+      // True (unbounded) active count for the badge — the list endpoint is capped,
+      // so its length would under-report once there are many notifications.
+      api<{ count: number }>('/api/notifications/counts')
+        .then(res => { if (active) setCount(res.count); })
         .catch(() => { /* keep last */ });
       api<{ count: number }>('/api/alerts/counts')
         .then(res => { if (active) setAlertCount(res.count); })
@@ -80,8 +82,8 @@ export function NotificationsBell() {
         if (!active) return;
         setNotifications(n.notifications);
         setAlerts(a.alerts);
-        setCount(n.notifications.length);
         setAlertCount(a.alerts.length);
+        // Badge count comes from the unbounded /counts poll, not this capped list.
       })
       .catch(() => { /* best-effort */ });
     return () => { active = false; };
@@ -130,7 +132,7 @@ export function NotificationsBell() {
             position: 'absolute', top: -6, right: -6, minWidth: 16, height: 16, padding: '0 4px',
             borderRadius: 8, background: ACCENT, color: '#fff', fontSize: 10, fontWeight: 600,
             fontFamily: FONT_SANS, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>{count > 20 ? '20+' : count}</span>
+          }}>{count > 99 ? '99+' : count}</span>
         )}
       </button>
 

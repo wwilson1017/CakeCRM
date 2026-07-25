@@ -85,19 +85,22 @@ def process_due_reminders(run_ai_enhancement: bool = True) -> list[dict]:
     for reminder in reminders_service.get_due_reminders(_MAX_PER_TICK):
         rid = reminder["id"]
         try:
-            if not reminders_service.claim_reminder(reminder):
-                continue  # lost the claim / rescheduled — no double-fire, still pending
+            claimed_row = reminders_service.claim_reminder(reminder)
         except Exception:
             # Claim errored → row stays pending, retries next tick. No alert.
             logger.warning("reminder %s claim failed", rid, exc_info=True)
             continue
+        if claimed_row is None:
+            continue  # lost the claim / rescheduled — no double-fire, still pending
         try:
-            _deliver_baseline(reminder)     # deliver_notification never raises
-            claimed.append(reminder)
+            # Use the FRESH claimed row (post-patch content), not the stale snapshot.
+            _deliver_baseline(claimed_row)
+            claimed.append(claimed_row)
         except Exception as e:
-            # The row is 'fired' now, so this genuine post-claim failure is alerted.
+            # The row is 'fired' now, so a genuine post-claim delivery failure (incl.
+            # zero-channel) is recorded + alerted, never silently "delivered".
             logger.warning("reminder %s baseline delivery failed: %s", rid, e, exc_info=True)
-            _finish_and_alert(reminder, str(e))
+            _finish_and_alert(claimed_row, str(e))
             results.append({"id": rid, "status": "error"})
 
     # ── Phase 2: AI enhancement (best-effort), after every baseline is out ──
@@ -129,11 +132,13 @@ def _deliver_baseline(reminder: dict) -> None:
     # ALWAYS, first, keyless — this alone satisfies acceptance ("a scheduled action
     # fires and delivers a push notification").
     result = delivery.deliver_notification(f"Reminder: {message[:120]}", body)
-    if not result.get("logged") and not result.get("web_push"):
-        # Neither the in-app row nor a push reached the user (transient infra). The
-        # reminder is already 'fired' (documented at-most-once), so we can't retry —
-        # surface it so the gap is observable rather than silent.
-        logger.warning("reminder %s: baseline delivery reached no channel", reminder["id"])
+    if not result.get("logged") and not result.get("channels_sent"):
+        # The in-app row insert failed AND no channel delivered → the already-fired
+        # reminder reached NOBODY and can't retry. Raise so the caller records an
+        # error + reminder alert rather than silently marking it delivered. (The
+        # normal keyless case — in-app row created, no push device — has logged=True,
+        # so it does NOT trip this.)
+        raise RuntimeError("baseline delivery reached no channel")
 
 
 def _enhance_reminder(reminder: dict) -> dict:
@@ -215,18 +220,23 @@ def maybe_run_heartbeat_turn(force: bool = False) -> dict:
         return {"skipped": "no_provider"}   # keyless — never an error/alert
 
     # Claim the turn slot via a rowcount UPDATE (no held connection / lock). The
-    # force path keeps an in-flight guard so run-now can't launch a 2nd concurrent
-    # turn (which would race on consecutive_errors and double the AI cost).
+    # claim marks the turn 'running'; the completion UPDATE below clears it to
+    # 'ok'/'error'. The force path (run-now) is blocked ONLY while a turn is actually
+    # in flight (status still 'running'), not merely because a turn ran recently —
+    # last_turn_at alone can't tell "running now" from "finished seconds ago", so a
+    # forced run must key off the 'running' marker (with a stale fallback in case a
+    # turn crashed without clearing it). The periodic path stays throttle-based.
     if force:
         claimed = pg_execute(
-            "UPDATE heartbeat_state SET last_turn_at = now() WHERE id = 1 AND "
-            "(last_turn_at IS NULL OR last_turn_at <= now() - make_interval(secs => %s))",
+            "UPDATE heartbeat_state SET last_turn_at = now(), last_turn_status = 'running' "
+            "WHERE id = 1 AND (last_turn_status <> 'running' "
+            "OR last_turn_at <= now() - make_interval(secs => %s))",
             (_TURN_INFLIGHT_GUARD_SECONDS,),
         )
     else:
         claimed = pg_execute(
-            "UPDATE heartbeat_state SET last_turn_at = now() WHERE id = 1 AND "
-            "(last_turn_at IS NULL OR last_turn_at <= now() - make_interval(mins => %s))",
+            "UPDATE heartbeat_state SET last_turn_at = now(), last_turn_status = 'running' "
+            "WHERE id = 1 AND (last_turn_at IS NULL OR last_turn_at <= now() - make_interval(mins => %s))",
             (settings.heartbeat_interval_minutes,),
         )
     if claimed == 0:

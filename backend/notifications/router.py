@@ -52,6 +52,14 @@ async def list_notifications(status: str = "active", limit: int = 10,
     return {"notifications": items, "count": len(items)}
 
 
+@router.get("/counts")
+async def notification_counts(_user: dict = Depends(get_current_user)):
+    """The TRUE active-notification count (unbounded) for the bell badge — the list
+    endpoint above is capped, so its length under-reports once there are many."""
+    count = await run_in_threadpool(service.get_active_count)
+    return {"count": count}
+
+
 @router.post("/{notification_id}/dismiss")
 async def dismiss(notification_id: str, _user: dict = Depends(get_current_user)):
     result = await run_in_threadpool(service.dismiss_notification, notification_id)

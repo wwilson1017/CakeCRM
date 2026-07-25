@@ -156,17 +156,19 @@ def test_claim_won_creates_successor(monkeypatch):
     row = ("Standup", "", datetime(2026, 7, 24, 9, 0, tzinfo=timezone.utc),
            {"type": "daily"}, "r1")  # fresh row from RETURNING
     conn = _install_conn(monkeypatch, rowcount=1, row=row)
-    reminder = {"id": "r1", "due_at": "stale-ignored", "recurrence_rule": {"type": "daily"}}
-    assert service.claim_reminder(reminder) is True
+    reminder = {"id": "r1", "message": "STALE", "due_at": "stale-ignored", "recurrence_rule": {"type": "daily"}}
+    claimed = service.claim_reminder(reminder)
+    assert claimed is not None
+    assert claimed["message"] == "Standup" and claimed["id"] == "r1"   # FRESH row, not stale
     sqls = [e[0] for e in conn._cur.executed]
     assert any("UPDATE reminders SET status = 'fired'" in s and "due_at <= now()" in s for s in sqls)
     assert any("INSERT INTO reminders" in s for s in sqls)   # successor in same tx, from fresh row
 
 
-def test_claim_lost_returns_false_no_successor(monkeypatch):
+def test_claim_lost_returns_none_no_successor(monkeypatch):
     conn = _install_conn(monkeypatch, rowcount=0)   # rescheduled to future / lost
     reminder = {"id": "r1", "recurrence_rule": {"type": "daily"}, "series_id": "r1"}
-    assert service.claim_reminder(reminder) is False
+    assert service.claim_reminder(reminder) is None
     sqls = [e[0] for e in conn._cur.executed]
     assert not any("INSERT INTO reminders" in s for s in sqls)   # no double-fire successor
 
@@ -175,6 +177,6 @@ def test_claim_non_recurring_no_successor(monkeypatch):
     row = ("x", "", datetime.now(timezone.utc), None, None)  # recurrence_rule None
     conn = _install_conn(monkeypatch, rowcount=1, row=row)
     reminder = {"id": "r1", "recurrence_rule": None}
-    assert service.claim_reminder(reminder) is True
+    assert service.claim_reminder(reminder) is not None
     sqls = [e[0] for e in conn._cur.executed]
     assert not any("INSERT INTO reminders" in s for s in sqls)

@@ -122,7 +122,7 @@ def test_atomic_claim_prevents_double_fire(pg_db):
 
     def worker():
         barrier.wait()
-        results.append(service.claim_reminder(reminder))
+        results.append(service.claim_reminder(reminder) is not None)
 
     threads = [threading.Thread(target=worker) for _ in range(2)]
     for t in threads:
@@ -149,10 +149,38 @@ def test_recurring_claim_creates_successor(pg_db):
         (due, Json({"type": "daily"})),
     )
     reminder = {"id": "rec1"}   # deliberately minimal — claim must use the RETURNING row
-    assert service.claim_reminder(reminder) is True
+    claimed = service.claim_reminder(reminder)
+    assert claimed is not None and claimed["message"] == "standup"   # fresh row returned
     pending = pg_fetchall("SELECT id, due_at FROM reminders WHERE status = 'pending' AND series_id = 'rec1'")
     assert len(pending) == 1                    # exactly one successor created
     assert pending[0]["id"] != "rec1"           # a new occurrence, not the fired one
+
+
+def test_force_turn_blocked_only_while_running(pg_db, monkeypatch):
+    # thread-3 fix: the force (run-now) guard blocks a 2nd turn ONLY while one is
+    # actually in flight (status 'running'), not merely because a turn ran recently.
+    from core.postgres import pg_execute
+    from heartbeat import service
+    monkeypatch.setattr(service.settings, "heartbeat_enabled", True)
+    monkeypatch.setattr(service, "get_ai_provider", lambda *a, **k: object())
+    calls = {"n": 0}
+    from assistant.background import BackgroundResult
+    monkeypatch.setattr(service.background, "run_background_turn",
+                        lambda *a, **k: (calls.__setitem__("n", calls["n"] + 1),
+                                         BackgroundResult(text="ok", error=False))[1])
+    monkeypatch.setattr(service, "ToolRegistry", lambda **k: object())
+    monkeypatch.setattr(service.background, "background_allowlist", lambda reg: set())
+    monkeypatch.setattr(service.identity, "get_identity", lambda: {"name": "Baker"})
+
+    # A turn that COMPLETED 1 second ago (status 'ok', last_turn_at now) → force runs.
+    pg_execute("UPDATE heartbeat_state SET last_turn_at = now(), last_turn_status = 'ok' WHERE id = 1")
+    out = service.maybe_run_heartbeat_turn(force=True)
+    assert out.get("status") == "ok" and calls["n"] == 1
+
+    # A turn currently RUNNING (status 'running', last_turn_at now) → force blocked.
+    pg_execute("UPDATE heartbeat_state SET last_turn_at = now(), last_turn_status = 'running' WHERE id = 1")
+    out = service.maybe_run_heartbeat_turn(force=True)
+    assert out == {"skipped": "in_progress"} and calls["n"] == 1   # no 2nd turn ran
 
 
 def test_vapid_persist_once(pg_db, monkeypatch):
