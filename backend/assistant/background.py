@@ -225,6 +225,7 @@ def run_background_turn(system_prompt, user_message: str, *, allowed_tools: set[
         timeout=timeout,
     )
     started = time.monotonic()
+    future: concurrent.futures.Future | None = None
     try:
         if use_main_loop:
             # Normal path: submit onto the main loop (where the provider client is
@@ -236,6 +237,10 @@ def run_background_turn(system_prompt, user_message: str, *, allowed_tools: set[
             # Only safe because such callers use non-loop-bound (fake) providers.
             result = asyncio.run(coro)
     except (asyncio.TimeoutError, concurrent.futures.TimeoutError):
+        # Cancel the abandoned coroutine so a recovered loop can't keep running its
+        # tools (e.g. a late notify_user) and overlap the next turn.
+        if future is not None:
+            future.cancel()
         logger.warning("background turn timed out after %ss", timeout)
         return BackgroundResult(text=f"background turn timed out after {timeout}s",
                                 error=True, model_used=getattr(provider, "model", ""))

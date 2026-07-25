@@ -101,19 +101,23 @@ def process_due_reminders(run_ai_enhancement: bool = True) -> list[dict]:
             results.append({"id": rid, "status": "error"})
 
     # ── Phase 2: AI enhancement (best-effort), after every baseline is out ──
+    # Each reminder is fully isolated: a finish_reminder / enhancement failure here
+    # (baseline already delivered) must never abort the rest of the batch or raise a
+    # false failure alert (R11).
     for reminder in claimed:
         rid = reminder["id"]
-        if not run_ai_enhancement:
-            reminders_service.finish_reminder(rid, "delivered")
-            results.append({"id": rid, "status": "delivered"})
-            continue
         try:
-            results.append(_enhance_reminder(reminder))
+            if not run_ai_enhancement:
+                reminders_service.finish_reminder(rid, "delivered")
+                results.append({"id": rid, "status": "delivered"})
+            else:
+                results.append(_enhance_reminder(reminder))
         except Exception as e:
-            # Enhancement SETUP (identity read, registry build) or the turn failed
-            # AFTER baseline delivery → record it, never a false failure alert (R11).
-            logger.warning("reminder %s AI enhancement failed: %s", rid, e, exc_info=True)
-            reminders_service.finish_reminder(rid, f"delivered; AI enhancement error: {str(e)[:400]}")
+            logger.warning("reminder %s phase-2 (enhancement/finish) failed: %s", rid, e, exc_info=True)
+            try:
+                reminders_service.finish_reminder(rid, f"delivered; enhancement error: {str(e)[:400]}")
+            except Exception:
+                logger.warning("reminder %s finish also failed", rid, exc_info=True)
             results.append({"id": rid, "status": "delivered_ai_error"})
     return results
 
@@ -124,7 +128,12 @@ def _deliver_baseline(reminder: dict) -> None:
     body = message + (f"\n\n{context}" if context else "")
     # ALWAYS, first, keyless — this alone satisfies acceptance ("a scheduled action
     # fires and delivers a push notification").
-    delivery.deliver_notification(f"Reminder: {message[:120]}", body)
+    result = delivery.deliver_notification(f"Reminder: {message[:120]}", body)
+    if not result.get("logged") and not result.get("web_push"):
+        # Neither the in-app row nor a push reached the user (transient infra). The
+        # reminder is already 'fired' (documented at-most-once), so we can't retry —
+        # surface it so the gap is observable rather than silent.
+        logger.warning("reminder %s: baseline delivery reached no channel", reminder["id"])
 
 
 def _enhance_reminder(reminder: dict) -> dict:

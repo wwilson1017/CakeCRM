@@ -45,38 +45,23 @@ def start_scheduler() -> None:
     logger.info("Heartbeat scheduler started (reminder_tick 60s + heartbeat_turn 300s)")
 
 
-_SHUTDOWN_WAIT_SECONDS = 10
-
-
 def shutdown_scheduler() -> None:
-    """Stop the scheduler, giving an in-flight tick a bounded window to finish (so
-    it doesn't lose the Postgres pool under it) WITHOUT hanging a deploy past its
-    SIGTERM grace if a tick is wedged on a hung tool. We attempt ``shutdown(wait=True)``
-    in a helper thread joined for ~10s, then fall back to ``wait=False``."""
+    """Stop the scheduler WITHOUT waiting for in-flight jobs.
+
+    ``wait=False`` is deliberate: background AI turns run their coroutine on the MAIN
+    event loop (via run_coroutine_threadsafe), and this shutdown is called from the
+    lifespan handler ON that same loop — so ``shutdown(wait=True)`` would block the
+    main loop while a scheduler-thread tick blocks on a turn that can only progress
+    on the (now-blocked) main loop → deadlock until the turn's timeout. Not waiting
+    avoids that; an abandoned in-flight tick is at-most-once-safe (a reminder may be
+    left ``processing``, never double-fired) and the pool close below is guarded."""
     global _scheduler
     if _scheduler is None:
         return
-    import threading
-    sched = _scheduler
-
-    def _graceful():
-        try:
-            sched.shutdown(wait=True)
-        except Exception:
-            logger.warning("scheduler graceful shutdown errored", exc_info=True)
-
-    t = threading.Thread(target=_graceful, daemon=True)
-    t.start()
-    t.join(timeout=_SHUTDOWN_WAIT_SECONDS)
-    if t.is_alive():
-        # A tick is still running past the grace window — stop waiting so the
-        # process can exit; the wedged job is abandoned (at-most-once semantics).
-        logger.warning("scheduler still running after %ss — forcing non-blocking shutdown",
-                       _SHUTDOWN_WAIT_SECONDS)
-        try:
-            sched.shutdown(wait=False)
-        except Exception:
-            logger.warning("scheduler forced shutdown errored", exc_info=True)
+    try:
+        _scheduler.shutdown(wait=False)
+    except Exception:
+        logger.warning("scheduler shutdown errored", exc_info=True)
     _scheduler = None
     logger.info("Heartbeat scheduler stopped")
 

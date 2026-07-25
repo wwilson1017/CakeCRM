@@ -41,8 +41,10 @@ def deliver_notification(title: str, message: str) -> dict:
     # Persist the in-app row FIRST (the guaranteed audit record). If even that
     # fails, fall through with a local id so push can still be attempted.
     notification_id = None
+    logged = False
     try:
         notification_id = service.create_notification(title, message, [])
+        logged = True
     except Exception:
         logger.warning("failed to create notification row", exc_info=True)
     if notification_id is None:
@@ -68,7 +70,7 @@ def deliver_notification(title: str, message: str) -> dict:
         logger.warning("failed to record channels_sent for %s", notification_id, exc_info=True)
 
     return {"ok": True, "notification_id": notification_id,
-            "channels_sent": channels_sent, "web_push": web_push_ok}
+            "channels_sent": channels_sent, "web_push": web_push_ok, "logged": logged}
 
 
 def is_safe_push_endpoint(endpoint: str) -> bool:

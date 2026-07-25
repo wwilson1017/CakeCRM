@@ -18,8 +18,12 @@ def mocks(monkeypatch):
         "delivered": [], "finished": [], "alerts": [], "resolved": [],
         "ran_turn": 0, "notified": [],
     }
-    monkeypatch.setattr(service.delivery, "deliver_notification",
-                        lambda title, message: state["delivered"].append((title, message)))
+    def _deliver(title, message):
+        state["delivered"].append((title, message))
+        return {"ok": True, "notification_id": "n1", "channels_sent": ["web_push"],
+                "web_push": True, "logged": True}
+
+    monkeypatch.setattr(service.delivery, "deliver_notification", _deliver)
     monkeypatch.setattr(service, "_maybe_run_dreaming", lambda: None)
     monkeypatch.setattr(service.reminders_service, "finish_reminder",
                         lambda rid, result: state["finished"].append((rid, result)))

@@ -132,6 +132,29 @@ def test_atomic_claim_prevents_double_fire(pg_db):
     assert sorted(results) == [False, True]     # exactly one claim wins
 
 
+def test_recurring_claim_creates_successor(pg_db):
+    # Exercises the RETURNING path against real Postgres: a recurring reminder's
+    # claim must build the next occurrence from the fresh row (proves row_to_dict's
+    # ISO-stringified due_at parses and the JSONB rule comes back as a dict).
+    from datetime import datetime, timezone
+
+    from psycopg2.extras import Json
+
+    from core.postgres import pg_execute, pg_fetchall
+    from reminders import service
+    due = datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)   # far past
+    pg_execute(
+        "INSERT INTO reminders (id, message, due_at, status, recurrence_rule, series_id) "
+        "VALUES ('rec1', 'standup', %s, 'pending', %s, 'rec1')",
+        (due, Json({"type": "daily"})),
+    )
+    reminder = {"id": "rec1"}   # deliberately minimal — claim must use the RETURNING row
+    assert service.claim_reminder(reminder) is True
+    pending = pg_fetchall("SELECT id, due_at FROM reminders WHERE status = 'pending' AND series_id = 'rec1'")
+    assert len(pending) == 1                    # exactly one successor created
+    assert pending[0]["id"] != "rec1"           # a new occurrence, not the fired one
+
+
 def test_vapid_persist_once(pg_db, monkeypatch):
     from core.postgres import pg_fetchone
     from notifications import vapid
