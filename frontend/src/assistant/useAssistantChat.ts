@@ -396,9 +396,13 @@ export function useAssistantChat() {
         ),
       }));
 
-      // Continue only once EVERY card on this message reached a final state.
+      // Continue only once EVERY card on this message reached a final state. A
+      // 'failed' card (an approved write whose executor errored, e.g. Gmail
+      // disconnected — issue #8) is final too, so the turn continues and the model
+      // can react to the error; hence `!== 'pending'` rather than an approved/denied
+      // allow-list.
       const msg = messagesRef.current.find((m) => m.id === msgId);
-      const allFinal = (msg?.pendingConfirmations ?? []).every((c) => c.status === 'approved' || c.status === 'denied');
+      const allFinal = (msg?.pendingConfirmations ?? []).every((c) => c.status !== 'pending');
       if (allFinal) continueTurn();
     } catch { /* leave the card pending; the user can retry */ }
   }, [continueTurn, updateMessage]);
