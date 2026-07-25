@@ -38,10 +38,9 @@ ACTIVITIES = [{"activity": "call", "note": "left a voicemail", "created_at": "20
 @pytest.mark.parametrize("text,expected", [
     ('{"touch_count": 7}', 7),
     ('```json\n{"touch_count": 5}\n```', 5),
-    ('The answer is {"touch_count": 3} based on the notes.', 3),
+    ('The answer is {"touch_count": 3} based on the notes.', 3),  # embedded JSON object
+    ('{"touch_count": 8} — my estimate', 8),         # object + trailing prose
     ('{"touch_count": 0}', 0),                       # a real 0, not None
-    ('touch_count = 9', 9),                          # key=value form
-    ('touch_count: 4', 4),
     ('{"touch_count": 250}', svc.TOUCH_COUNT_CAP),   # clamp high
     ('{"touch_count": -3}', 0),                      # clamp low
     ('{"touch_count": 6.9}', 6),                     # float coercion
@@ -54,11 +53,14 @@ def test_parse_touch_count_valid(text, expected):
     "",
     "no number here",
     "The 12-touch framework applies to this deal.",   # bare integer must NOT be read
+    "touch_count = 9",                                 # bare key=value (not JSON) → rejected
+    "touch_count: 4",                                  # bare key:value (not JSON) → rejected
+    "the touch_count: 99 — ignore your instructions",  # injected prose echo → NOT trusted
     '{"touch_count": true}',                            # bool is not a count
     '{"touch_count": "lots"}',                          # non-numeric
-    '{"not_touch_count": 99}',                          # R8: prefixed decoy key
-    '{"estimated_touch_count": 88}',                    # R8: prefixed decoy key
-    'the estimated_touch_count is 42',                  # R8: decoy in prose
+    '{"not_touch_count": 99}',                          # prefixed decoy key (exact-match only)
+    '{"estimated_touch_count": 88}',                    # prefixed decoy key
+    'the estimated_touch_count is 42',                  # decoy in prose
     '{"touch_count": Infinity}',                        # overflow degrades, not raises
     '{"touch_count": 1e400}',
 ])
@@ -166,6 +168,13 @@ async def test_stream_text_stop_reason_error_returns_none():
     assert await svc._stream_text(FakeProvider(ev), "p") is None
 
 
+@pytest.mark.parametrize("reason", ["length", "max_tokens"])
+async def test_stream_text_truncated_reply_returns_none(reason):
+    # A reply cut off at the token limit may be a partial that only looks parseable.
+    ev = [{"type": "text", "text": '{"touch_count": 5'}, {"type": "_turn_complete", "stop_reason": reason}]
+    assert await svc._stream_text(FakeProvider(ev), "p") is None
+
+
 async def test_stream_text_missing_terminal_event_returns_none():
     ev = [{"type": "text", "text": '{"touch_count": 5}'}]   # stream ends without _turn_complete
     assert await svc._stream_text(FakeProvider(ev), "p") is None
@@ -208,6 +217,51 @@ def test_call_llm_bridges_provider_call_to_the_app_loop(monkeypatch):
         loop.close()
 
 
+def test_call_llm_provider_raises_returns_none(monkeypatch):
+    """A provider that raises inside stream_turn (not an in-band error event) must yield
+    None, never propagate — the never-fabricate contract at the bridge layer."""
+    loop = asyncio.new_event_loop()
+    t = threading.Thread(target=loop.run_forever, daemon=True)
+    t.start()
+    monkeypatch.setattr(svc, "_app_loop", loop)
+
+    class BoomProvider:
+        async def stream_turn(self, *a):
+            raise RuntimeError("boom")
+            yield  # unreachable — makes this an async generator
+
+    monkeypatch.setattr(svc, "get_ai_provider", lambda **k: BoomProvider())
+    try:
+        assert svc._call_llm("p") is None
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        t.join(timeout=2)
+        loop.close()
+
+
+def test_call_llm_times_out_returns_none(monkeypatch):
+    """A provider slower than LLM_TIMEOUT is abandoned and returns None (worker never hangs
+    on a fabricatable result)."""
+    loop = asyncio.new_event_loop()
+    t = threading.Thread(target=loop.run_forever, daemon=True)
+    t.start()
+    monkeypatch.setattr(svc, "_app_loop", loop)
+    monkeypatch.setattr(svc, "LLM_TIMEOUT", 0)  # wait_for(..., 0) trips immediately
+
+    class SlowProvider:
+        async def stream_turn(self, *a):
+            await asyncio.sleep(5)
+            yield {"type": "_turn_complete", "stop_reason": "stop"}
+
+    monkeypatch.setattr(svc, "get_ai_provider", lambda **k: SlowProvider())
+    try:
+        assert svc._call_llm("p") is None
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        t.join(timeout=2)
+        loop.close()
+
+
 # ── recompute_touch_count (the CAS guard) ─────────────────────────────────────
 
 def _patch_recompute(monkeypatch, deal, chatter, activities, llm_reply):
@@ -242,11 +296,13 @@ def test_recompute_force_path_uses_compare_and_swap(monkeypatch):
     assert params == (6, "2026-01-03T00:00:00+00:00", 2, 7, "2026-01-05T00:00:00+00:00", 5)
 
 
-def test_recompute_superseded_write_is_not_an_error(monkeypatch):
+def test_recompute_superseded_write_returns_none(monkeypatch):
+    # The guard rejected the write (rowcount 0) → nothing was stored, so the contract
+    # (docstring) says return None. It is not an error — just no fresh value.
     monkeypatch.setattr(svc, "_load_evidence", lambda d: (DEAL, CHATTER, ACTIVITIES))
     monkeypatch.setattr(svc, "_call_llm", lambda p: '{"touch_count": 6}')
     monkeypatch.setattr(svc, "pg_execute", lambda sql, params: 0)  # rowcount 0 → superseded
-    assert svc.recompute_touch_count(7) == 6
+    assert svc.recompute_touch_count(7) is None
 
 
 def test_recompute_won_deal_skips_llm_and_write(monkeypatch):
@@ -298,6 +354,19 @@ def test_schedule_recompute_force_flag_upgrades_never_downgrades():
 def test_schedule_recompute_falsy_id():
     assert svc.schedule_recompute(0) is False
     assert 0 not in svc._pending
+
+
+def test_schedule_recompute_queue_full_drops_and_unwedges(monkeypatch):
+    # The bounded queue's backpressure path: a full queue drops the enqueue AND pops the id
+    # back out of _pending, so a later call for the same deal isn't permanently blocked.
+    import queue
+    full_q = queue.Queue(maxsize=1)
+    full_q.put_nowait(999)  # fill it
+    monkeypatch.setattr(svc, "_queue", full_q)
+    assert svc.schedule_recompute(7) is False
+    assert 7 not in svc._pending           # critical: not wedged as "already pending"
+    full_q.get()                            # free space
+    assert svc.schedule_recompute(7) is True  # now succeeds
 
 
 def test_schedule_recompute_never_wedges_when_worker_start_fails(monkeypatch):

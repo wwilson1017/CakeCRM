@@ -101,7 +101,7 @@ _queue: "queue.Queue[int]" = queue.Queue(maxsize=QUEUE_MAX)
 # recompute is pending can upgrade the flag rather than be dropped.
 _pending: dict[int, bool] = {}
 _lock = threading.Lock()
-_worker: "threading.Thread | None" = None
+_worker: threading.Thread | None = None
 
 
 def _ensure_worker() -> None:
@@ -178,10 +178,10 @@ def schedule_recompute(deal_id: int, force_write: bool = False) -> bool:
 
 # --- Event-loop bridge (async provider from the sync worker thread) --------
 
-_app_loop: "asyncio.AbstractEventLoop | None" = None
+_app_loop: asyncio.AbstractEventLoop | None = None
 
 
-def capture_event_loop(loop: "asyncio.AbstractEventLoop") -> None:
+def capture_event_loop(loop: asyncio.AbstractEventLoop) -> None:
     """Called once from main.py's lifespan. All provider I/O runs on THIS loop via
     run_coroutine_threadsafe, so the module-level provider client caches (e.g.
     anthropic_provider's shared AsyncAnthropic / httpx pool) are only ever touched from
@@ -191,7 +191,7 @@ def capture_event_loop(loop: "asyncio.AbstractEventLoop") -> None:
     _app_loop = loop
 
 
-async def _stream_text(provider, prompt: str) -> "str | None":
+async def _stream_text(provider, prompt: str) -> str | None:
     """Drive the provider's async stream to one text blob on the app loop.
 
     Returns None on any failure so recompute writes nothing (never-fabricate):
@@ -214,7 +214,9 @@ async def _stream_text(provider, prompt: str) -> "str | None":
             saw_error = True
         elif etype == "_turn_complete":
             completed = True
-            if event.get("stop_reason") == "error":
+            # Reject explicit errors AND truncation reasons: a reply cut off at the token
+            # limit ("length"/"max_tokens") may be a partial that only looks parseable.
+            if event.get("stop_reason") in ("error", "length", "max_tokens"):
                 saw_error = True
             break
     if saw_error or not completed:
@@ -222,7 +224,7 @@ async def _stream_text(provider, prompt: str) -> "str | None":
     return text
 
 
-def _call_llm(prompt: str) -> "str | None":
+def _call_llm(prompt: str) -> str | None:
     """Worker-thread only. None = no provider (zero keys, silent) or failure (logged).
     Never raises."""
     try:
@@ -238,12 +240,18 @@ def _call_llm(prompt: str) -> "str | None":
         future = asyncio.run_coroutine_threadsafe(
             asyncio.wait_for(_stream_text(provider, prompt), timeout=LLM_TIMEOUT), loop
         )
-        return future.result(timeout=LLM_TIMEOUT + 5)
-    except concurrent.futures.TimeoutError:
-        logger.warning("touch count LLM call timed out")
-        return None
+        try:
+            return future.result(timeout=LLM_TIMEOUT + 5)
+        except concurrent.futures.TimeoutError:
+            # Cancel the abandoned coroutine so it can't keep consuming the provider while
+            # the (single) worker moves on to the next deal — preserves one-call-at-a-time.
+            future.cancel()
+            logger.warning("touch count LLM call timed out")
+            return None
     except Exception as e:
-        logger.warning("touch count LLM call failed: %s", e)
+        # Log the exception TYPE only, never str(e): the prompt is built from customer
+        # note text, and some provider SDKs echo request content in their error messages.
+        logger.warning("touch count LLM call failed: %s", type(e).__name__)
         return None
 
 
@@ -254,7 +262,7 @@ def _truncate(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + "…"
 
 
-def _describe_chatter(row: dict) -> "str | None":
+def _describe_chatter(row: dict) -> str | None:
     """One evidence line for a chatter row, or None if it carries no signal.
 
     CakeCRM's crm_chatter is message-only (the blueprint's event_type/field_name/
@@ -331,35 +339,33 @@ def build_user_prompt(deal: dict, lines: list) -> str:
     )
 
 
-def parse_touch_count(text: str) -> "int | None":
+def parse_touch_count(text: str) -> int | None:
     """Extract a clamped touch count from the model's reply, or None.
 
-    Deliberately strict: only the exact ``touch_count`` key is trusted. A bare
-    first-integer fallback would read "The 12-touch framework applies; touch_count is 7"
-    as 12 -- so there isn't one. The fallback regex requires a key BOUNDARY so a decoy
-    like ``not_touch_count`` / ``estimated_touch_count`` (or a prompt-injected one) can't
-    match the ``touch_count`` substring inside it."""
+    Strict by design (the system prompt demands JSON-only ``{"touch_count": <int>}``):
+    only an exact ``touch_count`` key inside VALID JSON is trusted — the whole reply, or a
+    ``{...}`` object embedded in prose. There is NO bare-number / bare ``key: value`` regex
+    fallback: a model echoing an injected ``touch_count: 99`` from the untrusted evidence,
+    or emitting a truncated/partial reply, must not be parsed (never fabricate). A decoy key
+    like ``not_touch_count`` is rejected because ``"touch_count" in data`` is an exact match."""
     if not text:
         return None
     cleaned = text.strip()
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
         cleaned = re.sub(r"\s*```$", "", cleaned).strip()
-    try:
-        data = json.loads(cleaned)
+    # Whole reply first, then each brace-delimited object embedded in prose.
+    for candidate in (cleaned, *re.findall(r"\{[^{}]*\}", cleaned)):
+        try:
+            data = json.loads(candidate)
+        except (json.JSONDecodeError, ValueError, TypeError):
+            continue
         if isinstance(data, dict) and "touch_count" in data:
             return _clamp(data["touch_count"])
-    except (json.JSONDecodeError, ValueError, TypeError):
-        pass
-    # JSON embedded in prose, or key: value -- still keyed (with a boundary), never a
-    # bare integer. (?<!\w) rejects a prefixed decoy key ('..._touch_count').
-    match = re.search(r'(?<!\w)"?touch_count"?\s*[:=]\s*(-?\d+)', cleaned)
-    if match:
-        return _clamp(match.group(1))
     return None
 
 
-def _clamp(value) -> "int | None":
+def _clamp(value) -> int | None:
     # bool is an int subclass, so {"touch_count": true} would otherwise coerce to 1 -- a
     # fabricated count the model never actually gave.
     if isinstance(value, bool):
@@ -459,7 +465,7 @@ def _load_evidence(deal_id: int) -> tuple:
     return deal, chatter, activities
 
 
-def recompute_touch_count(deal_id: int, force_write: bool = False) -> "int | None":
+def recompute_touch_count(deal_id: int, force_write: bool = False) -> int | None:
     """Infer and store one deal's touch count. Worker-thread only.
 
     force_write relaxes the stale-write guard for the scope=all repair path (it still
@@ -543,12 +549,14 @@ def recompute_touch_count(deal_id: int, force_write: bool = False) -> "int | Non
     )
     if not updated:
         logger.debug("touch count for deal %s superseded by a newer snapshot", deal_id)
+        return None  # guard rejected the write — nothing stored (see docstring)
     return count
 
 
 # --- Backfill -------------------------------------------------------------
 
-_last_backfill_at: "float | None" = None  # process-local monotonic; double-fire guard
+_last_backfill_at: float | None = None  # process-local monotonic; double-fire guard
+_backfill_lock = threading.Lock()       # makes the cooldown check-and-claim atomic
 
 
 def start_backfill(scope: str = "null", force: bool = False) -> dict:
@@ -578,24 +586,35 @@ def start_backfill(scope: str = "null", force: bool = False) -> dict:
     if get_ai_provider(agent_model_tier="light") is None:
         return {"started": False, "reason": "no AI provider configured", "queued": 0}
 
-    now = time.monotonic()
-    if not force and _last_backfill_at is not None:
-        elapsed = now - _last_backfill_at
-        if 0 <= elapsed < BACKFILL_COOLDOWN_SECONDS:
-            return {
-                "started": False,
-                "reason": (
-                    f"a backfill started {int(elapsed)}s ago and may still be draining "
-                    "— check /backfill/status, or pass force=true"
-                ),
-                "queued": 0,
-            }
-    _last_backfill_at = now
+    # The endpoint runs this in a threadpool, so two requests can race here. Do the cooldown
+    # check-AND-claim atomically under a lock, and claim the window up front so a concurrent
+    # request is rejected — then release the claim if the candidate query fails, so a
+    # transient DB error can't block retries for the whole cooldown.
+    with _backfill_lock:
+        now = time.monotonic()
+        if not force and _last_backfill_at is not None:
+            elapsed = now - _last_backfill_at
+            if 0 <= elapsed < BACKFILL_COOLDOWN_SECONDS:
+                return {
+                    "started": False,
+                    "reason": (
+                        f"a backfill started {int(elapsed)}s ago and may still be draining "
+                        "— check /backfill/status, or pass force=true"
+                    ),
+                    "queued": 0,
+                }
+        prev_backfill_at = _last_backfill_at
+        _last_backfill_at = now  # claim the cooldown window
 
     where = "stage NOT IN ('won', 'lost')"
     if scope == "null":
         where += " AND ai_touch_count IS NULL"
-    rows = pg_fetchall(f"SELECT id FROM deals WHERE {where} ORDER BY id")
+    try:
+        rows = pg_fetchall(f"SELECT id FROM deals WHERE {where} ORDER BY id")
+    except Exception:
+        with _backfill_lock:
+            _last_backfill_at = prev_backfill_at  # release the claim so retries aren't wedged
+        raise
     deal_ids = [r["id"] for r in rows]
 
     force_write = scope == "all"
@@ -617,11 +636,14 @@ def backfill_status() -> dict:
 
     remaining_null — open deals that have never been computed. Tracks the scope=null
     launch pass to completion; says NOTHING about a scope=all repair run (which re-does
-    deals that already have a count). queue_depth — this process's queue depth."""
+    deals that already have a count). queue_depth — items queued OR in flight
+    (queue.unfinished_tasks, not qsize): the worker pops an id before computing it, so
+    qsize would read 0 while the last deal is still being processed and falsely signal
+    'done' for a scope=all run whose only progress signal this is."""
     rows = pg_fetchall(
         """SELECT COUNT(*) AS remaining
              FROM deals
             WHERE stage NOT IN ('won', 'lost') AND ai_touch_count IS NULL"""
     )
     remaining = rows[0]["remaining"] if rows else 0
-    return {"remaining_null": remaining, "queue_depth": _queue.qsize()}
+    return {"remaining_null": remaining, "queue_depth": _queue.unfinished_tasks}
