@@ -25,8 +25,12 @@ export default function useKanbanState<TItem extends KanbanItem>(
   const [items, setItems] = useState<ItemMap<TItem>>(() => toStringKeys(externalItems));
   const snapshotRef = useRef<ItemMap<TItem> | null>(null);
   const draggingRef = useRef(false);
+  // Always-current mirror of externalItems (updated even mid-drag), so a canceled
+  // gesture can re-sync to the latest data instead of a stale pre-drag snapshot.
+  const externalRef = useRef(externalItems);
 
   useEffect(() => {
+    externalRef.current = externalItems;
     if (!draggingRef.current) {
       setItems(toStringKeys(externalItems));
     }
@@ -76,9 +80,11 @@ export default function useKanbanState<TItem extends KanbanItem>(
   }, []);
 
   const rollback = useCallback(() => {
-    if (snapshotRef.current) {
-      setItems(snapshotRef.current);
-    }
+    // Re-sync to the LATEST external items rather than the pre-drag snapshot: while
+    // this gesture was active an out-of-band update (e.g. another card's failed
+    // move reverting in `data`) may have landed but been skipped by the resync
+    // effect above, and restoring the stale snapshot would silently drop it.
+    setItems(toStringKeys(externalRef.current));
     draggingRef.current = false;
     snapshotRef.current = null;
   }, []);

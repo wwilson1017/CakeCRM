@@ -39,6 +39,9 @@ export function PipelinePage() {
 
   const columnRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const deepLinkDone = useRef(false);
+  // Per-deal operation counter so out-of-order responses from rapid moves of the
+  // SAME deal can't clobber each other — only the latest op reconciles/reverts.
+  const dealOpSeq = useRef<Map<number, number>>(new Map());
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -52,30 +55,41 @@ export function PipelinePage() {
   useEffect(() => { queueMicrotask(load); }, [load]);
 
   // `data` is the single source of truth for the board. A stage change is applied
-  // to it optimistically — the deal is re-staged and moved to the front (mirroring
-  // the server's updated_at-DESC order) — so the card, column counts, and totals
-  // all move together at drop time. Persistence runs in the background: on success
-  // we reconcile with the canonical PUT response (new updated_at, joined names); on
-  // failure we revert just this deal's stage and toast. The ported Kanban hook
-  // mirrors `data` between gestures, so it re-syncs to whichever branch wins — there
-  // is no separate rollback snapshot, and a concurrent change made elsewhere (detail
-  // sheet, new deal) is never clobbered.
+  // to it optimistically — the deal is re-staged IN PLACE (its list position is
+  // untouched, so a failed move needs no position bookkeeping) — so the card,
+  // column counts, and totals all move together at drop time. Persistence runs in
+  // the background: on success we reconcile with the canonical PUT response (new
+  // updated_at, joined names); on failure we revert just this deal's stage and
+  // toast. The ported Kanban hook mirrors `data` between gestures, so it re-syncs
+  // to whichever branch wins — there is no separate rollback snapshot, and a
+  // concurrent change made elsewhere (detail sheet, new deal) is never clobbered.
+  // A per-deal op sequence guards against rapid moves of the same deal whose PUTs
+  // resolve out of order: a superseded op neither reconciles nor reverts.
   const moveDealStage = useCallback((deal: CrmDeal, toStage: string, fromStage: string) => {
+    const dealId = deal.id;
+    const seq = (dealOpSeq.current.get(dealId) ?? 0) + 1;
+    dealOpSeq.current.set(dealId, seq);
+    // Optimistic: restage the CURRENT record (not the captured drag snapshot, which
+    // could be missing fields edited meanwhile), keeping its list position.
     setData(prev => prev ? {
       ...prev,
-      deals: [{ ...deal, stage: toStage }, ...prev.deals.filter(d => d.id !== deal.id)],
+      deals: prev.deals.map(d => d.id === dealId ? { ...d, stage: toStage } : d),
     } : prev);
-    api<CrmDeal>(`/api/crm/deals/${deal.id}`, { method: 'PUT', body: JSON.stringify({ stage: toStage }) })
-      .then(updated => setData(prev => prev ? {
-        ...prev,
-        deals: prev.deals.map(d => d.id === updated.id ? { ...d, ...updated } : d),
-      } : prev))
+    api<CrmDeal>(`/api/crm/deals/${dealId}`, { method: 'PUT', body: JSON.stringify({ stage: toStage }) })
+      .then(updated => {
+        if (dealOpSeq.current.get(dealId) !== seq) return; // a newer move superseded this one
+        setData(prev => prev ? {
+          ...prev,
+          deals: prev.deals.map(d => d.id === dealId ? { ...d, ...updated } : d),
+        } : prev);
+      })
       .catch(err => {
+        if (dealOpSeq.current.get(dealId) !== seq) return; // superseded — leave the newer state
         console.error('Failed to move deal:', err);
         toast.error('Failed to move deal.');
         setData(prev => prev ? {
           ...prev,
-          deals: prev.deals.map(d => d.id === deal.id ? { ...d, stage: fromStage } : d),
+          deals: prev.deals.map(d => d.id === dealId ? { ...d, stage: fromStage } : d),
         } : prev);
       });
   }, []);
