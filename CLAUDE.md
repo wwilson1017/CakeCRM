@@ -49,7 +49,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   and gated off `ai_ready`. The assistant has a **long-term memory + nightly dreaming**
   (landed #5, `backend/memory/` + `backend/dreaming/`, **pure-algorithmic — no AI
   calls**): temporal facts in Postgres (`memory_facts`, generated `tsvector` + GIN,
-  searched via `websearch_to_tsquery('simple', …)`) with four `memory_*` tools carrying
+  searched via an OR-of-keywords `to_tsquery('simple', …)` tokenizer) with four `memory_*` tools carrying
   the `writes` flag; relevant facts are injected into the **volatile** half of the
   system prompt each turn (never the cached static half) with once-per-hour retrieval
   tracking. **Dreaming** adapts chatty's file-archival to the single-assistant layout —

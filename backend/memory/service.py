@@ -1,8 +1,10 @@
 """Temporal-facts service — CRUD + full-text search over Postgres.
 
 Ported from the *facts* half of Chatty's ``core/agents/memory/db.py`` and translated
-to Postgres: SQLite FTS5 becomes a generated ``tsvector`` column searched with
-``websearch_to_tsquery('simple', …)``; SQLite's ``?`` placeholders become ``%s``; all
+to Postgres: SQLite FTS5 becomes a generated ``tsvector`` column searched with an
+OR-of-keywords ``to_tsquery('simple', …)`` (query text is tokenized to word-char
+lexemes, so it is injection-safe and a conversational query matches on any keyword
+rather than requiring all of them); SQLite's ``?`` placeholders become ``%s``; all
 access goes through ``core/postgres.py`` helpers. Everything here is synchronous
 blocking psycopg2 — callers (the assistant engine, the tool registry) offload to a
 thread. No AI, no provider SDKs.
@@ -300,7 +302,15 @@ def invalidate_fact(fact_id: int, valid_to: str | None = None) -> dict:
 def track_retrieval_for(fact_ids: list[int]) -> None:
     """Bump retrieval_count / last_retrieved_at for *fact_ids*, throttled to once
     per hour per fact. Fire-and-forget — never raises (a tracking failure must not
-    break a chat turn or a tool call)."""
+    break a chat turn or a tool call).
+
+    Only *live* (non-archived, non-expired) facts are bumped, so a fact the nightly
+    dreaming cycle archived between selection and this call is simply skipped. The
+    converse — dreaming archiving a fact a concurrent chat just surfaced — is a benign,
+    low-probability edge (a nightly job vs. daytime chat) and is recoverable via
+    ``include_archived``; selection and tracking are deliberately NOT one transaction,
+    to keep the chat hot-path lock-free.
+    """
     if not fact_ids:
         return
     try:

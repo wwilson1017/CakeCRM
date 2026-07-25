@@ -70,10 +70,12 @@ def _run_cycle(conn) -> dict:
     start = time.monotonic()
     cur = conn.cursor()
 
-    # Bound the row-lock wait so a stalled concurrent transaction holding a memory-row
-    # lock can't hang the FOR UPDATE (and thus block scheduler shutdown / the pool
-    # close) indefinitely — a timeout raises, the cycle rolls back and is retried next run.
+    # Bound the transaction so it can never hang scheduler shutdown / the pool close:
+    # lock_timeout caps the FOR UPDATE lock wait, statement_timeout caps any single
+    # statement's execution. On timeout the statement raises, the cycle rolls back, and
+    # it is retried on the next run.
     cur.execute("SET LOCAL lock_timeout = '10s'")
+    cur.execute("SET LOCAL statement_timeout = '30s'")
     cur.execute(_SELECT_LIVE)
     rows = cur.fetchall()
 

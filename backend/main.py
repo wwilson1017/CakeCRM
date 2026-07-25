@@ -59,12 +59,6 @@ async def lifespan(app: FastAPI):
     postgres.init_pool()
     postgres.run_migrations()
 
-    # Interim dreaming scheduler (issue #5) — issue #6's background loop absorbs this
-    # single call-site: delete these two lines and call dreaming.processor
-    # .run_dreaming_if_due() from #6's loop instead. Safe to double-drive (idempotent,
-    # advisory-lock + due-guarded).
-    start_scheduler()
-
     # ── Railway environment logging ─────────────────────────────────────────
     if settings.is_railway:
         from core.config import RAILWAY_PUBLIC_URL
@@ -99,17 +93,26 @@ async def lifespan(app: FastAPI):
             )
 
     logger.info("CakeCRM backend started. Data dir: %s", data_root)
+
+    # Interim dreaming scheduler (issue #5) — issue #6's background loop absorbs this
+    # single call-site: delete this start/stop pair and call dreaming.processor
+    # .run_dreaming_if_due() from #6's loop instead. Safe to double-drive (idempotent,
+    # advisory-lock + due-guarded). Started as the LAST startup step and inside the try
+    # so its cleanup always runs.
     try:
+        start_scheduler()
         yield
     finally:
-        # Shutdown cleanup MUST run even if an exception/cancellation propagates through
-        # the lifespan, so the scheduler stops and the pool closes rather than leaking.
-        # Stop the dreaming scheduler BEFORE closing the pool — stop_scheduler awaits any
-        # in-flight cycle so the pool is never pulled out from under a running cycle.
+        # Cleanup MUST run even if an exception/cancellation propagates through the
+        # lifespan. Stop the scheduler BEFORE closing the pool (stop_scheduler awaits any
+        # in-flight cycle so the pool is never pulled out from under one), and close the
+        # pool from a NESTED finally so a stop_scheduler failure can't leak the pool.
         # (Sibling lifespan tasks — e.g. #7's telegram poller — stop here too, keep-both.)
-        await stop_scheduler()
-        postgres.close_pool()
-        logger.info("CakeCRM backend shutting down.")
+        try:
+            await stop_scheduler()
+        finally:
+            postgres.close_pool()
+            logger.info("CakeCRM backend shutting down.")
 
 
 app = FastAPI(

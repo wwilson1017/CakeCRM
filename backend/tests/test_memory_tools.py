@@ -101,3 +101,20 @@ def test_add_fact_executor_forwards_valid_from(monkeypatch):
     monkeypatch.setattr(service, "add_fact", lambda **kw: captured.update(kw) or {"ok": True})
     tools.memory_add_fact(subject="D", predicate="p", object="o", valid_from="2026-01-01")
     assert captured["valid_from"] == "2026-01-01"
+
+
+def test_search_rejects_invalid_filters():
+    assert "memory_type must be one of" in tools.memory_search("acme", memory_type="decison")["error"]
+    assert "error" in tools.memory_search("acme", date_from="not-a-date")
+
+
+def test_query_facts_rejects_invalid_filters():
+    assert "error" in tools.memory_query_facts(memory_type="bogus")
+    assert "error" in tools.memory_query_facts(as_of="not-a-date")
+
+
+def test_valid_filters_pass_through(monkeypatch):
+    monkeypatch.setattr(service, "search_facts", lambda *a, **k: [])
+    monkeypatch.setattr(service, "query_facts", lambda **k: [])
+    assert "error" not in tools.memory_search("acme", memory_type="person", date_from="2026-01-01")
+    assert "error" not in tools.memory_query_facts(memory_type="decision", as_of="2026-01-01")

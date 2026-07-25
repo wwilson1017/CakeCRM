@@ -20,13 +20,30 @@ source here — and the bare names gain the ``memory_`` prefix.
 """
 
 from collections.abc import Callable
+from datetime import date
 
 from memory import service
-from memory.types import MEMORY_TYPES
+from memory.types import MEMORY_TYPES, validate_memory_type
 
 # Sorted for a stable schema enum the model picks from (also keeps typos from silently
 # stripping tier-1 archival protection — see memory/service.add_fact).
 _MEMORY_TYPE_VALUES = sorted(MEMORY_TYPES)
+
+
+def _filter_error(memory_type: str | None = None, dates: dict | None = None) -> dict | None:
+    """Validate read-filter inputs at the tool boundary and return an ``{"error": ...}``
+    dict for a bad value, else None. Symmetric with add_fact's write-path validation so
+    an invalid memory_type or date gets a clear message instead of silently widening the
+    result set (memory_type) or raising a raw psycopg2 cast error (dates)."""
+    if memory_type and validate_memory_type(memory_type) is None:
+        return {"error": "memory_type must be one of: " + ", ".join(_MEMORY_TYPE_VALUES)}
+    for name, value in (dates or {}).items():
+        if value:
+            try:
+                date.fromisoformat(str(value))
+            except (TypeError, ValueError):
+                return {"error": f"{name} must be a date in YYYY-MM-DD format"}
+    return None
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Tool Definitions (schema only — sent to the AI provider)
@@ -134,6 +151,9 @@ def memory_search(
     date_to: str | None = None,
     limit: int = 20,
 ) -> dict:
+    err = _filter_error(memory_type, {"date_from": date_from, "date_to": date_to})
+    if err:
+        return err
     results = service.search_facts(
         query, memory_type=memory_type, date_from=date_from, date_to=date_to, limit=limit
     )
@@ -163,6 +183,9 @@ def memory_query_facts(
     include_archived: bool = False,
     limit: int = 50,
 ) -> dict:
+    err = _filter_error(memory_type, {"as_of": as_of})
+    if err:
+        return err
     facts = service.query_facts(
         subject=subject, predicate=predicate, as_of=as_of, memory_type=memory_type,
         include_expired=include_expired, include_archived=include_archived, limit=limit,
