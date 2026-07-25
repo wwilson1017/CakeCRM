@@ -193,7 +193,9 @@ def update_access_token(
 
 def mark_broken() -> None:
     """Flag the connection as broken (refresh failed / revoked) so the UI prompts
-    a reconnect. Never raises."""
+    a reconnect. Never raises. (A refresh-token CAS to avoid marking a
+    concurrently-replaced account broken is deferred to #43 — single-user v1, the
+    admin is the only actor.)"""
     try:
         pg_execute(
             "UPDATE gmail_connection SET connection_status = 'broken', updated_at = now() WHERE id = 1"

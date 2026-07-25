@@ -347,12 +347,14 @@ async def _chat_impl(
                 "type": "tool_end", "tool": name, "tool_use_id": tool_use_id,
                 "result": result, "elapsed_ms": elapsed_ms,
             })
-            if is_write and not persisted:
-                # A write executed but its result couldn't be recorded. Fail closed:
-                # end the turn with an error so a later rebuild can't show the
-                # stubbed "result not recorded" and tempt the model to redo the
-                # mutation (especially in power mode).
-                yield _sse({"type": "error", "error": "A change was made but could not be fully saved — please reload the conversation."})
+            if not persisted and (is_write or name in _UNTRUSTED_SOURCE_TOOLS):
+                # Fail closed when the result couldn't be recorded, for either of two
+                # reasons: (a) a write executed but its result is unrecorded (a later
+                # rebuild would show the stub and tempt the model to redo the
+                # mutation), or (b) an untrusted external read (Gmail) whose taint
+                # marker didn't persist — a later turn would then miss the
+                # power→normal downgrade and could auto-execute an injected write.
+                yield _sse({"type": "error", "error": "The result could not be fully saved — please reload the conversation."})
                 return
 
         # Rebuild history for the next turn using build_tool_turn (keeps the

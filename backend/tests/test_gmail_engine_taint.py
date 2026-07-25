@@ -239,3 +239,20 @@ async def test_no_gmail_read_leaves_power_mode_intact(store):
     ])
     await _run(prov, reg, [{"role": "user", "content": "draft a cold email"}], tool_mode="power")
     assert reg.calls == [("gmail_create_draft", {"to": "a@x.com", "subject": "s", "body": "b"})]
+
+
+@pytest.mark.asyncio
+async def test_untrusted_read_persist_failure_fails_closed(store, monkeypatch):
+    """If an untrusted Gmail read result can't be persisted, the turn fails closed —
+    otherwise its taint marker is lost and a later turn drops the power->normal
+    downgrade."""
+    monkeypatch.setattr(history, "merge_tool_result",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("db down")))
+    reg = Registry()
+    prov = FakeProvider([
+        [_complete([_tc("gmail_search", "r1", {"query": "x"})], stop="tool_use")],
+        [{"type": "text", "text": "done"}, _complete()],
+    ])
+    events = await _run(prov, reg, [{"role": "user", "content": "search"}], tool_mode="power")
+    assert events[-1]["type"] == "error"
+    assert not any(e["type"] == "done" for e in events)

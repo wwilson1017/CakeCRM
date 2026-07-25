@@ -51,6 +51,10 @@ def _parse_headers(headers: list[dict]) -> dict:
 
 
 def _get_body_text(payload: dict, _depth: int = 0) -> str:
+    # Reads inline `body.data` only; a very large text/html part stored separately
+    # under `attachmentId` (empty `data`) returns "" rather than a capped
+    # attachments.get fetch — deferred to #43 (attachment-content fetch was
+    # deliberately scoped out of #8).
     if _depth > _MAX_MIME_DEPTH:
         return ""
     mime_type = payload.get("mimeType", "")
@@ -169,7 +173,11 @@ def list_messages_op(service, query: str = "", max_results: int = 20) -> list[di
 
 def get_thread_op(service, thread_id: str) -> dict:
     """All messages in a thread (bodies as plain text, capped). Attachment names
-    only."""
+    only.
+
+    Model-facing output is bounded (per-body char cap + message-count cap below),
+    and Gmail bounds thread size; a two-step metadata-then-retained-messages fetch to
+    also bound peak download memory is deferred to #43."""
     thread = service.users().threads().get(
         userId="me", id=thread_id, format="full"
     ).execute()

@@ -29,8 +29,9 @@ _FORBIDDEN = [
     (re.compile(r"getattr\([^)]*['\"]send['\"]"), "dynamic getattr(..., 'send') access"),
 ]
 
-# The Gmail package additionally may not contain a bare `.send(` at all.
-_GMAIL_SEND = re.compile(r"\.send\s*\(")
+# The Gmail package may not reference `.send` at all — not even as a bare attribute
+# (`sender = svc.users().messages().send; sender(...)` aliases past a `.send(` check).
+_GMAIL_SEND = re.compile(r"\.send\b")
 
 
 def _runtime_py_files():
@@ -55,7 +56,7 @@ def test_no_send_surface_in_runtime_source():
     )
 
 
-def test_gmail_package_has_no_bare_send_call():
+def test_gmail_package_has_no_send_reference():
     gmail_dir = BACKEND / "gmail"
     offenders = []
     for path in gmail_dir.rglob("*.py"):
@@ -64,8 +65,8 @@ def test_gmail_package_has_no_bare_send_call():
             line = text.count("\n", 0, m.start()) + 1
             offenders.append(f"{path.relative_to(BACKEND)}:{line}")
     assert not offenders, (
-        "backend/gmail/ contains a `.send(` call — no send is permitted:\n"
-        + "\n".join(offenders)
+        "backend/gmail/ references `.send` (call OR bare attribute) — no send is "
+        "permitted, and aliasing must not slip past:\n" + "\n".join(offenders)
     )
 
 

@@ -141,12 +141,18 @@ def oauth_callback(code: str = "", state: str = "", error: str = ""):
 
         expires_in = int(tokens.get("expires_in", 3600) or 3600)
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+        # Persist the fixed minimal scope set we requested, NOT whatever Google
+        # returned — if the user's OAuth app is configured with extra scopes, Google
+        # could grant more, but we never record or refresh under anything broader
+        # than gmail.readonly + gmail.compose. (A sub-second disconnect/app-replace
+        # race between the state-claim above and this write is a documented v1
+        # limitation — single-user, self-correcting; tracked in #43.)
         try:
             store.save_tokens(
                 access_token=access_token,
                 refresh_token=refresh_token,
                 expires_at=expires_at,
-                scopes=" ".join(sorted(granted)),
+                scopes=" ".join(oauth.SCOPES),
                 email=email,
             )
         except Exception as e:
@@ -165,6 +171,9 @@ def disconnect(user=Depends(get_current_user)):
     (keeping app credentials for a one-click reconnect)."""
     from core.encryption import decrypt_value
 
+    # Read-then-clear rather than one atomic read-and-clear returning the old token:
+    # the narrow failure window (read fails → clear succeeds → token unrevoked) is a
+    # documented v1 limitation, single-user and self-correcting (tracked in #43).
     refresh_secret = decrypt_value(store.get_row().get("refresh_token_enc", ""))
     if refresh_secret:
         oauth.revoke_token(refresh_secret)

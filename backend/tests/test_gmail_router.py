@@ -240,3 +240,18 @@ def test_callback_persist_failure_revokes_tokens(monkeypatch, api):
     r = api.get("/api/gmail/oauth/callback?state=s&code=c")
     assert "reason=exchange" in r.headers["location"]
     assert revoked == ["rt"]  # orphaned grant revoked
+
+
+def test_callback_persists_only_minimal_scopes(monkeypatch, api):
+    saved = {}
+    monkeypatch.setattr(router_mod.store, "claim_oauth_state", lambda s: True)
+    monkeypatch.setattr(router_mod.store, "get_app_credentials", lambda: ("cid", "sec"))
+    granted = f"{oauth.GMAIL_READONLY_SCOPE} {oauth.GMAIL_COMPOSE_SCOPE} https://www.googleapis.com/auth/gmail.modify"
+    monkeypatch.setattr(router_mod.oauth, "exchange_code", lambda *a: _tokens(scope=granted))
+    monkeypatch.setattr(router_mod.client, "call_with_token", lambda t, op: {"email": "me@x.com"})
+    monkeypatch.setattr(router_mod.store, "save_tokens", lambda **k: saved.update(k))
+    r = api.get("/api/gmail/oauth/callback?state=s&code=c")
+    assert "gmail=connected" in r.headers["location"]
+    # Google granted an extra scope, but we persist ONLY the minimal requested set.
+    assert saved["scopes"].split() == oauth.SCOPES
+    assert "gmail.modify" not in saved["scopes"]
