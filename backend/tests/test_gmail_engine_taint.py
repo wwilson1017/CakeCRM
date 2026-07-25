@@ -1,0 +1,174 @@
+"""Prompt-injection defense for Gmail reads (issue #8, Codex High #2).
+
+An untrusted external read (gmail_search / gmail_read_thread) must taint the turn
+so that a power-mode write proposed after it routes through confirmation instead of
+auto-executing — and the read result is wrapped so LATER turns downgrade too.
+
+Self-contained minimal harness (mirrors test_assistant_engine.py) so this file
+stays conflict-free from concurrent engine work."""
+
+import json
+
+import pytest
+
+from assistant import assembly, engine, history, identity
+
+
+class FakeProvider:
+    def __init__(self, scripts):
+        self.model = "fake-model"
+        self.context_window = None
+        self._scripts = scripts
+        self._i = 0
+        self.captured_tools = []
+
+    async def stream_turn(self, messages, tools, system_prompt):
+        self.captured_tools.append(tools)
+        script = self._scripts[self._i] if self._i < len(self._scripts) else self._scripts[-1]
+        self._i += 1
+        for event in script:
+            yield event
+
+    def build_tool_turn(self, text, tool_calls, results):
+        return [{"role": "assistant", "content": text, "tool_calls": tool_calls},
+                {"role": "tool", "results": results}]
+
+
+def _tc(name, tid, args=None):
+    return {"id": tid, "name": name, "args": args or {}}
+
+
+def _complete(tool_calls=None, stop="stop"):
+    return {"type": "_turn_complete", "tool_calls": tool_calls or [], "stop_reason": stop}
+
+
+class Store:
+    def __init__(self):
+        self.convs = {}
+        self.merges = []
+        self._n = 0
+
+    def create_conversation(self):
+        self._n += 1
+        cid = f"conv{self._n}"
+        self.convs[cid] = {"id": cid, "messages": []}
+        return {"id": cid}
+
+    def conversation_exists(self, cid):
+        return cid in self.convs
+
+    def auto_title(self, cid, text):
+        return (text or "")[:60]
+
+    def save_message(self, cid, mid, role, content, tool_calls=None, model=""):
+        self.convs.setdefault(cid, {"id": cid, "messages": []})["messages"].append(
+            {"id": mid, "role": role, "content": content, "tool_calls": tool_calls, "tool_results": None})
+
+    def merge_tool_result(self, mid, tuid, tname, content):
+        self.merges.append({"tuid": tuid, "tool_name": tname, "content": content})
+
+
+class Registry:
+    def __init__(self, writes=frozenset()):
+        self._writes = set(writes)
+        self.descriptions = {}
+        self.calls = []
+
+    def is_write(self, name):
+        return name in self._writes
+
+    def provider_tools(self, tool_mode):
+        return [{"name": "gmail_search"}, {"name": "gmail_create_draft"}]
+
+    def execute_tool_sync(self, name, args):
+        self.calls.append((name, args))
+        return {"ok": True, "name": name}
+
+    async def execute_tool(self, name, args):
+        return self.execute_tool_sync(name, args)
+
+
+@pytest.fixture
+def store(monkeypatch):
+    s = Store()
+    for fn in ("create_conversation", "conversation_exists", "auto_title", "save_message", "merge_tool_result"):
+        monkeypatch.setattr(history, fn, getattr(s, fn))
+    monkeypatch.setattr(identity, "get_identity",
+                        lambda: {"name": "Baker", "personality": "p", "using_default": True})
+    monkeypatch.setattr(assembly, "assemble_messages", lambda provider, cid: [{"role": "user", "content": "hi"}])
+    return s
+
+
+async def _run(provider, registry, messages, **kw):
+    out = []
+    async for line in engine.chat(provider, registry, messages, **kw):
+        out.append(json.loads(line[len("data: "):]))
+    return out
+
+
+def _types(events):
+    return [e["type"] for e in events]
+
+
+@pytest.mark.asyncio
+async def test_gmail_read_then_draft_confirms_in_power_mode(store):
+    """Same-turn: after gmail_search runs, a power-mode gmail_create_draft must
+    CONFIRM, not auto-execute."""
+    reg = Registry(writes={"gmail_create_draft"})
+    prov = FakeProvider([
+        [_complete(
+            [_tc("gmail_search", "r1", {"query": "x"}),
+             _tc("gmail_create_draft", "w1", {"to": "a@x.com", "subject": "s", "body": "b"})],
+            stop="tool_use",
+        )],
+        [{"type": "text", "text": "Shall I?"}, _complete()],
+    ])
+    events = await _run(prov, reg, [{"role": "user", "content": "reply to that email"}], tool_mode="power")
+    # The read executed; the draft did NOT (it was gated to confirmation).
+    assert ("gmail_search", {"query": "x"}) in reg.calls
+    assert not any(c[0] == "gmail_create_draft" for c in reg.calls)
+    assert any(e["type"] == "confirm" and e["tool"] == "gmail_create_draft" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_gmail_read_result_is_wrapped_untrusted(store):
+    """The persisted gmail read result carries the untrusted-external marker so a
+    later turn's power->normal downgrade fires on it."""
+    reg = Registry()
+    prov = FakeProvider([
+        [_complete([_tc("gmail_search", "r1", {"query": "x"})], stop="tool_use")],
+        [{"type": "text", "text": "here"}, _complete()],
+    ])
+    await _run(prov, reg, [{"role": "user", "content": "search my mail"}], tool_mode="power")
+    wrapped = [m for m in store.merges if engine._UNTRUSTED_EXTERNAL_MARKER in m["content"]]
+    assert wrapped and wrapped[0]["tool_name"] == "gmail_search"
+
+
+@pytest.mark.asyncio
+async def test_prior_turn_gmail_content_downgrades_power(store, monkeypatch):
+    """Cross-turn: assembled history carrying the untrusted-external marker forces a
+    power-mode write to confirm."""
+    monkeypatch.setattr(assembly, "assemble_messages", lambda provider, cid: [
+        {"role": "user", "content": "hi"},
+        {"role": "tool", "content": f'{engine._UNTRUSTED_EXTERNAL_MARKER} source="gmail_search">...'},
+    ])
+    reg = Registry(writes={"gmail_create_draft"})
+    prov = FakeProvider([
+        [_complete([_tc("gmail_create_draft", "w1", {"to": "a@x.com", "subject": "s", "body": "b"})], stop="tool_use")],
+        [{"type": "text", "text": "Shall I?"}, _complete()],
+    ])
+    events = await _run(prov, reg, [{"role": "user", "content": "draft it"}], tool_mode="power")
+    assert any(e["type"] == "confirm" for e in events)
+    assert reg.calls == []  # write not auto-executed
+
+
+@pytest.mark.asyncio
+async def test_no_gmail_read_leaves_power_mode_intact(store):
+    """Control: without an untrusted read, power mode still auto-executes writes."""
+    reg = Registry(writes={"gmail_create_draft"})
+    prov = FakeProvider([
+        [_complete([_tc("gmail_create_draft", "w1", {"to": "a@x.com", "subject": "s", "body": "b"})], stop="tool_use")],
+        [{"type": "text", "text": "done"}, _complete()],
+    ])
+    await _run(prov, reg, [{"role": "user", "content": "draft a cold email"}], tool_mode="power")
+    assert reg.calls == [("gmail_create_draft", {"to": "a@x.com", "subject": "s", "body": "b"})]

@@ -372,11 +372,17 @@ export function useAssistantChat() {
       // approve/deny race the other click won) or still-executing.
       const rstatus =
         result && typeof result === 'object' ? (result as { status?: string }).status : undefined;
-      let cardStatus: 'approved' | 'denied' | 'pending';
+      const resultErrored =
+        result && typeof result === 'object' && (result as { error?: unknown }).error != null;
+      let cardStatus: 'approved' | 'denied' | 'pending' | 'failed';
       if (rstatus === 'executing') {
         cardStatus = 'pending'; // resolved elsewhere but not yet finalized — stay pending
       } else if (rstatus === 'denied_by_user') {
         cardStatus = 'denied';
+      } else if (decision === 'approve' && resultErrored) {
+        // Approved, but the executor returned an error (e.g. Gmail disconnected).
+        // Show it as failed, not "Approved" (issue #8).
+        cardStatus = 'failed';
       } else if (body?.status === 'already_resolved') {
         cardStatus = 'approved'; // resolved by a prior action and not a denial
       } else {

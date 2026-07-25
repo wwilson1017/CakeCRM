@@ -23,3 +23,10 @@ google-generativeai==0.8.6
 pdfplumber==0.11.9
 python-docx==1.2.0
 openpyxl==3.1.5
+
+# Gmail integration (issue #8) — read + create-draft ONLY; there is NO send path
+# (see SECURITY.md). Imported lazily inside backend/gmail/ so a missing SDK never
+# breaks import/startup. google-auth-oauthlib is deliberately NOT used: the code
+# exchange is a direct httpx POST and refresh is google-auth's Credentials.
+google-auth==2.56.2
+google-api-python-client==2.198.0

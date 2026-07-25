@@ -30,6 +30,16 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   the codebase, and none may be added. Google scopes can't express "draft but not
   send", so the guarantee is enforced at the tool layer: the registry exposes read
   and create-draft tools only. This is a documented trust guarantee (SECURITY.md).
+  Landed #8 as `backend/gmail/` (mounted `/api/gmail`) + `frontend/src/crm/components/GmailCard.tsx`:
+  BYO Google OAuth app (client_id/secret + tokens Fernet-encrypted in the
+  `gmail_connection` singleton), scopes `gmail.readonly` + `gmail.compose` only, the
+  three tools `gmail_search`/`gmail_read_thread`/`gmail_create_draft` collected via
+  `gmail.tools.get_gmail_tools()` (defs gated on connection, executors follow),
+  `gmail_create_draft` marked `writes:true`. Enforcement artifacts: the guard test
+  `backend/tests/test_gmail_guard.py` (CI fails if any send surface appears), a
+  runtime op-allow-list in `gmail/client.py`, and `SECURITY.md`. Untrusted email read
+  into the assistant taints the turn (power→normal confirmation) to blunt prompt
+  injection.
 - **Multi-provider AI** via the `AIProvider` ABC (Anthropic, OpenAI, Gemini, Ollama,
   Together). Never call a provider SDK directly from feature code. Cheap background
   AI work (touch counts, classification) uses the light tier via
@@ -157,7 +167,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | CRM core (schema, router, tools, smart import) — **landed #3** as `backend/crm/` + `frontend/src/crm/` + `frontend/src/shared/` | `chatty/backend/integrations/crm_lite/`, `chatty/frontend/src/crm/` |
 | Assistant engine — **chat loop, tool registry, confirmations, uploads landed #4** as `backend/assistant/` + `frontend/src/assistant/`; memory/dreaming/heartbeat/reminders/notifications still pending | `chatty/backend/core/agents/` |
 | Telegram | `chatty/backend/integrations/telegram/` |
-| Gmail (reduced to read + draft) | `chatty/backend/integrations/google/` |
+| Gmail (read + draft only: `gmail_connection` singleton, BYO OAuth at `/api/gmail`, tools `gmail_search`/`gmail_read_thread`/`gmail_create_draft`, guard test + SECURITY.md) — **landed #8** as `backend/gmail/` + `frontend/src/crm/components/GmailCard.tsx` | `chatty/backend/integrations/google/` |
 | Kanban drag-and-drop | `cake_os/frontend/src/shared/dnd/` |
 | Companies (first-class entity: `companies` table, `company_id` FKs, rollup detail page, text→FK backfill migration) — **landed #13** | `cake_os/backend/apps/crm/company_service.py` |
 | Chatter/notes (`crm_chatter`) — **landed #15** as `backend/crm/chatter_service.py` + `frontend/src/crm/components/NotesThread.tsx` | `cake_os/backend/apps/crm/chatter_service.py` |

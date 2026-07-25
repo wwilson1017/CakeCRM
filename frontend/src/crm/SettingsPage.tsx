@@ -27,6 +27,7 @@ import {
   pagePadding, pageHeading, sectionHeading, cardStyle, btnPrimary, btnSecondary, btnDanger,
 } from './styles';
 import { BrandLogo } from './components/BrandLogo';
+import { GmailCard } from './components/GmailCard';
 
 // SVG is excluded: all logos are stored/served as image/png, and browsers don't
 // content-sniff SVG, so an SVG would silently never render. (Serving real SVG from
@@ -206,6 +207,9 @@ export function SettingsPage() {
           >{saving ? 'Saving…' : 'Save branding'}</button>
         </div>
       </div>
+
+      {/* Gmail connect (issue #8) — appended last in the settings card chain. */}
+      <GmailCard isMobile={isMobile} />
     </div>
   );
 }

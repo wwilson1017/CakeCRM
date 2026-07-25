@@ -85,8 +85,11 @@ async def chat(req: ChatRequest, user=Depends(get_current_user)):
     if not req.messages and not req.conversation_id:
         raise HTTPException(status_code=400, detail="messages or conversation_id is required.")
     provider = await asyncio.to_thread(_require_provider)
+    # ToolRegistry construction reads the Gmail connection state from Postgres
+    # (issue #8), so build it off the event loop.
+    registry = await asyncio.to_thread(ToolRegistry)
     stream = engine.chat(
-        provider, ToolRegistry(), req.messages,
+        provider, registry, req.messages,
         tool_mode=req.tool_mode, conversation_id=req.conversation_id,
     )
     return StreamingResponse(stream, media_type="text/event-stream", headers=_SSE_HEADERS)
@@ -150,8 +153,9 @@ async def chat_upload(
         if tool_mode == "power":
             tool_mode = "normal"
 
+    registry = await asyncio.to_thread(ToolRegistry)
     stream = engine.chat(
-        provider, ToolRegistry(), messages,
+        provider, registry, messages,
         tool_mode=tool_mode, conversation_id=conversation_id, title_hint=original_text,
     )
     return StreamingResponse(stream, media_type="text/event-stream", headers=_SSE_HEADERS)

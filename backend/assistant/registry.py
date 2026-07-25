@@ -1,11 +1,20 @@
-"""The assistant's tool registry — a thin layer over the CRM tools.
+"""The assistant's tool registry — a thin layer over the tool sources.
 
 Chatty's ``ToolRegistry`` dispatches many tool families by ``kind``; CakeCRM's
-assistant has exactly one family (the CRM tools), so this is deliberately small.
-It wraps ``crm.tools.get_crm_tools()`` — the ``(defs, executors)`` pair — and is
-the SINGLE SOURCE OF TRUTH for which tools are writes: the streaming loop's
-confirmation gate and the ``/confirm`` endpoint both read ``is_write`` from here,
-so they can never diverge on what needs approval.
+assistant composes tool *sources* instead. It merges ``crm.tools.get_crm_tools()``
+(always on — the CRM is core) with ``gmail.tools.get_gmail_tools()`` (issue #8 —
+defs only when Gmail is connected, so a disconnected/keyless instance never shows
+the model those tools; executors follow the defs). Each source returns a
+``(defs, executors)`` pair. The registry is the SINGLE SOURCE OF TRUTH for which
+tools are writes: the streaming loop's confirmation gate and the ``/confirm``
+endpoint both read ``is_write`` from here, so they can never diverge on what needs
+approval.
+
+Because ``get_gmail_tools()`` reads the Gmail connection state from Postgres,
+constructing a ``ToolRegistry`` does one DB read; the async chat endpoints build it
+via ``asyncio.to_thread`` so it never blocks the event loop. Every tool source is
+required to never raise (they degrade to no tools with no DB), so hermetic
+construction with no database still works.
 
 Executors are synchronous, blocking psycopg2 code. ``execute_tool_sync`` is the
 real dispatch (used directly by sync endpoints); ``execute_tool`` offloads it to a
@@ -16,6 +25,7 @@ import asyncio
 import logging
 
 from crm.tools import get_crm_tools
+from gmail.tools import get_gmail_tools
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +36,10 @@ _INTERNAL_KEYS = {"kind", "writes"}
 
 class ToolRegistry:
     def __init__(self) -> None:
-        self.tool_defs, self.executors = get_crm_tools()
+        crm_defs, crm_execs = get_crm_tools()
+        gmail_defs, gmail_execs = get_gmail_tools()
+        self.tool_defs = crm_defs + gmail_defs
+        self.executors = {**crm_execs, **gmail_execs}
         self.writes_map = {t["name"]: bool(t.get("writes", False)) for t in self.tool_defs}
         self.descriptions = {t["name"]: t.get("description", "") for t in self.tool_defs}
 

@@ -350,20 +350,31 @@ async def list_models(provider: str, user=Depends(get_current_user)):
 # ── Setup status (AI-readiness / degradation gate) ────────────────────────────
 
 @setup_router.get("/status")
-async def setup_status(user=Depends(get_current_user)):
+def setup_status(user=Depends(get_current_user)):
     """AI-readiness gate for the frontend. ``ai_ready`` (the active provider
     resolves to a usable provider) is the flag the CRM UI keys AI affordances off;
-    ``credentials_present`` is the softer "any provider configured" signal."""
+    ``credentials_present`` is the softer "any provider configured" signal;
+    ``gmail_connected`` gates the Gmail affordances (issue #8).
+
+    Sync ``def`` on purpose: it does blocking pooled Postgres reads (CredentialStore
+    + the Gmail check), so FastAPI runs it in a worker thread rather than blocking
+    the event loop."""
     from providers import get_ai_provider
     store = CredentialStore()
     try:
         ai_ready = get_ai_provider() is not None
     except Exception:
         ai_ready = False
+    try:
+        from gmail.store import is_connected as _gmail_connected
+        gmail_connected = _gmail_connected()
+    except Exception:
+        gmail_connected = False
     return {
         "ai_ready": ai_ready,
         "credentials_present": store.is_configured(),
         "active_provider": store.data.get("active_provider", ""),
         "active_model": store.data.get("active_model", ""),
         "configured_providers": store.configured_providers(),
+        "gmail_connected": gmail_connected,
     }

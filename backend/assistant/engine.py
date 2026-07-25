@@ -40,22 +40,33 @@ logger = logging.getLogger(__name__)
 MAX_ITERATIONS = 20
 _VALID_MODES = {"read-only", "normal", "power"}
 _UNTRUSTED_MARKER = "<untrusted_file_content"
+# Tool results from untrusted EXTERNAL sources (e.g. Gmail — issue #8) are wrapped
+# with this marker when recorded, so a later turn's power→normal downgrade fires on
+# them exactly like uploaded-file content does.
+_UNTRUSTED_EXTERNAL_MARKER = "<untrusted_external_content"
+_UNTRUSTED_MARKERS = (_UNTRUSTED_MARKER, _UNTRUSTED_EXTERNAL_MARKER)
+# Read tools whose output is untrusted external content. Reading it must not let a
+# prompt injection inside that content drive an unconfirmed write in power mode.
+_UNTRUSTED_SOURCE_TOOLS = {"gmail_search", "gmail_read_thread"}
 
 
 def _context_has_untrusted_upload(messages: list[dict]) -> bool:
-    """True if any message content carries wrapped uploaded-file text.
+    """True if any message content carries untrusted wrapped text — an uploaded
+    file OR a tool result from an untrusted external source (Gmail, issue #8).
 
     The marker normally lives in user-turn string content, but coalescing can fold
-    an upload user row into a block list (e.g. merged with a trailing tool-result
-    message), so also scan text blocks inside list content — otherwise the
-    power→normal downgrade would silently miss it."""
+    an upload/tool-result row into a block list, so also scan text blocks inside
+    list content — otherwise the power→normal downgrade would silently miss it."""
+    def _has_marker(text: str) -> bool:
+        return any(marker in text for marker in _UNTRUSTED_MARKERS)
+
     for m in messages:
         content = m.get("content")
-        if isinstance(content, str) and _UNTRUSTED_MARKER in content:
+        if isinstance(content, str) and _has_marker(content):
             return True
         if isinstance(content, list):
             for block in content:
-                if isinstance(block, dict) and _UNTRUSTED_MARKER in str(block.get("text") or ""):
+                if isinstance(block, dict) and _has_marker(str(block.get("text") or "")):
                     return True
     return False
 
@@ -175,6 +186,10 @@ async def _chat_impl(
 
     # ── Main tool-execution loop ───────────────────────────────────────────────
     iteration = 0
+    # Set once an untrusted-external read (e.g. Gmail) runs during THIS turn; from
+    # then on, power-mode writes route through confirmation (issue #8). Prior-turn
+    # untrusted content already downgraded tool_mode above.
+    turn_has_untrusted_reads = False
     while iteration < MAX_ITERATIONS:
         iteration += 1
         turn_text = ""
@@ -282,9 +297,12 @@ async def _chat_impl(
                     terminated = True
                     break
 
-            # Normal-mode confirmation gate: persist the pending placeholder BEFORE
-            # emitting confirm (so /confirm can find it), then wait for approval.
-            if tool_mode == "normal" and is_write:
+            # Confirmation gate: normal mode always confirms writes; power mode
+            # confirms them too once an untrusted external read (Gmail) has run this
+            # turn, so injected instructions in that content can't auto-execute a
+            # write (issue #8). Persist the pending placeholder BEFORE emitting
+            # confirm (so /confirm can find it), then wait for approval.
+            if is_write and (tool_mode == "normal" or (tool_mode == "power" and turn_has_untrusted_reads)):
                 try:
                     await asyncio.to_thread(
                         history.merge_tool_result, iter_msg_id, tool_use_id, name,
@@ -308,6 +326,15 @@ async def _chat_impl(
             result = await registry.execute_tool(name, args)
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             content = json.dumps(result, default=str)
+            # An untrusted external read (Gmail) taints the rest of the turn and, via
+            # the wrapping marker persisted below, later turns too — so a prompt
+            # injection in the email can't silently drive a power-mode write.
+            if name in _UNTRUSTED_SOURCE_TOOLS:
+                turn_has_untrusted_reads = True
+                content = (
+                    f'{_UNTRUSTED_EXTERNAL_MARKER} source="{name}">\n'
+                    f"{content}\n</untrusted_external_content>"
+                )
             results.append({"tool_use_id": tool_use_id, "tool_name": name, "content": content})
             persisted = True
             try:
