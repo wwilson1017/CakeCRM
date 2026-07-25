@@ -433,7 +433,12 @@ export function useAssistantChat(recordContext?: ActiveRecordContext | null) {
 
       // Continue only once EVERY card on this message reached a final state.
       const msg = messagesRef.current.find((m) => m.id === msgId);
-      const allFinal = (msg?.pendingConfirmations ?? []).every((c) => c.status === 'approved' || c.status === 'denied');
+      // If the message vanished (e.g. the user switched conversations while /confirm
+      // was in flight), do NOT continue: an empty pendingConfirmations list makes
+      // .every() vacuously true, which would resume this turn against the CURRENT
+      // conversation — the wrong thread.
+      if (!msg) return;
+      const allFinal = (msg.pendingConfirmations ?? []).every((c) => c.status === 'approved' || c.status === 'denied');
       // Resume with the snapshot captured when THIS message's turn started (undefined
       // for a reload-resumed message that has no snapshot → context omitted).
       if (allFinal) continueTurn(turnCtxByMsgRef.current[msgId]);

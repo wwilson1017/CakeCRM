@@ -17,7 +17,7 @@
 // `label` is display-only (drawer chip). The wire payload built in
 // useAssistantChat carries record_type + record_id exclusively.
 
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { ActiveRecordContext, ActiveRecordType } from '../assistant';
 
@@ -66,7 +66,10 @@ export function usePublishActiveRecord(
 ): void {
   const { publish, clearIfOwner } = useActiveRecord();
   const tokenRef = useRef({}); // stable identity per publisher instance
-  useEffect(() => {
+  // Publish in the COMMIT phase (useLayoutEffect), matching the layout-effect record
+  // mirror in useAssistantChat — so after a route/sheet change the drawer never reads
+  // the previous record in the window before passive effects would have run.
+  useLayoutEffect(() => {
     // Guard to the backend's domain: a positive int4 PK. Anything else (NaN,
     // fractional, negative, or out of int4 range) is never published, so it can't
     // reach the wire and can't cause an otherwise-valid chat request to 422.
