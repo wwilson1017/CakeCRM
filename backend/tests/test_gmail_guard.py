@@ -102,6 +102,24 @@ def test_scopes_are_minimal():
     assert set(oauth.SCOPES) == {oauth.GMAIL_READONLY_SCOPE, oauth.GMAIL_COMPOSE_SCOPE}
 
 
+def test_gmail_read_tools_are_in_the_engine_taint_set():
+    """Coupling guard: every Gmail READ tool must be in the engine's
+    _UNTRUSTED_SOURCE_TOOLS taint set. Otherwise a future attacker-controlled read
+    (e.g. a message/attachment reader) added to the defs without wiring the taint
+    would silently lose the prompt-injection power→normal downgrade AND the
+    nonce-fence wrapping — with no failing test to warn the author (the taint set is
+    a hand-maintained literal two modules away)."""
+    from assistant.engine import _UNTRUSTED_SOURCE_TOOLS
+    from gmail.tools import GMAIL_TOOL_DEFS
+
+    reads = {d["name"] for d in GMAIL_TOOL_DEFS if not d["writes"]}
+    missing = reads - _UNTRUSTED_SOURCE_TOOLS
+    assert not missing, (
+        "Gmail read tools missing from engine._UNTRUSTED_SOURCE_TOOLS — they would "
+        f"produce un-tainted, un-fenced untrusted content: {missing}"
+    )
+
+
 def test_client_op_allowlist_excludes_send():
     from gmail import client, ops
 
