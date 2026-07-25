@@ -88,11 +88,14 @@ def test_delete_definition_404_and_ok(client, monkeypatch):
 
 # ── Values ────────────────────────────────────────────────────────────────────
 
-def test_get_values_valueerror_400(client, monkeypatch):
-    def raise_ve(et, eid):
-        raise ValueError("Invalid entity_type: widget")
-    monkeypatch.setattr(field_service, "get_field_values", raise_ve)
+def test_get_values_invalid_type_400(client):
+    # Invalid entity_type is rejected before any DB access.
     assert client.get("/api/crm/widget/5/fields").status_code == 400
+
+
+def test_get_values_missing_entity_404(client, monkeypatch):
+    monkeypatch.setattr(field_service, "entity_exists", lambda et, eid: False)
+    assert client.get("/api/crm/contact/999/fields").status_code == 404
 
 
 def test_set_values_forwards_sub_as_editor(client, monkeypatch):
@@ -128,6 +131,7 @@ def test_set_values_fk_violation_400_not_500(client, monkeypatch):
 
 def test_entity_field_route_does_not_shadow_entity_detail(client, monkeypatch):
     monkeypatch.setattr(service, "get_contact_detail", lambda cid: {"id": cid, "kind": "contact"})
+    monkeypatch.setattr(field_service, "entity_exists", lambda et, eid: True)
     monkeypatch.setattr(field_service, "get_field_values", lambda et, eid: [{"field_id": 1, "kind": "fields"}])
     # /contacts/5 -> the contact detail handler; /contact/5/fields -> the fields handler.
     assert client.get("/api/crm/contacts/5").json()["kind"] == "contact"

@@ -620,3 +620,22 @@ def test_demo_clear_preserves_definitions_clear_all_wipes(pg_db):
 
     service.clear_all()
     assert fs.list_field_definitions() == []               # clear_all is the full wipe
+
+
+def test_update_cannot_strip_select_options(pg_db):
+    """PUT that clears a select's options is rejected (reopening the accept-anything
+    hole the create path guards) — API returns 400."""
+    from crm import field_service as fs
+    client = _client()
+    d = fs.create_field_definition({"entity_type": "contact", "name": "Tier", "field_type": "select",
+                                    "dropdown_options": ["A", "B"]})
+    assert client.put(f"/api/crm/fields/{d['id']}", json={"dropdown_options": []}).status_code == 400
+    assert client.put(f"/api/crm/fields/{d['id']}", json={"dropdown_options": None}).status_code == 400
+    # a valid options change still works
+    r = client.put(f"/api/crm/fields/{d['id']}", json={"dropdown_options": ["A", "B", "C"]})
+    assert r.status_code == 200 and r.json()["dropdown_options"] == ["A", "B", "C"]
+
+
+def test_get_values_404s_for_missing_entity(pg_db):
+    client = _client()
+    assert client.get("/api/crm/contact/999999/fields").status_code == 404

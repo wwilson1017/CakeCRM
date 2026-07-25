@@ -104,12 +104,12 @@ def test_options_reject_duplicates(monkeypatch):
 
 # ── update_field_definition ───────────────────────────────────────────────────
 
-def _capture_update(monkeypatch, *, exists=True):
+def _capture_update(monkeypatch, *, exists=True, field_type="text"):
     captured: dict = {"execute": None}
 
     def fake_fetchone(sql, params=()):
-        if "SELECT id FROM crm_field_definitions" in sql:
-            return {"id": 1} if exists else None
+        if "SELECT field_type FROM crm_field_definitions" in sql:  # existence pre-check
+            return {"field_type": field_type} if exists else None
         if "SELECT * FROM crm_field_definitions WHERE id" in sql:
             return {"id": 1, "dropdown_options": None}
         return None
@@ -134,12 +134,28 @@ def test_update_only_touches_mutable_columns(monkeypatch):
     assert "entity_type" not in sql and "field_key" not in sql and "field_type" not in sql
 
 
-def test_update_explicit_null_dropdown_clears(monkeypatch):
-    cap = _capture_update(monkeypatch)
+def test_update_explicit_null_dropdown_clears_on_non_select(monkeypatch):
+    # A non-select field may clear its (always-null) options — allowed.
+    cap = _capture_update(monkeypatch, field_type="text")
     field_service.update_field_definition(1, {"dropdown_options": None})
     sql, params = cap["execute"]
     assert "dropdown_options = %s" in sql
-    assert params[0] is None            # NULL clears the options
+    assert params[0] is None
+
+
+def test_update_select_cannot_clear_options(monkeypatch):
+    # The same invariant the create path enforces: a select must keep >=1 option.
+    _capture_update(monkeypatch, field_type="select")
+    with pytest.raises(ValueError):
+        field_service.update_field_definition(1, {"dropdown_options": None})
+    with pytest.raises(ValueError):
+        field_service.update_field_definition(1, {"dropdown_options": []})
+
+
+def test_update_rejects_options_on_non_select(monkeypatch):
+    _capture_update(monkeypatch, field_type="text")
+    with pytest.raises(ValueError):
+        field_service.update_field_definition(1, {"dropdown_options": ["A"]})
 
 
 def test_update_blank_name_raises(monkeypatch):

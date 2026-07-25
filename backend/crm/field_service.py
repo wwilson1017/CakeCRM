@@ -186,7 +186,9 @@ def update_field_definition(field_id: int, data: dict) -> dict | None:
     """Partial update of a definition. Only name/dropdown_options/is_required/
     display_order are mutable (entity_type/field_key/field_type are immutable).
     Returns None when the field does not exist."""
-    existing = pg_fetchone("SELECT id FROM crm_field_definitions WHERE id = %s", (field_id,))
+    existing = pg_fetchone(
+        "SELECT field_type FROM crm_field_definitions WHERE id = %s", (field_id,)
+    )
     if not existing:
         return None
 
@@ -201,8 +203,17 @@ def update_field_definition(field_id: int, data: dict) -> dict | None:
         fields.append("name = %s")
         params.append(name)
     if "dropdown_options" in data:
+        opts_json = _options_json(data["dropdown_options"])
+        # Preserve the same invariant the create path enforces: a select must keep
+        # >=1 option (an empty list would make validate accept ANY value), and only
+        # a select may carry options at all.
+        if existing["field_type"] == "select":
+            if not opts_json:
+                raise ValueError("A select field requires at least one option")
+        elif opts_json is not None:
+            raise ValueError("Only select fields can have dropdown options")
         fields.append("dropdown_options = %s")
-        params.append(_options_json(data["dropdown_options"]))
+        params.append(opts_json)
     if "is_required" in data and data["is_required"] is not None:
         fields.append("is_required = %s")
         params.append(int(bool(data["is_required"])))
@@ -363,6 +374,11 @@ def validate_field_value(field_def: dict, value: str) -> None:
         raise ValueError(f"Field '{field_def['name']}' value too long (max {_MAX_VALUE_LEN} chars)")
     field_type = field_def["field_type"]
     if field_type == "number":
+        # Pin the wire form to what <input type="number"> produces: reject surrounding
+        # whitespace and underscore grouping that float() would otherwise accept but
+        # the UI can't render.
+        if value.strip() != value or "_" in value:
+            raise ValueError(f"Field '{field_def['name']}' requires a plain number, got '{value}'")
         try:
             parsed = float(value)
         except (ValueError, TypeError):
@@ -374,13 +390,17 @@ def validate_field_value(field_def: dict, value: str) -> None:
         if value not in ("0", "1"):
             raise ValueError(f"Field '{field_def['name']}' requires '0' or '1', got '{value}'")
     elif field_type == "date":
-        # Frontend sends YYYY-MM-DD; reject arbitrary text so stored dates are real.
+        # Pin to strict YYYY-MM-DD (what <input type="date"> produces) — date.fromisoformat
+        # alone accepts basic-format/ISO-week forms that vary by Python version and the
+        # date input can't render.
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            raise ValueError(
+                f"Field '{field_def['name']}' requires an ISO date (YYYY-MM-DD), got '{value}'"
+            )
         try:
             date.fromisoformat(value)
         except ValueError:
-            raise ValueError(
-                f"Field '{field_def['name']}' requires an ISO date (YYYY-MM-DD), got '{value}'"
-            ) from None
+            raise ValueError(f"Field '{field_def['name']}' is not a valid date: '{value}'") from None
     elif field_type == "select":
         options = json.loads(field_def["dropdown_options"]) if field_def.get("dropdown_options") else []
         if options and value not in options:

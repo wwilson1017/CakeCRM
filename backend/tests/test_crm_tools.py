@@ -249,12 +249,21 @@ def test_get_fields_with_missing_entity_returns_error(monkeypatch):
     assert tools.crm_get_contact_fields(999) == {"error": "contact 999 not found"}
 
 
-def test_get_fields_with_id_returns_values(monkeypatch):
+def test_get_fields_with_id_returns_normalized_values(monkeypatch):
     monkeypatch.setattr(field_service, "entity_exists", lambda et, eid: True)
-    monkeypatch.setattr(field_service, "get_field_values",
-                        lambda et, eid: [{"field_id": 1, "field_key": "tier", "value": "A"}])
+    monkeypatch.setattr(field_service, "get_field_values", lambda et, eid: [
+        {"field_id": 1, "field_key": "tier", "name": "Tier", "field_type": "select",
+         "dropdown_options": ["A", "B"], "is_required": 1, "value": "A",
+         "value_updated_at": "t", "updated_by_email": "u"},
+    ])
     out = tools.crm_get_deal_fields(5)
-    assert out == {"fields": [{"field_id": 1, "field_key": "tier", "value": "A"}], "total": 1}
+    # Same normalized schema shape as the no-id path (is_required bool, 'options'),
+    # plus the per-entity value fields.
+    assert out == {"fields": [{
+        "field_id": 1, "field_key": "tier", "name": "Tier", "field_type": "select",
+        "is_required": True, "options": ["A", "B"], "value": "A",
+        "value_updated_at": "t", "updated_by_email": "u",
+    }], "total": 1}
 
 
 def test_set_fields_normalizes_and_reports_unknown(monkeypatch):

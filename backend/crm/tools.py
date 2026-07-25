@@ -816,6 +816,21 @@ def _normalize_field_value(value) -> str:
     return str(value)
 
 
+def _normalize_field(r: dict) -> dict:
+    """One field's schema in the shape shown to the model. Used for BOTH get-tool
+    modes so a schema learned without an id matches the keys/types read with one."""
+    out = {
+        "field_id": r.get("field_id", r.get("id")),
+        "field_key": r["field_key"],
+        "name": r["name"],
+        "field_type": r["field_type"],
+        "is_required": bool(r["is_required"]),
+    }
+    if r.get("dropdown_options"):
+        out["options"] = r["dropdown_options"]
+    return out
+
+
 def _get_entity_fields(entity_type: str, entity_id: int | None) -> dict:
     """No id → list the definitions (schema discovery). With an id → that entity's
     values (every definition, unset ones with value=None)."""
@@ -824,14 +839,7 @@ def _get_entity_fields(entity_type: str, entity_id: int | None) -> dict:
             defs = field_service.list_field_definitions(entity_type)
         except ValueError as e:
             return {"error": str(e)}
-        fields = [
-            {
-                "field_id": d["id"], "field_key": d["field_key"], "name": d["name"],
-                "field_type": d["field_type"], "is_required": bool(d["is_required"]),
-                **({"options": d["dropdown_options"]} if d.get("dropdown_options") else {}),
-            }
-            for d in defs
-        ]
+        fields = [_normalize_field(d) for d in defs]
         return {"fields": fields, "total": len(fields)}
     if not field_service.entity_exists(entity_type, entity_id):
         return {"error": f"{entity_type} {entity_id} not found"}
@@ -839,7 +847,13 @@ def _get_entity_fields(entity_type: str, entity_id: int | None) -> dict:
         rows = field_service.get_field_values(entity_type, entity_id)
     except ValueError as e:
         return {"error": str(e)}
-    return {"fields": rows, "total": len(rows)}
+    # Same normalized schema shape as the no-id path, plus the per-entity value fields.
+    fields = [
+        {**_normalize_field(r), "value": r["value"],
+         "value_updated_at": r.get("value_updated_at"), "updated_by_email": r.get("updated_by_email")}
+        for r in rows
+    ]
+    return {"fields": fields, "total": len(fields)}
 
 
 def _set_entity_fields(entity_type: str, entity_id: int, fields: dict) -> dict:

@@ -32,6 +32,9 @@ export function ContactDetailPage() {
   const [contact, setContact] = useState<CrmContact | null>(null);
   const [loading, setLoading] = useState(true);
   const [showEdit, setShowEdit] = useState(false);
+  // Bumped when the edit modal saves, so the Custom Fields section (which self-fetches
+  // and would otherwise show stale values after a modal save) remounts and refetches.
+  const [cfVersion, setCfVersion] = useState(0);
   const [showAddDeal, setShowAddDeal] = useState(false);
   const [showAddTask, setShowAddTask] = useState(false);
   const [logActivity, setLogActivity] = useState('');
@@ -301,7 +304,7 @@ export function ContactDetailPage() {
       </div>
 
       {/* Custom fields — renders nothing when no contact fields are defined */}
-      <CustomFieldsSection key={`contact-${contact.id}`} entityType="contact" entityId={contact.id} />
+      <CustomFieldsSection key={`contact-${contact.id}-${cfVersion}`} entityType="contact" entityId={contact.id} />
 
       {/* Chatter — editable notes thread */}
       <div style={{ marginTop: 24, borderTop: `1px solid ${LINE}`, paddingTop: 24 }}>
@@ -309,7 +312,7 @@ export function ContactDetailPage() {
         <NotesThread key={`contact-${contact.id}`} entityType="contact" entityId={contact.id} />
       </div>
 
-      {showEdit && <ContactForm contact={contact} onClose={() => setShowEdit(false)} onSaved={() => { setShowEdit(false); load(); }} />}
+      {showEdit && <ContactForm contact={contact} onClose={() => setShowEdit(false)} onSaved={() => { setShowEdit(false); load(); setCfVersion(v => v + 1); }} />}
       {showAddDeal && <DealForm contactId={contact.id} onClose={() => setShowAddDeal(false)} onSaved={() => { setShowAddDeal(false); load(); }} />}
       {showAddTask && <TaskForm contactId={contact.id} onClose={() => setShowAddTask(false)} onSaved={() => { setShowAddTask(false); load(); }} />}
     </div>

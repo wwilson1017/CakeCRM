@@ -73,7 +73,7 @@ import logging
 import psycopg2
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from core.auth import get_current_user
 from crm import chatter_service, field_service, service as crm
@@ -228,7 +228,9 @@ class FieldDefinitionUpdate(BaseModel):
     name: str | None = None
     dropdown_options: list[str] | None = None
     is_required: bool | None = None
-    display_order: int | None = None
+    # Bounded so an out-of-range value 400s at the Pydantic layer rather than
+    # overflowing the INTEGER column into an unhandled 500.
+    display_order: int | None = Field(default=None, ge=0, le=1_000_000)
 
 
 class FieldValuesUpdate(BaseModel):
@@ -834,10 +836,13 @@ async def delete_field_definition(field_id: int, user=Depends(get_current_user))
 
 @router.get("/{entity_type}/{entity_id}/fields")
 async def get_field_values(entity_type: str, entity_id: int, user=Depends(get_current_user)):
-    try:
-        return field_service.get_field_values(entity_type, entity_id)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from None
+    # 404 a missing entity (consistent with PUT on this path and every other
+    # per-entity GET) rather than returning definitions with all-null values.
+    if entity_type not in field_service.VALID_ENTITY_TYPES:
+        raise HTTPException(status_code=400, detail=f"Invalid entity_type: {entity_type}")
+    if not field_service.entity_exists(entity_type, entity_id):
+        raise HTTPException(status_code=404, detail=f"{entity_type} {entity_id} not found")
+    return field_service.get_field_values(entity_type, entity_id)
 
 
 @router.put("/{entity_type}/{entity_id}/fields")

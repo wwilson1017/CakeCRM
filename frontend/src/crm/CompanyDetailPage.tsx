@@ -28,6 +28,8 @@ export function CompanyDetailPage() {
   const [company, setCompany] = useState<CrmCompany | null>(null);
   const [loading, setLoading] = useState(true);
   const [showEdit, setShowEdit] = useState(false);
+  // Bumped on modal save so the self-fetching Custom Fields section remounts + refetches.
+  const [cfVersion, setCfVersion] = useState(0);
 
   const loadIdRef = useRef(0);
   const load = useCallback(async () => {
@@ -186,13 +188,13 @@ export function CompanyDetailPage() {
 
       {/* Custom fields — renders nothing when no company fields are defined */}
       <CustomFieldsSection
-        key={`company-${company.id}`}
+        key={`company-${company.id}-${cfVersion}`}
         entityType="company"
         entityId={company.id}
         sectionStyle={{ marginTop: 24, borderTop: `1px solid ${LINE_STRONG}`, paddingTop: 24 }}
       />
 
-      {showEdit && <CompanyForm company={company} onClose={() => setShowEdit(false)} onSaved={() => { setShowEdit(false); load(); }} />}
+      {showEdit && <CompanyForm company={company} onClose={() => setShowEdit(false)} onSaved={() => { setShowEdit(false); load(); setCfVersion(v => v + 1); }} />}
     </div>
   );
 }

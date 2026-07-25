@@ -18,8 +18,11 @@ export async function putCustomFields(
       method: 'PUT', body: JSON.stringify({ values }),
     });
     if (res.errors?.length) toast.error(`Some custom fields didn't save: ${res.errors.join('; ')}`);
-  } catch {
-    toast.error(`${savedLabel} — custom fields didn't save.`);
+  } catch (err: unknown) {
+    // Surface the backend's specific reason (e.g. "value too long"), matching
+    // CustomFieldsSection.save — a bare "didn't save" leaves the user nothing to fix.
+    const msg = err instanceof Error ? err.message.replace(/^API error \d+: /, '') : '';
+    toast.error(msg ? `${savedLabel} — custom fields didn't save: ${msg}` : `${savedLabel} — custom fields didn't save.`);
   }
 }
 
