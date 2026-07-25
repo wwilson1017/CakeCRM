@@ -233,11 +233,17 @@ def try_consume_batch(batch_msg_id: str) -> bool:
             (batch_msg_id, conversation_id),
         )
         tr = cur.fetchone()
-        pending = 0
-        if tr and tr[0]:
-            # `executing` counts as unsettled too — a write stuck mid-execution (a
-            # crash between claim and merge) must not let the continuation proceed.
-            pending = sum(1 for r in tr[0] if is_unsettled_result(r.get("content")))
+        if tr is None:
+            # The batch message is gone (e.g. its conversation was deleted out from
+            # under us). Clear the stale marker and do NOT continue — there is no valid
+            # turn to resume, and continuing would run an empty turn on another thread.
+            cur.execute(
+                "UPDATE telegram_settings SET pending_msg_id = '', updated_at = now() WHERE id = 1"
+            )
+            return False
+        # `executing` counts as unsettled too — a write stuck mid-execution (a crash
+        # between claim and merge) must not let the continuation proceed.
+        pending = sum(1 for r in (tr[0] or []) if is_unsettled_result(r.get("content")))
         if pending == 0:
             cur.execute(
                 "UPDATE telegram_settings SET pending_msg_id = '', updated_at = now() WHERE id = 1"

@@ -1,12 +1,13 @@
 """Telegram admin API — mounted at ``/api/telegram`` (see main.py).
 
 JWT-protected management for the single-user integration: connect/validate a bot token,
-read connection + link status, regenerate the link code, and disconnect. Handlers are
-sync (FastAPI runs them in its threadpool, so the blocking DB/getMe calls never touch
-the event loop). The bot token is never returned in any response.
-
-The running poll task re-reads ``telegram_settings`` each iteration, so a connect or
-disconnect is picked up automatically within a few seconds — no task restart here.
+read connection + link status, regenerate the link code, and disconnect. ``status`` and
+``regenerate`` are sync handlers (FastAPI runs them in its threadpool). ``connect`` and
+``disconnect`` are async: they must ``stop()`` the poll task, mutate config, then
+``start()`` a fresh one — so an in-flight ``getUpdates`` against the OLD bot can't
+process a stale update or skew the NEW bot's reset offset — and they offload their
+blocking DB/getMe calls with ``asyncio.to_thread``. The bot token is never returned in
+any response.
 """
 
 import asyncio
@@ -66,10 +67,17 @@ async def connect(body: ConnectRequest, user=Depends(get_current_user)):
     # Stop the poll task BEFORE swapping config, so an in-flight getUpdates against the
     # OLD bot can't process a stale update or skew the NEW bot's freshly-reset offset.
     await poller.stop()
-    # A previously-used bot may have a webhook set, which blocks getUpdates polling.
-    await asyncio.to_thread(client.delete_webhook, token, False)
-    await asyncio.to_thread(store.connect, token, username)
-    poller.start()  # fresh task picks up the new bot immediately
+    try:
+        # A previously-used bot may have a webhook set, which blocks getUpdates polling.
+        # drop_pending_updates=True: at connect time, discard the new bot's pre-connect
+        # backlog so up-to-24h of old queued messages aren't replayed to their senders.
+        await asyncio.to_thread(client.delete_webhook, token, True)
+        await asyncio.to_thread(store.connect, token, username)
+    finally:
+        # ALWAYS restart the poller — even if the mutation raised — so a DB blip during
+        # connect can't leave polling permanently dead (store.connect is atomic, so on
+        # failure the prior config simply resumes).
+        poller.start()
     logger.info("telegram bot connected (@%s)", username)
     return await asyncio.to_thread(_status_payload)
 
@@ -77,8 +85,10 @@ async def connect(body: ConnectRequest, user=Depends(get_current_user)):
 @router.post("/disconnect")
 async def disconnect(user=Depends(get_current_user)):
     await poller.stop()
-    await asyncio.to_thread(store.disconnect)
-    poller.start()  # task resumes but idles until a token is connected again
+    try:
+        await asyncio.to_thread(store.disconnect)
+    finally:
+        poller.start()  # always resume the task (it idles until a token is connected)
     logger.info("telegram bot disconnected")
     return await asyncio.to_thread(_status_payload)
 

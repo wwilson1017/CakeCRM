@@ -16,6 +16,7 @@ auth/rate/transport failures.
 """
 
 import logging
+import time
 
 from .format import chunk_text, markdown_to_telegram_html
 
@@ -124,6 +125,26 @@ def get_updates(bot_token: str, offset: int, timeout: int = _LONG_POLL_TIMEOUT) 
     return result or []
 
 
+_MAX_RETRY_AFTER = 30  # cap how long we'll block a send thread on a Telegram 429
+
+
+def _send_message(bot_token: str, payload: dict) -> None:
+    """POST sendMessage, retrying ONCE after Telegram's ``retry_after`` on a 429.
+
+    Without this, a rate limit partway through a multi-chunk reply would raise and drop
+    every remaining chunk. Blocks the calling thread (sends run under ``asyncio.to_thread``
+    / on #6's heartbeat thread, never the event loop), bounded by ``_MAX_RETRY_AFTER``.
+    """
+    try:
+        _post(bot_token, "sendMessage", payload)
+    except TelegramError as e:
+        if e.status == 429 and e.retry_after:
+            time.sleep(min(e.retry_after, _MAX_RETRY_AFTER))
+            _post(bot_token, "sendMessage", payload)
+        else:
+            raise
+
+
 # ── Sending ─────────────────────────────────────────────────────────────────
 
 def send_text(chat_id: int | str, text: str, bot_token: str, reply_markup: dict | None = None) -> None:
@@ -140,7 +161,7 @@ def send_text(chat_id: int | str, text: str, bot_token: str, reply_markup: dict 
         # Attach the keyboard only to the final chunk.
         if reply_markup and i == len(chunks) - 1:
             payload["reply_markup"] = reply_markup
-        _post(bot_token, "sendMessage", payload)
+        _send_message(bot_token, payload)
 
 
 def send_html(chat_id: int | str, markdown: str, bot_token: str, reply_markup: dict | None = None) -> None:
@@ -162,7 +183,7 @@ def send_html(chat_id: int | str, markdown: str, bot_token: str, reply_markup: d
         if reply_markup and i == len(chunks) - 1:
             payload["reply_markup"] = reply_markup
         try:
-            _post(bot_token, "sendMessage", payload)
+            _send_message(bot_token, payload)
         except TelegramError as e:
             if not e.is_parse_error:
                 raise
@@ -170,7 +191,7 @@ def send_html(chat_id: int | str, markdown: str, bot_token: str, reply_markup: d
             fallback = {"chat_id": chat_id, "text": chunk}
             if reply_markup and i == len(chunks) - 1:
                 fallback["reply_markup"] = reply_markup
-            _post(bot_token, "sendMessage", fallback)
+            _send_message(bot_token, fallback)
 
 
 def answer_callback_query(callback_query_id: str, bot_token: str, text: str = "") -> None:

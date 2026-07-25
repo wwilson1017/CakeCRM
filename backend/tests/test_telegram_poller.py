@@ -44,7 +44,7 @@ class _FakeConn:
 def _patch_connect(monkeypatch, conn):
     import psycopg2
     monkeypatch.setenv("DATABASE_URL", "postgresql://x/y")
-    monkeypatch.setattr(psycopg2, "connect", lambda dsn: conn)
+    monkeypatch.setattr(psycopg2, "connect", lambda dsn, **kw: conn)  # accepts connect_timeout
 
 
 def test_acquire_lock_leader_holds_connection(monkeypatch):
@@ -120,6 +120,23 @@ async def test_processes_updates_and_advances_offset(monkeypatch):
         await poller._run()
     assert handled == [5, 6]
     assert advanced == [6, 7]  # update_id + 1, after dispatch
+
+
+async def test_cancelled_update_is_not_acknowledged(monkeypatch):
+    # A shutdown (CancelledError) mid-update must NOT advance the offset, so Telegram
+    # redelivers it next boot rather than silently dropping it.
+    _leader(monkeypatch)
+    advanced = []
+    monkeypatch.setattr(poller.store, "advance_offset", lambda n: advanced.append(n))
+    monkeypatch.setattr(poller.client, "get_updates", lambda t, o, to: [{"update_id": 9}])
+
+    async def handle(u):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(poller.service, "handle_update", handle)
+    with pytest.raises(asyncio.CancelledError):
+        await poller._run()
+    assert advanced == []  # the interrupted update was left for redelivery
 
 
 async def test_409_triggers_delete_webhook(monkeypatch):

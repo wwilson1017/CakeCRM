@@ -16,7 +16,12 @@ Single-process invariant: production runs ``gunicorn --workers 1`` and local dev
 single process, so there is normally one poller. As defense against a multi-replica
 deploy, the task first takes a best-effort Postgres advisory lock (a second instance
 idles instead of fighting over ``getUpdates``); if the lock mechanism itself errors we
-fail OPEN and poll anyway (availability over the rare double-poll).
+fail OPEN and poll anyway (availability over the rare double-poll). The bot-swap
+``stop → mutate → start`` guarantee (router.connect/disconnect) is likewise
+single-process: under multiple replicas, connect on one replica can't stop another's
+in-flight poll, so a swap has a rare offset-skew window that self-heals (once the new
+bot's update_ids pass the stale cursor) or is fixed by regenerating — a durable
+config-generation counter is future work if multi-replica ever becomes supported.
 """
 
 import asyncio
@@ -46,18 +51,23 @@ def start() -> None:
 
 
 async def stop() -> None:
-    """Cancel the poll task and wait for it to unwind. Call from lifespan shutdown."""
+    """Cancel the poll task and wait for it to unwind. Call from lifespan shutdown.
+
+    Swap-and-null the global FIRST so a concurrent ``start()`` (e.g. a second connect
+    request while this one awaits the old task) can't have its freshly-created task
+    clobbered to None and orphaned — we only ever cancel/await our OWN local reference.
+    """
     global _task
-    if _task is None:
+    task, _task = _task, None
+    if task is None:
         return
-    _task.cancel()
+    task.cancel()
     try:
-        await _task
+        await task
     except asyncio.CancelledError:
         pass
     except Exception:
         logger.exception("telegram poller: task ended with an error during shutdown")
-    _task = None
     logger.info("telegram poller stopped")
 
 
@@ -78,7 +88,7 @@ def _acquire_lock():
         return None
     conn = None
     try:
-        conn = psycopg2.connect(dsn)
+        conn = psycopg2.connect(dsn, connect_timeout=10)
         conn.autocommit = True
         cur = conn.cursor()
         cur.execute("SELECT pg_try_advisory_lock(%s)", (_ADVISORY_LOCK_KEY,))
@@ -96,6 +106,31 @@ def _acquire_lock():
         return None
 
 
+async def _acquire_lock_safe():
+    """Acquire the leader lock without leaking a lock-holding connection on cancellation.
+
+    If the task is cancelled mid-acquire, the executor thread still runs to completion
+    and would otherwise return a connection (holding ``pg_try_advisory_lock``) into a
+    dropped future — leaving the lock held until GC and locking every future poller out
+    (BUSY). ``shield`` keeps that future alive so a done-callback can close the
+    connection once it finishes.
+    """
+    loop = asyncio.get_running_loop()
+    fut = loop.run_in_executor(None, _acquire_lock)
+    try:
+        return await asyncio.shield(fut)
+    except asyncio.CancelledError:
+        def _close(f):
+            try:
+                r = f.result()
+                if r not in (None, "BUSY") and hasattr(r, "close"):
+                    r.close()
+            except Exception:
+                pass
+        fut.add_done_callback(_close)
+        raise
+
+
 async def _run() -> None:
     lock_conn = None
     leadership_resolved = False
@@ -105,7 +140,7 @@ async def _run() -> None:
             try:
                 # ── Leader election (best effort) ──────────────────────────
                 if not leadership_resolved:
-                    res = await asyncio.to_thread(_acquire_lock)
+                    res = await _acquire_lock_safe()
                     if res == "BUSY":
                         await asyncio.sleep(_BUSY_SLEEP)
                         continue
@@ -135,18 +170,22 @@ async def _run() -> None:
                 for u in updates:
                     try:
                         await service.handle_update(u)
+                    except asyncio.CancelledError:
+                        # Shutdown (e.g. a Railway redeploy) mid-update: do NOT advance
+                        # the offset — let Telegram redeliver this update next boot.
+                        # resolve_confirmation is idempotent and a redelivered text just
+                        # re-answers; both beat silently dropping the message.
+                        raise
                     except Exception:
                         logger.exception("telegram poller: update handling failed")
-                    finally:
-                        # Advance the cursor AFTER dispatch, monotonically. handle_update
-                        # is best-effort: a handler error is logged and the update is
-                        # still consumed (at-MOST-once on a handler failure, so a bad
-                        # update can't become a poison-pill retry loop; the user can
-                        # resend). Only a hard crash BEFORE this advance yields Telegram
-                        # redelivery.
-                        uid = u.get("update_id")
-                        if uid is not None:
-                            await asyncio.to_thread(store.advance_offset, int(uid) + 1)
+                    # Advance the cursor AFTER a COMPLETED dispatch (success or handled
+                    # error), monotonically. A handler error still consumes the update
+                    # (at-MOST-once on a handler failure, so a bad update can't become a
+                    # poison-pill retry loop; the user can resend). Only a crash or a
+                    # graceful-shutdown cancel BEFORE this advance yields redelivery.
+                    uid = u.get("update_id")
+                    if uid is not None:
+                        await asyncio.to_thread(store.advance_offset, int(uid) + 1)
             except asyncio.CancelledError:
                 raise
             except Exception:

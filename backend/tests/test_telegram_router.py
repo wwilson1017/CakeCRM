@@ -25,7 +25,7 @@ def _fake_backend(monkeypatch, *, valid_token=True):
     monkeypatch.setattr(tgrouter.client, "validate_token",
                         lambda t: ({"username": "acmebot"} if valid_token else None))
     monkeypatch.setattr(tgrouter.client, "delete_webhook",
-                        lambda t, drop: calls.append(("delete_webhook", t)))
+                        lambda t, drop: calls.append(("delete_webhook", t, drop)))
     monkeypatch.setattr(tgrouter.store, "connect",
                         lambda t, u: calls.append(("connect", t, u)))
     monkeypatch.setattr(tgrouter.store, "disconnect",
@@ -70,7 +70,7 @@ def test_connect_wires_poller_and_never_leaks_token(monkeypatch):
     names = [c[0] for c in calls]
     # Poller stopped BEFORE the config mutation, started after; webhook cleared.
     assert names.index("stop") < names.index("connect") < names.index("start")
-    assert ("delete_webhook", "123:REAL") in calls
+    assert ("delete_webhook", "123:REAL", True) in calls  # drop the pre-connect backlog
     assert ("connect", "123:REAL", "acmebot") in calls
     body = resp.json()
     assert "bot_token" not in body and "bot_token_enc" not in body

@@ -81,6 +81,14 @@ def test_try_consume_batch_false_for_stale_batch(monkeypatch, fake_conn):
     assert store.try_consume_batch("msgOLD") is False
 
 
+def test_try_consume_batch_missing_row_clears_and_returns_false(monkeypatch, fake_conn):
+    # The batch's message row is gone (e.g. the conversation was deleted): clear the
+    # stale marker and do NOT launch an (empty) continuation.
+    conn = fake_conn(monkeypatch, store, fetchone_results=[("msgGONE", "conv1"), None])
+    assert store.try_consume_batch("msgGONE") is False
+    assert any("pending_msg_id = ''" in e[0] for e in conn.executed)
+
+
 def test_advance_offset_is_monotonic(monkeypatch):
     captured = {}
     monkeypatch.setattr(store, "pg_execute", lambda sql, params=(): captured.update(sql=sql, params=params))
