@@ -6,6 +6,7 @@ import { mono, INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, ACCENT_INK, GOLD, SAGE
 import { modalOverlay, modalContent, mobileDragHandle, btnDanger } from '../styles';
 import { ActivityTimeline } from './ActivityTimeline';
 import { NotesThread } from './NotesThread';
+import { CustomFieldsSection } from './CustomFieldsSection';
 
 interface DealDetailSheetProps {
   deal: CrmDeal;
@@ -93,6 +94,14 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
             </div>
           )}
         </div>
+
+        {/* Custom fields — renders nothing when no deal fields are defined */}
+        <CustomFieldsSection
+          key={`deal-${deal.id}`}
+          entityType="deal"
+          entityId={deal.id}
+          sectionStyle={{ borderTop: `1px solid ${LINE}`, paddingTop: 16, marginBottom: 20 }}
+        />
 
         {/* Activity timeline */}
         <div style={{ borderTop: `1px solid ${LINE}`, paddingTop: 16, marginBottom: 20 }}>

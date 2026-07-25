@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
 import { api } from '../../core/api/client';
-import { labelStyle, inputStyle, CORAL } from '../../shared/styles';
+import { labelStyle, inputStyle, CORAL, LINE, INK_DIM, mono } from '../../shared/styles';
 import { formModalOverlay, formModalContent, formTitle, btnPrimary, btnSecondary } from '../styles';
 import { STAGE_ORDER } from '../constants';
 import type { CrmDeal, CrmContact, CrmCompany } from '../../core/types';
+import { CustomFieldInputs } from './CustomFieldInputs';
+import { useCustomFieldsForm, putCustomFields } from './useCustomFieldsForm';
 
 interface Props {
   deal?: CrmDeal;
@@ -27,6 +29,7 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
   const [companies, setCompanies] = useState<CrmCompany[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const cf = useCustomFieldsForm('deal', deal?.id);
 
   useEffect(() => {
     api<{ contacts: CrmContact[] }>('/api/crm/contacts?limit=200')
@@ -67,11 +70,15 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
       };
       body.contact_id = selectedContact;  // always send (null unlinks the contact)
       body.company_id = selectedCompany;  // always send (null unlinks the company)
+      let id: number;
       if (isEdit) {
         await api(`/api/crm/deals/${deal.id}`, { method: 'PUT', body: JSON.stringify(body) });
+        id = deal.id;
       } else {
-        await api('/api/crm/deals', { method: 'POST', body: JSON.stringify(body) });
+        const created = await api<CrmDeal>('/api/crm/deals', { method: 'POST', body: JSON.stringify(body) });
+        id = created.id;
       }
+      await putCustomFields('deal', id, cf.changedForSave(), isEdit ? 'Deal saved' : 'Deal created');
       onSaved();
     } catch (err: unknown) { setError(err instanceof Error ? err.message : 'Failed to save'); }
     setSaving(false);
@@ -116,6 +123,13 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
           </div>
           <div><label style={labelStyle}>Notes</label><textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2} style={{ ...inputStyle, resize: 'none' }} /></div>
         </div>
+
+        {cf.editableFields.length > 0 && (
+          <div style={{ marginTop: 16, borderTop: `1px solid ${LINE}`, paddingTop: 16 }}>
+            <span style={{ ...mono(10, INK_DIM), display: 'block', marginBottom: 12 }}>Custom Fields</span>
+            <CustomFieldInputs fields={cf.editableFields} values={cf.values} onChange={cf.setValue} />
+          </div>
+        )}
 
         <div style={{ display: 'flex', gap: 8, marginTop: 20 }}>
           <button type="button" onClick={onClose} style={{ ...btnSecondary, flex: 1 }}>Cancel</button>

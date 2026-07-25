@@ -4,6 +4,7 @@ import { api } from '../core/api/client';
 import type { CrmCompany } from '../core/types';
 import { CompanyForm } from './components/CompanyForm';
 import { ActivityTimeline } from './components/ActivityTimeline';
+import { CustomFieldsSection } from './components/CustomFieldsSection';
 import { StatusBadge } from './components/badges';
 import { STAGE_COLORS } from './constants';
 import { IconArrowLeft } from '../shared/icons';
@@ -182,6 +183,14 @@ export function CompanyDetailPage() {
         <span style={{ ...mono(10, INK_DIM), display: 'block', marginBottom: 12 }}>Activity History</span>
         <ActivityTimeline activities={company.activity || []} onUpdate={load} />
       </div>
+
+      {/* Custom fields — renders nothing when no company fields are defined */}
+      <CustomFieldsSection
+        key={`company-${company.id}`}
+        entityType="company"
+        entityId={company.id}
+        sectionStyle={{ marginTop: 24, borderTop: `1px solid ${LINE_STRONG}`, paddingTop: 24 }}
+      />
 
       {showEdit && <CompanyForm company={company} onClose={() => setShowEdit(false)} onSaved={() => { setShowEdit(false); load(); }} />}
     </div>

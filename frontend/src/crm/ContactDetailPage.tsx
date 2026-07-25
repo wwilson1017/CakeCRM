@@ -7,6 +7,7 @@ import { DealForm } from './components/DealForm';
 import { TaskForm } from './components/TaskForm';
 import { ActivityTimeline } from './components/ActivityTimeline';
 import { NotesThread } from './components/NotesThread';
+import { CustomFieldsSection } from './components/CustomFieldsSection';
 import { PriorityBadge } from './components/badges';
 import { STAGE_COLORS } from './constants';
 import { IconArrowLeft } from '../shared/icons';
@@ -298,6 +299,9 @@ export function ContactDetailPage() {
         <span style={{ ...mono(10, INK_DIM), display: 'block', marginBottom: 12 }}>Activity History</span>
         <ActivityTimeline activities={contact.activity || []} onUpdate={load} />
       </div>
+
+      {/* Custom fields — renders nothing when no contact fields are defined */}
+      <CustomFieldsSection key={`contact-${contact.id}`} entityType="contact" entityId={contact.id} />
 
       {/* Chatter — editable notes thread */}
       <div style={{ marginTop: 24, borderTop: `1px solid ${LINE}`, paddingTop: 24 }}>
