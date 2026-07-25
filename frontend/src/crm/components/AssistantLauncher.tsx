@@ -30,10 +30,6 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
   const navigate = useNavigate();
   const { record } = useActiveRecord();
   const [open, setOpen] = useState(false);
-  // Latch: mount the drawer only after the FIRST open, then keep it mounted so chat
-  // state + the open-record ref survive close/reopen — without paying the mount cost
-  // (and the conversation-list fetch) for CRM sessions that never open it.
-  const [hasOpened, setHasOpened] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -70,18 +66,18 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
 
   function handleClick() {
     if (loading) return;
-    if (ready) {
-      setOpen(o => !o);
-      setHasOpened(true); // first open latches the drawer mounted (see hasOpened)
-    } else navigate('/setup');
+    if (ready) setOpen(o => !o);
+    else navigate('/setup');
   }
 
   return (
     <>
-      {/* Mounted after the first open (hasOpened) and kept mounted (translated
-          off-screen when closed) so conversation state + the open-record ref survive
-          open/close and the post-confirm continuation never loses its context (#14). */}
-      {ready && hasOpened && (
+      {/* The drawer stays MOUNTED whenever AI is ready (translated off-screen when
+          closed, so it slides in on first open) so conversation state + the open-record
+          ref survive open/close and the post-confirm continuation keeps its context.
+          The one-time conversation-list fetch on mount is the accepted cost of that
+          continuity (issue #14). */}
+      {ready && (
         <>
           {open && (
             <div

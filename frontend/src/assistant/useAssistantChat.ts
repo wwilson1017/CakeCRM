@@ -121,12 +121,14 @@ export function useAssistantChat(recordContext?: ActiveRecordContext | null) {
   const recordCtxRef = useRef<ActiveRecordContext | null>(null);
   useLayoutEffect(() => { recordCtxRef.current = recordContext ?? null; }, [recordContext]);
 
-  // Snapshot of the context for the currently-active turn. A post-confirm
-  // continuation must reuse the record that STARTED the turn, not whatever record is
-  // open when the user finally approves — otherwise "update this deal" begun on deal
-  // 3 would resume bound to deal 4 if the user navigated away mid-confirmation. null
-  // = no active snapshot (e.g. a reload-resumed conversation) → fall back to live.
-  const turnCtxRef = useRef<{ value: { record_type: string; record_id: number } | undefined } | null>(null);
+  // Per-assistant-message context snapshot, keyed by the client message id. A
+  // confirmation belongs to a specific assistant message; its post-confirm
+  // continuation must reuse the record open when THAT message's turn started — not a
+  // global "last turn" value, because the user can send another message on a different
+  // record before approving an earlier confirmation. A reload-resumed conversation has
+  // no snapshot for its restored message id → context is OMITTED (never the live
+  // record), so a reload can't rebind the resumed turn either.
+  const turnCtxByMsgRef = useRef<Record<string, { record_type: string; record_id: number } | undefined>>({});
 
   // Only type + id cross the wire — label is display-only (injection boundary).
   const wireContext = useCallback((): { record_type: string; record_id: number } | undefined => {
@@ -331,9 +333,10 @@ export function useAssistantChat(recordContext?: ActiveRecordContext | null) {
     if (abortRef.current) return; // a turn is already streaming
     const userMsg: ChatMessage = { id: newId(), role: 'user', content: text };
     const asstId = startAssistant([userMsg]);
-    // Snapshot the record for THIS turn so its post-confirm continuation reuses it.
+    // Snapshot the record for THIS message's turn so its post-confirm continuation
+    // reuses it (keyed by the assistant message id).
     const turnContext = wireContext();
-    turnCtxRef.current = { value: turnContext };
+    turnCtxByMsgRef.current[asstId] = turnContext;
     const payload = {
       messages: [{ role: 'user', content: text }],
       conversation_id: convIdRef.current,
@@ -352,14 +355,13 @@ export function useAssistantChat(recordContext?: ActiveRecordContext | null) {
     }
   }, [runStream, startAssistant, wireContext]);
 
-  const continueTurn = useCallback(() => {
+  const continueTurn = useCallback((context: { record_type: string; record_id: number } | undefined) => {
     if (!convIdRef.current || abortRef.current) return;
     const asstId = startAssistant([]);
-    // A continuation is a fresh HTTP request that rebuilds the system prompt, so it
-    // must carry the STARTING turn's record (turnCtxRef snapshot) — not whatever
-    // record is open now. Fall back to the live record only for a reload-resumed
-    // conversation that has no snapshot.
-    const context = turnCtxRef.current ? turnCtxRef.current.value : wireContext();
+    // Carry the snapshot from the message being resumed, and propagate it forward: if
+    // this continuation itself proposes a write, its own continuation reuses the same
+    // record. (undefined = no record, or an unknowable reload-resumed context.)
+    turnCtxByMsgRef.current[asstId] = context;
     void runStream(
       JSON.stringify({
         messages: [],
@@ -370,7 +372,7 @@ export function useAssistantChat(recordContext?: ActiveRecordContext | null) {
       false,
       asstId,
     );
-  }, [runStream, startAssistant, wireContext]);
+  }, [runStream, startAssistant]);
 
   const resolve = useCallback(async (msgId: string, toolUseId: string, decision: 'approve' | 'deny') => {
     const token = getToken();
@@ -432,7 +434,9 @@ export function useAssistantChat(recordContext?: ActiveRecordContext | null) {
       // Continue only once EVERY card on this message reached a final state.
       const msg = messagesRef.current.find((m) => m.id === msgId);
       const allFinal = (msg?.pendingConfirmations ?? []).every((c) => c.status === 'approved' || c.status === 'denied');
-      if (allFinal) continueTurn();
+      // Resume with the snapshot captured when THIS message's turn started (undefined
+      // for a reload-resumed message that has no snapshot → context omitted).
+      if (allFinal) continueTurn(turnCtxByMsgRef.current[msgId]);
     } catch { /* leave the card pending; the user can retry */ }
   }, [continueTurn, updateMessage]);
 
@@ -454,7 +458,7 @@ export function useAssistantChat(recordContext?: ActiveRecordContext | null) {
     abortRef.current = null;
     setIsStreaming(false);
     convIdRef.current = null;
-    turnCtxRef.current = null; // discard any active-turn context snapshot
+    turnCtxByMsgRef.current = {}; // discard all per-message context snapshots
     setConversationId(null);
     setContextUsage(null);
     commit([]);
@@ -499,7 +503,7 @@ export function useAssistantChat(recordContext?: ActiveRecordContext | null) {
       };
     });
     convIdRef.current = convId;
-    turnCtxRef.current = null; // a reloaded conversation has no active-turn snapshot
+    turnCtxByMsgRef.current = {}; // a reloaded conversation has no per-message snapshots
     setConversationId(convId);
     commit(mapped);
   }, [commit]);

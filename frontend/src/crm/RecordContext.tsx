@@ -67,9 +67,10 @@ export function usePublishActiveRecord(
   const { publish, clearIfOwner } = useActiveRecord();
   const tokenRef = useRef({}); // stable identity per publisher instance
   useEffect(() => {
-    // Guard to the backend's domain: a positive safe integer (record PKs). Anything
-    // else (NaN, fractional, negative) is never published, so it can't reach the wire.
-    if (!recordType || !recordId || !Number.isInteger(recordId) || recordId <= 0) return;
+    // Guard to the backend's domain: a positive int4 PK. Anything else (NaN,
+    // fractional, negative, or out of int4 range) is never published, so it can't
+    // reach the wire and can't cause an otherwise-valid chat request to 422.
+    if (!recordType || !recordId || !Number.isSafeInteger(recordId) || recordId <= 0 || recordId > 2_147_483_647) return;
     const token = tokenRef.current;
     publish({ recordType, recordId, label }, token);
     return () => clearIfOwner(token);

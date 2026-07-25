@@ -80,8 +80,15 @@ def test_build_system_prompt_context_appends_to_volatile_only():
 
 
 def test_build_system_prompt_context_none_matches_legacy():
-    # Back-compat: omitting context is identical to the pre-#14 call shape.
-    assert identity.build_system_prompt(_IDENT) == identity.build_system_prompt(_IDENT, context=None)
+    # Back-compat: omitting context vs context=None produce the same shape. Compare the
+    # static halves byte-for-byte; the volatile half carries a wall-clock timestamp that
+    # can tick between the two calls, so assert its structure (not equality) to stay
+    # non-flaky across a minute boundary.
+    s1, v1 = identity.build_system_prompt(_IDENT)
+    s2, v2 = identity.build_system_prompt(_IDENT, context=None)
+    assert s1 == s2
+    assert v1.startswith("Current date and time:") and v2.startswith("Current date and time:")
+    assert "open in the CRM" not in v1 and "open in the CRM" not in v2
 
 
 def test_build_system_prompt_invalid_context_no_note():
