@@ -28,6 +28,7 @@ from core.auth_2fa import router as auth_2fa_router
 from core.config import settings
 from core.storage import atomic_write
 from crm.router import router as crm_router
+from dreaming.schedule import start_scheduler, stop_scheduler
 from providers.router import router as providers_router, setup_router as ai_setup_router
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,12 @@ async def lifespan(app: FastAPI):
 
     postgres.init_pool()
     postgres.run_migrations()
+
+    # Interim dreaming scheduler (issue #5) — issue #6's background loop absorbs this
+    # single call-site: delete these two lines and call dreaming.processor
+    # .run_dreaming_if_due() from #6's loop instead. Safe to double-drive (idempotent,
+    # advisory-lock + due-guarded).
+    start_scheduler()
 
     # ── Railway environment logging ─────────────────────────────────────────
     if settings.is_railway:
@@ -94,6 +101,9 @@ async def lifespan(app: FastAPI):
     logger.info("CakeCRM backend started. Data dir: %s", data_root)
     yield
 
+    # Stop the dreaming scheduler BEFORE closing the pool — stop_scheduler awaits any
+    # in-flight cycle so the pool is never pulled out from under a running cycle.
+    await stop_scheduler()
     postgres.close_pool()
     logger.info("CakeCRM backend shutting down.")
 

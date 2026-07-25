@@ -46,8 +46,21 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   (`stream_turn`/`add_tool_results`/`build_tool_turn`) is consumed by the built-in
   assistant engine (`backend/assistant/`, landed #4): an SSE streaming tool loop
   with write-tool confirmation modes and file uploads, mounted at `/api/assistant`
-  and gated off `ai_ready`. Multi-user is future work (authz/ownership), not just a
-  `user_id` column.
+  and gated off `ai_ready`. The assistant has a **long-term memory + nightly dreaming**
+  (landed #5, `backend/memory/` + `backend/dreaming/`, **pure-algorithmic — no AI
+  calls**): temporal facts in Postgres (`memory_facts`, generated `tsvector` + GIN,
+  searched via `websearch_to_tsquery('simple', …)`) with four `memory_*` tools carrying
+  the `writes` flag; relevant facts are injected into the **volatile** half of the
+  system prompt each turn (never the cached static half) with once-per-hour retrieval
+  tracking. **Dreaming** adapts chatty's file-archival to the single-assistant layout —
+  the unit is the fact, so it soft-archives dormant non-tier-1 facts (`archived_at`, never
+  deleting; `decision`/`preference` are never archived), scored purely from usage signals
+  (14-day-half-life recency, recency-gated frequency, age, confidence; active/stale/dormant
+  at 0.4/0.1) and audited in `dreaming_runs`. Its entrypoint
+  `dreaming.processor.run_dreaming_if_due()` is scheduler-agnostic (advisory-lock +
+  due-guard); an **interim** guarded lifespan task in `main.py` runs it nightly + startup
+  catch-up **until #6's background loop absorbs that single call-site**. Multi-user is
+  future work (authz/ownership), not just a `user_id` column.
 - **One database: PostgreSQL, and it's mandatory** — the backend refuses to start
   without `DATABASE_URL` (decided 2026-07-18; single engine, ready for multi-user
   growth). Locally `docker compose up -d`; on Railway the template provisions
@@ -155,7 +168,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Postgres pool + migration runner | `cake_os/backend/core/postgres.py` |
 | AI providers + pricing + setup wizard | `chatty/backend/core/providers/`, `chatty/frontend/src/setup/` |
 | CRM core (schema, router, tools, smart import) — **landed #3** as `backend/crm/` + `frontend/src/crm/` + `frontend/src/shared/` | `chatty/backend/integrations/crm_lite/`, `chatty/frontend/src/crm/` |
-| Assistant engine — **chat loop, tool registry, confirmations, uploads landed #4** as `backend/assistant/` + `frontend/src/assistant/`; memory/dreaming/heartbeat/reminders/notifications still pending | `chatty/backend/core/agents/` |
+| Assistant engine — **chat loop, tool registry, confirmations, uploads landed #4** (`backend/assistant/` + `frontend/src/assistant/`); **memory (facts + FTS) + dreaming (pure-algorithmic usage scoring + fact soft-archival) landed #5** as `backend/memory/` + `backend/dreaming/` (dreaming's archival unit is the fact row, not context files — CakeCRM has no file store); heartbeat/reminders/notifications still pending (#6, which absorbs dreaming's interim scheduler) | `chatty/backend/core/agents/` |
 | Telegram | `chatty/backend/integrations/telegram/` |
 | Gmail (reduced to read + draft) | `chatty/backend/integrations/google/` |
 | Kanban drag-and-drop | `cake_os/frontend/src/shared/dnd/` |

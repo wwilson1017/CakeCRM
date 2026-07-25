@@ -32,6 +32,7 @@ from collections.abc import AsyncGenerator
 
 from assistant import assembly, history, identity
 from assistant.write_budget import WRITE_BUDGET_PER_TURN, BudgetAction, BudgetState
+from memory import context as memory_context
 from providers.base import AIProvider, _sse
 from providers.windows import context_usage_event
 
@@ -40,6 +41,24 @@ logger = logging.getLogger(__name__)
 MAX_ITERATIONS = 20
 _VALID_MODES = {"read-only", "normal", "power"}
 _UNTRUSTED_MARKER = "<untrusted_file_content"
+# Transient user turn appended on resume to keep a trailing-assistant sequence valid.
+_CONTINUATION_ACK = "Please continue based on the results shown above."
+
+
+def _last_user_text(messages: list[dict]) -> str | None:
+    """The most recent genuine user-typed text in the assembled context, or None.
+
+    Used to FTS-match long-term memory for this turn. Scans from the end so a normal
+    turn picks the just-saved user row and a continuation picks the last real user
+    message. build_memory_context bounds/tokenizes it, so upload-blob content is
+    harmless noise rather than a match hazard.
+    """
+    for m in reversed(messages):
+        if m.get("role") == "user":
+            content = m.get("content")
+            if isinstance(content, str) and content.strip() and content != _CONTINUATION_ACK:
+                return content  # skip the synthetic resume ack — match the real prompt
+    return None
 
 
 def _context_has_untrusted_upload(messages: list[dict]) -> bool:
@@ -170,8 +189,18 @@ async def _chat_impl(
     if current_messages[-1].get("role") == "assistant":
         current_messages = current_messages + [{
             "role": "user",
-            "content": "Please continue based on the results shown above.",
+            "content": _CONTINUATION_ACK,
         }]
+
+    # Surface long-term memory into THIS turn's prompt (issue #5 acceptance clause 1).
+    # Done AFTER validation + assembly so a rejected/failed turn never accrues retrieval
+    # usage, and matched against the user's genuine text. The facts ride the volatile
+    # half of the prompt (never the cached static block); build_memory_context never
+    # raises, so a memory outage degrades to a memory-less turn.
+    memory_block = await asyncio.to_thread(
+        memory_context.build_memory_context, _last_user_text(current_messages)
+    )
+    system_prompt = identity.build_system_prompt(ident, memory_context=memory_block)
 
     # ── Main tool-execution loop ───────────────────────────────────────────────
     iteration = 0

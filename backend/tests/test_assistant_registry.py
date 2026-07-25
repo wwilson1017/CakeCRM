@@ -76,3 +76,61 @@ async def test_execute_tool_offloads_to_thread():
     reg = ToolRegistry()
     reg.executors["crm_create_contact"] = lambda **k: {"ran": True}
     assert await reg.execute_tool("crm_create_contact", {}) == {"ran": True}
+
+
+# ── Memory tool family (issue #5) merged into the registry ────────────────────
+
+def test_memory_tools_present_and_classified():
+    reg = ToolRegistry()
+    names = {t["name"] for t in reg.tool_defs}
+    assert {"memory_search", "memory_add_fact", "memory_query_facts",
+            "memory_invalidate_fact"} <= names
+    assert reg.is_write("memory_add_fact") is True
+    assert reg.is_write("memory_invalidate_fact") is True
+    assert reg.is_write("memory_search") is False
+    assert reg.is_write("memory_query_facts") is False
+
+
+def test_memory_write_tools_hidden_in_read_only():
+    reg = ToolRegistry()
+    normal = {t["name"] for t in reg.provider_tools("normal")}
+    readonly = {t["name"] for t in reg.provider_tools("read-only")}
+    assert "memory_add_fact" in normal and "memory_add_fact" not in readonly
+    assert "memory_search" in readonly   # reads survive read-only mode
+
+
+def test_provider_tools_strip_internal_keys_from_memory_defs():
+    reg = ToolRegistry()
+    mem = [t for t in reg.provider_tools("normal") if t["name"].startswith("memory_")]
+    assert mem
+    for t in mem:
+        assert set(t) <= {"name", "description", "input_schema"}
+
+
+def test_crm_alias_still_non_executable_after_merge():
+    # Merging a second source must not make the def-less crm_log_note alias runnable.
+    reg = ToolRegistry()
+    assert "crm_log_note" in reg.executors
+    assert reg.execute_tool_sync("crm_log_note", {}) == {"error": "Unknown tool: crm_log_note"}
+
+
+def _fake_source(name, writes=False):
+    defs = [{"name": name, "writes": writes, "kind": "memory", "description": "x",
+             "input_schema": {"type": "object", "properties": {}}}]
+    return defs, {name: (lambda **k: {})}
+
+
+def test_duplicate_tool_name_across_sources_raises(monkeypatch):
+    from assistant import registry as reg_mod
+    monkeypatch.setattr(reg_mod, "get_memory_tools", lambda: _fake_source("crm_dashboard"))
+    with pytest.raises(RuntimeError, match="Duplicate tool def name"):
+        reg_mod.ToolRegistry()
+
+
+def test_non_bool_writes_flag_raises(monkeypatch):
+    from assistant import registry as reg_mod
+    bad = ([{"name": "memory_bad", "writes": "yes", "kind": "memory", "description": "x",
+             "input_schema": {"type": "object", "properties": {}}}], {"memory_bad": (lambda **k: {})})
+    monkeypatch.setattr(reg_mod, "get_memory_tools", lambda: bad)
+    with pytest.raises(RuntimeError, match="missing a boolean 'writes'"):
+        reg_mod.ToolRegistry()

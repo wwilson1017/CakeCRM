@@ -23,10 +23,12 @@ class FakeProvider:
         self._i = 0
         self.captured_tools: list[list] = []
         self.captured_messages: list[list] = []
+        self.captured_system: list = []
 
     async def stream_turn(self, messages, tools, system_prompt):
         self.captured_tools.append(tools)
         self.captured_messages.append(messages)
+        self.captured_system.append(system_prompt)
         script = self._scripts[self._i] if self._i < len(self._scripts) else self._scripts[-1]
         self._i += 1
         for event in script:
@@ -505,3 +507,57 @@ async def test_wrap_up_stream_without_turn_complete_errors(store):
     ])
     events = await _run(prov, reg, [{"role": "user", "content": "add"}], tool_mode="normal")
     assert events[-1]["type"] == "error"
+
+
+# ── Long-term memory injection (issue #5, acceptance clause 1) ─────────────────
+
+@pytest.mark.asyncio
+async def test_memory_block_injected_into_volatile_prompt(store, monkeypatch):
+    """A surfaced fact lands in the VOLATILE half of the system prompt, never the
+    cached static half — end-to-end through the engine."""
+    monkeypatch.setattr(engine.memory_context, "build_memory_context",
+                        lambda text: "MEMSENTINEL-fact-line")
+    prov = FakeProvider([[{"type": "text", "text": "hi"}, _complete()]])
+    await _run(prov, Registry(), [{"role": "user", "content": "hello"}])
+    static, volatile = prov.captured_system[0]
+    assert "MEMSENTINEL-fact-line" in volatile
+    assert "MEMSENTINEL-fact-line" not in static
+
+
+@pytest.mark.asyncio
+async def test_memory_builder_receives_user_text(store, monkeypatch):
+    seen = {}
+    def _capture(text):
+        seen["text"] = text
+        return ""
+    monkeypatch.setattr(engine.memory_context, "build_memory_context", _capture)
+    prov = FakeProvider([[{"type": "text", "text": "hi"}, _complete()]])
+    await _run(prov, Registry(), [{"role": "user", "content": "hello"}])
+    # assemble_messages stub returns the user's message; the builder matches on it.
+    assert seen["text"] == "hi"
+
+
+@pytest.mark.asyncio
+async def test_empty_memory_block_leaves_turn_working(store, monkeypatch):
+    monkeypatch.setattr(engine.memory_context, "build_memory_context", lambda text: "")
+    prov = FakeProvider([[{"type": "text", "text": "ok"}, _complete()]])
+    events = await _run(prov, Registry(), [{"role": "user", "content": "hello"}])
+    assert _types(events)[-1] == "done"
+    _, volatile = prov.captured_system[0]
+    assert volatile.startswith("Current date and time:")  # nothing appended
+
+
+def test_last_user_text_skips_continuation_ack():
+    # On a resumed turn the synthetic ack is the trailing user message; memory must
+    # match the genuine prompt, not the boilerplate (Codex R9).
+    msgs = [
+        {"role": "user", "content": "what's Dana's renewal date"},
+        {"role": "assistant", "content": "let me check"},
+        {"role": "user", "content": engine._CONTINUATION_ACK},
+    ]
+    assert engine._last_user_text(msgs) == "what's Dana's renewal date"
+
+
+def test_last_user_text_none_when_only_ack():
+    msgs = [{"role": "user", "content": engine._CONTINUATION_ACK}]
+    assert engine._last_user_text(msgs) is None
