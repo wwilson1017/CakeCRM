@@ -70,6 +70,11 @@ export default function useKanbanState<TItem extends KanbanItem>(
       await onMove(event);
     } catch (err) {
       console.error('Kanban move failed:', err);
+      // Persist-failure rollback restores the pre-drag SNAPSHOT (not externalRef,
+      // which rollback() uses): here onMove rejected, so the consumer's external
+      // store may or may not have reverted — the snapshot undoes just this drag
+      // locally without assuming external state. (Unused by the pipeline board,
+      // whose onMove never rejects; kept correct for other consumers of this hook.)
       if (snapshotRef.current) {
         setItems(snapshotRef.current);
       }
