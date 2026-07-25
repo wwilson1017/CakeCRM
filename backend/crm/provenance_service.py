@@ -33,14 +33,15 @@ from core.postgres import (
 
 VALID_ENTITY_TYPES = {"deal", "contact"}
 ENTITY_TABLE_MAP = {"deal": "deals", "contact": "contacts"}
-# Standard columns only for v1 — must mirror service.update_contact / update_deal's
-# `allowed` sets exactly, so a badge can only attach to a field the assistant can write
-# and the UI can render. Issue #19 will add the 'cf:' namespace.
+# Standard columns only for v1, scoped to exactly the fields the detail views render a
+# badge for (ContactDetailPage / DealDetailSheet) — so every recorded row is visible AND
+# confirmable ("badged until confirmed or overwritten" holds for all of them). Entity
+# identity / FK columns the assistant also writes (name, title, source, status, currency,
+# contact_id, company_id) are deliberately NOT tracked in v1: the whole entity is already
+# AI-created, and those have no per-field badge site. Issue #19 will add the 'cf:' namespace.
 PROVENANCE_FIELDS = {
-    "contact": {"name", "email", "phone", "company", "title", "source", "status",
-                "tags", "notes", "company_id"},
-    "deal": {"title", "stage", "value", "notes", "expected_close_date",
-             "probability", "currency", "contact_id", "company_id"},
+    "contact": {"email", "phone", "company", "title", "tags", "notes"},
+    "deal": {"stage", "value", "notes", "probability", "expected_close_date"},
 }
 VALID_SOURCES = {"assistant"}
 
@@ -53,16 +54,21 @@ def _norm(v) -> str:
     return "" if v is None else str(v)
 
 
+def _check_entity_type(entity_type: str) -> None:
+    if entity_type not in VALID_ENTITY_TYPES:
+        raise ValueError(f"Invalid entity_type: {entity_type}")
+
+
 def record(
     entity_type: str,
     entity_id: int,
     field_name: str,
-    value_snapshot: "str | None",
+    value_snapshot: str | None,
     source: str,
-    source_detail: "str | None" = None,
-    confidence: "float | None" = None,
+    source_detail: str | None = None,
+    confidence: float | None = None,
     cur=None,
-) -> "dict | None":
+) -> dict | None:
     """Upsert a provenance row tying the badge to ``value_snapshot``.
 
     EVERY AI (re)write resets confirmation: the freshly written value is unverified until a
@@ -71,8 +77,7 @@ def record(
     human had since edited away (the old confirmation would suppress the badge on the
     overwrite). Re-confirming is the safe default. Pass ``cur`` to run inside a caller's
     transaction (used by record_fields)."""
-    if entity_type not in VALID_ENTITY_TYPES:
-        raise ValueError(f"Invalid entity_type: {entity_type}")
+    _check_entity_type(entity_type)
     if source not in VALID_SOURCES:
         raise ValueError(f"Invalid source: {source} (expected one of {sorted(VALID_SOURCES)})")
     if field_name not in PROVENANCE_FIELDS[entity_type]:
@@ -117,11 +122,10 @@ def record_fields(entity_type: str, entity_id: int, values: dict) -> None:
 
     ``values`` maps field_name → the POST-write value (from the tool's returned entity
     dict), so normalization (tags coercion, etc.) can't produce an instantly-stale badge.
-    """
-    if entity_type not in VALID_ENTITY_TYPES:
-        raise ValueError(f"Invalid entity_type: {entity_type}")
+    Empty-valued fields are skipped (no badge on a field the UI won't render)."""
+    _check_entity_type(entity_type)
     allowed = PROVENANCE_FIELDS[entity_type]
-    fields = {k: v for k, v in values.items() if k in allowed}
+    fields = {k: v for k, v in values.items() if k in allowed and _norm(v) != ""}
     if not fields:
         return
     table = ENTITY_TABLE_MAP[entity_type]
@@ -138,7 +142,7 @@ def record_fields(entity_type: str, entity_id: int, values: dict) -> None:
             record(entity_type, entity_id, field_name, _norm(snapshot), "assistant", cur=cur)
 
 
-def get_one(entity_type: str, entity_id: int, field_name: str) -> "dict | None":
+def get_one(entity_type: str, entity_id: int, field_name: str) -> dict | None:
     return pg_fetchone(
         """SELECT * FROM crm_field_provenance
            WHERE entity_type = %s AND entity_id = %s AND field_name = %s""",
@@ -152,8 +156,7 @@ def _load_current_values(entity_type: str, entity_id: int) -> dict:
     if not table:
         raise ValueError(f"Invalid entity_type: {entity_type}")
     # table is from the fixed local map — never interpolating user input.
-    row = pg_fetchone(f"SELECT * FROM {table} WHERE id = %s", (entity_id,))
-    return dict(row) if row else {}
+    return pg_fetchone(f"SELECT * FROM {table} WHERE id = %s", (entity_id,)) or {}
 
 
 def get_provenance(
@@ -165,8 +168,7 @@ def get_provenance(
     """Provenance rows for an entity, each annotated with ``stale`` (snapshot no longer
     matches the live value). By default returns only the live badge state: unconfirmed AND
     not stale. Pass include_confirmed/include_stale for history."""
-    if entity_type not in VALID_ENTITY_TYPES:
-        raise ValueError(f"Invalid entity_type: {entity_type}")
+    _check_entity_type(entity_type)
     rows = pg_fetchall(
         """SELECT * FROM crm_field_provenance
            WHERE entity_type = %s AND entity_id = %s
@@ -187,34 +189,39 @@ def get_provenance(
     return out
 
 
-def confirm(entity_type: str, entity_id: int, field_name: str) -> "dict | None":
+def confirm(entity_type: str, entity_id: int, field_name: str) -> dict | None:
     """Mark an AI-populated value human-confirmed (clears the badge). Returns the updated
     row; ``{"stale": True}`` if the live value no longer matches what was written (a human
-    already changed it — nothing to confirm); None if no provenance row.
+    already changed it — nothing to confirm); None if no provenance row. Idempotent: an
+    already-confirmed row is returned unchanged (no duplicate audit note).
 
     One transaction: lock the entity row FOR UPDATE (consistent order with record_fields /
-    delete_contact), then lock the provenance row FOR UPDATE and re-read its snapshot in the
-    same snapshot, so a concurrent AI rewrite can't slip between the read and the confirm."""
-    if entity_type not in VALID_ENTITY_TYPES:
-        raise ValueError(f"Invalid entity_type: {entity_type}")
+    delete_contact), then lock the provenance row FOR UPDATE, so a concurrent AI rewrite
+    can't slip between the read and the confirm. Each fetched row is converted to a dict
+    IMMEDIATELY, before the next execute — row_to_dict reads cursor.description, which every
+    execute rebinds to its own column set."""
+    _check_entity_type(entity_type)
     table = ENTITY_TABLE_MAP[entity_type]
     now = _now()
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(f"SELECT * FROM {table} WHERE id = %s FOR UPDATE", (entity_id,))
-        entity_row = cur.fetchone()
+        row = cur.fetchone()
+        entity = row_to_dict(cur, row) if row else None       # convert before next execute
         cur.execute(
-            """SELECT value_snapshot FROM crm_field_provenance
+            """SELECT * FROM crm_field_provenance
                WHERE entity_type = %s AND entity_id = %s AND field_name = %s
                FOR UPDATE""",
             (entity_type, entity_id, field_name),
         )
-        prov = cur.fetchone()
+        row = cur.fetchone()
+        prov = row_to_dict(cur, row) if row else None         # convert before next execute
         if prov is None:
             return None
-        snapshot = prov[0]
-        live = row_to_dict(cur, entity_row).get(field_name) if entity_row else None
-        if _norm(live) != _norm(snapshot):
+        if prov.get("confirmed_at") is not None:
+            return prov                                       # already confirmed — idempotent
+        live = entity.get(field_name) if entity else None
+        if _norm(live) != _norm(prov.get("value_snapshot")):
             return {"stale": True}  # value changed under us — nothing to confirm
         cur.execute(
             """UPDATE crm_field_provenance SET confirmed_at = %s

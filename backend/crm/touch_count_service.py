@@ -126,6 +126,12 @@ def _process_one(deal_id: int) -> None:
     # landing mid-compute must be able to re-enqueue, or its evidence would be missed.
     with _lock:
         force_write = _pending.pop(deal_id, False)
+    # Zero keys: skip the whole evidence load (the REPEATABLE READ snapshot + up to 150 rows
+    # + prompt build) — with no provider, recompute would discard all of it in _call_llm
+    # anyway. This keeps keyless installs from paying that per-note DB churn forever;
+    # _call_llm remains the authoritative gate.
+    if get_ai_provider(agent_model_tier="light") is None:
+        return
     try:
         recompute_touch_count(deal_id, force_write=force_write)
     except Exception:
@@ -214,8 +220,11 @@ async def _stream_text(provider, prompt: str) -> str | None:
             saw_error = True
         elif etype == "_turn_complete":
             completed = True
-            # Reject explicit errors AND truncation reasons: a reply cut off at the token
-            # limit ("length"/"max_tokens") may be a partial that only looks parseable.
+            # Reject explicit errors, plus truncation reasons as defense-in-depth. NOTE this
+            # only fires for providers that pass a raw finish_reason through (Anthropic's
+            # "max_tokens"); the openai_compat/google providers synthesize "stop", so the
+            # AUTHORITATIVE guard against a truncated reply is parse_touch_count requiring
+            # complete valid JSON (a mid-object cut fails to parse → None).
             if event.get("stop_reason") in ("error", "length", "max_tokens"):
                 saw_error = True
             break
@@ -295,7 +304,10 @@ def build_evidence_lines(deal: dict, chatter_rows: list, activity_rows: list) ->
             lines.append((str(row.get("created_at") or ""), described))
     for row in activity_rows or []:
         lines.append((str(row.get("created_at") or ""), _describe_activity(row)))
-    lines.sort(key=lambda pair: pair[0])
+    # Sort by PARSED instant, not the raw string: psycopg2 returns session-TZ timestamps
+    # whose ISO strings misorder across a DST boundary (same reason evidence_watermark
+    # parses). Keeps the timeline the model reads chronologically consistent.
+    lines.sort(key=lambda pair: _parse_ts(pair[0]))
     out = [line for _, line in lines]
     notes = _truncate((deal or {}).get("notes") or "", MAX_DEAL_NOTES_CHARS)
     if notes:

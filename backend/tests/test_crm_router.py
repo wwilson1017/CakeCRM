@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from core.auth import get_current_user
-from crm import service
+from crm import provenance_service, service, touch_count_service
 from crm.router import router as crm_router
 
 
@@ -368,3 +368,68 @@ def test_deal_update_omitted_company_id_not_sent(client, monkeypatch):
                         lambda did, **kw: seen.update(kw) or {"id": did})
     client.put("/api/crm/deals/1", json={"title": "D"})
     assert "company_id" not in seen and seen == {"title": "D"}
+
+
+# ── AI touch counts + provenance (issue #16) — HTTP wiring through the ASGI stack ──
+
+def test_touch_count_backfill_passes_scope_and_force(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(touch_count_service, "start_backfill",
+                        lambda scope, force: seen.update(scope=scope, force=force)
+                        or {"started": True, "scope": scope, "queued": 0})
+    r = client.post("/api/crm/deals/touch-count/backfill?scope=all&force=true")
+    assert r.status_code == 200 and r.json()["started"] is True
+    assert seen == {"scope": "all", "force": True}
+
+
+def test_touch_count_backfill_defaults_scope_null(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(touch_count_service, "start_backfill",
+                        lambda scope, force: seen.update(scope=scope) or {"started": True})
+    client.post("/api/crm/deals/touch-count/backfill")
+    assert seen == {"scope": "null"}
+
+
+def test_touch_count_backfill_bad_scope_422(client):
+    # The Query pattern ^(null|all)$ rejects it before the handler runs.
+    assert client.post("/api/crm/deals/touch-count/backfill?scope=everything").status_code == 422
+
+
+def test_touch_count_backfill_status_200(client, monkeypatch):
+    monkeypatch.setattr(touch_count_service, "backfill_status",
+                        lambda: {"remaining_null": 3, "queue_depth": 0})
+    r = client.get("/api/crm/deals/touch-count/backfill/status")
+    assert r.status_code == 200 and r.json()["remaining_null"] == 3
+
+
+def test_get_provenance_200_shape(client, monkeypatch):
+    monkeypatch.setattr(provenance_service, "get_provenance",
+                        lambda et, eid: [{"field_name": "phone", "stale": False}])
+    r = client.get("/api/crm/provenance/contact/1")
+    assert r.status_code == 200 and r.json() == {"provenance": [{"field_name": "phone", "stale": False}], "count": 1}
+
+
+def test_get_provenance_bad_entity_400(client, monkeypatch):
+    def _raise(et, eid):
+        raise ValueError("Invalid entity_type: widget")
+    monkeypatch.setattr(provenance_service, "get_provenance", _raise)
+    assert client.get("/api/crm/provenance/widget/1").status_code == 400
+
+
+def test_confirm_provenance_200_confirmed(client, monkeypatch):
+    monkeypatch.setattr(provenance_service, "confirm",
+                        lambda et, eid, fn: {"field_name": fn, "confirmed_at": "c"})
+    r = client.post("/api/crm/provenance/contact/1/confirm", json={"field_name": "phone"})
+    assert r.status_code == 200 and r.json() == {"confirmed": True, "provenance": {"field_name": "phone", "confirmed_at": "c"}}
+
+
+def test_confirm_provenance_200_stale(client, monkeypatch):
+    monkeypatch.setattr(provenance_service, "confirm", lambda et, eid, fn: {"stale": True})
+    r = client.post("/api/crm/provenance/deal/1/confirm", json={"field_name": "stage"})
+    assert r.status_code == 200 and r.json() == {"confirmed": False, "stale": True}
+
+
+def test_confirm_provenance_404_when_no_row(client, monkeypatch):
+    monkeypatch.setattr(provenance_service, "confirm", lambda et, eid, fn: None)
+    r = client.post("/api/crm/provenance/contact/1/confirm", json={"field_name": "phone"})
+    assert r.status_code == 404

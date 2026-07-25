@@ -501,14 +501,15 @@ def _record_provenance(entity_type: str, entity_id: int, provided: dict, result:
     """Best-effort: record 'assistant' provenance for the fields this tool call set.
 
     Snapshots come from the POST-write entity dict (``result``) so normalization can't mint
-    an instantly-stale badge; empty values are skipped (no badge on a field the UI won't
-    render). Never raises — a provenance failure must not fail the write it describes."""
+    an instantly-stale badge; record_fields skips empty values (no badge on a field the UI
+    won't render). Never raises — a provenance failure must not fail the write it describes."""
     try:
+        if not entity_id:
+            return
         fields = {
             k: result.get(k)
             for k in provided
             if k in provenance_service.PROVENANCE_FIELDS.get(entity_type, ())
-            and provenance_service._norm(result.get(k)) != ""
         }
         if fields:
             provenance_service.record_fields(entity_type, entity_id, fields)
@@ -531,7 +532,9 @@ def crm_create_contact(name: str, **kwargs) -> dict:
         result = crm.create_contact(name=name, **kwargs)
     except psycopg2.errors.ForeignKeyViolation:
         return {"error": "Referenced company does not exist"}
-    _record_provenance("contact", result["id"], {"name": name, **kwargs}, result)
+    if not result:
+        return {"error": "Contact could not be created"}
+    _record_provenance("contact", result.get("id"), {"name": name, **kwargs}, result)
     return result
 
 
@@ -574,7 +577,9 @@ def crm_create_deal(title: str, **kwargs) -> dict:
         result = crm.create_deal(title=title, **kwargs)
     except psycopg2.errors.ForeignKeyViolation:
         return {"error": "Referenced contact or company does not exist"}
-    _record_provenance("deal", result["id"], {"title": title, **kwargs}, result)
+    if not result:
+        return {"error": "Deal could not be created"}
+    _record_provenance("deal", result.get("id"), {"title": title, **kwargs}, result)
     return result
 
 

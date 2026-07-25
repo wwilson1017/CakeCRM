@@ -29,13 +29,19 @@ export function StatusBadge({ status }: { status: string }) {
   return <span style={{ ...badgeBase, background: c.bg, color: c.color }}>{status}</span>;
 }
 
+// Informational "AI" blue, shared by the touch-count high band and AiBadge (issue #16).
+// There is no brand-neutral blue token in shared/styles, and this must NOT be ACCENT
+// (which is user-rebrandable), so it lives here as the single source both files import.
+export const AI_BLUE = '#3A6CB0';
+export const AI_BLUE_SOFT = 'rgba(58,108,176,0.12)';
+
 // AI-estimated touch count (issue #16). Three "12-touches" bands: 0-4 dead zone (amber),
 // 5-12 closing window (green), 13+ long-cycle (blue). A NULL count renders nothing — the
 // zero-keys degradation rule holds by construction (no count is written without a provider).
 const TOUCH_COLORS = {
-  low: { bg: 'rgba(176,124,46,0.12)', color: GOLD },       // 0-4
-  mid: { bg: 'rgba(46,125,79,0.12)', color: SAGE },        // 5-12
-  high: { bg: 'rgba(58,108,176,0.12)', color: '#3A6CB0' }, // 13+
+  low: { bg: 'rgba(176,124,46,0.12)', color: GOLD },   // 0-4
+  mid: { bg: 'rgba(46,125,79,0.12)', color: SAGE },    // 5-12
+  high: { bg: AI_BLUE_SOFT, color: AI_BLUE },          // 13+
 } as const;
 
 export function TouchCountPill({ count }: { count?: number | null }) {

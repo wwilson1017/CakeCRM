@@ -9,7 +9,7 @@ import { ActivityTimeline } from './components/ActivityTimeline';
 import { NotesThread } from './components/NotesThread';
 import { PriorityBadge } from './components/badges';
 import { ProvenanceBadge } from './components/ProvenanceBadge';
-import { useProvenance } from './hooks/useProvenance';
+import { useProvenance } from './useProvenance';
 import { STAGE_COLORS } from './constants';
 import { IconArrowLeft } from '../shared/icons';
 import { useIsMobile } from '../shared/useIsMobile';

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api } from '../../core/api/client';
-import type { FieldProvenance } from '../../core/types';
+import { api } from '../core/api/client';
+import type { FieldProvenance } from '../core/types';
 
 // Fetches a deal/contact's live-badge provenance (issue #16), keyed by field_name. Mirrors
 // NotesThread's fetch idiom: a monotonic reqRef guard so a slow response for a since-switched
@@ -52,6 +52,10 @@ export function useProvenance(entityType: 'deal' | 'contact', entityId: number |
         // Confirmed OR stale (edited since the AI wrote it — already dead server-side): drop
         // the badge either way. Any other error leaves it in place for a retry.
         if (res.confirmed || res.stale) {
+          // Invalidate any in-flight refresh() whose server read predates this confirm, so a
+          // late response can't repopulate the badge we just cleared (reqRef also sequences
+          // refresh-vs-refresh — this extends it to confirm-vs-refresh).
+          reqRef.current += 1;
           setByField(prev => {
             const next = { ...prev };
             delete next[fieldName];

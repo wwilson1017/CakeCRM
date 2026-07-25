@@ -8,7 +8,7 @@ import { ActivityTimeline } from './ActivityTimeline';
 import { NotesThread } from './NotesThread';
 import { TouchCountPill } from './badges';
 import { ProvenanceBadge } from './ProvenanceBadge';
-import { useProvenance } from '../hooks/useProvenance';
+import { useProvenance } from '../useProvenance';
 
 interface DealDetailSheetProps {
   deal: CrmDeal;

@@ -3,6 +3,8 @@
 No DB: get_connection is faked (conftest.fake_conn) and pg_fetchall/_load_current_values are
 monkeypatched."""
 
+from contextlib import contextmanager
+
 import pytest
 from fastapi import HTTPException
 
@@ -12,6 +14,52 @@ from crm import (
     service as crm_service,
     tools,
 )
+
+# Provenance table columns, in migration order — used by the described-cursor tests below.
+_PROV_COLS = ["id", "entity_type", "entity_id", "field_name", "value_snapshot", "source",
+              "source_detail", "confidence", "populated_at", "confirmed_at"]
+
+
+class _DescribedCursor:
+    """Fake cursor that mimics psycopg2's per-execute ``cursor.description`` so the REAL
+    row_to_dict runs against it. This is what catches confirm()'s description-reuse bug: a
+    cursor that just returns tuples (or a monkeypatched row_to_dict) hides it entirely.
+
+    steps: list of (columns | None, rows) in execute order. `description` is rebound to the
+    step's columns on each execute, exactly like a real cursor."""
+
+    def __init__(self, steps):
+        self._steps = list(steps)
+        self._i = -1
+        self.description = None
+        self._rows: list = []
+        self.executed: list = []
+
+    def execute(self, sql, params=()):
+        self.executed.append((" ".join(sql.split()), params))
+        self._i += 1
+        cols, rows = self._steps[self._i] if self._i < len(self._steps) else (None, [])
+        self.description = [(c,) for c in cols] if cols else None
+        self._rows = list(rows)
+
+    def fetchone(self):
+        return self._rows.pop(0) if self._rows else None
+
+
+def _install_described(monkeypatch, steps):
+    cur = _DescribedCursor(steps)
+
+    class _Conn:
+        def cursor(self):
+            return cur
+
+    @contextmanager
+    def _get_connection():
+        yield _Conn()
+
+    monkeypatch.setattr(prov, "get_connection", _get_connection)
+    return cur
+
 
 # ── record: validation + reset-on-rewrite ─────────────────────────────────────
 
@@ -66,6 +114,14 @@ def test_record_fields_ignores_non_allowlisted_keys(monkeypatch, fake_conn):
     assert not any("INSERT INTO crm_field_provenance" in s for s, _ in conn.executed)
 
 
+def test_record_fields_skips_empty_values(monkeypatch, fake_conn):
+    conn = fake_conn(monkeypatch, prov, fetchone_results=[(1,)])
+    monkeypatch.setattr(prov, "row_to_dict", lambda cur, r: {"phone": "555", "title": ""})
+    prov.record_fields("contact", 1, {"phone": "555", "title": ""})  # empty title → no badge
+    inserts = [p for s, p in conn.executed if "INSERT INTO crm_field_provenance" in s]
+    assert [p[2] for p in inserts] == ["phone"]                   # only the non-empty field
+
+
 # ── get_provenance: staleness + default filtering ─────────────────────────────
 
 def test_get_provenance_filters_stale_and_confirmed_by_default(monkeypatch):
@@ -102,33 +158,60 @@ def test_get_provenance_norm_treats_none_as_empty(monkeypatch):
 
 # ── confirm: one transaction, locked snapshot ─────────────────────────────────
 
-def test_confirm_happy_path_updates_and_audits_in_one_txn(monkeypatch, fake_conn):
-    conn = fake_conn(
-        monkeypatch, prov,
-        fetchone_results=[{"phone": "555"}, ("555",), {"field_name": "phone", "confirmed_at": "c"}],
-    )
-    monkeypatch.setattr(prov, "row_to_dict", lambda cur, r: r)     # rows are already dicts
+def _prov_row(value_snapshot, confirmed_at=None):
+    return (9, "contact", 1, "phone", value_snapshot, "assistant", None, None, "p", confirmed_at)
+
+
+def test_confirm_happy_path_updates_and_audits_in_one_txn(monkeypatch):
+    # Uses the REAL row_to_dict via the described cursor: the entity row (["id","phone"]) is
+    # converted to a dict BEFORE the provenance SELECT rebinds cursor.description, so the live
+    # value is read correctly. The old monkeypatched-row_to_dict test masked the P1 where the
+    # live value was read against the wrong description and confirm ALWAYS returned stale.
+    cur = _install_described(monkeypatch, [
+        (["id", "phone"], [(1, "555")]),                          # SELECT * FROM contacts FOR UPDATE
+        (_PROV_COLS, [_prov_row("555")]),                          # SELECT * FROM crm_field_provenance FOR UPDATE
+        (_PROV_COLS, [_prov_row("555", confirmed_at="c")]),        # UPDATE ... RETURNING *
+        (None, []),                                                # INSERT chatter
+    ])
     out = prov.confirm("contact", 1, "phone")
-    stmts = [s for s, _ in conn.executed]
+    stmts = [s for s, _ in cur.executed]
     assert any("SELECT * FROM contacts WHERE id = %s FOR UPDATE" in s for s in stmts)
     assert any("FROM crm_field_provenance WHERE entity_type = %s AND entity_id = %s AND field_name = %s FOR UPDATE" in s for s in stmts)
     assert any("UPDATE crm_field_provenance SET confirmed_at" in s for s in stmts)
     assert any("INSERT INTO crm_chatter" in s for s in stmts)
-    assert out["confirmed_at"] == "c"
+    assert out["confirmed_at"] == "c"        # live value matched snapshot → confirmed, not stale
 
 
-def test_confirm_stale_value_is_a_noop(monkeypatch, fake_conn):
-    conn = fake_conn(monkeypatch, prov, fetchone_results=[{"phone": "999"}, ("555",)])
-    monkeypatch.setattr(prov, "row_to_dict", lambda cur, r: r)
-    out = prov.confirm("contact", 1, "phone")                     # live 999 != snapshot 555
+def test_confirm_stale_value_is_a_noop(monkeypatch):
+    cur = _install_described(monkeypatch, [
+        (["id", "phone"], [(1, "999")]),        # live 999
+        (_PROV_COLS, [_prov_row("555")]),        # snapshot 555
+    ])
+    out = prov.confirm("contact", 1, "phone")
     assert out == {"stale": True}
-    assert not any("UPDATE crm_field_provenance SET confirmed_at" in s for s, _ in conn.executed)
-    assert not any("INSERT INTO crm_chatter" in s for s, _ in conn.executed)
+    stmts = [s for s, _ in cur.executed]
+    assert not any("UPDATE crm_field_provenance SET confirmed_at" in s for s in stmts)
+    assert not any("INSERT INTO crm_chatter" in s for s in stmts)
 
 
-def test_confirm_no_provenance_row_returns_none(monkeypatch, fake_conn):
-    fake_conn(monkeypatch, prov, fetchone_results=[{"phone": "555"}, None])  # prov row missing
-    monkeypatch.setattr(prov, "row_to_dict", lambda cur, r: r)
+def test_confirm_already_confirmed_is_idempotent(monkeypatch):
+    # An already-confirmed row returns unchanged — no re-UPDATE, no duplicate audit note.
+    cur = _install_described(monkeypatch, [
+        (["id", "phone"], [(1, "555")]),
+        (_PROV_COLS, [_prov_row("555", confirmed_at="2026-01-01T00:00:00+00:00")]),
+    ])
+    out = prov.confirm("contact", 1, "phone")
+    assert out["confirmed_at"] == "2026-01-01T00:00:00+00:00"
+    stmts = [s for s, _ in cur.executed]
+    assert not any("UPDATE crm_field_provenance SET confirmed_at" in s for s in stmts)
+    assert not any("INSERT INTO crm_chatter" in s for s in stmts)
+
+
+def test_confirm_no_provenance_row_returns_none(monkeypatch):
+    _install_described(monkeypatch, [
+        (["id", "phone"], [(1, "555")]),
+        (_PROV_COLS, []),                        # prov fetchone → None
+    ])
     assert prov.confirm("contact", 1, "phone") is None
 
 
@@ -150,13 +233,37 @@ def test_update_contact_tool_records_post_write_values(monkeypatch):
     assert calls == [("contact", 1, {"phone": "555", "tags": "a,b"})]
 
 
-def test_tool_skips_empty_values(monkeypatch):
+def test_tool_passes_allowlisted_post_write_fields(monkeypatch):
+    # The tool passes provided allowlisted fields with their POST-write values; record_fields
+    # is the one that skips empties (tested separately in test_record_fields_skips_empty).
     calls = []
     monkeypatch.setattr(crm_service, "update_contact",
                         lambda cid, **kw: {"id": cid, "phone": "", "title": "Mgr"})
     monkeypatch.setattr(prov, "record_fields", lambda et, eid, f: calls.append(f))
     tools.crm_update_contact(1, phone="", title="Mgr")
-    assert calls == [{"title": "Mgr"}]                            # empty phone skipped
+    assert calls == [{"phone": "", "title": "Mgr"}]
+
+
+def test_create_contact_tool_records_with_new_id(monkeypatch):
+    calls = []
+    monkeypatch.setattr(crm_service, "create_contact",
+                        lambda name, **kw: {"id": 42, "name": name, "phone": kw.get("phone", "")})
+    monkeypatch.setattr(prov, "record_fields", lambda et, eid, f: calls.append((et, eid, f)))
+    out = tools.crm_create_contact("Ada", phone="555")
+    assert out["id"] == 42
+    # 'name' is not a badged field (not in PROVENANCE_FIELDS) → only 'phone' is recorded.
+    assert calls == [("contact", 42, {"phone": "555"})]
+
+
+def test_create_deal_tool_missing_id_does_not_crash(monkeypatch):
+    # If the create's re-select returns None (row deleted in the window), the tool returns a
+    # clean error and record_fields is never reached with a bad id — provenance must not
+    # break the write path.
+    called = []
+    monkeypatch.setattr(crm_service, "create_deal", lambda title, **kw: None)
+    monkeypatch.setattr(prov, "record_fields", lambda *a: called.append(a))
+    out = tools.crm_create_deal("Big deal")
+    assert "error" in out and called == []                            # empty phone skipped
 
 
 def test_tool_error_result_records_nothing(monkeypatch):

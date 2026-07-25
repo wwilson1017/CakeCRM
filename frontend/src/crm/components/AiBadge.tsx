@@ -1,12 +1,10 @@
 import { INK_MUTE, FONT_MONO } from '../../shared/styles';
+import { AI_BLUE, AI_BLUE_SOFT } from './badges';
 
 // Small "AI" pill shown next to a field the assistant populated (issue #16), with an
 // optional inline Confirm affordance. Rewritten from cake_os's Tailwind AiBadge to
-// CakeCRM's inline-style idiom (matches badges.tsx). There is no "AI blue" theme token,
-// so a fixed informational blue is used (deliberately not ACCENT — that is user-rebrandable).
-
-const AI_BLUE = '#3A6CB0';
-const AI_BG = 'rgba(58,108,176,0.12)';
+// CakeCRM's inline-style idiom (matches badges.tsx). The AI_BLUE token (from badges.tsx)
+// is a fixed informational blue — deliberately not ACCENT, which is user-rebrandable.
 
 interface AiBadgeProps {
   source?: string | null;
@@ -27,7 +25,7 @@ export function AiBadge({ source, sourceDetail, confidence, onConfirm, confirmin
         title={tip}
         style={{
           fontFamily: FONT_MONO, fontSize: 10, letterSpacing: '0.08em', fontWeight: 600,
-          padding: '1px 6px', borderRadius: 4, background: AI_BG, color: AI_BLUE,
+          padding: '1px 6px', borderRadius: 4, background: AI_BLUE_SOFT, color: AI_BLUE,
           textTransform: 'uppercase', whiteSpace: 'nowrap',
         }}
       >

@@ -381,6 +381,7 @@ def test_schedule_recompute_never_wedges_when_worker_start_fails(monkeypatch):
 def test_process_one_clears_pending_before_computing_and_carries_force(monkeypatch):
     seen = {}
     svc._pending[7] = True
+    monkeypatch.setattr(svc, "get_ai_provider", lambda **k: FakeProvider([]))  # a key exists
 
     def fake_recompute(deal_id, force_write=False):
         seen["deal_id"] = deal_id
@@ -393,7 +394,18 @@ def test_process_one_clears_pending_before_computing_and_carries_force(monkeypat
     assert 7 not in seen["pending_during"]              # cleared BEFORE compute
 
 
+def test_process_one_skips_recompute_when_no_provider(monkeypatch):
+    called = []
+    svc._pending[7] = True
+    monkeypatch.setattr(svc, "get_ai_provider", lambda **k: None)   # zero keys
+    monkeypatch.setattr(svc, "recompute_touch_count", lambda *a, **k: called.append(a))
+    svc._process_one(7)
+    assert called == []                                  # no evidence load / recompute
+    assert 7 not in svc._pending                         # still cleared
+
+
 def test_process_one_swallows_errors(monkeypatch):
+    monkeypatch.setattr(svc, "get_ai_provider", lambda **k: FakeProvider([]))
     monkeypatch.setattr(svc, "recompute_touch_count", lambda *a, **k: (_ for _ in ()).throw(ValueError("x")))
     svc._process_one(7)  # must not raise
 
