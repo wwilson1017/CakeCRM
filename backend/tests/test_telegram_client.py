@@ -131,3 +131,21 @@ def test_validate_token_none_on_error(monkeypatch):
 
     monkeypatch.setattr(client, "_post", fake_post)
     assert client.validate_token("bad") is None
+
+
+def test_post_transport_error_redacts_token(monkeypatch):
+    # Security invariant: the bot token is in every Bot API URL, so a transport error
+    # must never surface it. _post logs only the exception class and raises a fresh
+    # TelegramError `from None` (breaking the chain so no token-bearing repr leaks).
+    import httpx
+
+    token = "123456:SUPER-SECRET-TOKEN"
+
+    def raiser(*a, **k):
+        raise httpx.ConnectError(f"failed connecting to https://api.telegram.org/bot{token}/getMe")
+
+    monkeypatch.setattr(httpx, "post", raiser)
+    with pytest.raises(client.TelegramError) as ei:
+        client._post(token, "getMe")
+    assert token not in str(ei.value)
+    assert ei.value.__cause__ is None  # `from None` suppressed the token-bearing cause

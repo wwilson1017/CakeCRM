@@ -34,6 +34,10 @@ from telegram.router import router as telegram_router
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+# httpx logs every request at INFO with the full URL. The Telegram Bot API embeds the
+# bot token in the URL path (/bot<TOKEN>/...), so INFO-level httpx request logs would
+# leak the token into application logs — quiet httpx to WARNING.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 VERSION = "0.1.0"
 

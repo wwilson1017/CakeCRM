@@ -9,6 +9,7 @@ The running poll task re-reads ``telegram_settings`` each iteration, so a connec
 disconnect is picked up automatically within a few seconds — no task restart here.
 """
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -16,7 +17,7 @@ from pydantic import BaseModel
 
 from core.auth import get_current_user
 
-from . import client, store
+from . import client, poller, store
 
 logger = logging.getLogger(__name__)
 
@@ -51,29 +52,35 @@ def get_status(user=Depends(get_current_user)):
 
 
 @router.post("/connect")
-def connect(body: ConnectRequest, user=Depends(get_current_user)):
+async def connect(body: ConnectRequest, user=Depends(get_current_user)):
     token = (body.bot_token or "").strip()
     if not token:
         raise HTTPException(status_code=400, detail="Bot token is required.")
-    info = client.validate_token(token)
+    info = await asyncio.to_thread(client.validate_token, token)
     if not info:
         raise HTTPException(
             status_code=400,
             detail="That bot token is invalid. Create one with @BotFather and try again.",
         )
     username = info.get("username") or ""
+    # Stop the poll task BEFORE swapping config, so an in-flight getUpdates against the
+    # OLD bot can't process a stale update or skew the NEW bot's freshly-reset offset.
+    await poller.stop()
     # A previously-used bot may have a webhook set, which blocks getUpdates polling.
-    client.delete_webhook(token, drop_pending_updates=False)
-    store.connect(token, username)
+    await asyncio.to_thread(client.delete_webhook, token, False)
+    await asyncio.to_thread(store.connect, token, username)
+    poller.start()  # fresh task picks up the new bot immediately
     logger.info("telegram bot connected (@%s)", username)
-    return _status_payload()
+    return await asyncio.to_thread(_status_payload)
 
 
 @router.post("/disconnect")
-def disconnect(user=Depends(get_current_user)):
-    store.disconnect()
+async def disconnect(user=Depends(get_current_user)):
+    await poller.stop()
+    await asyncio.to_thread(store.disconnect)
+    poller.start()  # task resumes but idles until a token is connected again
     logger.info("telegram bot disconnected")
-    return _status_payload()
+    return await asyncio.to_thread(_status_payload)
 
 
 @router.post("/link-code/regenerate")

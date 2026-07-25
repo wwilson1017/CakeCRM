@@ -87,3 +87,26 @@ def test_advance_offset_is_monotonic(monkeypatch):
     store.advance_offset(42)
     assert "GREATEST(poll_offset" in captured["sql"]
     assert captured["params"] == (42,)
+
+
+# ── history helpers backing the batch gate (hermetic — CI runs these) ────────
+
+def test_list_pending_tool_uses_filters(monkeypatch):
+    from assistant import history
+
+    row = {"tool_results": [
+        {"tool_use_id": "t1", "content": '{"status": "pending_user_approval"}'},
+        {"tool_use_id": "t2", "content": '{"ok": true}'},
+        {"tool_use_id": "t3", "content": '{"status": "pending_user_approval"}'},
+    ]}
+    monkeypatch.setattr(history, "pg_fetchone", lambda *a, **k: row)
+    assert history.list_pending_tool_uses("conv1", "m1") == ["t1", "t3"]
+
+
+def test_is_unsettled_result():
+    from assistant import history
+
+    assert history.is_unsettled_result('{"status": "pending_user_approval"}') is True
+    assert history.is_unsettled_result('{"status": "executing"}') is True  # stuck-mid-execution blocks
+    assert history.is_unsettled_result('{"status": "denied_by_user"}') is False
+    assert history.is_unsettled_result('{"ok": true}') is False

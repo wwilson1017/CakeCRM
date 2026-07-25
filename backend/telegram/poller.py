@@ -53,19 +53,30 @@ async def stop() -> None:
     _task.cancel()
     try:
         await _task
-    except (asyncio.CancelledError, Exception):
+    except asyncio.CancelledError:
         pass
+    except Exception:
+        logger.exception("telegram poller: task ended with an error during shutdown")
     _task = None
     logger.info("telegram poller stopped")
 
 
 def _acquire_lock():
-    """Best-effort leader election. Returns a held connection, "BUSY", or None (error)."""
+    """Best-effort leader election. Returns a held connection, "BUSY", or None (error).
+
+    Uses a DEDICATED psycopg2 connection rather than a ``core/postgres`` pooled one on
+    purpose: a session-level ``pg_try_advisory_lock`` is held until its connection
+    closes, so the leader must keep ONE connection open for the poller's lifetime.
+    ``get_connection`` is a context manager that returns the connection to the shared
+    pool on exit — a pooled lock-holder would leak process leadership to whoever next
+    checks out that connection. This is the one sanctioned raw-connect in the module.
+    """
     import psycopg2
 
     dsn = os.getenv("DATABASE_URL")
     if not dsn:
         return None
+    conn = None
     try:
         conn = psycopg2.connect(dsn)
         conn.autocommit = True
@@ -76,6 +87,11 @@ def _acquire_lock():
         conn.close()
         return "BUSY"
     except Exception:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
         logger.warning("telegram poller: advisory-lock acquire errored — polling without leader lock")
         return None
 
@@ -86,45 +102,61 @@ async def _run() -> None:
     backoff = _MIN_BACKOFF
     try:
         while True:
-            # ── Leader election (best effort) ──────────────────────────────
-            if not leadership_resolved:
-                res = await asyncio.to_thread(_acquire_lock)
-                if res == "BUSY":
-                    await asyncio.sleep(_BUSY_SLEEP)
-                    continue
-                lock_conn = res if res not in (None, "BUSY") else None
-                leadership_resolved = True  # got the lock, or fail-open on error
-
-            token = await asyncio.to_thread(store.get_bot_token)
-            if not token:
-                await asyncio.sleep(_IDLE_SLEEP)
-                continue
-
-            offset = await asyncio.to_thread(store.get_offset)
             try:
-                updates = await asyncio.to_thread(client.get_updates, token, offset, _LONG_POLL)
-                backoff = _MIN_BACKOFF
-            except client.TelegramError as e:
-                if e.status == 409:
-                    # A webhook is set (or another getUpdates is active): self-heal by
-                    # removing any webhook, then back off and retry.
-                    await asyncio.to_thread(client.delete_webhook, token, False)
-                wait = e.retry_after or backoff
-                logger.warning("telegram getUpdates error (status=%s) — backing off %ss", e.status, wait)
-                await asyncio.sleep(wait)
-                backoff = min(backoff * 2, _MAX_BACKOFF)
-                continue
+                # ── Leader election (best effort) ──────────────────────────
+                if not leadership_resolved:
+                    res = await asyncio.to_thread(_acquire_lock)
+                    if res == "BUSY":
+                        await asyncio.sleep(_BUSY_SLEEP)
+                        continue
+                    lock_conn = res if res not in (None, "BUSY") else None
+                    leadership_resolved = True  # got the lock, or fail-open on error
 
-            for u in updates:
+                token = await asyncio.to_thread(store.get_bot_token)
+                if not token:
+                    await asyncio.sleep(_IDLE_SLEEP)
+                    continue
+
+                offset = await asyncio.to_thread(store.get_offset)
                 try:
-                    await service.handle_update(u)
-                except Exception:
-                    logger.exception("telegram poller: update handling failed")
-                finally:
-                    # Advance the cursor AFTER dispatch (at-least-once), monotonically.
-                    uid = u.get("update_id")
-                    if uid is not None:
-                        await asyncio.to_thread(store.advance_offset, int(uid) + 1)
+                    updates = await asyncio.to_thread(client.get_updates, token, offset, _LONG_POLL)
+                    backoff = _MIN_BACKOFF
+                except client.TelegramError as e:
+                    if e.status == 409:
+                        # A webhook is set (or another getUpdates is active): self-heal
+                        # by removing any webhook, then back off and retry.
+                        await asyncio.to_thread(client.delete_webhook, token, False)
+                    wait = e.retry_after or backoff
+                    logger.warning("telegram getUpdates error (status=%s) — backing off %ss", e.status, wait)
+                    await asyncio.sleep(wait)
+                    backoff = min(backoff * 2, _MAX_BACKOFF)
+                    continue
+
+                for u in updates:
+                    try:
+                        await service.handle_update(u)
+                    except Exception:
+                        logger.exception("telegram poller: update handling failed")
+                    finally:
+                        # Advance the cursor AFTER dispatch, monotonically. handle_update
+                        # is best-effort: a handler error is logged and the update is
+                        # still consumed (at-MOST-once on a handler failure, so a bad
+                        # update can't become a poison-pill retry loop; the user can
+                        # resend). Only a hard crash BEFORE this advance yields Telegram
+                        # redelivery.
+                        uid = u.get("update_id")
+                        if uid is not None:
+                            await asyncio.to_thread(store.advance_offset, int(uid) + 1)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # Any OTHER error (a transient DB blip in a store.* call, pool
+                # exhaustion, a decrypt failure) must NOT kill the only poll task —
+                # log and back off, matching the getUpdates error path. Without this a
+                # single Postgres hiccup would permanently disable Telegram.
+                logger.exception("telegram poller: iteration error — backing off %ss", backoff)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, _MAX_BACKOFF)
     except asyncio.CancelledError:
         raise
     finally:

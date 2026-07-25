@@ -59,7 +59,10 @@ def markdown_to_telegram_html(text: str) -> str:
     # 3. Extract links (before HTML-escaping to avoid double-escaping URLs)
     def _link(m: re.Match) -> str:
         label = escape_html(m.group(1))
-        href = escape_html(m.group(2))
+        # Escape the double-quote too: href is interpolated inside a quoted HTML
+        # attribute, and assistant output can echo untrusted CRM field values, so an
+        # unescaped " would break out of the attribute.
+        href = escape_html(m.group(2)).replace('"', "&quot;")
         return _placeholder(f'<a href="{href}">{label}</a>')
 
     result = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", _link, result)
@@ -95,14 +98,21 @@ def markdown_to_telegram_html(text: str) -> str:
     return result
 
 
-def chunk_markdown(text: str, max_length: int = MAX_CHUNK_LENGTH) -> list[str]:
-    """Split markdown into chunks on paragraph/line/word boundaries.
+def chunk_text(text: str, max_length: int = MAX_CHUNK_LENGTH) -> list[str]:
+    """Split text into <=max_length chunks on paragraph/line/word boundaries.
 
-    Chunking the source markdown (not the converted HTML) guarantees we never split
-    an HTML tag or entity across two Telegram messages.
+    Generic (not markdown-specific) — the single splitter for both the HTML send path
+    (which chunks the SOURCE markdown before converting, so an HTML tag/entity is never
+    split across two Telegram messages) and the plain-text send path.
+
+    ``split_at <= 0`` (a boundary only at index 0, e.g. leading blank line before an
+    unbroken run longer than max_length) falls through to a hard split, and empty
+    chunks are filtered out — otherwise an empty chunk would be sent as an empty
+    message, which Telegram rejects with a non-parse 400 that aborts the send loop and
+    silently truncates the reply.
     """
     if len(text) <= max_length:
-        return [text]
+        return [text] if text else []
 
     chunks: list[str] = []
     remaining = text
@@ -112,14 +122,14 @@ def chunk_markdown(text: str, max_length: int = MAX_CHUNK_LENGTH) -> list[str]:
             break
 
         split_at = remaining.rfind("\n\n", 0, max_length)
-        if split_at == -1:
+        if split_at <= 0:
             split_at = remaining.rfind("\n", 0, max_length)
-        if split_at == -1:
+        if split_at <= 0:
             split_at = remaining.rfind(" ", 0, max_length)
-        if split_at == -1:
+        if split_at <= 0:
             split_at = max_length
 
         chunks.append(remaining[:split_at].rstrip())
         remaining = remaining[split_at:].lstrip()
 
-    return chunks
+    return [c for c in chunks if c]

@@ -51,13 +51,10 @@ def notify_linked_user(text: str) -> bool:
     if not text:
         return False
     try:
-        s = store.get_settings()
-        if not s.get("connected") or not s.get("linked"):
+        target = store.get_send_target()  # (token, chat_id) in one consistent read
+        if target is None:
             return False
-        token = store.get_bot_token()
-        chat_id = s.get("linked_chat_id")
-        if not token or not chat_id:
-            return False
+        token, chat_id = target
         client.send_text(chat_id, text, token)
         return True
     except client.TelegramError as e:
@@ -125,6 +122,12 @@ async def _handle_message(msg: dict) -> None:
             await _send_text(chat_id, _LINK_HELP, token)
         return
 
+    # Ignore non-text updates (photos, stickers, voice, service events): they carry no
+    # text, and feeding an empty message to the assistant would error and would also
+    # auto-deny a pending confirmation batch. Text-only for v1.
+    if not text:
+        return
+
     # Non-command: must come from the linked user in the linked chat.
     s = await asyncio.to_thread(store.get_settings)
     if not _is_authorized(s, chat_id, user_id):
@@ -187,20 +190,23 @@ async def _run_turn(settings: dict, token: str, user_text: str | None) -> None:
     if not chat_id:
         return
 
+    # A new user message cancels any still-open confirmation batch FIRST — before the
+    # provider check — so abandoned Approve/Deny buttons can't later execute a write the
+    # user has moved on from, even when no provider is configured. The pending batch
+    # lives on the existing conversation, so deny against that id directly.
+    if user_text is not None:
+        stale = settings.get("pending_msg_id")
+        stale_conv = settings.get("conversation_id")
+        if stale and stale_conv:
+            await _auto_deny_batch(stale_conv, stale)
+            await asyncio.to_thread(store.clear_pending_msg)
+
     provider = await asyncio.to_thread(get_ai_provider)
     if provider is None:
         await _send_text(chat_id, _NO_PROVIDER, token)
         return
 
     conv = await asyncio.to_thread(store.get_or_create_conversation)
-
-    # New user message while a prior confirmation batch is still open → auto-deny the
-    # stragglers so conversation history never carries an orphaned pending placeholder.
-    if user_text is not None:
-        stale = settings.get("pending_msg_id")
-        if stale:
-            await _auto_deny_batch(conv, stale)
-            await asyncio.to_thread(store.clear_pending_msg)
 
     registry = ToolRegistry()
     messages = [] if user_text is None else [{"role": "user", "content": user_text}]

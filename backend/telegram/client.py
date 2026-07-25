@@ -17,7 +17,7 @@ auth/rate/transport failures.
 
 import logging
 
-from .format import chunk_markdown, markdown_to_telegram_html
+from .format import chunk_text, markdown_to_telegram_html
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +134,7 @@ def send_text(chat_id: int | str, text: str, bot_token: str, reply_markup: dict 
     """
     if not bot_token or not text:
         return
-    chunks = _chunk_plain(text, MAX_TEXT_LENGTH)
+    chunks = chunk_text(text, MAX_TEXT_LENGTH)
     for i, chunk in enumerate(chunks):
         payload: dict = {"chat_id": chat_id, "text": chunk}
         # Attach the keyboard only to the final chunk.
@@ -152,7 +152,7 @@ def send_html(chat_id: int | str, markdown: str, bot_token: str, reply_markup: d
     """
     if not bot_token or not markdown:
         return
-    chunks = chunk_markdown(markdown)
+    chunks = chunk_text(markdown)
     for i, chunk in enumerate(chunks):
         payload: dict = {
             "chat_id": chat_id,
@@ -204,25 +204,3 @@ def edit_reply_markup(chat_id: int | str, message_id: int, bot_token: str,
         _post(bot_token, "editMessageReplyMarkup", payload, read_timeout=10.0)
     except TelegramError:
         logger.info("telegram editMessageReplyMarkup did not succeed (continuing)")
-
-
-def _chunk_plain(text: str, max_length: int) -> list[str]:
-    """Split plain text into <=max_length chunks on paragraph/line/word boundaries."""
-    if len(text) <= max_length:
-        return [text]
-    chunks: list[str] = []
-    remaining = text
-    while remaining:
-        if len(remaining) <= max_length:
-            chunks.append(remaining)
-            break
-        split_at = remaining.rfind("\n\n", 0, max_length)
-        if split_at == -1:
-            split_at = remaining.rfind("\n", 0, max_length)
-        if split_at == -1:
-            split_at = remaining.rfind(" ", 0, max_length)
-        if split_at == -1:
-            split_at = max_length
-        chunks.append(remaining[:split_at].rstrip())
-        remaining = remaining[split_at:].lstrip()
-    return chunks

@@ -19,7 +19,7 @@ import secrets
 from assistant.history import (
     conversation_exists,
     create_conversation,
-    is_pending_result,
+    is_unsettled_result,
 )
 from core.encryption import decrypt_value, encrypt_value
 from core.postgres import get_connection, pg_execute, pg_fetchone
@@ -57,6 +57,21 @@ def get_bot_token() -> str:
     if not row or not row.get("bot_token_enc"):
         return ""
     return decrypt_value(row["bot_token_enc"])
+
+
+def get_send_target() -> tuple[str, str] | None:
+    """Return ``(token, chat_id)`` for the linked user, or None if not connected/linked.
+
+    Reads token and chat_id in ONE row so a concurrent bot swap can't hand back one
+    bot's token paired with another's chat id (the connect() reset clears the link
+    atomically, so a mid-swap read yields either the old pair or no link at all).
+    """
+    row = pg_fetchone(
+        "SELECT bot_token_enc, linked_chat_id FROM telegram_settings WHERE id = 1"
+    )
+    if not row or not row.get("bot_token_enc") or not row.get("linked_chat_id"):
+        return None
+    return decrypt_value(row["bot_token_enc"]), row["linked_chat_id"]
 
 
 def connect(token: str, username: str) -> str:
@@ -220,7 +235,9 @@ def try_consume_batch(batch_msg_id: str) -> bool:
         tr = cur.fetchone()
         pending = 0
         if tr and tr[0]:
-            pending = sum(1 for r in tr[0] if is_pending_result(r.get("content")))
+            # `executing` counts as unsettled too — a write stuck mid-execution (a
+            # crash between claim and merge) must not let the continuation proceed.
+            pending = sum(1 for r in tr[0] if is_unsettled_result(r.get("content")))
         if pending == 0:
             cur.execute(
                 "UPDATE telegram_settings SET pending_msg_id = '', updated_at = now() WHERE id = 1"

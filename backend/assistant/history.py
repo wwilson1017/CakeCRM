@@ -57,6 +57,17 @@ def is_pending_result(content: str | None) -> bool:
     return _status_of(content) == PENDING_STATUS
 
 
+def is_unsettled_result(content: str | None) -> bool:
+    """True iff a stored result is still awaiting approval OR mid-execution.
+
+    Additive helper for the Telegram batch gate (issue #7): a write stuck in
+    ``executing`` — a crash between ``claim_pending_tool`` and the final
+    ``merge_tool_result`` — is not ``pending`` but is also NOT resolved, so a
+    continuation must treat it as not-yet-done rather than silently proceeding.
+    """
+    return _status_of(content) in (PENDING_STATUS, EXECUTING_STATUS)
+
+
 # ── Conversations ──────────────────────────────────────────────────────────
 
 def create_conversation() -> dict:

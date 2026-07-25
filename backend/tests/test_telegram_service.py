@@ -25,6 +25,7 @@ class Harness:
         self.pending_sets = []
         self.cleared = 0
         self.chat_calls = []          # messages passed to each engine.chat call
+        self.pending_tool_uses = []   # what list_pending_tool_uses returns (stale-batch tests)
         self._chat_scripts = []
         self._chat_idx = 0
         self._consume = iter(())
@@ -70,6 +71,10 @@ def _install(monkeypatch, h: Harness, *, chat_scripts=None, consume=None, provid
     fake_store = types.SimpleNamespace(
         get_settings=lambda: dict(h.settings),
         get_bot_token=lambda: ("TESTTOKEN" if h.settings.get("connected") else ""),
+        get_send_target=lambda: (
+            ("TESTTOKEN", h.settings["linked_chat_id"])
+            if h.settings.get("connected") and h.settings.get("linked") else None
+        ),
         get_or_create_conversation=lambda: "conv1",
         set_pending_msg=lambda m: (h.pending_sets.append(m), h.settings.__setitem__("pending_msg_id", m)),
         clear_pending_msg=lambda: (setattr_count(h), h.settings.__setitem__("pending_msg_id", "")),
@@ -90,7 +95,7 @@ def _install(monkeypatch, h: Harness, *, chat_scripts=None, consume=None, provid
     monkeypatch.setattr(service, "client", fake_client)
     monkeypatch.setattr(service, "get_ai_provider", lambda: h._provider)
     monkeypatch.setattr(service, "ToolRegistry", lambda: object())
-    monkeypatch.setattr(service, "list_pending_tool_uses", lambda conv, msg: [])
+    monkeypatch.setattr(service, "list_pending_tool_uses", lambda conv, msg: list(h.pending_tool_uses))
     return h
 
 
@@ -255,3 +260,129 @@ def test_notify_linked_user_false_when_disconnected(monkeypatch):
     h.settings.update(connected=False)
     _install(monkeypatch, h)
     assert service.notify_linked_user("anything") is False
+
+
+def _raise_tg(*a, **k):
+    raise real_client.TelegramError("boom", status=400)
+
+
+def _raise_generic(*a, **k):
+    raise RuntimeError("boom")
+
+
+def test_notify_linked_user_false_on_send_error(monkeypatch):
+    # The frozen #6 contract: never raises. A TelegramError from send → False.
+    h = Harness()
+    _install(monkeypatch, h)
+    monkeypatch.setattr(service.client, "send_text", _raise_tg)
+    assert service.notify_linked_user("hi") is False
+
+
+def test_notify_linked_user_false_on_unexpected_error(monkeypatch):
+    h = Harness()
+    _install(monkeypatch, h)
+    monkeypatch.setattr(service.client, "send_text", _raise_generic)
+    assert service.notify_linked_user("hi") is False
+
+
+# ── Non-text messages, error/edge turns, stale-batch cleanup ────────────────
+
+async def test_non_text_message_is_ignored(monkeypatch):
+    h = Harness()
+    _install(monkeypatch, h)
+    # A photo/sticker has no "text" field.
+    await service.handle_update({"message": {"chat": {"id": "chat1", "type": "private"},
+                                             "from": {"id": "user1", "first_name": "Alex"}}})
+    assert h.chat_calls == []   # no empty turn
+    assert h.sent == []         # and no spurious reply
+
+
+async def test_error_event_notifies_user(monkeypatch):
+    h = Harness()
+    _install(monkeypatch, h, chat_scripts=[[{"type": "error", "error": "provider exploded"}]])
+    await service.handle_update(_msg("hi"))
+    assert any("provider exploded" in t for t in _texts(h))
+
+
+async def test_engine_crash_notifies_user(monkeypatch):
+    h = Harness()
+    _install(monkeypatch, h)
+
+    async def boom(*a, **k):
+        raise RuntimeError("kaboom")
+        yield  # pragma: no cover — makes this an async generator
+
+    monkeypatch.setattr(service.engine, "chat", boom)
+    await service.handle_update(_msg("hi"))
+    assert any("unexpected error" in t.lower() for t in _texts(h))
+
+
+async def test_generator_without_done_flushes_buffer(monkeypatch):
+    h = Harness()
+    _install(monkeypatch, h, chat_scripts=[[{"type": "text", "text": "partial answer"}]])  # no 'done'
+    await service.handle_update(_msg("hi"))
+    assert ("html", "chat1", "partial answer", None) in h.sent
+
+
+async def test_new_message_auto_denies_stale_batch(monkeypatch):
+    h = Harness()
+    h.settings["pending_msg_id"] = "mOLD"
+    h.pending_tool_uses = ["tuA", "tuB"]
+    _install(monkeypatch, h, chat_scripts=[[{"type": "text", "text": "ok"}, {"type": "done"}]])
+    await service.handle_update(_msg("never mind, do this instead"))
+    assert ("conv1", "tuA", "deny", "mOLD") in h.resolve_calls
+    assert ("conv1", "tuB", "deny", "mOLD") in h.resolve_calls
+    assert h.cleared >= 1  # pending marker cleared before the new turn
+
+
+async def test_stale_batch_auto_denied_even_without_provider(monkeypatch):
+    # The reorder fix: a new message cancels abandoned buttons BEFORE the provider gate,
+    # so a disconnected provider can't leave a live Approve/Deny for an abandoned write.
+    h = Harness()
+    h.settings["pending_msg_id"] = "mOLD"
+    h.pending_tool_uses = ["tuA"]
+    _install(monkeypatch, h, provider=None)
+    await service.handle_update(_msg("never mind"))
+    assert ("conv1", "tuA", "deny", "mOLD") in h.resolve_calls  # denied despite no provider
+    assert h.chat_calls == []                                    # no turn ran
+    assert any("No AI provider" in t for t in _texts(h))
+
+
+async def test_bare_start_linked_greets(monkeypatch):
+    h = Harness()
+    _install(monkeypatch, h)
+    await service.handle_update(_msg("/start"))
+    assert any("linked" in t.lower() for t in _texts(h))
+    assert h.chat_calls == []
+
+
+async def test_bare_start_unlinked_shows_help(monkeypatch):
+    h = Harness()
+    h.settings.update(linked=False, linked_chat_id="", linked_user_id="")
+    _install(monkeypatch, h)
+    await service.handle_update(_msg("/start", user_id="stranger"))
+    assert any("don't recognize" in t for t in _texts(h))
+
+
+# ── Pure helpers ────────────────────────────────────────────────────────────
+
+def test_outcome_text_variants():
+    assert service._outcome_text("approve", {"result": {"ok": True}}) == "✅ Done."
+    assert service._outcome_text("deny", {"result": {"status": "denied_by_user"}}) == "❌ Denied."
+    assert service._outcome_text("approve", {"status": "already_resolved", "result": None}) == "Already handled."
+    assert service._outcome_text("approve", {"result": {"error": "nope"}}) == "⚠️ Action failed."
+
+
+def test_format_args_truncates_long_values():
+    out = service._format_args({"note": "x" * 400})
+    assert "..." in out and len(out) < 400
+
+
+def test_format_args_empty():
+    assert service._format_args({}) == ""
+
+
+def test_parse_sse():
+    assert service._parse_sse('data: {"type": "done"}\n\n') == {"type": "done"}
+    assert service._parse_sse("data: not json\n\n") is None
+    assert service._parse_sse("event: ping\n\n") is None
