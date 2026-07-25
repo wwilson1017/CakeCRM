@@ -379,9 +379,13 @@ export function useAssistantChat() {
         cardStatus = 'pending'; // resolved elsewhere but not yet finalized — stay pending
       } else if (rstatus === 'denied_by_user') {
         cardStatus = 'denied';
-      } else if (decision === 'approve' && resultErrored) {
-        // Approved, but the executor returned an error (e.g. Gmail disconnected).
-        // Show it as failed, not "Approved" (issue #8).
+      } else if (resultErrored) {
+        // The canonical outcome is an executor error (e.g. Gmail disconnected) —
+        // show it as failed, not "Approved" (issue #8). Independent of this
+        // request's decision: a deny that lost a race to an already-resolved
+        // errored approve returns that same canonical error via `already_resolved`,
+        // and a genuine deny never yields an error result (it returns a denied
+        // status, handled above), so this can't mislabel a real denial.
         cardStatus = 'failed';
       } else if (body?.status === 'already_resolved') {
         cardStatus = 'approved'; // resolved by a prior action and not a denial
