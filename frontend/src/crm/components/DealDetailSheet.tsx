@@ -6,6 +6,7 @@ import { mono, INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, ACCENT_INK, GOLD, SAGE
 import { modalOverlay, modalContent, mobileDragHandle, btnDanger } from '../styles';
 import { ActivityTimeline } from './ActivityTimeline';
 import { NotesThread } from './NotesThread';
+import { usePublishActiveRecord } from '../RecordContext';
 
 interface DealDetailSheetProps {
   deal: CrmDeal;
@@ -16,6 +17,11 @@ interface DealDetailSheetProps {
 }
 
 export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange }: DealDetailSheetProps) {
+  // Publish this deal as the open record while the sheet is mounted (issue #14).
+  // Deals have no route, so this IS the deal open/close signal for both Pipeline
+  // and Dashboard — no edits to either page.
+  usePublishActiveRecord('deal', deal.id, deal.title);
+
   // The pipeline passes a plain list-row deal (no activity). Fetch the detail so
   // the sheet can show the activity timeline alongside the chatter thread.
   const [activity, setActivity] = useState<CrmActivity[]>(deal.activity || []);
@@ -36,7 +42,10 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
   return (
     <div
       onClick={onClose}
-      style={modalOverlay(isMobile)}
+      // Lower ONLY this overlay below the assistant launcher button (z-40) so the
+      // drawer can be opened WITH deal context (the only time deal context exists);
+      // every other modalOverlay stays at 50 and correctly occludes the button (#14).
+      style={{ ...modalOverlay(isMobile), zIndex: 39 }}
     >
       <div
         onClick={e => e.stopPropagation()}

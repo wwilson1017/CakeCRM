@@ -23,10 +23,12 @@ class FakeProvider:
         self._i = 0
         self.captured_tools: list[list] = []
         self.captured_messages: list[list] = []
+        self.captured_system_prompts: list = []
 
     async def stream_turn(self, messages, tools, system_prompt):
         self.captured_tools.append(tools)
         self.captured_messages.append(messages)
+        self.captured_system_prompts.append(system_prompt)
         script = self._scripts[self._i] if self._i < len(self._scripts) else self._scripts[-1]
         self._i += 1
         for event in script:
@@ -505,3 +507,79 @@ async def test_wrap_up_stream_without_turn_complete_errors(store):
     ])
     events = await _run(prov, reg, [{"role": "user", "content": "add"}], tool_mode="normal")
     assert events[-1]["type"] == "error"
+
+
+# ── Record context injection (issue #14) ──────────────────────────────────────
+
+# Unique to build_context_note; the model never emits it in these scripted turns,
+# so finding it in a saved row would mean the note leaked into persisted history.
+_NOTE_MARK = "open in the CRM"
+
+
+@pytest.mark.asyncio
+async def test_context_reaches_volatile_prompt_and_is_never_persisted(store):
+    """The open-record note reaches the VOLATILE system prompt (so the static half
+    stays cacheable) but is NEVER written to any saved message, tool_call, or
+    tool_result — the non-persistence invariant."""
+    prov = FakeProvider([[{"type": "text", "text": "Hi"}, _complete()]])
+    events = await _run(
+        prov, Registry(), [{"role": "user", "content": "hello"}],
+        context={"record_type": "contact", "record_id": 7},
+    )
+    assert _types(events) == ["conversation_id", "text", "done"]
+    static, volatile = prov.captured_system_prompts[0]
+    assert _NOTE_MARK in volatile and "contact #7" in volatile and "crm_get_contact" in volatile
+    assert _NOTE_MARK not in static  # static stays byte-identical → cache preserved
+    # Non-persistence invariant: the note lives only in the per-request prompt.
+    for row in store.saved:
+        assert _NOTE_MARK not in (row.get("content") or "")
+        assert _NOTE_MARK not in json.dumps(row.get("tool_calls") or [])
+    for m in store.merges:
+        assert _NOTE_MARK not in (m.get("content") or "")
+
+
+@pytest.mark.asyncio
+async def test_static_prompt_byte_identical_with_and_without_context(store):
+    """The cacheable static half must not change whether or not context is present."""
+    prov_no = FakeProvider([[{"type": "text", "text": "Hi"}, _complete()]])
+    await _run(prov_no, Registry(), [{"role": "user", "content": "hi"}])
+    prov_ctx = FakeProvider([[{"type": "text", "text": "Hi"}, _complete()]])
+    await _run(prov_ctx, Registry(), [{"role": "user", "content": "hi"}],
+               context={"record_type": "deal", "record_id": 1})
+    assert prov_no.captured_system_prompts[0][0] == prov_ctx.captured_system_prompts[0][0]
+
+
+@pytest.mark.asyncio
+async def test_continuation_turn_carries_context(store):
+    """A continuation (empty messages + conversation_id) is a fresh request that
+    rebuilds the system prompt — context passed on it must reach the volatile half."""
+    conv = store.create_conversation()
+    prov = FakeProvider([[{"type": "text", "text": "Done."}, _complete()]])
+    events = await _run(
+        prov, Registry(), [], conversation_id=conv["id"],
+        context={"record_type": "deal", "record_id": 3},
+    )
+    assert _types(events)[-1] == "done"
+    _, volatile = prov.captured_system_prompts[0]
+    assert "deal #3" in volatile and "crm_get_deal" in volatile
+    for row in store.saved:
+        assert _NOTE_MARK not in (row.get("content") or "")
+
+
+@pytest.mark.asyncio
+async def test_no_context_no_note(store):
+    prov = FakeProvider([[{"type": "text", "text": "Hi"}, _complete()]])
+    await _run(prov, Registry(), [{"role": "user", "content": "hello"}])
+    _, volatile = prov.captured_system_prompts[0]
+    assert _NOTE_MARK not in volatile
+
+
+@pytest.mark.asyncio
+async def test_invalid_context_dropped_defensively(store):
+    """Defense in depth: an invalid context that somehow reaches the engine (past the
+    router's validation) is dropped — no note, no crash."""
+    prov = FakeProvider([[{"type": "text", "text": "Hi"}, _complete()]])
+    await _run(prov, Registry(), [{"role": "user", "content": "hi"}],
+               context={"record_type": "invoice", "record_id": 5})
+    _, volatile = prov.captured_system_prompts[0]
+    assert _NOTE_MARK not in volatile

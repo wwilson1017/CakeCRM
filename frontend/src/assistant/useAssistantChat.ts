@@ -12,6 +12,7 @@ import { useCallback, useRef, useState } from 'react';
 import { getToken, TOKEN_KEY } from '../core/auth/tokenUtils';
 import { toast } from '../shared/toast';
 import type {
+  ActiveRecordContext,
   ChatMessage,
   ContextUsage,
   ServerMessage,
@@ -96,7 +97,7 @@ function addConfirm(m: ChatMessage, evt: SSEEvent): ChatMessage {
   };
 }
 
-export function useAssistantChat() {
+export function useAssistantChat(recordContext?: ActiveRecordContext | null) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -110,6 +111,19 @@ export function useAssistantChat() {
   const userAbortedRef = useRef(false);
   const textBufRef = useRef<Record<string, string>>({});
   const rafRef = useRef<number | null>(null);
+
+  // Latest-value ref for the open CRM record. Written during render (idempotent)
+  // — the same stale-closure guard as convIdRef/toolModeRef, but with NO committed-
+  // render window: a send/continuation always reads the record open RIGHT NOW, so
+  // navigating deal → contact while the drawer is open updates the next turn.
+  const recordCtxRef = useRef<ActiveRecordContext | null>(null);
+  recordCtxRef.current = recordContext ?? null;
+
+  // Only type + id cross the wire — label is display-only (injection boundary).
+  const wireContext = useCallback((): { record_type: string; record_id: number } | undefined => {
+    const ctx = recordCtxRef.current;
+    return ctx ? { record_type: ctx.recordType, record_id: ctx.recordId } : undefined;
+  }, []);
 
   const commit = useCallback((next: ChatMessage[]) => {
     messagesRef.current = next;
@@ -312,6 +326,9 @@ export function useAssistantChat() {
       messages: [{ role: 'user', content: text }],
       conversation_id: convIdRef.current,
       tool_mode: toolModeRef.current,
+      // JSON.stringify drops an `undefined` value, so no key is added when no
+      // record is open — the wire shape stays back-compatible.
+      context: wireContext(),
     };
     if (files && files.length) {
       const fd = new FormData();
@@ -321,17 +338,25 @@ export function useAssistantChat() {
     } else {
       void runStream(JSON.stringify(payload), false, asstId);
     }
-  }, [runStream, startAssistant]);
+  }, [runStream, startAssistant, wireContext]);
 
   const continueTurn = useCallback(() => {
     if (!convIdRef.current || abortRef.current) return;
     const asstId = startAssistant([]);
+    // A continuation is a fresh HTTP request that rebuilds the system prompt, so it
+    // must carry the record open NOW (ref) — otherwise the post-confirm resumed turn
+    // silently loses the record context.
     void runStream(
-      JSON.stringify({ messages: [], conversation_id: convIdRef.current, tool_mode: toolModeRef.current }),
+      JSON.stringify({
+        messages: [],
+        conversation_id: convIdRef.current,
+        tool_mode: toolModeRef.current,
+        context: wireContext(),
+      }),
       false,
       asstId,
     );
-  }, [runStream, startAssistant]);
+  }, [runStream, startAssistant, wireContext]);
 
   const resolve = useCallback(async (msgId: string, toolUseId: string, decision: 'approve' | 'deny') => {
     const token = getToken();

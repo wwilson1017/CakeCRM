@@ -51,6 +51,38 @@ CONFIRMATION_NOTE = (
 )
 
 
+# Maps a validated record_type to the read tool the model should use for it. This
+# map is the ONLY source of the strings interpolated into the context note — the
+# note is NEVER built from client-supplied text (prompt-injection boundary, #14).
+_CONTEXT_TOOLS = {
+    "deal": ("crm_get_deal", "deal_id"),
+    "contact": ("crm_get_contact", "contact_id"),
+    "company": ("crm_get_company", "company_id"),
+}
+
+
+def build_context_note(record_type, record_id) -> str | None:
+    """Server-constructed volatile sentence for the CRM record the user has open.
+
+    Defense in depth behind the router's Pydantic validation (#14): anything that
+    is not a known record_type or a positive (non-bool) int returns None. The
+    sentence is only ever assembled from the hardcoded template, the enum-derived
+    tool name, and the validated integer id — never from client free text.
+    """
+    if not isinstance(record_type, str) or record_type not in _CONTEXT_TOOLS:
+        return None
+    # bool is an int subclass in Python, so exclude it explicitly.
+    if isinstance(record_id, bool) or not isinstance(record_id, int) or record_id <= 0:
+        return None
+    tool, arg = _CONTEXT_TOOLS[record_type]
+    return (
+        f"The user currently has {record_type} #{record_id} open in the CRM. "
+        f'When they say "this {record_type}" or refer to the open record, they mean '
+        f"that one — use the {tool} tool ({arg}={record_id}) to fetch its details "
+        f"when needed."
+    )
+
+
 def get_identity() -> dict:
     """Return the identity singleton, resolving the default personality.
 
@@ -85,11 +117,16 @@ def update_identity(name: str | None = None, personality: str | None = None) -> 
     return get_identity()
 
 
-def build_system_prompt(identity: dict) -> tuple[str, str]:
+def build_system_prompt(identity: dict, context: dict | None = None) -> tuple[str, str]:
     """Build the ``(static, volatile)`` system prompt for stream_turn().
 
     Static: personality (name-interpolated) + confirmation note + upload-safety
-    instruction (cacheable). Volatile: the current date/time (changes every turn).
+    instruction (cacheable — MUST stay byte-identical whether or not a record
+    context is present, so Anthropic's prompt cache is never poisoned). Volatile:
+    the current date/time (changes every turn), plus — when a validated CRM record
+    context is supplied (#14) — a server-built one-sentence note about the open
+    record. Context is per-turn only: it lives solely in this system prompt and is
+    never persisted to history.
     """
     name = identity.get("name") or DEFAULT_NAME
     personality = (identity.get("personality") or DEFAULT_PERSONALITY).replace("{name}", name)
@@ -99,4 +136,8 @@ def build_system_prompt(identity: dict) -> tuple[str, str]:
         delimiters.UPLOAD_SAFETY_INSTRUCTION,
     ])
     volatile = f"Current date and time: {datetime.now().astimezone().strftime('%A, %B %d, %Y %I:%M %p %Z')}"
+    if context:
+        note = build_context_note(context.get("record_type"), context.get("record_id"))
+        if note:
+            volatile = f"{volatile}\n\n{note}"
     return static, volatile

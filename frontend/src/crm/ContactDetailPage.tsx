@@ -7,6 +7,7 @@ import { DealForm } from './components/DealForm';
 import { TaskForm } from './components/TaskForm';
 import { ActivityTimeline } from './components/ActivityTimeline';
 import { NotesThread } from './components/NotesThread';
+import { usePublishActiveRecord } from './RecordContext';
 import { PriorityBadge } from './components/badges';
 import { STAGE_COLORS } from './constants';
 import { IconArrowLeft } from '../shared/icons';
@@ -36,6 +37,11 @@ export function ContactDetailPage() {
   const [logActivity, setLogActivity] = useState('');
   const [logNote, setLogNote] = useState('');
   const [logging, setLogging] = useState(false);
+
+  // Publish this contact as the open record for the assistant drawer (issue #14).
+  // type+id come from the route param (always current, even mid-load); the loaded
+  // name is display-only.
+  usePublishActiveRecord('contact', id ? Number(id) : null, contact?.name);
 
   const loadIdRef = useRef(0);
   const load = useCallback(async () => {

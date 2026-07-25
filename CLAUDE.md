@@ -80,7 +80,13 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   at `/crm/settings`, consuming the existing `/api/branding`; the accent is applied
   app-wide by setting the `--brand-color` CSS variable (`index.css` routes the whole
   theme's accent through it), so the CRM stays fully usable — and re-themable — with
-  zero AI keys.
+  zero AI keys. The launcher opens a **context-aware slide-over drawer** (#14): the
+  open deal/contact/company is published through a shared record context
+  (`frontend/src/crm/RecordContext.tsx`, set by the detail pages + `DealDetailSheet`)
+  and injected **per-turn** into the assistant's **volatile** system prompt as a
+  server-built sentence from a validated `{record_type, record_id}`
+  (`assistant/router.ChatContext` → `identity.build_context_note`) — never persisted,
+  never client free text — with record-aware quick actions rendered in the drawer.
 - **API keys are entered in-app, encrypted at rest** (Fernet; key from env →
   OS keychain → file fallback) — never as env vars.
 - **Backend tests** live in `backend/tests/` (config in `backend/pytest.ini`,

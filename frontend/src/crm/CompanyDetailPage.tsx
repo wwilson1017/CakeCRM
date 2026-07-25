@@ -4,6 +4,7 @@ import { api } from '../core/api/client';
 import type { CrmCompany } from '../core/types';
 import { CompanyForm } from './components/CompanyForm';
 import { ActivityTimeline } from './components/ActivityTimeline';
+import { usePublishActiveRecord } from './RecordContext';
 import { StatusBadge } from './components/badges';
 import { STAGE_COLORS } from './constants';
 import { IconArrowLeft } from '../shared/icons';
@@ -27,6 +28,10 @@ export function CompanyDetailPage() {
   const [company, setCompany] = useState<CrmCompany | null>(null);
   const [loading, setLoading] = useState(true);
   const [showEdit, setShowEdit] = useState(false);
+
+  // Publish this company as the open record for the assistant drawer (issue #14).
+  // type+id come from the route param (always current, even mid-load).
+  usePublishActiveRecord('company', id ? Number(id) : null, company?.name);
 
   const loadIdRef = useRef(0);
   const load = useCallback(async () => {
