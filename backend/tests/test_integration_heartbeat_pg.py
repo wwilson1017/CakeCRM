@@ -1,0 +1,155 @@
+"""Real-Postgres integration for issue #6 — proves what mocks can't: the migration
+applies, the DB constraints hold (VAPID enc CHECK, the recurring-successor unique
+index, the active-alert partial unique index), the atomic reminder claim actually
+prevents a double-fire under concurrency, and VAPID keys persist once.
+
+Marked ``integration`` and excluded from the default no-DB run. Admin DSN via
+TEST_ADMIN_DSN (defaults to the local dev container).
+"""
+
+import os
+import threading
+
+import psycopg2
+import pytest
+
+pytestmark = pytest.mark.integration
+
+ADMIN_DSN = os.getenv("TEST_ADMIN_DSN", "postgresql://cake:cake_dev@localhost:5432/cake")
+
+
+@pytest.fixture(scope="module")
+def pg_db():
+    from core import postgres
+
+    dbname = f"cakecrm_it6_{os.getpid()}"
+    admin = psycopg2.connect(ADMIN_DSN)
+    admin.autocommit = True
+    with admin.cursor() as cur:
+        cur.execute(f'DROP DATABASE IF EXISTS "{dbname}"')
+        cur.execute(f'CREATE DATABASE "{dbname}"')
+    admin.close()
+
+    dsn = ADMIN_DSN.rsplit("/", 1)[0] + f"/{dbname}"
+    prev = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = dsn
+    postgres.close_pool()
+    postgres.init_pool()
+    postgres.run_migrations()
+    yield dsn
+
+    postgres.close_pool()
+    if prev is not None:
+        os.environ["DATABASE_URL"] = prev
+    else:
+        os.environ.pop("DATABASE_URL", None)
+    admin = psycopg2.connect(ADMIN_DSN)
+    admin.autocommit = True
+    with admin.cursor() as cur:
+        cur.execute(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+            "WHERE datname = %s AND pid <> pg_backend_pid()", (dbname,))
+        cur.execute(f'DROP DATABASE IF EXISTS "{dbname}"')
+    admin.close()
+
+
+@pytest.fixture(autouse=True)
+def _clean(pg_db):
+    from core.postgres import pg_execute
+    pg_execute("TRUNCATE reminders, notifications, push_subscriptions, alerts, vapid_keys")
+    pg_execute("UPDATE heartbeat_state SET last_turn_at = NULL, consecutive_errors = 0, "
+               "last_failure_alert_at = NULL WHERE id = 1")
+    yield
+
+
+def test_migration_created_tables_and_singletons(pg_db):
+    from core.postgres import pg_fetchall, pg_fetchone
+    names = {r["table_name"] for r in pg_fetchall(
+        "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")}
+    assert {"reminders", "notifications", "push_subscriptions", "alerts",
+            "vapid_keys", "heartbeat_state"} <= names
+    assert pg_fetchone("SELECT id FROM heartbeat_state WHERE id = 1") is not None
+
+
+def test_vapid_check_rejects_plaintext(pg_db):
+    from core.postgres import pg_execute
+    with pytest.raises(psycopg2.Error):
+        pg_execute("INSERT INTO vapid_keys (id, public_key, private_key_enc) VALUES (1, 'p', 'plaintext')")
+
+
+def test_recurring_successor_unique_index(pg_db):
+    from datetime import datetime, timezone
+
+    from psycopg2.extras import Json
+
+    from core.postgres import pg_execute
+    due = datetime(2026, 8, 1, 9, 0, tzinfo=timezone.utc)
+    rule = Json({"type": "daily"})
+    pg_execute("INSERT INTO reminders (id, message, due_at, recurrence_rule, series_id) "
+               "VALUES ('a', 'm', %s, %s, 's1')", (due, rule))
+    # Same (series_id, due_at) → the unique index blocks a duplicate successor.
+    n = pg_execute("INSERT INTO reminders (id, message, due_at, recurrence_rule, series_id) "
+                   "VALUES ('b', 'm', %s, %s, 's1') "
+                   "ON CONFLICT (series_id, due_at) WHERE series_id IS NOT NULL DO NOTHING",
+                   (due, rule))
+    assert n == 0
+
+
+def test_alert_dedup_partial_unique(pg_db):
+    from alerts import service
+    from core.postgres import pg_fetchone
+    service.create_alert("Heartbeat failing", "1", source="heartbeat", source_id="heartbeat")
+    service.create_alert("Heartbeat failing", "2", source="heartbeat", source_id="heartbeat")
+    row = pg_fetchone("SELECT count(*) AS n FROM alerts WHERE status = 'active'")
+    assert row["n"] == 1                       # deduped to one active row
+    row = pg_fetchone("SELECT message FROM alerts WHERE status = 'active'")
+    assert row["message"] == "2"               # upsert refreshed the message
+
+
+def test_atomic_claim_prevents_double_fire(pg_db):
+    from datetime import datetime, timezone
+
+    from core.postgres import pg_execute
+    from reminders import service
+    due = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc).isoformat()
+    pg_execute("INSERT INTO reminders (id, message, due_at, status) VALUES ('r1', 'm', %s, 'pending')",
+               (datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc),))
+    reminder = {"id": "r1", "message": "m", "context": "", "due_at": due,
+                "recurrence_rule": None, "series_id": None}
+
+    results = []
+    barrier = threading.Barrier(2)
+
+    def worker():
+        barrier.wait()
+        results.append(service.claim_reminder(reminder))
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(results) == [False, True]     # exactly one claim wins
+
+
+def test_vapid_persist_once(pg_db, monkeypatch):
+    from core.postgres import pg_fetchone
+    from notifications import vapid
+    first = vapid.get_vapid_keys()
+    second = vapid.get_vapid_keys()
+    assert first == second                      # stable across calls
+    assert pg_fetchone("SELECT count(*) AS n FROM vapid_keys")["n"] == 1
+
+
+def test_due_reminders_uses_timestamp_comparison(pg_db):
+    from datetime import datetime, timedelta, timezone
+
+    from core.postgres import pg_execute
+    from reminders import service
+    past = datetime.now(timezone.utc) - timedelta(minutes=5)
+    future = datetime.now(timezone.utc) + timedelta(hours=1)
+    pg_execute("INSERT INTO reminders (id, message, due_at, status) VALUES ('p', 'past', %s, 'pending')", (past,))
+    pg_execute("INSERT INTO reminders (id, message, due_at, status) VALUES ('f', 'future', %s, 'pending')", (future,))
+    due = service.get_due_reminders()
+    ids = {r["id"] for r in due}
+    assert "p" in ids and "f" not in ids
