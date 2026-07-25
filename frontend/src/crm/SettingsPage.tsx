@@ -27,6 +27,7 @@ import {
   pagePadding, pageHeading, sectionHeading, cardStyle, btnPrimary, btnSecondary, btnDanger,
 } from './styles';
 import { BrandLogo } from './components/BrandLogo';
+import { TelegramSettings } from './components/TelegramSettings';
 
 // SVG is excluded: all logos are stored/served as image/png, and browsers don't
 // content-sniff SVG, so an SVG would silently never render. (Serving real SVG from
@@ -206,6 +207,8 @@ export function SettingsPage() {
           >{saving ? 'Saving…' : 'Save branding'}</button>
         </div>
       </div>
+
+      <TelegramSettings />
     </div>
   );
 }

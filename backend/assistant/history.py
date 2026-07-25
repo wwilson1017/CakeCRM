@@ -257,6 +257,28 @@ def get_tool_result(conversation_id: str, tool_use_id: str, msg_id: str | None =
     return None
 
 
+def list_pending_tool_uses(conversation_id: str, msg_id: str) -> list[str]:
+    """Return the tool_use_ids on one message whose result is still pending approval.
+
+    Additive helper for the Telegram integration (issue #7): a single assistant
+    iteration can request several writes, each persisted as a ``pending_user_approval``
+    placeholder on the same message. The Telegram confirm flow uses this to know when a
+    batch is fully resolved (continue only once the list is empty) and to auto-deny any
+    stragglers when a new user message arrives mid-confirmation. Read-only; no lock.
+    """
+    row = pg_fetchone(
+        "SELECT tool_results FROM assistant_messages WHERE id = %s AND conversation_id = %s",
+        (msg_id, conversation_id),
+    )
+    if not row:
+        return []
+    return [
+        r.get("tool_use_id")
+        for r in (row.get("tool_results") or [])
+        if r.get("tool_use_id") and is_pending_result(r.get("content"))
+    ]
+
+
 def claim_pending_tool(conversation_id: str, tool_use_id: str, msg_id: str | None = None) -> dict | None:
     """Atomically claim a pending write awaiting user approval.
 
