@@ -10,6 +10,7 @@ import inspect
 
 from memory import service, tools
 from memory.tools import MEMORY_TOOL_DEFS, MEMORY_TOOL_EXECUTORS, get_memory_tools
+from memory.types import MEMORY_TYPES
 
 _WRITE_TOOLS = {"memory_add_fact", "memory_invalidate_fact"}
 _READ_TOOLS = {"memory_search", "memory_query_facts"}
@@ -87,3 +88,16 @@ def test_search_executor_shapes_result(monkeypatch):
 def test_query_facts_executor_shapes_result(monkeypatch):
     monkeypatch.setattr(service, "query_facts", lambda **k: [{"id": 1}])
     assert tools.memory_query_facts() == {"facts": [{"id": 1}], "total": 1}
+
+
+def test_add_fact_schema_exposes_type_enum_and_valid_from():
+    props = {d["name"]: d for d in MEMORY_TOOL_DEFS}["memory_add_fact"]["input_schema"]["properties"]
+    assert set(props["memory_type"]["enum"]) == set(MEMORY_TYPES)
+    assert "valid_from" in props
+
+
+def test_add_fact_executor_forwards_valid_from(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(service, "add_fact", lambda **kw: captured.update(kw) or {"ok": True})
+    tools.memory_add_fact(subject="D", predicate="p", object="o", valid_from="2026-01-01")
+    assert captured["valid_from"] == "2026-01-01"

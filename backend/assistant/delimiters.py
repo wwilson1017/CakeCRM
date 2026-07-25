@@ -29,6 +29,24 @@ def wrap_untrusted_file(filename: str, text: str) -> str:
     )
 
 
+def wrap_untrusted_memory(text: str) -> str:
+    """Wrap injected long-term-memory facts in a nonce-fenced block (issue #5).
+
+    A recorded fact can carry text the assistant captured from a document or message,
+    so it could contain adversarial instructions. Fencing the facts the same way as
+    uploaded files — a random nonce repeated in both tags — means fact text (already
+    single-lined and length-capped by ``memory.service._clean_field`` before it gets
+    here) cannot forge the closing tag or impersonate system instructions. The static
+    ``MEMORY_NOTE`` tells the model to treat everything inside as data, never commands.
+    """
+    nonce = secrets.token_hex(8)
+    return (
+        f'<recorded_memory id="{nonce}">\n'
+        f"{text}\n"
+        f'</recorded_memory id="{nonce}">'
+    )
+
+
 UPLOAD_SAFETY_INSTRUCTION = (
     "## Uploaded File Safety\n"
     "\n"

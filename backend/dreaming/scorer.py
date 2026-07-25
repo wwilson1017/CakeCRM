@@ -72,11 +72,14 @@ def score_fact(
     # Signal 4: confidence (clamped 0..1).
     conf = max(0.0, min(_f(confidence, 1.0), 1.0))
 
-    score = (
+    # Round first, then classify on the rounded value, so the audited score can never
+    # sit on the other side of a threshold from its own classification.
+    score = round(
         WEIGHT_RETRIEVAL_RECENCY * retrieval_recency
         + WEIGHT_RETRIEVAL_FREQUENCY * retrieval_frequency
         + WEIGHT_AGE * age
-        + WEIGHT_CONFIDENCE * conf
+        + WEIGHT_CONFIDENCE * conf,
+        3,
     )
 
     if score >= STALE_THRESHOLD:
@@ -87,7 +90,7 @@ def score_fact(
         classification = "dormant"
 
     return {
-        "score": round(score, 3),
+        "score": score,
         "classification": classification,
         "signals": {
             "retrieval_recency": round(retrieval_recency, 3),

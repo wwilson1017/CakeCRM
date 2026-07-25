@@ -13,10 +13,11 @@ from memory import context
 @pytest.fixture
 def svc(monkeypatch):
     """Install stub search_facts/query_facts/track_retrieval_for and record tracked ids."""
-    state = {"search": [], "backfill": [], "tracked": None, "search_calls": 0}
+    state = {"search": [], "backfill": [], "tracked": None, "search_calls": 0, "last_query": None}
 
     def fake_search(query, limit=20, track_retrieval=True, **kw):
         state["search_calls"] += 1
+        state["last_query"] = query
         return list(state["search"])
 
     def fake_query(limit=50, track_retrieval=True, **kw):
@@ -36,10 +37,10 @@ def _fact(fid, subject="Dana", predicate="works at", object_="Acme", memory_type
             "memory_type": memory_type, "valid_from": valid_from}
 
 
-def test_renders_matches_as_single_line_entries(svc):
+def test_renders_matches_inside_a_nonce_fence(svc):
     svc["search"] = [_fact(1, memory_type="person")]
     out = context.build_memory_context("tell me about Dana at Acme")
-    assert "## Long-term memory" in out
+    assert "<recorded_memory id=" in out and "</recorded_memory id=" in out
     assert "- [person] Dana — works at — Acme (since 2026-07-01)" in out
 
 
@@ -92,9 +93,15 @@ def test_service_failure_returns_empty(monkeypatch):
     assert context.build_memory_context("x") == ""
 
 
-def test_match_query_or_joins_distinct_tokens():
-    q = context._match_query("Dana Dana at ACME corp!!!")
-    parts = q.split(" or ")
-    assert "dana" in parts and "acme" in parts and "corp" in parts
-    assert parts.count("dana") == 1     # distinct
-    assert "at" not in parts            # too short (<3)
+def test_search_receives_bounded_raw_user_text(svc):
+    # Tokenization now lives in service.search_facts; the builder just passes the
+    # (length-bounded) raw user text through.
+    svc["search"] = [_fact(1)]
+    context.build_memory_context("tell me about Dana at Acme corp")
+    assert svc["last_query"] == "tell me about Dana at Acme corp"
+
+
+def test_long_user_text_bounded_before_search(svc):
+    svc["search"] = [_fact(1)]
+    context.build_memory_context("word " * 5000)
+    assert len(svc["last_query"]) <= context._USER_TEXT_CAP

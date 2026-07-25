@@ -56,9 +56,12 @@ _ARCHIVE = """
     RETURNING id
 """
 
+# finished_at uses clock_timestamp() (real completion time), NOT now() (which is the
+# transaction START time) — a cycle that begins at 02:59 and commits after 03:00 must
+# record finished_at > 03:00 so the slot-based due-guard sees it ran for the new slot.
 _INSERT_RUN = """
     INSERT INTO dreaming_runs (finished_at, status, facts_scored, facts_archived, details, duration_ms)
-    VALUES (now(), 'ok', %s, %s, %s::jsonb, %s)
+    VALUES (clock_timestamp(), 'ok', %s, %s, %s::jsonb, %s)
 """
 
 
@@ -67,6 +70,10 @@ def _run_cycle(conn) -> dict:
     start = time.monotonic()
     cur = conn.cursor()
 
+    # Bound the row-lock wait so a stalled concurrent transaction holding a memory-row
+    # lock can't hang the FOR UPDATE (and thus block scheduler shutdown / the pool
+    # close) indefinitely — a timeout raises, the cycle rolls back and is retried next run.
+    cur.execute("SET LOCAL lock_timeout = '10s'")
     cur.execute(_SELECT_LIVE)
     rows = cur.fetchall()
 
@@ -122,7 +129,7 @@ def _record_error(message: str) -> None:
         with get_connection() as conn:
             conn.cursor().execute(
                 "INSERT INTO dreaming_runs (finished_at, status, facts_scored, facts_archived, error, duration_ms) "
-                "VALUES (now(), 'error', 0, 0, %s, 0)",
+                "VALUES (clock_timestamp(), 'error', 0, 0, %s, 0)",
                 (str(message)[:2000],),
             )
     except Exception:

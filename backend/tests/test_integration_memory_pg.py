@@ -195,7 +195,7 @@ def test_build_memory_context_surfaces_stored_fact(pg_db):
     from memory import context, service
     service.add_fact("Dana", "works at", "Acme", memory_type="person")
     block = context.build_memory_context("what do we know about dana")
-    assert "## Long-term memory" in block
+    assert "<recorded_memory id=" in block   # nonce-fenced
     assert "Dana" in block and "Acme" in block
 
 
@@ -244,3 +244,35 @@ def test_error_run_does_not_suppress_next_due(pg_db, monkeypatch):
     monkeypatch.undo()                               # remove the failure
     second = processor.run_dreaming_if_due()         # error row must NOT count as 'ok' → still due
     assert second is not None and second.get("status") != "error"
+
+
+def test_natural_language_search_matches_via_or(pg_db):
+    from memory import service
+    service.add_fact("Dana Chen", "works at", "Acme Corp", memory_type="person")
+    # A conversational query must still match (OR-of-keywords, not AND-everything).
+    assert any(h["subject"] == "Dana Chen" for h in service.search_facts("what do we know about Dana"))
+
+
+def test_short_and_unicode_entities_are_searchable(pg_db):
+    from memory import service
+    service.add_fact("Li", "leads", "US sales")
+    assert service.search_facts("Li")      # len-2 name findable
+    assert service.search_facts("US")      # len-2 acronym findable
+
+
+def test_invalidate_is_idempotent(pg_db):
+    from memory import service
+    f = service.add_fact("Switch Co", "status", "warm", valid_from="2026-01-01")
+    first = service.invalidate_fact(f["id"], valid_to="2026-03-01")   # >= valid_from
+    assert first["valid_to"] == "2026-03-01"
+    # Re-invalidating must NOT rewrite the earlier valid_to forward (history integrity).
+    again = service.invalidate_fact(f["id"])
+    assert again.get("already_invalidated") is True
+    assert again["valid_to"] == "2026-03-01"
+
+
+def test_add_fact_valid_from_supports_as_of(pg_db):
+    from memory import service
+    service.add_fact("Nadia", "role", "VP", valid_from="2026-01-01")
+    assert not any(x["subject"] == "Nadia" for x in service.query_facts(as_of="2025-12-01"))
+    assert any(x["subject"] == "Nadia" for x in service.query_facts(as_of="2026-02-01"))

@@ -22,6 +22,11 @@ source here — and the bare names gain the ``memory_`` prefix.
 from collections.abc import Callable
 
 from memory import service
+from memory.types import MEMORY_TYPES
+
+# Sorted for a stable schema enum the model picks from (also keeps typos from silently
+# stripping tier-1 archival protection — see memory/service.add_fact).
+_MEMORY_TYPE_VALUES = sorted(MEMORY_TYPES)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Tool Definitions (schema only — sent to the AI provider)
@@ -41,7 +46,7 @@ MEMORY_TOOL_DEFS: list[dict] = [
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Search query (natural language or keywords)"},
-                "memory_type": {"type": "string", "description": "Optional filter by memory type (decision, person, preference, etc.)"},
+                "memory_type": {"type": "string", "enum": _MEMORY_TYPE_VALUES, "description": "Optional filter by memory type"},
                 "date_from": {"type": "string", "description": "Optional start date (YYYY-MM-DD), filters by valid_from"},
                 "date_to": {"type": "string", "description": "Optional end date (YYYY-MM-DD)"},
                 "limit": {"type": "integer", "description": "Max results (default 20, max 100)"},
@@ -65,8 +70,10 @@ MEMORY_TOOL_DEFS: list[dict] = [
                 "subject": {"type": "string", "description": "The entity (e.g. 'Dana Chen')"},
                 "predicate": {"type": "string", "description": "The relationship (e.g. 'works at')"},
                 "object": {"type": "string", "description": "The value (e.g. 'Acme Corp')"},
-                "memory_type": {"type": "string", "description": "Optional type: decision, preference, person, insight, reference, etc."},
+                "memory_type": {"type": "string", "enum": _MEMORY_TYPE_VALUES,
+                                "description": "Optional durability type (e.g. decision/preference are never auto-archived)"},
                 "confidence": {"type": "number", "description": "Confidence 0.0-1.0 (default 1.0)"},
+                "valid_from": {"type": "string", "description": "Date the fact became true (YYYY-MM-DD); defaults to today. Set this when recording a fact you learned about the past."},
             },
             "required": ["subject", "predicate", "object"],
         },
@@ -86,7 +93,7 @@ MEMORY_TOOL_DEFS: list[dict] = [
                 "subject": {"type": "string", "description": "Filter by subject (partial match)"},
                 "predicate": {"type": "string", "description": "Filter by predicate (partial match)"},
                 "as_of": {"type": "string", "description": "Point-in-time view (YYYY-MM-DD)"},
-                "memory_type": {"type": "string", "description": "Filter by memory type"},
+                "memory_type": {"type": "string", "enum": _MEMORY_TYPE_VALUES, "description": "Filter by memory type"},
                 "include_expired": {"type": "boolean", "description": "Include invalidated facts (default false)"},
                 "include_archived": {"type": "boolean", "description": "Include auto-archived dormant facts (default false)"},
                 "limit": {"type": "integer", "description": "Max results (default 50)"},
@@ -139,10 +146,11 @@ def memory_add_fact(
     object: str,  # provider-facing name must match the schema property (registry calls fn(**args))
     memory_type: str | None = None,
     confidence: float = 1.0,
+    valid_from: str | None = None,
 ) -> dict:
     return service.add_fact(
         subject=subject, predicate=predicate, object_=object,
-        memory_type=memory_type, confidence=confidence,
+        memory_type=memory_type, confidence=confidence, valid_from=valid_from,
     )
 
 

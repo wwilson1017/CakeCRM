@@ -99,13 +99,17 @@ async def lifespan(app: FastAPI):
             )
 
     logger.info("CakeCRM backend started. Data dir: %s", data_root)
-    yield
-
-    # Stop the dreaming scheduler BEFORE closing the pool — stop_scheduler awaits any
-    # in-flight cycle so the pool is never pulled out from under a running cycle.
-    await stop_scheduler()
-    postgres.close_pool()
-    logger.info("CakeCRM backend shutting down.")
+    try:
+        yield
+    finally:
+        # Shutdown cleanup MUST run even if an exception/cancellation propagates through
+        # the lifespan, so the scheduler stops and the pool closes rather than leaking.
+        # Stop the dreaming scheduler BEFORE closing the pool — stop_scheduler awaits any
+        # in-flight cycle so the pool is never pulled out from under a running cycle.
+        # (Sibling lifespan tasks — e.g. #7's telegram poller — stop here too, keep-both.)
+        await stop_scheduler()
+        postgres.close_pool()
+        logger.info("CakeCRM backend shutting down.")
 
 
 app = FastAPI(

@@ -79,12 +79,25 @@ def test_add_fact_single_lines_and_caps_fields(rec):
     assert len(obj) == 500                       # capped
 
 
-def test_add_fact_clamps_confidence_and_validates_type(rec):
+def test_add_fact_clamps_confidence_and_stores_valid_type(rec):
     r = rec(fetchone={"id": 1})
-    service.add_fact("s", "p", "o", confidence=5.0, memory_type="BOGUS")
+    service.add_fact("s", "p", "o", confidence=5.0, memory_type="person")
     params = r.last_params()
-    assert params[6] == 1.0        # confidence clamped to 1.0
-    assert params[7] is None       # invalid memory_type → NULL
+    assert params[6] == 1.0            # confidence clamped to 1.0
+    assert params[7] == "person"       # valid memory_type stored
+
+
+def test_add_fact_rejects_invalid_memory_type_before_db(rec):
+    r = rec(fetchone={"id": 1})
+    out = service.add_fact("s", "p", "o", memory_type="decison")  # typo
+    assert "error" in out and "memory_type must be one of" in out["error"]
+    assert r.calls == []   # rejected before INSERT — a typo can't silently strip tier-1
+
+
+def test_add_fact_rejects_malformed_valid_from(rec):
+    r = rec(fetchone={"id": 1})
+    assert "error" in service.add_fact("s", "p", "o", valid_from="not-a-date")
+    assert r.calls == []
 
 
 # ── query_facts ─────────────────────────────────────────────────────────────────
@@ -140,14 +153,28 @@ def test_search_blank_query_hits_no_db(rec):
     assert r.calls == []
 
 
-def test_search_uses_websearch_tsquery_simple_parameterized(rec):
+def test_search_uses_to_tsquery_simple_with_or_terms(rec):
     r = rec(fetchall=[])
     service.search_facts("dana acme")
     sql = r.last_sql()
-    assert "websearch_to_tsquery('simple', %s)" in sql
+    assert "to_tsquery('simple', %s)" in sql
+    assert "websearch_to_tsquery" not in sql
     assert "search_tsv @@ q" in sql
     assert "valid_to IS NULL AND archived_at IS NULL" in sql
-    assert r.last_params()[0] == "dana acme"   # query is a bound param, never interpolated
+    assert r.last_params()[0] == "dana | acme"   # OR-of-keywords, bound param
+
+
+def test_or_tsquery_distinct_unicode_terms_len2():
+    assert service._or_tsquery("Dana DANA Acme") == "dana | acme"   # deduped
+    assert service._or_tsquery("Li US IT") == "li | us | it"        # len-2 entities kept
+    assert service._or_tsquery("José") == "josé"                     # unicode word chars
+    assert service._or_tsquery("&|!()") == ""                        # no usable terms
+
+
+def test_search_all_punctuation_hits_no_db(rec):
+    r = rec(fetchall=[{"id": 1}])
+    assert service.search_facts("&|!()") == []   # tokenizes to nothing → no DB call
+    assert r.calls == []
 
 
 def test_search_query_is_length_capped(rec):
