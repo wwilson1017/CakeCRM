@@ -34,7 +34,6 @@ export function PipelinePage() {
   const [showCreate, setShowCreate] = useState(false);
   const [editDeal, setEditDeal] = useState<CrmDeal | null>(null);
   const [selectedDeal, setSelectedDeal] = useState<CrmDeal | null>(null);
-  const [moving, setMoving] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const isMobile = useIsMobile();
 
@@ -52,63 +51,57 @@ export function PipelinePage() {
 
   useEffect(() => { queueMicrotask(load); }, [load]);
 
-  // Persist a stage change and optimistically fold it into `data` so column
-  // counts/totals refresh without a spinner rebuild. Uses the PUT response (the
-  // canonical deal incl. new updated_at + joined contact/company names) and
-  // moves it to the front so grouped order matches a future updated_at-DESC
-  // reload. Throws on failure — the caller decides how to react.
-  const persistStageChange = useCallback(async (deal: CrmDeal, stage: string): Promise<CrmDeal> => {
-    const updated = await api<CrmDeal>(`/api/crm/deals/${deal.id}`, {
-      method: 'PUT', body: JSON.stringify({ stage }),
-    });
-    const merged = { ...deal, ...updated };
+  // `data` is the single source of truth for the board. A stage change is applied
+  // to it optimistically — the deal is re-staged and moved to the front (mirroring
+  // the server's updated_at-DESC order) — so the card, column counts, and totals
+  // all move together at drop time. Persistence runs in the background: on success
+  // we reconcile with the canonical PUT response (new updated_at, joined names); on
+  // failure we revert just this deal's stage and toast. The ported Kanban hook
+  // mirrors `data` between gestures, so it re-syncs to whichever branch wins — there
+  // is no separate rollback snapshot, and a concurrent change made elsewhere (detail
+  // sheet, new deal) is never clobbered.
+  const moveDealStage = useCallback((deal: CrmDeal, toStage: string, fromStage: string) => {
     setData(prev => prev ? {
       ...prev,
-      deals: [merged, ...prev.deals.filter(d => d.id !== merged.id)],
+      deals: [{ ...deal, stage: toStage }, ...prev.deals.filter(d => d.id !== deal.id)],
     } : prev);
-    return merged;
+    api<CrmDeal>(`/api/crm/deals/${deal.id}`, { method: 'PUT', body: JSON.stringify({ stage: toStage }) })
+      .then(updated => setData(prev => prev ? {
+        ...prev,
+        deals: prev.deals.map(d => d.id === updated.id ? { ...d, ...updated } : d),
+      } : prev))
+      .catch(err => {
+        console.error('Failed to move deal:', err);
+        toast.error('Failed to move deal.');
+        setData(prev => prev ? {
+          ...prev,
+          deals: prev.deals.map(d => d.id === deal.id ? { ...d, stage: fromStage } : d),
+        } : prev);
+      });
   }, []);
 
-  // Background reconcile to server truth, WITHOUT the loading spinner. A stage
-  // change made through another path (detail sheet, new deal) while a drag PUT is
-  // in flight is skipped by the Kanban hook's resync (it ignores external updates
-  // mid-drag); re-fetching once the drag settles converges the board on both the
-  // successful and the rolled-back branch.
-  const silentRefresh = useCallback(() => {
-    api<PipelineData>('/api/crm/deals').then(setData).catch(() => { /* keep current state */ });
-  }, []);
-
-  // Drag handler: re-throws on failure so the Kanban hook rolls the card back to
-  // its origin column. `moving` blocks a second drag until this PUT settles, so
-  // the hook's single rollback snapshot can't be clobbered mid-flight.
-  const handleKanbanMove = useCallback(async (event: MoveEvent<CrmDeal>) => {
-    // Stage-only board: deals carry no rank column, so a same-stage reorder is
-    // not persisted (it would reset on reload anyway).
-    if (String(event.fromColumnId) === String(event.toColumnId)) return;
-    setMoving(true);
-    try {
-      await persistStageChange(event.item, String(event.toColumnId));
-    } catch (err) {
-      console.error('Failed to move deal:', err);
-      toast.error('Failed to move deal.');
-      throw err; // drive the Kanban optimistic rollback
-    } finally {
-      setMoving(false);
-      silentRefresh(); // reconcile against anything that changed during the PUT
+  // Drag handler. Resolves immediately so the Kanban hook ends its gesture and
+  // re-syncs from `data` right away; persistence + rollback are data-driven (via
+  // moveDealStage), never snapshot-driven, so this never needs to throw.
+  const handleKanbanMove = useCallback((event: MoveEvent<CrmDeal>): Promise<void> => {
+    const from = String(event.fromColumnId);
+    const to = String(event.toColumnId);
+    if (from === to) {
+      // Same-column drop persists nothing (deals carry no rank column). Bump the
+      // deals array reference so the hook re-syncs and drops the transient reorder
+      // rather than leaving an unsaved arrangement that jumps back on next load.
+      setData(prev => prev ? { ...prev, deals: prev.deals.slice() } : prev);
+      return Promise.resolve();
     }
-  }, [persistStageChange, silentRefresh]);
+    moveDealStage(event.item, to, from);
+    return Promise.resolve();
+  }, [moveDealStage]);
 
-  // Detail-sheet handler (fire-and-forget `void`): toast on failure, never
-  // re-throw — a rejection here would be unhandled.
-  const updateDealStage = useCallback(async (deal: CrmDeal, stage: string) => {
-    try {
-      await persistStageChange(deal, stage);
-      setSelectedDeal(null);
-    } catch (err) {
-      console.error('Failed to update deal stage:', err);
-      toast.error('Failed to move deal.');
-    }
-  }, [persistStageChange]);
+  // Detail-sheet handler (Mark Won / Lost) — optimistic move + close the sheet.
+  const updateDealStage = useCallback((deal: CrmDeal, stage: string) => {
+    if (deal.stage !== stage) moveDealStage(deal, stage, deal.stage);
+    setSelectedDeal(null);
+  }, [moveDealStage]);
 
   const deals = useMemo(() => data?.deals ?? [], [data]);
 
@@ -124,6 +117,17 @@ export function PipelinePage() {
     () => STAGE_ORDER.map(stage => ({ id: stage, data: { stage } })),
     [],
   );
+
+  // Per-stage value totals for the column headers — precomputed once per data
+  // change so drag re-renders (which fire at pointer-move frequency) don't re-reduce
+  // every column on every frame.
+  const columnTotals = useMemo(() => {
+    const totals: Record<string, number> = {};
+    for (const stage of STAGE_ORDER) {
+      totals[stage] = (grouped[stage] || []).reduce((s, d) => s + (d.value || 0), 0);
+    }
+    return totals;
+  }, [grouped]);
 
   const { openTotal, openCount } = useMemo(() => {
     const open = deals.filter(d => OPEN_STAGES.includes(d.stage));
@@ -178,9 +182,8 @@ export function PipelinePage() {
         columns={kanbanColumns}
         items={grouped}
         onMove={handleKanbanMove}
-        // Drag off on touch (fiddly) and while a move is in flight (protects the
-        // single rollback snapshot). Mobile stage changes go through the sheet.
-        dragDisabled={isMobile || moving}
+        // Drag off on touch (fiddly); mobile stage changes go through the sheet.
+        dragDisabled={isMobile}
         // The ported KanbanBoard/KanbanColumn expose only className hooks (no style
         // prop), so board-scroller and column-body layout use Tailwind here; the
         // card and header visuals below use the CRM's inline design tokens.
@@ -189,7 +192,7 @@ export function PipelinePage() {
         renderColumn={(col, children) => {
           const stage = col.data.stage;
           const colDeals = grouped[stage] || [];
-          const total = colDeals.reduce((s, d) => s + (d.value || 0), 0);
+          const total = columnTotals[stage] || 0;
           return (
             <div
               key={col.id}

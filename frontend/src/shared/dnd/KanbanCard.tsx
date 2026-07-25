@@ -12,7 +12,6 @@ interface KanbanCardProps<TItem extends KanbanItem> {
 
 export default function KanbanCard<TItem extends KanbanItem>({ item, columnId, renderCard, dragDisabled }: KanbanCardProps<TItem>) {
   const {
-    attributes,
     listeners,
     setNodeRef,
     transform,
@@ -30,9 +29,14 @@ export default function KanbanCard<TItem extends KanbanItem>({ item, columnId, r
     opacity: isDragging ? 0.4 : 1,
   };
 
-  // When drag is disabled, skip the sortable attributes entirely — dnd-kit
-  // still emits aria-disabled="true", which blocks clicks for AT and Playwright.
-  const dragProps = dragDisabled ? {} : { ...attributes, ...listeners };
+  // Only spread the pointer/touch drag `listeners`, never useSortable's
+  // `attributes`: this app registers no KeyboardSensor, so those attributes
+  // (role="button", tabIndex, aria-roledescription) would add a non-functional
+  // keyboard/AT tab stop that also nests inside the card's own interactive
+  // element. Consumers make the rendered card keyboard-operable themselves.
+  // (Keyboard drag-and-drop is future work.) When drag is disabled we drop the
+  // listeners too — dnd-kit's aria-disabled would otherwise block clicks.
+  const dragProps = dragDisabled ? {} : { ...listeners };
 
   return (
     <div ref={setNodeRef} style={style} {...dragProps}>
