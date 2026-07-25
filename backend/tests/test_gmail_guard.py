@@ -108,7 +108,7 @@ def test_client_op_allowlist_excludes_send():
         ops.list_messages_op,
         ops.get_thread_op,
         ops.create_draft_op,
-        ops._get_profile_op,
+        ops.get_profile_op,
     }
     # ops exposes no send/reply operation.
     assert not any(hasattr(ops, n) for n in ("send_email_op", "reply_to_email_op"))

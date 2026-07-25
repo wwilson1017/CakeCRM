@@ -36,6 +36,23 @@ _DEFAULT_BUDGET_TOKENS = 128_000
 
 _TRUNCATION_MARKER = "\n…[truncated]"
 _UPLOAD_OPEN_RE = re.compile(r'<untrusted_file_content id="([0-9a-f]+)"')
+_EXTERNAL_OPEN_RE = re.compile(r'<untrusted_external_content id="([0-9a-f]+)"')
+
+
+def _reclose_untrusted(cut: str) -> str:
+    """Close any untrusted-content fence (uploaded file OR external tool result,
+    e.g. Gmail) that a truncation cut left open, so text after the cut can't escape
+    the fence. Returns the close tags to append (newline-joined), or ''."""
+    reopened = []
+    for open_re, tag in (
+        (_UPLOAD_OPEN_RE, "untrusted_file_content"),
+        (_EXTERNAL_OPEN_RE, "untrusted_external_content"),
+    ):
+        for nonce in open_re.findall(cut):
+            close = f'</{tag} id="{nonce}">'
+            if close not in cut:
+                reopened.append(close)
+    return "\n".join(reopened)
 
 
 def assemble_messages(provider, conversation_id: str) -> list[dict]:
@@ -134,30 +151,34 @@ def _truncate_text(text, limit):
 def _truncate_user_content(text, limit):
     """Delimiter-safe truncation of a user row (which may carry uploaded-file blocks).
 
-    If a cut would leave an ``<untrusted_file_content id="X">`` block open, append
-    its matching close tag so injected text can't escape the fence.
+    If a cut would leave an ``<untrusted_file_content id="X">`` (or external) block
+    open, append its matching close tag so injected text can't escape the fence.
     """
     if not text or len(text) <= limit:
         return text
     cut = text[:limit]
-    reopened = [
-        f'</untrusted_file_content id="{nonce}">'
-        for nonce in _UPLOAD_OPEN_RE.findall(cut)
-        if f'</untrusted_file_content id="{nonce}">' not in cut
-    ]
     result = cut + _TRUNCATION_MARKER
-    if reopened:
-        result += "\n" + "\n".join(reopened)
+    reclosed = _reclose_untrusted(cut)
+    if reclosed:
+        result += "\n" + reclosed
     return result
 
 
 def _truncate_result(result, limit):
-    """Bound one persisted tool result. CRM tool results are plain JSON (never
-    untrusted-wrapped), so a plain cut is safe here."""
+    """Bound one persisted tool result. CRM results are plain JSON, but Gmail
+    (untrusted-external) results ARE nonce-fenced (the engine wraps them), and they
+    flow through here on reassembly — so re-close any fence a cut leaves open, the
+    same treatment _truncate_user_content gives uploads, so a cut can't drop the
+    closing tag and let email content escape the fence."""
     content = result.get("content") or ""
     if len(content) <= limit:
         return result
-    return {**result, "content": content[:limit] + _TRUNCATION_MARKER}
+    cut = content[:limit]
+    new_content = cut + _TRUNCATION_MARKER
+    reclosed = _reclose_untrusted(cut)
+    if reclosed:
+        new_content += "\n" + reclosed
+    return {**result, "content": new_content}
 
 
 def _truncate_call_args(tool_call, limit):

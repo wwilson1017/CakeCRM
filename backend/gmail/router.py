@@ -49,11 +49,21 @@ def gmail_status(user=Depends(get_current_user)):
 
 @router.post("/app")
 def save_app(body: AppCredentials, user=Depends(get_current_user)):
-    """Store BYO Google OAuth app credentials (client_id + client_secret)."""
+    """Store BYO Google OAuth app credentials (client_id + client_secret).
+
+    Replacing the app invalidates any tokens minted under the old client, so revoke
+    the outgoing refresh token at Google first (best-effort, mirroring disconnect)
+    — otherwise rotating credentials after a suspected secret leak would leave the
+    old grant live and untracked."""
     client_id = body.client_id.strip()
     client_secret = body.client_secret.strip()
     if not client_id or not client_secret:
         raise HTTPException(status_code=400, detail="Both client ID and client secret are required.")
+    from core.encryption import decrypt_value
+
+    old_refresh = decrypt_value(store.get_row().get("refresh_token_enc", ""))
+    if old_refresh:
+        oauth.revoke_token(old_refresh)
     store.save_app_credentials(client_id, client_secret)
     return store.status_dict()
 
@@ -115,32 +125,34 @@ def oauth_callback(code: str = "", state: str = "", error: str = ""):
             return _settings_redirect("error", "scopes")
 
         # 6. Fetch the connected address — also proves the grant actually works.
+        # Routed through the allow-list seam (call_with_token), so this second
+        # service-building path can't invoke anything outside the read/draft ops.
         try:
-            service = client.build_service_from_token(access_token)
-            try:
-                email = ops._get_profile_op(service).get("email", "")
-            finally:
-                try:
-                    service.close()
-                except Exception:
-                    pass
+            email = client.call_with_token(access_token, ops.get_profile_op).get("email", "")
         except Exception as e:
             logger.warning("gmail oauth profile fetch failed: %s", e)
             oauth.revoke_token(refresh_token)
             return _settings_redirect("error", "profile")
 
-        # 7. Persist. Expiry = now + expires_in seconds.
+        # 7. Persist. Expiry = now + expires_in seconds. If persistence fails, the
+        # just-granted tokens are unusable to us — revoke them so no live grant is
+        # orphaned at Google.
         from datetime import datetime, timedelta, timezone
 
         expires_in = int(tokens.get("expires_in", 3600) or 3600)
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
-        store.save_tokens(
-            access_token=access_token,
-            refresh_token=refresh_token,
-            expires_at=expires_at,
-            scopes=" ".join(sorted(granted)),
-            email=email,
-        )
+        try:
+            store.save_tokens(
+                access_token=access_token,
+                refresh_token=refresh_token,
+                expires_at=expires_at,
+                scopes=" ".join(sorted(granted)),
+                email=email,
+            )
+        except Exception as e:
+            logger.error("gmail oauth token persist failed: %s", e)
+            oauth.revoke_token(refresh_token)
+            return _settings_redirect("error", "exchange")
         return _settings_redirect("connected")
     except Exception as e:  # never 500 the browser callback
         logger.error("gmail oauth callback error: %s", e)

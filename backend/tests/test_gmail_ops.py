@@ -195,4 +195,43 @@ def test_profile_op_returns_email():
         def users(self):
             return _ProfileUsers()
 
-    assert ops._get_profile_op(_Svc()) == {"email": "me@example.com"}
+    assert ops.get_profile_op(_Svc()) == {"email": "me@example.com"}
+
+
+# ── Attachment metadata + depth caps ──────────────────────────────────────────
+
+def test_get_attachments_recursive():
+    payload = {"parts": [
+        {"filename": "a.pdf", "mimeType": "application/pdf", "body": {"size": 100}},
+        {"mimeType": "multipart/mixed", "parts": [
+            {"filename": "b.png", "mimeType": "image/png", "body": {"size": 50}},
+        ]},
+    ]}
+    out = ops._get_attachments(payload)
+    assert {a["filename"] for a in out} == {"a.pdf", "b.png"}
+    by_name = {a["filename"]: a for a in out}
+    assert by_name["a.pdf"]["mime_type"] == "application/pdf" and by_name["a.pdf"]["size"] == 100
+
+
+def test_get_thread_op_short_thread_no_truncation():
+    msgs = [{"id": "m1", "threadId": "t1", "labelIds": [],
+             "payload": {"headers": [{"name": "Subject", "value": "s"}]}}]
+    svc = _Service(_Users(threads=_Threads({"messages": msgs})))
+    out = ops.get_thread_op(svc, "t1")
+    assert out["message_count"] == 1
+    assert len(out["messages"]) == 1
+    assert "truncated" not in out
+
+
+def test_get_body_text_depth_capped_no_recursion_error():
+    payload = {"mimeType": "text/plain", "body": {"data": _b64("deep")}}
+    for _ in range(ops._MAX_MIME_DEPTH + 5):
+        payload = {"mimeType": "multipart/mixed", "parts": [payload]}
+    assert ops._get_body_text(payload) == ""  # bailed at the cap, not RecursionError
+
+
+def test_get_attachments_depth_capped_no_recursion_error():
+    payload = {"parts": [{"filename": "leaf.txt", "mimeType": "text/plain", "body": {"size": 1}}]}
+    for _ in range(ops._MAX_MIME_DEPTH + 5):
+        payload = {"parts": [payload]}
+    assert ops._get_attachments(payload) == []  # bailed at the cap, not RecursionError

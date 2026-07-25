@@ -149,3 +149,63 @@ def test_build_service_raises_when_disconnected(monkeypatch):
     monkeypatch.setattr(client.store, "is_connected", lambda row=None: False)
     with pytest.raises(GmailAuthError):
         client._build_credentials_and_service()
+
+
+# ── _build_credentials_and_service: connected happy path (field mapping) ──────
+
+def test_build_credentials_maps_decrypted_fields(monkeypatch):
+    from core.encryption import encrypt_value
+
+    row = {
+        "client_id": "cid",
+        "client_secret_enc": encrypt_value("secret"),
+        "access_token_enc": encrypt_value("at"),
+        "refresh_token_enc": encrypt_value("rt"),
+        "token_expires_at": "2026-07-24T12:00:00+00:00",
+        "scopes": "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose",
+        "connection_status": "ok",
+    }
+    monkeypatch.setattr(client.store, "get_row", lambda: row)
+    monkeypatch.setattr(client.store, "is_connected", lambda r=None: True)
+
+    captured = {}
+
+    class FakeCreds:
+        def __init__(self, **kw):
+            captured.update(kw)
+            self.expiry = None
+
+    monkeypatch.setattr("google.oauth2.credentials.Credentials", FakeCreds)
+    monkeypatch.setattr("googleapiclient.discovery.build", lambda *a, **k: _FakeService())
+
+    creds, service, prev_enc, refresh_before = client._build_credentials_and_service()
+    assert captured["token"] == "at"
+    assert captured["refresh_token"] == "rt"
+    assert captured["client_id"] == "cid"
+    assert captured["client_secret"] == "secret"
+    assert captured["scopes"] == [
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.compose",
+    ]
+    assert refresh_before == "rt"
+    assert prev_enc == row["refresh_token_enc"]  # CAS key is the stored ciphertext
+    assert creds.expiry == datetime(2026, 7, 24, 12, 0, 0)  # parsed to naive UTC
+
+
+# ── call_with_token: allow-list seam (OAuth callback path) ────────────────────
+
+def test_call_with_token_rejects_non_allowlisted_op():
+    with pytest.raises(GmailAuthError):
+        client.call_with_token("access-token", lambda service: "nope")
+
+
+def test_call_with_token_runs_approved_op_and_closes(monkeypatch):
+    svc = _FakeService()
+    monkeypatch.setattr(client, "build_service_from_token", lambda t: svc)
+
+    def op(service):
+        return {"email": "me@example.com"}
+
+    monkeypatch.setattr(client, "_APPROVED_OPS", frozenset({op}))
+    assert client.call_with_token("access-token", op) == {"email": "me@example.com"}
+    assert svc.closed is True

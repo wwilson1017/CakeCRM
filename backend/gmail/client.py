@@ -33,7 +33,7 @@ _APPROVED_OPS = frozenset({
     ops.list_messages_op,
     ops.get_thread_op,
     ops.create_draft_op,
-    ops._get_profile_op,
+    ops.get_profile_op,
 })
 
 
@@ -59,6 +59,24 @@ def build_service_from_token(access_token: str):
 
     creds = Credentials(token=access_token)
     return build("gmail", "v1", credentials=creds, cache_discovery=False)
+
+
+def call_with_token(access_token: str, op, **kwargs):
+    """Run an approved op against a service built from a bare access token (the
+    OAuth callback path, before a stored connection exists). Enforces the SAME
+    _APPROVED_OPS allow-list as call_gmail — so this second service-building path
+    can't invoke any Gmail method outside the read/draft set — and always closes
+    the transport."""
+    if op not in _APPROVED_OPS:
+        raise GmailAuthError("Unsupported Gmail operation.")
+    service = build_service_from_token(access_token)
+    try:
+        return op(service, **kwargs)
+    finally:
+        try:
+            service.close()
+        except Exception:
+            pass
 
 
 def _build_credentials_and_service():

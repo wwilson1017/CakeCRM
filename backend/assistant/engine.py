@@ -30,7 +30,7 @@ import time
 import uuid
 from collections.abc import AsyncGenerator
 
-from assistant import assembly, history, identity
+from assistant import assembly, delimiters, history, identity
 from assistant.write_budget import WRITE_BUDGET_PER_TURN, BudgetAction, BudgetState
 from providers.base import AIProvider, _sse
 from providers.windows import context_usage_event
@@ -54,20 +54,22 @@ def _context_has_untrusted_upload(messages: list[dict]) -> bool:
     """True if any message content carries untrusted wrapped text — an uploaded
     file OR a tool result from an untrusted external source (Gmail, issue #8).
 
-    The marker normally lives in user-turn string content, but coalescing can fold
-    an upload/tool-result row into a block list, so also scan text blocks inside
-    list content — otherwise the power→normal downgrade would silently miss it."""
+    Tool-result history is reassembled into PROVIDER-SPECIFIC shapes: Anthropic
+    stores the text under a block ``content`` key, Gemini nests it under
+    ``response.result``, OpenAI keeps a top-level string. Keying off one field name
+    (e.g. ``text``) would miss the marker for Anthropic/Gemini, so we stringify
+    non-string content and substring-scan the whole structure — provider-agnostic,
+    which is what keeps the power→normal downgrade firing on later turns."""
     def _has_marker(text: str) -> bool:
         return any(marker in text for marker in _UNTRUSTED_MARKERS)
 
     for m in messages:
         content = m.get("content")
-        if isinstance(content, str) and _has_marker(content):
+        if isinstance(content, str):
+            if _has_marker(content):
+                return True
+        elif content is not None and _has_marker(str(content)):
             return True
-        if isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict) and _has_marker(str(block.get("text") or "")):
-                    return True
     return False
 
 
@@ -327,14 +329,13 @@ async def _chat_impl(
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             content = json.dumps(result, default=str)
             # An untrusted external read (Gmail) taints the rest of the turn and, via
-            # the wrapping marker persisted below, later turns too — so a prompt
-            # injection in the email can't silently drive a power-mode write.
+            # the nonce-fenced marker persisted below, later turns too — so a prompt
+            # injection in the email can't silently drive a power-mode write. The
+            # nonce fence (delimiters.wrap_untrusted_external) is forge-proof and the
+            # paired system-prompt instruction tells the model to treat it as data.
             if name in _UNTRUSTED_SOURCE_TOOLS:
                 turn_has_untrusted_reads = True
-                content = (
-                    f'{_UNTRUSTED_EXTERNAL_MARKER} source="{name}">\n'
-                    f"{content}\n</untrusted_external_content>"
-                )
+                content = delimiters.wrap_untrusted_external(name, content)
             results.append({"tool_use_id": tool_use_id, "tool_name": name, "content": content})
             persisted = True
             try:

@@ -22,6 +22,9 @@ _MULTI_NL = re.compile(r"\n{3,}")
 # Bound the sensitive data pulled into the model context / persisted history.
 _MAX_BODY_CHARS = 4000
 _MAX_THREAD_MESSAGES = 20
+# Cap recursion into attacker-controllable MIME part trees (a hostile sender can
+# nest multipart parts arbitrarily deep; without a cap a read would RecursionError).
+_MAX_MIME_DEPTH = 20
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -47,7 +50,9 @@ def _parse_headers(headers: list[dict]) -> dict:
     return result
 
 
-def _get_body_text(payload: dict) -> str:
+def _get_body_text(payload: dict, _depth: int = 0) -> str:
+    if _depth > _MAX_MIME_DEPTH:
+        return ""
     mime_type = payload.get("mimeType", "")
 
     if mime_type == "text/plain":
@@ -76,7 +81,7 @@ def _get_body_text(payload: dict) -> str:
                 html = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
                 html_text = _html_to_text(html)
         elif part_mime.startswith("multipart/"):
-            nested = _get_body_text(part)
+            nested = _get_body_text(part, _depth + 1)
             if nested:
                 return nested
 
@@ -89,9 +94,11 @@ def _truncate_body(text: str) -> str:
     return text
 
 
-def _get_attachments(payload: dict) -> list[dict]:
+def _get_attachments(payload: dict, _depth: int = 0) -> list[dict]:
     """Attachment METADATA only (names/types/sizes) — reading attachment content
     is out of scope."""
+    if _depth > _MAX_MIME_DEPTH:
+        return []
     attachments = []
     parts = payload.get("parts", [])
     for part in parts:
@@ -103,7 +110,7 @@ def _get_attachments(payload: dict) -> list[dict]:
                 "size": part.get("body", {}).get("size", 0),
             })
         if part.get("parts"):
-            attachments.extend(_get_attachments(part))
+            attachments.extend(_get_attachments(part, _depth + 1))
     return attachments
 
 
@@ -182,7 +189,7 @@ def get_thread_op(service, thread_id: str) -> dict:
     return result
 
 
-def _get_profile_op(service) -> dict:
+def get_profile_op(service) -> dict:
     """The connected account's email (used by the OAuth callback to record which
     account was linked). Requires gmail.readonly."""
     profile = service.users().getProfile(userId="me").execute()

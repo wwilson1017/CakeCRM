@@ -155,3 +155,42 @@ def test_status_dict_leaks_no_secrets(monkeypatch):
     assert "refresh_token" not in d
     for v in d.values():
         assert not (isinstance(v, str) and v.startswith("enc:v1:"))
+
+
+# ── update_access_token (CAS) + mark_broken ───────────────────────────────────
+
+def test_update_access_token_no_rotation_uses_cas(monkeypatch):
+    rec = ExecRecorder(rowcount=1)
+    monkeypatch.setattr(store, "pg_execute", rec)
+    store.update_access_token("new-access", "2026-01-01T00:00:00+00:00", "enc:v1:prev-refresh")
+    sql, params = rec.calls[0]
+    assert "SET access_token_enc = %s" in sql
+    assert "refresh_token_enc = %s" not in sql.split("WHERE")[0]  # not rotated in SET
+    assert "WHERE id = 1 AND refresh_token_enc = %s" in sql  # compare-and-swap key
+    assert params[0].startswith("enc:v1:")  # new access token encrypted
+    assert params[-1] == "enc:v1:prev-refresh"  # CAS key is the prior ciphertext
+
+
+def test_update_access_token_with_rotation_persists_new_refresh(monkeypatch):
+    rec = ExecRecorder(rowcount=1)
+    monkeypatch.setattr(store, "pg_execute", rec)
+    store.update_access_token("new-access", None, "enc:v1:prev-refresh", refresh_token="rotated")
+    sql, params = rec.calls[0]
+    before_where = sql.split("WHERE")[0]
+    assert "access_token_enc = %s" in before_where
+    assert "refresh_token_enc = %s" in before_where  # rotated refresh is written
+    assert "WHERE id = 1 AND refresh_token_enc = %s" in sql
+    assert params[-1] == "enc:v1:prev-refresh"
+
+
+def test_mark_broken_sets_status_and_never_raises(monkeypatch):
+    rec = ExecRecorder()
+    monkeypatch.setattr(store, "pg_execute", rec)
+    store.mark_broken()
+    assert "connection_status = 'broken'" in rec.calls[0][0]
+
+    def boom(*a, **k):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(store, "pg_execute", boom)
+    store.mark_broken()  # must not raise

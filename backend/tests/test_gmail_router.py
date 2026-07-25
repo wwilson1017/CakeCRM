@@ -28,11 +28,6 @@ def api(app):
     return TestClient(app, follow_redirects=False)
 
 
-class _Svc:
-    def close(self):
-        pass
-
-
 # ── /status, /app ─────────────────────────────────────────────────────────────
 
 def test_status_returns_sanitized(monkeypatch, api):
@@ -156,8 +151,7 @@ def test_callback_profile_failure_is_fatal(monkeypatch, api):
     monkeypatch.setattr(router_mod.store, "claim_oauth_state", lambda s: True)
     monkeypatch.setattr(router_mod.store, "get_app_credentials", lambda: ("cid", "sec"))
     monkeypatch.setattr(router_mod.oauth, "exchange_code", lambda *a: _tokens())
-    monkeypatch.setattr(router_mod.client, "build_service_from_token", lambda t: _Svc())
-    monkeypatch.setattr(router_mod.ops, "_get_profile_op", lambda s: (_ for _ in ()).throw(RuntimeError("api down")))
+    monkeypatch.setattr(router_mod.client, "call_with_token", lambda t, op: (_ for _ in ()).throw(RuntimeError("api down")))
     monkeypatch.setattr(router_mod.oauth, "revoke_token", lambda t: revoked.append(t))
     r = api.get("/api/gmail/oauth/callback?state=s&code=c")
     assert "reason=profile" in r.headers["location"]
@@ -169,8 +163,7 @@ def test_callback_happy_path_saves_tokens(monkeypatch, api):
     monkeypatch.setattr(router_mod.store, "claim_oauth_state", lambda s: True)
     monkeypatch.setattr(router_mod.store, "get_app_credentials", lambda: ("cid", "sec"))
     monkeypatch.setattr(router_mod.oauth, "exchange_code", lambda *a: _tokens())
-    monkeypatch.setattr(router_mod.client, "build_service_from_token", lambda t: _Svc())
-    monkeypatch.setattr(router_mod.ops, "_get_profile_op", lambda s: {"email": "me@example.com"})
+    monkeypatch.setattr(router_mod.client, "call_with_token", lambda t, op: {"email": "me@example.com"})
     monkeypatch.setattr(router_mod.store, "save_tokens", lambda **k: saved.update(k))
     r = api.get("/api/gmail/oauth/callback?state=s&code=c")
     assert "gmail=connected" in r.headers["location"]
@@ -201,3 +194,49 @@ def test_setup_status_includes_gmail_connected(monkeypatch, api):
     r = api.get("/api/setup/status")
     assert r.status_code == 200
     assert r.json()["gmail_connected"] is True
+
+
+def test_callback_outer_catch_returns_302_not_500(monkeypatch, api):
+    # A DB blip in claim_oauth_state itself (not one of the inner try/excepts) must
+    # still yield a clean redirect, never a raw 500 on this public endpoint.
+    monkeypatch.setattr(router_mod.store, "claim_oauth_state",
+                        lambda s: (_ for _ in ()).throw(RuntimeError("db blip")))
+    r = api.get("/api/gmail/oauth/callback?state=s&code=c")
+    assert r.status_code == 302
+    assert "gmail=error" in r.headers["location"]
+
+
+def test_setup_status_gmail_connected_degrades_on_error(monkeypatch, api):
+    import gmail.store as gmail_store
+
+    monkeypatch.setattr(gmail_store, "is_connected", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    r = api.get("/api/setup/status")
+    assert r.status_code == 200
+    assert r.json()["gmail_connected"] is False
+
+
+def test_save_app_revokes_old_refresh_token(monkeypatch, api):
+    from core.encryption import encrypt_value
+
+    revoked = []
+    monkeypatch.setattr(router_mod.store, "get_row", lambda: {"refresh_token_enc": encrypt_value("old-rt")})
+    monkeypatch.setattr(router_mod.oauth, "revoke_token", lambda t: revoked.append(t))
+    monkeypatch.setattr(router_mod.store, "save_app_credentials", lambda c, s: None)
+    monkeypatch.setattr(router_mod.store, "status_dict", lambda: {"connected": False})
+    r = api.post("/api/gmail/app", json={"client_id": "cid", "client_secret": "sec"})
+    assert r.status_code == 200
+    assert revoked == ["old-rt"]  # old grant revoked before overwrite
+
+
+def test_callback_persist_failure_revokes_tokens(monkeypatch, api):
+    revoked = []
+    monkeypatch.setattr(router_mod.store, "claim_oauth_state", lambda s: True)
+    monkeypatch.setattr(router_mod.store, "get_app_credentials", lambda: ("cid", "sec"))
+    monkeypatch.setattr(router_mod.oauth, "exchange_code", lambda *a: _tokens())
+    monkeypatch.setattr(router_mod.client, "call_with_token", lambda t, op: {"email": "me@x.com"})
+    monkeypatch.setattr(router_mod.store, "save_tokens",
+                        lambda **k: (_ for _ in ()).throw(RuntimeError("db down")))
+    monkeypatch.setattr(router_mod.oauth, "revoke_token", lambda t: revoked.append(t))
+    r = api.get("/api/gmail/oauth/callback?state=s&code=c")
+    assert "reason=exchange" in r.headers["location"]
+    assert revoked == ["rt"]  # orphaned grant revoked

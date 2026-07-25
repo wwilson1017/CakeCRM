@@ -96,3 +96,13 @@ def test_get_gmail_tools_never_raises(monkeypatch):
     defs, execs = tools.get_gmail_tools()
     assert defs == []
     assert execs == {}
+
+
+def test_gmail_read_thread_generic_error_is_dict_not_raise(monkeypatch):
+    def boom(op, **kw):
+        raise RuntimeError("HttpError 500 raw detail")
+
+    monkeypatch.setattr(tools.client, "call_gmail", boom)
+    out = tools.gmail_read_thread(thread_id="t1")
+    assert "error" in out
+    assert "HttpError 500 raw detail" not in out["error"]  # raw text not leaked

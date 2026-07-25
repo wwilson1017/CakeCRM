@@ -130,3 +130,26 @@ def test_tokens_roundtrip_and_disconnect_keeps_app_creds(pg_db):
     row = _raw_row()
     assert row["client_id"] == "cid"  # app creds preserved for one-click reconnect
     assert row["refresh_token_enc"] == ""
+
+
+def test_update_access_token_cas_against_real_pg(pg_db):
+    from datetime import datetime, timedelta, timezone
+
+    from core.encryption import decrypt_value
+    from core.postgres import pg_fetchone
+    from gmail import store
+
+    store.save_app_credentials("cid", "secret")
+    expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+    store.save_tokens("at", "rt", expiry, "scope", "me@example.com")
+    current_enc = pg_fetchone("SELECT refresh_token_enc FROM gmail_connection WHERE id=1")["refresh_token_enc"]
+
+    # Matching CAS key updates the access token.
+    store.update_access_token("at-fresh", expiry, current_enc)
+    row = pg_fetchone("SELECT access_token_enc FROM gmail_connection WHERE id=1")
+    assert decrypt_value(row["access_token_enc"]) == "at-fresh"
+
+    # A stale CAS key (connection replaced meanwhile) is a no-op — no clobber.
+    store.update_access_token("at-stale-writer", expiry, "enc:v1:stale-ciphertext")
+    row = pg_fetchone("SELECT access_token_enc FROM gmail_connection WHERE id=1")
+    assert decrypt_value(row["access_token_enc"]) == "at-fresh"  # unchanged
