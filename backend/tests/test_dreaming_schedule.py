@@ -120,24 +120,45 @@ def test_module_level_start_stop(monkeypatch):
     asyncio.run(run())
 
 
-async def test_stop_propagates_own_cancellation(monkeypatch):
-    import contextlib
+async def test_stop_shields_inflight_cycle_under_cancellation(monkeypatch):
+    # Forced shutdown (stop() cancelled) must NOT abandon an in-flight cycle — its worker
+    # thread still holds a DB connection and main.py closes the pool right after stop()
+    # returns. stop() must let the cycle finish AND propagate the cancellation.
+    cycle_running = asyncio.Event()
+    let_finish = asyncio.Event()
+    done = {"finished": False}
     sched = schedule.DreamingScheduler()
 
-    async def block_forever(self, seconds):
-        await asyncio.Event().wait()   # loop task never returns on its own
+    async def instant_sleep(self, seconds):
+        return
 
-    monkeypatch.setattr(schedule.DreamingScheduler, "_sleep", block_forever)
+    async def controlled_run_due(self):
+        cycle_running.set()
+        await let_finish.wait()
+        done["finished"] = True
+        self._stop.set()   # end the loop after this one cycle
+
+    monkeypatch.setattr(schedule.DreamingScheduler, "_sleep", instant_sleep)
+    monkeypatch.setattr(schedule.DreamingScheduler, "_run_due", controlled_run_due)
+
     sched.start()
-    task = sched._task
-    await asyncio.sleep(0.01)
-
+    await cycle_running.wait()          # loop is in an in-flight cycle
     stop_task = asyncio.ensure_future(sched.stop())
+    await asyncio.sleep(0.01)           # let stop() reach the shielded await
+    stop_task.cancel()                  # forced shutdown mid-cycle
     await asyncio.sleep(0.01)
-    stop_task.cancel()                 # cancel stop() ITSELF (forced shutdown)
+    assert done["finished"] is False    # cycle NOT abandoned — still shielded
+    let_finish.set()                    # allow the cycle to complete
     with pytest.raises(asyncio.CancelledError):
-        await stop_task                # must propagate, not be swallowed
+        await stop_task                 # cancellation propagates...
+    assert done["finished"] is True     # ...only AFTER the cycle finished
 
-    task.cancel()                      # cleanup the still-blocked loop task
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
+
+def test_seconds_until_next_slot_is_dst_correct():
+    # US spring-forward is 2026-03-08 (02:00→03:00). From 2026-03-07 04:00 to the next
+    # 03:00 slot is 22 REAL hours, not 23 wall-clock hours — the .timestamp() delta must
+    # reflect the offset shift (naive same-tzinfo subtraction would return 23h).
+    from zoneinfo import ZoneInfo
+    ny = ZoneInfo("America/New_York")
+    secs = schedule.seconds_until_next_slot(datetime(2026, 3, 7, 4, 0, tzinfo=ny))
+    assert secs == pytest.approx(22 * 3600, abs=5)

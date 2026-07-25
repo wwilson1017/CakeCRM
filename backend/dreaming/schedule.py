@@ -59,11 +59,17 @@ def is_due(last_ok: datetime | None, now: datetime) -> bool:
 
 
 def seconds_until_next_slot(now: datetime) -> float:
-    """Seconds from *now* until the next RUN_HOUR:00 boundary (strictly future)."""
+    """Seconds from *now* until the next RUN_HOUR:00 boundary (strictly future).
+
+    Uses ``.timestamp()`` (POSIX/UTC) for the delta: subtracting two aware datetimes that
+    share the SAME tzinfo makes Python ignore the tzinfo and do naive wall-clock math, so
+    across a DST transition it would over/under-count by the offset shift (e.g. 23h of
+    wall clock for a 22h real interval on spring-forward). timestamp() is offset-correct.
+    """
     slot = now.replace(hour=RUN_HOUR, minute=0, second=0, microsecond=0)
     if now >= slot:
         slot += timedelta(days=1)
-    return max(1.0, (slot - now).total_seconds())
+    return max(1.0, slot.timestamp() - now.timestamp())
 
 
 class DreamingScheduler:
@@ -87,18 +93,23 @@ class DreamingScheduler:
         self._stop.set()
         task = self._task
         self._task = None
-        if task is not None:
+        if task is None:
+            return
+        # Wait for the loop task to finish, SHIELDED, so a cancellation of stop() (a forced
+        # shutdown) doesn't abandon an in-flight cycle: to_thread can't cancel the worker
+        # thread, which still holds a DB connection, and main.py closes the pool right after
+        # we return — closing it under a live cycle would yank that connection. Re-enter on
+        # each cancellation and keep waiting (bounded by the cycle's statement_timeout), then
+        # propagate the cancellation only AFTER the task is truly done so the caller's
+        # cancellation isn't silently swallowed.
+        cancelled = False
+        while not task.done():
             try:
-                await task
+                await asyncio.shield(task)
             except asyncio.CancelledError:
-                # Awaiting a task propagates a cancellation of OUR task down into it, so
-                # task.cancelled() can't tell the two apart. current_task().cancelling()
-                # is non-zero only when WE were cancelled (a forced shutdown while a cycle
-                # is in flight) — propagate that so the caller's cancellation isn't
-                # silently swallowed; otherwise the loop task alone ended, suppress it.
-                current = asyncio.current_task()
-                if current is not None and current.cancelling() > 0:
-                    raise
+                cancelled = True
+        if cancelled:
+            raise asyncio.CancelledError
 
     async def _sleep(self, seconds: float) -> None:
         """Sleep up to *seconds*, returning early if stop is signalled."""
