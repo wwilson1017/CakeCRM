@@ -13,8 +13,11 @@ There is no channel base class — adding/deferring a channel is adding/omitting
 NOT ported (per issue #6). pywebpush is imported lazily.
 """
 
+import ipaddress
 import json
 import logging
+import uuid
+from urllib.parse import urlparse
 
 from notifications import service, subscriptions
 
@@ -22,20 +25,42 @@ logger = logging.getLogger(__name__)
 
 _PAYLOAD_MAX_BYTES = 3900  # keep under the 4KB Web Push limit
 _PUSH_TIMEOUT_SECONDS = 10
+_MAX_ENDPOINT_LEN = 2000
 
 
 def deliver_notification(title: str, message: str) -> dict:
-    """Deliver a notification to all channels and log it. Never raises."""
+    """Deliver a notification to all channels and log it. NEVER raises.
+
+    Callers (notify_user, reminder firing, heartbeat-failure alerts) rely on this
+    contract — a DB hiccup or one broken channel must never propagate out and
+    abort a reminder batch or a scheduler tick.
+    """
     title = (title or "").strip() or "Notification"
     message = (message or "").strip()
-    notification_id = service.create_notification(title, message, [])
+
+    # Persist the in-app row FIRST (the guaranteed audit record). If even that
+    # fails, fall through with a local id so push can still be attempted.
+    notification_id = None
+    try:
+        notification_id = service.create_notification(title, message, [])
+    except Exception:
+        logger.warning("failed to create notification row", exc_info=True)
+    if notification_id is None:
+        notification_id = str(uuid.uuid4())
 
     channels_sent: list[str] = []
-    web_push_ok = _send_web_push(title, message, notification_id)
+    web_push_ok = False
+    try:
+        web_push_ok = _send_web_push(title, message, notification_id)
+    except Exception:
+        logger.warning("web push channel errored", exc_info=True)
     if web_push_ok:
         channels_sent.append("web_push")
-    if _send_telegram(title, message):
-        channels_sent.append("telegram")
+    try:
+        if _send_telegram(title, message):
+            channels_sent.append("telegram")
+    except Exception:
+        logger.debug("telegram channel errored", exc_info=True)
 
     try:
         service.update_channels(notification_id, channels_sent)
@@ -44,6 +69,34 @@ def deliver_notification(title: str, message: str) -> dict:
 
     return {"ok": True, "notification_id": notification_id,
             "channels_sent": channels_sent, "web_push": web_push_ok}
+
+
+def is_safe_push_endpoint(endpoint: str) -> bool:
+    """Best-effort guard against SSRF via a subscription endpoint.
+
+    Requires an https URL of bounded length and rejects endpoints whose host is an
+    obvious internal target (localhost, or a private/loopback/link-local/reserved IP
+    LITERAL). This is defense-in-depth for a single-tenant, auth-gated endpoint — it
+    does NOT resolve DNS, so it doesn't cover rebinding or redirects; real push
+    endpoints are public push-service hosts (fcm.googleapis.com, *.push.apple.com …).
+    """
+    if not endpoint or len(endpoint) > _MAX_ENDPOINT_LEN:
+        return False
+    try:
+        parsed = urlparse(endpoint)
+    except Exception:
+        return False
+    if parsed.scheme != "https" or not parsed.hostname:
+        return False
+    host = parsed.hostname.lower()
+    if host in ("localhost", "localhost.localdomain") or host.endswith(".localhost"):
+        return False
+    try:
+        ip = ipaddress.ip_address(parsed.hostname)   # only when host is an IP literal
+    except ValueError:
+        return True  # a hostname (not an IP) — allowed
+    return not (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
 
 
 def _build_payload(title: str, message: str, notification_id: str) -> str:
@@ -72,16 +125,28 @@ def _send_web_push(title: str, message: str, notification_id: str) -> bool:
     try:
         _pub, private_key = vapid.get_vapid_keys()
         claims = vapid.get_vapid_claims()
-    except Exception:
+    except Exception as e:
+        # A persistent VAPID failure (e.g. ENCRYPTION_KEY rotated) breaks push for
+        # good — surface it as a deduplicated alert, not just a log line, so the
+        # operator sees it in the bell. Delivery of reminders still continues.
         logger.warning("VAPID keys unavailable — skipping Web Push", exc_info=True)
+        try:
+            from alerts import service as alerts_service
+            alerts_service.create_alert(
+                title="Web Push unavailable",
+                message=f"VAPID keys could not be loaded: {str(e)[:200]}",
+                source="vapid", source_id="vapid",
+            )
+        except Exception:
+            logger.debug("failed to raise VAPID alert", exc_info=True)
         return False
 
     data = _build_payload(title, message, notification_id)
     sent = 0
     for sub in subs:
         endpoint = sub.get("endpoint") or ""
-        if not endpoint.startswith("https://") or len(endpoint) > 2000:
-            logger.warning("skipping push to invalid endpoint")
+        if not is_safe_push_endpoint(endpoint):
+            logger.warning("skipping push to invalid or unsafe endpoint")
             continue
         try:
             webpush(

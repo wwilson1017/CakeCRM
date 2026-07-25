@@ -50,12 +50,12 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `backend/assistant/background.py`) is a non-SSE `run_background_turn` for
   autonomous work (the heartbeat + reminder firing): it reuses the same
   `ToolRegistry`/`build_tool_turn` loop but, having no human to confirm writes,
-  **auto-approves** them under a tighter `WRITE_BUDGET_BACKGROUND` AND a
-  **server-enforced tool allowlist** (reads + `notify_user`; reminder turns also
-  get additive-only `crm_create_task`/`crm_log_activity` — never update/delete),
-  with untrusted reminder/CRM text kept in the user message, never the system
-  prompt. Multi-user is future work (authz/ownership), not just a
-  `user_id` column.
+  runs under a **server-enforced tool allowlist of READ tools + `notify_user` only**
+  (no CRM writes at all — enforced at both advertisement and execution) plus a
+  `WRITE_BUDGET_BACKGROUND`, with untrusted reminder/CRM text kept in the user
+  message, never the system prompt. So a prompt injection via reminder/CRM content
+  can at worst send one notification, never create/log/update/delete a record.
+  Multi-user is future work (authz/ownership), not just a `user_id` column.
 - **One database: PostgreSQL, and it's mandatory** — the backend refuses to start
   without `DATABASE_URL` (decided 2026-07-18; single engine, ready for multi-user
   growth). Locally `docker compose up -d`; on Railway the template provisions

@@ -101,25 +101,36 @@ def test_delete_pending_rejected(monkeypatch):
 
 # ── claim_reminder (atomic, R5) ─────────────────────────────────────────────
 
+# The claim uses UPDATE ... RETURNING, so the fake cursor exposes description +
+# fetchone matching the returned columns (message, context, due_at, recurrence_rule,
+# series_id) — mirroring row_to_dict's expectations.
+_RETURN_COLS = ("message", "context", "due_at", "recurrence_rule", "series_id")
+
+
 class _Cur:
-    def __init__(self, rowcount):
+    def __init__(self, rowcount, row=None):
         self.rowcount = rowcount
+        self.row = row
         self.executed = []
+        self.description = [(c,) for c in _RETURN_COLS]
 
     def execute(self, sql, params=()):
         self.executed.append((" ".join(sql.split()), params))
 
+    def fetchone(self):
+        return self.row
+
 
 class _Conn:
-    def __init__(self, rowcount):
-        self._cur = _Cur(rowcount)
+    def __init__(self, rowcount, row=None):
+        self._cur = _Cur(rowcount, row)
 
     def cursor(self):
         return self._cur
 
 
-def _install_conn(monkeypatch, rowcount):
-    conn = _Conn(rowcount)
+def _install_conn(monkeypatch, rowcount, row=None):
+    conn = _Conn(rowcount, row)
 
     @contextmanager
     def _get():
@@ -130,32 +141,28 @@ def _install_conn(monkeypatch, rowcount):
 
 
 def test_claim_won_creates_successor(monkeypatch):
-    conn = _install_conn(monkeypatch, rowcount=1)
-    reminder = {
-        "id": "r1", "message": "Standup", "context": "",
-        "due_at": datetime(2026, 7, 24, 9, 0, tzinfo=timezone.utc).isoformat(),
-        "recurrence_rule": {"type": "daily"}, "series_id": "r1",
-    }
+    row = ("Standup", "", datetime(2026, 7, 24, 9, 0, tzinfo=timezone.utc),
+           {"type": "daily"}, "r1")  # fresh row from RETURNING
+    conn = _install_conn(monkeypatch, rowcount=1, row=row)
+    reminder = {"id": "r1", "due_at": "stale-ignored", "recurrence_rule": {"type": "daily"}}
     assert service.claim_reminder(reminder) is True
     sqls = [e[0] for e in conn._cur.executed]
-    assert any("UPDATE reminders SET status = 'fired'" in s for s in sqls)
-    assert any("INSERT INTO reminders" in s for s in sqls)   # successor in same tx
+    assert any("UPDATE reminders SET status = 'fired'" in s and "due_at <= now()" in s for s in sqls)
+    assert any("INSERT INTO reminders" in s for s in sqls)   # successor in same tx, from fresh row
 
 
 def test_claim_lost_returns_false_no_successor(monkeypatch):
-    conn = _install_conn(monkeypatch, rowcount=0)
-    reminder = {"id": "r1", "message": "x", "due_at": datetime.now(timezone.utc).isoformat(),
-                "recurrence_rule": {"type": "daily"}, "series_id": "r1"}
+    conn = _install_conn(monkeypatch, rowcount=0)   # rescheduled to future / lost
+    reminder = {"id": "r1", "recurrence_rule": {"type": "daily"}, "series_id": "r1"}
     assert service.claim_reminder(reminder) is False
     sqls = [e[0] for e in conn._cur.executed]
     assert not any("INSERT INTO reminders" in s for s in sqls)   # no double-fire successor
 
 
 def test_claim_non_recurring_no_successor(monkeypatch):
-    conn = _install_conn(monkeypatch, rowcount=1)
-    reminder = {"id": "r1", "message": "x", "context": "",
-                "due_at": datetime.now(timezone.utc).isoformat(),
-                "recurrence_rule": None, "series_id": None}
+    row = ("x", "", datetime.now(timezone.utc), None, None)  # recurrence_rule None
+    conn = _install_conn(monkeypatch, rowcount=1, row=row)
+    reminder = {"id": "r1", "recurrence_rule": None}
     assert service.claim_reminder(reminder) is True
     sqls = [e[0] for e in conn._cur.executed]
     assert not any("INSERT INTO reminders" in s for s in sqls)

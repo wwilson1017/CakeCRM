@@ -187,11 +187,13 @@ def compute_next_due(current_due: datetime, rule: dict,
 
     if rtype == "daily":
         dt += timedelta(days=1)
-        for _ in range(_MAX_CATCHUP):
-            if dt > now:
-                return dt
+        if dt <= now:
+            # Jump forward in bulk to just after now (O(1)) instead of one day at a
+            # time — a reminder stale by years must NOT iterate itself into None.
+            dt += timedelta(days=(now - dt).days + 1)
+        while dt <= now:  # boundary guard (fractional day)
             dt += timedelta(days=1)
-        return None
+        return dt
 
     if rtype == "interval":
         try:
@@ -215,8 +217,12 @@ def compute_next_due(current_due: datetime, rule: dict,
         if not days:
             return None
         dt += timedelta(days=1)
-        for _ in range(14):
-            if dt.isoweekday() in days and dt > now:
+        if dt <= now:
+            # Jump to now's date (preserving time-of-day) so catch-up is O(1) — a
+            # weekly reminder stale by weeks/years must not scan itself into None.
+            dt = dt.replace(year=now.year, month=now.month, day=now.day)
+        for _ in range(8):   # ≤7 days to reach any matching weekday, +1 boundary
+            if dt > now and dt.isoweekday() in days:
                 return dt
             dt += timedelta(days=1)
         return None
@@ -239,18 +245,16 @@ def compute_next_due(current_due: datetime, rule: dict,
             return None
         try:
             from croniter import croniter
-            cron = croniter(expression, dt)
-            nxt = cron.get_next(datetime)
+            # Seed at the later of (current due, now) so get_next() lands on the
+            # next scheduled time strictly after now in ONE step — no per-occurrence
+            # iteration (a per-minute cron would otherwise exhaust the loop after a
+            # few days of downtime and silently return None).
+            base = dt if dt > now else now
+            nxt = croniter(expression, base).get_next(datetime)
             if nxt.tzinfo is None:
                 nxt = nxt.replace(tzinfo=timezone.utc)
-            for _ in range(_MAX_CATCHUP):
-                if nxt > now:
-                    return nxt
-                nxt = cron.get_next(datetime)
-                if nxt.tzinfo is None:
-                    nxt = nxt.replace(tzinfo=timezone.utc)
+            return nxt
         except Exception:
             return None
-        return None
 
     return None

@@ -17,13 +17,25 @@ from datetime import datetime, timezone
 
 from psycopg2.extras import Json
 
-from core.postgres import get_connection, pg_execute, pg_fetchall, pg_fetchone
+from core.postgres import (
+    get_connection,
+    pg_execute,
+    pg_fetchall,
+    pg_fetchone,
+    row_to_dict,
+)
 from reminders import recurrence
 
 logger = logging.getLogger(__name__)
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
+
+def _err(message: str, code: str = "bad_request") -> dict:
+    """A structured service error. ``code`` (bad_request|not_found|conflict) drives
+    the router's HTTP status without it having to substring-match the message."""
+    return {"error": message, "code": code}
+
 
 def _normalize_due_at(raw) -> datetime:
     """Parse a client/tool due_at into a timezone-aware UTC datetime.
@@ -63,14 +75,14 @@ def create_reminder(message: str, due_at, context: str | None = None,
     """
     message = (message or "").strip()
     if not message:
-        return {"error": "message is required"}
+        return _err("message is required")
     try:
         due = _normalize_due_at(due_at)
     except ValueError:
-        return {"error": "due_at must be a valid ISO 8601 datetime"}
+        return _err("due_at must be a valid ISO 8601 datetime")
     rule_err = recurrence.validate_rule(recurrence_rule)
     if rule_err:
-        return {"error": rule_err}
+        return _err(rule_err)
 
     rid = str(uuid.uuid4())
     if recurrence_rule is not None and not series_id:
@@ -130,7 +142,7 @@ def update_reminder(reminder_id: str, *, message=_UNSET, due_at=_UNSET,
     sets, params = [], []
     if message is not _UNSET:
         if not (message or "").strip():
-            return {"error": "message cannot be empty"}
+            return _err("message cannot be empty")
         sets.append("message = %s")
         params.append(message.strip())
     if context is not _UNSET:
@@ -141,18 +153,18 @@ def update_reminder(reminder_id: str, *, message=_UNSET, due_at=_UNSET,
             sets.append("due_at = %s")
             params.append(_normalize_due_at(due_at))
         except ValueError:
-            return {"error": "due_at must be a valid ISO 8601 datetime"}
+            return _err("due_at must be a valid ISO 8601 datetime")
     if recurrence_rule is not _UNSET:
         rule_err = recurrence.validate_rule(recurrence_rule)
         if rule_err:
-            return {"error": rule_err}
+            return _err(rule_err)
         sets.append("recurrence_rule = %s")
         params.append(Json(recurrence_rule) if recurrence_rule else None)
         # Adding recurrence to a formerly one-shot reminder must start a series.
         if recurrence_rule is not None:
             sets.append("series_id = COALESCE(series_id, id)")
     if not sets:
-        return {"error": "no fields to update"}
+        return _err("no fields to update")
 
     params.append(reminder_id)
     updated = pg_execute(
@@ -162,8 +174,8 @@ def update_reminder(reminder_id: str, *, message=_UNSET, due_at=_UNSET,
     if updated == 0:
         existing = get_reminder(reminder_id)
         if existing is None:
-            return {"error": "reminder not found"}
-        return {"error": "only pending reminders can be edited"}
+            return _err("reminder not found", "not_found")
+        return _err("only pending reminders can be edited", "conflict")
     return {"ok": True, "reminder": get_reminder(reminder_id)}
 
 
@@ -177,8 +189,8 @@ def cancel_reminder(reminder_id: str) -> dict:
     if cancelled == 0:
         existing = get_reminder(reminder_id)
         if existing is None:
-            return {"error": "reminder not found"}
-        return {"error": f"reminder already {existing['status']}"}
+            return _err("reminder not found", "not_found")
+        return _err(f"reminder already {existing['status']}", "conflict")
     was_recurring = bool((get_reminder(reminder_id) or {}).get("is_recurring"))
     return {"ok": True, "id": reminder_id,
             "note": "recurring series stopped" if was_recurring else "reminder cancelled"}
@@ -193,8 +205,8 @@ def delete_reminder(reminder_id: str) -> dict:
     if deleted == 0:
         existing = get_reminder(reminder_id)
         if existing is None:
-            return {"error": "reminder not found"}
-        return {"error": "cancel a pending reminder before deleting it"}
+            return _err("reminder not found", "not_found")
+        return _err("cancel a pending reminder before deleting it", "conflict")
     return {"ok": True, "id": reminder_id}
 
 
@@ -223,18 +235,24 @@ def claim_reminder(reminder: dict) -> bool:
     rid = reminder["id"]
     with get_connection() as conn:
         cur = conn.cursor()
+        # Re-check due_at <= now() inside the claim: a PATCH between get_due_reminders
+        # and here could have rescheduled the reminder into the future or changed its
+        # rule/content. RETURNING gives the FRESH row so the successor is built from
+        # current data, never the stale snapshot the caller passed in.
         cur.execute(
             "UPDATE reminders SET status = 'fired', fired_at = now(), result = 'processing' "
-            "WHERE id = %s AND status = 'pending'",
+            "WHERE id = %s AND status = 'pending' AND due_at <= now() "
+            "RETURNING message, context, due_at, recurrence_rule, series_id",
             (rid,),
         )
         if cur.rowcount != 1:
-            return False  # lost the claim
-        rule = reminder.get("recurrence_rule")
+            return False  # lost the claim, or the reminder was rescheduled to the future
+        row = row_to_dict(cur, cur.fetchone())
+        rule = row.get("recurrence_rule")   # fresh JSONB → dict | None
         if rule:
             try:
                 nxt = recurrence.compute_next_due(
-                    datetime.fromisoformat(reminder["due_at"]), rule)
+                    datetime.fromisoformat(row["due_at"]), rule)
             except (ValueError, TypeError):
                 nxt = None
             if nxt is not None:
@@ -242,8 +260,8 @@ def claim_reminder(reminder: dict) -> bool:
                     """INSERT INTO reminders (id, message, context, due_at, status, recurrence_rule, series_id)
                        VALUES (%s, %s, %s, %s, 'pending', %s, %s)
                        ON CONFLICT (series_id, due_at) WHERE series_id IS NOT NULL DO NOTHING""",
-                    (str(uuid.uuid4()), reminder["message"], reminder.get("context", ""),
-                     nxt, Json(rule), reminder.get("series_id") or rid),
+                    (str(uuid.uuid4()), row["message"], row.get("context", ""),
+                     nxt, Json(rule), row.get("series_id") or rid),
                 )
     return True
 
@@ -251,35 +269,3 @@ def claim_reminder(reminder: dict) -> bool:
 def finish_reminder(reminder_id: str, result: str) -> None:
     """Record the terminal result text on a fired reminder."""
     pg_execute("UPDATE reminders SET result = %s WHERE id = %s", (result[:2000], reminder_id))
-
-
-# Kept for API/tests parity with Chatty's naming; claim_reminder now owns the
-# same-transaction successor creation, but a caller may still want it standalone.
-def create_next_occurrence(fired_reminder: dict) -> dict | None:
-    """Create the next pending occurrence for a recurring reminder (idempotent)."""
-    rule = fired_reminder.get("recurrence_rule")
-    if not rule:
-        return None
-    try:
-        nxt = recurrence.compute_next_due(
-            datetime.fromisoformat(fired_reminder["due_at"]), rule)
-    except (ValueError, TypeError):
-        return None
-    if nxt is None:
-        return None
-    series_id = fired_reminder.get("series_id") or fired_reminder["id"]
-    rid = str(uuid.uuid4())
-    with get_connection() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            """INSERT INTO reminders (id, message, context, due_at, status, recurrence_rule, series_id)
-               VALUES (%s, %s, %s, %s, 'pending', %s, %s)
-               ON CONFLICT (series_id, due_at) WHERE series_id IS NOT NULL DO NOTHING
-               RETURNING id""",
-            (rid, fired_reminder["message"], fired_reminder.get("context", ""),
-             nxt, Json(rule), series_id),
-        )
-        inserted = cur.fetchone()
-    if inserted is None:
-        return None  # successor already existed
-    return {"id": rid, "due_at": nxt.isoformat(), "series_id": series_id}

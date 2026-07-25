@@ -145,14 +145,35 @@ def test_provider_error_event(monkeypatch):
     assert r.error and "rate limited" in r.text
 
 
-def test_allowlist_builders_use_writes_map():
+def test_allowlist_is_reads_plus_notify_only():
     reg = FakeRegistry()
-    hb = background.heartbeat_allowlist(reg)
-    assert "crm_dashboard" in hb and "notify_user" in hb
-    assert "crm_delete_contact" not in hb and "crm_create_task" not in hb
-    rem = background.reminder_allowlist(reg)
-    assert "crm_create_task" in rem and "notify_user" in rem
-    assert "crm_delete_contact" not in rem
+    allowed = background.background_allowlist(reg)
+    assert "crm_dashboard" in allowed and "notify_user" in allowed   # read + notify
+    # NO CRM writes at all — not deletes, not creates, not logging.
+    assert "crm_delete_contact" not in allowed
+    assert "crm_create_task" not in allowed
+    # heartbeat_allowlist / reminder_allowlist are aliases of the same boundary.
+    assert background.heartbeat_allowlist(reg) == allowed
+    assert background.reminder_allowlist(reg) == allowed
+
+
+def test_timeout_returns_error(monkeypatch):
+    class HangingProvider:
+        model = "fake-model"
+
+        async def stream_turn(self, messages, tools, system_prompt):
+            import asyncio as _a
+            await _a.sleep(5)   # never completes within the short timeout
+            yield _complete(stop="stop")
+
+        def build_tool_turn(self, text, tool_calls, results):
+            return []
+
+    _use(HangingProvider(), monkeypatch)
+    r = run_background_turn(("sys", "vol"), "go", allowed_tools={"crm_dashboard"},
+                            registry=FakeRegistry(), timeout=1)
+    assert r.error
+    assert "timed out" in r.text
 
 
 async def test_refuses_inside_running_loop(monkeypatch):

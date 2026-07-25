@@ -182,3 +182,61 @@ def test_failure_below_threshold_no_alert(monkeypatch, mocks):
                         lambda *a, **k: BackgroundResult(text="blip", error=True))
     service.maybe_run_heartbeat_turn(force=True)
     assert mocks["alerts"] == []
+
+
+def test_failure_alert_suppressed_within_cooldown(monkeypatch, mocks):
+    # Over threshold, but the cooldown SELECT returns None → no new alert/push.
+    monkeypatch.setattr(service.settings, "heartbeat_enabled", True)
+    monkeypatch.setattr(service, "get_ai_provider", lambda *a, **k: object())
+    monkeypatch.setattr(service, "pg_execute", lambda *a, **k: 1)
+
+    def fetchone(sql, *a, **k):
+        return {"consecutive_errors": 5} if "RETURNING consecutive_errors" in sql else None
+
+    monkeypatch.setattr(service, "pg_fetchone", fetchone)
+    monkeypatch.setattr(service.background, "run_background_turn",
+                        lambda *a, **k: BackgroundResult(text="still down", error=True))
+    service.maybe_run_heartbeat_turn(force=True)
+    assert mocks["alerts"] == []       # cooldown gate held → no duplicate alert/push
+    assert mocks["delivered"] == []
+
+
+# ── tick / entrypoints ──────────────────────────────────────────────────────
+
+def test_tick_runs_turn_only_when_forced(monkeypatch):
+    calls = {"turn": 0, "reminders": 0}
+    monkeypatch.setattr(service, "pg_execute", lambda *a, **k: 1)
+    monkeypatch.setattr(service, "process_due_reminders",
+                        lambda run_ai_enhancement=True: calls.__setitem__("reminders", calls["reminders"] + 1) or [])
+    monkeypatch.setattr(service, "_maybe_run_dreaming", lambda: None)
+    monkeypatch.setattr(service, "maybe_run_heartbeat_turn",
+                        lambda force=False: calls.__setitem__("turn", calls["turn"] + 1) or {"status": "ok"})
+
+    out = service.tick(force_turn=False, run_ai_enhancement=False)
+    assert out["heartbeat_turn"] == {"skipped": "not requested"}
+    assert calls["turn"] == 0 and calls["reminders"] == 1   # run_ai_turn=false → no AI turn
+
+    out = service.tick(force_turn=True, run_ai_enhancement=True)
+    assert calls["turn"] == 1 and out["heartbeat_turn"] == {"status": "ok"}
+
+
+def test_reminder_tick_gates_ai_on_env(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(service, "pg_execute", lambda *a, **k: 1)
+    monkeypatch.setattr(service, "_maybe_run_dreaming", lambda: None)
+    monkeypatch.setattr(service, "process_due_reminders",
+                        lambda run_ai_enhancement=True: captured.__setitem__("ai", run_ai_enhancement) or [])
+    monkeypatch.setattr(service.settings, "heartbeat_enabled", False)
+    service.reminder_tick()
+    assert captured["ai"] is False       # local (disabled) → reminders deliver baseline-only
+    monkeypatch.setattr(service.settings, "heartbeat_enabled", True)
+    service.reminder_tick()
+    assert captured["ai"] is True
+
+
+def test_heartbeat_turn_tick_delegates(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(service, "maybe_run_heartbeat_turn",
+                        lambda force=False: seen.__setitem__("force", force) or {"skipped": "throttled"})
+    assert service.heartbeat_turn_tick() == {"skipped": "throttled"}
+    assert seen["force"] is False

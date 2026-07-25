@@ -1,10 +1,14 @@
 """APScheduler wiring for the heartbeat (issue #6).
 
-A single ``BackgroundScheduler`` with one 60s ``heartbeat_tick`` job. No
-persistent job store — the job is re-registered from code on every boot (matches
-Chatty; the tick is idempotent). ``get_scheduler()`` exposes the scheduler so
-other features (e.g. #5 dreaming, if it ever wants its own APScheduler job rather
-than the tick seam) can register jobs without touching this module.
+A single ``BackgroundScheduler`` with TWO jobs, deliberately decoupled so a slow
+system AI turn never delays reminder delivery:
+  * ``reminder_tick`` — every 60s: fire due reminders + drive dreaming (fast, bounded).
+  * ``heartbeat_turn`` — every 5 min: run the throttled system AI turn if due.
+Each job is ``max_instances=1, coalesce=True`` so a slow run never stacks and never
+blocks the OTHER job. No persistent job store — jobs are re-registered on every boot
+(the ticks are idempotent). ``get_scheduler()`` exposes the scheduler so other
+features (e.g. #5 dreaming, if it ever wants its own job) can register without
+touching this module.
 
 The scheduler ALWAYS starts (locally too): processing due reminders is keyless,
 cost-free work — only the heartbeat AI *turn* is env-gated (see heartbeat.service).
@@ -30,11 +34,15 @@ def start_scheduler() -> None:
 
     _scheduler = BackgroundScheduler()
     _scheduler.add_job(
-        service.tick, "interval", seconds=60, id="heartbeat_tick",
-        max_instances=1, coalesce=True,   # a slow tick never stacks
+        service.reminder_tick, "interval", seconds=60, id="reminder_tick",
+        max_instances=1, coalesce=True,
+    )
+    _scheduler.add_job(
+        service.heartbeat_turn_tick, "interval", seconds=300, id="heartbeat_turn",
+        max_instances=1, coalesce=True,
     )
     _scheduler.start()
-    logger.info("Heartbeat scheduler started (60s tick)")
+    logger.info("Heartbeat scheduler started (reminder_tick 60s + heartbeat_turn 300s)")
 
 
 def shutdown_scheduler() -> None:

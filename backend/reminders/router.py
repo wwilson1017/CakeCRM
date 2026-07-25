@@ -47,17 +47,20 @@ def _parse_recurrence_or_400(raw: str) -> dict | None:
     return rule
 
 
+_CODE_TO_STATUS = {"not_found": 404, "conflict": 409, "bad_request": 400}
+
+
 def _raise_for_error(result: dict) -> dict:
-    """Map a service ``{"error": ...}`` to the right HTTP status."""
+    """Map a service ``{"error": ..., "code": ...}`` to the right HTTP status.
+
+    Keys off the structured ``code`` (not the message text), so rewording a service
+    error can never silently flip the HTTP status.
+    """
     err = result.get("error")
     if not err:
         return result
-    low = err.lower()
-    if "not found" in low:
-        raise HTTPException(status_code=404, detail=err)
-    if "only pending" in low or "already" in low or "before deleting" in low:
-        raise HTTPException(status_code=409, detail=err)
-    raise HTTPException(status_code=400, detail=err)
+    status = _CODE_TO_STATUS.get(result.get("code", "bad_request"), 400)
+    raise HTTPException(status_code=status, detail=err)
 
 
 @router.get("")

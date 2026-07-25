@@ -9,7 +9,7 @@ given as a natural-language string and parsed via ``reminders.recurrence``.
 
 from collections.abc import Callable
 
-from reminders import recurrence, service
+from reminders import recurrence as recurrence_rules, service
 
 REMINDER_TOOL_DEFS: list[dict] = [
     {
@@ -66,7 +66,7 @@ def _create_reminder(message: str = "", due_at: str = "", context: str = "",
                     recurrence: str = "") -> dict:
     rule = None
     if recurrence and recurrence.strip():
-        rule = _parse(recurrence)
+        rule = recurrence_rules.parse_recurrence(recurrence)
         if rule is None:
             return {"error": f"Could not understand the recurrence '{recurrence}'. "
                              "Try 'daily', 'weekly:mon,wed', 'monthly:15', 'every 4 hours', or 'cron:<expr>'."}
@@ -81,12 +81,6 @@ def _cancel_reminder(reminder_id: str = "") -> dict:
     if not reminder_id:
         return {"error": "reminder_id is required"}
     return service.cancel_reminder(reminder_id)
-
-
-def _parse(raw: str) -> dict | None:
-    # Wrapper kept so the local `recurrence` parameter name in _create_reminder
-    # doesn't shadow the imported module at call time.
-    return recurrence.parse_recurrence(raw)
 
 
 def get_reminder_tools() -> tuple[list[dict], dict[str, Callable[..., dict]]]:

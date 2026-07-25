@@ -79,6 +79,10 @@ async def vapid_public_key(_user: dict = Depends(get_current_user)):
 async def subscribe(req: SubscribeRequest, _user: dict = Depends(get_current_user)):
     if not req.endpoint or not req.keys.p256dh or not req.keys.auth:
         raise HTTPException(status_code=400, detail="endpoint and keys are required")
+    # Reject an endpoint that isn't a safe public https push URL (defense-in-depth
+    # against SSRF — the server later POSTs to this endpoint).
+    if not delivery.is_safe_push_endpoint(req.endpoint):
+        raise HTTPException(status_code=400, detail="invalid push endpoint")
     return await run_in_threadpool(
         subscriptions.save_subscription, req.endpoint, req.keys.p256dh, req.keys.auth, req.user_agent)
 

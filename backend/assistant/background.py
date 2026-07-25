@@ -62,15 +62,21 @@ def read_tool_names(registry) -> set[str]:
     return {name for name, is_write in registry.writes_map.items() if not is_write}
 
 
-def heartbeat_allowlist(registry) -> set[str]:
-    """Heartbeat turn: read tools + notify_user only (it observes and alerts)."""
+def background_allowlist(registry) -> set[str]:
+    """Tools a background (autonomous) turn may use: READ tools + notify_user ONLY.
+
+    No CRM write tools at all. The turn observes the user's data and, if warranted,
+    calls notify_user once (its only externally-visible action, budgeted). This is
+    a hard boundary against prompt injection via reminder/CRM text: even if the
+    model were steered by injected content, the worst it can do is send one
+    notification — it can never create/log/update/delete CRM records.
+    """
     return read_tool_names(registry) | {"notify_user"}
 
 
-def reminder_allowlist(registry) -> set[str]:
-    """Reminder-fire turn: reads + notify_user + additive-only writes (log a call,
-    create a follow-up task). Never update/delete, never reminder mutation."""
-    return read_tool_names(registry) | {"notify_user", "crm_create_task", "crm_log_activity"}
+# Heartbeat and reminder turns share the same (read + notify_user) boundary.
+heartbeat_allowlist = background_allowlist
+reminder_allowlist = background_allowlist
 
 
 def _short(value, limit: int) -> str:

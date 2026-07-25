@@ -24,6 +24,20 @@ _jwt_secret_from_env = os.getenv("JWT_SECRET", "")
 _jwt_secret_is_auto = not _jwt_secret_from_env or _jwt_secret_from_env == "change-me-in-production"
 
 
+def _positive_int_env(name: str, default: int) -> int:
+    """Read a positive-integer env var, falling back to ``default`` on a missing,
+    non-integer, or non-positive value (so a bad HEARTBEAT_INTERVAL_MINUTES can
+    neither crash startup nor make the heartbeat cadence fire every tick)."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value >= 1 else default
+
+
 class AuthSettings:
     # Plaintext or bcrypt-hashed password for single-user login
     password: str = os.getenv("AUTH_PASSWORD", "changeme")
@@ -73,7 +87,7 @@ class Settings:
     # How stale last_turn_at must be before the tick runs another system heartbeat
     # turn. The tick fires every 60s but a per-tick AI turn would be ~1,440/day of
     # token burn, so the turn itself is throttled (Chatty's heartbeat cadence).
-    heartbeat_interval_minutes: int = int(os.getenv("HEARTBEAT_INTERVAL_MINUTES", "30"))
+    heartbeat_interval_minutes: int = _positive_int_env("HEARTBEAT_INTERVAL_MINUTES", 30)
 
     # Web Push (VAPID). Leave blank to auto-generate a keypair once and persist it
     # in Postgres (vapid_keys singleton, private key Fernet-encrypted). Set both

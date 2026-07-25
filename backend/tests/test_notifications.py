@@ -114,3 +114,31 @@ def test_pywebpush_missing_degrades(wiring, monkeypatch):
     monkeypatch.setattr(subscriptions, "list_subscriptions", lambda: [_SUB])
     result = delivery.deliver_notification("Hi", "there")
     assert result["web_push"] is False
+
+
+def test_create_notification_failure_never_raises(monkeypatch):
+    # Even if the audit row can't be written, deliver_notification must not raise.
+    def boom(*a, **k):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(delivery.service, "create_notification", boom)
+    monkeypatch.setattr(delivery.service, "update_channels", lambda *a, **k: None)
+    monkeypatch.setattr(subscriptions, "list_subscriptions", lambda: [])
+    result = delivery.deliver_notification("Hi", "there")   # must not raise
+    assert result["ok"] is True and result["notification_id"]
+
+
+@pytest.mark.parametrize("endpoint,ok", [
+    ("https://fcm.googleapis.com/fcm/send/abc", True),
+    ("https://web.push.apple.com/xyz", True),
+    ("http://fcm.googleapis.com/x", False),        # not https
+    ("https://localhost/x", False),                 # localhost
+    ("https://127.0.0.1/x", False),                 # loopback IP literal
+    ("https://10.0.0.5/x", False),                   # private IP literal
+    ("https://169.254.169.254/latest", False),       # link-local (cloud metadata)
+    ("https://[::1]/x", False),                       # IPv6 loopback
+    ("", False),
+    ("https://" + "a" * 3000, False),                # too long
+])
+def test_is_safe_push_endpoint(endpoint, ok):
+    assert delivery.is_safe_push_endpoint(endpoint) is ok

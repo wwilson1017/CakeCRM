@@ -24,10 +24,11 @@ def test_shutdown_without_start_is_safe():
     assert scheduler.get_scheduler() is None
 
 
-def test_registers_the_tick_job():
+def test_registers_both_jobs():
     try:
         scheduler.start_scheduler()
         sched = scheduler.get_scheduler()
-        assert sched.get_job("heartbeat_tick") is not None
+        assert sched.get_job("reminder_tick") is not None    # 60s reminder job
+        assert sched.get_job("heartbeat_turn") is not None    # throttled AI-turn job
     finally:
         scheduler.shutdown_scheduler()
