@@ -36,9 +36,11 @@ _MAX_PER_TICK = 3
 _REMINDER_AI_TIMEOUT = 60      # short bound so a slow model can't stall the tick
 _FAILURE_ALERT_THRESHOLD = 3
 _FAILURE_ALERT_COOLDOWN_SECONDS = 3600
-# A forced (run-now) turn is refused while another turn is in flight — longer than
-# the turn timeout so it only blocks genuine overlap, never a legitimate re-run.
-_TURN_INFLIGHT_GUARD_SECONDS = 180
+# A forced (run-now) turn is refused while another turn is in flight. Set above the
+# 120s turn timeout PLUS the worst-case executor-join window (asyncio.run joins the
+# to_thread default executor on close — up to ~300s on 3.12 if a sync tool hangs),
+# so the guard stays honest even when a wedged tool holds the scheduler thread.
+_TURN_INFLIGHT_GUARD_SECONDS = 480
 
 
 # ── scheduler job entrypoints ────────────────────────────────────────────────
@@ -72,46 +74,66 @@ def tick(*, force_turn: bool = False, run_ai_enhancement: bool = True) -> dict:
 # ── reminders ───────────────────────────────────────────────────────────────
 
 def process_due_reminders(run_ai_enhancement: bool = True) -> list[dict]:
-    """Fire up to _MAX_PER_TICK due reminders. Baseline delivery first; each
-    reminder is fully isolated so one failure never aborts the batch."""
-    processed: list[dict] = []
+    """Fire up to _MAX_PER_TICK due reminders in TWO phases so a slow AI model can
+    never delay another reminder's baseline push: (1) claim + baseline-deliver ALL
+    due reminders, (2) run best-effort AI enhancement on each. Every reminder is
+    isolated so one failure never aborts the batch."""
+    claimed: list[dict] = []
+    results: list[dict] = []
+
+    # ── Phase 1: claim + baseline delivery for ALL due reminders first ──────
     for reminder in reminders_service.get_due_reminders(_MAX_PER_TICK):
         rid = reminder["id"]
         try:
             if not reminders_service.claim_reminder(reminder):
-                continue  # lost the claim / rescheduled — no double-fire
-            processed.append(_process_reminder(reminder, run_ai_enhancement))
+                continue  # lost the claim / rescheduled — no double-fire, still pending
+        except Exception:
+            # Claim errored → row stays pending, retries next tick. No alert.
+            logger.warning("reminder %s claim failed", rid, exc_info=True)
+            continue
+        try:
+            _deliver_baseline(reminder)     # deliver_notification never raises
+            claimed.append(reminder)
         except Exception as e:
-            # Never let one bad reminder stop the rest of the batch.
-            logger.warning("reminder %s failed to process: %s", rid, e, exc_info=True)
-            try:
-                reminders_service.finish_reminder(rid, f"error: {e}")
-                _reminder_error_alert(reminder, str(e))
-            except Exception:
-                logger.warning("reminder %s error-handling also failed", rid, exc_info=True)
-            processed.append({"id": rid, "status": "error"})
-    return processed
+            # The row is 'fired' now, so this genuine post-claim failure is alerted.
+            logger.warning("reminder %s baseline delivery failed: %s", rid, e, exc_info=True)
+            _finish_and_alert(reminder, str(e))
+            results.append({"id": rid, "status": "error"})
+
+    # ── Phase 2: AI enhancement (best-effort), after every baseline is out ──
+    for reminder in claimed:
+        rid = reminder["id"]
+        if not run_ai_enhancement:
+            reminders_service.finish_reminder(rid, "delivered")
+            results.append({"id": rid, "status": "delivered"})
+            continue
+        try:
+            results.append(_enhance_reminder(reminder))
+        except Exception as e:
+            # Enhancement SETUP (identity read, registry build) or the turn failed
+            # AFTER baseline delivery → record it, never a false failure alert (R11).
+            logger.warning("reminder %s AI enhancement failed: %s", rid, e, exc_info=True)
+            reminders_service.finish_reminder(rid, f"delivered; AI enhancement error: {str(e)[:400]}")
+            results.append({"id": rid, "status": "delivered_ai_error"})
+    return results
 
 
-def _process_reminder(reminder: dict, run_ai_enhancement: bool) -> dict:
-    rid = reminder["id"]
+def _deliver_baseline(reminder: dict) -> None:
     message = reminder.get("message", "")
     context = reminder.get("context", "")
-
-    # 1) Baseline delivery — ALWAYS, first, keyless. This alone satisfies acceptance
-    #    ("a scheduled action fires and delivers a push notification").
     body = message + (f"\n\n{context}" if context else "")
+    # ALWAYS, first, keyless — this alone satisfies acceptance ("a scheduled action
+    # fires and delivers a push notification").
     delivery.deliver_notification(f"Reminder: {message[:120]}", body)
 
-    # 2) AI enhancement — best-effort, short-bounded, read + notify_user only.
-    if not run_ai_enhancement:
-        reminders_service.finish_reminder(rid, "delivered")
-        return {"id": rid, "status": "delivered"}
 
+def _enhance_reminder(reminder: dict) -> dict:
+    """Best-effort AI enhancement of an already-delivered reminder (read+notify only)."""
+    rid = reminder["id"]
     reg = ToolRegistry(background=True)
     result = background.run_background_turn(
         _reminder_prompt(reminder),
-        _reminder_user_message(message, context),
+        _reminder_user_message(reminder.get("message", ""), reminder.get("context", "")),
         allowed_tools=background.background_allowlist(reg),
         registry=reg, model_tier="light", timeout=_REMINDER_AI_TIMEOUT,
     )
@@ -119,12 +141,19 @@ def _process_reminder(reminder: dict, run_ai_enhancement: bool) -> dict:
         reminders_service.finish_reminder(rid, "delivered (no AI provider)")
         return {"id": rid, "status": "delivered_no_ai"}
     if result.error:
-        # Baseline already delivered → an AI-enhancement failure is NOT an alert,
-        # just recorded (avoids alert noise on every rate-limit/model blip).
         reminders_service.finish_reminder(rid, f"delivered; AI enhancement error: {result.text[:400]}")
         return {"id": rid, "status": "delivered_ai_error"}
     reminders_service.finish_reminder(rid, f"processed: {result.text[:500]}")
     return {"id": rid, "status": "processed"}
+
+
+def _finish_and_alert(reminder: dict, error: str) -> None:
+    """Record a terminal error on a fired reminder and raise a reminder alert."""
+    try:
+        reminders_service.finish_reminder(reminder["id"], f"error: {error}")
+        _reminder_error_alert(reminder, error)
+    except Exception:
+        logger.warning("reminder %s error-handling also failed", reminder["id"], exc_info=True)
 
 
 def _reminder_prompt(reminder: dict) -> tuple[str, str]:
@@ -162,8 +191,10 @@ def _reminder_error_alert(reminder: dict, error: str) -> None:
 
 def maybe_run_heartbeat_turn(force: bool = False) -> dict:
     """Run the periodic system heartbeat AI turn, subject to three gates."""
+    # Skips do NOT write last_turn_status — that column records the last ACTUAL turn
+    # (so /status stays a coherent status+result pair). The current gate state is
+    # reported live by the status endpoint from `enabled` + provider presence.
     if not force and not settings.heartbeat_enabled:
-        _set_turn_status("skipped_disabled")
         return {"skipped": "disabled"}
 
     try:
@@ -172,8 +203,7 @@ def maybe_run_heartbeat_turn(force: bool = False) -> dict:
         logger.warning("get_ai_provider failed during heartbeat preflight", exc_info=True)
         provider = None
     if provider is None:
-        _set_turn_status("skipped_no_provider")   # keyless — never an error/alert
-        return {"skipped": "no_provider"}
+        return {"skipped": "no_provider"}   # keyless — never an error/alert
 
     # Claim the turn slot via a rowcount UPDATE (no held connection / lock). The
     # force path keeps an in-flight guard so run-now can't launch a 2nd concurrent
@@ -234,10 +264,6 @@ def _heartbeat_prompt() -> tuple[str, str]:
 def _now_line() -> str:
     from datetime import datetime, timezone
     return f"Current UTC time: {datetime.now(timezone.utc).isoformat()}"
-
-
-def _set_turn_status(status: str) -> None:
-    pg_execute("UPDATE heartbeat_state SET last_turn_status = %s WHERE id = 1", (status,))
 
 
 def _evaluate_failure_alert(consecutive_errors: int, last_error: str) -> None:

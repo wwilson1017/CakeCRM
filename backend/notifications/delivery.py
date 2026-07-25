@@ -141,6 +141,14 @@ def _send_web_push(title: str, message: str, notification_id: str) -> bool:
             logger.debug("failed to raise VAPID alert", exc_info=True)
         return False
 
+    # Keys loaded → auto-clear any prior "Web Push unavailable" alert (symmetric with
+    # the heartbeat-failure recovery path).
+    try:
+        from alerts import service as alerts_service
+        alerts_service.resolve_by_source("vapid", "vapid")
+    except Exception:
+        logger.debug("failed to resolve VAPID alert", exc_info=True)
+
     data = _build_payload(title, message, notification_id)
     sent = 0
     for sub in subs:

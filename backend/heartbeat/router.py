@@ -38,10 +38,21 @@ async def run_now(req: RunNowRequest, _user: dict = Depends(get_current_user)):
 
 @router.get("/status")
 async def status(_user: dict = Depends(get_current_user)):
-    state = await run_in_threadpool(
-        pg_fetchone, "SELECT * FROM heartbeat_state WHERE id = 1")
+    def _read():
+        from providers import get_ai_provider
+        state = pg_fetchone("SELECT * FROM heartbeat_state WHERE id = 1")
+        try:
+            provider_ready = get_ai_provider() is not None
+        except Exception:
+            provider_ready = False
+        return state, provider_ready
+
+    state, provider_ready = await run_in_threadpool(_read)
     return {
+        # last_turn_status/result reflect the last ACTUAL turn; the current gate is
+        # reported live below (enabled + provider_ready), never stored as a "skip".
         "state": state or {},
         "enabled": settings.heartbeat_enabled,
         "interval_minutes": settings.heartbeat_interval_minutes,
+        "provider_ready": provider_ready,
     }

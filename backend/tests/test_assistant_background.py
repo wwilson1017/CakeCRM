@@ -186,6 +186,36 @@ async def test_refuses_inside_running_loop(monkeypatch):
     assert "event loop" in r.text
 
 
+def test_runs_on_captured_main_loop(monkeypatch):
+    # When a main loop is captured, the turn runs ON it (via run_coroutine_threadsafe)
+    # from the calling/scheduler thread — the path that keeps the loop-bound provider
+    # client alive across many background turns.
+    import asyncio
+    import threading
+
+    loop = asyncio.new_event_loop()
+    ready = threading.Event()
+
+    def run_loop():
+        asyncio.set_event_loop(loop)
+        ready.set()
+        loop.run_forever()
+
+    t = threading.Thread(target=run_loop, daemon=True)
+    t.start()
+    ready.wait()
+    monkeypatch.setattr(background, "_main_loop", loop)
+    try:
+        prov = FakeProvider([[{"type": "text", "text": "on main loop"}, _complete(stop="stop")]])
+        _use(prov, monkeypatch)
+        r = run_background_turn(("s", "v"), "go", allowed_tools={"crm_dashboard"}, registry=FakeRegistry())
+        assert not r.error and r.text == "on main loop"
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        t.join(timeout=2)
+        loop.close()
+
+
 def test_result_dataclass_defaults():
     r = BackgroundResult(text="hi")
     assert r.tool_log == [] and r.input_tokens == 0 and not r.error

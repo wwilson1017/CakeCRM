@@ -15,10 +15,10 @@ from enum import Enum
 # multi-step turn while still capping a runaway loop.
 WRITE_BUDGET_PER_TURN = 20
 
-# Background turns (heartbeat / reminder firing) auto-approve writes — there is no
-# human to confirm them — so they run under a tighter budget AND a server-enforced
-# tool allowlist (assistant/background.py) that admits only reads + notify_user
-# (+ additive-only writes for reminder enhancement). Half the interactive budget.
+# Background turns (heartbeat / reminder firing) have no human to confirm writes,
+# so a server-enforced tool allowlist (assistant/background.py) admits only READ
+# tools + notify_user — no CRM writes at all. This budget therefore just bounds how
+# many notify_user calls a runaway turn can make. Half the interactive budget.
 WRITE_BUDGET_BACKGROUND = 10
 
 

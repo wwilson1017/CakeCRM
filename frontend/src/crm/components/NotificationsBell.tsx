@@ -46,15 +46,21 @@ export function NotificationsBell() {
   const [notifications, setNotifications] = useState<NotificationRow[]>([]);
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
   const [count, setCount] = useState(0);
+  const [alertCount, setAlertCount] = useState(0);
   const wrapRef = useRef<HTMLDivElement>(null);
 
-  // Poll the active-notification count for the badge (setState only in the async
-  // .then callback, never synchronously in the effect body).
+  // Poll the active notification + alert counts for the badge/indicator (setState
+  // only in async .then callbacks, never synchronously in the effect body). Alerts
+  // are polled too so the "something is wrong" color fires proactively, not only
+  // after the dropdown has been opened once.
   useEffect(() => {
     let active = true;
     const poll = () => {
       api<{ notifications: NotificationRow[] }>('/api/notifications?status=active&limit=20')
         .then(res => { if (active) setCount(res.notifications.length); })
+        .catch(() => { /* keep last */ });
+      api<{ count: number }>('/api/alerts/counts')
+        .then(res => { if (active) setAlertCount(res.count); })
         .catch(() => { /* keep last */ });
     };
     poll();
@@ -75,6 +81,7 @@ export function NotificationsBell() {
         setNotifications(n.notifications);
         setAlerts(a.alerts);
         setCount(n.notifications.length);
+        setAlertCount(a.alerts.length);
       })
       .catch(() => { /* best-effort */ });
     return () => { active = false; };
@@ -102,6 +109,7 @@ export function NotificationsBell() {
   }
   async function actOnAlert(id: string, action: 'acknowledge' | 'resolve') {
     setAlerts(list => list.filter(a => a.id !== id));
+    setAlertCount(c => Math.max(0, c - 1));
     try { await api(`/api/alerts/${id}/${action}`, { method: 'POST' }); } catch { /* ignore */ }
   }
 
@@ -113,7 +121,7 @@ export function NotificationsBell() {
         style={{
           position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center',
           width: 34, height: 32, border: `1px solid ${LINE_STRONG}`, borderRadius: 6,
-          background: 'transparent', color: alerts.length ? CORAL : INK_MUTE, cursor: 'pointer',
+          background: 'transparent', color: alertCount > 0 ? CORAL : INK_MUTE, cursor: 'pointer',
         }}
       >
         <BellIcon />

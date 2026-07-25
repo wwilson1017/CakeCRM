@@ -96,6 +96,14 @@ async def lifespan(app: FastAPI):
             )
 
     # ── Background scheduler (issue #6) ─────────────────────────────────────
+    # Capture the main event loop so scheduler-thread background AI turns run their
+    # coroutines HERE (the provider async clients are module-cached + loop-bound to
+    # this loop; a throwaway asyncio.run loop would break on the 2nd turn).
+    import asyncio as _asyncio
+
+    from assistant import background as _background
+    _background.set_main_loop(_asyncio.get_running_loop())
+
     # Started after migrations so the tick's tables exist. The reminder tick
     # always runs (keyless); only the heartbeat AI turn is env-gated.
     from heartbeat.scheduler import start_scheduler

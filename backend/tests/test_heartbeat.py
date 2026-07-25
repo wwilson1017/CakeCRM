@@ -86,20 +86,53 @@ def test_ai_error_after_delivery_no_alert(monkeypatch, mocks):
     assert "AI enhancement error" in mocks["finished"][0][1]
 
 
-def test_processing_exception_alerts(monkeypatch, mocks):
+def test_enhancement_exception_after_delivery_no_alert(monkeypatch, mocks):
+    # An exception in the enhancement PHASE (setup or the turn) after the baseline
+    # was delivered is recorded as delivered_ai_error, NEVER a false failure alert.
     monkeypatch.setattr(service.reminders_service, "get_due_reminders", lambda n: [_reminder()])
     monkeypatch.setattr(service.reminders_service, "claim_reminder", lambda r: True)
 
     def boom(*a, **k):
-        raise RuntimeError("enhancement exploded")
+        raise RuntimeError("enhancement setup exploded")
 
-    # An unexpected crash inside processing (baseline already delivered) is caught,
-    # the reminder marked errored, and a reminder alert raised.
     monkeypatch.setattr(service.background, "run_background_turn", boom)
     out = service.process_due_reminders(run_ai_enhancement=True)
+    assert out[0]["status"] == "delivered_ai_error"
+    assert mocks["delivered"]          # baseline delivered before the enhancement crash
+    assert mocks["alerts"] == []       # R11: enhancement failure is never alerted
+
+
+def test_baseline_delivery_failure_alerts(monkeypatch, mocks):
+    # A genuine post-claim failure (baseline delivery itself) alerts, since the row
+    # is already 'fired' and won't retry.
+    monkeypatch.setattr(service.reminders_service, "get_due_reminders", lambda n: [_reminder()])
+    monkeypatch.setattr(service.reminders_service, "claim_reminder", lambda r: True)
+
+    calls = {"n": 0}
+
+    def deliver(title, message):
+        calls["n"] += 1
+        if calls["n"] == 1:   # the baseline call raises; the alert's own deliver is fine
+            raise RuntimeError("push subsystem down")
+
+    monkeypatch.setattr(service.delivery, "deliver_notification", deliver)
+    out = service.process_due_reminders(run_ai_enhancement=False)
     assert out[0]["status"] == "error"
-    assert mocks["delivered"]      # baseline delivery still happened before the crash
     assert mocks["alerts"] and mocks["alerts"][0]["source"] == "reminder"
+
+
+def test_claim_failure_no_alert_stays_pending(monkeypatch, mocks):
+    # A claim exception means the row is still pending (rolled back) → retries next
+    # tick, no alert, no double handling.
+    monkeypatch.setattr(service.reminders_service, "get_due_reminders", lambda n: [_reminder()])
+
+    def boom(r):
+        raise RuntimeError("db blip")
+
+    monkeypatch.setattr(service.reminders_service, "claim_reminder", boom)
+    out = service.process_due_reminders()
+    assert out == []
+    assert mocks["alerts"] == [] and mocks["delivered"] == []
 
 
 def test_run_ai_enhancement_false_skips_turn(monkeypatch, mocks):
@@ -118,9 +151,11 @@ def test_run_ai_enhancement_false_skips_turn(monkeypatch, mocks):
 
 def test_turn_skipped_when_disabled(monkeypatch, mocks):
     monkeypatch.setattr(service.settings, "heartbeat_enabled", False)
-    monkeypatch.setattr(service, "_set_turn_status", lambda s: None)
     provider_called = {"n": 0}
     monkeypatch.setattr(service, "get_ai_provider", lambda *a, **k: provider_called.__setitem__("n", 1))
+    # A skip must NOT write last_turn_status (would clobber the last real turn).
+    monkeypatch.setattr(service, "pg_execute", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("skip must not write heartbeat_state")))
     assert service.maybe_run_heartbeat_turn(force=False) == {"skipped": "disabled"}
     assert provider_called["n"] == 0
 
@@ -128,12 +163,11 @@ def test_turn_skipped_when_disabled(monkeypatch, mocks):
 def test_turn_skipped_no_provider_no_alert(monkeypatch, mocks):
     monkeypatch.setattr(service.settings, "heartbeat_enabled", True)
     monkeypatch.setattr(service, "get_ai_provider", lambda *a, **k: None)
-    statuses = []
-    monkeypatch.setattr(service, "_set_turn_status", lambda s: statuses.append(s))
+    monkeypatch.setattr(service, "pg_execute", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("skip must not write heartbeat_state")))
     ran = {"n": 0}
     monkeypatch.setattr(service.background, "run_background_turn", lambda *a, **k: ran.__setitem__("n", 1))
     assert service.maybe_run_heartbeat_turn() == {"skipped": "no_provider"}
-    assert statuses == ["skipped_no_provider"]
     assert ran["n"] == 0 and mocks["alerts"] == []
 
 

@@ -15,6 +15,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
+import psycopg2
 from psycopg2.extras import Json
 
 from core.postgres import (
@@ -167,10 +168,17 @@ def update_reminder(reminder_id: str, *, message=_UNSET, due_at=_UNSET,
         return _err("no fields to update")
 
     params.append(reminder_id)
-    updated = pg_execute(
-        f"UPDATE reminders SET {', '.join(sets)} WHERE id = %s AND status = 'pending'",
-        tuple(params),
-    )
+    try:
+        updated = pg_execute(
+            f"UPDATE reminders SET {', '.join(sets)} WHERE id = %s AND status = 'pending'",
+            tuple(params),
+        )
+    except psycopg2.errors.UniqueViolation:
+        # Editing a recurring reminder's time onto a slot another occurrence of the
+        # series already holds (uq_reminders_series_due has no status predicate, so
+        # a fired occurrence keeps its slot forever). Surface as a clean conflict.
+        return _err("another occurrence of this series already exists at that time — "
+                    "pick a slightly different time", "conflict")
     if updated == 0:
         existing = get_reminder(reminder_id)
         if existing is None:

@@ -45,16 +45,38 @@ def start_scheduler() -> None:
     logger.info("Heartbeat scheduler started (reminder_tick 60s + heartbeat_turn 300s)")
 
 
+_SHUTDOWN_WAIT_SECONDS = 10
+
+
 def shutdown_scheduler() -> None:
-    """Stop the scheduler, waiting for an in-flight tick to finish (so it never
-    loses the Postgres pool out from under it)."""
+    """Stop the scheduler, giving an in-flight tick a bounded window to finish (so
+    it doesn't lose the Postgres pool under it) WITHOUT hanging a deploy past its
+    SIGTERM grace if a tick is wedged on a hung tool. We attempt ``shutdown(wait=True)``
+    in a helper thread joined for ~10s, then fall back to ``wait=False``."""
     global _scheduler
     if _scheduler is None:
         return
-    try:
-        _scheduler.shutdown(wait=True)
-    except Exception:
-        logger.warning("scheduler shutdown errored", exc_info=True)
+    import threading
+    sched = _scheduler
+
+    def _graceful():
+        try:
+            sched.shutdown(wait=True)
+        except Exception:
+            logger.warning("scheduler graceful shutdown errored", exc_info=True)
+
+    t = threading.Thread(target=_graceful, daemon=True)
+    t.start()
+    t.join(timeout=_SHUTDOWN_WAIT_SECONDS)
+    if t.is_alive():
+        # A tick is still running past the grace window — stop waiting so the
+        # process can exit; the wedged job is abandoned (at-most-once semantics).
+        logger.warning("scheduler still running after %ss — forcing non-blocking shutdown",
+                       _SHUTDOWN_WAIT_SECONDS)
+        try:
+            sched.shutdown(wait=False)
+        except Exception:
+            logger.warning("scheduler forced shutdown errored", exc_info=True)
     _scheduler = None
     logger.info("Heartbeat scheduler stopped")
 

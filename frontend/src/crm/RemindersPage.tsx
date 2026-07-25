@@ -71,12 +71,17 @@ function ruleToPreset(rule: RecurrenceRule | null): string {
 }
 
 function presetToNL(preset: string, dueLocal: string, hoursN: number): string {
+  // Derive weekday/day from the UTC representation of the chosen instant — the
+  // backend evaluates recurrence rules in UTC, so a rule built from LOCAL calendar
+  // fields would drift a day for any time that crosses the UTC date boundary
+  // (e.g. US evenings). getUTC* keeps the rule consistent with the due_at we submit.
   const d = new Date(dueLocal);
+  const valid = !Number.isNaN(d.getTime());
   switch (preset) {
     case 'daily': return 'daily';
     case 'weekdays': return 'weekly:mon,tue,wed,thu,fri';
-    case 'weekly': return `weekly:${DOW[Number.isNaN(d.getTime()) ? 1 : d.getDay()]}`;
-    case 'monthly': return `monthly:${Number.isNaN(d.getTime()) ? 1 : d.getDate()}`;
+    case 'weekly': return `weekly:${DOW[valid ? d.getUTCDay() : 1]}`;
+    case 'monthly': return `monthly:${valid ? d.getUTCDate() : 1}`;
     case 'hourly': return `every ${Math.max(1, hoursN)} hours`;
     default: return '';
   }

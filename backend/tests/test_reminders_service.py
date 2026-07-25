@@ -82,6 +82,18 @@ def test_update_no_fields(monkeypatch):
     assert "no fields" in service.update_reminder("r1")["error"]
 
 
+def test_update_unique_violation_maps_conflict(monkeypatch):
+    import psycopg2
+
+    def raise_unique(*a, **k):
+        raise psycopg2.errors.UniqueViolation("dup (series_id, due_at)")
+
+    monkeypatch.setattr(service, "pg_execute", raise_unique)
+    out = service.update_reminder("r1", due_at="2026-07-25T09:00:00Z")
+    assert out["code"] == "conflict"           # 409, not an unhandled 500
+    assert "already exists" in out["error"]
+
+
 def test_cancel_success_and_missing(monkeypatch):
     monkeypatch.setattr(service, "pg_execute", lambda *a, **k: 1)
     monkeypatch.setattr(service, "get_reminder", lambda rid: {"id": rid, "is_recurring": True})

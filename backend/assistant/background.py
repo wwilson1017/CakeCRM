@@ -9,12 +9,13 @@ semantics live in one place), and returns a ``BackgroundResult`` — no SSE, no
 conversation rows (outcomes land on ``reminders.result`` / ``heartbeat_state`` /
 the ``notifications`` log).
 
-Two safety rules make auto-approved writes acceptable (the confirmation gate is
+Two safety rules make the autonomous turn acceptable (the confirmation gate is
 never involved here):
   * a SERVER-ENFORCED ALLOWLIST (``allowed_tools``) checked at BOTH advertisement
-    and execution — background turns get read tools + ``notify_user`` (+ a tiny,
-    additive-only write subset for reminder enhancement); never delete/update; and
-  * a dedicated ``WRITE_BUDGET_BACKGROUND`` + a ``max_iterations`` cap.
+    and execution — background turns get READ tools + ``notify_user`` ONLY, no CRM
+    write tools at all (so a prompt injection can at most send one notification); and
+  * a dedicated ``WRITE_BUDGET_BACKGROUND`` (bounds ``notify_user``) + a
+    ``max_iterations`` cap.
 
 The whole thing is wrapped in ``asyncio.wait_for`` + a catch-all so a crashed or
 slow turn can never hang the scheduler thread. Sync→async bridge is a plain
@@ -23,6 +24,7 @@ slow turn can never hang the scheduler thread. Sync→async bridge is a plain
 """
 
 import asyncio
+import concurrent.futures
 import json
 import logging
 import time
@@ -35,6 +37,20 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_ITERATIONS = 5
 DEFAULT_TIMEOUT_SECONDS = 120
+
+# The provider async clients (e.g. anthropic.AsyncAnthropic → httpx.AsyncClient) are
+# module-cached and BOUND to the event loop they were first used on — uvicorn's main
+# loop. A background turn driven from the scheduler thread must therefore run its
+# coroutine ON that same main loop (via run_coroutine_threadsafe), NOT on a throwaway
+# asyncio.run loop (which would reuse a client bound to an already-closed loop and
+# fail on the 2nd turn). main.py captures the loop here at startup.
+_main_loop: asyncio.AbstractEventLoop | None = None
+
+
+def set_main_loop(loop: asyncio.AbstractEventLoop) -> None:
+    """Capture the app's main event loop (called once from main.py's lifespan)."""
+    global _main_loop
+    _main_loop = loop
 
 
 @dataclass
@@ -190,23 +206,36 @@ def run_background_turn(system_prompt, user_message: str, *, allowed_tools: set[
         from assistant.registry import ToolRegistry
         registry = ToolRegistry(background=True)
 
-    # Sync context: all real callers run with NO event loop (APScheduler thread /
-    # asyncio.to_thread). Refuse rather than deadlock if that invariant breaks.
-    try:
-        asyncio.get_running_loop()
-        logger.error("run_background_turn invoked inside a running event loop; refusing")
-        return BackgroundResult(text="background turn cannot run inside an event loop", error=True)
-    except RuntimeError:
-        pass  # good — no running loop
+    loop = _main_loop
+    use_main_loop = loop is not None and loop.is_running()
+    if not use_main_loop:
+        # Fallback path is asyncio.run — which cannot run inside an already-running
+        # loop. Check BEFORE creating the coroutine so the refuse path leaves no
+        # un-awaited coroutine.
+        try:
+            asyncio.get_running_loop()
+            logger.error("run_background_turn invoked inside a running loop with no main loop set; refusing")
+            return BackgroundResult(text="background turn cannot run inside an event loop", error=True)
+        except RuntimeError:
+            pass  # no running loop — safe to asyncio.run
 
+    coro = asyncio.wait_for(
+        _run_turn(provider, registry, system_prompt, user_message,
+                  allowed_tools, max_iterations, write_budget_limit),
+        timeout=timeout,
+    )
     started = time.monotonic()
     try:
-        result = asyncio.run(asyncio.wait_for(
-            _run_turn(provider, registry, system_prompt, user_message,
-                      allowed_tools, max_iterations, write_budget_limit),
-            timeout=timeout,
-        ))
-    except asyncio.TimeoutError:
+        if use_main_loop:
+            # Normal path: submit onto the main loop (where the provider client is
+            # bound) from this scheduler thread and block for the result.
+            future = asyncio.run_coroutine_threadsafe(coro, loop)
+            result = future.result(timeout=timeout + 30)   # backstop if the loop wedges
+        else:
+            # No main loop captured (tests / standalone) — run on a throwaway loop.
+            # Only safe because such callers use non-loop-bound (fake) providers.
+            result = asyncio.run(coro)
+    except (asyncio.TimeoutError, concurrent.futures.TimeoutError):
         logger.warning("background turn timed out after %ss", timeout)
         return BackgroundResult(text=f"background turn timed out after {timeout}s",
                                 error=True, model_used=getattr(provider, "model", ""))
