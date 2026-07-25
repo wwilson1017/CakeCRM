@@ -54,16 +54,28 @@ def _last_user_text(messages: list[dict]) -> str | None:
     untrusted file blob, so attacker-controlled file text never chooses which facts
     surface; memory matching only ever uses genuinely-typed text.
     """
+    def _usable(text) -> bool:
+        return (
+            isinstance(text, str)
+            and text.strip()
+            and text != _CONTINUATION_ACK
+            and _UNTRUSTED_MARKER not in text
+        )
+
     for m in reversed(messages):
-        if m.get("role") == "user":
-            content = m.get("content")
-            if (
-                isinstance(content, str)
-                and content.strip()
-                and content != _CONTINUATION_ACK
-                and _UNTRUSTED_MARKER not in content
-            ):
+        if m.get("role") != "user":
+            continue
+        content = m.get("content")
+        if isinstance(content, str):
+            if _usable(content):
                 return content
+        elif isinstance(content, list):
+            # Provider block-list content: when assembly coalesces a freshly-typed user
+            # message onto a trailing tool_result turn (abandoned confirmation / budget
+            # terminate), the new text is a `{"type":"text"}` block here, not a str.
+            for block in reversed(content):
+                if isinstance(block, dict) and block.get("type") == "text" and _usable(block.get("text")):
+                    return block["text"]
     return None
 
 

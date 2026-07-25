@@ -46,6 +46,24 @@ _TOKEN_RE = re.compile(r"\w+", re.UNICODE)
 _SEARCH_MIN_TOKEN_LEN = 2
 _SEARCH_MAX_TERMS = 20
 
+# English function words dropped from search queries. The `simple` FTS config keeps no
+# stopwords (so names like "Will"/"US" stay searchable) — but that means a conversational
+# query would otherwise OR-match facts on filler like "at"/"to"/"is" (which appear in
+# predicates: "works at", "reports to"), and every such match is retrieval-tracked, which
+# would keep facts perpetually "used" and stop dreaming from ever archiving them. So we
+# strip filler on the QUERY side only, with a fallback (below) when a query is ALL filler
+# so bare lookups still work. Deliberately EXCLUDES name/acronym homographs (will, may,
+# mark, us, it, in, on, no, …) so those stay searchable as entities.
+_STOPWORDS = frozenset({
+    "a", "an", "and", "the", "or", "but", "of", "to", "at", "by", "for", "from",
+    "with", "about", "as", "is", "am", "are", "was", "were", "be", "been", "being",
+    "do", "does", "did", "have", "has", "had", "this", "that", "these", "those",
+    "we", "our", "you", "your", "they", "them", "their", "he", "she", "him", "her",
+    "his", "what", "who", "whom", "when", "where", "why", "how", "which", "whose",
+    "if", "then", "than", "there", "here", "out", "over", "just", "only", "also",
+    "very", "too", "not", "all", "any", "some", "each", "every", "into", "so", "me", "my",
+})
+
 # Columns returned to callers (never expose search_tsv).
 _FACT_COLS = "id, subject, predicate, object, valid_from, valid_to, confidence, memory_type, created_at"
 
@@ -66,19 +84,28 @@ def _date_error(value, field: str) -> dict | None:
 
 
 def _or_tsquery(text: str) -> str:
-    """Distinct significant lexemes (unicode word-chars, len >= 2), OR-joined for
-    ``to_tsquery('simple', ...)``. Returns '' when there is nothing usable. Because
-    the output contains only word-chars separated by ' | ', it is safe as a tsquery."""
-    seen: list[str] = []
-    seen_set: set[str] = set()
+    """Distinct significant lexemes (unicode word-chars, len >= 2), function words
+    dropped, OR-joined for ``to_tsquery('simple', ...)``. Falls back to the unfiltered
+    tokens when a query is entirely filler (so a bare "is"/"at" still searches something).
+    Returns '' when there is nothing usable. The output is only word-chars separated by
+    ' | ', so it is injection-safe as a tsquery input."""
+    content: list[str] = []
+    content_set: set[str] = set()
+    first: list[str] = []          # distinct tokens incl. filler — the all-filler fallback
+    first_set: set[str] = set()
     for tok in _TOKEN_RE.findall(text.lower()):
-        if len(tok) < _SEARCH_MIN_TOKEN_LEN or tok in seen_set:
+        if len(tok) < _SEARCH_MIN_TOKEN_LEN:
             continue
-        seen_set.add(tok)
-        seen.append(tok)
-        if len(seen) >= _SEARCH_MAX_TERMS:
-            break
-    return " | ".join(seen)
+        if tok not in first_set and len(first) < _SEARCH_MAX_TERMS:
+            first_set.add(tok)
+            first.append(tok)
+        if tok not in _STOPWORDS and tok not in content_set:
+            content_set.add(tok)
+            content.append(tok)
+            if len(content) >= _SEARCH_MAX_TERMS:
+                break   # enough content terms — scanned past filler, trailing entities kept
+    terms = content or first    # fall back to filler when the query was entirely filler
+    return " | ".join(terms)
 
 
 def _clean_field(value: str) -> str:
@@ -272,10 +299,14 @@ def invalidate_fact(fact_id: int, valid_to: str | None = None) -> dict:
     if date_err:
         return date_err
 
+    # GREATEST(...,valid_from): never write a valid_to earlier than valid_from — that
+    # would violate the valid-window CHECK and dead-end the tool in a retry loop. The
+    # sneaky case is a future-dated fact invalidated today (CURRENT_DATE < valid_from);
+    # clamping to valid_from makes it a zero-duration (never-really-valid) fact.
     row = pg_fetchone(
         """
         UPDATE memory_facts
-        SET valid_to = COALESCE(%s::date, CURRENT_DATE), updated_at = now()
+        SET valid_to = GREATEST(COALESCE(%s::date, CURRENT_DATE), valid_from), updated_at = now()
         WHERE id = %s AND valid_to IS NULL
         RETURNING id, valid_to
         """,
@@ -314,15 +345,25 @@ def track_retrieval_for(fact_ids: list[int]) -> None:
     if not fact_ids:
         return
     try:
+        # Lock the target rows via an ORDER BY id + FOR UPDATE SKIP LOCKED sub-select:
+        # ORDER BY id gives a consistent lock order with the dreaming cycle's
+        # `SELECT ... ORDER BY id FOR UPDATE` (no deadlock), and SKIP LOCKED means this
+        # chat hot-path bump never blocks behind a running dreaming transaction — a
+        # skipped row is exactly the already-documented benign retrieval-vs-archival race.
         pg_execute(
             """
             UPDATE memory_facts
             SET retrieval_count = retrieval_count + 1,
                 last_retrieved_at = now(),
                 updated_at = now()
-            WHERE id = ANY(%s)
-              AND valid_to IS NULL AND archived_at IS NULL
-              AND (last_retrieved_at IS NULL OR last_retrieved_at < now() - interval '1 hour')
+            WHERE id IN (
+                SELECT id FROM memory_facts
+                WHERE id = ANY(%s)
+                  AND valid_to IS NULL AND archived_at IS NULL
+                  AND (last_retrieved_at IS NULL OR last_retrieved_at < now() - interval '1 hour')
+                ORDER BY id
+                FOR UPDATE SKIP LOCKED
+            )
             """,
             (list(fact_ids),),
         )

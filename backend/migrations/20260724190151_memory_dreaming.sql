@@ -31,8 +31,15 @@ CREATE TABLE IF NOT EXISTS memory_facts (
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     -- Two-arg to_tsvector(regconfig, text) is IMMUTABLE (legal in a generated
     -- column); the one-arg form is only STABLE and Postgres rejects it here.
+    -- Index the raw text AND a punctuation-split copy so email/URL/date-valued facts are
+    -- findable by their parts: the `simple` parser emits compound lexemes for
+    -- 'dana@acme.com' / '2026-09-15', which a plain-word query can never reproduce.
+    -- translate('@./:-' -> spaces) also exposes 'dana acme com' / '2026 09 15'.
     search_tsv        tsvector GENERATED ALWAYS AS (
-        to_tsvector('simple', subject || ' ' || predicate || ' ' || object)
+        to_tsvector('simple',
+            subject || ' ' || predicate || ' ' || object || ' ' ||
+            translate(subject || ' ' || predicate || ' ' || object, '@./:-', '     ')
+        )
     ) STORED,
     CONSTRAINT memory_facts_valid_window CHECK (valid_to IS NULL OR valid_to >= valid_from)
 );

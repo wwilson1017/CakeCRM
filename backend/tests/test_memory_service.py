@@ -253,3 +253,14 @@ def test_invalidate_fact_rejects_malformed_date(rec):
     assert service.invalidate_fact(5, valid_to="nope") == {
         "error": "valid_to must be a date in YYYY-MM-DD format"}
     assert r.calls == []
+
+
+def test_or_tsquery_drops_function_words_with_fallback():
+    # Function words are dropped so conversational queries don't OR-match facts on
+    # filler (which would keep every fact perpetually "used" and defeat archival).
+    assert service._or_tsquery("what do we know about Dana") == "know | dana"
+    assert service._or_tsquery("works at Acme") == "works | acme"
+    # An all-filler query falls back to the raw tokens so bare lookups still work.
+    assert service._or_tsquery("is at") == "is | at"
+    # Name/acronym homographs are NOT stoplisted, so they stay searchable as entities.
+    assert service._or_tsquery("Li US IT") == "li | us | it"

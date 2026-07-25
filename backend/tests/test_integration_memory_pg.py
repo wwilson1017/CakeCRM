@@ -276,3 +276,22 @@ def test_add_fact_valid_from_supports_as_of(pg_db):
     service.add_fact("Nadia", "role", "VP", valid_from="2026-01-01")
     assert not any(x["subject"] == "Nadia" for x in service.query_facts(as_of="2025-12-01"))
     assert any(x["subject"] == "Nadia" for x in service.query_facts(as_of="2026-02-01"))
+
+
+def test_email_url_date_facts_findable_by_parts(pg_db):
+    from memory import service
+    service.add_fact("Acme portal", "url", "https://acme.com/pricing")
+    service.add_fact("Contact", "email", "dana@acme.com")
+    service.add_fact("Acme", "renewal", "2026-09-15")
+    assert service.search_facts("pricing")        # URL path segment
+    assert service.search_facts("dana@acme.com")  # email split → dana|acme|com
+    assert service.search_facts("2026")           # date year part
+
+
+def test_invalidate_clamps_valid_to_up_to_valid_from(pg_db):
+    from memory import service
+    f = service.add_fact("FutureCo", "status", "pending", valid_from="2026-12-01")
+    # Invalidating with a date BEFORE valid_from must clamp (not dead-end on the CHECK).
+    out = service.invalidate_fact(f["id"], valid_to="2026-06-01")
+    assert out.get("ok") is True
+    assert out["valid_to"] == "2026-12-01"   # clamped up to valid_from

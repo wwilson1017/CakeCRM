@@ -118,3 +118,26 @@ def test_module_level_start_stop(monkeypatch):
         assert schedule._scheduler is None
 
     asyncio.run(run())
+
+
+async def test_stop_propagates_own_cancellation(monkeypatch):
+    import contextlib
+    sched = schedule.DreamingScheduler()
+
+    async def block_forever(self, seconds):
+        await asyncio.Event().wait()   # loop task never returns on its own
+
+    monkeypatch.setattr(schedule.DreamingScheduler, "_sleep", block_forever)
+    sched.start()
+    task = sched._task
+    await asyncio.sleep(0.01)
+
+    stop_task = asyncio.ensure_future(sched.stop())
+    await asyncio.sleep(0.01)
+    stop_task.cancel()                 # cancel stop() ITSELF (forced shutdown)
+    with pytest.raises(asyncio.CancelledError):
+        await stop_task                # must propagate, not be swallowed
+
+    task.cancel()                      # cleanup the still-blocked loop task
+    with contextlib.suppress(asyncio.CancelledError):
+        await task

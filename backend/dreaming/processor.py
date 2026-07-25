@@ -43,6 +43,7 @@ _SELECT_LIVE = """
            (GREATEST(0, EXTRACT(EPOCH FROM (now() - created_at)) / 86400.0))::double precision AS days_old
     FROM memory_facts
     WHERE valid_to IS NULL AND archived_at IS NULL
+    ORDER BY id
     FOR UPDATE
 """
 

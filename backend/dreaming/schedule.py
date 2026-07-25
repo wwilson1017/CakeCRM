@@ -85,12 +85,20 @@ class DreamingScheduler:
 
     async def stop(self) -> None:
         self._stop.set()
-        if self._task is not None:
+        task = self._task
+        self._task = None
+        if task is not None:
             try:
-                await self._task
+                await task
             except asyncio.CancelledError:
-                pass
-            self._task = None
+                # Awaiting a task propagates a cancellation of OUR task down into it, so
+                # task.cancelled() can't tell the two apart. current_task().cancelling()
+                # is non-zero only when WE were cancelled (a forced shutdown while a cycle
+                # is in flight) — propagate that so the caller's cancellation isn't
+                # silently swallowed; otherwise the loop task alone ended, suppress it.
+                current = asyncio.current_task()
+                if current is not None and current.cancelling() > 0:
+                    raise
 
     async def _sleep(self, seconds: float) -> None:
         """Sleep up to *seconds*, returning early if stop is signalled."""
