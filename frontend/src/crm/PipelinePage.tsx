@@ -42,6 +42,10 @@ export function PipelinePage() {
   // Per-deal operation counter so out-of-order responses from rapid moves of the
   // SAME deal can't clobber each other — only the latest op reconciles/reverts.
   const dealOpSeq = useRef<Map<number, number>>(new Map());
+  // Per-deal write chain: each deal's PUT is queued behind its prior in-flight
+  // write so the SERVER applies moves in the user's action order (ending at the
+  // latest intent), never racing two concurrent writes for the same deal.
+  const dealWriteChain = useRef<Map<number, Promise<void>>>(new Map());
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -63,8 +67,13 @@ export function PipelinePage() {
   // toast. The ported Kanban hook mirrors `data` between gestures, so it re-syncs
   // to whichever branch wins — there is no separate rollback snapshot, and a
   // concurrent change made elsewhere (detail sheet, new deal) is never clobbered.
-  // A per-deal op sequence guards against rapid moves of the same deal whose PUTs
-  // resolve out of order: a superseded op neither reconciles nor reverts.
+  //
+  // Rapid moves of the SAME deal are made safe two ways: (1) the PUTs are chained
+  // per deal so the server applies them in action order; (2) a per-deal op sequence
+  // means only the latest op reconciles/reverts the client (no intermediate flicker
+  // from an earlier op's response). NOTE: if two chained writes for one deal BOTH
+  // fail, the client is left at the later op's intermediate stage — a rare double-
+  // failure that self-heals on the next load; the deal always holds a valid stage.
   const moveDealStage = useCallback((deal: CrmDeal, toStage: string, fromStage: string) => {
     const dealId = deal.id;
     const seq = (dealOpSeq.current.get(dealId) ?? 0) + 1;
@@ -75,15 +84,18 @@ export function PipelinePage() {
       ...prev,
       deals: prev.deals.map(d => d.id === dealId ? { ...d, stage: toStage } : d),
     } : prev);
-    api<CrmDeal>(`/api/crm/deals/${dealId}`, { method: 'PUT', body: JSON.stringify({ stage: toStage }) })
-      .then(updated => {
+    const prior = dealWriteChain.current.get(dealId) ?? Promise.resolve();
+    const run = prior.then(async () => {
+      try {
+        const updated = await api<CrmDeal>(`/api/crm/deals/${dealId}`, {
+          method: 'PUT', body: JSON.stringify({ stage: toStage }),
+        });
         if (dealOpSeq.current.get(dealId) !== seq) return; // a newer move superseded this one
         setData(prev => prev ? {
           ...prev,
           deals: prev.deals.map(d => d.id === dealId ? { ...d, ...updated } : d),
         } : prev);
-      })
-      .catch(err => {
+      } catch (err) {
         if (dealOpSeq.current.get(dealId) !== seq) return; // superseded — leave the newer state
         console.error('Failed to move deal:', err);
         toast.error('Failed to move deal.');
@@ -91,7 +103,9 @@ export function PipelinePage() {
           ...prev,
           deals: prev.deals.map(d => d.id === dealId ? { ...d, stage: fromStage } : d),
         } : prev);
-      });
+      }
+    });
+    dealWriteChain.current.set(dealId, run);
   }, []);
 
   // Drag handler. Resolves immediately so the Kanban hook ends its gesture and
