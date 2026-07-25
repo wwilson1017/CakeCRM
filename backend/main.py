@@ -29,9 +29,15 @@ from core.config import settings
 from core.storage import atomic_write
 from crm.router import router as crm_router
 from providers.router import router as providers_router, setup_router as ai_setup_router
+from telegram import poller as telegram_poller
+from telegram.router import router as telegram_router
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+# httpx logs every request at INFO with the full URL. The Telegram Bot API embeds the
+# bot token in the URL path (/bot<TOKEN>/...), so INFO-level httpx request logs would
+# leak the token into application logs — quiet httpx to WARNING.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 VERSION = "0.1.0"
 
@@ -91,9 +97,14 @@ async def lifespan(app: FastAPI):
                 volume_marker,
             )
 
+    # Telegram long-poll task (issue #7): a single main-loop asyncio task. It idles
+    # until a bot token is connected, so it is safe to start unconditionally here.
+    telegram_poller.start()
+
     logger.info("CakeCRM backend started. Data dir: %s", data_root)
     yield
 
+    await telegram_poller.stop()
     postgres.close_pool()
     logger.info("CakeCRM backend shutting down.")
 
@@ -136,6 +147,7 @@ app.include_router(providers_router, prefix="/api/providers", tags=["providers"]
 app.include_router(ai_setup_router, prefix="/api/setup", tags=["setup"])
 app.include_router(crm_router, prefix="/api/crm", tags=["crm"])
 app.include_router(assistant_router, prefix="/api/assistant", tags=["assistant"])
+app.include_router(telegram_router, prefix="/api/telegram", tags=["telegram"])
 
 
 # ── Health endpoints ──────────────────────────────────────────────────────────
