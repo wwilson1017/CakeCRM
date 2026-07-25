@@ -155,10 +155,15 @@ def create_field_definition(data: dict) -> dict:
         raise ValueError(f"Field key too long (max {_MAX_KEY_LEN} chars)")
 
     options_json = _options_json(data.get("dropdown_options"))
-    if field_type == "select" and not options_json:
+    if field_type == "select":
         # A select with no options would otherwise accept ANY value (validate skips
         # the membership check when the list is empty) — require at least one.
-        raise ValueError("A select field requires at least one option")
+        if not options_json:
+            raise ValueError("A select field requires at least one option")
+    elif options_json is not None:
+        # Mirror update_field_definition: only a select may carry options, so a
+        # non-select can't persist irrelevant options the get-tools would expose.
+        raise ValueError("Only select fields can have dropdown options")
     now = _now()
 
     # Single statement: the display_order (server-assigned max+10 within the entity

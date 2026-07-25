@@ -93,6 +93,15 @@ def test_create_select_requires_at_least_one_option(monkeypatch):
         )
 
 
+def test_create_rejects_options_on_non_select(monkeypatch):
+    _capture_create(monkeypatch)
+    with pytest.raises(ValueError):
+        field_service.create_field_definition(
+            {"entity_type": "contact", "name": "Notes", "field_type": "text",
+             "dropdown_options": ["A", "B"]}
+        )
+
+
 def test_options_reject_duplicates(monkeypatch):
     _capture_create(monkeypatch)
     with pytest.raises(ValueError):

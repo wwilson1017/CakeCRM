@@ -63,7 +63,9 @@ function renderInput(f: EditableField, value: string, set: (v: string) => void) 
     case 'date':
       return <input type="date" value={value} onChange={e => set(e.target.value)} style={style} />;
     case 'number':
-      return <input type="number" value={value} onChange={e => set(e.target.value)} style={style} />;
+      // step="any" so a fractional value (the backend accepts finite floats) doesn't
+      // fail native <input type="number"> validation and block the whole form submit.
+      return <input type="number" step="any" value={value} onChange={e => set(e.target.value)} style={style} />;
     default:
       return <input type="text" value={value} onChange={e => set(e.target.value)} style={style} />;
   }
