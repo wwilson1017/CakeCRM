@@ -22,6 +22,12 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
   // The pipeline passes a plain list-row deal (no activity). Fetch the detail so
   // the sheet can show the activity timeline alongside the chatter thread.
   const [activity, setActivity] = useState<CrmActivity[]>(deal.activity || []);
+  // Read the touch count from re-fetchable state (not the frozen list-row prop): loadDetail
+  // refreshes it on open and after activity mutations, so the sheet shows the latest STORED
+  // count. The recompute itself is async (a background LLM call, seconds after a note), so a
+  // freshly-triggered count lands on the next fetch/navigation — accepted eventual
+  // consistency for an estimate nudge (see the PR's accepted-limitations note).
+  const [touchCount, setTouchCount] = useState<number | null | undefined>(deal.ai_touch_count);
   const { byField, confirm, confirming } = useProvenance('deal', deal.id);
   const badge = (f: string) => (
     <ProvenanceBadge prov={byField[f]} onConfirm={() => confirm(f)} confirming={confirming === f} />
@@ -33,6 +39,7 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
       const detail = await api<CrmDeal>(`/api/crm/deals/${deal.id}`);
       if (reqId !== reqRef.current) return;
       setActivity(detail.activity || []);
+      setTouchCount(detail.ai_touch_count);
     } catch {
       // Non-fatal: the sheet still shows deal fields + chatter; leave activity as-is.
     }
@@ -79,7 +86,7 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
             Stage: <span style={{ color: STAGE_COLORS[deal.stage]?.color || INK }}>{deal.stage}</span>
           </span>
           {badge('stage')}
-          <TouchCountPill count={deal.ai_touch_count} />
+          <TouchCountPill count={touchCount} />
         </div>
 
         {deal.notes && (
