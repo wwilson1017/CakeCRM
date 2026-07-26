@@ -34,6 +34,25 @@ def test_seed_row_counts_match_the_dataset():
     assert len(inserts) == 6  # one executemany per table (companies + the original 4 + crm_chatter)
 
 
+def test_seed_empty_guard_counts_field_values_not_definitions():
+    # Decision 9: field VALUES count toward "non-empty" (a stray value must not seed
+    # into a reused id); field DEFINITIONS do not (user config, no fixed-id collision).
+    conn = FakeConn(fetchone_results=[(0,)])
+    seed_demo_data(conn)
+    guard = conn.executed[0][0]  # the empty-guard count SELECT runs first
+    assert "crm_field_values" in guard
+    assert "crm_field_definitions" not in guard
+
+
+def test_seed_setval_loop_excludes_field_tables():
+    # Field tables ship EMPTY (no fixed-id inserts) → nothing to advance; they must
+    # not appear in the sequence-advance loop.
+    conn = FakeConn(fetchone_results=[(0,)])
+    seed_demo_data(conn)
+    setvals = [sql for sql, _ in conn.executed if "setval" in sql]
+    assert not any("crm_field_values" in s or "crm_field_definitions" in s for s in setvals)
+
+
 def test_seed_inserts_companies_before_contacts_before_deals():
     """FK order: companies must be inserted before the contacts/deals that link them."""
     conn = FakeConn(fetchone_results=[(0,)])

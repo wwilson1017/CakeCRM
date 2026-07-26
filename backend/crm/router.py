@@ -45,6 +45,14 @@ Chatter (notes threads on a deal or contact):
   POST   /api/crm/chatter/note/:id/archive      — soft-archive a note
   POST   /api/crm/chatter/note/:id/unarchive    — restore an archived note
 
+Custom fields (user-defined fields on contacts/companies/deals):
+  GET    /api/crm/fields                — list definitions (?entity_type=)
+  POST   /api/crm/fields                — create a definition
+  PUT    /api/crm/fields/:id            — update a definition
+  DELETE /api/crm/fields/:id            — delete a definition (values cascade)
+  GET    /api/crm/:type/:id/fields      — an entity's field values (defs + values)
+  PUT    /api/crm/:type/:id/fields      — set an entity's field values
+
 Other:
   GET    /api/crm/dashboard             — summary stats
   GET    /api/crm/demo-status           — first-run onboarding / sample-data state
@@ -65,10 +73,10 @@ import logging
 import psycopg2
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from core.auth import get_current_user
-from crm import chatter_service, service as crm
+from crm import chatter_service, field_service, service as crm
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -205,6 +213,28 @@ class SmartImportConfirm(BaseModel):
         if len(v) > 5000:
             raise ValueError("Too many contacts (max 5000)")
         return v
+
+
+class FieldDefinitionCreate(BaseModel):
+    entity_type: str
+    name: str
+    field_key: str = ""              # blank → the service derives a slug from name
+    field_type: str
+    dropdown_options: list[str] | None = None
+    is_required: bool = False
+
+
+class FieldDefinitionUpdate(BaseModel):
+    name: str | None = None
+    dropdown_options: list[str] | None = None
+    is_required: bool | None = None
+    # Bounded so an out-of-range value 400s at the Pydantic layer rather than
+    # overflowing the INTEGER column into an unhandled 500.
+    display_order: int | None = Field(default=None, ge=0, le=1_000_000)
+
+
+class FieldValuesUpdate(BaseModel):
+    values: dict[str, str]
 
 
 # ── Contacts ──────────────────────────────────────────────────────────────────
@@ -744,3 +774,92 @@ async def delete_company(company_id: int, user=Depends(get_current_user)):
     if not crm.delete_company(company_id):
         raise HTTPException(status_code=404, detail="Company not found")
     return {"deleted": True, "company_id": company_id}
+
+
+# ── Custom fields ─────────────────────────────────────────────────────────────
+# User-defined fields on contacts/companies/deals (two-table EAV in field_service).
+# Appended as a self-contained block; each route declares its own get_current_user
+# dependency (the blanket auth test iterates every route and asserts it). Validation
+# (entity/field-type checks, value coercion, entity existence) lives in field_service
+# and surfaces here as ValueError → 400. The /{entity_type}/{entity_id}/fields paths
+# don't shadow existing routes: no other route ends in the literal "fields", and the
+# existing 3-segment routes have literal first segments (/chatter/…, /tasks/…).
+
+@router.get("/fields")
+async def list_field_definitions(entity_type: str | None = None, user=Depends(get_current_user)):
+    try:
+        return field_service.list_field_definitions(entity_type)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+
+
+@router.post("/fields")
+async def create_field_definition(body: FieldDefinitionCreate, user=Depends(get_current_user)):
+    try:
+        return field_service.create_field_definition(body.model_dump())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    except psycopg2.errors.UniqueViolation:
+        raise HTTPException(
+            status_code=400,
+            detail="A field with that name or key already exists for this entity type",
+        ) from None
+
+
+@router.put("/fields/{field_id}")
+async def update_field_definition(
+    field_id: int, body: FieldDefinitionUpdate, user=Depends(get_current_user)
+):
+    # exclude_unset so an explicit "dropdown_options": null clears options while an
+    # unsent key is left untouched (matches the service's "key present" semantics).
+    try:
+        result = field_service.update_field_definition(
+            field_id, body.model_dump(exclude_unset=True)
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    except psycopg2.errors.UniqueViolation:
+        raise HTTPException(
+            status_code=400, detail="A field with that name already exists for this entity type"
+        ) from None
+    if result is None:
+        raise HTTPException(status_code=404, detail="Field not found")
+    return result
+
+
+@router.delete("/fields/{field_id}")
+async def delete_field_definition(field_id: int, user=Depends(get_current_user)):
+    if not field_service.delete_field_definition(field_id):
+        raise HTTPException(status_code=404, detail="Field not found")
+    return {"ok": True}
+
+
+@router.get("/{entity_type}/{entity_id}/fields")
+async def get_field_values(entity_type: str, entity_id: int, user=Depends(get_current_user)):
+    # 404 a missing entity (consistent with PUT on this path and every other
+    # per-entity GET) rather than returning definitions with all-null values.
+    if entity_type not in field_service.VALID_ENTITY_TYPES:
+        raise HTTPException(status_code=400, detail=f"Invalid entity_type: {entity_type}")
+    if not field_service.entity_exists(entity_type, entity_id):
+        raise HTTPException(status_code=404, detail=f"{entity_type} {entity_id} not found")
+    return field_service.get_field_values(entity_type, entity_id)
+
+
+@router.put("/{entity_type}/{entity_id}/fields")
+async def set_field_values(
+    entity_type: str, entity_id: int, body: FieldValuesUpdate, user=Depends(get_current_user)
+):
+    # No email claim in CakeCRM JWTs (payload is {"sub","role"}); fall back to sub.
+    editor = user.get("email") or user.get("sub") or ""
+    # Offloaded to a thread (like the bulk CSV import): this write holds an entity
+    # FOR UPDATE lock while doing up to 200 upserts, so it must not block the loop.
+    try:
+        return await run_in_threadpool(
+            field_service.set_field_values, entity_type, entity_id, body.values, editor
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    except psycopg2.errors.ForeignKeyViolation:
+        # A definition was deleted concurrently (the FOR SHARE lock narrows but the
+        # 400 is the correct backstop, never a 500).
+        raise HTTPException(status_code=400, detail="One or more fields no longer exist") from None

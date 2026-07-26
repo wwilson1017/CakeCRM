@@ -65,7 +65,14 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   contacts, landed #15; query idioms follow the matching `cake_os/backend/apps/crm`
   services so later feature ports diff cleanly). Companies are a first-class entity (#13):
   contacts/deals carry a nullable `company_id` FK and a company detail page rolls up
-  the linked contacts/deals/activity. The ~24 `crm_*` agent tools + executors are
+  the linked contacts/deals/activity. User-defined **custom fields** (#19) add a
+  two-table EAV (`crm_field_definitions` + `crm_field_values`) on contacts/companies/
+  deals, managed in `/crm/settings`, rendered in the entity forms and detail pages, and
+  exposed to the assistant via `crm_{get,set}_{contact,company,deal}_fields`;
+  `crm_field_values` is polymorphic (no entity FK), so it is cleaned at every
+  entity-delete + `_truncate_all` site (definitions survive demo-clear, wiped only by
+  `clear_all`), and `is_required` is advisory-only (never enforced server-side). The
+  ~30 `crm_*` agent tools + executors are
   collected UNCONDITIONALLY via `crm.tools.get_crm_tools()` — each def carries a
   `"writes"` flag (the single source of truth for the assistant's confirmation gate),
   consumed by `assistant.registry.ToolRegistry` (landed #4). Contact
@@ -167,6 +174,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Kanban drag-and-drop | `cake_os/frontend/src/shared/dnd/` |
 | Companies (first-class entity: `companies` table, `company_id` FKs, rollup detail page, text→FK backfill migration) — **landed #13** | `cake_os/backend/apps/crm/company_service.py` |
 | Chatter/notes (`crm_chatter`) — **landed #15** as `backend/crm/chatter_service.py` + `frontend/src/crm/components/NotesThread.tsx` | `cake_os/backend/apps/crm/chatter_service.py` |
-| Scoring, custom fields, analytics, provenance, touch counts | `cake_os/backend/apps/crm/*_service.py` |
+| Custom fields (EAV `crm_field_definitions`/`crm_field_values`, Settings editor, entity-form + detail-page value inputs, 6 `crm_*_fields` tools) — **landed #19** as `backend/crm/field_service.py` + `frontend/src/crm/components/{CustomFieldSettings,CustomFieldsSection,CustomFieldInputs}.tsx` | `cake_os/backend/apps/crm/field_service.py` |
+| Scoring, analytics, provenance, touch counts | `cake_os/backend/apps/crm/*_service.py` |
 | Assistant tool set (~43 tools) + sales behaviors | `cake_os/backend/apps/crm/tools/` + Casey's agent config |
 | Pipeline facet filtering | `cake_os/docs/CRM_FILTER_DESIGN.md` |

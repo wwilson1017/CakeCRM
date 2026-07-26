@@ -7,6 +7,7 @@ import { DealForm } from './components/DealForm';
 import { TaskForm } from './components/TaskForm';
 import { ActivityTimeline } from './components/ActivityTimeline';
 import { NotesThread } from './components/NotesThread';
+import { CustomFieldsSection } from './components/CustomFieldsSection';
 import { usePublishActiveRecord } from './RecordContext';
 import { PriorityBadge } from './components/badges';
 import { STAGE_COLORS } from './constants';
@@ -32,6 +33,9 @@ export function ContactDetailPage() {
   const [contact, setContact] = useState<CrmContact | null>(null);
   const [loading, setLoading] = useState(true);
   const [showEdit, setShowEdit] = useState(false);
+  // Bumped when the edit modal saves, so the Custom Fields section (which self-fetches
+  // and would otherwise show stale values after a modal save) remounts and refetches.
+  const [cfVersion, setCfVersion] = useState(0);
   const [showAddDeal, setShowAddDeal] = useState(false);
   const [showAddTask, setShowAddTask] = useState(false);
   const [logActivity, setLogActivity] = useState('');
@@ -308,13 +312,16 @@ export function ContactDetailPage() {
         <ActivityTimeline activities={contact.activity || []} onUpdate={load} />
       </div>
 
+      {/* Custom fields — renders nothing when no contact fields are defined */}
+      <CustomFieldsSection key={`contact-${contact.id}-${cfVersion}`} entityType="contact" entityId={contact.id} />
+
       {/* Chatter — editable notes thread */}
       <div style={{ marginTop: 24, borderTop: `1px solid ${LINE}`, paddingTop: 24 }}>
         <span style={{ ...mono(10, INK_DIM), display: 'block', marginBottom: 12 }}>Chatter</span>
         <NotesThread key={`contact-${contact.id}`} entityType="contact" entityId={contact.id} />
       </div>
 
-      {showEdit && <ContactForm contact={contact} onClose={() => setShowEdit(false)} onSaved={() => { setShowEdit(false); load(); }} />}
+      {showEdit && <ContactForm contact={contact} onClose={() => setShowEdit(false)} onSaved={() => { setShowEdit(false); load(); setCfVersion(v => v + 1); }} />}
       {showAddDeal && <DealForm contactId={contact.id} onClose={() => setShowAddDeal(false)} onSaved={() => { setShowAddDeal(false); load(); }} />}
       {showAddTask && <TaskForm contactId={contact.id} onClose={() => setShowAddTask(false)} onSaved={() => { setShowAddTask(false); load(); }} />}
     </div>

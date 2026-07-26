@@ -62,7 +62,10 @@ def pg_db():
 def _clean_crm(pg_db):
     """Reset all CRM state between tests so scenarios stay isolated."""
     from core.postgres import pg_execute
-    pg_execute("TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter RESTART IDENTITY")
+    pg_execute(
+        "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
+        "crm_field_definitions, crm_field_values RESTART IDENTITY"
+    )
     pg_execute(
         "UPDATE crm_meta SET sample_data_loaded = FALSE, onboarding_dismissed = FALSE, "
         "ai_key_prompt_dismissed = FALSE WHERE id = 1"
@@ -89,7 +92,8 @@ def test_migration_created_tables_and_singleton(pg_db):
             "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
         )
     }
-    assert {"companies", "contacts", "deals", "tasks", "activity_log", "crm_meta", "crm_chatter"} <= names
+    assert {"companies", "contacts", "deals", "tasks", "activity_log", "crm_meta", "crm_chatter",
+            "crm_field_definitions", "crm_field_values"} <= names
     meta = pg_fetchone("SELECT * FROM crm_meta WHERE id = 1")
     assert meta and meta["sample_data_loaded"] is False
     # issue #9 migration: durable AI-key-nudge dismissal, default FALSE
@@ -444,3 +448,194 @@ def test_chatter_http_roundtrip(pg_db):
     assert client.post(f"/api/crm/chatter/deal/{d['id']}/note", json={"message": " "}).status_code == 400
     assert client.patch("/api/crm/chatter/note/999999", json={"message": "x"}).status_code == 404
     assert client.get("/api/crm/chatter/company/1").status_code == 400
+
+
+# ── Custom fields (issue #19) ─────────────────────────────────────────────────
+
+def test_field_definition_crud_and_entity_scoped_unique(pg_db):
+    from crm import field_service as fs
+
+    a = fs.create_field_definition({"entity_type": "contact", "name": "Account Tier",
+                                    "field_type": "select", "dropdown_options": ["Gold", "Silver"]})
+    assert a["field_key"] == "account_tier" and a["dropdown_options"] == ["Gold", "Silver"]
+    assert a["display_order"] == 10
+
+    # A second contact field gets the next server-assigned order (max+10).
+    b = fs.create_field_definition({"entity_type": "contact", "name": "Region", "field_type": "text"})
+    assert b["display_order"] == 20
+
+    # Same name on a DIFFERENT entity type is allowed (UNIQUE is per entity_type).
+    fs.create_field_definition({"entity_type": "deal", "name": "Account Tier", "field_type": "text"})
+
+    # Duplicate (entity_type, name) is rejected by the UNIQUE index.
+    with pytest.raises(psycopg2.errors.UniqueViolation):
+        fs.create_field_definition({"entity_type": "contact", "name": "Account Tier", "field_type": "text"})
+
+    # Update touches only mutable columns; field_key stays put.
+    updated = fs.update_field_definition(a["id"], {"name": "Tier", "is_required": True})
+    assert updated["name"] == "Tier" and updated["is_required"] == 1 and updated["field_key"] == "account_tier"
+
+    assert fs.delete_field_definition(a["id"]) is True
+    assert fs.delete_field_definition(a["id"]) is False
+
+
+def test_field_values_upsert_get_validation_and_clear(pg_db):
+    from crm import field_service as fs, service
+    client = _client()
+
+    contact = service.create_contact("Grace Hopper")
+    num = fs.create_field_definition({"entity_type": "contact", "name": "Budget", "field_type": "number"})
+    sel = fs.create_field_definition({"entity_type": "contact", "name": "Tier", "field_type": "select",
+                                      "dropdown_options": ["A", "B"]})
+
+    # Unset defs appear with value=None.
+    rows = fs.get_field_values("contact", contact["id"])
+    assert {r["field_key"] for r in rows} == {"budget", "tier"}
+    assert all(r["value"] is None for r in rows)
+
+    # PUT upsert via the router.
+    r = client.put(f"/api/crm/contact/{contact['id']}/fields",
+                   json={"values": {str(num["id"]): "5000", str(sel["id"]): "A"}})
+    assert r.status_code == 200 and r.json()["updated"] == 2
+    by_key = {row["field_key"]: row["value"] for row in fs.get_field_values("contact", contact["id"])}
+    assert by_key == {"budget": "5000", "tier": "A"}
+
+    # Re-PUT updates in place (no duplicate rows — UNIQUE(entity,entity_id,field)).
+    client.put(f"/api/crm/contact/{contact['id']}/fields", json={"values": {str(num["id"]): "6000"}})
+    from core.postgres import pg_fetchone
+    cnt = pg_fetchone("SELECT COUNT(*) AS c FROM crm_field_values WHERE field_id = %s", (num["id"],))
+    assert cnt["c"] == 1
+
+    # Type validation rejects a bad number (400).
+    bad = client.put(f"/api/crm/contact/{contact['id']}/fields", json={"values": {str(num["id"]): "abc"}})
+    assert bad.status_code == 400
+
+    # Empty string clears a number/select field (the divergence-from-source bug fix).
+    ok = client.put(f"/api/crm/contact/{contact['id']}/fields",
+                    json={"values": {str(num["id"]): "", str(sel["id"]): ""}})
+    assert ok.status_code == 200
+    by_key = {row["field_key"]: row["value"] for row in fs.get_field_values("contact", contact["id"])}
+    assert by_key == {"budget": "", "tier": ""}
+
+
+def test_definition_delete_cascades_values(pg_db):
+    from core.postgres import pg_fetchone
+    from crm import field_service as fs, service
+
+    contact = service.create_contact("Katherine Johnson")
+    d = fs.create_field_definition({"entity_type": "contact", "name": "Note", "field_type": "text"})
+    fs.set_field_values("contact", contact["id"], {str(d["id"]): "hi"}, "u")
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM crm_field_values")["c"] == 1
+    fs.delete_field_definition(d["id"])                       # FK ON DELETE CASCADE
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM crm_field_values")["c"] == 0
+
+
+def test_set_values_partial_validation_rolls_back(pg_db):
+    """One valid + one invalid field in a single write → the whole batch rolls back;
+    the valid field is NOT persisted (proves the txn guarantee mocks can't show)."""
+    from crm import field_service as fs, service
+
+    contact = service.create_contact("Dorothy Vaughan")
+    text = fs.create_field_definition({"entity_type": "contact", "name": "Notes", "field_type": "text"})
+    num = fs.create_field_definition({"entity_type": "contact", "name": "Score", "field_type": "number"})
+    with pytest.raises(ValueError):
+        fs.set_field_values("contact", contact["id"],
+                            {str(text["id"]): "keep me", str(num["id"]): "not-a-number"}, "u")
+    # The valid text field must not have persisted.
+    by_key = {row["field_key"]: row["value"] for row in fs.get_field_values("contact", contact["id"])}
+    assert by_key == {"notes": None, "score": None}
+
+
+def test_delete_contact_drops_field_values_no_orphan(pg_db):
+    from core.postgres import pg_execute, pg_fetchone
+    from crm import field_service as fs, service
+
+    contact = service.create_contact("Mary Jackson")           # id 1
+    d = fs.create_field_definition({"entity_type": "contact", "name": "Clearance", "field_type": "text"})
+    fs.set_field_values("contact", contact["id"], {str(d["id"]): "secret"}, "u")
+
+    service.delete_contact(contact["id"])
+    # The value row is gone — no polymorphic orphan left behind.
+    assert pg_fetchone(
+        "SELECT COUNT(*) AS c FROM crm_field_values WHERE entity_type='contact' AND entity_id=%s",
+        (contact["id"],),
+    )["c"] == 0
+    # A new contact reusing the same id inherits nothing.
+    pg_execute("INSERT INTO contacts (id, name) VALUES (%s, %s)", (contact["id"], "Reused"))
+    assert all(r["value"] is None for r in fs.get_field_values("contact", contact["id"]))
+
+
+def test_delete_company_drops_field_values_no_orphan(pg_db):
+    from core.postgres import pg_fetchone
+    from crm import field_service as fs, service
+
+    company = service.create_company("Hidden Figures Inc")
+    d = fs.create_field_definition({"entity_type": "company", "name": "Segment", "field_type": "text"})
+    fs.set_field_values("company", company["id"], {str(d["id"]): "enterprise"}, "u")
+
+    assert service.delete_company(company["id"]) is True
+    assert pg_fetchone(
+        "SELECT COUNT(*) AS c FROM crm_field_values WHERE entity_type='company' AND entity_id=%s",
+        (company["id"],),
+    )["c"] == 0
+
+
+def test_is_required_toggle_via_put(pg_db):
+    """PUT flips is_required (Pydantic bool → INTEGER column) on real Postgres."""
+    from crm import field_service as fs
+    client = _client()
+    d = fs.create_field_definition({"entity_type": "deal", "name": "Priority", "field_type": "text"})
+    assert d["is_required"] == 0
+    r = client.put(f"/api/crm/fields/{d['id']}", json={"is_required": True})
+    assert r.status_code == 200 and r.json()["is_required"] == 1
+
+
+def test_field_definitions_do_not_block_sample_seed(pg_db):
+    """Decision 9: a bare field definition (no entities/values) must NOT suppress the
+    first-run sample-data prompt."""
+    from crm import field_service as fs, service
+
+    fs.create_field_definition({"entity_type": "contact", "name": "Persona", "field_type": "text"})
+    status = service.get_demo_status()
+    assert status["empty"] is True and status["show_onboarding"] is True
+    assert service.load_sample_data() == {"ok": True, "seeded": True}
+    # The definition survived the (insert-only) seed.
+    assert [d["field_key"] for d in fs.list_field_definitions("contact")] == ["persona"]
+
+
+def test_demo_clear_preserves_definitions_clear_all_wipes(pg_db):
+    """R2: demo-clear keeps the user's field schema (wipes values); clear_all wipes it."""
+    from core.postgres import pg_fetchone
+    from crm import field_service as fs, service
+
+    service.load_sample_data()
+    d = fs.create_field_definition({"entity_type": "contact", "name": "Owner", "field_type": "text"})
+    fs.set_field_values("contact", 1, {str(d["id"]): "will"}, "u")
+
+    assert service.clear_demo_data()["cleared"] is True
+    # Definitions survive demo-clear; values are gone; entities are gone.
+    assert [x["field_key"] for x in fs.list_field_definitions("contact")] == ["owner"]
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM crm_field_values")["c"] == 0
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM contacts")["c"] == 0
+
+    service.clear_all()
+    assert fs.list_field_definitions() == []               # clear_all is the full wipe
+
+
+def test_update_cannot_strip_select_options(pg_db):
+    """PUT that clears a select's options is rejected (reopening the accept-anything
+    hole the create path guards) — API returns 400."""
+    from crm import field_service as fs
+    client = _client()
+    d = fs.create_field_definition({"entity_type": "contact", "name": "Tier", "field_type": "select",
+                                    "dropdown_options": ["A", "B"]})
+    assert client.put(f"/api/crm/fields/{d['id']}", json={"dropdown_options": []}).status_code == 400
+    assert client.put(f"/api/crm/fields/{d['id']}", json={"dropdown_options": None}).status_code == 400
+    # a valid options change still works
+    r = client.put(f"/api/crm/fields/{d['id']}", json={"dropdown_options": ["A", "B", "C"]})
+    assert r.status_code == 200 and r.json()["dropdown_options"] == ["A", "B", "C"]
+
+
+def test_get_values_404s_for_missing_entity(pg_db):
+    client = _client()
+    assert client.get("/api/crm/contact/999999/fields").status_code == 404
