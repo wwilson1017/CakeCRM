@@ -20,6 +20,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from alerts.router import router as alerts_router
 from assistant.router import router as assistant_router
 from branding.router import router as branding_router
 from core import postgres
@@ -28,7 +29,10 @@ from core.auth_2fa import router as auth_2fa_router
 from core.config import settings
 from core.storage import atomic_write
 from crm.router import router as crm_router
+from heartbeat.router import router as heartbeat_router
+from notifications.router import router as notifications_router
 from providers.router import router as providers_router, setup_router as ai_setup_router
+from reminders.router import router as reminders_router
 from telegram import poller as telegram_poller
 from telegram.router import router as telegram_router
 
@@ -97,16 +101,39 @@ async def lifespan(app: FastAPI):
                 volume_marker,
             )
 
+    # ── Background scheduler (issue #6) ─────────────────────────────────────
+    # Capture the main event loop so scheduler-thread background AI turns run their
+    # coroutines HERE (the provider async clients are module-cached + loop-bound to
+    # this loop; a throwaway asyncio.run loop would break on the 2nd turn).
+    import asyncio as _asyncio
+
+    from assistant import background as _background
+    _background.set_main_loop(_asyncio.get_running_loop())
+
+    # Started after migrations so the tick's tables exist. The reminder tick
+    # always runs (keyless); only the heartbeat AI turn is env-gated.
+    from heartbeat.scheduler import start_scheduler
+    start_scheduler()
+    logger.info("Heartbeat scheduler started (60s tick; AI turn %s)",
+                "enabled" if settings.heartbeat_enabled else "disabled")
+
     # Telegram long-poll task (issue #7): a single main-loop asyncio task. It idles
     # until a bot token is connected, so it is safe to start unconditionally here.
     telegram_poller.start()
 
     logger.info("CakeCRM backend started. Data dir: %s", data_root)
-    yield
-
-    await telegram_poller.stop()
-    postgres.close_pool()
-    logger.info("CakeCRM backend shutting down.")
+    try:
+        yield
+    finally:
+        # Stop the scheduler (waiting for an in-flight tick) BEFORE closing the
+        # pool, so a running tick never loses the Postgres pool under it. The
+        # Telegram poller stops next — a tick's notification delivery goes through
+        # telegram.service's own sync client, so it does not depend on the poller.
+        from heartbeat.scheduler import shutdown_scheduler
+        shutdown_scheduler()
+        await telegram_poller.stop()
+        postgres.close_pool()
+        logger.info("CakeCRM backend shutting down.")
 
 
 app = FastAPI(
@@ -148,6 +175,10 @@ app.include_router(ai_setup_router, prefix="/api/setup", tags=["setup"])
 app.include_router(crm_router, prefix="/api/crm", tags=["crm"])
 app.include_router(assistant_router, prefix="/api/assistant", tags=["assistant"])
 app.include_router(telegram_router, prefix="/api/telegram", tags=["telegram"])
+app.include_router(reminders_router, prefix="/api/reminders", tags=["reminders"])
+app.include_router(notifications_router, prefix="/api/notifications", tags=["notifications"])
+app.include_router(alerts_router, prefix="/api/alerts", tags=["alerts"])
+app.include_router(heartbeat_router, prefix="/api/heartbeat", tags=["heartbeat"])
 
 
 # ── Health endpoints ──────────────────────────────────────────────────────────

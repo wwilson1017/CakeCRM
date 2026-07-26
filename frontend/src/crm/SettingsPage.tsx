@@ -27,6 +27,7 @@ import {
   pagePadding, pageHeading, sectionHeading, cardStyle, btnPrimary, btnSecondary, btnDanger,
 } from './styles';
 import { BrandLogo } from './components/BrandLogo';
+import { NotificationSettings } from './components/NotificationSettings';
 import { CustomFieldSettings } from './components/CustomFieldSettings';
 import { TelegramSettings } from './components/TelegramSettings';
 
@@ -210,6 +211,7 @@ export function SettingsPage() {
       </div>
 
       <TelegramSettings />
+      <NotificationSettings isMobile={isMobile} />
       {/* Custom-field definitions manager (issue #19). Appended at the END of the
           settings card chain so a keep-both merge with the Telegram (#7) /
           Notifications (#6) cards stays trivial. */}

@@ -11,6 +11,7 @@ import { modalOverlay, modalContent, btnPrimary, btnSecondary } from './styles';
 import { AiKeyNudge } from './components/AiKeyNudge';
 import { AssistantLauncher } from './components/AssistantLauncher';
 import { BrandLogo } from './components/BrandLogo';
+import { NotificationsBell } from './components/NotificationsBell';
 import { ActiveRecordProvider } from './RecordContext';
 
 const NAV_ITEMS = [
@@ -19,6 +20,7 @@ const NAV_ITEMS = [
   { to: '/crm/contacts', label: 'Contacts' },
   { to: '/crm/companies', label: 'Companies' },
   { to: '/crm/tasks', label: 'Tasks' },
+  { to: '/crm/reminders', label: 'Reminders' },
 ];
 
 interface DemoStatus {
@@ -280,10 +282,19 @@ export function CrmLayout() {
               </div>
               <div style={{ flex: 1 }} />
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <NotificationsBell />
                 <Link to="/crm/settings" style={actionLink}>Settings</Link>
                 <Link to="/setup" style={actionLink}>AI Setup</Link>
                 <button onClick={logout} style={actionLink}>Sign out</button>
               </div>
+            </>
+          )}
+          {/* Mobile: the account actions live in the drawer, but the bell stays in
+              the header so notifications/alerts are reachable on mobile too. */}
+          {isMobile && (
+            <>
+              <div style={{ flex: 1 }} />
+              <NotificationsBell />
             </>
           )}
         </div>
