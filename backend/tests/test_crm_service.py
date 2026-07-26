@@ -176,8 +176,11 @@ def test_delete_contact_existence_check_and_cascade_one_txn(monkeypatch, fake_co
     assert service.delete_contact(42) is True
     stmts = [sql for sql, _ in conn.executed]
     assert any("SELECT id FROM contacts WHERE id" in s for s in stmts)
-    assert sum("DELETE FROM" in s for s in stmts) == 4  # activity_log, tasks, crm_chatter, contacts
+    # activity_log, tasks, crm_chatter, crm_field_values, crm_field_provenance, contacts
+    assert sum("DELETE FROM" in s for s in stmts) == 6
     assert any("DELETE FROM crm_chatter WHERE entity_type = 'contact'" in s for s in stmts)
+    assert any("DELETE FROM crm_field_values WHERE entity_type = 'contact'" in s for s in stmts)
+    assert any("DELETE FROM crm_field_provenance WHERE entity_type = 'contact'" in s for s in stmts)
     assert "DELETE FROM contacts WHERE id" in stmts[-1]
 
 
@@ -198,8 +201,15 @@ def test_clear_demo_data_truncates_when_sample_loaded(monkeypatch, fake_conn):
     conn = fake_conn(monkeypatch, service, fetchone_results=[(True,)])
     out = service.clear_demo_data()
     assert out == {"ok": True, "cleared": True}
-    assert any("TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter RESTART IDENTITY" in s
-               for s, _ in conn.executed)
+    stmts = [s for s, _ in conn.executed]
+    # Base truncate: crm_field_values and crm_field_provenance ARE wiped, but
+    # crm_field_definitions is NOT — demo-clear preserves the user's custom-field
+    # schema (only clear_all wipes it).
+    assert any(
+        "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
+        "crm_field_values, crm_field_provenance RESTART IDENTITY" in s for s in stmts
+    )
+    assert not any("crm_field_definitions" in s for s in stmts)
 
 
 def test_load_sample_data_noop_when_not_empty(monkeypatch, fake_conn):
@@ -226,8 +236,25 @@ def test_clear_all_truncates_and_resets_flag(monkeypatch, fake_conn):
     conn = fake_conn(monkeypatch, service)
     assert service.clear_all() == {"ok": True}
     stmts = [s for s, _ in conn.executed]
-    assert any("TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter RESTART IDENTITY" in s for s in stmts)
+    # clear_all is the deliberate full reset: it ALSO wipes crm_field_definitions,
+    # placed after the entity tables but before crm_field_values (lock order
+    # consistent with both set_field_values entity→defs and delete_field_definition
+    # defs→values); crm_field_provenance trails both.
+    assert any(
+        "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
+        "crm_field_definitions, crm_field_values, crm_field_provenance RESTART IDENTITY"
+        in s for s in stmts
+    )
     assert any("sample_data_loaded = FALSE" in s for s in stmts)
+
+
+def test_is_crm_empty_counts_field_values_not_definitions(rec):
+    # Decision 9: a stray custom-field VALUE keeps the CRM "non-empty" (orphan-id
+    # safety), but a bare field DEFINITION must NOT suppress the first-run seed prompt.
+    rec.fetchone_queue = [{"total": 0}]
+    assert service.is_crm_empty() is True
+    sql = rec.sql_containing("crm_field_values")
+    assert "crm_field_definitions" not in sql
 
 
 # ── AI-key nudge dismissal (issue #9) ─────────────────────────────────────────
@@ -400,11 +427,21 @@ def test_update_company_appends_updated_at_and_filters_unknown(rec):
     assert params[-1] == 1  # id last
 
 
-def test_delete_company_returns_rowcount_bool(rec):
-    rec.execute_rowcount = 1
+def test_delete_company_cascades_field_values_in_one_txn(monkeypatch, fake_conn):
+    conn = fake_conn(monkeypatch, service, fetchone_results=[(5,)])
     assert service.delete_company(5) is True
-    rec.execute_rowcount = 0
+    stmts = [s for s, _ in conn.executed]
+    assert any("SELECT id FROM companies WHERE id" in s and "FOR UPDATE" in s for s in stmts)
+    assert any("DELETE FROM crm_field_values WHERE entity_type = 'company'" in s for s in stmts)
+    assert "DELETE FROM companies WHERE id" in stmts[-1]
+    # Global schema is never touched by a per-entity delete cascade.
+    assert not any("crm_field_definitions" in s for s in stmts)
+
+
+def test_delete_company_missing_returns_false_no_deletes(monkeypatch, fake_conn):
+    conn = fake_conn(monkeypatch, service)  # existence SELECT → None
     assert service.delete_company(5) is False
+    assert not any("DELETE FROM" in s for s, _ in conn.executed)
 
 
 def test_get_company_detail_rolls_up_activity_and_open_value(rec):

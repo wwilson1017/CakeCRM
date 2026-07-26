@@ -8,6 +8,7 @@ CORS, and serves the built frontend in production. The CRM core is mounted at
 Postgres is mandatory — startup fails loudly without DATABASE_URL.
 """
 
+import asyncio
 import contextvars
 import logging
 import os
@@ -20,6 +21,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from alerts.router import router as alerts_router
 from assistant.router import router as assistant_router
 from branding.router import router as branding_router
 from core import postgres
@@ -28,11 +30,19 @@ from core.auth_2fa import router as auth_2fa_router
 from core.config import settings
 from core.storage import atomic_write
 from crm.router import router as crm_router
-from dreaming.schedule import start_scheduler, stop_scheduler
+from heartbeat.router import router as heartbeat_router
+from notifications.router import router as notifications_router
 from providers.router import router as providers_router, setup_router as ai_setup_router
+from reminders.router import router as reminders_router
+from telegram import poller as telegram_poller
+from telegram.router import router as telegram_router
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+# httpx logs every request at INFO with the full URL. The Telegram Bot API embeds the
+# bot token in the URL path (/bot<TOKEN>/...), so INFO-level httpx request logs would
+# leak the token into application logs — quiet httpx to WARNING.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 VERSION = "0.1.0"
 
@@ -58,6 +68,15 @@ async def lifespan(app: FastAPI):
 
     postgres.init_pool()
     postgres.run_migrations()
+
+    # ── AI touch-count worker (issue #16) ────────────────────────────────────
+    # The in-process daemon worker marshals its provider calls onto THIS event loop
+    # (see crm/touch_count_service.capture_event_loop) so the module-level provider
+    # client caches are never shared across event loops. Capture-only — the worker
+    # itself starts lazily on the first note/activity write; nothing to stop on shutdown
+    # (it's a daemon thread that dies with the process).
+    from crm import touch_count_service
+    touch_count_service.capture_event_loop(asyncio.get_running_loop())
 
     # ── Railway environment logging ─────────────────────────────────────────
     if settings.is_railway:
@@ -92,27 +111,44 @@ async def lifespan(app: FastAPI):
                 volume_marker,
             )
 
-    logger.info("CakeCRM backend started. Data dir: %s", data_root)
+    # ── Background scheduler (issue #6) ─────────────────────────────────────
+    # Capture the main event loop so scheduler-thread background AI turns run their
+    # coroutines HERE (the provider async clients are module-cached + loop-bound to
+    # this loop; a throwaway asyncio.run loop would break on the 2nd turn).
+    import asyncio as _asyncio
 
-    # Interim dreaming scheduler (issue #5) — issue #6's background loop absorbs this
-    # single call-site: delete this start/stop pair and call dreaming.processor
-    # .run_dreaming_if_due() from #6's loop instead. Safe to double-drive (idempotent,
-    # advisory-lock + due-guarded). Started as the LAST startup step and inside the try
-    # so its cleanup always runs.
+    from assistant import background as _background
+    _background.set_main_loop(_asyncio.get_running_loop())
+
+    # Started after migrations so the tick's tables exist. The reminder tick
+    # always runs (keyless); only the heartbeat AI turn is env-gated.
+    from heartbeat.scheduler import start_scheduler
+    start_scheduler()
+    logger.info("Heartbeat scheduler started (60s tick; AI turn %s)",
+                "enabled" if settings.heartbeat_enabled else "disabled")
+
+    # Telegram long-poll task (issue #7): a single main-loop asyncio task. It idles
+    # until a bot token is connected, so it is safe to start unconditionally here.
+    telegram_poller.start()
+
+    # Dreaming (issue #5) needs no wiring here: #6's reminder_tick calls
+    # dreaming.processor.run_dreaming_if_due() every 60s through its own guarded seam
+    # (heartbeat.service._maybe_run_dreaming). #5's interim lifespan scheduler was
+    # always meant to be absorbed the moment #6 landed — this is that deletion.
+
+    logger.info("CakeCRM backend started. Data dir: %s", data_root)
     try:
-        start_scheduler()
         yield
     finally:
-        # Cleanup MUST run even if an exception/cancellation propagates through the
-        # lifespan. Stop the scheduler BEFORE closing the pool (stop_scheduler awaits any
-        # in-flight cycle so the pool is never pulled out from under one), and close the
-        # pool from a NESTED finally so a stop_scheduler failure can't leak the pool.
-        # (Sibling lifespan tasks — e.g. #7's telegram poller — stop here too, keep-both.)
-        try:
-            await stop_scheduler()
-        finally:
-            postgres.close_pool()
-            logger.info("CakeCRM backend shutting down.")
+        # Stop the scheduler (waiting for an in-flight tick) BEFORE closing the
+        # pool, so a running tick never loses the Postgres pool under it. The
+        # Telegram poller stops next — a tick's notification delivery goes through
+        # telegram.service's own sync client, so it does not depend on the poller.
+        from heartbeat.scheduler import shutdown_scheduler
+        shutdown_scheduler()
+        await telegram_poller.stop()
+        postgres.close_pool()
+        logger.info("CakeCRM backend shutting down.")
 
 
 app = FastAPI(
@@ -153,6 +189,11 @@ app.include_router(providers_router, prefix="/api/providers", tags=["providers"]
 app.include_router(ai_setup_router, prefix="/api/setup", tags=["setup"])
 app.include_router(crm_router, prefix="/api/crm", tags=["crm"])
 app.include_router(assistant_router, prefix="/api/assistant", tags=["assistant"])
+app.include_router(telegram_router, prefix="/api/telegram", tags=["telegram"])
+app.include_router(reminders_router, prefix="/api/reminders", tags=["reminders"])
+app.include_router(notifications_router, prefix="/api/notifications", tags=["notifications"])
+app.include_router(alerts_router, prefix="/api/alerts", tags=["alerts"])
+app.include_router(heartbeat_router, prefix="/api/heartbeat", tags=["heartbeat"])
 
 
 # ── Health endpoints ──────────────────────────────────────────────────────────

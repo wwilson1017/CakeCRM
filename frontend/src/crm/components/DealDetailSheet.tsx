@@ -6,6 +6,11 @@ import { mono, INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, ACCENT_INK, GOLD, SAGE
 import { modalOverlay, modalContent, mobileDragHandle, btnDanger } from '../styles';
 import { ActivityTimeline } from './ActivityTimeline';
 import { NotesThread } from './NotesThread';
+import { TouchCountPill } from './badges';
+import { ProvenanceBadge } from './ProvenanceBadge';
+import { useProvenance } from '../useProvenance';
+import { CustomFieldsSection } from './CustomFieldsSection';
+import { usePublishActiveRecord } from '../RecordContext';
 
 interface DealDetailSheetProps {
   deal: CrmDeal;
@@ -16,9 +21,24 @@ interface DealDetailSheetProps {
 }
 
 export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange }: DealDetailSheetProps) {
+  // Publish this deal as the open record while the sheet is mounted (issue #14).
+  // Deals have no route, so this IS the deal open/close signal for both Pipeline
+  // and Dashboard — no edits to either page.
+  usePublishActiveRecord('deal', deal.id, deal.title);
+
   // The pipeline passes a plain list-row deal (no activity). Fetch the detail so
   // the sheet can show the activity timeline alongside the chatter thread.
   const [activity, setActivity] = useState<CrmActivity[]>(deal.activity || []);
+  // Read the touch count from re-fetchable state (not the frozen list-row prop): loadDetail
+  // refreshes it on open and after activity mutations, so the sheet shows the latest STORED
+  // count. The recompute itself is async (a background LLM call, seconds after a note), so a
+  // freshly-triggered count lands on the next fetch/navigation — accepted eventual
+  // consistency for an estimate nudge (see the PR's accepted-limitations note).
+  const [touchCount, setTouchCount] = useState<number | null | undefined>(deal.ai_touch_count);
+  const { byField, confirm, confirming } = useProvenance('deal', deal.id);
+  const badge = (f: string) => (
+    <ProvenanceBadge prov={byField[f]} onConfirm={() => confirm(f)} confirming={confirming === f} />
+  );
   const reqRef = useRef(0);
   const loadDetail = useCallback(async () => {
     const reqId = ++reqRef.current;
@@ -26,6 +46,7 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
       const detail = await api<CrmDeal>(`/api/crm/deals/${deal.id}`);
       if (reqId !== reqRef.current) return;
       setActivity(detail.activity || []);
+      setTouchCount(detail.ai_touch_count);
     } catch {
       // Non-fatal: the sheet still shows deal fields + chatter; leave activity as-is.
     }
@@ -36,7 +57,13 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
   return (
     <div
       onClick={onClose}
-      style={modalOverlay(isMobile)}
+      // DESKTOP: lower ONLY this overlay below the assistant launcher button (z-40) so
+      // the drawer can be opened WITH deal context (the only time deal context exists);
+      // every other modalOverlay stays at 50 and correctly occludes the button.
+      // MOBILE: the sheet is a full-width bottom sheet, so a poked-through launcher
+      // would overlap the sheet's bottom-left controls and steal taps — keep it at 50
+      // (button occluded). Deal-context-via-drawer is therefore desktop-only for now (#14).
+      style={{ ...modalOverlay(isMobile), zIndex: isMobile ? 50 : 39 }}
     >
       <div
         onClick={e => e.stopPropagation()}
@@ -55,21 +82,29 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
             color: INK, margin: 0, flex: 1,
           }}>{deal.title}</h3>
           <span style={{
-            fontFamily: FONT_DISPLAY,
-            fontSize: 20, color: GOLD, flexShrink: 0, marginLeft: 12,
-          }}>${deal.value.toLocaleString()}</span>
+            display: 'inline-flex', alignItems: 'center', gap: 8, flexShrink: 0, marginLeft: 12,
+          }}>
+            <span style={{ fontFamily: FONT_DISPLAY, fontSize: 20, color: GOLD }}>
+              ${deal.value.toLocaleString()}
+            </span>
+            {badge('value')}
+          </span>
         </div>
 
         <div style={{
+          display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
           fontSize: 12, color: INK_MUTE, marginBottom: 16,
-          textTransform: 'capitalize',
         }}>
-          Stage: <span style={{ color: STAGE_COLORS[deal.stage]?.color || INK }}>{deal.stage}</span>
+          <span style={{ textTransform: 'capitalize' }}>
+            Stage: <span style={{ color: STAGE_COLORS[deal.stage]?.color || INK }}>{deal.stage}</span>
+          </span>
+          {badge('stage')}
+          <TouchCountPill count={touchCount} />
         </div>
 
         {deal.notes && (
           <p style={{ fontSize: 14, color: INK_MUTE, marginBottom: 16, lineHeight: 1.5 }}>
-            {deal.notes}
+            {deal.notes} {badge('notes')}
           </p>
         )}
 
@@ -81,18 +116,32 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
             </div>
           )}
           {deal.probability > 0 && (
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ ...mono(10), color: INK_DIM }}>Probability</span>
-              <span style={{ fontSize: 13, color: INK }}>{deal.probability}%</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 13, color: INK }}>{deal.probability}%</span>
+                {badge('probability')}
+              </span>
             </div>
           )}
           {deal.expected_close_date && (
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ ...mono(10), color: INK_DIM }}>Expected Close</span>
-              <span style={{ fontSize: 13, color: INK }}>{deal.expected_close_date}</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 13, color: INK }}>{deal.expected_close_date}</span>
+                {badge('expected_close_date')}
+              </span>
             </div>
           )}
         </div>
+
+        {/* Custom fields — renders nothing when no deal fields are defined */}
+        <CustomFieldsSection
+          key={`deal-${deal.id}`}
+          entityType="deal"
+          entityId={deal.id}
+          sectionStyle={{ borderTop: `1px solid ${LINE}`, paddingTop: 16, marginBottom: 20 }}
+        />
 
         {/* Activity timeline */}
         <div style={{ borderTop: `1px solid ${LINE}`, paddingTop: 16, marginBottom: 20 }}>

@@ -123,7 +123,7 @@ def _fake_source(name, writes=False):
 def test_duplicate_tool_name_across_sources_raises(monkeypatch):
     from assistant import registry as reg_mod
     monkeypatch.setattr(reg_mod, "get_memory_tools", lambda: _fake_source("crm_dashboard"))
-    with pytest.raises(RuntimeError, match="Duplicate tool def name"):
+    with pytest.raises(ValueError, match="duplicate tool name across sources"):
         reg_mod.ToolRegistry()
 
 
@@ -132,7 +132,7 @@ def test_non_bool_writes_flag_raises(monkeypatch):
     bad = ([{"name": "memory_bad", "writes": "yes", "kind": "memory", "description": "x",
              "input_schema": {"type": "object", "properties": {}}}], {"memory_bad": (lambda **k: {})})
     monkeypatch.setattr(reg_mod, "get_memory_tools", lambda: bad)
-    with pytest.raises(RuntimeError, match="missing a boolean 'writes'"):
+    with pytest.raises(ValueError, match="must carry a boolean 'writes' flag"):
         reg_mod.ToolRegistry()
 
 
@@ -144,5 +144,5 @@ def test_duplicate_executor_across_sources_raises(monkeypatch):
              "input_schema": {"type": "object", "properties": {}}}]
     execs = {"memory_probe": (lambda **k: {}), "crm_log_note": (lambda **k: {})}
     monkeypatch.setattr(reg_mod, "get_memory_tools", lambda: (defs, execs))
-    with pytest.raises(RuntimeError, match="Duplicate tool executor"):
+    with pytest.raises(ValueError, match="duplicate executor across sources"):
         reg_mod.ToolRegistry()

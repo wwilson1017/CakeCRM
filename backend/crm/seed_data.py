@@ -34,7 +34,8 @@ def seed_demo_data(conn) -> bool:
                 + (SELECT COUNT(*) FROM deals)
                 + (SELECT COUNT(*) FROM tasks)
                 + (SELECT COUNT(*) FROM activity_log)
-                + (SELECT COUNT(*) FROM crm_chatter)"""
+                + (SELECT COUNT(*) FROM crm_chatter)
+                + (SELECT COUNT(*) FROM crm_field_values)"""
     )
     if cur.fetchone()[0] > 0:
         logger.info("CRM already has data — skipping demo seed")

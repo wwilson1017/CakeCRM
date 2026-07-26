@@ -104,12 +104,17 @@ async def chat(
     tool_mode: str = "normal",
     conversation_id: str | None = None,
     title_hint: str | None = None,
+    context: dict | None = None,
 ) -> AsyncGenerator[str, None]:
     """Stream one assistant turn as SSE.
 
     ``messages`` carries only the newest user message (history lives server-side).
     An EMPTY ``messages`` with a ``conversation_id`` is a *continuation* — used to
     resume after a write was approved out-of-band — and saves no new user row.
+
+    ``context`` (the CRM record the user has open, e.g.
+    ``{"record_type": "deal", "record_id": 3}``) is per-request/volatile: it is
+    folded into the system prompt for this turn only and is NEVER persisted.
 
     Thin catch-all wrapper: the SSE response has already started (200 + bytes
     flushed), so any unexpected exception in the loop must still terminate with a
@@ -118,7 +123,7 @@ async def chat(
     stop).
     """
     try:
-        async for line in _chat_impl(provider, registry, messages, tool_mode, conversation_id, title_hint):
+        async for line in _chat_impl(provider, registry, messages, tool_mode, conversation_id, title_hint, context):
             yield line
     except Exception:
         logger.exception("assistant.chat crashed mid-stream")
@@ -132,6 +137,7 @@ async def _chat_impl(
     tool_mode: str = "normal",
     conversation_id: str | None = None,
     title_hint: str | None = None,
+    context: dict | None = None,
 ) -> AsyncGenerator[str, None]:
     if tool_mode not in _VALID_MODES:
         tool_mode = "normal"
@@ -217,7 +223,14 @@ async def _chat_impl(
     memory_block = await asyncio.to_thread(
         memory_context.build_memory_context, _last_user_text(current_messages)
     )
-    system_prompt = identity.build_system_prompt(ident, memory_context=memory_block)
+    # ONE unified pre-loop build: the record context (#14) and the memory block (#5)
+    # are both per-turn injections that ride the VOLATILE half of the system prompt —
+    # never assembled/persisted messages, never the cached static block. BOTH kwargs
+    # must be passed here; dropping either silently loses that feature's injection.
+    # This same system_prompt feeds the main loop and the confirmation wrap-up turn.
+    system_prompt = identity.build_system_prompt(
+        ident, context=context, memory_context=memory_block,
+    )
 
     # ── Main tool-execution loop ───────────────────────────────────────────────
     iteration = 0
