@@ -12,6 +12,7 @@ import { CompaniesPage } from './crm/CompaniesPage';
 import { CompanyDetailPage } from './crm/CompanyDetailPage';
 import { PipelinePage } from './crm/PipelinePage';
 import { TasksPage } from './crm/TasksPage';
+import { RemindersPage } from './crm/RemindersPage';
 import { SettingsPage } from './crm/SettingsPage';
 import { ToastViewport } from './shared/ToastViewport';
 import { ConfirmHost } from './shared/ConfirmHost';
@@ -47,6 +48,7 @@ export default function App() {
             <Route path="companies/:id" element={<CompanyDetailPage />} />
             <Route path="pipeline" element={<PipelinePage />} />
             <Route path="tasks" element={<TasksPage />} />
+            <Route path="reminders" element={<RemindersPage />} />
             <Route path="settings" element={<SettingsPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/crm" replace />} />

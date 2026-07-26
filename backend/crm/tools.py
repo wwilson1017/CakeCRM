@@ -1,7 +1,8 @@
-"""CakeCRM — CRM agent tools (24 tools).
+"""CakeCRM — CRM agent tools (30 tools).
 
-Contacts, deals, tasks, activities, chatter/notes, companies, and analytics — all
-accessible to the AI assistant for managing customer relationships conversationally.
+Contacts, deals, tasks, activities, chatter/notes, companies, custom fields, and
+analytics — all accessible to the AI assistant for managing customer relationships
+conversationally.
 The CRM is first-class core, so these tools are collected UNCONDITIONALLY (no enable
 gate); the assistant engine (backend/assistant/) consumes them via get_crm_tools().
 
@@ -17,7 +18,7 @@ from collections.abc import Callable
 
 import psycopg2
 
-from crm import chatter_service, provenance_service, service as crm
+from crm import chatter_service, field_service, provenance_service, service as crm
 
 logger = logging.getLogger(__name__)
 
@@ -484,6 +485,136 @@ CRM_TOOL_DEFS = [
         },
         "kind": "integration",
     },
+    # ── Custom fields (6 tools) ───────────────────────────────────────────────
+    # User-defined fields on contacts/companies/deals. Get tools discover the field
+    # schema (types/options/keys); with an id they also read that record's values.
+    # Set tools write by field_key. Values are stored as text (booleans as "1"/"0").
+    {
+        "name": "crm_get_contact_fields",
+        "writes": False,
+        "description": (
+            "List the custom-field definitions for contacts (name, key, type, options). "
+            "Optionally pass a contact_id to also get that contact's current values. "
+            "Call this before crm_set_contact_fields to learn the valid field keys."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "contact_id": {
+                    "type": "integer",
+                    "description": "Optional. Omit to list definitions; provide to also get this contact's values.",
+                },
+            },
+            "required": [],
+        },
+        "kind": "integration",
+    },
+    {
+        "name": "crm_set_contact_fields",
+        "writes": True,
+        "description": (
+            "Set custom-field values on a contact. Pass a map of field_key → value. "
+            "Send an empty string to clear a field; booleans as true/false or \"1\"/\"0\". "
+            "Discover valid keys/types first with crm_get_contact_fields."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "contact_id": {"type": "integer", "description": "Contact ID"},
+                "fields": {
+                    "type": "object",
+                    "description": "Map of field_key → value.",
+                    "additionalProperties": {"type": ["string", "number", "boolean"]},
+                },
+            },
+            "required": ["contact_id", "fields"],
+        },
+        "kind": "integration",
+    },
+    {
+        "name": "crm_get_company_fields",
+        "writes": False,
+        "description": (
+            "List the custom-field definitions for companies (name, key, type, options). "
+            "Optionally pass a company_id to also get that company's current values. "
+            "Call this before crm_set_company_fields to learn the valid field keys."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "company_id": {
+                    "type": "integer",
+                    "description": "Optional. Omit to list definitions; provide to also get this company's values.",
+                },
+            },
+            "required": [],
+        },
+        "kind": "integration",
+    },
+    {
+        "name": "crm_set_company_fields",
+        "writes": True,
+        "description": (
+            "Set custom-field values on a company. Pass a map of field_key → value. "
+            "Send an empty string to clear a field; booleans as true/false or \"1\"/\"0\". "
+            "Discover valid keys/types first with crm_get_company_fields."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "company_id": {"type": "integer", "description": "Company ID"},
+                "fields": {
+                    "type": "object",
+                    "description": "Map of field_key → value.",
+                    "additionalProperties": {"type": ["string", "number", "boolean"]},
+                },
+            },
+            "required": ["company_id", "fields"],
+        },
+        "kind": "integration",
+    },
+    {
+        "name": "crm_get_deal_fields",
+        "writes": False,
+        "description": (
+            "List the custom-field definitions for deals (name, key, type, options). "
+            "Optionally pass a deal_id to also get that deal's current values. "
+            "Call this before crm_set_deal_fields to learn the valid field keys."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "deal_id": {
+                    "type": "integer",
+                    "description": "Optional. Omit to list definitions; provide to also get this deal's values.",
+                },
+            },
+            "required": [],
+        },
+        "kind": "integration",
+    },
+    {
+        "name": "crm_set_deal_fields",
+        "writes": True,
+        "description": (
+            "Set custom-field values on a deal. Pass a map of field_key → value. "
+            "Send an empty string to clear a field; booleans as true/false or \"1\"/\"0\". "
+            "Discover valid keys/types first with crm_get_deal_fields."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "deal_id": {"type": "integer", "description": "Deal ID"},
+                "fields": {
+                    "type": "object",
+                    "description": "Map of field_key → value.",
+                    "additionalProperties": {"type": ["string", "number", "boolean"]},
+                },
+            },
+            "required": ["deal_id", "fields"],
+        },
+        "kind": "integration",
+    },
 ]
 
 
@@ -714,8 +845,129 @@ def crm_get_chatter(
     return {"notes": notes, "count": len(notes)}
 
 
+# ── Custom fields ─────────────────────────────────────────────────────────────
+# Get tools discover the field schema (and optionally a record's values); set tools
+# write by field_key. Attribution is hardcoded "assistant" — the set tools expose no
+# user_email param, so the model can't spoof who edited a value.
+
+def _normalize_field_value(value) -> str:
+    """Coerce an LLM-supplied value to the text form the value table stores."""
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    return str(value)
+
+
+def _normalize_field(r: dict) -> dict:
+    """One field's schema in the shape shown to the model. Used for BOTH get-tool
+    modes so a schema learned without an id matches the keys/types read with one."""
+    out = {
+        "field_id": r.get("field_id", r.get("id")),
+        "field_key": r["field_key"],
+        "name": r["name"],
+        "field_type": r["field_type"],
+        "is_required": bool(r["is_required"]),
+    }
+    if r.get("dropdown_options"):
+        out["options"] = r["dropdown_options"]
+    return out
+
+
+def _get_entity_fields(entity_type: str, entity_id: int | None) -> dict:
+    """No id → list the definitions (schema discovery). With an id → that entity's
+    values (every definition, unset ones with value=None)."""
+    if entity_id is None:
+        try:
+            defs = field_service.list_field_definitions(entity_type)
+        except ValueError as e:
+            return {"error": str(e)}
+        fields = [_normalize_field(d) for d in defs]
+        return {"fields": fields, "total": len(fields)}
+    if not field_service.entity_exists(entity_type, entity_id):
+        return {"error": f"{entity_type} {entity_id} not found"}
+    try:
+        rows = field_service.get_field_values(entity_type, entity_id)
+    except ValueError as e:
+        return {"error": str(e)}
+    # Same normalized schema shape as the no-id path, plus the per-entity value fields.
+    fields = [
+        {**_normalize_field(r), "value": r["value"],
+         "value_updated_at": r.get("value_updated_at"), "updated_by_email": r.get("updated_by_email")}
+        for r in rows
+    ]
+    return {"fields": fields, "total": len(fields)}
+
+
+def _set_entity_fields(entity_type: str, entity_id: int, fields: dict) -> dict:
+    """Resolve field_key → id (scoped to entity_type), normalize values, and upsert.
+    None values are rejected (send "" to clear); unknown keys are reported, not set."""
+    if not isinstance(fields, dict) or not fields:
+        return {"error": "No fields provided"}
+    if not field_service.entity_exists(entity_type, entity_id):
+        return {"error": f"{entity_type} {entity_id} not found"}
+    try:
+        defs = field_service.list_field_definitions(entity_type)
+    except ValueError as e:
+        return {"error": str(e)}
+    key_to_id = {d["field_key"]: d["id"] for d in defs}
+
+    values_by_id: dict[str, str] = {}
+    unknown: list[str] = []
+    rejected: list[str] = []
+    for key, value in fields.items():
+        if value is None:
+            rejected.append(key)
+            continue
+        field_id = key_to_id.get(key)
+        if field_id is None:
+            unknown.append(key)
+            continue
+        values_by_id[str(field_id)] = _normalize_field_value(value)
+
+    if not values_by_id:
+        detail = []
+        if unknown:
+            detail.append(f"unknown keys: {unknown}")
+        if rejected:
+            detail.append(f"null values (send an empty string to clear): {rejected}")
+        return {"error": "No valid fields to set" + (f" ({'; '.join(detail)})" if detail else "")}
+
+    try:
+        result = field_service.set_field_values(entity_type, entity_id, values_by_id, "assistant")
+    except ValueError as e:
+        return {"error": str(e)}
+    if unknown:
+        result["unknown_keys"] = unknown
+    if rejected:
+        result["rejected"] = rejected
+    return result
+
+
+def crm_get_contact_fields(contact_id: int | None = None) -> dict:
+    return _get_entity_fields("contact", contact_id)
+
+
+def crm_set_contact_fields(contact_id: int, fields: dict) -> dict:
+    return _set_entity_fields("contact", contact_id, fields)
+
+
+def crm_get_company_fields(company_id: int | None = None) -> dict:
+    return _get_entity_fields("company", company_id)
+
+
+def crm_set_company_fields(company_id: int, fields: dict) -> dict:
+    return _set_entity_fields("company", company_id, fields)
+
+
+def crm_get_deal_fields(deal_id: int | None = None) -> dict:
+    return _get_entity_fields("deal", deal_id)
+
+
+def crm_set_deal_fields(deal_id: int, fields: dict) -> dict:
+    return _set_entity_fields("deal", deal_id, fields)
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
-# Executor Mapping (name -> callable(**kwargs) -> dict). 25 entries: the 24
+# Executor Mapping (name -> callable(**kwargs) -> dict). 31 entries: the 30
 # schema'd tools plus the crm_log_note back-compat alias (no schema def).
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -751,6 +1003,13 @@ TOOL_EXECUTORS = {
     "crm_list_companies": crm_list_companies,
     "crm_create_company": crm_create_company,
     "crm_update_company": crm_update_company,
+    # Custom fields
+    "crm_get_contact_fields": crm_get_contact_fields,
+    "crm_set_contact_fields": crm_set_contact_fields,
+    "crm_get_company_fields": crm_get_company_fields,
+    "crm_set_company_fields": crm_set_company_fields,
+    "crm_get_deal_fields": crm_get_deal_fields,
+    "crm_set_deal_fields": crm_set_deal_fields,
     # Backwards compat alias — a legacy 'note' logs an activity (unchanged); the
     # editable notes thread is crm_add_note.
     "crm_log_note": crm_log_activity,

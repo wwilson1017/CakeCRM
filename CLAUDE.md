@@ -46,8 +46,16 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   (`stream_turn`/`add_tool_results`/`build_tool_turn`) is consumed by the built-in
   assistant engine (`backend/assistant/`, landed #4): an SSE streaming tool loop
   with write-tool confirmation modes and file uploads, mounted at `/api/assistant`
-  and gated off `ai_ready`. Multi-user is future work (authz/ownership), not just a
-  `user_id` column.
+  and gated off `ai_ready`. The assistant's **second execution mode** (landed #6,
+  `backend/assistant/background.py`) is a non-SSE `run_background_turn` for
+  autonomous work (the heartbeat + reminder firing): it reuses the same
+  `ToolRegistry`/`build_tool_turn` loop but, having no human to confirm writes,
+  runs under a **server-enforced tool allowlist of READ tools + `notify_user` only**
+  (no CRM writes at all — enforced at both advertisement and execution) plus a
+  `WRITE_BUDGET_BACKGROUND`, with untrusted reminder/CRM text kept in the user
+  message, never the system prompt. So a prompt injection via reminder/CRM content
+  can at worst send one notification, never create/log/update/delete a record.
+  Multi-user is future work (authz/ownership), not just a `user_id` column.
 - **One database: PostgreSQL, and it's mandatory** — the backend refuses to start
   without `DATABASE_URL` (decided 2026-07-18; single engine, ready for multi-user
   growth). Locally `docker compose up -d`; on Railway the template provisions
@@ -65,7 +73,14 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   contacts, landed #15; query idioms follow the matching `cake_os/backend/apps/crm`
   services so later feature ports diff cleanly). Companies are a first-class entity (#13):
   contacts/deals carry a nullable `company_id` FK and a company detail page rolls up
-  the linked contacts/deals/activity. The ~24 `crm_*` agent tools + executors are
+  the linked contacts/deals/activity. User-defined **custom fields** (#19) add a
+  two-table EAV (`crm_field_definitions` + `crm_field_values`) on contacts/companies/
+  deals, managed in `/crm/settings`, rendered in the entity forms and detail pages, and
+  exposed to the assistant via `crm_{get,set}_{contact,company,deal}_fields`;
+  `crm_field_values` is polymorphic (no entity FK), so it is cleaned at every
+  entity-delete + `_truncate_all` site (definitions survive demo-clear, wiped only by
+  `clear_all`), and `is_required` is advisory-only (never enforced server-side). The
+  ~30 `crm_*` agent tools + executors are
   collected UNCONDITIONALLY via `crm.tools.get_crm_tools()` — each def carries a
   `"writes"` flag (the single source of truth for the assistant's confirmation gate),
   consumed by `assistant.registry.ToolRegistry` (landed #4). **AI touch counts +
@@ -88,7 +103,13 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   at `/crm/settings`, consuming the existing `/api/branding`; the accent is applied
   app-wide by setting the `--brand-color` CSS variable (`index.css` routes the whole
   theme's accent through it), so the CRM stays fully usable — and re-themable — with
-  zero AI keys.
+  zero AI keys. The launcher opens a **context-aware slide-over drawer** (#14): the
+  open deal/contact/company is published through a shared record context
+  (`frontend/src/crm/RecordContext.tsx`, set by the detail pages + `DealDetailSheet`)
+  and injected **per-turn** into the assistant's **volatile** system prompt as a
+  server-built sentence from a validated `{record_type, record_id}`
+  (`assistant/router.ChatContext` → `identity.build_context_note`) — never persisted,
+  never client free text — with record-aware quick actions rendered in the drawer.
 - **API keys are entered in-app, encrypted at rest** (Fernet; key from env →
   OS keychain → file fallback) — never as env vars.
 - **Backend tests** live in `backend/tests/` (config in `backend/pytest.ini`,
@@ -163,13 +184,17 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Postgres pool + migration runner | `cake_os/backend/core/postgres.py` |
 | AI providers + pricing + setup wizard | `chatty/backend/core/providers/`, `chatty/frontend/src/setup/` |
 | CRM core (schema, router, tools, smart import) — **landed #3** as `backend/crm/` + `frontend/src/crm/` + `frontend/src/shared/` | `chatty/backend/integrations/crm_lite/`, `chatty/frontend/src/crm/` |
-| Assistant engine — **chat loop, tool registry, confirmations, uploads landed #4** as `backend/assistant/` + `frontend/src/assistant/`; memory/dreaming/heartbeat/reminders/notifications still pending | `chatty/backend/core/agents/` |
-| Telegram | `chatty/backend/integrations/telegram/` |
+| Assistant engine — **chat loop, tool registry, confirmations, uploads landed #4** as `backend/assistant/` + `frontend/src/assistant/`; memory/dreaming still pending (#5) | `chatty/backend/core/agents/` |
+| Heartbeat + background AI turn — **landed #6** as `backend/heartbeat/` (60s APScheduler tick) + `backend/assistant/background.py` (non-SSE `run_background_turn`: auto-approved writes under a server-enforced tool allowlist + `WRITE_BUDGET_BACKGROUND`) | `chatty/backend/core/agents/background_runner.py` + `main.py` scheduler wiring |
+| Reminders (own table, recurrence math, agent tools + **net-new full CRUD REST/UI**) — **landed #6** as `backend/reminders/` + `frontend/src/crm/RemindersPage.tsx` | `chatty/backend/core/agents/reminders/` |
+| Notifications (Web Push VAPID keys persisted in Postgres, `notify_user` tool, bell) + system alerts — **landed #6** as `backend/notifications/` + `backend/alerts/` + `frontend/src/crm/components/{NotificationsBell,NotificationSettings}.tsx` + `frontend/public/sw.js`. Telegram delivery goes out through `telegram.service.notify_linked_user` (the pure-sync channel #7 landed), via `_send_telegram`; WhatsApp not ported. Chatty's user-configurable `scheduled_actions` subsystem (leases/active-hours/triage/dashboards) deliberately deferred | `chatty/backend/core/agents/notifications/` + `alerts/` |
+| Telegram — **landed #7** as `backend/telegram/*` + `frontend/src/crm/components/TelegramSettings.tsx`: single-assistant long-polling (one main-loop asyncio task offloads `getUpdates` via `to_thread` and drives `engine.chat` on the SAME loop as the SSE endpoint — provider async clients are loop-bound), Fernet-encrypted bot token on a `telegram_settings` singleton, one linked user via a single-use `link_code` (Telegram deep link), CRM write confirmations as inline-keyboard Approve/Deny buttons (mapped onto `engine.resolve_confirmation` + an empty-messages continuation, batched so it continues only once every write is resolved), and `telegram.service.notify_linked_user(text)->bool` as the pure-sync outbound channel #6 consumes. No webhooks, no group chat (deliberately cut). | `chatty/backend/integrations/telegram/` |
 | Gmail (reduced to read + draft) | `chatty/backend/integrations/google/` |
 | Kanban drag-and-drop | `cake_os/frontend/src/shared/dnd/` |
 | Companies (first-class entity: `companies` table, `company_id` FKs, rollup detail page, text→FK backfill migration) — **landed #13** | `cake_os/backend/apps/crm/company_service.py` |
 | Chatter/notes (`crm_chatter`) — **landed #15** as `backend/crm/chatter_service.py` + `frontend/src/crm/components/NotesThread.tsx` | `cake_os/backend/apps/crm/chatter_service.py` |
+| Custom fields (EAV `crm_field_definitions`/`crm_field_values`, Settings editor, entity-form + detail-page value inputs, 6 `crm_*_fields` tools) — **landed #19** as `backend/crm/field_service.py` + `frontend/src/crm/components/{CustomFieldSettings,CustomFieldsSection,CustomFieldInputs}.tsx` | `cake_os/backend/apps/crm/field_service.py` |
 | Touch counts + field provenance (`deals.ai_touch_*` cols + in-process recompute worker; `crm_field_provenance` + `AiBadge`/`ProvenanceBadge`/`TouchCountPill`) — **landed #16** as `backend/crm/touch_count_service.py` + `provenance_service.py` | `cake_os/backend/apps/crm/touch_count_service.py`, `provenance_service.py` |
-| Scoring, custom fields, analytics | `cake_os/backend/apps/crm/*_service.py` |
+| Scoring, analytics | `cake_os/backend/apps/crm/*_service.py` |
 | Assistant tool set (~43 tools) + sales behaviors | `cake_os/backend/apps/crm/tools/` + Casey's agent config |
 | Pipeline facet filtering | `cake_os/docs/CRM_FILTER_DESIGN.md` |

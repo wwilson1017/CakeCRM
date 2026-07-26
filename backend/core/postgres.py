@@ -166,7 +166,8 @@ def pg_execute(sql: str, params: tuple | list | dict = ()) -> int:
 # ---------------------------------------------------------------------------
 
 # Advisory lock registry (keep in sync when adding locks):
-#   pg_advisory_lock(1) — migration runner (below)
+#   pg_advisory_lock(1)          — migration runner (below)
+#   pg_try_advisory_lock(720770) — telegram poller leader election (telegram/poller.py)
 
 
 def run_migrations() -> None:
