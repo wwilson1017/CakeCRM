@@ -413,11 +413,21 @@ export function useAssistantChat(recordContext?: ActiveRecordContext | null) {
       // approve/deny race the other click won) or still-executing.
       const rstatus =
         result && typeof result === 'object' ? (result as { status?: string }).status : undefined;
-      let cardStatus: 'approved' | 'denied' | 'pending';
+      const resultErrored =
+        result && typeof result === 'object' && (result as { error?: unknown }).error != null;
+      let cardStatus: 'approved' | 'denied' | 'pending' | 'failed';
       if (rstatus === 'executing') {
         cardStatus = 'pending'; // resolved elsewhere but not yet finalized — stay pending
       } else if (rstatus === 'denied_by_user') {
         cardStatus = 'denied';
+      } else if (resultErrored) {
+        // The canonical outcome is an executor error (e.g. Gmail disconnected) —
+        // show it as failed, not "Approved" (issue #8). Independent of this
+        // request's decision: a deny that lost a race to an already-resolved
+        // errored approve returns that same canonical error via `already_resolved`,
+        // and a genuine deny never yields an error result (it returns a denied
+        // status, handled above), so this can't mislabel a real denial.
+        cardStatus = 'failed';
       } else if (body?.status === 'already_resolved') {
         cardStatus = 'approved'; // resolved by a prior action and not a denial
       } else {
@@ -431,14 +441,20 @@ export function useAssistantChat(recordContext?: ActiveRecordContext | null) {
         ),
       }));
 
-      // Continue only once EVERY card on this message reached a final state.
+      // Continue only once EVERY card on this message reached a final state. A
+      // 'failed' card (an approved write whose executor errored, e.g. Gmail
+      // disconnected — issue #8) is final too, so the turn continues and the model
+      // can react to the error; hence `!== 'pending'` rather than an approved/denied
+      // allow-list.
       const msg = messagesRef.current.find((m) => m.id === msgId);
       // If the message vanished (e.g. the user switched conversations while /confirm
       // was in flight), do NOT continue: an empty pendingConfirmations list makes
       // .every() vacuously true, which would resume this turn against the CURRENT
       // conversation — the wrong thread.
       if (!msg) return;
-      const allFinal = (msg.pendingConfirmations ?? []).every((c) => c.status === 'approved' || c.status === 'denied');
+      // 'failed' is terminal too (issue #8): a write whose executor errored must not
+      // wedge the turn waiting for a status that will never change.
+      const allFinal = (msg.pendingConfirmations ?? []).every((c) => c.status !== 'pending');
       // Resume with the snapshot captured when THIS message's turn started (undefined
       // for a reload-resumed message that has no snapshot → context omitted).
       if (allFinal) continueTurn(turnCtxByMsgRef.current[msgId]);

@@ -82,16 +82,26 @@ function ConfirmationCard({
   const args = Object.entries(confirm.args ?? {});
   if (confirm.status !== 'pending') {
     const approved = confirm.status === 'approved';
+    const failed = confirm.status === 'failed';
+    const errMsg =
+      failed && confirm.result && typeof confirm.result === 'object'
+        ? String((confirm.result as { error?: unknown }).error ?? 'Action failed.')
+        : undefined;
+    const label = approved ? 'Approved' : failed ? 'Failed' : 'Declined';
     return (
       <div
         style={{
-          display: 'flex', alignItems: 'center', gap: 6, margin: '6px 0', padding: '6px 10px',
+          display: 'flex', flexDirection: 'column', gap: 4, margin: '6px 0', padding: '6px 10px',
           border: `1px solid ${LINE}`, borderRadius: 8, background: BG_RAISED, fontSize: 13,
-          color: approved ? SAGE : INK_SOFT,
         }}
       >
-        {approved ? <IconCheck size={14} /> : <IconX size={14} />}
-        <span>{approved ? 'Approved' : 'Declined'}: <code>{confirm.tool}</code></span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: approved ? SAGE : failed ? CORAL : INK_SOFT }}>
+          {approved ? <IconCheck size={14} /> : <IconX size={14} />}
+          <span>{label}: <code>{confirm.tool}</code></span>
+        </div>
+        {errMsg && (
+          <span style={{ color: INK_SOFT, fontSize: 12, paddingLeft: 20 }}>{errMsg}</span>
+        )}
       </div>
     );
   }

@@ -30,6 +30,16 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   the codebase, and none may be added. Google scopes can't express "draft but not
   send", so the guarantee is enforced at the tool layer: the registry exposes read
   and create-draft tools only. This is a documented trust guarantee (SECURITY.md).
+  Landed #8 as `backend/gmail/` (mounted `/api/gmail`) + `frontend/src/crm/components/GmailCard.tsx`:
+  BYO Google OAuth app (client_id/secret + tokens Fernet-encrypted in the
+  `gmail_connection` singleton), scopes `gmail.readonly` + `gmail.compose` only, the
+  three tools `gmail_search`/`gmail_read_thread`/`gmail_create_draft` collected via
+  `gmail.tools.get_gmail_tools()` (defs gated on connection, executors follow),
+  `gmail_create_draft` marked `writes:true`. Enforcement artifacts: the guard test
+  `backend/tests/test_gmail_guard.py` (CI fails if any send surface appears), a
+  runtime op-allow-list in `gmail/client.py`, and `SECURITY.md`. Untrusted email read
+  into the assistant taints the turn (power→normal confirmation) to blunt prompt
+  injection.
 - **Multi-provider AI** via the `AIProvider` ABC (Anthropic, OpenAI, Gemini, Ollama,
   Together). Never call a provider SDK directly from feature code. Cheap background
   AI work (touch counts, classification) uses the light tier via
@@ -204,7 +214,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Reminders (own table, recurrence math, agent tools + **net-new full CRUD REST/UI**) — **landed #6** as `backend/reminders/` + `frontend/src/crm/RemindersPage.tsx` | `chatty/backend/core/agents/reminders/` |
 | Notifications (Web Push VAPID keys persisted in Postgres, `notify_user` tool, bell) + system alerts — **landed #6** as `backend/notifications/` + `backend/alerts/` + `frontend/src/crm/components/{NotificationsBell,NotificationSettings}.tsx` + `frontend/public/sw.js`. Telegram delivery goes out through `telegram.service.notify_linked_user` (the pure-sync channel #7 landed), via `_send_telegram`; WhatsApp not ported. Chatty's user-configurable `scheduled_actions` subsystem (leases/active-hours/triage/dashboards) deliberately deferred | `chatty/backend/core/agents/notifications/` + `alerts/` |
 | Telegram — **landed #7** as `backend/telegram/*` + `frontend/src/crm/components/TelegramSettings.tsx`: single-assistant long-polling (one main-loop asyncio task offloads `getUpdates` via `to_thread` and drives `engine.chat` on the SAME loop as the SSE endpoint — provider async clients are loop-bound), Fernet-encrypted bot token on a `telegram_settings` singleton, one linked user via a single-use `link_code` (Telegram deep link), CRM write confirmations as inline-keyboard Approve/Deny buttons (mapped onto `engine.resolve_confirmation` + an empty-messages continuation, batched so it continues only once every write is resolved), and `telegram.service.notify_linked_user(text)->bool` as the pure-sync outbound channel #6 consumes. No webhooks, no group chat (deliberately cut). | `chatty/backend/integrations/telegram/` |
-| Gmail (reduced to read + draft) | `chatty/backend/integrations/google/` |
+| Gmail (read + draft only: `gmail_connection` singleton, BYO OAuth at `/api/gmail`, tools `gmail_search`/`gmail_read_thread`/`gmail_create_draft`, guard test + SECURITY.md) — **landed #8** as `backend/gmail/` + `frontend/src/crm/components/GmailCard.tsx` | `chatty/backend/integrations/google/` |
 | Kanban drag-and-drop | `cake_os/frontend/src/shared/dnd/` |
 | Companies (first-class entity: `companies` table, `company_id` FKs, rollup detail page, text→FK backfill migration) — **landed #13** | `cake_os/backend/apps/crm/company_service.py` |
 | Chatter/notes (`crm_chatter`) — **landed #15** as `backend/crm/chatter_service.py` + `frontend/src/crm/components/NotesThread.tsx` | `cake_os/backend/apps/crm/chatter_service.py` |

@@ -12,6 +12,11 @@ features append cleanly):
   * background only (``ToolRegistry(background=True)``): ``notify_user`` — Chatty
     gates it behind background mode; interactive chat never needs it.
   * always: ``memory.tools.get_memory_tools()`` (issue #5 — long-term facts).
+  * conditional: ``gmail.tools.get_gmail_tools()`` (issue #8) — defs ONLY when
+    Gmail is connected, so a disconnected/keyless instance never shows the model
+    those tools; it returns ``([], {})`` otherwise and never raises. It reads the
+    connection state from Postgres, so constructing a registry does one DB read —
+    the async chat endpoints build it via ``asyncio.to_thread``.
 
 Construction FAILS LOUD on a malformed composition — a duplicate tool name, a def
 with no executor, an executor with no def, or a non-boolean ``writes`` — so a new
@@ -27,6 +32,7 @@ import logging
 from collections.abc import Callable
 
 from crm.tools import get_crm_tools
+from gmail.tools import get_gmail_tools
 from memory.tools import get_memory_tools
 from reminders.tools import get_reminder_tools
 
@@ -48,6 +54,7 @@ class ToolRegistry:
             get_crm_tools(),
             get_reminder_tools(),
             get_memory_tools(),
+            get_gmail_tools(),
         ]
         if background:
             from notifications.tools import get_notification_tools

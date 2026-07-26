@@ -30,7 +30,7 @@ import time
 import uuid
 from collections.abc import AsyncGenerator
 
-from assistant import assembly, history, identity
+from assistant import assembly, delimiters, history, identity
 from assistant.write_budget import WRITE_BUDGET_PER_TURN, BudgetAction, BudgetState
 from memory import context as memory_context
 from providers.base import AIProvider, _sse
@@ -41,6 +41,15 @@ logger = logging.getLogger(__name__)
 MAX_ITERATIONS = 20
 _VALID_MODES = {"read-only", "normal", "power"}
 _UNTRUSTED_MARKER = "<untrusted_file_content"
+# Tool results from untrusted EXTERNAL sources (e.g. Gmail — issue #8) are wrapped
+# with this marker when recorded, so a later turn's power→normal downgrade fires on
+# them exactly like uploaded-file content does.
+_UNTRUSTED_EXTERNAL_MARKER = "<untrusted_external_content"
+_UNTRUSTED_MARKERS = (_UNTRUSTED_MARKER, _UNTRUSTED_EXTERNAL_MARKER)
+# Read tools whose output is untrusted external content. Reading it must not let a
+# prompt injection inside that content drive an unconfirmed write in power mode.
+_UNTRUSTED_SOURCE_TOOLS = {"gmail_search", "gmail_read_thread"}
+
 # Transient user turn appended on resume to keep a trailing-assistant sequence valid.
 _CONTINUATION_ACK = "Please continue based on the results shown above."
 
@@ -51,15 +60,16 @@ def _last_user_text(messages: list[dict]) -> str | None:
     Used to FTS-match long-term memory for this turn. Scans from the end so a normal
     turn picks the just-saved user row and a continuation picks the last real user
     message. Skips the synthetic resume ack, and — on an upload turn — the wrapped
-    untrusted file blob, so attacker-controlled file text never chooses which facts
-    surface; memory matching only ever uses genuinely-typed text.
+    untrusted file blob AND any external (Gmail, #8) content, so attacker-controlled
+    text never chooses which facts surface; memory matching only ever uses
+    genuinely-typed text.
     """
     def _usable(text) -> bool:
         return (
             isinstance(text, str)
             and text.strip()
             and text != _CONTINUATION_ACK
-            and _UNTRUSTED_MARKER not in text
+            and not any(mark in text for mark in _UNTRUSTED_MARKERS)
         )
 
     for m in reversed(messages):
@@ -80,20 +90,25 @@ def _last_user_text(messages: list[dict]) -> str | None:
 
 
 def _context_has_untrusted_upload(messages: list[dict]) -> bool:
-    """True if any message content carries wrapped uploaded-file text.
+    """True if any message content carries untrusted wrapped text — an uploaded
+    file OR a tool result from an untrusted external source (Gmail, issue #8).
 
-    The marker normally lives in user-turn string content, but coalescing can fold
-    an upload user row into a block list (e.g. merged with a trailing tool-result
-    message), so also scan text blocks inside list content — otherwise the
-    power→normal downgrade would silently miss it."""
+    Tool-result history is reassembled into PROVIDER-SPECIFIC shapes: Anthropic
+    stores the text under a block ``content`` key, Gemini nests it under
+    ``response.result``, OpenAI keeps a top-level string. Keying off one field name
+    (e.g. ``text``) would miss the marker for Anthropic/Gemini, so we stringify
+    non-string content and substring-scan the whole structure — provider-agnostic,
+    which is what keeps the power→normal downgrade firing on later turns."""
+    def _has_marker(text: str) -> bool:
+        return any(marker in text for marker in _UNTRUSTED_MARKERS)
+
     for m in messages:
         content = m.get("content")
-        if isinstance(content, str) and _UNTRUSTED_MARKER in content:
+        if isinstance(content, str):
+            if _has_marker(content):
+                return True
+        elif content is not None and _has_marker(str(content)):
             return True
-        if isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict) and _UNTRUSTED_MARKER in str(block.get("text") or ""):
-                    return True
     return False
 
 
@@ -234,6 +249,10 @@ async def _chat_impl(
 
     # ── Main tool-execution loop ───────────────────────────────────────────────
     iteration = 0
+    # Set once an untrusted-external read (e.g. Gmail) runs during THIS turn; from
+    # then on, power-mode writes route through confirmation (issue #8). Prior-turn
+    # untrusted content already downgraded tool_mode above.
+    turn_has_untrusted_reads = False
     while iteration < MAX_ITERATIONS:
         iteration += 1
         turn_text = ""
@@ -341,9 +360,12 @@ async def _chat_impl(
                     terminated = True
                     break
 
-            # Normal-mode confirmation gate: persist the pending placeholder BEFORE
-            # emitting confirm (so /confirm can find it), then wait for approval.
-            if tool_mode == "normal" and is_write:
+            # Confirmation gate: normal mode always confirms writes; power mode
+            # confirms them too once an untrusted external read (Gmail) has run this
+            # turn, so injected instructions in that content can't auto-execute a
+            # write (issue #8). Persist the pending placeholder BEFORE emitting
+            # confirm (so /confirm can find it), then wait for approval.
+            if is_write and (tool_mode == "normal" or (tool_mode == "power" and turn_has_untrusted_reads)):
                 try:
                     await asyncio.to_thread(
                         history.merge_tool_result, iter_msg_id, tool_use_id, name,
@@ -367,6 +389,14 @@ async def _chat_impl(
             result = await registry.execute_tool(name, args)
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             content = json.dumps(result, default=str)
+            # An untrusted external read (Gmail) taints the rest of the turn and, via
+            # the nonce-fenced marker persisted below, later turns too — so a prompt
+            # injection in the email can't silently drive a power-mode write. The
+            # nonce fence (delimiters.wrap_untrusted_external) is forge-proof and the
+            # paired system-prompt instruction tells the model to treat it as data.
+            if name in _UNTRUSTED_SOURCE_TOOLS:
+                turn_has_untrusted_reads = True
+                content = delimiters.wrap_untrusted_external(name, content)
             results.append({"tool_use_id": tool_use_id, "tool_name": name, "content": content})
             persisted = True
             try:
@@ -378,12 +408,14 @@ async def _chat_impl(
                 "type": "tool_end", "tool": name, "tool_use_id": tool_use_id,
                 "result": result, "elapsed_ms": elapsed_ms,
             })
-            if is_write and not persisted:
-                # A write executed but its result couldn't be recorded. Fail closed:
-                # end the turn with an error so a later rebuild can't show the
-                # stubbed "result not recorded" and tempt the model to redo the
-                # mutation (especially in power mode).
-                yield _sse({"type": "error", "error": "A change was made but could not be fully saved — please reload the conversation."})
+            if not persisted and (is_write or name in _UNTRUSTED_SOURCE_TOOLS):
+                # Fail closed when the result couldn't be recorded, for either of two
+                # reasons: (a) a write executed but its result is unrecorded (a later
+                # rebuild would show the stub and tempt the model to redo the
+                # mutation), or (b) an untrusted external read (Gmail) whose taint
+                # marker didn't persist — a later turn would then miss the
+                # power→normal downgrade and could auto-execute an injected write.
+                yield _sse({"type": "error", "error": "The result could not be fully saved — please reload the conversation."})
                 return
 
         # Rebuild history for the next turn using build_tool_turn (keeps the

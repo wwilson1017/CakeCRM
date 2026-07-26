@@ -30,6 +30,7 @@ from core.auth_2fa import router as auth_2fa_router
 from core.config import settings
 from core.storage import atomic_write
 from crm.router import router as crm_router
+from gmail.router import router as gmail_router
 from heartbeat.router import router as heartbeat_router
 from notifications.router import router as notifications_router
 from providers.router import router as providers_router, setup_router as ai_setup_router
@@ -190,6 +191,7 @@ app.include_router(ai_setup_router, prefix="/api/setup", tags=["setup"])
 app.include_router(crm_router, prefix="/api/crm", tags=["crm"])
 app.include_router(assistant_router, prefix="/api/assistant", tags=["assistant"])
 app.include_router(telegram_router, prefix="/api/telegram", tags=["telegram"])
+app.include_router(gmail_router, prefix="/api/gmail", tags=["gmail"])
 app.include_router(reminders_router, prefix="/api/reminders", tags=["reminders"])
 app.include_router(notifications_router, prefix="/api/notifications", tags=["notifications"])
 app.include_router(alerts_router, prefix="/api/alerts", tags=["alerts"])

@@ -18,7 +18,10 @@ export interface PendingConfirmation {
   msgId?: string; // the persisted assistant row; disambiguates reused tool_use_ids
   args: Record<string, unknown>;
   description?: string;
-  status: 'pending' | 'approved' | 'denied';
+  // 'failed' — the write was approved but its executor returned an error (e.g. a
+  // Gmail draft when the connection dropped); without it a failed action wrongly
+  // renders as "Approved" (issue #8).
+  status: 'pending' | 'approved' | 'denied' | 'failed';
   result?: unknown;
 }
 

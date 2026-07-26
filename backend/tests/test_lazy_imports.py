@@ -6,8 +6,10 @@ absent key can't break import/startup. AST-based, so it also catches
 import ast
 from pathlib import Path
 
-PROVIDERS_DIR = Path(__file__).resolve().parent.parent / "providers"
-SDK_ROOTS = {"anthropic", "openai", "google", "httpx"}
+_BACKEND = Path(__file__).resolve().parent.parent
+# Packages whose modules must keep provider/integration SDKs out of module scope.
+SCANNED_DIRS = [_BACKEND / "providers", _BACKEND / "gmail"]
+SDK_ROOTS = {"anthropic", "openai", "google", "googleapiclient", "httpx"}
 
 
 def _top_level_import_nodes(tree: ast.Module):
@@ -20,17 +22,18 @@ def _top_level_import_nodes(tree: ast.Module):
 
 def test_no_top_level_sdk_imports():
     offenders = []
-    for path in sorted(PROVIDERS_DIR.glob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in _top_level_import_nodes(tree):
-            if isinstance(node, ast.Import):
-                names = [alias.name for alias in node.names]
-            else:  # ImportFrom
-                names = [node.module or ""]
-            for name in names:
-                if name.split(".")[0] in SDK_ROOTS:
-                    offenders.append(f"{path.name}:{node.lineno} imports {name!r}")
+    for scanned in SCANNED_DIRS:
+        for path in sorted(scanned.glob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in _top_level_import_nodes(tree):
+                if isinstance(node, ast.Import):
+                    names = [alias.name for alias in node.names]
+                else:  # ImportFrom
+                    names = [node.module or ""]
+                for name in names:
+                    if name.split(".")[0] in SDK_ROOTS:
+                        offenders.append(f"{scanned.name}/{path.name}:{node.lineno} imports {name!r}")
     assert not offenders, (
-        "Provider SDKs must be imported lazily, not at module level:\n"
+        "Provider/integration SDKs must be imported lazily, not at module level:\n"
         + "\n".join(offenders)
     )
