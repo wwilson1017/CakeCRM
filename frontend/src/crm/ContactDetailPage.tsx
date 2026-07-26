@@ -7,7 +7,11 @@ import { DealForm } from './components/DealForm';
 import { TaskForm } from './components/TaskForm';
 import { ActivityTimeline } from './components/ActivityTimeline';
 import { NotesThread } from './components/NotesThread';
+import { CustomFieldsSection } from './components/CustomFieldsSection';
+import { usePublishActiveRecord } from './RecordContext';
 import { PriorityBadge } from './components/badges';
+import { ProvenanceBadge } from './components/ProvenanceBadge';
+import { useProvenance } from './useProvenance';
 import { STAGE_COLORS } from './constants';
 import { IconArrowLeft } from '../shared/icons';
 import { useIsMobile } from '../shared/useIsMobile';
@@ -29,13 +33,31 @@ export function ContactDetailPage() {
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const [contact, setContact] = useState<CrmContact | null>(null);
+  // Called unconditionally (before the loading/not-found early returns): the hook is a no-op
+  // while contact is null, then refetches when the id resolves. refreshProvenance runs after a
+  // human edit so client-side badges re-evaluate.
+  const { byField, confirm, confirming, refresh: refreshProvenance } = useProvenance('contact', contact?.id ?? null);
+  const badge = (f: string) => (
+    <ProvenanceBadge prov={byField[f]} onConfirm={() => confirm(f)} confirming={confirming === f} />
+  );
   const [loading, setLoading] = useState(true);
   const [showEdit, setShowEdit] = useState(false);
+  // Bumped when the edit modal saves, so the Custom Fields section (which self-fetches
+  // and would otherwise show stale values after a modal save) remounts and refetches.
+  const [cfVersion, setCfVersion] = useState(0);
   const [showAddDeal, setShowAddDeal] = useState(false);
   const [showAddTask, setShowAddTask] = useState(false);
   const [logActivity, setLogActivity] = useState('');
   const [logNote, setLogNote] = useState('');
   const [logging, setLogging] = useState(false);
+
+  // Publish this contact as the open record for the assistant drawer (issue #14).
+  // type+id come from the route param (always current, even mid-load); the loaded name
+  // is display-only and only used once it belongs to the CURRENT route — otherwise the
+  // chip would show the previous contact's name while its id already points at the new
+  // one during a navigation fetch. Falls back to "contact #N" until B loads.
+  usePublishActiveRecord('contact', id ? Number(id) : null,
+    contact && contact.id === Number(id) ? contact.name : undefined);
 
   const loadIdRef = useRef(0);
   const load = useCallback(async () => {
@@ -133,6 +155,7 @@ export function ContactDetailPage() {
         {(contact.title || contact.company_id || contact.company) && (
           <p style={{ fontSize: 14, color: INK_MUTE, marginTop: 4 }}>
             {contact.title}
+            {contact.title && badge('title')}
             {(contact.company_id || contact.company) && (
               <>
                 {contact.title ? ' at ' : ''}
@@ -142,16 +165,17 @@ export function ContactDetailPage() {
                     style={{ color: ACCENT, cursor: 'pointer' }}
                   >{contact.company_name || contact.company}</span>
                 ) : contact.company}
+                {' '}{badge('company')}
               </>
             )}
           </p>
         )}
         <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? 4 : 16, marginTop: 8, fontSize: 13, color: INK_MUTE }}>
-          {contact.email && <span>{contact.email}</span>}
-          {contact.phone && <span>{contact.phone}</span>}
+          {contact.email && <span>{contact.email} {badge('email')}</span>}
+          {contact.phone && <span>{contact.phone} {badge('phone')}</span>}
         </div>
         {contact.tags && (
-          <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
             {contact.tags.split(',').map(t => t.trim()).filter(Boolean).map(tag => (
               <span key={tag} style={{
                 fontSize: 10, padding: '2px 8px', borderRadius: 3,
@@ -160,6 +184,7 @@ export function ContactDetailPage() {
                 letterSpacing: '0.1em',
               }}>{tag}</span>
             ))}
+            {badge('tags')}
           </div>
         )}
       </div>
@@ -170,7 +195,9 @@ export function ContactDetailPage() {
           ...cardStyle,
           padding: isMobile ? 14 : 16, marginBottom: isMobile ? 20 : 24,
         }}>
-          <p style={{ ...mono(10), marginBottom: 6 }}>Notes</p>
+          <p style={{ ...mono(10), marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span>Notes</span> {badge('notes')}
+          </p>
           <p style={{ fontSize: 13, color: INK_MUTE, whiteSpace: 'pre-wrap', lineHeight: 1.5, margin: 0 }}>{contact.notes}</p>
         </div>
       )}
@@ -299,13 +326,16 @@ export function ContactDetailPage() {
         <ActivityTimeline activities={contact.activity || []} onUpdate={load} />
       </div>
 
+      {/* Custom fields — renders nothing when no contact fields are defined */}
+      <CustomFieldsSection key={`contact-${contact.id}-${cfVersion}`} entityType="contact" entityId={contact.id} />
+
       {/* Chatter — editable notes thread */}
       <div style={{ marginTop: 24, borderTop: `1px solid ${LINE}`, paddingTop: 24 }}>
         <span style={{ ...mono(10, INK_DIM), display: 'block', marginBottom: 12 }}>Chatter</span>
         <NotesThread key={`contact-${contact.id}`} entityType="contact" entityId={contact.id} />
       </div>
 
-      {showEdit && <ContactForm contact={contact} onClose={() => setShowEdit(false)} onSaved={() => { setShowEdit(false); load(); }} />}
+      {showEdit && <ContactForm contact={contact} onClose={() => setShowEdit(false)} onSaved={() => { setShowEdit(false); load(); setCfVersion(v => v + 1); refreshProvenance(); }} />}
       {showAddDeal && <DealForm contactId={contact.id} onClose={() => setShowAddDeal(false)} onSaved={() => { setShowAddDeal(false); load(); }} />}
       {showAddTask && <TaskForm contactId={contact.id} onClose={() => setShowAddTask(false)} onSaved={() => { setShowAddTask(false); load(); }} />}
     </div>

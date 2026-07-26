@@ -42,6 +42,9 @@ SENSITIVE_FIELDS = frozenset({
     "refresh_token",    # integration OAuth
     "client_secret",    # BYO OAuth app credentials
     "bot_token",        # Telegram bot token
+    "private_key",      # VAPID private key (vapid_keys.private_key_enc); documents
+                        # the field class for encrypt_dict — the vapid_keys column
+                        # is encrypted via encrypt_value() directly (issue #6).
 })
 
 

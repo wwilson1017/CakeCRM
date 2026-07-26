@@ -32,6 +32,7 @@ from collections.abc import AsyncGenerator
 
 from assistant import assembly, delimiters, history, identity
 from assistant.write_budget import WRITE_BUDGET_PER_TURN, BudgetAction, BudgetState
+from memory import context as memory_context
 from providers.base import AIProvider, _sse
 from providers.windows import context_usage_event
 
@@ -48,6 +49,44 @@ _UNTRUSTED_MARKERS = (_UNTRUSTED_MARKER, _UNTRUSTED_EXTERNAL_MARKER)
 # Read tools whose output is untrusted external content. Reading it must not let a
 # prompt injection inside that content drive an unconfirmed write in power mode.
 _UNTRUSTED_SOURCE_TOOLS = {"gmail_search", "gmail_read_thread"}
+
+# Transient user turn appended on resume to keep a trailing-assistant sequence valid.
+_CONTINUATION_ACK = "Please continue based on the results shown above."
+
+
+def _last_user_text(messages: list[dict]) -> str | None:
+    """The most recent genuine user-typed text in the assembled context, or None.
+
+    Used to FTS-match long-term memory for this turn. Scans from the end so a normal
+    turn picks the just-saved user row and a continuation picks the last real user
+    message. Skips the synthetic resume ack, and — on an upload turn — the wrapped
+    untrusted file blob AND any external (Gmail, #8) content, so attacker-controlled
+    text never chooses which facts surface; memory matching only ever uses
+    genuinely-typed text.
+    """
+    def _usable(text) -> bool:
+        return (
+            isinstance(text, str)
+            and text.strip()
+            and text != _CONTINUATION_ACK
+            and not any(mark in text for mark in _UNTRUSTED_MARKERS)
+        )
+
+    for m in reversed(messages):
+        if m.get("role") != "user":
+            continue
+        content = m.get("content")
+        if isinstance(content, str):
+            if _usable(content):
+                return content
+        elif isinstance(content, list):
+            # Provider block-list content: when assembly coalesces a freshly-typed user
+            # message onto a trailing tool_result turn (abandoned confirmation / budget
+            # terminate), the new text is a `{"type":"text"}` block here, not a str.
+            for block in reversed(content):
+                if isinstance(block, dict) and block.get("type") == "text" and _usable(block.get("text")):
+                    return block["text"]
+    return None
 
 
 def _context_has_untrusted_upload(messages: list[dict]) -> bool:
@@ -80,12 +119,17 @@ async def chat(
     tool_mode: str = "normal",
     conversation_id: str | None = None,
     title_hint: str | None = None,
+    context: dict | None = None,
 ) -> AsyncGenerator[str, None]:
     """Stream one assistant turn as SSE.
 
     ``messages`` carries only the newest user message (history lives server-side).
     An EMPTY ``messages`` with a ``conversation_id`` is a *continuation* — used to
     resume after a write was approved out-of-band — and saves no new user row.
+
+    ``context`` (the CRM record the user has open, e.g.
+    ``{"record_type": "deal", "record_id": 3}``) is per-request/volatile: it is
+    folded into the system prompt for this turn only and is NEVER persisted.
 
     Thin catch-all wrapper: the SSE response has already started (200 + bytes
     flushed), so any unexpected exception in the loop must still terminate with a
@@ -94,7 +138,7 @@ async def chat(
     stop).
     """
     try:
-        async for line in _chat_impl(provider, registry, messages, tool_mode, conversation_id, title_hint):
+        async for line in _chat_impl(provider, registry, messages, tool_mode, conversation_id, title_hint, context):
             yield line
     except Exception:
         logger.exception("assistant.chat crashed mid-stream")
@@ -108,12 +152,12 @@ async def _chat_impl(
     tool_mode: str = "normal",
     conversation_id: str | None = None,
     title_hint: str | None = None,
+    context: dict | None = None,
 ) -> AsyncGenerator[str, None]:
     if tool_mode not in _VALID_MODES:
         tool_mode = "normal"
 
     ident = await asyncio.to_thread(identity.get_identity)
-    system_prompt = identity.build_system_prompt(ident)
     provider_tools = registry.provider_tools(tool_mode)
     budget = BudgetState(limit=WRITE_BUDGET_PER_TURN)
 
@@ -183,8 +227,25 @@ async def _chat_impl(
     if current_messages[-1].get("role") == "assistant":
         current_messages = current_messages + [{
             "role": "user",
-            "content": "Please continue based on the results shown above.",
+            "content": _CONTINUATION_ACK,
         }]
+
+    # Surface long-term memory into THIS turn's prompt (issue #5 acceptance clause 1).
+    # Done AFTER validation + assembly so a rejected/failed turn never accrues retrieval
+    # usage, and matched against the user's genuine text. The facts ride the volatile
+    # half of the prompt (never the cached static block); build_memory_context never
+    # raises, so a memory outage degrades to a memory-less turn.
+    memory_block = await asyncio.to_thread(
+        memory_context.build_memory_context, _last_user_text(current_messages)
+    )
+    # ONE unified pre-loop build: the record context (#14) and the memory block (#5)
+    # are both per-turn injections that ride the VOLATILE half of the system prompt —
+    # never assembled/persisted messages, never the cached static block. BOTH kwargs
+    # must be passed here; dropping either silently loses that feature's injection.
+    # This same system_prompt feeds the main loop and the confirmation wrap-up turn.
+    system_prompt = identity.build_system_prompt(
+        ident, context=context, memory_context=memory_block,
+    )
 
     # ── Main tool-execution loop ───────────────────────────────────────────────
     iteration = 0

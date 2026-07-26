@@ -1,7 +1,7 @@
 """CRM agent-tools contract: unconditional, complete, well-formed.
 
 The issue requires the crm_* tools to be collected unconditionally (no enable
-gate). This pins that: 24 schema defs, 25 executors (incl. the crm_log_note
+gate). This pins that: 30 schema defs, 31 executors (incl. the crm_log_note
 back-compat alias), every def has an executor, and get_crm_tools() returns the
 full set with no gating.
 """
@@ -10,13 +10,19 @@ import inspect
 
 import psycopg2
 
-from crm import service, tools
+from crm import field_service, service, tools
 from crm.tools import CRM_TOOL_DEFS, TOOL_EXECUTORS, get_crm_tools
 
 
-def test_twentyfour_defs_twentyfive_executors():
-    assert len(CRM_TOOL_DEFS) == 24
-    assert len(TOOL_EXECUTORS) == 25
+def test_def_and_executor_counts():
+    # Absolute counts. ⚠ TOOL-COUNT SUM RULE (coach #67): concurrent sibling issues
+    # may add crm_* tools in the same auto-issues run. If so, this is 24 (base) +
+    # 6 (#19 custom fields) + N (sibling additions) — SUM the additions, never
+    # overwrite the number. The executor count is always defs + 1 (crm_log_note alias).
+    assert len(CRM_TOOL_DEFS) == 30
+    assert len(TOOL_EXECUTORS) == 31
+    # Relative invariant (robust to any future additions): exactly one alias-only executor.
+    assert len(TOOL_EXECUTORS) == len(CRM_TOOL_DEFS) + 1
 
 
 def test_company_tools_present():
@@ -91,10 +97,12 @@ _OWNED_WRITE_TOOLS = {
     "crm_create_contact", "crm_update_contact", "crm_delete_contact",
     "crm_create_deal", "crm_update_deal", "crm_update_deal_stage",
     "crm_log_activity", "crm_create_task", "crm_complete_task",
+    "crm_set_contact_fields", "crm_set_company_fields", "crm_set_deal_fields",
 }
 _OWNED_READ_TOOLS = {
     "crm_find_contact", "crm_get_contact", "crm_list_contacts", "crm_get_pipeline",
     "crm_get_deal", "crm_get_activity_log", "crm_list_tasks", "crm_dashboard",
+    "crm_get_contact_fields", "crm_get_company_fields", "crm_get_deal_fields",
 }
 
 
@@ -201,3 +209,110 @@ def test_chatter_executors_happy_path_shapes(monkeypatch):
     monkeypatch.setattr(chatter_service, "get_chatter", lambda *a, **k: [{"id": 1}, {"id": 2}])
     assert tools.crm_add_note("deal", 3, "hi") == {"ok": True, "note": {"id": 1, "message": "hi"}}
     assert tools.crm_get_chatter("deal", 3) == {"notes": [{"id": 1}, {"id": 2}], "count": 2}
+
+
+# ── Custom-field tools (issue #19) ────────────────────────────────────────────
+
+def test_field_tools_present_and_shaped():
+    by_name = {d["name"]: d for d in CRM_TOOL_DEFS}
+    get_tools = {"crm_get_contact_fields", "crm_get_company_fields", "crm_get_deal_fields"}
+    set_tools = {"crm_set_contact_fields", "crm_set_company_fields", "crm_set_deal_fields"}
+    assert (get_tools | set_tools) <= set(by_name)
+    for name in get_tools:
+        assert by_name[name]["writes"] is False, name
+        assert by_name[name]["input_schema"]["required"] == [], name  # id is optional
+    for name in set_tools:
+        assert by_name[name]["writes"] is True, name
+        props = by_name[name]["input_schema"]["properties"]
+        assert "fields" in props and props["fields"]["type"] == "object", name
+        req = by_name[name]["input_schema"]["required"]
+        assert "fields" in req and any(k.endswith("_id") for k in req), name
+    # None of the set tools expose a spoofable user_email param.
+    for name in set_tools:
+        assert "user_email" not in by_name[name]["input_schema"]["properties"], name
+
+
+def test_get_fields_no_id_lists_definitions(monkeypatch):
+    monkeypatch.setattr(field_service, "list_field_definitions", lambda et: [
+        {"id": 7, "field_key": "tier", "name": "Tier", "field_type": "select",
+         "is_required": 1, "dropdown_options": ["A", "B"]},
+    ])
+    out = tools.crm_get_contact_fields()
+    assert out["total"] == 1
+    field = out["fields"][0]
+    assert field == {"field_id": 7, "field_key": "tier", "name": "Tier",
+                     "field_type": "select", "is_required": True, "options": ["A", "B"]}
+
+
+def test_get_fields_with_missing_entity_returns_error(monkeypatch):
+    monkeypatch.setattr(field_service, "entity_exists", lambda et, eid: False)
+    assert tools.crm_get_contact_fields(999) == {"error": "contact 999 not found"}
+
+
+def test_get_fields_with_id_returns_normalized_values(monkeypatch):
+    monkeypatch.setattr(field_service, "entity_exists", lambda et, eid: True)
+    monkeypatch.setattr(field_service, "get_field_values", lambda et, eid: [
+        {"field_id": 1, "field_key": "tier", "name": "Tier", "field_type": "select",
+         "dropdown_options": ["A", "B"], "is_required": 1, "value": "A",
+         "value_updated_at": "t", "updated_by_email": "u"},
+    ])
+    out = tools.crm_get_deal_fields(5)
+    # Same normalized schema shape as the no-id path (is_required bool, 'options'),
+    # plus the per-entity value fields.
+    assert out == {"fields": [{
+        "field_id": 1, "field_key": "tier", "name": "Tier", "field_type": "select",
+        "is_required": True, "options": ["A", "B"], "value": "A",
+        "value_updated_at": "t", "updated_by_email": "u",
+    }], "total": 1}
+
+
+def test_set_fields_normalizes_and_reports_unknown(monkeypatch):
+    monkeypatch.setattr(field_service, "entity_exists", lambda et, eid: True)
+    monkeypatch.setattr(field_service, "list_field_definitions",
+                        lambda et: [{"id": 9, "field_key": "vip"}])
+    captured = {}
+    monkeypatch.setattr(field_service, "set_field_values",
+                        lambda et, eid, vals, email: captured.update(
+                            et=et, eid=eid, vals=vals, email=email) or {"ok": True, "updated": 1, "errors": []})
+    out = tools.crm_set_contact_fields(5, {"vip": True, "ghost": "x"})
+    # bool normalized to "1"; unknown key reported, not sent; attribution hardcoded.
+    assert captured["vals"] == {"9": "1"}
+    assert captured["email"] == "assistant"
+    assert out["unknown_keys"] == ["ghost"]
+
+
+def test_set_fields_rejects_none_with_clear_hint(monkeypatch):
+    monkeypatch.setattr(field_service, "entity_exists", lambda et, eid: True)
+    monkeypatch.setattr(field_service, "list_field_definitions", lambda et: [{"id": 9, "field_key": "vip"}])
+    # Only a None value → nothing valid to set → single error mentioning the clear contract.
+    out = tools.crm_set_contact_fields(5, {"vip": None})
+    assert "error" in out and "empty string to clear" in out["error"]
+
+
+def test_set_fields_translates_service_valueerror(monkeypatch):
+    monkeypatch.setattr(field_service, "entity_exists", lambda et, eid: True)
+    monkeypatch.setattr(field_service, "list_field_definitions", lambda et: [{"id": 9, "field_key": "amount"}])
+    def raise_ve(*a, **k):
+        raise ValueError("Field 'Amount' requires a number, got 'abc'")
+    monkeypatch.setattr(field_service, "set_field_values", raise_ve)
+    out = tools.crm_set_deal_fields(5, {"amount": "abc"})
+    assert out == {"error": "Field 'Amount' requires a number, got 'abc'"}
+
+
+def test_set_fields_missing_entity_returns_error(monkeypatch):
+    monkeypatch.setattr(field_service, "entity_exists", lambda et, eid: False)
+    assert tools.crm_set_contact_fields(999, {"vip": "1"}) == {"error": "contact 999 not found"}
+
+
+def test_set_fields_empty_map_returns_error():
+    assert tools.crm_set_contact_fields(5, {}) == {"error": "No fields provided"}
+
+
+def test_set_fields_empty_string_clear_forwards(monkeypatch):
+    monkeypatch.setattr(field_service, "entity_exists", lambda et, eid: True)
+    monkeypatch.setattr(field_service, "list_field_definitions", lambda et: [{"id": 9, "field_key": "vip"}])
+    captured = {}
+    monkeypatch.setattr(field_service, "set_field_values",
+                        lambda et, eid, vals, email: captured.update(vals=vals) or {"ok": True, "updated": 1, "errors": []})
+    tools.crm_set_contact_fields(5, {"vip": ""})
+    assert captured["vals"] == {"9": ""}   # empty string forwarded (clears downstream)

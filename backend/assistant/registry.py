@@ -1,31 +1,40 @@
-"""The assistant's tool registry — a thin layer over the tool sources.
+"""The assistant's tool registry — a composition over the feature tool sources.
 
-Chatty's ``ToolRegistry`` dispatches many tool families by ``kind``; CakeCRM's
-assistant composes tool *sources* instead. It merges ``crm.tools.get_crm_tools()``
-(always on — the CRM is core) with ``gmail.tools.get_gmail_tools()`` (issue #8 —
-defs only when Gmail is connected, so a disconnected/keyless instance never shows
-the model those tools; executors follow the defs). Each source returns a
-``(defs, executors)`` pair. The registry is the SINGLE SOURCE OF TRUTH for which
-tools are writes: the streaming loop's confirmation gate and the ``/confirm``
-endpoint both read ``is_write`` from here, so they can never diverge on what needs
-approval.
+Each feature exposes a ``get_*_tools() -> (defs, executors)`` pair (same shape as
+``crm.tools.get_crm_tools()``); the registry concatenates an ORDERED list of them
+and is the SINGLE SOURCE OF TRUTH for which tools are writes — the streaming
+loop's confirmation gate, the ``/confirm`` endpoint, and the background runner all
+read ``is_write`` from here, so they can never diverge.
 
-Because ``get_gmail_tools()`` reads the Gmail connection state from Postgres,
-constructing a ``ToolRegistry`` does one DB read; the async chat endpoints build it
-via ``asyncio.to_thread`` so it never blocks the event loop. Every tool source is
-required to never raise (they degrade to no tools with no DB), so hermetic
-construction with no database still works.
+Sources (issue #6 turned this from a single-source wrapper into a composition so
+features append cleanly):
+  * always: ``crm.tools.get_crm_tools()`` + ``reminders.tools.get_reminder_tools()``
+  * background only (``ToolRegistry(background=True)``): ``notify_user`` — Chatty
+    gates it behind background mode; interactive chat never needs it.
+  * always: ``memory.tools.get_memory_tools()`` (issue #5 — long-term facts).
+  * conditional: ``gmail.tools.get_gmail_tools()`` (issue #8) — defs ONLY when
+    Gmail is connected, so a disconnected/keyless instance never shows the model
+    those tools; it returns ``([], {})`` otherwise and never raises. It reads the
+    connection state from Postgres, so constructing a registry does one DB read —
+    the async chat endpoints build it via ``asyncio.to_thread``.
+
+Construction FAILS LOUD on a malformed composition — a duplicate tool name, a def
+with no executor, an executor with no def, or a non-boolean ``writes`` — so a new
+source can never silently clobber another feature's tool (issue #6 R13).
 
 Executors are synchronous, blocking psycopg2 code. ``execute_tool_sync`` is the
-real dispatch (used directly by sync endpoints); ``execute_tool`` offloads it to a
-thread so a tool call never blocks the async SSE event loop.
+real dispatch; ``execute_tool`` offloads it to a thread so a call never blocks the
+async SSE event loop.
 """
 
 import asyncio
 import logging
+from collections.abc import Callable
 
 from crm.tools import get_crm_tools
 from gmail.tools import get_gmail_tools
+from memory.tools import get_memory_tools
+from reminders.tools import get_reminder_tools
 
 logger = logging.getLogger(__name__)
 
@@ -35,35 +44,72 @@ _INTERNAL_KEYS = {"kind", "writes"}
 
 
 class ToolRegistry:
-    def __init__(self) -> None:
-        crm_defs, crm_execs = get_crm_tools()
-        gmail_defs, gmail_execs = get_gmail_tools()
-        self.tool_defs = crm_defs + gmail_defs
-        self.executors = {**crm_execs, **gmail_execs}
+    def __init__(self, *, background: bool = False) -> None:
+        # Per-run flag for the one-notification-per-run guard (see notify_user).
+        self._notify_user_called = False
+
+        # Ordered tool sources — the extension point. Each is a (defs, executors)
+        # pair. Features append here; second-to-land resolves keep-both.
+        sources: list[tuple[list[dict], dict[str, Callable[..., dict]]]] = [
+            get_crm_tools(),
+            get_reminder_tools(),
+            get_memory_tools(),
+            get_gmail_tools(),
+        ]
+        if background:
+            from notifications.tools import get_notification_tools
+            sources.append(get_notification_tools(self))
+
+        self.tool_defs: list[dict] = []
+        self.executors: dict[str, Callable[..., dict]] = {}
+        for defs, executors in sources:
+            for d in defs:
+                name = d.get("name")
+                if not name:
+                    raise ValueError("tool def missing a name")
+                if name in self.executors or any(t["name"] == name for t in self.tool_defs):
+                    raise ValueError(f"duplicate tool name across sources: {name!r}")
+                if not isinstance(d.get("writes"), bool):
+                    raise ValueError(f"tool {name!r} must carry a boolean 'writes' flag")
+                if name not in executors:
+                    raise ValueError(f"tool {name!r} has a def but no executor")
+                self.tool_defs.append(d)
+            # Merge executors (a source may carry executor-only aliases with no def,
+            # e.g. crm_log_note — legitimate; execute_tool_sync fail-closes on any
+            # name not in writes_map, so an alias can never run unconfirmed).
+            for name, fn in executors.items():
+                if name in self.executors:
+                    raise ValueError(f"duplicate executor across sources: {name!r}")
+                self.executors[name] = fn
+
         self.writes_map = {t["name"]: bool(t.get("writes", False)) for t in self.tool_defs}
         self.descriptions = {t["name"]: t.get("description", "") for t in self.tool_defs}
 
     def is_write(self, name: str) -> bool:
         return self.writes_map.get(name, False)
 
-    def provider_tools(self, tool_mode: str) -> list[dict]:
+    def provider_tools(self, tool_mode: str, allow: set[str] | None = None) -> list[dict]:
         """Tool defs to send the provider, internal keys stripped.
 
-        In read-only mode, write tools are filtered out entirely so the model
-        cannot even name them. (The engine ALSO refuses to execute a write in
-        read-only mode — filtering is not the authorization boundary.)
+        In read-only mode, write tools are filtered out so the model cannot even
+        name them (the engine ALSO refuses to execute a write in read-only mode —
+        filtering is not the authorization boundary). When ``allow`` is given
+        (background turns), only allowlisted tools are advertised — advertisement
+        AND execution are both gated so an off-list tool is never even offered.
         """
         out: list[dict] = []
         for t in self.tool_defs:
-            if tool_mode == "read-only" and self.writes_map.get(t["name"], False):
+            name = t["name"]
+            if allow is not None and name not in allow:
+                continue
+            if tool_mode == "read-only" and self.writes_map.get(name, False):
                 continue
             out.append({k: v for k, v in t.items() if k not in _INTERNAL_KEYS})
         return out
 
     def execute_tool_sync(self, name: str, args: dict | None) -> dict:
         # Fail closed: only DECLARED tools (those with a def, hence a writes flag)
-        # are executable. This keeps executor-only aliases like crm_log_note — which
-        # have no def and no writes classification — from ever running unconfirmed.
+        # are executable.
         if name not in self.writes_map:
             return {"error": f"Unknown tool: {name}"}
         fn = self.executors.get(name)

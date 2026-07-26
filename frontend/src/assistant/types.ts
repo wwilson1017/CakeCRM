@@ -49,6 +49,18 @@ export interface ContextUsage {
   contextWindow: number;
 }
 
+// CRM record context (issue #14) ---------------------------------------------
+
+export type ActiveRecordType = 'deal' | 'contact' | 'company';
+
+export interface ActiveRecordContext {
+  recordType: ActiveRecordType;
+  recordId: number;
+  /** Display only (drawer chip / quick-actions header). NEVER sent to the
+   *  backend — the wire payload carries record_type + record_id exclusively. */
+  label?: string;
+}
+
 // Raw server shapes (SSE events + history rows) ------------------------------
 
 export interface ServerToolCall {
