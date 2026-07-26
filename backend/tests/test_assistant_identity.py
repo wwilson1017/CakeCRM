@@ -129,3 +129,23 @@ def test_context_tools_match_the_real_crm_registry():
         props = d["input_schema"]["properties"]
         assert arg in props, f"{tool} has no '{arg}' parameter"
         assert arg in d["input_schema"].get("required", []), f"{tool}.{arg} must be required"
+
+
+# ── Long-term memory injection (issue #5) ─────────────────────────────────────
+
+def test_build_system_prompt_injects_memory_into_volatile_only():
+    """The per-turn memory block rides the volatile half; it must NEVER enter the
+    cached static block (a stale cached prefix would hide fact updates)."""
+    ident = {"name": "Ace", "personality": "You are {name}.", "using_default": False}
+    static, volatile = identity.build_system_prompt(ident, memory_context="MEM-SENTINEL")
+    assert "MEM-SENTINEL" in volatile
+    assert "MEM-SENTINEL" not in static
+    # The constant framing (MEMORY_NOTE) is cacheable and lives in static.
+    assert "Long-term memory" in static
+
+
+def test_build_system_prompt_empty_memory_is_back_compat():
+    ident = {"name": "Ace", "personality": "p", "using_default": True}
+    _, volatile = identity.build_system_prompt(ident)   # no memory_context
+    assert volatile.startswith("Current date and time:")
+    assert "\n\n" not in volatile   # exactly the date line, nothing appended

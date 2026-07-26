@@ -11,7 +11,7 @@ features append cleanly):
   * always: ``crm.tools.get_crm_tools()`` + ``reminders.tools.get_reminder_tools()``
   * background only (``ToolRegistry(background=True)``): ``notify_user`` — Chatty
     gates it behind background mode; interactive chat never needs it.
-  * a future feature (e.g. #5 memory) appends its ``get_memory_tools()`` here.
+  * always: ``memory.tools.get_memory_tools()`` (issue #5 — long-term facts).
 
 Construction FAILS LOUD on a malformed composition — a duplicate tool name, a def
 with no executor, an executor with no def, or a non-boolean ``writes`` — so a new
@@ -27,6 +27,7 @@ import logging
 from collections.abc import Callable
 
 from crm.tools import get_crm_tools
+from memory.tools import get_memory_tools
 from reminders.tools import get_reminder_tools
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,7 @@ class ToolRegistry:
         sources: list[tuple[list[dict], dict[str, Callable[..., dict]]]] = [
             get_crm_tools(),
             get_reminder_tools(),
+            get_memory_tools(),
         ]
         if background:
             from notifications.tools import get_notification_tools

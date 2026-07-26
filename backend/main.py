@@ -131,6 +131,11 @@ async def lifespan(app: FastAPI):
     # until a bot token is connected, so it is safe to start unconditionally here.
     telegram_poller.start()
 
+    # Dreaming (issue #5) needs no wiring here: #6's reminder_tick calls
+    # dreaming.processor.run_dreaming_if_due() every 60s through its own guarded seam
+    # (heartbeat.service._maybe_run_dreaming). #5's interim lifespan scheduler was
+    # always meant to be absorbed the moment #6 landed — this is that deletion.
+
     logger.info("CakeCRM backend started. Data dir: %s", data_root)
     try:
         yield

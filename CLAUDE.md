@@ -55,6 +55,21 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `WRITE_BUDGET_BACKGROUND`, with untrusted reminder/CRM text kept in the user
   message, never the system prompt. So a prompt injection via reminder/CRM content
   can at worst send one notification, never create/log/update/delete a record.
+  The assistant has a **long-term memory + nightly dreaming**
+  (landed #5, `backend/memory/` + `backend/dreaming/`, **pure-algorithmic — no AI
+  calls**): temporal facts in Postgres (`memory_facts`, generated `tsvector` + GIN,
+  searched via an OR-of-keywords `to_tsquery('simple', …)` tokenizer) with four `memory_*` tools carrying
+  the `writes` flag; relevant facts are injected into the **volatile** half of the
+  system prompt each turn (never the cached static half) with once-per-hour retrieval
+  tracking. **Dreaming** adapts chatty's file-archival to the single-assistant layout —
+  the unit is the fact, so it soft-archives dormant non-tier-1 facts (`archived_at`, never
+  deleting; `decision`/`preference` are never archived), scored purely from usage signals
+  (14-day-half-life recency, recency-gated frequency, age, confidence; active/stale/dormant
+  at 0.4/0.1) and audited in `dreaming_runs`. Its entrypoint
+  `dreaming.processor.run_dreaming_if_due()` is scheduler-agnostic (advisory-lock +
+  due-guard) and is driven by **#6's 60s `reminder_tick`** (via
+  `heartbeat.service._maybe_run_dreaming`) — #5's interim lifespan task was absorbed
+  when #6 landed, exactly as planned.
   Multi-user is future work (authz/ownership), not just a `user_id` column.
 - **One database: PostgreSQL, and it's mandatory** — the backend refuses to start
   without `DATABASE_URL` (decided 2026-07-18; single engine, ready for multi-user
@@ -184,7 +199,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Postgres pool + migration runner | `cake_os/backend/core/postgres.py` |
 | AI providers + pricing + setup wizard | `chatty/backend/core/providers/`, `chatty/frontend/src/setup/` |
 | CRM core (schema, router, tools, smart import) — **landed #3** as `backend/crm/` + `frontend/src/crm/` + `frontend/src/shared/` | `chatty/backend/integrations/crm_lite/`, `chatty/frontend/src/crm/` |
-| Assistant engine — **chat loop, tool registry, confirmations, uploads landed #4** as `backend/assistant/` + `frontend/src/assistant/`; memory/dreaming still pending (#5) | `chatty/backend/core/agents/` |
+| Assistant engine — **chat loop, tool registry, confirmations, uploads landed #4** as `backend/assistant/` + `frontend/src/assistant/`; **memory (facts + FTS) + dreaming (pure-algorithmic usage scoring + fact soft-archival) landed #5** as `backend/memory/` + `backend/dreaming/` (dreaming's archival unit is the fact row, not context files — CakeCRM has no file store; driven by #6's reminder tick) | `chatty/backend/core/agents/` |
 | Heartbeat + background AI turn — **landed #6** as `backend/heartbeat/` (60s APScheduler tick) + `backend/assistant/background.py` (non-SSE `run_background_turn`: auto-approved writes under a server-enforced tool allowlist + `WRITE_BUDGET_BACKGROUND`) | `chatty/backend/core/agents/background_runner.py` + `main.py` scheduler wiring |
 | Reminders (own table, recurrence math, agent tools + **net-new full CRUD REST/UI**) — **landed #6** as `backend/reminders/` + `frontend/src/crm/RemindersPage.tsx` | `chatty/backend/core/agents/reminders/` |
 | Notifications (Web Push VAPID keys persisted in Postgres, `notify_user` tool, bell) + system alerts — **landed #6** as `backend/notifications/` + `backend/alerts/` + `frontend/src/crm/components/{NotificationsBell,NotificationSettings}.tsx` + `frontend/public/sw.js`. Telegram delivery goes out through `telegram.service.notify_linked_user` (the pure-sync channel #7 landed), via `_send_telegram`; WhatsApp not ported. Chatty's user-configurable `scheduled_actions` subsystem (leases/active-hours/triage/dashboards) deliberately deferred | `chatty/backend/core/agents/notifications/` + `alerts/` |
