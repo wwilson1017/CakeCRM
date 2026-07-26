@@ -5,3 +5,4 @@
 
 export { default as AssistantPanelBody } from './AssistantPanelBody';
 export { default } from './AssistantPanelBody';
+export type { ActiveRecordContext, ActiveRecordType } from './types';

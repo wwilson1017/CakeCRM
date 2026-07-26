@@ -5,6 +5,7 @@ import type { CrmCompany } from '../core/types';
 import { CompanyForm } from './components/CompanyForm';
 import { ActivityTimeline } from './components/ActivityTimeline';
 import { CustomFieldsSection } from './components/CustomFieldsSection';
+import { usePublishActiveRecord } from './RecordContext';
 import { StatusBadge } from './components/badges';
 import { STAGE_COLORS } from './constants';
 import { IconArrowLeft } from '../shared/icons';
@@ -30,6 +31,13 @@ export function CompanyDetailPage() {
   const [showEdit, setShowEdit] = useState(false);
   // Bumped on modal save so the self-fetching Custom Fields section remounts + refetches.
   const [cfVersion, setCfVersion] = useState(0);
+
+  // Publish this company as the open record for the assistant drawer (issue #14).
+  // type+id come from the route param (always current, even mid-load); the label is
+  // only used once the loaded company matches the current route (else "company #N"
+  // until it loads — avoids showing the previous company's name during a nav fetch).
+  usePublishActiveRecord('company', id ? Number(id) : null,
+    company && company.id === Number(id) ? company.name : undefined);
 
   const loadIdRef = useRef(0);
   const load = useCallback(async () => {

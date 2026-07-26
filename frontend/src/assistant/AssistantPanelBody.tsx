@@ -24,7 +24,8 @@ import {
 } from '../shared/styles';
 import { IdentitySettings } from './IdentitySettings';
 import { MessageBubble } from './MessageBubble';
-import type { ToolMode } from './types';
+import { QuickActions } from './QuickActions';
+import type { ActiveRecordContext, ToolMode } from './types';
 import { useAssistantChat } from './useAssistantChat';
 import { useConversations } from './useConversations';
 
@@ -41,8 +42,13 @@ const MODES: { mode: ToolMode; label: string; title: string }[] = [
   { mode: 'power', label: 'Auto', title: 'Auto — changes run without asking' },
 ];
 
-export default function AssistantPanelBody() {
-  const chat = useAssistantChat();
+export interface AssistantPanelBodyProps {
+  /** CRM record open behind this surface; null/omitted → generic panel. */
+  recordContext?: ActiveRecordContext | null;
+}
+
+export default function AssistantPanelBody({ recordContext = null }: AssistantPanelBodyProps = {}) {
+  const chat = useAssistantChat(recordContext);
   const { conversations, load: loadConversations, openConversation: fetchConversation, remove: removeConversation } = useConversations();
   const [input, setInput] = useState('');
   const [files, setFiles] = useState<File[]>([]);
@@ -115,7 +121,10 @@ export default function AssistantPanelBody() {
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 10px', borderBottom: `1px solid ${LINE}` }}>
         <button
-          onClick={() => setShowHistory((s) => !s)}
+          // Refetch on OPEN: the drawer now stays mounted for the whole session
+          // (issue #14), so the mount-time load() no longer runs per open — without
+          // this the list would miss conversations created since the shell loaded.
+          onClick={() => { if (!showHistory) void loadConversations(); setShowHistory((s) => !s); }}
           style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', color: INK, fontSize: 13, fontWeight: 600, padding: 4, minWidth: 0 }}
         >
           <IconBot size={16} />
@@ -164,6 +173,14 @@ export default function AssistantPanelBody() {
 
       {/* Composer */}
       <div style={{ borderTop: `1px solid ${LINE}`, padding: 8 }}>
+        {recordContext && (
+          <QuickActions
+            record={recordContext}
+            onPick={(p) => { if (!chat.isStreaming) chat.sendMessage(p); }}
+            disabled={chat.isStreaming}
+          />
+        )}
+
         {meterPct != null && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, fontSize: 11, color: INK_SOFT }}>
             <div style={{ flex: 1, height: 3, background: BG_RAISED, borderRadius: 2, overflow: 'hidden' }}>

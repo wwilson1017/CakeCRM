@@ -6,7 +6,8 @@ off ``ai_ready``: when no provider is configured the chat endpoints return a cle
 500). Streaming endpoints are POST + fetch-stream SSE (get_current_user reads a
 Bearer header, which a browser EventSource cannot set).
 
-  POST   /api/assistant/chat                  — stream a turn (SSE); {} messages = continuation
+  POST   /api/assistant/chat                  — stream a turn (SSE); {} messages = continuation;
+                                                 optional validated `context` (open CRM record, #14)
   POST   /api/assistant/chat/upload           — same, multipart (payload + files)
   POST   /api/assistant/confirm               — approve/deny a pending write (idempotent)
   GET    /api/assistant/conversations         — list
@@ -20,10 +21,11 @@ Bearer header, which a browser EventSource cannot set).
 import asyncio
 import json
 import logging
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ValidationError
 
 from assistant import engine, history, identity, uploads
 from assistant.registry import ToolRegistry
@@ -46,10 +48,27 @@ _SSE_HEADERS = {
 
 # ── Request models ─────────────────────────────────────────────────────────
 
+class ChatContext(BaseModel):
+    """The CRM record the user has open — a prompt-injection boundary (#14).
+
+    Only a validated enum + positive int ever cross this seam; the English sentence
+    shown to the model is built SERVER-side (identity.build_context_note) from these
+    values, never from client free text. ``record_id`` is STRICT so bool/str/float
+    are rejected (422), not coerced. Unknown fields (e.g. a client display ``label``)
+    are ignored by Pydantic's default and never reach the engine.
+    """
+    record_type: Literal["deal", "contact", "company"]
+    # StrictInt (bool/str/float rejected, not coerced) + bounded to a positive int4 PK
+    # (le) so an out-of-range id is a clean 422, never a downstream "integer out of
+    # range" from the crm_get_* tools.
+    record_id: Annotated[int, Field(strict=True, gt=0, le=2_147_483_647)]
+
+
 class ChatRequest(BaseModel):
     messages: list[dict] = []
     conversation_id: str | None = None
     tool_mode: str = "normal"
+    context: ChatContext | None = None
 
 
 class ConfirmRequest(BaseModel):
@@ -88,6 +107,7 @@ async def chat(req: ChatRequest, user=Depends(get_current_user)):
     stream = engine.chat(
         provider, ToolRegistry(), req.messages,
         tool_mode=req.tool_mode, conversation_id=req.conversation_id,
+        context=req.context.model_dump() if req.context else None,
     )
     return StreamingResponse(stream, media_type="text/event-stream", headers=_SSE_HEADERS)
 
@@ -115,6 +135,17 @@ async def chat_upload(
         raise HTTPException(status_code=400, detail="message content must be text.")
     conversation_id = data.get("conversation_id")
     tool_mode = data.get("tool_mode", "normal")
+
+    # This path parses `payload` by hand, so mirror ChatRequest's Pydantic validation
+    # for the record context — same injection boundary, same strict shape. Sits with
+    # the other payload-shape checks (cheap), before _require_provider / file parse.
+    context = None
+    raw_context = data.get("context")
+    if raw_context is not None:
+        try:
+            context = ChatContext.model_validate(raw_context).model_dump()
+        except ValidationError:
+            raise HTTPException(status_code=400, detail="Invalid context.")
 
     # Reject when no provider is configured BEFORE parsing any file — a keyless
     # instance must not burn CPU extracting arbitrary PDF/DOCX/XLSX content.
@@ -153,6 +184,7 @@ async def chat_upload(
     stream = engine.chat(
         provider, ToolRegistry(), messages,
         tool_mode=tool_mode, conversation_id=conversation_id, title_hint=original_text,
+        context=context,
     )
     return StreamingResponse(stream, media_type="text/event-stream", headers=_SSE_HEADERS)
 

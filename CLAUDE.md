@@ -87,7 +87,13 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   at `/crm/settings`, consuming the existing `/api/branding`; the accent is applied
   app-wide by setting the `--brand-color` CSS variable (`index.css` routes the whole
   theme's accent through it), so the CRM stays fully usable — and re-themable — with
-  zero AI keys.
+  zero AI keys. The launcher opens a **context-aware slide-over drawer** (#14): the
+  open deal/contact/company is published through a shared record context
+  (`frontend/src/crm/RecordContext.tsx`, set by the detail pages + `DealDetailSheet`)
+  and injected **per-turn** into the assistant's **volatile** system prompt as a
+  server-built sentence from a validated `{record_type, record_id}`
+  (`assistant/router.ChatContext` → `identity.build_context_note`) — never persisted,
+  never client free text — with record-aware quick actions rendered in the drawer.
 - **API keys are entered in-app, encrypted at rest** (Fernet; key from env →
   OS keychain → file fallback) — never as env vars.
 - **Backend tests** live in `backend/tests/` (config in `backend/pytest.ini`,
@@ -163,7 +169,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | AI providers + pricing + setup wizard | `chatty/backend/core/providers/`, `chatty/frontend/src/setup/` |
 | CRM core (schema, router, tools, smart import) — **landed #3** as `backend/crm/` + `frontend/src/crm/` + `frontend/src/shared/` | `chatty/backend/integrations/crm_lite/`, `chatty/frontend/src/crm/` |
 | Assistant engine — **chat loop, tool registry, confirmations, uploads landed #4** as `backend/assistant/` + `frontend/src/assistant/`; memory/dreaming/heartbeat/reminders/notifications still pending | `chatty/backend/core/agents/` |
-| Telegram | `chatty/backend/integrations/telegram/` |
+| Telegram — **landed #7** as `backend/telegram/*` + `frontend/src/crm/components/TelegramSettings.tsx`: single-assistant long-polling (one main-loop asyncio task offloads `getUpdates` via `to_thread` and drives `engine.chat` on the SAME loop as the SSE endpoint — provider async clients are loop-bound), Fernet-encrypted bot token on a `telegram_settings` singleton, one linked user via a single-use `link_code` (Telegram deep link), CRM write confirmations as inline-keyboard Approve/Deny buttons (mapped onto `engine.resolve_confirmation` + an empty-messages continuation, batched so it continues only once every write is resolved), and `telegram.service.notify_linked_user(text)->bool` as the pure-sync outbound channel #6 consumes. No webhooks, no group chat (deliberately cut). | `chatty/backend/integrations/telegram/` |
 | Gmail (reduced to read + draft) | `chatty/backend/integrations/google/` |
 | Kanban drag-and-drop | `cake_os/frontend/src/shared/dnd/` |
 | Companies (first-class entity: `companies` table, `company_id` FKs, rollup detail page, text→FK backfill migration) — **landed #13** | `cake_os/backend/apps/crm/company_service.py` |

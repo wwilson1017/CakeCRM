@@ -67,3 +67,11 @@ input:focus, textarea:focus, select:focus {
   from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+
+/* Assistant drawer scrim fade-in (crm/components/AssistantLauncher, issue #14).
+   The drawer panel itself slides via a CSS `transition` so it animates both
+   directions; only the scrim needs a mount-time keyframe. */
+@keyframes ck-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}

@@ -67,12 +67,17 @@ async def chat(
     tool_mode: str = "normal",
     conversation_id: str | None = None,
     title_hint: str | None = None,
+    context: dict | None = None,
 ) -> AsyncGenerator[str, None]:
     """Stream one assistant turn as SSE.
 
     ``messages`` carries only the newest user message (history lives server-side).
     An EMPTY ``messages`` with a ``conversation_id`` is a *continuation* — used to
     resume after a write was approved out-of-band — and saves no new user row.
+
+    ``context`` (the CRM record the user has open, e.g.
+    ``{"record_type": "deal", "record_id": 3}``) is per-request/volatile: it is
+    folded into the system prompt for this turn only and is NEVER persisted.
 
     Thin catch-all wrapper: the SSE response has already started (200 + bytes
     flushed), so any unexpected exception in the loop must still terminate with a
@@ -81,7 +86,7 @@ async def chat(
     stop).
     """
     try:
-        async for line in _chat_impl(provider, registry, messages, tool_mode, conversation_id, title_hint):
+        async for line in _chat_impl(provider, registry, messages, tool_mode, conversation_id, title_hint, context):
             yield line
     except Exception:
         logger.exception("assistant.chat crashed mid-stream")
@@ -95,12 +100,16 @@ async def _chat_impl(
     tool_mode: str = "normal",
     conversation_id: str | None = None,
     title_hint: str | None = None,
+    context: dict | None = None,
 ) -> AsyncGenerator[str, None]:
     if tool_mode not in _VALID_MODES:
         tool_mode = "normal"
 
     ident = await asyncio.to_thread(identity.get_identity)
-    system_prompt = identity.build_system_prompt(ident)
+    # The record context (if any) is folded into the VOLATILE half of the system
+    # prompt only — never into assembled/persisted messages. The same system_prompt
+    # feeds both the main loop and the confirmation wrap-up turn below.
+    system_prompt = identity.build_system_prompt(ident, context=context)
     provider_tools = registry.provider_tools(tool_mode)
     budget = BudgetState(limit=WRITE_BUDGET_PER_TURN)
 
