@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import { api } from '../../core/api/client';
-import { labelStyle, inputStyle, CORAL } from '../../shared/styles';
+import { labelStyle, inputStyle, CORAL, LINE, INK_DIM, mono } from '../../shared/styles';
 import { formModalOverlay, formModalContent, formTitle, btnPrimary, btnSecondary } from '../styles';
 import type { CrmCompany } from '../../core/types';
+import { CustomFieldInputs } from './CustomFieldInputs';
+import { useCustomFieldsForm, putCustomFields } from './useCustomFieldsForm';
 
 interface Props {
   company?: CrmCompany;
@@ -22,6 +24,7 @@ export function CompanyForm({ company, onClose, onSaved }: Props) {
   const [notes, setNotes] = useState(company?.notes || '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const cf = useCustomFieldsForm('company', company?.id);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -29,11 +32,15 @@ export function CompanyForm({ company, onClose, onSaved }: Props) {
     setSaving(true); setError('');
     const body = JSON.stringify({ name, domain, industry, phone, address, source, status, notes });
     try {
+      let id: number;
       if (isEdit) {
         await api(`/api/crm/companies/${company.id}`, { method: 'PUT', body });
+        id = company.id;
       } else {
-        await api('/api/crm/companies', { method: 'POST', body });
+        const created = await api<CrmCompany>('/api/crm/companies', { method: 'POST', body });
+        id = created.id;
       }
+      await putCustomFields('company', id, cf.changedForSave(), isEdit ? 'Company saved' : 'Company created');
       onSaved();
     } catch (err: unknown) { setError(err instanceof Error ? err.message : 'Failed to save'); }
     setSaving(false);
@@ -74,6 +81,13 @@ export function CompanyForm({ company, onClose, onSaved }: Props) {
           </div>
           <div><label style={labelStyle}>Notes</label><textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3} style={{ ...inputStyle, resize: 'none' }} /></div>
         </div>
+
+        {cf.editableFields.length > 0 && (
+          <div style={{ marginTop: 16, borderTop: `1px solid ${LINE}`, paddingTop: 16 }}>
+            <span style={{ ...mono(10, INK_DIM), display: 'block', marginBottom: 12 }}>Custom Fields</span>
+            <CustomFieldInputs fields={cf.editableFields} values={cf.values} onChange={cf.setValue} />
+          </div>
+        )}
 
         <div style={{ display: 'flex', gap: 8, marginTop: 20 }}>
           <button type="button" onClick={onClose} style={{ ...btnSecondary, flex: 1 }}>Cancel</button>

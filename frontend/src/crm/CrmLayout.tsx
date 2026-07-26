@@ -12,6 +12,7 @@ import { AiKeyNudge } from './components/AiKeyNudge';
 import { AssistantLauncher } from './components/AssistantLauncher';
 import { BrandLogo } from './components/BrandLogo';
 import { NotificationsBell } from './components/NotificationsBell';
+import { ActiveRecordProvider } from './RecordContext';
 
 const NAV_ITEMS = [
   { to: '/crm', label: 'Dashboard', end: true },
@@ -224,6 +225,7 @@ export function CrmLayout() {
   const aiReady = setup === null ? null : setup.ai_ready;
 
   return (
+    <ActiveRecordProvider>
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       <div style={{ borderBottom: `1px solid ${LINE}` }}>
         {/* Row 1: wordmark + nav tabs (desktop) / hamburger (mobile) + account actions */}
@@ -346,5 +348,6 @@ export function CrmLayout() {
       {/* Persistent assistant affordance — always present, degrades gracefully. */}
       <AssistantLauncher aiReady={aiReady} />
     </div>
+    </ActiveRecordProvider>
   );
 }

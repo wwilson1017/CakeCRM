@@ -28,6 +28,8 @@ import {
 } from './styles';
 import { BrandLogo } from './components/BrandLogo';
 import { NotificationSettings } from './components/NotificationSettings';
+import { CustomFieldSettings } from './components/CustomFieldSettings';
+import { TelegramSettings } from './components/TelegramSettings';
 
 // SVG is excluded: all logos are stored/served as image/png, and browsers don't
 // content-sniff SVG, so an SVG would silently never render. (Serving real SVG from
@@ -208,7 +210,12 @@ export function SettingsPage() {
         </div>
       </div>
 
+      <TelegramSettings />
       <NotificationSettings isMobile={isMobile} />
+      {/* Custom-field definitions manager (issue #19). Appended at the END of the
+          settings card chain so a keep-both merge with the Telegram (#7) /
+          Notifications (#6) cards stays trivial. */}
+      <CustomFieldSettings />
     </div>
   );
 }
