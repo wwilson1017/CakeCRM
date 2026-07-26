@@ -36,7 +36,25 @@ export interface CrmDeal {
   currency: string;
   created_at: string;
   updated_at: string;
+  ai_touch_count?: number | null;       // AI-estimated touch count (issue #16); null = uncomputed
+  ai_touch_count_at?: string | null;
   activity?: CrmActivity[];
+}
+
+// Field provenance (issue #16): which standard fields the AI assistant wrote. A row is a
+// live badge only while unconfirmed AND not stale (snapshot still equals the live value).
+export interface FieldProvenance {
+  id: number;
+  entity_type: string;
+  entity_id: number;
+  field_name: string;
+  value_snapshot: string | null;
+  source: string;
+  source_detail: string | null;
+  confidence: number | null;
+  populated_at: string;
+  confirmed_at: string | null;
+  stale?: boolean;
 }
 
 export interface CrmCompany {

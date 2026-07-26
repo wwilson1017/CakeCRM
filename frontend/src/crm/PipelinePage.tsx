@@ -4,6 +4,7 @@ import { api } from '../core/api/client';
 import type { CrmDeal } from '../core/types';
 import { DealForm } from './components/DealForm';
 import { DealDetailSheet } from './components/DealDetailSheet';
+import { TouchCountPill } from './components/badges';
 import { STAGE_COLORS, STAGE_ORDER } from './constants';
 import { IconPlus } from '../shared/icons';
 import { useIsMobile } from '../shared/useIsMobile';
@@ -326,6 +327,7 @@ function DealBoardCard({ deal, columnStage, onOpen }: { deal: CrmDeal; columnSta
         {deal.contact_name && <span>{deal.contact_name}</span>}
         {deal.probability > 0 && <span>{deal.probability}%</span>}
         {deal.expected_close_date && <span>{deal.expected_close_date}</span>}
+        <TouchCountPill count={deal.ai_touch_count} />
       </div>
     </div>
   );

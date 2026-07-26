@@ -83,7 +83,15 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   ~30 `crm_*` agent tools + executors are
   collected UNCONDITIONALLY via `crm.tools.get_crm_tools()` — each def carries a
   `"writes"` flag (the single source of truth for the assistant's confirmation gate),
-  consumed by `assistant.registry.ToolRegistry` (landed #4). Contact
+  consumed by `assistant.registry.ToolRegistry` (landed #4). **AI touch counts +
+  field provenance** (#16) are the two zero-keys-degrading AI reads: an in-process
+  daemon worker (`crm/touch_count_service.py`, event-driven off note/activity writes,
+  light tier via `get_ai_provider(agent_model_tier="light")`, prompt-injection-hardened,
+  never-fabricate) stores an estimated touch count in `deals.ai_touch_*` for a pipeline
+  nudge pill; and `crm/provenance_service.py` (`crm_field_provenance`) records which
+  standard fields the assistant wrote (recorded inside the assistant's write-tool
+  executors — human router edits don't), badged until confirmed or overwritten. Both are
+  invisible with zero keys (no count is computed, no provenance is written). Contact
   import is keyless for CSV/vCard; the AI smart-import path (`get_ai_provider()`)
   degrades to a warning when no provider is configured and its UI affordance keys off
   `ai_ready`. First-run offers to load fictional sample data (prompt tracked on the
@@ -186,6 +194,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Companies (first-class entity: `companies` table, `company_id` FKs, rollup detail page, text→FK backfill migration) — **landed #13** | `cake_os/backend/apps/crm/company_service.py` |
 | Chatter/notes (`crm_chatter`) — **landed #15** as `backend/crm/chatter_service.py` + `frontend/src/crm/components/NotesThread.tsx` | `cake_os/backend/apps/crm/chatter_service.py` |
 | Custom fields (EAV `crm_field_definitions`/`crm_field_values`, Settings editor, entity-form + detail-page value inputs, 6 `crm_*_fields` tools) — **landed #19** as `backend/crm/field_service.py` + `frontend/src/crm/components/{CustomFieldSettings,CustomFieldsSection,CustomFieldInputs}.tsx` | `cake_os/backend/apps/crm/field_service.py` |
-| Scoring, analytics, provenance, touch counts | `cake_os/backend/apps/crm/*_service.py` |
+| Touch counts + field provenance (`deals.ai_touch_*` cols + in-process recompute worker; `crm_field_provenance` + `AiBadge`/`ProvenanceBadge`/`TouchCountPill`) — **landed #16** as `backend/crm/touch_count_service.py` + `provenance_service.py` | `cake_os/backend/apps/crm/touch_count_service.py`, `provenance_service.py` |
+| Scoring, analytics | `cake_os/backend/apps/crm/*_service.py` |
 | Assistant tool set (~43 tools) + sales behaviors | `cake_os/backend/apps/crm/tools/` + Casey's agent config |
 | Pipeline facet filtering | `cake_os/docs/CRM_FILTER_DESIGN.md` |

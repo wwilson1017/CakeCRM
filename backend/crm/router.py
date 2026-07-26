@@ -24,6 +24,8 @@ Deals:
   GET    /api/crm/deals/:id             — detail
   POST   /api/crm/deals                 — create
   PUT    /api/crm/deals/:id             — update
+  POST   /api/crm/deals/touch-count/backfill        — recompute AI touch counts (?scope=null|all&force=)
+  GET    /api/crm/deals/touch-count/backfill/status — backfill progress
 
 Tasks:
   GET    /api/crm/tasks                 — filtered list
@@ -53,6 +55,10 @@ Custom fields (user-defined fields on contacts/companies/deals):
   GET    /api/crm/:type/:id/fields      — an entity's field values (defs + values)
   PUT    /api/crm/:type/:id/fields      — set an entity's field values
 
+Provenance (AI-written field badges on a deal or contact):
+  GET    /api/crm/provenance/:type/:id           — live badge rows (unconfirmed + not stale)
+  POST   /api/crm/provenance/:type/:id/confirm   — confirm a field's AI value (clears badge)
+
 Other:
   GET    /api/crm/dashboard             — summary stats
   GET    /api/crm/demo-status           — first-run onboarding / sample-data state
@@ -76,7 +82,13 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, field_validator
 
 from core.auth import get_current_user
-from crm import chatter_service, field_service, service as crm
+from crm import (
+    chatter_service,
+    field_service,
+    provenance_service,
+    service as crm,
+    touch_count_service,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -200,6 +212,10 @@ class ChatterNoteUpdate(BaseModel):
 
 class ClearAllBody(BaseModel):
     confirmation: str
+
+
+class ProvenanceConfirmBody(BaseModel):
+    field_name: str
 
 
 class SmartImportConfirm(BaseModel):
@@ -357,6 +373,33 @@ async def update_deal(deal_id: int, body: DealUpdate, user=Depends(get_current_u
     if not result:
         raise HTTPException(status_code=404, detail="Deal not found or invalid stage")
     return result
+
+
+# ── AI touch counts (issue #16) ───────────────────────────────────────────────
+# Recompute happens event-driven off note/activity writes; these endpoints are the
+# operator repair/observability surface. The path prefix (/deals/touch-count/…) has a
+# different segment count than /deals/{deal_id}, so there is no route collision.
+
+@router.post("/deals/touch-count/backfill")
+async def touch_count_backfill(
+    scope: str = Query("null", pattern="^(null|all)$"),
+    force: bool = False,
+    user=Depends(get_current_user),
+):
+    """Backfill AI touch counts. scope=null (default) computes never-computed open deals;
+    scope=all re-computes every open deal (repair). force bypasses the process-local
+    cooldown. Degrades to {"started": false} with no AI provider. Enqueue-and-return —
+    the in-process worker drains asynchronously (candidate SELECT is offloaded)."""
+    try:
+        return await run_in_threadpool(touch_count_service.start_backfill, scope, force)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+
+
+@router.get("/deals/touch-count/backfill/status")
+async def touch_count_backfill_status(user=Depends(get_current_user)):
+    """Backfill progress: remaining never-computed open deals + this process's queue depth."""
+    return touch_count_service.backfill_status()
 
 
 # ── Tasks ─────────────────────────────────────────────────────────────────────
@@ -714,6 +757,37 @@ async def unarchive_chatter_note(note_id: int, user=Depends(get_current_user)):
     if not chatter_service.unarchive_note(note_id):
         raise HTTPException(status_code=404, detail="Note not found")
     return {"ok": True}
+
+
+# ── Field provenance (issue #16) ──────────────────────────────────────────────
+# "AI" badges on the fields the assistant populated. GET returns only live-badge rows
+# (unconfirmed AND not stale). A human confirm clears the badge; a 200 {stale:true} means
+# the value was edited since the AI wrote it (the shared api() client throws a status-less
+# Error, so the stale outcome is a payload branch the hook reads, not a 409).
+
+@router.get("/provenance/{entity_type}/{entity_id}")
+async def get_provenance(entity_type: str, entity_id: int, user=Depends(get_current_user)):
+    try:
+        rows = provenance_service.get_provenance(entity_type, entity_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    return {"provenance": rows, "count": len(rows)}
+
+
+@router.post("/provenance/{entity_type}/{entity_id}/confirm")
+async def confirm_provenance(
+    entity_type: str, entity_id: int, body: ProvenanceConfirmBody,
+    user=Depends(get_current_user),
+):
+    try:
+        result = provenance_service.confirm(entity_type, entity_id, body.field_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    if result is None:
+        raise HTTPException(status_code=404, detail="No provenance for that field")
+    if result.get("stale"):
+        return {"confirmed": False, "stale": True}
+    return {"confirmed": True, "provenance": result}
 
 
 # ── Companies ─────────────────────────────────────────────────────────────────

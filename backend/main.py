@@ -8,6 +8,7 @@ CORS, and serves the built frontend in production. The CRM core is mounted at
 Postgres is mandatory — startup fails loudly without DATABASE_URL.
 """
 
+import asyncio
 import contextvars
 import logging
 import os
@@ -67,6 +68,15 @@ async def lifespan(app: FastAPI):
 
     postgres.init_pool()
     postgres.run_migrations()
+
+    # ── AI touch-count worker (issue #16) ────────────────────────────────────
+    # The in-process daemon worker marshals its provider calls onto THIS event loop
+    # (see crm/touch_count_service.capture_event_loop) so the module-level provider
+    # client caches are never shared across event loops. Capture-only — the worker
+    # itself starts lazily on the first note/activity write; nothing to stop on shutdown
+    # (it's a daemon thread that dies with the process).
+    from crm import touch_count_service
+    touch_count_service.capture_event_loop(asyncio.get_running_loop())
 
     # ── Railway environment logging ─────────────────────────────────────────
     if settings.is_railway:

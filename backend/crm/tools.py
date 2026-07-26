@@ -13,11 +13,14 @@ confirmation in normal mode; read tools are ``False``. Any def added here MUST
 carry a ``"writes"`` flag — ``tests/test_crm_tools.py`` fails loudly otherwise.
 """
 
+import logging
 from collections.abc import Callable
 
 import psycopg2
 
-from crm import chatter_service, field_service, service as crm
+from crm import chatter_service, field_service, provenance_service, service as crm
+
+logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Tool Definitions (schema only — sent to the AI provider)
@@ -619,6 +622,33 @@ CRM_TOOL_DEFS = [
 # Tool Executor Functions
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# ── Field provenance (issue #16) ──────────────────────────────────────────────
+# These executors are reached ONLY through the assistant (assistant.registry →
+# get_crm_tools()); human edits go through crm/router.py, which never calls them. So a
+# successful write here IS an "AI wrote this field" event — record provenance so the UI
+# can badge it until a human confirms or overwrites it.
+
+def _record_provenance(entity_type: str, entity_id: int, provided: dict, result: dict) -> None:
+    """Best-effort: record 'assistant' provenance for the fields this tool call set.
+
+    Snapshots come from the POST-write entity dict (``result``) so normalization can't mint
+    an instantly-stale badge; record_fields skips empty values (no badge on a field the UI
+    won't render). Never raises — a provenance failure must not fail the write it describes."""
+    try:
+        if not entity_id:
+            return
+        fields = {
+            k: result.get(k)
+            for k in provided
+            if k in provenance_service.PROVENANCE_FIELDS.get(entity_type, ())
+        }
+        if fields:
+            provenance_service.record_fields(entity_type, entity_id, fields)
+    except Exception:
+        logger.warning("provenance recording failed for %s %s", entity_type, entity_id,
+                       exc_info=True)
+
+
 # ── Contacts ──────────────────────────────────────────────────────────────────
 
 def crm_find_contact(query: str, status: str | None = None, tags: str | None = None) -> dict:
@@ -630,9 +660,13 @@ def crm_create_contact(name: str, **kwargs) -> dict:
     # An invalid company_id would raise a raw FK error; translate it (the HTTP
     # route returns 400 for the same case).
     try:
-        return crm.create_contact(name=name, **kwargs)
+        result = crm.create_contact(name=name, **kwargs)
     except psycopg2.errors.ForeignKeyViolation:
         return {"error": "Referenced company does not exist"}
+    if not result:
+        return {"error": "Contact could not be created"}
+    _record_provenance("contact", result.get("id"), {"name": name, **kwargs}, result)
+    return result
 
 
 def crm_update_contact(contact_id: int, **kwargs) -> dict:
@@ -642,6 +676,7 @@ def crm_update_contact(contact_id: int, **kwargs) -> dict:
         return {"error": "Referenced company does not exist"}
     if not result:
         return {"error": f"Contact {contact_id} not found"}
+    _record_provenance("contact", contact_id, kwargs, result)
     return result
 
 
@@ -670,9 +705,13 @@ def crm_get_pipeline(stage: str | None = None) -> dict:
 
 def crm_create_deal(title: str, **kwargs) -> dict:
     try:
-        return crm.create_deal(title=title, **kwargs)
+        result = crm.create_deal(title=title, **kwargs)
     except psycopg2.errors.ForeignKeyViolation:
         return {"error": "Referenced contact or company does not exist"}
+    if not result:
+        return {"error": "Deal could not be created"}
+    _record_provenance("deal", result.get("id"), {"title": title, **kwargs}, result)
+    return result
 
 
 def crm_update_deal(deal_id: int, **kwargs) -> dict:
@@ -682,6 +721,7 @@ def crm_update_deal(deal_id: int, **kwargs) -> dict:
         return {"error": "Referenced contact or company does not exist"}
     if not result:
         return {"error": f"Deal {deal_id} not found or invalid stage"}
+    _record_provenance("deal", deal_id, kwargs, result)
     return result
 
 
@@ -689,6 +729,7 @@ def crm_update_deal_stage(deal_id: int, stage: str) -> dict:
     deal = crm.update_deal_stage(deal_id, stage)
     if not deal:
         return {"error": f"Deal not found or invalid stage: {stage}"}
+    _record_provenance("deal", deal_id, {"stage": stage}, deal)
     return deal
 
 

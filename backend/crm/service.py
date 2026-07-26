@@ -13,6 +13,7 @@ import logging
 from datetime import datetime, timezone
 
 from core.postgres import get_connection, pg_execute, pg_fetchall, pg_fetchone
+from crm import touch_count_service
 
 logger = logging.getLogger(__name__)
 
@@ -183,9 +184,9 @@ def delete_contact(contact_id: int) -> bool:
             return False
         cur.execute("DELETE FROM activity_log WHERE contact_id = %s", (contact_id,))
         cur.execute("DELETE FROM tasks WHERE contact_id = %s", (contact_id,))
-        # crm_chatter and crm_field_values are polymorphic (no FK), so their rows are
-        # dropped explicitly — otherwise a reused contact SERIAL id would inherit this
-        # contact's notes / custom-field values.
+        # crm_chatter, crm_field_values and crm_field_provenance are polymorphic (no
+        # FK), so their rows are dropped explicitly — otherwise a reused contact SERIAL
+        # id would inherit this contact's notes / custom-field values / AI badges.
         # NOTE: deals have no delete path today; if a delete_deal is ever added it MUST
         # do the same FOR UPDATE lock + these DELETEs for entity_type='deal'.
         cur.execute(
@@ -194,6 +195,10 @@ def delete_contact(contact_id: int) -> bool:
         )
         cur.execute(
             "DELETE FROM crm_field_values WHERE entity_type = 'contact' AND entity_id = %s",
+            (contact_id,),
+        )
+        cur.execute(
+            "DELETE FROM crm_field_provenance WHERE entity_type = 'contact' AND entity_id = %s",
             (contact_id,),
         )
         cur.execute("DELETE FROM contacts WHERE id = %s", (contact_id,))
@@ -599,7 +604,12 @@ def log_activity(activity: str, note: str = "", contact_id: int | None = None,
            VALUES (%s, %s, %s, %s) RETURNING id""",
         (activity, note, contact_id, deal_id),
     )
-    return pg_fetchone("SELECT * FROM activity_log WHERE id = %s", (row["id"],)) or {}
+    result = pg_fetchone("SELECT * FROM activity_log WHERE id = %s", (row["id"],)) or {}
+    # An activity on a deal is fresh touch-count evidence — queue a recompute (O(1), never
+    # raises; the insert has already committed via the pg_fetchone helpers).
+    if deal_id:
+        touch_count_service.schedule_recompute(deal_id)
+    return result
 
 
 def get_activity_log(contact_id: int | None = None, deal_id: int | None = None, limit: int = 20) -> list[dict]:
@@ -698,13 +708,14 @@ def get_dashboard_stats() -> dict:
 
 # ── First-run / sample-data state (crm_meta singleton) ────────────────────────
 
-# Entity-data tables cleaned on every demo/reset path. crm_field_values is polymorphic
-# (no FK to the entity tables), so it belongs here alongside crm_chatter. The GLOBAL
-# schema table crm_field_definitions is user *configuration* — it is NOT entity data,
-# survives demo-clear, and is truncated only by clear_all (see _truncate_all).
+# Entity-data tables cleaned on every demo/reset path. crm_field_values and
+# crm_field_provenance are polymorphic (no FK to the entity tables), so they belong
+# here alongside crm_chatter. The GLOBAL schema table crm_field_definitions is user
+# *configuration* — it is NOT entity data, survives demo-clear, and is truncated only
+# by clear_all (see _truncate_all).
 _CRM_TABLES = (
     "companies", "contacts", "deals", "tasks", "activity_log", "crm_chatter",
-    "crm_field_values",
+    "crm_field_values", "crm_field_provenance",
 )
 
 
@@ -734,7 +745,8 @@ def is_crm_empty() -> bool:
                 + (SELECT COUNT(*) FROM tasks)
                 + (SELECT COUNT(*) FROM activity_log)
                 + (SELECT COUNT(*) FROM crm_chatter)
-                + (SELECT COUNT(*) FROM crm_field_values) AS total"""
+                + (SELECT COUNT(*) FROM crm_field_values)
+                + (SELECT COUNT(*) FROM crm_field_provenance) AS total"""
     )
     return bool(row) and row["total"] == 0
 
@@ -751,7 +763,8 @@ def _crm_empty_in_txn(cur) -> bool:
                 + (SELECT COUNT(*) FROM tasks)
                 + (SELECT COUNT(*) FROM activity_log)
                 + (SELECT COUNT(*) FROM crm_chatter)
-                + (SELECT COUNT(*) FROM crm_field_values) AS total"""
+                + (SELECT COUNT(*) FROM crm_field_values)
+                + (SELECT COUNT(*) FROM crm_field_provenance) AS total"""
     )
     return cur.fetchone()[0] == 0
 
@@ -833,15 +846,18 @@ def _truncate_all(cur, include_definitions: bool = False) -> None:
     # set_field_values locks entity→definitions, and delete_field_definition locks
     # definitions→values — entity, then definitions, then values satisfies both and
     # can't invert against either. demo-clear leaves definitions intact (user config).
+    # crm_field_provenance trails both variants, matching the entity-tables-first order
+    # its own writers take (record_fields/confirm lock the entity row FOR UPDATE before
+    # touching provenance), so it inverts against no writer either.
     if include_definitions:
         cur.execute(
             "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
-            "crm_field_definitions, crm_field_values RESTART IDENTITY"
+            "crm_field_definitions, crm_field_values, crm_field_provenance RESTART IDENTITY"
         )
     else:
         cur.execute(
             "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
-            "crm_field_values RESTART IDENTITY"
+            "crm_field_values, crm_field_provenance RESTART IDENTITY"
         )
 
 

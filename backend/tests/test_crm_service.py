@@ -176,10 +176,11 @@ def test_delete_contact_existence_check_and_cascade_one_txn(monkeypatch, fake_co
     assert service.delete_contact(42) is True
     stmts = [sql for sql, _ in conn.executed]
     assert any("SELECT id FROM contacts WHERE id" in s for s in stmts)
-    # activity_log, tasks, crm_chatter, crm_field_values, contacts
-    assert sum("DELETE FROM" in s for s in stmts) == 5
+    # activity_log, tasks, crm_chatter, crm_field_values, crm_field_provenance, contacts
+    assert sum("DELETE FROM" in s for s in stmts) == 6
     assert any("DELETE FROM crm_chatter WHERE entity_type = 'contact'" in s for s in stmts)
     assert any("DELETE FROM crm_field_values WHERE entity_type = 'contact'" in s for s in stmts)
+    assert any("DELETE FROM crm_field_provenance WHERE entity_type = 'contact'" in s for s in stmts)
     assert "DELETE FROM contacts WHERE id" in stmts[-1]
 
 
@@ -201,11 +202,12 @@ def test_clear_demo_data_truncates_when_sample_loaded(monkeypatch, fake_conn):
     out = service.clear_demo_data()
     assert out == {"ok": True, "cleared": True}
     stmts = [s for s, _ in conn.executed]
-    # Base truncate: crm_field_values IS wiped, but crm_field_definitions is NOT —
-    # demo-clear preserves the user's custom-field schema (only clear_all wipes it).
+    # Base truncate: crm_field_values and crm_field_provenance ARE wiped, but
+    # crm_field_definitions is NOT — demo-clear preserves the user's custom-field
+    # schema (only clear_all wipes it).
     assert any(
         "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
-        "crm_field_values RESTART IDENTITY" in s for s in stmts
+        "crm_field_values, crm_field_provenance RESTART IDENTITY" in s for s in stmts
     )
     assert not any("crm_field_definitions" in s for s in stmts)
 
@@ -237,10 +239,11 @@ def test_clear_all_truncates_and_resets_flag(monkeypatch, fake_conn):
     # clear_all is the deliberate full reset: it ALSO wipes crm_field_definitions,
     # placed after the entity tables but before crm_field_values (lock order
     # consistent with both set_field_values entity→defs and delete_field_definition
-    # defs→values).
+    # defs→values); crm_field_provenance trails both.
     assert any(
         "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
-        "crm_field_definitions, crm_field_values RESTART IDENTITY" in s for s in stmts
+        "crm_field_definitions, crm_field_values, crm_field_provenance RESTART IDENTITY"
+        in s for s in stmts
     )
     assert any("sample_data_loaded = FALSE" in s for s in stmts)
 
