@@ -49,11 +49,11 @@ logger = logging.getLogger(__name__)
 
 # --- advisory lock keys (registered in core/postgres.py's registry comment) ---
 # Per-entity recompute uses the two-int form pg_advisory_xact_lock(namespace, id);
-# deals.id / contacts.id are SERIAL (int4) so they fit. The daily refresh holds a
-# session-level pg_try_advisory_lock across its whole run to prevent overlap.
+# deals.id / contacts.id are SERIAL (int4) so they fit. The daily refresh is lock-free
+# (see run_score_refresh_if_due): reminder_tick is max_instances=1 and these per-entity
+# locks are the only serialization it needs.
 _DEAL_LOCK_NS = 1801
 _CONTACT_LOCK_NS = 1802
-_REFRESH_LOCK_KEY = 20260718  # distinct from migration(1)/telegram(720770)/dreaming(20260705)
 
 _REFRESH_INTERVAL = timedelta(hours=24)
 # Per-tick cap for the time-decay refresh. reminder_tick is a shared, fast-and-bounded
@@ -458,26 +458,22 @@ def _unique(ids):
 
 def backfill_scores(scope: str = "null", now: datetime | None = None) -> dict:
     """Recompute scores in bulk. scope='null' scores only never-scored rows (fast, for
-    seeding/new rows); scope='all' rescores every row (drift repair + the daily refresh)."""
+    seeding/new rows); scope='all' rescores every row (drift repair). The candidate ids are
+    bounded IN SQL (``LIMIT``) so even scope='all' on a huge table never materializes the whole
+    id set in memory; if the cap is hit, ``capped`` is true and a repeat call continues."""
     if scope not in ("null", "all"):
         raise ValueError(f"invalid scope: {scope!r} (expected 'null' or 'all')")
     now = _now(now)
     where = "WHERE lead_score IS NULL" if scope == "null" else ""
-    deal_ids = [r["id"] for r in pg_fetchall(f"SELECT id FROM deals {where} ORDER BY id")]
-    contact_ids = [r["id"] for r in pg_fetchall(f"SELECT id FROM contacts {where} ORDER BY id")]
-
-    total = len(deal_ids) + len(contact_ids)
-    capped = False
-    if total > _REFRESH_MAX_ROWS:
-        capped = True
-        logger.warning(
-            "lead-score backfill(%s): %d candidates exceed cap %d; processing the first %d, "
-            "remainder deferred to the next run / a manual backfill.",
-            scope, total, _REFRESH_MAX_ROWS, _REFRESH_MAX_ROWS,
-        )
-        # Bound the work: fill from deals first, then contacts.
-        deal_ids = deal_ids[:_REFRESH_MAX_ROWS]
-        contact_ids = contact_ids[: max(0, _REFRESH_MAX_ROWS - len(deal_ids))]
+    deal_ids = [r["id"] for r in pg_fetchall(
+        f"SELECT id FROM deals {where} ORDER BY id LIMIT %s", (_REFRESH_MAX_ROWS,))]
+    remaining = _REFRESH_MAX_ROWS - len(deal_ids)
+    contact_ids = [r["id"] for r in pg_fetchall(
+        f"SELECT id FROM contacts {where} ORDER BY id LIMIT %s", (remaining,))] if remaining > 0 else []
+    capped = len(deal_ids) + len(contact_ids) >= _REFRESH_MAX_ROWS
+    if capped:
+        logger.warning("lead-score backfill(%s) hit the %d-row cap; run it again to continue.",
+                       scope, _REFRESH_MAX_ROWS)
 
     deals_scored = _run_batch(recompute_deal, deal_ids, now, "deal")
     contacts_scored = _run_batch(recompute_contact, contact_ids, now, "contact")
@@ -496,59 +492,53 @@ def _run_batch(fn, ids, now, label) -> int:
     return ok
 
 
-def _stale_ids(cur, table: str, cutoff: datetime, limit: int) -> list[int]:
+def _stale_ids(table: str, cutoff: datetime, limit: int) -> list[int]:
     """Up to ``limit`` ids of rows whose score is stale (never scored, or last scored before
-    ``cutoff``). ``table`` is a module-internal literal ('deals'/'contacts'), never user input.
-    Ids are extracted immediately (before the cursor is reused — row_to_dict gotcha)."""
+    ``cutoff``), OLDEST-scored first (NULLs first) so a backlog drains fairly with no row ever
+    starved. Bounded IN SQL (``LIMIT``) and index-backed by ``idx_<table>_lead_score_at``.
+    ``table`` is a module-internal literal ('deals'/'contacts'), never user input."""
     if limit <= 0:
         return []
-    cur.execute(
-        f"SELECT id FROM {table} WHERE lead_score_at IS NULL OR lead_score_at < %s LIMIT %s",
+    rows = pg_fetchall(
+        f"SELECT id FROM {table} WHERE lead_score_at IS NULL OR lead_score_at < %s "
+        f"ORDER BY lead_score_at ASC NULLS FIRST, id LIMIT %s",
         (cutoff, limit),
     )
-    return [r[0] for r in cur.fetchall()]
+    return [r["id"] for r in rows]
 
 
 def run_score_refresh_if_due(now: datetime | None = None) -> dict | None:
     """Refresh the STALEST scores whose time-decay factors (recency/age) have drifted — rows
-    not recomputed within _REFRESH_INTERVAL (or never scored). Two guards keep it cheap and
-    bounded inside reminder_tick's shared slot (T1):
+    not recomputed within _REFRESH_INTERVAL (or never scored). Three properties keep it cheap,
+    bounded, and correct inside reminder_tick's shared slot (T1):
 
-    * a **coarse due-gate** on `crm_meta.scores_refreshed_at` (like dreaming) — on ~every tick
-      the window is closed and this returns None WITHOUT scanning any table;
-    * a **per-tick batch cap** (`_REFRESH_BATCH`) — once the window opens it processes at most
-      that many stale rows, and the remainder rolls to the next tick (self-resuming). Completion
-      is stamped (closing the 24h window) only when a pass drains the stale set, so a large
-      backlog keeps draining each tick until caught up.
+    * a **coarse due-gate** on ``crm_meta.scores_refreshed_at`` (like dreaming) — on ~every tick
+      the window is closed and this returns None WITHOUT scanning either table;
+    * a **per-tick batch cap** (``_REFRESH_BATCH``, applied in SQL) — once the window opens it
+      recomputes at most that many stale rows, OLDEST first, and the remainder rolls to the next
+      tick (self-resuming, no starvation);
+    * it is **lock-free**: reminder_tick runs ``max_instances=1`` (serialized per process) and
+      each recompute takes its own per-entity ``pg_advisory_xact_lock``, so correctness needs no
+      cross-phase session lock (which — see the earlier design — could leak on a rolled-back
+      transaction and could nest pooled connections). A multi-process deploy at worst does
+      redundant, never-corrupting work.
 
-    A short session-level advisory lock guards ONLY the gate + id-selection (phase 1); it is
-    released before the recompute (phase 2) so we never hold a pooled connection across the
-    nested per-entity recompute connections (which could self-deadlock a pool sized below 2).
-    A manual backfill does not take this lock; the per-entity xact locks still prevent corruption.
-    Returns a summary, or None when not due / nothing stale / the lock is busy."""
+    The 24h window is stamped closed only on a **clean drain** (fewer than the cap AND zero
+    per-row failures), so a backlog or a transient error keeps retrying on later ticks. Returns
+    a summary, or None when not due / nothing stale."""
     now = _now(now)
     cutoff = now - _REFRESH_INTERVAL
-    # Phase 1 (short, under the session lock): due-gate, then select a bounded batch of stale ids.
-    with get_connection() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT pg_try_advisory_lock(%s)", (_REFRESH_LOCK_KEY,))
-        if not cur.fetchone()[0]:
-            return None  # another refresh pass holds the lock
-        try:
-            cur.execute("SELECT scores_refreshed_at FROM crm_meta WHERE id = 1")
-            row = cur.fetchone()
-            last = row[0] if row else None
-            if last is not None:
-                if last.tzinfo is None:
-                    last = last.replace(tzinfo=timezone.utc)
-                if now - last < _REFRESH_INTERVAL:
-                    return None  # not due — the cheap path on ~every tick, no table scan
-            deal_ids = _stale_ids(cur, "deals", cutoff, _REFRESH_BATCH)
-            contact_ids = _stale_ids(cur, "contacts", cutoff, _REFRESH_BATCH - len(deal_ids))
-        finally:
-            cur.execute("SELECT pg_advisory_unlock(%s)", (_REFRESH_LOCK_KEY,))
-    # Phase 2 (outside the lock): recompute + stamp. Each recompute takes its own connection +
-    # per-entity xact lock, so there is no connection nesting under the session lock.
+    # Coarse due-gate: a single-row read; on ~every tick the window is closed -> return early.
+    meta = pg_fetchone("SELECT scores_refreshed_at FROM crm_meta WHERE id = 1")
+    last = meta.get("scores_refreshed_at") if meta else None
+    if last is not None:
+        last_dt = datetime.fromisoformat(last) if isinstance(last, str) else last
+        if last_dt.tzinfo is None:
+            last_dt = last_dt.replace(tzinfo=timezone.utc)
+        if now - last_dt < _REFRESH_INTERVAL:
+            return None
+    deal_ids = _stale_ids("deals", cutoff, _REFRESH_BATCH)
+    contact_ids = _stale_ids("contacts", cutoff, _REFRESH_BATCH - len(deal_ids))
     total = len(deal_ids) + len(contact_ids)
     if total == 0:
         # Window open but nothing stale (events kept everything fresh) — reset the 24h gate.
@@ -556,8 +546,7 @@ def run_score_refresh_if_due(now: datetime | None = None) -> dict | None:
         return None
     d = _run_batch(recompute_deal, deal_ids, now, "deal")
     c = _run_batch(recompute_contact, contact_ids, now, "contact")
-    # Stamp only when this pass DRAINED the stale set (batch not full), so a backlog keeps
-    # draining each tick (self-resuming) and only then closes the 24h window.
-    if total < _REFRESH_BATCH:
+    errors = (len(deal_ids) - d) + (len(contact_ids) - c)
+    if total < _REFRESH_BATCH and errors == 0:
         pg_execute("UPDATE crm_meta SET scores_refreshed_at = %s WHERE id = 1", (now,))
-    return {"deals_scored": d, "contacts_scored": c, "batch": total}
+    return {"deals_scored": d, "contacts_scored": c, "batch": total, "errors": errors}

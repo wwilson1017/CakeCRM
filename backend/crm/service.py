@@ -209,7 +209,9 @@ def delete_contact(contact_id: int) -> bool:
         # FK), so their rows are dropped explicitly — otherwise a reused contact SERIAL
         # id would inherit this contact's notes / custom-field values / AI badges.
         # NOTE: deals have no delete path today; if a delete_deal is ever added it MUST
-        # do the same FOR UPDATE lock + these DELETEs for entity_type='deal'.
+        # do the same FOR UPDATE lock + these DELETEs for entity_type='deal', AND (per #18)
+        # capture the deal's contact_id before delete and score_on_event(contact_ids=(...))
+        # after commit — a removed deal changes its former contact's deal-linkage factor.
         cur.execute(
             "DELETE FROM crm_chatter WHERE entity_type = 'contact' AND entity_id = %s",
             (contact_id,),

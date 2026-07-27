@@ -171,7 +171,6 @@ def pg_execute(sql: str, params: tuple | list | dict = ()) -> int:
 #   pg_try_advisory_xact_lock(20260705) — dreaming cycle (dreaming/processor.run_dreaming_if_due)
 #   pg_advisory_xact_lock(1801, id)   — per-deal lead-score recompute (crm/scoring_service.py)
 #   pg_advisory_xact_lock(1802, id)   — per-contact lead-score recompute (crm/scoring_service.py)
-#   pg_try_advisory_lock(20260718)    — daily lead-score refresh (crm/scoring_service.run_score_refresh_if_due)
 
 
 def run_migrations() -> None:
