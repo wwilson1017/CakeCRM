@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../core/api/client';
 import type { CrmDashboard, CrmDeal, CrmAnalytics } from '../core/types';
@@ -40,11 +40,17 @@ export function CrmDashboardPage() {
   const [editDeal, setEditDeal] = useState<CrmDeal | null>(null);
   const navigate = useNavigate();
   const isMobile = useIsMobile();
+  // Monotonic id so a slow in-flight analytics request can't overwrite a newer
+  // one (loadAnalytics fires from mount, reload, retry, and sheet-close).
+  const analyticsReqId = useRef(0);
 
   // Best-effort: a failed analytics fetch degrades to the classic dashboard
   // (analytics sections just don't render) rather than blanking the page.
   function loadAnalytics() {
-    api<CrmAnalytics>('/api/crm/analytics').then(setAnalytics).catch(() => {});
+    const reqId = ++analyticsReqId.current;
+    api<CrmAnalytics>('/api/crm/analytics')
+      .then(a => { if (reqId === analyticsReqId.current) setAnalytics(a); })
+      .catch(() => {});
   }
 
   function reload() {
