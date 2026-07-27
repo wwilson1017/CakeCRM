@@ -328,13 +328,17 @@ def _read_deal_score(deal_id: int, q1, now: datetime) -> dict | None:
     deal = q1("SELECT * FROM deals WHERE id = %s", (deal_id,))
     if deal is None:
         return None
-    agg = q1(
+    chat = q1(
         "SELECT COUNT(*) AS cnt, MAX(created_at) AS newest FROM crm_chatter "
         "WHERE entity_type = 'deal' AND entity_id = %s AND archived = 0",
         (deal_id,),
     ) or {}
-    act = q1("SELECT MAX(created_at) AS newest FROM activity_log WHERE deal_id = %s", (deal_id,)) or {}
-    return _compose_deal(deal, int(agg.get("cnt") or 0), _newest(agg.get("newest"), act.get("newest")), now)
+    # Engagement counts BOTH notes and logged activities (symmetric with contact scoring) —
+    # activity_log is the CRM's primary touch surface, so a deal worked only via logged calls
+    # must not read as zero-engagement.
+    act = q1("SELECT COUNT(*) AS cnt, MAX(created_at) AS newest FROM activity_log WHERE deal_id = %s", (deal_id,)) or {}
+    count = int(chat.get("cnt") or 0) + int(act.get("cnt") or 0)
+    return _compose_deal(deal, count, _newest(chat.get("newest"), act.get("newest")), now)
 
 
 def _read_contact_score(contact_id: int, q1, qall, now: datetime) -> dict | None:
@@ -465,11 +469,14 @@ def backfill_scores(scope: str = "null", now: datetime | None = None) -> dict:
         raise ValueError(f"invalid scope: {scope!r} (expected 'null' or 'all')")
     now = _now(now)
     where = "WHERE lead_score IS NULL" if scope == "null" else ""
+    # Oldest-scored first (NULLs first): each recompute bumps lead_score_at, so a re-run after
+    # hitting the cap genuinely PROGRESSES to the next rows rather than re-scoring the same ids.
+    order = "ORDER BY lead_score_at ASC NULLS FIRST, id"
     deal_ids = [r["id"] for r in pg_fetchall(
-        f"SELECT id FROM deals {where} ORDER BY id LIMIT %s", (_REFRESH_MAX_ROWS,))]
+        f"SELECT id FROM deals {where} {order} LIMIT %s", (_REFRESH_MAX_ROWS,))]
     remaining = _REFRESH_MAX_ROWS - len(deal_ids)
     contact_ids = [r["id"] for r in pg_fetchall(
-        f"SELECT id FROM contacts {where} ORDER BY id LIMIT %s", (remaining,))] if remaining > 0 else []
+        f"SELECT id FROM contacts {where} {order} LIMIT %s", (remaining,))] if remaining > 0 else []
     capped = len(deal_ids) + len(contact_ids) >= _REFRESH_MAX_ROWS
     if capped:
         logger.warning("lead-score backfill(%s) hit the %d-row cap; run it again to continue.",
@@ -492,15 +499,16 @@ def _run_batch(fn, ids, now, label) -> int:
     return ok
 
 
-def _stale_ids(table: str, cutoff: datetime, limit: int) -> list[int]:
+def _stale_ids(table: str, cutoff: datetime, limit: int, extra: str = "") -> list[int]:
     """Up to ``limit`` ids of rows whose score is stale (never scored, or last scored before
     ``cutoff``), OLDEST-scored first (NULLs first) so a backlog drains fairly with no row ever
     starved. Bounded IN SQL (``LIMIT``) and index-backed by ``idx_<table>_lead_score_at``.
-    ``table`` is a module-internal literal ('deals'/'contacts'), never user input."""
+    ``table`` and ``extra`` are module-internal literals ('deals'/'contacts' + a fixed
+    predicate), never user input."""
     if limit <= 0:
         return []
     rows = pg_fetchall(
-        f"SELECT id FROM {table} WHERE lead_score_at IS NULL OR lead_score_at < %s "
+        f"SELECT id FROM {table} WHERE (lead_score_at IS NULL OR lead_score_at < %s) {extra} "
         f"ORDER BY lead_score_at ASC NULLS FIRST, id LIMIT %s",
         (cutoff, limit),
     )
@@ -517,11 +525,13 @@ def run_score_refresh_if_due(now: datetime | None = None) -> dict | None:
     * a **per-tick batch cap** (``_REFRESH_BATCH``, applied in SQL) — once the window opens it
       recomputes at most that many stale rows, OLDEST first, and the remainder rolls to the next
       tick (self-resuming, no starvation);
-    * it is **lock-free**: reminder_tick runs ``max_instances=1`` (serialized per process) and
-      each recompute takes its own per-entity ``pg_advisory_xact_lock``, so correctness needs no
-      cross-phase session lock (which — see the earlier design — could leak on a rolled-back
-      transaction and could nest pooled connections). A multi-process deploy at worst does
-      redundant, never-corrupting work.
+    * it is **lock-free and safe under arbitrary concurrent entry** — the scheduled tick,
+      ``POST /api/heartbeat/run-now`` (``tick()`` on a threadpool thread), and even multiple
+      processes can all run it at once. Safety does NOT depend on serialization: each recompute
+      is independently atomic under its own per-entity ``pg_advisory_xact_lock``, and the stamp
+      is idempotent. Concurrency only costs redundant work — never corruption. (An earlier design
+      used a session lock; it was dropped because it could leak on a rolled-back transaction and
+      nest pooled connections.)
 
     The 24h window is stamped closed only on a **clean drain** (fewer than the cap AND zero
     per-row failures), so a backlog or a transient error keeps retrying on later ticks. Returns
@@ -529,15 +539,21 @@ def run_score_refresh_if_due(now: datetime | None = None) -> dict | None:
     now = _now(now)
     cutoff = now - _REFRESH_INTERVAL
     # Coarse due-gate: a single-row read; on ~every tick the window is closed -> return early.
+    # A future stamp (clock stepped back after a stamp) counts as due, so the gate can never
+    # wedge closed waiting for real time to catch up to a bogus timestamp.
     meta = pg_fetchone("SELECT scores_refreshed_at FROM crm_meta WHERE id = 1")
     last = meta.get("scores_refreshed_at") if meta else None
     if last is not None:
         last_dt = datetime.fromisoformat(last) if isinstance(last, str) else last
         if last_dt.tzinfo is None:
             last_dt = last_dt.replace(tzinfo=timezone.utc)
-        if now - last_dt < _REFRESH_INTERVAL:
+        if last_dt <= now and now - last_dt < _REFRESH_INTERVAL:
             return None
-    deal_ids = _stale_ids("deals", cutoff, _REFRESH_BATCH)
+    # Terminal deals (won=100 / lost=0) have no time-decay factor, so a scored terminal deal
+    # never needs refreshing — exclude it so it doesn't consume drain capacity every day. A
+    # stage change out of terminal re-triggers via the event path.
+    deal_ids = _stale_ids("deals", cutoff, _REFRESH_BATCH,
+                          extra="AND NOT (stage IN ('won', 'lost') AND lead_score IS NOT NULL)")
     contact_ids = _stale_ids("contacts", cutoff, _REFRESH_BATCH - len(deal_ids))
     total = len(deal_ids) + len(contact_ids)
     if total == 0:

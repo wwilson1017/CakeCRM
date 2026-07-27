@@ -344,3 +344,30 @@ def test_refresh_first_run_null_last_is_due(monkeypatch):
     _wire_refresh(monkeypatch, last=None, deals=[5])  # never run -> due
     out = ss.run_score_refresh_if_due(now=NOW)
     assert out is not None and out["deals_scored"] == 1
+
+
+def test_backfill_all_orders_by_lead_score_at_for_resumability(monkeypatch):
+    # scope=all must order by lead_score_at so a repeat call past the cap progresses (P2 fix).
+    seen = []
+    monkeypatch.setattr(ss, "pg_fetchall", lambda sql, params=(): seen.append(" ".join(sql.split())) or [])
+    ss.backfill_scores("all")
+    assert any("ORDER BY lead_score_at ASC NULLS FIRST" in s for s in seen)
+
+
+def test_refresh_future_stamp_is_treated_as_due(monkeypatch):
+    # A stamp in the future (clock stepped back after stamping) must NOT wedge the gate closed.
+    _wire_refresh(monkeypatch, last=(NOW + timedelta(hours=5)).isoformat(), deals=[7])
+    out = ss.run_score_refresh_if_due(now=NOW)
+    assert out is not None and out["deals_scored"] == 1
+
+
+def test_refresh_excludes_scored_terminal_deals(monkeypatch):
+    seen = []
+    monkeypatch.setattr(ss, "pg_fetchone", lambda *a, **k: {"scores_refreshed_at": None})
+    monkeypatch.setattr(ss, "pg_fetchall", lambda sql, params=(): seen.append(" ".join(sql.split())) or [])
+    monkeypatch.setattr(ss, "pg_execute", lambda *a, **k: None)
+    ss.run_score_refresh_if_due(now=NOW)
+    deals_q = next(s for s in seen if "FROM deals" in s)
+    assert "NOT (stage IN ('won', 'lost') AND lead_score IS NOT NULL)" in deals_q
+    contacts_q = next(s for s in seen if "FROM contacts" in s)
+    assert "stage IN" not in contacts_q  # terminal exclusion is deals-only

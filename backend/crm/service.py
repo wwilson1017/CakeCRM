@@ -202,7 +202,11 @@ def delete_contact(contact_id: int) -> bool:
         # #18: deals linked to this contact unlink (FK ON DELETE SET NULL), so their
         # relationship factor drops — capture them now (before the next execute) to rescore.
         cur.execute("SELECT id FROM deals WHERE contact_id = %s", (contact_id,))
-        affected_deal_ids = [r[0] for r in cur.fetchall()]
+        affected_deal_ids = {r[0] for r in cur.fetchall()}
+        # This contact's activity rows (deleted below) may reference OTHER deals too; those
+        # deals' recency input changes, so rescore them as well.
+        cur.execute("SELECT DISTINCT deal_id FROM activity_log WHERE contact_id = %s AND deal_id IS NOT NULL", (contact_id,))
+        affected_deal_ids |= {r[0] for r in cur.fetchall()}
         cur.execute("DELETE FROM activity_log WHERE contact_id = %s", (contact_id,))
         cur.execute("DELETE FROM tasks WHERE contact_id = %s", (contact_id,))
         # crm_chatter, crm_field_values and crm_field_provenance are polymorphic (no
@@ -533,14 +537,15 @@ def update_deal(deal_id: int, **fields) -> dict | None:
     pg_execute(
         f"UPDATE deals SET {set_clause}, updated_at = %s WHERE id = %s", values
     )
-    # Any deal edit can shift the score (stage/value/relink); the linked contact's
-    # deal-linkage factor depends on this deal's stage, so rescore it too (P1.7). The
-    # current contact_id comes from the get_deal we already do — no extra query.
-    deal = get_deal(deal_id)
+    # Any deal edit can shift the score (stage/value/relink); the linked contact's deal-linkage
+    # factor depends on this deal's stage, so rescore it too (P1.7). Rescore BEFORE the final
+    # get_deal so the response carries the fresh lead_score (the kanban merges this response into
+    # its board state — a stale score would show on the card until a full refetch).
+    linked = pg_fetchone("SELECT contact_id FROM deals WHERE id = %s", (deal_id,))
     scoring_service.score_on_event(
-        deal_ids=(deal_id,), contact_ids=((deal or {}).get("contact_id"), old_contact_id)
+        deal_ids=(deal_id,), contact_ids=((linked or {}).get("contact_id"), old_contact_id)
     )
-    return deal
+    return get_deal(deal_id)
 
 
 def update_deal_stage(deal_id: int, stage: str) -> dict | None:
@@ -549,11 +554,11 @@ def update_deal_stage(deal_id: int, stage: str) -> dict | None:
     pg_execute(
         "UPDATE deals SET stage = %s, updated_at = %s WHERE id = %s", (stage, _now(), deal_id)
     )
-    # #18: stage feeds both the deal's own baseline/terminal and the linked contact's
-    # deal-linkage factor.
-    deal = get_deal(deal_id)
-    scoring_service.score_on_event(deal_ids=(deal_id,), contact_ids=((deal or {}).get("contact_id"),))
-    return deal
+    # #18: stage feeds the deal's own baseline/terminal and the linked contact's deal-linkage
+    # factor. Rescore before the final read so the response (merged into the kanban) is fresh.
+    linked = pg_fetchone("SELECT contact_id FROM deals WHERE id = %s", (deal_id,))
+    scoring_service.score_on_event(deal_ids=(deal_id,), contact_ids=((linked or {}).get("contact_id"),))
+    return get_deal(deal_id)
 
 
 # ── Tasks ─────────────────────────────────────────────────────────────────────

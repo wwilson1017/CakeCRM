@@ -799,3 +799,28 @@ def test_score_refresh_rescoring_stale_rows_only(pg_db):
     # second immediate pass: the drain stamped scores_refreshed_at, so the coarse 24h gate
     # closes -> None (no rescan).
     assert scoring_service.run_score_refresh_if_due(now=now) is None
+
+
+def test_update_deal_stage_response_carries_fresh_score(pg_db):
+    # P2 fix: the mutation response must reflect the post-recompute score (the kanban merges it).
+    from crm import service
+    deal = service.create_deal("Deal", stage="qualified", value=20000)
+    assert deal["lead_score"] not in (None, 100)
+    won = service.update_deal_stage(deal["id"], "won")
+    assert won["lead_score"] == 100  # not the stale pre-recompute value
+    reopened = service.update_deal(deal["id"], stage="negotiation")
+    assert reopened["lead_score"] not in (None, 100)  # fresh, recomputed from the new stage
+
+
+def test_deal_engagement_counts_logged_activities(pg_db):
+    # P3 fix: activity_log is a touch surface — a deal worked only via logged calls must not
+    # read as zero-engagement.
+    from core.postgres import pg_fetchone
+    from crm import service
+    bare = service.create_deal("Bare", stage="qualified", value=20000)
+    worked = service.create_deal("Worked", stage="qualified", value=20000)
+    for _ in range(6):
+        service.log_activity("call", deal_id=worked["id"])
+    bare_score = pg_fetchone("SELECT lead_score FROM deals WHERE id = %s", (bare["id"],))["lead_score"]
+    worked_score = pg_fetchone("SELECT lead_score FROM deals WHERE id = %s", (worked["id"],))["lead_score"]
+    assert worked_score > bare_score
