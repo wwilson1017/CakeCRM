@@ -6,6 +6,7 @@ monkeypatched. These prove the branch logic + the SQL statement sequence; real O
 idempotency + the CRM-reset compatibility live in test_gmail_scan_integration.py.
 """
 
+import threading
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -15,6 +16,19 @@ from gmail_scan import service as gs
 
 def _raise(*_a, **_k):
     raise AssertionError("must not be called")
+
+
+@pytest.fixture(autouse=True)
+def _reset_inflight():
+    """The single-in-flight-worker guard (gs._inflight) is module state that survives across
+    tests in the same process. A test that leaves a still-blocked worker parked there would
+    push the NEXT test down the 'prior pass still hung' branch (turning an expected 'ok' into
+    'error'), so reset — and release/join — it after every test."""
+    yield
+    worker = getattr(gs, "_inflight", None)
+    gs._inflight = None
+    if worker is not None and worker.is_alive():
+        worker.join(timeout=1)
 
 
 @pytest.fixture
@@ -258,6 +272,29 @@ def test_scan_abandons_pass_when_gmail_hangs(monkeypatch, connected):
     monkeypatch.setattr(gs, "call_gmail", hang)
     out = gs.run_scan_if_due()
     assert out == {"status": "error"}
+
+
+def test_second_pass_reuses_single_in_flight_worker(monkeypatch):
+    # Codex P2: t.join(timeout) can't kill a hung request (gmail/client.py has no transport
+    # timeout), so a fresh worker per timed-out pass would leak one thread+socket per interval.
+    # The guard keeps a SINGLE in-flight worker: a second pass must REUSE it, never spawn a
+    # second. Block the worker on an Event (not sleep) so the liveness check is deterministic;
+    # assert on identity (immune to other tests' leaked daemons), not a live-thread count.
+    monkeypatch.setattr(gs, "_SCAN_HTTP_DEADLINE", 0.05)
+    release = threading.Event()
+    monkeypatch.setattr(gs, "call_gmail", lambda *a, **k: release.wait() or [])
+    try:
+        with pytest.raises(TimeoutError):
+            gs._list_recent_inbox()                 # pass 1 spawns a worker that hangs
+        first = gs._inflight
+        assert first is not None and first.is_alive()   # the single leaked worker
+        with pytest.raises(TimeoutError):
+            gs._list_recent_inbox()                 # pass 2 while it's still in flight
+        assert gs._inflight is first                # SAME worker — none spawned
+    finally:
+        release.set()                               # let the worker exit promptly
+        if gs._inflight is not None:
+            gs._inflight.join(timeout=1)
 
 
 def test_per_message_error_is_isolated(monkeypatch, connected):

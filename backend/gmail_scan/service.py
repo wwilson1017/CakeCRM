@@ -35,11 +35,13 @@ delivery — the same decoupling principle that split ``heartbeat_turn`` from
 ``reminder_tick`` in #6. That decoupling protects *reminders*, not this job — so the
 list call itself runs under a wall-clock deadline (``_SCAN_HTTP_DEADLINE``) on a worker
 thread: a hung request abandons the pass and frees the ``gmail_scan`` slot for the next
-tick instead of parking it forever (a truly-hung request leaks one bounded worker per
-timed-out pass — the scan throttles to the interval, and real Gmail failures raise
-rather than hang). The deeper root cause — the shared ``gmail/client.py`` builds its
+tick instead of parking it forever. ``t.join(timeout)`` cannot TERMINATE a hung request
+(only stop waiting on it), so a SINGLE in-flight worker is reused across passes: while one
+is still alive the guard declines to spawn another, bounding a persistent hang to at most
+ONE leaked thread/socket total — never one per interval. The deeper root cause — the shared ``gmail/client.py`` builds its
 service with no transport timeout, which also affects the assistant's user-invoked Gmail
-tools — is a pre-existing #8 gap left for follow-up. Gated ONLY on Gmail being connected:
+tools — is a pre-existing #8 gap left for follow-up; until it lands, that one bounded
+worker persists until its socket finally errors. Gated ONLY on Gmail being connected:
 no AI keys are needed (deal touches merely enqueue ``touch_count_service.schedule_recompute``).
 """
 
@@ -121,17 +123,43 @@ def _window_days() -> int:
     return max(_SCAN_WINDOW_DAYS, settings.gmail_scan_interval_minutes // _MINUTES_PER_DAY + 1)
 
 
+# Handle to the current/most-recent list worker, so a hung one is REUSED across passes
+# rather than re-spawned (see _list_recent_inbox). Touched only by the single-instance
+# gmail_scan job (max_instances=1, coalesce=True), so no lock is needed; the worker thread
+# writes only its own result box, never this global.
+_inflight: threading.Thread | None = None
+
+
 def _list_recent_inbox() -> list[dict]:
     """Fetch recent inbox mail via the existing approved list op, bounded by a wall-clock
-    deadline on a DAEMON worker thread. On overrun we RAISE (abandoning the pass) rather
-    than let a hung, transport-timeout-less request park the gmail_scan slot forever — the
-    caller records an error and the next tick retries.
+    deadline on a DAEMON worker thread, with AT MOST ONE worker in flight across passes.
+
+    On overrun we RAISE (abandoning the pass) rather than let a hung, transport-timeout-less
+    request park the gmail_scan slot forever — the caller records an error and the next tick
+    retries. But ``t.join(timeout)`` only stops THIS caller waiting; it cannot terminate the
+    worker, which keeps holding its Gmail socket (gmail/client.py builds the service with no
+    transport timeout — a pre-existing #8 gap). So a handle to the outstanding worker is kept
+    in the module-global ``_inflight``: while it is still alive a later pass REUSES it and
+    declines to spawn a second, bounding a persistent hang to exactly one leaked thread/socket
+    total — never one per scan interval. That single thread persists until its socket finally
+    errors; a real transport timeout in gmail/client.py is the deferred root fix.
 
     A daemon thread (NOT a ThreadPoolExecutor) is deliberate: the executor registers an
     atexit hook that joins every worker it ever spawned, so a permanently-hung request
     would block interpreter shutdown forever. A daemon thread is force-killed at exit and
-    never joined, so even a hung request can't wedge process shutdown; the leaked thread
-    ends when its socket eventually errors (bounded: the scan throttles to the interval)."""
+    never joined, so even a hung request can't wedge process shutdown."""
+    global _inflight
+
+    if _inflight is not None:
+        if _inflight.is_alive():
+            # A prior pass's request is still outstanding (persistent transport hang). NEVER
+            # start a second worker — one leaked thread is the bound, not one per interval.
+            raise TimeoutError(
+                f"gmail list from a prior pass still hung past {_SCAN_HTTP_DEADLINE}s "
+                "deadline — reusing the single in-flight worker (none spawned)"
+            )
+        _inflight = None   # the prior request finally finished; discard it and fetch fresh
+
     box: dict = {}
 
     def _worker():
@@ -144,10 +172,13 @@ def _list_recent_inbox() -> list[dict]:
             box["error"] = e
 
     t = threading.Thread(target=_worker, name="gmail-scan-list", daemon=True)
+    _inflight = t
     t.start()
     t.join(timeout=_SCAN_HTTP_DEADLINE)
     if t.is_alive():
+        # Leave _inflight = t so the NEXT pass reuses it rather than spawning another.
         raise TimeoutError(f"gmail list exceeded {_SCAN_HTTP_DEADLINE}s deadline")
+    _inflight = None
     if "error" in box:
         raise box["error"]
     return box.get("messages", [])
