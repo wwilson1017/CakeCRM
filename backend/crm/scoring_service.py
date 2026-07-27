@@ -37,7 +37,13 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
-from core.postgres import get_connection, pg_fetchall, pg_fetchone, row_to_dict
+from core.postgres import (
+    get_connection,
+    pg_execute,
+    pg_fetchall,
+    pg_fetchone,
+    row_to_dict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +64,10 @@ _REFRESH_BATCH = 500
 # endpoint/tool, never in the tick): bound + log rather than run unboundedly.
 _REFRESH_MAX_ROWS = 20000
 
+# Per-stage starting score for the multiplicative chain. Keyed by the same stage strings as
+# crm.service.DEAL_STAGES, but a LOCAL literal on purpose: service.py imports this module for
+# its trigger hooks, so importing service back would be a circular import. The open stages here
+# also double as the "is this an open stage?" membership set in the contact deal-linkage factor.
 STAGE_BASELINES = {"lead": 8, "qualified": 18, "proposal": 32, "negotiation": 45}
 _TERMINAL_WON = "won"
 _TERMINAL_LOST = "lost"
@@ -306,56 +316,60 @@ def _now(now: datetime | None = None) -> datetime:
     return now or datetime.now(timezone.utc)
 
 
-def score_deal(deal_id: int, now: datetime | None = None) -> dict | None:
-    """Compute a deal's score live (no persistence). Returns None if the deal is missing."""
-    now = _now(now)
-    deal = pg_fetchone("SELECT * FROM deals WHERE id = %s", (deal_id,))
-    if deal is None:
-        return None
-    agg = pg_fetchone(
-        "SELECT COUNT(*) AS cnt, MAX(created_at) AS newest FROM crm_chatter "
-        "WHERE entity_type = 'deal' AND entity_id = %s AND archived = 0",
-        (deal_id,),
-    ) or {}
-    act = pg_fetchone(
-        "SELECT MAX(created_at) AS newest FROM activity_log WHERE deal_id = %s", (deal_id,)
-    ) or {}
-    last_touch = _newest(agg.get("newest"), act.get("newest"))
-    return _compose_deal(deal, int(agg.get("cnt") or 0), last_touch, now)
-
-
-def score_contact(contact_id: int, now: datetime | None = None) -> dict | None:
-    """Compute a contact's score live (no persistence). Returns None if missing."""
-    now = _now(now)
-    contact = pg_fetchone("SELECT * FROM contacts WHERE id = %s", (contact_id,))
-    if contact is None:
-        return None
-    chat = pg_fetchone(
-        "SELECT COUNT(*) AS cnt, MAX(created_at) AS newest FROM crm_chatter "
-        "WHERE entity_type = 'contact' AND entity_id = %s AND archived = 0",
-        (contact_id,),
-    ) or {}
-    act = pg_fetchone(
-        "SELECT COUNT(*) AS cnt, MAX(created_at) AS newest FROM activity_log WHERE contact_id = %s",
-        (contact_id,),
-    ) or {}
-    stages = [r["stage"] for r in pg_fetchall("SELECT stage FROM deals WHERE contact_id = %s", (contact_id,))]
-    count = int(chat.get("cnt") or 0) + int(act.get("cnt") or 0)
-    last_touch = _newest(chat.get("newest"), act.get("newest"))
-    return _compose_contact(contact, count, last_touch, stages, now)
-
-
 def _newest(*values):
     """Return the max of ISO-string/None timestamps (lexicographic ISO ordering is chronological)."""
     present = [v for v in values if v]
     return max(present) if present else None
 
 
+# The factor input reads, defined ONCE and shared by the read-only (score_*) and persisting
+# (recompute_*) paths via a `q1`/`qall` fetch-primitive pair, so the two can never drift.
+def _read_deal_score(deal_id: int, q1, now: datetime) -> dict | None:
+    deal = q1("SELECT * FROM deals WHERE id = %s", (deal_id,))
+    if deal is None:
+        return None
+    agg = q1(
+        "SELECT COUNT(*) AS cnt, MAX(created_at) AS newest FROM crm_chatter "
+        "WHERE entity_type = 'deal' AND entity_id = %s AND archived = 0",
+        (deal_id,),
+    ) or {}
+    act = q1("SELECT MAX(created_at) AS newest FROM activity_log WHERE deal_id = %s", (deal_id,)) or {}
+    return _compose_deal(deal, int(agg.get("cnt") or 0), _newest(agg.get("newest"), act.get("newest")), now)
+
+
+def _read_contact_score(contact_id: int, q1, qall, now: datetime) -> dict | None:
+    contact = q1("SELECT * FROM contacts WHERE id = %s", (contact_id,))
+    if contact is None:
+        return None
+    chat = q1(
+        "SELECT COUNT(*) AS cnt, MAX(created_at) AS newest FROM crm_chatter "
+        "WHERE entity_type = 'contact' AND entity_id = %s AND archived = 0",
+        (contact_id,),
+    ) or {}
+    act = q1(
+        "SELECT COUNT(*) AS cnt, MAX(created_at) AS newest FROM activity_log WHERE contact_id = %s",
+        (contact_id,),
+    ) or {}
+    stages = [r["stage"] for r in qall("SELECT stage FROM deals WHERE contact_id = %s", (contact_id,))]
+    count = int(chat.get("cnt") or 0) + int(act.get("cnt") or 0)
+    return _compose_contact(contact, count, _newest(chat.get("newest"), act.get("newest")), stages, now)
+
+
+def score_deal(deal_id: int, now: datetime | None = None) -> dict | None:
+    """Compute a deal's score live (no persistence). Returns None if the deal is missing."""
+    return _read_deal_score(deal_id, pg_fetchone, _now(now))
+
+
+def score_contact(contact_id: int, now: datetime | None = None) -> dict | None:
+    """Compute a contact's score live (no persistence). Returns None if missing."""
+    return _read_contact_score(contact_id, pg_fetchone, pg_fetchall, _now(now))
+
+
 # ---------------------------------------------------------------------------
 # Persisting recompute (serialized per entity with a transaction-level advisory lock)
 # ---------------------------------------------------------------------------
 
-def _fetch_one(cur, sql, params):
+def _fetch_one(cur, sql, params=()):
     """Execute + fetch + convert immediately (before the cursor is reused — see
     core.postgres.row_to_dict gotcha)."""
     cur.execute(sql, params)
@@ -363,7 +377,7 @@ def _fetch_one(cur, sql, params):
     return row_to_dict(cur, row) if row else None
 
 
-def _fetch_all(cur, sql, params):
+def _fetch_all(cur, sql, params=()):
     cur.execute(sql, params)
     rows = cur.fetchall()
     return [row_to_dict(cur, r) for r in rows]
@@ -374,22 +388,15 @@ def recompute_deal(deal_id: int, now: datetime | None = None) -> int | None:
 
     Holds a per-deal transaction advisory lock across read->compute->write so a concurrent
     recompute cannot overwrite a newer score with an older one. Never bumps ``updated_at``.
+    Uses the SAME reads as ``score_deal`` (via ``_read_deal_score``), on the locked cursor.
     """
     now = _now(now)
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute("SELECT pg_advisory_xact_lock(%s, %s)", (_DEAL_LOCK_NS, deal_id))
-        deal = _fetch_one(cur, "SELECT * FROM deals WHERE id = %s", (deal_id,))
-        if deal is None:
+        result = _read_deal_score(deal_id, lambda s, p=(): _fetch_one(cur, s, p), now)
+        if result is None:
             return None
-        agg = _fetch_one(
-            cur,
-            "SELECT COUNT(*) AS cnt, MAX(created_at) AS newest FROM crm_chatter "
-            "WHERE entity_type = 'deal' AND entity_id = %s AND archived = 0",
-            (deal_id,),
-        ) or {}
-        act = _fetch_one(cur, "SELECT MAX(created_at) AS newest FROM activity_log WHERE deal_id = %s", (deal_id,)) or {}
-        result = _compose_deal(deal, int(agg.get("cnt") or 0), _newest(agg.get("newest"), act.get("newest")), now)
         cur.execute(
             "UPDATE deals SET lead_score = %s, lead_score_at = %s WHERE id = %s",
             (result["score"], now, deal_id),
@@ -403,23 +410,11 @@ def recompute_contact(contact_id: int, now: datetime | None = None) -> int | Non
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute("SELECT pg_advisory_xact_lock(%s, %s)", (_CONTACT_LOCK_NS, contact_id))
-        contact = _fetch_one(cur, "SELECT * FROM contacts WHERE id = %s", (contact_id,))
-        if contact is None:
+        result = _read_contact_score(
+            contact_id, lambda s, p=(): _fetch_one(cur, s, p), lambda s, p=(): _fetch_all(cur, s, p), now
+        )
+        if result is None:
             return None
-        chat = _fetch_one(
-            cur,
-            "SELECT COUNT(*) AS cnt, MAX(created_at) AS newest FROM crm_chatter "
-            "WHERE entity_type = 'contact' AND entity_id = %s AND archived = 0",
-            (contact_id,),
-        ) or {}
-        act = _fetch_one(
-            cur,
-            "SELECT COUNT(*) AS cnt, MAX(created_at) AS newest FROM activity_log WHERE contact_id = %s",
-            (contact_id,),
-        ) or {}
-        stages = [r["stage"] for r in _fetch_all(cur, "SELECT stage FROM deals WHERE contact_id = %s", (contact_id,))]
-        count = int(chat.get("cnt") or 0) + int(act.get("cnt") or 0)
-        result = _compose_contact(contact, count, _newest(chat.get("newest"), act.get("newest")), stages, now)
         cur.execute(
             "UPDATE contacts SET lead_score = %s, lead_score_at = %s WHERE id = %s",
             (result["score"], now, contact_id),
@@ -516,30 +511,53 @@ def _stale_ids(cur, table: str, cutoff: datetime, limit: int) -> list[int]:
 
 def run_score_refresh_if_due(now: datetime | None = None) -> dict | None:
     """Refresh the STALEST scores whose time-decay factors (recency/age) have drifted — rows
-    not recomputed within _REFRESH_INTERVAL (or never scored). BOUNDED to _REFRESH_BATCH
-    entities per call so it stays fast inside reminder_tick's shared slot (T1); any remainder
-    is picked up on later ticks (self-resuming). Because event writes keep active rows fresh,
-    this only ever touches dormant rows. A session-level advisory lock (held across the pass)
-    prevents two refresh passes from overlapping (a manual backfill does NOT take this lock —
-    it may run concurrently; the per-entity xact locks still prevent any corruption). Returns
-    a summary, or None when nothing is stale / the lock is busy."""
+    not recomputed within _REFRESH_INTERVAL (or never scored). Two guards keep it cheap and
+    bounded inside reminder_tick's shared slot (T1):
+
+    * a **coarse due-gate** on `crm_meta.scores_refreshed_at` (like dreaming) — on ~every tick
+      the window is closed and this returns None WITHOUT scanning any table;
+    * a **per-tick batch cap** (`_REFRESH_BATCH`) — once the window opens it processes at most
+      that many stale rows, and the remainder rolls to the next tick (self-resuming). Completion
+      is stamped (closing the 24h window) only when a pass drains the stale set, so a large
+      backlog keeps draining each tick until caught up.
+
+    A short session-level advisory lock guards ONLY the gate + id-selection (phase 1); it is
+    released before the recompute (phase 2) so we never hold a pooled connection across the
+    nested per-entity recompute connections (which could self-deadlock a pool sized below 2).
+    A manual backfill does not take this lock; the per-entity xact locks still prevent corruption.
+    Returns a summary, or None when not due / nothing stale / the lock is busy."""
     now = _now(now)
     cutoff = now - _REFRESH_INTERVAL
+    # Phase 1 (short, under the session lock): due-gate, then select a bounded batch of stale ids.
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute("SELECT pg_try_advisory_lock(%s)", (_REFRESH_LOCK_KEY,))
         if not cur.fetchone()[0]:
-            return None  # another refresh/backfill holds the lock
+            return None  # another refresh pass holds the lock
         try:
+            cur.execute("SELECT scores_refreshed_at FROM crm_meta WHERE id = 1")
+            row = cur.fetchone()
+            last = row[0] if row else None
+            if last is not None:
+                if last.tzinfo is None:
+                    last = last.replace(tzinfo=timezone.utc)
+                if now - last < _REFRESH_INTERVAL:
+                    return None  # not due — the cheap path on ~every tick, no table scan
             deal_ids = _stale_ids(cur, "deals", cutoff, _REFRESH_BATCH)
             contact_ids = _stale_ids(cur, "contacts", cutoff, _REFRESH_BATCH - len(deal_ids))
-            if not deal_ids and not contact_ids:
-                return None  # nothing stale — the common cheap path
-            # recompute_* each take their own pooled connection + per-entity xact lock; the
-            # session lock on `conn` stays held (its cursor is idle) so no overlap can start.
-            d = _run_batch(recompute_deal, deal_ids, now, "deal")
-            c = _run_batch(recompute_contact, contact_ids, now, "contact")
-            cur.execute("UPDATE crm_meta SET scores_refreshed_at = %s WHERE id = 1", (now,))
-            return {"deals_scored": d, "contacts_scored": c, "batch": len(deal_ids) + len(contact_ids)}
         finally:
             cur.execute("SELECT pg_advisory_unlock(%s)", (_REFRESH_LOCK_KEY,))
+    # Phase 2 (outside the lock): recompute + stamp. Each recompute takes its own connection +
+    # per-entity xact lock, so there is no connection nesting under the session lock.
+    total = len(deal_ids) + len(contact_ids)
+    if total == 0:
+        # Window open but nothing stale (events kept everything fresh) — reset the 24h gate.
+        pg_execute("UPDATE crm_meta SET scores_refreshed_at = %s WHERE id = 1", (now,))
+        return None
+    d = _run_batch(recompute_deal, deal_ids, now, "deal")
+    c = _run_batch(recompute_contact, contact_ids, now, "contact")
+    # Stamp only when this pass DRAINED the stale set (batch not full), so a backlog keeps
+    # draining each tick (self-resuming) and only then closes the 24h window.
+    if total < _REFRESH_BATCH:
+        pg_execute("UPDATE crm_meta SET scores_refreshed_at = %s WHERE id = 1", (now,))
+    return {"deals_scored": d, "contacts_scored": c, "batch": total}

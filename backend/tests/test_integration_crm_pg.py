@@ -772,6 +772,8 @@ def test_score_refresh_rescoring_stale_rows_only(pg_db):
     from crm import scoring_service, service
 
     now = datetime.now(timezone.utc)
+    # Reset the coarse due-gate so this pass is due regardless of test ordering.
+    pg_execute("UPDATE crm_meta SET scores_refreshed_at = NULL WHERE id = 1")
     stale_deal = service.create_deal("Dormant", stage="qualified", value=20000)["id"]
     fresh_deal = service.create_deal("Active", stage="proposal", value=30000)["id"]
     stale_contact = service.create_contact("Old", status="active")["id"]
@@ -794,5 +796,6 @@ def test_score_refresh_rescoring_stale_rows_only(pg_db):
     # fresh deal untouched (sentinel intact)
     assert pg_fetchone("SELECT lead_score FROM deals WHERE id = %s", (fresh_deal,))["lead_score"] == 42
 
-    # second immediate pass: nothing is stale anymore -> None
+    # second immediate pass: the drain stamped scores_refreshed_at, so the coarse 24h gate
+    # closes -> None (no rescan).
     assert scoring_service.run_score_refresh_if_due(now=now) is None

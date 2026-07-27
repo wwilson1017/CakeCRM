@@ -1029,6 +1029,8 @@ def crm_get_lead_score(entity_type: str, entity_id: int) -> dict:
 
 
 def crm_recompute_lead_scores(scope: str = "all") -> dict:
+    # Defaults to "all": an assistant asked to "recompute lead scores" means a full repair.
+    # (The /scores/backfill REST endpoint defaults to "null" — the cheap new-rows-only pass.)
     try:
         return scoring_service.backfill_scores(scope)
     except ValueError as e:
