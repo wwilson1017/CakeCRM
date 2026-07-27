@@ -44,25 +44,30 @@ export function PipelinePage() {
   // never leaves the browser — filtering is a pure predicate over the already-loaded
   // board, no backend query params. Held as ONE object so restore/persist/clear-all
   // are single-path.
-  const [filters, setFilters] = useState<PipelineFilterState>(() => {
-    // A dashboard deep-link (?stage=X) is an explicit "show me this column" intent that
-    // overrides restored session filters ENTIRELY: any restored facet — not just a
-    // conflicting stage — could hide the target column or match zero deals (→ the empty
-    // state renders, no columns mount, the scroll below silently no-ops). So a VALID
-    // deep-link starts from empty filters; an unknown param is ignored (matching the
-    // scroll effect's STAGE_ORDER guard). Done here, not in an effect, to avoid a
-    // cascading setState-in-effect.
-    const s = searchParams.get('stage');
-    if (s && STAGE_ORDER.includes(s)) return EMPTY_FILTER_STATE;
-    return loadFilterState();
-  });
+  const [filters, setFilters] = useState<PipelineFilterState>(loadFilterState);
   const { search, advanced } = filters;
   useEffect(() => { saveFilterState(filters); }, [filters]);
   const setSearch = useCallback((s: string) => setFilters(f => ({ ...f, search: s })), []);
   const setAdvanced = useCallback((a: AdvancedFilters) => setFilters(f => ({ ...f, advanced: a })), []);
 
+  // Dashboard deep-link (?stage=X) — an explicit "show me this column" intent that overrides
+  // restored session filters ENTIRELY (any restored facet could hide the target column or
+  // match zero deals → the empty state, no columns, scroll no-ops). Handled REACTIVELY via
+  // React's render-time "reset state when an input changes" pattern (a state compare, NOT an
+  // effect — so no cascading setState-in-effect), so it fires whether the page just mounted OR
+  // was already mounted when the search param changed. `seenDeepLink` starts null so a mount
+  // with ?stage=X triggers the reset; an unknown stage is ignored (matches the scroll guard).
+  const deepLinkStage = searchParams.get('stage');
+  const validDeepLink = deepLinkStage && STAGE_ORDER.includes(deepLinkStage) ? deepLinkStage : null;
+  const [seenDeepLink, setSeenDeepLink] = useState<string | null>(null);
+  if (validDeepLink !== seenDeepLink) {
+    setSeenDeepLink(validDeepLink);
+    if (validDeepLink) setFilters(EMPTY_FILTER_STATE);
+  }
+
   const columnRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-  const deepLinkDone = useRef(false);
+  // Last stage the deep-link effect scrolled to — re-fires per NEW target, once each.
+  const scrolledStage = useRef<string | null>(null);
   // Per-deal operation counter so out-of-order responses from rapid moves of the
   // SAME deal can't clobber each other — only the latest op reconciles/reverts.
   const dealOpSeq = useRef<Map<number, number>>(new Map());
@@ -75,9 +80,13 @@ export function PipelinePage() {
   // display reconcile is superseded), so a rolled-back move restores the real
   // server stage rather than an optimistic intermediate that itself never persisted.
   const dealConfirmedStage = useRef<Map<number, string>>(new Map());
-  // Count of optimistic stage writes still in flight — lets a silent refresh drop a
-  // response that may predate an as-yet-unconfirmed drag PUT (see `load`).
+  // Optimistic-write bookkeeping for the silent refresh (see `load`): a count of writes
+  // still IN FLIGHT, plus a monotonic generation bumped whenever a write STARTS. Together
+  // they let a silent GET detect a drag PUT that overlapped its flight — one that started
+  // before it (pending>0) OR started-and-settled during it (generation changed) — and drop
+  // its now-stale payload rather than reverting a move that actually succeeded.
   const pendingWrites = useRef(0);
+  const writeGen = useRef(0);
 
   // `silent` refetches without the loading spinner — used to refresh the board after the
   // detail sheet closes, so a deal touched in-sheet (a logged note/activity) leaves the
@@ -87,13 +96,16 @@ export function PipelinePage() {
     // `=== true` guards against a truthy non-boolean arg (e.g. a bare `onClick={load}`
     // handing in a MouseEvent) accidentally forcing silent mode.
     const isSilent = silent === true;
+    const startGen = writeGen.current;
     if (!isSilent) setLoading(true);
     try {
       const d = await api<PipelineData>('/api/crm/deals');
-      // A silent refresh must not clobber an in-flight optimistic drag: if a stage PUT is
-      // still pending, this GET may have read pre-commit data — drop it and let the PUT's
-      // own reconcile settle the board (else a stale, non-self-healing revert could land).
-      if (isSilent && pendingWrites.current > 0) return;
+      // A silent refresh must not clobber an optimistic drag: if any stage write overlapped
+      // this GET — still pending, OR started-and-settled while it was in flight — the GET may
+      // have read pre-commit data. Drop it and let the PUT's own reconcile settle the board
+      // (else a stale, non-self-healing revert of a succeeded move could land). A rare skipped
+      // refresh self-heals on the next close/interaction, when no write is racing.
+      if (isSilent && (pendingWrites.current > 0 || writeGen.current !== startGen)) return;
       setData(d);
       dealConfirmedStage.current = new Map(d.deals.map(deal => [deal.id, deal.stage]));
     } catch { /* data stays null → LoadError below (silent: keep the current board) */ }
@@ -132,6 +144,7 @@ export function PipelinePage() {
       deals: prev.deals.map(d => d.id === dealId ? { ...d, stage: toStage } : d),
     } : prev);
     pendingWrites.current++; // an unconfirmed optimistic write now exists (see `load`'s silent guard)
+    writeGen.current++;      // ...and bump the generation so a silent GET spanning it is invalidated
     const prior = dealWriteChain.current.get(dealId) ?? Promise.resolve();
     const run = prior.then(async () => {
       try {
@@ -253,19 +266,16 @@ export function PipelinePage() {
     return { openTotal: open.reduce((s, d) => s + (d.value || 0), 0), openCount: open.length };
   }, [filteredDeals]);
 
-  // Dashboard deep-link (/crm/pipeline?stage=X): once `data` has rendered the
-  // columns (refs populated), scroll the requested column into view, then clear
-  // only the `stage` param (preserving any others). Runs once.
+  // Dashboard deep-link (/crm/pipeline?stage=X): once `data` has rendered the columns (refs
+  // populated), scroll the requested column into view, then clear the `stage` param
+  // (preserving any others). Reactive per target — `scrolledStage` guards a re-scroll for the
+  // same stage; the render-time guard above already cleared filters so every column is mounted.
   useEffect(() => {
-    if (!data || deepLinkDone.current) return;
+    if (!data) return;
     const s = searchParams.get('stage');
-    if (!s) return;
-    deepLinkDone.current = true;
-    if (STAGE_ORDER.includes(s)) {
-      // The initializer cleared restored filters for a valid deep-link, so every stage
-      // column is present and non-empty-state — the target is guaranteed mounted here.
-      columnRefs.current.get(s)?.scrollIntoView({ behavior: 'smooth', inline: 'start', block: 'nearest' });
-    }
+    if (!s || !STAGE_ORDER.includes(s) || scrolledStage.current === s) return;
+    scrolledStage.current = s;
+    columnRefs.current.get(s)?.scrollIntoView({ behavior: 'smooth', inline: 'start', block: 'nearest' });
     const next = new URLSearchParams(searchParams);
     next.delete('stage');
     setSearchParams(next, { replace: true });

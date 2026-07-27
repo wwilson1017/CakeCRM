@@ -61,20 +61,38 @@ export const EMPTY_FILTER_STATE: PipelineFilterState = {
 
 // ── Date helpers (local timezone) ───────────────────────────────────────────
 
-/** Local YYYY-MM-DD for `base` shifted by `offsetDays`. Builds the shifted date via
- *  calendar fields (not `getTime() + n*86_400_000`) so a day offset that crosses a DST
- *  transition still lands on the right calendar date near midnight. */
-export function ymd(base: Date, offsetDays = 0): string {
-  return new Date(base.getFullYear(), base.getMonth(), base.getDate() + offsetDays)
-    .toLocaleDateString('en-CA');
+/** Local YYYY-MM-DD for a Date, built explicitly from calendar fields with zero-padding.
+ *  `toLocaleDateString('en-CA')` is NOT contractually YYYY-MM-DD (locale/ICU availability
+ *  can vary the format), and lexicographic comparisons depend on the exact format — so we
+ *  format it ourselves. */
+function ymdOf(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
-/** The date portion (YYYY-MM-DD) of a stored timestamp, or '' if absent.
- *  Deal timestamps arrive as the DB session's offset (UTC by default); comparing
- *  their date part against local `ymd(now)` can skew by up to one day at bucket
- *  edges near midnight — accepted (matches the blueprint). */
-function datePart(ts: string | null | undefined): string {
+/** Local YYYY-MM-DD for `now` shifted by `offsetDays`. Builds the shifted date via calendar
+ *  fields (not `getTime() + n*86_400_000`) so a day offset that crosses a DST transition
+ *  still lands on the right calendar date near midnight. */
+export function ymd(base: Date, offsetDays = 0): string {
+  return ymdOf(new Date(base.getFullYear(), base.getMonth(), base.getDate() + offsetDays));
+}
+
+/** Close date: stored as a date-only 'YYYY-MM-DD' string (or ''), already a local calendar
+ *  date — take it verbatim (parsing 'YYYY-MM-DD' as a Date would read it as UTC midnight and
+ *  could shift a day). */
+function closeDatePart(ts: string | null | undefined): string {
   return ts ? ts.slice(0, 10) : '';
+}
+
+/** Last-activity: a full TIMESTAMPTZ ISO string (DB offset, UTC by default). Parse it and
+ *  take the VIEWER'S LOCAL calendar date so the recency buckets are correct in local time
+ *  (a slice(0,10) would use the UTC date and misbucket an evening touch near midnight). */
+function activityLocalDate(ts: string | null | undefined): string {
+  if (!ts) return '';
+  const d = new Date(ts);
+  return Number.isNaN(d.getTime()) ? '' : ymdOf(d);
 }
 
 // ── Predicate ───────────────────────────────────────────────────────────────
@@ -87,7 +105,7 @@ function matchesValue(deal: CrmDeal, f: AdvancedFilters): boolean {
 }
 
 function matchesCloseDate(deal: CrmDeal, preset: ClosePreset, now: Date): boolean {
-  const close = datePart(deal.expected_close_date);
+  const close = closeDatePart(deal.expected_close_date);
   switch (preset) {
     case 'noDate':
       return !close;
@@ -103,7 +121,7 @@ function matchesCloseDate(deal: CrmDeal, preset: ClosePreset, now: Date): boolea
 }
 
 function matchesLastActivity(deal: CrmDeal, preset: ActivityPreset, now: Date): boolean {
-  const act = datePart(deal.last_activity_at);
+  const act = activityLocalDate(deal.last_activity_at);
   switch (preset) {
     case 'none':
       return !act;

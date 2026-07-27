@@ -444,6 +444,11 @@ def get_pipeline(stage: str | None = None) -> dict:
     # POST /api/crm/activity — never written by edits/stage-moves) blended with un-archived
     # deal chatter notes. The UNION-ALL/GROUP BY yields one row per deal; the LEFT JOIN
     # leaves `last_at` NULL when a deal has neither → the client's "no activity" bucket.
+    # Scale note: the subquery aggregates the whole activity_log + chatter before the join
+    # (the stage WHERE can't push into it) — accepted at single-user v1 scale, where the
+    # unpaginated all-deals board is the binding constraint, not this once-per-load aggregate.
+    # If deal/activity volume ever grows, switch to a per-deal LATERAL MAX (indexes exist:
+    # idx_activity_deal, idx_crm_chatter_entity) or a maintained last-activity column.
     where = "WHERE d.stage = %s" if stage else ""
     deals = pg_fetchall(
         f"""SELECT d.*, c.name AS contact_name, co.name AS company_name,
