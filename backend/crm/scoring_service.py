@@ -520,8 +520,9 @@ def run_score_refresh_if_due(now: datetime | None = None) -> dict | None:
     entities per call so it stays fast inside reminder_tick's shared slot (T1); any remainder
     is picked up on later ticks (self-resuming). Because event writes keep active rows fresh,
     this only ever touches dormant rows. A session-level advisory lock (held across the pass)
-    prevents overlap with a manual backfill or another tick. Returns a summary, or None when
-    nothing is stale / the lock is busy."""
+    prevents two refresh passes from overlapping (a manual backfill does NOT take this lock —
+    it may run concurrently; the per-entity xact locks still prevent any corruption). Returns
+    a summary, or None when nothing is stale / the lock is busy."""
     now = _now(now)
     cutoff = now - _REFRESH_INTERVAL
     with get_connection() as conn:

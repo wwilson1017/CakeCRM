@@ -760,3 +760,39 @@ def test_concurrent_recompute_serialized_by_advisory_lock(pg_db):
     assert errors == []
     final = pg_fetchone("SELECT lead_score FROM deals WHERE id = %s", (deal_id,))
     assert final["lead_score"] is not None and 1 <= final["lead_score"] <= 99
+
+
+def test_score_refresh_rescoring_stale_rows_only(pg_db):
+    """run_score_refresh_if_due drives its session-lock connection across the inner per-entity
+    recompute connections on a REAL pool — the one path mocks can't exercise. A stale row is
+    rescored; a fresh row is left alone; a second immediate pass finds nothing stale."""
+    from datetime import datetime, timedelta, timezone
+
+    from core.postgres import pg_execute, pg_fetchone
+    from crm import scoring_service, service
+
+    now = datetime.now(timezone.utc)
+    stale_deal = service.create_deal("Dormant", stage="qualified", value=20000)["id"]
+    fresh_deal = service.create_deal("Active", stage="proposal", value=30000)["id"]
+    stale_contact = service.create_contact("Old", status="active")["id"]
+    # Age one deal + one contact past the 24h staleness cutoff; pin the fresh deal's score
+    # to a sentinel so we can prove it was NOT recomputed.
+    old = now - timedelta(hours=48)
+    pg_execute("UPDATE deals SET lead_score = 3, lead_score_at = %s WHERE id = %s", (old, stale_deal))
+    pg_execute("UPDATE deals SET lead_score = 42, lead_score_at = %s WHERE id = %s", (now, fresh_deal))
+    pg_execute("UPDATE contacts SET lead_score = 3, lead_score_at = %s WHERE id = %s", (old, stale_contact))
+
+    out = scoring_service.run_score_refresh_if_due(now=now)
+    assert out is not None and out["deals_scored"] == 1 and out["contacts_scored"] == 1
+
+    # stale rows recomputed (lead_score_at advanced past the cutoff; value may coincide, so
+    # the advanced timestamp is the proof it ran)
+    d = pg_fetchone("SELECT lead_score, lead_score_at FROM deals WHERE id = %s", (stale_deal,))
+    assert d["lead_score_at"] > old.isoformat()
+    c = pg_fetchone("SELECT lead_score_at FROM contacts WHERE id = %s", (stale_contact,))
+    assert c["lead_score_at"] > old.isoformat()
+    # fresh deal untouched (sentinel intact)
+    assert pg_fetchone("SELECT lead_score FROM deals WHERE id = %s", (fresh_deal,))["lead_score"] == 42
+
+    # second immediate pass: nothing is stale anymore -> None
+    assert scoring_service.run_score_refresh_if_due(now=now) is None
