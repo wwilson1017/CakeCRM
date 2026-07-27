@@ -39,7 +39,16 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `backend/tests/test_gmail_guard.py` (CI fails if any send surface appears), a
   runtime op-allow-list in `gmail/client.py`, and `SECURITY.md`. Untrusted email read
   into the assistant taints the turn (power→normal confirmation) to blunt prompt
-  injection.
+  injection. A **read-only Gmail touch scan** (#17, `backend/gmail_scan/`) runs as its
+  own `gmail_scan` heartbeat job (60s due-check, gated only on Gmail being connected,
+  no AI keys needed): it lists recent inbox mail via the *existing* approved
+  `list_messages_op` (no new op/scope — still read+draft-only), matches senders to
+  contacts by exact case-insensitive email, and logs `email` touches to `activity_log`
+  so #16's counts see exchanges nobody logged. Idempotent per Gmail message-id via the
+  `gmail_scanned_messages` ledger (one txn per message; audit columns carry NO FK so the
+  CRM-reset TRUNCATE still works); a deal is attributed only when the contact has exactly
+  one open deal (never fabricated). Senders recurring ≥3 times with no contact raise one
+  deduped "create contact?" alert (`source=gmail_touch_scan`).
 - **Multi-provider AI** via the `AIProvider` ABC (Anthropic, OpenAI, Gemini, Ollama,
   Together). Never call a provider SDK directly from feature code. Cheap background
   AI work (touch counts, classification) uses the light tier via
@@ -215,6 +224,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Notifications (Web Push VAPID keys persisted in Postgres, `notify_user` tool, bell) + system alerts — **landed #6** as `backend/notifications/` + `backend/alerts/` + `frontend/src/crm/components/{NotificationsBell,NotificationSettings}.tsx` + `frontend/public/sw.js`. Telegram delivery goes out through `telegram.service.notify_linked_user` (the pure-sync channel #7 landed), via `_send_telegram`; WhatsApp not ported. Chatty's user-configurable `scheduled_actions` subsystem (leases/active-hours/triage/dashboards) deliberately deferred | `chatty/backend/core/agents/notifications/` + `alerts/` |
 | Telegram — **landed #7** as `backend/telegram/*` + `frontend/src/crm/components/TelegramSettings.tsx`: single-assistant long-polling (one main-loop asyncio task offloads `getUpdates` via `to_thread` and drives `engine.chat` on the SAME loop as the SSE endpoint — provider async clients are loop-bound), Fernet-encrypted bot token on a `telegram_settings` singleton, one linked user via a single-use `link_code` (Telegram deep link), CRM write confirmations as inline-keyboard Approve/Deny buttons (mapped onto `engine.resolve_confirmation` + an empty-messages continuation, batched so it continues only once every write is resolved), and `telegram.service.notify_linked_user(text)->bool` as the pure-sync outbound channel #6 consumes. No webhooks, no group chat (deliberately cut). | `chatty/backend/integrations/telegram/` |
 | Gmail (read + draft only: `gmail_connection` singleton, BYO OAuth at `/api/gmail`, tools `gmail_search`/`gmail_read_thread`/`gmail_create_draft`, guard test + SECURITY.md) — **landed #8** as `backend/gmail/` + `frontend/src/crm/components/GmailCard.tsx` | `chatty/backend/integrations/google/` |
+| Gmail touch-scan heartbeat job (read-only inbox scan → sender→contact match → idempotent `email` touch logging feeding #16; `gmail_scan_state`/`gmail_scanned_messages`/`gmail_unmatched_correspondents` tables; own `gmail_scan` scheduler job; "create contact?" alerts) — **landed #17** as `backend/gmail_scan/` | New capability (no blueprint — back-port candidate to CAKE OS) |
 | Kanban drag-and-drop | `cake_os/frontend/src/shared/dnd/` |
 | Companies (first-class entity: `companies` table, `company_id` FKs, rollup detail page, text→FK backfill migration) — **landed #13** | `cake_os/backend/apps/crm/company_service.py` |
 | Chatter/notes (`crm_chatter`) — **landed #15** as `backend/crm/chatter_service.py` + `frontend/src/crm/components/NotesThread.tsx` | `cake_os/backend/apps/crm/chatter_service.py` |

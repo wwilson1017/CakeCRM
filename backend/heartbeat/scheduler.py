@@ -41,8 +41,16 @@ def start_scheduler() -> None:
         service.heartbeat_turn_tick, "interval", seconds=300, id="heartbeat_turn",
         max_instances=1, coalesce=True,
     )
+    # #17: the Gmail touch scan is slow / network-bound, so it gets its OWN decoupled
+    # job (not a reminder_tick sibling) — a hung inbox request must never delay reminder
+    # delivery. run_scan_if_due self-throttles to GMAIL_SCAN_INTERVAL_MINUTES and no-ops
+    # when Gmail isn't connected, so a 60s trigger is just the due-check cadence.
+    _scheduler.add_job(
+        service.gmail_scan_tick, "interval", seconds=60, id="gmail_scan",
+        max_instances=1, coalesce=True,
+    )
     _scheduler.start()
-    logger.info("Heartbeat scheduler started (reminder_tick 60s + heartbeat_turn 300s)")
+    logger.info("Heartbeat scheduler started (reminder_tick 60s + heartbeat_turn 300s + gmail_scan 60s)")
 
 
 def shutdown_scheduler() -> None:

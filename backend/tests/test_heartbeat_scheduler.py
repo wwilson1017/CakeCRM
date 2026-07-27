@@ -24,11 +24,12 @@ def test_shutdown_without_start_is_safe():
     assert scheduler.get_scheduler() is None
 
 
-def test_registers_both_jobs():
+def test_registers_all_jobs():
     try:
         scheduler.start_scheduler()
         sched = scheduler.get_scheduler()
         assert sched.get_job("reminder_tick") is not None    # 60s reminder job
         assert sched.get_job("heartbeat_turn") is not None    # throttled AI-turn job
+        assert sched.get_job("gmail_scan") is not None        # #17 read-only inbox touch scan
     finally:
         scheduler.shutdown_scheduler()
