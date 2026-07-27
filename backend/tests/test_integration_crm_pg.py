@@ -648,3 +648,63 @@ def test_update_cannot_strip_select_options(pg_db):
 def test_get_values_404s_for_missing_entity(pg_db):
     client = _client()
     assert client.get("/api/crm/contact/999999/fields").status_code == 404
+
+
+# ── Pipeline payload: company_name + derived last_activity_at blend (issue #21) ─
+
+def test_get_pipeline_last_activity_blends_activity_and_chatter(pg_db):
+    """The board's last_activity_at = MAX across deal-level activity_log rows and
+    un-archived deal chatter notes; NULL when a deal has neither. Real SQL proves what
+    the hermetic SQL-shape test can't: the UNION-ALL/GROUP BY blend, the NULL/never case,
+    the archived-fallback, and that multiple event rows never multiply the deal."""
+    from core.postgres import pg_execute
+    from crm import chatter_service, service
+
+    co = service.create_company("Acme Corp")
+    d = service.create_deal("Big deal", stage="proposal", value=1000, company_id=co["id"])
+    did = d["id"]
+
+    def board_deal():
+        return next(x for x in service.get_pipeline()["deals"] if x["id"] == did)
+
+    def last_ymd():
+        v = board_deal()["last_activity_at"]
+        return None if v is None else str(v)[:10]
+
+    # 1. No activity of any kind → NULL (the client's "no activity logged" bucket);
+    #    company join is populated on the board payload.
+    deal = board_deal()
+    assert deal["last_activity_at"] is None
+    assert deal["company_name"] == "Acme Corp"
+
+    # 2. Activity-log row only → last_activity is that row's date.
+    pg_execute("INSERT INTO activity_log (activity, deal_id, created_at) VALUES (%s, %s, %s)",
+               ("call", did, "2026-01-10T09:00:00+00:00"))
+    assert last_ymd() == "2026-01-10"
+
+    # 3. A NEWER chatter note wins over the older activity row (add_note uses now()).
+    n_new = chatter_service.add_note("deal", did, "just talked to them")
+    assert last_ymd() > "2026-01-10"
+
+    # 4. Archiving the newest note falls back to the older activity-log row.
+    assert chatter_service.archive_note(n_new["id"]) is True
+    assert last_ymd() == "2026-01-10"
+
+    # 5. A chatter note OLDER than the activity row does not win.
+    pg_execute("INSERT INTO crm_chatter (entity_type, entity_id, message, created_at) VALUES (%s, %s, %s, %s)",
+               ("deal", did, "old note", "2025-06-01T00:00:00+00:00"))
+    assert last_ymd() == "2026-01-10"
+
+    # 6. Multiple activity + chatter rows must NOT multiply the deal row.
+    pg_execute("INSERT INTO activity_log (activity, deal_id, created_at) VALUES (%s, %s, %s)",
+               ("email", did, "2025-12-01T00:00:00+00:00"))
+    pg_execute("INSERT INTO crm_chatter (entity_type, entity_id, message, created_at) VALUES (%s, %s, %s, %s)",
+               ("deal", did, "another old note", "2025-05-01T00:00:00+00:00"))
+    deals = service.get_pipeline()["deals"]
+    assert len([x for x in deals if x["id"] == did]) == 1
+    assert last_ymd() == "2026-01-10"  # newest overall is still the Jan-10 activity row
+
+    # 7. Chatter attached to a DIFFERENT entity type (contact) never counts for the deal.
+    pg_execute("INSERT INTO crm_chatter (entity_type, entity_id, message, created_at) VALUES (%s, %s, %s, %s)",
+               ("contact", did, "wrong-entity note", "2030-01-01T00:00:00+00:00"))
+    assert last_ymd() == "2026-01-10"

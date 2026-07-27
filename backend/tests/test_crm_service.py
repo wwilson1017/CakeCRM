@@ -515,6 +515,46 @@ def test_get_deal_joins_company_name(rec):
     assert "co.name AS company_name" in sql and "LEFT JOIN companies co" in sql
 
 
+# ── Pipeline board payload: company_name + derived last_activity_at (issue #21) ─
+
+def test_get_pipeline_includes_company_and_last_activity(rec):
+    # deals query, then the stage_summary aggregate query.
+    rec.fetchall_queue = [
+        [{"id": 1, "stage": "lead", "contact_name": "Ann",
+          "company_name": "Acme", "last_activity_at": "2026-07-20T10:00:00+00:00"}],
+        [{"stage": "lead", "count": 1, "total_value": 100.0}],
+    ]
+    out = service.get_pipeline()
+    sql = rec.sql_containing("last_activity_at")
+    # company join mirrors get_deal; new derived field is aliased.
+    assert "co.name AS company_name" in sql and "LEFT JOIN companies co" in sql
+    assert "la.last_at AS last_activity_at" in sql
+    # last_activity blends BOTH genuine activity lanes via UNION ALL → one row per deal.
+    assert "UNION ALL" in sql and "GROUP BY deal_id" in sql
+    assert "FROM activity_log WHERE deal_id IS NOT NULL" in sql
+    assert "FROM crm_chatter" in sql and "entity_type = 'deal'" in sql and "archived = 0" in sql
+    # unfiltered board load carries no stage WHERE.
+    assert "WHERE d.stage" not in sql
+    # new fields pass straight through the payload.
+    assert out["deals"][0]["company_name"] == "Acme"
+    assert out["deals"][0]["last_activity_at"] == "2026-07-20T10:00:00+00:00"
+    assert out["total_pipeline_value"] == 100.0
+
+
+def test_get_pipeline_stage_branch_carries_new_fields(rec):
+    # The stage-filtered branch (used by the assistant's crm_get_pipeline tool) must
+    # carry the same new fields — the unified query guarantees the branches can't drift.
+    rec.fetchall_queue = [
+        [{"id": 2, "stage": "lead", "company_name": None, "last_activity_at": None}],
+        [],
+    ]
+    service.get_pipeline(stage="lead")
+    sql = rec.sql_containing("last_activity_at")
+    assert "WHERE d.stage = %s" in sql
+    assert "la.last_at AS last_activity_at" in sql and "co.name AS company_name" in sql
+    assert rec.params_for("last_activity_at") == ["lead"]
+
+
 def test_search_companies_status_filter(rec):
     service.search_companies("acme", status="active")
     sql = rec.sql_containing("FROM companies WHERE")

@@ -14,8 +14,13 @@ import {
   INK, INK_MUTE, INK_DIM, LINE, BG_CARD,
   FONT_DISPLAY, mono, formatNumber,
 } from '../shared/styles';
-import { pageHeading, btnPrimary, stageCard } from './styles';
+import { pageHeading, btnPrimary, btnSecondary, btnSmall, stageCard } from './styles';
 import { KanbanBoard, type MoveEvent } from '../shared/dnd';
+import PipelineFilterBar from './components/PipelineFilterBar';
+import {
+  type PipelineFilterState, type AdvancedFilters,
+  EMPTY_FILTER_STATE, dealMatchesAdvanced, hasAdvanced, loadFilterState, saveFilterState,
+} from './pipelineFilters';
 
 // The /api/crm/deals payload also carries server-computed `stage_summary` and
 // `total_pipeline_value`, but the board derives every total client-side from
@@ -37,6 +42,28 @@ export function PipelinePage() {
   const [selectedDeal, setSelectedDeal] = useState<CrmDeal | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const isMobile = useIsMobile();
+
+  // Client-side facet filtering (issue #21). One envelope (search + advanced facets)
+  // restored from / persisted to sessionStorage so a reload keeps the view, but it
+  // never leaves the browser — filtering is a pure predicate over the already-loaded
+  // board, no backend query params. Held as ONE object so restore/persist/clear-all
+  // are single-path.
+  const [filters, setFilters] = useState<PipelineFilterState>(() => {
+    const restored = loadFilterState();
+    // A dashboard deep-link (?stage=X) is authoritative over a restored stage facet: if
+    // the saved facet would hide the target column, drop it at mount so the column exists
+    // (matches the once-per-mount deep-link scroll below). Done here, not in an effect, to
+    // avoid a cascading setState-in-effect.
+    const s = searchParams.get('stage');
+    if (s && restored.advanced.stages.length && !restored.advanced.stages.includes(s)) {
+      return { ...restored, advanced: { ...restored.advanced, stages: [] } };
+    }
+    return restored;
+  });
+  const { search, advanced } = filters;
+  useEffect(() => { saveFilterState(filters); }, [filters]);
+  const setSearch = useCallback((s: string) => setFilters(f => ({ ...f, search: s })), []);
+  const setAdvanced = useCallback((a: AdvancedFilters) => setFilters(f => ({ ...f, advanced: a })), []);
 
   const columnRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const deepLinkDone = useRef(false);
@@ -154,17 +181,41 @@ export function PipelinePage() {
 
   const deals = useMemo(() => data?.deals ?? [], [data]);
 
+  const isFiltering = search.trim() !== '' || hasAdvanced(advanced);
+
+  // The board loads every deal, so advanced filtering is a pure client-side predicate
+  // over `deals` — no refetch. This memo is spliced between `deals` and `grouped`; when
+  // nothing is active it returns `deals` by reference so unfiltered renders don't churn.
+  const filteredDeals = useMemo(() => {
+    if (!isFiltering) return deals;
+    const q = search.trim().toLowerCase();
+    const now = new Date();
+    return deals.filter(d => {
+      if (q) {
+        const hay = [d.title, d.contact_name, d.company_name].filter(Boolean).join(' ').toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return dealMatchesAdvanced(d, advanced, now);
+    });
+  }, [deals, search, advanced, isFiltering]);
+
   const grouped = useMemo(
     () => STAGE_ORDER.reduce<Record<string, CrmDeal[]>>((acc, stage) => {
-      acc[stage] = deals.filter(d => d.stage === stage);
+      acc[stage] = filteredDeals.filter(d => d.stage === stage);
       return acc;
     }, {}),
-    [deals],
+    [filteredDeals],
+  );
+
+  // Stage facet doubles as a column filter: selecting stages hides the rest.
+  const visibleStages = useMemo(
+    () => (advanced.stages.length ? STAGE_ORDER.filter(s => advanced.stages.includes(s)) : STAGE_ORDER),
+    [advanced.stages],
   );
 
   const kanbanColumns = useMemo(
-    () => STAGE_ORDER.map(stage => ({ id: stage, data: { stage } })),
-    [],
+    () => visibleStages.map(stage => ({ id: stage, data: { stage } })),
+    [visibleStages],
   );
 
   // Per-stage value totals for the column headers — precomputed once per data
@@ -178,10 +229,12 @@ export function PipelinePage() {
     return totals;
   }, [grouped]);
 
+  // Open-pipeline $/count reflect the FILTERED set so the header describes what's shown
+  // (a "showing X of Y" annotation below signals when a filter is narrowing the board).
   const { openTotal, openCount } = useMemo(() => {
-    const open = deals.filter(d => OPEN_STAGES.includes(d.stage));
+    const open = filteredDeals.filter(d => OPEN_STAGES.includes(d.stage));
     return { openTotal: open.reduce((s, d) => s + (d.value || 0), 0), openCount: open.length };
-  }, [deals]);
+  }, [filteredDeals]);
 
   // Dashboard deep-link (/crm/pipeline?stage=X): once `data` has rendered the
   // columns (refs populated), scroll the requested column into view, then clear
@@ -192,6 +245,8 @@ export function PipelinePage() {
     if (!s) return;
     deepLinkDone.current = true;
     if (STAGE_ORDER.includes(s)) {
+      // The initializer already dropped any restored stage facet that would hide this
+      // column, so the target is guaranteed present here.
       columnRefs.current.get(s)?.scrollIntoView({ behavior: 'smooth', inline: 'start', block: 'nearest' });
     }
     const next = new URLSearchParams(searchParams);
@@ -216,6 +271,9 @@ export function PipelinePage() {
           <h1 style={pageHeading(isMobile)}>Pipeline</h1>
           <p style={{ fontSize: isMobile ? 14 : 20, color: INK_MUTE, marginTop: 6 }}>
             ${formatNumber(openTotal)} open · {openCount} open deal{openCount !== 1 ? 's' : ''}
+            {isFiltering && (
+              <span style={{ color: INK_DIM }}> · showing {filteredDeals.length} of {deals.length}</span>
+            )}
           </p>
         </div>
         <button onClick={() => setShowCreate(true)} style={{
@@ -227,11 +285,30 @@ export function PipelinePage() {
         </button>
       </div>
 
+      <div style={{ marginBottom: isMobile ? 12 : 16 }}>
+        <PipelineFilterBar
+          search={search}
+          advanced={advanced}
+          onSearchChange={setSearch}
+          onAdvancedChange={setAdvanced}
+          isMobile={isMobile}
+        />
+      </div>
+
+      {isFiltering && filteredDeals.length === 0 ? (
+        <EmptyFilterState onClear={() => setFilters(EMPTY_FILTER_STATE)} />
+      ) : (
       <KanbanBoard<CrmDeal, { stage: string }>
         columns={kanbanColumns}
         items={grouped}
         onMove={handleKanbanMove}
-        // Drag off on touch (fiddly); mobile stage changes go through the sheet.
+        // Drag stays ENABLED while filtering (only `isMobile` disables it). CakeCRM's
+        // board is stage-only: `handleKanbanMove` ignores `MoveEvent.newIndex`, same-column
+        // drops persist nothing, and `moveDealStage` restages by deal id against the full
+        // `data.deals` — so a drop while a filter hides cards is index-safe by construction
+        // (unlike the blueprint, whose board persisted intra-column order and disabled drag).
+        // A drop that makes a deal stop matching an active facet just removes it from the
+        // filtered view — correct filter semantics.
         dragDisabled={isMobile}
         // The ported KanbanBoard/KanbanColumn expose only className hooks (no style
         // prop), so board-scroller and column-body layout use Tailwind here; the
@@ -268,6 +345,7 @@ export function PipelinePage() {
           }}>No deals</div>
         )}
       />
+      )}
 
       {showCreate && <DealForm onClose={() => setShowCreate(false)} onSaved={() => { setShowCreate(false); load(); }} />}
       {editDeal && <DealForm deal={editDeal} onClose={() => setEditDeal(null)} onSaved={() => { setEditDeal(null); setSelectedDeal(null); load(); }} />}
@@ -282,6 +360,20 @@ export function PipelinePage() {
           onStageChange={updateDealStage}
         />
       )}
+    </div>
+  );
+}
+
+// Shown in place of the board when active filters match no deals (avoids a row of
+// empty stage columns reading as "no deals at all").
+function EmptyFilterState({ onClear }: { onClear: () => void }) {
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12,
+      padding: '56px 24px', textAlign: 'center', border: `1px dashed ${LINE}`, borderRadius: 8,
+    }}>
+      <p style={{ fontSize: 15, color: INK_MUTE, margin: 0 }}>No deals match your filters.</p>
+      <button onClick={onClear} style={{ ...btnSecondary, ...btnSmall }}>Clear filters</button>
     </div>
   );
 }
