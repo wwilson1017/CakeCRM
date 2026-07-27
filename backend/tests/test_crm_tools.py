@@ -17,10 +17,12 @@ from crm.tools import CRM_TOOL_DEFS, TOOL_EXECUTORS, get_crm_tools
 def test_def_and_executor_counts():
     # Absolute counts. ⚠ TOOL-COUNT SUM RULE (coach #67): concurrent sibling issues
     # may add crm_* tools in the same auto-issues run. If so, this is 24 (base) +
-    # 6 (#19 custom fields) + N (sibling additions) — SUM the additions, never
-    # overwrite the number. The executor count is always defs + 1 (crm_log_note alias).
-    assert len(CRM_TOOL_DEFS) == 30
-    assert len(TOOL_EXECUTORS) == 31
+    # 6 (#19 custom fields) + 2 (#18 lead scores) + N (sibling additions) — SUM the
+    # additions, never overwrite the number. On rebase behind a sibling that also adds
+    # a tool (e.g. #20 crm_analytics), recompute cumulative (do NOT keep-both a single
+    # number). The executor count is always defs + 1 (crm_log_note alias).
+    assert len(CRM_TOOL_DEFS) == 32
+    assert len(TOOL_EXECUTORS) == 33
     # Relative invariant (robust to any future additions): exactly one alias-only executor.
     assert len(TOOL_EXECUTORS) == len(CRM_TOOL_DEFS) + 1
 
@@ -98,11 +100,13 @@ _OWNED_WRITE_TOOLS = {
     "crm_create_deal", "crm_update_deal", "crm_update_deal_stage",
     "crm_log_activity", "crm_create_task", "crm_complete_task",
     "crm_set_contact_fields", "crm_set_company_fields", "crm_set_deal_fields",
+    "crm_recompute_lead_scores",  # #18
 }
 _OWNED_READ_TOOLS = {
     "crm_find_contact", "crm_get_contact", "crm_list_contacts", "crm_get_pipeline",
     "crm_get_deal", "crm_get_activity_log", "crm_list_tasks", "crm_dashboard",
     "crm_get_contact_fields", "crm_get_company_fields", "crm_get_deal_fields",
+    "crm_get_lead_score",  # #18
 }
 
 
@@ -316,3 +320,53 @@ def test_set_fields_empty_string_clear_forwards(monkeypatch):
                         lambda et, eid, vals, email: captured.update(vals=vals) or {"ok": True, "updated": 1, "errors": []})
     tools.crm_set_contact_fields(5, {"vip": ""})
     assert captured["vals"] == {"9": ""}   # empty string forwarded (clears downstream)
+
+
+# ── Lead-score tools (issue #18) ──────────────────────────────────────────────
+
+def test_lead_score_tool_defs_shaped():
+    by_name = {d["name"]: d for d in CRM_TOOL_DEFS}
+    assert by_name["crm_get_lead_score"]["writes"] is False
+    assert by_name["crm_get_lead_score"]["input_schema"]["required"] == ["entity_type", "entity_id"]
+    assert by_name["crm_recompute_lead_scores"]["writes"] is True
+    assert by_name["crm_recompute_lead_scores"]["input_schema"]["required"] == []  # scope optional
+
+
+def test_crm_get_lead_score_deal_happy(monkeypatch):
+    from crm import scoring_service
+    monkeypatch.setattr(scoring_service, "score_deal", lambda eid: {"score": 71, "factors": {}})
+    monkeypatch.setattr(service, "get_deal", lambda eid: {"id": eid, "lead_score": 68})
+    out = tools.crm_get_lead_score("deal", 5)
+    assert out["score"] == 71 and out["stored_score"] == 68
+
+
+def test_crm_get_lead_score_contact_happy(monkeypatch):
+    from crm import scoring_service
+    monkeypatch.setattr(scoring_service, "score_contact", lambda eid: {"score": 40, "factors": {}})
+    monkeypatch.setattr(service, "get_contact", lambda eid: {"id": eid, "lead_score": 40})
+    out = tools.crm_get_lead_score("contact", 9)
+    assert out["score"] == 40 and out["stored_score"] == 40
+
+
+def test_crm_get_lead_score_bad_type_and_missing(monkeypatch):
+    from crm import scoring_service
+    assert "error" in tools.crm_get_lead_score("company", 1)  # invalid entity_type
+    monkeypatch.setattr(scoring_service, "score_deal", lambda eid: None)  # missing entity
+    monkeypatch.setattr(service, "get_deal", lambda eid: None)
+    assert "error" in tools.crm_get_lead_score("deal", 999)
+
+
+def test_crm_recompute_lead_scores_passes_scope_and_wraps_error(monkeypatch):
+    from crm import scoring_service
+    seen = {}
+    monkeypatch.setattr(scoring_service, "backfill_scores",
+                        lambda scope: seen.update({"scope": scope}) or {"deals_scored": 1, "contacts_scored": 0, "errors": 0, "capped": False})
+    assert tools.crm_recompute_lead_scores("all")["deals_scored"] == 1
+    assert seen["scope"] == "all"
+    assert tools.crm_recompute_lead_scores()  # default scope reaches the service
+    assert seen["scope"] == "all"  # executor default
+
+    def boom(scope):
+        raise ValueError("bad scope")
+    monkeypatch.setattr(scoring_service, "backfill_scores", boom)
+    assert "error" in tools.crm_recompute_lead_scores("weird")

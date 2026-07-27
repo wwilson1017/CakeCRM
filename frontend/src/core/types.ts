@@ -15,6 +15,8 @@ export interface CrmContact {
   notes: string;
   created_at: string;
   updated_at: string;
+  lead_score?: number | null;           // computed lead score 0-100 (issue #18); null = never scored
+  lead_score_at?: string | null;
   // Detail view extras
   deals?: CrmDeal[];
   tasks?: CrmTask[];
@@ -38,6 +40,8 @@ export interface CrmDeal {
   updated_at: string;
   ai_touch_count?: number | null;       // AI-estimated touch count (issue #16); null = uncomputed
   ai_touch_count_at?: string | null;
+  lead_score?: number | null;           // computed lead score 0-100 (issue #18); null = never scored
+  lead_score_at?: string | null;
   activity?: CrmActivity[];
 }
 

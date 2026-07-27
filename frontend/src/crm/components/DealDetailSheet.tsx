@@ -6,7 +6,7 @@ import { mono, INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, ACCENT_INK, GOLD, SAGE
 import { modalOverlay, modalContent, mobileDragHandle, btnDanger } from '../styles';
 import { ActivityTimeline } from './ActivityTimeline';
 import { NotesThread } from './NotesThread';
-import { TouchCountPill } from './badges';
+import { ScorePill, TouchCountPill } from './badges';
 import { ProvenanceBadge } from './ProvenanceBadge';
 import { useProvenance } from '../useProvenance';
 import { CustomFieldsSection } from './CustomFieldsSection';
@@ -122,6 +122,12 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
                 <span style={{ fontSize: 13, color: INK }}>{deal.probability}%</span>
                 {badge('probability')}
               </span>
+            </div>
+          )}
+          {deal.lead_score != null && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ ...mono(10), color: INK_DIM }}>Lead Score</span>
+              <ScorePill score={deal.lead_score} />
             </div>
           )}
           {deal.expected_close_date && (

@@ -152,9 +152,17 @@ def test_delete_task_rowcount(rec):
     assert service.delete_task(5) is True
 
 
-def test_delete_activity_rowcount(rec):
-    rec.execute_rowcount = 1
+def test_delete_activity_returns_true_and_rescores_links(rec):
+    # #18: delete_activity now DELETE ... RETURNING the links so the affected deal/contact
+    # can be rescored (their interaction count/recency changed).
+    rec.fetchone_queue = [{"contact_id": 5, "deal_id": 7}]
     assert service.delete_activity(3) is True
+    assert "RETURNING contact_id, deal_id" in rec.sql_containing("DELETE FROM activity_log")
+
+
+def test_delete_activity_missing_returns_false(rec):
+    rec.fetchone_queue = [None]  # RETURNING found nothing
+    assert service.delete_activity(999) is False
 
 
 # ── Dashboard overdue: today-date TEXT compare, no ::date cast ─────────────────

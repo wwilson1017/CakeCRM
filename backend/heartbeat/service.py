@@ -52,7 +52,9 @@ def reminder_tick() -> dict:
     # dev server must not spam real background AI calls when reminders fire.
     processed = process_due_reminders(run_ai_enhancement=settings.heartbeat_enabled)
     dreaming = _maybe_run_dreaming()
-    return {"reminders_processed": len(processed), "reminders": processed, "dreaming": dreaming}
+    scores = _maybe_refresh_scores()
+    return {"reminders_processed": len(processed), "reminders": processed,
+            "dreaming": dreaming, "score_refresh": scores}
 
 
 def heartbeat_turn_tick() -> dict:
@@ -66,9 +68,10 @@ def tick(*, force_turn: bool = False, run_ai_enhancement: bool = True) -> dict:
     pg_execute("UPDATE heartbeat_state SET last_tick_at = now() WHERE id = 1")
     processed = process_due_reminders(run_ai_enhancement=run_ai_enhancement)
     dreaming = _maybe_run_dreaming()
+    scores = _maybe_refresh_scores()
     turn = maybe_run_heartbeat_turn(force=True) if force_turn else {"skipped": "not requested"}
     return {"reminders_processed": len(processed), "reminders": processed,
-            "heartbeat_turn": turn, "dreaming": dreaming}
+            "heartbeat_turn": turn, "dreaming": dreaming, "score_refresh": scores}
 
 
 # ── reminders ───────────────────────────────────────────────────────────────
@@ -322,4 +325,23 @@ def _maybe_run_dreaming():
         return run_dreaming_if_due()
     except Exception:
         logger.warning("dreaming pass errored", exc_info=True)
+        return None
+
+
+# ── #18 lead-score daily refresh seam (order-independent, idempotent) ────────
+# NOTE (team): #17 (Gmail touch-scan heartbeat) owns a general periodic-job seam and
+# will absorb this call into it. Until then this follows the #5 dreaming pattern.
+
+def _maybe_refresh_scores():
+    """Drive #18's daily lead-score refresh if present. Lazy ImportError-guarded so merge
+    order is irrelevant; run_score_refresh_if_due is advisory-locked + due-guarded (24h) +
+    idempotent, so calling it every tick is safe and cheap when not due."""
+    try:
+        from crm.scoring_service import run_score_refresh_if_due
+    except ImportError:
+        return None
+    try:
+        return run_score_refresh_if_due()
+    except Exception:
+        logger.warning("lead-score refresh errored", exc_info=True)
         return None
