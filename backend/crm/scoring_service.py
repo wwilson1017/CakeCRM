@@ -59,7 +59,14 @@ _REFRESH_INTERVAL = timedelta(hours=24)
 # Per-tick cap for the time-decay refresh. reminder_tick is a shared, fast-and-bounded
 # (T1) slot, so the refresh MUST NOT sweep the whole table on the tick it fires — it
 # processes at most this many stale entities per pass and self-resumes on later ticks.
-_REFRESH_BATCH = 500
+# Kept small (each entity is ~4 indexed round trips) so even on a high-latency remote
+# Postgres a single drain tick stays well within the 60s interval and never delays reminders.
+_REFRESH_BATCH = 100
+
+# Housekeeping notes that provenance_service.confirm inserts directly into crm_chatter
+# ("Confirmed AI-populated value for '<field>'.") are CRM audit rows, NOT customer engagement,
+# so they are excluded from the engagement count/recency. Must mirror that message prefix.
+_HOUSEKEEPING_NOTE_LIKE = "Confirmed AI-populated value for %"
 # Safety valve for a MANUAL backfill("all") of a huge dataset (runs off-thread via the
 # endpoint/tool, never in the tick): bound + log rather than run unboundedly.
 _REFRESH_MAX_ROWS = 20000
@@ -330,8 +337,8 @@ def _read_deal_score(deal_id: int, q1, now: datetime) -> dict | None:
         return None
     chat = q1(
         "SELECT COUNT(*) AS cnt, MAX(created_at) AS newest FROM crm_chatter "
-        "WHERE entity_type = 'deal' AND entity_id = %s AND archived = 0",
-        (deal_id,),
+        "WHERE entity_type = 'deal' AND entity_id = %s AND archived = 0 AND message NOT LIKE %s",
+        (deal_id, _HOUSEKEEPING_NOTE_LIKE),
     ) or {}
     # Engagement counts BOTH notes and logged activities (symmetric with contact scoring) —
     # activity_log is the CRM's primary touch surface, so a deal worked only via logged calls
@@ -347,8 +354,8 @@ def _read_contact_score(contact_id: int, q1, qall, now: datetime) -> dict | None
         return None
     chat = q1(
         "SELECT COUNT(*) AS cnt, MAX(created_at) AS newest FROM crm_chatter "
-        "WHERE entity_type = 'contact' AND entity_id = %s AND archived = 0",
-        (contact_id,),
+        "WHERE entity_type = 'contact' AND entity_id = %s AND archived = 0 AND message NOT LIKE %s",
+        (contact_id, _HOUSEKEEPING_NOTE_LIKE),
     ) or {}
     act = q1(
         "SELECT COUNT(*) AS cnt, MAX(created_at) AS newest FROM activity_log WHERE contact_id = %s",

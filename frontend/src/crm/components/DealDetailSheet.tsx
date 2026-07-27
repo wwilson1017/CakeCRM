@@ -35,6 +35,10 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
   // freshly-triggered count lands on the next fetch/navigation — accepted eventual
   // consistency for an estimate nudge (see the PR's accepted-limitations note).
   const [touchCount, setTouchCount] = useState<number | null | undefined>(deal.ai_touch_count);
+  // Same rationale for lead_score (issue #18): render the re-fetchable value, not the frozen
+  // list-row prop, so an in-sheet activity mutation (or the daily refresh / another client)
+  // updates the pill on the next loadDetail rather than showing a stale score until close.
+  const [leadScore, setLeadScore] = useState<number | null | undefined>(deal.lead_score);
   const { byField, confirm, confirming } = useProvenance('deal', deal.id);
   const badge = (f: string) => (
     <ProvenanceBadge prov={byField[f]} onConfirm={() => confirm(f)} confirming={confirming === f} />
@@ -47,6 +51,7 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
       if (reqId !== reqRef.current) return;
       setActivity(detail.activity || []);
       setTouchCount(detail.ai_touch_count);
+      setLeadScore(detail.lead_score);
     } catch {
       // Non-fatal: the sheet still shows deal fields + chatter; leave activity as-is.
     }
@@ -124,10 +129,10 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
               </span>
             </div>
           )}
-          {deal.lead_score != null && (
+          {leadScore != null && (
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ ...mono(10), color: INK_DIM }}>Lead Score</span>
-              <ScorePill score={deal.lead_score} />
+              <ScorePill score={leadScore} />
             </div>
           )}
           {deal.expected_close_date && (

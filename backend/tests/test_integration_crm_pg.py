@@ -824,3 +824,17 @@ def test_deal_engagement_counts_logged_activities(pg_db):
     bare_score = pg_fetchone("SELECT lead_score FROM deals WHERE id = %s", (bare["id"],))["lead_score"]
     worked_score = pg_fetchone("SELECT lead_score FROM deals WHERE id = %s", (worked["id"],))["lead_score"]
     assert worked_score > bare_score
+
+
+def test_provenance_confirm_notes_excluded_from_engagement(pg_db):
+    # Housekeeping confirm-notes (provenance_service.confirm inserts them directly) must NOT
+    # count as customer engagement; real notes must.
+    from core.postgres import pg_execute
+    from crm import chatter_service, scoring_service, service
+    deal = service.create_deal("D", stage="qualified", value=20000)
+    for _ in range(5):
+        pg_execute("INSERT INTO crm_chatter (entity_type, entity_id, message) VALUES ('deal', %s, %s)",
+                   (deal["id"], "Confirmed AI-populated value for 'probability'."))
+    assert scoring_service.score_deal(deal["id"])["factors"]["engagement"]["value"] == 0
+    chatter_service.add_note("deal", deal["id"], "Real customer note")
+    assert scoring_service.score_deal(deal["id"])["factors"]["engagement"]["value"] == 1
