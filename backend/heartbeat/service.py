@@ -1,6 +1,7 @@
 """The heartbeat — the background half of the assistant (issue #6).
 
-Two independent scheduler jobs (so a slow AI turn never delays reminder delivery):
+Three independent scheduler jobs (so a slow AI turn or inbox scan never delays reminder
+delivery):
   * ``reminder_tick()`` (every 60s): fires due reminders + drives #5's dreaming
     pass. Each reminder ALWAYS delivers a deterministic baseline push ("Reminder:
     …") FIRST, keyless, so a due reminder reliably notifies even with zero AI keys;
@@ -8,6 +9,8 @@ Two independent scheduler jobs (so a slow AI turn never delays reminder delivery
     turn (reads + notify_user only).
   * ``heartbeat_turn_tick()`` (every few minutes, throttled to ~30 min): runs ONE
     system heartbeat AI turn — env-gated (off locally) and provider-gated.
+  * ``gmail_scan_tick()`` (every 60s): runs #17's read-only Gmail touch scan if due
+    (network-bound, so it gets its own slot rather than riding reminder_tick).
 
 ``tick()`` is the run-now workhorse behind ``POST /api/heartbeat/run-now``; it does
 reminders synchronously and only runs the AI turn when explicitly forced.

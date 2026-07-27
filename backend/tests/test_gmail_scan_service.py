@@ -244,6 +244,22 @@ def test_recompute_fired_once_per_deal_post_commit(monkeypatch, connected):
     assert out["logged"] == 3 and out["new"] == 3     # a, b, c all logged; d was a duplicate
 
 
+def test_scan_abandons_pass_when_gmail_hangs(monkeypatch, connected):
+    # A hung list call must not park the job forever: the wall-clock deadline abandons
+    # the pass (records error, frees the slot) so the next tick retries. (F7 / lead ask.)
+    import time
+    monkeypatch.setattr(gs, "_SCAN_HTTP_DEADLINE", 0.05)
+    monkeypatch.setattr(gs, "pg_execute", lambda *a, **k: 1)
+
+    def hang(*a, **k):
+        time.sleep(0.4)          # exceeds the deadline; the leaked worker exits promptly
+        return []
+
+    monkeypatch.setattr(gs, "call_gmail", hang)
+    out = gs.run_scan_if_due()
+    assert out == {"status": "error"}
+
+
 def test_per_message_error_is_isolated(monkeypatch, connected):
     monkeypatch.setattr(gs, "pg_execute", lambda *a, **k: 1)
     monkeypatch.setattr(gs, "call_gmail", lambda *a, **k: [{"id": "a"}, {"id": "b"}])
@@ -262,13 +278,16 @@ def test_per_message_error_is_isolated(monkeypatch, connected):
 # ── _fire_unmatched_alert ────────────────────────────────────────────────────
 
 def test_alert_created_then_stamped(monkeypatch):
+    order = []                                        # pin the create-BEFORE-stamp guarantee
     created = {}
     monkeypatch.setattr(gs.alerts, "create_alert",
-                        lambda **k: created.update(k) or {"ok": True})
+                        lambda **k: order.append("create") or created.update(k) or {"ok": True})
     stamped = {}
     monkeypatch.setattr(gs, "pg_execute",
-                        lambda sql, params=(): stamped.update(sql=" ".join(sql.split()), params=params) or 1)
+                        lambda sql, params=(): order.append("stamp")
+                        or stamped.update(sql=" ".join(sql.split()), params=params) or 1)
     gs._fire_unmatched_alert("new@guy.com", 3)
+    assert order == ["create", "stamp"]               # create FIRST so a stamp failure only retries
     assert created["source"] == "gmail_touch_scan" and created["source_id"] == "new@guy.com"
     assert "alerted_at = now()" in stamped["sql"] and "alerted_at IS NULL" in stamped["sql"]
     assert stamped["params"] == ("new@guy.com",)

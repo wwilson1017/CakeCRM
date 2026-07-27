@@ -121,10 +121,14 @@ def test_double_scan_logs_exactly_one_touch(pg_db, monkeypatch):
 
     first = gs.run_scan_if_due()
     assert first["status"] == "ok" and first["logged"] == 1 and first["new"] == 1
+    after_first = pg_fetchone("SELECT last_status, last_touches_logged FROM gmail_scan_state WHERE id = 1")
+    assert after_first["last_status"] == "ok" and after_first["last_touches_logged"] == 1
 
     _reset_due()
     second = gs.run_scan_if_due()
     assert second["status"] == "ok" and second["new"] == 0 and second["logged"] == 0
+    after_second = pg_fetchone("SELECT last_touches_logged FROM gmail_scan_state WHERE id = 1")
+    assert after_second["last_touches_logged"] == 0          # dedup pass logged nothing
 
     acts = pg_fetchall("SELECT activity, contact_id, deal_id FROM activity_log")
     assert len(acts) == 1                                    # exactly ONE touch, not two
@@ -132,8 +136,6 @@ def test_double_scan_logs_exactly_one_touch(pg_db, monkeypatch):
     assert acts[0]["deal_id"] == did                          # single open deal → attributed
     ledger = pg_fetchall("SELECT outcome FROM gmail_scanned_messages")
     assert len(ledger) == 1 and ledger[0]["outcome"] == "logged"
-    seen = pg_fetchone("SELECT last_status, last_touches_logged FROM gmail_scan_state WHERE id = 1")
-    assert seen["last_status"] == "ok"
 
 
 def test_multiple_open_deals_logs_contact_only(pg_db, monkeypatch):
@@ -199,3 +201,35 @@ def test_clear_all_succeeds_with_ledger_present(pg_db, monkeypatch):
 
     assert pg_fetchall("SELECT id FROM contacts") == []       # CRM wiped
     assert pg_fetchall("SELECT message_id FROM gmail_scanned_messages")   # ledger survives (accepted)
+
+
+def test_crash_mid_transaction_rolls_back_and_self_heals(pg_db, monkeypatch):
+    # The core self-heal guarantee: a raise INSIDE the per-message transaction (after the
+    # ledger claim) rolls the claim back, so the message is neither logged nor marked
+    # scanned — and the next pass reprocesses it successfully.
+    from core.postgres import pg_fetchall
+    cid = _seed_contact("heal@client.com", "Heal")
+    _seed_deal(cid)
+    monkeypatch.setattr(gs, "call_gmail",
+                        lambda *a, **k: [{"id": "heal-1", "from": "heal@client.com",
+                                          "subject": "z", "date": ""}])
+
+    original_build_note = gs._build_note
+
+    def boom(*a, **k):
+        raise RuntimeError("crash mid-transaction")   # fires after the claim, before commit
+
+    monkeypatch.setattr(gs, "_build_note", boom)
+    gs.run_scan_if_due()
+    # Claim rolled back with the txn → message absent, nothing logged.
+    assert pg_fetchall("SELECT message_id FROM gmail_scanned_messages") == []
+    assert pg_fetchall("SELECT id FROM activity_log") == []
+
+    # Recover: the same message self-heals on the next pass.
+    monkeypatch.setattr(gs, "_build_note", original_build_note)
+    _reset_due()
+    gs.run_scan_if_due()
+    acts = pg_fetchall("SELECT contact_id FROM activity_log")
+    assert len(acts) == 1 and acts[0]["contact_id"] == cid
+    ledger = pg_fetchall("SELECT outcome FROM gmail_scanned_messages")
+    assert len(ledger) == 1 and ledger[0]["outcome"] == "logged"

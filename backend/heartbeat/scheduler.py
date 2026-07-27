@@ -1,9 +1,11 @@
 """APScheduler wiring for the heartbeat (issue #6).
 
-A single ``BackgroundScheduler`` with TWO jobs, deliberately decoupled so a slow
-system AI turn never delays reminder delivery:
+A single ``BackgroundScheduler`` with THREE jobs, deliberately decoupled so a slow
+system AI turn (or a slow inbox scan) never delays reminder delivery:
   * ``reminder_tick`` — every 60s: fire due reminders + drive dreaming (fast, bounded).
   * ``heartbeat_turn`` — every 5 min: run the throttled system AI turn if due.
+  * ``gmail_scan`` — every 60s: run the read-only Gmail touch scan if due (#17;
+    network-bound, so it gets its own slot rather than riding reminder_tick).
 Each job is ``max_instances=1, coalesce=True`` so a slow run never stacks and never
 blocks the OTHER job. No persistent job store — jobs are re-registered on every boot
 (the ticks are idempotent). ``get_scheduler()`` exposes the scheduler so other

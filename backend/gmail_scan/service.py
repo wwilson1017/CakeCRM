@@ -32,11 +32,18 @@ SCHEDULING (tier-2). Driven by its OWN ``gmail_scan`` scheduler job (heartbeat/s
 NOT as a ``reminder_tick`` sibling: an inbox scan is slow / network-bound and a hung
 request in ``reminder_tick``'s shared ``max_instances=1`` slot would stall reminder
 delivery — the same decoupling principle that split ``heartbeat_turn`` from
-``reminder_tick`` in #6. A transport-level timeout on the shared Gmail client is future
-hardening (out of this feature's scope). Gated ONLY on Gmail being connected: no AI keys
-are needed (deal touches merely enqueue ``touch_count_service.schedule_recompute``).
+``reminder_tick`` in #6. That decoupling protects *reminders*, not this job — so the
+list call itself runs under a wall-clock deadline (``_SCAN_HTTP_DEADLINE``) on a worker
+thread: a hung request abandons the pass and frees the ``gmail_scan`` slot for the next
+tick instead of parking it forever (a truly-hung request leaks one bounded worker per
+timed-out pass — the scan throttles to the interval, and real Gmail failures raise
+rather than hang). The deeper root cause — the shared ``gmail/client.py`` builds its
+service with no transport timeout, which also affects the assistant's user-invoked Gmail
+tools — is a pre-existing #8 gap left for follow-up. Gated ONLY on Gmail being connected:
+no AI keys are needed (deal touches merely enqueue ``touch_count_service.schedule_recompute``).
 """
 
+import concurrent.futures
 import logging
 from datetime import datetime, timedelta, timezone
 from email.utils import parseaddr, parsedate_to_datetime
@@ -52,10 +59,12 @@ logger = logging.getLogger(__name__)
 
 _MAX_RESULTS = 50              # newest-first page cap; bounds Gmail HTTP to <=51 calls/scan
 _SCAN_WINDOW_DAYS = 2          # floor; widened when the interval exceeds a day
+_MINUTES_PER_DAY = 1440
 _UNMATCHED_ALERT_THRESHOLD = 3
 _MAX_NOTE_CHARS = 300          # bound untrusted subject/sender text persisted per touch
 _MAX_ERROR_CHARS = 500
 _DATE_SLACK = timedelta(days=1)   # tolerance around the window for the Date-header clamp
+_SCAN_HTTP_DEADLINE = 90       # seconds; abandon a pass whose Gmail HTTP overruns (see below)
 _ALERT_SOURCE = "gmail_touch_scan"
 
 
@@ -83,7 +92,8 @@ def run_scan_if_due() -> dict | None:
         logger.warning("gmail scan failed", exc_info=True)
         _record_result("error", error=str(e)[:_MAX_ERROR_CHARS])
         return {"status": "error"}
-    _record_result("ok", seen=summary["seen"], new=summary["new"], logged=summary["logged"])
+    _record_result("ok", seen=summary.get("seen", 0), new=summary.get("new", 0),
+                   logged=summary.get("logged", 0))
     return {"status": "ok", **summary}
 
 
@@ -103,18 +113,33 @@ def _claim_due() -> bool:
 
 def _window_days() -> int:
     """Day-granular scan window; kept >= the interval when set to a multi-day cadence."""
-    return max(_SCAN_WINDOW_DAYS, settings.gmail_scan_interval_minutes // 1440 + 1)
+    return max(_SCAN_WINDOW_DAYS, settings.gmail_scan_interval_minutes // _MINUTES_PER_DAY + 1)
+
+
+def _list_recent_inbox() -> list[dict]:
+    """Fetch recent inbox mail via the existing approved list op, bounded by a wall-clock
+    deadline on a worker thread. On overrun we RAISE (abandoning the pass) rather than let
+    a hung, transport-timeout-less request park the gmail_scan slot forever — the caller
+    records an error and the next tick retries. A truly-hung request leaks one worker per
+    timed-out pass (bounded: the scan throttles to the interval)."""
+    ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = ex.submit(
+        call_gmail, ops.list_messages_op,
+        query=f"in:inbox newer_than:{_window_days()}d", max_results=_MAX_RESULTS,
+    )
+    try:
+        return future.result(timeout=_SCAN_HTTP_DEADLINE)
+    except concurrent.futures.TimeoutError as e:
+        raise TimeoutError(f"gmail list exceeded {_SCAN_HTTP_DEADLINE}s deadline") from e
+    finally:
+        ex.shutdown(wait=False)   # never block on a possibly-hung worker
 
 
 # ── scan orchestration ───────────────────────────────────────────────────────
 
 def _run_scan() -> dict:
     own_email = (store.get_row().get("email") or "").strip().lower()
-    messages = call_gmail(
-        ops.list_messages_op,
-        query=f"in:inbox newer_than:{_window_days()}d",
-        max_results=_MAX_RESULTS,
-    )
+    messages = _list_recent_inbox()
     seen, new, logged, errors = len(messages), 0, 0, 0
     recompute: set[int] = set()
     alert_pending: dict[str, int] = {}        # email -> count at crossing (dict dedups in-batch)
