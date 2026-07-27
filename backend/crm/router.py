@@ -61,6 +61,7 @@ Provenance (AI-written field badges on a deal or contact):
 
 Other:
   GET    /api/crm/dashboard             — summary stats
+  GET    /api/crm/analytics             — win/loss, activity volume, deal aging (?days, ?stale_days)
   GET    /api/crm/demo-status           — first-run onboarding / sample-data state
   POST   /api/crm/load-sample-data      — seed fictional demo data (first run)
   POST   /api/crm/dismiss-onboarding    — dismiss the first-run prompt

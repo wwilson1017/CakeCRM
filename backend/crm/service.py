@@ -734,14 +734,19 @@ def _shape_win_loss(row: dict | None) -> dict:
     lost = int(row.get("lost") or 0)
     open_count = int(row.get("open_count") or 0)
     total_closed = won + lost
+    awd = row.get("avg_won_deal_size")
+    aod = row.get("avg_open_deal_size")
     adtc = row.get("avg_days_to_close")
     return {
         "deals_won": won,
         "deals_lost": lost,
         "open_deals": open_count,
         "win_rate_pct": round(won / total_closed * 100, 1) if total_closed else None,
-        "avg_won_deal_size": round(_as_float(row.get("avg_won_deal_size")), 2),
-        "avg_open_deal_size": round(_as_float(row.get("avg_open_deal_size")), 2),
+        # None (not 0.0) when there is no qualifying deal — consistent with
+        # win_rate_pct / avg_days_to_close so the UI shows "—" ("no data yet")
+        # rather than a misleading "$0".
+        "avg_won_deal_size": round(_as_float(awd), 2) if awd is not None else None,
+        "avg_open_deal_size": round(_as_float(aod), 2) if aod is not None else None,
         # updated_at - created_at is an approximation of close time (updated_at moves
         # on any edit; there is no closed_at column) — same as the cake_os blueprint.
         "avg_days_to_close": round(_as_float(adtc), 1) if adtc is not None else None,

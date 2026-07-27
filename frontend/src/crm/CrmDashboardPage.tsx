@@ -18,11 +18,12 @@ import {
 } from '../shared/styles';
 import { sectionHeading, btnSecondary } from './styles';
 
-// Aging-bucket fill color: severity ramp (older = hotter). The two oldest buckets
-// stay OFF the rebrandable ACCENT so "stale" reads as a warning, not brand.
-function bucketColor(label: string): string {
-  if (label === '91+') return CORAL;
-  if (label === '31-90') return GOLD;
+// Aging-bucket fill color: severity ramp keyed on the numeric lower bound, so a
+// backend label rename can't silently drop a bucket back to the brand color. The
+// two oldest buckets stay OFF the rebrandable ACCENT so "stale" reads as a warning.
+function bucketColor(minDays: number): string {
+  if (minDays >= 91) return CORAL;
+  if (minDays >= 31) return GOLD;
   return ACCENT;
 }
 
@@ -103,7 +104,9 @@ export function CrmDashboardPage() {
   // Analytics-derived view values (all null-safe: analytics may not have loaded).
   const wl = analytics?.win_loss;
   const closed = wl ? wl.deals_won + wl.deals_lost : 0;
-  const wonPct = closed > 0 ? Math.round((wl!.deals_won / closed) * 100) : 0;
+  // Reuse the backend's win_rate_pct (won/closed) for the bar rather than recompute
+  // the same ratio; when closed > 0 the backend guarantees it's non-null.
+  const wonPct = closed > 0 ? Math.round(wl!.win_rate_pct ?? 0) : 0;
   const winRateColor =
     wl?.win_rate_pct == null ? undefined : wl.win_rate_pct >= 50 ? SAGE : wl.win_rate_pct > 0 ? GOLD : undefined;
   const agingBuckets = analytics?.aging.buckets ?? [];
@@ -136,7 +139,10 @@ export function CrmDashboardPage() {
       {/* Snapshot (analytics) */}
       {analytics && wl && (
         <div style={{ padding: `0 ${px} 4px`, position: 'relative', zIndex: 2 }}>
-          <div style={sectionHeading(INK_SOFT)}>Snapshot · last {analytics.window_days} days</div>
+          {/* Win/loss + pipeline are all-time / current-state (the stats query is not
+              date-windowed) — so NO "last N days" qualifier here; that belongs only on
+              the genuinely windowed Activity section below. */}
+          <div style={sectionHeading(INK_SOFT)}>Snapshot</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
             <StatCard
               label="Win rate"
@@ -149,7 +155,10 @@ export function CrmDashboardPage() {
               value={wl.avg_days_to_close === null ? '—' : `${wl.avg_days_to_close}d`}
               sub="won deals · approx"
             />
-            <StatCard label="Avg won deal" value={`$${formatNumber(wl.avg_won_deal_size)}`} />
+            <StatCard
+              label="Avg won deal"
+              value={wl.avg_won_deal_size === null ? '—' : `$${formatNumber(wl.avg_won_deal_size)}`}
+            />
             <StatCard
               label="Open deals"
               value={`${wl.open_deals}`}
@@ -290,7 +299,7 @@ export function CrmDashboardPage() {
                       <div style={{
                         position: 'absolute', inset: 0,
                         right: `${100 - Math.max(pct, b.count ? 2 : 0)}%`,
-                        background: bucketColor(b.label),
+                        background: bucketColor(b.min_days),
                       }} />
                     </div>
                     <span style={{ ...mono(11, INK), textAlign: 'right' }}>{b.count}</span>

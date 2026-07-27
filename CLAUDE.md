@@ -105,7 +105,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `crm_field_values` is polymorphic (no entity FK), so it is cleaned at every
   entity-delete + `_truncate_all` site (definitions survive demo-clear, wiped only by
   `clear_all`), and `is_required` is advisory-only (never enforced server-side). The
-  ~30 `crm_*` agent tools + executors are
+  ~31 `crm_*` agent tools + executors are
   collected UNCONDITIONALLY via `crm.tools.get_crm_tools()` — each def carries a
   `"writes"` flag (the single source of truth for the assistant's confirmation gate),
   consumed by `assistant.registry.ToolRegistry` (landed #4). **AI touch counts +

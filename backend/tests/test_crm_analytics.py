@@ -126,13 +126,21 @@ def test_get_analytics_clamps_inputs(rec):
     assert out["aging"]["stale_count"] == 60          # count is limit-independent
     assert len(out["aging"]["stale_deals"]) == 50     # list clamped to 50
 
+    # Upper clamp — the direction the crm_analytics "absurd LLM value is bounded"
+    # safety comment is about; the tool path has no Query-level backstop, so this
+    # server-side clamp is the only guard.
+    rec.fetchone_queue = [None]
+    rec.fetchall_queue = [[], [], []]
+    hi = service.get_analytics(days=10**7, stale_days=10**7)
+    assert hi["window_days"] == 365 and hi["stale_days"] == 365
+
 
 # ── Pure shapers ──────────────────────────────────────────────────────────────
 
 def test_shape_win_loss_guards_and_types():
     assert service._shape_win_loss(None) == {
         "deals_won": 0, "deals_lost": 0, "open_deals": 0, "win_rate_pct": None,
-        "avg_won_deal_size": 0.0, "avg_open_deal_size": 0.0,
+        "avg_won_deal_size": None, "avg_open_deal_size": None,  # None (not 0.0) = "no data"
         "avg_days_to_close": None, "total_pipeline_value": 0.0,
     }
     won = service._shape_win_loss({"won": 3, "lost": 1, "open_count": 5,
@@ -141,6 +149,7 @@ def test_shape_win_loss_guards_and_types():
     assert won["win_rate_pct"] == 75.0
     assert won["avg_days_to_close"] == 10.0 and isinstance(won["avg_days_to_close"], float)
     assert isinstance(won["avg_won_deal_size"], float)
+    assert won["avg_open_deal_size"] is None  # NULL avg → None, not 0.0
     # won+lost == 0 with open deals → None, not a misleading 0% record
     assert service._shape_win_loss({"won": 0, "lost": 0, "open_count": 4})["win_rate_pct"] is None
 
@@ -166,6 +175,21 @@ def test_stale_open_deals_threshold_sort_and_count():
     assert total == 3                       # count before the limit
     assert [d["id"] for d in stale] == [4, 2]   # stalest first, id tiebreak, top-2
     assert all(isinstance(d["days_since_touch"], int) for d in stale)
+
+
+def test_stale_threshold_is_inclusive():
+    # days_since_touch == stale_days must count as stale (the `>=` boundary).
+    rows = [_open_deal(1, age_days=20, days_since_touch=14),   # exactly at threshold
+            _open_deal(2, age_days=20, days_since_touch=13)]   # just under
+    stale, total = service._stale_open_deals(rows, stale_days=14, limit=10)
+    assert total == 1 and [d["id"] for d in stale] == [1]
+
+
+def test_stale_open_deals_clamps_negative_age():
+    # _stale_open_deals clamps its own age_days output (a second clamp site).
+    stale, _ = service._stale_open_deals(
+        [_open_deal(1, age_days=-3, days_since_touch=30)], stale_days=14, limit=10)
+    assert stale[0]["age_days"] == 0
 
 
 def test_fill_activity_daily_frame_and_types():
@@ -257,3 +281,4 @@ def test_analytics_route_validates_bounds(client, monkeypatch):
     assert client.get("/api/crm/analytics?days=1").status_code == 422   # ge=7
     assert client.get("/api/crm/analytics?days=999").status_code == 422  # le=365
     assert client.get("/api/crm/analytics?stale_days=0").status_code == 422  # ge=1
+    assert client.get("/api/crm/analytics?stale_days=9999").status_code == 422  # le=365

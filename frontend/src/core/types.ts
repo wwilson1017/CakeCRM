@@ -157,8 +157,9 @@ export interface CrmDashboard {
   top_deals: CrmDeal[];
 }
 
-// GET /api/crm/analytics (issue #20). Keyless SQL analytics; win_rate_pct and
-// avg_days_to_close are null when undefined (no closed deals) — render as "—".
+// GET /api/crm/analytics (issue #20). Keyless SQL analytics; win_rate_pct,
+// avg_days_to_close, and the avg deal sizes are null when there's no qualifying
+// deal (no closed / no won / no open with value) — render as "—", not "$0".
 export interface CrmAnalytics {
   window_days: number;
   stale_days: number;
@@ -167,8 +168,8 @@ export interface CrmAnalytics {
     deals_lost: number;
     open_deals: number;
     win_rate_pct: number | null;
-    avg_won_deal_size: number;
-    avg_open_deal_size: number;
+    avg_won_deal_size: number | null;
+    avg_open_deal_size: number | null;
     avg_days_to_close: number | null;
     total_pipeline_value: number;
   };
