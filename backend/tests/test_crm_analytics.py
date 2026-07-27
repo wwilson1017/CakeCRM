@@ -98,8 +98,10 @@ def test_get_analytics_query_shapes(rec):
 
     daily = rec.sql_containing("GROUP BY 1")
     assert "AT TIME ZONE 'UTC'" in daily and "::date" in daily
+    assert "created_at >= %s AND created_at < %s" in daily  # half-open window
     by_type = rec.sql_containing("GROUP BY activity")
     assert "ORDER BY count DESC, activity ASC" in by_type
+    assert "created_at >= %s AND created_at < %s" in by_type
 
 
 def test_activity_queries_share_one_window(rec):
@@ -110,9 +112,12 @@ def test_activity_queries_share_one_window(rec):
     service.get_analytics(days=30)
     daily_params = rec.params_for("GROUP BY 1")
     type_params = rec.params_for("GROUP BY activity")
-    assert len(daily_params) == 1 and isinstance(daily_params[0], datetime)
-    assert daily_params == type_params  # identical boundary
-    assert daily_params[0].tzinfo is not None  # tz-aware
+    # Half-open [start_dt, end_dt): BOTH bounds shared, so a today+1 row (UTC-midnight
+    # straddle / DB-clock skew) is excluded from both queries, not just the daily frame.
+    assert len(daily_params) == 2 and all(isinstance(p, datetime) for p in daily_params)
+    assert daily_params == type_params            # identical window
+    assert daily_params[0] < daily_params[1]      # start before exclusive end
+    assert all(p.tzinfo is not None for p in daily_params)  # tz-aware
 
 
 def test_get_analytics_clamps_inputs(rec):
@@ -246,6 +251,22 @@ def test_summarize_analytics_trims_to_lean_shape():
     assert out["stale_count"] == 6
     assert len(out["stale_deals"]) == 5  # top-5 only
     assert set(out["stale_deals"][0]) == {"id", "title", "days_since_touch"}
+
+
+def test_summarize_analytics_caps_activity_by_type():
+    # Free-text activity vocab → the tool trims to the top-N by count (D5 lean payload).
+    full = {
+        "window_days": 30, "stale_days": 14,
+        "win_loss": {"deals_won": 0, "deals_lost": 0, "open_deals": 0, "win_rate_pct": None,
+                     "avg_won_deal_size": None, "avg_open_deal_size": None,
+                     "avg_days_to_close": None, "total_pipeline_value": 0.0},
+        "activity": {"daily": [], "total": 120,
+                     "by_type": [{"activity": f"k{i:02d}", "count": 100 - i} for i in range(15)]},
+        "aging": {"buckets": [], "stale_count": 0, "stale_deals": []},
+    }
+    out = service.summarize_analytics(full)
+    assert len(out["activity_by_type"]) == service._TOOL_MAX_ACTIVITY_TYPES  # capped at top-10
+    assert out["activity_by_type"][0]["activity"] == "k00"  # highest-count first, order kept
 
 
 # ── Tool ──────────────────────────────────────────────────────────────────────

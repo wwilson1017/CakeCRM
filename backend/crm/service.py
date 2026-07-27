@@ -715,6 +715,11 @@ AGE_BUCKETS = ((0, 7, "0-7"), (8, 30, "8-30"), (31, 90, "31-90"), (91, None, "91
 # Open-deal predicate (DEAL_STAGES sentinels; no status column / CHECK exists).
 _OPEN_PREDICATE = "stage NOT IN ('won', 'lost')"
 
+# The assistant tool trims activity_by_type to the top-N by count: the activity
+# vocabulary is free text (no CHECK), so an unbounded tail of one-off kinds would
+# defeat summarize_analytics's "lean payload" goal (D5). The page shows the full list.
+_TOOL_MAX_ACTIVITY_TYPES = 10
+
 
 def _as_float(x, default: float = 0.0) -> float:
     """Coerce a SQL numeric to float. psycopg2 returns Decimal for EXTRACT/AVG
@@ -843,12 +848,17 @@ def get_analytics(days: int = 30, stale_days: int = 14, stale_limit: int = 8) ->
     stale_days = max(1, min(365, int(stale_days)))
     stale_limit = max(1, min(50, int(stale_limit)))
 
-    # One shared UTC calendar-day window for BOTH activity queries, aligned with
-    # the frame _fill_activity_daily renders, so activity.total (sum of the daily
-    # series) can never disagree with sum(by_type).
+    # One shared UTC calendar-day window [start_dt, end_dt) for BOTH activity
+    # queries, aligned EXACTLY with the frame _fill_activity_daily renders. Both
+    # bounds are shared and end_dt is start-of-tomorrow-UTC (exclusive), so a row
+    # landing on today+1 (a request straddling UTC midnight, or DB-clock skew) is
+    # excluded from BOTH queries rather than counted in by_type but dropped from
+    # the daily frame — making activity.total == sum(by_type) true by construction.
     today = datetime.now(timezone.utc).date()
     start_date = today - timedelta(days=days - 1)
+    end_date = today + timedelta(days=1)
     start_dt = datetime(start_date.year, start_date.month, start_date.day, tzinfo=timezone.utc)
+    end_dt = datetime(end_date.year, end_date.month, end_date.day, tzinfo=timezone.utc)
 
     stats_row = pg_fetchone(
         f"""
@@ -890,22 +900,22 @@ def get_analytics(days: int = 30, stale_days: int = 14, stale_limit: int = 8) ->
         """
         SELECT (created_at AT TIME ZONE 'UTC')::date AS day, COUNT(*) AS count
         FROM activity_log
-        WHERE created_at >= %s
+        WHERE created_at >= %s AND created_at < %s
         GROUP BY 1
         ORDER BY 1
         """,
-        (start_dt,),
+        (start_dt, end_dt),
     )
 
     type_rows = pg_fetchall(
         """
         SELECT activity, COUNT(*) AS count
         FROM activity_log
-        WHERE created_at >= %s
+        WHERE created_at >= %s AND created_at < %s
         GROUP BY activity
         ORDER BY count DESC, activity ASC
         """,
-        (start_dt,),
+        (start_dt, end_dt),
     )
 
     daily = _fill_activity_daily(daily_rows, days, today=today)
@@ -944,7 +954,7 @@ def summarize_analytics(analytics: dict) -> dict:
         "avg_days_to_close": wl["avg_days_to_close"],
         "total_pipeline_value": wl["total_pipeline_value"],
         "activity_total": act["total"],
-        "activity_by_type": act["by_type"],
+        "activity_by_type": act["by_type"][:_TOOL_MAX_ACTIVITY_TYPES],
         "aging_buckets": {b["label"]: b["count"] for b in aging["buckets"]},
         "stale_count": aging["stale_count"],
         "stale_deals": [

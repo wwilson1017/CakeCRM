@@ -62,7 +62,12 @@ export function CrmDashboardPage() {
 
   function openDeal(id: number) {
     // stale-deal rows carry only a summary; fetch the full deal for the sheet.
-    api<CrmDeal>(`/api/crm/deals/${id}`).then(setSelectedDeal).catch(() => {});
+    // Analytics can be stale (deal deleted in another tab / by the assistant), so
+    // on failure give feedback — a silent dead click reads as a broken UI, and
+    // every other user action here toasts — and refresh the now-stale list.
+    api<CrmDeal>(`/api/crm/deals/${id}`)
+      .then(setSelectedDeal)
+      .catch(() => { toast.error('Could not open that deal — it may have been deleted.'); loadAnalytics(); });
   }
 
   async function updateDealStage(deal: CrmDeal, stage: string) {
@@ -395,7 +400,10 @@ export function CrmDashboardPage() {
                       padding: '9px 0', borderBottom: `1px solid ${LINE}`,
                       display: 'grid', gridTemplateColumns: '90px 1fr 32px', gap: 12, alignItems: 'center',
                     }}>
-                      <span style={{ ...mono(11, INK_MUTE), textTransform: 'capitalize' }}>{t.activity}</span>
+                      <span style={{
+                        ...mono(11, INK_MUTE), textTransform: 'capitalize',
+                        minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      }}>{t.activity}</span>
                       <div style={{ height: 2, background: LINE, position: 'relative' }}>
                         <div style={{
                           position: 'absolute', inset: 0,
