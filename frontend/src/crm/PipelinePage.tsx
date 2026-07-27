@@ -5,7 +5,7 @@ import type { CrmDeal } from '../core/types';
 import { DealForm } from './components/DealForm';
 import { DealDetailSheet } from './components/DealDetailSheet';
 import { TouchCountPill } from './components/badges';
-import { STAGE_COLORS, STAGE_ORDER } from './constants';
+import { STAGE_COLORS, STAGE_ORDER, OPEN_STAGES } from './constants';
 import { IconPlus } from '../shared/icons';
 import { useIsMobile } from '../shared/useIsMobile';
 import { LoadError } from '../shared/LoadError';
@@ -30,10 +30,6 @@ interface PipelineData {
   deals: CrmDeal[];
 }
 
-// Open stages drive the header subtitle; won/lost are terminal and excluded so
-// the "open pipeline" total stays correct as deals are dragged in and out.
-const OPEN_STAGES = STAGE_ORDER.filter(s => s !== 'won' && s !== 'lost');
-
 export function PipelinePage() {
   const [data, setData] = useState<PipelineData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -55,7 +51,7 @@ export function PipelinePage() {
     // (matches the once-per-mount deep-link scroll below). Done here, not in an effect, to
     // avoid a cascading setState-in-effect.
     const s = searchParams.get('stage');
-    if (s && restored.advanced.stages.length && !restored.advanced.stages.includes(s)) {
+    if (s && STAGE_ORDER.includes(s) && restored.advanced.stages.length && !restored.advanced.stages.includes(s)) {
       return { ...restored, advanced: { ...restored.advanced, stages: [] } };
     }
     return restored;

@@ -1,5 +1,9 @@
 export const STAGE_ORDER = ['lead', 'qualified', 'proposal', 'negotiation', 'won', 'lost'];
 
+// Open (non-terminal) stages — the single source of truth for "open deal", shared by
+// the pipeline header's open-pipeline total and the Overdue close-date facet.
+export const OPEN_STAGES = STAGE_ORDER.filter(s => s !== 'won' && s !== 'lost');
+
 // Stage hues tuned for readable contrast on CakeCRM's warm-light surfaces
 // (chatty's originals were tuned for a dark theme; the light-gray "qualified"
 // in particular was near-invisible on white).

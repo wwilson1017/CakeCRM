@@ -708,3 +708,18 @@ def test_get_pipeline_last_activity_blends_activity_and_chatter(pg_db):
     pg_execute("INSERT INTO crm_chatter (entity_type, entity_id, message, created_at) VALUES (%s, %s, %s, %s)",
                ("contact", did, "wrong-entity note", "2030-01-01T00:00:00+00:00"))
     assert last_ymd() == "2026-01-10"
+
+    # 8. A SECOND deal must have an INDEPENDENT last_activity_at — proves the join key
+    #    (la.deal_id = d.id over the GROUP BY) attributes rows per deal with no cross-deal
+    #    leakage — and the stage-filtered branch (the crm_get_pipeline assistant-tool path)
+    #    returns the same per-deal value against real SQL, not just the mocked shape test.
+    d2 = service.create_deal("Small deal", stage="lead", value=200, company_id=co["id"])
+    did2 = d2["id"]
+    pg_execute("INSERT INTO activity_log (activity, deal_id, created_at) VALUES (%s, %s, %s)",
+               ("meeting", did2, "2026-03-15T12:00:00+00:00"))
+    board = {x["id"]: x for x in service.get_pipeline()["deals"]}
+    assert str(board[did]["last_activity_at"])[:10] == "2026-01-10"   # deal 1 unaffected by deal 2's row
+    assert str(board[did2]["last_activity_at"])[:10] == "2026-03-15"  # deal 2 sees only its own
+    lead_only = service.get_pipeline(stage="lead")["deals"]
+    assert [x["id"] for x in lead_only] == [did2]
+    assert str(lead_only[0]["last_activity_at"])[:10] == "2026-03-15"

@@ -16,7 +16,7 @@
  * the predicate so the logic stays pure and time-deterministic for testing.
  */
 import type { CrmDeal } from '../core/types';
-import { STAGE_ORDER } from './constants';
+import { STAGE_ORDER, OPEN_STAGES } from './constants';
 
 // ── Filter model ────────────────────────────────────────────────────────────
 
@@ -74,11 +74,6 @@ function datePart(ts: string | null | undefined): string {
   return ts ? ts.slice(0, 10) : '';
 }
 
-/** A deal is "open" when it is not in a terminal stage (deals carry no status field). */
-function isOpen(deal: CrmDeal): boolean {
-  return deal.stage !== 'won' && deal.stage !== 'lost';
-}
-
 // ── Predicate ───────────────────────────────────────────────────────────────
 
 function matchesValue(deal: CrmDeal, f: AdvancedFilters): boolean {
@@ -94,8 +89,9 @@ function matchesCloseDate(deal: CrmDeal, preset: ClosePreset, now: Date): boolea
     case 'noDate':
       return !close;
     case 'overdue':
-      // Overdue is only meaningful for still-open deals.
-      return isOpen(deal) && !!close && close < ymd(now);
+      // Overdue is only meaningful for still-open deals (deals carry no status field,
+      // so "open" = non-terminal stage, shared with the header's open-pipeline total).
+      return OPEN_STAGES.includes(deal.stage) && !!close && close < ymd(now);
     case 'next7':
       return !!close && close >= ymd(now) && close <= ymd(now, 7);
     case 'thisMonth':
