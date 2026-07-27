@@ -87,6 +87,10 @@ export function PipelinePage() {
   // its now-stale payload rather than reverting a move that actually succeeded.
   const pendingWrites = useRef(0);
   const writeGen = useRef(0);
+  // A silent refresh that couldn't run safely (a stage write was racing it) is DEFERRED, not
+  // dropped: moveDealStage re-fires it once the last write settles, so activity/derived fields
+  // still update after a sheet dismissal even when a drag PUT overlapped the refresh.
+  const pendingRefresh = useRef(false);
 
   // `silent` refetches without the loading spinner — used to refresh the board after the
   // detail sheet closes, so a deal touched in-sheet (a logged note/activity) leaves the
@@ -96,16 +100,19 @@ export function PipelinePage() {
     // `=== true` guards against a truthy non-boolean arg (e.g. a bare `onClick={load}`
     // handing in a MouseEvent) accidentally forcing silent mode.
     const isSilent = silent === true;
+    // A silent refresh must not clobber an optimistic drag. If a stage write is already in
+    // flight, don't even fire the GET — defer it (moveDealStage re-fires when writes settle).
+    if (isSilent && pendingWrites.current > 0) { pendingRefresh.current = true; return; }
     const startGen = writeGen.current;
     if (!isSilent) setLoading(true);
     try {
       const d = await api<PipelineData>('/api/crm/deals');
-      // A silent refresh must not clobber an optimistic drag: if any stage write overlapped
-      // this GET — still pending, OR started-and-settled while it was in flight — the GET may
-      // have read pre-commit data. Drop it and let the PUT's own reconcile settle the board
-      // (else a stale, non-self-healing revert of a succeeded move could land). A rare skipped
-      // refresh self-heals on the next close/interaction, when no write is racing.
-      if (isSilent && (pendingWrites.current > 0 || writeGen.current !== startGen)) return;
+      // A write that STARTED during this GET's flight (generation changed) may have made the
+      // payload stale — defer+retry rather than clobber a succeeded move OR lose the refresh.
+      if (isSilent && (pendingWrites.current > 0 || writeGen.current !== startGen)) {
+        pendingRefresh.current = true;
+        return;
+      }
       setData(d);
       dealConfirmedStage.current = new Map(d.deals.map(deal => [deal.id, deal.stage]));
     } catch { /* data stays null → LoadError below (silent: keep the current board) */ }
@@ -177,10 +184,17 @@ export function PipelinePage() {
         } : prev);
       } finally {
         pendingWrites.current--; // write settled (reconciled or reverted)
+        // Once ALL writes have settled, fire any silent refresh that was deferred while a
+        // write was racing it — so a sheet dismissal (Close OR Mark Won/Lost) still lands the
+        // fresh last_activity_at even though the stage PUT was in flight at dismissal time.
+        if (pendingWrites.current === 0 && pendingRefresh.current) {
+          pendingRefresh.current = false;
+          load(true);
+        }
       }
     });
     dealWriteChain.current.set(dealId, run);
-  }, []);
+  }, [load]);
 
   // Drag handler. Resolves immediately so the Kanban hook ends its gesture and
   // re-syncs from `data` right away; persistence + rollback are data-driven (via
@@ -199,11 +213,14 @@ export function PipelinePage() {
     return Promise.resolve();
   }, [moveDealStage]);
 
-  // Detail-sheet handler (Mark Won / Lost) — optimistic move + close the sheet.
+  // Detail-sheet handler (Mark Won / Lost) — optimistic move + close the sheet. Also refresh
+  // the board (like onClose) so an in-sheet note/activity logged before this dismissal lands
+  // its last_activity_at; if a stage move fired, the refresh defers until that PUT settles.
   const updateDealStage = useCallback((deal: CrmDeal, stage: string) => {
     if (deal.stage !== stage) moveDealStage(deal, stage, deal.stage);
     setSelectedDeal(null);
-  }, [moveDealStage]);
+    load(true);
+  }, [moveDealStage, load]);
 
   const deals = useMemo(() => data?.deals ?? [], [data]);
 
