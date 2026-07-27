@@ -61,9 +61,12 @@ export const EMPTY_FILTER_STATE: PipelineFilterState = {
 
 // ── Date helpers (local timezone) ───────────────────────────────────────────
 
-/** Local YYYY-MM-DD for `base` shifted by `offsetDays`. */
+/** Local YYYY-MM-DD for `base` shifted by `offsetDays`. Builds the shifted date via
+ *  calendar fields (not `getTime() + n*86_400_000`) so a day offset that crosses a DST
+ *  transition still lands on the right calendar date near midnight. */
 export function ymd(base: Date, offsetDays = 0): string {
-  return new Date(base.getTime() + offsetDays * 86_400_000).toLocaleDateString('en-CA');
+  return new Date(base.getFullYear(), base.getMonth(), base.getDate() + offsetDays)
+    .toLocaleDateString('en-CA');
 }
 
 /** The date portion (YYYY-MM-DD) of a stored timestamp, or '' if absent.
@@ -163,7 +166,7 @@ export function loadFilterState(): PipelineFilterState {
       search: typeof p.search === 'string' ? p.search : '',
       advanced: {
         stages: Array.isArray(adv.stages)
-          ? adv.stages.filter((s): s is string => typeof s === 'string' && STAGE_ORDER.includes(s))
+          ? [...new Set(adv.stages.filter((s): s is string => typeof s === 'string' && STAGE_ORDER.includes(s)))]
           : [],
         valueMin: coerceNumOrNull(adv.valueMin),
         valueMax: coerceNumOrNull(adv.valueMax),

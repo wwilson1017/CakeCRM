@@ -178,6 +178,8 @@ function FacetButton({ label, active, children }: { label: string; active: boole
     <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
       <button
         onClick={() => setOpen(o => !o)}
+        aria-haspopup="true"
+        aria-expanded={open}
         style={{
           display: 'flex', alignItems: 'center', gap: 5, padding: '7px 12px', borderRadius: 4,
           fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: FONT_SANS,

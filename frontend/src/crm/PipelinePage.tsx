@@ -45,16 +45,16 @@ export function PipelinePage() {
   // board, no backend query params. Held as ONE object so restore/persist/clear-all
   // are single-path.
   const [filters, setFilters] = useState<PipelineFilterState>(() => {
-    const restored = loadFilterState();
-    // A dashboard deep-link (?stage=X) is authoritative over a restored stage facet: if
-    // the saved facet would hide the target column, drop it at mount so the column exists
-    // (matches the once-per-mount deep-link scroll below). Done here, not in an effect, to
-    // avoid a cascading setState-in-effect.
+    // A dashboard deep-link (?stage=X) is an explicit "show me this column" intent that
+    // overrides restored session filters ENTIRELY: any restored facet — not just a
+    // conflicting stage — could hide the target column or match zero deals (→ the empty
+    // state renders, no columns mount, the scroll below silently no-ops). So a VALID
+    // deep-link starts from empty filters; an unknown param is ignored (matching the
+    // scroll effect's STAGE_ORDER guard). Done here, not in an effect, to avoid a
+    // cascading setState-in-effect.
     const s = searchParams.get('stage');
-    if (s && STAGE_ORDER.includes(s) && restored.advanced.stages.length && !restored.advanced.stages.includes(s)) {
-      return { ...restored, advanced: { ...restored.advanced, stages: [] } };
-    }
-    return restored;
+    if (s && STAGE_ORDER.includes(s)) return EMPTY_FILTER_STATE;
+    return loadFilterState();
   });
   const { search, advanced } = filters;
   useEffect(() => { saveFilterState(filters); }, [filters]);
@@ -76,14 +76,18 @@ export function PipelinePage() {
   // server stage rather than an optimistic intermediate that itself never persisted.
   const dealConfirmedStage = useRef<Map<number, string>>(new Map());
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  // `silent` refetches without the loading spinner — used to refresh the board after the
+  // detail sheet closes, so a deal touched in-sheet (a logged note/activity) leaves the
+  // "no activity" bucket without flashing the whole board. `data` stays the single source
+  // of truth (issue #12): this re-derives everything from the server, no second optimistic layer.
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const d = await api<PipelineData>('/api/crm/deals');
       setData(d);
       dealConfirmedStage.current = new Map(d.deals.map(deal => [deal.id, deal.stage]));
-    } catch { /* data stays null → LoadError below */ }
-    finally { setLoading(false); }
+    } catch { /* data stays null → LoadError below (silent: keep the current board) */ }
+    finally { if (!silent) setLoading(false); }
   }, []);
 
   useEffect(() => { queueMicrotask(load); }, [load]);
@@ -182,6 +186,10 @@ export function PipelinePage() {
   // The board loads every deal, so advanced filtering is a pure client-side predicate
   // over `deals` — no refetch. This memo is spliced between `deals` and `grouped`; when
   // nothing is active it returns `deals` by reference so unfiltered renders don't churn.
+  // `now` is snapshotted per recompute (on any deals/search/advanced change), so an IDLE
+  // tab left open across midnight keeps yesterday's date-bucket boundaries until the next
+  // interaction — accepted (self-heals on any filter/drag/refresh; same class as the
+  // documented UTC-vs-local date-part skew in pipelineFilters.ts).
   const filteredDeals = useMemo(() => {
     if (!isFiltering) return deals;
     const q = search.trim().toLowerCase();
@@ -241,8 +249,8 @@ export function PipelinePage() {
     if (!s) return;
     deepLinkDone.current = true;
     if (STAGE_ORDER.includes(s)) {
-      // The initializer already dropped any restored stage facet that would hide this
-      // column, so the target is guaranteed present here.
+      // The initializer cleared restored filters for a valid deep-link, so every stage
+      // column is present and non-empty-state — the target is guaranteed mounted here.
       columnRefs.current.get(s)?.scrollIntoView({ behavior: 'smooth', inline: 'start', block: 'nearest' });
     }
     const next = new URLSearchParams(searchParams);
@@ -351,7 +359,10 @@ export function PipelinePage() {
           key={selectedDeal.id}
           deal={selectedDeal}
           isMobile={isMobile}
-          onClose={() => setSelectedDeal(null)}
+          // Silent-refresh the board on close so an in-sheet note/activity log updates the
+          // deal's last_activity_at (and touch count) without a spinner flash — closes the
+          // "filter stale deals → log a touch → it leaves the stale bucket" loop.
+          onClose={() => { setSelectedDeal(null); load(true); }}
           onEdit={(d) => { setSelectedDeal(null); setEditDeal(d); }}
           onStageChange={updateDealStage}
         />
