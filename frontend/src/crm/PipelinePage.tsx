@@ -75,19 +75,29 @@ export function PipelinePage() {
   // display reconcile is superseded), so a rolled-back move restores the real
   // server stage rather than an optimistic intermediate that itself never persisted.
   const dealConfirmedStage = useRef<Map<number, string>>(new Map());
+  // Count of optimistic stage writes still in flight — lets a silent refresh drop a
+  // response that may predate an as-yet-unconfirmed drag PUT (see `load`).
+  const pendingWrites = useRef(0);
 
   // `silent` refetches without the loading spinner — used to refresh the board after the
   // detail sheet closes, so a deal touched in-sheet (a logged note/activity) leaves the
   // "no activity" bucket without flashing the whole board. `data` stays the single source
   // of truth (issue #12): this re-derives everything from the server, no second optimistic layer.
   const load = useCallback(async (silent = false) => {
-    if (!silent) setLoading(true);
+    // `=== true` guards against a truthy non-boolean arg (e.g. a bare `onClick={load}`
+    // handing in a MouseEvent) accidentally forcing silent mode.
+    const isSilent = silent === true;
+    if (!isSilent) setLoading(true);
     try {
       const d = await api<PipelineData>('/api/crm/deals');
+      // A silent refresh must not clobber an in-flight optimistic drag: if a stage PUT is
+      // still pending, this GET may have read pre-commit data — drop it and let the PUT's
+      // own reconcile settle the board (else a stale, non-self-healing revert could land).
+      if (isSilent && pendingWrites.current > 0) return;
       setData(d);
       dealConfirmedStage.current = new Map(d.deals.map(deal => [deal.id, deal.stage]));
     } catch { /* data stays null → LoadError below (silent: keep the current board) */ }
-    finally { if (!silent) setLoading(false); }
+    finally { if (!isSilent) setLoading(false); }
   }, []);
 
   useEffect(() => { queueMicrotask(load); }, [load]);
@@ -121,6 +131,7 @@ export function PipelinePage() {
       ...prev,
       deals: prev.deals.map(d => d.id === dealId ? { ...d, stage: toStage } : d),
     } : prev);
+    pendingWrites.current++; // an unconfirmed optimistic write now exists (see `load`'s silent guard)
     const prior = dealWriteChain.current.get(dealId) ?? Promise.resolve();
     const run = prior.then(async () => {
       try {
@@ -151,6 +162,8 @@ export function PipelinePage() {
           ...prev,
           deals: prev.deals.map(d => d.id === dealId ? { ...d, stage: confirmed } : d),
         } : prev);
+      } finally {
+        pendingWrites.current--; // write settled (reconciled or reverted)
       }
     });
     dealWriteChain.current.set(dealId, run);
@@ -266,7 +279,7 @@ export function PipelinePage() {
     );
   }
 
-  if (!data) return <LoadError label="Couldn't load pipeline" onRetry={load} />;
+  if (!data) return <LoadError label="Couldn't load pipeline" onRetry={() => load()} />;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, padding: isMobile ? '20px 16px' : '32px 44px' }}>
