@@ -271,29 +271,37 @@ def test_refresh_lock_busy_returns_none(monkeypatch, fake_conn):
     assert not any("crm_meta" in s for s, _ in conn.executed)
 
 
-def test_refresh_not_due_returns_none_no_backfill(monkeypatch, fake_conn):
-    recent = NOW - timedelta(hours=1)
-    conn = fake_conn(monkeypatch, ss, fetchone_results=[(True,), (recent,)])
-    monkeypatch.setattr(ss, "backfill_scores", lambda *a, **k: pytest.fail("must not backfill when not due"))
+def test_refresh_nothing_stale_returns_none(monkeypatch, fake_conn):
+    # lock acquired, but both stale-id queries return empty -> nothing to do.
+    conn = fake_conn(monkeypatch, ss, fetchone_results=[(True,)], fetchall_results=[[], []])
+    monkeypatch.setattr(ss, "recompute_deal", lambda *a, **k: pytest.fail("nothing stale -> no recompute"))
     assert ss.run_score_refresh_if_due(now=NOW) is None
-    # lock released, no completion stamp written
     stmts = [s for s, _ in conn.executed]
-    assert any("pg_advisory_unlock" in s for s in stmts)
-    assert not any("UPDATE crm_meta" in s for s in stmts)
+    assert any("pg_advisory_unlock" in s for s in stmts)  # lock always released
+    assert not any("UPDATE crm_meta" in s for s in stmts)  # no stamp when nothing ran
 
 
-def test_refresh_due_runs_and_stamps_completion(monkeypatch, fake_conn):
-    stale = NOW - timedelta(hours=48)
-    conn = fake_conn(monkeypatch, ss, fetchone_results=[(True,), (stale,)])
-    monkeypatch.setattr(ss, "backfill_scores", lambda scope, now=None: {"deals_scored": 3, "contacts_scored": 2, "errors": 0, "capped": False})
+def test_refresh_processes_stale_batch_and_stamps(monkeypatch, fake_conn):
+    # lock=True; two stale deals + one stale contact.
+    conn = fake_conn(monkeypatch, ss, fetchone_results=[(True,)],
+                     fetchall_results=[[(1,), (2,)], [(9,)]])
+    monkeypatch.setattr(ss, "recompute_deal", lambda i, now=None: 50)
+    monkeypatch.setattr(ss, "recompute_contact", lambda i, now=None: 40)
     out = ss.run_score_refresh_if_due(now=NOW)
-    assert out["deals_scored"] == 3
+    assert out == {"deals_scored": 2, "contacts_scored": 1, "batch": 3}
     stmts = [s for s, _ in conn.executed]
     assert any("UPDATE crm_meta SET scores_refreshed_at = %s WHERE id = 1" in s for s in stmts)
     assert any("pg_advisory_unlock" in s for s in stmts)
 
 
-def test_refresh_first_run_last_is_null_runs(monkeypatch, fake_conn):
-    fake_conn(monkeypatch, ss, fetchone_results=[(True,), None])  # crm_meta row/col empty -> due
-    monkeypatch.setattr(ss, "backfill_scores", lambda scope, now=None: {"deals_scored": 0, "contacts_scored": 0, "errors": 0, "capped": False})
-    assert ss.run_score_refresh_if_due(now=NOW) is not None
+def test_refresh_is_bounded_to_batch(monkeypatch, fake_conn):
+    # deals fill the whole batch; contacts then get the remainder (0) and are skipped.
+    conn = fake_conn(monkeypatch, ss, fetchone_results=[(True,)],
+                     fetchall_results=[[(i,) for i in range(ss._REFRESH_BATCH)], []])
+    monkeypatch.setattr(ss, "recompute_deal", lambda i, now=None: 1)
+    monkeypatch.setattr(ss, "recompute_contact", lambda i, now=None: 1)
+    ss.run_score_refresh_if_due(now=NOW)
+    deal_limit = next(p[-1] for s, p in conn.executed if "FROM deals WHERE lead_score_at" in s)
+    assert deal_limit == ss._REFRESH_BATCH
+    # contacts stale-query is skipped entirely when the deal batch is already full (limit 0)
+    assert not any("FROM contacts WHERE lead_score_at" in s for s, _ in conn.executed)

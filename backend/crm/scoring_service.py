@@ -50,9 +50,12 @@ _CONTACT_LOCK_NS = 1802
 _REFRESH_LOCK_KEY = 20260718  # distinct from migration(1)/telegram(720770)/dreaming(20260705)
 
 _REFRESH_INTERVAL = timedelta(hours=24)
-# Safety valve for the daily all-rows refresh: never process an unbounded set inline
-# in the heartbeat path. At single-user scale this is never reached; if it is, the
-# overflow is logged (never silently dropped) and picked up by the next run / a manual backfill.
+# Per-tick cap for the time-decay refresh. reminder_tick is a shared, fast-and-bounded
+# (T1) slot, so the refresh MUST NOT sweep the whole table on the tick it fires — it
+# processes at most this many stale entities per pass and self-resumes on later ticks.
+_REFRESH_BATCH = 500
+# Safety valve for a MANUAL backfill("all") of a huge dataset (runs off-thread via the
+# endpoint/tool, never in the tick): bound + log rather than run unboundedly.
 _REFRESH_MAX_ROWS = 20000
 
 STAGE_BASELINES = {"lead": 8, "qualified": 18, "proposal": 32, "negotiation": 45}
@@ -498,29 +501,44 @@ def _run_batch(fn, ids, now, label) -> int:
     return ok
 
 
+def _stale_ids(cur, table: str, cutoff: datetime, limit: int) -> list[int]:
+    """Up to ``limit`` ids of rows whose score is stale (never scored, or last scored before
+    ``cutoff``). ``table`` is a module-internal literal ('deals'/'contacts'), never user input.
+    Ids are extracted immediately (before the cursor is reused — row_to_dict gotcha)."""
+    if limit <= 0:
+        return []
+    cur.execute(
+        f"SELECT id FROM {table} WHERE lead_score_at IS NULL OR lead_score_at < %s LIMIT %s",
+        (cutoff, limit),
+    )
+    return [r[0] for r in cur.fetchall()]
+
+
 def run_score_refresh_if_due(now: datetime | None = None) -> dict | None:
-    """Daily refresh of the time-decay factors (recency/age drift with the clock, not with
-    writes). Holds a session-level advisory lock across the WHOLE run (prevents overlap with
-    another due-check, a manual backfill, or a tool call) and only stamps completion on
-    success, so a crash mid-refresh simply retries next tick. Returns the backfill summary,
-    or None when not due / the lock is busy. Modeled on dreaming.run_dreaming_if_due."""
+    """Refresh the STALEST scores whose time-decay factors (recency/age) have drifted — rows
+    not recomputed within _REFRESH_INTERVAL (or never scored). BOUNDED to _REFRESH_BATCH
+    entities per call so it stays fast inside reminder_tick's shared slot (T1); any remainder
+    is picked up on later ticks (self-resuming). Because event writes keep active rows fresh,
+    this only ever touches dormant rows. A session-level advisory lock (held across the pass)
+    prevents overlap with a manual backfill or another tick. Returns a summary, or None when
+    nothing is stale / the lock is busy."""
     now = _now(now)
+    cutoff = now - _REFRESH_INTERVAL
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute("SELECT pg_try_advisory_lock(%s)", (_REFRESH_LOCK_KEY,))
         if not cur.fetchone()[0]:
-            return None  # another refresh is running
+            return None  # another refresh/backfill holds the lock
         try:
-            cur.execute("SELECT scores_refreshed_at FROM crm_meta WHERE id = 1")
-            row = cur.fetchone()
-            last = row[0] if row else None
-            if last is not None:
-                if last.tzinfo is None:
-                    last = last.replace(tzinfo=timezone.utc)
-                if now - last < _REFRESH_INTERVAL:
-                    return None  # not due yet
-            summary = backfill_scores("all", now=now)
+            deal_ids = _stale_ids(cur, "deals", cutoff, _REFRESH_BATCH)
+            contact_ids = _stale_ids(cur, "contacts", cutoff, _REFRESH_BATCH - len(deal_ids))
+            if not deal_ids and not contact_ids:
+                return None  # nothing stale — the common cheap path
+            # recompute_* each take their own pooled connection + per-entity xact lock; the
+            # session lock on `conn` stays held (its cursor is idle) so no overlap can start.
+            d = _run_batch(recompute_deal, deal_ids, now, "deal")
+            c = _run_batch(recompute_contact, contact_ids, now, "contact")
             cur.execute("UPDATE crm_meta SET scores_refreshed_at = %s WHERE id = 1", (now,))
-            return summary
+            return {"deals_scored": d, "contacts_scored": c, "batch": len(deal_ids) + len(contact_ids)}
         finally:
             cur.execute("SELECT pg_advisory_unlock(%s)", (_REFRESH_LOCK_KEY,))
