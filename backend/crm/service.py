@@ -10,7 +10,7 @@ Ported from chatty's SQLite ``crm_lite/client.py`` and translated to Postgres:
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from core.postgres import get_connection, pg_execute, pg_fetchall, pg_fetchone
 from crm import touch_count_service
@@ -703,6 +703,249 @@ def get_dashboard_stats() -> dict:
         "pending_tasks": pending_tasks,
         "recent_activity": recent_activity,
         "top_deals": top_deals,
+    }
+
+
+# Deal-age buckets for the aging distribution (#20, D1: read-time only, from
+# created_at). max_days=None means open-ended. All four buckets are always
+# returned (zero-filled) so the UI renders a stable frame. Boundaries and labels
+# are aligned exactly — day 90 is "31-90", day 91 is "91+" (no off-by-one).
+AGE_BUCKETS = ((0, 7, "0-7"), (8, 30, "8-30"), (31, 90, "31-90"), (91, None, "91+"))
+
+# Open-deal predicate (DEAL_STAGES sentinels; no status column / CHECK exists).
+_OPEN_PREDICATE = "stage NOT IN ('won', 'lost')"
+
+
+def _as_float(x, default: float = 0.0) -> float:
+    """Coerce a SQL numeric to float. psycopg2 returns Decimal for EXTRACT/AVG
+    results and the pg adapter leaves those untouched (it only ISO-stringifies
+    date/datetime), so Python arithmetic must never mix Decimal with float."""
+    return float(x) if x is not None else default
+
+
+# ── Analytics: pure shapers (no DB access — the hermetic-test surface) ─────────
+
+def _shape_win_loss(row: dict | None) -> dict:
+    """Win/loss + deal-size scalars from the single aggregate row. Guards: a None
+    row (empty deals table / mock), NULL AVGs, and won+lost == 0 → win_rate_pct is
+    None ("no closed deals yet", distinct from a genuine 0% record; UI shows "—")."""
+    row = row or {}
+    won = int(row.get("won") or 0)
+    lost = int(row.get("lost") or 0)
+    open_count = int(row.get("open_count") or 0)
+    total_closed = won + lost
+    adtc = row.get("avg_days_to_close")
+    return {
+        "deals_won": won,
+        "deals_lost": lost,
+        "open_deals": open_count,
+        "win_rate_pct": round(won / total_closed * 100, 1) if total_closed else None,
+        "avg_won_deal_size": round(_as_float(row.get("avg_won_deal_size")), 2),
+        "avg_open_deal_size": round(_as_float(row.get("avg_open_deal_size")), 2),
+        # updated_at - created_at is an approximation of close time (updated_at moves
+        # on any edit; there is no closed_at column) — same as the cake_os blueprint.
+        "avg_days_to_close": round(_as_float(adtc), 1) if adtc is not None else None,
+        "total_pipeline_value": round(_as_float(row.get("total_pipeline_value")), 2),
+    }
+
+
+def _bucket_deal_ages(open_rows: list[dict]) -> list[dict]:
+    """Bucket open deals by whole-day age. Negative ages (clock skew) clamp to 0.
+    Always returns all four AGE_BUCKETS in order, zero-filled."""
+    counts = {label: 0 for _, _, label in AGE_BUCKETS}
+    for row in open_rows:
+        days = max(0, int(_as_float(row.get("age_days"))))  # int() floors: 7.9d → "0-7"
+        for lo, hi, label in AGE_BUCKETS:
+            if days >= lo and (hi is None or days <= hi):
+                counts[label] += 1
+                break
+    return [
+        {"label": label, "min_days": lo, "max_days": hi, "count": counts[label]}
+        for lo, hi, label in AGE_BUCKETS
+    ]
+
+
+def _stale_open_deals(
+    open_rows: list[dict], stale_days: int, limit: int
+) -> tuple[list[dict], int]:
+    """(top-N stalest open deals, total stale count). Stale = days_since_touch >=
+    stale_days. Sorted stalest-first (days_since_touch desc, id asc tiebreak). The
+    count is computed BEFORE the limit so truncation never undercounts."""
+    stale = []
+    for row in open_rows:
+        days_since = int(_as_float(row.get("days_since_touch")))
+        if days_since >= stale_days:
+            stale.append({
+                "id": row.get("id"),
+                "title": row.get("title"),
+                "value": _as_float(row.get("value")),
+                "stage": row.get("stage"),
+                "contact_name": row.get("contact_name"),
+                "company_name": row.get("company_name"),
+                "days_since_touch": days_since,
+                "age_days": max(0, int(_as_float(row.get("age_days")))),
+            })
+    stale.sort(key=lambda d: (-d["days_since_touch"], d["id"]))
+    return stale[:limit], len(stale)
+
+
+def _fill_activity_daily(rows: list[dict], days: int, today=None) -> list[dict]:
+    """Zero-fill the daily activity series over the trailing `days` UTC days
+    (ending today, inclusive, ascending). Row 'day' may be a date (real SQL, ISO-
+    stringified by the pg adapter) or a string (mocks): both normalize via
+    str(day)[:10]. `today` (a date) is injectable for deterministic tests."""
+    if today is None:
+        today = datetime.now(timezone.utc).date()
+    counts = {str(r["day"])[:10]: int(r.get("count") or 0) for r in rows}
+    series = []
+    for i in range(days):
+        iso = (today - timedelta(days=days - 1 - i)).isoformat()
+        series.append({"day": iso, "count": counts.get(iso, 0)})
+    return series
+
+
+def _shape_activity_types(rows: list[dict]) -> list[dict]:
+    """Normalize the free-text activity vocabulary (no CHECK constraint): strip +
+    lowercase, blank → 'other', merge post-normalization duplicates, order by count
+    desc then label asc."""
+    merged: dict[str, int] = {}
+    for r in rows:
+        kind = (r.get("activity") or "").strip().lower() or "other"
+        merged[kind] = merged.get(kind, 0) + int(r.get("count") or 0)
+    return [
+        {"activity": k, "count": v}
+        for k, v in sorted(merged.items(), key=lambda kv: (-kv[1], kv[0]))
+    ]
+
+
+# ── Analytics: query + assemble ───────────────────────────────────────────────
+
+def get_analytics(days: int = 30, stale_days: int = 14, stale_limit: int = 8) -> dict:
+    """Keyless SQL analytics for the enriched dashboard (issue #20): win/loss,
+    activity volume, and read-time deal aging. Pure aggregation — no AI, no gate;
+    renders a sensible zero state on an empty CRM.
+
+    Split deliberately: this runs four queries and delegates every ratio, guard,
+    bucket, sort, and Decimal→float coercion to the pure module-level shapers
+    above, so the hermetic test suite (which mocks the pg helpers) exercises all
+    the logic without a database.
+
+    NOTE: avg_days_to_close uses updated_at - created_at on won deals — an
+    approximation (updated_at moves on any edit; there is no closed_at column),
+    same as the cake_os blueprint. Documented, not solved.
+    """
+    days = max(7, min(365, int(days)))
+    stale_days = max(1, min(365, int(stale_days)))
+    stale_limit = max(1, min(50, int(stale_limit)))
+
+    # One shared UTC calendar-day window for BOTH activity queries, aligned with
+    # the frame _fill_activity_daily renders, so activity.total (sum of the daily
+    # series) can never disagree with sum(by_type).
+    today = datetime.now(timezone.utc).date()
+    start_date = today - timedelta(days=days - 1)
+    start_dt = datetime(start_date.year, start_date.month, start_date.day, tzinfo=timezone.utc)
+
+    stats_row = pg_fetchone(
+        f"""
+        SELECT
+            COUNT(*) FILTER (WHERE stage = 'won')                       AS won,
+            COUNT(*) FILTER (WHERE stage = 'lost')                      AS lost,
+            COUNT(*) FILTER (WHERE {_OPEN_PREDICATE})                   AS open_count,
+            COALESCE(SUM(value) FILTER (WHERE {_OPEN_PREDICATE}), 0)    AS total_pipeline_value,
+            AVG(value) FILTER (WHERE stage = 'won' AND value > 0)       AS avg_won_deal_size,
+            AVG(value) FILTER (WHERE {_OPEN_PREDICATE} AND value > 0)   AS avg_open_deal_size,
+            AVG(EXTRACT(EPOCH FROM (updated_at - created_at)) / 86400.0)
+                FILTER (WHERE stage = 'won')                            AS avg_days_to_close
+        FROM deals
+        """
+    )
+
+    open_rows = pg_fetchall(
+        f"""
+        SELECT d.id, d.title, d.value, d.stage,
+               c.name  AS contact_name,
+               co.name AS company_name,
+               EXTRACT(EPOCH FROM (now() - d.created_at)) / 86400.0 AS age_days,
+               EXTRACT(EPOCH FROM (now() - GREATEST(
+                   d.updated_at,
+                   COALESCE((SELECT MAX(a.created_at) FROM activity_log a
+                             WHERE a.deal_id = d.id), d.updated_at),
+                   COALESCE((SELECT MAX(ch.created_at) FROM crm_chatter ch
+                             WHERE ch.entity_type = 'deal' AND ch.entity_id = d.id
+                               AND ch.archived = 0), d.updated_at)
+               ))) / 86400.0 AS days_since_touch
+        FROM deals d
+        LEFT JOIN contacts  c  ON d.contact_id = c.id
+        LEFT JOIN companies co ON d.company_id = co.id
+        WHERE d.{_OPEN_PREDICATE}
+        """
+    )
+
+    daily_rows = pg_fetchall(
+        """
+        SELECT (created_at AT TIME ZONE 'UTC')::date AS day, COUNT(*) AS count
+        FROM activity_log
+        WHERE created_at >= %s
+        GROUP BY 1
+        ORDER BY 1
+        """,
+        (start_dt,),
+    )
+
+    type_rows = pg_fetchall(
+        """
+        SELECT activity, COUNT(*) AS count
+        FROM activity_log
+        WHERE created_at >= %s
+        GROUP BY activity
+        ORDER BY count DESC, activity ASC
+        """,
+        (start_dt,),
+    )
+
+    daily = _fill_activity_daily(daily_rows, days, today=today)
+    stale_deals, stale_count = _stale_open_deals(open_rows, stale_days, stale_limit)
+    return {
+        "window_days": days,
+        "stale_days": stale_days,
+        "win_loss": _shape_win_loss(stats_row),
+        "activity": {
+            "daily": daily,
+            "by_type": _shape_activity_types(type_rows),
+            "total": sum(d["count"] for d in daily),
+        },
+        "aging": {
+            "buckets": _bucket_deal_ages(open_rows),
+            "stale_count": stale_count,
+            "stale_deals": stale_deals,
+        },
+    }
+
+
+def summarize_analytics(analytics: dict) -> dict:
+    """Lean assistant-tool shape (#20, D5): summarized scalars + compact lists only,
+    never the raw daily series (window_days rows of noise to the model)."""
+    wl = analytics["win_loss"]
+    act = analytics["activity"]
+    aging = analytics["aging"]
+    return {
+        "window_days": analytics["window_days"],
+        "stale_days": analytics["stale_days"],
+        "win_rate_pct": wl["win_rate_pct"],
+        "deals_won": wl["deals_won"],
+        "deals_lost": wl["deals_lost"],
+        "open_deals": wl["open_deals"],
+        "avg_won_deal_size": wl["avg_won_deal_size"],
+        "avg_days_to_close": wl["avg_days_to_close"],
+        "total_pipeline_value": wl["total_pipeline_value"],
+        "activity_total": act["total"],
+        "activity_by_type": act["by_type"],
+        "aging_buckets": {b["label"]: b["count"] for b in aging["buckets"]},
+        "stale_count": aging["stale_count"],
+        "stale_deals": [
+            {"id": d["id"], "title": d["title"], "days_since_touch": d["days_since_touch"]}
+            for d in aging["stale_deals"][:5]
+        ],
     }
 
 

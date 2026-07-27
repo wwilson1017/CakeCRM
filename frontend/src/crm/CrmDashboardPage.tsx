@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../core/api/client';
-import type { CrmDashboard, CrmDeal } from '../core/types';
+import type { CrmDashboard, CrmDeal, CrmAnalytics } from '../core/types';
 import { ActivityTimeline } from './components/ActivityTimeline';
 import { DealForm } from './components/DealForm';
 import { DealDetailSheet } from './components/DealDetailSheet';
+import { StatCard } from './components/StatCard';
 import { STAGE_COLORS, STAGE_ORDER } from './constants';
 import { WarmHalo } from '../shared/WarmHalo';
 import { useIsMobile } from '../shared/useIsMobile';
@@ -12,22 +13,49 @@ import { LoadError } from '../shared/LoadError';
 import { toast } from '../shared/toast';
 import {
   INK, INK_MUTE, INK_SOFT, INK_DIM, LINE,
-  GOLD, FONT_DISPLAY,
+  GOLD, ACCENT, SAGE, CORAL, BG_RAISED, FONT_DISPLAY,
   mono, formatNumber,
 } from '../shared/styles';
 import { sectionHeading, btnSecondary } from './styles';
 
+// Aging-bucket fill color: severity ramp (older = hotter). The two oldest buckets
+// stay OFF the rebrandable ACCENT so "stale" reads as a warning, not brand.
+function bucketColor(label: string): string {
+  if (label === '91+') return CORAL;
+  if (label === '31-90') return GOLD;
+  return ACCENT;
+}
+
+// "YYYY-MM-DD" → "Mon D" (parsed as local midnight; display-only labels).
+function fmtDay(iso: string): string {
+  return new Date(`${iso}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
 export function CrmDashboardPage() {
   const [data, setData] = useState<CrmDashboard | null>(null);
+  const [analytics, setAnalytics] = useState<CrmAnalytics | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedDeal, setSelectedDeal] = useState<CrmDeal | null>(null);
   const [editDeal, setEditDeal] = useState<CrmDeal | null>(null);
   const navigate = useNavigate();
   const isMobile = useIsMobile();
 
+  // Best-effort: a failed analytics fetch degrades to the classic dashboard
+  // (analytics sections just don't render) rather than blanking the page.
+  function loadAnalytics() {
+    api<CrmAnalytics>('/api/crm/analytics').then(setAnalytics).catch(() => {});
+  }
+
   function reload() {
-    // best-effort: refresh after a mutation; stale data beats a blank page
+    // refresh after a mutation; stale data beats a blank page. Refetches BOTH
+    // dashboard and analytics so win/loss, activity, and staleness stay current.
     api<CrmDashboard>('/api/crm/dashboard').then(setData).catch(() => {});
+    loadAnalytics();
+  }
+
+  function openDeal(id: number) {
+    // stale-deal rows carry only a summary; fetch the full deal for the sheet.
+    api<CrmDeal>(`/api/crm/deals/${id}`).then(setSelectedDeal).catch(() => {});
   }
 
   async function updateDealStage(deal: CrmDeal, stage: string) {
@@ -52,7 +80,7 @@ export function CrmDashboardPage() {
       .finally(() => setLoading(false));
   }
 
-  useEffect(() => { loadDashboard(); }, []);
+  useEffect(() => { loadDashboard(); loadAnalytics(); }, []);
 
   if (loading) {
     return (
@@ -62,7 +90,7 @@ export function CrmDashboardPage() {
     );
   }
 
-  if (!data) return <LoadError label="Couldn't load CRM dashboard" onRetry={() => { setLoading(true); loadDashboard(); }} />;
+  if (!data) return <LoadError label="Couldn't load CRM dashboard" onRetry={() => { setLoading(true); loadDashboard(); loadAnalytics(); }} />;
 
   const activePipeline = data.pipeline_by_stage
     .filter(s => s.stage !== 'won' && s.stage !== 'lost')
@@ -71,6 +99,20 @@ export function CrmDashboardPage() {
   const totalDeals = activePipeline.reduce((s, p) => s + p.count, 0);
 
   const px = isMobile ? '20px' : '44px';
+
+  // Analytics-derived view values (all null-safe: analytics may not have loaded).
+  const wl = analytics?.win_loss;
+  const closed = wl ? wl.deals_won + wl.deals_lost : 0;
+  const wonPct = closed > 0 ? Math.round((wl!.deals_won / closed) * 100) : 0;
+  const winRateColor =
+    wl?.win_rate_pct == null ? undefined : wl.win_rate_pct >= 50 ? SAGE : wl.win_rate_pct > 0 ? GOLD : undefined;
+  const agingBuckets = analytics?.aging.buckets ?? [];
+  const openDealCount = agingBuckets.reduce((s, b) => s + b.count, 0);
+  const maxBucket = Math.max(1, ...agingBuckets.map(b => b.count));
+  const daily = analytics?.activity.daily ?? [];
+  const maxDaily = Math.max(1, ...daily.map(d => d.count));
+  const byType = analytics?.activity.by_type ?? [];
+  const maxType = Math.max(1, ...byType.map(t => t.count));
 
   return (
     <div style={{ position: 'relative', overflow: 'auto', height: '100%' }}>
@@ -90,6 +132,51 @@ export function CrmDashboardPage() {
           <br /><span style={{ color: INK_MUTE, fontSize: isMobile ? 16 : 26 }}>across {totalDeals} open deals.</span>
         </h1>
       </div>
+
+      {/* Snapshot (analytics) */}
+      {analytics && wl && (
+        <div style={{ padding: `0 ${px} 4px`, position: 'relative', zIndex: 2 }}>
+          <div style={sectionHeading(INK_SOFT)}>Snapshot · last {analytics.window_days} days</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+            <StatCard
+              label="Win rate"
+              value={wl.win_rate_pct === null ? '—' : `${wl.win_rate_pct}%`}
+              sub={`${wl.deals_won}W / ${wl.deals_lost}L`}
+              color={winRateColor}
+            />
+            <StatCard
+              label="Avg days to close"
+              value={wl.avg_days_to_close === null ? '—' : `${wl.avg_days_to_close}d`}
+              sub="won deals · approx"
+            />
+            <StatCard label="Avg won deal" value={`$${formatNumber(wl.avg_won_deal_size)}`} />
+            <StatCard
+              label="Open deals"
+              value={`${wl.open_deals}`}
+              sub={`worth $${formatNumber(wl.total_pipeline_value)}`}
+            />
+            <StatCard
+              label="Overdue tasks"
+              value={`${data.overdue_tasks}`}
+              sub={`${data.pending_tasks} pending`}
+              color={data.overdue_tasks > 0 ? CORAL : undefined}
+            />
+          </div>
+          {closed > 0 ? (
+            <div style={{ marginTop: 14, maxWidth: 420 }}>
+              <div style={{ display: 'flex', height: 6, borderRadius: 3, overflow: 'hidden', background: LINE }}>
+                <div style={{ width: `${wonPct}%`, background: SAGE }} />
+                <div style={{ width: `${100 - wonPct}%`, background: CORAL }} />
+              </div>
+              <div style={{ ...mono(10, INK_DIM), marginTop: 5 }}>
+                {wl.deals_won} won · {wl.deals_lost} lost
+              </div>
+            </div>
+          ) : (
+            <div style={{ marginTop: 12, fontSize: 13, color: INK_DIM }}>No closed deals yet.</div>
+          )}
+        </div>
+      )}
 
       {/* Stage rows */}
       <div style={{ padding: `0 ${px} 28px`, position: 'relative', zIndex: 2 }}>
@@ -178,6 +265,138 @@ export function CrmDashboardPage() {
         </div>
       </div>
 
+      {/* Deal aging + activity volume (analytics) */}
+      {analytics && (
+        <div style={{
+          padding: `10px ${px} 20px`, position: 'relative', zIndex: 2,
+          display: isMobile ? 'flex' : 'grid',
+          flexDirection: isMobile ? 'column' as const : undefined,
+          gridTemplateColumns: isMobile ? undefined : '1fr 1fr',
+          gap: isMobile ? 28 : 36,
+        }}>
+          {/* Deal aging */}
+          <div>
+            <div style={sectionHeading(INK_SOFT)}>Deal aging · open deals by age</div>
+            <div style={{ borderTop: `1px solid ${LINE}` }}>
+              {agingBuckets.map(b => {
+                const pct = (b.count / maxBucket) * 100;
+                return (
+                  <div key={b.label} style={{
+                    padding: '11px 0', borderBottom: `1px solid ${LINE}`,
+                    display: 'grid', gridTemplateColumns: '64px 1fr 32px', gap: 14, alignItems: 'center',
+                  }}>
+                    <span style={mono(11, INK_MUTE)}>{b.label}d</span>
+                    <div style={{ height: 2, background: LINE, position: 'relative' }}>
+                      <div style={{
+                        position: 'absolute', inset: 0,
+                        right: `${100 - Math.max(pct, b.count ? 2 : 0)}%`,
+                        background: bucketColor(b.label),
+                      }} />
+                    </div>
+                    <span style={{ ...mono(11, INK), textAlign: 'right' }}>{b.count}</span>
+                  </div>
+                );
+              })}
+            </div>
+            {openDealCount === 0 && (
+              <p style={{ color: INK_DIM, fontSize: 13, padding: '10px 0' }}>No open deals yet.</p>
+            )}
+
+            <div style={{ ...sectionHeading(INK_SOFT), marginTop: 22 }}>
+              Needs a touch · {analytics.aging.stale_count} idle {analytics.stale_days}+ days
+            </div>
+            {analytics.aging.stale_deals.length === 0 ? (
+              <p style={{ color: INK_DIM, fontSize: 13, padding: '6px 0' }}>
+                Nothing stale — every open deal has a recent touch.
+              </p>
+            ) : (
+              analytics.aging.stale_deals.map(d => (
+                <div key={d.id} onClick={() => openDeal(d.id)} style={{
+                  padding: '12px 14px', marginBottom: 6,
+                  display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer',
+                  background: STAGE_COLORS[d.stage]?.bg || BG_RAISED,
+                  border: `1px solid ${LINE}`,
+                  borderLeft: `3px solid ${STAGE_COLORS[d.stage]?.color || INK_DIM}`,
+                  borderRadius: 6,
+                }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{
+                      fontSize: 15, color: INK,
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>{d.title}</div>
+                    <div style={{ ...mono(10, INK_MUTE), marginTop: 3 }}>
+                      {d.company_name || d.contact_name || 'No contact'}
+                    </div>
+                  </div>
+                  <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                    <div style={{ fontFamily: FONT_DISPLAY, fontSize: 16, color: INK }}>
+                      ${formatNumber(d.value)}
+                    </div>
+                    <div style={{
+                      ...mono(10, d.days_since_touch >= analytics.stale_days * 2 ? CORAL : GOLD),
+                      marginTop: 2,
+                    }}>{d.days_since_touch}d idle</div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          {/* Activity volume */}
+          <div>
+            <div style={sectionHeading(INK_SOFT)}>
+              Activity · {analytics.activity.total} in last {analytics.window_days} days
+            </div>
+            <div style={{
+              display: 'flex', alignItems: 'flex-end', gap: 2,
+              height: 64, borderBottom: `1px solid ${LINE}`,
+            }}>
+              {daily.map(pt => (
+                <div key={pt.day} title={`${pt.day}: ${pt.count}`} style={{
+                  flex: 1,
+                  height: pt.count ? `${Math.max((pt.count / maxDaily) * 100, 4)}%` : 2,
+                  background: pt.count ? ACCENT : LINE,
+                  borderRadius: 1,
+                }} />
+              ))}
+            </div>
+            {daily.length > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 5 }}>
+                <span style={mono(9, INK_DIM)}>{fmtDay(daily[0].day)}</span>
+                <span style={mono(9, INK_DIM)}>{fmtDay(daily[daily.length - 1].day)}</span>
+              </div>
+            )}
+
+            <div style={{ marginTop: 18 }}>
+              {byType.length === 0 ? (
+                <p style={{ color: INK_DIM, fontSize: 13, padding: '6px 0' }}>
+                  No activity in the last {analytics.window_days} days.
+                </p>
+              ) : (
+                byType.map(t => {
+                  const pct = (t.count / maxType) * 100;
+                  return (
+                    <div key={t.activity} style={{
+                      padding: '9px 0', borderBottom: `1px solid ${LINE}`,
+                      display: 'grid', gridTemplateColumns: '90px 1fr 32px', gap: 12, alignItems: 'center',
+                    }}>
+                      <span style={{ ...mono(11, INK_MUTE), textTransform: 'capitalize' }}>{t.activity}</span>
+                      <div style={{ height: 2, background: LINE, position: 'relative' }}>
+                        <div style={{
+                          position: 'absolute', inset: 0,
+                          right: `${100 - Math.max(pct, 2)}%`, background: ACCENT,
+                        }} />
+                      </div>
+                      <span style={{ ...mono(11, INK), textAlign: 'right' }}>{t.count}</span>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Top deals + activity */}
       <div style={{
         padding: `10px ${px} 40px`, position: 'relative', zIndex: 2,
@@ -256,7 +475,7 @@ export function CrmDashboardPage() {
           key={selectedDeal.id}
           deal={selectedDeal}
           isMobile={isMobile}
-          onClose={() => setSelectedDeal(null)}
+          onClose={() => { setSelectedDeal(null); reload(); }}
           onEdit={(d) => { setSelectedDeal(null); setEditDeal(d); }}
           onStageChange={updateDealStage}
         />
