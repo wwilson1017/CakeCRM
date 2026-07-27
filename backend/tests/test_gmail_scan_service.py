@@ -272,7 +272,19 @@ def test_per_message_error_is_isolated(monkeypatch, connected):
     monkeypatch.setattr(gs, "_process_message", proc)
     monkeypatch.setattr(gs.touch_count_service, "schedule_recompute", lambda *a, **k: True)
     out = gs.run_scan_if_due()
-    assert out["status"] == "ok" and out["errors"] == 1 and out["new"] == 1
+    assert out["status"] == "ok" and out["errors"] == 1 and out["new"] == 1   # partial → still ok
+
+
+def test_all_messages_failing_records_error_status(monkeypatch, connected):
+    # A pass where EVERY message fails is systemic → persisted status 'error', not 'ok'.
+    calls = []
+    monkeypatch.setattr(gs, "pg_execute", lambda sql, params=(): calls.append((sql, params)) or 1)
+    monkeypatch.setattr(gs, "call_gmail", lambda *a, **k: [{"id": "a"}, {"id": "b"}])
+    monkeypatch.setattr(gs, "_process_message",
+                        lambda msg, own: (_ for _ in ()).throw(RuntimeError("boom")))
+    out = gs.run_scan_if_due()
+    assert out["status"] == "error" and out["errors"] == 2
+    assert calls[-1][1][0] == "error"                 # last record UPDATE carries 'error' status
 
 
 # ── _fire_unmatched_alert ────────────────────────────────────────────────────

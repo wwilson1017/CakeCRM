@@ -5,9 +5,11 @@ system AI turn (or a slow inbox scan) never delays reminder delivery:
   * ``reminder_tick`` — every 60s: fire due reminders + drive dreaming (fast, bounded).
   * ``heartbeat_turn`` — every 5 min: run the throttled system AI turn if due.
   * ``gmail_scan`` — every 60s: run the read-only Gmail touch scan if due (#17;
-    network-bound, so it gets its own slot rather than riding reminder_tick).
-Each job is ``max_instances=1, coalesce=True`` so a slow run never stacks and never
-blocks the OTHER job. No persistent job store — jobs are re-registered on every boot
+    network-bound, so it runs as its OWN job rather than inside reminder_tick, and
+    bounds its Gmail call with a wall-clock deadline).
+Each job is ``max_instances=1, coalesce=True`` so a slow run never stacks. The three
+jobs share APScheduler's default thread pool, whose default width (10) far exceeds the
+three low-frequency jobs here, so a slow scan can't starve reminder_tick of a worker. No persistent job store — jobs are re-registered on every boot
 (the ticks are idempotent). ``get_scheduler()`` exposes the scheduler so other
 features (e.g. #5 dreaming, if it ever wants its own job) can register without
 touching this module.

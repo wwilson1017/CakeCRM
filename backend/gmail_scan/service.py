@@ -43,8 +43,8 @@ tools — is a pre-existing #8 gap left for follow-up. Gated ONLY on Gmail being
 no AI keys are needed (deal touches merely enqueue ``touch_count_service.schedule_recompute``).
 """
 
-import concurrent.futures
 import logging
+import threading
 from datetime import datetime, timedelta, timezone
 from email.utils import parseaddr, parsedate_to_datetime
 
@@ -92,9 +92,14 @@ def run_scan_if_due() -> dict | None:
         logger.warning("gmail scan failed", exc_info=True)
         _record_result("error", error=str(e)[:_MAX_ERROR_CHARS])
         return {"status": "error"}
-    _record_result("ok", seen=summary.get("seen", 0), new=summary.get("new", 0),
+    seen, errs = summary.get("seen", 0), summary.get("errors", 0)
+    # A pass where EVERY message failed is a systemic problem (schema drift, poison batch)
+    # — record it as 'error', not a clean 'ok'. Partial failures stay 'ok' but are noted.
+    status = "error" if seen and errs >= seen else "ok"
+    detail = f"{errs} of {seen} messages failed this pass" if errs else ""
+    _record_result(status, error=detail, seen=seen, new=summary.get("new", 0),
                    logged=summary.get("logged", 0))
-    return {"status": "ok", **summary}
+    return {"status": status, **summary}
 
 
 # ── cadence claim (rowcount-UPDATE due-guard; heartbeat-turn idiom) ───────────
@@ -118,21 +123,34 @@ def _window_days() -> int:
 
 def _list_recent_inbox() -> list[dict]:
     """Fetch recent inbox mail via the existing approved list op, bounded by a wall-clock
-    deadline on a worker thread. On overrun we RAISE (abandoning the pass) rather than let
-    a hung, transport-timeout-less request park the gmail_scan slot forever — the caller
-    records an error and the next tick retries. A truly-hung request leaks one worker per
-    timed-out pass (bounded: the scan throttles to the interval)."""
-    ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-    future = ex.submit(
-        call_gmail, ops.list_messages_op,
-        query=f"in:inbox newer_than:{_window_days()}d", max_results=_MAX_RESULTS,
-    )
-    try:
-        return future.result(timeout=_SCAN_HTTP_DEADLINE)
-    except concurrent.futures.TimeoutError as e:
-        raise TimeoutError(f"gmail list exceeded {_SCAN_HTTP_DEADLINE}s deadline") from e
-    finally:
-        ex.shutdown(wait=False)   # never block on a possibly-hung worker
+    deadline on a DAEMON worker thread. On overrun we RAISE (abandoning the pass) rather
+    than let a hung, transport-timeout-less request park the gmail_scan slot forever — the
+    caller records an error and the next tick retries.
+
+    A daemon thread (NOT a ThreadPoolExecutor) is deliberate: the executor registers an
+    atexit hook that joins every worker it ever spawned, so a permanently-hung request
+    would block interpreter shutdown forever. A daemon thread is force-killed at exit and
+    never joined, so even a hung request can't wedge process shutdown; the leaked thread
+    ends when its socket eventually errors (bounded: the scan throttles to the interval)."""
+    box: dict = {}
+
+    def _worker():
+        try:
+            box["messages"] = call_gmail(
+                ops.list_messages_op,
+                query=f"in:inbox newer_than:{_window_days()}d", max_results=_MAX_RESULTS,
+            )
+        except Exception as e:   # carry the real error back for the caller to record
+            box["error"] = e
+
+    t = threading.Thread(target=_worker, name="gmail-scan-list", daemon=True)
+    t.start()
+    t.join(timeout=_SCAN_HTTP_DEADLINE)
+    if t.is_alive():
+        raise TimeoutError(f"gmail list exceeded {_SCAN_HTTP_DEADLINE}s deadline")
+    if "error" in box:
+        raise box["error"]
+    return box.get("messages", [])
 
 
 # ── scan orchestration ───────────────────────────────────────────────────────
