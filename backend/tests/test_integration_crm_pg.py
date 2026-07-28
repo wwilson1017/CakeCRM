@@ -650,6 +650,92 @@ def test_get_values_404s_for_missing_entity(pg_db):
     assert client.get("/api/crm/contact/999999/fields").status_code == 404
 
 
+# ── Analytics (#20): real SQL for win/loss, activity volume, read-time aging ──
+
+def test_analytics_end_to_end(pg_db):
+    """Proves the four analytics queries against real Postgres: FILTER aggregates,
+    the last-touch GREATEST (incl. archived-chatter exclusion), age bucketing,
+    stale ordering, the shared activity window, and JSON-clean (Decimal-coerced)
+    output — none of which the hermetic suite can exercise."""
+    import json
+
+    from core.postgres import pg_execute
+    from crm import service
+
+    # 1) Zero state on a fresh CRM (autouse _clean_crm truncated everything).
+    zero = service.get_analytics()
+    assert zero["win_loss"]["win_rate_pct"] is None
+    assert zero["win_loss"]["total_pipeline_value"] == 0
+    assert [b["count"] for b in zero["aging"]["buckets"]] == [0, 0, 0, 0]
+    assert zero["aging"]["stale_count"] == 0 and zero["aging"]["stale_deals"] == []
+    assert len(zero["activity"]["daily"]) == 30
+    assert all(d["count"] == 0 for d in zero["activity"]["daily"])
+    assert zero["activity"]["by_type"] == []
+
+    # 2) Seed a known scenario.
+    co = service.create_company("Acme")
+    c = service.create_contact("Ada")
+
+    def deal(title, stage, value):
+        return service.create_deal(title, contact_id=c["id"], company_id=co["id"],
+                                   stage=stage, value=value)
+
+    # 3 won (each a 10-day created→updated span → avg_days_to_close == 10.0), 1 lost.
+    won_ids = [deal(f"Won {i}", "won", 1000)["id"] for i in range(3)]
+    deal("Lost", "lost", 500)
+    for wid in won_ids:
+        pg_execute(
+            "UPDATE deals SET created_at = now() - make_interval(days => 10), "
+            "updated_at = now() WHERE id = %s",
+            (wid,),
+        )
+
+    # 3 open deals: A rescued-by-activity (fresh), B stale (31-90), C stale (91+).
+    a = deal("Open A", "lead", 100)["id"]
+    b = deal("Open B", "qualified", 200)["id"]
+    cc = deal("Open C", "proposal", 300)["id"]
+    pg_execute("UPDATE deals SET created_at = now() - make_interval(days => 20), "
+               "updated_at = now() - make_interval(days => 20) WHERE id = %s", (a,))
+    pg_execute("UPDATE deals SET created_at = now() - make_interval(days => 45), "
+               "updated_at = now() - make_interval(days => 20) WHERE id = %s", (b,))
+    pg_execute("UPDATE deals SET created_at = now() - make_interval(days => 100), "
+               "updated_at = now() - make_interval(days => 40) WHERE id = %s", (cc,))
+
+    # A call TODAY on A refreshes its last-touch (proves activity_log rescues from
+    # staleness AND counts toward volume); an email 5 days ago counts toward volume.
+    service.log_activity("call", note="ping", contact_id=c["id"], deal_id=a)
+    em = service.log_activity("email", note="fu", contact_id=c["id"])
+    pg_execute("UPDATE activity_log SET created_at = now() - make_interval(days => 5) "
+               "WHERE id = %s", (em["id"],))
+
+    # A FRESH but ARCHIVED chatter note on B must NOT count as a touch (archived = 0).
+    pg_execute("INSERT INTO crm_chatter (entity_type, entity_id, message, archived) "
+               "VALUES ('deal', %s, 'archived note', 1)", (b,))
+
+    # 3) Assertions.
+    r = service.get_analytics(stale_days=14)
+    assert r["win_loss"]["deals_won"] == 3 and r["win_loss"]["deals_lost"] == 1
+    assert r["win_loss"]["win_rate_pct"] == 75.0
+    assert r["win_loss"]["open_deals"] == 3
+    assert r["win_loss"]["avg_days_to_close"] == 10.0
+    assert r["win_loss"]["total_pipeline_value"] == 600  # 100 + 200 + 300 (open only)
+
+    buckets = {x["label"]: x["count"] for x in r["aging"]["buckets"]}
+    assert buckets == {"0-7": 0, "8-30": 1, "31-90": 1, "91+": 1}  # A, B, C
+
+    assert r["aging"]["stale_count"] == 2  # B and C; A rescued by today's call
+    assert [d["id"] for d in r["aging"]["stale_deals"]] == [cc, b]  # stalest first (40d, 20d)
+
+    assert r["activity"]["total"] == 2
+    assert {t["activity"] for t in r["activity"]["by_type"]} == {"call", "email"}
+
+    json.dumps(r)  # JSON-clean: no stray Decimal/date leaks through the shapers
+
+    # Route smoke: the full superset over HTTP.
+    resp = _client().get("/api/crm/analytics")
+    assert resp.status_code == 200 and resp.json()["win_loss"]["win_rate_pct"] == 75.0
+
+
 # ── Pipeline payload: company_name + derived last_activity_at blend (issue #21) ─
 
 def test_get_pipeline_last_activity_blends_activity_and_chatter(pg_db):

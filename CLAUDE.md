@@ -105,7 +105,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `crm_field_values` is polymorphic (no entity FK), so it is cleaned at every
   entity-delete + `_truncate_all` site (definitions survive demo-clear, wiped only by
   `clear_all`), and `is_required` is advisory-only (never enforced server-side). The
-  ~30 `crm_*` agent tools + executors are
+  ~31 `crm_*` agent tools + executors are
   collected UNCONDITIONALLY via `crm.tools.get_crm_tools()` — each def carries a
   `"writes"` flag (the single source of truth for the assistant's confirmation gate),
   consumed by `assistant.registry.ToolRegistry` (landed #4). **AI touch counts +
@@ -220,6 +220,6 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Chatter/notes (`crm_chatter`) — **landed #15** as `backend/crm/chatter_service.py` + `frontend/src/crm/components/NotesThread.tsx` | `cake_os/backend/apps/crm/chatter_service.py` |
 | Custom fields (EAV `crm_field_definitions`/`crm_field_values`, Settings editor, entity-form + detail-page value inputs, 6 `crm_*_fields` tools) — **landed #19** as `backend/crm/field_service.py` + `frontend/src/crm/components/{CustomFieldSettings,CustomFieldsSection,CustomFieldInputs}.tsx` | `cake_os/backend/apps/crm/field_service.py` |
 | Touch counts + field provenance (`deals.ai_touch_*` cols + in-process recompute worker; `crm_field_provenance` + `AiBadge`/`ProvenanceBadge`/`TouchCountPill`) — **landed #16** as `backend/crm/touch_count_service.py` + `provenance_service.py` | `cake_os/backend/apps/crm/touch_count_service.py`, `provenance_service.py` |
-| Scoring, analytics | `cake_os/backend/apps/crm/*_service.py` |
+| Scoring, analytics — analytics **landed #20** as `service.get_analytics()`/`summarize_analytics()` + `GET /api/crm/analytics` + `crm_analytics` tool + enriched `CrmDashboardPage` (win/loss, activity volume, read-time deal aging from existing timestamps — no migration; stage-duration metrics dropped, no stage-change audit trail; scoring still pending) | `cake_os/backend/apps/crm/*_service.py` |
 | Assistant tool set (~43 tools) + sales behaviors | `cake_os/backend/apps/crm/tools/` + Casey's agent config |
 | Pipeline facet filtering (client-side, no backend query params: `frontend/src/crm/pipelineFilters.ts` pure predicate + `components/PipelineFilterBar.tsx`, spliced into `PipelinePage`'s useMemo seam as `deals`→`filteredDeals`→`grouped`; facets = keyword/stage/value/close-date/last-activity; sessionStorage `crm_pipeline_filters`) — **landed #21**. Owner facet dropped (single-tenant); `get_pipeline()` gains a derived `last_activity_at` = MAX(deal `activity_log` rows + un-archived deal `crm_chatter` notes) via one UNION-ALL/GROUP BY join (NULL = no activity), plus `company_name`. Drag stays enabled while filtering (board is stage-only, index-safe). | `cake_os/docs/CRM_FILTER_DESIGN.md` + `cake_os/docs/solutions/architecture-patterns/client-side-facet-filtering.md` |

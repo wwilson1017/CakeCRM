@@ -1,4 +1,4 @@
-"""CakeCRM — CRM agent tools (30 tools).
+"""CakeCRM — CRM agent tools (31 tools).
 
 Contacts, deals, tasks, activities, chatter/notes, companies, custom fields, and
 analytics — all accessible to the AI assistant for managing customer relationships
@@ -335,7 +335,7 @@ CRM_TOOL_DEFS = [
         "kind": "integration",
     },
 
-    # ── Analytics (1 tool) ────────────────────────────────────────────────────
+    # ── Analytics (2 tools) ───────────────────────────────────────────────────
     {
         "name": "crm_dashboard",
         "writes": False,
@@ -347,6 +347,28 @@ CRM_TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {},
+            "required": [],
+        },
+        "kind": "integration",
+    },
+    {
+        "name": "crm_analytics",
+        "writes": False,
+        "description": (
+            "Sales analytics summary: win/loss rate, average won deal size, average days to "
+            "close, total open pipeline value, activity volume by type, and deal aging (age "
+            "buckets plus the stalest open deals). Use for questions about performance, win "
+            "rate, stale or neglected deals, or how active the pipeline has been. For a simple "
+            "record-counts overview use crm_dashboard instead."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "stale_days": {
+                    "type": "integer",
+                    "description": "Days without a touch before an open deal counts as stale (default 14)",
+                },
+            },
             "required": [],
         },
         "kind": "integration",
@@ -823,6 +845,11 @@ def crm_dashboard() -> dict:
     return crm.get_dashboard_stats()
 
 
+def crm_analytics(stale_days: int = 14) -> dict:
+    # get_analytics clamps stale_days server-side, so an absurd LLM value is bounded.
+    return crm.summarize_analytics(crm.get_analytics(stale_days=stale_days))
+
+
 # ── Chatter / notes ───────────────────────────────────────────────────────────
 
 def crm_add_note(entity_type: str, entity_id: int, message: str) -> dict:
@@ -967,7 +994,7 @@ def crm_set_deal_fields(deal_id: int, fields: dict) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Executor Mapping (name -> callable(**kwargs) -> dict). 31 entries: the 30
+# Executor Mapping (name -> callable(**kwargs) -> dict). 32 entries: the 31
 # schema'd tools plus the crm_log_note back-compat alias (no schema def).
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -994,6 +1021,7 @@ TOOL_EXECUTORS = {
     "crm_complete_task": crm_complete_task,
     # Analytics
     "crm_dashboard": crm_dashboard,
+    "crm_analytics": crm_analytics,
     # Chatter / notes
     "crm_add_note": crm_add_note,
     "crm_get_chatter": crm_get_chatter,
