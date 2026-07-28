@@ -26,7 +26,7 @@ export interface CrmDeal {
   contact_id: number | null;
   contact_name?: string;
   company_id: number | null;
-  company_name?: string; // detail joins only (LEFT JOIN companies)
+  company_name?: string; // joined by get_deal AND the pipeline board (issue #21)
   title: string;
   stage: string;
   value: number;
@@ -38,6 +38,9 @@ export interface CrmDeal {
   updated_at: string;
   ai_touch_count?: number | null;       // AI-estimated touch count (issue #16); null = uncomputed
   ai_touch_count_at?: string | null;
+  // Pipeline board only (issue #21): MAX of the deal's activity_log rows + un-archived
+  // deal chatter notes; null = no logged activity. Not present on detail-path responses.
+  last_activity_at?: string | null;
   activity?: CrmActivity[];
 }
 

@@ -5,7 +5,7 @@ import type { CrmDeal } from '../core/types';
 import { DealForm } from './components/DealForm';
 import { DealDetailSheet } from './components/DealDetailSheet';
 import { TouchCountPill } from './components/badges';
-import { STAGE_COLORS, STAGE_ORDER } from './constants';
+import { STAGE_COLORS, STAGE_ORDER, OPEN_STAGES } from './constants';
 import { IconPlus } from '../shared/icons';
 import { useIsMobile } from '../shared/useIsMobile';
 import { LoadError } from '../shared/LoadError';
@@ -14,8 +14,13 @@ import {
   INK, INK_MUTE, INK_DIM, LINE, BG_CARD,
   FONT_DISPLAY, mono, formatNumber,
 } from '../shared/styles';
-import { pageHeading, btnPrimary, stageCard } from './styles';
+import { pageHeading, btnPrimary, btnSecondary, btnSmall, stageCard } from './styles';
 import { KanbanBoard, type MoveEvent } from '../shared/dnd';
+import PipelineFilterBar from './components/PipelineFilterBar';
+import {
+  type PipelineFilterState, type AdvancedFilters,
+  EMPTY_FILTER_STATE, dealMatchesAdvanced, hasAdvanced, loadFilterState, saveFilterState,
+} from './pipelineFilters';
 
 // The /api/crm/deals payload also carries server-computed `stage_summary` and
 // `total_pipeline_value`, but the board derives every total client-side from
@@ -24,10 +29,6 @@ import { KanbanBoard, type MoveEvent } from '../shared/dnd';
 interface PipelineData {
   deals: CrmDeal[];
 }
-
-// Open stages drive the header subtitle; won/lost are terminal and excluded so
-// the "open pipeline" total stays correct as deals are dragged in and out.
-const OPEN_STAGES = STAGE_ORDER.filter(s => s !== 'won' && s !== 'lost');
 
 export function PipelinePage() {
   const [data, setData] = useState<PipelineData | null>(null);
@@ -38,8 +39,35 @@ export function PipelinePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const isMobile = useIsMobile();
 
+  // Client-side facet filtering (issue #21). One envelope (search + advanced facets)
+  // restored from / persisted to sessionStorage so a reload keeps the view, but it
+  // never leaves the browser — filtering is a pure predicate over the already-loaded
+  // board, no backend query params. Held as ONE object so restore/persist/clear-all
+  // are single-path.
+  const [filters, setFilters] = useState<PipelineFilterState>(loadFilterState);
+  const { search, advanced } = filters;
+  useEffect(() => { saveFilterState(filters); }, [filters]);
+  const setSearch = useCallback((s: string) => setFilters(f => ({ ...f, search: s })), []);
+  const setAdvanced = useCallback((a: AdvancedFilters) => setFilters(f => ({ ...f, advanced: a })), []);
+
+  // Dashboard deep-link (?stage=X) — an explicit "show me this column" intent that overrides
+  // restored session filters ENTIRELY (any restored facet could hide the target column or
+  // match zero deals → the empty state, no columns, scroll no-ops). Handled REACTIVELY via
+  // React's render-time "reset state when an input changes" pattern (a state compare, NOT an
+  // effect — so no cascading setState-in-effect), so it fires whether the page just mounted OR
+  // was already mounted when the search param changed. `seenDeepLink` starts null so a mount
+  // with ?stage=X triggers the reset; an unknown stage is ignored (matches the scroll guard).
+  const deepLinkStage = searchParams.get('stage');
+  const validDeepLink = deepLinkStage && STAGE_ORDER.includes(deepLinkStage) ? deepLinkStage : null;
+  const [seenDeepLink, setSeenDeepLink] = useState<string | null>(null);
+  if (validDeepLink !== seenDeepLink) {
+    setSeenDeepLink(validDeepLink);
+    if (validDeepLink) setFilters(EMPTY_FILTER_STATE);
+  }
+
   const columnRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-  const deepLinkDone = useRef(false);
+  // Last stage the deep-link effect scrolled to — re-fires per NEW target, once each.
+  const scrolledStage = useRef<string | null>(null);
   // Per-deal operation counter so out-of-order responses from rapid moves of the
   // SAME deal can't clobber each other — only the latest op reconciles/reverts.
   const dealOpSeq = useRef<Map<number, number>>(new Map());
@@ -52,15 +80,43 @@ export function PipelinePage() {
   // display reconcile is superseded), so a rolled-back move restores the real
   // server stage rather than an optimistic intermediate that itself never persisted.
   const dealConfirmedStage = useRef<Map<number, string>>(new Map());
+  // Optimistic-write bookkeeping for the silent refresh (see `load`): a count of writes
+  // still IN FLIGHT, plus a monotonic generation bumped whenever a write STARTS. Together
+  // they let a silent GET detect a drag PUT that overlapped its flight — one that started
+  // before it (pending>0) OR started-and-settled during it (generation changed) — and drop
+  // its now-stale payload rather than reverting a move that actually succeeded.
+  const pendingWrites = useRef(0);
+  const writeGen = useRef(0);
+  // A silent refresh that couldn't run safely (a stage write was racing it) is DEFERRED, not
+  // dropped: moveDealStage re-fires it once the last write settles, so activity/derived fields
+  // still update after a sheet dismissal even when a drag PUT overlapped the refresh.
+  const pendingRefresh = useRef(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  // `silent` refetches without the loading spinner — used to refresh the board after the
+  // detail sheet closes, so a deal touched in-sheet (a logged note/activity) leaves the
+  // "no activity" bucket without flashing the whole board. `data` stays the single source
+  // of truth (issue #12): this re-derives everything from the server, no second optimistic layer.
+  const load = useCallback(async (silent = false) => {
+    // `=== true` guards against a truthy non-boolean arg (e.g. a bare `onClick={load}`
+    // handing in a MouseEvent) accidentally forcing silent mode.
+    const isSilent = silent === true;
+    // A silent refresh must not clobber an optimistic drag. If a stage write is already in
+    // flight, don't even fire the GET — defer it (moveDealStage re-fires when writes settle).
+    if (isSilent && pendingWrites.current > 0) { pendingRefresh.current = true; return; }
+    const startGen = writeGen.current;
+    if (!isSilent) setLoading(true);
     try {
       const d = await api<PipelineData>('/api/crm/deals');
+      // A write that STARTED during this GET's flight (generation changed) may have made the
+      // payload stale — defer+retry rather than clobber a succeeded move OR lose the refresh.
+      if (isSilent && (pendingWrites.current > 0 || writeGen.current !== startGen)) {
+        pendingRefresh.current = true;
+        return;
+      }
       setData(d);
       dealConfirmedStage.current = new Map(d.deals.map(deal => [deal.id, deal.stage]));
-    } catch { /* data stays null → LoadError below */ }
-    finally { setLoading(false); }
+    } catch { /* data stays null → LoadError below (silent: keep the current board) */ }
+    finally { if (!isSilent) setLoading(false); }
   }, []);
 
   useEffect(() => { queueMicrotask(load); }, [load]);
@@ -94,6 +150,8 @@ export function PipelinePage() {
       ...prev,
       deals: prev.deals.map(d => d.id === dealId ? { ...d, stage: toStage } : d),
     } : prev);
+    pendingWrites.current++; // an unconfirmed optimistic write now exists (see `load`'s silent guard)
+    writeGen.current++;      // ...and bump the generation so a silent GET spanning it is invalidated
     const prior = dealWriteChain.current.get(dealId) ?? Promise.resolve();
     const run = prior.then(async () => {
       try {
@@ -124,10 +182,19 @@ export function PipelinePage() {
           ...prev,
           deals: prev.deals.map(d => d.id === dealId ? { ...d, stage: confirmed } : d),
         } : prev);
+      } finally {
+        pendingWrites.current--; // write settled (reconciled or reverted)
+        // Once ALL writes have settled, fire any silent refresh that was deferred while a
+        // write was racing it — so a sheet dismissal (Close OR Mark Won/Lost) still lands the
+        // fresh last_activity_at even though the stage PUT was in flight at dismissal time.
+        if (pendingWrites.current === 0 && pendingRefresh.current) {
+          pendingRefresh.current = false;
+          load(true);
+        }
       }
     });
     dealWriteChain.current.set(dealId, run);
-  }, []);
+  }, [load]);
 
   // Drag handler. Resolves immediately so the Kanban hook ends its gesture and
   // re-syncs from `data` right away; persistence + rollback are data-driven (via
@@ -146,25 +213,56 @@ export function PipelinePage() {
     return Promise.resolve();
   }, [moveDealStage]);
 
-  // Detail-sheet handler (Mark Won / Lost) — optimistic move + close the sheet.
+  // Detail-sheet handler (Mark Won / Lost) — optimistic move + close the sheet. Also refresh
+  // the board (like onClose) so an in-sheet note/activity logged before this dismissal lands
+  // its last_activity_at; if a stage move fired, the refresh defers until that PUT settles.
   const updateDealStage = useCallback((deal: CrmDeal, stage: string) => {
     if (deal.stage !== stage) moveDealStage(deal, stage, deal.stage);
     setSelectedDeal(null);
-  }, [moveDealStage]);
+    load(true);
+  }, [moveDealStage, load]);
 
   const deals = useMemo(() => data?.deals ?? [], [data]);
 
+  const isFiltering = search.trim() !== '' || hasAdvanced(advanced);
+
+  // The board loads every deal, so advanced filtering is a pure client-side predicate
+  // over `deals` — no refetch. This memo is spliced between `deals` and `grouped`; when
+  // nothing is active it returns `deals` by reference so unfiltered renders don't churn.
+  // `now` is snapshotted per recompute (on any deals/search/advanced change), so an IDLE
+  // tab left open across midnight keeps yesterday's date-bucket boundaries until the next
+  // interaction — accepted (self-heals on any filter/drag/refresh; same class as the
+  // documented UTC-vs-local date-part skew in pipelineFilters.ts).
+  const filteredDeals = useMemo(() => {
+    if (!isFiltering) return deals;
+    const q = search.trim().toLowerCase();
+    const now = new Date();
+    return deals.filter(d => {
+      if (q) {
+        const hay = [d.title, d.contact_name, d.company_name].filter(Boolean).join(' ').toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return dealMatchesAdvanced(d, advanced, now);
+    });
+  }, [deals, search, advanced, isFiltering]);
+
   const grouped = useMemo(
     () => STAGE_ORDER.reduce<Record<string, CrmDeal[]>>((acc, stage) => {
-      acc[stage] = deals.filter(d => d.stage === stage);
+      acc[stage] = filteredDeals.filter(d => d.stage === stage);
       return acc;
     }, {}),
-    [deals],
+    [filteredDeals],
+  );
+
+  // Stage facet doubles as a column filter: selecting stages hides the rest.
+  const visibleStages = useMemo(
+    () => (advanced.stages.length ? STAGE_ORDER.filter(s => advanced.stages.includes(s)) : STAGE_ORDER),
+    [advanced.stages],
   );
 
   const kanbanColumns = useMemo(
-    () => STAGE_ORDER.map(stage => ({ id: stage, data: { stage } })),
-    [],
+    () => visibleStages.map(stage => ({ id: stage, data: { stage } })),
+    [visibleStages],
   );
 
   // Per-stage value totals for the column headers — precomputed once per data
@@ -178,22 +276,23 @@ export function PipelinePage() {
     return totals;
   }, [grouped]);
 
+  // Open-pipeline $/count reflect the FILTERED set so the header describes what's shown
+  // (a "showing X of Y" annotation below signals when a filter is narrowing the board).
   const { openTotal, openCount } = useMemo(() => {
-    const open = deals.filter(d => OPEN_STAGES.includes(d.stage));
+    const open = filteredDeals.filter(d => OPEN_STAGES.includes(d.stage));
     return { openTotal: open.reduce((s, d) => s + (d.value || 0), 0), openCount: open.length };
-  }, [deals]);
+  }, [filteredDeals]);
 
-  // Dashboard deep-link (/crm/pipeline?stage=X): once `data` has rendered the
-  // columns (refs populated), scroll the requested column into view, then clear
-  // only the `stage` param (preserving any others). Runs once.
+  // Dashboard deep-link (/crm/pipeline?stage=X): once `data` has rendered the columns (refs
+  // populated), scroll the requested column into view, then clear the `stage` param
+  // (preserving any others). Reactive per target — `scrolledStage` guards a re-scroll for the
+  // same stage; the render-time guard above already cleared filters so every column is mounted.
   useEffect(() => {
-    if (!data || deepLinkDone.current) return;
+    if (!data) return;
     const s = searchParams.get('stage');
-    if (!s) return;
-    deepLinkDone.current = true;
-    if (STAGE_ORDER.includes(s)) {
-      columnRefs.current.get(s)?.scrollIntoView({ behavior: 'smooth', inline: 'start', block: 'nearest' });
-    }
+    if (!s || !STAGE_ORDER.includes(s) || scrolledStage.current === s) return;
+    scrolledStage.current = s;
+    columnRefs.current.get(s)?.scrollIntoView({ behavior: 'smooth', inline: 'start', block: 'nearest' });
     const next = new URLSearchParams(searchParams);
     next.delete('stage');
     setSearchParams(next, { replace: true });
@@ -207,7 +306,7 @@ export function PipelinePage() {
     );
   }
 
-  if (!data) return <LoadError label="Couldn't load pipeline" onRetry={load} />;
+  if (!data) return <LoadError label="Couldn't load pipeline" onRetry={() => load()} />;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, padding: isMobile ? '20px 16px' : '32px 44px' }}>
@@ -216,6 +315,9 @@ export function PipelinePage() {
           <h1 style={pageHeading(isMobile)}>Pipeline</h1>
           <p style={{ fontSize: isMobile ? 14 : 20, color: INK_MUTE, marginTop: 6 }}>
             ${formatNumber(openTotal)} open · {openCount} open deal{openCount !== 1 ? 's' : ''}
+            {isFiltering && (
+              <span style={{ color: INK_DIM }}> · showing {filteredDeals.length} of {deals.length}</span>
+            )}
           </p>
         </div>
         <button onClick={() => setShowCreate(true)} style={{
@@ -227,11 +329,30 @@ export function PipelinePage() {
         </button>
       </div>
 
+      <div style={{ marginBottom: isMobile ? 12 : 16 }}>
+        <PipelineFilterBar
+          search={search}
+          advanced={advanced}
+          onSearchChange={setSearch}
+          onAdvancedChange={setAdvanced}
+          isMobile={isMobile}
+        />
+      </div>
+
+      {isFiltering && filteredDeals.length === 0 ? (
+        <EmptyFilterState onClear={() => setFilters(EMPTY_FILTER_STATE)} />
+      ) : (
       <KanbanBoard<CrmDeal, { stage: string }>
         columns={kanbanColumns}
         items={grouped}
         onMove={handleKanbanMove}
-        // Drag off on touch (fiddly); mobile stage changes go through the sheet.
+        // Drag stays ENABLED while filtering (only `isMobile` disables it). CakeCRM's
+        // board is stage-only: `handleKanbanMove` ignores `MoveEvent.newIndex`, same-column
+        // drops persist nothing, and `moveDealStage` restages by deal id against the full
+        // `data.deals` — so a drop while a filter hides cards is index-safe by construction
+        // (unlike the blueprint, whose board persisted intra-column order and disabled drag).
+        // A drop that makes a deal stop matching an active facet just removes it from the
+        // filtered view — correct filter semantics.
         dragDisabled={isMobile}
         // The ported KanbanBoard/KanbanColumn expose only className hooks (no style
         // prop), so board-scroller and column-body layout use Tailwind here; the
@@ -268,6 +389,7 @@ export function PipelinePage() {
           }}>No deals</div>
         )}
       />
+      )}
 
       {showCreate && <DealForm onClose={() => setShowCreate(false)} onSaved={() => { setShowCreate(false); load(); }} />}
       {editDeal && <DealForm deal={editDeal} onClose={() => setEditDeal(null)} onSaved={() => { setEditDeal(null); setSelectedDeal(null); load(); }} />}
@@ -277,11 +399,28 @@ export function PipelinePage() {
           key={selectedDeal.id}
           deal={selectedDeal}
           isMobile={isMobile}
-          onClose={() => setSelectedDeal(null)}
+          // Silent-refresh the board on close so an in-sheet note/activity log updates the
+          // deal's last_activity_at (and touch count) without a spinner flash — closes the
+          // "filter stale deals → log a touch → it leaves the stale bucket" loop.
+          onClose={() => { setSelectedDeal(null); load(true); }}
           onEdit={(d) => { setSelectedDeal(null); setEditDeal(d); }}
           onStageChange={updateDealStage}
         />
       )}
+    </div>
+  );
+}
+
+// Shown in place of the board when active filters match no deals (avoids a row of
+// empty stage columns reading as "no deals at all").
+function EmptyFilterState({ onClear }: { onClear: () => void }) {
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12,
+      padding: '56px 24px', textAlign: 'center', border: `1px dashed ${LINE}`, borderRadius: 8,
+    }}>
+      <p style={{ fontSize: 15, color: INK_MUTE, margin: 0 }}>No deals match your filters.</p>
+      <button onClick={onClear} style={{ ...btnSecondary, ...btnSmall }}>Clear filters</button>
     </div>
   );
 }

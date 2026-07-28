@@ -734,3 +734,78 @@ def test_analytics_end_to_end(pg_db):
     # Route smoke: the full superset over HTTP.
     resp = _client().get("/api/crm/analytics")
     assert resp.status_code == 200 and resp.json()["win_loss"]["win_rate_pct"] == 75.0
+
+
+# ── Pipeline payload: company_name + derived last_activity_at blend (issue #21) ─
+
+def test_get_pipeline_last_activity_blends_activity_and_chatter(pg_db):
+    """The board's last_activity_at = MAX across deal-level activity_log rows and
+    un-archived deal chatter notes; NULL when a deal has neither. Real SQL proves what
+    the hermetic SQL-shape test can't: the UNION-ALL/GROUP BY blend, the NULL/never case,
+    the archived-fallback, and that multiple event rows never multiply the deal."""
+    from core.postgres import pg_execute
+    from crm import chatter_service, service
+
+    co = service.create_company("Acme Corp")
+    d = service.create_deal("Big deal", stage="proposal", value=1000, company_id=co["id"])
+    did = d["id"]
+
+    def board_deal():
+        return next(x for x in service.get_pipeline()["deals"] if x["id"] == did)
+
+    def last_ymd():
+        v = board_deal()["last_activity_at"]
+        return None if v is None else str(v)[:10]
+
+    # 1. No activity of any kind → NULL (the client's "no activity logged" bucket);
+    #    company join is populated on the board payload.
+    deal = board_deal()
+    assert deal["last_activity_at"] is None
+    assert deal["company_name"] == "Acme Corp"
+
+    # 2. Activity-log row only → last_activity is that row's date.
+    pg_execute("INSERT INTO activity_log (activity, deal_id, created_at) VALUES (%s, %s, %s)",
+               ("call", did, "2026-01-10T09:00:00+00:00"))
+    assert last_ymd() == "2026-01-10"
+
+    # 3. A NEWER chatter note wins over the older activity row (add_note uses now()).
+    n_new = chatter_service.add_note("deal", did, "just talked to them")
+    assert last_ymd() > "2026-01-10"
+
+    # 4. Archiving the newest note falls back to the older activity-log row.
+    assert chatter_service.archive_note(n_new["id"]) is True
+    assert last_ymd() == "2026-01-10"
+
+    # 5. A chatter note OLDER than the activity row does not win.
+    pg_execute("INSERT INTO crm_chatter (entity_type, entity_id, message, created_at) VALUES (%s, %s, %s, %s)",
+               ("deal", did, "old note", "2025-06-01T00:00:00+00:00"))
+    assert last_ymd() == "2026-01-10"
+
+    # 6. Multiple activity + chatter rows must NOT multiply the deal row.
+    pg_execute("INSERT INTO activity_log (activity, deal_id, created_at) VALUES (%s, %s, %s)",
+               ("email", did, "2025-12-01T00:00:00+00:00"))
+    pg_execute("INSERT INTO crm_chatter (entity_type, entity_id, message, created_at) VALUES (%s, %s, %s, %s)",
+               ("deal", did, "another old note", "2025-05-01T00:00:00+00:00"))
+    deals = service.get_pipeline()["deals"]
+    assert len([x for x in deals if x["id"] == did]) == 1
+    assert last_ymd() == "2026-01-10"  # newest overall is still the Jan-10 activity row
+
+    # 7. Chatter attached to a DIFFERENT entity type (contact) never counts for the deal.
+    pg_execute("INSERT INTO crm_chatter (entity_type, entity_id, message, created_at) VALUES (%s, %s, %s, %s)",
+               ("contact", did, "wrong-entity note", "2030-01-01T00:00:00+00:00"))
+    assert last_ymd() == "2026-01-10"
+
+    # 8. A SECOND deal must have an INDEPENDENT last_activity_at — proves the join key
+    #    (la.deal_id = d.id over the GROUP BY) attributes rows per deal with no cross-deal
+    #    leakage — and the stage-filtered branch (the crm_get_pipeline assistant-tool path)
+    #    returns the same per-deal value against real SQL, not just the mocked shape test.
+    d2 = service.create_deal("Small deal", stage="lead", value=200, company_id=co["id"])
+    did2 = d2["id"]
+    pg_execute("INSERT INTO activity_log (activity, deal_id, created_at) VALUES (%s, %s, %s)",
+               ("meeting", did2, "2026-03-15T12:00:00+00:00"))
+    board = {x["id"]: x for x in service.get_pipeline()["deals"]}
+    assert str(board[did]["last_activity_at"])[:10] == "2026-01-10"   # deal 1 unaffected by deal 2's row
+    assert str(board[did2]["last_activity_at"])[:10] == "2026-03-15"  # deal 2 sees only its own
+    lead_only = service.get_pipeline(stage="lead")["deals"]
+    assert [x["id"] for x in lead_only] == [did2]
+    assert str(lead_only[0]["last_activity_at"])[:10] == "2026-03-15"

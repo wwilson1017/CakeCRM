@@ -437,19 +437,37 @@ def get_deal_detail(deal_id: int) -> dict | None:
 
 
 def get_pipeline(stage: str | None = None) -> dict:
-    if stage:
-        deals = pg_fetchall(
-            """SELECT d.*, c.name AS contact_name
-               FROM deals d LEFT JOIN contacts c ON d.contact_id = c.id
-               WHERE d.stage = %s ORDER BY d.updated_at DESC""",
-            (stage,),
-        )
-    else:
-        deals = pg_fetchall(
-            """SELECT d.*, c.name AS contact_name
-               FROM deals d LEFT JOIN contacts c ON d.contact_id = c.id
-               ORDER BY d.updated_at DESC""",
-        )
+    # Single query (optional stage WHERE) so the two branches can't drift. Beyond the
+    # contact-name join, the board payload carries `company_name` (mirrors get_deal) for
+    # keyword search, and a derived `last_activity_at` (issue #21) = the most recent of the
+    # deal's genuine activity signals: explicit activity_log rows (calls/emails logged via
+    # POST /api/crm/activity — never written by edits/stage-moves) blended with un-archived
+    # deal chatter notes. The UNION-ALL/GROUP BY yields one row per deal; the LEFT JOIN
+    # leaves `last_at` NULL when a deal has neither → the client's "no activity" bucket.
+    # Scale note: the subquery aggregates the whole activity_log + chatter before the join
+    # (the stage WHERE can't push into it) — accepted at single-user v1 scale, where the
+    # unpaginated all-deals board is the binding constraint, not this once-per-load aggregate.
+    # If deal/activity volume ever grows, switch to a per-deal LATERAL MAX (indexes exist:
+    # idx_activity_deal, idx_crm_chatter_entity) or a maintained last-activity column.
+    where = "WHERE d.stage = %s" if stage else ""
+    deals = pg_fetchall(
+        f"""SELECT d.*, c.name AS contact_name, co.name AS company_name,
+                   la.last_at AS last_activity_at
+            FROM deals d
+            LEFT JOIN contacts c ON d.contact_id = c.id
+            LEFT JOIN companies co ON d.company_id = co.id
+            LEFT JOIN (
+                SELECT deal_id, MAX(created_at) AS last_at FROM (
+                    SELECT deal_id, created_at FROM activity_log WHERE deal_id IS NOT NULL
+                    UNION ALL
+                    SELECT entity_id AS deal_id, created_at FROM crm_chatter
+                    WHERE entity_type = 'deal' AND archived = 0
+                ) events GROUP BY deal_id
+            ) la ON la.deal_id = d.id
+            {where}
+            ORDER BY d.updated_at DESC""",
+        (stage,) if stage else (),
+    )
 
     # Value summaries per stage (open stages only).
     stage_summary = pg_fetchall(
