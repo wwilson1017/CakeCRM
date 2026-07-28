@@ -1,7 +1,7 @@
 """CRM agent-tools contract: unconditional, complete, well-formed.
 
 The issue requires the crm_* tools to be collected unconditionally (no enable
-gate). This pins that: 30 schema defs, 31 executors (incl. the crm_log_note
+gate). This pins that: 31 schema defs, 32 executors (incl. the crm_log_note
 back-compat alias), every def has an executor, and get_crm_tools() returns the
 full set with no gating.
 """
@@ -17,12 +17,12 @@ from crm.tools import CRM_TOOL_DEFS, TOOL_EXECUTORS, get_crm_tools
 def test_def_and_executor_counts():
     # Absolute counts. ⚠ TOOL-COUNT SUM RULE (coach #67): concurrent sibling issues
     # may add crm_* tools in the same auto-issues run. If so, this is 24 (base) +
-    # 6 (#19 custom fields) + 2 (#18 lead scores) + N (sibling additions) — SUM the
-    # additions, never overwrite the number. On rebase behind a sibling that also adds
-    # a tool (e.g. #20 crm_analytics), recompute cumulative (do NOT keep-both a single
+    # 6 (#19 custom fields) + 2 (#18 lead scores) + 1 (#20 crm_analytics) + N (sibling
+    # additions) — SUM the additions, never overwrite the number. On rebase behind a
+    # sibling that also adds a tool, recompute cumulative (do NOT keep-both a single
     # number). The executor count is always defs + 1 (crm_log_note alias).
-    assert len(CRM_TOOL_DEFS) == 32
-    assert len(TOOL_EXECUTORS) == 33
+    assert len(CRM_TOOL_DEFS) == 33
+    assert len(TOOL_EXECUTORS) == 34
     # Relative invariant (robust to any future additions): exactly one alias-only executor.
     assert len(TOOL_EXECUTORS) == len(CRM_TOOL_DEFS) + 1
 
@@ -105,6 +105,7 @@ _OWNED_WRITE_TOOLS = {
 _OWNED_READ_TOOLS = {
     "crm_find_contact", "crm_get_contact", "crm_list_contacts", "crm_get_pipeline",
     "crm_get_deal", "crm_get_activity_log", "crm_list_tasks", "crm_dashboard",
+    "crm_analytics",
     "crm_get_contact_fields", "crm_get_company_fields", "crm_get_deal_fields",
     "crm_get_lead_score",  # #18
 }

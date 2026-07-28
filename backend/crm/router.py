@@ -64,6 +64,7 @@ Lead scores (issue #18):
 
 Other:
   GET    /api/crm/dashboard             — summary stats
+  GET    /api/crm/analytics             — win/loss, activity volume, deal aging (?days, ?stale_days)
   GET    /api/crm/demo-status           — first-run onboarding / sample-data state
   POST   /api/crm/load-sample-data      — seed fictional demo data (first run)
   POST   /api/crm/dismiss-onboarding    — dismiss the first-run prompt
@@ -530,6 +531,18 @@ async def delete_activity(activity_id: int, user=Depends(get_current_user)):
 @router.get("/dashboard")
 async def dashboard(user=Depends(get_current_user)):
     return crm.get_dashboard_stats()
+
+
+@router.get("/analytics")
+async def analytics(
+    days: int = Query(30, ge=7, le=365),
+    stale_days: int = Query(14, ge=1, le=365),
+    user=Depends(get_current_user),
+):
+    """Keyless SQL analytics for the enriched dashboard (issue #20): win/loss,
+    activity volume, and read-time deal aging. Returns the full superset; the
+    assistant's crm_analytics tool returns the summarize_analytics() trim."""
+    return crm.get_analytics(days=days, stale_days=stale_days)
 
 
 # ── First-run / sample data ───────────────────────────────────────────────────

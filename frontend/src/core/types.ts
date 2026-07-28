@@ -28,7 +28,7 @@ export interface CrmDeal {
   contact_id: number | null;
   contact_name?: string;
   company_id: number | null;
-  company_name?: string; // detail joins only (LEFT JOIN companies)
+  company_name?: string; // joined by get_deal AND the pipeline board (issue #21)
   title: string;
   stage: string;
   value: number;
@@ -40,6 +40,9 @@ export interface CrmDeal {
   updated_at: string;
   ai_touch_count?: number | null;       // AI-estimated touch count (issue #16); null = uncomputed
   ai_touch_count_at?: string | null;
+  // Pipeline board only (issue #21): MAX of the deal's activity_log rows + un-archived
+  // deal chatter notes; null = no logged activity. Not present on detail-path responses.
+  last_activity_at?: string | null;
   lead_score?: number | null;           // computed lead score 0-100 (issue #18); null = never scored
   lead_score_at?: string | null;
   activity?: CrmActivity[];
@@ -159,4 +162,41 @@ export interface CrmDashboard {
   pending_tasks: number;
   recent_activity: CrmActivity[];
   top_deals: CrmDeal[];
+}
+
+// GET /api/crm/analytics (issue #20). Keyless SQL analytics; win_rate_pct,
+// avg_days_to_close, and the avg deal sizes are null when there's no qualifying
+// deal (no closed / no won / no open with value) — render as "—", not "$0".
+export interface CrmAnalytics {
+  window_days: number;
+  stale_days: number;
+  win_loss: {
+    deals_won: number;
+    deals_lost: number;
+    open_deals: number;
+    win_rate_pct: number | null;
+    avg_won_deal_size: number | null;
+    avg_open_deal_size: number | null;
+    avg_days_to_close: number | null;
+    total_pipeline_value: number;
+  };
+  activity: {
+    daily: { day: string; count: number }[];
+    by_type: { activity: string; count: number }[];
+    total: number;
+  };
+  aging: {
+    buckets: { label: string; min_days: number; max_days: number | null; count: number }[];
+    stale_count: number;
+    stale_deals: {
+      id: number;
+      title: string;
+      value: number;
+      stage: string;
+      contact_name: string | null;
+      company_name: string | null;
+      days_since_touch: number;
+      age_days: number;
+    }[];
+  };
 }

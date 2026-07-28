@@ -1,4 +1,4 @@
-"""CakeCRM — CRM agent tools (32 tools).
+"""CakeCRM — CRM agent tools (33 tools).
 
 Contacts, deals, tasks, activities, chatter/notes, companies, custom fields,
 analytics, and lead scores — all accessible to the AI assistant for managing customer
@@ -341,7 +341,7 @@ CRM_TOOL_DEFS = [
         "kind": "integration",
     },
 
-    # ── Analytics (1 tool) ────────────────────────────────────────────────────
+    # ── Analytics (2 tools) ───────────────────────────────────────────────────
     {
         "name": "crm_dashboard",
         "writes": False,
@@ -353,6 +353,28 @@ CRM_TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {},
+            "required": [],
+        },
+        "kind": "integration",
+    },
+    {
+        "name": "crm_analytics",
+        "writes": False,
+        "description": (
+            "Sales analytics summary: win/loss rate, average won deal size, average days to "
+            "close, total open pipeline value, activity volume by type, and deal aging (age "
+            "buckets plus the stalest open deals). Use for questions about performance, win "
+            "rate, stale or neglected deals, or how active the pipeline has been. For a simple "
+            "record-counts overview use crm_dashboard instead."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "stale_days": {
+                    "type": "integer",
+                    "description": "Days without a touch before an open deal counts as stale (default 14)",
+                },
+            },
             "required": [],
         },
         "kind": "integration",
@@ -867,6 +889,11 @@ def crm_dashboard() -> dict:
     return crm.get_dashboard_stats()
 
 
+def crm_analytics(stale_days: int = 14) -> dict:
+    # get_analytics clamps stale_days server-side, so an absurd LLM value is bounded.
+    return crm.summarize_analytics(crm.get_analytics(stale_days=stale_days))
+
+
 # ── Chatter / notes ───────────────────────────────────────────────────────────
 
 def crm_add_note(entity_type: str, entity_id: int, message: str) -> dict:
@@ -1038,7 +1065,7 @@ def crm_recompute_lead_scores(scope: str = "all") -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Executor Mapping (name -> callable(**kwargs) -> dict). 33 entries: the 32
+# Executor Mapping (name -> callable(**kwargs) -> dict). 34 entries: the 33
 # schema'd tools plus the crm_log_note back-compat alias (no schema def).
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1065,6 +1092,7 @@ TOOL_EXECUTORS = {
     "crm_complete_task": crm_complete_task,
     # Analytics
     "crm_dashboard": crm_dashboard,
+    "crm_analytics": crm_analytics,
     # Lead scores (issue #18)
     "crm_get_lead_score": crm_get_lead_score,
     "crm_recompute_lead_scores": crm_recompute_lead_scores,

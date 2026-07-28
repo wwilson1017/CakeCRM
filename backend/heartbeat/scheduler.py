@@ -1,11 +1,15 @@
 """APScheduler wiring for the heartbeat (issue #6).
 
-A single ``BackgroundScheduler`` with TWO jobs, deliberately decoupled so a slow
-system AI turn never delays reminder delivery:
+A single ``BackgroundScheduler`` with THREE jobs, deliberately decoupled so a slow
+system AI turn (or a slow inbox scan) never delays reminder delivery:
   * ``reminder_tick`` — every 60s: fire due reminders + drive dreaming (fast, bounded).
   * ``heartbeat_turn`` — every 5 min: run the throttled system AI turn if due.
-Each job is ``max_instances=1, coalesce=True`` so a slow run never stacks and never
-blocks the OTHER job. No persistent job store — jobs are re-registered on every boot
+  * ``gmail_scan`` — every 60s: run the read-only Gmail touch scan if due (#17;
+    network-bound, so it runs as its OWN job rather than inside reminder_tick, and
+    bounds its Gmail call with a wall-clock deadline).
+Each job is ``max_instances=1, coalesce=True`` so a slow run never stacks. The three
+jobs share APScheduler's default thread pool, whose default width (10) far exceeds the
+three low-frequency jobs here, so a slow scan can't starve reminder_tick of a worker. No persistent job store — jobs are re-registered on every boot
 (the ticks are idempotent). ``get_scheduler()`` exposes the scheduler so other
 features (e.g. #5 dreaming, if it ever wants its own job) can register without
 touching this module.
@@ -41,8 +45,16 @@ def start_scheduler() -> None:
         service.heartbeat_turn_tick, "interval", seconds=300, id="heartbeat_turn",
         max_instances=1, coalesce=True,
     )
+    # #17: the Gmail touch scan is slow / network-bound, so it gets its OWN decoupled
+    # job (not a reminder_tick sibling) — a hung inbox request must never delay reminder
+    # delivery. run_scan_if_due self-throttles to GMAIL_SCAN_INTERVAL_MINUTES and no-ops
+    # when Gmail isn't connected, so a 60s trigger is just the due-check cadence.
+    _scheduler.add_job(
+        service.gmail_scan_tick, "interval", seconds=60, id="gmail_scan",
+        max_instances=1, coalesce=True,
+    )
     _scheduler.start()
-    logger.info("Heartbeat scheduler started (reminder_tick 60s + heartbeat_turn 300s)")
+    logger.info("Heartbeat scheduler started (reminder_tick 60s + heartbeat_turn 300s + gmail_scan 60s)")
 
 
 def shutdown_scheduler() -> None:

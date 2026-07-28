@@ -650,6 +650,167 @@ def test_get_values_404s_for_missing_entity(pg_db):
     assert client.get("/api/crm/contact/999999/fields").status_code == 404
 
 
+# ── Analytics (#20): real SQL for win/loss, activity volume, read-time aging ──
+
+def test_analytics_end_to_end(pg_db):
+    """Proves the four analytics queries against real Postgres: FILTER aggregates,
+    the last-touch GREATEST (incl. archived-chatter exclusion), age bucketing,
+    stale ordering, the shared activity window, and JSON-clean (Decimal-coerced)
+    output — none of which the hermetic suite can exercise."""
+    import json
+
+    from core.postgres import pg_execute
+    from crm import service
+
+    # 1) Zero state on a fresh CRM (autouse _clean_crm truncated everything).
+    zero = service.get_analytics()
+    assert zero["win_loss"]["win_rate_pct"] is None
+    assert zero["win_loss"]["total_pipeline_value"] == 0
+    assert [b["count"] for b in zero["aging"]["buckets"]] == [0, 0, 0, 0]
+    assert zero["aging"]["stale_count"] == 0 and zero["aging"]["stale_deals"] == []
+    assert len(zero["activity"]["daily"]) == 30
+    assert all(d["count"] == 0 for d in zero["activity"]["daily"])
+    assert zero["activity"]["by_type"] == []
+
+    # 2) Seed a known scenario.
+    co = service.create_company("Acme")
+    c = service.create_contact("Ada")
+
+    def deal(title, stage, value):
+        return service.create_deal(title, contact_id=c["id"], company_id=co["id"],
+                                   stage=stage, value=value)
+
+    # 3 won (each a 10-day created→updated span → avg_days_to_close == 10.0), 1 lost.
+    won_ids = [deal(f"Won {i}", "won", 1000)["id"] for i in range(3)]
+    deal("Lost", "lost", 500)
+    for wid in won_ids:
+        pg_execute(
+            "UPDATE deals SET created_at = now() - make_interval(days => 10), "
+            "updated_at = now() WHERE id = %s",
+            (wid,),
+        )
+
+    # 3 open deals: A rescued-by-activity (fresh), B stale (31-90), C stale (91+).
+    a = deal("Open A", "lead", 100)["id"]
+    b = deal("Open B", "qualified", 200)["id"]
+    cc = deal("Open C", "proposal", 300)["id"]
+    pg_execute("UPDATE deals SET created_at = now() - make_interval(days => 20), "
+               "updated_at = now() - make_interval(days => 20) WHERE id = %s", (a,))
+    pg_execute("UPDATE deals SET created_at = now() - make_interval(days => 45), "
+               "updated_at = now() - make_interval(days => 20) WHERE id = %s", (b,))
+    pg_execute("UPDATE deals SET created_at = now() - make_interval(days => 100), "
+               "updated_at = now() - make_interval(days => 40) WHERE id = %s", (cc,))
+
+    # A call TODAY on A refreshes its last-touch (proves activity_log rescues from
+    # staleness AND counts toward volume); an email 5 days ago counts toward volume.
+    service.log_activity("call", note="ping", contact_id=c["id"], deal_id=a)
+    em = service.log_activity("email", note="fu", contact_id=c["id"])
+    pg_execute("UPDATE activity_log SET created_at = now() - make_interval(days => 5) "
+               "WHERE id = %s", (em["id"],))
+
+    # A FRESH but ARCHIVED chatter note on B must NOT count as a touch (archived = 0).
+    pg_execute("INSERT INTO crm_chatter (entity_type, entity_id, message, archived) "
+               "VALUES ('deal', %s, 'archived note', 1)", (b,))
+
+    # 3) Assertions.
+    r = service.get_analytics(stale_days=14)
+    assert r["win_loss"]["deals_won"] == 3 and r["win_loss"]["deals_lost"] == 1
+    assert r["win_loss"]["win_rate_pct"] == 75.0
+    assert r["win_loss"]["open_deals"] == 3
+    assert r["win_loss"]["avg_days_to_close"] == 10.0
+    assert r["win_loss"]["total_pipeline_value"] == 600  # 100 + 200 + 300 (open only)
+
+    buckets = {x["label"]: x["count"] for x in r["aging"]["buckets"]}
+    assert buckets == {"0-7": 0, "8-30": 1, "31-90": 1, "91+": 1}  # A, B, C
+
+    assert r["aging"]["stale_count"] == 2  # B and C; A rescued by today's call
+    assert [d["id"] for d in r["aging"]["stale_deals"]] == [cc, b]  # stalest first (40d, 20d)
+
+    assert r["activity"]["total"] == 2
+    assert {t["activity"] for t in r["activity"]["by_type"]} == {"call", "email"}
+
+    json.dumps(r)  # JSON-clean: no stray Decimal/date leaks through the shapers
+
+    # Route smoke: the full superset over HTTP.
+    resp = _client().get("/api/crm/analytics")
+    assert resp.status_code == 200 and resp.json()["win_loss"]["win_rate_pct"] == 75.0
+
+
+# ── Pipeline payload: company_name + derived last_activity_at blend (issue #21) ─
+
+def test_get_pipeline_last_activity_blends_activity_and_chatter(pg_db):
+    """The board's last_activity_at = MAX across deal-level activity_log rows and
+    un-archived deal chatter notes; NULL when a deal has neither. Real SQL proves what
+    the hermetic SQL-shape test can't: the UNION-ALL/GROUP BY blend, the NULL/never case,
+    the archived-fallback, and that multiple event rows never multiply the deal."""
+    from core.postgres import pg_execute
+    from crm import chatter_service, service
+
+    co = service.create_company("Acme Corp")
+    d = service.create_deal("Big deal", stage="proposal", value=1000, company_id=co["id"])
+    did = d["id"]
+
+    def board_deal():
+        return next(x for x in service.get_pipeline()["deals"] if x["id"] == did)
+
+    def last_ymd():
+        v = board_deal()["last_activity_at"]
+        return None if v is None else str(v)[:10]
+
+    # 1. No activity of any kind → NULL (the client's "no activity logged" bucket);
+    #    company join is populated on the board payload.
+    deal = board_deal()
+    assert deal["last_activity_at"] is None
+    assert deal["company_name"] == "Acme Corp"
+
+    # 2. Activity-log row only → last_activity is that row's date.
+    pg_execute("INSERT INTO activity_log (activity, deal_id, created_at) VALUES (%s, %s, %s)",
+               ("call", did, "2026-01-10T09:00:00+00:00"))
+    assert last_ymd() == "2026-01-10"
+
+    # 3. A NEWER chatter note wins over the older activity row (add_note uses now()).
+    n_new = chatter_service.add_note("deal", did, "just talked to them")
+    assert last_ymd() > "2026-01-10"
+
+    # 4. Archiving the newest note falls back to the older activity-log row.
+    assert chatter_service.archive_note(n_new["id"]) is True
+    assert last_ymd() == "2026-01-10"
+
+    # 5. A chatter note OLDER than the activity row does not win.
+    pg_execute("INSERT INTO crm_chatter (entity_type, entity_id, message, created_at) VALUES (%s, %s, %s, %s)",
+               ("deal", did, "old note", "2025-06-01T00:00:00+00:00"))
+    assert last_ymd() == "2026-01-10"
+
+    # 6. Multiple activity + chatter rows must NOT multiply the deal row.
+    pg_execute("INSERT INTO activity_log (activity, deal_id, created_at) VALUES (%s, %s, %s)",
+               ("email", did, "2025-12-01T00:00:00+00:00"))
+    pg_execute("INSERT INTO crm_chatter (entity_type, entity_id, message, created_at) VALUES (%s, %s, %s, %s)",
+               ("deal", did, "another old note", "2025-05-01T00:00:00+00:00"))
+    deals = service.get_pipeline()["deals"]
+    assert len([x for x in deals if x["id"] == did]) == 1
+    assert last_ymd() == "2026-01-10"  # newest overall is still the Jan-10 activity row
+
+    # 7. Chatter attached to a DIFFERENT entity type (contact) never counts for the deal.
+    pg_execute("INSERT INTO crm_chatter (entity_type, entity_id, message, created_at) VALUES (%s, %s, %s, %s)",
+               ("contact", did, "wrong-entity note", "2030-01-01T00:00:00+00:00"))
+    assert last_ymd() == "2026-01-10"
+
+    # 8. A SECOND deal must have an INDEPENDENT last_activity_at — proves the join key
+    #    (la.deal_id = d.id over the GROUP BY) attributes rows per deal with no cross-deal
+    #    leakage — and the stage-filtered branch (the crm_get_pipeline assistant-tool path)
+    #    returns the same per-deal value against real SQL, not just the mocked shape test.
+    d2 = service.create_deal("Small deal", stage="lead", value=200, company_id=co["id"])
+    did2 = d2["id"]
+    pg_execute("INSERT INTO activity_log (activity, deal_id, created_at) VALUES (%s, %s, %s)",
+               ("meeting", did2, "2026-03-15T12:00:00+00:00"))
+    board = {x["id"]: x for x in service.get_pipeline()["deals"]}
+    assert str(board[did]["last_activity_at"])[:10] == "2026-01-10"   # deal 1 unaffected by deal 2's row
+    assert str(board[did2]["last_activity_at"])[:10] == "2026-03-15"  # deal 2 sees only its own
+    lead_only = service.get_pipeline(stage="lead")["deals"]
+    assert [x["id"] for x in lead_only] == [did2]
+    assert str(lead_only[0]["last_activity_at"])[:10] == "2026-03-15"
+
+
 # ── Lead scoring (issue #18) — proves NULLS-LAST ordering, triggers, no-updated_at ──
 
 def test_lead_score_migration_columns_and_index(pg_db):

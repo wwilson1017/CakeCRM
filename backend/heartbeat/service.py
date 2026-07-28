@@ -1,6 +1,7 @@
 """The heartbeat — the background half of the assistant (issue #6).
 
-Two independent scheduler jobs (so a slow AI turn never delays reminder delivery):
+Three independent scheduler jobs (so a slow AI turn or inbox scan never delays reminder
+delivery):
   * ``reminder_tick()`` (every 60s): fires due reminders + drives #5's dreaming
     pass. Each reminder ALWAYS delivers a deterministic baseline push ("Reminder:
     …") FIRST, keyless, so a due reminder reliably notifies even with zero AI keys;
@@ -8,6 +9,8 @@ Two independent scheduler jobs (so a slow AI turn never delays reminder delivery
     turn (reads + notify_user only).
   * ``heartbeat_turn_tick()`` (every few minutes, throttled to ~30 min): runs ONE
     system heartbeat AI turn — env-gated (off locally) and provider-gated.
+  * ``gmail_scan_tick()`` (every 60s): runs #17's read-only Gmail touch scan if due
+    (network-bound, so it gets its own slot rather than riding reminder_tick).
 
 ``tick()`` is the run-now workhorse behind ``POST /api/heartbeat/run-now``; it does
 reminders synchronously and only runs the AI turn when explicitly forced.
@@ -328,9 +331,32 @@ def _maybe_run_dreaming():
         return None
 
 
+# ── #17 gmail touch-scan seam (its OWN scheduler job, not a reminder_tick sibling) ──
+
+def gmail_scan_tick() -> dict | None:
+    """Dedicated scheduler job (registered in heartbeat/scheduler.py). The Gmail scan
+    is slow / network-bound, so it runs on its own max_instances=1 job rather than in
+    reminder_tick — a hung inbox request must never delay reminder delivery (same
+    decoupling as heartbeat_turn vs reminder_tick)."""
+    return _maybe_run_gmail_scan()
+
+
+def _maybe_run_gmail_scan():
+    """Drive #17's Gmail touch scan if present. BOTH the lazy import (merge-order
+    independence) AND the call are under one broad guard so nothing here — not even an
+    import-time error — can abort the gmail_scan job. run_scan_if_due is
+    connection-gated + due-guarded + ledger-idempotent, so calling it every tick is safe."""
+    try:
+        from gmail_scan.service import run_scan_if_due
+        return run_scan_if_due()
+    except Exception:
+        logger.warning("gmail touch scan errored", exc_info=True)
+
+
 # ── #18 lead-score daily refresh seam (order-independent, idempotent) ────────
-# NOTE (team): #17 (Gmail touch-scan heartbeat) owns a general periodic-job seam and
-# will absorb this call into it. Until then this follows the #5 dreaming pattern.
+# This stays a reminder_tick sibling (the #5 dreaming pattern) rather than moving to a
+# dedicated job like #17's above: the refresh is local SQL — advisory-locked, due-guarded,
+# no network — so it can't stall reminder delivery the way a hung inbox request can.
 
 def _maybe_refresh_scores():
     """Drive #18's daily lead-score refresh if present. Lazy ImportError-guarded so merge
