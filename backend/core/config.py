@@ -89,6 +89,11 @@ class Settings:
     # token burn, so the turn itself is throttled (Chatty's heartbeat cadence).
     heartbeat_interval_minutes: int = _positive_int_env("HEARTBEAT_INTERVAL_MINUTES", 30)
 
+    # Cadence of the read-only Gmail inbox touch scan (issue #17), driven by its own
+    # gmail_scan scheduler job. Gated ONLY on Gmail being connected — deliberately no
+    # per-feature enable flag (product rule: the integration connection IS the gate).
+    gmail_scan_interval_minutes: int = _positive_int_env("GMAIL_SCAN_INTERVAL_MINUTES", 15)
+
     # Web Push (VAPID). Leave blank to auto-generate a keypair once and persist it
     # in Postgres (vapid_keys singleton, private key Fernet-encrypted). Set both
     # to operator-manage the keys via env instead (never persisted then).
