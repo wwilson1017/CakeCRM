@@ -201,8 +201,13 @@ def _truncate_body(text: str) -> str:
 
 
 def _get_attachments(payload: dict, _depth: int = 0) -> list[dict]:
-    """Attachment METADATA only (names/types/sizes) — reading attachment content
-    is out of scope."""
+    """Attachment METADATA only — names, types, sizes; this never reads a byte of
+    attachment content, and a real file's content is never read anywhere.
+
+    The one narrow exception lives in _part_text: a large text BODY that Gmail
+    stored out of line behind an attachmentId is recovered there under a byte cap
+    (#43). Parts that are actual files — named, or marked
+    `Content-Disposition: attachment` — are excluded from that path."""
     if _depth > _MAX_MIME_DEPTH:
         return []
     attachments = []
