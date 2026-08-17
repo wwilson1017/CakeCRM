@@ -77,13 +77,37 @@ def _declared_size(body: dict) -> int | None:
         return None
 
 
+def _is_attachment_part(part: dict) -> bool:
+    """True when a text part is a FILE attachment rather than the message body.
+
+    A `filename` is the common signal, but `Content-Disposition: attachment` with no
+    filename parameter is valid MIME and still a file. Body recovery must skip both,
+    or the "message bodies only, never your files" guarantee in SECURITY.md leaks
+    through the nameless case.
+    """
+    if part.get("filename"):
+        return True
+    for header in part.get("headers") or []:
+        if header.get("name", "").lower() == "content-disposition":
+            return header.get("value", "").strip().lower().startswith("attachment")
+    return False
+
+
+def _stored_body_id(part: dict) -> str:
+    """The attachmentId of an out-of-line TEXT BODY, or "" if this part isn't one."""
+    body = part.get("body") or {}
+    if body.get("data") or _is_attachment_part(part):
+        return ""
+    return body.get("attachmentId") or ""
+
+
 def _part_text(part: dict, fetch=None) -> str:
     """Plain text for one text/plain or text/html part ("" if it carries none).
 
     Prefers the inline `body.data`. When Gmail stored a large text body separately
     (empty `data` plus a `body.attachmentId`) and a fetcher is supplied, recover it
-    under the byte cap (#43). Strictly text bodies: a part with a `filename` is a
-    real file attachment and is NEVER fetched — those stay metadata-only via
+    under the byte cap (#43). Strictly text bodies: a file attachment — named OR
+    merely disposition-marked — is NEVER fetched; those stay metadata-only via
     _get_attachments. `fetch=None` reproduces the pre-#43 behavior exactly.
     """
     mime_type = part.get("mimeType", "")
@@ -98,7 +122,7 @@ def _part_text(part: dict, fetch=None) -> str:
             # Malformed base64 degrades this ONE part to blank rather than failing
             # the whole thread read.
             return ""
-    elif fetch and body.get("attachmentId") and not part.get("filename"):
+    elif fetch and _stored_body_id(part):
         size = _declared_size(body)
         # Fail CLOSED on an undeclared size. Gmail has no ranged read, so an
         # unknown size means we cannot bound the download before making it — and
@@ -126,28 +150,48 @@ def _get_body_text(payload: dict, _depth: int = 0, fetch=None) -> str:
     if direct:
         return direct
 
-    plain_text = ""
-    html_text = ""
-    oversize = ""
+    # Walk the parts inline-only first, collecting the ones whose body Gmail stored
+    # out of line. Fetching is deferred to the resolution step below so the thread's
+    # fetch budget is never spent on an alternative we would discard: plain wins over
+    # html, so a message with BOTH stored would otherwise burn two slots per message.
+    inline_plain = ""
+    inline_html = ""
+    stored_plain: list[dict] = []
+    stored_html: list[dict] = []
     for part in payload.get("parts", []):
         part_mime = part.get("mimeType", "")
         if part_mime in ("text/plain", "text/html"):
-            text = _part_text(part, fetch)
-            # The oversize marker is truthy, so hold it aside — otherwise an
-            # unreadable text/plain would shadow a perfectly good text/html
-            # alternative carrying the same message.
-            if text == _BODY_TOO_LARGE:
-                oversize = text
-            elif part_mime == "text/plain":
-                plain_text = text or plain_text
-            else:
-                html_text = text or html_text
+            text = _part_text(part)  # inline only — never fetches
+            is_plain = part_mime == "text/plain"
+            if text:
+                if is_plain:
+                    inline_plain = text
+                else:
+                    inline_html = text
+            elif _stored_body_id(part):
+                (stored_plain if is_plain else stored_html).append(part)
         elif part_mime.startswith("multipart/"):
             nested = _get_body_text(part, _depth + 1, fetch)
             if nested:
                 return nested
 
-    return plain_text or html_text or oversize
+    oversize = ""
+
+    def _resolve(inline: str, stored: list[dict]) -> str:
+        nonlocal oversize
+        if inline or not fetch:
+            return inline
+        for candidate in stored:
+            text = _part_text(candidate, fetch)
+            # The oversize marker is truthy, so hold it aside — an unreadable
+            # text/plain must not shadow a readable text/html alternative.
+            if text == _BODY_TOO_LARGE:
+                oversize = text
+            elif text:
+                return text
+        return ""
+
+    return _resolve(inline_plain, stored_plain) or _resolve(inline_html, stored_html) or oversize
 
 
 def _truncate_body(text: str) -> str:
@@ -292,12 +336,15 @@ def get_thread_op(service, thread_id: str) -> dict:
     total = len(all_messages)
     # Keep the most-recent messages when a thread is very long.
     kept = all_messages[-_MAX_THREAD_MESSAGES:] if total > _MAX_THREAD_MESSAGES else all_messages
-    # One fetcher, one budget, for the whole thread.
+    # One fetcher, one budget, for the whole thread — and spend it NEWEST-first.
+    # `kept` runs oldest→newest, so formatting in order would hand the budget to the
+    # oldest messages and return the latest replies (what the user actually asked
+    # about) blank. Format in reverse, then restore chronological order.
     body_fetcher = _make_body_fetcher(service)
     messages = [
         _format_message(m, fetch=functools.partial(body_fetcher, m.get("id", "")))
-        for m in kept
-    ]
+        for m in reversed(kept)
+    ][::-1]
     result = {
         "thread_id": thread_id,
         "message_count": total,

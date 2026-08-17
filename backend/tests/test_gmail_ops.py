@@ -388,13 +388,10 @@ def test_get_thread_op_budgets_attachment_fetches_per_thread():
     svc = _Service(_Users(messages=_MessagesWithAttachments(attachments), threads=_Threads(thread)))
 
     out = ops.get_thread_op(svc, "t1")
-    # Exact, not `<=`: a one-sided bound would also pass if the fetcher were broken
-    # into never fetching at all, which is the regression that matters most here.
-    assert len(attachments.calls) == ops._MAX_BODY_FETCHES_PER_THREAD
-    # ...and the budget was spent usefully — a body did come back. Which sibling
-    # wins is PRE-EXISTING behavior (the last non-empty text/plain part), preserved
-    # unchanged by this refactor; asserted here only to prove a fetch succeeded.
-    assert out["messages"][0]["body"] == f"body {ops._MAX_BODY_FETCHES_PER_THREAD - 1}"
+    # Resolution stops at the FIRST recovered body, so six eligible siblings cost
+    # one fetch, not six — and certainly not one per sibling.
+    assert len(attachments.calls) == 1
+    assert out["messages"][0]["body"] == "body 0"
 
 
 def test_attachment_fetch_budget_spans_the_whole_thread_not_each_message():
@@ -502,3 +499,83 @@ def test_repeated_fetch_failures_log_once_per_thread_read():
         logger.removeHandler(handler)
 
     assert len([r for r in records if r.levelno >= logging.WARNING]) == 1
+
+
+# ── Settle-loop findings (PR #63 Codex connector) ─────────────────────────────
+
+def test_nameless_disposition_attachment_is_never_fetched_as_a_body():
+    """A text part with `Content-Disposition: attachment` and NO filename is valid
+    MIME and still a file. Keying only on `filename` would leak it into the model
+    context, breaking SECURITY.md's 'message bodies only, never your files'."""
+    fetched = []
+    part = {
+        "mimeType": "text/plain",
+        "filename": "",
+        "headers": [{"name": "Content-Disposition", "value": "attachment"}],
+        "body": {"data": "", "attachmentId": "att-1", "size": 10},
+    }
+    assert ops._part_text(part, fetch=lambda aid: fetched.append(aid) or "secret") == ""
+    assert fetched == []
+
+
+def test_inline_disposition_text_part_is_still_a_body():
+    """`Content-Disposition: inline` is a body — the guard must not over-reject."""
+    part = {
+        "mimeType": "text/plain",
+        "headers": [{"name": "Content-Disposition", "value": "inline"}],
+        "body": {"data": "", "attachmentId": "att-1", "size": 10},
+    }
+    assert ops._part_text(part, fetch=lambda aid: "the body") == "the body"
+
+
+def test_html_alternative_is_not_fetched_when_plain_succeeds():
+    """Both alternatives stored out of line: only the preferred one may be fetched.
+    Fetching the discarded HTML too would burn two budget slots per message, so two
+    ordinary messages would exhaust the thread budget."""
+    attachments = _Attachments({"att-plain": _b64("plain wins"), "att-html": _b64("<p>x</p>")})
+    thread = {"messages": [{"id": "m1", "threadId": "t1", "payload": {
+        "mimeType": "multipart/alternative", "headers": [], "parts": [
+            _stored_part("text/plain", "att-plain", 10),
+            _stored_part("text/html", "att-html", 10),
+        ]}}]}
+    svc = _Service(_Users(messages=_MessagesWithAttachments(attachments), threads=_Threads(thread)))
+
+    out = ops.get_thread_op(svc, "t1")
+    assert out["messages"][0]["body"] == "plain wins"
+    assert attachments.calls == [("m1", "att-plain")]  # the HTML was never requested
+
+
+def test_html_alternative_is_fetched_when_plain_is_unrecoverable():
+    attachments = _Attachments({"att-html": _b64("<p>html fallback</p>")})
+    thread = {"messages": [{"id": "m1", "threadId": "t1", "payload": {
+        "mimeType": "multipart/alternative", "headers": [], "parts": [
+            _stored_part("text/plain", "att-missing", ops._MAX_BODY_FETCH_BYTES + 1),
+            _stored_part("text/html", "att-html", 10),
+        ]}}]}
+    svc = _Service(_Users(messages=_MessagesWithAttachments(attachments), threads=_Threads(thread)))
+
+    out = ops.get_thread_op(svc, "t1")
+    assert out["messages"][0]["body"] == "html fallback"
+
+
+def test_fetch_budget_is_spent_on_the_newest_messages():
+    """`kept` runs oldest to newest. Spending the budget in that order would return
+    the latest replies — the ones the user is asking about — blank."""
+    n = 10
+    blobs = {f"att-{i}": _b64(f"body {i}") for i in range(n)}
+    attachments = _Attachments(blobs)
+    thread = {"messages": [
+        {"id": f"m{i}", "threadId": "t1", "payload": {
+            "mimeType": "multipart/mixed", "headers": [],
+            "parts": [_stored_part("text/plain", f"att-{i}", 10)]}}
+        for i in range(n)
+    ]}
+    svc = _Service(_Users(messages=_MessagesWithAttachments(attachments), threads=_Threads(thread)))
+
+    out = ops.get_thread_op(svc, "t1")
+    budget = ops._MAX_BODY_FETCHES_PER_THREAD
+    # Output stays chronological...
+    assert [m["id"] for m in out["messages"]] == [f"m{i}" for i in range(n)]
+    # ...but the bodies that came back are the NEWEST ones.
+    with_bodies = [m["id"] for m in out["messages"] if m["body"]]
+    assert with_bodies == [f"m{i}" for i in range(n - budget, n)]
