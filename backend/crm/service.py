@@ -109,8 +109,16 @@ def _contact_search_where(query: str, status: str | None, tags: str | None) -> t
 
     ``co.name`` is part of the match (issue #35) so a contact linked to a company
     is findable by that company's name even when its legacy free-text is empty or
-    stale. The legacy ``ct.company`` stays in the OR so unlinked contacts remain
-    findable by their text.
+    stale.
+
+    ``ct.company`` is matched for EVERY contact, not just unlinked ones — this is
+    deliberate, not an oversight (two reviewers read it as one). Link-authority is
+    about identity and display, not about forgetting former names: after a company
+    is renamed Acme→Beta, searching "Acme" still finds the contact and the result
+    renders "Beta" via ``company_name``. Search is recall, and a superset with an
+    authoritative label beats hiding a record because the user remembered the old
+    name. Scoping it to ``ct.company_id IS NULL`` would silently drop those hits.
+    Pinned by test_search_matches_old_company_spelling_but_displays_new_name.
     """
     like = f"%{query}%"
     conditions = [

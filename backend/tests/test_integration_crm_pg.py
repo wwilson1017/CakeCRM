@@ -440,6 +440,28 @@ def test_contact_list_and_search_are_link_authoritative(pg_db):
     assert service.count_search_contacts("") == len(service.list_contacts()["contacts"])
 
 
+def test_search_matches_old_company_spelling_but_displays_new_name(pg_db):
+    """Deliberate, and pinned so nobody 'fixes' it: the legacy text stays in the
+    search predicate for LINKED contacts too, so a rename doesn't make the
+    contact unfindable by the name the user remembers — while the row it returns
+    is labelled with the authoritative new name."""
+    from crm import service
+
+    co = service.create_company("Acme")
+    c = service.create_contact("Ada", company="Acme")   # links, and keeps the text
+    assert c["company_id"] == co["id"]
+
+    service.update_company(co["id"], name="Beta")
+
+    by_new = service.search_contacts("Beta")
+    assert [r["id"] for r in by_new] == [c["id"]]
+
+    by_old = service.search_contacts("Acme")            # the stale free text
+    assert [r["id"] for r in by_old] == [c["id"]]
+    assert by_old[0]["company_name"] == "Beta"          # ...labelled authoritatively
+    assert service.count_search_contacts("Acme") == 1   # count agrees with the rows
+
+
 def test_csv_import_populates_companies_page(pg_db):
     """The headline acceptance: fresh install -> import my contacts -> the
     Companies page is populated, not silently empty."""
