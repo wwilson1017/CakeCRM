@@ -304,7 +304,7 @@ def test_stored_body_without_a_fetcher_is_blank_as_before():
 
 
 def test_body_fetcher_swallows_api_errors_and_enforces_its_budget():
-    """The fetcher is where 'never raises' and the per-message bound actually live."""
+    """The fetcher is where 'never raises' and the thread-wide bound actually live."""
     failing = _Attachments({}, fail=True)
     svc = _Service(_Users(messages=_MessagesWithAttachments(failing)))
     assert ops._make_body_fetcher(svc)("m1", "att-1") == ""
@@ -355,7 +355,7 @@ def test_unparseable_declared_size_also_fails_closed():
 
 def test_get_thread_op_recovers_stored_bodies_with_one_thread_call():
     """End-to-end: the thread read is still ONE threads.get (the two-step fetch was
-    declined in #43), and the stored body is recovered through the per-message
+    declined in #43), and the stored body is recovered through the thread-scoped
     fetcher built inside the already-allow-listed op."""
     attachments = _Attachments({"att-1": _b64("the real body")})
     thread = {"messages": [{
@@ -482,8 +482,8 @@ def test_malformed_inline_base64_degrades_one_part_not_the_thread():
     assert ops._get_body_text(payload) == "good"
 
 
-def test_repeated_fetch_failures_log_once_per_message():
-    """A 20-message thread must not emit 40 warnings for one broken mailbox."""
+def test_repeated_fetch_failures_log_once_per_thread_read():
+    """One broken mailbox must not emit a warning per failed fetch."""
     import logging
 
     failing = _Attachments({}, fail=True)

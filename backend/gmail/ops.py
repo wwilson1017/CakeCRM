@@ -232,7 +232,7 @@ def _make_body_fetcher(service):
         except Exception as e:
             # warning, not debug: a systemic failure here degrades every thread read
             # to blank bodies, which is indistinguishable from genuinely empty mail.
-            # Once per message, so a bad thread can't flood the log.
+            # Once per thread read, so a bad thread can't flood the log.
             if not warned[0]:
                 warned[0] = True
                 logger.warning("gmail.ops: body attachment fetch failed for a message: %s", e)
