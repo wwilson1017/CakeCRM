@@ -38,8 +38,10 @@ LIVE_PREDICATE_D = "d.archived_at IS NULL"
 
 # A task belongs to a live deal, or to no deal at all. Archiving is the user's "stop
 # nagging me about this" gesture and the heartbeat reads the task surfaces, so EVERY
-# task reader carries this — list_tasks, the dashboard's overdue/pending counts, and
-# the contact detail page. Standalone tasks (deal_id NULL) are never affected.
+# task reader applies this rule — the dashboard's overdue/pending counts and the
+# contact detail page use this constant; list_tasks uses the equivalent aliased form
+# (`t.deal_id IS NULL OR d.archived_at IS NULL`) since it already joins deals. Any new
+# task reader must carry one of the two. Standalone tasks (deal_id NULL) are unaffected.
 LIVE_TASK_PREDICATE = (
     "(tasks.deal_id IS NULL OR EXISTS (SELECT 1 FROM deals ld "
     "WHERE ld.id = tasks.deal_id AND ld.archived_at IS NULL))"
@@ -553,8 +555,9 @@ def list_deals(stage: str | None = None, contact_id: int | None = None, limit: i
 def _write_deal_update(deal_id: int, filtered: dict) -> bool:
     """Apply a validated column map to one deal in a single transaction.
 
-    Every deal write funnels through here so the three things that must happen
-    together with a stage change actually do (issue #22):
+    Every deal COLUMN update funnels through here (create_deal and archive_deal are
+    the two writes that don't — they have no old stage to transition from) so the
+    three things that must happen together with a stage change actually do (issue #22):
 
     1. **Stage history** — a ``deal_stage_events`` row is appended in the SAME
        transaction as the ``UPDATE``, so the log can never disagree with

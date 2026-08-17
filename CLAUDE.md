@@ -120,8 +120,9 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `clear_all`), and `is_required` is advisory-only (never enforced server-side).
   **Deal lifecycle + sales intelligence** (#22 Phase 1) add `deals.lost_reason` and a
   soft-archive `deals.archived_at` (NULL = live) plus an append-only `deal_stage_events`
-  log. Every deal write funnels through `service._write_deal_update`, which in ONE
-  transaction takes `SELECT stage … FOR UPDATE`, writes the row, appends a stage event
+  log. Every deal column update funnels through `service._write_deal_update`
+  (`create_deal` and `archive_deal` are the two writes that don't — neither has an old
+  stage to transition from), which in ONE transaction takes `SELECT stage … FOR UPDATE`, writes the row, appends a stage event
   when the stage moved, and CLEARS `lost_reason` when a deal leaves `lost` (the bug the
   blueprint fixed after our snapshot). `archived_at` is a **sweep**: `LIVE_PREDICATE`
   is carried by every deal-reading query (pipeline, dashboard, analytics, list/search,
