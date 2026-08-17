@@ -51,10 +51,13 @@ export function ContactForm({ contact, onClose, onSaved }: Props) {
   // Keep the legacy free-text `company` in sync with the linked company so the two
   // can't contradict (link to Beta while the text still says Acme). Selecting a
   // company overwrites the text; "No company" leaves the text for free-form entry.
+  // Looks in companyOptions, not companies: the contact's own linked company may
+  // only exist as the appended synthetic option, and missing it here would leave
+  // the legacy text naming whatever company was selected before.
   function pickCompany(id: number | null) {
     setCompanyId(id);
     if (id != null) {
-      const co = companies.find(c => c.id === id);
+      const co = companyOptions.find(c => c.id === id);
       if (co) setCompany(co.name);
     }
   }
@@ -67,7 +70,7 @@ export function ContactForm({ contact, onClose, onSaved }: Props) {
     // free-text `company` too, so the two can't contradict regardless of the order
     // the user touched the fields. company_id is always sent (null unlinks — the
     // update endpoint keeps explicit nulls for FKs).
-    const linked = companyId != null ? companies.find(c => c.id === companyId) : undefined;
+    const linked = companyId != null ? companyOptions.find(c => c.id === companyId) : undefined;
     const companyText = linked ? linked.name : company;
     const body = JSON.stringify({ name, email, phone, company: companyText, title, source, status, tags, notes, company_id: companyId });
     try {
