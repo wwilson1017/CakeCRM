@@ -192,8 +192,11 @@ def test_merge_repoints_moves_copies_and_archives_the_source(monkeypatch, rec, f
     assert any("UPDATE tasks SET deal_id = %s" in s for s in stmts)
     # Notes are COPIED (source keeps its own thread for the restore case).
     assert any("INSERT INTO crm_chatter" in s and "left(%s || message, %s)" in s for s in stmts)
-    # Custom fields gap-fill only — the target's own values must win.
-    assert any("ON CONFLICT (entity_type, entity_id, field_id) DO NOTHING" in s for s in stmts)
+    # Custom fields gap-fill only — the target's own SET values must win, but a
+    # CLEARED target field (an existing row holding '') must still be filled.
+    upsert = next(s for s in stmts if "INSERT INTO crm_field_values" in s)
+    assert "DO UPDATE SET value = EXCLUDED.value" in upsert
+    assert "WHERE crm_field_values.value IS NULL OR crm_field_values.value = ''" in upsert
     # Source is archived, never deleted.
     assert any("UPDATE deals SET archived_at = COALESCE(archived_at, %s)" in s for s in stmts)
     assert not any("DELETE FROM deals" in s for s in stmts)
@@ -372,3 +375,30 @@ def test_search_deals_caps_the_number_of_custom_field_filters(rec, no_field_embe
     service.search_deals(custom_field_filters={f"k{i}": "v" for i in range(50)})
     sql = rec.calls[-1][0]
     assert sql.count("EXISTS (SELECT 1 FROM crm_field_values") == service.MAX_CUSTOM_FIELD_FILTERS
+
+
+def test_closing_via_the_generic_stage_path_still_settles_probability(monkeypatch, rec, fake_conn):
+    """The Kanban drag and crm_update_deal_stage close deals too. Normalizing at the
+    single write chokepoint keeps a 'won' deal from showing 30% win probability."""
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("negotiation",)])
+    rec.fetchone_queue = [{"id": 1}]
+    service.update_deal_stage(1, "won")
+    _, params = next((s, p) for s, p in conn.executed if "UPDATE deals SET" in s)
+    assert 100 in params
+
+
+def test_an_explicit_probability_is_never_overridden(monkeypatch, rec, fake_conn):
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("negotiation",)])
+    rec.fetchone_queue = [{"id": 1}]
+    service.update_deal(1, stage="won", probability=80)
+    _, params = next((s, p) for s, p in conn.executed if "UPDATE deals SET" in s)
+    assert 80 in params and 100 not in params
+
+
+def test_editing_probability_on_an_already_closed_deal_is_respected(monkeypatch, rec, fake_conn):
+    """No stage transition -> no normalization; the user's edit stands."""
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("won",)])
+    rec.fetchone_queue = [{"id": 1}]
+    service.update_deal(1, probability=55)
+    _, params = next((s, p) for s, p in conn.executed if "UPDATE deals SET" in s)
+    assert 55 in params and 100 not in params

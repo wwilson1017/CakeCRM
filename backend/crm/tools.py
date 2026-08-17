@@ -1049,11 +1049,35 @@ def crm_mark_deal_lost(deal_id: int, lost_reason: str = "") -> dict:
     return deal
 
 
+# Models do send `"false"` where a boolean is asked for, and `bool("false")` is True —
+# which would ARCHIVE a deal the user asked to restore. Parse strictly and refuse
+# anything ambiguous rather than guessing at a destructive default.
+_TRUE_WORDS = {"true", "1", "yes", "y"}
+_FALSE_WORDS = {"false", "0", "no", "n"}
+
+
+def _as_bool(value) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in _TRUE_WORDS:
+            return True
+        if text in _FALSE_WORDS:
+            return False
+    return None
+
+
 def crm_archive_deal(deal_id: int, archived: bool = True) -> dict:
-    deal = crm.archive_deal(deal_id, archived=bool(archived))
+    flag = _as_bool(archived)
+    if flag is None:
+        return {"error": "archived must be true or false"}
+    deal = crm.archive_deal(deal_id, archived=flag)
     if not deal:
         return {"error": f"Deal {deal_id} not found"}
-    return {"ok": True, "archived": bool(archived), "deal": deal}
+    return {"ok": True, "archived": flag, "deal": deal}
 
 
 def crm_merge_deals(target_deal_id: int, source_deal_id: int) -> dict:

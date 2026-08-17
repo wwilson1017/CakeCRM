@@ -409,6 +409,11 @@ def get_company_detail(company_id: int) -> dict | None:
             FROM activity_log a
             LEFT JOIN contacts c ON a.contact_id = c.id
             LEFT JOIN deals d ON a.deal_id = d.id
+            -- Only the DEAL side filters archived: an archived deal stops being one
+            -- of the company's deals. The CONTACT side deliberately does not — that
+            -- row is the history of talking to a person who still belongs to this
+            -- company, and it already shows on the contact's own page. Filtering it
+            -- here would make the two views disagree about the same interaction.
             WHERE a.contact_id IN (SELECT id FROM contacts WHERE company_id = %s)
                OR a.deal_id IN (SELECT id FROM deals WHERE company_id = %s
                                  AND {LIVE_PREDICATE})
@@ -565,6 +570,16 @@ def _write_deal_update(deal_id: int, filtered: dict) -> bool:
         new_stage = filtered.get("stage", old_stage)
         if old_stage == "lost" and new_stage != "lost" and "lost_reason" not in filtered:
             filtered = {**filtered, "lost_reason": ""}
+        # Closing a deal settles its win probability, whichever path closed it — the
+        # Kanban drag and crm_update_deal_stage go through here too, and a 'won' deal
+        # still showing 30% is just wrong. Only on the TRANSITION, and only when the
+        # caller didn't say otherwise: editing probability on an already-closed deal
+        # stays the caller's call.
+        if new_stage != old_stage and "probability" not in filtered:
+            if new_stage == "won":
+                filtered = {**filtered, "probability": 100}
+            elif new_stage == "lost":
+                filtered = {**filtered, "probability": 0}
         set_clause = ", ".join(f"{k} = %s" for k in filtered)
         cur.execute(
             f"UPDATE deals SET {set_clause}, updated_at = %s WHERE id = %s",
@@ -818,6 +833,12 @@ def merge_deals(target_deal_id: int, source_deal_id: int) -> dict:
             (target_deal_id, f"[Merged from deal #{source_deal_id}] ",
              chatter_service.MAX_MESSAGE_LEN, source_deal_id),
         )
+        # DO UPDATE ... WHERE, not DO NOTHING: clearing a custom field UPSERTs
+        # value='' rather than deleting the row (field_service.set_field_values), so
+        # "the target left it blank" usually means an EXISTING row holding ''. DO
+        # NOTHING would skip exactly the case this is meant to fill. The WHERE keeps
+        # the promise intact in the other direction — a target value that is actually
+        # set is never overwritten.
         cur.execute(
             """INSERT INTO crm_field_values
                    (entity_type, entity_id, field_id, value, updated_at, updated_by_email)
@@ -825,7 +846,11 @@ def merge_deals(target_deal_id: int, source_deal_id: int) -> dict:
                  FROM crm_field_values s
                 WHERE s.entity_type = 'deal' AND s.entity_id = %s
                   AND s.value IS NOT NULL AND s.value <> ''
-               ON CONFLICT (entity_type, entity_id, field_id) DO NOTHING""",
+               ON CONFLICT (entity_type, entity_id, field_id)
+               DO UPDATE SET value = EXCLUDED.value,
+                             updated_at = EXCLUDED.updated_at,
+                             updated_by_email = EXCLUDED.updated_by_email
+                WHERE crm_field_values.value IS NULL OR crm_field_values.value = ''""",
             (target_deal_id, source_deal_id),
         )
         cur.execute(

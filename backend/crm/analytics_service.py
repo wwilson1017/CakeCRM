@@ -350,11 +350,18 @@ def scan_gaps(entity_type: str = "all", limit: int = DEFAULT_LIMIT) -> dict:
     # empty predicate that reads as if company provenance were a real thing.
     provenance_types = [w for w in wanted if w in ("contact", "deal")]
     out["unverified_fields"] = [] if not provenance_types else pg_fetchall(
-        """SELECT entity_type, entity_id, field_name, value_snapshot, populated_at
-             FROM crm_field_provenance
-            WHERE confirmed_at IS NULL AND entity_type = ANY(%s)
-            ORDER BY populated_at DESC
-            LIMIT %s""",
+        f"""SELECT p.entity_type, p.entity_id, p.field_name, p.value_snapshot,
+                   p.populated_at
+              FROM crm_field_provenance p
+             WHERE p.confirmed_at IS NULL AND p.entity_type = ANY(%s)
+               -- An archived deal disappears from every other read; its unconfirmed
+               -- fields must go with it, or merge_deals' archived source keeps asking
+               -- the user to verify a deal that no longer exists to them.
+               AND (p.entity_type <> 'deal' OR EXISTS (
+                     SELECT 1 FROM deals d
+                      WHERE d.id = p.entity_id AND {LIVE_PREDICATE_D}))
+             ORDER BY p.populated_at DESC
+             LIMIT %s""",
         (provenance_types, limit),
     )
     out["total_gaps"] = sum(len(v) for k, v in out.items()

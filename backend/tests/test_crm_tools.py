@@ -441,3 +441,19 @@ def test_find_contact_and_search_companies_pass_the_limit_through(monkeypatch):
     tools.crm_find_contact("a", limit=5)
     tools.crm_search_companies("b", limit=9999)
     assert seen == {"c": 5, "co": 100}
+
+
+def test_archive_tool_parses_booleans_strictly(monkeypatch):
+    """A model sending the STRING "false" must restore, not archive — bool("false")
+    is True, so a naive cast would do the destructive thing on a restore request."""
+    seen = []
+    monkeypatch.setattr(service, "archive_deal",
+                        lambda d, archived=True: seen.append(archived) or {"id": d})
+    tools.crm_archive_deal(1, archived="false")
+    tools.crm_archive_deal(1, archived="true")
+    tools.crm_archive_deal(1, archived=False)
+    tools.crm_archive_deal(1)
+    assert seen == [False, True, False, True]
+    # Anything ambiguous is refused rather than guessed at.
+    assert "error" in tools.crm_archive_deal(1, archived="maybe")
+    assert len(seen) == 4  # the service was never reached for the bad value

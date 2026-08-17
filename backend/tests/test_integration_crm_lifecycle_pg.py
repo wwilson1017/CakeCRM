@@ -550,3 +550,61 @@ def test_scan_gaps_never_claims_company_provenance(pg_db):
 
     service.create_company("Bare Co")
     assert analytics_service.scan_gaps(entity_type="company")["unverified_fields"] == []
+
+
+def test_merge_fills_a_cleared_target_field_but_not_a_set_one(pg_db, monkeypatch):
+    """Clearing a custom field stores value='' rather than deleting the row, so
+    "the target left it blank" is usually an EXISTING empty row — a plain
+    ON CONFLICT DO NOTHING would skip exactly the case gap-fill exists for."""
+    from crm import field_service, service, touch_count_service
+
+    monkeypatch.setattr(touch_count_service, "schedule_recompute", lambda *a, **k: True)
+    contact = service.create_contact("Ana")
+    target = service.create_deal("Kept", contact_id=contact["id"])
+    source = service.create_deal("Dupe", contact_id=contact["id"])
+
+    cleared = field_service.create_field_definition(
+        {"entity_type": "deal", "name": "Region", "field_type": "text"})
+    kept = field_service.create_field_definition(
+        {"entity_type": "deal", "name": "Tier", "field_type": "text"})
+    field_service.set_field_values(
+        "deal", target["id"], {str(cleared["id"]): "", str(kept["id"]): "gold"}, "u")
+    field_service.set_field_values(
+        "deal", source["id"], {str(cleared["id"]): "north", str(kept["id"]): "bronze"}, "u")
+
+    service.merge_deals(target["id"], source["id"])
+
+    values = {r["field_key"]: r["value"]
+              for r in field_service.get_field_values("deal", target["id"])}
+    assert values == {"region": "north", "tier": "gold"}
+
+
+def test_archived_deals_stop_surfacing_unconfirmed_fields(pg_db):
+    """An archived deal disappears from every other read; its unconfirmed fields must
+    go with it, or merge_deals' archived source keeps asking to verify a dead deal."""
+    from crm import analytics_service, provenance_service, service
+
+    live = service.create_deal("Live", value=100)
+    doomed = service.create_deal("Doomed", value=200)
+    # record() directly: record_fields re-reads the live row and skips when the
+    # snapshot differs, and a float value column never string-matches "100".
+    provenance_service.record("deal", live["id"], "value", "100", "assistant")
+    provenance_service.record("deal", doomed["id"], "value", "200", "assistant")
+    assert len(analytics_service.scan_gaps()["unverified_fields"]) == 2
+
+    service.archive_deal(doomed["id"])
+    remaining = analytics_service.scan_gaps()["unverified_fields"]
+    assert [r["entity_id"] for r in remaining] == [live["id"]]
+
+
+def test_closing_a_deal_settles_probability_on_every_path(pg_db):
+    from crm import service
+
+    dragged = service.create_deal("Dragged to won", stage="negotiation", probability=30)
+    assert service.update_deal_stage(dragged["id"], "won")["probability"] == 100
+
+    lost = service.create_deal("Dragged to lost", stage="proposal", probability=45)
+    assert service.update_deal(lost["id"], stage="lost")["probability"] == 0
+
+    explicit = service.create_deal("Explicit", stage="proposal", probability=45)
+    assert service.update_deal(explicit["id"], stage="won", probability=80)["probability"] == 80
