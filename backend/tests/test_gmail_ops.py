@@ -390,8 +390,10 @@ def test_get_thread_op_budgets_attachment_fetches_per_message():
     # Exact, not `<=`: a one-sided bound would also pass if the fetcher were broken
     # into never fetching at all, which is the regression that matters most here.
     assert len(attachments.calls) == ops._MAX_BODY_FETCHES_PER_MESSAGE
-    # ...and the budget was spent usefully — a body did come back.
-    assert out["messages"][0]["body"] == "body 1"  # last successful plain part wins
+    # ...and the budget was spent usefully — a body did come back. Which sibling
+    # wins is PRE-EXISTING behavior (the last non-empty text/plain part), preserved
+    # unchanged by this refactor; asserted here only to prove a fetch succeeded.
+    assert out["messages"][0]["body"] == "body 1"
 
 
 def test_get_thread_op_survives_attachment_fetch_errors():
@@ -427,3 +429,36 @@ def test_get_thread_op_makes_exactly_one_threads_get_call():
     out = ops.get_thread_op(svc, "t1")
     assert calls == ["full"]
     assert [m["body"] for m in out["messages"]] == ["body 0", "body 1", "body 2"]
+
+
+def test_malformed_inline_base64_degrades_one_part_not_the_thread():
+    """A part whose data won't decode must blank that part only — not raise out of
+    the MIME walk and take the whole thread read with it."""
+    bad = {"mimeType": "text/plain", "body": {"data": "!!!not-base64!!!"}}
+    good_html = {"mimeType": "text/html", "body": {"data": _b64("<p>good</p>")}}
+    assert ops._part_text(bad) == ""
+
+    payload = {"mimeType": "multipart/alternative", "parts": [bad, good_html]}
+    assert ops._get_body_text(payload) == "good"
+
+
+def test_repeated_fetch_failures_log_once_per_message():
+    """A 20-message thread must not emit 40 warnings for one broken mailbox."""
+    import logging
+
+    failing = _Attachments({}, fail=True)
+    svc = _Service(_Users(messages=_MessagesWithAttachments(failing)))
+    fetch = ops._make_body_fetcher(svc, "m1")
+
+    logger = logging.getLogger("gmail.ops")
+    records = []
+    handler = logging.Handler()
+    handler.emit = records.append
+    logger.addHandler(handler)
+    try:
+        fetch("att-1")
+        fetch("att-2")
+    finally:
+        logger.removeHandler(handler)
+
+    assert len([r for r in records if r.levelno >= logging.WARNING]) == 1

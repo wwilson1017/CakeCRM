@@ -505,9 +505,17 @@ def _binding_conflict(tool: str, pending_content: str | None) -> dict | None:
         return None
     from gmail import tools as gmail_tools  # lazy: see _pending_placeholder
 
-    try:
-        parsed = json.loads(pending_content) if pending_content else {}
-    except (TypeError, ValueError):
+    # Accept an already-decoded mapping as well as the JSON string the history layer
+    # stores, so a future change in how the placeholder is deserialized can't make
+    # this check silently fail open (it would parse to nothing and find no binding).
+    if isinstance(pending_content, dict):
+        parsed = pending_content
+    elif isinstance(pending_content, str) and pending_content:
+        try:
+            parsed = json.loads(pending_content)
+        except ValueError:
+            return None
+    else:
         return None
     return gmail_tools.binding_conflict(parsed if isinstance(parsed, dict) else {})
 

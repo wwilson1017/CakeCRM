@@ -87,7 +87,12 @@ def _part_text(part: dict, fetch=None) -> str:
     body = part.get("body") or {}
     data = body.get("data", "")
     if data:
-        text = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
+        try:
+            text = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
+        except (ValueError, TypeError):
+            # Malformed base64 degrades this ONE part to blank rather than failing
+            # the whole thread read.
+            return ""
     elif fetch and body.get("attachmentId") and not part.get("filename"):
         size = _declared_size(body)
         # Fail CLOSED on an undeclared size. Gmail has no ranged read, so an
@@ -192,6 +197,7 @@ def _make_body_fetcher(service, message_id: str):
     failure returns "", which is exactly the blank body callers saw before #43.
     """
     remaining = [_MAX_BODY_FETCHES_PER_MESSAGE]
+    warned = [False]
 
     def fetch(attachment_id: str) -> str:
         if remaining[0] <= 0:
@@ -211,7 +217,10 @@ def _make_body_fetcher(service, message_id: str):
         except Exception as e:
             # warning, not debug: a systemic failure here degrades every thread read
             # to blank bodies, which is indistinguishable from genuinely empty mail.
-            logger.warning("gmail.ops: body attachment fetch failed for %s: %s", message_id, e)
+            # Once per message, so a bad thread can't flood the log.
+            if not warned[0]:
+                warned[0] = True
+                logger.warning("gmail.ops: body attachment fetch failed for a message: %s", e)
             return ""
 
     return fetch
