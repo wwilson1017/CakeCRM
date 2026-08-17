@@ -73,12 +73,21 @@ def test_stale_deals_reports_days_in_stage_and_open_task(rec):
     assert "AS has_open_task" in sql
 
 
-def test_stale_total_is_counted_before_the_limit(rec):
+def test_stale_total_is_counted_before_the_limit_when_truncated(rec):
     """A truncated list must never understate the problem."""
     rec.fetchall_queue = [[{"id": 1}, {"id": 2}]]
     rec.fetchone_queue = [{"cnt": 57}]
     out = az.get_stale_deals(limit=2)
     assert out["count"] == 2 and out["total_stale"] == 57
+
+
+def test_stale_total_skips_the_second_scan_when_nothing_was_truncated(rec):
+    """The count is a second full scan of the same non-sargable predicate (~150ms at
+    50k deals). Under the limit, the rows in hand ARE the answer."""
+    rec.fetchall_queue = [[{"id": 1}]]
+    out = az.get_stale_deals(limit=20)
+    assert out["total_stale"] == 1
+    assert not any("COUNT(*) AS cnt" in s for s, _ in rec.calls)
 
 
 # ── contact staleness ────────────────────────────────────────────────────────
@@ -154,7 +163,7 @@ def test_find_duplicates_rejects_an_unknown_entity_type(rec):
 def test_find_duplicates_all_covers_every_entity(rec):
     rec.fetchall_queue = [[] for _ in range(12)]
     out = az.find_duplicates()
-    assert set(out) == {"contacts", "companies", "deals", "total_groups"}
+    assert set(out) == {"contacts", "companies", "deals", "groups_returned"}
 
 
 # ── gap scan ─────────────────────────────────────────────────────────────────
@@ -186,7 +195,7 @@ def test_scan_gaps_surfaces_unconfirmed_assistant_writes(rec):
 
 def test_scan_gaps_total_excludes_the_provenance_list(rec):
     rec.fetchall_queue = [[{"id": 1}], [{"id": 2}], [], [{"x": 1}, {"x": 2}]]
-    assert az.scan_gaps()["total_gaps"] == 2
+    assert az.scan_gaps()["gaps_returned"] == 2
 
 
 def test_scan_gaps_rejects_an_unknown_entity_type(rec):
@@ -212,15 +221,15 @@ def test_scan_gaps_company_branch_checks_domain_industry_and_phone(rec):
     assert "companies" in out and "contacts" not in out and "deals" not in out
 
 
-def test_find_duplicate_companies_matches_domain_then_name(rec):
-    """Covered hermetically, not only by the integration suite — CI runs
-    `pytest -m 'not integration'`, so an integration-only test guards nothing in CI."""
-    rec.fetchall_queue = [[], [], []]
+def test_find_duplicate_companies_matches_on_domain_only(rec):
+    """Domain only: uq_companies_name_ci already makes case/whitespace name variants
+    impossible to co-exist, so a name pass could never return a group — it would just
+    cost a query. Covered hermetically because CI runs `pytest -m 'not integration'`."""
+    rec.fetchall_queue = [[], []]
     az.find_duplicate_companies()
     domain_sql = rec.sql_containing("lower(btrim(domain))")
     assert "btrim(domain) <> ''" in domain_sql and "HAVING COUNT(*) > 1" in domain_sql
-    name_sql = rec.sql_containing("lower(btrim(name))")
-    assert "FROM companies" in name_sql and "btrim(name) <> ''" in name_sql
+    assert not any("lower(btrim(name))" in s for s, _ in rec.calls)
 
 
 def test_predicates_are_imported_not_retyped():

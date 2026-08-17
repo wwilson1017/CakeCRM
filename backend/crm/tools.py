@@ -212,6 +212,15 @@ CRM_TOOL_DEFS = [
                     "additionalProperties": {"type": ["string", "number", "boolean"]},
                 },
                 "limit": {"type": "integer", "description": "Max results (default 25, max 100)", "default": 25},
+                "include_archived": {
+                    "type": "boolean",
+                    "description": (
+                        "Include archived deals (default false). This is the only way to "
+                        "find an archived deal — use it when the user wants to restore "
+                        "one or is looking for a deal that has gone missing."
+                    ),
+                    "default": False,
+                },
             },
             "required": [],
         },
@@ -268,12 +277,16 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_update_deal_stage",
         "writes": True,
-        "description": "Move a deal to a new pipeline stage. Quick way to advance or close a deal.",
+        "description": (
+            "Move a deal between OPEN pipeline stages. To CLOSE a deal use "
+            "crm_mark_deal_won or crm_mark_deal_lost instead — they capture the lost "
+            "reason and settle the win probability, which this tool does not."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "deal_id": {"type": "integer"},
-                "stage": {"type": "string", "description": "New stage: lead, qualified, proposal, negotiation, won, lost"},
+                "stage": {"type": "string", "description": "New stage: lead, qualified, proposal, negotiation"},
             },
             "required": ["deal_id", "stage"],
         },
@@ -959,6 +972,26 @@ def crm_delete_contact(contact_id: int) -> dict:
 
 # ── Deals ─────────────────────────────────────────────────────────────────────
 
+# The columns a model needs to reason about a deal. The service returns `d.*` for the
+# UI (notes, currency, ai_touch_*, timestamps); forwarding all of that costs ~27k
+# tokens for a 150-deal board and buys nothing — the model can always crm_get_deal for
+# the full record. Projection happens HERE, at the model boundary, so the HTTP/Kanban
+# payloads are untouched.
+_DEAL_SUMMARY_FIELDS = (
+    "id", "title", "stage", "value", "currency", "probability",
+    "expected_close_date", "contact_id", "contact_name", "company_id",
+    "company_name", "last_activity_at", "archived_at",
+)
+
+
+def _summarize_deal(deal: dict) -> dict:
+    out = {k: deal[k] for k in _DEAL_SUMMARY_FIELDS if k in deal}
+    # custom_fields is small and often the reason the deal was searched for.
+    if deal.get("custom_fields"):
+        out["custom_fields"] = deal["custom_fields"]
+    return out
+
+
 def crm_get_pipeline(stage: str | None = None, limit_per_stage: int = 25) -> dict:
     """Pipeline board, with the per-stage deal LIST capped for the model's context.
 
@@ -977,7 +1010,7 @@ def crm_get_pipeline(stage: str | None = None, limit_per_stage: int = 25) -> dic
         if per_stage.get(key, 0) >= limit_per_stage:
             continue
         per_stage[key] = per_stage.get(key, 0) + 1
-        trimmed.append(deal)
+        trimmed.append(_summarize_deal(deal))
     return {**result, "deals": trimmed,
             "limit_per_stage": limit_per_stage,
             "deals_truncated": len(trimmed) < len(deals)}
@@ -986,14 +1019,35 @@ def crm_get_pipeline(stage: str | None = None, limit_per_stage: int = 25) -> dic
 def crm_search_deals(
     search: str = "", stage: str | None = None, sort_by: str = "updated_at",
     sort_dir: str = "desc", custom_field_filters: dict | None = None, limit: int = 25,
+    include_archived: bool = False,
 ) -> dict:
     if custom_field_filters is not None and not isinstance(custom_field_filters, dict):
         return {"error": "custom_field_filters must be a map of field_key -> value"}
+    archived = _as_bool(include_archived)
+    if archived is None:
+        return {"error": "include_archived must be true or false"}
+
+    # Report keys that match no definition. Without this an unknown key just returns
+    # zero rows and the model tells the user "no deals match" — a wrong answer rather
+    # than "that field doesn't exist". _set_entity_fields already behaves this way.
+    unknown: list[str] = []
+    if custom_field_filters:
+        try:
+            known = {d["field_key"].lower()
+                     for d in field_service.list_field_definitions("deal")}
+        except ValueError:
+            known = set()
+        unknown = [k for k in custom_field_filters if str(k).lower() not in known]
+
     deals = crm.search_deals(
         search=search or "", stage=stage, sort_by=sort_by, sort_dir=sort_dir,
         custom_field_filters=custom_field_filters, limit=limit,
+        include_archived=archived,
     )
-    return {"deals": deals, "count": len(deals)}
+    result = {"deals": [_summarize_deal(d) for d in deals], "count": len(deals)}
+    if unknown:
+        result["unknown_field_keys"] = unknown
+    return result
 
 
 def crm_create_deal(title: str, **kwargs) -> dict:

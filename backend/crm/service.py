@@ -439,6 +439,11 @@ def create_deal(
     if stage not in DEAL_STAGES:
         stage = "lead"
     probability = max(0, min(100, probability))  # keep the percentage in range
+    # Creating a deal straight into won/lost settles its probability too — the edit
+    # form's stage <select> offers those stages, so this is a reachable fourth close
+    # path, not a theoretical one. (_write_deal_update covers the other three.)
+    if stage in ("won", "lost"):
+        probability = 100 if stage == "won" else 0
     # company_id appended last (see create_contact); a bad FK -> ForeignKeyViolation.
     row = pg_fetchone(
         """INSERT INTO deals (title, contact_id, stage, value, notes, expected_close_date, probability, currency, company_id)
@@ -562,16 +567,26 @@ def _write_deal_update(deal_id: int, filtered: dict) -> bool:
         raise ValueError("_write_deal_update requires at least one column to set")
     with get_connection() as conn:
         cur = conn.cursor()
-        cur.execute("SELECT stage FROM deals WHERE id = %s FOR UPDATE", (deal_id,))
+        cur.execute(
+            "SELECT stage, archived_at FROM deals WHERE id = %s FOR UPDATE", (deal_id,)
+        )
         row = cur.fetchone()
         if row is None:
             return False
-        old_stage = row[0]
+        old_stage, archived_at = row[0], row[1]
         new_stage = filtered.get("stage", old_stage)
+        # An archived deal is out of every list, board and aggregate — so closing one
+        # would book revenue nothing can see (won + archived is absent from win rate
+        # and avg deal size). Same stance merge_deals takes: restore it first.
+        if new_stage != old_stage and archived_at is not None:
+            raise ValueError(
+                f"Cannot change the stage of archived deal #{deal_id} — restore it first"
+            )
         if old_stage == "lost" and new_stage != "lost" and "lost_reason" not in filtered:
             filtered = {**filtered, "lost_reason": ""}
-        # Closing a deal settles its win probability, whichever path closed it — the
-        # Kanban drag, crm_update_deal_stage and the edit form all come through here.
+        # Closing a deal settles its win probability on every path that CHANGES the
+        # stage — the Kanban drag, crm_update_deal_stage and the edit form all come
+        # through here (create_deal handles the create-as-closed case itself).
         # This OVERRIDES a supplied probability on purpose: "probability" means chance
         # of winning, so it has exactly one correct value once the deal is decided, and
         # the edit form happily posts the old 30% alongside stage='won'. Only on the
@@ -621,6 +636,7 @@ def _embed_custom_fields(rows: list[dict]) -> list[dict]:
 def search_deals(
     search: str = "", stage: str | None = None, sort_by: str = "updated_at",
     sort_dir: str = "desc", custom_field_filters: dict | None = None, limit: int = 25,
+    include_archived: bool = False,
 ) -> list[dict]:
     """Keyword + facet search over live deals, with custom-field values embedded.
 
@@ -641,8 +657,17 @@ def search_deals(
         limit = 25
     sort_col = sort_by if sort_by in _DEAL_SORTS else "updated_at"
     direction = "ASC" if str(sort_dir).lower() == "asc" else "DESC"
+    # expected_close_date is TEXT NOT NULL DEFAULT '', so a plain sort puts every
+    # UNDATED deal first — the exact opposite of "deals closing soon". NULLIF + NULLS
+    # LAST pushes them to the end in both directions.
+    sort_expr = (f"NULLIF(d.{sort_col}, '') {direction} NULLS LAST"
+                 if sort_col == "expected_close_date" else f"d.{sort_col} {direction}")
 
-    conditions = [LIVE_PREDICATE_D]
+    # This is the ONLY read that can surface an archived deal, which makes it the way
+    # back from an accidental archive or a wrong merge: without it a soft archive is a
+    # one-way door, since every other list/board/rollup filters them out and get_deal
+    # needs an id nothing would tell you.
+    conditions = [] if include_archived else [LIVE_PREDICATE_D]
     params: list = []
     if search:
         like = f"%{search}%"
@@ -677,8 +702,8 @@ def search_deals(
             FROM deals d
             LEFT JOIN contacts c ON d.contact_id = c.id
             LEFT JOIN companies co ON d.company_id = co.id
-            WHERE {' AND '.join(conditions)}
-            ORDER BY d.{sort_col} {direction}, d.id {direction}
+            {('WHERE ' + ' AND '.join(conditions)) if conditions else ''}
+            ORDER BY {sort_expr}, d.id {direction}
             LIMIT %s""",
         params,
     )
@@ -753,13 +778,15 @@ def archive_deal(deal_id: int, archived: bool = True) -> dict | None:
     Idempotent: archiving an already-archived deal keeps the original timestamp, so
     "when was this archived" survives a repeat call.
     """
-    now = _now()
+    # updated_at is deliberately NOT bumped. LAST_TOUCH_SQL treats updated_at as a
+    # touch, so an archive→restore round-trip would silently reset the deal's staleness
+    # clock and drop it out of get_stale_deals and the heartbeat's nudges until someone
+    # logged a real interaction. archived_at IS the state change; nothing else moved.
     # COALESCE keeps the FIRST archive timestamp on a repeat call; restore just NULLs it.
     archived_at_sql = "COALESCE(archived_at, %s)" if archived else "NULL"
-    params = (now, now, deal_id) if archived else (now, deal_id)
+    params = (_now(), deal_id) if archived else (deal_id,)
     row = pg_fetchone(
-        f"UPDATE deals SET archived_at = {archived_at_sql}, updated_at = %s "
-        "WHERE id = %s RETURNING id",
+        f"UPDATE deals SET archived_at = {archived_at_sql} WHERE id = %s RETURNING id",
         params,
     )
     if not row:
@@ -777,8 +804,9 @@ def merge_deals(target_deal_id: int, source_deal_id: int) -> dict:
 
     What moves vs. what is copied:
       * ``activity_log`` + ``tasks`` are **repointed** — a dated interaction and an
-        open follow-up belong to exactly one deal, and leaving them on an archived
-        deal would hide them from the timeline and the task list.
+        open follow-up belong to exactly one deal, and the surviving deal is the one
+        that still has work to do. (Tasks would additionally drop out of list_tasks
+        with the archived source; activity would not, since history is never swept.)
       * notes are **copied** (annotated with the source id), because the source keeps
         its own thread for the restore case.
       * custom fields are **gap-filled** — the target's own values always win; the
@@ -916,7 +944,12 @@ def list_tasks(
     if priority:
         conditions.append("t.priority = %s")
         params.append(priority)
-    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    # A task on an archived deal follows it out of view: archiving is the user's "stop
+    # bothering me about this" gesture, and the heartbeat is told to nag about overdue
+    # tasks. Standalone tasks (deal_id NULL) are untouched. Activity is deliberately NOT
+    # swept the same way — see get_activity_log.
+    conditions.append(f"(t.deal_id IS NULL OR {LIVE_PREDICATE_D})")
+    where = f"WHERE {' AND '.join(conditions)}"
     params.append(limit)
     return pg_fetchall(
         f"""SELECT t.*, c.name AS contact_name, d.title AS deal_title
@@ -979,6 +1012,13 @@ def log_activity(activity: str, note: str = "", contact_id: int | None = None,
 
 
 def get_activity_log(contact_id: int | None = None, deal_id: int | None = None, limit: int = 20) -> list[dict]:
+    """Activity rows, optionally scoped to a contact or deal.
+
+    Archived deals are deliberately NOT filtered here, unlike list_tasks: an activity
+    row is the record of something that actually happened, not an outstanding work
+    item, and reviewing an archived deal's history is exactly what you need before
+    deciding to restore it. Passing deal_id for an archived deal must keep working.
+    """
     conditions = []
     params: list = []
     if contact_id is not None:

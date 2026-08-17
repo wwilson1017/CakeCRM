@@ -123,11 +123,20 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   log. Every deal write funnels through `service._write_deal_update`, which in ONE
   transaction takes `SELECT stage … FOR UPDATE`, writes the row, appends a stage event
   when the stage moved, and CLEARS `lost_reason` when a deal leaves `lost` (the bug the
-  blueprint fixed after our snapshot). `archived_at` is a **sweep**: `_LIVE_PREDICATE`
+  blueprint fixed after our snapshot). `archived_at` is a **sweep**: `LIVE_PREDICATE`
   is carried by every deal-reading query (pipeline, dashboard, analytics, list/search,
-  contact/company rollups, touch-count backfill, the Gmail-scan open-deal attribution) —
-  the only deliberate exceptions are `get_deal` (fetch-by-id must still resolve an
-  archived deal so it can be shown/restored/merged) and the is-the-CRM-empty counts.
+  contact/company rollups, touch-count backfill, the Gmail-scan open-deal attribution),
+  and `crm/analytics_service.py` IMPORTS those predicate constants rather than re-typing
+  them. The line the sweep draws is **work items follow the deal, history does not**: an
+  archived deal's open tasks drop out of `list_tasks` (archiving is the user's "stop
+  nagging me" gesture, and the heartbeat is told to read that list), while `activity_log`
+  is never filtered — it records what actually happened, and you need it to decide
+  whether to restore. Deliberate exceptions: `get_deal` (fetch-by-id must still resolve
+  an archived deal so it can be shown/restored/merged), the is-the-CRM-empty counts, and
+  `crm_search_deals(include_archived=true)` — the ONE read that can surface an archived
+  deal, so an accidental archive or a wrong merge stays recoverable (there is no
+  archived-deals UI yet). A stage change on an archived deal is refused outright: won +
+  archived would book revenue no report can see.
   `deal_stage_events` is the one CRM table with a real FK to `deals`, so it MUST stay in
   every `TRUNCATE` sweep or the CRM reset errors out. `merge_deals` repoints
   activity/tasks, copies notes with a `[Merged from deal #N]` marker, gap-fills custom

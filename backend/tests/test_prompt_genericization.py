@@ -56,14 +56,22 @@ def _offenders(text: str, label: str) -> list[str]:
 
 
 def _all_tool_defs() -> list[dict]:
-    """Every tool def the assistant can advertise, from the real modules."""
+    """EVERY tool def the assistant can advertise, from the real modules.
+
+    Must stay exhaustive — a guard that silently covers a subset is worse than none,
+    because people stop double-checking it. Pinned by
+    test_the_guard_covers_every_registered_tool.
+    """
+    from assistant.registry import ToolRegistry
     from crm.tools import CRM_TOOL_DEFS
     from gmail.tools import GMAIL_TOOL_DEFS
     from memory.tools import get_memory_tools
+    from notifications.tools import get_notification_tools
     from reminders.tools import get_reminder_tools
 
     defs = list(CRM_TOOL_DEFS) + list(GMAIL_TOOL_DEFS)
     defs += list(get_memory_tools()[0]) + list(get_reminder_tools()[0])
+    defs += list(get_notification_tools(ToolRegistry())[0])
     return defs
 
 
@@ -80,10 +88,14 @@ def model_facing(monkeypatch):
     static, volatile = identity.build_system_prompt({"name": "Baker", "personality": ""})
     hb_static, hb_volatile = heartbeat_service._heartbeat_prompt()
 
+    rm_static, rm_volatile = heartbeat_service._reminder_prompt(
+        {"id": 1, "message": "", "context": ""}
+    )
     texts = [
         ("assistant system prompt (static)", static),
         ("assistant system prompt (volatile)", volatile),
         ("heartbeat prompt", f"{hb_static}\n{hb_volatile}"),
+        ("reminder prompt", f"{rm_static}\n{rm_volatile}"),
         ("quick-action starters", _TS_COMMENTS.sub("", QUICK_ACTIONS.read_text(encoding="utf-8"))),
     ]
     # Tool defs go to the provider verbatim — name, description AND the JSON schema
@@ -100,6 +112,17 @@ def test_no_company_specific_tokens_reach_the_model(model_facing):
         "Company-specific text leaked into the model-facing payload. CakeCRM is public "
         "and its history is permanent — genericize it:\n" + "\n".join(offenders)
     )
+
+
+def test_the_guard_covers_every_registered_tool():
+    """The docstring claims it scans every tool name/description/schema. Prove it
+    against the real registry rather than a hand-maintained list that drifts."""
+    from assistant.registry import ToolRegistry
+
+    scanned = {d["name"] for d in _all_tool_defs()}
+    registered = set(ToolRegistry().writes_map)
+    missing = registered - scanned
+    assert not missing, f"tools the genericization guard never scans: {missing}"
 
 
 def test_the_guard_actually_catches_a_leak():

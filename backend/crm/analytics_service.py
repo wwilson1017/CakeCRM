@@ -86,16 +86,23 @@ def get_stale_deals(stale_days: int = DEFAULT_DEAL_STALE_DAYS, limit: int = DEFA
         """,
         (stale_days, limit),
     )
-    total_row = pg_fetchone(
-        f"""SELECT COUNT(*) AS cnt FROM deals d
-             WHERE {OPEN_PREDICATE_D} AND {LIVE_PREDICATE_D}
-               AND {LAST_TOUCH_SQL} < now() - make_interval(days => %s)""",
-        (stale_days,),
-    )
-    # Counted before the LIMIT, so a truncated list never understates the problem.
+    # The count exists so a truncated list never understates the problem — but it is a
+    # second full scan of the same non-sargable predicate (~150ms at 50k deals), so
+    # only pay for it when the list actually WAS truncated. Under the limit, the rows
+    # we already have are the exact answer.
+    if len(rows) < limit:
+        total_stale = len(rows)
+    else:
+        total_row = pg_fetchone(
+            f"""SELECT COUNT(*) AS cnt FROM deals d
+                 WHERE {OPEN_PREDICATE_D} AND {LIVE_PREDICATE_D}
+                   AND {LAST_TOUCH_SQL} < now() - make_interval(days => %s)""",
+            (stale_days,),
+        )
+        total_stale = (total_row or {}).get("cnt", 0)
     return {
         "stale_days": stale_days,
-        "total_stale": (total_row or {}).get("cnt", 0),
+        "total_stale": total_stale,
         "deals": rows,
         "count": len(rows),
     }
@@ -223,15 +230,14 @@ def find_duplicate_contacts(limit: int = DEFAULT_LIMIT) -> list[dict]:
 
 
 def find_duplicate_companies(limit: int = DEFAULT_LIMIT) -> list[dict]:
-    """Companies sharing a domain, or sharing a name. (A unique index already blocks
-    exact-duplicate names, so name hits here are case/whitespace variants.)"""
+    """Companies sharing a domain. Domain only, on purpose: ``uq_companies_name_ci`` is
+    already a unique index on ``LOWER(btrim(name, …))``, so two companies whose names
+    differ only in case or surrounding whitespace cannot both exist — a name pass here
+    could never return a group, only cost a query."""
     limit = _bounded(limit, DEFAULT_LIMIT)
     by_domain = _duplicate_groups(
         "companies", "lower(btrim(domain))", "btrim(domain) <> ''", limit)
-    by_name = _duplicate_groups(
-        "companies", "lower(btrim(name))", "btrim(name) <> ''", limit)
-    return (_shape_groups(by_domain, "companies", "name", "domain")
-            + _shape_groups(by_name, "companies", "domain", "name"))
+    return _shape_groups(by_domain, "companies", "name", "domain")
 
 
 def find_duplicate_deals(limit: int = DEFAULT_LIMIT) -> list[dict]:
@@ -268,7 +274,10 @@ def find_duplicates(entity_type: str = "all", limit: int = DEFAULT_LIMIT) -> dic
         out["deals"] = find_duplicate_deals(limit)
     if not out:
         return {"error": f"Unknown entity_type: {entity_type!r}. Use contact, company, deal, or all."}
-    out["total_groups"] = sum(len(v) for v in out.values() if isinstance(v, list))
+    # groups_RETURNED, not total: these are len() of already-limited lists, unlike
+    # get_stale_deals' total_stale which is counted before its LIMIT. Naming them the
+    # same would tell the model two different things under one word.
+    out["groups_returned"] = sum(len(v) for v in out.values() if isinstance(v, list))
     return out
 
 
@@ -371,6 +380,6 @@ def scan_gaps(entity_type: str = "all", limit: int = DEFAULT_LIMIT) -> dict:
              LIMIT %s""",
         (provenance_types, limit),
     )
-    out["total_gaps"] = sum(len(v) for k, v in out.items()
-                            if isinstance(v, list) and k != "unverified_fields")
+    out["gaps_returned"] = sum(len(v) for k, v in out.items()
+                               if isinstance(v, list) and k != "unverified_fields")
     return out

@@ -372,12 +372,12 @@ def test_find_duplicates_groups_exact_matches_only(pg_db):
     assert [r["id"] for r in email_group["records"]] == [a["id"], b["id"]]
     assert {r["label"] for r in email_group["records"]} == {"Ana Ruiz", "A. Ruiz"}
 
-    domain_groups = [g for g in analytics_service.find_duplicate_companies()
-                     if g["match_on"] == "domain"]
-    assert len(domain_groups) == 1 and domain_groups[0]["count"] == 2
+    company_groups = analytics_service.find_duplicate_companies()
+    assert [g["match_on"] for g in company_groups] == ["domain"]
+    assert company_groups[0]["count"] == 2
 
     everything = analytics_service.find_duplicates()
-    assert everything["total_groups"] >= 2
+    assert everything["groups_returned"] >= 2
 
 
 def test_duplicate_deals_need_the_same_contact_and_ignore_archived(pg_db):
@@ -411,7 +411,7 @@ def test_scan_gaps_lists_missing_fields_worst_first(pg_db):
     assert [c["id"] for c in out["contacts"]] == [worst["id"]]
     assert set(out["contacts"][0]["missing_fields"]) == {
         "email", "phone", "company_link", "title"}
-    assert out["total_gaps"] == 1
+    assert out["gaps_returned"] == 1
 
     deals = analytics_service.scan_gaps(entity_type="deal")
     service.create_deal("Vague")
@@ -643,3 +643,78 @@ def test_duplicate_group_labels_are_always_strings(pg_db):
     labels = [r["label"] for r in name_groups[0]["records"]]
     assert all(isinstance(label, str) for label in labels)
     assert "" in labels
+
+
+def test_archive_restore_keeps_the_deal_stale(pg_db):
+    """Archiving must not reset the staleness clock — a bookkeeping round-trip would
+    otherwise erase the deal from every stale/nudge surface until a real touch."""
+    from core.postgres import pg_execute
+    from crm import analytics_service, service
+
+    deal = service.create_deal("Cold one")
+    pg_execute("UPDATE deals SET updated_at = now() - make_interval(days => 60) "
+               "WHERE id = %s", (deal["id"],))
+    assert analytics_service.get_stale_deals(stale_days=14)["count"] == 1
+
+    service.archive_deal(deal["id"])
+    service.archive_deal(deal["id"], archived=False)
+    assert [d["id"] for d in analytics_service.get_stale_deals(
+        stale_days=14)["deals"]] == [deal["id"]]
+
+
+def test_tasks_follow_an_archived_deal_out_of_view_but_history_does_not(pg_db):
+    from crm import service
+
+    deal = service.create_deal("Junk")
+    service.create_task("Chase junk", deal_id=deal["id"])
+    standalone = service.create_task("Unrelated errand")
+    service.log_activity("call", note="talked", deal_id=deal["id"])
+
+    service.archive_deal(deal["id"])
+    assert [t["id"] for t in service.list_tasks()] == [standalone["id"]]
+    # History is still readable — you need it to decide whether to restore.
+    assert len(service.get_activity_log(deal_id=deal["id"])) == 1
+    assert len(service.get_activity_log()) == 1
+
+
+def test_a_stage_change_on_an_archived_deal_is_refused_end_to_end(pg_db):
+    from crm import service
+
+    deal = service.create_deal("Parked", stage="proposal")
+    service.archive_deal(deal["id"])
+    with pytest.raises(ValueError, match="restore it first"):
+        service.mark_deal_won(deal["id"])
+    # Non-stage edits still work, and restoring re-enables the close.
+    assert service.update_deal(deal["id"], notes="tidy")["notes"] == "tidy"
+    service.archive_deal(deal["id"], archived=False)
+    assert service.mark_deal_won(deal["id"])["stage"] == "won"
+
+
+def test_search_is_the_way_back_from_an_archive(pg_db):
+    from crm import service
+
+    keep = service.create_deal("Live one")
+    gone = service.create_deal("Archived one")
+    service.archive_deal(gone["id"])
+
+    assert [d["id"] for d in service.search_deals(search="one")] == [keep["id"]]
+    found = service.search_deals(search="one", include_archived=True)
+    assert {d["id"] for d in found} == {keep["id"], gone["id"]}
+
+
+def test_undated_deals_sort_last_by_close_date(pg_db):
+    from crm import service
+
+    undated = service.create_deal("No date")
+    soon = service.create_deal("Soon", expected_close_date="2026-09-01")
+    later = service.create_deal("Later", expected_close_date="2027-01-15")
+    ordered = service.search_deals(sort_by="expected_close_date", sort_dir="asc")
+    assert [d["id"] for d in ordered] == [soon["id"], later["id"], undated["id"]]
+
+
+def test_creating_a_deal_already_closed_settles_its_probability(pg_db):
+    from crm import service
+
+    won = service.create_deal("Won on arrival", stage="won", probability=0)
+    lost = service.create_deal("Lost on arrival", stage="lost", probability=90)
+    assert won["probability"] == 100 and lost["probability"] == 0

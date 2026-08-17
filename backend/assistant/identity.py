@@ -98,9 +98,10 @@ SALES_GUIDE = (
     "**Custom fields.** This CRM's owner can define their own fields. Before deciding "
     "something can't be recorded, check the definitions with crm_get_contact_fields, "
     "crm_get_company_fields, or crm_get_deal_fields.\n\n"
-    "**Email.** You can search and read the user's email and DRAFT replies for them. "
-    "You cannot send anything, ever — always hand the draft back for the user to review "
-    "and send themselves."
+    "**Email.** If email tools are available to you, you can search and read mail and "
+    "DRAFT replies. You can never send anything — always hand the draft back for the "
+    "user to review and send themselves. If no email tool is listed, this CRM has no "
+    "mailbox connected: say so plainly rather than offering to look."
 )
 
 # Static (cacheable) explanation of the assistant's long-term memory (issue #5). The

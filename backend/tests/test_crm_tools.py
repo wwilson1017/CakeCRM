@@ -483,3 +483,64 @@ def test_mark_deal_lost_badges_an_assistant_written_reason(monkeypatch):
     tools.crm_mark_deal_lost(4, lost_reason="chose a competitor")
     assert recorded == [["lost_reason", "probability", "stage"]]
     assert "lost_reason" in provenance_service.PROVENANCE_FIELDS["deal"]
+
+
+def test_pipeline_and_search_tools_project_the_payload(monkeypatch):
+    """The service returns d.* for the UI (notes, ai_touch_*, timestamps). Forwarding
+    all of it costs ~27k tokens for a 150-deal board and buys nothing — the model can
+    always crm_get_deal for the full record."""
+    fat = {
+        "id": 1, "title": "T", "stage": "lead", "value": 10, "currency": "USD",
+        "probability": 20, "expected_close_date": "", "contact_id": None,
+        "contact_name": None, "company_id": None, "company_name": None,
+        "last_activity_at": None, "archived_at": None,
+        # noise the model never needs:
+        "notes": "x" * 5000, "created_at": "t", "updated_at": "t",
+        "ai_touch_count": 3, "ai_touch_count_at": "t", "ai_touch_evidence_count": 2,
+        "lost_reason": "",
+    }
+    monkeypatch.setattr(service, "get_pipeline", lambda stage=None: {
+        "deals": [dict(fat)], "stage_summary": [], "total_pipeline_value": 0})
+    monkeypatch.setattr(service, "search_deals", lambda **kw: [dict(fat)])
+    monkeypatch.setattr(field_service, "list_field_definitions", lambda et: [])
+
+    for payload in (tools.crm_get_pipeline()["deals"][0],
+                    tools.crm_search_deals()["deals"][0]):
+        assert set(payload) <= set(tools._DEAL_SUMMARY_FIELDS) | {"custom_fields"}
+        assert "notes" not in payload and "ai_touch_count" not in payload
+        assert payload["title"] == "T"   # the useful fields survive
+
+
+def test_search_reports_an_unknown_custom_field_key(monkeypatch):
+    """Without this the model says 'no deals match' when the field doesn't exist —
+    a wrong answer, not a missing one."""
+    monkeypatch.setattr(service, "search_deals", lambda **kw: [])
+    monkeypatch.setattr(field_service, "list_field_definitions",
+                        lambda et: [{"field_key": "region"}])
+    out = tools.crm_search_deals(custom_field_filters={"region": "n", "nope": "x"})
+    assert out["unknown_field_keys"] == ["nope"]
+    assert "unknown_field_keys" not in tools.crm_search_deals(
+        custom_field_filters={"Region": "n"})   # case-insensitive, so not unknown
+
+
+def test_search_can_be_asked_for_archived_deals(monkeypatch):
+    seen = {}
+
+    def fake(**kw):
+        seen.update(kw)
+        return []
+    monkeypatch.setattr(service, "search_deals", fake)
+    monkeypatch.setattr(field_service, "list_field_definitions", lambda et: [])
+    tools.crm_search_deals(search="junk", include_archived="true")
+    assert seen["include_archived"] is True
+    assert "error" in tools.crm_search_deals(include_archived="perhaps")
+
+
+def test_stage_tool_no_longer_advertises_closing():
+    """Tool descriptions are read at call time and beat a prompt block hundreds of
+    tokens earlier — this one used to say 'quick way to close a deal', steering the
+    model past the lifecycle verbs that capture the reason."""
+    by_name = {d["name"]: d for d in CRM_TOOL_DEFS}
+    stage_tool = by_name["crm_update_deal_stage"]
+    assert "crm_mark_deal_won" in stage_tool["description"]
+    assert "won" not in stage_tool["input_schema"]["properties"]["stage"]["description"]

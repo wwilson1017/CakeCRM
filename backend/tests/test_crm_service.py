@@ -497,7 +497,7 @@ def test_update_contact_accepts_explicit_null_company_id(rec):
 def test_update_deal_accepts_company_id(monkeypatch, rec, fake_conn):
     # Deal writes go through one transaction (issue #22: the stage event must land
     # with the UPDATE), so the UPDATE is on the raw cursor, not pg_execute.
-    conn = fake_conn(monkeypatch, service, fetchone_results=[("lead",)])
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("lead", None)])
     rec.fetchone_queue = [{"id": 1}]
     service.update_deal(1, company_id=None)
     sql = next(s for s, _ in conn.executed if "UPDATE deals SET" in s)
