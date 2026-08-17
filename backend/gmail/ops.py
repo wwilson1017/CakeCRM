@@ -12,6 +12,7 @@ Imports are stdlib-only (base64/logging/re/email/html), safe at module top level
 from __future__ import annotations
 
 import base64
+import functools
 import logging
 import re
 from email.message import EmailMessage
@@ -32,10 +33,14 @@ _MAX_MIME_DEPTH = 20
 # fetchable `body.attachmentId`. We recover those (issue #43) under a hard byte cap:
 # only 4000 CHARS are ever kept, but HTML markup means recovering that much readable
 # text can need far more raw bytes, so the cap is generous while still bounding the
-# transient download. Paired with a per-message fetch budget in get_thread_op, the
-# worst case for a thread is 20 messages x 2 fetches x 256 KB.
+# transient download.
 _MAX_BODY_FETCH_BYTES = 262144
-_MAX_BODY_FETCHES_PER_MESSAGE = 2
+# The budget is per THREAD READ, not per message: the MIME walk is breadth-unbounded
+# and a thread holds up to 20 messages, so a per-message budget would let a sender
+# shape one gmail_read_thread into ~40 sequential round-trips. A genuinely oversized
+# body is rare — one or two per thread — so a thread-wide budget keeps the feature
+# while capping the worst case at 4 fetches / ~1 MB.
+_MAX_BODY_FETCHES_PER_THREAD = 4
 # Shown instead of a blank body when the stored text is too large to pull in, so the
 # model can tell "this email is empty" from "this body was not retrieved".
 _BODY_TOO_LARGE = "[body too large to display]"
@@ -123,18 +128,26 @@ def _get_body_text(payload: dict, _depth: int = 0, fetch=None) -> str:
 
     plain_text = ""
     html_text = ""
+    oversize = ""
     for part in payload.get("parts", []):
         part_mime = part.get("mimeType", "")
-        if part_mime == "text/plain":
-            plain_text = _part_text(part, fetch) or plain_text
-        elif part_mime == "text/html":
-            html_text = _part_text(part, fetch) or html_text
+        if part_mime in ("text/plain", "text/html"):
+            text = _part_text(part, fetch)
+            # The oversize marker is truthy, so hold it aside — otherwise an
+            # unreadable text/plain would shadow a perfectly good text/html
+            # alternative carrying the same message.
+            if text == _BODY_TOO_LARGE:
+                oversize = text
+            elif part_mime == "text/plain":
+                plain_text = text or plain_text
+            else:
+                html_text = text or html_text
         elif part_mime.startswith("multipart/"):
             nested = _get_body_text(part, _depth + 1, fetch)
             if nested:
                 return nested
 
-    return plain_text or html_text
+    return plain_text or html_text or oversize
 
 
 def _truncate_body(text: str) -> str:
@@ -183,23 +196,25 @@ def _format_message(msg: dict, fetch=None) -> dict:
     }
 
 
-def _make_body_fetcher(service, message_id: str):
-    """Per-message fetcher for a text body Gmail stored outside `body.data` (#43).
+def _make_body_fetcher(service):
+    """Thread-scoped fetcher for text bodies Gmail stored outside `body.data` (#43).
 
     Strictly read-only (`users.messages.attachments.get`, covered by the existing
     gmail.readonly scope) and executed from INSIDE the already-allow-listed
     get_thread_op, so no new entry in client._APPROVED_OPS is introduced and the
     read+draft-only surface is unchanged.
 
-    Budgeted per message (one attempt for the plain part, one for an HTML fallback)
-    because the MIME walk is breadth-unbounded — without the budget a message with
-    many eligible text parts could issue a fetch for each. Never raises: every
-    failure returns "", which is exactly the blank body callers saw before #43.
+    ONE budget is shared across every message in the thread — see
+    _MAX_BODY_FETCHES_PER_THREAD. Never raises: every failure returns "", which is
+    exactly the blank body callers saw before #43.
+
+    Returns a two-arg callable; get_thread_op partially applies the message id so
+    the MIME walk only ever sees `fetch(attachment_id)`.
     """
-    remaining = [_MAX_BODY_FETCHES_PER_MESSAGE]
+    remaining = [_MAX_BODY_FETCHES_PER_THREAD]
     warned = [False]
 
-    def fetch(attachment_id: str) -> str:
+    def fetch(message_id: str, attachment_id: str) -> str:
         if remaining[0] <= 0:
             return ""
         remaining[0] -= 1
@@ -277,8 +292,10 @@ def get_thread_op(service, thread_id: str) -> dict:
     total = len(all_messages)
     # Keep the most-recent messages when a thread is very long.
     kept = all_messages[-_MAX_THREAD_MESSAGES:] if total > _MAX_THREAD_MESSAGES else all_messages
+    # One fetcher, one budget, for the whole thread.
+    body_fetcher = _make_body_fetcher(service)
     messages = [
-        _format_message(m, fetch=_make_body_fetcher(service, m.get("id", "")))
+        _format_message(m, fetch=functools.partial(body_fetcher, m.get("id", "")))
         for m in kept
     ]
     result = {

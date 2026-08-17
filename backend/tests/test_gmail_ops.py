@@ -307,13 +307,13 @@ def test_body_fetcher_swallows_api_errors_and_enforces_its_budget():
     """The fetcher is where 'never raises' and the per-message bound actually live."""
     failing = _Attachments({}, fail=True)
     svc = _Service(_Users(messages=_MessagesWithAttachments(failing)))
-    assert ops._make_body_fetcher(svc, "m1")("att-1") == ""
+    assert ops._make_body_fetcher(svc)("m1", "att-1") == ""
 
-    ok = _Attachments({f"att-{i}": _b64("x") for i in range(5)})
-    fetch = ops._make_body_fetcher(_Service(_Users(messages=_MessagesWithAttachments(ok))), "m1")
-    for i in range(5):
-        fetch(f"att-{i}")
-    assert len(ok.calls) == ops._MAX_BODY_FETCHES_PER_MESSAGE
+    ok = _Attachments({f"att-{i}": _b64("x") for i in range(8)})
+    fetch = ops._make_body_fetcher(_Service(_Users(messages=_MessagesWithAttachments(ok))))
+    for i in range(8):
+        fetch("m1", f"att-{i}")
+    assert len(ok.calls) == ops._MAX_BODY_FETCHES_PER_THREAD
 
 
 def test_body_fetcher_rejects_a_blob_that_under_declared_its_size():
@@ -322,7 +322,7 @@ def test_body_fetcher_rejects_a_blob_that_under_declared_its_size():
     huge = "A" * (ops._MAX_BODY_FETCH_BYTES * 2 + 4)
     attachments = _Attachments({"att-1": huge})
     svc = _Service(_Users(messages=_MessagesWithAttachments(attachments)))
-    assert ops._make_body_fetcher(svc, "m1")("att-1") == ""
+    assert ops._make_body_fetcher(svc)("m1", "att-1") == ""
 
 
 def test_real_file_attachment_is_never_fetched_as_a_body():
@@ -375,9 +375,10 @@ def test_get_thread_op_recovers_stored_bodies_with_one_thread_call():
     assert attachments.calls == [("m1", "att-1")]
 
 
-def test_get_thread_op_budgets_attachment_fetches_per_message():
-    """The MIME walk is breadth-unbounded, so the per-message budget is what keeps
-    a message with many stored text parts from issuing a fetch for each."""
+def test_get_thread_op_budgets_attachment_fetches_per_thread():
+    """The MIME walk is breadth-unbounded AND a thread holds up to 20 messages, so
+    ONE budget for the whole read is what stops a sender shaping a single
+    gmail_read_thread into dozens of sequential round-trips."""
     blobs = {f"att-{i}": _b64(f"body {i}") for i in range(6)}
     attachments = _Attachments(blobs)
     # Six sibling text/plain parts, each stored out-of-line.
@@ -389,11 +390,50 @@ def test_get_thread_op_budgets_attachment_fetches_per_message():
     out = ops.get_thread_op(svc, "t1")
     # Exact, not `<=`: a one-sided bound would also pass if the fetcher were broken
     # into never fetching at all, which is the regression that matters most here.
-    assert len(attachments.calls) == ops._MAX_BODY_FETCHES_PER_MESSAGE
+    assert len(attachments.calls) == ops._MAX_BODY_FETCHES_PER_THREAD
     # ...and the budget was spent usefully — a body did come back. Which sibling
     # wins is PRE-EXISTING behavior (the last non-empty text/plain part), preserved
     # unchanged by this refactor; asserted here only to prove a fetch succeeded.
-    assert out["messages"][0]["body"] == "body 1"
+    assert out["messages"][0]["body"] == f"body {ops._MAX_BODY_FETCHES_PER_THREAD - 1}"
+
+
+def test_attachment_fetch_budget_spans_the_whole_thread_not_each_message():
+    """The budget is per THREAD READ. Per-message it would scale with message
+    count, letting a sender turn one read into dozens of sequential round-trips."""
+    n_messages = 10
+    blobs = {f"att-{i}": _b64(f"body {i}") for i in range(n_messages)}
+    attachments = _Attachments(blobs)
+    thread = {"messages": [
+        {"id": f"m{i}", "threadId": "t1", "payload": {
+            "mimeType": "multipart/mixed", "headers": [],
+            "parts": [_stored_part("text/plain", f"att-{i}", 10)]}}
+        for i in range(n_messages)
+    ]}
+    svc = _Service(_Users(messages=_MessagesWithAttachments(attachments), threads=_Threads(thread)))
+
+    out = ops.get_thread_op(svc, "t1")
+    assert len(attachments.calls) == ops._MAX_BODY_FETCHES_PER_THREAD
+    # Every message is still returned; the ones past the budget just have no body.
+    assert len(out["messages"]) == n_messages
+    assert sum(1 for m in out["messages"] if m["body"]) == ops._MAX_BODY_FETCHES_PER_THREAD
+
+
+def test_oversize_marker_does_not_shadow_a_readable_alternative():
+    """An unreadable oversized text/plain must not hide a perfectly good text/html
+    alternative carrying the same message — the marker is truthy, so it has to be
+    held aside rather than treated as recovered text."""
+    payload = {"mimeType": "multipart/alternative", "parts": [
+        _stored_part("text/plain", "att-1", ops._MAX_BODY_FETCH_BYTES + 1),
+        {"mimeType": "text/html", "body": {"data": _b64("<p>the readable one</p>")}},
+    ]}
+    assert ops._get_body_text(payload, fetch=lambda aid: "") == "the readable one"
+
+
+def test_oversize_marker_is_shown_when_nothing_else_is_readable():
+    payload = {"mimeType": "multipart/alternative", "parts": [
+        _stored_part("text/plain", "att-1", ops._MAX_BODY_FETCH_BYTES + 1),
+    ]}
+    assert ops._get_body_text(payload, fetch=lambda aid: "") == ops._BODY_TOO_LARGE
 
 
 def test_get_thread_op_survives_attachment_fetch_errors():
@@ -448,7 +488,7 @@ def test_repeated_fetch_failures_log_once_per_message():
 
     failing = _Attachments({}, fail=True)
     svc = _Service(_Users(messages=_MessagesWithAttachments(failing)))
-    fetch = ops._make_body_fetcher(svc, "m1")
+    fetch = ops._make_body_fetcher(svc)
 
     logger = logging.getLogger("gmail.ops")
     records = []
@@ -456,8 +496,8 @@ def test_repeated_fetch_failures_log_once_per_message():
     handler.emit = records.append
     logger.addHandler(handler)
     try:
-        fetch("att-1")
-        fetch("att-2")
+        fetch("m1", "att-1")
+        fetch("m1", "att-2")
     finally:
         logger.removeHandler(handler)
 

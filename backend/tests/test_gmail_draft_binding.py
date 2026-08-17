@@ -61,7 +61,18 @@ def test_pending_binding_reads_the_live_generation(at_generation):
 
 
 def test_pending_binding_degrades_to_empty_when_the_store_is_unreachable(monkeypatch):
-    """An unbindable proposal must still be proposable — never block the write."""
+    """An unbindable proposal must still be proposable — never block the write.
+
+    The REAL failure mode: store.get_row() swallows read errors and returns {}, it
+    does not raise. Reading it as `... or 0` would mint a bogus generation 0 here
+    and then falsely refuse the draft at approve time.
+    """
+    monkeypatch.setattr(gmail_tools.store, "get_row", lambda: {})
+    assert gmail_tools.pending_binding() == {}
+
+
+def test_pending_binding_degrades_when_get_row_raises(monkeypatch):
+    """Defence in depth — get_row is documented never to raise, but don't rely on it."""
     monkeypatch.setattr(gmail_tools.store, "get_row",
                         lambda: (_ for _ in ()).throw(RuntimeError("pool down")))
     assert gmail_tools.pending_binding() == {}
@@ -92,11 +103,15 @@ def test_binding_conflict_never_raises_and_defaults_to_executing(at_generation, 
     assert gmail_tools.binding_conflict(placeholder) is None
 
 
-def test_binding_conflict_tolerates_an_unreachable_store(monkeypatch):
-    monkeypatch.setattr(gmail_tools.store, "get_row",
-                        lambda: (_ for _ in ()).throw(RuntimeError("pool down")))
-    # Falls through to the executor, whose own auth-error path reports a dead
-    # connection with a message the user can act on.
+@pytest.mark.parametrize("get_row", [
+    lambda: {},                                                  # the real failure mode
+    lambda: (_ for _ in ()).throw(RuntimeError("pool down")),    # defence in depth
+])
+def test_binding_conflict_tolerates_an_unreachable_store(monkeypatch, get_row):
+    """An unreadable generation must NOT read as a conflict. Reporting one would
+    tell the user their Gmail account changed when nothing had, and burn the
+    confirmation — claim_pending_tool has already marked it executing."""
+    monkeypatch.setattr(gmail_tools.store, "get_row", get_row)
     assert gmail_tools.binding_conflict({"gmail_generation": 5}) is None
 
 
@@ -122,8 +137,7 @@ async def test_placeholder_is_unchanged_for_non_gmail_writes(at_generation):
 
 
 async def test_placeholder_falls_back_when_the_binding_cannot_be_read(monkeypatch):
-    monkeypatch.setattr(gmail_tools.store, "get_row",
-                        lambda: (_ for _ in ()).throw(RuntimeError("pool down")))
+    monkeypatch.setattr(gmail_tools.store, "get_row", lambda: {})
     assert await engine._pending_placeholder("gmail_create_draft") == history.PENDING_RESULT_JSON
 
 

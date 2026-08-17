@@ -70,9 +70,14 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   plain `UPDATE … RETURNING` yields post-update values), so the router revokes exactly the
   grant it ended. Read fidelity: a large text body Gmail stored under `attachmentId` is
   recovered inside the **existing** `get_thread_op` (no new `_APPROVED_OPS` entry, no scope
-  change) under a 256 KB pre-check plus a 2-fetch-per-message budget, HTML flattened like
-  inline HTML, degrading to `""` on failure and `[body too large to display]` when oversize;
-  parts carrying a `filename` are NEVER fetched. The two-step thread fetch was evaluated and
+  change) under a 256 KB pre-check that **fails closed on an undeclared `body.size`** (Gmail
+  has no ranged read) plus a **thread-scoped** 4-fetch budget (per-message would scale with
+  message count, letting a sender shape one read into dozens of round-trips), HTML flattened
+  like inline HTML, degrading to `""` on failure and `[body too large to display]` when
+  oversize; parts carrying a `filename` are NEVER fetched. Note `store.get_row()` swallows
+  read errors and returns `{}`, so `gmail.tools._live_generation()` distinguishes
+  "unreadable" from generation 0 — reading it as `... or 0` would mint a bogus binding and
+  falsely refuse a valid draft. The two-step thread fetch was evaluated and
   **declined** (it doubles common-case calls/latency/quota to bound memory only for rare
   long threads).
 - **Multi-provider AI** via the `AIProvider` ABC (Anthropic, OpenAI, Gemini, Ollama,

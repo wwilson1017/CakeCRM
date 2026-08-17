@@ -137,6 +137,29 @@ def gmail_create_draft(to: str, subject: str, body: str, cc: str = "", bcc: str 
 BINDING_KEY = "gmail_generation"
 
 
+def _live_generation() -> int | None:
+    """The connection's current generation, or None when it could not be read.
+
+    `store.get_row()` never raises — it swallows read failures and returns {} — so
+    "unreadable" MUST be distinguished here rather than in an except block. Reading
+    it as `... or 0` would turn a transient DB blip into a *bogus* generation 0,
+    which is never a real connected value and would falsely refuse a valid draft.
+    """
+    try:
+        row = store.get_row() or {}
+    except Exception as e:  # defence in depth; get_row is documented never to raise
+        logger.warning("gmail.tools: could not read the connection generation: %s", e)
+        return None
+    gen = row.get("connection_generation")
+    if gen is None:
+        logger.warning("gmail.tools: connection generation unavailable (row unreadable)")
+        return None
+    try:
+        return int(gen)
+    except (TypeError, ValueError):
+        return None
+
+
 def pending_binding() -> dict:
     """Keys to merge into the pending-confirmation placeholder for a Gmail write.
 
@@ -144,11 +167,8 @@ def pending_binding() -> dict:
     the connection can't be read — an unbindable proposal simply behaves as it did
     before #43 rather than blocking the write.
     """
-    try:
-        return {BINDING_KEY: int(store.get_row().get("connection_generation") or 0)}
-    except Exception as e:
-        logger.warning("gmail.tools: could not read the connection generation: %s", e)
-        return {}
+    gen = _live_generation()
+    return {} if gen is None else {BINDING_KEY: gen}
 
 
 def binding_conflict(placeholder: dict | None) -> dict | None:
@@ -158,17 +178,21 @@ def binding_conflict(placeholder: dict | None) -> dict | None:
     Never raises — it runs after the pending call has already been claimed and
     marked executing, so an exception here would strand the confirmation. Anything
     unreadable (no binding key, a hand-edited placeholder, an unreachable store)
-    resolves to None and executes exactly as before #43.
+    resolves to None and executes exactly as before #43. In particular an
+    unreadable generation must NOT be reported as a conflict: the draft would be
+    refused with a message saying the account changed when nothing had.
     """
+    bound = (placeholder or {}).get(BINDING_KEY)
+    if bound is None:
+        return None  # proposed before #43 shipped, or unbindable at propose time
+    live = _live_generation()
+    if live is None:
+        return None  # can't verify; the executor's own auth path reports a dead link
     try:
-        bound = (placeholder or {}).get(BINDING_KEY)
-        if bound is None:
-            return None  # proposed before #43 shipped, or unbindable at propose time
-        if int(bound) == int(store.get_row().get("connection_generation") or 0):
+        if int(bound) == live:
             return None
-    except Exception as e:
-        logger.warning("gmail.tools: could not verify the connection binding: %s", e)
-        return None
+    except (TypeError, ValueError):
+        return None  # hand-edited / corrupt placeholder
     return {
         "error": (
             "The Gmail connection changed after this draft was proposed, so it was not "
