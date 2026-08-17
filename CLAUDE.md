@@ -123,8 +123,10 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `contacts.company` column stays in place, non-authoritative (the freetext↔link
   combobox merge is deliberate follow-up); a second one-shot backfill migration
   (`20260816203810_company_link_backfill.sql`) repairs installs that imported between
-  #13 and #35, narrowing deal-inherit to a CTE over the contacts it just linked so
-  deliberate unlinks survive. User-defined **custom fields** (#19) add a
+  #13 and #35 by linking contacts that are still `company_id IS NULL` with matching
+  text. Unlike #13's it deliberately does **not** inherit company onto deals: `NULL`
+  no longer unambiguously means "never set" (a user can clear a deal's company), and
+  no ingestion path creates deals anyway. User-defined **custom fields** (#19) add a
   two-table EAV (`crm_field_definitions` + `crm_field_values`) on contacts/companies/
   deals, managed in `/crm/settings`, rendered in the entity forms and detail pages, and
   exposed to the assistant via `crm_{get,set}_{contact,company,deal}_fields`;

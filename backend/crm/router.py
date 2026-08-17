@@ -98,6 +98,25 @@ MAX_UPLOAD_BYTES = 1_048_576  # 1 MB cap on uploaded files (CSV + smart-import)
 MAX_IMPORT_ROWS = 5000  # cap CSV rows processed per request (matches smart-import's contact cap)
 
 
+def _resolve_companies_or_fallback(names: list[str], context: str) -> dict[str, int]:
+    """Batch-resolve company names for a bulk import, degrading safely (issue #35).
+
+    Both import loops pre-resolve companies in one batch (2 queries total) so a
+    5000-row file doesn't issue a lookup per row. Shared here because the
+    degrade path is the subtle part and must not drift between the two callers:
+    a single malformed cell (a NUL byte, say) makes the whole batch statement
+    raise, which would turn one bad row into a failed import. Returning an empty
+    map instead lets each row resolve inside create_contact, where the loops'
+    existing per-row try/except still turns a bad value into one row error —
+    preserving the pre-#35 fault isolation exactly.
+    """
+    try:
+        return crm.resolve_company_ids(names)
+    except Exception as e:
+        logger.warning("%s: batch company resolution failed, falling back per row: %s", context, e)
+        return {}
+
+
 # ── Request models ────────────────────────────────────────────────────────────
 
 class ContactCreate(BaseModel):
@@ -641,21 +660,10 @@ async def import_csv(file: UploadFile = File(...), user=Depends(get_current_user
         def _company_of(row: dict) -> str:
             return _cell(row, company_col)
 
-        # Resolve every company name in 2 queries total (issue #35), so the
-        # Companies page populates from an import instead of staying empty. Only
-        # importable rows feed the resolver — a row that will be skipped for a
-        # blank name must not leave an auto-created company behind.
-        try:
-            company_ids = crm.resolve_company_ids(
-                [_company_of(row) for _, row in rows if (row.get(name_col) or "").strip()]
-            )
-        except Exception as e:
-            # One malformed cell (a NUL byte, say) must not fail the whole import.
-            # Falling back to an empty map lets each row resolve inside
-            # create_contact, where the existing per-row try/except still turns a
-            # bad value into one row error — preserving pre-#35 fault isolation.
-            logger.warning("CSV import: batch company resolution failed, falling back per row: %s", e)
-            company_ids = {}
+        company_ids = _resolve_companies_or_fallback(
+            [_company_of(row) for _, row in rows if (row.get(name_col) or "").strip()],
+            "CSV import",
+        )
 
         for i, row in rows:
             name = (row.get(name_col) or "").strip()
@@ -729,15 +737,10 @@ async def smart_import_confirm(body: SmartImportConfirm, user=Depends(get_curren
         def _company_of(entry: dict) -> str:
             return str(entry.get("company", "") or "").strip()
 
-        # Same batched company resolution as /import (issue #35) — 2 queries for
-        # the whole batch, and only for entries that will actually be imported.
-        try:
-            company_ids = crm.resolve_company_ids(
-                [_company_of(entry) for entry in contacts if _name_of(entry)]
-            )
-        except Exception as e:
-            logger.warning("Smart import: batch company resolution failed, falling back per row: %s", e)
-            company_ids = {}
+        company_ids = _resolve_companies_or_fallback(
+            [_company_of(entry) for entry in contacts if _name_of(entry)],
+            "Smart import",
+        )
 
         for i, entry in enumerate(contacts):
             # Fall back to email/phone as the name so email-only entries the

@@ -472,8 +472,15 @@ def test_csv_import_populates_companies_page(pg_db):
 
 def test_second_backfill_migration_repairs_pre_35_imports(pg_db):
     """The repair half of #35, on its own throwaway DB (same pattern as the #13
-    backfill test): unlinked contacts written between #13 and #35 get linked,
-    without clobbering deliberate links/unlinks."""
+    backfill test): contacts written between #13 and #35 get linked.
+
+    Precisely what is and isn't protected:
+      - an EXISTING contact link to a different company is never overwritten (E);
+      - deals are never touched at all, so a deliberate deal unlink survives;
+      - but a CONTACT whose link was deliberately removed while its text still
+        names a company IS relinked (D) — accepted and documented in the
+        migration header, because nothing distinguishes that from "never linked".
+    """
     from pathlib import Path
 
     migrations = Path(__file__).resolve().parent.parent / "migrations"
@@ -504,7 +511,8 @@ def test_second_backfill_migration_repairs_pre_35_imports(pg_db):
             "INSERT INTO contacts (name, company) VALUES "
             "('A', 'ACME'), ('B', 'Beta Corp'), ('C', ''), ('D', 'Acme')"
         )
-        # D is DELIBERATELY unlinked-but-nothing; E is deliberately linked elsewhere
+        # D stands in for a deliberately-unlinked contact (relinked — accepted);
+        # E is deliberately linked to a DIFFERENT company (must be left alone)
         cur.execute("INSERT INTO companies (name) VALUES ('Other Co')")
         cur.execute(
             "INSERT INTO contacts (name, company, company_id) VALUES "

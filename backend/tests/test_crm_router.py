@@ -253,6 +253,23 @@ def test_smart_import_confirm_passes_resolved_company_id(client, monkeypatch):
     assert created[0]["company_id"] == 5
 
 
+def test_smart_import_confirm_survives_batch_resolver_failure(client, monkeypatch):
+    """Counterpart to the CSV case: both import loops share one degrade path, so
+    both are covered — a batch failure must not fail the whole import."""
+    created = []
+    monkeypatch.setattr(service, "create_contact",
+                        lambda **kw: created.append(kw) or {"id": len(created)})
+
+    def _boom(names):
+        raise ValueError("A string literal cannot contain NUL (0x00) characters.")
+
+    monkeypatch.setattr(service, "resolve_company_ids", _boom)
+    resp = client.post("/api/crm/smart-import/confirm",
+                       json={"contacts": [{"name": "Ada", "company": "Acme"}]})
+    assert resp.status_code == 200 and resp.json()["imported"] == 1
+    assert created[0]["company_id"] is None  # fell back; create_contact resolves
+
+
 def test_smart_import_confirm_falls_back_to_email_as_name(client, monkeypatch):
     created = []
     monkeypatch.setattr(service, "create_contact",
