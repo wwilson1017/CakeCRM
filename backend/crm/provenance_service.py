@@ -41,7 +41,9 @@ ENTITY_TABLE_MAP = {"deal": "deals", "contact": "contacts"}
 # AI-created, and those have no per-field badge site. Issue #19 will add the 'cf:' namespace.
 PROVENANCE_FIELDS = {
     "contact": {"email", "phone", "company", "title", "tags", "notes"},
-    "deal": {"stage", "value", "notes", "probability", "expected_close_date"},
+    # lost_reason joined in #22: when the assistant decides WHY a deal was lost, that
+    # is a judgement worth a human's confirmation, and it feeds win/loss review.
+    "deal": {"stage", "value", "notes", "probability", "expected_close_date", "lost_reason"},
 }
 VALID_SOURCES = {"assistant"}
 

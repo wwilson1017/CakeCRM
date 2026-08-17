@@ -1045,7 +1045,10 @@ def crm_mark_deal_lost(deal_id: int, lost_reason: str = "") -> dict:
     deal = crm.mark_deal_lost(deal_id, lost_reason=lost_reason)
     if not deal:
         return {"error": f"Deal {deal_id} not found"}
-    _record_provenance("deal", deal_id, {"stage": "lost", "probability": 0}, deal)
+    _record_provenance(
+        "deal", deal_id,
+        {"stage": "lost", "probability": 0, "lost_reason": lost_reason}, deal,
+    )
     return deal
 
 
@@ -1060,7 +1063,9 @@ def _as_bool(value) -> bool | None:
     if isinstance(value, bool):
         return value
     if isinstance(value, int):
-        return bool(value)
+        # 0/1 only — an int like 2 or -1 is not an unambiguous "restore or archive?"
+        # answer, and this flag decides whether data disappears from every view.
+        return bool(value) if value in (0, 1) else None
     if isinstance(value, str):
         text = value.strip().lower()
         if text in _TRUE_WORDS:

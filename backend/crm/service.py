@@ -571,15 +571,14 @@ def _write_deal_update(deal_id: int, filtered: dict) -> bool:
         if old_stage == "lost" and new_stage != "lost" and "lost_reason" not in filtered:
             filtered = {**filtered, "lost_reason": ""}
         # Closing a deal settles its win probability, whichever path closed it — the
-        # Kanban drag and crm_update_deal_stage go through here too, and a 'won' deal
-        # still showing 30% is just wrong. Only on the TRANSITION, and only when the
-        # caller didn't say otherwise: editing probability on an already-closed deal
-        # stays the caller's call.
-        if new_stage != old_stage and "probability" not in filtered:
-            if new_stage == "won":
-                filtered = {**filtered, "probability": 100}
-            elif new_stage == "lost":
-                filtered = {**filtered, "probability": 0}
+        # Kanban drag, crm_update_deal_stage and the edit form all come through here.
+        # This OVERRIDES a supplied probability on purpose: "probability" means chance
+        # of winning, so it has exactly one correct value once the deal is decided, and
+        # the edit form happily posts the old 30% alongside stage='won'. Only on the
+        # TRANSITION though — editing probability on an already-closed deal stays the
+        # caller's call.
+        if new_stage != old_stage and new_stage in ("won", "lost"):
+            filtered = {**filtered, "probability": 100 if new_stage == "won" else 0}
         set_clause = ", ".join(f"{k} = %s" for k in filtered)
         cur.execute(
             f"UPDATE deals SET {set_clause}, updated_at = %s WHERE id = %s",

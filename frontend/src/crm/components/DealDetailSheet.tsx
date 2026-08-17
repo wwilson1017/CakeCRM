@@ -113,7 +113,7 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
         {deal.lost_reason && (
           <p style={{ fontSize: 13, color: INK_MUTE, marginBottom: 16, lineHeight: 1.5 }}>
             <span style={{ ...mono(10), color: INK_DIM, marginRight: 6 }}>LOST REASON</span>
-            {deal.lost_reason}
+            {deal.lost_reason} {badge('lost_reason')}
           </p>
         )}
 

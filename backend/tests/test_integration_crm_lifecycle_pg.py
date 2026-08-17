@@ -606,5 +606,8 @@ def test_closing_a_deal_settles_probability_on_every_path(pg_db):
     lost = service.create_deal("Dragged to lost", stage="proposal", probability=45)
     assert service.update_deal(lost["id"], stage="lost")["probability"] == 0
 
+    # Even an explicit probability loses to the close — see _write_deal_update.
     explicit = service.create_deal("Explicit", stage="proposal", probability=45)
-    assert service.update_deal(explicit["id"], stage="won", probability=80)["probability"] == 80
+    assert service.update_deal(explicit["id"], stage="won", probability=80)["probability"] == 100
+    # ...but editing probability on an already-closed deal is still the caller's call.
+    assert service.update_deal(explicit["id"], probability=60)["probability"] == 60

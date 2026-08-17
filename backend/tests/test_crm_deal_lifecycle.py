@@ -387,12 +387,15 @@ def test_closing_via_the_generic_stage_path_still_settles_probability(monkeypatc
     assert 100 in params
 
 
-def test_an_explicit_probability_is_never_overridden(monkeypatch, rec, fake_conn):
+def test_closing_overrides_even_an_explicit_probability(monkeypatch, rec, fake_conn):
+    """Deliberate override: probability means "chance of winning", so a decided deal
+    has exactly one correct value — and the edit form posts the stale 30% right
+    alongside stage='won'."""
     conn = fake_conn(monkeypatch, service, fetchone_results=[("negotiation",)])
     rec.fetchone_queue = [{"id": 1}]
     service.update_deal(1, stage="won", probability=80)
     _, params = next((s, p) for s, p in conn.executed if "UPDATE deals SET" in s)
-    assert 80 in params and 100 not in params
+    assert 100 in params and 80 not in params
 
 
 def test_editing_probability_on_an_already_closed_deal_is_respected(monkeypatch, rec, fake_conn):

@@ -457,3 +457,29 @@ def test_archive_tool_parses_booleans_strictly(monkeypatch):
     # Anything ambiguous is refused rather than guessed at.
     assert "error" in tools.crm_archive_deal(1, archived="maybe")
     assert len(seen) == 4  # the service was never reached for the bad value
+
+
+def test_archive_tool_rejects_ambiguous_integers(monkeypatch):
+    """0/1 are unambiguous; 2 or -1 are not, and this flag decides whether a deal
+    disappears from every view."""
+    monkeypatch.setattr(service, "archive_deal", lambda d, archived=True: {"id": d})
+    assert tools.crm_archive_deal(1, archived=1)["archived"] is True
+    assert tools.crm_archive_deal(1, archived=0)["archived"] is False
+    assert "error" in tools.crm_archive_deal(1, archived=2)
+    assert "error" in tools.crm_archive_deal(1, archived=-1)
+
+
+def test_mark_deal_lost_badges_an_assistant_written_reason(monkeypatch):
+    """Why a deal was lost is a judgement the assistant made — it feeds win/loss
+    review, so it should carry a badge until a human confirms it."""
+    from crm import provenance_service
+    recorded = []
+    monkeypatch.setattr(service, "mark_deal_lost",
+                        lambda d, lost_reason="": {"id": d, "stage": "lost",
+                                                   "probability": 0,
+                                                   "lost_reason": lost_reason})
+    monkeypatch.setattr(provenance_service, "record_fields",
+                        lambda et, eid, fields: recorded.append(sorted(fields)))
+    tools.crm_mark_deal_lost(4, lost_reason="chose a competitor")
+    assert recorded == [["lost_reason", "probability", "stage"]]
+    assert "lost_reason" in provenance_service.PROVENANCE_FIELDS["deal"]
