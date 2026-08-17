@@ -37,26 +37,26 @@ WHERE company_id IS NULL
 ORDER BY LOWER(btrim(company, E' \t\n\r\f\x0b')), id
 ON CONFLICT (LOWER(btrim(name, E' \t\n\r\f\x0b'))) DO NOTHING;
 
--- 2) Link each still-unlinked contact to its company, and 3) let that contact's
---    still-unlinked deals inherit the company.
+-- 2) Link each still-unlinked contact to its company.
+UPDATE contacts SET company_id = co.id
+FROM companies co
+WHERE contacts.company_id IS NULL
+  AND btrim(contacts.company, E' \t\n\r\f\x0b') != ''
+  AND LOWER(btrim(contacts.company, E' \t\n\r\f\x0b'))
+    = LOWER(btrim(co.name, E' \t\n\r\f\x0b'));
+
+-- NO deal-inheritance step, deliberately — this is where this backfill departs
+-- from #13's.
 --
---    These are ONE statement on purpose. #13's step 3 inherited for every deal
---    with company_id IS NULL, which was safe only because company_id had just
---    been added and no deliberate unlink could exist yet. Today a user can
---    unlink a deal on its own (DealForm sends an explicit null), so repeating
---    that broad pattern would silently re-link deals somebody deliberately
---    detached. The CTE narrows inheritance to deals whose contact was linked by
---    THIS migration.
-WITH linked AS (
-    UPDATE contacts SET company_id = co.id
-    FROM companies co
-    WHERE contacts.company_id IS NULL
-      AND btrim(contacts.company, E' \t\n\r\f\x0b') != ''
-      AND LOWER(btrim(contacts.company, E' \t\n\r\f\x0b'))
-        = LOWER(btrim(co.name, E' \t\n\r\f\x0b'))
-    RETURNING contacts.id AS contact_id, contacts.company_id AS company_id
-)
-UPDATE deals SET company_id = linked.company_id
-FROM linked
-WHERE deals.company_id IS NULL
-  AND deals.contact_id = linked.contact_id;
+-- #13 could safely set deals.company_id for every deal with a NULL company
+-- because company_id had just been ADDED to the table: every deal was NULL, so
+-- "NULL" unambiguously meant "never set". That is no longer true. A user can
+-- now clear a deal's company on its own (DealForm sends an explicit null), and
+-- nothing in the schema distinguishes "never linked" from "deliberately
+-- unlinked" — so inheriting would silently overwrite a deliberate choice.
+--
+-- The upside would have been small anyway: no ingestion path creates deals
+-- (CSV/vCard/smart import create contacts only), so a deal's company is always
+-- something a human or the assistant set explicitly on the deal itself.
+-- Contact links — the actual reason the Companies page was empty — are
+-- repaired above.

@@ -510,7 +510,8 @@ def test_second_backfill_migration_repairs_pre_35_imports(pg_db):
             "INSERT INTO contacts (name, company, company_id) VALUES "
             "('E', 'Acme', (SELECT id FROM companies WHERE name='Other Co'))"
         )
-        # a deal on A (should inherit) and one on E (must NOT be touched)
+        # deals on a backfilled contact (A) and on an already-linked one (E):
+        # NEITHER may be touched — unlike #13, this backfill does not inherit
         cur.execute(
             "INSERT INTO deals (contact_id, title) VALUES "
             "((SELECT id FROM contacts WHERE name='A'), 'DealA'), "
@@ -535,12 +536,10 @@ def test_second_backfill_migration_repairs_pre_35_imports(pg_db):
         cur.execute("SELECT id FROM companies WHERE name = 'Other Co'")
         assert links["E"] == cur.fetchone()[0]
 
-        # DealA inherited from A; DealE's contact was already linked, so the CTE
-        # never saw it — no re-linking of deals nobody backfilled
+        # No deal is touched: "company_id IS NULL" can no longer be distinguished
+        # from a deliberate unlink, so this backfill leaves deals entirely alone
         cur.execute("SELECT title, company_id FROM deals ORDER BY title")
-        deal_links = dict(cur.fetchall())
-        assert deal_links["DealA"] == acme_id
-        assert deal_links["DealE"] is None
+        assert dict(cur.fetchall()) == {"DealA": None, "DealE": None}
 
         # a backfill is not an edit
         cur.execute("SELECT name, updated_at FROM contacts ORDER BY name")

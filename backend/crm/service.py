@@ -353,6 +353,13 @@ def resolve_company_ids(names: list[str]) -> dict[str, int]:
     the caller's contact write later fails. Accepted: the name genuinely appeared
     in the input, and a company with no contacts is valid, visible, deletable
     data — not corruption.
+
+    Also accepted (single-user v1): if a company is DELETED by someone else in
+    the window between the two statements, that name is simply absent from the
+    returned map and its contact is written unlinked, keeping its free text — the
+    display falls back to that text, so nothing is lost or wrong. A retry loop
+    would close it; not worth the branch until the app is multi-user, when this
+    becomes a get-or-create that locks the conflicting row.
     """
     # Exact-string dedupe, order-preserving (first spelling wins the stored
     # name). str.strip(_WS) matches btrim's byte set, so Python and SQL agree on
