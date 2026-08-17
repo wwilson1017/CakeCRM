@@ -12,14 +12,22 @@ confirmation gate quiet for reads, and it puts these functions inside
 ``assistant.background.background_allowlist()`` automatically, so the proactive
 heartbeat can call them without any further wiring.
 
-Deal reads exclude archived deals (``service._LIVE_PREDICATE``) — an archived deal
-is not "going stale", it is put away.
+Deal reads exclude archived deals, and the live/open predicates are IMPORTED from
+``crm.service`` rather than re-typed here: a second copy of "what counts as a live,
+open deal" is exactly how a sweep site gets missed when the definition changes. An
+archived deal is not "going stale", it is put away.
 """
 
 import logging
 
 from core.postgres import pg_fetchall, pg_fetchone
-from crm.service import LAST_TOUCH_SQL
+from crm.service import (
+    LAST_TOUCH_SQL,
+    LIVE_PREDICATE,
+    LIVE_PREDICATE_D,
+    OPEN_PREDICATE,
+    OPEN_PREDICATE_D,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,8 +79,7 @@ def get_stale_deals(stale_days: int = DEFAULT_DEAL_STALE_DAYS, limit: int = DEFA
           FROM deals d
           LEFT JOIN contacts  c  ON d.contact_id = c.id
           LEFT JOIN companies co ON d.company_id = co.id
-         WHERE d.stage NOT IN ('won', 'lost')
-           AND d.archived_at IS NULL
+         WHERE {OPEN_PREDICATE_D} AND {LIVE_PREDICATE_D}
            AND {LAST_TOUCH_SQL} < now() - make_interval(days => %s)
          ORDER BY days_since_touch DESC, d.id ASC
          LIMIT %s
@@ -81,7 +88,7 @@ def get_stale_deals(stale_days: int = DEFAULT_DEAL_STALE_DAYS, limit: int = DEFA
     )
     total_row = pg_fetchone(
         f"""SELECT COUNT(*) AS cnt FROM deals d
-             WHERE d.stage NOT IN ('won', 'lost') AND d.archived_at IS NULL
+             WHERE {OPEN_PREDICATE_D} AND {LIVE_PREDICATE_D}
                AND {LAST_TOUCH_SQL} < now() - make_interval(days => %s)""",
         (stale_days,),
     )
@@ -116,7 +123,7 @@ def get_contact_staleness(
     stale_days = _bounded(stale_days, DEFAULT_CONTACT_STALE_DAYS, 1, 365)
     limit = _bounded(limit, DEFAULT_LIMIT)
     rows = pg_fetchall(
-        """
+        f"""
         -- GREATEST ignores NULLs (returning NULL only when every argument is NULL),
         -- so a contact with notes but no logged activity still gets a real date, and
         -- one with neither correctly comes out NULL = "never contacted".
@@ -136,8 +143,8 @@ def get_contact_staleness(
                FLOOR(EXTRACT(EPOCH FROM (now() - lt.touched_at)) / 86400.0)::int
                    AS days_since_contact,
                (SELECT COUNT(*) FROM deals d
-                 WHERE d.contact_id = ct.id AND d.archived_at IS NULL
-                   AND d.stage NOT IN ('won', 'lost')) AS open_deals
+                 WHERE d.contact_id = ct.id
+                   AND {LIVE_PREDICATE_D} AND {OPEN_PREDICATE_D}) AS open_deals
           FROM contacts ct
           JOIN last_touch lt ON lt.contact_id = ct.id
           LEFT JOIN companies co ON ct.company_id = co.id
@@ -232,11 +239,11 @@ def find_duplicate_deals(limit: int = DEFAULT_LIMIT) -> list[dict]:
     customers is not a duplicate)."""
     limit = _bounded(limit, DEFAULT_LIMIT)
     groups = pg_fetchall(
-        """
+        f"""
         SELECT lower(btrim(title)) AS match_value, contact_id, COUNT(*) AS count,
                ARRAY_AGG(id ORDER BY id) AS ids
           FROM deals
-         WHERE btrim(title) <> '' AND contact_id IS NOT NULL AND archived_at IS NULL
+         WHERE btrim(title) <> '' AND contact_id IS NOT NULL AND {LIVE_PREDICATE}
          GROUP BY lower(btrim(title)), contact_id
         HAVING COUNT(*) > 1
          ORDER BY COUNT(*) DESC, lower(btrim(title)) ASC
@@ -334,17 +341,21 @@ def scan_gaps(entity_type: str = "all", limit: int = DEFAULT_LIMIT) -> dict:
     if "deal" in wanted:
         out["deals"] = _scan_entity(
             "deals", "title", _DEAL_GAPS,
-            " AND archived_at IS NULL AND stage NOT IN ('won', 'lost')", limit)
+            f" AND {LIVE_PREDICATE} AND {OPEN_PREDICATE}", limit)
     if not out:
         return {"error": f"Unknown entity_type: {entity_type!r}. Use contact, company, deal, or all."}
 
-    out["unverified_fields"] = pg_fetchall(
+    # Only ask about entity types provenance can actually have: 'company' is not in
+    # provenance_service.VALID_ENTITY_TYPES, so including it would be a permanently
+    # empty predicate that reads as if company provenance were a real thing.
+    provenance_types = [w for w in wanted if w in ("contact", "deal")]
+    out["unverified_fields"] = [] if not provenance_types else pg_fetchall(
         """SELECT entity_type, entity_id, field_name, value_snapshot, populated_at
              FROM crm_field_provenance
             WHERE confirmed_at IS NULL AND entity_type = ANY(%s)
             ORDER BY populated_at DESC
             LIMIT %s""",
-        (list(wanted), limit),
+        (provenance_types, limit),
     )
     out["total_gaps"] = sum(len(v) for k, v in out.items()
                             if isinstance(v, list) and k != "unverified_fields")

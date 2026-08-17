@@ -465,3 +465,88 @@ def test_clear_all_truncates_through_the_stage_event_foreign_key(pg_db):
     service.clear_all()
     assert pg_fetchone("SELECT COUNT(*) AS c FROM deal_stage_events")["c"] == 0
     assert pg_fetchone("SELECT COUNT(*) AS c FROM deals")["c"] == 0
+
+
+def test_merge_refuses_an_archived_deal_end_to_end(pg_db):
+    from crm import service
+
+    contact = service.create_contact("Ana")
+    target = service.create_deal("Kept", contact_id=contact["id"])
+    source = service.create_deal("Dupe", contact_id=contact["id"])
+    service.archive_deal(target["id"])
+
+    with pytest.raises(ValueError, match="archived"):
+        service.merge_deals(target["id"], source["id"])
+    # Nothing moved — the refusal happens before any write.
+    assert service.get_deal(source["id"])["archived_at"] is None
+
+    service.archive_deal(target["id"], archived=False)
+    assert service.merge_deals(target["id"], source["id"])["id"] == target["id"]
+
+
+def test_boolean_custom_field_filters_actually_match(pg_db):
+    """Boolean values are stored '1'/'0'; a raw str(True) -> 'True' matched nothing, so
+    every boolean filter silently returned an empty list."""
+    from crm import field_service, service
+
+    keyacct = field_service.create_field_definition(
+        {"entity_type": "deal", "name": "Key account", "field_type": "boolean"})
+    yes = service.create_deal("Big customer")
+    no = service.create_deal("Small customer")
+    field_service.set_field_values("deal", yes["id"], {str(keyacct["id"]): "1"}, "u")
+    field_service.set_field_values("deal", no["id"], {str(keyacct["id"]): "0"}, "u")
+
+    assert [d["id"] for d in service.search_deals(
+        custom_field_filters={"key_account": True})] == [yes["id"]]
+    assert [d["id"] for d in service.search_deals(
+        custom_field_filters={"key_account": False})] == [no["id"]]
+    # The string forms the model may also send still work.
+    assert [d["id"] for d in service.search_deals(
+        custom_field_filters={"key_account": "1"})] == [yes["id"]]
+
+
+def test_scan_gaps_finds_company_gaps(pg_db):
+    """The crm_scan_gaps tool advertises company scanning; prove the branch runs and
+    returns the right labels against real Postgres."""
+    from crm import analytics_service, service
+
+    bare = service.create_company("Bare Co")
+    service.create_company("Complete Co", domain="complete.test",
+                           industry="retail", phone="555-0100")
+    partial = service.create_company("Partial Co", domain="partial.test")
+
+    out = analytics_service.scan_gaps(entity_type="company")
+    by_id = {c["id"]: set(c["missing_fields"]) for c in out["companies"]}
+    assert by_id == {
+        bare["id"]: {"domain", "industry", "phone"},
+        partial["id"]: {"industry", "phone"},
+    }
+    # Worst-first: three gaps before two.
+    assert out["companies"][0]["id"] == bare["id"]
+    assert out["companies"][0]["label"] == "Bare Co"
+
+
+def test_company_provenance_is_unwritable(pg_db):
+    """Pins WHY delete_company has no crm_field_provenance cleanup while delete_contact
+    does: a company provenance row cannot exist. A reviewer reasonably reads the
+    asymmetry as a leak, so make the invariant executable — if companies ever become a
+    valid provenance entity this fails, and the delete has to be added with it."""
+    from core.postgres import pg_fetchone
+    from crm import provenance_service, service
+
+    assert provenance_service.VALID_ENTITY_TYPES == {"deal", "contact"}
+    company = service.create_company("Northwind")
+    with pytest.raises(ValueError, match="Invalid entity_type"):
+        provenance_service.record("company", company["id"], "phone", "555-0100", "assistant")
+    service.delete_company(company["id"])
+    assert pg_fetchone(
+        "SELECT COUNT(*) AS c FROM crm_field_provenance WHERE entity_type = 'company'")["c"] == 0
+
+
+def test_scan_gaps_never_claims_company_provenance(pg_db):
+    """scan_gaps(entity_type='company') must return an empty unverified_fields rather
+    than a query that can only ever be empty."""
+    from crm import analytics_service, service
+
+    service.create_company("Bare Co")
+    assert analytics_service.scan_gaps(entity_type="company")["unverified_fields"] == []

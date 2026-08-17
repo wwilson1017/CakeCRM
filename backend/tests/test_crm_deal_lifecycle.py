@@ -13,7 +13,7 @@ user notices an archived deal inflating their pipeline value.
 import pytest
 
 from crm import chatter_service, service
-from tests.test_crm_service import Recorder  # noqa: F401  (rec fixture lives there)
+from tests.test_crm_service import Recorder
 
 
 @pytest.fixture
@@ -169,13 +169,13 @@ def test_merge_rejects_a_self_merge():
 
 
 def test_merge_rejects_a_missing_deal(monkeypatch, fake_conn):
-    fake_conn(monkeypatch, service, fetchall_results=[[(1, "Kept")]])
+    fake_conn(monkeypatch, service, fetchall_results=[[(1, "Kept", None)]])
     with pytest.raises(ValueError, match="Deal not found: 2"):
         service.merge_deals(1, 2)
 
 
 def test_merge_repoints_moves_copies_and_archives_the_source(monkeypatch, rec, fake_conn):
-    conn = fake_conn(monkeypatch, service, fetchall_results=[[(1, "Kept"), (2, "Dupe")]])
+    conn = fake_conn(monkeypatch, service, fetchall_results=[[(1, "Kept", None), (2, "Dupe", None)]])
     rec.fetchone_queue = [{"id": 1}]
     scheduled = []
     monkeypatch.setattr(service.touch_count_service, "schedule_recompute",
@@ -186,7 +186,7 @@ def test_merge_repoints_moves_copies_and_archives_the_source(monkeypatch, rec, f
     stmts = [s for s, _ in conn.executed]
     joined = " || ".join(stmts)
     # Both rows locked in id order so concurrent merges queue instead of deadlocking.
-    assert "SELECT id, title FROM deals WHERE id IN (%s, %s) ORDER BY id FOR UPDATE" in joined
+    assert "SELECT id, title, archived_at FROM deals WHERE id IN (%s, %s) ORDER BY id FOR UPDATE" in joined
     # Dated interactions + open work MOVE to the target.
     assert any("UPDATE activity_log SET deal_id = %s WHERE deal_id = %s" in s for s in stmts)
     assert any("UPDATE tasks SET deal_id = %s" in s for s in stmts)
@@ -204,7 +204,7 @@ def test_merge_repoints_moves_copies_and_archives_the_source(monkeypatch, rec, f
 def test_merge_never_touches_the_targets_own_columns(monkeypatch, rec, fake_conn):
     """A merge consolidates history; it must not silently rewrite the surviving
     deal's title/value/stage."""
-    conn = fake_conn(monkeypatch, service, fetchall_results=[[(1, "Kept"), (2, "Dupe")]])
+    conn = fake_conn(monkeypatch, service, fetchall_results=[[(1, "Kept", None), (2, "Dupe", None)]])
     rec.fetchone_queue = [{"id": 1}]
     monkeypatch.setattr(service.touch_count_service, "schedule_recompute",
                         lambda *a, **k: None)
@@ -337,3 +337,38 @@ def test_is_crm_empty_still_counts_archived_deals(rec):
     rec.fetchone_queue = [{"total": 1}]
     service.is_crm_empty()
     assert "archived_at" not in rec.sql_containing("SELECT COUNT(*) FROM deals")
+
+
+def test_write_deal_update_rejects_an_empty_column_map():
+    """No caller reaches this today; the guard exists so a future one can't emit
+    `SET , updated_at = ...`."""
+    with pytest.raises(ValueError, match="at least one column"):
+        service._write_deal_update(1, {})
+
+
+def test_merge_refuses_an_archived_deal(monkeypatch, fake_conn):
+    """Merging into an archived target would move the source's whole history onto a
+    deal every view already hides — the user would watch both deals disappear."""
+    fake_conn(monkeypatch, service,
+              fetchall_results=[[(1, "Kept", None), (2, "Dupe", "2026-02-01T00:00:00+00:00")]])
+    with pytest.raises(ValueError, match=r"Cannot merge: deal #2 is archived"):
+        service.merge_deals(1, 2)
+
+
+def test_search_deals_normalizes_boolean_filter_values(rec, no_field_embed):
+    """Boolean custom fields are stored '1'/'0'. A raw str(True) -> 'True' would match
+    nothing, silently returning an empty result for every boolean filter."""
+    rec.fetchall_queue = [[], []]
+    service.search_deals(custom_field_filters={"is_key_account": True})
+    assert "1" in rec.calls[-1][1]
+    service.search_deals(custom_field_filters={"is_key_account": False})
+    assert "0" in rec.calls[-1][1]
+
+
+def test_search_deals_caps_the_number_of_custom_field_filters(rec, no_field_embed):
+    """Every other model-supplied bound in search_deals is clamped; the filter count
+    is one too, or an LLM can build a query with hundreds of EXISTS subqueries."""
+    rec.fetchall_queue = [[]]
+    service.search_deals(custom_field_filters={f"k{i}": "v" for i in range(50)})
+    sql = rec.calls[-1][0]
+    assert sql.count("EXISTS (SELECT 1 FROM crm_field_values") == service.MAX_CUSTOM_FIELD_FILTERS

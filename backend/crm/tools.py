@@ -1199,13 +1199,6 @@ def crm_get_chatter(
 # write by field_key. Attribution is hardcoded "assistant" — the set tools expose no
 # user_email param, so the model can't spoof who edited a value.
 
-def _normalize_field_value(value) -> str:
-    """Coerce an LLM-supplied value to the text form the value table stores."""
-    if isinstance(value, bool):
-        return "1" if value else "0"
-    return str(value)
-
-
 def _normalize_field(r: dict) -> dict:
     """One field's schema in the shape shown to the model. Used for BOTH get-tool
     modes so a schema learned without an id matches the keys/types read with one."""
@@ -1270,7 +1263,7 @@ def _set_entity_fields(entity_type: str, entity_id: int, fields: dict) -> dict:
         if field_id is None:
             unknown.append(key)
             continue
-        values_by_id[str(field_id)] = _normalize_field_value(value)
+        values_by_id[str(field_id)] = field_service.normalize_value(value)
 
     if not values_by_id:
         detail = []

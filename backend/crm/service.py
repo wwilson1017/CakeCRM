@@ -31,8 +31,10 @@ COMPANY_STATUSES = ["active", "archived"]
 # only deliberate exceptions are get_deal (fetch-by-id must still resolve an archived
 # deal, so it can be shown/restored/merged) and the is-the-CRM-empty counts (an
 # archived deal is still data).
-_LIVE_PREDICATE = "archived_at IS NULL"
-_LIVE_PREDICATE_D = "d.archived_at IS NULL"
+# Public so crm/analytics_service.py imports them rather than re-typing the literal —
+# a second copy is exactly how a sweep site gets missed when the definition changes.
+LIVE_PREDICATE = "archived_at IS NULL"
+LIVE_PREDICATE_D = "d.archived_at IS NULL"
 
 # The six ASCII whitespace bytes (space, tab, LF, CR, FF, VT). Company names are
 # trimmed with THIS set (not Python's Unicode-aware str.strip()) so the value the
@@ -233,7 +235,7 @@ def get_contact_detail(contact_id: int) -> dict | None:
     if not contact:
         return None
     deals = pg_fetchall(
-        f"SELECT * FROM deals WHERE contact_id = %s AND {_LIVE_PREDICATE} "
+        f"SELECT * FROM deals WHERE contact_id = %s AND {LIVE_PREDICATE} "
         "ORDER BY updated_at DESC",
         (contact_id,),
     )
@@ -374,6 +376,12 @@ def delete_company(company_id: int) -> bool:
             "DELETE FROM crm_field_values WHERE entity_type = 'company' AND entity_id = %s",
             (company_id,),
         )
+        # NO crm_field_provenance cleanup here, unlike delete_contact — and that is
+        # correct, not an oversight: provenance_service.VALID_ENTITY_TYPES is
+        # {'deal', 'contact'} and its single INSERT is guarded by _check_entity_type,
+        # so a company provenance row cannot be written in the first place. Pinned by
+        # test_company_provenance_is_unwritable. If companies ever become a valid
+        # provenance entity, this delete has to be added with it.
         cur.execute("DELETE FROM companies WHERE id = %s", (company_id,))
     return True
 
@@ -393,7 +401,7 @@ def get_company_detail(company_id: int) -> dict | None:
     deals = pg_fetchall(
         f"""SELECT d.*, c.name AS contact_name
             FROM deals d LEFT JOIN contacts c ON d.contact_id = c.id
-            WHERE d.company_id = %s AND {_LIVE_PREDICATE_D} ORDER BY d.updated_at DESC""",
+            WHERE d.company_id = %s AND {LIVE_PREDICATE_D} ORDER BY d.updated_at DESC""",
         (company_id,),
     )
     activity = pg_fetchall(
@@ -403,7 +411,7 @@ def get_company_detail(company_id: int) -> dict | None:
             LEFT JOIN deals d ON a.deal_id = d.id
             WHERE a.contact_id IN (SELECT id FROM contacts WHERE company_id = %s)
                OR a.deal_id IN (SELECT id FROM deals WHERE company_id = %s
-                                 AND {_LIVE_PREDICATE})
+                                 AND {LIVE_PREDICATE})
             ORDER BY a.created_at DESC LIMIT 20""",
         (company_id, company_id),
     )
@@ -472,7 +480,7 @@ def get_pipeline(stage: str | None = None) -> dict:
     # unpaginated all-deals board is the binding constraint, not this once-per-load aggregate.
     # If deal/activity volume ever grows, switch to a per-deal LATERAL MAX (indexes exist:
     # idx_activity_deal, idx_crm_chatter_entity) or a maintained last-activity column.
-    where = f"WHERE {_LIVE_PREDICATE_D}" + (" AND d.stage = %s" if stage else "")
+    where = f"WHERE {LIVE_PREDICATE_D}" + (" AND d.stage = %s" if stage else "")
     deals = pg_fetchall(
         f"""SELECT d.*, c.name AS contact_name, co.name AS company_name,
                    la.last_at AS last_activity_at
@@ -495,7 +503,7 @@ def get_pipeline(stage: str | None = None) -> dict:
     # Value summaries per stage (open stages only).
     stage_summary = pg_fetchall(
         f"""SELECT stage, COUNT(*) AS count, COALESCE(SUM(value), 0) AS total_value
-            FROM deals WHERE stage NOT IN ('won', 'lost') AND {_LIVE_PREDICATE}
+            FROM deals WHERE stage NOT IN ('won', 'lost') AND {LIVE_PREDICATE}
             GROUP BY stage"""
     )
     total_pipeline = sum(s["total_value"] for s in stage_summary)
@@ -504,7 +512,7 @@ def get_pipeline(stage: str | None = None) -> dict:
 
 
 def list_deals(stage: str | None = None, contact_id: int | None = None, limit: int = 50) -> list[dict]:
-    conditions = [_LIVE_PREDICATE_D]
+    conditions = [LIVE_PREDICATE_D]
     params: list = []
     if stage:
         conditions.append("d.stage = %s")
@@ -579,6 +587,7 @@ _DEAL_SORTS = frozenset(
     {"updated_at", "created_at", "value", "expected_close_date", "title", "stage", "probability"}
 )
 MAX_DEAL_SEARCH_LIMIT = 100
+MAX_CUSTOM_FIELD_FILTERS = 10
 
 
 def _embed_custom_fields(rows: list[dict]) -> list[dict]:
@@ -617,7 +626,7 @@ def search_deals(
     sort_col = sort_by if sort_by in _DEAL_SORTS else "updated_at"
     direction = "ASC" if str(sort_dir).lower() == "asc" else "DESC"
 
-    conditions = [_LIVE_PREDICATE_D]
+    conditions = [LIVE_PREDICATE_D]
     params: list = []
     if search:
         like = f"%{search}%"
@@ -628,7 +637,11 @@ def search_deals(
     if stage:
         conditions.append("d.stage = %s")
         params.append(stage)
-    for key, value in (custom_field_filters or {}).items():
+    # Every other model-supplied bound in this function is clamped; the filter COUNT
+    # is one too — an LLM could otherwise emit hundreds of keys and build a query with
+    # hundreds of EXISTS subqueries. Extra keys are dropped, not an error: a truncated
+    # filter still returns a superset, never wrong rows.
+    for key, value in list((custom_field_filters or {}).items())[:MAX_CUSTOM_FIELD_FILTERS]:
         conditions.append(
             """EXISTS (SELECT 1 FROM crm_field_values v
                          JOIN crm_field_definitions fd ON fd.id = v.field_id
@@ -636,7 +649,10 @@ def search_deals(
                           AND fd.entity_type = 'deal' AND fd.field_key = %s
                           AND lower(v.value) = lower(%s))"""
         )
-        params.extend([str(key), str(value)])
+        # normalize_value, not str(): booleans are stored '1'/'0', so a raw
+        # str(True) -> 'True' would silently match nothing (the tool schema
+        # advertises boolean filter values).
+        params.extend([str(key), field_service.normalize_value(value)])
     params.append(limit)
 
     rows = pg_fetchall(
@@ -715,7 +731,7 @@ def mark_deal_lost(deal_id: int, lost_reason: str = "") -> dict | None:
 
 def archive_deal(deal_id: int, archived: bool = True) -> dict | None:
     """Soft-archive (or restore) a deal. Nothing is deleted — archived_at is set,
-    and every list/board/rollup/aggregate stops counting the deal (_LIVE_PREDICATE).
+    and every list/board/rollup/aggregate stops counting the deal (LIVE_PREDICATE).
 
     Idempotent: archiving an already-archived deal keeps the original timestamp, so
     "when was this archived" survives a repeat call.
@@ -764,14 +780,26 @@ def merge_deals(target_deal_id: int, source_deal_id: int) -> dict:
         # scan's output order), so two concurrent merges over the same pair queue up
         # instead of deadlocking.
         cur.execute(
-            "SELECT id, title FROM deals WHERE id IN (%s, %s) ORDER BY id FOR UPDATE",
+            "SELECT id, title, archived_at FROM deals WHERE id IN (%s, %s) "
+            "ORDER BY id FOR UPDATE",
             (target_deal_id, source_deal_id),
         )
         rows = cur.fetchall()
         titles = {r[0]: r[1] for r in rows}
+        archived = {r[0] for r in rows if r[2] is not None}
         missing = sorted({target_deal_id, source_deal_id} - set(titles))
         if missing:
             raise ValueError(f"Deal not found: {', '.join(str(i) for i in missing)}")
+        # Merging into an archived target would quietly move the source's whole
+        # history onto a deal that every list, board and report already hides — the
+        # user asks to consolidate two deals and watches both disappear. Refuse and
+        # say so; restoring first is one call.
+        if archived:
+            raise ValueError(
+                "Cannot merge: deal "
+                + ", ".join(f"#{i}" for i in sorted(archived))
+                + " is archived — restore it first"
+            )
 
         cur.execute(
             "UPDATE activity_log SET deal_id = %s WHERE deal_id = %s",
@@ -976,7 +1004,7 @@ def get_dashboard_stats() -> dict:
 
     pipeline_by_stage = pg_fetchall(
         f"""SELECT stage, COUNT(*) AS count, COALESCE(SUM(value), 0) AS total_value
-            FROM deals WHERE {_LIVE_PREDICATE} GROUP BY stage"""
+            FROM deals WHERE {LIVE_PREDICATE} GROUP BY stage"""
     )
     total_pipeline_value = sum(
         r["total_value"] for r in pipeline_by_stage if r["stage"] not in ("won", "lost")
@@ -1001,7 +1029,7 @@ def get_dashboard_stats() -> dict:
     top_deals = pg_fetchall(
         f"""SELECT d.*, c.name AS contact_name
             FROM deals d LEFT JOIN contacts c ON d.contact_id = c.id
-            WHERE d.stage NOT IN ('won', 'lost') AND {_LIVE_PREDICATE_D}
+            WHERE d.stage NOT IN ('won', 'lost') AND {LIVE_PREDICATE_D}
             ORDER BY d.value DESC LIMIT 5"""
     )
 
@@ -1024,7 +1052,9 @@ def get_dashboard_stats() -> dict:
 AGE_BUCKETS = ((0, 7, "0-7"), (8, 30, "8-30"), (31, 90, "31-90"), (91, None, "91+"))
 
 # Open-deal predicate (DEAL_STAGES sentinels; no status column / CHECK exists).
-_OPEN_PREDICATE = "stage NOT IN ('won', 'lost')"
+# Public for the same single-source-of-truth reason as LIVE_PREDICATE above.
+OPEN_PREDICATE = "stage NOT IN ('won', 'lost')"
+OPEN_PREDICATE_D = "d.stage NOT IN ('won', 'lost')"
 
 # "When was this deal last touched" — the newest of: any edit (updated_at), any logged
 # activity, any un-archived note. Requires the deals table aliased as `d`.
@@ -1191,14 +1221,14 @@ def get_analytics(days: int = 30, stale_days: int = 14, stale_limit: int = 8) ->
         SELECT
             COUNT(*) FILTER (WHERE stage = 'won')                       AS won,
             COUNT(*) FILTER (WHERE stage = 'lost')                      AS lost,
-            COUNT(*) FILTER (WHERE {_OPEN_PREDICATE})                   AS open_count,
-            COALESCE(SUM(value) FILTER (WHERE {_OPEN_PREDICATE}), 0)    AS total_pipeline_value,
+            COUNT(*) FILTER (WHERE {OPEN_PREDICATE})                   AS open_count,
+            COALESCE(SUM(value) FILTER (WHERE {OPEN_PREDICATE}), 0)    AS total_pipeline_value,
             AVG(value) FILTER (WHERE stage = 'won' AND value > 0)       AS avg_won_deal_size,
-            AVG(value) FILTER (WHERE {_OPEN_PREDICATE} AND value > 0)   AS avg_open_deal_size,
+            AVG(value) FILTER (WHERE {OPEN_PREDICATE} AND value > 0)   AS avg_open_deal_size,
             AVG(EXTRACT(EPOCH FROM (updated_at - created_at)) / 86400.0)
                 FILTER (WHERE stage = 'won')                            AS avg_days_to_close
         FROM deals
-        WHERE {_LIVE_PREDICATE}
+        WHERE {LIVE_PREDICATE}
         """
     )
 
@@ -1212,7 +1242,7 @@ def get_analytics(days: int = 30, stale_days: int = 14, stale_limit: int = 8) ->
         FROM deals d
         LEFT JOIN contacts  c  ON d.contact_id = c.id
         LEFT JOIN companies co ON d.company_id = co.id
-        WHERE d.{_OPEN_PREDICATE} AND {_LIVE_PREDICATE_D}
+        WHERE d.{OPEN_PREDICATE} AND {LIVE_PREDICATE_D}
         """
     )
 

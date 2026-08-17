@@ -370,6 +370,19 @@ def set_field_values(
     return {"ok": True, "updated": len(writes), "errors": errors}
 
 
+def normalize_value(value) -> str:
+    """Coerce a caller-supplied value to the TEXT form this table stores.
+
+    Lives here because this module owns the storage contract (see
+    validate_field_value: a boolean field is strictly '0'/'1'). Both writers and
+    readers must agree — a `str(True)` -> 'True' on the read side silently matches
+    nothing, which is exactly the bug a shared coercion prevents.
+    """
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    return str(value)
+
+
 def validate_field_value(field_def: dict, value: str) -> None:
     """Type-validate a single value. Empty string / None means "clear" and skips
     validation (fixes a source bug where clearing a number/select field raised)."""

@@ -13,33 +13,7 @@ bounds on every model-supplied number, and never counting an archived or closed 
 import pytest
 
 from crm import analytics_service as az
-
-
-class Recorder:
-    def __init__(self):
-        self.calls: list[tuple[str, list]] = []
-        self.fetchone_queue: list = []
-        self.fetchall_queue: list = []
-
-    def fetchone(self, sql, params=()):
-        self.calls.append((" ".join(sql.split()), list(params)))
-        return self.fetchone_queue.pop(0) if self.fetchone_queue else None
-
-    def fetchall(self, sql, params=()):
-        self.calls.append((" ".join(sql.split()), list(params)))
-        return self.fetchall_queue.pop(0) if self.fetchall_queue else []
-
-    def sql_containing(self, needle: str) -> str:
-        for sql, _ in self.calls:
-            if needle in sql:
-                return sql
-        raise AssertionError(f"no recorded SQL contains {needle!r}: {[s for s, _ in self.calls]}")
-
-    def params_for(self, needle: str) -> list:
-        for sql, params in self.calls:
-            if needle in sql:
-                return params
-        raise AssertionError(f"no recorded SQL contains {needle!r}")
+from tests.test_crm_service import Recorder
 
 
 @pytest.fixture
@@ -224,3 +198,39 @@ def test_scan_gaps_single_entity_scans_only_that_entity(rec):
     out = az.scan_gaps(entity_type="deal")
     assert "deals" in out and "contacts" not in out and "companies" not in out
     assert rec.params_for("crm_field_provenance")[0] == ["deal"]
+
+
+def test_scan_gaps_company_branch_checks_domain_industry_and_phone(rec):
+    """The crm_scan_gaps tool advertises company gap scanning, so the branch needs a
+    check of its own — the contact/deal tests above never touch it."""
+    rec.fetchall_queue = [[], []]
+    out = az.scan_gaps(entity_type="company")
+    sql = rec.sql_containing("FROM companies")
+    for label, column in (("domain", "domain"), ("industry", "industry"), ("phone", "phone")):
+        assert f"ARRAY['{label}']" in sql and f"btrim({column}) = ''" in sql
+    assert "status = 'active'" in sql          # archived companies aren't neglected
+    assert "companies" in out and "contacts" not in out and "deals" not in out
+
+
+def test_find_duplicate_companies_matches_domain_then_name(rec):
+    """Covered hermetically, not only by the integration suite — CI runs
+    `pytest -m 'not integration'`, so an integration-only test guards nothing in CI."""
+    rec.fetchall_queue = [[], [], []]
+    az.find_duplicate_companies()
+    domain_sql = rec.sql_containing("lower(btrim(domain))")
+    assert "btrim(domain) <> ''" in domain_sql and "HAVING COUNT(*) > 1" in domain_sql
+    name_sql = rec.sql_containing("lower(btrim(name))")
+    assert "FROM companies" in name_sql and "btrim(name) <> ''" in name_sql
+
+
+def test_predicates_are_imported_not_retyped():
+    """The live/open predicates have ONE definition (crm.service). A local copy here is
+    how a sweep site silently gets left behind when the definition changes."""
+    import inspect
+
+    from crm import service
+    src = inspect.getsource(az)
+    assert az.LIVE_PREDICATE is service.LIVE_PREDICATE
+    assert az.OPEN_PREDICATE is service.OPEN_PREDICATE
+    assert "archived_at IS NULL" not in src
+    assert "stage NOT IN" not in src
