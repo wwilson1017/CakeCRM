@@ -32,8 +32,9 @@ def test_get_chatter_returns_notes_and_count(client, monkeypatch):
 
 
 def test_get_chatter_bad_entity_type_400(client):
-    # real service: _check_entity_type raises before any pg call
-    assert client.get("/api/crm/chatter/company/3").status_code == 400
+    # real service: _check_entity_type raises before any pg call. 'company' became a
+    # VALID type in issue #22, so the invalid-type probe uses a type that never exists.
+    assert client.get("/api/crm/chatter/invoice/3").status_code == 400
 
 
 def test_get_chatter_passes_include_archived(client, monkeypatch):
@@ -63,7 +64,14 @@ def test_add_note_blank_message_400(client):
 
 
 def test_add_note_bad_entity_type_400(client):
-    assert client.post("/api/crm/chatter/company/3/note", json={"message": "hi"}).status_code == 400
+    assert client.post("/api/crm/chatter/invoice/3/note", json={"message": "hi"}).status_code == 400
+
+
+def test_company_is_a_valid_chatter_entity_type(client, monkeypatch):
+    """Issue #22: notes threads extend to companies — the HTTP path widened with the
+    service's CHATTER_ENTITY_TYPES, with no route change."""
+    monkeypatch.setattr(chatter_service, "get_chatter", lambda *a, **k: [])
+    assert client.get("/api/crm/chatter/company/3").status_code == 200
 
 
 # ── PATCH /chatter/note/{id} ────────────────────────────────────────────────────

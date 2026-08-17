@@ -1,0 +1,339 @@
+"""Deal lifecycle + search + the archived-deal sweep (issue #22).
+
+Hermetic: ``crm.service``'s pg helpers are monkeypatched with the shared Recorder and
+multi-statement writes go through the ``fake_conn`` fixture, so these assert the SQL
+SHAPE and the branching. The real queries are exercised against Postgres in
+``test_integration_crm_lifecycle_pg.py``.
+
+The archived-deal assertions are the important ones: `deals.archived_at` is only
+meaningful if EVERY read filters on it, and a missed query site is invisible until a
+user notices an archived deal inflating their pipeline value.
+"""
+
+import pytest
+
+from crm import chatter_service, service
+from tests.test_crm_service import Recorder  # noqa: F401  (rec fixture lives there)
+
+
+@pytest.fixture
+def rec(monkeypatch):
+    r = Recorder()
+    monkeypatch.setattr(service, "pg_fetchone", r.fetchone)
+    monkeypatch.setattr(service, "pg_fetchall", r.fetchall)
+    monkeypatch.setattr(service, "pg_execute", r.execute)
+    return r
+
+
+@pytest.fixture
+def no_field_embed(monkeypatch):
+    """get_deal_detail/search_deals embed custom fields via field_service; stub it so
+    these tests assert deal SQL, not the EAV batch query."""
+    from crm import field_service
+    monkeypatch.setattr(field_service, "get_field_values_batch", lambda *a, **k: {})
+
+
+# ── _write_deal_update: stage events + stale lost_reason ─────────────────────
+
+def test_stage_change_writes_a_stage_event_in_the_same_transaction(monkeypatch, rec, fake_conn):
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("lead",)])
+    rec.fetchone_queue = [{"id": 1, "stage": "qualified"}]
+    service.update_deal_stage(1, "qualified")
+
+    stmts = [s for s, _ in conn.executed]
+    assert any("SELECT stage FROM deals WHERE id = %s FOR UPDATE" in s for s in stmts)
+    assert any("UPDATE deals SET stage = %s" in s for s in stmts)
+    event = next((s, p) for s, p in conn.executed if "INSERT INTO deal_stage_events" in s)
+    assert event[1] == (1, "lead", "qualified")
+
+
+def test_no_stage_event_when_the_stage_does_not_change(monkeypatch, rec, fake_conn):
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("lead",)])
+    rec.fetchone_queue = [{"id": 1}]
+    service.update_deal(1, value=500)
+    assert not any("deal_stage_events" in s for s, _ in conn.executed)
+
+
+def test_leaving_lost_clears_the_lost_reason(monkeypatch, rec, fake_conn):
+    """cake_os shipped a stale-lost_reason bug and fixed it later; the fixed behavior
+    is what we port. A reopened deal must not carry 'budget cut' into win/loss reads."""
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("lost",)])
+    rec.fetchone_queue = [{"id": 1}]
+    service.update_deal_stage(1, "negotiation")
+    sql, params = next((s, p) for s, p in conn.executed if "UPDATE deals SET" in s)
+    assert "lost_reason = %s" in sql
+    assert "" in params
+
+
+def test_staying_lost_keeps_the_lost_reason(monkeypatch, rec, fake_conn):
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("lost",)])
+    rec.fetchone_queue = [{"id": 1}]
+    service.update_deal(1, notes="still lost")
+    sql, _ = next((s, p) for s, p in conn.executed if "UPDATE deals SET" in s)
+    assert "lost_reason" not in sql
+
+
+def test_write_on_a_missing_deal_returns_none_without_updating(monkeypatch, rec, fake_conn):
+    conn = fake_conn(monkeypatch, service, fetchone_results=[None])
+    assert service.update_deal(99, value=1) is None
+    assert not any("UPDATE deals SET" in s for s, _ in conn.executed)
+
+
+def test_update_deal_ignores_a_model_supplied_lost_reason(monkeypatch, rec, fake_conn):
+    """mark_deal_lost is lost_reason's only writer, so the reason always arrives with
+    the close (and its timeline note) and can't be set on a deal that isn't lost."""
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("lead",)])
+    rec.fetchone_queue = [{"id": 1}]
+    service.update_deal(1, lost_reason="sneaky")
+    assert not any("lost_reason" in s for s, _ in conn.executed)
+
+
+# ── mark won / lost ──────────────────────────────────────────────────────────
+
+def test_mark_deal_won_sets_stage_and_full_probability(monkeypatch, rec, fake_conn):
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("negotiation",)])
+    rec.fetchone_queue = [{"id": 1, "stage": "won"}]
+    assert service.mark_deal_won(1) == {"id": 1, "stage": "won"}
+    _, params = next((s, p) for s, p in conn.executed if "UPDATE deals SET" in s)
+    assert "won" in params and 100 in params
+
+
+def test_mark_deal_lost_records_reason_and_a_timeline_note(monkeypatch, rec, fake_conn):
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("proposal",)])
+    rec.fetchone_queue = [{"id": 1, "stage": "lost"}]
+    notes = []
+    monkeypatch.setattr(chatter_service, "add_note",
+                        lambda t, i, m: notes.append((t, i, m)))
+    service.mark_deal_lost(1, lost_reason="chose a competitor")
+    _, params = next((s, p) for s, p in conn.executed if "UPDATE deals SET" in s)
+    assert "lost" in params and 0 in params and "chose a competitor" in params
+    assert notes == [("deal", 1, "Deal lost — chose a competitor")]
+
+
+def test_mark_deal_lost_without_a_reason_writes_no_note(monkeypatch, rec, fake_conn):
+    fake_conn(monkeypatch, service, fetchone_results=[("proposal",)])
+    rec.fetchone_queue = [{"id": 1}]
+    called = []
+    monkeypatch.setattr(chatter_service, "add_note", lambda *a: called.append(a))
+    service.mark_deal_lost(1)
+    assert called == []
+
+
+def test_mark_deal_lost_survives_a_note_failure(monkeypatch, rec, fake_conn):
+    """The close is committed before the note is attempted — a chatter failure must
+    never leave the deal un-closed."""
+    fake_conn(monkeypatch, service, fetchone_results=[("proposal",)])
+    rec.fetchone_queue = [{"id": 1, "stage": "lost"}]
+
+    def boom(*a):
+        raise RuntimeError("chatter down")
+    monkeypatch.setattr(chatter_service, "add_note", boom)
+    assert service.mark_deal_lost(1, lost_reason="price")["stage"] == "lost"
+
+
+def test_lost_reason_is_length_bounded(monkeypatch, rec, fake_conn):
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("proposal",)])
+    rec.fetchone_queue = [{"id": 1}]
+    monkeypatch.setattr(chatter_service, "add_note", lambda *a: None)
+    service.mark_deal_lost(1, lost_reason="x" * 5000)
+    _, params = next((s, p) for s, p in conn.executed if "UPDATE deals SET" in s)
+    assert any(isinstance(v, str) and len(v) == service.MAX_LOST_REASON for v in params)
+
+
+# ── archive / restore ────────────────────────────────────────────────────────
+
+def test_archive_deal_preserves_the_first_archive_timestamp(rec):
+    rec.fetchone_queue = [{"id": 1}, {"id": 1}]
+    service.archive_deal(1)
+    sql = rec.sql_containing("UPDATE deals SET archived_at")
+    assert "COALESCE(archived_at, %s)" in sql
+
+
+def test_restore_deal_nulls_archived_at(rec):
+    rec.fetchone_queue = [{"id": 1}, {"id": 1}]
+    service.archive_deal(1, archived=False)
+    sql = rec.sql_containing("UPDATE deals SET archived_at")
+    assert "archived_at = NULL" in sql
+
+
+def test_archive_missing_deal_returns_none(rec):
+    rec.fetchone_queue = [None]
+    assert service.archive_deal(999) is None
+
+
+# ── merge ────────────────────────────────────────────────────────────────────
+
+def test_merge_rejects_a_self_merge():
+    with pytest.raises(ValueError, match="into itself"):
+        service.merge_deals(5, 5)
+
+
+def test_merge_rejects_a_missing_deal(monkeypatch, fake_conn):
+    fake_conn(monkeypatch, service, fetchall_results=[[(1, "Kept")]])
+    with pytest.raises(ValueError, match="Deal not found: 2"):
+        service.merge_deals(1, 2)
+
+
+def test_merge_repoints_moves_copies_and_archives_the_source(monkeypatch, rec, fake_conn):
+    conn = fake_conn(monkeypatch, service, fetchall_results=[[(1, "Kept"), (2, "Dupe")]])
+    rec.fetchone_queue = [{"id": 1}]
+    scheduled = []
+    monkeypatch.setattr(service.touch_count_service, "schedule_recompute",
+                        lambda did, force_write=False: scheduled.append((did, force_write)))
+
+    out = service.merge_deals(1, 2)
+
+    stmts = [s for s, _ in conn.executed]
+    joined = " || ".join(stmts)
+    # Both rows locked in id order so concurrent merges queue instead of deadlocking.
+    assert "SELECT id, title FROM deals WHERE id IN (%s, %s) ORDER BY id FOR UPDATE" in joined
+    # Dated interactions + open work MOVE to the target.
+    assert any("UPDATE activity_log SET deal_id = %s WHERE deal_id = %s" in s for s in stmts)
+    assert any("UPDATE tasks SET deal_id = %s" in s for s in stmts)
+    # Notes are COPIED (source keeps its own thread for the restore case).
+    assert any("INSERT INTO crm_chatter" in s and "left(%s || message, %s)" in s for s in stmts)
+    # Custom fields gap-fill only — the target's own values must win.
+    assert any("ON CONFLICT (entity_type, entity_id, field_id) DO NOTHING" in s for s in stmts)
+    # Source is archived, never deleted.
+    assert any("UPDATE deals SET archived_at = COALESCE(archived_at, %s)" in s for s in stmts)
+    assert not any("DELETE FROM deals" in s for s in stmts)
+    assert scheduled == [(1, True)]
+    assert out == {"id": 1}
+
+
+def test_merge_never_touches_the_targets_own_columns(monkeypatch, rec, fake_conn):
+    """A merge consolidates history; it must not silently rewrite the surviving
+    deal's title/value/stage."""
+    conn = fake_conn(monkeypatch, service, fetchall_results=[[(1, "Kept"), (2, "Dupe")]])
+    rec.fetchone_queue = [{"id": 1}]
+    monkeypatch.setattr(service.touch_count_service, "schedule_recompute",
+                        lambda *a, **k: None)
+    service.merge_deals(1, 2)
+    deal_updates = [s for s, _ in conn.executed if s.startswith("UPDATE deals SET")]
+    assert deal_updates == [
+        "UPDATE deals SET archived_at = COALESCE(archived_at, %s), updated_at = %s WHERE id = %s"
+    ]
+
+
+# ── search_deals ─────────────────────────────────────────────────────────────
+
+def test_search_deals_matches_title_notes_contact_and_company(rec, no_field_embed):
+    rec.fetchall_queue = [[]]
+    service.search_deals(search="acme")
+    sql = rec.sql_containing("FROM deals d")
+    assert "d.title ILIKE %s OR d.notes ILIKE %s OR c.name ILIKE %s OR co.name ILIKE %s" in sql
+    assert rec.params_for("FROM deals d")[:4] == ["%acme%"] * 4
+
+
+def test_search_deals_sort_is_allowlisted(rec, no_field_embed):
+    rec.fetchall_queue = [[], []]
+    service.search_deals(sort_by="value; DROP TABLE deals", sort_dir="sideways")
+    sql = rec.sql_containing("FROM deals d")
+    assert "DROP TABLE" not in sql
+    assert "ORDER BY d.updated_at DESC" in sql  # unknown sort + dir fall back
+
+
+def test_search_deals_honors_a_valid_sort(rec, no_field_embed):
+    rec.fetchall_queue = [[]]
+    service.search_deals(sort_by="value", sort_dir="asc")
+    assert "ORDER BY d.value ASC, d.id ASC" in rec.sql_containing("FROM deals d")
+
+
+def test_search_deals_custom_field_filter_uses_an_exists_join(rec, no_field_embed):
+    rec.fetchall_queue = [[]]
+    service.search_deals(custom_field_filters={"region": "north"})
+    sql = rec.sql_containing("FROM deals d")
+    assert "EXISTS (SELECT 1 FROM crm_field_values v" in sql
+    assert "lower(v.value) = lower(%s)" in sql
+    params = rec.params_for("FROM deals d")
+    assert "region" in params and "north" in params
+
+
+def test_search_deals_clamps_the_limit(rec, no_field_embed):
+    # rec.params_for returns the FIRST match, so read the latest call directly.
+    rec.fetchall_queue = [[], []]
+    service.search_deals(limit=99999)
+    assert rec.calls[-1][1][-1] == service.MAX_DEAL_SEARCH_LIMIT
+    service.search_deals(limit="not a number")
+    assert rec.calls[-1][1][-1] == 25
+
+
+def test_search_deals_embeds_custom_field_values(rec, monkeypatch):
+    from crm import field_service
+    rec.fetchall_queue = [[{"id": 7, "title": "D"}]]
+    monkeypatch.setattr(field_service, "get_field_values_batch",
+                        lambda et, ids: {7: {"region": "north"}})
+    out = service.search_deals(search="d")
+    assert out[0]["custom_fields"] == {"region": "north"}
+
+
+def test_get_deal_detail_embeds_custom_fields(rec, monkeypatch):
+    from crm import field_service
+    rec.fetchone_queue = [{"id": 7, "title": "D"}]
+    rec.fetchall_queue = [[]]
+    monkeypatch.setattr(field_service, "get_field_values_batch",
+                        lambda et, ids: {7: {"region": "north"}})
+    assert service.get_deal_detail(7)["custom_fields"] == {"region": "north"}
+
+
+# ── the archived-deal sweep ──────────────────────────────────────────────────
+# One test per read site. If a new deal-reading query is added without the
+# predicate, archived deals leak back into that surface silently.
+
+def test_pipeline_excludes_archived_deals(rec):
+    rec.fetchall_queue = [[], []]
+    service.get_pipeline()
+    assert "d.archived_at IS NULL" in rec.sql_containing("last_activity_at")
+    assert "archived_at IS NULL" in rec.sql_containing("GROUP BY stage")
+
+
+def test_list_deals_excludes_archived(rec):
+    rec.fetchall_queue = [[]]
+    service.list_deals()
+    assert "d.archived_at IS NULL" in rec.sql_containing("FROM deals d")
+
+
+def test_dashboard_excludes_archived(rec):
+    rec.fetchone_queue = [{"cnt": 0}, {"cnt": 0}, {"cnt": 0}]
+    rec.fetchall_queue = [[], [], [], []]
+    service.get_dashboard_stats()
+    assert "archived_at IS NULL" in rec.sql_containing("GROUP BY stage")
+    assert "d.archived_at IS NULL" in rec.sql_containing("ORDER BY d.value DESC")
+
+
+def test_analytics_excludes_archived(rec):
+    rec.fetchone_queue = [{}]
+    rec.fetchall_queue = [[], [], []]
+    service.get_analytics()
+    assert "archived_at IS NULL" in rec.sql_containing("AS avg_days_to_close")
+    assert "d.archived_at IS NULL" in rec.sql_containing("AS days_since_touch")
+
+
+def test_contact_and_company_detail_exclude_archived_deals(rec):
+    rec.fetchone_queue = [{"id": 1, "name": "Ana"}]
+    rec.fetchall_queue = [[], [], []]
+    service.get_contact_detail(1)
+    assert "archived_at IS NULL" in rec.sql_containing("WHERE contact_id = %s")
+
+    rec2_calls = len(rec.calls)
+    rec.fetchone_queue = [{"id": 2, "name": "Acme"}]
+    rec.fetchall_queue = [[], [], []]
+    service.get_company_detail(2)
+    later = [s for s, _ in rec.calls[rec2_calls:]]
+    assert any("d.archived_at IS NULL" in s for s in later)
+
+
+def test_get_deal_still_resolves_an_archived_deal(rec):
+    """Fetch-by-id must NOT filter: an archived deal has to stay readable so it can be
+    shown, restored, or merged."""
+    rec.fetchone_queue = [{"id": 1, "archived_at": "2026-01-01"}]
+    service.get_deal(1)
+    assert "archived_at IS NULL" not in rec.sql_containing("FROM deals d")
+
+
+def test_is_crm_empty_still_counts_archived_deals(rec):
+    """An archived deal is data, not absence of data — the first-run seed must not
+    fire into a CRM that has one."""
+    rec.fetchone_queue = [{"total": 1}]
+    service.is_crm_empty()
+    assert "archived_at" not in rec.sql_containing("SELECT COUNT(*) FROM deals")

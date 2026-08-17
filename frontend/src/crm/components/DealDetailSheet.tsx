@@ -108,6 +108,23 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
           </p>
         )}
 
+        {/* Why the deal was lost (issue #22). Cleared automatically if the deal is
+            reopened, so this only ever shows on a currently-lost deal. */}
+        {deal.lost_reason && (
+          <p style={{ fontSize: 13, color: INK_MUTE, marginBottom: 16, lineHeight: 1.5 }}>
+            <span style={{ ...mono(10), color: INK_DIM, marginRight: 6 }}>LOST REASON</span>
+            {deal.lost_reason}
+          </p>
+        )}
+
+        {/* Archived deals are excluded from the board and every rollup — say so
+            plainly if one is reached directly, so it never reads as a live deal. */}
+        {deal.archived_at && (
+          <p style={{ fontSize: 13, color: INK_DIM, marginBottom: 16 }}>
+            This deal is archived and is excluded from the pipeline and all reports.
+          </p>
+        )}
+
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
           {deal.contact_name && (
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>

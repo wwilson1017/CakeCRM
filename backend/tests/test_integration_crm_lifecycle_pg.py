@@ -1,0 +1,467 @@
+"""Real-Postgres integration for the deal lifecycle + sales intelligence (issue #22).
+
+These queries lean on Postgres features a mock cannot validate — array construction
+and ``cardinality`` in the gap scan, ``ARRAY_AGG``/``HAVING`` in duplicate detection,
+``make_interval``, ``GREATEST`` NULL semantics, ``NULLS FIRST`` ordering, and a real FK
+inside the CRM-reset TRUNCATE. The hermetic suites pin the SQL shape; this one proves
+the SQL actually runs and returns the right rows.
+
+Marked ``integration`` and excluded from the default no-DB run (see pytest.ini). Same
+throwaway-database pattern as test_integration_crm_pg.py.
+"""
+
+import os
+
+import psycopg2
+import pytest
+
+pytestmark = pytest.mark.integration
+
+ADMIN_DSN = os.getenv("TEST_ADMIN_DSN", "postgresql://cake:cake_dev@localhost:5432/cake")
+
+
+@pytest.fixture(scope="module")
+def pg_db():
+    from core import postgres
+
+    dbname = f"cakecrm_it_lifecycle_{os.getpid()}"
+    admin = psycopg2.connect(ADMIN_DSN)
+    admin.autocommit = True
+    with admin.cursor() as cur:
+        cur.execute(f'DROP DATABASE IF EXISTS "{dbname}"')
+        cur.execute(f'CREATE DATABASE "{dbname}"')
+    admin.close()
+
+    dsn = ADMIN_DSN.rsplit("/", 1)[0] + f"/{dbname}"
+    prev = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = dsn
+    postgres.close_pool()
+    postgres.init_pool()
+    postgres.run_migrations()
+    yield dsn
+
+    postgres.close_pool()
+    if prev is not None:
+        os.environ["DATABASE_URL"] = prev
+    else:
+        os.environ.pop("DATABASE_URL", None)
+    admin = psycopg2.connect(ADMIN_DSN)
+    admin.autocommit = True
+    with admin.cursor() as cur:
+        cur.execute(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+            "WHERE datname = %s AND pid <> pg_backend_pid()",
+            (dbname,),
+        )
+        cur.execute(f'DROP DATABASE IF EXISTS "{dbname}"')
+    admin.close()
+
+
+@pytest.fixture(autouse=True)
+def _clean(pg_db):
+    from core.postgres import pg_execute
+    pg_execute(
+        "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
+        "crm_field_definitions, crm_field_values, crm_field_provenance, "
+        "deal_stage_events RESTART IDENTITY"
+    )
+    yield
+
+
+# ── Migration ─────────────────────────────────────────────────────────────────
+
+def test_migrations_added_the_lifecycle_columns_and_stage_log(pg_db):
+    from core.postgres import pg_fetchall
+
+    cols = {r["column_name"] for r in pg_fetchall(
+        "SELECT column_name FROM information_schema.columns WHERE table_name = 'deals'")}
+    assert {"lost_reason", "archived_at"} <= cols
+
+    event_cols = {r["column_name"]: r["is_nullable"] for r in pg_fetchall(
+        "SELECT column_name, is_nullable FROM information_schema.columns "
+        "WHERE table_name = 'deal_stage_events'")}
+    assert {"id", "deal_id", "old_stage", "new_stage", "changed_at"} <= set(event_cols)
+    assert event_cols["deal_id"] == "NO"
+
+
+def test_migrations_are_idempotent(pg_db):
+    """Every migration re-runs on each boot; a second apply must be a no-op."""
+    from core import postgres
+    postgres.run_migrations()
+
+
+# ── Stage history ─────────────────────────────────────────────────────────────
+
+def test_stage_moves_are_logged_and_plain_edits_are_not(pg_db):
+    from core.postgres import pg_fetchall
+    from crm import service
+
+    deal = service.create_deal("Renewal", stage="lead")
+    service.update_deal_stage(deal["id"], "qualified")
+    service.update_deal(deal["id"], value=1200)          # no stage change
+    service.update_deal(deal["id"], stage="proposal")
+
+    events = pg_fetchall(
+        "SELECT old_stage, new_stage FROM deal_stage_events WHERE deal_id = %s "
+        "ORDER BY id", (deal["id"],))
+    assert [(e["old_stage"], e["new_stage"]) for e in events] == [
+        ("lead", "qualified"), ("qualified", "proposal")]
+
+
+def test_stage_events_cascade_when_a_deal_row_goes_away(pg_db):
+    from core.postgres import pg_execute, pg_fetchone
+    from crm import service
+
+    deal = service.create_deal("Temp", stage="lead")
+    service.update_deal_stage(deal["id"], "won")
+    pg_execute("DELETE FROM deals WHERE id = %s", (deal["id"],))
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM deal_stage_events")["c"] == 0
+
+
+# ── won / lost ────────────────────────────────────────────────────────────────
+
+def test_mark_lost_records_reason_and_note_then_reopening_clears_it(pg_db):
+    from crm import chatter_service, service
+
+    deal = service.create_deal("Big one", stage="negotiation", probability=60)
+    lost = service.mark_deal_lost(deal["id"], lost_reason="chose a competitor")
+    assert lost["stage"] == "lost" and lost["probability"] == 0
+    assert lost["lost_reason"] == "chose a competitor"
+    notes = chatter_service.get_chatter("deal", deal["id"])
+    assert any("chose a competitor" in n["message"] for n in notes)
+
+    # Reopened: the reason must not survive into the timeline or win/loss reads.
+    reopened = service.update_deal_stage(deal["id"], "negotiation")
+    assert reopened["lost_reason"] == ""
+
+    won = service.mark_deal_won(deal["id"])
+    assert won["stage"] == "won" and won["probability"] == 100 and won["lost_reason"] == ""
+
+
+# ── archive ───────────────────────────────────────────────────────────────────
+
+def test_archiving_removes_a_deal_from_every_read_at_once(pg_db):
+    from core.postgres import pg_execute
+    from crm import analytics_service, service
+
+    contact = service.create_contact("Ana")
+    keep = service.create_deal("Keep", contact_id=contact["id"], value=100, stage="lead")
+    junk = service.create_deal("Junk", contact_id=contact["id"], value=99999, stage="lead")
+
+    service.archive_deal(junk["id"])
+
+    board = service.get_pipeline()
+    assert [d["id"] for d in board["deals"]] == [keep["id"]]
+    assert board["total_pipeline_value"] == 100
+
+    dash = service.get_dashboard_stats()
+    assert dash["total_pipeline_value"] == 100
+    assert [d["id"] for d in dash["top_deals"]] == [keep["id"]]
+
+    assert service.get_analytics()["win_loss"]["open_deals"] == 1
+    assert [d["id"] for d in service.list_deals()] == [keep["id"]]
+    assert [d["id"] for d in service.search_deals(search="")] == [keep["id"]]
+    assert [d["id"] for d in service.get_contact_detail(contact["id"])["deals"]] == [keep["id"]]
+
+    # An archived deal is not "going stale" — it is put away. Age both so only the
+    # live one can qualify.
+    pg_execute("UPDATE deals SET updated_at = now() - make_interval(days => 40)")
+    stale = analytics_service.get_stale_deals(stale_days=14)
+    assert [d["id"] for d in stale["deals"]] == [keep["id"]]
+    assert stale["total_stale"] == 1
+
+    # ...but the archived deal itself is still readable, so it can be restored.
+    assert service.get_deal(junk["id"])["archived_at"] is not None
+    assert not service.is_crm_empty()
+
+    restored = service.archive_deal(junk["id"], archived=False)
+    assert restored["archived_at"] is None
+    assert len(service.get_pipeline()["deals"]) == 2
+
+
+def test_repeat_archive_keeps_the_original_timestamp(pg_db):
+    from crm import service
+
+    deal = service.create_deal("Junk")
+    first = service.archive_deal(deal["id"])["archived_at"]
+    again = service.archive_deal(deal["id"])["archived_at"]
+    assert first == again
+
+
+# ── merge ─────────────────────────────────────────────────────────────────────
+
+def test_merge_moves_history_gap_fills_fields_and_archives_the_source(pg_db, monkeypatch):
+    from crm import chatter_service, field_service, service, touch_count_service
+
+    monkeypatch.setattr(touch_count_service, "schedule_recompute", lambda *a, **k: True)
+
+    contact = service.create_contact("Ana")
+    target = service.create_deal("Kept deal", contact_id=contact["id"], value=500)
+    source = service.create_deal("Dupe deal", contact_id=contact["id"], value=700)
+
+    service.log_activity("call", note="talked", deal_id=source["id"])
+    service.create_task("Follow up", deal_id=source["id"])
+    chatter_service.add_note("deal", source["id"], "source note")
+
+    region = field_service.create_field_definition(
+        {"entity_type": "deal", "name": "Region", "field_type": "text"})
+    tier = field_service.create_field_definition(
+        {"entity_type": "deal", "name": "Tier", "field_type": "text"})
+    field_service.set_field_values("deal", target["id"], {str(tier["id"]): "gold"}, "u")
+    field_service.set_field_values(
+        "deal", source["id"],
+        {str(region["id"]): "north", str(tier["id"]): "bronze"}, "u")
+
+    merged = service.merge_deals(target["id"], source["id"])
+
+    assert merged["id"] == target["id"]
+    assert merged["value"] == 500 and merged["title"] == "Kept deal"  # untouched
+
+    acts = service.get_activity_log(deal_id=target["id"])
+    assert len(acts) == 1 and acts[0]["note"] == "talked"
+    assert [t["id"] for t in service.list_tasks(deal_id=source["id"])] == []
+    assert len(service.list_tasks(deal_id=target["id"])) == 1
+
+    messages = [n["message"] for n in chatter_service.get_chatter("deal", target["id"])]
+    assert any(m.startswith(f"[Merged from deal #{source['id']}] source note") for m in messages)
+    assert any(f'Merged deal #{source["id"]}' in m for m in messages)
+    # The source keeps its own thread — the merge is restorable.
+    assert [n["message"] for n in chatter_service.get_chatter("deal", source["id"])] == ["source note"]
+
+    values = {r["field_key"]: r["value"]
+              for r in field_service.get_field_values("deal", target["id"]) if r["value"]}
+    assert values == {"region": "north", "tier": "gold"}  # gap filled, target's own wins
+
+    assert service.get_deal(source["id"])["archived_at"] is not None
+    assert [d["id"] for d in service.get_pipeline()["deals"]] == [target["id"]]
+
+
+def test_merge_rejects_a_missing_or_self_target(pg_db):
+    from crm import service
+
+    deal = service.create_deal("Only")
+    with pytest.raises(ValueError, match="into itself"):
+        service.merge_deals(deal["id"], deal["id"])
+    with pytest.raises(ValueError, match="Deal not found"):
+        service.merge_deals(deal["id"], 424242)
+
+
+# ── search ────────────────────────────────────────────────────────────────────
+
+def test_search_deals_matches_related_names_and_filters_custom_fields(pg_db):
+    from crm import field_service, service
+
+    company = service.create_company("Northwind")
+    contact = service.create_contact("Ana Ruiz", company_id=company["id"])
+    a = service.create_deal("Spring order", contact_id=contact["id"],
+                            company_id=company["id"], value=100)
+    b = service.create_deal("Autumn order", value=900)
+
+    assert [d["id"] for d in service.search_deals(search="Northwind")] == [a["id"]]
+    assert [d["id"] for d in service.search_deals(search="Ana")] == [a["id"]]
+    assert {d["id"] for d in service.search_deals(search="order")} == {a["id"], b["id"]}
+    assert [d["id"] for d in service.search_deals(search="order", sort_by="value",
+                                                  sort_dir="desc")] == [b["id"], a["id"]]
+
+    region = field_service.create_field_definition(
+        {"entity_type": "deal", "name": "Region", "field_type": "text"})
+    field_service.set_field_values("deal", a["id"], {str(region["id"]): "North"}, "u")
+
+    hits = service.search_deals(custom_field_filters={"region": "north"})  # case-insensitive
+    assert [d["id"] for d in hits] == [a["id"]]
+    assert hits[0]["custom_fields"] == {"region": "North"}
+    assert service.search_deals(custom_field_filters={"region": "sou"}) == []  # not substring
+
+
+# ── intelligence reads ────────────────────────────────────────────────────────
+
+def test_stale_deals_reports_days_and_skips_fresh_or_closed_ones(pg_db):
+    from core.postgres import pg_execute
+    from crm import analytics_service, service
+
+    contact = service.create_contact("Ana")
+    old = service.create_deal("Old", contact_id=contact["id"], value=100)
+    service.create_deal("Fresh", contact_id=contact["id"], value=200)
+    closed = service.create_deal("Closed", contact_id=contact["id"])
+    service.mark_deal_won(closed["id"])
+
+    pg_execute("UPDATE deals SET updated_at = now() - make_interval(days => 40), "
+               "created_at = now() - make_interval(days => 60) WHERE id = %s", (old["id"],))
+    pg_execute("UPDATE deal_stage_events SET changed_at = now() - make_interval(days => 30) "
+               "WHERE deal_id = %s", (old["id"],))
+
+    out = analytics_service.get_stale_deals(stale_days=14)
+    assert [d["id"] for d in out["deals"]] == [old["id"]]
+    assert out["total_stale"] == 1
+    row = out["deals"][0]
+    assert row["days_since_touch"] >= 39
+    assert row["days_in_stage"] >= 59          # no stage events on it -> created_at
+    assert row["has_open_task"] is False
+    assert row["contact_name"] == "Ana"
+
+    # Any touch resets it — that is the whole point of the shared last-touch rule.
+    service.log_activity("call", deal_id=old["id"])
+    assert analytics_service.get_stale_deals(stale_days=14)["deals"] == []
+
+
+def test_stale_deals_flags_a_deal_that_already_has_a_follow_up(pg_db):
+    from core.postgres import pg_execute
+    from crm import analytics_service, service
+
+    deal = service.create_deal("Old")
+    service.create_task("Chase it", deal_id=deal["id"])
+    pg_execute("UPDATE deals SET updated_at = now() - make_interval(days => 40) WHERE id = %s",
+               (deal["id"],))
+    assert analytics_service.get_stale_deals(stale_days=14)["deals"][0]["has_open_task"] is True
+
+
+def test_contact_staleness_ranks_never_contacted_first(pg_db):
+    from core.postgres import pg_execute
+    from crm import analytics_service, service
+
+    never = service.create_contact("Never Touched")
+    old = service.create_contact("Long Ago")
+    recent = service.create_contact("Just Called")
+    archived = service.create_contact("Parked", status="archived")
+
+    service.log_activity("call", contact_id=old["id"])
+    pg_execute("UPDATE activity_log SET created_at = now() - make_interval(days => 90) "
+               "WHERE contact_id = %s", (old["id"],))
+    service.log_activity("call", contact_id=recent["id"])
+    service.log_activity("call", contact_id=archived["id"])
+    pg_execute("UPDATE activity_log SET created_at = now() - make_interval(days => 90) "
+               "WHERE contact_id = %s", (archived["id"],))
+
+    out = analytics_service.get_contact_staleness(stale_days=30)
+    ids = [c["id"] for c in out["contacts"]]
+    assert ids == [never["id"], old["id"]]          # recent excluded, archived excluded
+    assert out["contacts"][0]["days_since_contact"] is None
+    assert out["contacts"][1]["days_since_contact"] >= 89
+
+
+def test_contact_staleness_counts_open_deals_and_sees_notes_as_contact(pg_db):
+    from core.postgres import pg_execute
+    from crm import analytics_service, chatter_service, service
+
+    ana = service.create_contact("Ana")
+    service.create_deal("Open", contact_id=ana["id"])
+    closed = service.create_deal("Closed", contact_id=ana["id"])
+    service.mark_deal_won(closed["id"])
+    assert analytics_service.get_contact_staleness(stale_days=1)["contacts"][0]["open_deals"] == 1
+
+    # A note counts as a touch even with no activity_log row (GREATEST ignores NULLs).
+    chatter_service.add_note("contact", ana["id"], "spoke at the counter")
+    assert analytics_service.get_contact_staleness(stale_days=1)["contacts"] == []
+    pg_execute("UPDATE crm_chatter SET created_at = now() - make_interval(days => 90) "
+               "WHERE entity_type = 'contact'")
+    assert len(analytics_service.get_contact_staleness(stale_days=30)["contacts"]) == 1
+
+
+def test_find_duplicates_groups_exact_matches_only(pg_db):
+    from crm import analytics_service, service
+
+    a = service.create_contact("Ana Ruiz", email="Ana@Example.com")
+    b = service.create_contact("A. Ruiz", email="  ana@example.com ")
+    service.create_contact("Someone Else", email="else@example.com")
+    service.create_company("Northwind", domain="northwind.test")
+    service.create_company("Northwind Ltd", domain="Northwind.test")
+
+    contact_groups = analytics_service.find_duplicate_contacts()
+    email_group = next(g for g in contact_groups if g["match_on"] == "email")
+    assert email_group["value"] == "ana@example.com"
+    assert [r["id"] for r in email_group["records"]] == [a["id"], b["id"]]
+    assert {r["label"] for r in email_group["records"]} == {"Ana Ruiz", "A. Ruiz"}
+
+    domain_groups = [g for g in analytics_service.find_duplicate_companies()
+                     if g["match_on"] == "domain"]
+    assert len(domain_groups) == 1 and domain_groups[0]["count"] == 2
+
+    everything = analytics_service.find_duplicates()
+    assert everything["total_groups"] >= 2
+
+
+def test_duplicate_deals_need_the_same_contact_and_ignore_archived(pg_db):
+    from crm import analytics_service, service
+
+    ana = service.create_contact("Ana")
+    bob = service.create_contact("Bob")
+    d1 = service.create_deal("Q1 renewal", contact_id=ana["id"])
+    d2 = service.create_deal("q1 renewal", contact_id=ana["id"])
+    service.create_deal("Q1 renewal", contact_id=bob["id"])   # different contact
+
+    groups = analytics_service.find_duplicate_deals()
+    assert len(groups) == 1
+    assert [r["id"] for r in groups[0]["records"]] == [d1["id"], d2["id"]]
+
+    service.archive_deal(d2["id"])
+    assert analytics_service.find_duplicate_deals() == []
+
+
+def test_scan_gaps_lists_missing_fields_worst_first(pg_db):
+    from crm import analytics_service, service
+
+    worst = service.create_contact("No Details")                       # 4 gaps
+    company = service.create_company("Acme", domain="acme.test",
+                                     industry="retail", phone="123")   # no gaps
+    partial = service.create_contact("Some Details", email="a@b.test", phone="1",
+                                     title="Buyer", company_id=company["id"])
+    assert partial
+
+    out = analytics_service.scan_gaps(entity_type="contact")
+    assert [c["id"] for c in out["contacts"]] == [worst["id"]]
+    assert set(out["contacts"][0]["missing_fields"]) == {
+        "email", "phone", "company_link", "title"}
+    assert out["total_gaps"] == 1
+
+    deals = analytics_service.scan_gaps(entity_type="deal")
+    service.create_deal("Vague")
+    deals = analytics_service.scan_gaps(entity_type="deal")
+    assert set(deals["deals"][0]["missing_fields"]) == {
+        "value", "expected_close_date", "contact_link"}
+
+
+def test_scan_gaps_surfaces_unconfirmed_assistant_writes(pg_db):
+    from crm import analytics_service, provenance_service, service
+
+    contact = service.create_contact("Ana", email="a@b.test", phone="1", title="Buyer")
+    provenance_service.record_fields("contact", contact["id"], {"phone": "1"})
+    out = analytics_service.scan_gaps()
+    assert [r["field_name"] for r in out["unverified_fields"]] == ["phone"]
+
+    provenance_service.confirm("contact", contact["id"], "phone")
+    assert analytics_service.scan_gaps()["unverified_fields"] == []
+
+
+# ── company chatter + reset sweep ─────────────────────────────────────────────
+
+def test_company_notes_round_trip_and_are_cleaned_on_delete(pg_db):
+    from core.postgres import pg_fetchone
+    from crm import chatter_service, service
+
+    company = service.create_company("Northwind")
+    chatter_service.add_note("company", company["id"], "met at the counter")
+    assert [n["message"] for n in chatter_service.get_chatter("company", company["id"])] == [
+        "met at the counter"]
+
+    with pytest.raises(ValueError, match="No company with id"):
+        chatter_service.add_note("company", 999999, "orphan")
+
+    service.delete_company(company["id"])
+    assert pg_fetchone(
+        "SELECT COUNT(*) AS c FROM crm_chatter WHERE entity_type = 'company'")["c"] == 0
+
+
+def test_clear_all_truncates_through_the_stage_event_foreign_key(pg_db):
+    """deal_stage_events is the only CRM table with a real FK to deals — Postgres
+    refuses to truncate a referenced table unless the referencing one is in the same
+    statement, so a missing entry here breaks the entire CRM reset."""
+    from core.postgres import pg_fetchone
+    from crm import service
+
+    deal = service.create_deal("Doomed")
+    service.update_deal_stage(deal["id"], "won")
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM deal_stage_events")["c"] == 1
+
+    service.clear_all()
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM deal_stage_events")["c"] == 0
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM deals")["c"] == 0

@@ -276,9 +276,11 @@ def _heartbeat_prompt() -> tuple[str, str]:
     static = (
         f"You are {name}, running a periodic background heartbeat for this CRM. Use "
         "your READ tools to check for anything the user should know about — overdue "
-        "tasks, stalled deals. If, and ONLY if, something genuinely needs the user's "
-        "attention, call notify_user ONCE with a short, actionable summary. You cannot "
-        "modify CRM records. If nothing needs attention, reply exactly HEARTBEAT_OK."
+        "tasks (crm_list_tasks), deals going cold (crm_get_stale_deals), and contacts "
+        "nobody has followed up with (crm_get_contact_staleness). If, and ONLY if, "
+        "something genuinely needs the user's attention, call notify_user ONCE with a "
+        "short, actionable summary. You cannot modify CRM records. If nothing needs "
+        "attention, reply exactly HEARTBEAT_OK."
     )
     return static, _now_line()
 

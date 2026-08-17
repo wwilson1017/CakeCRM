@@ -207,7 +207,8 @@ def test_clear_demo_data_truncates_when_sample_loaded(monkeypatch, fake_conn):
     # schema (only clear_all wipes it).
     assert any(
         "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
-        "crm_field_values, crm_field_provenance RESTART IDENTITY" in s for s in stmts
+        "crm_field_values, crm_field_provenance, deal_stage_events RESTART IDENTITY"
+        in s for s in stmts
     )
     assert not any("crm_field_definitions" in s for s in stmts)
 
@@ -242,7 +243,8 @@ def test_clear_all_truncates_and_resets_flag(monkeypatch, fake_conn):
     # defs→values); crm_field_provenance trails both.
     assert any(
         "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
-        "crm_field_definitions, crm_field_values, crm_field_provenance RESTART IDENTITY"
+        "crm_field_definitions, crm_field_values, crm_field_provenance, "
+        "deal_stage_events RESTART IDENTITY"
         in s for s in stmts
     )
     assert any("sample_data_loaded = FALSE" in s for s in stmts)
@@ -455,7 +457,8 @@ def test_get_company_detail_rolls_up_activity_and_open_value(rec):
     # activity rollup joins through the company's contacts AND deals
     act_sql = rec.sql_containing("FROM activity_log")
     assert "IN (SELECT id FROM contacts WHERE company_id = %s)" in act_sql
-    assert "IN (SELECT id FROM deals WHERE company_id = %s)" in act_sql
+    # issue #22: archived deals drop out of the rollup with the rest of the sweep
+    assert "IN (SELECT id FROM deals WHERE company_id = %s AND archived_at IS NULL)" in act_sql
     # open_deal_value excludes won/lost
     assert out["open_deal_value"] == 300
     assert out["contacts"] and out["deals"] and out["activity"]
@@ -491,12 +494,16 @@ def test_update_contact_accepts_explicit_null_company_id(rec):
     assert None in rec.params_for("UPDATE contacts SET")
 
 
-def test_update_deal_accepts_company_id(rec):
+def test_update_deal_accepts_company_id(monkeypatch, rec, fake_conn):
+    # Deal writes go through one transaction (issue #22: the stage event must land
+    # with the UPDATE), so the UPDATE is on the raw cursor, not pg_execute.
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("lead",)])
     rec.fetchone_queue = [{"id": 1}]
     service.update_deal(1, company_id=None)
-    sql = rec.sql_containing("UPDATE deals SET")
+    sql = next(s for s, _ in conn.executed if "UPDATE deals SET" in s)
     assert "company_id = %s" in sql
-    assert None in rec.params_for("UPDATE deals SET")
+    params = next(p for s, p in conn.executed if "UPDATE deals SET" in s)
+    assert None in params
 
 
 def test_get_contact_detail_joins_company_name(rec):
@@ -550,7 +557,7 @@ def test_get_pipeline_stage_branch_carries_new_fields(rec):
     ]
     service.get_pipeline(stage="lead")
     sql = rec.sql_containing("last_activity_at")
-    assert "WHERE d.stage = %s" in sql
+    assert "WHERE d.archived_at IS NULL AND d.stage = %s" in sql
     assert "la.last_at AS last_activity_at" in sql and "co.name AS company_name" in sql
     assert rec.params_for("last_activity_at") == ["lead"]
 

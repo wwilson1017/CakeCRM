@@ -65,7 +65,11 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   (`stream_turn`/`add_tool_results`/`build_tool_turn`) is consumed by the built-in
   assistant engine (`backend/assistant/`, landed #4): an SSE streaming tool loop
   with write-tool confirmation modes and file uploads, mounted at `/api/assistant`
-  and gated off `ai_ready`. The assistant's **second execution mode** (landed #6,
+  and gated off `ai_ready`. The assistant's sales working practices live in
+  `identity.SALES_GUIDE` — a **static** constant appended alongside
+  `CONFIRMATION_NOTE`/`MEMORY_NOTE`, deliberately NOT inside `DEFAULT_PERSONALITY`,
+  because a user-written personality replaces that string wholesale and would silently
+  switch off every CRM discipline with it. The assistant's **second execution mode** (landed #6,
   `backend/assistant/background.py`) is a non-SSE `run_background_turn` for
   autonomous work (the heartbeat + reminder firing): it reuses the same
   `ToolRegistry`/`build_tool_turn` loop but, having no human to confirm writes,
@@ -113,11 +117,30 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   exposed to the assistant via `crm_{get,set}_{contact,company,deal}_fields`;
   `crm_field_values` is polymorphic (no entity FK), so it is cleaned at every
   entity-delete + `_truncate_all` site (definitions survive demo-clear, wiped only by
-  `clear_all`), and `is_required` is advisory-only (never enforced server-side). The
-  ~31 `crm_*` agent tools + executors are
+  `clear_all`), and `is_required` is advisory-only (never enforced server-side).
+  **Deal lifecycle + sales intelligence** (#22 Phase 1) add `deals.lost_reason` and a
+  soft-archive `deals.archived_at` (NULL = live) plus an append-only `deal_stage_events`
+  log. Every deal write funnels through `service._write_deal_update`, which in ONE
+  transaction takes `SELECT stage … FOR UPDATE`, writes the row, appends a stage event
+  when the stage moved, and CLEARS `lost_reason` when a deal leaves `lost` (the bug the
+  blueprint fixed after our snapshot). `archived_at` is a **sweep**: `_LIVE_PREDICATE`
+  is carried by every deal-reading query (pipeline, dashboard, analytics, list/search,
+  contact/company rollups, touch-count backfill, the Gmail-scan open-deal attribution) —
+  the only deliberate exceptions are `get_deal` (fetch-by-id must still resolve an
+  archived deal so it can be shown/restored/merged) and the is-the-CRM-empty counts.
+  `deal_stage_events` is the one CRM table with a real FK to `deals`, so it MUST stay in
+  every `TRUNCATE` sweep or the CRM reset errors out. `merge_deals` repoints
+  activity/tasks, copies notes with a `[Merged from deal #N]` marker, gap-fills custom
+  fields (the target's own values always win), and archives — never deletes — the
+  source. Chatter now also attaches to **companies** (zero-migration: `entity_type` is
+  free TEXT), cleaned in `delete_company`. The ~40 `crm_*` agent tools + executors are
   collected UNCONDITIONALLY via `crm.tools.get_crm_tools()` — each def carries a
   `"writes"` flag (the single source of truth for the assistant's confirmation gate),
-  consumed by `assistant.registry.ToolRegistry` (landed #4). **AI touch counts +
+  consumed by `assistant.registry.ToolRegistry` (landed #4). The four read-only
+  intelligence tools (`crm_get_stale_deals`, `crm_get_contact_staleness`,
+  `crm_find_duplicates`, `crm_scan_gaps`, all in `crm/analytics_service.py`) are pure
+  SQL — keyless — and because `writes:False` derives the background allowlist they are
+  heartbeat-callable for free. **AI touch counts +
   field provenance** (#16) are the two zero-keys-degrading AI reads: an in-process
   daemon worker (`crm/touch_count_service.py`, event-driven off note/activity writes,
   light tier via `get_ai_provider(agent_model_tier="light")`, prompt-injection-hardened,
@@ -164,6 +187,11 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 - Never commit TN Cheesecake internals: no real prospect/customer data, no TNC
   staff/product names, no internal hostnames or secrets. Ported prompts (Casey's)
   must be genericized. This repo goes public at launch and history is forever.
+  Enforced by `backend/tests/test_prompt_genericization.py` (#22), which scans the
+  **model-facing payload** — the assembled system prompt, every tool
+  name/description/schema, the heartbeat prompt, and the UI starter chips — and fails
+  CI on any company/product/vertical token. Source *comments* may still cite the
+  blueprint by name; shipped prompt text may not.
 - Never import git history from cake_os or chatty — code arrives as clean snapshots
   in ordinary commits.
 - Never merge a pull request — Will merges all PRs manually. Push feature branches
@@ -231,5 +259,5 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Custom fields (EAV `crm_field_definitions`/`crm_field_values`, Settings editor, entity-form + detail-page value inputs, 6 `crm_*_fields` tools) — **landed #19** as `backend/crm/field_service.py` + `frontend/src/crm/components/{CustomFieldSettings,CustomFieldsSection,CustomFieldInputs}.tsx` | `cake_os/backend/apps/crm/field_service.py` |
 | Touch counts + field provenance (`deals.ai_touch_*` cols + in-process recompute worker; `crm_field_provenance` + `AiBadge`/`ProvenanceBadge`/`TouchCountPill`) — **landed #16** as `backend/crm/touch_count_service.py` + `provenance_service.py` | `cake_os/backend/apps/crm/touch_count_service.py`, `provenance_service.py` |
 | Scoring, analytics — analytics **landed #20** as `service.get_analytics()`/`summarize_analytics()` + `GET /api/crm/analytics` + `crm_analytics` tool + enriched `CrmDashboardPage` (win/loss, activity volume, read-time deal aging from existing timestamps — no migration; stage-duration metrics dropped, no stage-change audit trail; scoring still pending) | `cake_os/backend/apps/crm/*_service.py` |
-| Assistant tool set (~43 tools) + sales behaviors | `cake_os/backend/apps/crm/tools/` + Casey's agent config |
+| Assistant tool set + sales behaviors — **Phase 1 landed #22**: 9 new tools (`crm_search_deals`, `crm_mark_deal_won`/`_lost`, `crm_archive_deal`, `crm_merge_deals`, `crm_get_stale_deals`, `crm_get_contact_staleness`, `crm_find_duplicates`, `crm_scan_gaps`) in `backend/crm/analytics_service.py` + `service.py`, parity closes (embedded `custom_fields`, tool-side `limit_per_stage`, `limit` on find/search, company chatter), the genericized static `identity.SALES_GUIDE` prompt block + sales `QuickActions`. **Phase 2** (`crm_get_deal_health` over #18's `crm_get_lead_score`, `crm_get_pipeline_analytics` over #20's `crm_analytics`) and **Phase 3** (daily digest + stale/untouched nudges as heartbeat T2 jobs) are follow-up PRs. NOT ported: `get_rep_performance` (no owner columns), `enrich_field` (no web tools), lead-import tools (own issue) | `cake_os/backend/apps/crm/tools/` + the blueprint sales agent's config |
 | Pipeline facet filtering (client-side, no backend query params: `frontend/src/crm/pipelineFilters.ts` pure predicate + `components/PipelineFilterBar.tsx`, spliced into `PipelinePage`'s useMemo seam as `deals`→`filteredDeals`→`grouped`; facets = keyword/stage/value/close-date/last-activity; sessionStorage `crm_pipeline_filters`) — **landed #21**. Owner facet dropped (single-tenant); `get_pipeline()` gains a derived `last_activity_at` = MAX(deal `activity_log` rows + un-archived deal `crm_chatter` notes) via one UNION-ALL/GROUP BY join (NULL = no activity), plus `company_name`. Drag stays enabled while filtering (board is stage-only, index-safe). | `cake_os/docs/CRM_FILTER_DESIGN.md` + `cake_os/docs/solutions/architecture-patterns/client-side-facet-filtering.md` |
