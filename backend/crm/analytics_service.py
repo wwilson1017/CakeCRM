@@ -203,7 +203,8 @@ def _shape_groups(groups: list[dict], table: str, label_col: str, match_on: str)
             "match_on": match_on,
             "value": g["match_value"],
             "count": g["count"],
-            "records": [{"id": i, "label": labels.get(i, "")} for i in (g.get("ids") or [])],
+            # `or ""`, not get(i, ""): a present key holding None skips the default.
+            "records": [{"id": i, "label": labels.get(i) or ""} for i in (g.get("ids") or [])],
         }
         for g in groups
     ]
@@ -275,6 +276,12 @@ def find_duplicates(entity_type: str = "all", limit: int = DEFAULT_LIMIT) -> dic
 
 # Per entity: (gap label, SQL predicate). Only fields worth chasing — a missing
 # `notes` is not a gap, a missing email on a contact you are trying to sell to is.
+#
+# `btrim(col) = ''` is deliberately NOT COALESCE-wrapped: every column named below is
+# declared TEXT NOT NULL DEFAULT '' (deals.value is DOUBLE PRECISION NOT NULL DEFAULT
+# 0), so these expressions can never see NULL and three-valued logic never applies. If
+# any of them is ever made nullable, wrap it — a NULL would otherwise make the row
+# vanish from the scan entirely rather than show up as a gap.
 _CONTACT_GAPS = (
     ("email", "btrim(email) = ''"),
     ("phone", "btrim(phone) = ''"),

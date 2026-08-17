@@ -611,3 +611,35 @@ def test_closing_a_deal_settles_probability_on_every_path(pg_db):
     assert service.update_deal(explicit["id"], stage="won", probability=80)["probability"] == 100
     # ...but editing probability on an already-closed deal is still the caller's call.
     assert service.update_deal(explicit["id"], probability=60)["probability"] == 60
+
+
+def test_custom_field_filter_key_matching_is_case_insensitive(pg_db):
+    """Stored keys are slugified lowercase; a model echoing the display name
+    ("Region") must still find the field rather than silently get zero rows."""
+    from crm import field_service, service
+
+    region = field_service.create_field_definition(
+        {"entity_type": "deal", "name": "Region", "field_type": "text"})
+    deal = service.create_deal("Northern order")
+    field_service.set_field_values("deal", deal["id"], {str(region["id"]): "North"}, "u")
+
+    for key in ("region", "Region", "REGION"):
+        assert [d["id"] for d in service.search_deals(
+            custom_field_filters={key: "north"})] == [deal["id"]], key
+
+
+def test_duplicate_group_labels_are_always_strings(pg_db):
+    """Grouping contacts by NAME labels each record with its email — a blank one must
+    come back as '' rather than None (dict.get's default never fires on a present
+    key holding None)."""
+    from crm import analytics_service, service
+
+    service.create_contact("Ana Ruiz")            # no email at all
+    service.create_contact("Ana Ruiz", email="ana@example.test")
+
+    name_groups = [g for g in analytics_service.find_duplicate_contacts()
+                   if g["match_on"] == "name"]
+    assert len(name_groups) == 1
+    labels = [r["label"] for r in name_groups[0]["records"]]
+    assert all(isinstance(label, str) for label in labels)
+    assert "" in labels

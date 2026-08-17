@@ -631,7 +631,9 @@ def search_deals(
     ``custom_field_filters`` is a ``{field_key: value}`` map ANDed together, each an
     EXISTS on the EAV tables. Matching is case-insensitive EXACT, not substring: these
     fields are mostly dropdowns, where a substring match would silently match sibling
-    options.
+    options. The KEY is matched case-insensitively too — stored keys are slugified
+    lowercase, and a model that echoes the display name ("Region") should still find
+    the field rather than silently get zero rows.
     """
     try:
         limit = max(1, min(int(limit), MAX_DEAL_SEARCH_LIMIT))
@@ -660,7 +662,8 @@ def search_deals(
             """EXISTS (SELECT 1 FROM crm_field_values v
                          JOIN crm_field_definitions fd ON fd.id = v.field_id
                         WHERE v.entity_type = 'deal' AND v.entity_id = d.id
-                          AND fd.entity_type = 'deal' AND fd.field_key = %s
+                          AND fd.entity_type = 'deal'
+                          AND lower(fd.field_key) = lower(%s)
                           AND lower(v.value) = lower(%s))"""
         )
         # normalize_value, not str(): booleans are stored '1'/'0', so a raw
@@ -1266,7 +1269,7 @@ def get_analytics(days: int = 30, stale_days: int = 14, stale_limit: int = 8) ->
         FROM deals d
         LEFT JOIN contacts  c  ON d.contact_id = c.id
         LEFT JOIN companies co ON d.company_id = co.id
-        WHERE d.{OPEN_PREDICATE} AND {LIVE_PREDICATE_D}
+        WHERE {OPEN_PREDICATE_D} AND {LIVE_PREDICATE_D}
         """
     )
 
