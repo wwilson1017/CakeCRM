@@ -64,8 +64,8 @@ def test_create_contact_insert_returning_and_tag_normalization(rec):
     assert "%s" in insert_sql and "?" not in insert_sql
     # tags normalized (whitespace stripped, empties dropped) in the insert params
     assert "PT,ET,MT" in rec.params_for("INSERT INTO contacts")
-    # hydrated via a follow-up SELECT by the returned id
-    assert rec.params_for("SELECT * FROM contacts WHERE id = %s") == [7]
+    # hydrated via a follow-up SELECT by the returned id (joined for company_name)
+    assert rec.params_for("FROM contacts ct LEFT JOIN companies") == [7]
     assert result == {"id": 7, "name": "Ana"}
 
 
@@ -540,14 +540,14 @@ def test_create_contact_resolves_company_text_to_id(rec):
 def test_create_contact_explicit_company_id_skips_resolution(rec):
     rec.fetchone_queue = [{"id": 1}, {"id": 1}]
     service.create_contact("Ana", company="Acme", company_id=3)
-    assert not any("companies" in sql for sql, _ in rec.calls)
+    assert not any("INSERT INTO companies" in sql for sql, _ in rec.calls)
     assert 3 in rec.params_for("INSERT INTO contacts")
 
 
 def test_create_contact_blank_company_skips_resolution(rec):
     rec.fetchone_queue = [{"id": 1}, {"id": 1}]
     service.create_contact("Ana", company="   ")
-    assert not any("companies" in sql for sql, _ in rec.calls)
+    assert not any("INSERT INTO companies" in sql for sql, _ in rec.calls)
 
 
 def test_update_contact_resolves_company_text_when_no_id_key(rec):
@@ -573,7 +573,7 @@ def test_update_contact_explicit_null_company_id_wins_over_text(rec):
     must NOT be overridden by resolving the free text sitting next to it."""
     rec.fetchone_queue = [{"id": 1}]
     service.update_contact(1, company="Acme", company_id=None)
-    assert not any("companies" in sql for sql, _ in rec.calls)  # no resolution
+    assert not any("INSERT INTO companies" in sql for sql, _ in rec.calls)  # no resolution
     params = rec.params_for("UPDATE contacts SET")
     assert None in params and 9 not in params
 

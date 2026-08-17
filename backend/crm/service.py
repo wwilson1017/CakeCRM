@@ -86,7 +86,16 @@ def create_contact(
 
 
 def get_contact(contact_id: int) -> dict | None:
-    return pg_fetchone("SELECT * FROM contacts WHERE id = %s", (contact_id,))
+    # Joins companies (mirroring get_deal) so company_name is present on EVERY
+    # contact payload — including the dicts create_contact/update_contact return.
+    # Without it, a contact linked by id with no legacy text would come back from
+    # a write looking company-less to an API or agent-tool caller (issue #35).
+    return pg_fetchone(
+        """SELECT ct.*, co.name AS company_name
+           FROM contacts ct LEFT JOIN companies co ON ct.company_id = co.id
+           WHERE ct.id = %s""",
+        (contact_id,),
+    )
 
 
 def _contact_search_where(query: str, status: str | None, tags: str | None) -> tuple[str, list]:

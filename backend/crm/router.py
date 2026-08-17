@@ -626,8 +626,20 @@ async def import_csv(file: UploadFile = File(...), user=Depends(get_current_user
                 break
             rows.append((i, row))
 
+        def _cell(row: dict, col: str | None) -> str:
+            """Read one mapped column, tolerating an absent mapping.
+
+            `col` is None when the CSV has no column for that field. The old
+            `row.get(col or "", "")` idiom then looked up the key "" — which
+            csv.DictReader really does assign to an UNNAMED header cell (e.g.
+            "Name,Email,,Phone"), so an unrelated column silently became the
+            field's value. Harmless-looking until #35 made a stray company value
+            auto-create a company row.
+            """
+            return (row.get(col) or "").strip() if col else ""
+
         def _company_of(row: dict) -> str:
-            return (row.get(company_col or "", "") or "").strip()
+            return _cell(row, company_col)
 
         # Resolve every company name in 2 queries total (issue #35), so the
         # Companies page populates from an import instead of staying empty. Only
@@ -654,14 +666,14 @@ async def import_csv(file: UploadFile = File(...), user=Depends(get_current_user
             try:
                 crm.create_contact(
                     name=name,
-                    email=(row.get(_resolve("email") or "", "") or "").strip(),
-                    phone=(row.get(_resolve("phone") or "", "") or "").strip(),
+                    email=_cell(row, _resolve("email")),
+                    phone=_cell(row, _resolve("phone")),
                     company=company,
                     company_id=company_ids.get(company),  # pre-resolved: no per-row lookup
-                    title=(row.get(_resolve("title") or "", "") or "").strip(),
-                    source=(row.get(_resolve("source") or "", "") or "").strip(),
-                    tags=(row.get(_resolve("tags") or "", "") or "").strip(),
-                    notes=(row.get(_resolve("notes") or "", "") or "").strip(),
+                    title=_cell(row, _resolve("title")),
+                    source=_cell(row, _resolve("source")),
+                    tags=_cell(row, _resolve("tags")),
+                    notes=_cell(row, _resolve("notes")),
                 )
                 imported += 1
             except Exception as e:

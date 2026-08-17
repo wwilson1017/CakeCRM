@@ -135,6 +135,29 @@ def test_csv_import_batch_resolves_and_links_companies(client, monkeypatch):
     assert by_name["Bob Stone"]["company_id"] is None
 
 
+def test_csv_import_unnamed_column_is_not_read_as_a_field(client, monkeypatch):
+    """csv.DictReader keys an UNNAMED header cell as "", which the old
+    `row.get(col or "", "")` idiom read whenever a field had no mapped column —
+    silently importing an unrelated column (and, post-#35, auto-creating a
+    company from it)."""
+    created = []
+    resolver_calls = []
+    monkeypatch.setattr(service, "create_contact",
+                        lambda **kw: created.append(kw) or {"id": len(created)})
+    monkeypatch.setattr(service, "resolve_company_ids",
+                        lambda names: resolver_calls.append(list(names)) or {})
+    # no Company header at all; the third column is unnamed
+    csv_text = "Name,Email,,Phone\nAda,ada@x.io,STRAY VALUE,555\n"
+    resp = client.post(
+        "/api/crm/import",
+        files={"file": ("c.csv", io.BytesIO(csv_text.encode()), "text/csv")},
+    )
+    assert resp.status_code == 200 and resp.json()["imported"] == 1
+    assert created[0]["company"] == ""          # not "STRAY VALUE"
+    assert resolver_calls == [[""]]             # and no company auto-created
+    assert created[0]["title"] == "" and created[0]["notes"] == ""
+
+
 def test_csv_import_survives_batch_resolver_failure(client, monkeypatch):
     """A poison company cell (e.g. a NUL byte) must not 500 the whole import —
     it degrades to per-row resolution inside create_contact."""
