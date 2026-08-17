@@ -335,9 +335,22 @@ def test_real_file_attachment_is_never_fetched_as_a_body():
     assert fetched == []
 
 
-def test_missing_declared_size_still_attempts_the_fetch():
+def test_missing_declared_size_fails_closed_and_never_fetches():
+    """Gmail has no ranged read, so an undeclared size cannot be bounded before the
+    download. The sender chooses the message shape, so this must fail closed —
+    otherwise the 256 KB cap is trivially bypassed by omitting `size`."""
+    fetched = []
     part = {"mimeType": "text/plain", "body": {"data": "", "attachmentId": "att-1"}}
-    assert ops._part_text(part, fetch=lambda aid: "body text") == "body text"
+    assert ops._part_text(part, fetch=lambda aid: fetched.append(aid) or "huge") == ""
+    assert fetched == []
+
+
+def test_unparseable_declared_size_also_fails_closed():
+    fetched = []
+    part = {"mimeType": "text/plain",
+            "body": {"data": "", "attachmentId": "att-1", "size": "not-a-number"}}
+    assert ops._part_text(part, fetch=lambda aid: fetched.append(aid) or "huge") == ""
+    assert fetched == []
 
 
 def test_get_thread_op_recovers_stored_bodies_with_one_thread_call():
@@ -373,8 +386,12 @@ def test_get_thread_op_budgets_attachment_fetches_per_message():
                             "payload": {"mimeType": "multipart/mixed", "headers": [], "parts": parts}}]}
     svc = _Service(_Users(messages=_MessagesWithAttachments(attachments), threads=_Threads(thread)))
 
-    ops.get_thread_op(svc, "t1")
-    assert len(attachments.calls) <= ops._MAX_BODY_FETCHES_PER_MESSAGE
+    out = ops.get_thread_op(svc, "t1")
+    # Exact, not `<=`: a one-sided bound would also pass if the fetcher were broken
+    # into never fetching at all, which is the regression that matters most here.
+    assert len(attachments.calls) == ops._MAX_BODY_FETCHES_PER_MESSAGE
+    # ...and the budget was spent usefully — a body did come back.
+    assert out["messages"][0]["body"] == "body 1"  # last successful plain part wins
 
 
 def test_get_thread_op_survives_attachment_fetch_errors():

@@ -182,7 +182,8 @@ def oauth_callback(code: str = "", state: str = "", error: str = ""):
 
 @router.delete("/connection")
 def disconnect(user=Depends(get_current_user)):
-    """Disconnect Gmail: best-effort revoke at Google, then clear tokens locally
+    """Disconnect Gmail: clear the connection locally — capturing the token it held
+    in the same statement — then best-effort revoke exactly that token at Google
     (keeping app credentials for a one-click reconnect)."""
     from core.encryption import decrypt_value
 

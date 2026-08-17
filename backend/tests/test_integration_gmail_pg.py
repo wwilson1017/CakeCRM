@@ -263,3 +263,24 @@ def test_clear_and_replace_return_the_ciphertext_they_cleared(pg_db):
     replaced = store.save_app_credentials("cid2", "secret2")
     assert decrypt_value(replaced) == "rt-two"
     assert _raw_row()["client_id"] == "cid2"
+
+
+def test_two_racing_callbacks_only_the_first_persists(pg_db):
+    """save_tokens' docstring claims a second racing callback must miss too. Two
+    connects that both captured the same starting generation: the first wins, the
+    second is refused — the CAS is on the generation, not on 'was it a disconnect'."""
+    from datetime import datetime, timedelta, timezone
+
+    from core.encryption import decrypt_value
+    from gmail import store
+
+    store.save_app_credentials("cid", "secret")
+    both_captured = _generation()
+    expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+
+    assert store.save_tokens("at1", "rt-first", expiry, "scope", "one@x.com", both_captured) is True
+    assert store.save_tokens("at2", "rt-second", expiry, "scope", "two@x.com", both_captured) is False
+
+    row = _raw_row()
+    assert decrypt_value(row["refresh_token_enc"]) == "rt-first"
+    assert row["email"] == "one@x.com"

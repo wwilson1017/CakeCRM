@@ -64,12 +64,12 @@ def _parse_headers(headers: list[dict]) -> dict:
     return result
 
 
-def _declared_size(body: dict) -> int:
-    """The part's declared decoded byte size, 0 when absent/unparseable."""
+def _declared_size(body: dict) -> int | None:
+    """The part's declared decoded byte size, or None when it didn't declare one."""
     try:
-        return int(body.get("size") or 0)
-    except (TypeError, ValueError):
-        return 0
+        return int(body["size"])
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def _part_text(part: dict, fetch=None) -> str:
@@ -89,7 +89,14 @@ def _part_text(part: dict, fetch=None) -> str:
     if data:
         text = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
     elif fetch and body.get("attachmentId") and not part.get("filename"):
-        if _declared_size(body) > _MAX_BODY_FETCH_BYTES:
+        size = _declared_size(body)
+        # Fail CLOSED on an undeclared size. Gmail has no ranged read, so an
+        # unknown size means we cannot bound the download before making it — and
+        # the sender of this mail chose its shape. Skipping costs nothing that
+        # wasn't already blank before #43.
+        if size is None:
+            return ""
+        if size > _MAX_BODY_FETCH_BYTES:
             return _BODY_TOO_LARGE
         text = fetch(body["attachmentId"])  # never raises; "" on any failure
     else:
@@ -202,7 +209,9 @@ def _make_body_fetcher(service, message_id: str):
                 return ""
             return base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
         except Exception as e:
-            logger.debug("gmail.ops: body attachment fetch failed for %s: %s", message_id, e)
+            # warning, not debug: a systemic failure here degrades every thread read
+            # to blank bodies, which is indistinguishable from genuinely empty mail.
+            logger.warning("gmail.ops: body attachment fetch failed for %s: %s", message_id, e)
             return ""
 
     return fetch
