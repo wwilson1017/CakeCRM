@@ -98,7 +98,7 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
             <label style={labelStyle}>Contact</label>
             <select value={selectedContact ?? ''} onChange={e => pickContact(e.target.value ? Number(e.target.value) : null)} style={inputStyle}>
               <option value="">No contact</option>
-              {contacts.map(c => <option key={c.id} value={c.id}>{c.name}{c.company ? ` (${c.company})` : ''}</option>)}
+              {contacts.map(c => <option key={c.id} value={c.id}>{c.name}{(c.company_name || c.company) ? ` (${c.company_name || c.company})` : ''}</option>)}
             </select>
           </div>
           <div>

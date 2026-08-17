@@ -7,7 +7,9 @@ export interface CrmContact {
   phone: string;
   company: string;
   company_id: number | null;
-  company_name?: string; // detail joins only (LEFT JOIN companies)
+  company_name?: string; // LEFT JOIN companies — contact detail, list, and search responses.
+                         // Authoritative over the legacy free-text `company` (issue #35):
+                         // render `company_name || company`.
   title: string;
   source: string;
   status: string;

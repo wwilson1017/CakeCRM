@@ -56,6 +56,24 @@ def create_contact(
 ) -> dict:
     if status not in CONTACT_STATUSES:
         status = "active"  # unknown status would hide the contact from every status tab
+    # Ongoing-ingestion coherence (issue #35): with no explicit link, resolve the
+    # free-text company against the companies table, auto-creating it when new —
+    # the same rule the one-shot backfill applied, now at write time. This is the
+    # choke point every ingestion path funnels through (CSV import, smart import,
+    # the REST route, crm_create_contact), so companies populate no matter how the
+    # contact arrived. An explicit company_id always wins and skips the lookup:
+    # bulk importers pass a pre-resolved id here, which is what keeps a 5000-row
+    # import at 2 resolution queries instead of 5000.
+    #
+    # Note the deliberate asymmetry with update_contact: there, an explicit
+    # company_id=None means "unlink" and suppresses resolution. On create there is
+    # no link to remove, and the REST create route passes company_id=None whether
+    # or not the client sent it (model_dump() without exclude_unset), so
+    # absent-vs-null is not even expressible here — resolving on None is the only
+    # rule that satisfies "ingestion always links". The eventual freetext↔link
+    # combobox merge is where this asymmetry goes away.
+    if company_id is None and company and company.strip(_WS):
+        company_id = resolve_company_ids([company]).get(company)
     # company_id is appended last so the existing INSERT-param assertions (which
     # check the leading columns) stay valid; a bad FK raises ForeignKeyViolation
     # which the router maps to 400.
@@ -72,12 +90,27 @@ def get_contact(contact_id: int) -> dict | None:
 
 
 def _contact_search_where(query: str, status: str | None, tags: str | None) -> tuple[str, list]:
-    """Build the shared WHERE clause + params for contact free-text search."""
+    """Build the shared WHERE clause + params for contact free-text search.
+
+    Assumes the caller's FROM is ``contacts ct LEFT JOIN companies co ON
+    ct.company_id = co.id`` — contact columns are ct-qualified because companies
+    shares several of their names (id, name, status, notes, created_at,
+    updated_at), which would otherwise be ambiguous. ``tags`` stays unqualified
+    inside _TAGS_NORMALIZED_SQL: companies has no tags column.
+
+    ``co.name`` is part of the match (issue #35) so a contact linked to a company
+    is findable by that company's name even when its legacy free-text is empty or
+    stale. The legacy ``ct.company`` stays in the OR so unlinked contacts remain
+    findable by their text.
+    """
     like = f"%{query}%"
-    conditions = ["(name ILIKE %s OR email ILIKE %s OR company ILIKE %s OR notes ILIKE %s)"]
-    params: list = [like, like, like, like]
+    conditions = [
+        "(ct.name ILIKE %s OR ct.email ILIKE %s OR ct.company ILIKE %s"
+        " OR co.name ILIKE %s OR ct.notes ILIKE %s)"
+    ]
+    params: list = [like, like, like, like, like]
     if status:
-        conditions.append("status = %s")
+        conditions.append("ct.status = %s")
         params.append(status)
     if tags:
         labels = [tag.strip() for tag in tags.split(",") if tag.strip()]
@@ -94,15 +127,27 @@ def search_contacts(
 ) -> list[dict]:
     where, params = _contact_search_where(query, status, tags)
     return pg_fetchall(
-        f"SELECT * FROM contacts WHERE {where} ORDER BY updated_at DESC LIMIT %s OFFSET %s",
+        f"""SELECT ct.*, co.name AS company_name
+            FROM contacts ct LEFT JOIN companies co ON ct.company_id = co.id
+            WHERE {where} ORDER BY ct.updated_at DESC LIMIT %s OFFSET %s""",
         params + [limit, offset],
     )
 
 
 def count_search_contacts(query: str, status: str | None = None, tags: str | None = None) -> int:
-    """Total number of contacts matching a search (for accurate pagination totals)."""
+    """Total number of contacts matching a search (for accurate pagination totals).
+
+    Carries the same join as search_contacts because the shared WHERE references
+    co.name. LEFT JOIN on the companies PRIMARY KEY yields at most one company row
+    per contact, so COUNT(*) is still a count of contacts, not of pairs.
+    """
     where, params = _contact_search_where(query, status, tags)
-    row = pg_fetchone(f"SELECT COUNT(*) AS cnt FROM contacts WHERE {where}", params)
+    row = pg_fetchone(
+        f"""SELECT COUNT(*) AS cnt
+            FROM contacts ct LEFT JOIN companies co ON ct.company_id = co.id
+            WHERE {where}""",
+        params,
+    )
     return row["cnt"] if row else 0
 
 
@@ -110,13 +155,23 @@ def list_contacts(
     offset: int = 0, limit: int = 50, status: str | None = None,
     tags: str | None = None, sort: str = "updated_at",
 ) -> dict:
-    allowed_sorts = {"updated_at", "created_at", "name", "company"}
-    sort_col = sort if sort in allowed_sorts else "updated_at"
+    # Sort expressions are ct-qualified (companies shares column names), and
+    # "company" sorts by the EFFECTIVE display name — the link is authoritative
+    # (issue #35), falling back to the legacy text for unlinked contacts, so the
+    # order matches what the list actually renders. Values are SQL fragments from
+    # this allowlist; the caller's `sort` is never interpolated.
+    allowed_sorts = {
+        "updated_at": "ct.updated_at",
+        "created_at": "ct.created_at",
+        "name": "ct.name",
+        "company": "COALESCE(co.name, ct.company)",
+    }
+    sort_col = allowed_sorts.get(sort, "ct.updated_at")
 
     conditions = []
     params: list = []
     if status:
-        conditions.append("status = %s")
+        conditions.append("ct.status = %s")
         params.append(status)
     if tags:
         labels = [tag.strip() for tag in tags.split(",") if tag.strip()]
@@ -127,12 +182,16 @@ def list_contacts(
 
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
-    total_row = pg_fetchone(f"SELECT COUNT(*) AS cnt FROM contacts {where}", params)
+    # The count needs no join — its WHERE only touches ct columns (the alias is
+    # here so the shared qualified conditions parse).
+    total_row = pg_fetchone(f"SELECT COUNT(*) AS cnt FROM contacts ct {where}", params)
     total = total_row["cnt"] if total_row else 0
 
     params.extend([limit, offset])
     rows = pg_fetchall(
-        f"SELECT * FROM contacts {where} ORDER BY {sort_col} DESC LIMIT %s OFFSET %s",
+        f"""SELECT ct.*, co.name AS company_name
+            FROM contacts ct LEFT JOIN companies co ON ct.company_id = co.id
+            {where} ORDER BY {sort_col} DESC LIMIT %s OFFSET %s""",
         params,
     )
     return {"contacts": rows, "total": total, "limit": limit, "offset": offset}
@@ -157,6 +216,18 @@ def update_contact(contact_id: int, **fields) -> dict | None:
         filtered["tags"] = _normalize_tags(filtered["tags"] or "")
     if "status" in filtered and filtered["status"] not in CONTACT_STATUSES:
         filtered["status"] = "active"
+    # Issue #35: a company-text write with NO explicit company_id derives the link
+    # from the text — non-blank resolves/auto-creates, blank unlinks (the link is
+    # what the UI displays, so clearing the text has to clear the display too).
+    # Key PRESENCE is the signal: an explicit company_id wins, INCLUDING an
+    # explicit None, which means "unlink". ContactForm always sends company_id, so
+    # that path is unaffected; crm_update_contact forwards exactly the keys the
+    # model sent, so all three cases (absent / id / null) stay expressible.
+    if "company" in filtered and "company_id" not in filtered:
+        text = filtered["company"] or ""
+        filtered["company_id"] = (
+            resolve_company_ids([text]).get(text) if text.strip(_WS) else None
+        )
     if not filtered:
         return get_contact(contact_id)
     set_clause = ", ".join(f"{k} = %s" for k in filtered)
@@ -252,6 +323,71 @@ def create_company(
 
 def get_company(company_id: int) -> dict | None:
     return pg_fetchone("SELECT * FROM companies WHERE id = %s", (company_id,))
+
+
+def resolve_company_ids(names: list[str]) -> dict[str, int]:
+    """Batch-resolve raw company-name spellings to company ids, auto-creating any
+    that don't exist yet (issue #35).
+
+    This is the single company-resolution primitive — the ongoing-ingestion
+    counterpart to the one-shot backfill in the companies migration. The #61
+    cake_os importer consumes it as-is (``from crm.service import
+    resolve_company_ids``).
+
+    Normalization is the ``uq_companies_name_ci`` contract: case-insensitive
+    after trimming the six ASCII whitespace bytes. Names blank after that trim
+    are ignored. Returns ``{raw spelling exactly as passed: company id}``, so a
+    caller maps a row back with a plain ``.get(row_value)`` and never has to
+    normalize; two spellings that normalize alike both appear as keys mapping to
+    the same id.
+
+    Two fixed statements regardless of ``len(names)`` — a 5000-row import costs
+    2 queries here, not 5000.
+
+    The case-folding is computed entirely IN SQL on both sides rather than with
+    Python's ``str.lower()``: Python's Unicode case-folding can disagree with the
+    database's ``LOWER()``, which would strand a name we just created. (Same
+    class of drift the migration's whitespace comment guards against.)
+
+    The two statements are autocommit, so a company created here survives even if
+    the caller's contact write later fails. Accepted: the name genuinely appeared
+    in the input, and a company with no contacts is valid, visible, deletable
+    data — not corruption.
+    """
+    # Exact-string dedupe, order-preserving (first spelling wins the stored
+    # name). str.strip(_WS) matches btrim's byte set, so Python and SQL agree on
+    # what counts as blank.
+    unique = [n for n in dict.fromkeys(names) if n and n.strip(_WS)]
+    if not unique:
+        return {}
+
+    # 1) Create the missing ones. The conflict target is the normalized-name
+    #    expression index, NOT a bare ON CONFLICT: bare would also swallow a
+    #    primary-key conflict, silently skipping an insert and stranding the
+    #    contact unlinked. DISTINCT ON collapses same-key spellings inside the
+    #    batch; WITH ORDINALITY makes first-seen-wins deterministic. Race-safe
+    #    against a concurrent import by construction (no SELECT-then-INSERT
+    #    window). Raw strings: the E'' escapes are Postgres syntax, not Python.
+    pg_execute(
+        r"""INSERT INTO companies (name)
+            SELECT DISTINCT ON (LOWER(btrim(n, E' \t\n\r\f\x0b')))
+                   btrim(n, E' \t\n\r\f\x0b')
+            FROM unnest(%s::text[]) WITH ORDINALITY AS t(n, ord)
+            ORDER BY LOWER(btrim(n, E' \t\n\r\f\x0b')), ord
+            ON CONFLICT (LOWER(btrim(name, E' \t\n\r\f\x0b'))) DO NOTHING""",
+        (unique,),
+    )
+    # 2) Map every raw spelling back to its id. The co.name side is exactly the
+    #    uq_companies_name_ci expression, so the join is index-assisted.
+    rows = pg_fetchall(
+        r"""SELECT t.n AS raw, co.id AS id
+            FROM unnest(%s::text[]) AS t(n)
+            JOIN companies co
+              ON LOWER(btrim(co.name, E' \t\n\r\f\x0b'))
+               = LOWER(btrim(t.n, E' \t\n\r\f\x0b'))""",
+        (unique,),
+    )
+    return {row["raw"]: row["id"] for row in rows}
 
 
 def _company_search_where(query: str, status: str | None) -> tuple[str, list]:

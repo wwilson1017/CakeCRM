@@ -9,6 +9,7 @@ test_integration_pg.py, with an autouse per-test CRM cleanup so scenarios don't
 contaminate each other.
 """
 
+import io
 import os
 
 import psycopg2
@@ -361,6 +362,194 @@ def test_companies_backfill_migration(pg_db):
         deal_links = dict(cur.fetchall())
         assert deal_links["DealA"] == links["A"]
         assert deal_links["DealE"] is None
+    finally:
+        if conn is not None:
+            conn.close()
+        admin = psycopg2.connect(ADMIN_DSN)
+        admin.autocommit = True
+        with admin.cursor() as cur:
+            cur.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE datname = %s AND pid <> pg_backend_pid()",
+                (dbname,),
+            )
+            cur.execute(f'DROP DATABASE IF EXISTS "{dbname}"')
+        admin.close()
+
+
+# ── Company link coherence (issue #35) ────────────────────────────────────────
+
+def test_ingestion_resolves_and_autocreates_companies(pg_db):
+    """The write-time half of #35: every ingestion path links a company, creating
+    it when the name is new, with the migration's normalization."""
+    from crm import service
+
+    ada = service.create_contact("Ada", company="  Acme  ")
+    assert ada["company_id"] is not None
+    assert service.get_company(ada["company_id"])["name"] == "Acme"  # trimmed
+    assert ada["company"] == "  Acme  "  # legacy text preserved verbatim
+
+    # a different spelling resolves to the SAME company (case/whitespace-insensitive)
+    bob = service.create_contact("Bob", company="ACME")
+    assert bob["company_id"] == ada["company_id"]
+    assert service.count_search_companies("Acme") == 1
+
+    # update with new text auto-creates and re-links
+    bob2 = service.update_contact(bob["id"], company="Beta Corp")
+    assert bob2["company_id"] not in (None, ada["company_id"])
+    # ...and clearing the text unlinks (the link is what the UI renders)
+    assert service.update_contact(bob["id"], company="")["company_id"] is None
+
+    # an explicit null company_id wins over text sitting beside it (ContactForm)
+    assert service.update_contact(ada["id"], company="Acme", company_id=None)["company_id"] is None
+
+    # an explicit id is respected as-is, never overwritten by the text
+    beta = service.create_company("Gamma Inc")
+    cy = service.create_contact("Cy", company="Totally Different", company_id=beta["id"])
+    assert cy["company_id"] == beta["id"]
+
+
+def test_contact_list_and_search_are_link_authoritative(pg_db):
+    """The read-time half of #35: a contact linked to a company is findable and
+    displayable by that company's name even with NO legacy free text."""
+    from crm import service
+
+    co = service.create_company("Initech")
+    linked = service.create_contact("Peter", company_id=co["id"])  # no free text
+    assert linked["company"] == ""
+
+    rows = service.list_contacts()["contacts"]
+    row = next(r for r in rows if r["id"] == linked["id"])
+    assert row["company_name"] == "Initech"  # what the UI renders
+
+    # searchable by company name purely via the join — the reported bug
+    found = service.search_contacts("Initech")
+    assert [c["id"] for c in found] == [linked["id"]]
+    assert service.count_search_contacts("Initech") == 1
+
+    # a rename propagates immediately (no text to go stale)
+    service.update_company(co["id"], name="Initech Global")
+    assert service.search_contacts("Initech Global")[0]["id"] == linked["id"]
+    row = next(r for r in service.list_contacts()["contacts"] if r["id"] == linked["id"])
+    assert row["company_name"] == "Initech Global"
+
+    # unlinked contacts stay findable by their legacy text
+    service.create_contact("Milton", company="Legacy Only")
+    assert service.search_contacts("Legacy Only")[0]["name"] == "Milton"
+    # ...and the join never multiplies rows
+    assert service.count_search_contacts("") == len(service.list_contacts()["contacts"])
+
+
+def test_csv_import_populates_companies_page(pg_db):
+    """The headline acceptance: fresh install -> import my contacts -> the
+    Companies page is populated, not silently empty."""
+    from crm import service
+
+    csv_text = (
+        "Name,Email,Company\n"
+        "Ada Lovelace,ada@x.io,Acme Corp\n"
+        "Bob Stone,bob@x.io,acme corp\n"   # same company, different case
+        "Cy Young,cy@x.io,Beta LLC\n"
+        ",ghost@x.io,Ghost Co\n"           # skipped: no name
+    )
+    client = _client()
+    resp = client.post(
+        "/api/crm/import",
+        files={"file": ("contacts.csv", io.BytesIO(csv_text.encode()), "text/csv")},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["imported"] == 3 and resp.json()["skipped"] == 1
+
+    names = sorted(c["name"] for c in service.list_companies()["companies"])
+    assert names == ["Acme Corp", "Beta LLC"]  # Ghost Co never created
+
+    # both Acme rows point at the one company, and its rollup sees them
+    acme = next(c for c in service.list_companies()["companies"] if c["name"] == "Acme Corp")
+    assert {c["name"] for c in service.get_company_detail(acme["id"])["contacts"]} == {
+        "Ada Lovelace", "Bob Stone"
+    }
+
+
+def test_second_backfill_migration_repairs_pre_35_imports(pg_db):
+    """The repair half of #35, on its own throwaway DB (same pattern as the #13
+    backfill test): unlinked contacts written between #13 and #35 get linked,
+    without clobbering deliberate links/unlinks."""
+    from pathlib import Path
+
+    migrations = Path(__file__).resolve().parent.parent / "migrations"
+    crm_core = (migrations / "20260723221920_crm_core.sql").read_text()
+    companies_sql = (migrations / "20260724062314_companies.sql").read_text()
+    backfill_sql = (migrations / "20260816203810_company_link_backfill.sql").read_text()
+
+    dbname = f"cakecrm_it_backfill2_{os.getpid()}"
+    admin = psycopg2.connect(ADMIN_DSN)
+    admin.autocommit = True
+    with admin.cursor() as cur:
+        cur.execute(f'DROP DATABASE IF EXISTS "{dbname}"')
+        cur.execute(f'CREATE DATABASE "{dbname}"')
+    admin.close()
+
+    dsn = ADMIN_DSN.rsplit("/", 1)[0] + f"/{dbname}"
+    conn = None
+    try:
+        conn = psycopg2.connect(dsn)
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute(crm_core)
+        cur.execute(companies_sql)  # #13 runs on an empty CRM: creates nothing
+
+        # Now simulate post-#13 ingestion: free text only, no company_id.
+        cur.execute("INSERT INTO companies (name) VALUES ('Acme')")
+        cur.execute(
+            "INSERT INTO contacts (name, company) VALUES "
+            "('A', 'ACME'), ('B', 'Beta Corp'), ('C', ''), ('D', 'Acme')"
+        )
+        # D is DELIBERATELY unlinked-but-nothing; E is deliberately linked elsewhere
+        cur.execute("INSERT INTO companies (name) VALUES ('Other Co')")
+        cur.execute(
+            "INSERT INTO contacts (name, company, company_id) VALUES "
+            "('E', 'Acme', (SELECT id FROM companies WHERE name='Other Co'))"
+        )
+        # a deal on A (should inherit) and one on E (must NOT be touched)
+        cur.execute(
+            "INSERT INTO deals (contact_id, title) VALUES "
+            "((SELECT id FROM contacts WHERE name='A'), 'DealA'), "
+            "((SELECT id FROM contacts WHERE name='E'), 'DealE')"
+        )
+        cur.execute("SELECT name, updated_at FROM contacts ORDER BY name")
+        before = dict(cur.fetchall())
+
+        cur.execute(backfill_sql)
+
+        # 'ACME' matched the EXISTING Acme (ON CONFLICT path — no duplicate)
+        cur.execute("SELECT name FROM companies ORDER BY name")
+        assert [r[0] for r in cur.fetchall()] == ["Acme", "Beta Corp", "Other Co"]
+
+        cur.execute("SELECT name, company_id FROM contacts ORDER BY name")
+        links = dict(cur.fetchall())
+        acme_id = links["A"]
+        assert acme_id is not None and links["D"] == acme_id   # both link to Acme
+        assert links["B"] is not None and links["B"] != acme_id
+        assert links["C"] is None                              # empty text stays NULL
+        # E's deliberate link to a DIFFERENT company is untouched
+        cur.execute("SELECT id FROM companies WHERE name = 'Other Co'")
+        assert links["E"] == cur.fetchone()[0]
+
+        # DealA inherited from A; DealE's contact was already linked, so the CTE
+        # never saw it — no re-linking of deals nobody backfilled
+        cur.execute("SELECT title, company_id FROM deals ORDER BY title")
+        deal_links = dict(cur.fetchall())
+        assert deal_links["DealA"] == acme_id
+        assert deal_links["DealE"] is None
+
+        # a backfill is not an edit
+        cur.execute("SELECT name, updated_at FROM contacts ORDER BY name")
+        assert dict(cur.fetchall()) == before
+
+        # idempotent: re-running changes nothing
+        cur.execute(backfill_sql)
+        cur.execute("SELECT COUNT(*) FROM companies")
+        assert cur.fetchone()[0] == 3
     finally:
         if conn is not None:
             conn.close()

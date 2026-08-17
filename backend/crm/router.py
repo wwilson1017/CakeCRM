@@ -607,6 +607,7 @@ async def import_csv(file: UploadFile = File(...), user=Depends(get_current_user
     name_col = _resolve("name")
     if not name_col:
         raise HTTPException(status_code=400, detail="CSV must have a 'name' column")
+    company_col = _resolve("company")
 
     # The row loop is synchronous psycopg2 (two round-trips per contact); run it
     # off the event loop so a large import can't freeze the single-process app
@@ -614,20 +615,49 @@ async def import_csv(file: UploadFile = File(...), user=Depends(get_current_user
     def _import_rows() -> tuple[int, int, list[str]]:
         imported = skipped = 0
         errors: list[str] = []
+        # Materialize the lazy reader up to the cap (already bounded by the 1MB
+        # upload limit and MAX_IMPORT_ROWS) so companies can be resolved in one
+        # batch below instead of once per row. The cap check still counts EVERY
+        # row read — imported, skipped, or errored — exactly as before.
+        rows: list[tuple[int, dict]] = []
         for i, row in enumerate(reader, start=2):  # Row 2+ (after header)
             if i - 2 >= MAX_IMPORT_ROWS:  # count every row read (imported/skipped/errored)
                 errors.append(f"Import capped at {MAX_IMPORT_ROWS} rows — split the file and import the rest.")
                 break
+            rows.append((i, row))
+
+        def _company_of(row: dict) -> str:
+            return (row.get(company_col or "", "") or "").strip()
+
+        # Resolve every company name in 2 queries total (issue #35), so the
+        # Companies page populates from an import instead of staying empty. Only
+        # importable rows feed the resolver — a row that will be skipped for a
+        # blank name must not leave an auto-created company behind.
+        try:
+            company_ids = crm.resolve_company_ids(
+                [_company_of(row) for _, row in rows if (row.get(name_col) or "").strip()]
+            )
+        except Exception as e:
+            # One malformed cell (a NUL byte, say) must not fail the whole import.
+            # Falling back to an empty map lets each row resolve inside
+            # create_contact, where the existing per-row try/except still turns a
+            # bad value into one row error — preserving pre-#35 fault isolation.
+            logger.warning("CSV import: batch company resolution failed, falling back per row: %s", e)
+            company_ids = {}
+
+        for i, row in rows:
             name = (row.get(name_col) or "").strip()
             if not name:
                 skipped += 1
                 continue
+            company = _company_of(row)
             try:
                 crm.create_contact(
                     name=name,
                     email=(row.get(_resolve("email") or "", "") or "").strip(),
                     phone=(row.get(_resolve("phone") or "", "") or "").strip(),
-                    company=(row.get(_resolve("company") or "", "") or "").strip(),
+                    company=company,
+                    company_id=company_ids.get(company),  # pre-resolved: no per-row lookup
                     title=(row.get(_resolve("title") or "", "") or "").strip(),
                     source=(row.get(_resolve("source") or "", "") or "").strip(),
                     tags=(row.get(_resolve("tags") or "", "") or "").strip(),
@@ -680,20 +710,39 @@ async def smart_import_confirm(body: SmartImportConfirm, user=Depends(get_curren
     def _confirm_rows() -> tuple[int, int, list[str]]:
         imported = skipped = 0
         errors: list[str] = []
+
+        def _name_of(entry: dict) -> str:
+            return str(entry.get("name") or entry.get("email") or entry.get("phone") or "").strip()
+
+        def _company_of(entry: dict) -> str:
+            return str(entry.get("company", "") or "").strip()
+
+        # Same batched company resolution as /import (issue #35) — 2 queries for
+        # the whole batch, and only for entries that will actually be imported.
+        try:
+            company_ids = crm.resolve_company_ids(
+                [_company_of(entry) for entry in contacts if _name_of(entry)]
+            )
+        except Exception as e:
+            logger.warning("Smart import: batch company resolution failed, falling back per row: %s", e)
+            company_ids = {}
+
         for i, entry in enumerate(contacts):
             # Fall back to email/phone as the name so email-only entries the
             # parser kept (and showed in the preview) are actually importable,
             # not silently dropped — the preview→confirm contract.
-            name = str(entry.get("name") or entry.get("email") or entry.get("phone") or "").strip()
+            name = _name_of(entry)
             if not name:
                 skipped += 1
                 continue
+            company = _company_of(entry)
             try:
                 crm.create_contact(
                     name=name,
                     email=str(entry.get("email", "") or "").strip(),
                     phone=str(entry.get("phone", "") or "").strip(),
-                    company=str(entry.get("company", "") or "").strip(),
+                    company=company,
+                    company_id=company_ids.get(company),  # pre-resolved: no per-row lookup
                     title=str(entry.get("title", "") or "").strip(),
                     source=str(entry.get("source", "") or "").strip(),
                     tags=str(entry.get("tags", "") or "").strip(),
