@@ -981,6 +981,11 @@ _DEAL_SUMMARY_FIELDS = (
     "id", "title", "stage", "value", "currency", "probability",
     "expected_close_date", "contact_id", "contact_name", "company_id",
     "company_name", "last_activity_at", "archived_at",
+    # lost_reason is THE field a quarter review reads (SALES_GUIDE says so), and
+    # updated_at is the only recency signal a search row carries — last_activity_at
+    # is computed by get_pipeline only. Dropping either made the projection lossy for
+    # the exact queries these tools exist to answer.
+    "lost_reason", "updated_at",
 )
 
 
@@ -1062,10 +1067,15 @@ def crm_create_deal(title: str, **kwargs) -> dict:
 
 
 def crm_update_deal(deal_id: int, **kwargs) -> dict:
+    # ValueError is a refusal the model can act on ("restore it first"); letting it
+    # escape would hit registry.execute_tool_sync's generic "failed, please try again"
+    # and send the model into a retry loop on a permanent condition.
     try:
         result = crm.update_deal(deal_id, **kwargs)
     except psycopg2.errors.ForeignKeyViolation:
         return {"error": "Referenced contact or company does not exist"}
+    except ValueError as e:
+        return {"error": str(e)}
     if not result:
         return {"error": f"Deal {deal_id} not found or invalid stage"}
     _record_provenance("deal", deal_id, kwargs, result)
@@ -1073,7 +1083,10 @@ def crm_update_deal(deal_id: int, **kwargs) -> dict:
 
 
 def crm_update_deal_stage(deal_id: int, stage: str) -> dict:
-    deal = crm.update_deal_stage(deal_id, stage)
+    try:
+        deal = crm.update_deal_stage(deal_id, stage)
+    except ValueError as e:
+        return {"error": str(e)}
     if not deal:
         return {"error": f"Deal not found or invalid stage: {stage}"}
     _record_provenance("deal", deal_id, {"stage": stage}, deal)
@@ -1088,7 +1101,10 @@ def crm_get_deal(deal_id: int) -> dict:
 
 
 def crm_mark_deal_won(deal_id: int) -> dict:
-    deal = crm.mark_deal_won(deal_id)
+    try:
+        deal = crm.mark_deal_won(deal_id)
+    except ValueError as e:
+        return {"error": str(e)}
     if not deal:
         return {"error": f"Deal {deal_id} not found"}
     _record_provenance("deal", deal_id, {"stage": "won", "probability": 100}, deal)
@@ -1096,7 +1112,10 @@ def crm_mark_deal_won(deal_id: int) -> dict:
 
 
 def crm_mark_deal_lost(deal_id: int, lost_reason: str = "") -> dict:
-    deal = crm.mark_deal_lost(deal_id, lost_reason=lost_reason)
+    try:
+        deal = crm.mark_deal_lost(deal_id, lost_reason=lost_reason)
+    except ValueError as e:
+        return {"error": str(e)}
     if not deal:
         return {"error": f"Deal {deal_id} not found"}
     _record_provenance(

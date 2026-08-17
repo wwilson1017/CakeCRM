@@ -36,6 +36,15 @@ COMPANY_STATUSES = ["active", "archived"]
 LIVE_PREDICATE = "archived_at IS NULL"
 LIVE_PREDICATE_D = "d.archived_at IS NULL"
 
+# A task belongs to a live deal, or to no deal at all. Archiving is the user's "stop
+# nagging me about this" gesture and the heartbeat reads the task surfaces, so EVERY
+# task reader carries this — list_tasks, the dashboard's overdue/pending counts, and
+# the contact detail page. Standalone tasks (deal_id NULL) are never affected.
+LIVE_TASK_PREDICATE = (
+    "(tasks.deal_id IS NULL OR EXISTS (SELECT 1 FROM deals ld "
+    "WHERE ld.id = tasks.deal_id AND ld.archived_at IS NULL))"
+)
+
 # The six ASCII whitespace bytes (space, tab, LF, CR, FF, VT). Company names are
 # trimmed with THIS set (not Python's Unicode-aware str.strip()) so the value the
 # service stores normalizes identically to the companies migration's backfill +
@@ -240,7 +249,8 @@ def get_contact_detail(contact_id: int) -> dict | None:
         (contact_id,),
     )
     tasks = pg_fetchall(
-        "SELECT * FROM tasks WHERE contact_id = %s ORDER BY completed ASC, due_date ASC LIMIT 20",
+        f"SELECT * FROM tasks WHERE contact_id = %s AND {LIVE_TASK_PREDICATE} "
+        "ORDER BY completed ASC, due_date ASC LIMIT 20",
         (contact_id,),
     )
     activity = pg_fetchall(
@@ -948,7 +958,7 @@ def list_tasks(
     # bothering me about this" gesture, and the heartbeat is told to nag about overdue
     # tasks. Standalone tasks (deal_id NULL) are untouched. Activity is deliberately NOT
     # swept the same way — see get_activity_log.
-    conditions.append(f"(t.deal_id IS NULL OR {LIVE_PREDICATE_D})")
+    conditions.append(f"(t.deal_id IS NULL OR {LIVE_PREDICATE_D})")  # see LIVE_TASK_PREDICATE
     where = f"WHERE {' AND '.join(conditions)}"
     params.append(limit)
     return pg_fetchall(
@@ -1082,12 +1092,15 @@ def get_dashboard_stats() -> dict:
     # NOT overdue) and can never cast-error on a malformed row (unlike ::date).
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     overdue_row = pg_fetchone(
-        "SELECT COUNT(*) AS cnt FROM tasks WHERE completed = 0 AND due_date != '' AND due_date < %s",
+        "SELECT COUNT(*) AS cnt FROM tasks WHERE completed = 0 AND due_date != '' "
+        f"AND due_date < %s AND {LIVE_TASK_PREDICATE}",
         (today,),
     )
     overdue_tasks = overdue_row["cnt"] if overdue_row else 0
 
-    pending_row = pg_fetchone("SELECT COUNT(*) AS cnt FROM tasks WHERE completed = 0")
+    pending_row = pg_fetchone(
+        f"SELECT COUNT(*) AS cnt FROM tasks WHERE completed = 0 AND {LIVE_TASK_PREDICATE}"
+    )
     pending_tasks = pending_row["cnt"] if pending_row else 0
 
     recent_activity = get_activity_log(limit=10)

@@ -718,3 +718,36 @@ def test_creating_a_deal_already_closed_settles_its_probability(pg_db):
     won = service.create_deal("Won on arrival", stage="won", probability=0)
     lost = service.create_deal("Lost on arrival", stage="lost", probability=90)
     assert won["probability"] == 100 and lost["probability"] == 0
+
+
+def test_every_task_surface_hides_an_archived_deals_tasks(pg_db):
+    """list_tasks was fixed first; the dashboard counts and the contact page read the
+    same tasks and were still counting them — and crm_dashboard is background-callable,
+    so the heartbeat kept nagging about the task the archive was meant to silence."""
+    from crm import service
+
+    contact = service.create_contact("Ana")
+    deal = service.create_deal("Junk", contact_id=contact["id"])
+    service.create_task("Chase junk", deal_id=deal["id"], contact_id=contact["id"],
+                        due_date="2020-01-01")
+    service.create_task("Real errand", contact_id=contact["id"], due_date="2020-01-01")
+
+    before = service.get_dashboard_stats()
+    assert before["overdue_tasks"] == 2 and before["pending_tasks"] == 2
+
+    service.archive_deal(deal["id"])
+    after = service.get_dashboard_stats()
+    assert after["overdue_tasks"] == 1 and after["pending_tasks"] == 1
+    assert [t["title"] for t in service.list_tasks()] == ["Real errand"]
+    assert [t["title"] for t in
+            service.get_contact_detail(contact["id"])["tasks"]] == ["Real errand"]
+
+
+def test_search_still_carries_the_lost_reason_for_a_quarter_review(pg_db):
+    from crm import service, tools
+
+    deal = service.create_deal("Big one", stage="negotiation")
+    service.mark_deal_lost(deal["id"], lost_reason="chose a competitor")
+    row = tools.crm_search_deals(stage="lost")["deals"][0]
+    assert row["lost_reason"] == "chose a competitor"
+    assert row["updated_at"]        # the only recency signal a search row carries

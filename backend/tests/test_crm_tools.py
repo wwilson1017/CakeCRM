@@ -544,3 +544,29 @@ def test_stage_tool_no_longer_advertises_closing():
     stage_tool = by_name["crm_update_deal_stage"]
     assert "crm_mark_deal_won" in stage_tool["description"]
     assert "won" not in stage_tool["input_schema"]["properties"]["stage"]["description"]
+
+
+def test_lifecycle_tools_surface_a_refusal_instead_of_raising(monkeypatch):
+    """A ValueError escaping an executor becomes registry.execute_tool_sync's generic
+    "failed, please try again" — which sends the model into a retry loop on a
+    permanent condition and hides the actionable message."""
+    def refuse(*a, **k):
+        raise ValueError("Cannot change the stage of archived deal #7 — restore it first")
+
+    for name, call in (
+        ("mark_deal_won", lambda: tools.crm_mark_deal_won(7)),
+        ("mark_deal_lost", lambda: tools.crm_mark_deal_lost(7, lost_reason="x")),
+        ("update_deal_stage", lambda: tools.crm_update_deal_stage(7, "won")),
+        ("update_deal", lambda: tools.crm_update_deal(7, stage="won")),
+    ):
+        monkeypatch.setattr(service, name, refuse)
+        out = call()
+        assert "restore it first" in out.get("error", ""), name
+
+
+def test_summary_projection_keeps_the_fields_the_prompt_relies_on():
+    """SALES_GUIDE calls lost_reason 'the most useful field when reviewing a quarter',
+    and a search row's only recency signal is updated_at (last_activity_at is computed
+    by get_pipeline alone)."""
+    assert "lost_reason" in tools._DEAL_SUMMARY_FIELDS
+    assert "updated_at" in tools._DEAL_SUMMARY_FIELDS
