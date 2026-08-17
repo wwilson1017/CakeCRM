@@ -26,6 +26,18 @@ logger = logging.getLogger(__name__)
 # Tool Definitions (schema only — sent to the AI provider)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# Appended to every contact-READ tool description. The link is authoritative for
+# display and search (issue #35), but the legacy free-text column deliberately
+# stays and is never propagated to — so after a company rename it holds the old
+# name forever. The assistant is the one contact surface that reads raw JSON
+# rather than the UI's `company_name || company`, so it needs the precedence rule
+# stated explicitly or it will answer with a stale company name.
+_COMPANY_NAME_NOTE = (
+    "Each contact carries both `company_name` (the linked company — authoritative) "
+    "and `company` (legacy free text that can be stale, e.g. after the company was "
+    "renamed). Prefer `company_name` whenever it is present."
+)
+
 CRM_TOOL_DEFS = [
     # ── Contacts (6 tools) ────────────────────────────────────────────────────
     {
@@ -33,7 +45,10 @@ CRM_TOOL_DEFS = [
         "writes": False,
         "description": (
             "Search CRM contacts by name, email, company, or notes. "
-            "Use this when the user mentions a person or company and you need to look them up."
+            "Use this when the user mentions a person or company and you need to look them up. "
+            "Matches the linked company's name as well as the legacy text, so a contact linked "
+            "to a company is found by that company's name. "
+            + _COMPANY_NAME_NOTE
         ),
         "input_schema": {
             "type": "object",
@@ -102,7 +117,8 @@ CRM_TOOL_DEFS = [
         "writes": False,
         "description": (
             "Get a contact's full profile including their deals, tasks, and recent activity. "
-            "Use this to see everything about a specific customer."
+            "Use this to see everything about a specific customer. "
+            + _COMPANY_NAME_NOTE
         ),
         "input_schema": {
             "type": "object",
@@ -118,7 +134,8 @@ CRM_TOOL_DEFS = [
         "writes": False,
         "description": (
             "List contacts with optional filtering. Use to browse the customer list or "
-            "see contacts by status."
+            "see contacts by status. "
+            + _COMPANY_NAME_NOTE
         ),
         "input_schema": {
             "type": "object",

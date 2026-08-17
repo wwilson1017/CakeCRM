@@ -47,6 +47,19 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
     }
   }, [deal, contactId]);
 
+  // Same capped-page hazard the contact fetch above already guards against, now
+  // binding for companies too: #35 auto-creates a company per distinct imported
+  // name, so a deal's linked company can fall outside the alphabetical first 200
+  // and the <select> would render blank — reading as "No company". Append the
+  // deal's own company so the control shows the truth.
+  const companyOptions = selectedCompany != null && !companies.some(c => c.id === selectedCompany)
+    ? [...companies, {
+        id: selectedCompany,
+        name: deal?.company_name || `Company #${selectedCompany}`,
+        status: 'active',
+      }]
+    : companies;
+
   // Picking a contact fills the company from that contact ONLY when no company is
   // set yet — deal↔company links are independent, so we never overwrite (or null)
   // a company the user chose deliberately just because they changed the contact.
@@ -105,7 +118,7 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
             <label style={labelStyle}>Company</label>
             <select value={selectedCompany ?? ''} onChange={e => setSelectedCompany(e.target.value ? Number(e.target.value) : null)} style={inputStyle}>
               <option value="">No company</option>
-              {companies.map(co => <option key={co.id} value={co.id}>{co.name}{co.status === 'archived' ? ' (archived)' : ''}</option>)}
+              {companyOptions.map(co => <option key={co.id} value={co.id}>{co.name}{co.status === 'archived' ? ' (archived)' : ''}</option>)}
             </select>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>

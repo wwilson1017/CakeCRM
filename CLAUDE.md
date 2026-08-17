@@ -111,7 +111,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   the single source of truth: every ingestion path (CSV import, smart-import confirm,
   `crm_create_contact`/`crm_update_contact`, the REST routes) resolves free-text company
   names and auto-creates the company through one shared primitive,
-  `crm.service.resolve_company_ids()` — 2 queries per batch regardless of row count
+  `crm.service.resolve_or_create_company_ids()` — 2 queries per batch regardless of row count
   (the bulk loops pre-resolve and pass `company_id`, and degrade to per-row resolution
   if the batch call fails, preserving per-row error isolation); it is also the helper
   the #61 importer consumes. An explicit `company_id` always wins — including an
@@ -246,7 +246,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Gmail touch-scan heartbeat job (read-only inbox scan → sender→contact match → idempotent `email` touch logging feeding #16; `gmail_scan_state`/`gmail_scanned_messages`/`gmail_unmatched_correspondents` tables; own `gmail_scan` scheduler job; "create contact?" alerts) — **landed #17** as `backend/gmail_scan/` | New capability (no blueprint — back-port candidate to CAKE OS) |
 | Kanban drag-and-drop | `cake_os/frontend/src/shared/dnd/` |
 | Companies (first-class entity: `companies` table, `company_id` FKs, rollup detail page, text→FK backfill migration) — **landed #13** | `cake_os/backend/apps/crm/company_service.py` |
-| Company link coherence (shared batched `resolve_company_ids()` resolve-or-auto-create on every ingestion path; contact list/search LEFT JOIN + `company_name`; second one-shot backfill) — **landed #35** | New capability (gate decision on issue #35; shared with the #61 importer) |
+| Company link coherence (shared batched `resolve_or_create_company_ids()` resolve-or-auto-create on every ingestion path; contact list/search LEFT JOIN + `company_name`; second one-shot backfill) — **landed #35** | New capability (gate decision on issue #35; shared with the #61 importer) |
 | Chatter/notes (`crm_chatter`) — **landed #15** as `backend/crm/chatter_service.py` + `frontend/src/crm/components/NotesThread.tsx` | `cake_os/backend/apps/crm/chatter_service.py` |
 | Custom fields (EAV `crm_field_definitions`/`crm_field_values`, Settings editor, entity-form + detail-page value inputs, 6 `crm_*_fields` tools) — **landed #19** as `backend/crm/field_service.py` + `frontend/src/crm/components/{CustomFieldSettings,CustomFieldsSection,CustomFieldInputs}.tsx` | `cake_os/backend/apps/crm/field_service.py` |
 | Touch counts + field provenance (`deals.ai_touch_*` cols + in-process recompute worker; `crm_field_provenance` + `AiBadge`/`ProvenanceBadge`/`TouchCountPill`) — **landed #16** as `backend/crm/touch_count_service.py` + `provenance_service.py` | `cake_os/backend/apps/crm/touch_count_service.py`, `provenance_service.py` |

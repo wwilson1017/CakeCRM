@@ -73,7 +73,7 @@ def create_contact(
     # rule that satisfies "ingestion always links". The eventual freetext↔link
     # combobox merge is where this asymmetry goes away.
     if company_id is None and company and company.strip(_WS):
-        company_id = resolve_company_ids([company]).get(company)
+        company_id = resolve_or_create_company_ids([company]).get(company)
     # company_id is appended last so the existing INSERT-param assertions (which
     # check the leading columns) stay valid; a bad FK raises ForeignKeyViolation
     # which the router maps to 400.
@@ -235,7 +235,7 @@ def update_contact(contact_id: int, **fields) -> dict | None:
     if "company" in filtered and "company_id" not in filtered:
         text = filtered["company"] or ""
         filtered["company_id"] = (
-            resolve_company_ids([text]).get(text) if text.strip(_WS) else None
+            resolve_or_create_company_ids([text]).get(text) if text.strip(_WS) else None
         )
     if not filtered:
         return get_contact(contact_id)
@@ -334,14 +334,14 @@ def get_company(company_id: int) -> dict | None:
     return pg_fetchone("SELECT * FROM companies WHERE id = %s", (company_id,))
 
 
-def resolve_company_ids(names: list[str]) -> dict[str, int]:
+def resolve_or_create_company_ids(names: list[str]) -> dict[str, int]:
     """Batch-resolve raw company-name spellings to company ids, auto-creating any
     that don't exist yet (issue #35).
 
     This is the single company-resolution primitive — the ongoing-ingestion
     counterpart to the one-shot backfill in the companies migration. The #61
     cake_os importer consumes it as-is (``from crm.service import
-    resolve_company_ids``).
+    resolve_or_create_company_ids``).
 
     Normalization is the ``uq_companies_name_ci`` contract: case-insensitive
     after trimming the six ASCII whitespace bytes. Names blank after that trim

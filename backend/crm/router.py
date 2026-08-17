@@ -90,6 +90,7 @@ from crm import (
     service as crm,
     touch_count_service,
 )
+from crm.smart_import import csv_cell
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -111,7 +112,7 @@ def _resolve_companies_or_fallback(names: list[str], context: str) -> dict[str, 
     preserving the pre-#35 fault isolation exactly.
     """
     try:
-        return crm.resolve_company_ids(names)
+        return crm.resolve_or_create_company_ids(names)
     except Exception as e:
         logger.warning("%s: batch company resolution failed, falling back per row: %s", context, e)
         return {}
@@ -645,20 +646,8 @@ async def import_csv(file: UploadFile = File(...), user=Depends(get_current_user
                 break
             rows.append((i, row))
 
-        def _cell(row: dict, col: str | None) -> str:
-            """Read one mapped column, tolerating an absent mapping.
-
-            `col` is None when the CSV has no column for that field. The old
-            `row.get(col or "", "")` idiom then looked up the key "" — which
-            csv.DictReader really does assign to an UNNAMED header cell (e.g.
-            "Name,Email,,Phone"), so an unrelated column silently became the
-            field's value. Harmless-looking until #35 made a stray company value
-            auto-create a company row.
-            """
-            return (row.get(col) or "").strip() if col else ""
-
         def _company_of(row: dict) -> str:
-            return _cell(row, company_col)
+            return csv_cell(row, company_col)
 
         company_ids = _resolve_companies_or_fallback(
             [_company_of(row) for _, row in rows if (row.get(name_col) or "").strip()],
@@ -674,14 +663,14 @@ async def import_csv(file: UploadFile = File(...), user=Depends(get_current_user
             try:
                 crm.create_contact(
                     name=name,
-                    email=_cell(row, _resolve("email")),
-                    phone=_cell(row, _resolve("phone")),
+                    email=csv_cell(row, _resolve("email")),
+                    phone=csv_cell(row, _resolve("phone")),
                     company=company,
                     company_id=company_ids.get(company),  # pre-resolved: no per-row lookup
-                    title=_cell(row, _resolve("title")),
-                    source=_cell(row, _resolve("source")),
-                    tags=_cell(row, _resolve("tags")),
-                    notes=_cell(row, _resolve("notes")),
+                    title=csv_cell(row, _resolve("title")),
+                    source=csv_cell(row, _resolve("source")),
+                    tags=csv_cell(row, _resolve("tags")),
+                    notes=csv_cell(row, _resolve("notes")),
                 )
                 imported += 1
             except Exception as e:

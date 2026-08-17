@@ -113,7 +113,7 @@ def test_csv_import_batch_resolves_and_links_companies(client, monkeypatch):
 
     monkeypatch.setattr(service, "create_contact",
                         lambda **kw: created.append(kw) or {"id": len(created)})
-    monkeypatch.setattr(service, "resolve_company_ids", _resolve)
+    monkeypatch.setattr(service, "resolve_or_create_company_ids", _resolve)
     csv_text = (
         "Name,Company\n"
         "Ada Lovelace,Acme Corp\n"
@@ -144,7 +144,7 @@ def test_csv_import_unnamed_column_is_not_read_as_a_field(client, monkeypatch):
     resolver_calls = []
     monkeypatch.setattr(service, "create_contact",
                         lambda **kw: created.append(kw) or {"id": len(created)})
-    monkeypatch.setattr(service, "resolve_company_ids",
+    monkeypatch.setattr(service, "resolve_or_create_company_ids",
                         lambda names: resolver_calls.append(list(names)) or {})
     # no Company header at all; the third column is unnamed
     csv_text = "Name,Email,,Phone\nAda,ada@x.io,STRAY VALUE,555\n"
@@ -168,7 +168,7 @@ def test_csv_import_survives_batch_resolver_failure(client, monkeypatch):
     def _boom(names):
         raise ValueError("A string literal cannot contain NUL (0x00) characters.")
 
-    monkeypatch.setattr(service, "resolve_company_ids", _boom)
+    monkeypatch.setattr(service, "resolve_or_create_company_ids", _boom)
     resp = client.post(
         "/api/crm/import",
         files={"file": ("c.csv", io.BytesIO(b"Name,Company\nAda,Acme\n"), "text/csv")},
@@ -242,7 +242,7 @@ def test_smart_import_confirm_passes_resolved_company_id(client, monkeypatch):
 
     monkeypatch.setattr(service, "create_contact",
                         lambda **kw: created.append(kw) or {"id": len(created)})
-    monkeypatch.setattr(service, "resolve_company_ids", _resolve)
+    monkeypatch.setattr(service, "resolve_or_create_company_ids", _resolve)
     resp = client.post("/api/crm/smart-import/confirm", json={"contacts": [
         {"name": "Ada", "company": "Acme Corp"},
         {"company": "Ghost Co"},   # no name/email/phone -> skipped, excluded from batch
@@ -263,7 +263,7 @@ def test_smart_import_confirm_survives_batch_resolver_failure(client, monkeypatc
     def _boom(names):
         raise ValueError("A string literal cannot contain NUL (0x00) characters.")
 
-    monkeypatch.setattr(service, "resolve_company_ids", _boom)
+    monkeypatch.setattr(service, "resolve_or_create_company_ids", _boom)
     resp = client.post("/api/crm/smart-import/confirm",
                        json={"contacts": [{"name": "Ada", "company": "Acme"}]})
     assert resp.status_code == 200 and resp.json()["imported"] == 1

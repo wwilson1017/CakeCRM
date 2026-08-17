@@ -506,9 +506,9 @@ def test_update_contact_accepts_explicit_null_company_id(rec):
 
 # ── Company resolution on ingestion (issue #35) ───────────────────────────────
 
-def test_resolve_company_ids_two_fixed_queries_and_raw_key_map(rec):
+def test_resolve_or_create_company_ids_two_fixed_queries_and_raw_key_map(rec):
     rec.fetchall_queue = [[{"raw": "Acme", "id": 9}, {"raw": "  ACME  ", "id": 9}]]
-    out = service.resolve_company_ids(["Acme", "  ACME  ", "Acme", "", "   "])
+    out = service.resolve_or_create_company_ids(["Acme", "  ACME  ", "Acme", "", "   "])
     # exactly two statements regardless of input size
     assert len(rec.calls) == 2
     insert_sql = rec.sql_containing("INSERT INTO companies")
@@ -522,9 +522,9 @@ def test_resolve_company_ids_two_fixed_queries_and_raw_key_map(rec):
     assert out == {"Acme": 9, "  ACME  ": 9}
 
 
-def test_resolve_company_ids_blank_input_issues_no_queries(rec):
-    assert service.resolve_company_ids([]) == {}
-    assert service.resolve_company_ids(["", "   ", "\t\n"]) == {}
+def test_resolve_or_create_company_ids_blank_input_issues_no_queries(rec):
+    assert service.resolve_or_create_company_ids([]) == {}
+    assert service.resolve_or_create_company_ids(["", "   ", "\t\n"]) == {}
     assert rec.calls == []  # never touches the DB for nothing
 
 

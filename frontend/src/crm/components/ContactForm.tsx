@@ -34,6 +34,20 @@ export function ContactForm({ contact, onClose, onSaved }: Props) {
       .then(d => setCompanies(d.companies)).catch(() => {});
   }, []);
 
+  // The picker shows only the first 200 companies (alphabetical). Since #35 makes
+  // an import auto-create one company per distinct name, a contact's linked
+  // company can easily fall outside that page — and a <select> whose value has no
+  // matching <option> renders blank, reading as "No company" and misrepresenting
+  // the record. Append the contact's own company so the control always shows the
+  // truth. (Proper fix is the deferred searchable combobox.)
+  const companyOptions = companyId != null && !companies.some(c => c.id === companyId)
+    ? [...companies, {
+        id: companyId,
+        name: contact?.company_name || contact?.company || `Company #${companyId}`,
+        status: 'active',
+      }]
+    : companies;
+
   // Keep the legacy free-text `company` in sync with the linked company so the two
   // can't contradict (link to Beta while the text still says Acme). Selecting a
   // company overwrites the text; "No company" leaves the text for free-form entry.
@@ -90,7 +104,7 @@ export function ContactForm({ contact, onClose, onSaved }: Props) {
             <label style={labelStyle}>Linked Company</label>
             <select value={companyId ?? ''} onChange={e => pickCompany(e.target.value ? Number(e.target.value) : null)} style={inputStyle}>
               <option value="">No company</option>
-              {companies.map(co => <option key={co.id} value={co.id}>{co.name}{co.status === 'archived' ? ' (archived)' : ''}</option>)}
+              {companyOptions.map(co => <option key={co.id} value={co.id}>{co.name}{co.status === 'archived' ? ' (archived)' : ''}</option>)}
             </select>
           </div>
           <div><label style={labelStyle}>Job Title</label><input value={title} onChange={e => setTitle(e.target.value)} style={inputStyle} /></div>
