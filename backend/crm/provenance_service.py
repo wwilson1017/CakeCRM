@@ -191,6 +191,47 @@ def get_provenance(
     return out
 
 
+def filter_live(rows: list[dict]) -> list[dict]:
+    """Drop provenance rows whose snapshot no longer matches the live value.
+
+    The BATCH counterpart of get_provenance's per-entity staleness filter, and the
+    reason this lives here rather than in the caller: "unconfirmed" alone is not the
+    badge state. A row is also dead once the value moved on — a human edited the field,
+    or a lifecycle write cleared it (reopening a lost deal blanks ``lost_reason`` while
+    its provenance row survives). Showing those asks the user to verify a value that is
+    no longer on the record.
+
+    One query per entity_type, not per row, so a cross-entity list stays cheap.
+    """
+    if not rows:
+        return []
+    ids_by_type: dict[str, set[int]] = {}
+    for r in rows:
+        ids_by_type.setdefault(r["entity_type"], set()).add(r["entity_id"])
+
+    current: dict[tuple[str, int], dict] = {}
+    for entity_type, ids in ids_by_type.items():
+        table = ENTITY_TABLE_MAP.get(entity_type)
+        if not table:
+            continue  # unknown type can't be verified against anything
+        placeholders = ",".join("%s" for _ in ids)
+        # table comes from the fixed local map — never interpolating caller input.
+        for row in pg_fetchall(
+            f"SELECT * FROM {table} WHERE id IN ({placeholders})", list(ids)
+        ):
+            current[(entity_type, row["id"])] = row
+
+    live = []
+    for r in rows:
+        entity = current.get((r["entity_type"], r["entity_id"]))
+        if entity is None:
+            continue  # entity is gone — nothing left to verify
+        if _norm(entity.get(r["field_name"])) != _norm(r["value_snapshot"]):
+            continue  # stale
+        live.append(r)
+    return live
+
+
 def confirm(entity_type: str, entity_id: int, field_name: str) -> dict | None:
     """Mark an AI-populated value human-confirmed (clears the badge). Returns the updated
     row; ``{"stale": True}`` if the live value no longer matches what was written (a human

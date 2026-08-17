@@ -21,6 +21,7 @@ archived deal is not "going stale", it is put away.
 import logging
 
 from core.postgres import pg_fetchall, pg_fetchone
+from crm import provenance_service
 from crm.service import (
     LAST_TOUCH_SQL,
     LIVE_PREDICATE,
@@ -365,7 +366,11 @@ def scan_gaps(entity_type: str = "all", limit: int = DEFAULT_LIMIT) -> dict:
     # provenance_service.VALID_ENTITY_TYPES, so including it would be a permanently
     # empty predicate that reads as if company provenance were a real thing.
     provenance_types = [w for w in wanted if w in ("contact", "deal")]
-    out["unverified_fields"] = [] if not provenance_types else pg_fetchall(
+    # Over-fetch: confirmed_at IS NULL is only half the badge state — the rows are then
+    # filtered for staleness, and the stale case is common (every reopened lost deal
+    # strands a lost_reason snapshot), so fetching exactly `limit` would routinely
+    # return a near-empty list.
+    candidates = [] if not provenance_types else pg_fetchall(
         f"""SELECT p.entity_type, p.entity_id, p.field_name, p.value_snapshot,
                    p.populated_at
               FROM crm_field_provenance p
@@ -378,8 +383,9 @@ def scan_gaps(entity_type: str = "all", limit: int = DEFAULT_LIMIT) -> dict:
                       WHERE d.id = p.entity_id AND {LIVE_PREDICATE_D}))
              ORDER BY p.populated_at DESC
              LIMIT %s""",
-        (provenance_types, limit),
+        (provenance_types, limit * 3),
     )
+    out["unverified_fields"] = provenance_service.filter_live(candidates)[:limit]
     out["gaps_returned"] = sum(len(v) for k, v in out.items()
                                if isinstance(v, list) and k != "unverified_fields")
     return out

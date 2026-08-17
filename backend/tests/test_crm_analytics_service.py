@@ -183,9 +183,11 @@ def test_scan_gaps_ignores_closed_and_archived_deals(rec):
     assert "archived_at IS NULL" in sql and "stage NOT IN ('won', 'lost')" in sql
 
 
-def test_scan_gaps_surfaces_unconfirmed_assistant_writes(rec):
+def test_scan_gaps_surfaces_unconfirmed_assistant_writes(rec, monkeypatch):
     """The values most worth a second look are the ones the assistant wrote and
     nobody has confirmed — nothing else exposes those to the model."""
+    from crm import provenance_service
+    monkeypatch.setattr(provenance_service, "filter_live", lambda rows: rows)
     rec.fetchall_queue = [[], [], [], [{"entity_type": "deal", "field_name": "value"}]]
     out = az.scan_gaps()
     sql = rec.sql_containing("crm_field_provenance")
@@ -193,7 +195,49 @@ def test_scan_gaps_surfaces_unconfirmed_assistant_writes(rec):
     assert out["unverified_fields"][0]["field_name"] == "value"
 
 
-def test_scan_gaps_total_excludes_the_provenance_list(rec):
+def test_scan_gaps_drops_stale_provenance(rec, monkeypatch):
+    """`confirmed_at IS NULL` is only half the badge state. A snapshot the record has
+    moved past — a human edit, or reopening a lost deal blanking lost_reason — must not
+    be offered for verification. Delegated to provenance_service, which owns the
+    definition of stale (get_provenance applies the same filter per-entity)."""
+    from crm import provenance_service
+    seen = {}
+
+    def fake_filter(rows):
+        seen["rows"] = rows
+        return [r for r in rows if r["field_name"] != "lost_reason"]
+
+    monkeypatch.setattr(provenance_service, "filter_live", fake_filter)
+    rec.fetchall_queue = [[], [], [], [
+        {"entity_type": "deal", "entity_id": 1, "field_name": "lost_reason"},
+        {"entity_type": "deal", "entity_id": 2, "field_name": "value"},
+    ]]
+    out = az.scan_gaps()
+    assert [r["field_name"] for r in out["unverified_fields"]] == ["value"]
+    assert len(seen["rows"]) == 2          # the filter really was handed both rows
+
+
+def test_scan_gaps_overfetches_provenance_candidates(rec, monkeypatch):
+    """Staleness is filtered AFTER the LIMIT, and stale rows are common, so fetching
+    exactly `limit` would routinely return a near-empty list."""
+    from crm import provenance_service
+    monkeypatch.setattr(provenance_service, "filter_live", lambda rows: rows)
+    rec.fetchall_queue = [[], [], [], []]
+    az.scan_gaps(limit=20)
+    assert rec.params_for("crm_field_provenance")[-1] == 60
+
+
+def test_scan_gaps_still_honors_the_limit_after_filtering(rec, monkeypatch):
+    from crm import provenance_service
+    monkeypatch.setattr(provenance_service, "filter_live", lambda rows: rows)
+    rec.fetchall_queue = [[], [], [], [{"entity_type": "deal", "field_name": f"f{i}"}
+                                       for i in range(30)]]
+    assert len(az.scan_gaps(limit=5)["unverified_fields"]) == 5
+
+
+def test_scan_gaps_total_excludes_the_provenance_list(rec, monkeypatch):
+    from crm import provenance_service
+    monkeypatch.setattr(provenance_service, "filter_live", lambda rows: rows)
     rec.fetchall_queue = [[{"id": 1}], [{"id": 2}], [], [{"x": 1}, {"x": 2}]]
     assert az.scan_gaps()["gaps_returned"] == 2
 

@@ -586,10 +586,10 @@ def test_archived_deals_stop_surfacing_unconfirmed_fields(pg_db):
 
     live = service.create_deal("Live", value=100)
     doomed = service.create_deal("Doomed", value=200)
-    # record() directly: record_fields re-reads the live row and skips when the
-    # snapshot differs, and a float value column never string-matches "100".
-    provenance_service.record("deal", live["id"], "value", "100", "assistant")
-    provenance_service.record("deal", doomed["id"], "value", "200", "assistant")
+    # The snapshot must equal the LIVE value or the row is stale and correctly hidden
+    # (scan_gaps filters staleness now) — value is a float column, so stringify it.
+    provenance_service.record("deal", live["id"], "value", str(live["value"]), "assistant")
+    provenance_service.record("deal", doomed["id"], "value", str(doomed["value"]), "assistant")
     assert len(analytics_service.scan_gaps()["unverified_fields"]) == 2
 
     service.archive_deal(doomed["id"])
@@ -751,3 +751,39 @@ def test_search_still_carries_the_lost_reason_for_a_quarter_review(pg_db):
     row = tools.crm_search_deals(stage="lost")["deals"][0]
     assert row["lost_reason"] == "chose a competitor"
     assert row["updated_at"]        # the only recency signal a search row carries
+
+
+def test_reopening_a_lost_deal_stops_asking_you_to_verify_the_reason(pg_db):
+    """The concrete stale-provenance case this PR creates: mark_deal_lost badges the
+    reason it wrote, then reopening the deal blanks lost_reason — leaving a provenance
+    row pointing at a value the record no longer has. scan_gaps must not offer it."""
+    from crm import analytics_service, service, tools
+
+    deal = service.create_deal("Big one", stage="negotiation")
+    # Through the TOOL, not the service: provenance is recorded in the assistant's
+    # executors by design — a human edit via the router deliberately mints no badge.
+    tools.crm_mark_deal_lost(deal["id"], lost_reason="chose a competitor")
+    unverified = analytics_service.scan_gaps(entity_type="deal")["unverified_fields"]
+    assert "lost_reason" in [r["field_name"] for r in unverified]
+
+    service.update_deal_stage(deal["id"], "negotiation")   # clears lost_reason
+    assert service.get_deal(deal["id"])["lost_reason"] == ""
+    after = analytics_service.scan_gaps(entity_type="deal")["unverified_fields"]
+    assert "lost_reason" not in [r["field_name"] for r in after]
+
+
+def test_a_human_edit_retires_the_badge_in_scan_gaps(pg_db):
+    """Same rule for the ordinary case — get_provenance already hides a snapshot the
+    human has moved past; scan_gaps must agree with it rather than have its own idea
+    of what 'unverified' means."""
+    from crm import analytics_service, provenance_service, service
+
+    contact = service.create_contact("Ana", phone="555-0100")
+    provenance_service.record("contact", contact["id"], "phone", "555-0100", "assistant")
+    assert [r["field_name"] for r in
+            analytics_service.scan_gaps(entity_type="contact")["unverified_fields"]] == ["phone"]
+
+    service.update_contact(contact["id"], phone="555-0199")   # human overwrote it
+    assert analytics_service.scan_gaps(entity_type="contact")["unverified_fields"] == []
+    # ...and the two surfaces agree, which is the actual invariant.
+    assert provenance_service.get_provenance("contact", contact["id"]) == []
