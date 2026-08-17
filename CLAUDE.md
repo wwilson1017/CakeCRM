@@ -74,7 +74,11 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   has no ranged read) plus a **thread-scoped** 4-fetch budget (per-message would scale with
   message count, letting a sender shape one read into dozens of round-trips), HTML flattened
   like inline HTML, degrading to `""` on failure and `[body too large to display]` when
-  oversize; parts carrying a `filename` are NEVER fetched. Note `store.get_row()` swallows
+  oversize; file attachments are NEVER fetched (guarded on `filename` OR a
+  `Content-Disposition: attachment` header — a nameless attachment is still a file).
+  Fetching is deferred until after the inline walk and resolves plain-before-HTML, so
+  a discarded alternative never spends a budget slot, and the budget is spent
+  newest-message-first so long threads don't return the latest replies blank. Note `store.get_row()` swallows
   read errors and returns `{}`, so `gmail.tools._live_generation()` distinguishes
   "unreadable" from generation 0 — reading it as `... or 0` would mint a bogus binding and
   falsely refuse a valid draft. The two-step thread fetch was evaluated and

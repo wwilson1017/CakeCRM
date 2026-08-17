@@ -78,10 +78,12 @@ It returns nothing.
 - **Message bodies only, never your files.** Gmail stores an unusually large *text
   body* outside the message and behind an attachment id. Reading a thread will pull
   such a body back in, under a hard byte cap, so a long email doesn't silently
-  arrive blank. That is the only case in which attachment storage is read: a part
-  carrying a **filename** — an actual attached file — is never downloaded, and its
-  name, type, and size are all the assistant ever sees. Oversized bodies are
-  reported as `[body too large to display]` rather than fetched.
+  arrive blank. That is the only case in which attachment storage is read: an actual
+  attached **file** is never downloaded — whether it carries a filename or is merely
+  marked `Content-Disposition: attachment` — and its name, type, and size are all the
+  assistant ever sees. Oversized bodies, and bodies whose size the message doesn't
+  declare, are skipped rather than fetched (the former reported as
+  `[body too large to display]`).
 - **Connection integrity.** The Gmail connection carries a generation counter that
   advances whenever the live connection changes (you save new app credentials,
   disconnect, or complete a new sign-in). Anything that starts under one connection
