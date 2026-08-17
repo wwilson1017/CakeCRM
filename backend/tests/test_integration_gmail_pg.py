@@ -65,7 +65,7 @@ def _reset_row(pg_db):
             client_id='', client_secret_enc='', email='', access_token_enc='',
             refresh_token_enc='', token_expires_at=NULL, scopes='',
             connection_status='disconnected', oauth_state_hash='',
-            oauth_state_created_at=NULL
+            oauth_state_created_at=NULL, connection_generation=0
         WHERE id=1
         """
     )
@@ -76,6 +76,10 @@ def _raw_row():
     from core.postgres import pg_fetchone
 
     return pg_fetchone("SELECT * FROM gmail_connection WHERE id = 1")
+
+
+def _generation() -> int:
+    return int(_raw_row()["connection_generation"])
 
 
 def test_migration_seeds_singleton_row(pg_db):
@@ -106,8 +110,10 @@ def test_oauth_state_single_use(pg_db):
     from gmail import store
 
     store.set_oauth_state_hash("state-abc")
-    assert store.claim_oauth_state("state-abc") is True
-    assert store.claim_oauth_state("state-abc") is False  # already consumed
+    # Claiming returns the generation observed, not a bare bool — and claiming does
+    # not itself advance it.
+    assert store.claim_oauth_state("state-abc") == _generation()
+    assert store.claim_oauth_state("state-abc") is None  # already consumed
 
 
 def test_tokens_roundtrip_and_disconnect_keeps_app_creds(pg_db):
@@ -116,13 +122,14 @@ def test_tokens_roundtrip_and_disconnect_keeps_app_creds(pg_db):
     from gmail import store
 
     store.save_app_credentials("cid", "secret")
-    store.save_tokens(
+    assert store.save_tokens(
         access_token="at",
         refresh_token="rt",
         expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
         scopes="https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose",
         email="me@example.com",
-    )
+        expected_generation=_generation(),
+    ) is True
     assert store.is_connected() is True
 
     store.clear_connection()
@@ -141,7 +148,7 @@ def test_update_access_token_cas_against_real_pg(pg_db):
 
     store.save_app_credentials("cid", "secret")
     expiry = datetime.now(timezone.utc) + timedelta(hours=1)
-    store.save_tokens("at", "rt", expiry, "scope", "me@example.com")
+    store.save_tokens("at", "rt", expiry, "scope", "me@example.com", _generation())
     current_enc = pg_fetchone("SELECT refresh_token_enc FROM gmail_connection WHERE id=1")["refresh_token_enc"]
 
     # Matching CAS key updates the access token.
@@ -153,3 +160,106 @@ def test_update_access_token_cas_against_real_pg(pg_db):
     store.update_access_token("at-stale-writer", expiry, "enc:v1:stale-ciphertext")
     row = pg_fetchone("SELECT access_token_enc FROM gmail_connection WHERE id=1")
     assert decrypt_value(row["access_token_enc"]) == "at-fresh"  # unchanged
+
+
+def test_oauth_callback_cas_loses_to_a_concurrent_disconnect(pg_db):
+    """THE #43 race against real Postgres.
+
+    The admin clicks Connect (state claimed, generation captured), then disconnects
+    while Google is still authorizing. The token persist must lose: no resurrection
+    of a connection the admin deliberately ended.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from gmail import store
+
+    store.save_app_credentials("cid", "secret")
+    store.set_oauth_state_hash("state-xyz")
+    captured = store.claim_oauth_state("state-xyz")
+    assert captured is not None
+
+    # ...the admin disconnects mid-handshake.
+    store.clear_connection()
+    assert _generation() > captured
+
+    persisted = store.save_tokens(
+        access_token="at",
+        refresh_token="rt",
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        scopes="scope",
+        email="me@example.com",
+        expected_generation=captured,
+    )
+    assert persisted is False
+    assert store.is_connected() is False
+    row = _raw_row()
+    assert row["refresh_token_enc"] == ""  # nothing was written
+    assert row["email"] == ""
+
+
+def test_generation_bumps_only_on_identity_changes(pg_db):
+    """Refresh and mark_broken must NOT advance the generation — doing so would
+    invalidate in-flight reconnects and every pending draft on each hourly refresh."""
+    from datetime import datetime, timedelta, timezone
+
+    from core.postgres import pg_fetchone
+    from gmail import store
+
+    store.save_app_credentials("cid", "secret")
+    after_app = _generation()
+
+    expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+    assert store.save_tokens("at", "rt", expiry, "scope", "me@example.com", after_app) is True
+    after_connect = _generation()
+    assert after_connect == after_app + 1
+
+    current_enc = pg_fetchone("SELECT refresh_token_enc FROM gmail_connection WHERE id=1")["refresh_token_enc"]
+    store.update_access_token("at-fresh", expiry, current_enc)
+    assert _generation() == after_connect  # same account, fresher token
+
+    store.mark_broken(current_enc)
+    assert _generation() == after_connect  # a status change, not an identity change
+    assert _raw_row()["connection_status"] == "broken"
+
+    store.set_oauth_state_hash("s")
+    assert _generation() == after_connect  # starting a flow changes nothing
+
+    store.clear_connection()
+    assert _generation() == after_connect + 1  # disconnect IS an identity change
+
+
+def test_mark_broken_cas_ignores_a_stale_credential(pg_db):
+    """A concurrent call holding an old refresh token must not be able to mark a
+    healthy, freshly reconnected account broken."""
+    from datetime import datetime, timedelta, timezone
+
+    from gmail import store
+
+    store.save_app_credentials("cid", "secret")
+    expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+    store.save_tokens("at", "rt", expiry, "scope", "me@example.com", _generation())
+
+    store.mark_broken("enc:v1:some-older-ciphertext")
+    assert _raw_row()["connection_status"] == "ok"  # CAS missed, connection intact
+    assert store.is_connected() is True
+
+
+def test_clear_and_replace_return_the_ciphertext_they_cleared(pg_db):
+    """The router revokes what these return, so it must be the grant actually ended."""
+    from datetime import datetime, timedelta, timezone
+
+    from core.encryption import decrypt_value
+    from gmail import store
+
+    store.save_app_credentials("cid", "secret")
+    expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+    store.save_tokens("at", "rt-one", expiry, "scope", "me@example.com", _generation())
+
+    old = store.clear_connection()
+    assert decrypt_value(old) == "rt-one"
+    assert store.clear_connection() == ""  # nothing left to revoke
+
+    store.save_tokens("at", "rt-two", expiry, "scope", "me@example.com", _generation())
+    replaced = store.save_app_credentials("cid2", "secret2")
+    assert decrypt_value(replaced) == "rt-two"
+    assert _raw_row()["client_id"] == "cid2"

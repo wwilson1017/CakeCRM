@@ -188,7 +188,14 @@ def test_claim_pending_tool_by_msg_id_marks_executing(fake_conn, monkeypatch):
     conn = fake_conn(monkeypatch, history, fetchone_results=[(calls, results)])
     monkeypatch.setattr(history, "row_to_dict", lambda cur, row: {"tool_calls": row[0], "tool_results": row[1]})
     out = history.claim_pending_tool("c1", "t1", msg_id="m1")
-    assert out == {"msg_id": "m1", "tool": "crm_create_contact", "args": {"n": 1}}
+    assert out == {
+        "msg_id": "m1",
+        "tool": "crm_create_contact",
+        "args": {"n": 1},
+        # The pre-claim placeholder, so the resolver can read anything the gate
+        # bound to it (the Gmail connection binding, #43).
+        "content": history.PENDING_RESULT_JSON,
+    }
     # scoped the lock to the row AND conversation, and marked the result executing
     sqls = " || ".join(s for s, _ in conn.executed)
     assert "WHERE id = %s AND conversation_id = %s FOR UPDATE" in sqls

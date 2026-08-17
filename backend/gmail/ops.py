@@ -6,15 +6,18 @@ operations, the mark-as-read/modify ops, and attachment sending. The three tool
 executors call ONLY the ops defined here; client.call_gmail additionally
 allow-lists them at runtime. See SECURITY.md.
 
-Imports are stdlib-only (base64/re/email/html), safe at module top level.
+Imports are stdlib-only (base64/logging/re/email/html), safe at module top level.
 """
 
 from __future__ import annotations
 
 import base64
+import logging
 import re
 from email.message import EmailMessage
 from html import unescape
+
+logger = logging.getLogger(__name__)
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _MULTI_NL = re.compile(r"\n{3,}")
@@ -25,6 +28,17 @@ _MAX_THREAD_MESSAGES = 20
 # Cap recursion into attacker-controllable MIME part trees (a hostile sender can
 # nest multipart parts arbitrarily deep; without a cap a read would RecursionError).
 _MAX_MIME_DEPTH = 20
+# Gmail moves a large text body out of the inline `body.data` and into a separately
+# fetchable `body.attachmentId`. We recover those (issue #43) under a hard byte cap:
+# only 4000 CHARS are ever kept, but HTML markup means recovering that much readable
+# text can need far more raw bytes, so the cap is generous while still bounding the
+# transient download. Paired with a per-message fetch budget in get_thread_op, the
+# worst case for a thread is 20 messages x 2 fetches x 256 KB.
+_MAX_BODY_FETCH_BYTES = 262144
+_MAX_BODY_FETCHES_PER_MESSAGE = 2
+# Shown instead of a blank body when the stored text is too large to pull in, so the
+# model can tell "this email is empty" from "this body was not retrieved".
+_BODY_TOO_LARGE = "[body too large to display]"
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -50,42 +64,61 @@ def _parse_headers(headers: list[dict]) -> dict:
     return result
 
 
-def _get_body_text(payload: dict, _depth: int = 0) -> str:
-    # Reads inline `body.data` only; a very large text/html part stored separately
-    # under `attachmentId` (empty `data`) returns "" rather than a capped
-    # attachments.get fetch — deferred to #43 (attachment-content fetch was
-    # deliberately scoped out of #8).
+def _declared_size(body: dict) -> int:
+    """The part's declared decoded byte size, 0 when absent/unparseable."""
+    try:
+        return int(body.get("size") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _part_text(part: dict, fetch=None) -> str:
+    """Plain text for one text/plain or text/html part ("" if it carries none).
+
+    Prefers the inline `body.data`. When Gmail stored a large text body separately
+    (empty `data` plus a `body.attachmentId`) and a fetcher is supplied, recover it
+    under the byte cap (#43). Strictly text bodies: a part with a `filename` is a
+    real file attachment and is NEVER fetched — those stay metadata-only via
+    _get_attachments. `fetch=None` reproduces the pre-#43 behavior exactly.
+    """
+    mime_type = part.get("mimeType", "")
+    if mime_type not in ("text/plain", "text/html"):
+        return ""
+    body = part.get("body") or {}
+    data = body.get("data", "")
+    if data:
+        text = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
+    elif fetch and body.get("attachmentId") and not part.get("filename"):
+        if _declared_size(body) > _MAX_BODY_FETCH_BYTES:
+            return _BODY_TOO_LARGE
+        text = fetch(body["attachmentId"])  # never raises; "" on any failure
+    else:
+        return ""
+    if not text:
+        return ""
+    # HTML must be flattened here just as inline HTML is — gmail_read_thread's
+    # contract is plain text, and raw markup would burn the 4000-char budget.
+    return _html_to_text(text) if mime_type == "text/html" else text
+
+
+def _get_body_text(payload: dict, _depth: int = 0, fetch=None) -> str:
     if _depth > _MAX_MIME_DEPTH:
         return ""
-    mime_type = payload.get("mimeType", "")
 
-    if mime_type == "text/plain":
-        data = payload.get("body", {}).get("data", "")
-        if data:
-            return base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
+    direct = _part_text(payload, fetch)
+    if direct:
+        return direct
 
-    if mime_type == "text/html":
-        data = payload.get("body", {}).get("data", "")
-        if data:
-            html = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
-            return _html_to_text(html)
-
-    parts = payload.get("parts", [])
     plain_text = ""
     html_text = ""
-    for part in parts:
+    for part in payload.get("parts", []):
         part_mime = part.get("mimeType", "")
         if part_mime == "text/plain":
-            data = part.get("body", {}).get("data", "")
-            if data:
-                plain_text = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
+            plain_text = _part_text(part, fetch) or plain_text
         elif part_mime == "text/html":
-            data = part.get("body", {}).get("data", "")
-            if data:
-                html = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
-                html_text = _html_to_text(html)
+            html_text = _part_text(part, fetch) or html_text
         elif part_mime.startswith("multipart/"):
-            nested = _get_body_text(part, _depth + 1)
+            nested = _get_body_text(part, _depth + 1, fetch)
             if nested:
                 return nested
 
@@ -118,7 +151,7 @@ def _get_attachments(payload: dict, _depth: int = 0) -> list[dict]:
     return attachments
 
 
-def _format_message(msg: dict) -> dict:
+def _format_message(msg: dict, fetch=None) -> dict:
     payload = msg.get("payload", {})
     headers = _parse_headers(payload.get("headers", []))
     label_ids = msg.get("labelIds", [])
@@ -133,9 +166,46 @@ def _format_message(msg: dict) -> dict:
         "snippet": msg.get("snippet", ""),
         "is_unread": "UNREAD" in label_ids,
         "labels": label_ids,
-        "body": _truncate_body(_get_body_text(payload)),
+        "body": _truncate_body(_get_body_text(payload, fetch=fetch)),
         "attachments": _get_attachments(payload),
     }
+
+
+def _make_body_fetcher(service, message_id: str):
+    """Per-message fetcher for a text body Gmail stored outside `body.data` (#43).
+
+    Strictly read-only (`users.messages.attachments.get`, covered by the existing
+    gmail.readonly scope) and executed from INSIDE the already-allow-listed
+    get_thread_op, so no new entry in client._APPROVED_OPS is introduced and the
+    read+draft-only surface is unchanged.
+
+    Budgeted per message (one attempt for the plain part, one for an HTML fallback)
+    because the MIME walk is breadth-unbounded — without the budget a message with
+    many eligible text parts could issue a fetch for each. Never raises: every
+    failure returns "", which is exactly the blank body callers saw before #43.
+    """
+    remaining = [_MAX_BODY_FETCHES_PER_MESSAGE]
+
+    def fetch(attachment_id: str) -> str:
+        if remaining[0] <= 0:
+            return ""
+        remaining[0] -= 1
+        try:
+            att = service.users().messages().attachments().get(
+                userId="me", messageId=message_id, id=attachment_id,
+            ).execute()
+            data = att.get("data") or ""
+            # Backstop for a part that under-declared body.size (the pre-fetch cap
+            # check in _part_text is the primary guard). base64 inflates ~4/3, so
+            # this sits comfortably above the byte budget we agreed to pull.
+            if len(data) > _MAX_BODY_FETCH_BYTES * 2:
+                return ""
+            return base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
+        except Exception as e:
+            logger.debug("gmail.ops: body attachment fetch failed for %s: %s", message_id, e)
+            return ""
+
+    return fetch
 
 
 # ── Read ops ─────────────────────────────────────────────────────────────────
@@ -175,9 +245,13 @@ def get_thread_op(service, thread_id: str) -> dict:
     """All messages in a thread (bodies as plain text, capped). Attachment names
     only.
 
-    Model-facing output is bounded (per-body char cap + message-count cap below),
-    and Gmail bounds thread size; a two-step metadata-then-retained-messages fetch to
-    also bound peak download memory is deferred to #43."""
+    Deliberately ONE `threads.get(format="full")` call. A two-step
+    metadata-then-retained-messages fetch (to bound peak download memory) was
+    evaluated in #43 and declined: it makes the common case two calls instead of one
+    — and a long thread 1 + 20 — doubling latency and quota on every read, to bound
+    transient memory only for rare long threads that Gmail's own conversation model
+    already bounds. Model-facing output is bounded regardless, by the per-body char
+    cap and the message-count cap below."""
     thread = service.users().threads().get(
         userId="me", id=thread_id, format="full"
     ).execute()
@@ -185,7 +259,10 @@ def get_thread_op(service, thread_id: str) -> dict:
     total = len(all_messages)
     # Keep the most-recent messages when a thread is very long.
     kept = all_messages[-_MAX_THREAD_MESSAGES:] if total > _MAX_THREAD_MESSAGES else all_messages
-    messages = [_format_message(m) for m in kept]
+    messages = [
+        _format_message(m, fetch=_make_body_fetcher(service, m.get("id", "")))
+        for m in kept
+    ]
     result = {
         "thread_id": thread_id,
         "message_count": total,

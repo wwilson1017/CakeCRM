@@ -49,6 +49,32 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   CRM-reset TRUNCATE still works); a deal is attributed only when the contact has exactly
   one open deal (never fabricated). Senders recurring ≥3 times with no contact raise one
   deduped "create contact?" alert (`source=gmail_touch_scan`).
+  **Connection-race hardening** (#43) adds `gmail_connection.connection_generation`, an
+  optimistic-lock counter bumped by every mutation that changes WHICH connection is live
+  (`save_app_credentials` / `clear_connection` / `save_tokens`) and deliberately NOT by
+  `update_access_token` or `mark_broken` (same account; bumping there would invalidate
+  in-flight reconnects and every pending draft on each hourly refresh). Two CAS mechanisms
+  coexist **by design**, each matching its invariant: generation-CAS guards connection
+  *identity* — `claim_oauth_state()` returns the generation (`int | None`, so callers test
+  `is None`, never truthiness) and `save_tokens(..., expected_generation)` CASes on it
+  (miss → revoke the fresh grant, redirect `reason=conflict`); ciphertext-CAS guards
+  *credential material* — `update_access_token` (unchanged) and now `mark_broken(prev_refresh_enc)`.
+  A pending `gmail_create_draft` is bound to the connection it was proposed against: the
+  engine stamps `gmail_generation` into the **pending-result placeholder** (safe — history's
+  status helpers read only `"status"`) via `_pending_placeholder()`, and
+  `resolve_confirmation` refuses a stale one via `_binding_conflict()` →
+  `gmail.tools.binding_conflict()`, keyed off the hand-maintained
+  `engine._CONNECTION_BOUND_WRITE_TOOLS` (same shape as `_UNTRUSTED_SOURCE_TOOLS`);
+  `claim_pending_tool` now also returns the pre-claim `content`. Disconnect/app-replace are
+  one atomic statement (CTE `SELECT … FOR UPDATE` → clear → `RETURNING` the OLD ciphertext;
+  plain `UPDATE … RETURNING` yields post-update values), so the router revokes exactly the
+  grant it ended. Read fidelity: a large text body Gmail stored under `attachmentId` is
+  recovered inside the **existing** `get_thread_op` (no new `_APPROVED_OPS` entry, no scope
+  change) under a 256 KB pre-check plus a 2-fetch-per-message budget, HTML flattened like
+  inline HTML, degrading to `""` on failure and `[body too large to display]` when oversize;
+  parts carrying a `filename` are NEVER fetched. The two-step thread fetch was evaluated and
+  **declined** (it doubles common-case calls/latency/quota to bound memory only for rare
+  long threads).
 - **Multi-provider AI** via the `AIProvider` ABC (Anthropic, OpenAI, Gemini, Ollama,
   Together). Never call a provider SDK directly from feature code. Cheap background
   AI work (touch counts, classification) uses the light tier via
@@ -224,6 +250,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Notifications (Web Push VAPID keys persisted in Postgres, `notify_user` tool, bell) + system alerts — **landed #6** as `backend/notifications/` + `backend/alerts/` + `frontend/src/crm/components/{NotificationsBell,NotificationSettings}.tsx` + `frontend/public/sw.js`. Telegram delivery goes out through `telegram.service.notify_linked_user` (the pure-sync channel #7 landed), via `_send_telegram`; WhatsApp not ported. Chatty's user-configurable `scheduled_actions` subsystem (leases/active-hours/triage/dashboards) deliberately deferred | `chatty/backend/core/agents/notifications/` + `alerts/` |
 | Telegram — **landed #7** as `backend/telegram/*` + `frontend/src/crm/components/TelegramSettings.tsx`: single-assistant long-polling (one main-loop asyncio task offloads `getUpdates` via `to_thread` and drives `engine.chat` on the SAME loop as the SSE endpoint — provider async clients are loop-bound), Fernet-encrypted bot token on a `telegram_settings` singleton, one linked user via a single-use `link_code` (Telegram deep link), CRM write confirmations as inline-keyboard Approve/Deny buttons (mapped onto `engine.resolve_confirmation` + an empty-messages continuation, batched so it continues only once every write is resolved), and `telegram.service.notify_linked_user(text)->bool` as the pure-sync outbound channel #6 consumes. No webhooks, no group chat (deliberately cut). | `chatty/backend/integrations/telegram/` |
 | Gmail (read + draft only: `gmail_connection` singleton, BYO OAuth at `/api/gmail`, tools `gmail_search`/`gmail_read_thread`/`gmail_create_draft`, guard test + SECURITY.md) — **landed #8** as `backend/gmail/` + `frontend/src/crm/components/GmailCard.tsx` | `chatty/backend/integrations/google/` |
+| Gmail connection-race hardening (`connection_generation` optimistic lock + CAS on token persist; pending-draft binding through the shared confirm flow; ciphertext CAS on `mark_broken`; atomic clear-and-capture on disconnect/app-replace; capped recovery of attachment-stored text bodies) — **landed #43** across `backend/gmail/*` + `backend/assistant/{engine,history}.py` | Follow-up to #8 (no blueprint — back-port candidate to CAKE OS) |
 | Gmail touch-scan heartbeat job (read-only inbox scan → sender→contact match → idempotent `email` touch logging feeding #16; `gmail_scan_state`/`gmail_scanned_messages`/`gmail_unmatched_correspondents` tables; own `gmail_scan` scheduler job; "create contact?" alerts) — **landed #17** as `backend/gmail_scan/` | New capability (no blueprint — back-port candidate to CAKE OS) |
 | Kanban drag-and-drop | `cake_os/frontend/src/shared/dnd/` |
 | Companies (first-class entity: `companies` table, `company_id` FKs, rollup detail page, text→FK backfill migration) — **landed #13** | `cake_os/backend/apps/crm/company_service.py` |

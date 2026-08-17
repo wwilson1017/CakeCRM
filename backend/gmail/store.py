@@ -23,6 +23,27 @@ logger = logging.getLogger(__name__)
 # TTL for an in-flight OAuth redirect's CSRF state.
 _STATE_TTL_SQL = "now() - interval '10 minutes'"
 
+# Two compare-and-swap mechanisms live in this module, by design — each guards a
+# different invariant (issue #43):
+#
+#   * generation-CAS guards connection IDENTITY. `connection_generation` is bumped
+#     by every mutation that changes which Google connection is live
+#     (save_app_credentials / clear_connection / save_tokens). An action that
+#     starts under one connection and completes later — the OAuth callback
+#     (state-claim, then seconds of Google round-trips, then persist) and a pending
+#     gmail_create_draft confirmation — captures the generation up front and
+#     refuses to complete if it moved.
+#   * ciphertext-CAS guards CREDENTIAL MATERIAL. update_access_token and
+#     mark_broken key on the refresh-token ciphertext they acted under, so a
+#     concurrently-rotated or replaced credential makes the stale write a no-op.
+#
+# They are not interchangeable. The callback cannot use ciphertext-CAS: on a fresh
+# connect refresh_token_enc is '' and an intervening app-replace leaves it '' too,
+# so an ''->'' compare would pass and persist tokens minted under the OLD
+# client_id. And mark_broken must NOT bump the generation: a background scan
+# hitting RefreshError mid-reconnect would then CAS-kill the admin's own in-flight
+# callback — the exact bug class #43 exists to fix.
+
 
 def _hash_state(state: str) -> str:
     return hashlib.sha256(state.encode("utf-8")).hexdigest()
@@ -62,17 +83,51 @@ def is_connected(row: dict | None = None) -> bool:
     return True
 
 
-def save_app_credentials(client_id: str, client_secret: str) -> None:
+def save_app_credentials(client_id: str, client_secret: str) -> str:
     """Store BYO OAuth app credentials and force a fresh connect.
 
     Replacing the app invalidates any tokens minted under the old client, so we
-    clear the tokens/email/scopes/status AND any in-flight OAuth state.
+    clear the tokens/email/scopes/status AND any in-flight OAuth state, and bump
+    the generation (a new OAuth app is a new connection identity, so in-flight
+    callbacks and pending drafts must not complete against it).
+
+    Returns the refresh-token ciphertext that was cleared ('' if none) so the
+    caller can revoke exactly the grant this call ended — the capture and the
+    clear are one statement, closing the read-then-clear window (#43).
     """
-    pg_execute(
+    return _clear_returning_old_refresh(
         """
-        UPDATE gmail_connection SET
             client_id = %s,
             client_secret_enc = %s,
+        """,
+        (client_id.strip(), encrypt_value(client_secret.strip())),
+    )
+
+
+def _clear_returning_old_refresh(extra_set_sql: str, extra_params: tuple) -> str:
+    """Clear the live connection, bump the generation, and return the refresh-token
+    ciphertext that was cleared — atomically, in ONE statement.
+
+    Shared by clear_connection (disconnect) and save_app_credentials (app replace):
+    both end the current grant, and both need the OLD ciphertext afterwards so the
+    router can revoke exactly the grant it just ended.
+
+    The CTE takes `FOR UPDATE` before the UPDATE runs, so no other writer can slip
+    between reading the old value and overwriting it. That lock is load-bearing:
+    without it the CTE's snapshot could predate a concurrent write and hand back a
+    ciphertext that is not the one actually cleared. Plain `UPDATE ... RETURNING`
+    cannot be used at all here — RETURNING yields POST-update values, i.e. ''.
+
+    ``extra_set_sql`` is a trusted, caller-supplied fragment of literal SQL
+    assignments (never user input) whose placeholders bind ``extra_params`` first.
+    """
+    row = pg_fetchone(
+        f"""
+        WITH old AS (
+            SELECT refresh_token_enc FROM gmail_connection WHERE id = 1 FOR UPDATE
+        )
+        UPDATE gmail_connection SET
+            {extra_set_sql}
             access_token_enc = '',
             refresh_token_enc = '',
             email = '',
@@ -81,11 +136,15 @@ def save_app_credentials(client_id: str, client_secret: str) -> None:
             connection_status = 'disconnected',
             oauth_state_hash = '',
             oauth_state_created_at = NULL,
+            connection_generation = gmail_connection.connection_generation + 1,
             updated_at = now()
-        WHERE id = 1
+        FROM old
+        WHERE gmail_connection.id = 1
+        RETURNING old.refresh_token_enc AS old_refresh_token_enc
         """,
-        (client_id.strip(), encrypt_value(client_secret.strip())),
+        extra_params,
     )
+    return (row or {}).get("old_refresh_token_enc") or ""
 
 
 def get_app_credentials() -> tuple[str, str]:
@@ -102,18 +161,28 @@ def set_oauth_state_hash(state: str) -> None:
     )
 
 
-def claim_oauth_state(state: str) -> bool:
+def claim_oauth_state(state: str) -> int | None:
     """Single-use, TTL-bounded claim of the OAuth CSRF state.
 
     Atomic compare-and-clear: the UPDATE matches only if the stored hash equals
     this state's hash AND it was created within the TTL, and clears it in the same
     statement (so a replay can't reuse it). A mismatch clears nothing (an attacker
-    guessing states can't invalidate a legitimate in-flight connect). Returns True
+    guessing states can't invalidate a legitimate in-flight connect). Succeeds
     exactly once for a valid state.
+
+    Returns the connection generation observed AT CLAIM TIME, or None when the
+    claim failed. The callback carries that number through the Google round-trips
+    and hands it back to save_tokens as the CAS key, so a disconnect or app-replace
+    during the handshake makes the persist a no-op instead of an overwrite (#43).
+    Capturing it here rather than in a second query is what makes it race-free —
+    there is no window between the claim and the read.
+
+    (The statement never modifies connection_generation, so RETURNING's post-update
+    value is the current one — no old/new pitfall.)
     """
     if not state:
-        return False
-    rows = pg_execute(
+        return None
+    row = pg_fetchone(
         f"""
         UPDATE gmail_connection
            SET oauth_state_hash = '', oauth_state_created_at = NULL
@@ -121,15 +190,36 @@ def claim_oauth_state(state: str) -> bool:
            AND oauth_state_hash <> ''
            AND oauth_state_hash = %s
            AND oauth_state_created_at >= {_STATE_TTL_SQL}
+        RETURNING connection_generation
         """,
         (_hash_state(state),),
     )
-    return rows == 1
+    if not row:
+        return None
+    return int(row.get("connection_generation") or 0)
 
 
-def save_tokens(access_token: str, refresh_token: str, expires_at, scopes: str, email: str) -> None:
-    """Persist a freshly granted connection (called from the OAuth callback)."""
-    pg_execute(
+def save_tokens(
+    access_token: str,
+    refresh_token: str,
+    expires_at,
+    scopes: str,
+    email: str,
+    expected_generation: int,
+) -> bool:
+    """Persist a freshly granted connection (called from the OAuth callback).
+
+    Compare-and-swap on the generation captured by claim_oauth_state: if the admin
+    disconnected, replaced the OAuth app, or completed a competing connect during
+    the Google round-trips, the WHERE misses and this write is a no-op. Returns
+    True when the connection was persisted, False on a CAS miss — the caller
+    revokes the just-granted tokens rather than orphaning a live Google grant.
+
+    A successful persist bumps the generation: a new grant is a new connection
+    identity, so any pending draft proposed under the previous one must not
+    execute against it, and a second racing callback must miss too (#43).
+    """
+    return pg_execute(
         """
         UPDATE gmail_connection SET
             access_token_enc = %s,
@@ -138,8 +228,9 @@ def save_tokens(access_token: str, refresh_token: str, expires_at, scopes: str, 
             scopes = %s,
             email = %s,
             connection_status = 'ok',
+            connection_generation = connection_generation + 1,
             updated_at = now()
-        WHERE id = 1
+        WHERE id = 1 AND connection_generation = %s
         """,
         (
             encrypt_value(access_token),
@@ -147,8 +238,9 @@ def save_tokens(access_token: str, refresh_token: str, expires_at, scopes: str, 
             expires_at,
             scopes,
             email,
+            expected_generation,
         ),
-    )
+    ) == 1
 
 
 def update_access_token(
@@ -191,37 +283,40 @@ def update_access_token(
         )
 
 
-def mark_broken() -> None:
+def mark_broken(prev_refresh_enc: str) -> None:
     """Flag the connection as broken (refresh failed / revoked) so the UI prompts
-    a reconnect. Never raises. (A refresh-token CAS to avoid marking a
-    concurrently-replaced account broken is deferred to #43 — single-user v1, the
-    admin is the only actor.)"""
+    a reconnect. Never raises.
+
+    Compare-and-swap on the refresh-token ciphertext the failing call ran under
+    (#43): if the connection was replaced or another call rotated the token
+    meanwhile, the WHERE misses and a healthy connection is not marked broken.
+    Concretely — call A refreshes successfully and rotates the refresh token while
+    call B, still holding the old one, gets a RefreshError; B's CAS misses, so B
+    cannot break A's working connection.
+
+    Deliberately does NOT bump connection_generation: 'broken' is a status change,
+    not an identity change, and bumping here would let a background scan's
+    RefreshError invalidate the admin's own in-flight reconnect.
+    """
     try:
         pg_execute(
-            "UPDATE gmail_connection SET connection_status = 'broken', updated_at = now() WHERE id = 1"
+            "UPDATE gmail_connection SET connection_status = 'broken', updated_at = now() "
+            "WHERE id = 1 AND refresh_token_enc = %s",
+            (prev_refresh_enc,),
         )
     except Exception as e:
         logger.warning("gmail.store.mark_broken failed: %s", e)
 
 
-def clear_connection() -> None:
-    """Disconnect: clear tokens/email/scopes/state; KEEP app credentials so a
-    reconnect is one click."""
-    pg_execute(
-        """
-        UPDATE gmail_connection SET
-            access_token_enc = '',
-            refresh_token_enc = '',
-            email = '',
-            scopes = '',
-            token_expires_at = NULL,
-            connection_status = 'disconnected',
-            oauth_state_hash = '',
-            oauth_state_created_at = NULL,
-            updated_at = now()
-        WHERE id = 1
-        """
-    )
+def clear_connection() -> str:
+    """Disconnect: clear tokens/email/scopes/state and bump the generation; KEEP
+    app credentials so a reconnect is one click.
+
+    Returns the refresh-token ciphertext that was cleared ('' if none) so the
+    caller can revoke exactly the grant this call ended — capture and clear happen
+    in one statement, closing the read-then-clear window (#43).
+    """
+    return _clear_returning_old_refresh("", ())
 
 
 def status_dict() -> dict:

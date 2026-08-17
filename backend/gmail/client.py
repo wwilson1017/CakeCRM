@@ -138,7 +138,9 @@ def call_gmail(op, **kwargs):
         return op(service, **kwargs)
     except RefreshError:
         refresh_failed = True
-        store.mark_broken()
+        # CAS on the ciphertext this call refreshed under: a connection replaced (or
+        # a token rotated by a concurrent call) meanwhile must not be marked broken.
+        store.mark_broken(prev_refresh_enc)
         raise GmailAuthError("Gmail connection expired — reconnect it in Settings.")
     finally:
         try:

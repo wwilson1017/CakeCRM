@@ -123,6 +123,60 @@ def gmail_create_draft(to: str, subject: str, body: str, cc: str = "", bcc: str 
         return {"error": "Creating the Gmail draft failed. Please try again."}
 
 
+# ── Pending-confirmation binding (issue #43) ──────────────────────────────────
+#
+# gmail_create_draft is proposed in one turn and approved later — potentially
+# minutes later, from the web UI or a Telegram button. In between, the admin can
+# disconnect Gmail or connect a DIFFERENT Google account, and the approved draft
+# would land in whichever account happens to be live. These two helpers bind the
+# connection generation observed at propose time to the pending confirmation; the
+# assistant engine stamps it into the pending placeholder and checks it before
+# executing. They are plain module functions, NOT agent tools — the tool surface
+# stays exactly the three defs above.
+
+BINDING_KEY = "gmail_generation"
+
+
+def pending_binding() -> dict:
+    """Keys to merge into the pending-confirmation placeholder for a Gmail write.
+
+    Reads Postgres, so callers on the event loop must offload it. Returns {} when
+    the connection can't be read — an unbindable proposal simply behaves as it did
+    before #43 rather than blocking the write.
+    """
+    try:
+        return {BINDING_KEY: int(store.get_row().get("connection_generation") or 0)}
+    except Exception as e:
+        logger.warning("gmail.tools: could not read the connection generation: %s", e)
+        return {}
+
+
+def binding_conflict(placeholder: dict | None) -> dict | None:
+    """An error result when the Gmail connection changed since the draft was
+    proposed, else None (meaning: go ahead and execute).
+
+    Never raises — it runs after the pending call has already been claimed and
+    marked executing, so an exception here would strand the confirmation. Anything
+    unreadable (no binding key, a hand-edited placeholder, an unreachable store)
+    resolves to None and executes exactly as before #43.
+    """
+    try:
+        bound = (placeholder or {}).get(BINDING_KEY)
+        if bound is None:
+            return None  # proposed before #43 shipped, or unbindable at propose time
+        if int(bound) == int(store.get_row().get("connection_generation") or 0):
+            return None
+    except Exception as e:
+        logger.warning("gmail.tools: could not verify the connection binding: %s", e)
+        return None
+    return {
+        "error": (
+            "The Gmail connection changed after this draft was proposed, so it was not "
+            "created. Ask again to draft it against the account connected now."
+        )
+    }
+
+
 GMAIL_TOOL_EXECUTORS: dict[str, Callable[..., dict]] = {
     "gmail_search": gmail_search,
     "gmail_read_thread": gmail_read_thread,

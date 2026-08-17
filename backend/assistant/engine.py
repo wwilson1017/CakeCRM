@@ -366,16 +366,17 @@ async def _chat_impl(
             # write (issue #8). Persist the pending placeholder BEFORE emitting
             # confirm (so /confirm can find it), then wait for approval.
             if is_write and (tool_mode == "normal" or (tool_mode == "power" and turn_has_untrusted_reads)):
+                placeholder = await _pending_placeholder(name)
                 try:
                     await asyncio.to_thread(
                         history.merge_tool_result, iter_msg_id, tool_use_id, name,
-                        history.PENDING_RESULT_JSON,
+                        placeholder,
                     )
                 except Exception as e:
                     logger.warning("assistant.chat: failed to persist pending action: %s", e)
                     yield _sse({"type": "error", "error": "Failed to save the pending action."})
                     return
-                results.append({"tool_use_id": tool_use_id, "tool_name": name, "content": history.PENDING_RESULT_JSON})
+                results.append({"tool_use_id": tool_use_id, "tool_name": name, "content": placeholder})
                 has_pending = True
                 yield _sse({
                     "type": "confirm", "tool": name, "args": args,
@@ -470,6 +471,47 @@ async def _chat_impl(
     yield _sse({"type": "error", "error": "Tool loop exceeded maximum iterations."})
 
 
+# Writes whose target can change between propose and approve, so the pending
+# confirmation must be bound to what was live when it was proposed. Only Gmail
+# qualifies today: a draft approved minutes later would otherwise land in whatever
+# Google account happens to be connected then (#43). Hand-maintained by name, the
+# same shape as _UNTRUSTED_SOURCE_TOOLS above.
+_CONNECTION_BOUND_WRITE_TOOLS = frozenset({"gmail_create_draft"})
+
+
+async def _pending_placeholder(tool_name: str) -> str:
+    """The pending-approval result to persist for a gated write.
+
+    Plain PENDING_RESULT_JSON, except for a connection-bound write, which also
+    carries the identity of the connection it was proposed against. Extra keys are
+    safe: history's status helpers read only "status". The binding read touches
+    Postgres, so it is offloaded — this runs on the SSE event loop.
+    """
+    if tool_name not in _CONNECTION_BOUND_WRITE_TOOLS:
+        return history.PENDING_RESULT_JSON
+    from gmail import tools as gmail_tools  # lazy: keeps gmail out of engine import
+
+    binding = await asyncio.to_thread(gmail_tools.pending_binding)
+    if not binding:
+        return history.PENDING_RESULT_JSON
+    return json.dumps({"status": history.PENDING_STATUS, **binding})
+
+
+def _binding_conflict(tool: str, pending_content: str | None) -> dict | None:
+    """An error result when a connection-bound write's target changed since it was
+    proposed, else None. Never raises — the call is already claimed and marked
+    executing, so raising here would strand the confirmation."""
+    if tool not in _CONNECTION_BOUND_WRITE_TOOLS:
+        return None
+    from gmail import tools as gmail_tools  # lazy: see _pending_placeholder
+
+    try:
+        parsed = json.loads(pending_content) if pending_content else {}
+    except (TypeError, ValueError):
+        return None
+    return gmail_tools.binding_conflict(parsed if isinstance(parsed, dict) else {})
+
+
 def resolve_confirmation(registry, conversation_id: str, tool_use_id: str, decision: str,
                          msg_id: str | None = None) -> dict:
     """Approve or deny a pending write — server-authoritative and idempotent.
@@ -502,7 +544,13 @@ def resolve_confirmation(registry, conversation_id: str, tool_use_id: str, decis
     if decision == "approve" and not registry.is_write(tool):
         result = {"error": "Not a confirmable write action."}
     elif decision == "approve":
-        result = registry.execute_tool_sync(tool, args)
+        # A connection-bound write must still be aimed at what it was proposed
+        # against. simplification: checked here rather than inside the executor, so
+        # a millisecond-scale check→execute window remains — acceptable for
+        # single-user v1, where the admin is the only actor; closing it fully would
+        # thread the binding through every executor signature.
+        conflict = _binding_conflict(tool, claimed.get("content"))
+        result = conflict if conflict is not None else registry.execute_tool_sync(tool, args)
     else:  # deny
         result = {"status": history.DENIED_STATUS}
     history.merge_tool_result(claimed_msg_id, tool_use_id, tool, json.dumps(result, default=str))
