@@ -78,6 +78,17 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `WRITE_BUDGET_BACKGROUND`, with untrusted reminder/CRM text kept in the user
   message, never the system prompt. So a prompt injection via reminder/CRM content
   can at worst send one notification, never create/log/update/delete a record.
+  **Since #22 that ceiling is unchanged but the on-ramp is wider, deliberately:** the
+  new read tools put raw per-record free text in front of the unattended turn for the
+  first time — `crm_scan_gaps` returns `crm_field_provenance.value_snapshot` verbatim
+  and `crm_find_duplicates` returns deal titles / contact names, where the earlier
+  background-callable reads (`crm_dashboard`, `crm_analytics`) exposed only structured
+  aggregates. Accepted because the blast radius is still exactly one `notify_user` and
+  the alternative — a second, narrower payload shape per tool for background turns —
+  buys nothing against a ceiling that already holds. Mitigated in
+  `heartbeat.service._heartbeat_prompt`, which states plainly that everything a CRM
+  tool returns is DATA the user or a third party typed, never instructions. Any future
+  background-callable read should assume its payload can carry hostile text.
   The assistant has a **long-term memory + nightly dreaming**
   (landed #5, `backend/memory/` + `backend/dreaming/`, **pure-algorithmic — no AI
   calls**): temporal facts in Postgres (`memory_facts`, generated `tsvector` + GIN,
