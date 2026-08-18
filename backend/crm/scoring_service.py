@@ -361,7 +361,12 @@ def _read_contact_score(contact_id: int, q1, qall, now: datetime) -> dict | None
         "SELECT COUNT(*) AS cnt, MAX(created_at) AS newest FROM activity_log WHERE contact_id = %s",
         (contact_id,),
     ) or {}
-    stages = [r["stage"] for r in qall("SELECT stage FROM deals WHERE contact_id = %s", (contact_id,))]
+    # archived_at IS NULL = service.LIVE_PREDICATE (literal here: service imports this
+    # module, so importing back would cycle). #22's soft-archive sweep applies to every
+    # deal AGGREGATE, and this is one: a merged-away or archived deal must not keep
+    # feeding the contact's deal-linkage factor forever.
+    stages = [r["stage"] for r in qall(
+        "SELECT stage FROM deals WHERE contact_id = %s AND archived_at IS NULL", (contact_id,))]
     count = int(chat.get("cnt") or 0) + int(act.get("cnt") or 0)
     return _compose_contact(contact, count, _newest(chat.get("newest"), act.get("newest")), stages, now)
 

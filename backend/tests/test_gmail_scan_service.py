@@ -128,6 +128,9 @@ def test_first_sight_match_logs_email_touch(monkeypatch, fake_conn):
     assert "INSERT INTO gmail_scanned_messages" in stmts[0] and "ON CONFLICT (message_id) DO NOTHING" in stmts[0]
     assert "lower(email) = %s" in stmts[1]
     assert "stage NOT IN ('won', 'lost')" in stmts[2] and "LIMIT 2" in stmts[2]
+    # Archived deals are not attribution candidates (issue #22) — without this the
+    # scan could log an email touch onto a deal the user has already put away.
+    assert "archived_at IS NULL" in stmts[2]
     assert "INSERT INTO activity_log" in stmts[3] and "'email'" in stmts[3]
     assert "outcome = 'logged'" in stmts[4]
     # activity insert params: (note, contact_id, deal_id, occurred_at)

@@ -5,6 +5,7 @@ import type { CrmCompany } from '../core/types';
 import { CompanyForm } from './components/CompanyForm';
 import { ActivityTimeline } from './components/ActivityTimeline';
 import { CustomFieldsSection } from './components/CustomFieldsSection';
+import { NotesThread } from './components/NotesThread';
 import { usePublishActiveRecord } from './RecordContext';
 import { StatusBadge } from './components/badges';
 import { STAGE_COLORS } from './constants';
@@ -192,6 +193,12 @@ export function CompanyDetailPage() {
       <div style={{ marginTop: 24, borderTop: `1px solid ${LINE_STRONG}`, paddingTop: 24 }}>
         <span style={{ ...mono(10, INK_DIM), display: 'block', marginBottom: 12 }}>Activity History</span>
         <ActivityTimeline activities={company.activity || []} onUpdate={load} />
+      </div>
+
+      {/* Chatter — editable notes thread (companies joined in issue #22) */}
+      <div style={{ marginTop: 24, borderTop: `1px solid ${LINE_STRONG}`, paddingTop: 24 }}>
+        <span style={{ ...mono(10, INK_DIM), display: 'block', marginBottom: 12 }}>Chatter</span>
+        <NotesThread key={`company-${company.id}`} entityType="company" entityId={company.id} />
       </div>
 
       {/* Custom fields — renders nothing when no company fields are defined */}

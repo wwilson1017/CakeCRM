@@ -438,7 +438,7 @@ def _load_evidence(deal_id: int) -> tuple:
         # The guard columns are read in THIS snapshot too, so the repair path can
         # compare-and-swap against exactly what it saw (see recompute's guard).
         cur.execute(
-            """SELECT id, title, notes, stage, created_at,
+            """SELECT id, title, notes, stage, created_at, archived_at,
                       ai_touch_count_at, ai_touch_evidence_count
                  FROM deals WHERE id = %s""",
             (deal_id,),
@@ -447,9 +447,11 @@ def _load_evidence(deal_id: int) -> tuple:
         if not deal_row:
             return None, [], []
         deal = row_to_dict(cur, deal_row)
-        if deal.get("stage") in ("won", "lost"):
+        if deal.get("stage") in ("won", "lost") or deal.get("archived_at") is not None:
             # recompute_touch_count rejects these anyway — don't pay two queries to build
-            # evidence for a prompt that will never be sent.
+            # evidence for a prompt that will never be sent. Archived deals (issue #22)
+            # join closed ones here: they render on no board, so a paid AI count for one
+            # would never be seen.
             return deal, [], []
 
         # id DESC tie-breaks equal timestamps so the LIMIT window is deterministic.
@@ -495,7 +497,10 @@ def recompute_touch_count(deal_id: int, force_write: bool = False) -> int | None
     # closed one buys nothing. Won/lost cards keep the count they earned while open;
     # dragging one back to an open stage means the next note resumes recomputes -- nothing
     # is permanently frozen.
-    if deal.get("stage") in ("won", "lost"):
+    # Archived deals (issue #22) are excluded for the same reason: they render on no
+    # board, so a count computed for one could never be seen. Un-archiving restores
+    # recomputes, exactly as dragging a won/lost card back does.
+    if deal.get("stage") in ("won", "lost") or deal.get("archived_at") is not None:
         return None
 
     lines = build_evidence_lines(deal, chatter, activities)
@@ -618,7 +623,7 @@ def start_backfill(scope: str = "null", force: bool = False) -> dict:
         prev_backfill_at = _last_backfill_at
         _last_backfill_at = now  # claim the cooldown window
 
-    where = "stage NOT IN ('won', 'lost')"
+    where = "stage NOT IN ('won', 'lost') AND archived_at IS NULL"
     if scope == "null":
         where += " AND ai_touch_count IS NULL"
     try:
@@ -655,7 +660,8 @@ def backfill_status() -> dict:
     rows = pg_fetchall(
         """SELECT COUNT(*) AS remaining
              FROM deals
-            WHERE stage NOT IN ('won', 'lost') AND ai_touch_count IS NULL"""
+            WHERE stage NOT IN ('won', 'lost') AND archived_at IS NULL
+              AND ai_touch_count IS NULL"""
     )
     remaining = rows[0]["remaining"] if rows else 0
     return {"remaining_null": remaining, "queue_depth": _queue.unfinished_tasks}

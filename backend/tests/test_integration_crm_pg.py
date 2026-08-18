@@ -64,7 +64,8 @@ def _clean_crm(pg_db):
     from core.postgres import pg_execute
     pg_execute(
         "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
-        "crm_field_definitions, crm_field_values, crm_field_provenance RESTART IDENTITY"
+        "crm_field_definitions, crm_field_values, crm_field_provenance, "
+        "deal_stage_events RESTART IDENTITY"
     )
     pg_execute(
         "UPDATE crm_meta SET sample_data_loaded = FALSE, onboarding_dismissed = FALSE, "
@@ -456,7 +457,8 @@ def test_chatter_http_roundtrip(pg_db):
     # blank + missing + bad-type contract at the HTTP layer
     assert client.post(f"/api/crm/chatter/deal/{d['id']}/note", json={"message": " "}).status_code == 400
     assert client.patch("/api/crm/chatter/note/999999", json={"message": "x"}).status_code == 404
-    assert client.get("/api/crm/chatter/company/1").status_code == 400
+    # 'company' became a valid chatter type in issue #22 — probe with one that never is.
+    assert client.get("/api/crm/chatter/invoice/1").status_code == 400
 
 
 # ── Custom fields (issue #19) ─────────────────────────────────────────────────

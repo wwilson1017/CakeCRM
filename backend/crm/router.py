@@ -378,6 +378,10 @@ async def update_deal(deal_id: int, body: DealUpdate, user=Depends(get_current_u
         result = crm.update_deal(deal_id, **updates)
     except psycopg2.errors.ForeignKeyViolation:
         raise HTTPException(status_code=400, detail="Referenced contact or company does not exist") from None
+    except ValueError as e:
+        # e.g. a stage change on an archived deal — a refusal the caller can act on,
+        # not a server fault.
+        raise HTTPException(status_code=400, detail=str(e)) from None
     if not result:
         raise HTTPException(status_code=404, detail="Deal not found or invalid stage")
     return result

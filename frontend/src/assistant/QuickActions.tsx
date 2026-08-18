@@ -8,21 +8,32 @@
 import { ACCENT, ACCENT_SOFT, INK_DIM, LINE } from '../shared/styles';
 import type { ActiveRecordContext, ActiveRecordType } from './types';
 
+// Sales-oriented starters (issue #22). Each maps to a working practice the assistant
+// is instructed to follow in identity.SALES_GUIDE — recap before an interaction, always
+// name a next step, log what happened, close deals with a reason — so a chip and the
+// system prompt pull in the same direction. Generic by rule: no industry, product, or
+// company wording may appear here (tests/test_prompt_genericization.py enforces it).
 const STARTERS: Record<ActiveRecordType, string[]> = {
   deal: [
     'Summarize this deal',
     'What should my next step be on this deal?',
     'Draft a follow-up email about this deal',
+    'Log a call I just had on this deal',
+    'Has this deal gone quiet?',
   ],
   contact: [
     'Summarize this contact',
+    'Catch me up before I call them',
     'Draft a follow-up email to this contact',
     'What deals do I have with this contact?',
+    'Log a call with this contact',
   ],
   company: [
     'Summarize this company',
     'What deals and contacts are linked to this company?',
+    'Which deals here need attention?',
     'Draft a follow-up email to a contact at this company',
+    'Add a note about this company',
   ],
 };
 

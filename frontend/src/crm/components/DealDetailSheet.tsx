@@ -113,6 +113,21 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
           </p>
         )}
 
+        {/* Why the deal was lost (issue #22). Cleared automatically if the deal is
+            reopened, so this only ever shows on a currently-lost deal. */}
+        {deal.lost_reason && (
+          <p style={{ fontSize: 13, color: INK_MUTE, marginBottom: 16, lineHeight: 1.5 }}>
+            <span style={{ ...mono(10), color: INK_DIM, marginRight: 6 }}>LOST REASON</span>
+            {deal.lost_reason} {badge('lost_reason')}
+          </p>
+        )}
+
+        {/* No archived-deal banner here on purpose. Archiving is assistant-only in
+            Phase 1 (issue #22) and every surface that opens this sheet — the pipeline
+            board and the dashboard — filters archived deals out, so a banner would be
+            unreachable UI implying a path that doesn't exist. Add it back together
+            with the "Archived" pipeline facet that makes an archived deal openable. */}
+
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
           {deal.contact_name && (
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>

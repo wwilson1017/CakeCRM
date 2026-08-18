@@ -215,7 +215,8 @@ def test_clear_demo_data_truncates_when_sample_loaded(monkeypatch, fake_conn):
     # schema (only clear_all wipes it).
     assert any(
         "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
-        "crm_field_values, crm_field_provenance RESTART IDENTITY" in s for s in stmts
+        "crm_field_values, crm_field_provenance, deal_stage_events RESTART IDENTITY"
+        in s for s in stmts
     )
     assert not any("crm_field_definitions" in s for s in stmts)
 
@@ -250,7 +251,8 @@ def test_clear_all_truncates_and_resets_flag(monkeypatch, fake_conn):
     # defs→values); crm_field_provenance trails both.
     assert any(
         "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
-        "crm_field_definitions, crm_field_values, crm_field_provenance RESTART IDENTITY"
+        "crm_field_definitions, crm_field_values, crm_field_provenance, "
+        "deal_stage_events RESTART IDENTITY"
         in s for s in stmts
     )
     assert any("sample_data_loaded = FALSE" in s for s in stmts)
@@ -463,7 +465,8 @@ def test_get_company_detail_rolls_up_activity_and_open_value(rec):
     # activity rollup joins through the company's contacts AND deals
     act_sql = rec.sql_containing("FROM activity_log")
     assert "IN (SELECT id FROM contacts WHERE company_id = %s)" in act_sql
-    assert "IN (SELECT id FROM deals WHERE company_id = %s)" in act_sql
+    # issue #22: archived deals drop out of the rollup with the rest of the sweep
+    assert "IN (SELECT id FROM deals WHERE company_id = %s AND archived_at IS NULL)" in act_sql
     # open_deal_value excludes won/lost
     assert out["open_deal_value"] == 300
     assert out["contacts"] and out["deals"] and out["activity"]
@@ -499,12 +502,16 @@ def test_update_contact_accepts_explicit_null_company_id(rec):
     assert None in rec.params_for("UPDATE contacts SET")
 
 
-def test_update_deal_accepts_company_id(rec):
+def test_update_deal_accepts_company_id(monkeypatch, rec, fake_conn):
+    # Deal writes go through one transaction (issue #22: the stage event must land
+    # with the UPDATE), so the UPDATE is on the raw cursor, not pg_execute.
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("lead", None, None)])
     rec.fetchone_queue = [{"id": 1}]
     service.update_deal(1, company_id=None)
-    sql = rec.sql_containing("UPDATE deals SET")
+    sql = next(s for s, _ in conn.executed if "UPDATE deals SET" in s)
     assert "company_id = %s" in sql
-    assert None in rec.params_for("UPDATE deals SET")
+    params = next(p for s, p in conn.executed if "UPDATE deals SET" in s)
+    assert None in params
 
 
 def test_get_contact_detail_joins_company_name(rec):
@@ -558,7 +565,7 @@ def test_get_pipeline_stage_branch_carries_new_fields(rec):
     ]
     service.get_pipeline(stage="lead")
     sql = rec.sql_containing("last_activity_at")
-    assert "WHERE d.stage = %s" in sql
+    assert "WHERE d.archived_at IS NULL AND d.stage = %s" in sql
     assert "la.last_at AS last_activity_at" in sql and "co.name AS company_name" in sql
     assert rec.params_for("last_activity_at") == ["lead"]
 
@@ -632,17 +639,39 @@ def test_create_deal_scores_deal_and_contact(rec, score_spy):
     assert score_spy == [{"deal_ids": (9,), "contact_ids": (3,)}]
 
 
-def test_update_deal_relink_scores_old_and_new_contact(rec, score_spy):
-    # contact_id in the update -> pre-read old link (2), then get_deal shows new link (5).
-    rec.fetchone_queue = [{"contact_id": 2}, {"id": 1, "contact_id": 5}]
+def test_update_deal_relink_scores_old_and_new_contact(monkeypatch, rec, fake_conn, score_spy):
+    # contact_id in the update -> the funnel's FOR UPDATE row carries the old link (2);
+    # the new link (5) rides in the update itself. Both rescore, new first.
+    fake_conn(monkeypatch, service, fetchone_results=[("lead", None, 2)])
+    rec.fetchone_queue = [{"id": 1, "contact_id": 5}]  # get_deal after the funnel
     service.update_deal(1, contact_id=5)
     assert score_spy == [{"deal_ids": (1,), "contact_ids": (5, 2)}]
 
 
-def test_update_deal_stage_scores_deal_and_linked_contact(rec, score_spy):
-    rec.fetchone_queue = [{"id": 1, "contact_id": 4}]  # get_deal after UPDATE
+def test_update_deal_stage_scores_deal_and_linked_contact(monkeypatch, rec, fake_conn, score_spy):
+    fake_conn(monkeypatch, service, fetchone_results=[("lead", None, 4)])
+    rec.fetchone_queue = [{"id": 1, "contact_id": 4}]  # get_deal after the funnel
     service.update_deal_stage(1, "won")
-    assert score_spy == [{"deal_ids": (1,), "contact_ids": (4,)}]
+    # No re-link in a stage move: slot 1 (the update's contact_id) is empty, the
+    # funnel's FOR UPDATE row supplies the linked contact. score_on_event drops Nones.
+    assert score_spy == [{"deal_ids": (1,), "contact_ids": (None, 4)}]
+
+
+def test_mark_deal_won_scores_through_the_funnel(monkeypatch, rec, fake_conn, score_spy):
+    # The #22 lifecycle verbs postdate #18 — the funnel hook is what guarantees they
+    # rescore at all. Pin one so the hook can't silently move back into the callers.
+    fake_conn(monkeypatch, service, fetchone_results=[("negotiation", None, 7)])
+    rec.fetchone_queue = [{"id": 3, "contact_id": 7}]
+    service.mark_deal_won(3)
+    assert score_spy == [{"deal_ids": (3,), "contact_ids": (None, 7)}]
+
+
+def test_archive_deal_scores_deal_and_linked_contact(rec, score_spy):
+    # Archived deals leave the contact's deal-linkage aggregate (scoring_service
+    # carries archived_at IS NULL), so archive/restore must rescore the contact.
+    rec.fetchone_queue = [{"contact_id": 7}, {"id": 1}]  # RETURNING row, get_deal
+    service.archive_deal(1)
+    assert score_spy == [{"deal_ids": (1,), "contact_ids": (7,)}]
 
 
 def test_create_and_update_contact_score_the_contact(rec, score_spy):

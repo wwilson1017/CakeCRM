@@ -435,6 +435,18 @@ def test_confirm_provenance_404_when_no_row(client, monkeypatch):
     assert r.status_code == 404
 
 
+def test_update_deal_refusal_is_a_400_not_a_500(client, monkeypatch):
+    """A stage change on an archived deal is a refusal the caller can act on (issue
+    #22). Letting the ValueError escape gave the Kanban drag an HTTP 500."""
+    def refuse(deal_id, **kw):
+        raise ValueError("Cannot change the stage of archived deal #3 — restore it first")
+
+    monkeypatch.setattr(service, "update_deal", refuse)
+    r = client.put("/api/crm/deals/3", json={"stage": "won"})
+    assert r.status_code == 400
+    assert "restore it first" in r.json()["detail"]
+
+
 # ── Lead scores (issue #18) ───────────────────────────────────────────────────
 
 def test_contacts_sort_forwarded_browse_and_search(client, monkeypatch):

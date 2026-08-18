@@ -204,6 +204,24 @@ def test_recompute_contact_writes_only_score_cols(monkeypatch, fake_conn, _ident
     assert "lead_score = %s" in upd and "lead_score_at = %s" in upd and "updated_at" not in upd
 
 
+def test_contact_stage_aggregate_excludes_archived_deals(monkeypatch, fake_conn, _identity_row_to_dict):
+    # #22's soft-archive sweep reaches this aggregate too: a merged-away or archived
+    # deal must not keep feeding the contact's deal-linkage factor forever
+    # (service.LIVE_PREDICATE — literal in scoring_service, importing back would cycle).
+    conn = fake_conn(
+        monkeypatch, ss,
+        fetchone_results=[
+            {"status": "active", "company_id": 1, "company": "", "email": "a@b.c", "phone": "5", "created_at": _ago(3)},
+            {"cnt": 2, "newest": _ago(1)},   # chatter agg
+            {"cnt": 1, "newest": _ago(4)},   # activity agg
+        ],
+        fetchall_results=[[{"stage": "proposal"}]],  # linked deal stages
+    )
+    ss.recompute_contact(7, now=NOW)
+    stages_sql = next(s for s, _ in conn.executed if "SELECT stage FROM deals" in s)
+    assert "archived_at IS NULL" in stages_sql
+
+
 # ── score_on_event facade: never raises, per-id isolation, dedupe, skip falsy ─
 
 def test_score_on_event_isolates_per_id_failures(monkeypatch):

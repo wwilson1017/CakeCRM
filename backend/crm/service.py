@@ -13,7 +13,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from core.postgres import get_connection, pg_execute, pg_fetchall, pg_fetchone
-from crm import scoring_service, touch_count_service
+from crm import chatter_service, field_service, scoring_service, touch_count_service
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,31 @@ DEAL_STAGES = ["lead", "qualified", "proposal", "negotiation", "won", "lost"]
 CONTACT_STATUSES = ["active", "inactive", "archived"]
 TASK_PRIORITIES = ["low", "medium", "high"]
 COMPANY_STATUSES = ["active", "archived"]
+
+# Soft-archive predicate for deals (issue #22). `deals.archived_at IS NULL` means the
+# deal is live; an archived deal (archived_at set by archive_deal, or by merge_deals on
+# the merged-away source) must disappear from EVERY list, board, rollup, count and
+# aggregate together — a deal that vanishes from the Kanban but still inflates the
+# dashboard's pipeline value is worse than no archive at all. Named so the sweep is
+# greppable: every deal-reading query below carries one of these two forms, and the
+# only deliberate exceptions are get_deal (fetch-by-id must still resolve an archived
+# deal, so it can be shown/restored/merged) and the is-the-CRM-empty counts (an
+# archived deal is still data).
+# Public so crm/analytics_service.py imports them rather than re-typing the literal —
+# a second copy is exactly how a sweep site gets missed when the definition changes.
+LIVE_PREDICATE = "archived_at IS NULL"
+LIVE_PREDICATE_D = "d.archived_at IS NULL"
+
+# A task belongs to a live deal, or to no deal at all. Archiving is the user's "stop
+# nagging me about this" gesture and the heartbeat reads the task surfaces, so EVERY
+# task reader applies this rule — the dashboard's overdue/pending counts and the
+# contact detail page use this constant; list_tasks uses the equivalent aliased form
+# (`t.deal_id IS NULL OR d.archived_at IS NULL`) since it already joins deals. Any new
+# task reader must carry one of the two. Standalone tasks (deal_id NULL) are unaffected.
+LIVE_TASK_PREDICATE = (
+    "(tasks.deal_id IS NULL OR EXISTS (SELECT 1 FROM deals ld "
+    "WHERE ld.id = tasks.deal_id AND ld.archived_at IS NULL))"
+)
 
 # Contact list ORDER BY fragments (allowlisted — the param is NEVER interpolated). Every
 # fragment ends with `id DESC` so limit/offset pagination is deterministic (no dupes/skips
@@ -249,10 +274,13 @@ def get_contact_detail(contact_id: int) -> dict | None:
     if not contact:
         return None
     deals = pg_fetchall(
-        "SELECT * FROM deals WHERE contact_id = %s ORDER BY updated_at DESC", (contact_id,)
+        f"SELECT * FROM deals WHERE contact_id = %s AND {LIVE_PREDICATE} "
+        "ORDER BY updated_at DESC",
+        (contact_id,),
     )
     tasks = pg_fetchall(
-        "SELECT * FROM tasks WHERE contact_id = %s ORDER BY completed ASC, due_date ASC LIMIT 20",
+        f"SELECT * FROM tasks WHERE contact_id = %s AND {LIVE_TASK_PREDICATE} "
+        "ORDER BY completed ASC, due_date ASC LIMIT 20",
         (contact_id,),
     )
     activity = pg_fetchall(
@@ -365,19 +393,25 @@ def update_company(company_id: int, **fields) -> dict | None:
 
 def delete_company(company_id: int) -> bool:
     """Delete a company. Its contacts/deals are kept — the FK is ON DELETE SET NULL,
-    so they simply unlink. Its polymorphic crm_field_values rows are dropped
-    explicitly (no FK), so a reused company SERIAL id can't inherit them.
+    so they simply unlink. Its polymorphic crm_chatter / crm_field_values rows are
+    dropped explicitly (no FK), so a reused company SERIAL id can't inherit them.
 
     Runs in one transaction with a FOR UPDATE lock — the same discipline as
-    delete_contact — serializing against field_service.set_field_values so a value
-    can't be written to a company this transaction is deleting. (No crm_chatter
-    cleanup: chatter attaches to deals/contacts only, never companies.)
+    delete_contact — serializing against chatter_service.add_note and
+    field_service.set_field_values (both lock this row before inserting), so a note
+    or custom-field value can't be written to a company this transaction is deleting.
     """
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute("SELECT id FROM companies WHERE id = %s FOR UPDATE", (company_id,))
         if cur.fetchone() is None:
             return False
+        # Company chatter arrived with issue #22; without this a deleted company's
+        # notes would resurface on whatever company later reuses its SERIAL id.
+        cur.execute(
+            "DELETE FROM crm_chatter WHERE entity_type = 'company' AND entity_id = %s",
+            (company_id,),
+        )
         # #18: contacts + deals unlink (FK ON DELETE SET NULL) — their company-linkage /
         # relationship factors change. Capture ids now (each before the next execute).
         cur.execute("SELECT id FROM contacts WHERE company_id = %s", (company_id,))
@@ -388,6 +422,12 @@ def delete_company(company_id: int) -> bool:
             "DELETE FROM crm_field_values WHERE entity_type = 'company' AND entity_id = %s",
             (company_id,),
         )
+        # NO crm_field_provenance cleanup here, unlike delete_contact — and that is
+        # correct, not an oversight: provenance_service.VALID_ENTITY_TYPES is
+        # {'deal', 'contact'} and its single INSERT is guarded by _check_entity_type,
+        # so a company provenance row cannot be written in the first place. Pinned by
+        # test_company_provenance_is_unwritable. If companies ever become a valid
+        # provenance entity, this delete has to be added with it.
         cur.execute("DELETE FROM companies WHERE id = %s", (company_id,))
     scoring_service.score_on_event(deal_ids=affected_deal_ids, contact_ids=affected_contact_ids)  # #18
     return True
@@ -406,19 +446,25 @@ def get_company_detail(company_id: int) -> dict | None:
         "SELECT * FROM contacts WHERE company_id = %s ORDER BY name ASC", (company_id,)
     )
     deals = pg_fetchall(
-        """SELECT d.*, c.name AS contact_name
-           FROM deals d LEFT JOIN contacts c ON d.contact_id = c.id
-           WHERE d.company_id = %s ORDER BY d.updated_at DESC""",
+        f"""SELECT d.*, c.name AS contact_name
+            FROM deals d LEFT JOIN contacts c ON d.contact_id = c.id
+            WHERE d.company_id = %s AND {LIVE_PREDICATE_D} ORDER BY d.updated_at DESC""",
         (company_id,),
     )
     activity = pg_fetchall(
-        """SELECT a.*, c.name AS contact_name, d.title AS deal_title
-           FROM activity_log a
-           LEFT JOIN contacts c ON a.contact_id = c.id
-           LEFT JOIN deals d ON a.deal_id = d.id
-           WHERE a.contact_id IN (SELECT id FROM contacts WHERE company_id = %s)
-              OR a.deal_id IN (SELECT id FROM deals WHERE company_id = %s)
-           ORDER BY a.created_at DESC LIMIT 20""",
+        f"""SELECT a.*, c.name AS contact_name, d.title AS deal_title
+            FROM activity_log a
+            LEFT JOIN contacts c ON a.contact_id = c.id
+            LEFT JOIN deals d ON a.deal_id = d.id
+            -- Only the DEAL side filters archived: an archived deal stops being one
+            -- of the company's deals. The CONTACT side deliberately does not — that
+            -- row is the history of talking to a person who still belongs to this
+            -- company, and it already shows on the contact's own page. Filtering it
+            -- here would make the two views disagree about the same interaction.
+            WHERE a.contact_id IN (SELECT id FROM contacts WHERE company_id = %s)
+               OR a.deal_id IN (SELECT id FROM deals WHERE company_id = %s
+                                 AND {LIVE_PREDICATE})
+            ORDER BY a.created_at DESC LIMIT 20""",
         (company_id, company_id),
     )
     # Single-currency (USD) sum, matching the rest of the app's hardcoded '$'.
@@ -440,6 +486,11 @@ def create_deal(
     if stage not in DEAL_STAGES:
         stage = "lead"
     probability = max(0, min(100, probability))  # keep the percentage in range
+    # Creating a deal straight into won/lost settles its probability too — the edit
+    # form's stage <select> offers those stages, so this is a reachable fourth close
+    # path, not a theoretical one. (_write_deal_update covers the other three.)
+    if stage in ("won", "lost"):
+        probability = 100 if stage == "won" else 0
     # company_id appended last (see create_contact); a bad FK -> ForeignKeyViolation.
     row = pg_fetchone(
         """INSERT INTO deals (title, contact_id, stage, value, notes, expected_close_date, probability, currency, company_id)
@@ -469,7 +520,9 @@ def get_deal_detail(deal_id: int) -> dict | None:
     activity = pg_fetchall(
         "SELECT * FROM activity_log WHERE deal_id = %s ORDER BY created_at DESC LIMIT 20", (deal_id,)
     )
-    return {**deal, "activity": activity}
+    # custom_fields is embedded (issue #22 Q12a) so one read answers "tell me about
+    # this deal" — previously the assistant needed a second crm_get_deal_fields call.
+    return _embed_custom_fields([{**deal, "activity": activity}])[0]
 
 
 def get_pipeline(stage: str | None = None) -> dict:
@@ -485,7 +538,7 @@ def get_pipeline(stage: str | None = None) -> dict:
     # unpaginated all-deals board is the binding constraint, not this once-per-load aggregate.
     # If deal/activity volume ever grows, switch to a per-deal LATERAL MAX (indexes exist:
     # idx_activity_deal, idx_crm_chatter_entity) or a maintained last-activity column.
-    where = "WHERE d.stage = %s" if stage else ""
+    where = f"WHERE {LIVE_PREDICATE_D}" + (" AND d.stage = %s" if stage else "")
     deals = pg_fetchall(
         f"""SELECT d.*, c.name AS contact_name, co.name AS company_name,
                    la.last_at AS last_activity_at
@@ -507,9 +560,9 @@ def get_pipeline(stage: str | None = None) -> dict:
 
     # Value summaries per stage (open stages only).
     stage_summary = pg_fetchall(
-        """SELECT stage, COUNT(*) AS count, COALESCE(SUM(value), 0) AS total_value
-           FROM deals WHERE stage NOT IN ('won', 'lost')
-           GROUP BY stage"""
+        f"""SELECT stage, COUNT(*) AS count, COALESCE(SUM(value), 0) AS total_value
+            FROM deals WHERE stage NOT IN ('won', 'lost') AND {LIVE_PREDICATE}
+            GROUP BY stage"""
     )
     total_pipeline = sum(s["total_value"] for s in stage_summary)
 
@@ -517,7 +570,7 @@ def get_pipeline(stage: str | None = None) -> dict:
 
 
 def list_deals(stage: str | None = None, contact_id: int | None = None, limit: int = 50) -> list[dict]:
-    conditions = []
+    conditions = [LIVE_PREDICATE_D]
     params: list = []
     if stage:
         conditions.append("d.stage = %s")
@@ -535,7 +588,193 @@ def list_deals(stage: str | None = None, contact_id: int | None = None, limit: i
     )
 
 
+def _write_deal_update(deal_id: int, filtered: dict) -> bool:
+    """Apply a validated column map to one deal in a single transaction.
+
+    Every deal COLUMN update funnels through here (create_deal and archive_deal are
+    the two writes that don't — they have no old stage to transition from) so the
+    three things that must happen together with a stage change actually do (issue #22):
+
+    1. **Stage history** — a ``deal_stage_events`` row is appended in the SAME
+       transaction as the ``UPDATE``, so the log can never disagree with
+       ``deals.stage``.
+    2. **Stale lost_reason** — a deal leaving the 'lost' stage has its reason
+       cleared. cake_os shipped this bug and fixed it later; porting the fixed
+       behavior means a reopened deal can't carry "budget cut" into the timeline
+       or a win/loss read.
+    3. **Serialization** — the old stage is read under ``SELECT ... FOR UPDATE``,
+       so two concurrent moves can't both log a transition from the same old
+       stage (CLAUDE.md: a check-then-write spanning reads and updates is one
+       transaction).
+    4. **Lead scores** (#18) — after the write commits, the deal and its linked
+       contact(s) are rescored. Hooked HERE rather than in each caller (where #18
+       originally put it) so every funneled write rescores — including the #22
+       lifecycle verbs (mark won/lost) #18 never knew about. On a re-link both the
+       old and the new contact changed inputs. score_on_event never raises.
+
+    Returns False when the deal does not exist. ``filtered`` must already be
+    validated/clamped by the caller — this function writes what it is given, and must
+    be non-empty (an empty map would build ``SET , updated_at = …``). No caller can
+    reach that today; the guard is here so a future one can't either.
+    """
+    if not filtered:
+        raise ValueError("_write_deal_update requires at least one column to set")
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT stage, archived_at, contact_id FROM deals WHERE id = %s FOR UPDATE",
+            (deal_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return False
+        old_stage, archived_at, old_contact_id = row[0], row[1], row[2]
+        new_stage = filtered.get("stage", old_stage)
+        # An archived deal is out of every list, board and aggregate — so closing one
+        # would book revenue nothing can see (won + archived is absent from win rate
+        # and avg deal size). Same stance merge_deals takes: restore it first.
+        if new_stage != old_stage and archived_at is not None:
+            raise ValueError(
+                f"Cannot change the stage of archived deal #{deal_id} — restore it first"
+            )
+        if old_stage == "lost" and new_stage != "lost" and "lost_reason" not in filtered:
+            filtered = {**filtered, "lost_reason": ""}
+        # Closing a deal settles its win probability on every path that CHANGES the
+        # stage — the Kanban drag, crm_update_deal_stage and the edit form all come
+        # through here (create_deal handles the create-as-closed case itself).
+        # This OVERRIDES a supplied probability on purpose: "probability" means chance
+        # of winning, so it has exactly one correct value once the deal is decided, and
+        # the edit form happily posts the old 30% alongside stage='won'. Only on the
+        # TRANSITION though — editing probability on an already-closed deal stays the
+        # caller's call.
+        if new_stage != old_stage and new_stage in ("won", "lost"):
+            filtered = {**filtered, "probability": 100 if new_stage == "won" else 0}
+        set_clause = ", ".join(f"{k} = %s" for k in filtered)
+        cur.execute(
+            f"UPDATE deals SET {set_clause}, updated_at = %s WHERE id = %s",
+            list(filtered.values()) + [_now(), deal_id],
+        )
+        if new_stage != old_stage:
+            cur.execute(
+                "INSERT INTO deal_stage_events (deal_id, old_stage, new_stage) "
+                "VALUES (%s, %s, %s)",
+                (deal_id, old_stage, new_stage),
+            )
+    # After commit, on purpose: a scoring read inside the transaction would see (and
+    # lengthen) the FOR UPDATE window. Dedup/None-filtering is score_on_event's job.
+    scoring_service.score_on_event(
+        deal_ids=(deal_id,),
+        contact_ids=(filtered.get("contact_id"), old_contact_id),
+    )
+    return True
+
+
+# Sortable deal columns for search_deals. An allowlist, not a passthrough: the column
+# is interpolated into the ORDER BY, so anything outside this set is an injection
+# vector. Sorting by a CUSTOM field key is deliberately out of scope for v1 (issue #22
+# Q11) — it needs a join whose shape overlaps #21's filtering work.
+_DEAL_SORTS = frozenset(
+    {"updated_at", "created_at", "value", "expected_close_date", "title", "stage", "probability"}
+)
+MAX_DEAL_SEARCH_LIMIT = 100
+MAX_CUSTOM_FIELD_FILTERS = 10
+
+
+def _embed_custom_fields(rows: list[dict]) -> list[dict]:
+    """Attach each deal's non-empty custom-field values as a ``custom_fields`` dict.
+
+    One batched query for the whole result set (issue #22 Q12a) — the assistant used
+    to need a second crm_get_deal_fields round-trip per deal to see them.
+    """
+    if not rows:
+        return rows
+    values = field_service.get_field_values_batch("deal", [r["id"] for r in rows])
+    for row in rows:
+        row["custom_fields"] = values.get(row["id"], {})
+    return rows
+
+
+def search_deals(
+    search: str = "", stage: str | None = None, sort_by: str = "updated_at",
+    sort_dir: str = "desc", custom_field_filters: dict | None = None, limit: int = 25,
+    include_archived: bool = False,
+) -> list[dict]:
+    """Keyword + facet search over live deals, with custom-field values embedded.
+
+    ``list_deals`` only ever filtered by stage/contact_id, so the assistant had no way
+    to answer "which deals mention X". Keyword matches the deal's own title/notes plus
+    the linked contact and company names — the three things a user names a deal by.
+
+    ``custom_field_filters`` is a ``{field_key: value}`` map ANDed together, each an
+    EXISTS on the EAV tables. Matching is case-insensitive EXACT, not substring: these
+    fields are mostly dropdowns, where a substring match would silently match sibling
+    options. The KEY is matched case-insensitively too — stored keys are slugified
+    lowercase, and a model that echoes the display name ("Region") should still find
+    the field rather than silently get zero rows.
+    """
+    try:
+        limit = max(1, min(int(limit), MAX_DEAL_SEARCH_LIMIT))
+    except (TypeError, ValueError):
+        limit = 25
+    sort_col = sort_by if sort_by in _DEAL_SORTS else "updated_at"
+    direction = "ASC" if str(sort_dir).lower() == "asc" else "DESC"
+    # expected_close_date is TEXT NOT NULL DEFAULT '', so a plain sort puts every
+    # UNDATED deal first — the exact opposite of "deals closing soon". NULLIF + NULLS
+    # LAST pushes them to the end in both directions.
+    sort_expr = (f"NULLIF(d.{sort_col}, '') {direction} NULLS LAST"
+                 if sort_col == "expected_close_date" else f"d.{sort_col} {direction}")
+
+    # This is the ONLY read that can surface an archived deal, which makes it the way
+    # back from an accidental archive or a wrong merge: without it a soft archive is a
+    # one-way door, since every other list/board/rollup filters them out and get_deal
+    # needs an id nothing would tell you.
+    conditions = [] if include_archived else [LIVE_PREDICATE_D]
+    params: list = []
+    if search:
+        like = f"%{search}%"
+        conditions.append(
+            "(d.title ILIKE %s OR d.notes ILIKE %s OR c.name ILIKE %s OR co.name ILIKE %s)"
+        )
+        params.extend([like] * 4)
+    if stage:
+        conditions.append("d.stage = %s")
+        params.append(stage)
+    # Every other model-supplied bound in this function is clamped; the filter COUNT
+    # is one too — an LLM could otherwise emit hundreds of keys and build a query with
+    # hundreds of EXISTS subqueries. Extra keys are dropped, not an error: a truncated
+    # filter still returns a superset, never wrong rows.
+    for key, value in list((custom_field_filters or {}).items())[:MAX_CUSTOM_FIELD_FILTERS]:
+        conditions.append(
+            """EXISTS (SELECT 1 FROM crm_field_values v
+                         JOIN crm_field_definitions fd ON fd.id = v.field_id
+                        WHERE v.entity_type = 'deal' AND v.entity_id = d.id
+                          AND fd.entity_type = 'deal'
+                          AND lower(fd.field_key) = lower(%s)
+                          AND lower(v.value) = lower(%s))"""
+        )
+        # normalize_value, not str(): booleans are stored '1'/'0', so a raw
+        # str(True) -> 'True' would silently match nothing (the tool schema
+        # advertises boolean filter values).
+        params.extend([str(key), field_service.normalize_value(value)])
+    params.append(limit)
+
+    rows = pg_fetchall(
+        f"""SELECT d.*, c.name AS contact_name, co.name AS company_name
+            FROM deals d
+            LEFT JOIN contacts c ON d.contact_id = c.id
+            LEFT JOIN companies co ON d.company_id = co.id
+            {('WHERE ' + ' AND '.join(conditions)) if conditions else ''}
+            ORDER BY {sort_expr}, d.id {direction}
+            LIMIT %s""",
+        params,
+    )
+    return _embed_custom_fields(rows)
+
+
 def update_deal(deal_id: int, **fields) -> dict | None:
+    # lost_reason is deliberately NOT in `allowed`: mark_deal_lost is its single
+    # writer, so a reason always arrives with the close (and its timeline note) and
+    # can never be set on a deal that isn't lost.
     allowed = {"title", "stage", "value", "notes", "expected_close_date", "probability", "currency", "contact_id", "company_id"}
     filtered = {k: v for k, v in fields.items() if k in allowed}
     if "stage" in filtered and filtered["stage"] not in DEAL_STAGES:
@@ -544,39 +783,195 @@ def update_deal(deal_id: int, **fields) -> dict | None:
         filtered["probability"] = max(0, min(100, filtered["probability"]))
     if not filtered:
         return get_deal(deal_id)
-    # #18: capture the OLD contact link before a re-link, so both old and new contacts
-    # get their deal-linkage factor refreshed.
-    old_contact_id = None
-    if "contact_id" in filtered:
-        prev = pg_fetchone("SELECT contact_id FROM deals WHERE id = %s", (deal_id,))
-        old_contact_id = prev["contact_id"] if prev else None
-    set_clause = ", ".join(f"{k} = %s" for k in filtered)
-    values = list(filtered.values()) + [_now(), deal_id]
-    pg_execute(
-        f"UPDATE deals SET {set_clause}, updated_at = %s WHERE id = %s", values
-    )
-    # Any deal edit can shift the score (stage/value/relink); the linked contact's deal-linkage
-    # factor depends on this deal's stage, so rescore it too (P1.7). Rescore BEFORE the final
-    # get_deal so the response carries the fresh lead_score (the kanban merges this response into
-    # its board state — a stale score would show on the card until a full refetch).
-    linked = pg_fetchone("SELECT contact_id FROM deals WHERE id = %s", (deal_id,))
-    scoring_service.score_on_event(
-        deal_ids=(deal_id,), contact_ids=((linked or {}).get("contact_id"), old_contact_id)
-    )
+    if not _write_deal_update(deal_id, filtered):
+        return None
     return get_deal(deal_id)
 
 
 def update_deal_stage(deal_id: int, stage: str) -> dict | None:
     if stage not in DEAL_STAGES:
         return None
-    pg_execute(
-        "UPDATE deals SET stage = %s, updated_at = %s WHERE id = %s", (stage, _now(), deal_id)
-    )
-    # #18: stage feeds the deal's own baseline/terminal and the linked contact's deal-linkage
-    # factor. Rescore before the final read so the response (merged into the kanban) is fresh.
-    linked = pg_fetchone("SELECT contact_id FROM deals WHERE id = %s", (deal_id,))
-    scoring_service.score_on_event(deal_ids=(deal_id,), contact_ids=((linked or {}).get("contact_id"),))
+    if not _write_deal_update(deal_id, {"stage": stage}):
+        return None
     return get_deal(deal_id)
+
+
+# ── Deal lifecycle: won / lost / archive / merge (issue #22) ──────────────────
+
+MAX_LOST_REASON = 500
+
+
+def mark_deal_won(deal_id: int) -> dict | None:
+    """Close a deal as won: stage='won', probability=100.
+
+    Any lost_reason from an earlier close is cleared by _write_deal_update.
+    """
+    if not _write_deal_update(deal_id, {"stage": "won", "probability": 100}):
+        return None
+    return get_deal(deal_id)
+
+
+def mark_deal_lost(deal_id: int, lost_reason: str = "") -> dict | None:
+    """Close a deal as lost: stage='lost', probability=0, reason recorded.
+
+    The reason is stored on the deal (queryable, shown on the deal sheet) AND
+    appended to the notes thread (visible where the user reads the deal's story).
+    The note is best-effort and lands after the close commits — a chatter failure
+    must never leave the deal un-closed.
+    """
+    reason = (lost_reason or "").strip()[:MAX_LOST_REASON]
+    if not _write_deal_update(
+        deal_id, {"stage": "lost", "probability": 0, "lost_reason": reason}
+    ):
+        return None
+    if reason:
+        try:
+            chatter_service.add_note("deal", deal_id, f"Deal lost — {reason}")
+        except Exception:
+            logger.warning("lost-reason note failed for deal %s", deal_id, exc_info=True)
+    return get_deal(deal_id)
+
+
+def archive_deal(deal_id: int, archived: bool = True) -> dict | None:
+    """Soft-archive (or restore) a deal. Nothing is deleted — archived_at is set,
+    and every list/board/rollup/aggregate stops counting the deal (LIVE_PREDICATE).
+
+    Idempotent: archiving an already-archived deal keeps the original timestamp, so
+    "when was this archived" survives a repeat call.
+    """
+    # updated_at is deliberately NOT bumped. LAST_TOUCH_SQL treats updated_at as a
+    # touch, so an archive→restore round-trip would silently reset the deal's staleness
+    # clock and drop it out of get_stale_deals and the heartbeat's nudges until someone
+    # logged a real interaction. archived_at IS the state change; nothing else moved.
+    # COALESCE keeps the FIRST archive timestamp on a repeat call; restore just NULLs it.
+    archived_at_sql = "COALESCE(archived_at, %s)" if archived else "NULL"
+    params = (_now(), deal_id) if archived else (deal_id,)
+    row = pg_fetchone(
+        f"UPDATE deals SET archived_at = {archived_at_sql} WHERE id = %s "
+        "RETURNING contact_id",
+        params,
+    )
+    if not row:
+        return None
+    # #18: an archived deal leaves the contact's deal-linkage aggregate (and a restore
+    # puts it back), so the linked contact's score inputs just changed; the deal's own
+    # stored score also refreshes so a restore doesn't resurface a stale number.
+    scoring_service.score_on_event(deal_ids=(deal_id,), contact_ids=(row["contact_id"],))
+    return get_deal(deal_id)
+
+
+def merge_deals(target_deal_id: int, source_deal_id: int) -> dict:
+    """Fold ``source`` into ``target`` and archive the source. Raises ValueError on
+    a self-merge or a missing deal.
+
+    Restorable by construction — the source is soft-archived, never deleted, and its
+    own notes/history stay on it, so a wrong merge can be undone by un-archiving
+    (the copied rows on the target are then the only cleanup).
+
+    What moves vs. what is copied:
+      * ``activity_log`` + ``tasks`` are **repointed** — a dated interaction and an
+        open follow-up belong to exactly one deal, and the surviving deal is the one
+        that still has work to do. (Tasks would additionally drop out of list_tasks
+        with the archived source; activity would not, since history is never swept.)
+      * notes are **copied** (annotated with the source id), because the source keeps
+        its own thread for the restore case.
+      * custom fields are **gap-filled** — the target's own values always win; the
+        source only fills keys the target left blank. Merging must never overwrite
+        data on the deal being kept.
+
+    Deliberately NOT touched: the target's standard columns (title/value/stage/…).
+    A merge is a consolidation of *history*, not a silent edit of the surviving deal.
+    """
+    if target_deal_id == source_deal_id:
+        raise ValueError("Cannot merge a deal into itself")
+    now = _now()
+    with get_connection() as conn:
+        cur = conn.cursor()
+        # Both rows locked in ascending id order (ORDER BY ... FOR UPDATE locks in the
+        # scan's output order), so two concurrent merges over the same pair queue up
+        # instead of deadlocking.
+        cur.execute(
+            "SELECT id, title, archived_at, contact_id FROM deals WHERE id IN (%s, %s) "
+            "ORDER BY id FOR UPDATE",
+            (target_deal_id, source_deal_id),
+        )
+        rows = cur.fetchall()
+        titles = {r[0]: r[1] for r in rows}
+        archived = {r[0] for r in rows if r[2] is not None}
+        contact_by_deal = {r[0]: r[3] for r in rows}
+        missing = sorted({target_deal_id, source_deal_id} - set(titles))
+        if missing:
+            raise ValueError(f"Deal not found: {', '.join(str(i) for i in missing)}")
+        # Merging into an archived target would quietly move the source's whole
+        # history onto a deal that every list, board and report already hides — the
+        # user asks to consolidate two deals and watches both disappear. Refuse and
+        # say so; restoring first is one call.
+        if archived:
+            raise ValueError(
+                "Cannot merge: deal "
+                + ", ".join(f"#{i}" for i in sorted(archived))
+                + " is archived — restore it first"
+            )
+
+        cur.execute(
+            "UPDATE activity_log SET deal_id = %s WHERE deal_id = %s",
+            (target_deal_id, source_deal_id),
+        )
+        cur.execute(
+            "UPDATE tasks SET deal_id = %s, updated_at = %s WHERE deal_id = %s",
+            (target_deal_id, now, source_deal_id),
+        )
+        # left(...) keeps a copied note inside chatter_service.MAX_MESSAGE_LEN so the
+        # annotated copy stays editable in the UI (the validator rejects longer text).
+        cur.execute(
+            """INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, archived)
+               SELECT 'deal', %s, left(%s || message, %s), created_at, archived
+                 FROM crm_chatter WHERE entity_type = 'deal' AND entity_id = %s""",
+            (target_deal_id, f"[Merged from deal #{source_deal_id}] ",
+             chatter_service.MAX_MESSAGE_LEN, source_deal_id),
+        )
+        # DO UPDATE ... WHERE, not DO NOTHING: clearing a custom field UPSERTs
+        # value='' rather than deleting the row (field_service.set_field_values), so
+        # "the target left it blank" usually means an EXISTING row holding ''. DO
+        # NOTHING would skip exactly the case this is meant to fill. The WHERE keeps
+        # the promise intact in the other direction — a target value that is actually
+        # set is never overwritten.
+        cur.execute(
+            """INSERT INTO crm_field_values
+                   (entity_type, entity_id, field_id, value, updated_at, updated_by_email)
+               SELECT 'deal', %s, s.field_id, s.value, s.updated_at, s.updated_by_email
+                 FROM crm_field_values s
+                WHERE s.entity_type = 'deal' AND s.entity_id = %s
+                  AND s.value IS NOT NULL AND s.value <> ''
+               ON CONFLICT (entity_type, entity_id, field_id)
+               DO UPDATE SET value = EXCLUDED.value,
+                             updated_at = EXCLUDED.updated_at,
+                             updated_by_email = EXCLUDED.updated_by_email
+                WHERE crm_field_values.value IS NULL OR crm_field_values.value = ''""",
+            (target_deal_id, source_deal_id),
+        )
+        cur.execute(
+            "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at) "
+            "VALUES ('deal', %s, %s, %s)",
+            (target_deal_id,
+             f'Merged deal #{source_deal_id} ("{titles[source_deal_id]}") into this deal.',
+             now),
+        )
+        cur.execute(
+            "UPDATE deals SET archived_at = COALESCE(archived_at, %s), updated_at = %s "
+            "WHERE id = %s",
+            (now, now, source_deal_id),
+        )
+    # The target just absorbed the source's evidence, so its touch count is stale —
+    # force_write because the merged-in notes can move the watermark either way.
+    touch_count_service.schedule_recompute(target_deal_id, force_write=True)
+    # #18: activity/tasks were repointed and the source archived — both deals'
+    # interaction factors and both linked contacts' deal-linkage aggregates changed.
+    scoring_service.score_on_event(
+        deal_ids=(target_deal_id, source_deal_id),
+        contact_ids=(contact_by_deal[target_deal_id], contact_by_deal[source_deal_id]),
+    )
+    return get_deal(target_deal_id)
 
 
 # ── Tasks ─────────────────────────────────────────────────────────────────────
@@ -622,7 +1017,12 @@ def list_tasks(
     if priority:
         conditions.append("t.priority = %s")
         params.append(priority)
-    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    # A task on an archived deal follows it out of view: archiving is the user's "stop
+    # bothering me about this" gesture, and the heartbeat is told to nag about overdue
+    # tasks. Standalone tasks (deal_id NULL) are untouched. Activity is deliberately NOT
+    # swept the same way — see get_activity_log.
+    conditions.append(f"(t.deal_id IS NULL OR {LIVE_PREDICATE_D})")  # see LIVE_TASK_PREDICATE
+    where = f"WHERE {' AND '.join(conditions)}"
     params.append(limit)
     return pg_fetchall(
         f"""SELECT t.*, c.name AS contact_name, d.title AS deal_title
@@ -687,6 +1087,13 @@ def log_activity(activity: str, note: str = "", contact_id: int | None = None,
 
 
 def get_activity_log(contact_id: int | None = None, deal_id: int | None = None, limit: int = 20) -> list[dict]:
+    """Activity rows, optionally scoped to a contact or deal.
+
+    Archived deals are deliberately NOT filtered here, unlike list_tasks: an activity
+    row is the record of something that actually happened, not an outstanding work
+    item, and reviewing an archived deal's history is exactly what you need before
+    deciding to restore it. Passing deal_id for an archived deal must keep working.
+    """
     conditions = []
     params: list = []
     if contact_id is not None:
@@ -746,8 +1153,8 @@ def get_dashboard_stats() -> dict:
         contacts_by_status[row["status"]] = row["count"]
 
     pipeline_by_stage = pg_fetchall(
-        """SELECT stage, COUNT(*) AS count, COALESCE(SUM(value), 0) AS total_value
-           FROM deals GROUP BY stage"""
+        f"""SELECT stage, COUNT(*) AS count, COALESCE(SUM(value), 0) AS total_value
+            FROM deals WHERE {LIVE_PREDICATE} GROUP BY stage"""
     )
     total_pipeline_value = sum(
         r["total_value"] for r in pipeline_by_stage if r["stage"] not in ("won", "lost")
@@ -758,22 +1165,25 @@ def get_dashboard_stats() -> dict:
     # NOT overdue) and can never cast-error on a malformed row (unlike ::date).
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     overdue_row = pg_fetchone(
-        "SELECT COUNT(*) AS cnt FROM tasks WHERE completed = 0 AND due_date != '' AND due_date < %s",
+        "SELECT COUNT(*) AS cnt FROM tasks WHERE completed = 0 AND due_date != '' "
+        f"AND due_date < %s AND {LIVE_TASK_PREDICATE}",
         (today,),
     )
     overdue_tasks = overdue_row["cnt"] if overdue_row else 0
 
-    pending_row = pg_fetchone("SELECT COUNT(*) AS cnt FROM tasks WHERE completed = 0")
+    pending_row = pg_fetchone(
+        f"SELECT COUNT(*) AS cnt FROM tasks WHERE completed = 0 AND {LIVE_TASK_PREDICATE}"
+    )
     pending_tasks = pending_row["cnt"] if pending_row else 0
 
     recent_activity = get_activity_log(limit=10)
 
     # Top open deals by value.
     top_deals = pg_fetchall(
-        """SELECT d.*, c.name AS contact_name
-           FROM deals d LEFT JOIN contacts c ON d.contact_id = c.id
-           WHERE d.stage NOT IN ('won', 'lost')
-           ORDER BY d.value DESC LIMIT 5"""
+        f"""SELECT d.*, c.name AS contact_name
+            FROM deals d LEFT JOIN contacts c ON d.contact_id = c.id
+            WHERE d.stage NOT IN ('won', 'lost') AND {LIVE_PREDICATE_D}
+            ORDER BY d.value DESC LIMIT 5"""
     )
 
     return {
@@ -795,7 +1205,24 @@ def get_dashboard_stats() -> dict:
 AGE_BUCKETS = ((0, 7, "0-7"), (8, 30, "8-30"), (31, 90, "31-90"), (91, None, "91+"))
 
 # Open-deal predicate (DEAL_STAGES sentinels; no status column / CHECK exists).
-_OPEN_PREDICATE = "stage NOT IN ('won', 'lost')"
+# Public for the same single-source-of-truth reason as LIVE_PREDICATE above.
+OPEN_PREDICATE = "stage NOT IN ('won', 'lost')"
+OPEN_PREDICATE_D = "d.stage NOT IN ('won', 'lost')"
+
+# "When was this deal last touched" — the newest of: any edit (updated_at), any logged
+# activity, any un-archived note. Requires the deals table aliased as `d`.
+#
+# Shared by get_analytics (below) and analytics_service.get_stale_deals (issue #22), so
+# the dashboard's stale count and the assistant's stale-deal list can never disagree
+# about what "touched" means. Change it here and both move together.
+LAST_TOUCH_SQL = """GREATEST(
+    d.updated_at,
+    COALESCE((SELECT MAX(a.created_at) FROM activity_log a
+               WHERE a.deal_id = d.id), d.updated_at),
+    COALESCE((SELECT MAX(ch.created_at) FROM crm_chatter ch
+               WHERE ch.entity_type = 'deal' AND ch.entity_id = d.id
+                 AND ch.archived = 0), d.updated_at)
+)"""
 
 # The assistant tool trims activity_by_type to the top-N by count: the activity
 # vocabulary is free text (no CHECK), so an unbounded tail of one-off kinds would
@@ -947,13 +1374,14 @@ def get_analytics(days: int = 30, stale_days: int = 14, stale_limit: int = 8) ->
         SELECT
             COUNT(*) FILTER (WHERE stage = 'won')                       AS won,
             COUNT(*) FILTER (WHERE stage = 'lost')                      AS lost,
-            COUNT(*) FILTER (WHERE {_OPEN_PREDICATE})                   AS open_count,
-            COALESCE(SUM(value) FILTER (WHERE {_OPEN_PREDICATE}), 0)    AS total_pipeline_value,
+            COUNT(*) FILTER (WHERE {OPEN_PREDICATE})                   AS open_count,
+            COALESCE(SUM(value) FILTER (WHERE {OPEN_PREDICATE}), 0)    AS total_pipeline_value,
             AVG(value) FILTER (WHERE stage = 'won' AND value > 0)       AS avg_won_deal_size,
-            AVG(value) FILTER (WHERE {_OPEN_PREDICATE} AND value > 0)   AS avg_open_deal_size,
+            AVG(value) FILTER (WHERE {OPEN_PREDICATE} AND value > 0)   AS avg_open_deal_size,
             AVG(EXTRACT(EPOCH FROM (updated_at - created_at)) / 86400.0)
                 FILTER (WHERE stage = 'won')                            AS avg_days_to_close
         FROM deals
+        WHERE {LIVE_PREDICATE}
         """
     )
 
@@ -963,18 +1391,11 @@ def get_analytics(days: int = 30, stale_days: int = 14, stale_limit: int = 8) ->
                c.name  AS contact_name,
                co.name AS company_name,
                EXTRACT(EPOCH FROM (now() - d.created_at)) / 86400.0 AS age_days,
-               EXTRACT(EPOCH FROM (now() - GREATEST(
-                   d.updated_at,
-                   COALESCE((SELECT MAX(a.created_at) FROM activity_log a
-                             WHERE a.deal_id = d.id), d.updated_at),
-                   COALESCE((SELECT MAX(ch.created_at) FROM crm_chatter ch
-                             WHERE ch.entity_type = 'deal' AND ch.entity_id = d.id
-                               AND ch.archived = 0), d.updated_at)
-               ))) / 86400.0 AS days_since_touch
+               EXTRACT(EPOCH FROM (now() - {LAST_TOUCH_SQL})) / 86400.0 AS days_since_touch
         FROM deals d
         LEFT JOIN contacts  c  ON d.contact_id = c.id
         LEFT JOIN companies co ON d.company_id = co.id
-        WHERE d.{_OPEN_PREDICATE}
+        WHERE {OPEN_PREDICATE_D} AND {LIVE_PREDICATE_D}
         """
     )
 
@@ -1195,15 +1616,20 @@ def _truncate_all(cur, include_definitions: bool = False) -> None:
     # crm_field_provenance trails both variants, matching the entity-tables-first order
     # its own writers take (record_fields/confirm lock the entity row FOR UPDATE before
     # touching provenance), so it inverts against no writer either.
+    # deal_stage_events trails everything: it is the one CRM table with a real FK to
+    # deals, so Postgres REQUIRES it in the same TRUNCATE statement (truncating a
+    # referenced table alone errors out). Its only writer, _write_deal_update, locks
+    # the deals row first, so a later position can't invert against it.
     if include_definitions:
         cur.execute(
             "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
-            "crm_field_definitions, crm_field_values, crm_field_provenance RESTART IDENTITY"
+            "crm_field_definitions, crm_field_values, crm_field_provenance, "
+            "deal_stage_events RESTART IDENTITY"
         )
     else:
         cur.execute(
             "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
-            "crm_field_values, crm_field_provenance RESTART IDENTITY"
+            "crm_field_values, crm_field_provenance, deal_stage_events RESTART IDENTITY"
         )
 
 

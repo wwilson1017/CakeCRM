@@ -1,7 +1,7 @@
 """CRM agent-tools contract: unconditional, complete, well-formed.
 
 The issue requires the crm_* tools to be collected unconditionally (no enable
-gate). This pins that: 31 schema defs, 32 executors (incl. the crm_log_note
+gate). This pins that: 40 schema defs, 41 executors (incl. the crm_log_note
 back-compat alias), every def has an executor, and get_crm_tools() returns the
 full set with no gating.
 """
@@ -10,19 +10,21 @@ import inspect
 
 import psycopg2
 
-from crm import field_service, service, tools
+from crm import chatter_service, field_service, service, tools
 from crm.tools import CRM_TOOL_DEFS, TOOL_EXECUTORS, get_crm_tools
 
 
 def test_def_and_executor_counts():
     # Absolute counts. ⚠ TOOL-COUNT SUM RULE (coach #67): concurrent sibling issues
     # may add crm_* tools in the same auto-issues run. If so, this is 24 (base) +
-    # 6 (#19 custom fields) + 2 (#18 lead scores) + 1 (#20 crm_analytics) + N (sibling
+    # 6 (#19 custom fields) + 2 (#18 lead scores) + 1 (#20 crm_analytics) + 9 (#22
+    # Casey parity: search_deals, mark_deal_won/lost, archive_deal, merge_deals,
+    # get_stale_deals, get_contact_staleness, find_duplicates, scan_gaps) + N (sibling
     # additions) — SUM the additions, never overwrite the number. On rebase behind a
     # sibling that also adds a tool, recompute cumulative (do NOT keep-both a single
     # number). The executor count is always defs + 1 (crm_log_note alias).
-    assert len(CRM_TOOL_DEFS) == 33
-    assert len(TOOL_EXECUTORS) == 34
+    assert len(CRM_TOOL_DEFS) == 42
+    assert len(TOOL_EXECUTORS) == 43
     # Relative invariant (robust to any future additions): exactly one alias-only executor.
     assert len(TOOL_EXECUTORS) == len(CRM_TOOL_DEFS) + 1
 
@@ -196,15 +198,18 @@ def test_chatter_tools_present_and_shaped():
     assert {"crm_add_note", "crm_get_chatter"} <= set(by_name)
     for name in ("crm_add_note", "crm_get_chatter"):
         props = by_name[name]["input_schema"]["properties"]
-        assert props["entity_type"]["enum"] == ["deal", "contact"]
+        # 'company' joined in issue #22. The tool enum must track the service's
+        # CHATTER_ENTITY_TYPES exactly, or the model is told about a type the service
+        # rejects (or denied one it accepts).
+        assert set(props["entity_type"]["enum"]) == set(chatter_service.CHATTER_ENTITY_TYPES)
     assert by_name["crm_add_note"]["input_schema"]["required"] == ["entity_type", "entity_id", "message"]
 
 
 def test_chatter_executors_wrap_validation_errors():
     # A bad entity_type is rejected in the service before any DB call; the tool
     # surfaces it as {"error": ...} rather than raising.
-    assert "error" in tools.crm_add_note("company", 1, "hi")
-    assert "error" in tools.crm_get_chatter("company", 1)
+    assert "error" in tools.crm_add_note("invoice", 1, "hi")
+    assert "error" in tools.crm_get_chatter("invoice", 1)
 
 
 def test_chatter_executors_happy_path_shapes(monkeypatch):
@@ -321,6 +326,253 @@ def test_set_fields_empty_string_clear_forwards(monkeypatch):
                         lambda et, eid, vals, email: captured.update(vals=vals) or {"ok": True, "updated": 1, "errors": []})
     tools.crm_set_contact_fields(5, {"vip": ""})
     assert captured["vals"] == {"9": ""}   # empty string forwarded (clears downstream)
+
+
+# ── Deal lifecycle + sales intelligence (issue #22) ──────────────────────────
+
+_LIFECYCLE_TOOLS = {
+    "crm_search_deals": False,
+    "crm_mark_deal_won": True,
+    "crm_mark_deal_lost": True,
+    "crm_archive_deal": True,
+    "crm_merge_deals": True,
+}
+_INTELLIGENCE_TOOLS = {
+    "crm_get_stale_deals", "crm_get_contact_staleness",
+    "crm_find_duplicates", "crm_scan_gaps",
+}
+
+
+def test_issue22_tools_present_with_correct_writes_flags():
+    writes = {d["name"]: d["writes"] for d in CRM_TOOL_DEFS}
+    for name, expected in _LIFECYCLE_TOOLS.items():
+        assert writes.get(name) is expected, f"{name} writes flag"
+        assert callable(TOOL_EXECUTORS.get(name)), f"{name} executor"
+    for name in _INTELLIGENCE_TOOLS:
+        assert writes.get(name) is False, f"{name} must be a read"
+        assert callable(TOOL_EXECUTORS.get(name)), f"{name} executor"
+
+
+def test_intelligence_reads_are_available_to_the_background_turn():
+    """The proactive heartbeat's allowlist is DERIVED from the writes flags (reads +
+    notify_user). These four reads exist so the heartbeat can find stale work, so
+    flipping any of them to writes=True would silently disable that — pin it."""
+    from assistant.background import background_allowlist
+    from assistant.registry import ToolRegistry
+
+    allowed = background_allowlist(ToolRegistry())
+    assert _INTELLIGENCE_TOOLS <= allowed
+    # ...and none of the destructive lifecycle verbs may ever be background-callable.
+    assert not ({n for n, w in _LIFECYCLE_TOOLS.items() if w} & allowed)
+
+
+def test_get_pipeline_tool_caps_the_list_but_not_the_totals(monkeypatch):
+    deals = [{"id": i, "stage": "lead"} for i in range(10)]
+    deals += [{"id": 100 + i, "stage": "won"} for i in range(3)]
+    monkeypatch.setattr(service, "get_pipeline", lambda stage=None: {
+        "deals": deals,
+        "stage_summary": [{"stage": "lead", "count": 10, "total_value": 999}],
+        "total_pipeline_value": 999,
+    })
+    out = tools.crm_get_pipeline(limit_per_stage=2)
+    assert [d["id"] for d in out["deals"]] == [0, 1, 100, 101]  # 2 per stage
+    assert out["deals_truncated"] is True
+    # Counts and value are computed over EVERY deal — trimming the list must not lie.
+    assert out["stage_summary"][0]["count"] == 10
+    assert out["total_pipeline_value"] == 999
+
+
+def test_get_pipeline_tool_reports_no_truncation_when_it_fits(monkeypatch):
+    monkeypatch.setattr(service, "get_pipeline", lambda stage=None: {
+        "deals": [{"id": 1, "stage": "lead"}], "stage_summary": [], "total_pipeline_value": 0,
+    })
+    assert tools.crm_get_pipeline()["deals_truncated"] is False
+
+
+def test_search_deals_tool_rejects_a_non_map_filter():
+    assert "error" in tools.crm_search_deals(custom_field_filters=["region"])
+
+
+def test_merge_deals_tool_wraps_validation_errors(monkeypatch):
+    def boom(t, s):
+        raise ValueError("Cannot merge a deal into itself")
+    monkeypatch.setattr(service, "merge_deals", boom)
+    assert tools.crm_merge_deals(1, 1) == {"error": "Cannot merge a deal into itself"}
+
+
+def test_lifecycle_tools_report_a_missing_deal(monkeypatch):
+    monkeypatch.setattr(service, "mark_deal_won", lambda d: None)
+    monkeypatch.setattr(service, "mark_deal_lost", lambda d, lost_reason="": None)
+    monkeypatch.setattr(service, "archive_deal", lambda d, archived=True: None)
+    assert "error" in tools.crm_mark_deal_won(9)
+    assert "error" in tools.crm_mark_deal_lost(9)
+    assert "error" in tools.crm_archive_deal(9)
+
+
+def test_won_and_lost_record_provenance(monkeypatch):
+    """These executors are reached only through the assistant, so a successful write
+    IS an 'AI set this field' event — same contract as crm_update_deal."""
+    from crm import provenance_service
+    recorded = []
+    monkeypatch.setattr(service, "mark_deal_won", lambda d: {"id": d, "stage": "won", "probability": 100})
+    monkeypatch.setattr(provenance_service, "record_fields",
+                        lambda et, eid, fields: recorded.append((et, eid, sorted(fields))))
+    tools.crm_mark_deal_won(4)
+    assert recorded == [("deal", 4, ["probability", "stage"])]
+
+
+def test_bounded_limit_clamps_model_supplied_values():
+    assert tools._bounded_limit(0) == 1
+    assert tools._bounded_limit(10_000) == 100
+    assert tools._bounded_limit("many") == 20
+    assert tools._bounded_limit(None, default=5) == 5
+
+
+def test_find_contact_and_search_companies_pass_the_limit_through(monkeypatch):
+    seen = {}
+
+    def fake_contacts(q, status=None, tags=None, limit=20):
+        seen["c"] = limit
+        return []
+
+    def fake_companies(q, status=None, limit=20):
+        seen["co"] = limit
+        return []
+
+    monkeypatch.setattr(service, "search_contacts", fake_contacts)
+    monkeypatch.setattr(service, "search_companies", fake_companies)
+    tools.crm_find_contact("a", limit=5)
+    tools.crm_search_companies("b", limit=9999)
+    assert seen == {"c": 5, "co": 100}
+
+
+def test_archive_tool_parses_booleans_strictly(monkeypatch):
+    """A model sending the STRING "false" must restore, not archive — bool("false")
+    is True, so a naive cast would do the destructive thing on a restore request."""
+    seen = []
+    monkeypatch.setattr(service, "archive_deal",
+                        lambda d, archived=True: seen.append(archived) or {"id": d})
+    tools.crm_archive_deal(1, archived="false")
+    tools.crm_archive_deal(1, archived="true")
+    tools.crm_archive_deal(1, archived=False)
+    tools.crm_archive_deal(1)
+    assert seen == [False, True, False, True]
+    # Anything ambiguous is refused rather than guessed at.
+    assert "error" in tools.crm_archive_deal(1, archived="maybe")
+    assert len(seen) == 4  # the service was never reached for the bad value
+
+
+def test_archive_tool_rejects_ambiguous_integers(monkeypatch):
+    """0/1 are unambiguous; 2 or -1 are not, and this flag decides whether a deal
+    disappears from every view."""
+    monkeypatch.setattr(service, "archive_deal", lambda d, archived=True: {"id": d})
+    assert tools.crm_archive_deal(1, archived=1)["archived"] is True
+    assert tools.crm_archive_deal(1, archived=0)["archived"] is False
+    assert "error" in tools.crm_archive_deal(1, archived=2)
+    assert "error" in tools.crm_archive_deal(1, archived=-1)
+
+
+def test_mark_deal_lost_badges_an_assistant_written_reason(monkeypatch):
+    """Why a deal was lost is a judgement the assistant made — it feeds win/loss
+    review, so it should carry a badge until a human confirms it."""
+    from crm import provenance_service
+    recorded = []
+    monkeypatch.setattr(service, "mark_deal_lost",
+                        lambda d, lost_reason="": {"id": d, "stage": "lost",
+                                                   "probability": 0,
+                                                   "lost_reason": lost_reason})
+    monkeypatch.setattr(provenance_service, "record_fields",
+                        lambda et, eid, fields: recorded.append(sorted(fields)))
+    tools.crm_mark_deal_lost(4, lost_reason="chose a competitor")
+    assert recorded == [["lost_reason", "probability", "stage"]]
+    assert "lost_reason" in provenance_service.PROVENANCE_FIELDS["deal"]
+
+
+def test_pipeline_and_search_tools_project_the_payload(monkeypatch):
+    """The service returns d.* for the UI (notes, ai_touch_*, timestamps). Forwarding
+    all of it costs ~27k tokens for a 150-deal board and buys nothing — the model can
+    always crm_get_deal for the full record."""
+    fat = {
+        "id": 1, "title": "T", "stage": "lead", "value": 10, "currency": "USD",
+        "probability": 20, "expected_close_date": "", "contact_id": None,
+        "contact_name": None, "company_id": None, "company_name": None,
+        "last_activity_at": None, "archived_at": None,
+        # noise the model never needs:
+        "notes": "x" * 5000, "created_at": "t", "updated_at": "t",
+        "ai_touch_count": 3, "ai_touch_count_at": "t", "ai_touch_evidence_count": 2,
+        "lost_reason": "",
+    }
+    monkeypatch.setattr(service, "get_pipeline", lambda stage=None: {
+        "deals": [dict(fat)], "stage_summary": [], "total_pipeline_value": 0})
+    monkeypatch.setattr(service, "search_deals", lambda **kw: [dict(fat)])
+    monkeypatch.setattr(field_service, "list_field_definitions", lambda et: [])
+
+    for payload in (tools.crm_get_pipeline()["deals"][0],
+                    tools.crm_search_deals()["deals"][0]):
+        assert set(payload) <= set(tools._DEAL_SUMMARY_FIELDS) | {"custom_fields"}
+        assert "notes" not in payload and "ai_touch_count" not in payload
+        assert payload["title"] == "T"   # the useful fields survive
+
+
+def test_search_reports_an_unknown_custom_field_key(monkeypatch):
+    """Without this the model says 'no deals match' when the field doesn't exist —
+    a wrong answer, not a missing one."""
+    monkeypatch.setattr(service, "search_deals", lambda **kw: [])
+    monkeypatch.setattr(field_service, "list_field_definitions",
+                        lambda et: [{"field_key": "region"}])
+    out = tools.crm_search_deals(custom_field_filters={"region": "n", "nope": "x"})
+    assert out["unknown_field_keys"] == ["nope"]
+    assert "unknown_field_keys" not in tools.crm_search_deals(
+        custom_field_filters={"Region": "n"})   # case-insensitive, so not unknown
+
+
+def test_search_can_be_asked_for_archived_deals(monkeypatch):
+    seen = {}
+
+    def fake(**kw):
+        seen.update(kw)
+        return []
+    monkeypatch.setattr(service, "search_deals", fake)
+    monkeypatch.setattr(field_service, "list_field_definitions", lambda et: [])
+    tools.crm_search_deals(search="junk", include_archived="true")
+    assert seen["include_archived"] is True
+    assert "error" in tools.crm_search_deals(include_archived="perhaps")
+
+
+def test_stage_tool_no_longer_advertises_closing():
+    """Tool descriptions are read at call time and beat a prompt block hundreds of
+    tokens earlier — this one used to say 'quick way to close a deal', steering the
+    model past the lifecycle verbs that capture the reason."""
+    by_name = {d["name"]: d for d in CRM_TOOL_DEFS}
+    stage_tool = by_name["crm_update_deal_stage"]
+    assert "crm_mark_deal_won" in stage_tool["description"]
+    assert "won" not in stage_tool["input_schema"]["properties"]["stage"]["description"]
+
+
+def test_lifecycle_tools_surface_a_refusal_instead_of_raising(monkeypatch):
+    """A ValueError escaping an executor becomes registry.execute_tool_sync's generic
+    "failed, please try again" — which sends the model into a retry loop on a
+    permanent condition and hides the actionable message."""
+    def refuse(*a, **k):
+        raise ValueError("Cannot change the stage of archived deal #7 — restore it first")
+
+    for name, call in (
+        ("mark_deal_won", lambda: tools.crm_mark_deal_won(7)),
+        ("mark_deal_lost", lambda: tools.crm_mark_deal_lost(7, lost_reason="x")),
+        ("update_deal_stage", lambda: tools.crm_update_deal_stage(7, "won")),
+        ("update_deal", lambda: tools.crm_update_deal(7, stage="won")),
+    ):
+        monkeypatch.setattr(service, name, refuse)
+        out = call()
+        assert "restore it first" in out.get("error", ""), name
+
+
+def test_summary_projection_keeps_the_fields_the_prompt_relies_on():
+    """SALES_GUIDE calls lost_reason 'the most useful field when reviewing a quarter',
+    and a search row's only recency signal is updated_at (last_activity_at is computed
+    by get_pipeline alone)."""
+    assert "lost_reason" in tools._DEAL_SUMMARY_FIELDS
+    assert "updated_at" in tools._DEAL_SUMMARY_FIELDS
 
 
 # ── Lead-score tools (issue #18) ──────────────────────────────────────────────

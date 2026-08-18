@@ -12,8 +12,9 @@ non-empty bounded message, and bounded list windows. Invalid input raises ``Valu
 Storage is polymorphic ``(entity_type, entity_id)`` with no FK, so orphan safety is
 enforced structurally: ``add_note`` checks the target exists and inserts in ONE
 transaction (``SELECT ... FOR UPDATE`` on the target row, per the check-then-write
-rule in CLAUDE.md), and ``service.py`` clears chatter in ``delete_contact`` (which
-also locks the target ``FOR UPDATE``) and every CRM-truncate path. A SERIAL id is
+rule in CLAUDE.md), and ``service.py`` clears chatter in ``delete_contact`` /
+``delete_company`` (both of which also lock the target ``FOR UPDATE``) and every
+CRM-truncate path. A SERIAL id is
 never reused except by ``TRUNCATE ... RESTART IDENTITY``, which also wipes
 ``crm_chatter`` — so a reused id can never inherit a deleted entity's notes.
 """
@@ -23,8 +24,11 @@ from datetime import datetime, timezone
 from core.postgres import get_connection, pg_fetchall, pg_fetchone, row_to_dict
 from crm import scoring_service, touch_count_service
 
-CHATTER_ENTITY_TYPES = ("deal", "contact")
-_ENTITY_TABLE = {"deal": "deals", "contact": "contacts"}
+# Companies joined in issue #22 (Casey parity): entity_type is free TEXT with no CHECK
+# constraint, exactly so this is a zero-migration add. Widening the tuple widens the
+# HTTP routes and the agent tools at once — they all validate through here.
+CHATTER_ENTITY_TYPES = ("deal", "contact", "company")
+_ENTITY_TABLE = {"deal": "deals", "contact": "contacts", "company": "companies"}
 MAX_MESSAGE_LEN = 10_000
 _MAX_LIMIT = 200
 

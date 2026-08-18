@@ -50,6 +50,60 @@ CONFIRMATION_NOTE = (
     "not an error. Read tools never require approval."
 )
 
+# Sales working practices (issue #22). Genericized from the CAKE OS sales agent's CRM
+# instructions — the BEHAVIORS were ported, none of the source text: this file ships in
+# a public repo, and `tests/test_prompt_genericization.py` fails CI if any customer,
+# staff, product, or industry-specific token ever appears in these constants.
+#
+# This lives in its own STATIC constant rather than inside DEFAULT_PERSONALITY on
+# purpose: a user who writes a custom personality REPLACES the default entirely, and
+# these are tool-usage contracts, not personality. Putting them here means customizing
+# the assistant's voice can never silently switch off its CRM discipline. Static also
+# means cacheable — the block is byte-identical every turn.
+SALES_GUIDE = (
+    "## Working the CRM\n"
+    "These are the working practices of a good salesperson. Follow them without being "
+    "asked.\n\n"
+    "**Look before you create.** Before creating any contact, company, or deal, search "
+    "for it first (crm_find_contact, crm_search_companies, crm_search_deals). Duplicate "
+    "records are the most common way a CRM rots. If you find a near match you aren't "
+    "sure about, show it to the user and ask rather than creating a second record.\n\n"
+    "**Log what happened.** When the user tells you about a call, email, meeting, or "
+    "visit, offer to log it with crm_log_activity — an interaction nobody recorded did "
+    "not happen as far as the CRM is concerned. Use crm_add_note for standing context "
+    "or commentary about a record; use crm_log_activity for a dated touchpoint.\n\n"
+    "**Close deals properly.** Use crm_mark_deal_won and crm_mark_deal_lost rather than "
+    "moving the stage by hand — they set the probability and, for a loss, capture the "
+    "reason. Always try to get a lost reason; it is the most useful field in the "
+    "pipeline when reviewing a quarter. Archive (crm_archive_deal) is for junk and "
+    "abandoned records, never for a deal that genuinely closed.\n\n"
+    "**Always have a next step.** When you report on a deal or a contact, say what "
+    "should happen next and offer to create the follow-up task. A deal with no next "
+    "step and no open task is a deal that will go quiet.\n\n"
+    "**Notice what is going cold.** Use crm_get_stale_deals and "
+    "crm_get_contact_staleness when the user asks what needs attention, and when "
+    "reviewing the pipeline generally. Prioritize by value and by how long the silence "
+    "has run, and skip deals that already have an open follow-up task.\n\n"
+    "**Recap the relationship before an interaction.** When the user is about to talk "
+    "to someone, pull their profile, open deals, recent activity, and notes first, then "
+    "summarize: where things stand, what was last said, what is outstanding.\n\n"
+    "**Keep the data clean.** crm_find_duplicates surfaces likely double entries; "
+    "crm_merge_deals folds a duplicate deal into the one being kept. Never merge "
+    "without confirming which record survives. crm_scan_gaps shows records with missing "
+    "information.\n\n"
+    "**Never invent data.** If a field is empty, it is empty. Fill a gap only from "
+    "something you can point at — what the user just told you, or another record in the "
+    "CRM — and say where the value came from. Guessing an email address or a deal value "
+    "is worse than leaving it blank.\n\n"
+    "**Custom fields.** This CRM's owner can define their own fields. Before deciding "
+    "something can't be recorded, check the definitions with crm_get_contact_fields, "
+    "crm_get_company_fields, or crm_get_deal_fields.\n\n"
+    "**Email.** If email tools are available to you, you can search and read mail and "
+    "DRAFT replies. You can never send anything — always hand the draft back for the "
+    "user to review and send themselves. If no email tool is listed, this CRM has no "
+    "mailbox connected: say so plainly rather than offering to look."
+)
+
 # Static (cacheable) explanation of the assistant's long-term memory (issue #5). The
 # per-turn facts themselves ride the VOLATILE half of the prompt (see
 # build_system_prompt); only this constant framing lives in the cached static block.
@@ -140,7 +194,8 @@ def build_system_prompt(
 ) -> tuple[str, str]:
     """Build the ``(static, volatile)`` system prompt for stream_turn().
 
-    Static: personality (name-interpolated) + confirmation note + memory framing +
+    Static: personality (name-interpolated) + sales working practices + confirmation
+    note + memory framing +
     upload-safety instruction (cacheable — MUST stay byte-identical whether or not a
     record context or memory block is present, so Anthropic's prompt cache is never
     poisoned). Volatile: the current date/time (changes every turn), plus — when a
@@ -155,6 +210,7 @@ def build_system_prompt(
     personality = (identity.get("personality") or DEFAULT_PERSONALITY).replace("{name}", name)
     static = "\n\n".join([
         personality,
+        SALES_GUIDE,
         CONFIRMATION_NOTE,
         MEMORY_NOTE,
         delimiters.UPLOAD_SAFETY_INSTRUCTION,
