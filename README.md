@@ -33,6 +33,19 @@ that works your pipeline for you.
   codebase — by design.
 - Memory that persists across conversations
 
+## Deploy to Railway
+
+[![Deploy on Railway](docs/railway-deploy-button.svg)](https://railway.com/deploy/cakecrm?referralCode=HMgK-M)
+
+1. Click the button and set your `AUTH_PASSWORD` — the only input you provide
+2. Railway provisions PostgreSQL and deploys CakeCRM automatically
+3. Open your CakeCRM URL, log in, and optionally add an AI provider key in-app
+   (the CRM is fully usable without one)
+
+`DATABASE_URL` is injected by the template's Postgres service; `JWT_SECRET` and
+`ENCRYPTION_KEY` auto-generate. Prefer your own hardware? `python run.py` runs
+everything locally, with Postgres via Docker Compose.
+
 ## Lineage
 
 CakeCRM is built from two proven codebases by the same author: the agent platform
