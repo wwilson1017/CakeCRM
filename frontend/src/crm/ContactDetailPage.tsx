@@ -9,7 +9,7 @@ import { ActivityTimeline } from './components/ActivityTimeline';
 import { NotesThread } from './components/NotesThread';
 import { CustomFieldsSection } from './components/CustomFieldsSection';
 import { usePublishActiveRecord } from './RecordContext';
-import { PriorityBadge } from './components/badges';
+import { PriorityBadge, ScorePill } from './components/badges';
 import { ProvenanceBadge } from './components/ProvenanceBadge';
 import { useProvenance } from './useProvenance';
 import { STAGE_COLORS } from './constants';
@@ -138,11 +138,14 @@ export function ContactDetailPage() {
       {/* Header */}
       <div style={{ marginBottom: isMobile ? 20 : 32 }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
-          <h1 style={{
-            fontFamily: FONT_DISPLAY,
-            fontSize: isMobile ? 24 : 32, fontWeight: 400, letterSpacing: '-0.02em',
-            color: INK, margin: 0,
-          }}>{contact.name}</h1>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, minWidth: 0 }}>
+            <h1 style={{
+              fontFamily: FONT_DISPLAY,
+              fontSize: isMobile ? 24 : 32, fontWeight: 400, letterSpacing: '-0.02em',
+              color: INK, margin: 0,
+            }}>{contact.name}</h1>
+            <ScorePill score={contact.lead_score} />
+          </div>
           <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
             <button onClick={() => setShowEdit(true)} style={{
               ...btnSecondary, ...btnSmall,

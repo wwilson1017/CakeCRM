@@ -13,7 +13,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from core.postgres import get_connection, pg_execute, pg_fetchall, pg_fetchone
-from crm import touch_count_service
+from crm import scoring_service, touch_count_service
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,22 @@ DEAL_STAGES = ["lead", "qualified", "proposal", "negotiation", "won", "lost"]
 CONTACT_STATUSES = ["active", "inactive", "archived"]
 TASK_PRIORITIES = ["low", "medium", "high"]
 COMPANY_STATUSES = ["active", "archived"]
+
+# Contact list ORDER BY fragments (allowlisted — the param is NEVER interpolated). Every
+# fragment ends with `id DESC` so limit/offset pagination is deterministic (no dupes/skips
+# on tied sort keys). The lead_score fragment is `DESC NULLS LAST` so unscored rows sink
+# rather than float to the top (Postgres DESC defaults to NULLS FIRST). Added by #18.
+_CONTACT_SORTS = {
+    "updated_at": "updated_at DESC, id DESC",
+    "created_at": "created_at DESC, id DESC",
+    "name": "name DESC, id DESC",
+    "company": "company DESC, id DESC",
+    "lead_score": "lead_score DESC NULLS LAST, updated_at DESC, id DESC",
+}
+
+
+def _contact_order_by(sort: str) -> str:
+    return _CONTACT_SORTS.get(sort, _CONTACT_SORTS["updated_at"])
 
 # The six ASCII whitespace bytes (space, tab, LF, CR, FF, VT). Company names are
 # trimmed with THIS set (not Python's Unicode-aware str.strip()) so the value the
@@ -64,6 +80,7 @@ def create_contact(
            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
         (name, email, phone, company, title, source, status, _normalize_tags(tags), notes, company_id),
     )
+    scoring_service.score_on_event(contact_ids=(row["id"],))  # #18: seed lead_score (never raises)
     return get_contact(row["id"])
 
 
@@ -90,11 +107,11 @@ def _contact_search_where(query: str, status: str | None, tags: str | None) -> t
 
 def search_contacts(
     query: str, status: str | None = None, tags: str | None = None,
-    limit: int = 20, offset: int = 0,
+    limit: int = 20, offset: int = 0, sort: str = "updated_at",
 ) -> list[dict]:
     where, params = _contact_search_where(query, status, tags)
     return pg_fetchall(
-        f"SELECT * FROM contacts WHERE {where} ORDER BY updated_at DESC LIMIT %s OFFSET %s",
+        f"SELECT * FROM contacts WHERE {where} ORDER BY {_contact_order_by(sort)} LIMIT %s OFFSET %s",
         params + [limit, offset],
     )
 
@@ -110,8 +127,7 @@ def list_contacts(
     offset: int = 0, limit: int = 50, status: str | None = None,
     tags: str | None = None, sort: str = "updated_at",
 ) -> dict:
-    allowed_sorts = {"updated_at", "created_at", "name", "company"}
-    sort_col = sort if sort in allowed_sorts else "updated_at"
+    order_by = _contact_order_by(sort)
 
     conditions = []
     params: list = []
@@ -132,7 +148,7 @@ def list_contacts(
 
     params.extend([limit, offset])
     rows = pg_fetchall(
-        f"SELECT * FROM contacts {where} ORDER BY {sort_col} DESC LIMIT %s OFFSET %s",
+        f"SELECT * FROM contacts {where} ORDER BY {order_by} LIMIT %s OFFSET %s",
         params,
     )
     return {"contacts": rows, "total": total, "limit": limit, "offset": offset}
@@ -164,6 +180,7 @@ def update_contact(contact_id: int, **fields) -> dict | None:
     pg_execute(
         f"UPDATE contacts SET {set_clause}, updated_at = %s WHERE id = %s", values
     )
+    scoring_service.score_on_event(contact_ids=(contact_id,))  # #18: status/company edits shift the score
     return get_contact(contact_id)
 
 
@@ -182,13 +199,23 @@ def delete_contact(contact_id: int) -> bool:
         cur.execute("SELECT id FROM contacts WHERE id = %s FOR UPDATE", (contact_id,))
         if cur.fetchone() is None:
             return False
+        # #18: deals linked to this contact unlink (FK ON DELETE SET NULL), so their
+        # relationship factor drops — capture them now (before the next execute) to rescore.
+        cur.execute("SELECT id FROM deals WHERE contact_id = %s", (contact_id,))
+        affected_deal_ids = {r[0] for r in cur.fetchall()}
+        # This contact's activity rows (deleted below) may reference OTHER deals too; those
+        # deals' recency input changes, so rescore them as well.
+        cur.execute("SELECT DISTINCT deal_id FROM activity_log WHERE contact_id = %s AND deal_id IS NOT NULL", (contact_id,))
+        affected_deal_ids |= {r[0] for r in cur.fetchall()}
         cur.execute("DELETE FROM activity_log WHERE contact_id = %s", (contact_id,))
         cur.execute("DELETE FROM tasks WHERE contact_id = %s", (contact_id,))
         # crm_chatter, crm_field_values and crm_field_provenance are polymorphic (no
         # FK), so their rows are dropped explicitly — otherwise a reused contact SERIAL
         # id would inherit this contact's notes / custom-field values / AI badges.
         # NOTE: deals have no delete path today; if a delete_deal is ever added it MUST
-        # do the same FOR UPDATE lock + these DELETEs for entity_type='deal'.
+        # do the same FOR UPDATE lock + these DELETEs for entity_type='deal', AND (per #18)
+        # capture the deal's contact_id before delete and score_on_event(contact_ids=(...))
+        # after commit — a removed deal changes its former contact's deal-linkage factor.
         cur.execute(
             "DELETE FROM crm_chatter WHERE entity_type = 'contact' AND entity_id = %s",
             (contact_id,),
@@ -202,6 +229,7 @@ def delete_contact(contact_id: int) -> bool:
             (contact_id,),
         )
         cur.execute("DELETE FROM contacts WHERE id = %s", (contact_id,))
+    scoring_service.score_on_event(deal_ids=affected_deal_ids)  # #18: after commit (unlinked deals)
     return True
 
 
@@ -350,11 +378,18 @@ def delete_company(company_id: int) -> bool:
         cur.execute("SELECT id FROM companies WHERE id = %s FOR UPDATE", (company_id,))
         if cur.fetchone() is None:
             return False
+        # #18: contacts + deals unlink (FK ON DELETE SET NULL) — their company-linkage /
+        # relationship factors change. Capture ids now (each before the next execute).
+        cur.execute("SELECT id FROM contacts WHERE company_id = %s", (company_id,))
+        affected_contact_ids = [r[0] for r in cur.fetchall()]
+        cur.execute("SELECT id FROM deals WHERE company_id = %s", (company_id,))
+        affected_deal_ids = [r[0] for r in cur.fetchall()]
         cur.execute(
             "DELETE FROM crm_field_values WHERE entity_type = 'company' AND entity_id = %s",
             (company_id,),
         )
         cur.execute("DELETE FROM companies WHERE id = %s", (company_id,))
+    scoring_service.score_on_event(deal_ids=affected_deal_ids, contact_ids=affected_contact_ids)  # #18
     return True
 
 
@@ -411,6 +446,7 @@ def create_deal(
            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
         (title, contact_id, stage, value, notes, expected_close_date, probability, currency, company_id),
     )
+    scoring_service.score_on_event(deal_ids=(row["id"],), contact_ids=(contact_id,))  # #18
     return get_deal(row["id"])
 
 
@@ -508,10 +544,24 @@ def update_deal(deal_id: int, **fields) -> dict | None:
         filtered["probability"] = max(0, min(100, filtered["probability"]))
     if not filtered:
         return get_deal(deal_id)
+    # #18: capture the OLD contact link before a re-link, so both old and new contacts
+    # get their deal-linkage factor refreshed.
+    old_contact_id = None
+    if "contact_id" in filtered:
+        prev = pg_fetchone("SELECT contact_id FROM deals WHERE id = %s", (deal_id,))
+        old_contact_id = prev["contact_id"] if prev else None
     set_clause = ", ".join(f"{k} = %s" for k in filtered)
     values = list(filtered.values()) + [_now(), deal_id]
     pg_execute(
         f"UPDATE deals SET {set_clause}, updated_at = %s WHERE id = %s", values
+    )
+    # Any deal edit can shift the score (stage/value/relink); the linked contact's deal-linkage
+    # factor depends on this deal's stage, so rescore it too (P1.7). Rescore BEFORE the final
+    # get_deal so the response carries the fresh lead_score (the kanban merges this response into
+    # its board state — a stale score would show on the card until a full refetch).
+    linked = pg_fetchone("SELECT contact_id FROM deals WHERE id = %s", (deal_id,))
+    scoring_service.score_on_event(
+        deal_ids=(deal_id,), contact_ids=((linked or {}).get("contact_id"), old_contact_id)
     )
     return get_deal(deal_id)
 
@@ -522,6 +572,10 @@ def update_deal_stage(deal_id: int, stage: str) -> dict | None:
     pg_execute(
         "UPDATE deals SET stage = %s, updated_at = %s WHERE id = %s", (stage, _now(), deal_id)
     )
+    # #18: stage feeds the deal's own baseline/terminal and the linked contact's deal-linkage
+    # factor. Rescore before the final read so the response (merged into the kanban) is fresh.
+    linked = pg_fetchone("SELECT contact_id FROM deals WHERE id = %s", (deal_id,))
+    scoring_service.score_on_event(deal_ids=(deal_id,), contact_ids=((linked or {}).get("contact_id"),))
     return get_deal(deal_id)
 
 
@@ -627,6 +681,8 @@ def log_activity(activity: str, note: str = "", contact_id: int | None = None,
     # raises; the insert has already committed via the pg_fetchone helpers).
     if deal_id:
         touch_count_service.schedule_recompute(deal_id)
+    # #18: an activity changes the engagement/recency of its deal and/or contact.
+    scoring_service.score_on_event(deal_ids=(deal_id,), contact_ids=(contact_id,))
     return result
 
 
@@ -668,7 +724,15 @@ def update_activity(activity_id: int, activity: str | None = None, note: str | N
 
 
 def delete_activity(activity_id: int) -> bool:
-    return pg_execute("DELETE FROM activity_log WHERE id = %s", (activity_id,)) > 0
+    # RETURNING the links so #18 can rescore the affected deal/contact (their
+    # interaction count / recency changed).
+    row = pg_fetchone(
+        "DELETE FROM activity_log WHERE id = %s RETURNING contact_id, deal_id", (activity_id,)
+    )
+    if row is None:
+        return False
+    scoring_service.score_on_event(deal_ids=(row["deal_id"],), contact_ids=(row["contact_id"],))
+    return True
 
 
 # ── Analytics ─────────────────────────────────────────────────────────────────
@@ -1079,6 +1143,12 @@ def load_sample_data() -> dict:
             "updated_at = %s WHERE id = 1",
             (_now(),),
         )
+    # #18: seed committed — backfill lead scores so demo pills render immediately.
+    # Best-effort: a scoring hiccup must not fail the seed (the daily refresh repairs it).
+    try:
+        scoring_service.backfill_scores("null")
+    except Exception:
+        logger.warning("initial lead-score backfill after sample data failed", exc_info=True)
     return {"ok": True, "seeded": True}
 
 

@@ -15,6 +15,8 @@ export interface CrmContact {
   notes: string;
   created_at: string;
   updated_at: string;
+  lead_score?: number | null;           // computed lead score 0-100 (issue #18); null = never scored
+  lead_score_at?: string | null;
   // Detail view extras
   deals?: CrmDeal[];
   tasks?: CrmTask[];
@@ -41,6 +43,8 @@ export interface CrmDeal {
   // Pipeline board only (issue #21): MAX of the deal's activity_log rows + un-archived
   // deal chatter notes; null = no logged activity. Not present on detail-path responses.
   last_activity_at?: string | null;
+  lead_score?: number | null;           // computed lead score 0-100 (issue #18); null = never scored
+  lead_score_at?: string | null;
   activity?: CrmActivity[];
 }
 
