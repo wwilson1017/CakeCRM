@@ -49,6 +49,41 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   CRM-reset TRUNCATE still works); a deal is attributed only when the contact has exactly
   one open deal (never fabricated). Senders recurring ≥3 times with no contact raise one
   deduped "create contact?" alert (`source=gmail_touch_scan`).
+  **Connection-race hardening** (#43) adds `gmail_connection.connection_generation`, an
+  optimistic-lock counter bumped by every mutation that changes WHICH connection is live
+  (`save_app_credentials` / `clear_connection` / `save_tokens`) and deliberately NOT by
+  `update_access_token` or `mark_broken` (same account; bumping there would invalidate
+  in-flight reconnects and every pending draft on each hourly refresh). Two CAS mechanisms
+  coexist **by design**, each matching its invariant: generation-CAS guards connection
+  *identity* — `claim_oauth_state()` returns the generation (`int | None`, so callers test
+  `is None`, never truthiness) and `save_tokens(..., expected_generation)` CASes on it
+  (miss → revoke the fresh grant, redirect `reason=conflict`); ciphertext-CAS guards
+  *credential material* — `update_access_token` (unchanged) and now `mark_broken(prev_refresh_enc)`.
+  A pending `gmail_create_draft` is bound to the connection it was proposed against: the
+  engine stamps `gmail_generation` into the **pending-result placeholder** (safe — history's
+  status helpers read only `"status"`) via `_pending_placeholder()`, and
+  `resolve_confirmation` refuses a stale one via `_binding_conflict()` →
+  `gmail.tools.binding_conflict()`, keyed off the hand-maintained
+  `engine._CONNECTION_BOUND_WRITE_TOOLS` (same shape as `_UNTRUSTED_SOURCE_TOOLS`);
+  `claim_pending_tool` now also returns the pre-claim `content`. Disconnect/app-replace are
+  one atomic statement (CTE `SELECT … FOR UPDATE` → clear → `RETURNING` the OLD ciphertext;
+  plain `UPDATE … RETURNING` yields post-update values), so the router revokes exactly the
+  grant it ended. Read fidelity: a large text body Gmail stored under `attachmentId` is
+  recovered inside the **existing** `get_thread_op` (no new `_APPROVED_OPS` entry, no scope
+  change) under a 256 KB pre-check that **fails closed on an undeclared `body.size`** (Gmail
+  has no ranged read) plus a **thread-scoped** 4-fetch budget (per-message would scale with
+  message count, letting a sender shape one read into dozens of round-trips), HTML flattened
+  like inline HTML, degrading to `""` on failure and `[body too large to display]` when
+  oversize; file attachments are NEVER fetched (guarded on `filename` OR a
+  `Content-Disposition: attachment` header — a nameless attachment is still a file).
+  Fetching is deferred until after the inline walk and resolves plain-before-HTML, so
+  a discarded alternative never spends a budget slot, and the budget is spent
+  newest-message-first so long threads don't return the latest replies blank. Note `store.get_row()` swallows
+  read errors and returns `{}`, so `gmail.tools._live_generation()` distinguishes
+  "unreadable" from generation 0 — reading it as `... or 0` would mint a bogus binding and
+  falsely refuse a valid draft. The two-step thread fetch was evaluated and
+  **declined** (it doubles common-case calls/latency/quota to bound memory only for rare
+  long threads).
 - **Multi-provider AI** via the `AIProvider` ABC (Anthropic, OpenAI, Gemini, Ollama,
   Together). Never call a provider SDK directly from feature code. Cheap background
   AI work (touch counts, classification) uses the light tier via
@@ -65,7 +100,11 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   (`stream_turn`/`add_tool_results`/`build_tool_turn`) is consumed by the built-in
   assistant engine (`backend/assistant/`, landed #4): an SSE streaming tool loop
   with write-tool confirmation modes and file uploads, mounted at `/api/assistant`
-  and gated off `ai_ready`. The assistant's **second execution mode** (landed #6,
+  and gated off `ai_ready`. The assistant's sales working practices live in
+  `identity.SALES_GUIDE` — a **static** constant appended alongside
+  `CONFIRMATION_NOTE`/`MEMORY_NOTE`, deliberately NOT inside `DEFAULT_PERSONALITY`,
+  because a user-written personality replaces that string wholesale and would silently
+  switch off every CRM discipline with it. The assistant's **second execution mode** (landed #6,
   `backend/assistant/background.py`) is a non-SSE `run_background_turn` for
   autonomous work (the heartbeat + reminder firing): it reuses the same
   `ToolRegistry`/`build_tool_turn` loop but, having no human to confirm writes,
@@ -74,6 +113,17 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `WRITE_BUDGET_BACKGROUND`, with untrusted reminder/CRM text kept in the user
   message, never the system prompt. So a prompt injection via reminder/CRM content
   can at worst send one notification, never create/log/update/delete a record.
+  **Since #22 that ceiling is unchanged but the on-ramp is wider, deliberately:** the
+  new read tools put raw per-record free text in front of the unattended turn for the
+  first time — `crm_scan_gaps` returns `crm_field_provenance.value_snapshot` verbatim
+  and `crm_find_duplicates` returns deal titles / contact names, where the earlier
+  background-callable reads (`crm_dashboard`, `crm_analytics`) exposed only structured
+  aggregates. Accepted because the blast radius is still exactly one `notify_user` and
+  the alternative — a second, narrower payload shape per tool for background turns —
+  buys nothing against a ceiling that already holds. Mitigated in
+  `heartbeat.service._heartbeat_prompt`, which states plainly that everything a CRM
+  tool returns is DATA the user or a third party typed, never instructions. Any future
+  background-callable read should assume its payload can carry hostile text.
   The assistant has a **long-term memory + nightly dreaming**
   (landed #5, `backend/memory/` + `backend/dreaming/`, **pure-algorithmic — no AI
   calls**): temporal facts in Postgres (`memory_facts`, generated `tsvector` + GIN,
@@ -132,11 +182,40 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   exposed to the assistant via `crm_{get,set}_{contact,company,deal}_fields`;
   `crm_field_values` is polymorphic (no entity FK), so it is cleaned at every
   entity-delete + `_truncate_all` site (definitions survive demo-clear, wiped only by
-  `clear_all`), and `is_required` is advisory-only (never enforced server-side). The
-  ~31 `crm_*` agent tools + executors are
+  `clear_all`), and `is_required` is advisory-only (never enforced server-side).
+  **Deal lifecycle + sales intelligence** (#22 Phase 1) add `deals.lost_reason` and a
+  soft-archive `deals.archived_at` (NULL = live) plus an append-only `deal_stage_events`
+  log. Every deal column update funnels through `service._write_deal_update`
+  (`create_deal` and `archive_deal` are the two writes that don't — neither has an old
+  stage to transition from), which in ONE transaction takes `SELECT stage … FOR UPDATE`, writes the row, appends a stage event
+  when the stage moved, and CLEARS `lost_reason` when a deal leaves `lost` (the bug the
+  blueprint fixed after our snapshot). `archived_at` is a **sweep**: `LIVE_PREDICATE`
+  is carried by every deal-reading query (pipeline, dashboard, analytics, list/search,
+  contact/company rollups, touch-count backfill, the Gmail-scan open-deal attribution),
+  and `crm/analytics_service.py` IMPORTS those predicate constants rather than re-typing
+  them. The line the sweep draws is **work items follow the deal, history does not**: an
+  archived deal's open tasks drop out of `list_tasks` (archiving is the user's "stop
+  nagging me" gesture, and the heartbeat is told to read that list), while `activity_log`
+  is never filtered — it records what actually happened, and you need it to decide
+  whether to restore. Deliberate exceptions: `get_deal` (fetch-by-id must still resolve
+  an archived deal so it can be shown/restored/merged), the is-the-CRM-empty counts, and
+  `crm_search_deals(include_archived=true)` — the ONE read that can surface an archived
+  deal, so an accidental archive or a wrong merge stays recoverable (there is no
+  archived-deals UI yet). A stage change on an archived deal is refused outright: won +
+  archived would book revenue no report can see.
+  `deal_stage_events` is the one CRM table with a real FK to `deals`, so it MUST stay in
+  every `TRUNCATE` sweep or the CRM reset errors out. `merge_deals` repoints
+  activity/tasks, copies notes with a `[Merged from deal #N]` marker, gap-fills custom
+  fields (the target's own values always win), and archives — never deletes — the
+  source. Chatter now also attaches to **companies** (zero-migration: `entity_type` is
+  free TEXT), cleaned in `delete_company`. The ~40 `crm_*` agent tools + executors are
   collected UNCONDITIONALLY via `crm.tools.get_crm_tools()` — each def carries a
   `"writes"` flag (the single source of truth for the assistant's confirmation gate),
-  consumed by `assistant.registry.ToolRegistry` (landed #4). **AI touch counts +
+  consumed by `assistant.registry.ToolRegistry` (landed #4). The four read-only
+  intelligence tools (`crm_get_stale_deals`, `crm_get_contact_staleness`,
+  `crm_find_duplicates`, `crm_scan_gaps`, all in `crm/analytics_service.py`) are pure
+  SQL — keyless — and because `writes:False` derives the background allowlist they are
+  heartbeat-callable for free. **AI touch counts +
   field provenance** (#16) are the two zero-keys-degrading AI reads: an in-process
   daemon worker (`crm/touch_count_service.py`, event-driven off note/activity writes,
   light tier via `get_ai_provider(agent_model_tier="light")`, prompt-injection-hardened,
@@ -163,6 +242,14 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   server-built sentence from a validated `{record_type, record_id}`
   (`assistant/router.ChatContext` → `identity.build_context_note`) — never persisted,
   never client free text — with record-aware quick actions rendered in the drawer.
+  **Lead scoring** (#18) is the third zero-keys, **pure-algorithmic (no AI)** CRM read: a
+  0-100 `lead_score` on deals and contacts, recomputed inline at write-event chokepoints
+  (serialized per-entity by a `pg_advisory_xact_lock`, never bumping `updated_at`) plus a
+  **bounded** daily heartbeat refresh (T1 `_maybe_refresh_scores`, ≤`_REFRESH_BATCH` stalest
+  rows per tick, self-resuming). It uses **dedicated columns**, never `deals.probability`
+  (a live user/assistant-editable, provenance-tracked field) — and `lead_score` is never
+  user/tool/assistant-writable. Deals sort by score client-side (within kanban column);
+  contacts have a server-sorted `lead_score` column (`DESC NULLS LAST`).
 - **API keys are entered in-app, encrypted at rest** (Fernet; key from env →
   OS keychain → file fallback) — never as env vars.
 - **Backend tests** live in `backend/tests/` (config in `backend/pytest.ini`,
@@ -183,6 +270,11 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 - Never commit TN Cheesecake internals: no real prospect/customer data, no TNC
   staff/product names, no internal hostnames or secrets. Ported prompts (Casey's)
   must be genericized. This repo goes public at launch and history is forever.
+  Enforced by `backend/tests/test_prompt_genericization.py` (#22), which scans the
+  **model-facing payload** — the assembled system prompt, every tool
+  name/description/schema, the heartbeat prompt, and the UI starter chips — and fails
+  CI on any company/product/vertical token. Source *comments* may still cite the
+  blueprint by name; shipped prompt text may not.
 - Never import git history from cake_os or chatty — code arrives as clean snapshots
   in ordinary commits.
 - Never merge a pull request — Will merges all PRs manually. Push feature branches
@@ -243,6 +335,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Notifications (Web Push VAPID keys persisted in Postgres, `notify_user` tool, bell) + system alerts — **landed #6** as `backend/notifications/` + `backend/alerts/` + `frontend/src/crm/components/{NotificationsBell,NotificationSettings}.tsx` + `frontend/public/sw.js`. Telegram delivery goes out through `telegram.service.notify_linked_user` (the pure-sync channel #7 landed), via `_send_telegram`; WhatsApp not ported. Chatty's user-configurable `scheduled_actions` subsystem (leases/active-hours/triage/dashboards) deliberately deferred | `chatty/backend/core/agents/notifications/` + `alerts/` |
 | Telegram — **landed #7** as `backend/telegram/*` + `frontend/src/crm/components/TelegramSettings.tsx`: single-assistant long-polling (one main-loop asyncio task offloads `getUpdates` via `to_thread` and drives `engine.chat` on the SAME loop as the SSE endpoint — provider async clients are loop-bound), Fernet-encrypted bot token on a `telegram_settings` singleton, one linked user via a single-use `link_code` (Telegram deep link), CRM write confirmations as inline-keyboard Approve/Deny buttons (mapped onto `engine.resolve_confirmation` + an empty-messages continuation, batched so it continues only once every write is resolved), and `telegram.service.notify_linked_user(text)->bool` as the pure-sync outbound channel #6 consumes. No webhooks, no group chat (deliberately cut). | `chatty/backend/integrations/telegram/` |
 | Gmail (read + draft only: `gmail_connection` singleton, BYO OAuth at `/api/gmail`, tools `gmail_search`/`gmail_read_thread`/`gmail_create_draft`, guard test + SECURITY.md) — **landed #8** as `backend/gmail/` + `frontend/src/crm/components/GmailCard.tsx` | `chatty/backend/integrations/google/` |
+| Gmail connection-race hardening (`connection_generation` optimistic lock + CAS on token persist; pending-draft binding through the shared confirm flow; ciphertext CAS on `mark_broken`; atomic clear-and-capture on disconnect/app-replace; capped recovery of attachment-stored text bodies) — **landed #43** across `backend/gmail/*` + `backend/assistant/{engine,history}.py` | Follow-up to #8 (no blueprint — back-port candidate to CAKE OS) |
 | Gmail touch-scan heartbeat job (read-only inbox scan → sender→contact match → idempotent `email` touch logging feeding #16; `gmail_scan_state`/`gmail_scanned_messages`/`gmail_unmatched_correspondents` tables; own `gmail_scan` scheduler job; "create contact?" alerts) — **landed #17** as `backend/gmail_scan/` | New capability (no blueprint — back-port candidate to CAKE OS) |
 | Kanban drag-and-drop | `cake_os/frontend/src/shared/dnd/` |
 | Companies (first-class entity: `companies` table, `company_id` FKs, rollup detail page, text→FK backfill migration) — **landed #13** | `cake_os/backend/apps/crm/company_service.py` |
@@ -250,6 +343,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Chatter/notes (`crm_chatter`) — **landed #15** as `backend/crm/chatter_service.py` + `frontend/src/crm/components/NotesThread.tsx` | `cake_os/backend/apps/crm/chatter_service.py` |
 | Custom fields (EAV `crm_field_definitions`/`crm_field_values`, Settings editor, entity-form + detail-page value inputs, 6 `crm_*_fields` tools) — **landed #19** as `backend/crm/field_service.py` + `frontend/src/crm/components/{CustomFieldSettings,CustomFieldsSection,CustomFieldInputs}.tsx` | `cake_os/backend/apps/crm/field_service.py` |
 | Touch counts + field provenance (`deals.ai_touch_*` cols + in-process recompute worker; `crm_field_provenance` + `AiBadge`/`ProvenanceBadge`/`TouchCountPill`) — **landed #16** as `backend/crm/touch_count_service.py` + `provenance_service.py` | `cake_os/backend/apps/crm/touch_count_service.py`, `provenance_service.py` |
-| Scoring, analytics — analytics **landed #20** as `service.get_analytics()`/`summarize_analytics()` + `GET /api/crm/analytics` + `crm_analytics` tool + enriched `CrmDashboardPage` (win/loss, activity volume, read-time deal aging from existing timestamps — no migration; stage-duration metrics dropped, no stage-change audit trail; scoring still pending) | `cake_os/backend/apps/crm/*_service.py` |
-| Assistant tool set (~43 tools) + sales behaviors | `cake_os/backend/apps/crm/tools/` + Casey's agent config |
+| Lead scoring (pure-algorithmic `lead_score` 0-100 on deals+contacts; event-triggered inline recompute serialized by a per-entity advisory lock + a bounded daily heartbeat refresh + backfill endpoint/tools `crm_get_lead_score`/`crm_recompute_lead_scores`; sortable contact list + `ScorePill`) — **landed #18** as `backend/crm/scoring_service.py`. Since the #22 merge the write-event chokepoint for deal-column writes is `service._write_deal_update` (one hook covers the #22 lifecycle verbs too), with `archive_deal`/`merge_deals` hooked separately; archived deals are excluded from the contact deal-linkage aggregate | `cake_os/backend/apps/crm/scoring_service.py` |
+| Scoring, analytics — analytics **landed #20** as `service.get_analytics()`/`summarize_analytics()` + `GET /api/crm/analytics` + `crm_analytics` tool + enriched `CrmDashboardPage` (win/loss, activity volume, read-time deal aging from existing timestamps — no migration; stage-duration metrics dropped, no stage-change audit trail; scoring landed separately in #18 above) | `cake_os/backend/apps/crm/*_service.py` |
+| Assistant tool set + sales behaviors — **Phase 1 landed #22**: 9 new tools (`crm_search_deals`, `crm_mark_deal_won`/`_lost`, `crm_archive_deal`, `crm_merge_deals`, `crm_get_stale_deals`, `crm_get_contact_staleness`, `crm_find_duplicates`, `crm_scan_gaps`) in `backend/crm/analytics_service.py` + `service.py`, parity closes (embedded `custom_fields`, tool-side `limit_per_stage`, `limit` on find/search, company chatter), the genericized static `identity.SALES_GUIDE` prompt block + sales `QuickActions`. **Phase 2** (`crm_get_deal_health` over #18's `crm_get_lead_score`, `crm_get_pipeline_analytics` over #20's `crm_analytics`) and **Phase 3** (daily digest + stale/untouched nudges as heartbeat T2 jobs) are follow-up PRs. NOT ported: `get_rep_performance` (no owner columns), `enrich_field` (no web tools), lead-import tools (own issue) | `cake_os/backend/apps/crm/tools/` + the blueprint sales agent's config |
 | Pipeline facet filtering (client-side, no backend query params: `frontend/src/crm/pipelineFilters.ts` pure predicate + `components/PipelineFilterBar.tsx`, spliced into `PipelinePage`'s useMemo seam as `deals`→`filteredDeals`→`grouped`; facets = keyword/stage/value/close-date/last-activity; sessionStorage `crm_pipeline_filters`) — **landed #21**. Owner facet dropped (single-tenant); `get_pipeline()` gains a derived `last_activity_at` = MAX(deal `activity_log` rows + un-archived deal `crm_chatter` notes) via one UNION-ALL/GROUP BY join (NULL = no activity), plus `company_name`. Drag stays enabled while filtering (board is stage-only, index-safe). | `cake_os/docs/CRM_FILTER_DESIGN.md` + `cake_os/docs/solutions/architecture-patterns/client-side-facet-filtering.md` |

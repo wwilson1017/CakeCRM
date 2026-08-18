@@ -304,7 +304,8 @@ def claim_pending_tool(conversation_id: str, tool_use_id: str, msg_id: str | Non
     Returns None when nothing pending matches (already approved/denied/executing,
     unknown, or the row was deleted) — the caller treats that as an idempotent
     no-op. The tool/args come from the DB, not the client, so an approval cannot
-    execute an attacker-chosen tool.
+    execute an attacker-chosen tool. ``content`` carries the pre-claim pending
+    placeholder so the resolver can read anything the gate bound to it (#43).
     """
     if msg_id:
         candidates = [{"id": msg_id}]
@@ -349,5 +350,14 @@ def claim_pending_tool(conversation_id: str, tool_use_id: str, msg_id: str | Non
                 "UPDATE assistant_messages SET tool_results = %s::jsonb WHERE id = %s",
                 (json.dumps(results), cand["id"]),
             )
-            return {"msg_id": cand["id"], "tool": call.get("tool"), "args": call.get("args") or {}}
+            # "content" is the PRE-claim pending placeholder. It normally holds just
+            # {"status": ...}, but the gate may have merged extra keys into it — the
+            # Gmail connection binding (#43) — that the resolver needs to check
+            # before executing.
+            return {
+                "msg_id": cand["id"],
+                "tool": call.get("tool"),
+                "args": call.get("args") or {},
+                "content": existing.get("content"),
+            }
     return None

@@ -91,7 +91,17 @@ def test_add_note_too_long_raises():
 
 def test_add_note_bad_entity_type_raises():
     with pytest.raises(ValueError, match="Invalid entity_type"):
-        chatter_service.add_note("company", 3, "hi")
+        chatter_service.add_note("invoice", 3, "hi")
+
+
+def test_company_chatter_targets_the_companies_table(monkeypatch, fake_conn):
+    """Issue #22: 'company' is a first-class chatter type, and its existence check
+    must lock the COMPANIES row (a wrong table would let notes orphan)."""
+    conn = fake_conn(monkeypatch, chatter_service, fetchone_results=[(1,), (1,)])
+    monkeypatch.setattr(chatter_service, "row_to_dict", lambda cur, row: {"id": 1})
+    chatter_service.add_note("company", 4, "hi")
+    stmts = [s for s, _ in conn.executed]
+    assert any("SELECT 1 FROM companies WHERE id = %s FOR UPDATE" in s for s in stmts)
 
 
 def test_add_note_nonpositive_id_raises():
@@ -125,7 +135,7 @@ def test_get_chatter_bounds_limit(rec):
 
 def test_get_chatter_bad_type_raises(rec):
     with pytest.raises(ValueError, match="Invalid entity_type"):
-        chatter_service.get_chatter("company", 3)
+        chatter_service.get_chatter("invoice", 3)
 
 
 def test_get_chatter_passes_bounded_offset(rec):

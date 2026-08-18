@@ -169,6 +169,8 @@ def pg_execute(sql: str, params: tuple | list | dict = ()) -> int:
 #   pg_advisory_lock(1)               — migration runner (below)
 #   pg_try_advisory_lock(720770)      — telegram poller leader election (telegram/poller.py)
 #   pg_try_advisory_xact_lock(20260705) — dreaming cycle (dreaming/processor.run_dreaming_if_due)
+#   pg_advisory_xact_lock(1801, id)   — per-deal lead-score recompute (crm/scoring_service.py)
+#   pg_advisory_xact_lock(1802, id)   — per-contact lead-score recompute (crm/scoring_service.py)
 
 
 def run_migrations() -> None:

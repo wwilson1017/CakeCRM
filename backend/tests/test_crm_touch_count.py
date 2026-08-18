@@ -314,6 +314,17 @@ def test_recompute_won_deal_skips_llm_and_write(monkeypatch):
     assert called == []
 
 
+def test_recompute_archived_deal_skips_llm_and_write(monkeypatch):
+    """Issue #22: archived deals join won/lost as "don't spend an AI call on this"."""
+    called = []
+    monkeypatch.setattr(svc, "_load_evidence",
+                        lambda d: ({**DEAL, "archived_at": "2026-02-01T00:00:00+00:00"}, [], []))
+    monkeypatch.setattr(svc, "_call_llm", lambda p: called.append(p) or '{"touch_count": 9}')
+    monkeypatch.setattr(svc, "pg_execute", lambda sql, params: called.append("write") or 1)
+    assert svc.recompute_touch_count(7) is None
+    assert called == []
+
+
 def test_recompute_missing_deal_noop(monkeypatch):
     monkeypatch.setattr(svc, "_load_evidence", lambda d: (None, [], []))
     monkeypatch.setattr(svc, "pg_execute", lambda *a: pytest.fail("must not write"))
@@ -432,6 +443,9 @@ def test_backfill_null_scope_targets_open_uncomputed(monkeypatch):
     calls = _capture_schedule(monkeypatch)
     out = svc.start_backfill("null")
     assert "stage NOT IN ('won', 'lost')" in seen["sql"] and "ai_touch_count IS NULL" in seen["sql"]
+    # Archived deals are excluded too (issue #22) — otherwise the backfill would queue
+    # paid AI work for deals that render nowhere.
+    assert "archived_at IS NULL" in seen["sql"]
     assert out == {"started": True, "scope": "null", "candidates": 2, "queued": 2, "not_queued": 0}
     assert calls == [(1, False), (2, False)]           # event guard, not force
 
@@ -470,16 +484,24 @@ def test_backfill_cooldown_blocks_repeat_unless_forced(monkeypatch):
 
 
 def test_backfill_status_shape(monkeypatch):
-    monkeypatch.setattr(svc, "pg_fetchall", lambda *a: [{"remaining": 3}])
+    seen = {}
+    monkeypatch.setattr(svc, "pg_fetchall", _fetchall_capturing(seen, [{"remaining": 3}]))
     out = svc.backfill_status()
     assert out["remaining_null"] == 3 and "queue_depth" in out
+    # Must match start_backfill's candidate set exactly, or "remaining" counts deals
+    # the backfill will never queue and the progress signal never reaches zero.
+    assert "stage NOT IN ('won', 'lost')" in seen["sql"] and "archived_at IS NULL" in seen["sql"]
 
 
 # ── _load_evidence (one REPEATABLE READ snapshot) ─────────────────────────────
 
 def _rowmap(cur, row):
-    if len(row) == 7:
-        keys = ["id", "title", "notes", "stage", "created_at", "ai_touch_count_at", "ai_touch_evidence_count"]
+    # Mirrors _load_evidence's real SELECT column order EXACTLY — archived_at joined it
+    # in issue #22. A stale map here would silently shift every field by one and the
+    # tests would still pass.
+    if len(row) == 8:
+        keys = ["id", "title", "notes", "stage", "created_at", "archived_at",
+                "ai_touch_count_at", "ai_touch_evidence_count"]
     elif len(row) == 2:
         keys = ["message", "created_at"]
     else:
@@ -488,7 +510,7 @@ def _rowmap(cur, row):
 
 
 def test_load_evidence_open_deal_reads_one_snapshot(monkeypatch, fake_conn):
-    deal_row = (7, "T", None, "qualified", "2026-01-01T00:00:00+00:00", None, None)
+    deal_row = (7, "T", None, "qualified", "2026-01-01T00:00:00+00:00", None, None, None)
     conn = fake_conn(monkeypatch, svc,
                      fetchone_results=[deal_row],
                      fetchall_results=[[("hi", "2026-01-03T00:00:00+00:00")],
@@ -503,11 +525,25 @@ def test_load_evidence_open_deal_reads_one_snapshot(monkeypatch, fake_conn):
 
 
 def test_load_evidence_won_deal_skips_evidence_queries(monkeypatch, fake_conn):
-    won_row = (7, "T", None, "won", "2026-01-01T00:00:00+00:00", None, None)
+    won_row = (7, "T", None, "won", "2026-01-01T00:00:00+00:00", None, None, None)
     conn = fake_conn(monkeypatch, svc, fetchone_results=[won_row])
     monkeypatch.setattr(svc, "row_to_dict", _rowmap)
     deal, chatter, activities = svc._load_evidence(7)
     stmts = [s for s, _ in conn.executed]
+    assert not any("FROM crm_chatter" in s for s in stmts)   # short-circuited
+    assert chatter == [] and activities == []
+
+
+def test_load_evidence_archived_deal_skips_evidence_queries(monkeypatch, fake_conn):
+    """Issue #22: an archived deal renders on no board, so building evidence for it
+    would pay two queries (and later an LLM call) for a count nobody can see."""
+    archived_row = (7, "T", None, "qualified", "2026-01-01T00:00:00+00:00",
+                    "2026-02-01T00:00:00+00:00", None, None)
+    conn = fake_conn(monkeypatch, svc, fetchone_results=[archived_row])
+    monkeypatch.setattr(svc, "row_to_dict", _rowmap)
+    deal, chatter, activities = svc._load_evidence(7)
+    stmts = [s for s, _ in conn.executed]
+    assert any("archived_at" in s for s in stmts)            # the column IS selected
     assert not any("FROM crm_chatter" in s for s in stmts)   # short-circuited
     assert chatter == [] and activities == []
 

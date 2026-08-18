@@ -6,7 +6,7 @@ import { toast } from '../../shared/toast';
 import { formatDate } from '../../shared/formatDate';
 
 interface Props {
-  entityType: 'deal' | 'contact';
+  entityType: 'deal' | 'contact' | 'company';
   entityId: number;
 }
 
@@ -15,10 +15,11 @@ interface Props {
 const MAX_NOTE_LEN = 10000;
 
 /**
- * Chatter — the editable, archivable notes thread for a deal or contact, shown
- * alongside the activity timeline. Self-fetches from /api/crm/chatter and owns
- * its own compose / edit / archive state so it can drop into either the contact
- * detail page or the pipeline deal sheet unchanged.
+ * Chatter — the editable, archivable notes thread for a deal, contact, or company
+ * (companies joined in issue #22), shown alongside the activity timeline.
+ * Self-fetches from /api/crm/chatter and owns its own compose / edit / archive state
+ * so it drops into the contact page, the company page, or the pipeline deal sheet
+ * unchanged.
  */
 export function NotesThread({ entityType, entityId }: Props) {
   const [notes, setNotes] = useState<CrmNote[]>([]);

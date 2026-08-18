@@ -4,7 +4,7 @@ import { api } from '../core/api/client';
 import type { CrmContact } from '../core/types';
 import { ContactForm } from './components/ContactForm';
 import { SmartImportModal } from './components/SmartImportModal';
-import { StatusBadge } from './components/badges';
+import { ScorePill, StatusBadge } from './components/badges';
 import { IconPlus, IconSearch } from '../shared/icons';
 import { useIsMobile } from '../shared/useIsMobile';
 import { LoadError } from '../shared/LoadError';
@@ -17,7 +17,7 @@ import {
 
 const STATUS_TABS = ['all', 'active', 'inactive', 'archived'] as const;
 
-const COLS = '2fr 1.5fr 2fr 1.2fr 80px';
+const COLS = '2fr 1.5fr 2fr 1.2fr 80px 72px';
 const PAGE_SIZE = 50;
 
 export function ContactsPage() {
@@ -26,6 +26,7 @@ export function ContactsPage() {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState<string>('all');
   const [tagFilter, setTagFilter] = useState<string[]>([]);
+  const [sort, setSort] = useState<string>('updated_at');  // #18: 'lead_score' when sorting by score
   const [availableTags, setAvailableTags] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -55,10 +56,11 @@ export function ContactsPage() {
     if (search) params.set('q', search);
     if (status !== 'all') params.set('status', status);
     if (tagFilter.length) params.set('tags', tagFilter.join(','));
+    if (sort !== 'updated_at') params.set('sort', sort);  // #18
     params.set('limit', String(PAGE_SIZE));
     params.set('offset', String(offset));
     return api<{ contacts: CrmContact[]; total: number }>(`/api/crm/contacts?${params}`);
-  }, [search, status, tagFilter]);
+  }, [search, status, tagFilter, sort]);
 
   const reload = useCallback(async () => {
     const id = ++loadIdRef.current;
@@ -249,7 +251,10 @@ export function ContactsPage() {
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                     <span style={{ fontSize: 16, color: INK }}>{c.name}</span>
-                    <StatusBadge status={c.status} />
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      <ScorePill score={c.lead_score} compact />
+                      <StatusBadge status={c.status} />
+                    </span>
                   </div>
                   {(c.company_name || c.company) && <div style={{ fontSize: 14, color: INK_MUTE, marginBottom: 2 }}>{c.company_name || c.company}</div>}
                   {c.email && <div style={{ fontSize: 14, color: INK_DIM }}>{c.email}</div>}
@@ -260,6 +265,20 @@ export function ContactsPage() {
             <div style={{ borderTop: `1px solid ${LINE}` }}>
               <div style={tableHeader(COLS)}>
                 <span>Name</span><span>Company</span><span>Email</span><span>Phone</span><span>Status</span>
+                {/* #18: sortable Score column — native button for keyboard + button semantics */}
+                <button
+                  type="button"
+                  aria-pressed={sort === 'lead_score'}
+                  onClick={() => setSort(s => (s === 'lead_score' ? 'updated_at' : 'lead_score'))}
+                  style={{
+                    background: 'none', border: 'none', padding: 0, margin: 0, cursor: 'pointer',
+                    font: 'inherit', color: sort === 'lead_score' ? INK : 'inherit',
+                    letterSpacing: 'inherit', textTransform: 'inherit', textAlign: 'left',
+                  }}
+                  title="Sort by lead score (highest first)"
+                >
+                  Score{sort === 'lead_score' ? ' ↓' : ''}
+                </button>
               </div>
               {contacts.map(c => (
                 <div key={c.id} onClick={() => navigate(`/crm/contacts/${c.id}`)}
@@ -275,6 +294,7 @@ export function ContactsPage() {
                   <span style={{ fontSize: 15, color: INK_MUTE, alignSelf: 'center' }}>{c.email || '\u2014'}</span>
                   <span style={{ fontSize: 15, color: INK_MUTE, alignSelf: 'center' }}>{c.phone || '\u2014'}</span>
                   <span style={{ alignSelf: 'center' }}><StatusBadge status={c.status} /></span>
+                  <span style={{ alignSelf: 'center' }}>{c.lead_score != null ? <ScorePill score={c.lead_score} compact /> : '\u2014'}</span>
                 </div>
               ))}
             </div>

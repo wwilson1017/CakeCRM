@@ -1,7 +1,9 @@
-"""CakeCRM — CRM agent tools (31 tools).
+"""CakeCRM — CRM agent tools (42 tools).
 
-Contacts, deals, tasks, activities, chatter/notes, companies, custom fields, and
-analytics — all accessible to the AI assistant for managing customer relationships
+Contacts, deals (incl. search + the won/lost/archive/merge lifecycle verbs), tasks,
+activities, chatter/notes, companies, custom fields, analytics, lead scores, and the
+read-only sales-intelligence set (stale deals, contact staleness, duplicates, data
+gaps) — all accessible to the AI assistant for managing customer relationships
 conversationally.
 The CRM is first-class core, so these tools are collected UNCONDITIONALLY (no enable
 gate); the assistant engine (backend/assistant/) consumes them via get_crm_tools().
@@ -18,7 +20,14 @@ from collections.abc import Callable
 
 import psycopg2
 
-from crm import chatter_service, field_service, provenance_service, service as crm
+from crm import (
+    analytics_service,
+    chatter_service,
+    field_service,
+    provenance_service,
+    scoring_service,
+    service as crm,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +65,7 @@ CRM_TOOL_DEFS = [
                 "query": {"type": "string", "description": "Search term (name, email, company, or keyword)"},
                 "status": {"type": "string", "description": "Filter by status: active, inactive, archived"},
                 "tags": {"type": "string", "description": "Exact tag label, case-insensitive; comma-separate multiple tags"},
+                "limit": {"type": "integer", "description": "Max results (default 20)", "default": 20},
             },
             "required": ["query"],
         },
@@ -162,13 +172,16 @@ CRM_TOOL_DEFS = [
         "kind": "integration",
     },
 
-    # ── Deals (5 tools) ──────────────────────────────────────────────────────
+    # ── Deals (10 tools) ─────────────────────────────────────────────────────
     {
         "name": "crm_get_pipeline",
         "writes": False,
         "description": (
             "Get the deal pipeline with value summaries per stage. "
-            "Use when the user asks about their pipeline, deals, or sales status."
+            "Use when the user asks about their pipeline, deals, or sales status. "
+            "Only the newest limit_per_stage deals per stage are listed; the per-stage "
+            "counts and values always cover every deal. To find specific deals by "
+            "keyword or field, use crm_search_deals instead."
         ),
         "input_schema": {
             "type": "object",
@@ -176,6 +189,56 @@ CRM_TOOL_DEFS = [
                 "stage": {
                     "type": "string",
                     "description": "Filter by stage: lead, qualified, proposal, negotiation, won, lost",
+                },
+                "limit_per_stage": {
+                    "type": "integer",
+                    "description": "Max deals listed per stage (default 25, max 100)",
+                    "default": 25,
+                },
+            },
+            "required": [],
+        },
+        "kind": "integration",
+    },
+    {
+        "name": "crm_search_deals",
+        "writes": False,
+        "description": (
+            "Search deals by keyword and filters. Keyword matches the deal title and "
+            "notes plus the linked contact and company names. Optionally filter by "
+            "stage or by custom-field values, and sort by any core field. Each result "
+            "includes the deal's custom-field values. Use this to answer 'which deals "
+            "involve X', 'show me the biggest deals closing soon', or to find a deal "
+            "before updating it. Archived deals are excluded."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "search": {"type": "string", "description": "Keyword (title, notes, contact name, company name)", "default": ""},
+                "stage": {"type": "string", "description": "Filter: lead, qualified, proposal, negotiation, won, lost"},
+                "sort_by": {
+                    "type": "string",
+                    "description": "Sort field: updated_at (default), created_at, value, expected_close_date, title, stage, probability",
+                    "default": "updated_at",
+                },
+                "sort_dir": {"type": "string", "description": "asc or desc (default desc)", "default": "desc"},
+                "custom_field_filters": {
+                    "type": "object",
+                    "description": (
+                        "Map of custom field_key -> required value (case-insensitive exact match), "
+                        "ANDed together. Discover valid keys with crm_get_deal_fields."
+                    ),
+                    "additionalProperties": {"type": ["string", "number", "boolean"]},
+                },
+                "limit": {"type": "integer", "description": "Max results (default 25, max 100)", "default": 25},
+                "include_archived": {
+                    "type": "boolean",
+                    "description": (
+                        "Include archived deals (default false). This is the only way to "
+                        "find an archived deal — use it when the user wants to restore "
+                        "one or is looking for a deal that has gone missing."
+                    ),
+                    "default": False,
                 },
             },
             "required": [],
@@ -233,12 +296,16 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_update_deal_stage",
         "writes": True,
-        "description": "Move a deal to a new pipeline stage. Quick way to advance or close a deal.",
+        "description": (
+            "Move a deal between OPEN pipeline stages. To CLOSE a deal use "
+            "crm_mark_deal_won or crm_mark_deal_lost instead — they capture the lost "
+            "reason and settle the win probability, which this tool does not."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "deal_id": {"type": "integer"},
-                "stage": {"type": "string", "description": "New stage: lead, qualified, proposal, negotiation, won, lost"},
+                "stage": {"type": "string", "description": "New stage: lead, qualified, proposal, negotiation"},
             },
             "required": ["deal_id", "stage"],
         },
@@ -247,13 +314,99 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_get_deal",
         "writes": False,
-        "description": "Get full details for a specific deal including contact info and activity history.",
+        "description": (
+            "Get full details for a specific deal including contact info, custom-field "
+            "values, and activity history."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "deal_id": {"type": "integer", "description": "Deal ID"},
             },
             "required": ["deal_id"],
+        },
+        "kind": "integration",
+    },
+    {
+        "name": "crm_mark_deal_won",
+        "writes": True,
+        "description": (
+            "Close a deal as WON: moves it to the 'won' stage and sets probability to "
+            "100%. Use when the user says a deal closed, was signed, or came through."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "deal_id": {"type": "integer", "description": "Deal ID to mark won"},
+            },
+            "required": ["deal_id"],
+        },
+        "kind": "integration",
+    },
+    {
+        "name": "crm_mark_deal_lost",
+        "writes": True,
+        "description": (
+            "Close a deal as LOST: moves it to the 'lost' stage, sets probability to 0, "
+            "records why, and adds the reason to the deal's notes thread. Always try to "
+            "capture a reason — it is what makes lost deals worth reviewing later."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "deal_id": {"type": "integer", "description": "Deal ID to mark lost"},
+                "lost_reason": {
+                    "type": "string",
+                    "description": "Why the deal was lost, e.g. price, timing, chose a competitor, no budget",
+                    "default": "",
+                },
+            },
+            "required": ["deal_id"],
+        },
+        "kind": "integration",
+    },
+    {
+        "name": "crm_archive_deal",
+        "writes": True,
+        "description": (
+            "Archive a deal (or restore an archived one). Archiving hides the deal from "
+            "the pipeline, dashboards, analytics and searches WITHOUT deleting anything "
+            "— use it for junk, test, or abandoned deals that shouldn't skew the "
+            "numbers. Do NOT use it to close a real deal: that's crm_mark_deal_won or "
+            "crm_mark_deal_lost."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "deal_id": {"type": "integer", "description": "Deal ID"},
+                "archived": {
+                    "type": "boolean",
+                    "description": "true to archive (default), false to restore",
+                    "default": True,
+                },
+            },
+            "required": ["deal_id"],
+        },
+        "kind": "integration",
+    },
+    {
+        "name": "crm_merge_deals",
+        "writes": True,
+        "description": (
+            "Merge a duplicate deal into the one being kept. The source deal's logged "
+            "activities and tasks move to the target, its notes are copied across with "
+            "a '[Merged from deal #N]' marker, and its custom-field values fill in only "
+            "the target's blanks — the target's own field values, title, value and "
+            "stage are never overwritten. The source is archived, not deleted. Confirm "
+            "which deal is being kept before calling this."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "target_deal_id": {"type": "integer", "description": "The deal to KEEP"},
+                "source_deal_id": {"type": "integer", "description": "The duplicate to fold in and archive"},
+            },
+            "required": ["target_deal_id", "source_deal_id"],
         },
         "kind": "integration",
     },
@@ -352,7 +505,10 @@ CRM_TOOL_DEFS = [
         "kind": "integration",
     },
 
-    # ── Analytics (2 tools) ───────────────────────────────────────────────────
+    # ── Analytics + sales intelligence (6 tools) ──────────────────────────────
+    # The four intelligence reads below are pure SQL — they work with zero AI keys,
+    # and because they carry writes:False they are automatically inside the
+    # background-turn allowlist, so the proactive heartbeat can call them too.
     {
         "name": "crm_dashboard",
         "writes": False,
@@ -390,20 +546,105 @@ CRM_TOOL_DEFS = [
         },
         "kind": "integration",
     },
+    {
+        "name": "crm_get_stale_deals",
+        "writes": False,
+        "description": (
+            "List the open deals nobody has touched recently, stalest first, with the "
+            "stage, value, contact, how many days since the last touch, how long the "
+            "deal has sat in its current stage, and whether a follow-up task already "
+            "exists. Use for 'what's going cold', 'what needs attention', or to pick "
+            "the next follow-up. crm_analytics gives the stale COUNT for a summary; "
+            "this gives the actionable list."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "stale_days": {"type": "integer", "description": "Days without a touch to count as stale (default 14)", "default": 14},
+                "limit": {"type": "integer", "description": "Max deals (default 20, max 100)", "default": 20},
+            },
+            "required": [],
+        },
+        "kind": "integration",
+    },
+    {
+        "name": "crm_get_contact_staleness",
+        "writes": False,
+        "description": (
+            "List active contacts with no logged interaction recently, longest-neglected "
+            "first. Contacts never contacted at all come first with a null date. Shows "
+            "each contact's company and how many open deals they have, so relationships "
+            "with live business can be prioritized. Use for 'who haven't I followed up "
+            "with' or to plan a check-in round."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "stale_days": {"type": "integer", "description": "Days without contact to count as stale (default 30)", "default": 30},
+                "limit": {"type": "integer", "description": "Max contacts (default 20, max 100)", "default": 20},
+            },
+            "required": [],
+        },
+        "kind": "integration",
+    },
+    {
+        "name": "crm_find_duplicates",
+        "writes": False,
+        "description": (
+            "Find likely duplicate records: contacts sharing an email or a name, "
+            "companies sharing a domain or a name, and live deals with the same title "
+            "on the same contact. Matching is exact after trimming and lowercasing — "
+            "near-misses are not reported. Use before creating a record the user thinks "
+            "might already exist, or when cleaning up the CRM. Review each group with "
+            "the user before merging anything."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "entity_type": {"type": "string", "enum": ["contact", "company", "deal", "all"], "description": "Which entity to check (default all)", "default": "all"},
+                "limit": {"type": "integer", "description": "Max groups per match type (default 20, max 100)", "default": 20},
+            },
+            "required": [],
+        },
+        "kind": "integration",
+    },
+    {
+        "name": "crm_scan_gaps",
+        "writes": False,
+        "description": (
+            "Find records with missing information worth filling in — contacts without "
+            "an email, phone, job title or company link; companies without a domain, "
+            "industry or phone; open deals with no value, close date or contact. Also "
+            "lists fields YOU previously filled in that the user has not confirmed yet. "
+            "This tool only reports the holes: never invent a value to fill one — get "
+            "it from the user or from an existing record, then use the normal update "
+            "tool."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "entity_type": {"type": "string", "enum": ["contact", "company", "deal", "all"], "description": "Which entity to scan (default all)", "default": "all"},
+                "limit": {"type": "integer", "description": "Max records per entity (default 20, max 100)", "default": 20},
+            },
+            "required": [],
+        },
+        "kind": "integration",
+    },
 
     # ── Chatter / notes (2 tools) ─────────────────────────────────────────────
     {
         "name": "crm_add_note",
         "description": (
-            "Add a free-form note to a deal or contact — editable, archivable commentary shown "
-            "in the entity's notes thread alongside its activity timeline. Use for observations, "
-            "context, or reminders about the record (not a dated interaction — that's crm_log_activity)."
+            "Add a free-form note to a deal, contact, or company — editable, archivable "
+            "commentary shown in the entity's notes thread alongside its activity timeline. "
+            "Use for observations, context, or reminders about the record (not a dated "
+            "interaction — that's crm_log_activity)."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "entity_type": {"type": "string", "enum": ["deal", "contact"], "description": "'deal' or 'contact'"},
-                "entity_id": {"type": "integer", "description": "ID of the deal or contact"},
+                "entity_type": {"type": "string", "enum": ["deal", "contact", "company"], "description": "'deal', 'contact', or 'company'"},
+                "entity_id": {"type": "integer", "description": "ID of the deal, contact, or company"},
                 "message": {"type": "string", "description": "The note text"},
             },
             "required": ["entity_type", "entity_id", "message"],
@@ -413,12 +654,12 @@ CRM_TOOL_DEFS = [
     },
     {
         "name": "crm_get_chatter",
-        "description": "Read the notes thread for a deal or contact (newest first).",
+        "description": "Read the notes thread for a deal, contact, or company (newest first).",
         "input_schema": {
             "type": "object",
             "properties": {
-                "entity_type": {"type": "string", "enum": ["deal", "contact"], "description": "'deal' or 'contact'"},
-                "entity_id": {"type": "integer", "description": "ID of the deal or contact"},
+                "entity_type": {"type": "string", "enum": ["deal", "contact", "company"], "description": "'deal', 'contact', or 'company'"},
+                "entity_id": {"type": "integer", "description": "ID of the deal, contact, or company"},
                 "limit": {"type": "integer", "description": "Max notes (default 50)", "default": 50, "minimum": 1, "maximum": 200},
                 "include_archived": {"type": "boolean", "description": "Include archived notes", "default": False},
             },
@@ -440,6 +681,7 @@ CRM_TOOL_DEFS = [
             "properties": {
                 "query": {"type": "string", "description": "Search term (name, domain, industry, or keyword)"},
                 "status": {"type": "string", "description": "Filter by status: active, archived"},
+                "limit": {"type": "integer", "description": "Max results (default 20)", "default": 20},
             },
             "required": ["query"],
         },
@@ -654,6 +896,44 @@ CRM_TOOL_DEFS = [
         },
         "kind": "integration",
     },
+    {
+        "name": "crm_get_lead_score",
+        "writes": False,
+        "description": (
+            "Get one deal's or contact's computed lead score (0-100) with its full "
+            "factor-by-factor breakdown (stage, engagement, value, links, recency, age). "
+            "Use to explain WHY a specific deal or contact is scored the way it is. This is "
+            "a single-entity lookup — to rank the hottest leads, sort the contact list by "
+            "lead_score or read the pipeline."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "entity_type": {"type": "string", "enum": ["deal", "contact"], "description": "Which entity to score"},
+                "entity_id": {"type": "integer", "description": "The deal or contact ID"},
+            },
+            "required": ["entity_type", "entity_id"],
+        },
+        "kind": "integration",
+    },
+    {
+        "name": "crm_recompute_lead_scores",
+        "writes": True,
+        "description": (
+            "Recompute and persist stored lead scores across the CRM (repair/backfill). "
+            "scope='null' scores only never-scored rows; scope='all' rescores every deal "
+            "and contact. Scores normally recompute automatically on writes + a daily "
+            "refresh, so use this only to repair drift or after a bulk import."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "scope": {"type": "string", "enum": ["null", "all"], "description": "'null' = only unscored rows; 'all' = every row"},
+            },
+            "required": [],
+        },
+        "kind": "integration",
+    },
 ]
 
 
@@ -690,8 +970,19 @@ def _record_provenance(entity_type: str, entity_id: int, provided: dict, result:
 
 # ── Contacts ──────────────────────────────────────────────────────────────────
 
-def crm_find_contact(query: str, status: str | None = None, tags: str | None = None) -> dict:
-    contacts = crm.search_contacts(query, status=status, tags=tags)
+def _bounded_limit(limit, default: int = 20, high: int = 100) -> int:
+    """Clamp a model-supplied limit. The LLM writes these numbers, so an absurd value
+    (or a string) must bound to something sane rather than reach the database."""
+    try:
+        return max(1, min(int(limit), high))
+    except (TypeError, ValueError):
+        return default
+
+
+def crm_find_contact(
+    query: str, status: str | None = None, tags: str | None = None, limit: int = 20,
+) -> dict:
+    contacts = crm.search_contacts(query, status=status, tags=tags, limit=_bounded_limit(limit))
     return {"contacts": contacts, "count": len(contacts)}
 
 
@@ -738,8 +1029,87 @@ def crm_delete_contact(contact_id: int) -> dict:
 
 # ── Deals ─────────────────────────────────────────────────────────────────────
 
-def crm_get_pipeline(stage: str | None = None) -> dict:
-    return crm.get_pipeline(stage=stage)
+# The columns a model needs to reason about a deal. The service returns `d.*` for the
+# UI (notes, currency, ai_touch_*, timestamps); forwarding all of that costs ~27k
+# tokens for a 150-deal board and buys nothing — the model can always crm_get_deal for
+# the full record. Projection happens HERE, at the model boundary, so the HTTP/Kanban
+# payloads are untouched.
+_DEAL_SUMMARY_FIELDS = (
+    "id", "title", "stage", "value", "currency", "probability",
+    "expected_close_date", "contact_id", "contact_name", "company_id",
+    "company_name", "last_activity_at", "archived_at",
+    # lost_reason is THE field a quarter review reads (SALES_GUIDE says so), and
+    # updated_at is the only recency signal a search row carries — last_activity_at
+    # is computed by get_pipeline only. Dropping either made the projection lossy for
+    # the exact queries these tools exist to answer.
+    "lost_reason", "updated_at",
+)
+
+
+def _summarize_deal(deal: dict) -> dict:
+    out = {k: deal[k] for k in _DEAL_SUMMARY_FIELDS if k in deal}
+    # custom_fields is small and often the reason the deal was searched for.
+    if deal.get("custom_fields"):
+        out["custom_fields"] = deal["custom_fields"]
+    return out
+
+
+def crm_get_pipeline(stage: str | None = None, limit_per_stage: int = 25) -> dict:
+    """Pipeline board, with the per-stage deal LIST capped for the model's context.
+
+    The cap is applied here rather than in the service so the Kanban board (which
+    needs every card to render) is untouched. stage_summary is computed over all
+    deals, so the counts and values stay true even when the list is trimmed —
+    `deals_truncated` tells the model when it is looking at a partial list.
+    """
+    limit_per_stage = _bounded_limit(limit_per_stage, default=25)
+    result = crm.get_pipeline(stage=stage)
+    deals = result.get("deals") or []
+    per_stage: dict[str, int] = {}
+    trimmed = []
+    for deal in deals:  # already ordered updated_at DESC — newest per stage survives
+        key = deal.get("stage") or ""
+        if per_stage.get(key, 0) >= limit_per_stage:
+            continue
+        per_stage[key] = per_stage.get(key, 0) + 1
+        trimmed.append(_summarize_deal(deal))
+    return {**result, "deals": trimmed,
+            "limit_per_stage": limit_per_stage,
+            "deals_truncated": len(trimmed) < len(deals)}
+
+
+def crm_search_deals(
+    search: str = "", stage: str | None = None, sort_by: str = "updated_at",
+    sort_dir: str = "desc", custom_field_filters: dict | None = None, limit: int = 25,
+    include_archived: bool = False,
+) -> dict:
+    if custom_field_filters is not None and not isinstance(custom_field_filters, dict):
+        return {"error": "custom_field_filters must be a map of field_key -> value"}
+    archived = _as_bool(include_archived)
+    if archived is None:
+        return {"error": "include_archived must be true or false"}
+
+    # Report keys that match no definition. Without this an unknown key just returns
+    # zero rows and the model tells the user "no deals match" — a wrong answer rather
+    # than "that field doesn't exist". _set_entity_fields already behaves this way.
+    unknown: list[str] = []
+    if custom_field_filters:
+        try:
+            known = {d["field_key"].lower()
+                     for d in field_service.list_field_definitions("deal")}
+        except ValueError:
+            known = set()
+        unknown = [k for k in custom_field_filters if str(k).lower() not in known]
+
+    deals = crm.search_deals(
+        search=search or "", stage=stage, sort_by=sort_by, sort_dir=sort_dir,
+        custom_field_filters=custom_field_filters, limit=limit,
+        include_archived=archived,
+    )
+    result = {"deals": [_summarize_deal(d) for d in deals], "count": len(deals)}
+    if unknown:
+        result["unknown_field_keys"] = unknown
+    return result
 
 
 def crm_create_deal(title: str, **kwargs) -> dict:
@@ -754,10 +1124,15 @@ def crm_create_deal(title: str, **kwargs) -> dict:
 
 
 def crm_update_deal(deal_id: int, **kwargs) -> dict:
+    # ValueError is a refusal the model can act on ("restore it first"); letting it
+    # escape would hit registry.execute_tool_sync's generic "failed, please try again"
+    # and send the model into a retry loop on a permanent condition.
     try:
         result = crm.update_deal(deal_id, **kwargs)
     except psycopg2.errors.ForeignKeyViolation:
         return {"error": "Referenced contact or company does not exist"}
+    except ValueError as e:
+        return {"error": str(e)}
     if not result:
         return {"error": f"Deal {deal_id} not found or invalid stage"}
     _record_provenance("deal", deal_id, kwargs, result)
@@ -765,7 +1140,10 @@ def crm_update_deal(deal_id: int, **kwargs) -> dict:
 
 
 def crm_update_deal_stage(deal_id: int, stage: str) -> dict:
-    deal = crm.update_deal_stage(deal_id, stage)
+    try:
+        deal = crm.update_deal_stage(deal_id, stage)
+    except ValueError as e:
+        return {"error": str(e)}
     if not deal:
         return {"error": f"Deal not found or invalid stage: {stage}"}
     _record_provenance("deal", deal_id, {"stage": stage}, deal)
@@ -777,6 +1155,72 @@ def crm_get_deal(deal_id: int) -> dict:
     if not result:
         return {"error": f"Deal {deal_id} not found"}
     return result
+
+
+def crm_mark_deal_won(deal_id: int) -> dict:
+    try:
+        deal = crm.mark_deal_won(deal_id)
+    except ValueError as e:
+        return {"error": str(e)}
+    if not deal:
+        return {"error": f"Deal {deal_id} not found"}
+    _record_provenance("deal", deal_id, {"stage": "won", "probability": 100}, deal)
+    return deal
+
+
+def crm_mark_deal_lost(deal_id: int, lost_reason: str = "") -> dict:
+    try:
+        deal = crm.mark_deal_lost(deal_id, lost_reason=lost_reason)
+    except ValueError as e:
+        return {"error": str(e)}
+    if not deal:
+        return {"error": f"Deal {deal_id} not found"}
+    _record_provenance(
+        "deal", deal_id,
+        {"stage": "lost", "probability": 0, "lost_reason": lost_reason}, deal,
+    )
+    return deal
+
+
+# Models do send `"false"` where a boolean is asked for, and `bool("false")` is True —
+# which would ARCHIVE a deal the user asked to restore. Parse strictly and refuse
+# anything ambiguous rather than guessing at a destructive default.
+_TRUE_WORDS = {"true", "1", "yes", "y"}
+_FALSE_WORDS = {"false", "0", "no", "n"}
+
+
+def _as_bool(value) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        # 0/1 only — an int like 2 or -1 is not an unambiguous "restore or archive?"
+        # answer, and this flag decides whether data disappears from every view.
+        return bool(value) if value in (0, 1) else None
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in _TRUE_WORDS:
+            return True
+        if text in _FALSE_WORDS:
+            return False
+    return None
+
+
+def crm_archive_deal(deal_id: int, archived: bool = True) -> dict:
+    flag = _as_bool(archived)
+    if flag is None:
+        return {"error": "archived must be true or false"}
+    deal = crm.archive_deal(deal_id, archived=flag)
+    if not deal:
+        return {"error": f"Deal {deal_id} not found"}
+    return {"ok": True, "archived": flag, "deal": deal}
+
+
+def crm_merge_deals(target_deal_id: int, source_deal_id: int) -> dict:
+    try:
+        deal = crm.merge_deals(target_deal_id, source_deal_id)
+    except ValueError as e:
+        return {"error": str(e)}
+    return {"ok": True, "merged_from": source_deal_id, "deal": deal}
 
 
 # ── Activities ────────────────────────────────────────────────────────────────
@@ -817,8 +1261,8 @@ def crm_complete_task(task_id: int) -> dict:
 
 # ── Companies ─────────────────────────────────────────────────────────────────
 
-def crm_search_companies(query: str, status: str | None = None) -> dict:
-    companies = crm.search_companies(query, status=status)
+def crm_search_companies(query: str, status: str | None = None, limit: int = 20) -> dict:
+    companies = crm.search_companies(query, status=status, limit=_bounded_limit(limit))
     return {"companies": companies, "count": len(companies)}
 
 
@@ -867,6 +1311,26 @@ def crm_analytics(stale_days: int = 14) -> dict:
     return crm.summarize_analytics(crm.get_analytics(stale_days=stale_days))
 
 
+# ── Sales intelligence (issue #22) ────────────────────────────────────────────
+# Thin pass-throughs: analytics_service clamps every bound itself, so these stay
+# free of duplicated validation.
+
+def crm_get_stale_deals(stale_days: int = 14, limit: int = 20) -> dict:
+    return analytics_service.get_stale_deals(stale_days=stale_days, limit=limit)
+
+
+def crm_get_contact_staleness(stale_days: int = 30, limit: int = 20) -> dict:
+    return analytics_service.get_contact_staleness(stale_days=stale_days, limit=limit)
+
+
+def crm_find_duplicates(entity_type: str = "all", limit: int = 20) -> dict:
+    return analytics_service.find_duplicates(entity_type=entity_type, limit=limit)
+
+
+def crm_scan_gaps(entity_type: str = "all", limit: int = 20) -> dict:
+    return analytics_service.scan_gaps(entity_type=entity_type, limit=limit)
+
+
 # ── Chatter / notes ───────────────────────────────────────────────────────────
 
 def crm_add_note(entity_type: str, entity_id: int, message: str) -> dict:
@@ -893,13 +1357,6 @@ def crm_get_chatter(
 # Get tools discover the field schema (and optionally a record's values); set tools
 # write by field_key. Attribution is hardcoded "assistant" — the set tools expose no
 # user_email param, so the model can't spoof who edited a value.
-
-def _normalize_field_value(value) -> str:
-    """Coerce an LLM-supplied value to the text form the value table stores."""
-    if isinstance(value, bool):
-        return "1" if value else "0"
-    return str(value)
-
 
 def _normalize_field(r: dict) -> dict:
     """One field's schema in the shape shown to the model. Used for BOTH get-tool
@@ -965,7 +1422,7 @@ def _set_entity_fields(entity_type: str, entity_id: int, fields: dict) -> dict:
         if field_id is None:
             unknown.append(key)
             continue
-        values_by_id[str(field_id)] = _normalize_field_value(value)
+        values_by_id[str(field_id)] = field_service.normalize_value(value)
 
     if not values_by_id:
         detail = []
@@ -1010,8 +1467,35 @@ def crm_set_deal_fields(deal_id: int, fields: dict) -> dict:
     return _set_entity_fields("deal", deal_id, fields)
 
 
+# ── Lead scores (issue #18) ──────────────────────────────────────────────────
+
+def crm_get_lead_score(entity_type: str, entity_id: int) -> dict:
+    if entity_type == "deal":
+        result = scoring_service.score_deal(entity_id)
+        stored = crm.get_deal(entity_id)
+    elif entity_type == "contact":
+        result = scoring_service.score_contact(entity_id)
+        stored = crm.get_contact(entity_id)
+    else:
+        return {"error": f"invalid entity_type: {entity_type!r} (expected 'deal' or 'contact')"}
+    if result is None:
+        return {"error": f"no {entity_type} with id {entity_id}"}
+    # stored_score = the persisted value (may lag the live compute until the next event/refresh).
+    result["stored_score"] = stored.get("lead_score") if stored else None
+    return result
+
+
+def crm_recompute_lead_scores(scope: str = "all") -> dict:
+    # Defaults to "all": an assistant asked to "recompute lead scores" means a full repair.
+    # (The /scores/backfill REST endpoint defaults to "null" — the cheap new-rows-only pass.)
+    try:
+        return scoring_service.backfill_scores(scope)
+    except ValueError as e:
+        return {"error": str(e)}
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
-# Executor Mapping (name -> callable(**kwargs) -> dict). 32 entries: the 31
+# Executor Mapping (name -> callable(**kwargs) -> dict). 43 entries: the 42
 # schema'd tools plus the crm_log_note back-compat alias (no schema def).
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1025,10 +1509,15 @@ TOOL_EXECUTORS = {
     "crm_delete_contact": crm_delete_contact,
     # Deals
     "crm_get_pipeline": crm_get_pipeline,
+    "crm_search_deals": crm_search_deals,
     "crm_create_deal": crm_create_deal,
     "crm_update_deal": crm_update_deal,
     "crm_update_deal_stage": crm_update_deal_stage,
     "crm_get_deal": crm_get_deal,
+    "crm_mark_deal_won": crm_mark_deal_won,
+    "crm_mark_deal_lost": crm_mark_deal_lost,
+    "crm_archive_deal": crm_archive_deal,
+    "crm_merge_deals": crm_merge_deals,
     # Activities
     "crm_log_activity": crm_log_activity,
     "crm_get_activity_log": crm_get_activity_log,
@@ -1036,9 +1525,16 @@ TOOL_EXECUTORS = {
     "crm_create_task": crm_create_task,
     "crm_list_tasks": crm_list_tasks,
     "crm_complete_task": crm_complete_task,
-    # Analytics
+    # Analytics + sales intelligence
     "crm_dashboard": crm_dashboard,
     "crm_analytics": crm_analytics,
+    "crm_get_stale_deals": crm_get_stale_deals,
+    "crm_get_contact_staleness": crm_get_contact_staleness,
+    "crm_find_duplicates": crm_find_duplicates,
+    "crm_scan_gaps": crm_scan_gaps,
+    # Lead scores (issue #18)
+    "crm_get_lead_score": crm_get_lead_score,
+    "crm_recompute_lead_scores": crm_recompute_lead_scores,
     # Chatter / notes
     "crm_add_note": crm_add_note,
     "crm_get_chatter": crm_get_chatter,

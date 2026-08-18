@@ -6,7 +6,7 @@ import { mono, INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, ACCENT_INK, GOLD, SAGE
 import { modalOverlay, modalContent, mobileDragHandle, btnDanger } from '../styles';
 import { ActivityTimeline } from './ActivityTimeline';
 import { NotesThread } from './NotesThread';
-import { TouchCountPill } from './badges';
+import { ScorePill, TouchCountPill } from './badges';
 import { ProvenanceBadge } from './ProvenanceBadge';
 import { useProvenance } from '../useProvenance';
 import { CustomFieldsSection } from './CustomFieldsSection';
@@ -35,6 +35,10 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
   // freshly-triggered count lands on the next fetch/navigation — accepted eventual
   // consistency for an estimate nudge (see the PR's accepted-limitations note).
   const [touchCount, setTouchCount] = useState<number | null | undefined>(deal.ai_touch_count);
+  // Same rationale for lead_score (issue #18): render the re-fetchable value, not the frozen
+  // list-row prop, so an in-sheet activity mutation (or the daily refresh / another client)
+  // updates the pill on the next loadDetail rather than showing a stale score until close.
+  const [leadScore, setLeadScore] = useState<number | null | undefined>(deal.lead_score);
   const { byField, confirm, confirming } = useProvenance('deal', deal.id);
   const badge = (f: string) => (
     <ProvenanceBadge prov={byField[f]} onConfirm={() => confirm(f)} confirming={confirming === f} />
@@ -47,6 +51,7 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
       if (reqId !== reqRef.current) return;
       setActivity(detail.activity || []);
       setTouchCount(detail.ai_touch_count);
+      setLeadScore(detail.lead_score);
     } catch {
       // Non-fatal: the sheet still shows deal fields + chatter; leave activity as-is.
     }
@@ -108,6 +113,21 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
           </p>
         )}
 
+        {/* Why the deal was lost (issue #22). Cleared automatically if the deal is
+            reopened, so this only ever shows on a currently-lost deal. */}
+        {deal.lost_reason && (
+          <p style={{ fontSize: 13, color: INK_MUTE, marginBottom: 16, lineHeight: 1.5 }}>
+            <span style={{ ...mono(10), color: INK_DIM, marginRight: 6 }}>LOST REASON</span>
+            {deal.lost_reason} {badge('lost_reason')}
+          </p>
+        )}
+
+        {/* No archived-deal banner here on purpose. Archiving is assistant-only in
+            Phase 1 (issue #22) and every surface that opens this sheet — the pipeline
+            board and the dashboard — filters archived deals out, so a banner would be
+            unreachable UI implying a path that doesn't exist. Add it back together
+            with the "Archived" pipeline facet that makes an archived deal openable. */}
+
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
           {deal.contact_name && (
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -122,6 +142,12 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
                 <span style={{ fontSize: 13, color: INK }}>{deal.probability}%</span>
                 {badge('probability')}
               </span>
+            </div>
+          )}
+          {leadScore != null && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ ...mono(10), color: INK_DIM }}>Lead Score</span>
+              <ScorePill score={leadScore} />
             </div>
           )}
           {deal.expected_close_date && (

@@ -120,6 +120,23 @@ def test_gmail_read_tools_are_in_the_engine_taint_set():
     )
 
 
+def test_gmail_write_tools_are_in_the_engine_connection_binding_set():
+    """Coupling guard, mirroring the taint-set guard above: every Gmail WRITE tool
+    must be in the engine's _CONNECTION_BOUND_WRITE_TOOLS. That set is a
+    hand-maintained literal two modules away, so renaming or adding a Gmail write
+    without updating it would silently drop the propose-time connection binding
+    (#43) — a draft approved after the admin switches Google accounts would once
+    again be created in the new account, with no failing test to warn the author."""
+    from assistant.engine import _CONNECTION_BOUND_WRITE_TOOLS
+    from gmail.tools import GMAIL_TOOL_DEFS
+
+    writes = {d["name"] for d in GMAIL_TOOL_DEFS if d["writes"]}
+    assert writes == _CONNECTION_BOUND_WRITE_TOOLS, (
+        "Gmail write tools and engine._CONNECTION_BOUND_WRITE_TOOLS have drifted — "
+        f"writes={writes} bound={_CONNECTION_BOUND_WRITE_TOOLS}"
+    )
+
+
 def test_client_op_allowlist_excludes_send():
     from gmail import client, ops
 

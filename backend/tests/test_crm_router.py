@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from core.auth import get_current_user
-from crm import provenance_service, service, touch_count_service
+from crm import provenance_service, scoring_service, service, touch_count_service
 from crm.router import router as crm_router
 
 
@@ -548,3 +548,59 @@ def test_confirm_provenance_404_when_no_row(client, monkeypatch):
     monkeypatch.setattr(provenance_service, "confirm", lambda et, eid, fn: None)
     r = client.post("/api/crm/provenance/contact/1/confirm", json={"field_name": "phone"})
     assert r.status_code == 404
+
+
+def test_update_deal_refusal_is_a_400_not_a_500(client, monkeypatch):
+    """A stage change on an archived deal is a refusal the caller can act on (issue
+    #22). Letting the ValueError escape gave the Kanban drag an HTTP 500."""
+    def refuse(deal_id, **kw):
+        raise ValueError("Cannot change the stage of archived deal #3 — restore it first")
+
+    monkeypatch.setattr(service, "update_deal", refuse)
+    r = client.put("/api/crm/deals/3", json={"stage": "won"})
+    assert r.status_code == 400
+    assert "restore it first" in r.json()["detail"]
+
+
+# ── Lead scores (issue #18) ───────────────────────────────────────────────────
+
+def test_contacts_sort_forwarded_browse_and_search(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(service, "list_contacts",
+                        lambda **kw: seen.update({"browse": kw}) or {"contacts": [], "total": 0})
+    monkeypatch.setattr(service, "search_contacts",
+                        lambda *a, **kw: seen.update({"search": kw}) or [])
+    monkeypatch.setattr(service, "count_search_contacts", lambda *a, **kw: 0)
+    client.get("/api/crm/contacts?sort=lead_score")
+    assert seen["browse"]["sort"] == "lead_score"
+    client.get("/api/crm/contacts?q=acme&sort=lead_score")
+    assert seen["search"]["sort"] == "lead_score"  # sort honored during search too (P1.8)
+
+
+def test_contacts_sort_defaults_to_updated_at(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(service, "list_contacts",
+                        lambda **kw: seen.update(kw) or {"contacts": [], "total": 0})
+    client.get("/api/crm/contacts")
+    assert seen["sort"] == "updated_at"
+
+
+def test_scores_backfill_happy_path(client, monkeypatch):
+    monkeypatch.setattr(scoring_service, "backfill_scores",
+                        lambda scope: {"deals_scored": 2, "contacts_scored": 3, "errors": 0, "capped": False})
+    r = client.post("/api/crm/scores/backfill?scope=all")
+    assert r.status_code == 200
+    assert r.json()["deals_scored"] == 2 and r.json()["contacts_scored"] == 3
+
+
+def test_scores_backfill_default_scope_null(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(scoring_service, "backfill_scores",
+                        lambda scope: seen.update({"scope": scope}) or {"deals_scored": 0, "contacts_scored": 0, "errors": 0, "capped": False})
+    assert client.post("/api/crm/scores/backfill").status_code == 200
+    assert seen["scope"] == "null"
+
+
+def test_scores_backfill_bad_scope_rejected(client):
+    # Query(pattern="^(null|all)$") rejects out-of-pattern values before the handler (422).
+    assert client.post("/api/crm/scores/backfill?scope=everything").status_code == 422

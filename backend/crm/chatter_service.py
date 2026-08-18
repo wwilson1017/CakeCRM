@@ -12,8 +12,9 @@ non-empty bounded message, and bounded list windows. Invalid input raises ``Valu
 Storage is polymorphic ``(entity_type, entity_id)`` with no FK, so orphan safety is
 enforced structurally: ``add_note`` checks the target exists and inserts in ONE
 transaction (``SELECT ... FOR UPDATE`` on the target row, per the check-then-write
-rule in CLAUDE.md), and ``service.py`` clears chatter in ``delete_contact`` (which
-also locks the target ``FOR UPDATE``) and every CRM-truncate path. A SERIAL id is
+rule in CLAUDE.md), and ``service.py`` clears chatter in ``delete_contact`` /
+``delete_company`` (both of which also lock the target ``FOR UPDATE``) and every
+CRM-truncate path. A SERIAL id is
 never reused except by ``TRUNCATE ... RESTART IDENTITY``, which also wipes
 ``crm_chatter`` — so a reused id can never inherit a deleted entity's notes.
 """
@@ -21,12 +22,24 @@ never reused except by ``TRUNCATE ... RESTART IDENTITY``, which also wipes
 from datetime import datetime, timezone
 
 from core.postgres import get_connection, pg_fetchall, pg_fetchone, row_to_dict
-from crm import touch_count_service
+from crm import scoring_service, touch_count_service
 
-CHATTER_ENTITY_TYPES = ("deal", "contact")
-_ENTITY_TABLE = {"deal": "deals", "contact": "contacts"}
+# Companies joined in issue #22 (Casey parity): entity_type is free TEXT with no CHECK
+# constraint, exactly so this is a zero-migration add. Widening the tuple widens the
+# HTTP routes and the agent tools at once — they all validate through here.
+CHATTER_ENTITY_TYPES = ("deal", "contact", "company")
+_ENTITY_TABLE = {"deal": "deals", "contact": "contacts", "company": "companies"}
 MAX_MESSAGE_LEN = 10_000
 _MAX_LIMIT = 200
+
+
+def _score_chatter_entity(entity_type: str | None, entity_id: int) -> None:
+    """#18: a note add/archive/unarchive changes the entity's engagement + recency.
+    Covers BOTH deals and contacts (touch-count is deal-only). Never raises."""
+    if entity_type == "deal":
+        scoring_service.score_on_event(deal_ids=(entity_id,))
+    elif entity_type == "contact":
+        scoring_service.score_on_event(contact_ids=(entity_id,))
 
 
 def _now() -> str:
@@ -103,6 +116,7 @@ def add_note(entity_type: str, entity_id: int, message: str) -> dict:
     # O(1) and never raises, so it can't break a note write. Contact notes don't trigger.
     if entity_type == "deal":
         touch_count_service.schedule_recompute(entity_id)
+    _score_chatter_entity(entity_type, entity_id)  # #18: new note → engagement/recency
     return note
 
 
@@ -148,6 +162,7 @@ def archive_note(note_id: int) -> bool | None:
     # watermark (it's often the newest note), so force_write lets the CAS repair the count.
     if row.get("entity_type") == "deal":
         touch_count_service.schedule_recompute(row["entity_id"], force_write=True)
+    _score_chatter_entity(row.get("entity_type"), row.get("entity_id"))  # #18: active-note count changed
     return True
 
 
@@ -163,4 +178,5 @@ def unarchive_note(note_id: int) -> bool | None:
     # applies even though the watermark/count may not advance.
     if row.get("entity_type") == "deal":
         touch_count_service.schedule_recompute(row["entity_id"], force_write=True)
+    _score_chatter_entity(row.get("entity_type"), row.get("entity_id"))  # #18: active-note count changed
     return True

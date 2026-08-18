@@ -268,7 +268,8 @@ def _process_message(msg: dict, own_email: str) -> dict:
             contact_id = row[0]
             cur.execute(
                 "SELECT id FROM deals WHERE contact_id = %s "
-                "AND stage NOT IN ('won', 'lost') ORDER BY id LIMIT 2",
+                "AND stage NOT IN ('won', 'lost') AND archived_at IS NULL "
+                "ORDER BY id LIMIT 2",
                 (contact_id,),
             )
             open_deals = cur.fetchall()

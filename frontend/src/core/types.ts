@@ -17,6 +17,8 @@ export interface CrmContact {
   notes: string;
   created_at: string;
   updated_at: string;
+  lead_score?: number | null;           // computed lead score 0-100 (issue #18); null = never scored
+  lead_score_at?: string | null;
   // Detail view extras
   deals?: CrmDeal[];
   tasks?: CrmTask[];
@@ -40,9 +42,13 @@ export interface CrmDeal {
   updated_at: string;
   ai_touch_count?: number | null;       // AI-estimated touch count (issue #16); null = uncomputed
   ai_touch_count_at?: string | null;
+  lost_reason?: string;                 // why a lost deal was lost (issue #22); '' when unset
+  archived_at?: string | null;          // soft-archive (issue #22); null = live
   // Pipeline board only (issue #21): MAX of the deal's activity_log rows + un-archived
   // deal chatter notes; null = no logged activity. Not present on detail-path responses.
   last_activity_at?: string | null;
+  lead_score?: number | null;           // computed lead score 0-100 (issue #18); null = never scored
+  lead_score_at?: string | null;
   activity?: CrmActivity[];
 }
 

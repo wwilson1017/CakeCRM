@@ -65,7 +65,8 @@ def _clean_crm(pg_db):
     from core.postgres import pg_execute
     pg_execute(
         "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
-        "crm_field_definitions, crm_field_values, crm_field_provenance RESTART IDENTITY"
+        "crm_field_definitions, crm_field_values, crm_field_provenance, "
+        "deal_stage_events RESTART IDENTITY"
     )
     pg_execute(
         "UPDATE crm_meta SET sample_data_loaded = FALSE, onboarding_dismissed = FALSE, "
@@ -674,7 +675,8 @@ def test_chatter_http_roundtrip(pg_db):
     # blank + missing + bad-type contract at the HTTP layer
     assert client.post(f"/api/crm/chatter/deal/{d['id']}/note", json={"message": " "}).status_code == 400
     assert client.patch("/api/crm/chatter/note/999999", json={"message": "x"}).status_code == 404
-    assert client.get("/api/crm/chatter/company/1").status_code == 400
+    # 'company' became a valid chatter type in issue #22 — probe with one that never is.
+    assert client.get("/api/crm/chatter/invoice/1").status_code == 400
 
 
 # ── Custom fields (issue #19) ─────────────────────────────────────────────────
@@ -1027,3 +1029,193 @@ def test_get_pipeline_last_activity_blends_activity_and_chatter(pg_db):
     lead_only = service.get_pipeline(stage="lead")["deals"]
     assert [x["id"] for x in lead_only] == [did2]
     assert str(lead_only[0]["last_activity_at"])[:10] == "2026-03-15"
+
+
+# ── Lead scoring (issue #18) — proves NULLS-LAST ordering, triggers, no-updated_at ──
+
+def test_lead_score_migration_columns_and_index(pg_db):
+    from core.postgres import pg_fetchall
+    for table in ("deals", "contacts"):
+        cols = {r["column_name"] for r in pg_fetchall(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = %s", (table,))}
+        assert {"lead_score", "lead_score_at"} <= cols, table
+    meta_cols = {r["column_name"] for r in pg_fetchall(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name = 'crm_meta'")}
+    assert "scores_refreshed_at" in meta_cols
+    idx = {r["indexname"] for r in pg_fetchall(
+        "SELECT indexname FROM pg_indexes WHERE tablename = 'contacts'")}
+    assert "idx_contacts_lead_score" in idx
+
+
+def test_check_constraint_rejects_out_of_range(pg_db):
+    from core.postgres import get_connection
+    with pytest.raises(psycopg2.errors.CheckViolation):
+        with get_connection() as conn:
+            conn.cursor().execute("INSERT INTO contacts (name, lead_score) VALUES ('X', 200)")
+
+
+def test_create_persists_score_in_range(pg_db):
+    from crm import service
+    deal = service.create_deal("Big deal", stage="negotiation", value=50000)
+    assert deal["lead_score"] is not None and 1 <= deal["lead_score"] <= 99
+    contact = service.create_contact("Ada", email="a@b.c", status="active")
+    assert contact["lead_score"] is not None and 1 <= contact["lead_score"] <= 99
+
+
+def test_terminal_deal_scores_100_and_0(pg_db):
+    from crm import service
+    won = service.create_deal("Won", stage="won", value=1000)
+    lost = service.create_deal("Lost", stage="lost", value=1000)
+    assert won["lead_score"] == 100 and lost["lead_score"] == 0
+
+
+def test_adding_note_recomputes_but_does_not_bump_updated_at(pg_db):
+    from core.postgres import pg_fetchone
+    from crm import chatter_service, service
+    deal = service.create_deal("Deal", stage="qualified", value=20000)
+    before = pg_fetchone("SELECT lead_score, updated_at FROM deals WHERE id = %s", (deal["id"],))
+    for _ in range(6):
+        chatter_service.add_note("deal", deal["id"], "made progress")
+    after = pg_fetchone("SELECT lead_score, updated_at FROM deals WHERE id = %s", (deal["id"],))
+    assert after["updated_at"] == before["updated_at"]  # a score write never bumps updated_at
+    assert after["lead_score"] >= before["lead_score"]  # engagement rose
+
+
+def test_contact_sort_nulls_last_and_id_tiebreak(pg_db):
+    from core.postgres import pg_execute
+    from crm import service
+    # Three scored contacts + two never-scored (lead_score NULL).
+    ids = [service.create_contact(f"C{i}", status="active")["id"] for i in range(5)]
+    pg_execute("UPDATE contacts SET lead_score = 90 WHERE id = %s", (ids[0],))
+    pg_execute("UPDATE contacts SET lead_score = 50 WHERE id = %s", (ids[1],))
+    pg_execute("UPDATE contacts SET lead_score = 90 WHERE id = %s", (ids[2],))  # tie with ids[0]
+    pg_execute("UPDATE contacts SET lead_score = NULL WHERE id IN (%s, %s)", (ids[3], ids[4]))
+    rows = service.list_contacts(sort="lead_score", limit=50)["contacts"]
+    order = [r["id"] for r in rows]
+    scored = [r["id"] for r in rows if r["lead_score"] is not None]
+    unscored = [r["id"] for r in rows if r["lead_score"] is None]
+    # scored (DESC, ties by id DESC) precede all NULLs
+    assert scored == [ids[2], ids[0], ids[1]]   # 90(id2), 90(id0 — lower id after), 50
+    assert set(unscored) == {ids[3], ids[4]}
+    assert order.index(ids[1]) < order.index(ids[3])  # every scored row before any NULL
+
+
+def test_backfill_scope_null_only_unscored(pg_db):
+    from core.postgres import pg_execute, pg_fetchone
+    from crm import scoring_service, service
+    d1 = service.create_deal("A", stage="lead")["id"]
+    d2 = service.create_deal("B", stage="proposal", value=30000)["id"]
+    # Wipe d1's score to simulate an unscored row; pin d2's to a sentinel we can detect.
+    pg_execute("UPDATE deals SET lead_score = NULL WHERE id = %s", (d1,))
+    pg_execute("UPDATE deals SET lead_score = 7 WHERE id = %s", (d2,))
+    out = scoring_service.backfill_scores("null")
+    assert out["deals_scored"] >= 1
+    assert pg_fetchone("SELECT lead_score FROM deals WHERE id = %s", (d1,))["lead_score"] is not None
+    assert pg_fetchone("SELECT lead_score FROM deals WHERE id = %s", (d2,))["lead_score"] == 7  # untouched
+
+
+def test_concurrent_recompute_serialized_by_advisory_lock(pg_db):
+    """Two threads recomputing the same deal must not corrupt the row; the per-entity
+    advisory lock serializes them and the final score is a valid computed value."""
+    import threading
+
+    from core.postgres import pg_fetchone
+    from crm import scoring_service, service
+    deal_id = service.create_deal("Race", stage="negotiation", value=40000)["id"]
+    errors = []
+
+    def worker():
+        try:
+            for _ in range(15):
+                scoring_service.recompute_deal(deal_id)
+        except Exception as e:  # the whole point is to catch a corruption/deadlock
+            errors.append(e)
+
+    threads = [threading.Thread(target=worker) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    final = pg_fetchone("SELECT lead_score FROM deals WHERE id = %s", (deal_id,))
+    assert final["lead_score"] is not None and 1 <= final["lead_score"] <= 99
+
+
+def test_score_refresh_rescoring_stale_rows_only(pg_db):
+    """run_score_refresh_if_due drives its session-lock connection across the inner per-entity
+    recompute connections on a REAL pool — the one path mocks can't exercise. A stale row is
+    rescored; a fresh row is left alone; a second immediate pass finds nothing stale."""
+    from datetime import datetime, timedelta, timezone
+
+    from core.postgres import pg_execute, pg_fetchone
+    from crm import scoring_service, service
+
+    now = datetime.now(timezone.utc)
+    # Reset the coarse due-gate so this pass is due regardless of test ordering.
+    pg_execute("UPDATE crm_meta SET scores_refreshed_at = NULL WHERE id = 1")
+    stale_deal = service.create_deal("Dormant", stage="qualified", value=20000)["id"]
+    fresh_deal = service.create_deal("Active", stage="proposal", value=30000)["id"]
+    stale_contact = service.create_contact("Old", status="active")["id"]
+    # Age one deal + one contact past the 24h staleness cutoff; pin the fresh deal's score
+    # to a sentinel so we can prove it was NOT recomputed.
+    old = now - timedelta(hours=48)
+    pg_execute("UPDATE deals SET lead_score = 3, lead_score_at = %s WHERE id = %s", (old, stale_deal))
+    pg_execute("UPDATE deals SET lead_score = 42, lead_score_at = %s WHERE id = %s", (now, fresh_deal))
+    pg_execute("UPDATE contacts SET lead_score = 3, lead_score_at = %s WHERE id = %s", (old, stale_contact))
+
+    out = scoring_service.run_score_refresh_if_due(now=now)
+    assert out is not None and out["deals_scored"] == 1 and out["contacts_scored"] == 1
+
+    # stale rows recomputed (lead_score_at advanced past the cutoff; value may coincide, so
+    # the advanced timestamp is the proof it ran)
+    d = pg_fetchone("SELECT lead_score, lead_score_at FROM deals WHERE id = %s", (stale_deal,))
+    assert d["lead_score_at"] > old.isoformat()
+    c = pg_fetchone("SELECT lead_score_at FROM contacts WHERE id = %s", (stale_contact,))
+    assert c["lead_score_at"] > old.isoformat()
+    # fresh deal untouched (sentinel intact)
+    assert pg_fetchone("SELECT lead_score FROM deals WHERE id = %s", (fresh_deal,))["lead_score"] == 42
+
+    # second immediate pass: the drain stamped scores_refreshed_at, so the coarse 24h gate
+    # closes -> None (no rescan).
+    assert scoring_service.run_score_refresh_if_due(now=now) is None
+
+
+def test_update_deal_stage_response_carries_fresh_score(pg_db):
+    # P2 fix: the mutation response must reflect the post-recompute score (the kanban merges it).
+    from crm import service
+    deal = service.create_deal("Deal", stage="qualified", value=20000)
+    assert deal["lead_score"] not in (None, 100)
+    won = service.update_deal_stage(deal["id"], "won")
+    assert won["lead_score"] == 100  # not the stale pre-recompute value
+    reopened = service.update_deal(deal["id"], stage="negotiation")
+    assert reopened["lead_score"] not in (None, 100)  # fresh, recomputed from the new stage
+
+
+def test_deal_engagement_counts_logged_activities(pg_db):
+    # P3 fix: activity_log is a touch surface — a deal worked only via logged calls must not
+    # read as zero-engagement.
+    from core.postgres import pg_fetchone
+    from crm import service
+    bare = service.create_deal("Bare", stage="qualified", value=20000)
+    worked = service.create_deal("Worked", stage="qualified", value=20000)
+    for _ in range(6):
+        service.log_activity("call", deal_id=worked["id"])
+    bare_score = pg_fetchone("SELECT lead_score FROM deals WHERE id = %s", (bare["id"],))["lead_score"]
+    worked_score = pg_fetchone("SELECT lead_score FROM deals WHERE id = %s", (worked["id"],))["lead_score"]
+    assert worked_score > bare_score
+
+
+def test_provenance_confirm_notes_excluded_from_engagement(pg_db):
+    # Housekeeping confirm-notes (provenance_service.confirm inserts them directly) must NOT
+    # count as customer engagement; real notes must.
+    from core.postgres import pg_execute
+    from crm import chatter_service, scoring_service, service
+    deal = service.create_deal("D", stage="qualified", value=20000)
+    for _ in range(5):
+        pg_execute("INSERT INTO crm_chatter (entity_type, entity_id, message) VALUES ('deal', %s, %s)",
+                   (deal["id"], "Confirmed AI-populated value for 'probability'."))
+    assert scoring_service.score_deal(deal["id"])["factors"]["engagement"]["value"] == 0
+    chatter_service.add_note("deal", deal["id"], "Real customer note")
+    assert scoring_service.score_deal(deal["id"])["factors"]["engagement"]["value"] == 1

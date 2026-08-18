@@ -51,20 +51,20 @@ def gmail_status(user=Depends(get_current_user)):
 def save_app(body: AppCredentials, user=Depends(get_current_user)):
     """Store BYO Google OAuth app credentials (client_id + client_secret).
 
-    Replacing the app invalidates any tokens minted under the old client, so revoke
-    the outgoing refresh token at Google first (best-effort, mirroring disconnect)
+    Replacing the app invalidates any tokens minted under the old client, so the
+    outgoing refresh token is revoked at Google (best-effort, mirroring disconnect)
     — otherwise rotating credentials after a suspected secret leak would leave the
-    old grant live and untracked."""
+    old grant live and untracked. The save returns the ciphertext it actually
+    cleared, so we revoke exactly that grant rather than one read beforehand (#43)."""
     client_id = body.client_id.strip()
     client_secret = body.client_secret.strip()
     if not client_id or not client_secret:
         raise HTTPException(status_code=400, detail="Both client ID and client secret are required.")
     from core.encryption import decrypt_value
 
-    old_refresh = decrypt_value(store.get_row().get("refresh_token_enc", ""))
+    old_refresh = decrypt_value(store.save_app_credentials(client_id, client_secret) or "")
     if old_refresh:
         oauth.revoke_token(old_refresh)
-    store.save_app_credentials(client_id, client_secret)
     return store.status_dict()
 
 
@@ -86,10 +86,17 @@ def oauth_callback(code: str = "", state: str = "", error: str = ""):
     Claims the state FIRST so both success and denial consume it, then exchanges
     the code and persists tokens. Any post-grant failure revokes the received
     tokens before redirecting, so no live Google authorization is left behind.
+
+    The claim also captures the connection generation, which gates the persist
+    below: seconds of Google round-trips sit between the two, and the admin may
+    disconnect or replace the OAuth app in that window (#43).
     """
     try:
-        # 1. Consume the CSRF state before doing anything else.
-        if not state or not store.claim_oauth_state(state):
+        # 1. Consume the CSRF state before doing anything else. `claimed_generation`
+        #    is None on a failed claim; 0 is a legitimate generation, so test for
+        #    None explicitly rather than truthiness.
+        claimed_generation = store.claim_oauth_state(state) if state else None
+        if claimed_generation is None:
             return _settings_redirect("error", "state")
 
         # 2. User declined on Google's consent screen.
@@ -144,21 +151,29 @@ def oauth_callback(code: str = "", state: str = "", error: str = ""):
         # Persist the fixed minimal scope set we requested, NOT whatever Google
         # returned — if the user's OAuth app is configured with extra scopes, Google
         # could grant more, but we never record or refresh under anything broader
-        # than gmail.readonly + gmail.compose. (A sub-second disconnect/app-replace
-        # race between the state-claim above and this write is a documented v1
-        # limitation — single-user, self-correcting; tracked in #43.)
+        # than gmail.readonly + gmail.compose. The write is a compare-and-swap on
+        # the generation captured at state-claim: a disconnect or app-replace during
+        # the Google round-trips above makes it a no-op instead of resurrecting a
+        # connection the admin just ended (#43).
         try:
-            store.save_tokens(
+            persisted = store.save_tokens(
                 access_token=access_token,
                 refresh_token=refresh_token,
                 expires_at=expires_at,
                 scopes=" ".join(oauth.SCOPES),
                 email=email,
+                expected_generation=claimed_generation,
             )
         except Exception as e:
             logger.error("gmail oauth token persist failed: %s", e)
             oauth.revoke_token(refresh_token)
             return _settings_redirect("error", "exchange")
+        if not persisted:
+            # The connection changed underneath this handshake. Same discipline as
+            # every other post-grant failure: never leave a live grant orphaned.
+            logger.info("gmail oauth persist superseded by a concurrent connection change")
+            oauth.revoke_token(refresh_token)
+            return _settings_redirect("error", "conflict")
         return _settings_redirect("connected")
     except Exception as e:  # never 500 the browser callback
         logger.error("gmail oauth callback error: %s", e)
@@ -167,15 +182,19 @@ def oauth_callback(code: str = "", state: str = "", error: str = ""):
 
 @router.delete("/connection")
 def disconnect(user=Depends(get_current_user)):
-    """Disconnect Gmail: best-effort revoke at Google, then clear tokens locally
+    """Disconnect Gmail: clear the connection locally — capturing the token it held
+    in the same statement — then best-effort revoke exactly that token at Google
     (keeping app credentials for a one-click reconnect)."""
     from core.encryption import decrypt_value
 
-    # Read-then-clear rather than one atomic read-and-clear returning the old token:
-    # the narrow failure window (read fails → clear succeeds → token unrevoked) is a
-    # documented v1 limitation, single-user and self-correcting (tracked in #43).
-    refresh_secret = decrypt_value(store.get_row().get("refresh_token_enc", ""))
+    # One atomic clear-and-capture: the store returns the ciphertext it actually
+    # cleared, so the token we revoke is by construction the token we ended (#43).
+    # This replaces the old read-then-clear, which could revoke a stale token while
+    # clearing a newer one, or clear without revoking when the pre-read failed.
+    # Residual: if the process dies between the clear and the revoke below, the
+    # grant stays live at Google until the user removes it from their account —
+    # strictly narrower than before, and revoke_token was always best-effort.
+    refresh_secret = decrypt_value(store.clear_connection() or "")
     if refresh_secret:
         oauth.revoke_token(refresh_secret)
-    store.clear_connection()
     return {"ok": True}

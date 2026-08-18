@@ -34,6 +34,8 @@ const REASON_MESSAGES: Record<string, string> = {
   scopes: 'Both Gmail permissions are required — reconnect and leave both boxes checked.',
   profile: 'Couldn’t verify the Gmail account — reconnect.',
   exchange: 'Connecting to Google failed — check your client ID/secret and the redirect URI.',
+  conflict:
+    'The Gmail connection changed while Google was authorizing, so nothing was saved. Click Connect again.',
 };
 
 const TRUST_NOTE =

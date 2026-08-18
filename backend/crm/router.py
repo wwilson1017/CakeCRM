@@ -6,7 +6,7 @@ first-class core — there is no enable gate and no lazy DB init (the schema is
 owned by backend/migrations). Ported from chatty's crm_lite router.
 
 Contacts:
-  GET    /api/crm/contacts              — paginated list / search (?q=)
+  GET    /api/crm/contacts              — paginated list / search (?q=, ?sort=lead_score|name|…)
   GET    /api/crm/contacts/:id          — full detail
   POST   /api/crm/contacts              — create
   PUT    /api/crm/contacts/:id          — update
@@ -59,6 +59,9 @@ Provenance (AI-written field badges on a deal or contact):
   GET    /api/crm/provenance/:type/:id           — live badge rows (unconfirmed + not stale)
   POST   /api/crm/provenance/:type/:id/confirm   — confirm a field's AI value (clears badge)
 
+Lead scores (issue #18):
+  POST   /api/crm/scores/backfill       — recompute stored lead scores (?scope=null|all)
+
 Other:
   GET    /api/crm/dashboard             — summary stats
   GET    /api/crm/analytics             — win/loss, activity volume, deal aging (?days, ?stale_days)
@@ -87,6 +90,7 @@ from crm import (
     chatter_service,
     field_service,
     provenance_service,
+    scoring_service,
     service as crm,
     touch_count_service,
 )
@@ -278,19 +282,22 @@ class FieldValuesUpdate(BaseModel):
 
 @router.get("/contacts")
 async def list_contacts(
-    q: str = "", status: str = "", tags: str = "",
+    q: str = "", status: str = "", tags: str = "", sort: str = "",
     limit: int = Query(50, ge=1, le=1000), offset: int = Query(0, ge=0),
     user=Depends(get_current_user),
 ):
+    # #18: sort is allowlisted in the service layer (unknown -> updated_at); applied to
+    # BOTH the search (?q=) and browse branches so the UI's active sort is never ignored.
+    sort = sort or "updated_at"
     if q:
         contacts = crm.search_contacts(
-            q, status=status or None, tags=tags or None, limit=limit, offset=offset,
+            q, status=status or None, tags=tags or None, limit=limit, offset=offset, sort=sort,
         )
         total = crm.count_search_contacts(q, status=status or None, tags=tags or None)
         return {"contacts": contacts, "total": total}
     return crm.list_contacts(
         offset=offset, limit=limit,
-        status=status or None, tags=tags or None,
+        status=status or None, tags=tags or None, sort=sort,
     )
 
 
@@ -391,6 +398,10 @@ async def update_deal(deal_id: int, body: DealUpdate, user=Depends(get_current_u
         result = crm.update_deal(deal_id, **updates)
     except psycopg2.errors.ForeignKeyViolation:
         raise HTTPException(status_code=400, detail="Referenced contact or company does not exist") from None
+    except ValueError as e:
+        # e.g. a stage change on an archived deal — a refusal the caller can act on,
+        # not a server fault.
+        raise HTTPException(status_code=400, detail=str(e)) from None
     if not result:
         raise HTTPException(status_code=404, detail="Deal not found or invalid stage")
     return result
@@ -421,6 +432,25 @@ async def touch_count_backfill(
 async def touch_count_backfill_status(user=Depends(get_current_user)):
     """Backfill progress: remaining never-computed open deals + this process's queue depth."""
     return touch_count_service.backfill_status()
+
+
+# ── Lead scores (issue #18) ───────────────────────────────────────────────────
+# Scores are recomputed inline on write events + a daily heartbeat refresh; this is the
+# operator repair/backfill surface. Two literal segments — no collision with /deals/{id}
+# or the polymorphic /{entity_type}/{entity_id}/fields route.
+
+@router.post("/scores/backfill")
+async def scores_backfill(
+    scope: str = Query("null", pattern="^(null|all)$"),
+    user=Depends(get_current_user),
+):
+    """Recompute stored lead scores. scope=null (default) scores only never-scored rows;
+    scope=all rescores every deal + contact (drift repair). Pure-algorithmic and
+    synchronous — returns the final counts (no queue, so no status endpoint)."""
+    try:
+        return await run_in_threadpool(scoring_service.backfill_scores, scope)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
 
 
 # ── Tasks ─────────────────────────────────────────────────────────────────────

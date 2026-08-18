@@ -162,9 +162,17 @@ def test_delete_task_rowcount(rec):
     assert service.delete_task(5) is True
 
 
-def test_delete_activity_rowcount(rec):
-    rec.execute_rowcount = 1
+def test_delete_activity_returns_true_and_rescores_links(rec):
+    # #18: delete_activity now DELETE ... RETURNING the links so the affected deal/contact
+    # can be rescored (their interaction count/recency changed).
+    rec.fetchone_queue = [{"contact_id": 5, "deal_id": 7}]
     assert service.delete_activity(3) is True
+    assert "RETURNING contact_id, deal_id" in rec.sql_containing("DELETE FROM activity_log")
+
+
+def test_delete_activity_missing_returns_false(rec):
+    rec.fetchone_queue = [None]  # RETURNING found nothing
+    assert service.delete_activity(999) is False
 
 
 # ── Dashboard overdue: today-date TEXT compare, no ::date cast ─────────────────
@@ -217,7 +225,8 @@ def test_clear_demo_data_truncates_when_sample_loaded(monkeypatch, fake_conn):
     # schema (only clear_all wipes it).
     assert any(
         "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
-        "crm_field_values, crm_field_provenance RESTART IDENTITY" in s for s in stmts
+        "crm_field_values, crm_field_provenance, deal_stage_events RESTART IDENTITY"
+        in s for s in stmts
     )
     assert not any("crm_field_definitions" in s for s in stmts)
 
@@ -252,7 +261,8 @@ def test_clear_all_truncates_and_resets_flag(monkeypatch, fake_conn):
     # defs→values); crm_field_provenance trails both.
     assert any(
         "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
-        "crm_field_definitions, crm_field_values, crm_field_provenance RESTART IDENTITY"
+        "crm_field_definitions, crm_field_values, crm_field_provenance, "
+        "deal_stage_events RESTART IDENTITY"
         in s for s in stmts
     )
     assert any("sample_data_loaded = FALSE" in s for s in stmts)
@@ -468,7 +478,8 @@ def test_get_company_detail_rolls_up_activity_and_open_value(rec):
     # activity rollup joins through the company's contacts AND deals
     act_sql = rec.sql_containing("FROM activity_log")
     assert "IN (SELECT id FROM contacts WHERE company_id = %s)" in act_sql
-    assert "IN (SELECT id FROM deals WHERE company_id = %s)" in act_sql
+    # issue #22: archived deals drop out of the rollup with the rest of the sweep
+    assert "IN (SELECT id FROM deals WHERE company_id = %s AND archived_at IS NULL)" in act_sql
     # open_deal_value excludes won/lost
     assert out["open_deal_value"] == 300
     assert out["contacts"] and out["deals"] and out["activity"]
@@ -586,12 +597,16 @@ def test_list_contacts_company_sort_uses_effective_name(rec):
     assert "ORDER BY COALESCE(co.name, ct.company) DESC" in rec.sql_containing("ORDER BY")
 
 
-def test_update_deal_accepts_company_id(rec):
+def test_update_deal_accepts_company_id(monkeypatch, rec, fake_conn):
+    # Deal writes go through one transaction (issue #22: the stage event must land
+    # with the UPDATE), so the UPDATE is on the raw cursor, not pg_execute.
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("lead", None, None)])
     rec.fetchone_queue = [{"id": 1}]
     service.update_deal(1, company_id=None)
-    sql = rec.sql_containing("UPDATE deals SET")
+    sql = next(s for s, _ in conn.executed if "UPDATE deals SET" in s)
     assert "company_id = %s" in sql
-    assert None in rec.params_for("UPDATE deals SET")
+    params = next(p for s, p in conn.executed if "UPDATE deals SET" in s)
+    assert None in params
 
 
 def test_get_contact_detail_joins_company_name(rec):
@@ -645,7 +660,7 @@ def test_get_pipeline_stage_branch_carries_new_fields(rec):
     ]
     service.get_pipeline(stage="lead")
     sql = rec.sql_containing("last_activity_at")
-    assert "WHERE d.stage = %s" in sql
+    assert "WHERE d.archived_at IS NULL AND d.stage = %s" in sql
     assert "la.last_at AS last_activity_at" in sql and "co.name AS company_name" in sql
     assert rec.params_for("last_activity_at") == ["lead"]
 
@@ -700,3 +715,101 @@ def test_update_company_rejects_unicode_blank_name(rec):
     sql = rec.sql_containing("UPDATE companies SET")
     assert "name = %s" not in sql
     assert "domain = %s" in sql
+
+
+# ── #18 lead-score trigger wiring (score_on_event is fire-and-forget + swallows errors,
+#    so a miswired id would fail silently forever — pin the exact ids at each chokepoint) ──
+
+@pytest.fixture
+def score_spy(monkeypatch):
+    from crm import scoring_service
+    calls = []
+    monkeypatch.setattr(scoring_service, "score_on_event", lambda **kw: calls.append(kw))
+    return calls
+
+
+def test_create_deal_scores_deal_and_contact(rec, score_spy):
+    rec.fetchone_queue = [{"id": 9}, {"id": 9, "contact_id": 3}]  # INSERT id, get_deal
+    service.create_deal("D", contact_id=3, stage="lead")
+    assert score_spy == [{"deal_ids": (9,), "contact_ids": (3,)}]
+
+
+def test_update_deal_relink_scores_old_and_new_contact(monkeypatch, rec, fake_conn, score_spy):
+    # contact_id in the update -> the funnel's FOR UPDATE row carries the old link (2);
+    # the new link (5) rides in the update itself. Both rescore, new first.
+    fake_conn(monkeypatch, service, fetchone_results=[("lead", None, 2)])
+    rec.fetchone_queue = [{"id": 1, "contact_id": 5}]  # get_deal after the funnel
+    service.update_deal(1, contact_id=5)
+    assert score_spy == [{"deal_ids": (1,), "contact_ids": (5, 2)}]
+
+
+def test_update_deal_stage_scores_deal_and_linked_contact(monkeypatch, rec, fake_conn, score_spy):
+    fake_conn(monkeypatch, service, fetchone_results=[("lead", None, 4)])
+    rec.fetchone_queue = [{"id": 1, "contact_id": 4}]  # get_deal after the funnel
+    service.update_deal_stage(1, "won")
+    # No re-link in a stage move: slot 1 (the update's contact_id) is empty, the
+    # funnel's FOR UPDATE row supplies the linked contact. score_on_event drops Nones.
+    assert score_spy == [{"deal_ids": (1,), "contact_ids": (None, 4)}]
+
+
+def test_mark_deal_won_scores_through_the_funnel(monkeypatch, rec, fake_conn, score_spy):
+    # The #22 lifecycle verbs postdate #18 — the funnel hook is what guarantees they
+    # rescore at all. Pin one so the hook can't silently move back into the callers.
+    fake_conn(monkeypatch, service, fetchone_results=[("negotiation", None, 7)])
+    rec.fetchone_queue = [{"id": 3, "contact_id": 7}]
+    service.mark_deal_won(3)
+    assert score_spy == [{"deal_ids": (3,), "contact_ids": (None, 7)}]
+
+
+def test_archive_deal_scores_deal_and_linked_contact(rec, score_spy):
+    # Archived deals leave the contact's deal-linkage aggregate (scoring_service
+    # carries archived_at IS NULL), so archive/restore must rescore the contact.
+    rec.fetchone_queue = [{"contact_id": 7}, {"id": 1}]  # RETURNING row, get_deal
+    service.archive_deal(1)
+    assert score_spy == [{"deal_ids": (1,), "contact_ids": (7,)}]
+
+
+def test_create_and_update_contact_score_the_contact(rec, score_spy):
+    rec.fetchone_queue = [{"id": 7}, {"id": 7}]  # INSERT id, get_contact
+    service.create_contact("Ada")
+    rec.fetchone_queue = [{"id": 7}]  # get_contact after UPDATE
+    service.update_contact(7, status="inactive")
+    assert score_spy == [{"contact_ids": (7,)}, {"contact_ids": (7,)}]
+
+
+def test_log_activity_scores_deal_and_contact(rec, score_spy, monkeypatch):
+    from crm import touch_count_service
+    monkeypatch.setattr(touch_count_service, "schedule_recompute", lambda *a, **k: None)
+    rec.fetchone_queue = [{"id": 3}, {"id": 3, "deal_id": 8, "contact_id": 6}]  # INSERT id, re-select
+    service.log_activity("call", deal_id=8, contact_id=6)
+    assert score_spy == [{"deal_ids": (8,), "contact_ids": (6,)}]
+
+
+def test_delete_activity_scores_returned_links(rec, score_spy):
+    rec.fetchone_queue = [{"contact_id": 5, "deal_id": 7}]  # DELETE ... RETURNING
+    assert service.delete_activity(3) is True
+    assert score_spy == [{"deal_ids": (7,), "contact_ids": (5,)}]
+
+
+# ── #18 contact sort fragment (allowlisted, DESC NULLS LAST + id tiebreak) ──
+
+def test_list_contacts_lead_score_sort_fragment(rec):
+    rec.fetchone_queue = [{"cnt": 0}]
+    rec.fetchall_queue = [[]]
+    service.list_contacts(sort="lead_score")
+    sql = rec.sql_containing("ORDER BY ct.lead_score")
+    assert "lead_score DESC NULLS LAST" in sql and "id DESC" in sql
+
+
+def test_list_contacts_unknown_sort_falls_back_to_updated_at(rec):
+    rec.fetchone_queue = [{"cnt": 0}]
+    rec.fetchall_queue = [[]]
+    service.list_contacts(sort="bogus; DROP TABLE contacts")  # never interpolated (allowlist)
+    sql = rec.sql_containing("ORDER BY")
+    assert "ORDER BY ct.updated_at DESC, ct.id DESC" in sql
+    assert "DROP TABLE" not in sql
+
+
+def test_search_contacts_honors_lead_score_sort(rec):
+    service.search_contacts("acme", sort="lead_score")
+    assert "lead_score DESC NULLS LAST" in rec.sql_containing("FROM contacts ct")
