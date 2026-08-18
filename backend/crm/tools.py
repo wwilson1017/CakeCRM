@@ -1,9 +1,10 @@
-"""CakeCRM — CRM agent tools (40 tools).
+"""CakeCRM — CRM agent tools (42 tools).
 
 Contacts, deals (incl. search + the won/lost/archive/merge lifecycle verbs), tasks,
-activities, chatter/notes, companies, custom fields, analytics, and the read-only
-sales-intelligence set (stale deals, contact staleness, duplicates, data gaps) — all
-accessible to the AI assistant for managing customer relationships conversationally.
+activities, chatter/notes, companies, custom fields, analytics, lead scores, and the
+read-only sales-intelligence set (stale deals, contact staleness, duplicates, data
+gaps) — all accessible to the AI assistant for managing customer relationships
+conversationally.
 The CRM is first-class core, so these tools are collected UNCONDITIONALLY (no enable
 gate); the assistant engine (backend/assistant/) consumes them via get_crm_tools().
 
@@ -24,6 +25,7 @@ from crm import (
     chatter_service,
     field_service,
     provenance_service,
+    scoring_service,
     service as crm,
 )
 
@@ -877,6 +879,44 @@ CRM_TOOL_DEFS = [
         },
         "kind": "integration",
     },
+    {
+        "name": "crm_get_lead_score",
+        "writes": False,
+        "description": (
+            "Get one deal's or contact's computed lead score (0-100) with its full "
+            "factor-by-factor breakdown (stage, engagement, value, links, recency, age). "
+            "Use to explain WHY a specific deal or contact is scored the way it is. This is "
+            "a single-entity lookup — to rank the hottest leads, sort the contact list by "
+            "lead_score or read the pipeline."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "entity_type": {"type": "string", "enum": ["deal", "contact"], "description": "Which entity to score"},
+                "entity_id": {"type": "integer", "description": "The deal or contact ID"},
+            },
+            "required": ["entity_type", "entity_id"],
+        },
+        "kind": "integration",
+    },
+    {
+        "name": "crm_recompute_lead_scores",
+        "writes": True,
+        "description": (
+            "Recompute and persist stored lead scores across the CRM (repair/backfill). "
+            "scope='null' scores only never-scored rows; scope='all' rescores every deal "
+            "and contact. Scores normally recompute automatically on writes + a daily "
+            "refresh, so use this only to repair drift or after a bulk import."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "scope": {"type": "string", "enum": ["null", "all"], "description": "'null' = only unscored rows; 'all' = every row"},
+            },
+            "required": [],
+        },
+        "kind": "integration",
+    },
 ]
 
 
@@ -1410,8 +1450,35 @@ def crm_set_deal_fields(deal_id: int, fields: dict) -> dict:
     return _set_entity_fields("deal", deal_id, fields)
 
 
+# ── Lead scores (issue #18) ──────────────────────────────────────────────────
+
+def crm_get_lead_score(entity_type: str, entity_id: int) -> dict:
+    if entity_type == "deal":
+        result = scoring_service.score_deal(entity_id)
+        stored = crm.get_deal(entity_id)
+    elif entity_type == "contact":
+        result = scoring_service.score_contact(entity_id)
+        stored = crm.get_contact(entity_id)
+    else:
+        return {"error": f"invalid entity_type: {entity_type!r} (expected 'deal' or 'contact')"}
+    if result is None:
+        return {"error": f"no {entity_type} with id {entity_id}"}
+    # stored_score = the persisted value (may lag the live compute until the next event/refresh).
+    result["stored_score"] = stored.get("lead_score") if stored else None
+    return result
+
+
+def crm_recompute_lead_scores(scope: str = "all") -> dict:
+    # Defaults to "all": an assistant asked to "recompute lead scores" means a full repair.
+    # (The /scores/backfill REST endpoint defaults to "null" — the cheap new-rows-only pass.)
+    try:
+        return scoring_service.backfill_scores(scope)
+    except ValueError as e:
+        return {"error": str(e)}
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
-# Executor Mapping (name -> callable(**kwargs) -> dict). 41 entries: the 40
+# Executor Mapping (name -> callable(**kwargs) -> dict). 43 entries: the 42
 # schema'd tools plus the crm_log_note back-compat alias (no schema def).
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1448,6 +1515,9 @@ TOOL_EXECUTORS = {
     "crm_get_contact_staleness": crm_get_contact_staleness,
     "crm_find_duplicates": crm_find_duplicates,
     "crm_scan_gaps": crm_scan_gaps,
+    # Lead scores (issue #18)
+    "crm_get_lead_score": crm_get_lead_score,
+    "crm_recompute_lead_scores": crm_recompute_lead_scores,
     # Chatter / notes
     "crm_add_note": crm_add_note,
     "crm_get_chatter": crm_get_chatter,

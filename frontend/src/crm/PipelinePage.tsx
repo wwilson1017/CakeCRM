@@ -4,7 +4,7 @@ import { api } from '../core/api/client';
 import type { CrmDeal } from '../core/types';
 import { DealForm } from './components/DealForm';
 import { DealDetailSheet } from './components/DealDetailSheet';
-import { TouchCountPill } from './components/badges';
+import { ScorePill, TouchCountPill } from './components/badges';
 import { STAGE_COLORS, STAGE_ORDER, OPEN_STAGES } from './constants';
 import { IconPlus } from '../shared/icons';
 import { useIsMobile } from '../shared/useIsMobile';
@@ -246,9 +246,15 @@ export function PipelinePage() {
     });
   }, [deals, search, advanced, isFiltering]);
 
+  // #18: within each stage column, order by lead_score (hottest first); unscored rows
+  // (null) sink below scored ones. Array.sort is stable, so the server's updated_at DESC
+  // order is preserved for equal scores — matching the backend's DESC NULLS LAST idiom.
+  // Sorts the fresh array `.filter()` returns, so #21's `filteredDeals` is never mutated.
   const grouped = useMemo(
     () => STAGE_ORDER.reduce<Record<string, CrmDeal[]>>((acc, stage) => {
-      acc[stage] = filteredDeals.filter(d => d.stage === stage);
+      acc[stage] = filteredDeals
+        .filter(d => d.stage === stage)
+        .sort((a, b) => (b.lead_score ?? -1) - (a.lead_score ?? -1));
       return acc;
     }, {}),
     [filteredDeals],
@@ -466,6 +472,7 @@ function DealBoardCard({ deal, columnStage, onOpen }: { deal: CrmDeal; columnSta
         {deal.contact_name && <span>{deal.contact_name}</span>}
         {deal.probability > 0 && <span>{deal.probability}%</span>}
         {deal.expected_close_date && <span>{deal.expected_close_date}</span>}
+        <ScorePill score={deal.lead_score} compact />
         <TouchCountPill count={deal.ai_touch_count} />
       </div>
     </div>

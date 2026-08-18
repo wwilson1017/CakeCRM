@@ -36,12 +36,12 @@ def no_field_embed(monkeypatch):
 # ── _write_deal_update: stage events + stale lost_reason ─────────────────────
 
 def test_stage_change_writes_a_stage_event_in_the_same_transaction(monkeypatch, rec, fake_conn):
-    conn = fake_conn(monkeypatch, service, fetchone_results=[("lead", None)])
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("lead", None, None)])
     rec.fetchone_queue = [{"id": 1, "stage": "qualified"}]
     service.update_deal_stage(1, "qualified")
 
     stmts = [s for s, _ in conn.executed]
-    assert any("SELECT stage, archived_at FROM deals WHERE id = %s FOR UPDATE" in s
+    assert any("SELECT stage, archived_at, contact_id FROM deals WHERE id = %s FOR UPDATE" in s
                for s in stmts)
     assert any("UPDATE deals SET stage = %s" in s for s in stmts)
     event = next((s, p) for s, p in conn.executed if "INSERT INTO deal_stage_events" in s)
@@ -49,7 +49,7 @@ def test_stage_change_writes_a_stage_event_in_the_same_transaction(monkeypatch, 
 
 
 def test_no_stage_event_when_the_stage_does_not_change(monkeypatch, rec, fake_conn):
-    conn = fake_conn(monkeypatch, service, fetchone_results=[("lead", None)])
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("lead", None, None)])
     rec.fetchone_queue = [{"id": 1}]
     service.update_deal(1, value=500)
     assert not any("deal_stage_events" in s for s, _ in conn.executed)
@@ -58,7 +58,7 @@ def test_no_stage_event_when_the_stage_does_not_change(monkeypatch, rec, fake_co
 def test_leaving_lost_clears_the_lost_reason(monkeypatch, rec, fake_conn):
     """cake_os shipped a stale-lost_reason bug and fixed it later; the fixed behavior
     is what we port. A reopened deal must not carry 'budget cut' into win/loss reads."""
-    conn = fake_conn(monkeypatch, service, fetchone_results=[("lost", None)])
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("lost", None, None)])
     rec.fetchone_queue = [{"id": 1}]
     service.update_deal_stage(1, "negotiation")
     sql, params = next((s, p) for s, p in conn.executed if "UPDATE deals SET" in s)
@@ -67,7 +67,7 @@ def test_leaving_lost_clears_the_lost_reason(monkeypatch, rec, fake_conn):
 
 
 def test_staying_lost_keeps_the_lost_reason(monkeypatch, rec, fake_conn):
-    conn = fake_conn(monkeypatch, service, fetchone_results=[("lost", None)])
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("lost", None, None)])
     rec.fetchone_queue = [{"id": 1}]
     service.update_deal(1, notes="still lost")
     sql, _ = next((s, p) for s, p in conn.executed if "UPDATE deals SET" in s)
@@ -83,7 +83,7 @@ def test_write_on_a_missing_deal_returns_none_without_updating(monkeypatch, rec,
 def test_update_deal_ignores_a_model_supplied_lost_reason(monkeypatch, rec, fake_conn):
     """mark_deal_lost is lost_reason's only writer, so the reason always arrives with
     the close (and its timeline note) and can't be set on a deal that isn't lost."""
-    conn = fake_conn(monkeypatch, service, fetchone_results=[("lead", None)])
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("lead", None, None)])
     rec.fetchone_queue = [{"id": 1}]
     service.update_deal(1, lost_reason="sneaky")
     assert not any("lost_reason" in s for s, _ in conn.executed)
@@ -92,7 +92,7 @@ def test_update_deal_ignores_a_model_supplied_lost_reason(monkeypatch, rec, fake
 # ── mark won / lost ──────────────────────────────────────────────────────────
 
 def test_mark_deal_won_sets_stage_and_full_probability(monkeypatch, rec, fake_conn):
-    conn = fake_conn(monkeypatch, service, fetchone_results=[("negotiation", None)])
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("negotiation", None, None)])
     rec.fetchone_queue = [{"id": 1, "stage": "won"}]
     assert service.mark_deal_won(1) == {"id": 1, "stage": "won"}
     _, params = next((s, p) for s, p in conn.executed if "UPDATE deals SET" in s)
@@ -100,7 +100,7 @@ def test_mark_deal_won_sets_stage_and_full_probability(monkeypatch, rec, fake_co
 
 
 def test_mark_deal_lost_records_reason_and_a_timeline_note(monkeypatch, rec, fake_conn):
-    conn = fake_conn(monkeypatch, service, fetchone_results=[("proposal", None)])
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("proposal", None, None)])
     rec.fetchone_queue = [{"id": 1, "stage": "lost"}]
     notes = []
     monkeypatch.setattr(chatter_service, "add_note",
@@ -112,7 +112,7 @@ def test_mark_deal_lost_records_reason_and_a_timeline_note(monkeypatch, rec, fak
 
 
 def test_mark_deal_lost_without_a_reason_writes_no_note(monkeypatch, rec, fake_conn):
-    fake_conn(monkeypatch, service, fetchone_results=[("proposal", None)])
+    fake_conn(monkeypatch, service, fetchone_results=[("proposal", None, None)])
     rec.fetchone_queue = [{"id": 1}]
     called = []
     monkeypatch.setattr(chatter_service, "add_note", lambda *a: called.append(a))
@@ -123,7 +123,7 @@ def test_mark_deal_lost_without_a_reason_writes_no_note(monkeypatch, rec, fake_c
 def test_mark_deal_lost_survives_a_note_failure(monkeypatch, rec, fake_conn):
     """The close is committed before the note is attempted — a chatter failure must
     never leave the deal un-closed."""
-    fake_conn(monkeypatch, service, fetchone_results=[("proposal", None)])
+    fake_conn(monkeypatch, service, fetchone_results=[("proposal", None, None)])
     rec.fetchone_queue = [{"id": 1, "stage": "lost"}]
 
     def boom(*a):
@@ -133,7 +133,7 @@ def test_mark_deal_lost_survives_a_note_failure(monkeypatch, rec, fake_conn):
 
 
 def test_lost_reason_is_length_bounded(monkeypatch, rec, fake_conn):
-    conn = fake_conn(monkeypatch, service, fetchone_results=[("proposal", None)])
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("proposal", None, None)])
     rec.fetchone_queue = [{"id": 1}]
     monkeypatch.setattr(chatter_service, "add_note", lambda *a: None)
     service.mark_deal_lost(1, lost_reason="x" * 5000)
@@ -144,14 +144,14 @@ def test_lost_reason_is_length_bounded(monkeypatch, rec, fake_conn):
 # ── archive / restore ────────────────────────────────────────────────────────
 
 def test_archive_deal_preserves_the_first_archive_timestamp(rec):
-    rec.fetchone_queue = [{"id": 1}, {"id": 1}]
+    rec.fetchone_queue = [{"contact_id": None}, {"id": 1}]  # RETURNING row, get_deal
     service.archive_deal(1)
     sql = rec.sql_containing("UPDATE deals SET archived_at")
     assert "COALESCE(archived_at, %s)" in sql
 
 
 def test_restore_deal_nulls_archived_at(rec):
-    rec.fetchone_queue = [{"id": 1}, {"id": 1}]
+    rec.fetchone_queue = [{"contact_id": None}, {"id": 1}]
     service.archive_deal(1, archived=False)
     sql = rec.sql_containing("UPDATE deals SET archived_at")
     assert "archived_at = NULL" in sql
@@ -170,13 +170,13 @@ def test_merge_rejects_a_self_merge():
 
 
 def test_merge_rejects_a_missing_deal(monkeypatch, fake_conn):
-    fake_conn(monkeypatch, service, fetchall_results=[[(1, "Kept", None)]])
+    fake_conn(monkeypatch, service, fetchall_results=[[(1, "Kept", None, None)]])
     with pytest.raises(ValueError, match="Deal not found: 2"):
         service.merge_deals(1, 2)
 
 
 def test_merge_repoints_moves_copies_and_archives_the_source(monkeypatch, rec, fake_conn):
-    conn = fake_conn(monkeypatch, service, fetchall_results=[[(1, "Kept", None), (2, "Dupe", None)]])
+    conn = fake_conn(monkeypatch, service, fetchall_results=[[(1, "Kept", None, None), (2, "Dupe", None, None)]])
     rec.fetchone_queue = [{"id": 1}]
     scheduled = []
     monkeypatch.setattr(service.touch_count_service, "schedule_recompute",
@@ -187,7 +187,7 @@ def test_merge_repoints_moves_copies_and_archives_the_source(monkeypatch, rec, f
     stmts = [s for s, _ in conn.executed]
     joined = " || ".join(stmts)
     # Both rows locked in id order so concurrent merges queue instead of deadlocking.
-    assert "SELECT id, title, archived_at FROM deals WHERE id IN (%s, %s) ORDER BY id FOR UPDATE" in joined
+    assert "SELECT id, title, archived_at, contact_id FROM deals WHERE id IN (%s, %s) ORDER BY id FOR UPDATE" in joined
     # Dated interactions + open work MOVE to the target.
     assert any("UPDATE activity_log SET deal_id = %s WHERE deal_id = %s" in s for s in stmts)
     assert any("UPDATE tasks SET deal_id = %s" in s for s in stmts)
@@ -208,7 +208,7 @@ def test_merge_repoints_moves_copies_and_archives_the_source(monkeypatch, rec, f
 def test_merge_never_touches_the_targets_own_columns(monkeypatch, rec, fake_conn):
     """A merge consolidates history; it must not silently rewrite the surviving
     deal's title/value/stage."""
-    conn = fake_conn(monkeypatch, service, fetchall_results=[[(1, "Kept", None), (2, "Dupe", None)]])
+    conn = fake_conn(monkeypatch, service, fetchall_results=[[(1, "Kept", None, None), (2, "Dupe", None, None)]])
     rec.fetchone_queue = [{"id": 1}]
     monkeypatch.setattr(service.touch_count_service, "schedule_recompute",
                         lambda *a, **k: None)
@@ -354,7 +354,7 @@ def test_merge_refuses_an_archived_deal(monkeypatch, fake_conn):
     """Merging into an archived target would move the source's whole history onto a
     deal every view already hides — the user would watch both deals disappear."""
     fake_conn(monkeypatch, service,
-              fetchall_results=[[(1, "Kept", None), (2, "Dupe", "2026-02-01T00:00:00+00:00")]])
+              fetchall_results=[[(1, "Kept", None, None), (2, "Dupe", "2026-02-01T00:00:00+00:00", None)]])
     with pytest.raises(ValueError, match=r"Cannot merge: deal #2 is archived"):
         service.merge_deals(1, 2)
 
@@ -381,7 +381,7 @@ def test_search_deals_caps_the_number_of_custom_field_filters(rec, no_field_embe
 def test_closing_via_the_generic_stage_path_still_settles_probability(monkeypatch, rec, fake_conn):
     """The Kanban drag and crm_update_deal_stage close deals too. Normalizing at the
     single write chokepoint keeps a 'won' deal from showing 30% win probability."""
-    conn = fake_conn(monkeypatch, service, fetchone_results=[("negotiation", None)])
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("negotiation", None, None)])
     rec.fetchone_queue = [{"id": 1}]
     service.update_deal_stage(1, "won")
     _, params = next((s, p) for s, p in conn.executed if "UPDATE deals SET" in s)
@@ -392,7 +392,7 @@ def test_closing_overrides_even_an_explicit_probability(monkeypatch, rec, fake_c
     """Deliberate override: probability means "chance of winning", so a decided deal
     has exactly one correct value — and the edit form posts the stale 30% right
     alongside stage='won'."""
-    conn = fake_conn(monkeypatch, service, fetchone_results=[("negotiation", None)])
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("negotiation", None, None)])
     rec.fetchone_queue = [{"id": 1}]
     service.update_deal(1, stage="won", probability=80)
     _, params = next((s, p) for s, p in conn.executed if "UPDATE deals SET" in s)
@@ -401,7 +401,7 @@ def test_closing_overrides_even_an_explicit_probability(monkeypatch, rec, fake_c
 
 def test_editing_probability_on_an_already_closed_deal_is_respected(monkeypatch, rec, fake_conn):
     """No stage transition -> no normalization; the user's edit stands."""
-    conn = fake_conn(monkeypatch, service, fetchone_results=[("won", None)])
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("won", None, None)])
     rec.fetchone_queue = [{"id": 1}]
     service.update_deal(1, probability=55)
     _, params = next((s, p) for s, p in conn.executed if "UPDATE deals SET" in s)
@@ -412,7 +412,7 @@ def test_archiving_does_not_reset_the_staleness_clock(rec):
     """LAST_TOUCH_SQL treats updated_at as a touch, so bumping it here would make an
     archive→restore round-trip silently drop the deal out of get_stale_deals and the
     heartbeat's nudges."""
-    rec.fetchone_queue = [{"id": 1}, {"id": 1}]
+    rec.fetchone_queue = [{"contact_id": None}, {"id": 1}]
     service.archive_deal(1)
     assert "updated_at" not in rec.sql_containing("UPDATE deals SET archived_at")
 
@@ -420,14 +420,14 @@ def test_archiving_does_not_reset_the_staleness_clock(rec):
 def test_a_stage_change_on_an_archived_deal_is_refused(monkeypatch, rec, fake_conn):
     """won + archived would book revenue no report can see."""
     fake_conn(monkeypatch, service,
-              fetchone_results=[("negotiation", "2026-02-01T00:00:00+00:00")])
+              fetchone_results=[("negotiation", "2026-02-01T00:00:00+00:00", None)])
     with pytest.raises(ValueError, match="restore it first"):
         service.mark_deal_won(1)
 
 
 def test_a_non_stage_edit_on_an_archived_deal_is_still_allowed(monkeypatch, rec, fake_conn):
     conn = fake_conn(monkeypatch, service,
-                     fetchone_results=[("lead", "2026-02-01T00:00:00+00:00")])
+                     fetchone_results=[("lead", "2026-02-01T00:00:00+00:00", None)])
     rec.fetchone_queue = [{"id": 1}]
     service.update_deal(1, notes="tidy up")
     assert any("UPDATE deals SET" in s for s, _ in conn.executed)

@@ -58,3 +58,26 @@ export function TouchCountPill({ count }: { count?: number | null }) {
     </span>
   );
 }
+
+// Lead score (issue #18): a pure-algorithmic 0-100 "how alive is this?" number on deals and
+// contacts. Three bands — hot (>=70, green), warm (40-69, amber), cool (<40, muted). A NULL
+// score renders nothing (never-scored rows show no pill). NOT an AI feature — always on.
+const SCORE_COLORS = {
+  cool: { bg: 'rgba(31,35,40,0.06)', color: INK_SOFT },  // <40
+  warm: { bg: 'rgba(176,124,46,0.12)', color: GOLD },    // 40-69
+  hot: { bg: 'rgba(46,125,79,0.12)', color: SAGE },      // >=70
+} as const;
+
+export function ScorePill({ score, compact }: { score?: number | null; compact?: boolean }) {
+  if (score == null) return null;
+  const band = score >= 70 ? 'hot' : score >= 40 ? 'warm' : 'cool';
+  const c = SCORE_COLORS[band];
+  return (
+    <span
+      title="Computed lead score (0-100) from stage, engagement, value, links & recency. Ask the assistant for the full breakdown."
+      style={{ ...badgeBase, textTransform: 'none', padding: '2px 8px', background: c.bg, color: c.color }}
+    >
+      {compact ? score : `Score ${score}`}
+    </span>
+  );
+}
