@@ -680,3 +680,53 @@ def test_last_user_text_reads_coalesced_list_content():
         ]},
     ]
     assert engine._last_user_text(msgs) == "the new question about Dana"
+
+
+@pytest.mark.asyncio
+async def test_gmail_draft_confirmation_persists_the_connection_binding(store, monkeypatch):
+    """The wire between propose-time capture and confirm-time verification (#43).
+
+    _pending_placeholder is unit-tested on its own, but only this proves the SSE
+    gate actually threads the tool name through it AND writes the bound placeholder
+    to BOTH the persisted result and the in-turn results list. If either usage were
+    left on the old constant, every draft would look unbound and the whole binding
+    check in resolve_confirmation would silently become a no-op.
+    """
+    from gmail import tools as gmail_tools
+
+    monkeypatch.setattr(gmail_tools.store, "get_row", lambda: {"connection_generation": 12})
+    reg = Registry(writes={"gmail_create_draft"})
+    prov = FakeProvider([
+        [_complete([_tc("gmail_create_draft", args={"to": "a@b.c"})], stop="tool_use")],
+        [{"type": "text", "text": "Shall I draft that?"}, _complete()],
+    ])
+
+    events = await _run(prov, reg, [{"role": "user", "content": "draft a reply"}], tool_mode="normal")
+
+    assert reg.calls == []  # still not executed until approved
+    assert any(e["type"] == "confirm" for e in events)
+    persisted = [m["content"] for m in store.merges]
+    assert persisted, "the pending placeholder was never persisted"
+    assert json.loads(persisted[-1]) == {
+        "status": history.PENDING_STATUS,
+        "gmail_generation": 12,
+    }
+    # The extra key must stay invisible to the pending/executing state machine.
+    assert history.is_pending_result(persisted[-1]) is True
+
+
+@pytest.mark.asyncio
+async def test_non_gmail_write_placeholder_is_unbound(store, monkeypatch):
+    """A CRM write must not acquire a Gmail binding — nor consult Gmail at all."""
+    from gmail import tools as gmail_tools
+
+    monkeypatch.setattr(gmail_tools.store, "get_row",
+                        lambda: (_ for _ in ()).throw(AssertionError("must not be consulted")))
+    reg = Registry(writes={"crm_create_contact"})
+    prov = FakeProvider([
+        [_complete([_tc("crm_create_contact", args={"name": "X"})], stop="tool_use")],
+        [{"type": "text", "text": "Shall I?"}, _complete()],
+    ])
+
+    await _run(prov, reg, [{"role": "user", "content": "add X"}], tool_mode="normal")
+    assert any(m["content"] == history.PENDING_RESULT_JSON for m in store.merges)

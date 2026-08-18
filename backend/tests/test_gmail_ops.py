@@ -235,3 +235,347 @@ def test_get_attachments_depth_capped_no_recursion_error():
     for _ in range(ops._MAX_MIME_DEPTH + 5):
         payload = {"parts": [payload]}
     assert ops._get_attachments(payload) == []  # bailed at the cap, not RecursionError
+
+
+# ── Large text bodies stored under attachmentId (issue #43) ───────────────────
+
+class _Attachments:
+    """users().messages().attachments() — records every fetch."""
+
+    def __init__(self, blobs, fail=False):
+        self._blobs = blobs
+        self._fail = fail
+        self.calls = []
+
+    def get(self, userId, messageId, id):
+        self.calls.append((messageId, id))
+        if self._fail:
+            raise RuntimeError("attachment fetch exploded")
+        return _Exec({"data": self._blobs[id]})
+
+
+class _MessagesWithAttachments:
+    def __init__(self, attachments):
+        self._attachments = attachments
+
+    def attachments(self):
+        return self._attachments
+
+
+def _stored_part(mime_type, attachment_id, size, filename=""):
+    """A text part whose content Gmail moved out of body.data."""
+    return {
+        "mimeType": mime_type,
+        "filename": filename,
+        "body": {"data": "", "attachmentId": attachment_id, "size": size},
+    }
+
+
+def test_stored_plain_body_is_recovered_via_fetcher():
+    part = _stored_part("text/plain", "att-1", 12)
+    assert ops._part_text(part, fetch=lambda aid: "recovered body") == "recovered body"
+
+
+def test_stored_html_body_is_flattened_to_text():
+    """Fetched HTML must go through the same flattening as inline HTML —
+    gmail_read_thread's contract is plain text."""
+    part = _stored_part("text/html", "att-1", 40)
+    out = ops._part_text(part, fetch=lambda aid: "<p>Hi <b>there</b></p>")
+    assert "<p>" not in out and "<b>" not in out
+    assert "Hi there" in out
+
+
+def test_stored_body_over_cap_shows_marker_and_never_fetches():
+    """Oversize bodies must be distinguishable from an empty email, and must not
+    be downloaded at all — the cap is checked BEFORE the fetch."""
+    fetched = []
+    part = _stored_part("text/plain", "att-1", ops._MAX_BODY_FETCH_BYTES + 1)
+    out = ops._part_text(part, fetch=lambda aid: fetched.append(aid) or "nope")
+    assert out == ops._BODY_TOO_LARGE
+    assert fetched == []
+
+
+def test_stored_body_without_a_fetcher_is_blank_as_before():
+    """`fetch=None` reproduces the pre-#43 behaviour byte for byte, which is what
+    keeps list_messages_op and every other caller unaffected."""
+    part = _stored_part("text/plain", "att-1", 10)
+    assert ops._part_text(part, fetch=None) == ""
+    assert ops._part_text(part, fetch=lambda aid: "") == ""
+
+
+def test_body_fetcher_swallows_api_errors_and_enforces_its_budget():
+    """The fetcher is where 'never raises' and the thread-wide bound actually live."""
+    failing = _Attachments({}, fail=True)
+    svc = _Service(_Users(messages=_MessagesWithAttachments(failing)))
+    assert ops._make_body_fetcher(svc)("m1", "att-1") == ""
+
+    ok = _Attachments({f"att-{i}": _b64("x") for i in range(8)})
+    fetch = ops._make_body_fetcher(_Service(_Users(messages=_MessagesWithAttachments(ok))))
+    for i in range(8):
+        fetch("m1", f"att-{i}")
+    assert len(ok.calls) == ops._MAX_BODY_FETCHES_PER_THREAD
+
+
+def test_body_fetcher_rejects_a_blob_that_under_declared_its_size():
+    """Backstop for a part whose body.size lied: the pre-fetch cap check can't
+    catch it, so the fetcher refuses to decode an oversized payload."""
+    huge = "A" * (ops._MAX_BODY_FETCH_BYTES * 2 + 4)
+    attachments = _Attachments({"att-1": huge})
+    svc = _Service(_Users(messages=_MessagesWithAttachments(attachments)))
+    assert ops._make_body_fetcher(svc)("m1", "att-1") == ""
+
+
+def test_real_file_attachment_is_never_fetched_as_a_body():
+    """A part with a filename is a genuine file attachment. Reading attachment
+    CONTENT stays out of scope — only text BODIES are recovered."""
+    fetched = []
+    part = _stored_part("text/plain", "att-1", 10, filename="notes.txt")
+    out = ops._part_text(part, fetch=lambda aid: fetched.append(aid) or "secret file")
+    assert out == ""
+    assert fetched == []
+
+
+def test_missing_declared_size_fails_closed_and_never_fetches():
+    """Gmail has no ranged read, so an undeclared size cannot be bounded before the
+    download. The sender chooses the message shape, so this must fail closed —
+    otherwise the 256 KB cap is trivially bypassed by omitting `size`."""
+    fetched = []
+    part = {"mimeType": "text/plain", "body": {"data": "", "attachmentId": "att-1"}}
+    assert ops._part_text(part, fetch=lambda aid: fetched.append(aid) or "huge") == ""
+    assert fetched == []
+
+
+def test_unparseable_declared_size_also_fails_closed():
+    fetched = []
+    part = {"mimeType": "text/plain",
+            "body": {"data": "", "attachmentId": "att-1", "size": "not-a-number"}}
+    assert ops._part_text(part, fetch=lambda aid: fetched.append(aid) or "huge") == ""
+    assert fetched == []
+
+
+def test_get_thread_op_recovers_stored_bodies_with_one_thread_call():
+    """End-to-end: the thread read is still ONE threads.get (the two-step fetch was
+    declined in #43), and the stored body is recovered through the thread-scoped
+    fetcher built inside the already-allow-listed op."""
+    attachments = _Attachments({"att-1": _b64("the real body")})
+    thread = {"messages": [{
+        "id": "m1",
+        "threadId": "t1",
+        "payload": {
+            "mimeType": "multipart/alternative",
+            "headers": [{"name": "Subject", "value": "Big one"}],
+            "parts": [_stored_part("text/plain", "att-1", 13)],
+        },
+    }]}
+    threads = _Threads(thread)
+    svc = _Service(_Users(messages=_MessagesWithAttachments(attachments), threads=threads))
+
+    out = ops.get_thread_op(svc, "t1")
+    assert out["messages"][0]["body"] == "the real body"
+    assert attachments.calls == [("m1", "att-1")]
+
+
+def test_get_thread_op_budgets_attachment_fetches_per_thread():
+    """The MIME walk is breadth-unbounded AND a thread holds up to 20 messages, so
+    ONE budget for the whole read is what stops a sender shaping a single
+    gmail_read_thread into dozens of sequential round-trips."""
+    blobs = {f"att-{i}": _b64(f"body {i}") for i in range(6)}
+    attachments = _Attachments(blobs)
+    # Six sibling text/plain parts, each stored out-of-line.
+    parts = [_stored_part("text/plain", f"att-{i}", 10) for i in range(6)]
+    thread = {"messages": [{"id": "m1", "threadId": "t1",
+                            "payload": {"mimeType": "multipart/mixed", "headers": [], "parts": parts}}]}
+    svc = _Service(_Users(messages=_MessagesWithAttachments(attachments), threads=_Threads(thread)))
+
+    out = ops.get_thread_op(svc, "t1")
+    # Resolution stops at the FIRST recovered body, so six eligible siblings cost
+    # one fetch, not six — and certainly not one per sibling.
+    assert len(attachments.calls) == 1
+    assert out["messages"][0]["body"] == "body 0"
+
+
+def test_attachment_fetch_budget_spans_the_whole_thread_not_each_message():
+    """The budget is per THREAD READ. Per-message it would scale with message
+    count, letting a sender turn one read into dozens of sequential round-trips."""
+    n_messages = 10
+    blobs = {f"att-{i}": _b64(f"body {i}") for i in range(n_messages)}
+    attachments = _Attachments(blobs)
+    thread = {"messages": [
+        {"id": f"m{i}", "threadId": "t1", "payload": {
+            "mimeType": "multipart/mixed", "headers": [],
+            "parts": [_stored_part("text/plain", f"att-{i}", 10)]}}
+        for i in range(n_messages)
+    ]}
+    svc = _Service(_Users(messages=_MessagesWithAttachments(attachments), threads=_Threads(thread)))
+
+    out = ops.get_thread_op(svc, "t1")
+    assert len(attachments.calls) == ops._MAX_BODY_FETCHES_PER_THREAD
+    # Every message is still returned; the ones past the budget just have no body.
+    assert len(out["messages"]) == n_messages
+    assert sum(1 for m in out["messages"] if m["body"]) == ops._MAX_BODY_FETCHES_PER_THREAD
+
+
+def test_oversize_marker_does_not_shadow_a_readable_alternative():
+    """An unreadable oversized text/plain must not hide a perfectly good text/html
+    alternative carrying the same message — the marker is truthy, so it has to be
+    held aside rather than treated as recovered text."""
+    payload = {"mimeType": "multipart/alternative", "parts": [
+        _stored_part("text/plain", "att-1", ops._MAX_BODY_FETCH_BYTES + 1),
+        {"mimeType": "text/html", "body": {"data": _b64("<p>the readable one</p>")}},
+    ]}
+    assert ops._get_body_text(payload, fetch=lambda aid: "") == "the readable one"
+
+
+def test_oversize_marker_is_shown_when_nothing_else_is_readable():
+    payload = {"mimeType": "multipart/alternative", "parts": [
+        _stored_part("text/plain", "att-1", ops._MAX_BODY_FETCH_BYTES + 1),
+    ]}
+    assert ops._get_body_text(payload, fetch=lambda aid: "") == ops._BODY_TOO_LARGE
+
+
+def test_get_thread_op_survives_attachment_fetch_errors():
+    """A failing attachment fetch must not fail the whole thread read."""
+    attachments = _Attachments({}, fail=True)
+    thread = {"messages": [{"id": "m1", "threadId": "t1", "payload": {
+        "mimeType": "multipart/alternative", "headers": [],
+        "parts": [_stored_part("text/plain", "att-1", 10)],
+    }}]}
+    svc = _Service(_Users(messages=_MessagesWithAttachments(attachments), threads=_Threads(thread)))
+
+    out = ops.get_thread_op(svc, "t1")
+    assert out["messages"][0]["body"] == ""
+    assert out["message_count"] == 1
+
+
+def test_get_thread_op_makes_exactly_one_threads_get_call():
+    """Pins the #43 decision to keep the single full-thread fetch: a two-step
+    metadata-then-messages fetch would double every common-case read."""
+    calls = []
+
+    class _CountingThreads(_Threads):
+        def get(self, userId, id, format):
+            calls.append(format)
+            return _Exec(self._thread)
+
+    thread = {"messages": [
+        {"id": f"m{i}", "threadId": "t1",
+         "payload": {"mimeType": "text/plain", "headers": [], "body": {"data": _b64(f"body {i}")}}}
+        for i in range(3)
+    ]}
+    svc = _Service(_Users(threads=_CountingThreads(thread)))
+    out = ops.get_thread_op(svc, "t1")
+    assert calls == ["full"]
+    assert [m["body"] for m in out["messages"]] == ["body 0", "body 1", "body 2"]
+
+
+def test_malformed_inline_base64_degrades_one_part_not_the_thread():
+    """A part whose data won't decode must blank that part only — not raise out of
+    the MIME walk and take the whole thread read with it."""
+    bad = {"mimeType": "text/plain", "body": {"data": "!!!not-base64!!!"}}
+    good_html = {"mimeType": "text/html", "body": {"data": _b64("<p>good</p>")}}
+    assert ops._part_text(bad) == ""
+
+    payload = {"mimeType": "multipart/alternative", "parts": [bad, good_html]}
+    assert ops._get_body_text(payload) == "good"
+
+
+def test_repeated_fetch_failures_log_once_per_thread_read():
+    """One broken mailbox must not emit a warning per failed fetch."""
+    import logging
+
+    failing = _Attachments({}, fail=True)
+    svc = _Service(_Users(messages=_MessagesWithAttachments(failing)))
+    fetch = ops._make_body_fetcher(svc)
+
+    logger = logging.getLogger("gmail.ops")
+    records = []
+    handler = logging.Handler()
+    handler.emit = records.append
+    logger.addHandler(handler)
+    try:
+        fetch("m1", "att-1")
+        fetch("m1", "att-2")
+    finally:
+        logger.removeHandler(handler)
+
+    assert len([r for r in records if r.levelno >= logging.WARNING]) == 1
+
+
+# ── Settle-loop findings (PR #63 Codex connector) ─────────────────────────────
+
+def test_nameless_disposition_attachment_is_never_fetched_as_a_body():
+    """A text part with `Content-Disposition: attachment` and NO filename is valid
+    MIME and still a file. Keying only on `filename` would leak it into the model
+    context, breaking SECURITY.md's 'message bodies only, never your files'."""
+    fetched = []
+    part = {
+        "mimeType": "text/plain",
+        "filename": "",
+        "headers": [{"name": "Content-Disposition", "value": "attachment"}],
+        "body": {"data": "", "attachmentId": "att-1", "size": 10},
+    }
+    assert ops._part_text(part, fetch=lambda aid: fetched.append(aid) or "secret") == ""
+    assert fetched == []
+
+
+def test_inline_disposition_text_part_is_still_a_body():
+    """`Content-Disposition: inline` is a body — the guard must not over-reject."""
+    part = {
+        "mimeType": "text/plain",
+        "headers": [{"name": "Content-Disposition", "value": "inline"}],
+        "body": {"data": "", "attachmentId": "att-1", "size": 10},
+    }
+    assert ops._part_text(part, fetch=lambda aid: "the body") == "the body"
+
+
+def test_html_alternative_is_not_fetched_when_plain_succeeds():
+    """Both alternatives stored out of line: only the preferred one may be fetched.
+    Fetching the discarded HTML too would burn two budget slots per message, so two
+    ordinary messages would exhaust the thread budget."""
+    attachments = _Attachments({"att-plain": _b64("plain wins"), "att-html": _b64("<p>x</p>")})
+    thread = {"messages": [{"id": "m1", "threadId": "t1", "payload": {
+        "mimeType": "multipart/alternative", "headers": [], "parts": [
+            _stored_part("text/plain", "att-plain", 10),
+            _stored_part("text/html", "att-html", 10),
+        ]}}]}
+    svc = _Service(_Users(messages=_MessagesWithAttachments(attachments), threads=_Threads(thread)))
+
+    out = ops.get_thread_op(svc, "t1")
+    assert out["messages"][0]["body"] == "plain wins"
+    assert attachments.calls == [("m1", "att-plain")]  # the HTML was never requested
+
+
+def test_html_alternative_is_fetched_when_plain_is_unrecoverable():
+    attachments = _Attachments({"att-html": _b64("<p>html fallback</p>")})
+    thread = {"messages": [{"id": "m1", "threadId": "t1", "payload": {
+        "mimeType": "multipart/alternative", "headers": [], "parts": [
+            _stored_part("text/plain", "att-missing", ops._MAX_BODY_FETCH_BYTES + 1),
+            _stored_part("text/html", "att-html", 10),
+        ]}}]}
+    svc = _Service(_Users(messages=_MessagesWithAttachments(attachments), threads=_Threads(thread)))
+
+    out = ops.get_thread_op(svc, "t1")
+    assert out["messages"][0]["body"] == "html fallback"
+
+
+def test_fetch_budget_is_spent_on_the_newest_messages():
+    """`kept` runs oldest to newest. Spending the budget in that order would return
+    the latest replies — the ones the user is asking about — blank."""
+    n = 10
+    blobs = {f"att-{i}": _b64(f"body {i}") for i in range(n)}
+    attachments = _Attachments(blobs)
+    thread = {"messages": [
+        {"id": f"m{i}", "threadId": "t1", "payload": {
+            "mimeType": "multipart/mixed", "headers": [],
+            "parts": [_stored_part("text/plain", f"att-{i}", 10)]}}
+        for i in range(n)
+    ]}
+    svc = _Service(_Users(messages=_MessagesWithAttachments(attachments), threads=_Threads(thread)))
+
+    out = ops.get_thread_op(svc, "t1")
+    budget = ops._MAX_BODY_FETCHES_PER_THREAD
+    # Output stays chronological...
+    assert [m["id"] for m in out["messages"]] == [f"m{i}" for i in range(n)]
+    # ...but the bodies that came back are the NEWEST ones.
+    with_bodies = [m["id"] for m in out["messages"] if m["body"]]
+    assert with_bodies == [f"m{i}" for i in range(n - budget, n)]

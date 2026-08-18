@@ -25,6 +25,19 @@ class ExecRecorder:
         return self.rowcount
 
 
+class FetchRecorder:
+    """Records (normalized_sql, params) for the pg_fetchone seam and returns a
+    configurable row (None = no row matched)."""
+
+    def __init__(self, row=None):
+        self.calls = []
+        self.row = row
+
+    def __call__(self, sql, params=()):
+        self.calls.append((" ".join(sql.split()), params))
+        return self.row
+
+
 def _row(**over):
     base = {
         "id": 1,
@@ -38,6 +51,7 @@ def _row(**over):
         "connection_status": "disconnected",
         "oauth_state_hash": "",
         "oauth_state_created_at": None,
+        "connection_generation": 0,
     }
     base.update(over)
     return base
@@ -59,9 +73,10 @@ def _connected_row(**over):
 # ── save_app_credentials ──────────────────────────────────────────────────────
 
 def test_save_app_credentials_encrypts_and_clears(monkeypatch):
-    rec = ExecRecorder()
-    monkeypatch.setattr(store, "pg_execute", rec)
-    store.save_app_credentials(" cid ", " shh ")
+    rec = FetchRecorder(row={"old_refresh_token_enc": "enc:v1:outgoing"})
+    monkeypatch.setattr(store, "pg_fetchone", rec)
+    # Returns the ciphertext it cleared, so the router revokes exactly that grant.
+    assert store.save_app_credentials(" cid ", " shh ") == "enc:v1:outgoing"
 
     sql, params = rec.calls[0]
     assert params[0] == "cid"  # stripped client_id
@@ -71,6 +86,30 @@ def test_save_app_credentials_encrypts_and_clears(monkeypatch):
     assert "refresh_token_enc = ''" in sql
     assert "connection_status = 'disconnected'" in sql
     assert "oauth_state_hash = ''" in sql
+    # New identity -> generation bumped, and the old ciphertext is captured under
+    # the same lock that clears it (one statement, no read-then-clear window).
+    assert "connection_generation = gmail_connection.connection_generation + 1" in sql
+    assert "SELECT refresh_token_enc FROM gmail_connection WHERE id = 1 FOR UPDATE" in sql
+    assert "RETURNING old.refresh_token_enc" in sql
+
+
+def test_clear_connection_bumps_generation_and_returns_old_ciphertext(monkeypatch):
+    rec = FetchRecorder(row={"old_refresh_token_enc": "enc:v1:was-live"})
+    monkeypatch.setattr(store, "pg_fetchone", rec)
+    assert store.clear_connection() == "enc:v1:was-live"
+
+    sql, _ = rec.calls[0]
+    assert "connection_status = 'disconnected'" in sql
+    assert "connection_generation = gmail_connection.connection_generation + 1" in sql
+    assert "FOR UPDATE" in sql
+    # App credentials survive a disconnect so reconnecting is one click.
+    assert "client_id = %s" not in sql
+    assert "client_secret_enc" not in sql
+
+
+def test_clear_connection_no_row_returns_empty_string(monkeypatch):
+    monkeypatch.setattr(store, "pg_fetchone", FetchRecorder(row=None))
+    assert store.clear_connection() == ""
 
 
 # ── OAuth state ───────────────────────────────────────────────────────────────
@@ -84,29 +123,60 @@ def test_set_oauth_state_hash_stores_hash_not_raw(monkeypatch):
     assert "the-raw-state" not in str(params)
 
 
-def test_claim_oauth_state_match_true_and_atomic(monkeypatch):
-    rec = ExecRecorder(rowcount=1)
-    monkeypatch.setattr(store, "pg_execute", rec)
-    assert store.claim_oauth_state("good-state") is True
+def test_claim_oauth_state_match_returns_generation_and_is_atomic(monkeypatch):
+    rec = FetchRecorder(row={"connection_generation": 7})
+    monkeypatch.setattr(store, "pg_fetchone", rec)
+    # The claim hands back the generation it observed, in the SAME statement — the
+    # callback carries it through the Google round-trips as its CAS key (#43).
+    assert store.claim_oauth_state("good-state") == 7
     sql, params = rec.calls[0]
     # Single atomic compare-and-clear with TTL, keyed by the state's hash.
     assert "UPDATE gmail_connection" in sql
     assert "oauth_state_hash = ''" in sql
     assert "oauth_state_created_at >= now() - interval '10 minutes'" in sql
+    assert "RETURNING connection_generation" in sql
     assert params[0] == hashlib.sha256(b"good-state").hexdigest()
 
 
-def test_claim_oauth_state_mismatch_false(monkeypatch):
-    rec = ExecRecorder(rowcount=0)
-    monkeypatch.setattr(store, "pg_execute", rec)
-    assert store.claim_oauth_state("wrong") is False
+def test_claim_oauth_state_generation_zero_is_a_real_claim(monkeypatch):
+    """0 is a legitimate generation — callers must test `is None`, not truthiness."""
+    monkeypatch.setattr(store, "pg_fetchone", FetchRecorder(row={"connection_generation": 0}))
+    assert store.claim_oauth_state("good-state") == 0
 
 
-def test_claim_oauth_state_empty_is_false_without_db(monkeypatch):
-    rec = ExecRecorder(rowcount=0)
-    monkeypatch.setattr(store, "pg_execute", rec)
-    assert store.claim_oauth_state("") is False
+def test_claim_oauth_state_mismatch_returns_none(monkeypatch):
+    monkeypatch.setattr(store, "pg_fetchone", FetchRecorder(row=None))
+    assert store.claim_oauth_state("wrong") is None
+
+
+def test_claim_oauth_state_empty_is_none_without_db(monkeypatch):
+    rec = FetchRecorder(row=None)
+    monkeypatch.setattr(store, "pg_fetchone", rec)
+    assert store.claim_oauth_state("") is None
     assert rec.calls == []  # short-circuits, never queries
+
+
+# ── save_tokens CAS (the OAuth callback race) ─────────────────────────────────
+
+def test_save_tokens_cas_on_generation_and_bumps_it(monkeypatch):
+    rec = ExecRecorder(rowcount=1)
+    monkeypatch.setattr(store, "pg_execute", rec)
+    assert store.save_tokens("at", "rt", None, "scope", "me@x.com", 4) is True
+
+    sql, params = rec.calls[0]
+    assert "WHERE id = 1 AND connection_generation = %s" in sql
+    assert "connection_generation = connection_generation + 1" in sql
+    assert params[-1] == 4  # CAS key is the generation captured at state-claim
+    assert params[0].startswith("enc:v1:")  # access token encrypted
+    assert params[1].startswith("enc:v1:")  # refresh token encrypted
+
+
+def test_save_tokens_returns_false_when_generation_moved(monkeypatch):
+    """The admin disconnected or replaced the app mid-handshake: the write is a
+    no-op and the caller revokes the just-granted tokens instead of resurrecting a
+    connection that was deliberately ended."""
+    monkeypatch.setattr(store, "pg_execute", ExecRecorder(rowcount=0))
+    assert store.save_tokens("at", "rt", None, "scope", "me@x.com", 4) is False
 
 
 # ── is_connected truth table ──────────────────────────────────────────────────
@@ -186,11 +256,35 @@ def test_update_access_token_with_rotation_persists_new_refresh(monkeypatch):
 def test_mark_broken_sets_status_and_never_raises(monkeypatch):
     rec = ExecRecorder()
     monkeypatch.setattr(store, "pg_execute", rec)
-    store.mark_broken()
-    assert "connection_status = 'broken'" in rec.calls[0][0]
+    store.mark_broken("enc:v1:prev-refresh")
+    sql, params = rec.calls[0]
+    assert "connection_status = 'broken'" in sql
+    # CAS on the credential that actually failed, so a connection replaced (or a
+    # token rotated by a concurrent call) meanwhile is not marked broken (#43).
+    assert "WHERE id = 1 AND refresh_token_enc = %s" in sql
+    assert params[0] == "enc:v1:prev-refresh"
+    # 'broken' is a status change, not an identity change — must NOT bump.
+    assert "connection_generation" not in sql
 
     def boom(*a, **k):
         raise RuntimeError("db down")
 
     monkeypatch.setattr(store, "pg_execute", boom)
-    store.mark_broken()  # must not raise
+    store.mark_broken("enc:v1:prev-refresh")  # must not raise
+
+
+def test_update_access_token_does_not_bump_generation(monkeypatch):
+    """Refreshing a token keeps the same account. Bumping here would invalidate
+    every pending draft on every hourly refresh."""
+    rec = ExecRecorder(rowcount=1)
+    monkeypatch.setattr(store, "pg_execute", rec)
+    store.update_access_token("new-access", None, "enc:v1:prev-refresh")
+    assert "connection_generation" not in rec.calls[0][0]
+
+
+def test_set_oauth_state_hash_does_not_bump_generation(monkeypatch):
+    """Starting an OAuth flow changes nothing about the connection that is live."""
+    rec = ExecRecorder()
+    monkeypatch.setattr(store, "pg_execute", rec)
+    store.set_oauth_state_hash("s")
+    assert "connection_generation" not in rec.calls[0][0]

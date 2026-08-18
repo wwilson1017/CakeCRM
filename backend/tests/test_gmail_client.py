@@ -132,12 +132,14 @@ def test_call_gmail_refresh_error_marks_broken(monkeypatch):
 
     monkeypatch.setattr(client, "_APPROVED_OPS", frozenset({op}))
     monkeypatch.setattr(client, "_build_credentials_and_service", lambda: (creds, svc, "enc-prev", "rt"))
-    monkeypatch.setattr(client.store, "mark_broken", lambda: marked.append(True))
+    monkeypatch.setattr(client.store, "mark_broken", lambda enc: marked.append(enc))
     monkeypatch.setattr(client.store, "update_access_token", lambda *a, **k: persisted.append((a, k)))
 
     with pytest.raises(GmailAuthError):
         client.call_gmail(op)
-    assert marked == [True]
+    # Marked broken under a CAS on the ciphertext this call actually ran with, so a
+    # connection replaced mid-call can't be marked broken by the stale failure (#43).
+    assert marked == ["enc-prev"]
     assert svc.closed is True  # transport still closed
     assert persisted == []  # no persist on refresh failure
 

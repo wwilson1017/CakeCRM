@@ -75,6 +75,22 @@ It returns nothing.
   conversation). Gmail bodies and threads are size-capped before they enter that
   context. Treat email content the assistant reads as data shared with your chosen
   AI provider.
+- **Message bodies only, never your files.** Gmail stores an unusually large *text
+  body* outside the message and behind an attachment id. Reading a thread will pull
+  such a body back in, under a hard byte cap, so a long email doesn't silently
+  arrive blank. That is the only case in which attachment storage is read: an actual
+  attached **file** is never downloaded — whether it carries a filename or is merely
+  marked `Content-Disposition: attachment` — and its name, type, and size are all the
+  assistant ever sees. Oversized bodies, and bodies whose size the message doesn't
+  declare, are skipped rather than fetched (the former reported as
+  `[body too large to display]`).
+- **Connection integrity.** The Gmail connection carries a generation counter that
+  advances whenever the live connection changes (you save new app credentials,
+  disconnect, or complete a new sign-in). Anything that starts under one connection
+  and finishes later — the OAuth callback, and a draft awaiting your approval —
+  is checked against it, so a sign-in you interrupted cannot resurrect a connection
+  you just removed, and a draft approved after you switch Google accounts is
+  refused instead of landing in the new account.
 - **Untrusted content.** Email you receive is untrusted input. If the assistant
   reads email during a turn, any write actions it proposes for the rest of that turn
   are routed through the human-confirmation gate even in "power" mode — so a
