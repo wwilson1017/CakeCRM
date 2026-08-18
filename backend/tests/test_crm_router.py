@@ -102,6 +102,82 @@ def test_csv_import_keyless(client, monkeypatch):
     assert created[0]["email"] == "ada@x.io"
 
 
+def test_csv_import_batch_resolves_and_links_companies(client, monkeypatch):
+    """Issue #35: an import must populate Companies, in ONE batched lookup."""
+    created = []
+    resolver_calls = []
+
+    def _resolve(names):
+        resolver_calls.append(list(names))
+        return {"Acme Corp": 5}
+
+    monkeypatch.setattr(service, "create_contact",
+                        lambda **kw: created.append(kw) or {"id": len(created)})
+    monkeypatch.setattr(service, "resolve_or_create_company_ids", _resolve)
+    csv_text = (
+        "Name,Company\n"
+        "Ada Lovelace,Acme Corp\n"
+        ",Ghost Co\n"           # blank name -> skipped, must NOT reach the resolver
+        "Bob Stone,\n"          # no company
+    )
+    resp = client.post(
+        "/api/crm/import",
+        files={"file": ("contacts.csv", io.BytesIO(csv_text.encode()), "text/csv")},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["imported"] == 2 and resp.json()["skipped"] == 1
+    # ONE batched call for the whole file, and the skipped row's company is absent
+    # (it must not leave an auto-created orphan company behind)
+    assert resolver_calls == [["Acme Corp", ""]]
+    by_name = {c["name"]: c for c in created}
+    assert by_name["Ada Lovelace"]["company_id"] == 5
+    assert by_name["Ada Lovelace"]["company"] == "Acme Corp"  # legacy text preserved
+    assert by_name["Bob Stone"]["company_id"] is None
+
+
+def test_csv_import_unnamed_column_is_not_read_as_a_field(client, monkeypatch):
+    """csv.DictReader keys an UNNAMED header cell as "", which the old
+    `row.get(col or "", "")` idiom read whenever a field had no mapped column —
+    silently importing an unrelated column (and, post-#35, auto-creating a
+    company from it)."""
+    created = []
+    resolver_calls = []
+    monkeypatch.setattr(service, "create_contact",
+                        lambda **kw: created.append(kw) or {"id": len(created)})
+    monkeypatch.setattr(service, "resolve_or_create_company_ids",
+                        lambda names: resolver_calls.append(list(names)) or {})
+    # no Company header at all; the third column is unnamed
+    csv_text = "Name,Email,,Phone\nAda,ada@x.io,STRAY VALUE,555\n"
+    resp = client.post(
+        "/api/crm/import",
+        files={"file": ("c.csv", io.BytesIO(csv_text.encode()), "text/csv")},
+    )
+    assert resp.status_code == 200 and resp.json()["imported"] == 1
+    assert created[0]["company"] == ""          # not "STRAY VALUE"
+    assert resolver_calls == [[""]]             # and no company auto-created
+    assert created[0]["title"] == "" and created[0]["notes"] == ""
+
+
+def test_csv_import_survives_batch_resolver_failure(client, monkeypatch):
+    """A poison company cell (e.g. a NUL byte) must not 500 the whole import —
+    it degrades to per-row resolution inside create_contact."""
+    created = []
+    monkeypatch.setattr(service, "create_contact",
+                        lambda **kw: created.append(kw) or {"id": len(created)})
+
+    def _boom(names):
+        raise ValueError("A string literal cannot contain NUL (0x00) characters.")
+
+    monkeypatch.setattr(service, "resolve_or_create_company_ids", _boom)
+    resp = client.post(
+        "/api/crm/import",
+        files={"file": ("c.csv", io.BytesIO(b"Name,Company\nAda,Acme\n"), "text/csv")},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["imported"] == 1
+    assert created[0]["company_id"] is None  # fell back; create_contact resolves
+
+
 def test_csv_import_rejects_non_csv(client):
     resp = client.post(
         "/api/crm/import",
@@ -153,6 +229,45 @@ def test_smart_import_confirm_happy_and_validator(client, monkeypatch):
     assert ok.status_code == 200 and ok.json()["imported"] == 1
     # empty list rejected by the SmartImportConfirm validator (422)
     assert client.post("/api/crm/smart-import/confirm", json={"contacts": []}).status_code == 422
+
+
+def test_smart_import_confirm_passes_resolved_company_id(client, monkeypatch):
+    """Issue #35: the smart-import write path links companies too, batched."""
+    created = []
+    resolver_calls = []
+
+    def _resolve(names):
+        resolver_calls.append(list(names))
+        return {"Acme Corp": 5}
+
+    monkeypatch.setattr(service, "create_contact",
+                        lambda **kw: created.append(kw) or {"id": len(created)})
+    monkeypatch.setattr(service, "resolve_or_create_company_ids", _resolve)
+    resp = client.post("/api/crm/smart-import/confirm", json={"contacts": [
+        {"name": "Ada", "company": "Acme Corp"},
+        {"company": "Ghost Co"},   # no name/email/phone -> skipped, excluded from batch
+    ]})
+    assert resp.status_code == 200
+    assert resp.json()["imported"] == 1 and resp.json()["skipped"] == 1
+    assert resolver_calls == [["Acme Corp"]]
+    assert created[0]["company_id"] == 5
+
+
+def test_smart_import_confirm_survives_batch_resolver_failure(client, monkeypatch):
+    """Counterpart to the CSV case: both import loops share one degrade path, so
+    both are covered — a batch failure must not fail the whole import."""
+    created = []
+    monkeypatch.setattr(service, "create_contact",
+                        lambda **kw: created.append(kw) or {"id": len(created)})
+
+    def _boom(names):
+        raise ValueError("A string literal cannot contain NUL (0x00) characters.")
+
+    monkeypatch.setattr(service, "resolve_or_create_company_ids", _boom)
+    resp = client.post("/api/crm/smart-import/confirm",
+                       json={"contacts": [{"name": "Ada", "company": "Acme"}]})
+    assert resp.status_code == 200 and resp.json()["imported"] == 1
+    assert created[0]["company_id"] is None  # fell back; create_contact resolves
 
 
 def test_smart_import_confirm_falls_back_to_email_as_name(client, monkeypatch):

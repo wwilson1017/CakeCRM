@@ -30,6 +30,22 @@ async def test_csv_deterministic_is_keyless(monkeypatch):
     assert any(c["name"] == "Ada" for c in result.contacts)
 
 
+async def test_csv_unnamed_column_is_not_read_as_a_field(monkeypatch):
+    """Sibling of the router's /import guard: csv.DictReader keys an UNNAMED
+    header cell to "", so the old `row.get(col or "", "")` idiom made every
+    unmapped field pick up that column — and post-#35 a stray value there would
+    auto-create a real company on confirm."""
+    monkeypatch.setattr(smart_import, "get_ai_provider",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("AI called")))
+    # no Company/Title/Notes headers; the third column is unnamed
+    result = await smart_import.parse_contacts(
+        "Name,Email,,Phone\nAda,ada@x.io,ACCOUNT #55512345,555\n", "contacts.csv")
+    contact = next(c for c in result.contacts if c["name"] == "Ada")
+    assert contact["company"] == ""
+    assert contact["title"] == "" and contact["tags"] == "" and contact["notes"] == ""
+    assert contact["email"] == "ada@x.io" and contact["phone"] == "555"
+
+
 async def test_vcard_is_keyless(monkeypatch):
     monkeypatch.setattr(smart_import, "get_ai_provider",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("AI called")))

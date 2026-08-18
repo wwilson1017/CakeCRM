@@ -94,12 +94,32 @@ from crm import (
     service as crm,
     touch_count_service,
 )
+from crm.smart_import import csv_cell
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 MAX_UPLOAD_BYTES = 1_048_576  # 1 MB cap on uploaded files (CSV + smart-import)
 MAX_IMPORT_ROWS = 5000  # cap CSV rows processed per request (matches smart-import's contact cap)
+
+
+def _resolve_companies_or_fallback(names: list[str], context: str) -> dict[str, int]:
+    """Batch-resolve company names for a bulk import, degrading safely (issue #35).
+
+    Both import loops pre-resolve companies in one batch (2 queries total) so a
+    5000-row file doesn't issue a lookup per row. Shared here because the
+    degrade path is the subtle part and must not drift between the two callers:
+    a single malformed cell (a NUL byte, say) makes the whole batch statement
+    raise, which would turn one bad row into a failed import. Returning an empty
+    map instead lets each row resolve inside create_contact, where the loops'
+    existing per-row try/except still turns a bad value into one row error —
+    preserving the pre-#35 fault isolation exactly.
+    """
+    try:
+        return crm.resolve_or_create_company_ids(names)
+    except Exception as e:
+        logger.warning("%s: batch company resolution failed, falling back per row: %s", context, e)
+        return {}
 
 
 # ── Request models ────────────────────────────────────────────────────────────
@@ -637,6 +657,7 @@ async def import_csv(file: UploadFile = File(...), user=Depends(get_current_user
     name_col = _resolve("name")
     if not name_col:
         raise HTTPException(status_code=400, detail="CSV must have a 'name' column")
+    company_col = _resolve("company")
 
     # The row loop is synchronous psycopg2 (two round-trips per contact); run it
     # off the event loop so a large import can't freeze the single-process app
@@ -644,24 +665,42 @@ async def import_csv(file: UploadFile = File(...), user=Depends(get_current_user
     def _import_rows() -> tuple[int, int, list[str]]:
         imported = skipped = 0
         errors: list[str] = []
+        # Materialize the lazy reader up to the cap (already bounded by the 1MB
+        # upload limit and MAX_IMPORT_ROWS) so companies can be resolved in one
+        # batch below instead of once per row. The cap check still counts EVERY
+        # row read — imported, skipped, or errored — exactly as before.
+        rows: list[tuple[int, dict]] = []
         for i, row in enumerate(reader, start=2):  # Row 2+ (after header)
             if i - 2 >= MAX_IMPORT_ROWS:  # count every row read (imported/skipped/errored)
                 errors.append(f"Import capped at {MAX_IMPORT_ROWS} rows — split the file and import the rest.")
                 break
+            rows.append((i, row))
+
+        def _company_of(row: dict) -> str:
+            return csv_cell(row, company_col)
+
+        company_ids = _resolve_companies_or_fallback(
+            [_company_of(row) for _, row in rows if (row.get(name_col) or "").strip()],
+            "CSV import",
+        )
+
+        for i, row in rows:
             name = (row.get(name_col) or "").strip()
             if not name:
                 skipped += 1
                 continue
+            company = _company_of(row)
             try:
                 crm.create_contact(
                     name=name,
-                    email=(row.get(_resolve("email") or "", "") or "").strip(),
-                    phone=(row.get(_resolve("phone") or "", "") or "").strip(),
-                    company=(row.get(_resolve("company") or "", "") or "").strip(),
-                    title=(row.get(_resolve("title") or "", "") or "").strip(),
-                    source=(row.get(_resolve("source") or "", "") or "").strip(),
-                    tags=(row.get(_resolve("tags") or "", "") or "").strip(),
-                    notes=(row.get(_resolve("notes") or "", "") or "").strip(),
+                    email=csv_cell(row, _resolve("email")),
+                    phone=csv_cell(row, _resolve("phone")),
+                    company=company,
+                    company_id=company_ids.get(company),  # pre-resolved: no per-row lookup
+                    title=csv_cell(row, _resolve("title")),
+                    source=csv_cell(row, _resolve("source")),
+                    tags=csv_cell(row, _resolve("tags")),
+                    notes=csv_cell(row, _resolve("notes")),
                 )
                 imported += 1
             except Exception as e:
@@ -710,20 +749,34 @@ async def smart_import_confirm(body: SmartImportConfirm, user=Depends(get_curren
     def _confirm_rows() -> tuple[int, int, list[str]]:
         imported = skipped = 0
         errors: list[str] = []
+
+        def _name_of(entry: dict) -> str:
+            return str(entry.get("name") or entry.get("email") or entry.get("phone") or "").strip()
+
+        def _company_of(entry: dict) -> str:
+            return str(entry.get("company", "") or "").strip()
+
+        company_ids = _resolve_companies_or_fallback(
+            [_company_of(entry) for entry in contacts if _name_of(entry)],
+            "Smart import",
+        )
+
         for i, entry in enumerate(contacts):
             # Fall back to email/phone as the name so email-only entries the
             # parser kept (and showed in the preview) are actually importable,
             # not silently dropped — the preview→confirm contract.
-            name = str(entry.get("name") or entry.get("email") or entry.get("phone") or "").strip()
+            name = _name_of(entry)
             if not name:
                 skipped += 1
                 continue
+            company = _company_of(entry)
             try:
                 crm.create_contact(
                     name=name,
                     email=str(entry.get("email", "") or "").strip(),
                     phone=str(entry.get("phone", "") or "").strip(),
-                    company=str(entry.get("company", "") or "").strip(),
+                    company=company,
+                    company_id=company_ids.get(company),  # pre-resolved: no per-row lookup
                     title=str(entry.get("title", "") or "").strip(),
                     source=str(entry.get("source", "") or "").strip(),
                     tags=str(entry.get("tags", "") or "").strip(),

@@ -256,7 +256,7 @@ export function ContactsPage() {
                       <StatusBadge status={c.status} />
                     </span>
                   </div>
-                  {c.company && <div style={{ fontSize: 14, color: INK_MUTE, marginBottom: 2 }}>{c.company}</div>}
+                  {(c.company_name || c.company) && <div style={{ fontSize: 14, color: INK_MUTE, marginBottom: 2 }}>{c.company_name || c.company}</div>}
                   {c.email && <div style={{ fontSize: 14, color: INK_DIM }}>{c.email}</div>}
                 </div>
               ))}
@@ -290,7 +290,7 @@ export function ContactsPage() {
                     <p style={{ fontSize: 16, color: INK, margin: 0 }}>{c.name}</p>
                     {c.title && <p style={{ fontSize: 13, color: INK_DIM, marginTop: 2 }}>{c.title}</p>}
                   </div>
-                  <span style={{ fontSize: 15, color: INK_MUTE, alignSelf: 'center' }}>{c.company || '\u2014'}</span>
+                  <span style={{ fontSize: 15, color: INK_MUTE, alignSelf: 'center' }}>{c.company_name || c.company || '\u2014'}</span>
                   <span style={{ fontSize: 15, color: INK_MUTE, alignSelf: 'center' }}>{c.email || '\u2014'}</span>
                   <span style={{ fontSize: 15, color: INK_MUTE, alignSelf: 'center' }}>{c.phone || '\u2014'}</span>
                   <span style={{ alignSelf: 'center' }}><StatusBadge status={c.status} /></span>

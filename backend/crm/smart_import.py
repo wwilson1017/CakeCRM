@@ -21,6 +21,23 @@ MAX_PARSE_CONTACTS = 5000  # cap parsed preview contacts (matches the confirm ca
 
 CONTACT_FIELDS = ("name", "email", "phone", "company", "title", "source", "tags", "notes")
 
+def csv_cell(row: dict, col: str | None) -> str:
+    """Read one alias-mapped CSV column, tolerating an absent mapping.
+
+    `col` is None when the file has no column for that field. The obvious
+    `row.get(col or "", "")` is a trap: csv.DictReader keys an UNNAMED header
+    cell (e.g. "Name,Email,,Phone" — what Excel emits for a stray trailing comma
+    and what some Google/Outlook exports produce) to "", so every unmapped field
+    silently picked up that column's value. Harmless-looking until #35 made a
+    stray company value auto-create a real company row.
+
+    Shared by both CSV readers — this module's deterministic parser and the
+    router's /import loop — so the guard can't be fixed in one and missed in the
+    other, which is exactly what happened when only the router was patched.
+    """
+    return (row.get(col) or "").strip() if col else ""
+
+
 COLUMN_ALIASES = {
     "name": ["name", "full_name", "full name", "contact_name", "contact name"],
     "email": ["email", "email_address", "email address", "e-mail"],
@@ -227,13 +244,13 @@ def _try_csv_deterministic(content: str) -> list[dict] | None:
             continue
         contacts.append({
             "name": name,
-            "email": (row.get(_resolve("email") or "", "") or "").strip(),
-            "phone": (row.get(_resolve("phone") or "", "") or "").strip(),
-            "company": (row.get(_resolve("company") or "", "") or "").strip(),
-            "title": (row.get(_resolve("title") or "", "") or "").strip(),
-            "source": (row.get(_resolve("source") or "", "") or "").strip(),
-            "tags": (row.get(_resolve("tags") or "", "") or "").strip(),
-            "notes": (row.get(_resolve("notes") or "", "") or "").strip(),
+            "email": csv_cell(row, _resolve("email")),
+            "phone": csv_cell(row, _resolve("phone")),
+            "company": csv_cell(row, _resolve("company")),
+            "title": csv_cell(row, _resolve("title")),
+            "source": csv_cell(row, _resolve("source")),
+            "tags": csv_cell(row, _resolve("tags")),
+            "notes": csv_cell(row, _resolve("notes")),
         })
 
     return contacts

@@ -64,19 +64,22 @@ def test_create_contact_insert_returning_and_tag_normalization(rec):
     assert "%s" in insert_sql and "?" not in insert_sql
     # tags normalized (whitespace stripped, empties dropped) in the insert params
     assert "PT,ET,MT" in rec.params_for("INSERT INTO contacts")
-    # hydrated via a follow-up SELECT by the returned id
-    assert rec.params_for("SELECT * FROM contacts WHERE id = %s") == [7]
+    # hydrated via a follow-up SELECT by the returned id (joined for company_name)
+    assert rec.params_for("FROM contacts ct LEFT JOIN companies") == [7]
     assert result == {"id": 7, "name": "Ana"}
 
 
 def test_search_contacts_ilike_and_tag_boundary(rec):
     service.search_contacts("acme", status="active", tags="vip, lead", limit=15)
-    sql = rec.sql_containing("FROM contacts WHERE")
-    assert sql.count("ILIKE") >= 4  # name/email/company/notes + tag clauses
+    sql = rec.sql_containing("FROM contacts ct")
+    # name/email/company/co.name/notes + tag clauses (issue #35 added the join term)
+    assert sql.count("ILIKE") >= 5
     assert "LIKE %s" not in sql.replace("ILIKE %s", "")  # no case-sensitive LIKE
-    assert "status = %s" in sql
-    params = rec.params_for("FROM contacts WHERE")
-    assert params[:4] == ["%acme%"] * 4
+    assert "ct.status = %s" in sql
+    assert "LEFT JOIN companies co ON ct.company_id = co.id" in sql
+    assert "co.name ILIKE %s" in sql  # linked contacts findable by company name
+    params = rec.params_for("FROM contacts ct")
+    assert params[:5] == ["%acme%"] * 5
     assert "active" in params
     assert "%,vip,%" in params and "%,lead,%" in params
     assert params[-2:] == [15, 0]  # LIMIT %s OFFSET %s (default offset 0)
@@ -86,9 +89,16 @@ def test_list_contacts_count_alias_and_sort_whitelist(rec):
     rec.fetchone_queue = [{"cnt": 3}]
     rec.fetchall_queue = [[{"id": 1}]]
     out = service.list_contacts(offset=10, limit=5, sort="bogus")
-    assert "COUNT(*) AS cnt" in rec.sql_containing("COUNT(*)")
+    count_sql = rec.sql_containing("COUNT(*)")
+    assert "COUNT(*) AS cnt" in count_sql
+    # The count's WHERE never references companies, so it carries no join.
+    assert "LEFT JOIN" not in count_sql
     # unknown sort falls back to updated_at
-    assert "ORDER BY updated_at DESC" in rec.sql_containing("ORDER BY")
+    assert "ORDER BY ct.updated_at DESC" in rec.sql_containing("ORDER BY")
+    # the rows query joins and exposes the authoritative company name (issue #35)
+    rows_sql = rec.sql_containing("LIMIT %s OFFSET %s")
+    assert "SELECT ct.*, co.name AS company_name" in rows_sql
+    assert "LEFT JOIN companies co ON ct.company_id = co.id" in rows_sql
     assert rec.params_for("LIMIT %s OFFSET %s")[-2:] == [5, 10]
     assert out == {"contacts": [{"id": 1}], "total": 3, "limit": 5, "offset": 10}
 
@@ -347,16 +357,19 @@ def test_create_task_coerces_unknown_priority(rec):
 
 def test_search_contacts_forwards_offset(rec):
     service.search_contacts("acme", limit=50, offset=100)
-    sql = rec.sql_containing("FROM contacts WHERE")
+    sql = rec.sql_containing("FROM contacts ct")
     assert "LIMIT %s OFFSET %s" in sql
-    assert rec.params_for("FROM contacts WHERE")[-2:] == [50, 100]
+    assert rec.params_for("FROM contacts ct")[-2:] == [50, 100]
 
 
 def test_count_search_contacts_uses_count_and_same_where(rec):
     rec.fetchone_queue = [{"cnt": 42}]
     assert service.count_search_contacts("acme", status="active") == 42
     sql = rec.sql_containing("COUNT(*) AS cnt")
-    assert "ILIKE" in sql and "status = %s" in sql
+    assert "ILIKE" in sql and "ct.status = %s" in sql
+    # the WHERE references co.name, so the count must carry the join too; a LEFT
+    # JOIN on the companies PK can't multiply rows, so this stays a contact count
+    assert "LEFT JOIN companies co ON ct.company_id = co.id" in sql
     assert "LIMIT" not in sql  # count has no pagination
 
 
@@ -500,6 +513,88 @@ def test_update_contact_accepts_explicit_null_company_id(rec):
     assert "company_id = %s" in sql
     # explicit None reaches the SQL params (unlink)
     assert None in rec.params_for("UPDATE contacts SET")
+
+
+# ── Company resolution on ingestion (issue #35) ───────────────────────────────
+
+def test_resolve_or_create_company_ids_two_fixed_queries_and_raw_key_map(rec):
+    rec.fetchall_queue = [[{"raw": "Acme", "id": 9}, {"raw": "  ACME  ", "id": 9}]]
+    out = service.resolve_or_create_company_ids(["Acme", "  ACME  ", "Acme", "", "   "])
+    # exactly two statements regardless of input size
+    assert len(rec.calls) == 2
+    insert_sql = rec.sql_containing("INSERT INTO companies")
+    assert "unnest(%s::text[]) WITH ORDINALITY" in insert_sql
+    # targeted at the normalized-name index, not a bare ON CONFLICT (a bare one
+    # would also swallow a PK conflict and strand the contact unlinked)
+    assert "ON CONFLICT (LOWER(btrim(name, E' \\t\\n\\r\\f\\x0b'))) DO NOTHING" in insert_sql
+    # blanks dropped, exact-string dedupe preserves first-seen order
+    assert rec.params_for("INSERT INTO companies")[0] == ["Acme", "  ACME  "]
+    # keyed by the RAW spelling the caller passed; both spellings -> the same id
+    assert out == {"Acme": 9, "  ACME  ": 9}
+
+
+def test_resolve_or_create_company_ids_blank_input_issues_no_queries(rec):
+    assert service.resolve_or_create_company_ids([]) == {}
+    assert service.resolve_or_create_company_ids(["", "   ", "\t\n"]) == {}
+    assert rec.calls == []  # never touches the DB for nothing
+
+
+def test_create_contact_resolves_company_text_to_id(rec):
+    rec.fetchall_queue = [[{"raw": "Acme", "id": 9}]]
+    rec.fetchone_queue = [{"id": 1}, {"id": 1}]
+    service.create_contact("Ana", company="Acme")
+    assert rec.sql_containing("INSERT INTO companies")  # auto-created
+    # the resolved id is what lands on the contact row
+    assert 9 in rec.params_for("INSERT INTO contacts")
+
+
+def test_create_contact_explicit_company_id_skips_resolution(rec):
+    rec.fetchone_queue = [{"id": 1}, {"id": 1}]
+    service.create_contact("Ana", company="Acme", company_id=3)
+    assert not any("INSERT INTO companies" in sql for sql, _ in rec.calls)
+    assert 3 in rec.params_for("INSERT INTO contacts")
+
+
+def test_create_contact_blank_company_skips_resolution(rec):
+    rec.fetchone_queue = [{"id": 1}, {"id": 1}]
+    service.create_contact("Ana", company="   ")
+    assert not any("INSERT INTO companies" in sql for sql, _ in rec.calls)
+
+
+def test_update_contact_resolves_company_text_when_no_id_key(rec):
+    rec.fetchall_queue = [[{"raw": "Acme", "id": 9}]]
+    rec.fetchone_queue = [{"id": 1}]
+    service.update_contact(1, company="Acme")
+    sql = rec.sql_containing("UPDATE contacts SET")
+    assert "company_id = %s" in sql          # link derived from the text
+    assert 9 in rec.params_for("UPDATE contacts SET")
+
+
+def test_update_contact_blank_company_text_unlinks(rec):
+    rec.fetchone_queue = [{"id": 1}]
+    service.update_contact(1, company="")
+    assert not any("INSERT INTO companies" in sql for sql, _ in rec.calls)
+    sql = rec.sql_containing("UPDATE contacts SET")
+    assert "company_id = %s" in sql
+    assert None in rec.params_for("UPDATE contacts SET")
+
+
+def test_update_contact_explicit_null_company_id_wins_over_text(rec):
+    """ContactForm always sends company_id; an explicit null means unlink and
+    must NOT be overridden by resolving the free text sitting next to it."""
+    rec.fetchone_queue = [{"id": 1}]
+    service.update_contact(1, company="Acme", company_id=None)
+    assert not any("INSERT INTO companies" in sql for sql, _ in rec.calls)  # no resolution
+    params = rec.params_for("UPDATE contacts SET")
+    assert None in params and 9 not in params
+
+
+def test_list_contacts_company_sort_uses_effective_name(rec):
+    rec.fetchone_queue = [{"cnt": 0}]
+    rec.fetchall_queue = [[]]
+    service.list_contacts(sort="company")
+    # sorts by what the UI renders (link first, legacy text as fallback)
+    assert "ORDER BY COALESCE(co.name, ct.company) DESC" in rec.sql_containing("ORDER BY")
 
 
 def test_update_deal_accepts_company_id(monkeypatch, rec, fake_conn):
@@ -702,7 +797,7 @@ def test_list_contacts_lead_score_sort_fragment(rec):
     rec.fetchone_queue = [{"cnt": 0}]
     rec.fetchall_queue = [[]]
     service.list_contacts(sort="lead_score")
-    sql = rec.sql_containing("ORDER BY lead_score")
+    sql = rec.sql_containing("ORDER BY ct.lead_score")
     assert "lead_score DESC NULLS LAST" in sql and "id DESC" in sql
 
 
@@ -711,10 +806,10 @@ def test_list_contacts_unknown_sort_falls_back_to_updated_at(rec):
     rec.fetchall_queue = [[]]
     service.list_contacts(sort="bogus; DROP TABLE contacts")  # never interpolated (allowlist)
     sql = rec.sql_containing("ORDER BY")
-    assert "ORDER BY updated_at DESC, id DESC" in sql
+    assert "ORDER BY ct.updated_at DESC, ct.id DESC" in sql
     assert "DROP TABLE" not in sql
 
 
 def test_search_contacts_honors_lead_score_sort(rec):
     service.search_contacts("acme", sort="lead_score")
-    assert "lead_score DESC NULLS LAST" in rec.sql_containing("FROM contacts WHERE")
+    assert "lead_score DESC NULLS LAST" in rec.sql_containing("FROM contacts ct")
