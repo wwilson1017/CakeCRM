@@ -128,7 +128,7 @@ export function OllamaSetup({ onConnected }: Props) {
         <div className="flex flex-col gap-2">
           {RECOMMENDED_MODELS.map(m => (
             <div key={m.name} className="bg-ck-raised rounded-md px-3 py-2">
-              <code className="text-xs text-ck-accent font-mono">ollama pull {m.name}</code>
+              <code className="text-xs text-ck-accent-text font-mono">ollama pull {m.name}</code>
               <p className="text-xs text-ck-ink-soft mt-0.5 mb-0">{m.desc}</p>
             </div>
           ))}
@@ -157,11 +157,11 @@ export function OllamaSetup({ onConnected }: Props) {
         <ol className="text-xs text-ck-ink-mute m-0 pl-4 list-decimal flex flex-col gap-1">
           <li>
             Install Ollama from{' '}
-            <a href="https://ollama.com" target="_blank" rel="noopener noreferrer" className="text-ck-accent">
+            <a href="https://ollama.com" target="_blank" rel="noopener noreferrer" className="text-ck-accent-text">
               ollama.com
             </a>
           </li>
-          <li>Start it with <code className="text-ck-accent font-mono">ollama serve</code>, then <code className="text-ck-accent font-mono">ollama pull qwen3.5:4b</code></li>
+          <li>Start it with <code className="text-ck-accent-text font-mono">ollama serve</code>, then <code className="text-ck-accent-text font-mono">ollama pull qwen3.5:4b</code></li>
           <li>Come back here and click "Refresh"</li>
         </ol>
       </div>

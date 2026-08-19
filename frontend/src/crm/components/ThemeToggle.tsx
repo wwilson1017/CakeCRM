@@ -3,10 +3,11 @@ import { INK_MUTE, LINE_STRONG } from '../../shared/styles';
 
 /**
  * Light/dark switch. Ported from the CAKE OS blueprint's ThemeToggle and adapted to
- * CakeCRM's inline-style idiom, sized to match NotificationsBell in the CRM header.
+ * CakeCRM's inline-style idiom, sized to match NotificationsBell in the CRM header,
+ * which is where it lives in both the desktop and mobile layouts.
  * The theme itself is entirely CSS — the hook only toggles `.dark` on <html>.
  */
-export function ThemeToggle({ full }: { full?: boolean } = {}) {
+export function ThemeToggle() {
   const { theme, toggleTheme } = useTheme();
   const label = theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
 
@@ -16,15 +17,14 @@ export function ThemeToggle({ full }: { full?: boolean } = {}) {
       aria-label={label}
       title={theme === 'dark' ? 'Light mode' : 'Dark mode'}
       style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-        width: full ? '100%' : 34, height: 32,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        width: 34, height: 32,
         border: `1px solid ${LINE_STRONG}`, borderRadius: 6,
         background: 'transparent', color: INK_MUTE, cursor: 'pointer',
         fontSize: 14,
       }}
     >
       <ThemeIcon theme={theme} />
-      {full && <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>}
     </button>
   );
 }

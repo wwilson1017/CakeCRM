@@ -50,6 +50,11 @@
   --color-ck-accent-wine: #710606;
   --color-ck-accent-ink: #ffffff;
   --color-ck-accent-soft: color-mix(in srgb, var(--color-ck-accent) 9%, transparent);
+  /* Accent used as TEXT or an icon rather than as a fill. Identical to `accent` in
+     light; the .dark block lightens it, because the fixed brand red is only 3.15:1
+     on the dark card and fails WCAG AA as body text. Fills (buttons, bars, borders,
+     focus rings) keep `accent` so the brand red stays identical in both themes. */
+  --color-ck-accent-text: var(--color-ck-accent);
 
   /* Status */
   --color-ck-green: #2e7d4f;
@@ -95,6 +100,9 @@
   --color-ck-ink-dim: #6b6963;
 
   --color-ck-accent-soft: color-mix(in srgb, var(--color-ck-accent) 20%, transparent);
+  /* Same rule the status hues below follow: lighten so it stays legible on a dark
+     surface. 5.19:1 on card, 4.51:1 on an accent-soft chip. */
+  --color-ck-accent-text: #f0727f;
 
   --color-ck-green: #5fb585;
   --color-ck-amber: #d9a441;
@@ -127,7 +135,9 @@ h1, h2, h3, h4, h5, h6, button {
   font-family: var(--font-display);
 }
 
-button, input, select, textarea, option {
+/* `button` is deliberately absent: it takes --font-display from the rule above, and
+   listing it here would silently undo that (same specificity, later wins). */
+input, select, textarea, option {
   font-family: inherit;
 }
 
@@ -144,6 +154,40 @@ input:focus, textarea:focus, select:focus {
   border-color: var(--color-ck-accent) !important;
   outline: none;
 }
+
+/* Dark-mode syntax highlighting for assistant code blocks.
+   `highlight.js/styles/github.css` (imported by assistant/MarkdownContent) is a fixed
+   LIGHT theme — without this, a fenced code block paints a white slab inside the dark
+   drawer. It is emitted after this file in the bundle, so these rules win on
+   specificity, not order: `.dark .hljs` is (0,2,0) against its (0,1,0). Hues are
+   github-dark's, all >= 4.5:1 on --color-ck-raised. */
+.dark .hljs {
+  color: var(--color-ck-ink);
+  background: transparent;
+}
+.dark .hljs-doctag, .dark .hljs-keyword, .dark .hljs-meta .hljs-keyword,
+.dark .hljs-template-tag, .dark .hljs-template-variable, .dark .hljs-type,
+.dark .hljs-variable.language_ { color: var(--color-ck-accent-text); }
+.dark .hljs-title, .dark .hljs-title.class_, .dark .hljs-title.class_.inherited__,
+.dark .hljs-title.function_ { color: #d2a8ff; }
+.dark .hljs-attr, .dark .hljs-attribute, .dark .hljs-literal, .dark .hljs-meta,
+.dark .hljs-number, .dark .hljs-operator, .dark .hljs-variable,
+.dark .hljs-selector-attr, .dark .hljs-selector-class,
+.dark .hljs-selector-id { color: #79c0ff; }
+.dark .hljs-regexp, .dark .hljs-string,
+.dark .hljs-meta .hljs-string { color: #a5d6ff; }
+.dark .hljs-built_in, .dark .hljs-symbol { color: #ffa657; }
+.dark .hljs-comment, .dark .hljs-code,
+.dark .hljs-formula { color: var(--color-ck-ink-mute); }
+.dark .hljs-name, .dark .hljs-quote, .dark .hljs-selector-tag,
+.dark .hljs-selector-pseudo { color: #7ee787; }
+.dark .hljs-subst { color: var(--color-ck-ink); }
+.dark .hljs-section { color: #79c0ff; font-weight: bold; }
+.dark .hljs-bullet { color: #d9a441; }
+.dark .hljs-emphasis { font-style: italic; }
+.dark .hljs-strong { font-weight: bold; }
+.dark .hljs-addition { color: #7ee787; background-color: #0f5323; }
+.dark .hljs-deletion { color: #ffa198; background-color: #67060c; }
 
 /* Toast slide-in (used by shared/ToastViewport). */
 @keyframes ck-toast-in {

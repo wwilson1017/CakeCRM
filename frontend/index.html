@@ -4,6 +4,10 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Mobile browser chrome. Kept in sync with the app theme by the script below
+         and by applyTheme() in src/core/theme/useTheme.ts; a prefers-color-scheme
+         media pair would be wrong here, since the toggle can override the OS. -->
+    <meta name="theme-color" content="#f1f1e8" />
     <title>CakeCRM</title>
     <script>
       // Apply the theme before React loads so a dark-mode reload never flashes white.
@@ -17,6 +21,9 @@
         }
         if (t === 'dark' || (!t && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
           document.documentElement.classList.add('dark');
+          var m = document.querySelector('meta[name="theme-color"]');
+          // Must match --color-ck-bg in the .dark block of src/index.css.
+          if (m) m.setAttribute('content', '#1c1b19');
         }
       })();
     </script>

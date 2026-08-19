@@ -9,7 +9,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { IconAttach, IconBot, IconPlus, IconSettings, IconX } from '../shared/icons';
 import { toast } from '../shared/toast';
 import {
-  ACCENT,
+  ACCENT, ACCENT_TEXT,
   ACCENT_INK,
   ACCENT_SOFT,
   BG_CARD,
@@ -245,7 +245,7 @@ export default function AssistantPanelBody({ recordContext = null }: AssistantPa
                   flex: 1, fontSize: 11, padding: '4px 6px', borderRadius: 6, cursor: 'pointer',
                   border: `1px solid ${active ? ACCENT : LINE}`,
                   background: active ? ACCENT_SOFT : 'none',
-                  color: active ? ACCENT : INK_MUTE,
+                  color: active ? ACCENT_TEXT : INK_MUTE,
                   fontWeight: active ? 600 : 400,
                 }}
               >

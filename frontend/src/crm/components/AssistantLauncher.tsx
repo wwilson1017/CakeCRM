@@ -22,7 +22,7 @@ import { useNavigate } from 'react-router-dom';
 import { AssistantPanelBody } from '../../assistant';
 import { IconBot, IconX } from '../../shared/icons';
 import {
-  INK, INK_MUTE, LINE, BG_CARD, ACCENT, ACCENT_INK, FONT_DISPLAY,
+  INK, INK_MUTE, LINE, BG_CARD, ACCENT, ACCENT_TEXT, ACCENT_INK, FONT_DISPLAY,
   SCRIM, SHADOW,
 } from '../../shared/styles';
 import { useActiveRecord } from '../RecordContext';
@@ -148,7 +148,7 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
                 display: 'flex', alignItems: 'center', gap: 8,
                 fontFamily: FONT_DISPLAY, fontSize: 16, color: INK,
               }}>
-                <IconBot size={17} style={{ color: ACCENT }} /> Assistant
+                <IconBot size={17} style={{ color: ACCENT_TEXT }} /> Assistant
               </span>
               <button
                 onClick={() => { setOpen(false); btnRef.current?.focus(); }}

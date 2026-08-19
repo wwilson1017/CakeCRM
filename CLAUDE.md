@@ -244,11 +244,21 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `crm/styles.ts` resolve through those tokens, and those modules carry **no literal
   hex/rgba fallbacks** — a fallback would silently pin a light colour into a dark
   surface. Tints are derived with `color-mix()` off a token (`shared/styles.tint()`),
-  never hand-written rgba. Fonts are **self-hosted** via `@fontsource` (Montserrat for
+  never hand-written rgba — the one exception being the three per-theme chrome tokens
+  (`hover`/`scrim`/`shadow`), declared literally in *each* block because they tint
+  **ink**, not the accent: a single dark tint would vanish on a dark surface. The brand
+  red is identical in both themes as a **fill**, but accent used as *text or an icon*
+  routes through `--color-ck-accent-text` (`ACCENT_TEXT`), which the `.dark` block
+  lightens — the fixed red is only 3.15:1 on the dark card and fails WCAG AA as body
+  text, the same reason the status and stage hues lighten. Fonts are **self-hosted**
+  via `@fontsource` (Montserrat for
   headings + buttons, Open Sans for body) — no Google Fonts CDN request, so an offline
-  deploy renders correctly. The light/dark choice persists in `localStorage`
+  deploy renders correctly; `index.css` also carries a `.dark .hljs*` block because
+  the assistant's `highlight.js` stylesheet is a fixed light theme. The light/dark
+  choice persists in `localStorage`
   (`cakecrm_theme`) and is applied by a pre-React anti-flash script in `index.html`
-  whose key is a contract with `core/theme/useTheme.ts`. So the CRM stays fully
+  whose key is a contract with `core/theme/useTheme.ts` — both also keep the
+  `theme-color` meta in sync so mobile browser chrome follows the app. So the CRM stays fully
   usable — and fully themed — with zero AI keys. The launcher opens a **context-aware slide-over drawer** (#14): the
   open deal/contact/company is published through a shared record context
   (`frontend/src/crm/RecordContext.tsx`, set by the detail pages + `DealDetailSheet`)

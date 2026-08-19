@@ -1,5 +1,7 @@
 // CakeCRM — markdown renderer for assistant messages.
-// Light highlight.js theme (github.css) so code blocks match the light UI.
+// Light highlight.js theme (github.css) so code blocks match the light UI. It is a
+// FIXED light theme, so index.css carries a `.dark .hljs*` override block — without it
+// a fenced block renders as a white slab inside the dark drawer.
 
 import 'highlight.js/styles/github.css';
 
@@ -8,11 +10,11 @@ import ReactMarkdown, { type Components } from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
 
-import { ACCENT, BG_RAISED, INK, INK_MUTE, LINE } from '../shared/styles';
+import { ACCENT_TEXT, BG_RAISED, INK, INK_MUTE, LINE } from '../shared/styles';
 
 const components: Components = {
   a: ({ href, children }: ComponentPropsWithoutRef<'a'>) => (
-    <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: ACCENT, textDecoration: 'underline' }}>
+    <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: ACCENT_TEXT, textDecoration: 'underline' }}>
       {children}
     </a>
   ),

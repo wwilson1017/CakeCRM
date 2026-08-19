@@ -9,7 +9,7 @@ import { IconPlus, IconSearch } from '../shared/icons';
 import { useIsMobile } from '../shared/useIsMobile';
 import { LoadError } from '../shared/LoadError';
 import { toast } from '../shared/toast';
-import { INK, INK_MUTE, INK_DIM, LINE, BG_RAISED, ACCENT, FONT_SANS, mono, ACCENT_SOFT, HOVER, SHADOW } from '../shared/styles';
+import { INK, INK_MUTE, INK_DIM, LINE, BG_RAISED, ACCENT, ACCENT_TEXT, FONT_SANS, mono, ACCENT_SOFT, HOVER, SHADOW } from '../shared/styles';
 import {
   pageHeading, cardStyle, filterTab,
   tableHeader, tableRow, btnPrimary, btnSecondary, btnSmall,
@@ -173,7 +173,7 @@ export function ContactsPage() {
             <button onClick={() => setTagDropdownOpen(v => !v)} style={{
               background: tagFilter.length ? ACCENT_SOFT : HOVER,
               border: `1px solid ${tagFilter.length ? ACCENT : LINE}`,
-              color: tagFilter.length ? ACCENT : INK_MUTE,
+              color: tagFilter.length ? ACCENT_TEXT : INK_MUTE,
               borderRadius: 4, padding: isMobile ? '10px 30px 10px 12px' : '12px 32px 12px 16px',
               fontSize: 14, fontWeight: 500,
               fontFamily: FONT_SANS, cursor: 'pointer', outline: 'none',

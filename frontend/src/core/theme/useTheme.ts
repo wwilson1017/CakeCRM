@@ -35,8 +35,14 @@ function hasExplicitPreference(): boolean {
   }
 }
 
+// Page-background hexes, mirrored from --color-ck-bg in index.css (light @theme /
+// .dark block). Only the mobile browser chrome reads these; every in-app surface
+// resolves the token itself.
+const THEME_COLOR: Record<Theme, string> = { light: '#f1f1e8', dark: '#1c1b19' };
+
 function applyTheme(next: Theme) {
   document.documentElement.classList.toggle('dark', next === 'dark');
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', THEME_COLOR[next]);
   listeners.forEach((notify) => notify());
 }
 

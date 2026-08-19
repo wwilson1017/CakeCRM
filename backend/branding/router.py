@@ -51,11 +51,11 @@ async def upload_logo(
     file: UploadFile = File(...),
     user=Depends(get_current_user),
 ):
-    """Upload a logo image (PNG, JPEG, GIF, WebP, SVG). Max 2 MB."""
+    """Upload a logo image (PNG, JPEG, GIF, WebP). Max 2 MB."""
     if file.content_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported image type: {file.content_type}. Allowed: PNG, JPEG, GIF, WebP, SVG",
+            detail=f"Unsupported image type: {file.content_type}. Allowed: PNG, JPEG, GIF, WebP",
         )
     data = await file.read()
     if len(data) > MAX_LOGO_BYTES:

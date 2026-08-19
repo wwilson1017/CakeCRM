@@ -10,7 +10,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../../core/api/client';
-import { INK, INK_MUTE, INK_SOFT, LINE, LINE_STRONG, BG_CARD, ACCENT, CORAL, FONT_SANS, ACCENT_INK, SHADOW } from '../../shared/styles';
+import { INK, INK_MUTE, INK_SOFT, LINE, LINE_STRONG, BG_CARD, ACCENT, ACCENT_TEXT, CORAL, FONT_SANS, ACCENT_INK, SHADOW } from '../../shared/styles';
 
 interface NotificationRow {
   id: string; title: string; message: string; created_at: string; channels_sent: string[];
@@ -189,5 +189,5 @@ export function NotificationsBell() {
 
 const linkBtn: React.CSSProperties = {
   background: 'transparent', border: 'none', padding: 0, cursor: 'pointer',
-  fontFamily: FONT_SANS, fontSize: 12, color: ACCENT,
+  fontFamily: FONT_SANS, fontSize: 12, color: ACCENT_TEXT,
 };

@@ -19,7 +19,7 @@ import { confirmDialog } from '../shared/confirm';
 import { toast } from '../shared/toast';
 import {
   INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, CORAL, SAGE,
-  ACCENT, ACCENT_INK,
+  ACCENT, ACCENT_TEXT, ACCENT_INK,
   FONT_DISPLAY, FONT_MONO,
   mono, inputStyle,
   BG_RAISED,
@@ -166,7 +166,7 @@ export function ContactDetailPage() {
                 {contact.company_id ? (
                   <span
                     onClick={() => navigate(`/crm/companies/${contact.company_id}`)}
-                    style={{ color: ACCENT, cursor: 'pointer' }}
+                    style={{ color: ACCENT_TEXT, cursor: 'pointer' }}
                   >{contact.company_name || contact.company}</span>
                 ) : contact.company}
                 {' '}{badge('company')}
@@ -213,7 +213,7 @@ export function ContactDetailPage() {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
             <span style={mono(10, INK_DIM)}>Deals</span>
             <button onClick={() => setShowAddDeal(true)} style={{
-              background: 'none', border: 'none', color: ACCENT,
+              background: 'none', border: 'none', color: ACCENT_TEXT,
               fontSize: 12, cursor: 'pointer',
             }}>+ Add</button>
           </div>
@@ -252,7 +252,7 @@ export function ContactDetailPage() {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
             <span style={mono(10, INK_DIM)}>Tasks</span>
             <button onClick={() => setShowAddTask(true)} style={{
-              background: 'none', border: 'none', color: ACCENT,
+              background: 'none', border: 'none', color: ACCENT_TEXT,
               fontSize: 12, cursor: 'pointer',
             }}>+ Add</button>
           </div>

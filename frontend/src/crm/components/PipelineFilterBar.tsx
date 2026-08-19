@@ -9,7 +9,7 @@ import {
 import { STAGE_ORDER, STAGE_COLORS } from '../constants';
 import {
   INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, BG_RAISED, BG_ELEV,
-  ACCENT, ACCENT_INK, FONT_SANS,
+  ACCENT, ACCENT_TEXT, ACCENT_INK, FONT_SANS,
   HOVER, SHADOW,
 } from '../../shared/styles';
 import { IconSearch, IconX, IconChevron } from '../../shared/icons';
@@ -224,11 +224,11 @@ function RadioList<T extends string>({ options, value, onSelect }: {
               width: '100%', textAlign: 'left', padding: '7px 8px', borderRadius: 4,
               fontSize: 13, cursor: 'pointer', border: 'none', background: 'transparent',
               fontFamily: FONT_SANS, fontWeight: selected ? 600 : 400,
-              color: selected ? ACCENT : INK,
+              color: selected ? ACCENT_TEXT : INK,
             }}
           >
             {o.label}
-            {selected && <span style={{ color: ACCENT }}>✓</span>}
+            {selected && <span style={{ color: ACCENT_TEXT }}>✓</span>}
           </button>
         );
       })}

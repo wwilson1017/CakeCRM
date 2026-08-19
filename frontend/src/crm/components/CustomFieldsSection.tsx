@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import type { CSSProperties } from 'react';
 import { api } from '../../core/api/client';
 import type { CrmFieldValue, CrmFieldValuesResult } from '../../core/types';
-import { mono, INK, INK_MUTE, INK_DIM, LINE, ACCENT, ACCENT_INK } from '../../shared/styles';
+import { mono, INK, INK_MUTE, INK_DIM, LINE, ACCENT, ACCENT_TEXT, ACCENT_INK } from '../../shared/styles';
 import { toast } from '../../shared/toast';
 import { CustomFieldInputs, type EditableField } from './CustomFieldInputs';
 
@@ -153,6 +153,6 @@ export function CustomFieldsSection({ entityType, entityId, sectionStyle }: Prop
 }
 
 const linkBtn = {
-  background: 'none', border: 'none', color: ACCENT,
+  background: 'none', border: 'none', color: ACCENT_TEXT,
   fontSize: 12, cursor: 'pointer', padding: 0,
 } as const;

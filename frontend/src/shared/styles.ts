@@ -21,6 +21,9 @@ export const BG_RAISED = 'var(--color-ck-raised)';
 export const ACCENT = 'var(--color-ck-accent)';
 export const ACCENT_INK = 'var(--color-ck-accent-ink)';
 export const ACCENT_SOFT = 'var(--color-ck-accent-soft)';
+// Accent as *text*/icon. Same value as ACCENT in light; lighter under .dark, where
+// the fixed brand red fails WCAG AA on a dark surface. Fills keep ACCENT.
+export const ACCENT_TEXT = 'var(--color-ck-accent-text)';
 export const GOLD = 'var(--color-ck-amber)';
 export const CORAL = 'var(--color-ck-red)';
 export const SAGE = 'var(--color-ck-green)';
