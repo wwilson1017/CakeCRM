@@ -17,8 +17,17 @@
  *
  * The theme is FIXED — there is no user-configurable accent. Branding is company
  * name + logo only (see /crm/settings).
+ *
+ * `static` is load-bearing: by default Tailwind only emits an @theme variable it can
+ * SEE being used, and most of this app reads tokens as inline `var(--color-ck-*)`
+ * strings rather than `ck-*` utility classes. A token whose name is assembled at
+ * runtime (crm/constants.ts builds `--color-ck-stage-${name}`) is invisible to the
+ * source scanner, so it was emitted in the hand-written .dark block below but
+ * tree-shaken out of the light one — every stage colour silently resolved to nothing
+ * in light mode. `static` emits all of them unconditionally and kills that whole class
+ * of bug; the .dark block still wins the cascade because it compiles unlayered.
  */
-@theme {
+@theme static {
   /* Neutrals — light */
   --color-ck-bg: #f1f1e8;
   --color-ck-card: #fffffa;
