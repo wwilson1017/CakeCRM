@@ -91,7 +91,7 @@ export function ActivityTimeline({ activities, onUpdate }: Props) {
             }}>
               <div style={{
                 width: 28, height: 28, borderRadius: 4,
-                background: 'rgba(245,239,227,0.06)',
+                background: BG_RAISED,
                 border: `1px solid ${LINE}`,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 color: INK_MUTE, flexShrink: 0,

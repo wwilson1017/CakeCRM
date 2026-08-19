@@ -1,6 +1,7 @@
 import type { ComponentType, ReactNode } from 'react';
 import { IconChart, IconUsers, IconBuilding, IconFunnel, IconCheck, IconCalendar, IconSettings, IconSparkle, IconLock } from './icons';
 import { BG_CARD, INK, INK_MUTE, LINE, ACCENT, FONT_DISPLAY } from './styles';
+import { ThemeToggle } from '../crm/components/ThemeToggle';
 
 interface MobileMenuDrawerProps {
   onClose: () => void;
@@ -64,6 +65,9 @@ export function MobileMenuDrawer({ onClose, navigate, onSignOut, children }: Mob
             <span style={{ fontSize: 14 }}>{item.label}</span>
           </div>
         ))}
+        <div style={{ marginTop: 8 }}>
+          <ThemeToggle full />
+        </div>
       </div>
       {children}
     </div>

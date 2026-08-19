@@ -4,7 +4,7 @@
  * user is looking); toasts are reserved for failed mutations.
  */
 
-import { INK_MUTE, CORAL, GOLD, FONT_SANS, mono } from './styles';
+import { INK_MUTE, CORAL, GOLD, FONT_SANS, mono, tint } from './styles';
 
 interface Props {
   label?: string;
@@ -19,8 +19,8 @@ export function LoadError({ label = "Couldn't load", onRetry, compact }: Props) 
         display: 'flex',
         alignItems: 'center',
         gap: 10,
-        background: 'rgba(194,65,65,0.06)',
-        border: '1px solid rgba(194,65,65,0.18)',
+        background: tint(CORAL, 6),
+        border: `1px solid ${tint(CORAL, 18)}`,
         borderRadius: 6,
         padding: compact ? '10px 12px' : '14px 16px',
         margin: compact ? '8px 12px' : '12px 16px',

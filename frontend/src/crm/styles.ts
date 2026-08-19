@@ -1,8 +1,9 @@
 import type { CSSProperties } from 'react';
 import {
   INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG,
-  BG_ELEV, BG_CARD, ACCENT, ACCENT_INK, CORAL,
-  FONT_DISPLAY, FONT_SANS, mono,
+  BG_ELEV, BG_CARD, ACCENT, ACCENT_INK, ACCENT_SOFT, CORAL,
+  HOVER, SCRIM, SHADOW, tint,
+  FONT_DISPLAY, mono,
 } from '../shared/styles';
 
 // ── Layout ───────────────────────────────────────────────────────────────────
@@ -42,7 +43,7 @@ export function stageCard(bg: string, color: string): CSSProperties {
 
 export function modalOverlay(isMobile: boolean): CSSProperties {
   return {
-    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
+    position: 'fixed', inset: 0, background: SCRIM,
     zIndex: 50, display: 'flex',
     alignItems: isMobile ? 'flex-end' : 'center',
     justifyContent: 'center',
@@ -57,7 +58,7 @@ export function modalContent(isMobile: boolean, maxWidth = 480): CSSProperties {
     borderBottom: isMobile ? 'none' : undefined,
     padding: isMobile ? '20px 20px 28px' : 28,
     width: '100%', maxWidth, margin: isMobile ? 0 : '0 16px',
-    boxShadow: '0 8px 40px rgba(31,35,40,0.18)',
+    boxShadow: `0 8px 40px ${SHADOW}`,
   };
 }
 
@@ -68,7 +69,7 @@ export function formModalContent(maxWidth = 420): CSSProperties {
     background: BG_ELEV, borderRadius: 6, border: `1px solid ${LINE_STRONG}`,
     padding: 24, width: '100%', maxWidth, margin: '0 16px',
     maxHeight: '90vh', overflowY: 'auto',
-    boxShadow: '0 8px 40px rgba(31,35,40,0.18)',
+    boxShadow: `0 8px 40px ${SHADOW}`,
   };
 }
 
@@ -89,7 +90,7 @@ export const btnPrimary: CSSProperties = {
   border: 'none', padding: '10px 20px', borderRadius: 4,
   fontSize: 15, fontWeight: 500, cursor: 'pointer',
   display: 'flex', alignItems: 'center', gap: 6,
-  fontFamily: FONT_SANS,
+  fontFamily: FONT_DISPLAY,
 };
 
 export const btnSecondary: CSSProperties = {
@@ -97,21 +98,21 @@ export const btnSecondary: CSSProperties = {
   border: `1px solid ${LINE_STRONG}`,
   padding: '10px 20px', borderRadius: 4,
   fontSize: 15, cursor: 'pointer',
-  fontFamily: FONT_SANS,
+  fontFamily: FONT_DISPLAY,
 };
 
 export const btnDanger: CSSProperties = {
-  background: 'rgba(194,65,65,0.1)', color: CORAL,
-  border: '1px solid rgba(194,65,65,0.2)',
+  background: tint(CORAL, 10), color: CORAL,
+  border: `1px solid ${tint(CORAL, 20)}`,
   padding: '10px 20px', borderRadius: 4,
   fontSize: 15, cursor: 'pointer',
-  fontFamily: FONT_SANS,
+  fontFamily: FONT_DISPLAY,
 };
 
 export const btnSmall: CSSProperties = {
   padding: '7px 14px', borderRadius: 4,
   fontSize: 13, fontWeight: 500, cursor: 'pointer',
-  fontFamily: FONT_SANS,
+  fontFamily: FONT_DISPLAY,
 };
 
 // ── Tables ────────────────────────────────────────────────────────────────────
@@ -149,12 +150,12 @@ export function filterTab(isMobile: boolean, isActive: boolean, activeColor?: st
     flex: 1, padding: isMobile ? '10px 8px' : '12px 16px',
     fontSize: 14, fontWeight: 500, textTransform: 'capitalize',
     color: isActive ? INK : INK_MUTE,
-    background: isActive ? 'var(--color-ck-accent-soft, rgba(176,58,82,0.12))' : 'rgba(31,35,40,0.045)',
+    background: isActive ? ACCENT_SOFT : HOVER,
     border: 'none',
-    borderLeft: `3px solid ${isActive ? borderColor : 'var(--color-ck-line, #E7E4DF)'}`,
-    borderRight: `3px solid ${isActive ? borderColor : 'var(--color-ck-line, #E7E4DF)'}`,
+    borderLeft: `3px solid ${isActive ? borderColor : LINE}`,
+    borderRight: `3px solid ${isActive ? borderColor : LINE}`,
     borderRadius: 0, cursor: 'pointer', whiteSpace: 'nowrap',
-    fontFamily: FONT_SANS,
+    fontFamily: FONT_DISPLAY,
     transition: 'background 0.15s, color 0.15s',
   };
 }

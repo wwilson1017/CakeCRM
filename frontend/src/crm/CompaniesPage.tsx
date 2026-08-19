@@ -8,7 +8,7 @@ import { IconPlus, IconSearch } from '../shared/icons';
 import { useIsMobile } from '../shared/useIsMobile';
 import { LoadError } from '../shared/LoadError';
 import { toast } from '../shared/toast';
-import { INK, INK_MUTE, INK_DIM, LINE, BG_RAISED, FONT_SANS, mono } from '../shared/styles';
+import { INK, INK_MUTE, INK_DIM, LINE, BG_RAISED, FONT_SANS, mono, HOVER } from '../shared/styles';
 import {
   pageHeading, cardStyle, filterTab,
   tableHeader, tableRow, btnPrimary, btnSmall,
@@ -174,7 +174,7 @@ export function CompaniesPage() {
               {companies.map(co => (
                 <div key={co.id} onClick={() => navigate(`/crm/companies/${co.id}`)}
                   style={tableRow(COLS)}
-                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(31,35,40,0.035)'; }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = HOVER; }}
                   onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
                 >
                   <div>

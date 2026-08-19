@@ -22,6 +22,7 @@ import {
   ACCENT, ACCENT_INK,
   FONT_DISPLAY, FONT_MONO,
   mono, inputStyle,
+  BG_RAISED,
 } from '../shared/styles';
 import {
   cardStyle, stageCard,
@@ -182,7 +183,7 @@ export function ContactDetailPage() {
             {contact.tags.split(',').map(t => t.trim()).filter(Boolean).map(tag => (
               <span key={tag} style={{
                 fontSize: 10, padding: '2px 8px', borderRadius: 3,
-                background: 'rgba(245,239,227,0.06)', color: INK_MUTE,
+                background: BG_RAISED, color: INK_MUTE,
                 fontFamily: FONT_MONO,
                 letterSpacing: '0.1em',
               }}>{tag}</span>
@@ -223,8 +224,8 @@ export function ContactDetailPage() {
               contact.deals.map(d => (
                 <div key={d.id} style={{
                   ...stageCard(
-                    STAGE_COLORS[d.stage]?.bg || 'var(--color-ck-raised, #F3F1EE)',
-                    STAGE_COLORS[d.stage]?.color || 'var(--color-ck-line, #E7E4DF)',
+                    STAGE_COLORS[d.stage]?.bg || BG_RAISED,
+                    STAGE_COLORS[d.stage]?.color || LINE,
                   ),
                   padding: '12px 14px', marginBottom: 6,
                   display: 'flex', alignItems: 'center', justifyContent: 'space-between',

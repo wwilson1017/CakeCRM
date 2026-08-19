@@ -9,6 +9,7 @@ import type { ConfirmOptions } from './confirm';
 import {
   BG_ELEV, LINE_STRONG, INK, INK_MUTE, INK_SOFT, ACCENT, ACCENT_INK, CORAL,
   FONT_DISPLAY, FONT_SANS,
+  SCRIM, SHADOW,
 } from './styles';
 
 export function ConfirmHost() {
@@ -54,7 +55,7 @@ function ConfirmCard({ options }: { options: ConfirmOptions }) {
     <div
       onClick={() => settleConfirm(false)}
       style={{
-        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
+        position: 'fixed', inset: 0, background: SCRIM,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         zIndex: 150, padding: 16,
       }}
@@ -69,7 +70,7 @@ function ConfirmCard({ options }: { options: ConfirmOptions }) {
           background: BG_ELEV, borderRadius: 6,
           border: `1px solid ${LINE_STRONG}`,
           padding: 28, width: '100%', maxWidth: 420,
-          boxShadow: '0 8px 40px rgba(31,35,40,0.18)',
+          boxShadow: `0 8px 40px ${SHADOW}`,
         }}
       >
         <h2

@@ -6,12 +6,13 @@ import { useBranding } from '../core/branding/BrandingContext';
 import { useIsMobile } from '../shared/useIsMobile';
 import { MobileMenuDrawer } from '../shared/MobileMenuDrawer';
 import { confirmDialog } from '../shared/confirm';
-import { INK, INK_SOFT, INK_MUTE, LINE, LINE_STRONG, ACCENT, GOLD, FONT_DISPLAY, FONT_SANS } from '../shared/styles';
+import { INK, INK_SOFT, INK_MUTE, LINE, LINE_STRONG, ACCENT, GOLD, FONT_DISPLAY, FONT_SANS, CORAL, tint } from '../shared/styles';
 import { modalOverlay, modalContent, btnPrimary, btnSecondary } from './styles';
 import { AiKeyNudge } from './components/AiKeyNudge';
 import { AssistantLauncher } from './components/AssistantLauncher';
 import { BrandLogo } from './components/BrandLogo';
 import { NotificationsBell } from './components/NotificationsBell';
+import { ThemeToggle } from './components/ThemeToggle';
 import { ActiveRecordProvider } from './RecordContext';
 
 const NAV_ITEMS = [
@@ -64,7 +65,7 @@ function OnboardingDialog({ onLoad, onDismiss }: {
           how CakeCRM works. You can clear it anytime, or start with an empty CRM.
         </p>
         {error && (
-          <p style={{ fontFamily: FONT_SANS, fontSize: 13, color: '#C24141', margin: '12px 0 0' }}>
+          <p style={{ fontFamily: FONT_SANS, fontSize: 13, color: CORAL, margin: '12px 0 0' }}>
             Couldn't load sample data. Please try again.
           </p>
         )}
@@ -109,8 +110,8 @@ function DemoBanner({ onClear, isMobile }: {
 
   return (
     <div style={{
-      background: 'rgba(176,124,46,0.08)',
-      borderBottom: '1px solid rgba(176,124,46,0.15)',
+      background: tint(GOLD, 8),
+      borderBottom: `1px solid ${tint(GOLD, 15)}`,
       padding: isMobile ? '10px 16px' : '8px 28px',
       display: 'flex',
       flexDirection: isMobile ? 'column' : 'row',
@@ -119,7 +120,7 @@ function DemoBanner({ onClear, isMobile }: {
       gap: isMobile ? 8 : 16,
     }}>
       <span style={{
-        fontFamily: FONT_SANS, fontSize: 13, color: error ? '#C24141' : GOLD, lineHeight: 1.4,
+        fontFamily: FONT_SANS, fontSize: 13, color: error ? CORAL : GOLD, lineHeight: 1.4,
       }}>
         {error
           ? 'Failed to clear example data. Please try again.'
@@ -129,8 +130,8 @@ function DemoBanner({ onClear, isMobile }: {
         onClick={handleClear}
         disabled={clearing}
         style={{
-          background: 'rgba(176,124,46,0.12)', color: GOLD,
-          border: '1px solid rgba(176,124,46,0.20)', borderRadius: 4,
+          background: tint(GOLD, 12), color: GOLD,
+          border: `1px solid ${tint(GOLD, 20)}`, borderRadius: 4,
           padding: '4px 14px', fontSize: 12, fontFamily: FONT_SANS,
           fontWeight: 500, cursor: clearing ? 'wait' : 'pointer',
           opacity: clearing ? 0.6 : 1, whiteSpace: 'nowrap',
@@ -282,6 +283,7 @@ export function CrmLayout() {
               </div>
               <div style={{ flex: 1 }} />
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <ThemeToggle />
                 <NotificationsBell />
                 <Link to="/crm/settings" style={actionLink}>Settings</Link>
                 <Link to="/setup" style={actionLink}>AI Setup</Link>
@@ -294,7 +296,10 @@ export function CrmLayout() {
           {isMobile && (
             <>
               <div style={{ flex: 1 }} />
-              <NotificationsBell />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <ThemeToggle />
+                <NotificationsBell />
+              </div>
             </>
           )}
         </div>

@@ -2,12 +2,24 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300..700&family=Fraunces:opsz,wght@9..144,300..600&display=swap" rel="stylesheet">
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>CakeCRM</title>
+    <script>
+      // Apply the theme before React loads so a dark-mode reload never flashes white.
+      // Key must match THEME_KEY in src/core/theme/useTheme.ts.
+      (function () {
+        var t = null;
+        try {
+          t = localStorage.getItem('cakecrm_theme');
+        } catch (e) {
+          // storage blocked — fall back to the OS preference below
+        }
+        if (t === 'dark' || (!t && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.classList.add('dark');
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

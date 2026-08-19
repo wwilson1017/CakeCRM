@@ -2,7 +2,7 @@
 CakeCRM — Branding API endpoints.
 
 GET  /api/branding           — get current branding config
-PUT  /api/branding           — update company name and/or accent color
+PUT  /api/branding           — update company name
 POST /api/branding/logo      — upload logo image (multipart)
 DELETE /api/branding/logo    — remove logo
 GET  /api/branding/logo      — serve logo image
@@ -29,8 +29,9 @@ MAX_LOGO_BYTES = 2 * 1024 * 1024  # 2 MB
 
 
 class BrandingUpdateRequest(BaseModel):
+    # `accent_color` was retired in #54 (the theme is fixed). Pydantic ignores unknown
+    # fields by default, so a stale browser tab still PUTs successfully instead of 422ing.
     company_name: str | None = None
-    accent_color: str | None = None
 
 
 @router.get("")
@@ -41,13 +42,8 @@ async def get_branding(user=Depends(get_current_user)):
 
 @router.put("")
 async def update_branding(body: BrandingUpdateRequest, user=Depends(get_current_user)):
-    """Update company name and/or accent color."""
-    if body.accent_color and not body.accent_color.startswith("#"):
-        raise HTTPException(status_code=400, detail="accent_color must be a hex color (e.g. #6366f1)")
-    return storage.save_config(
-        company_name=body.company_name,
-        accent_color=body.accent_color,
-    )
+    """Update company name."""
+    return storage.save_config(company_name=body.company_name)
 
 
 @router.post("/logo")

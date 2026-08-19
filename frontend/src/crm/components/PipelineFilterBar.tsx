@@ -10,6 +10,7 @@ import { STAGE_ORDER, STAGE_COLORS } from '../constants';
 import {
   INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, BG_RAISED, BG_ELEV,
   ACCENT, ACCENT_INK, FONT_SANS,
+  HOVER, SHADOW,
 } from '../../shared/styles';
 import { IconSearch, IconX, IconChevron } from '../../shared/icons';
 
@@ -184,7 +185,7 @@ function FacetButton({ label, active, children }: { label: string; active: boole
           display: 'flex', alignItems: 'center', gap: 5, padding: '7px 12px', borderRadius: 4,
           fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: FONT_SANS,
           whiteSpace: 'nowrap', transition: 'background 0.15s, color 0.15s',
-          background: active ? ACCENT : 'rgba(31,35,40,0.045)',
+          background: active ? ACCENT : HOVER,
           color: active ? ACCENT_INK : INK_MUTE,
           border: `1px solid ${active ? ACCENT : LINE}`,
         }}
@@ -196,7 +197,7 @@ function FacetButton({ label, active, children }: { label: string; active: boole
         <div style={{
           position: 'absolute', left: 0, top: '100%', marginTop: 4, zIndex: 40,
           background: BG_ELEV, border: `1px solid ${LINE_STRONG}`, borderRadius: 6, padding: 12,
-          boxShadow: '0 8px 40px rgba(31,35,40,0.18)',
+          boxShadow: `0 8px 40px ${SHADOW}`,
         }}>
           {children}
         </div>

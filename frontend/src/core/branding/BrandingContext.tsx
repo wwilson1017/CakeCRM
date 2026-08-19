@@ -1,23 +1,19 @@
 /**
  * CakeCRM — Branding context.
  *
- * Fetches the admin-global branding config once for the authenticated shell and
- * drives the theme's accent through the `--brand-color` / `--brand-color-soft`
- * CSS custom properties (see brandingConfig.ts).
+ * Fetches the admin-global branding config once for the authenticated shell.
  *
- * All DOM mutation lives in a provider-owned effect keyed on `branding`, so a
- * late save/upload that resolves AFTER the provider unmounts only touches React
- * state (ignored on an unmounted tree) and can never re-apply the accent to
- * /login or /setup. The vars are set on `document.documentElement` (not a
- * subtree) so App-level portals (ConfirmHost / ToastViewport) stay on-brand, and
- * removed on unmount so /login and /setup keep the CSS defaults. A failed initial
- * fetch falls back to DEFAULT_BRANDING so the shell (and Settings) stays usable.
+ * State only — this provider mutates no DOM. Issue #54 made the theme fixed, so
+ * there is no accent to apply: every colour resolves through the `--color-ck-*`
+ * tokens in index.css. Branding is company name + logo, both consumed as React
+ * state. A failed initial fetch falls back to DEFAULT_BRANDING so the shell (and
+ * Settings) stays usable.
  */
 
 import { createContext, useContext, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { api } from '../api/client';
-import { applyAccentVars, clearAccentVars, DEFAULT_BRANDING } from './brandingConfig';
+import { DEFAULT_BRANDING } from './brandingConfig';
 import type { BrandingConfig } from './brandingConfig';
 
 interface BrandingContextValue {
@@ -32,7 +28,7 @@ interface BrandingContextValue {
   loadError: boolean;
   /**
    * Merge a partial config via a functional update — used for BOTH a settings save
-   * ({company_name, accent_color}) and logo ops ({has_logo}). Each caller patches
+   * ({company_name}) and logo ops ({has_logo}). Each caller patches
    * only the fields it owns, so overlapping/out-of-order requests can't clobber each
    * other (a delayed save can't restore a stale has_logo, and vice versa).
    */
@@ -62,12 +58,6 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
       .catch(() => { if (!cancelled) setLoadError(true); });
     return () => { cancelled = true; };
   }, []);
-
-  // Apply the accent whenever branding changes; remove it only on unmount.
-  useEffect(() => {
-    if (branding) applyAccentVars(branding.accent_color);
-  }, [branding]);
-  useEffect(() => () => clearAccentVars(), []);
 
   const value: BrandingContextValue = {
     branding,

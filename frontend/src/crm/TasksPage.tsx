@@ -11,6 +11,7 @@ import {
   INK, INK_MUTE, INK_SOFT, INK_DIM, LINE, LINE_STRONG,
   CORAL, SAGE, ACCENT_INK,
   FONT_DISPLAY, mono,
+  HOVER, tint,
 } from '../shared/styles';
 import {
   pageHeading, filterBar, filterTab,
@@ -154,13 +155,13 @@ export function TasksPage() {
                 borderBottom: `1px solid ${LINE}`,
                 opacity: task.completed ? 0.5 : 1,
               }}
-                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(31,35,40,0.035)'; }}
+                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = HOVER; }}
                 onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
               >
                 <button onClick={e => { e.stopPropagation(); toggleComplete(task); }} style={{
                   width: 20, height: 20, borderRadius: 4, flexShrink: 0,
                   border: `1.5px solid ${task.completed ? SAGE : LINE_STRONG}`,
-                  background: task.completed ? 'rgba(46,125,79,0.2)' : 'transparent',
+                  background: task.completed ? tint(SAGE, 20) : 'transparent',
                   cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
                   color: SAGE,
                 }}>
@@ -277,7 +278,7 @@ export function TasksPage() {
                 }}
                 style={{
                   flex: 1, padding: '10px 16px', borderRadius: 6,
-                  background: selectedTask.completed ? 'rgba(31,35,40,0.06)' : SAGE,
+                  background: selectedTask.completed ? HOVER : SAGE,
                   color: selectedTask.completed ? INK : ACCENT_INK,
                   border: 'none', fontWeight: 500, fontSize: 13, cursor: 'pointer',
                 }}

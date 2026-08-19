@@ -10,7 +10,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../../core/api/client';
-import { INK, INK_MUTE, INK_SOFT, LINE, LINE_STRONG, BG_CARD, ACCENT, CORAL, FONT_SANS } from '../../shared/styles';
+import { INK, INK_MUTE, INK_SOFT, LINE, LINE_STRONG, BG_CARD, ACCENT, CORAL, FONT_SANS, ACCENT_INK, SHADOW } from '../../shared/styles';
 
 interface NotificationRow {
   id: string; title: string; message: string; created_at: string; channels_sent: string[];
@@ -130,7 +130,7 @@ export function NotificationsBell() {
         {count > 0 && (
           <span style={{
             position: 'absolute', top: -6, right: -6, minWidth: 16, height: 16, padding: '0 4px',
-            borderRadius: 8, background: ACCENT, color: '#fff', fontSize: 10, fontWeight: 600,
+            borderRadius: 8, background: ACCENT, color: ACCENT_INK, fontSize: 10, fontWeight: 600,
             fontFamily: FONT_SANS, display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}>{count > 99 ? '99+' : count}</span>
         )}
@@ -140,7 +140,7 @@ export function NotificationsBell() {
         <div style={{
           position: 'absolute', top: 40, right: 0, width: 340, maxWidth: '90vw',
           maxHeight: 460, overflowY: 'auto', background: BG_CARD, border: `1px solid ${LINE}`,
-          borderRadius: 8, boxShadow: '0 8px 28px rgba(0,0,0,0.12)', zIndex: 60,
+          borderRadius: 8, boxShadow: `0 8px 28px ${SHADOW}`, zIndex: 60,
         }}>
           {/* Alerts section (only when present) */}
           {alerts.length > 0 && (

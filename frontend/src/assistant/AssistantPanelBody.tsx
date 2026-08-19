@@ -21,6 +21,7 @@ import {
   INK_SOFT,
   LINE,
   SAGE,
+  SHADOW,
 } from '../shared/styles';
 import { IdentitySettings } from './IdentitySettings';
 import { MessageBubble } from './MessageBubble';
@@ -137,7 +138,7 @@ export default function AssistantPanelBody({ recordContext = null }: AssistantPa
       </div>
 
       {showHistory && (
-        <div style={{ position: 'absolute', top: 44, left: 8, right: 8, zIndex: 1, maxHeight: '60%', overflowY: 'auto', background: BG_CARD, border: `1px solid ${LINE}`, borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }}>
+        <div style={{ position: 'absolute', top: 44, left: 8, right: 8, zIndex: 1, maxHeight: '60%', overflowY: 'auto', background: BG_CARD, border: `1px solid ${LINE}`, borderRadius: 10, boxShadow: `0 8px 24px ${SHADOW}` }}>
           {conversations.length === 0 ? (
             <div style={{ padding: 12, color: INK_MUTE, fontSize: 13 }}>No conversations yet.</div>
           ) : (

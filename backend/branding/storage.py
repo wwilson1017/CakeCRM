@@ -1,7 +1,7 @@
 """
 CakeCRM — Branding storage.
 
-Saves/loads branding config (name, accent color) and logo from data/branding/.
+Saves/loads branding config (company name) and logo from data/branding/.
 """
 
 import json
@@ -18,7 +18,6 @@ LOGO_FILE = BRANDING_DIR / "logo.png"
 
 DEFAULT_CONFIG = {
     "company_name": "CakeCRM",
-    "accent_color": "#B03A52",
     "has_logo": False,
 }
 
@@ -34,26 +33,30 @@ def load_config() -> dict:
     persisted config — because a logo can be uploaded before any config write
     (POST /logo touches only the image file). Deriving it here keeps GET /api/branding
     honest after a reload on a fresh install.
+
+    A stale ``accent_color`` left by an install that predates the fixed theme (#54)
+    is stripped on read, so it is never echoed back to a client or re-persisted by
+    the next save.
     """
     ensure_dir()
     if not CONFIG_FILE.exists():
         return {**DEFAULT_CONFIG, "has_logo": LOGO_FILE.exists()}
     try:
         data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-        return {**DEFAULT_CONFIG, **data, "has_logo": LOGO_FILE.exists()}
+        merged = {**DEFAULT_CONFIG, **data, "has_logo": LOGO_FILE.exists()}
+        merged.pop("accent_color", None)  # retired in #54 — the theme is fixed
+        return merged
     except Exception as e:
         logger.warning("Failed to load branding config: %s", e)
         return {**DEFAULT_CONFIG, "has_logo": LOGO_FILE.exists()}
 
 
-def save_config(company_name: str | None = None, accent_color: str | None = None) -> dict:
+def save_config(company_name: str | None = None) -> dict:
     """Update branding config fields. Returns the updated config."""
     ensure_dir()
     current = load_config()
     if company_name is not None:
         current["company_name"] = company_name
-    if accent_color is not None:
-        current["accent_color"] = accent_color
     current.pop("has_logo", None)  # derived field, don't persist
     atomic_write_json(CONFIG_FILE, current)
     return load_config()

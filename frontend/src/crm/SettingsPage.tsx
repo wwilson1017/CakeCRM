@@ -1,27 +1,24 @@
 /**
  * SettingsPage — CRM settings, currently the Branding section (issue #9).
  *
- * Consumes the already-built /api/branding backend: company name, accent color,
- * and logo. Saves push through BrandingContext so the shell (wordmark + accent)
- * restyles live. Mutations stay disabled until the branding fetch resolves.
- * Form fields fall back to the fetched branding until the user edits them (no
- * seeding effect). Logo mutations use patchBranding (functional) so an in-flight
- * name/accent save can't be clobbered by an out-of-order logo response. Ported in
- * shape from chatty's SettingsPanel Branding tab, restyled with CakeCRM tokens.
+ * Consumes the already-built /api/branding backend: company name and logo. Saves
+ * push through BrandingContext so the shell wordmark updates live. Mutations stay
+ * disabled until the branding fetch resolves. Form fields fall back to the fetched
+ * branding until the user edits them (no seeding effect). Logo mutations use
+ * patchBranding (functional) so an in-flight name save can't be clobbered by an
+ * out-of-order logo response. The accent picker was removed in #54 — the theme is
+ * fixed (light/dark), so branding is company name + logo only.
  */
 
 import { useState } from 'react';
 import { api } from '../core/api/client';
 import { useBranding } from '../core/branding/BrandingContext';
-import {
-  DEFAULT_BRANDING, toSixDigitHex,
-} from '../core/branding/brandingConfig';
 import type { BrandingConfig } from '../core/branding/brandingConfig';
 import { useIsMobile } from '../shared/useIsMobile';
 import { toast } from '../shared/toast';
 import { IconX } from '../shared/icons';
 import {
-  INK, INK_MUTE, LINE_STRONG, CORAL, FONT_SANS, FONT_MONO, labelStyle, inputStyle,
+  INK_MUTE, CORAL, FONT_SANS, labelStyle, inputStyle,
 } from '../shared/styles';
 import {
   pagePadding, pageHeading, sectionHeading, cardStyle, btnPrimary, btnSecondary, btnDanger,
@@ -52,23 +49,21 @@ export function SettingsPage() {
 
   // Edits override the fetched value; until edited, fields mirror `branding`.
   const [nameEdit, setNameEdit] = useState<string | null>(null);
-  const [accentEdit, setAccentEdit] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [logoBusy, setLogoBusy] = useState(false);
 
   const nameVal = nameEdit ?? branding?.company_name ?? '';
-  const accentVal = accentEdit ?? toSixDigitHex(branding?.accent_color ?? DEFAULT_BRANDING.accent_color);
 
   async function handleSave() {
     setSaving(true);
     try {
       const updated = await api<BrandingConfig>('/api/branding', {
         method: 'PUT',
-        body: JSON.stringify({ company_name: nameVal.trim(), accent_color: accentVal }),
+        body: JSON.stringify({ company_name: nameVal.trim() }),
       });
       // Patch only the fields this save owns — never has_logo — so a slow save
       // can't clobber a logo uploaded/removed while it was in flight.
-      patchBranding({ company_name: updated.company_name, accent_color: updated.accent_color });
+      patchBranding({ company_name: updated.company_name });
       toast.success('Branding saved.');
     } catch {
       toast.error('Failed to save branding.');
@@ -125,8 +120,8 @@ export function SettingsPage() {
           fontFamily: FONT_SANS, fontSize: 13, color: INK_MUTE, lineHeight: 1.6,
           margin: '0 0 24px', maxWidth: 460,
         }}>
-          Personalize how CakeCRM looks — your company name, accent color, and logo
-          restyle the whole app.
+          Personalize how CakeCRM looks — your company name and logo appear
+          throughout the app.
         </p>
 
         {loadError && (
@@ -149,24 +144,6 @@ export function SettingsPage() {
             placeholder="CakeCRM"
             onChange={e => setNameEdit(e.target.value)}
           />
-        </div>
-
-        <div style={fieldWrap}>
-          <label htmlFor="branding-accent" style={labelStyle}>Accent color</label>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <input
-              id="branding-accent"
-              type="color"
-              value={accentVal}
-              disabled={!loaded}
-              onChange={e => setAccentEdit(e.target.value)}
-              style={{
-                width: 44, height: 36, padding: 0, border: `1px solid ${LINE_STRONG}`,
-                borderRadius: 4, background: 'transparent', cursor: loaded ? 'pointer' : 'default',
-              }}
-            />
-            <span style={{ fontFamily: FONT_MONO, fontSize: 13, color: INK }}>{accentVal}</span>
-          </div>
         </div>
 
         <div style={fieldWrap}>

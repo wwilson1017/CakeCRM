@@ -1,47 +1,118 @@
 @import "tailwindcss";
 
+/* Make dark: variants follow the .dark class instead of the OS media query. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 /*
- * CakeCRM — neutral light theme.
- * The accent is driven by --brand-color so the branding settings
- * (logo / company name / accent color) restyle the whole app.
+ * CakeCRM — one fixed theme, light and dark.
+ *
+ * The neutral tokens are SEMANTIC (bg = page, card = surface, ink = primary text),
+ * so the .dark block below re-themes the whole app by overriding them — no
+ * per-component `dark:` variants needed. Both the Tailwind `ck-*` utilities and
+ * the inline `var(--color-ck-*)` styles in shared/styles.ts + crm/styles.ts
+ * resolve through these properties.
+ *
+ * `.dark` lands on <html>, the same element `:root` matches, so the color-mix()
+ * tokens below re-resolve against the overridden ink/accent automatically.
+ *
+ * The theme is FIXED — there is no user-configurable accent. Branding is company
+ * name + logo only (see /crm/settings).
  */
-
 @theme {
-  --color-ck-bg: #FAF9F7;
-  --color-ck-card: #FFFFFF;
-  --color-ck-raised: #F3F1EE;
+  /* Neutrals — light */
+  --color-ck-bg: #f1f1e8;
+  --color-ck-card: #fffffa;
+  --color-ck-raised: #e8e8dd;
+  --color-ck-line: #e5e7eb;
+  --color-ck-line-strong: #d1d5db;
+  --color-ck-ink: #292929;
+  --color-ck-ink-mute: #666666;
+  --color-ck-ink-soft: #757575;
+  --color-ck-ink-dim: #8f8f8f;
 
-  --color-ck-line: #E7E4DF;
-  --color-ck-line-strong: #D8D4CD;
+  /* Brand ramp — identical in both themes */
+  --color-ck-accent: #e31d3b;
+  --color-ck-accent-dark: #a8302c;
+  --color-ck-accent-deep: #ba3733;
+  --color-ck-accent-maroon: #6f1f1f;
+  --color-ck-accent-wine: #710606;
+  --color-ck-accent-ink: #ffffff;
+  --color-ck-accent-soft: color-mix(in srgb, var(--color-ck-accent) 9%, transparent);
 
-  --color-ck-ink: #1F2328;
-  --color-ck-ink-mute: #5A6069;
-  --color-ck-ink-soft: #878D96;
-  --color-ck-ink-dim: #9AA0A8;
+  /* Status */
+  --color-ck-green: #2e7d4f;
+  --color-ck-amber: #b07c2e;
+  --color-ck-red: #c24141;
+  /* Assistant-authored badges (provenance / AI touch counts) */
+  --color-ck-ai: #3a6cb0;
 
-  --color-ck-accent: var(--brand-color, #B03A52);
-  --color-ck-accent-soft: var(--brand-color-soft, rgba(176, 58, 82, 0.09));
-  --color-ck-accent-ink: #FFFFFF;
+  /* Pipeline stage hues (consumed by crm/constants.ts) */
+  --color-ck-stage-lead: #3b6ea5;
+  --color-ck-stage-qualified: #64748b;
+  --color-ck-stage-proposal: #b07c2e;
+  --color-ck-stage-negotiation: #c26b3c;
+  --color-ck-stage-won: #2e7d4f;
+  --color-ck-stage-lost: #c24141;
 
-  --color-ck-green: #2E7D4F;
-  --color-ck-amber: #B07C2E;
-  --color-ck-red: #C24141;
+  /* Chrome — hover is an ink tint, so it must be declared per theme (a light
+     tint over a dark surface, not a dark tint that would vanish there). */
+  --color-ck-hover: rgba(41, 41, 41, 0.05);
+  --color-ck-scrim: rgba(0, 0, 0, 0.45);
+  --color-ck-shadow: rgba(41, 41, 41, 0.18);
+  --color-ck-scroll-thumb: #d1d5db;
+  --color-ck-scroll-thumb-hover: #b9bcc2;
 
-  --font-display: 'Fraunces', Georgia, serif;
-  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-display: 'Montserrat', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --font-sans: 'Open Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif;
 }
 
-:root {
-  --brand-color: #B03A52;
-  --brand-color-soft: rgba(176, 58, 82, 0.09);
+:root { color-scheme: light; }
+
+/* Warm dark grays to match the warm light palette; brand reds unchanged.
+   Status and stage hues lighten so they stay legible on a dark surface. */
+.dark {
+  color-scheme: dark;
+  --color-ck-bg: #1c1b19;
+  --color-ck-card: #2a2826;
+  --color-ck-raised: #232220;
+  --color-ck-line: #3d3b38;
+  --color-ck-line-strong: #4a4845;
+  --color-ck-ink: #f0efe8;
+  --color-ck-ink-mute: #9c9a93;
+  --color-ck-ink-soft: #7e7c76;
+  --color-ck-ink-dim: #6b6963;
+
+  --color-ck-accent-soft: color-mix(in srgb, var(--color-ck-accent) 20%, transparent);
+
+  --color-ck-green: #5fb585;
+  --color-ck-amber: #d9a441;
+  --color-ck-red: #e8736b;
+  --color-ck-ai: #7fa8dd;
+
+  --color-ck-stage-lead: #7aa8d8;
+  --color-ck-stage-qualified: #9aa5b6;
+  --color-ck-stage-proposal: #d9a441;
+  --color-ck-stage-negotiation: #e0916a;
+  --color-ck-stage-won: #5fb585;
+  --color-ck-stage-lost: #e8736b;
+
+  --color-ck-hover: rgba(240, 239, 232, 0.06);
+  --color-ck-scrim: rgba(0, 0, 0, 0.7);
+  --color-ck-shadow: rgba(0, 0, 0, 0.5);
+  --color-ck-scroll-thumb: #4a4845;
+  --color-ck-scroll-thumb-hover: #5d5a56;
 }
 
 body {
   margin: 0;
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
-  background: #FAF9F7;
-  color: #1F2328;
+  background: var(--color-ck-bg);
+  color: var(--color-ck-ink);
+}
+
+h1, h2, h3, h4, h5, h6, button {
+  font-family: var(--font-display);
 }
 
 button, input, select, textarea, option {
@@ -54,11 +125,11 @@ button, input, select, textarea, option {
 
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #D8D4CD; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #C5C0B8; }
+::-webkit-scrollbar-thumb { background: var(--color-ck-scroll-thumb); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-ck-scroll-thumb-hover); }
 
 input:focus, textarea:focus, select:focus {
-  border-color: var(--brand-color) !important;
+  border-color: var(--color-ck-accent) !important;
   outline: none;
 }
 
