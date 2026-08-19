@@ -8,6 +8,8 @@ sanctioned file-based carve-out; we point its storage paths at ``tmp_path`` so
 the suite stays hermetic and never touches ``backend/data/branding``.
 """
 
+import json
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -71,6 +73,12 @@ def test_get_strips_accent_color_from_legacy_config(client, tmp_path):
     assert body["company_name"] == "Legacy"
     assert "accent_color" not in body
     assert "accent_color" not in client.put("/api/branding", json={"company_name": "Legacy"}).json()
+    # Assert on the ON-DISK artifact, not just the response: every read goes through
+    # load_config(), which strips the key — so a response-only assertion stays green
+    # even if save_config() writes the retired key straight back to config.json.
+    on_disk = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
+    assert "accent_color" not in on_disk
+    assert on_disk["company_name"] == "Legacy"
 
 
 def test_get_derives_has_logo_when_config_corrupt(client, tmp_path):

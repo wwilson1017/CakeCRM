@@ -19,8 +19,8 @@ import {
 import { sectionHeading, btnSecondary } from './styles';
 
 // Aging-bucket fill color: severity ramp keyed on the numeric lower bound, so a
-// backend label rename can't silently drop a bucket back to the brand color. The
-// two oldest buckets stay OFF the rebrandable ACCENT so "stale" reads as a warning.
+// backend label rename can't silently drop a bucket back to the neutral accent. The
+// two oldest buckets stay OFF ACCENT so "stale" reads as a warning, not a highlight.
 function bucketColor(minDays: number): string {
   if (minDays >= 91) return CORAL;
   if (minDays >= 31) return GOLD;

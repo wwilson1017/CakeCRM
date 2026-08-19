@@ -1,3 +1,5 @@
+import { tint } from '../shared/styles';
+
 export const STAGE_ORDER = ['lead', 'qualified', 'proposal', 'negotiation', 'won', 'lost'];
 
 // Open (non-terminal) stages — the single source of truth for "open deal", shared by
@@ -10,7 +12,7 @@ export const OPEN_STAGES = STAGE_ORDER.filter(s => s !== 'won' && s !== 'lost');
 // hand-maintained table, so both themes stay right from one source.
 const stage = (name: string): { color: string; bg: string } => {
   const color = `var(--color-ck-stage-${name})`;
-  return { color, bg: `color-mix(in srgb, ${color} 12%, transparent)` };
+  return { color, bg: tint(color, 12) };
 };
 
 export const STAGE_COLORS: Record<string, { color: string; bg: string }> =

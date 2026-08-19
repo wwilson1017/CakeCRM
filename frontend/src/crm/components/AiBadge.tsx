@@ -4,7 +4,8 @@ import { AI_BLUE, AI_BLUE_SOFT } from './badges';
 // Small "AI" pill shown next to a field the assistant populated (issue #16), with an
 // optional inline Confirm affordance. Rewritten from cake_os's Tailwind AiBadge to
 // CakeCRM's inline-style idiom (matches badges.tsx). The AI_BLUE token (from badges.tsx)
-// is a fixed informational blue — deliberately not ACCENT, which is user-rebrandable.
+// is a themed informational blue that lightens under .dark — deliberately not ACCENT,
+// which since #54 means the app's one fixed brand red, not a user-configurable setting.
 
 interface AiBadgeProps {
   source?: string | null;

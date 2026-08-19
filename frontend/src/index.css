@@ -39,7 +39,10 @@
   --color-ck-ink-soft: #757575;
   --color-ck-ink-dim: #8f8f8f;
 
-  /* Brand ramp — identical in both themes */
+  /* Brand ramp — identical in both themes. Issue #54 names these four ramp steps
+     explicitly as fixed design tokens; only `accent` has a consumer today, so they
+     are declared-but-unused ON PURPOSE (deeper reds for future hover/gradient work),
+     not leftovers. `static` below is what guarantees they actually reach the CSS. */
   --color-ck-accent: #e31d3b;
   --color-ck-accent-dark: #a8302c;
   --color-ck-accent-deep: #ba3733;
