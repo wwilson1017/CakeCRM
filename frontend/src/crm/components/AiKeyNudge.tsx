@@ -10,7 +10,7 @@
 
 import { Link } from 'react-router-dom';
 import { IconSparkle, IconX } from '../../shared/icons';
-import { INK, INK_MUTE, ACCENT, ACCENT_INK, ACCENT_SOFT, LINE, FONT_SANS } from '../../shared/styles';
+import { INK, INK_MUTE, ACCENT, ACCENT_TEXT, ACCENT_INK, ACCENT_SOFT, LINE, FONT_SANS } from '../../shared/styles';
 
 export function AiKeyNudge({ onDismiss, isMobile }: {
   onDismiss: () => void; isMobile: boolean;
@@ -30,7 +30,7 @@ export function AiKeyNudge({ onDismiss, isMobile }: {
         display: 'flex', alignItems: 'center', gap: 8,
         fontFamily: FONT_SANS, fontSize: 13, color: INK, lineHeight: 1.4,
       }}>
-        <IconSparkle size={15} style={{ color: ACCENT, flexShrink: 0 }} />
+        <IconSparkle size={15} style={{ color: ACCENT_TEXT, flexShrink: 0 }} />
         <span>
           <strong style={{ fontWeight: 600 }}>Add an AI key to hire your assistant</strong>
           <span style={{ color: INK_MUTE }}> — smart import, drafting, and more.</span>

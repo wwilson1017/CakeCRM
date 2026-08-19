@@ -22,7 +22,8 @@ import { useNavigate } from 'react-router-dom';
 import { AssistantPanelBody } from '../../assistant';
 import { IconBot, IconX } from '../../shared/icons';
 import {
-  INK, INK_MUTE, LINE, BG_CARD, ACCENT, ACCENT_INK, FONT_DISPLAY,
+  INK, INK_MUTE, LINE, BG_CARD, ACCENT, ACCENT_TEXT, ACCENT_INK, FONT_DISPLAY,
+  SCRIM, SHADOW,
 } from '../../shared/styles';
 import { useActiveRecord } from '../RecordContext';
 
@@ -107,7 +108,7 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
               aria-hidden
               style={{
                 position: 'fixed', inset: 0, zIndex: 58,
-                background: 'rgba(31,35,40,0.32)',
+                background: SCRIM,
                 animation: 'ck-fade-in 0.18s ease-out',
               }}
             />
@@ -126,7 +127,7 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
               position: 'fixed', top: 0, bottom: 0, left: 0, zIndex: 59,
               width: 'min(420px, 100vw)',
               background: BG_CARD, borderRight: `1px solid ${LINE}`,
-              boxShadow: '12px 0 32px rgba(31,35,40,0.16)',
+              boxShadow: `12px 0 32px ${SHADOW}`,
               display: 'flex', flexDirection: 'column', overflow: 'hidden',
               outline: 'none',
               transform: open ? 'translateX(0)' : 'translateX(-100%)',
@@ -147,7 +148,7 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
                 display: 'flex', alignItems: 'center', gap: 8,
                 fontFamily: FONT_DISPLAY, fontSize: 16, color: INK,
               }}>
-                <IconBot size={17} style={{ color: ACCENT }} /> Assistant
+                <IconBot size={17} style={{ color: ACCENT_TEXT }} /> Assistant
               </span>
               <button
                 onClick={() => { setOpen(false); btnRef.current?.focus(); }}
@@ -181,7 +182,7 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
           width: 52, height: 52, borderRadius: '50%',
           background: ACCENT, color: ACCENT_INK, border: 'none',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          boxShadow: '0 6px 18px rgba(31,35,40,0.22)',
+          boxShadow: `0 6px 18px ${SHADOW}`,
           cursor: loading ? 'default' : 'pointer',
           opacity: loading ? 0.55 : 1,
         }}

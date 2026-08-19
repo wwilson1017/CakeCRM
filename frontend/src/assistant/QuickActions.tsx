@@ -5,7 +5,7 @@
 // Phrasing rule: Gmail is read + create-draft ONLY — prompts may say "draft",
 // never "send" (SECURITY.md trust guarantee).
 
-import { ACCENT, ACCENT_SOFT, INK_DIM, LINE } from '../shared/styles';
+import { ACCENT_TEXT, ACCENT_SOFT, INK_DIM, LINE } from '../shared/styles';
 import type { ActiveRecordContext, ActiveRecordType } from './types';
 
 // Sales-oriented starters (issue #22). Each maps to a working practice the assistant
@@ -60,7 +60,7 @@ export function QuickActions({ record, onPick, disabled }: QuickActionsProps) {
             disabled={disabled}
             style={{
               fontSize: 12, padding: '4px 10px', borderRadius: 999,
-              border: `1px solid ${LINE}`, background: ACCENT_SOFT, color: ACCENT,
+              border: `1px solid ${LINE}`, background: ACCENT_SOFT, color: ACCENT_TEXT,
               cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.5 : 1,
               fontFamily: 'inherit',
             }}

@@ -9,7 +9,7 @@ import { IconPlus, IconSearch } from '../shared/icons';
 import { useIsMobile } from '../shared/useIsMobile';
 import { LoadError } from '../shared/LoadError';
 import { toast } from '../shared/toast';
-import { INK, INK_MUTE, INK_DIM, LINE, BG_RAISED, ACCENT, FONT_SANS, mono } from '../shared/styles';
+import { INK, INK_MUTE, INK_DIM, LINE, BG_RAISED, ACCENT, ACCENT_TEXT, FONT_SANS, mono, ACCENT_SOFT, HOVER, SHADOW } from '../shared/styles';
 import {
   pageHeading, cardStyle, filterTab,
   tableHeader, tableRow, btnPrimary, btnSecondary, btnSmall,
@@ -171,9 +171,9 @@ export function ContactsPage() {
         {availableTags.length > 0 && (
           <div ref={tagDropdownRef} style={{ position: 'relative', flexShrink: 0 }}>
             <button onClick={() => setTagDropdownOpen(v => !v)} style={{
-              background: tagFilter.length ? 'var(--color-ck-accent-soft, rgba(176,58,82,0.09))' : 'rgba(31,35,40,0.045)',
-              border: `1px solid ${tagFilter.length ? 'var(--color-ck-accent, #B03A52)' : LINE}`,
-              color: tagFilter.length ? ACCENT : INK_MUTE,
+              background: tagFilter.length ? ACCENT_SOFT : HOVER,
+              border: `1px solid ${tagFilter.length ? ACCENT : LINE}`,
+              color: tagFilter.length ? ACCENT_TEXT : INK_MUTE,
               borderRadius: 4, padding: isMobile ? '10px 30px 10px 12px' : '12px 32px 12px 16px',
               fontSize: 14, fontWeight: 500,
               fontFamily: FONT_SANS, cursor: 'pointer', outline: 'none',
@@ -191,7 +191,7 @@ export function ContactsPage() {
                 position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 50,
                 background: BG_RAISED, border: `1px solid ${LINE}`, borderRadius: 6,
                 minWidth: 180, maxHeight: 260, overflowY: 'auto',
-                boxShadow: '0 8px 24px rgba(31,35,40,0.12)',
+                boxShadow: `0 8px 24px ${SHADOW}`,
               }}>
                 {tagFilter.length > 0 && (
                   <button onClick={() => setTagFilter([])} style={{
@@ -209,12 +209,12 @@ export function ContactsPage() {
                       padding: '7px 12px', cursor: 'pointer', fontSize: 13,
                       fontFamily: FONT_SANS, color: checked ? INK : INK_MUTE,
                     }}
-                      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(31,35,40,0.05)'; }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = HOVER; }}
                       onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
                     >
                       <input type="checkbox" checked={checked} onChange={() => setTagFilter(prev =>
                         checked ? prev.filter(x => x !== t) : [...prev, t]
-                      )} style={{ accentColor: 'var(--color-ck-accent, #B03A52)' }} />
+                      )} style={{ accentColor: ACCENT }} />
                       {t}
                     </label>
                   );
@@ -283,7 +283,7 @@ export function ContactsPage() {
               {contacts.map(c => (
                 <div key={c.id} onClick={() => navigate(`/crm/contacts/${c.id}`)}
                   style={tableRow(COLS)}
-                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(31,35,40,0.035)'; }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = HOVER; }}
                   onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
                 >
                   <div>

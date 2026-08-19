@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
 import { subscribeToasts, getToasts, dismissToast } from './toast';
 import type { ToastItem, ToastSeverity } from './toast';
 import { useIsMobile } from './useIsMobile';
-import { BG_ELEV, LINE_STRONG, INK, INK_DIM, CORAL, SAGE, GOLD, FONT_SANS, mono } from './styles';
+import { BG_ELEV, LINE_STRONG, INK, INK_DIM, CORAL, SAGE, GOLD, FONT_SANS, mono, SHADOW } from './styles';
 
 const SEVERITY_COLOR: Record<ToastSeverity, string> = {
   error: CORAL,
@@ -92,7 +92,7 @@ function ToastCard({ item }: { item: ToastItem }) {
         borderLeft: `3px solid ${color}`,
         borderRadius: 8,
         padding: '10px 12px 10px 14px',
-        boxShadow: '0 8px 32px rgba(31,35,40,0.16)',
+        boxShadow: `0 8px 32px ${SHADOW}`,
         animation: 'ck-toast-in 0.18s ease-out',
       }}
     >

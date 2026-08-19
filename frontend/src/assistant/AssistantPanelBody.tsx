@@ -9,7 +9,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { IconAttach, IconBot, IconPlus, IconSettings, IconX } from '../shared/icons';
 import { toast } from '../shared/toast';
 import {
-  ACCENT,
+  ACCENT, ACCENT_TEXT,
   ACCENT_INK,
   ACCENT_SOFT,
   BG_CARD,
@@ -21,6 +21,7 @@ import {
   INK_SOFT,
   LINE,
   SAGE,
+  SHADOW,
 } from '../shared/styles';
 import { IdentitySettings } from './IdentitySettings';
 import { MessageBubble } from './MessageBubble';
@@ -137,7 +138,7 @@ export default function AssistantPanelBody({ recordContext = null }: AssistantPa
       </div>
 
       {showHistory && (
-        <div style={{ position: 'absolute', top: 44, left: 8, right: 8, zIndex: 1, maxHeight: '60%', overflowY: 'auto', background: BG_CARD, border: `1px solid ${LINE}`, borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }}>
+        <div style={{ position: 'absolute', top: 44, left: 8, right: 8, zIndex: 1, maxHeight: '60%', overflowY: 'auto', background: BG_CARD, border: `1px solid ${LINE}`, borderRadius: 10, boxShadow: `0 8px 24px ${SHADOW}` }}>
           {conversations.length === 0 ? (
             <div style={{ padding: 12, color: INK_MUTE, fontSize: 13 }}>No conversations yet.</div>
           ) : (
@@ -244,7 +245,7 @@ export default function AssistantPanelBody({ recordContext = null }: AssistantPa
                   flex: 1, fontSize: 11, padding: '4px 6px', borderRadius: 6, cursor: 'pointer',
                   border: `1px solid ${active ? ACCENT : LINE}`,
                   background: active ? ACCENT_SOFT : 'none',
-                  color: active ? ACCENT : INK_MUTE,
+                  color: active ? ACCENT_TEXT : INK_MUTE,
                   fontWeight: active ? 600 : 400,
                 }}
               >

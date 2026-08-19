@@ -231,11 +231,35 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   nav with Dashboard/Pipeline/Contacts/Tasks, surfaces the assistant as a persistent
   launcher (never the home page), and shows a **dismissible** "add an AI key" nudge —
   never a gate, gated on `!credentials_present`, dismissal tracked on
-  `crm_meta.ai_key_prompt_dismissed`. Branding (company name / accent / logo) is edited
-  at `/crm/settings`, consuming the existing `/api/branding`; the accent is applied
-  app-wide by setting the `--brand-color` CSS variable (`index.css` routes the whole
-  theme's accent through it), so the CRM stays fully usable — and re-themable — with
-  zero AI keys. The launcher opens a **context-aware slide-over drawer** (#14): the
+  `crm_meta.ai_key_prompt_dismissed`. Branding (company name / logo) is edited at
+  `/crm/settings`, consuming the existing `/api/branding`. The **theme itself is fixed**
+  (#54) — one polished CakeCRM look in light and dark, defined as `--color-ck-*` tokens
+  in `index.css` with a `.dark` override block; there is **no user-configurable accent**
+  (`accent_color` was removed from `/api/branding`, and a stale key on disk is stripped
+  on read). The neutral tokens are *semantic* (`bg` = page, `card` = surface, `ink` =
+  primary text), so overriding them under `.dark` re-themes the whole app — login,
+  setup, CRM, assistant, settings — with no per-component `dark:` variants; that block
+  compiles **unlayered**, so it wins over Tailwind's `@layer theme`. Both the Tailwind
+  `ck-*` utilities and the inline `var(--color-ck-*)` styles in `shared/styles.ts` +
+  `crm/styles.ts` resolve through those tokens, and those modules carry **no literal
+  hex/rgba fallbacks** — a fallback would silently pin a light colour into a dark
+  surface. Tints are derived with `color-mix()` off a token (`shared/styles.tint()`),
+  never hand-written rgba — the one exception being the three per-theme chrome tokens
+  (`hover`/`scrim`/`shadow`), declared literally in *each* block because they tint
+  **ink**, not the accent: a single dark tint would vanish on a dark surface. The brand
+  red is identical in both themes as a **fill**, but accent used as *text or an icon*
+  routes through `--color-ck-accent-text` (`ACCENT_TEXT`), which the `.dark` block
+  lightens — the fixed red is only 3.15:1 on the dark card and fails WCAG AA as body
+  text, the same reason the status and stage hues lighten. Fonts are **self-hosted**
+  via `@fontsource` (Montserrat for
+  headings + buttons, Open Sans for body) — no Google Fonts CDN request, so an offline
+  deploy renders correctly; `index.css` also carries a `.dark .hljs*` block because
+  the assistant's `highlight.js` stylesheet is a fixed light theme. The light/dark
+  choice persists in `localStorage`
+  (`cakecrm_theme`) and is applied by a pre-React anti-flash script in `index.html`
+  whose key is a contract with `core/theme/useTheme.ts` — both also keep the
+  `theme-color` meta in sync so mobile browser chrome follows the app. So the CRM stays fully
+  usable — and fully themed — with zero AI keys. The launcher opens a **context-aware slide-over drawer** (#14): the
   open deal/contact/company is published through a shared record context
   (`frontend/src/crm/RecordContext.tsx`, set by the detail pages + `DealDetailSheet`)
   and injected **per-turn** into the assistant's **volatile** system prompt as a
@@ -338,6 +362,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Gmail connection-race hardening (`connection_generation` optimistic lock + CAS on token persist; pending-draft binding through the shared confirm flow; ciphertext CAS on `mark_broken`; atomic clear-and-capture on disconnect/app-replace; capped recovery of attachment-stored text bodies) — **landed #43** across `backend/gmail/*` + `backend/assistant/{engine,history}.py` | Follow-up to #8 (no blueprint — back-port candidate to CAKE OS) |
 | Gmail touch-scan heartbeat job (read-only inbox scan → sender→contact match → idempotent `email` touch logging feeding #16; `gmail_scan_state`/`gmail_scanned_messages`/`gmail_unmatched_correspondents` tables; own `gmail_scan` scheduler job; "create contact?" alerts) — **landed #17** as `backend/gmail_scan/` | New capability (no blueprint — back-port candidate to CAKE OS) |
 | Kanban drag-and-drop | `cake_os/frontend/src/shared/dnd/` |
+| Theme + dark mode (fixed `--color-ck-*` palette, `.dark` semantic-token override, self-hosted Montserrat/Open Sans, `useTheme` + `ThemeToggle`, accent-picker removal) — **landed #54** as `frontend/src/index.css` + `core/theme/useTheme.ts` + `crm/components/ThemeToggle.tsx` | `cake_os/frontend/src/index.css` + `core/theme/useTheme.ts` (read from `origin/master`) |
 | Companies (first-class entity: `companies` table, `company_id` FKs, rollup detail page, text→FK backfill migration) — **landed #13** | `cake_os/backend/apps/crm/company_service.py` |
 | Company link coherence (shared batched `resolve_or_create_company_ids()` resolve-or-auto-create on every ingestion path; contact list/search LEFT JOIN + `company_name`; second one-shot backfill) — **landed #35** | New capability (gate decision on issue #35; shared with the #61 importer) |
 | Chatter/notes (`crm_chatter`) — **landed #15** as `backend/crm/chatter_service.py` + `frontend/src/crm/components/NotesThread.tsx` | `cake_os/backend/apps/crm/chatter_service.py` |

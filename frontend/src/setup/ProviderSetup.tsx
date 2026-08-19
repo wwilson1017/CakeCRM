@@ -73,7 +73,7 @@ export function ProviderSetup() {
               <div>
                 <p className="font-display text-lg text-ck-ink m-0">{p.label}</p>
                 {isActive && (
-                  <span className="text-xs uppercase tracking-wider text-ck-accent">Active</span>
+                  <span className="text-xs uppercase tracking-wider text-ck-accent-text">Active</span>
                 )}
               </div>
 

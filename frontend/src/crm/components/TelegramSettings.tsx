@@ -13,7 +13,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { api } from '../../core/api/client';
-import { FONT_SANS, INK, INK_MUTE, ACCENT, labelStyle, inputStyle } from '../../shared/styles';
+import { FONT_SANS, INK, INK_MUTE, ACCENT_TEXT, labelStyle, inputStyle } from '../../shared/styles';
 import { toast } from '../../shared/toast';
 import { cardStyle, sectionHeading, btnPrimary, btnSecondary, btnDanger } from '../styles';
 
@@ -143,7 +143,7 @@ export function TelegramSettings() {
           />
           <p style={{ fontFamily: FONT_SANS, fontSize: 12, color: INK_MUTE, margin: '8px 0 0' }}>
             Create a bot with{' '}
-            <a href="https://t.me/BotFather" target="_blank" rel="noreferrer" style={{ color: ACCENT }}>@BotFather</a>{' '}
+            <a href="https://t.me/BotFather" target="_blank" rel="noreferrer" style={{ color: ACCENT_TEXT }}>@BotFather</a>{' '}
             and paste the token it gives you.
           </p>
           <div style={{ marginTop: 16 }}>

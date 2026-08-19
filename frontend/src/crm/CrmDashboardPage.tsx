@@ -19,8 +19,8 @@ import {
 import { sectionHeading, btnSecondary } from './styles';
 
 // Aging-bucket fill color: severity ramp keyed on the numeric lower bound, so a
-// backend label rename can't silently drop a bucket back to the brand color. The
-// two oldest buckets stay OFF the rebrandable ACCENT so "stale" reads as a warning.
+// backend label rename can't silently drop a bucket back to the neutral accent. The
+// two oldest buckets stay OFF ACCENT so "stale" reads as a warning, not a highlight.
 function bucketColor(minDays: number): string {
   if (minDays >= 91) return CORAL;
   if (minDays >= 31) return GOLD;
@@ -243,7 +243,7 @@ export function CrmDashboardPage() {
                         <div style={{
                           position: 'absolute', inset: 0,
                           right: `${100 - Math.max(pct, 2)}%`,
-                          background: STAGE_COLORS[stage.stage]?.color || 'var(--color-ck-accent, #B03A52)',
+                          background: STAGE_COLORS[stage.stage]?.color || ACCENT,
                         }} />
                       </div>
                     </>
@@ -264,7 +264,7 @@ export function CrmDashboardPage() {
                         <div style={{
                           position: 'absolute', inset: 0,
                           right: `${100 - Math.max(pct, 2)}%`,
-                          background: STAGE_COLORS[stage.stage]?.color || 'var(--color-ck-accent, #B03A52)',
+                          background: STAGE_COLORS[stage.stage]?.color || ACCENT,
                         }} />
                       </div>
                       <div style={{
@@ -439,9 +439,9 @@ export function CrmDashboardPage() {
                   padding: '14px 16px', marginBottom: 6,
                   display: 'flex', alignItems: 'center', gap: 14,
                   cursor: 'pointer',
-                  background: STAGE_COLORS[deal.stage]?.bg || 'var(--color-ck-raised, #F3F1EE)',
+                  background: STAGE_COLORS[deal.stage]?.bg || BG_RAISED,
                   border: `1px solid ${LINE}`,
-                  borderLeft: `3px solid ${STAGE_COLORS[deal.stage]?.color || 'var(--color-ck-line, #E7E4DF)'}`,
+                  borderLeft: `3px solid ${STAGE_COLORS[deal.stage]?.color || LINE}`,
                   borderRadius: 6,
                 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>

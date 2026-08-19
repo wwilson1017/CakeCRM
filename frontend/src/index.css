@@ -1,50 +1,143 @@
 @import "tailwindcss";
 
+/* Make dark: variants follow the .dark class instead of the OS media query. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 /*
- * CakeCRM — neutral light theme.
- * The accent is driven by --brand-color so the branding settings
- * (logo / company name / accent color) restyle the whole app.
+ * CakeCRM — one fixed theme, light and dark.
+ *
+ * The neutral tokens are SEMANTIC (bg = page, card = surface, ink = primary text),
+ * so the .dark block below re-themes the whole app by overriding them — no
+ * per-component `dark:` variants needed. Both the Tailwind `ck-*` utilities and
+ * the inline `var(--color-ck-*)` styles in shared/styles.ts + crm/styles.ts
+ * resolve through these properties.
+ *
+ * `.dark` lands on <html>, the same element `:root` matches, so the color-mix()
+ * tokens below re-resolve against the overridden ink/accent automatically.
+ *
+ * The theme is FIXED — there is no user-configurable accent. Branding is company
+ * name + logo only (see /crm/settings).
+ *
+ * `static` is load-bearing: by default Tailwind only emits an @theme variable it can
+ * SEE being used, and most of this app reads tokens as inline `var(--color-ck-*)`
+ * strings rather than `ck-*` utility classes. A token whose name is assembled at
+ * runtime (crm/constants.ts builds `--color-ck-stage-${name}`) is invisible to the
+ * source scanner, so it was emitted in the hand-written .dark block below but
+ * tree-shaken out of the light one — every stage colour silently resolved to nothing
+ * in light mode. `static` emits all of them unconditionally and kills that whole class
+ * of bug; the .dark block still wins the cascade because it compiles unlayered.
  */
+@theme static {
+  /* Neutrals — light */
+  --color-ck-bg: #f1f1e8;
+  --color-ck-card: #fffffa;
+  --color-ck-raised: #e8e8dd;
+  --color-ck-line: #e5e7eb;
+  --color-ck-line-strong: #d1d5db;
+  --color-ck-ink: #292929;
+  --color-ck-ink-mute: #666666;
+  --color-ck-ink-soft: #757575;
+  --color-ck-ink-dim: #8f8f8f;
 
-@theme {
-  --color-ck-bg: #FAF9F7;
-  --color-ck-card: #FFFFFF;
-  --color-ck-raised: #F3F1EE;
+  /* Brand ramp — identical in both themes. Issue #54 names these four ramp steps
+     explicitly as fixed design tokens; only `accent` has a consumer today, so they
+     are declared-but-unused ON PURPOSE (deeper reds for future hover/gradient work),
+     not leftovers. `static` below is what guarantees they actually reach the CSS. */
+  --color-ck-accent: #e31d3b;
+  --color-ck-accent-dark: #a8302c;
+  --color-ck-accent-deep: #ba3733;
+  --color-ck-accent-maroon: #6f1f1f;
+  --color-ck-accent-wine: #710606;
+  --color-ck-accent-ink: #ffffff;
+  --color-ck-accent-soft: color-mix(in srgb, var(--color-ck-accent) 9%, transparent);
+  /* Accent used as TEXT or an icon rather than as a fill. Identical to `accent` in
+     light; the .dark block lightens it, because the fixed brand red is only 3.15:1
+     on the dark card and fails WCAG AA as body text. Fills (buttons, bars, borders,
+     focus rings) keep `accent` so the brand red stays identical in both themes. */
+  --color-ck-accent-text: var(--color-ck-accent);
 
-  --color-ck-line: #E7E4DF;
-  --color-ck-line-strong: #D8D4CD;
+  /* Status */
+  --color-ck-green: #2e7d4f;
+  --color-ck-amber: #b07c2e;
+  --color-ck-red: #c24141;
+  /* Assistant-authored badges (provenance / AI touch counts) */
+  --color-ck-ai: #3a6cb0;
 
-  --color-ck-ink: #1F2328;
-  --color-ck-ink-mute: #5A6069;
-  --color-ck-ink-soft: #878D96;
-  --color-ck-ink-dim: #9AA0A8;
+  /* Pipeline stage hues (consumed by crm/constants.ts) */
+  --color-ck-stage-lead: #3b6ea5;
+  --color-ck-stage-qualified: #64748b;
+  --color-ck-stage-proposal: #b07c2e;
+  --color-ck-stage-negotiation: #c26b3c;
+  --color-ck-stage-won: #2e7d4f;
+  --color-ck-stage-lost: #c24141;
 
-  --color-ck-accent: var(--brand-color, #B03A52);
-  --color-ck-accent-soft: var(--brand-color-soft, rgba(176, 58, 82, 0.09));
-  --color-ck-accent-ink: #FFFFFF;
+  /* Chrome — hover is an ink tint, so it must be declared per theme (a light
+     tint over a dark surface, not a dark tint that would vanish there). */
+  --color-ck-hover: rgba(41, 41, 41, 0.05);
+  --color-ck-scrim: rgba(0, 0, 0, 0.45);
+  --color-ck-shadow: rgba(41, 41, 41, 0.18);
+  --color-ck-scroll-thumb: #d1d5db;
+  --color-ck-scroll-thumb-hover: #b9bcc2;
 
-  --color-ck-green: #2E7D4F;
-  --color-ck-amber: #B07C2E;
-  --color-ck-red: #C24141;
-
-  --font-display: 'Fraunces', Georgia, serif;
-  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-display: 'Montserrat', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --font-sans: 'Open Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif;
 }
 
-:root {
-  --brand-color: #B03A52;
-  --brand-color-soft: rgba(176, 58, 82, 0.09);
+:root { color-scheme: light; }
+
+/* Warm dark grays to match the warm light palette; brand reds unchanged.
+   Status and stage hues lighten so they stay legible on a dark surface. */
+.dark {
+  color-scheme: dark;
+  --color-ck-bg: #1c1b19;
+  --color-ck-card: #2a2826;
+  --color-ck-raised: #232220;
+  --color-ck-line: #3d3b38;
+  --color-ck-line-strong: #4a4845;
+  --color-ck-ink: #f0efe8;
+  --color-ck-ink-mute: #9c9a93;
+  --color-ck-ink-soft: #7e7c76;
+  --color-ck-ink-dim: #6b6963;
+
+  --color-ck-accent-soft: color-mix(in srgb, var(--color-ck-accent) 20%, transparent);
+  /* Same rule the status hues below follow: lighten so it stays legible on a dark
+     surface. 5.19:1 on card, 4.51:1 on an accent-soft chip. */
+  --color-ck-accent-text: #f0727f;
+
+  --color-ck-green: #5fb585;
+  --color-ck-amber: #d9a441;
+  --color-ck-red: #e8736b;
+  --color-ck-ai: #7fa8dd;
+
+  --color-ck-stage-lead: #7aa8d8;
+  --color-ck-stage-qualified: #9aa5b6;
+  --color-ck-stage-proposal: #d9a441;
+  --color-ck-stage-negotiation: #e0916a;
+  --color-ck-stage-won: #5fb585;
+  --color-ck-stage-lost: #e8736b;
+
+  --color-ck-hover: rgba(240, 239, 232, 0.06);
+  --color-ck-scrim: rgba(0, 0, 0, 0.7);
+  --color-ck-shadow: rgba(0, 0, 0, 0.5);
+  --color-ck-scroll-thumb: #4a4845;
+  --color-ck-scroll-thumb-hover: #5d5a56;
 }
 
 body {
   margin: 0;
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
-  background: #FAF9F7;
-  color: #1F2328;
+  background: var(--color-ck-bg);
+  color: var(--color-ck-ink);
 }
 
-button, input, select, textarea, option {
+h1, h2, h3, h4, h5, h6, button {
+  font-family: var(--font-display);
+}
+
+/* `button` is deliberately absent: it takes --font-display from the rule above, and
+   listing it here would silently undo that (same specificity, later wins). */
+input, select, textarea, option {
   font-family: inherit;
 }
 
@@ -54,13 +147,47 @@ button, input, select, textarea, option {
 
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #D8D4CD; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #C5C0B8; }
+::-webkit-scrollbar-thumb { background: var(--color-ck-scroll-thumb); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-ck-scroll-thumb-hover); }
 
 input:focus, textarea:focus, select:focus {
-  border-color: var(--brand-color) !important;
+  border-color: var(--color-ck-accent) !important;
   outline: none;
 }
+
+/* Dark-mode syntax highlighting for assistant code blocks.
+   `highlight.js/styles/github.css` (imported by assistant/MarkdownContent) is a fixed
+   LIGHT theme — without this, a fenced code block paints a white slab inside the dark
+   drawer. It is emitted after this file in the bundle, so these rules win on
+   specificity, not order: `.dark .hljs` is (0,2,0) against its (0,1,0). Hues are
+   github-dark's, all >= 4.5:1 on --color-ck-raised. */
+.dark .hljs {
+  color: var(--color-ck-ink);
+  background: transparent;
+}
+.dark .hljs-doctag, .dark .hljs-keyword, .dark .hljs-meta .hljs-keyword,
+.dark .hljs-template-tag, .dark .hljs-template-variable, .dark .hljs-type,
+.dark .hljs-variable.language_ { color: var(--color-ck-accent-text); }
+.dark .hljs-title, .dark .hljs-title.class_, .dark .hljs-title.class_.inherited__,
+.dark .hljs-title.function_ { color: #d2a8ff; }
+.dark .hljs-attr, .dark .hljs-attribute, .dark .hljs-literal, .dark .hljs-meta,
+.dark .hljs-number, .dark .hljs-operator, .dark .hljs-variable,
+.dark .hljs-selector-attr, .dark .hljs-selector-class,
+.dark .hljs-selector-id { color: #79c0ff; }
+.dark .hljs-regexp, .dark .hljs-string,
+.dark .hljs-meta .hljs-string { color: #a5d6ff; }
+.dark .hljs-built_in, .dark .hljs-symbol { color: #ffa657; }
+.dark .hljs-comment, .dark .hljs-code,
+.dark .hljs-formula { color: var(--color-ck-ink-mute); }
+.dark .hljs-name, .dark .hljs-quote, .dark .hljs-selector-tag,
+.dark .hljs-selector-pseudo { color: #7ee787; }
+.dark .hljs-subst { color: var(--color-ck-ink); }
+.dark .hljs-section { color: #79c0ff; font-weight: bold; }
+.dark .hljs-bullet { color: #d9a441; }
+.dark .hljs-emphasis { font-style: italic; }
+.dark .hljs-strong { font-weight: bold; }
+.dark .hljs-addition { color: #7ee787; background-color: #0f5323; }
+.dark .hljs-deletion { color: #ffa198; background-color: #67060c; }
 
 /* Toast slide-in (used by shared/ToastViewport). */
 @keyframes ck-toast-in {

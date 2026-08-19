@@ -1,4 +1,4 @@
-import { FONT_MONO, CORAL, GOLD, SAGE, INK_SOFT, INK_DIM } from '../../shared/styles';
+import { FONT_MONO, CORAL, GOLD, SAGE, INK, INK_SOFT, INK_DIM, AI, tint } from '../../shared/styles';
 
 const badgeBase: React.CSSProperties = {
   fontSize: 12, padding: '4px 12px', borderRadius: 4,
@@ -7,10 +7,10 @@ const badgeBase: React.CSSProperties = {
 };
 
 const PRIORITY_COLORS: Record<string, { bg: string; color: string }> = {
-  urgent: { bg: 'rgba(194,65,65,0.15)', color: '#C24141' },
-  high: { bg: 'rgba(194,65,65,0.12)', color: CORAL },
-  medium: { bg: 'rgba(176,124,46,0.10)', color: GOLD },
-  low: { bg: 'rgba(31,35,40,0.06)', color: INK_SOFT },
+  urgent: { bg: tint(CORAL, 15), color: CORAL },
+  high: { bg: tint(CORAL, 12), color: CORAL },
+  medium: { bg: tint(GOLD, 10), color: GOLD },
+  low: { bg: tint(INK, 6), color: INK_SOFT },
 };
 
 export function PriorityBadge({ priority }: { priority: string }) {
@@ -19,9 +19,9 @@ export function PriorityBadge({ priority }: { priority: string }) {
 }
 
 const STATUS_COLORS: Record<string, { bg: string; color: string }> = {
-  active: { bg: 'rgba(46,125,79,0.12)', color: SAGE },
-  inactive: { bg: 'rgba(31,35,40,0.05)', color: INK_DIM },
-  archived: { bg: 'rgba(194,65,65,0.08)', color: CORAL },
+  active: { bg: tint(SAGE, 12), color: SAGE },
+  inactive: { bg: tint(INK, 5), color: INK_DIM },
+  archived: { bg: tint(CORAL, 8), color: CORAL },
 };
 
 export function StatusBadge({ status }: { status: string }) {
@@ -30,17 +30,17 @@ export function StatusBadge({ status }: { status: string }) {
 }
 
 // Informational "AI" blue, shared by the touch-count high band and AiBadge (issue #16).
-// There is no brand-neutral blue token in shared/styles, and this must NOT be ACCENT
-// (which is user-rebrandable), so it lives here as the single source both files import.
-export const AI_BLUE = '#3A6CB0';
-export const AI_BLUE_SOFT = 'rgba(58,108,176,0.12)';
+// Deliberately not the accent: these badges mean "an AI wrote this", not "brand". Now a
+// themed token (`--color-ck-ai`) so it lightens on dark surfaces like every other hue.
+export const AI_BLUE = AI;
+export const AI_BLUE_SOFT = tint(AI, 12);
 
 // AI-estimated touch count (issue #16). Three "12-touches" bands: 0-4 dead zone (amber),
 // 5-12 closing window (green), 13+ long-cycle (blue). A NULL count renders nothing — the
 // zero-keys degradation rule holds by construction (no count is written without a provider).
 const TOUCH_COLORS = {
-  low: { bg: 'rgba(176,124,46,0.12)', color: GOLD },   // 0-4
-  mid: { bg: 'rgba(46,125,79,0.12)', color: SAGE },    // 5-12
+  low: { bg: tint(GOLD, 12), color: GOLD },   // 0-4
+  mid: { bg: tint(SAGE, 12), color: SAGE },   // 5-12
   high: { bg: AI_BLUE_SOFT, color: AI_BLUE },          // 13+
 } as const;
 
@@ -63,9 +63,9 @@ export function TouchCountPill({ count }: { count?: number | null }) {
 // contacts. Three bands — hot (>=70, green), warm (40-69, amber), cool (<40, muted). A NULL
 // score renders nothing (never-scored rows show no pill). NOT an AI feature — always on.
 const SCORE_COLORS = {
-  cool: { bg: 'rgba(31,35,40,0.06)', color: INK_SOFT },  // <40
-  warm: { bg: 'rgba(176,124,46,0.12)', color: GOLD },    // 40-69
-  hot: { bg: 'rgba(46,125,79,0.12)', color: SAGE },      // >=70
+  cool: { bg: tint(INK, 6), color: INK_SOFT },  // <40
+  warm: { bg: tint(GOLD, 12), color: GOLD },    // 40-69
+  hot: { bg: tint(SAGE, 12), color: SAGE },     // >=70
 } as const;
 
 export function ScorePill({ score, compact }: { score?: number | null; compact?: boolean }) {

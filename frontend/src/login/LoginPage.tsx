@@ -139,7 +139,7 @@ export function LoginPage() {
               <button
                 type="button"
                 onClick={() => { setUseBackupCode(!useBackupCode); setCode(''); setError(''); }}
-                className="bg-transparent border-none text-ck-accent text-sm cursor-pointer p-0"
+                className="bg-transparent border-none text-ck-accent-text text-sm cursor-pointer p-0"
               >
                 {useBackupCode ? 'Use authenticator code' : 'Use a backup code'}
               </button>

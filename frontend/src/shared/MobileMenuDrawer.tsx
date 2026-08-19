@@ -1,6 +1,6 @@
 import type { ComponentType, ReactNode } from 'react';
 import { IconChart, IconUsers, IconBuilding, IconFunnel, IconCheck, IconCalendar, IconSettings, IconSparkle, IconLock } from './icons';
-import { BG_CARD, INK, INK_MUTE, LINE, ACCENT, FONT_DISPLAY } from './styles';
+import { BG_CARD, INK, INK_MUTE, LINE, ACCENT_TEXT, FONT_DISPLAY } from './styles';
 
 interface MobileMenuDrawerProps {
   onClose: () => void;
@@ -57,7 +57,7 @@ export function MobileMenuDrawer({ onClose, navigate, onSignOut, children }: Mob
               padding: '12px 8px', borderRadius: 4, cursor: 'pointer',
               color: INK,
             }}
-            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = ACCENT; }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = ACCENT_TEXT; }}
             onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = INK; }}
           >
             <item.icon size={18} strokeWidth={1.85} />

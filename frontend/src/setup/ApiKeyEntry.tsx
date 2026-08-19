@@ -65,7 +65,7 @@ export function ApiKeyEntry({ provider, onConnected }: Props) {
           href={link.url}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-xs text-ck-accent no-underline hover:underline"
+          className="text-xs text-ck-accent-text no-underline hover:underline"
         >
           {link.label} &rarr;
         </a>

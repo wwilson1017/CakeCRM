@@ -15,6 +15,7 @@ import {
   inputStyle,
   labelStyle,
   LINE,
+  SCRIM,
 } from '../shared/styles';
 
 interface Identity {
@@ -70,7 +71,7 @@ export function IdentitySettings({ onClose }: { onClose: () => void }) {
   return (
     <div
       style={{
-        position: 'absolute', inset: 0, zIndex: 2, background: 'rgba(0,0,0,0.25)',
+        position: 'absolute', inset: 0, zIndex: 2, background: SCRIM,
         display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12,
       }}
       onClick={onClose}

@@ -4,7 +4,7 @@ import { useState } from 'react';
 
 import { IconBot, IconCheck, IconChevronRight, IconX } from '../shared/icons';
 import {
-  ACCENT,
+  ACCENT, ACCENT_TEXT,
   ACCENT_INK,
   ACCENT_SOFT,
   BG_CARD,
@@ -170,7 +170,7 @@ export function MessageBubble({
       <div
         style={{
           flexShrink: 0, width: 26, height: 26, borderRadius: 7, background: ACCENT_SOFT,
-          color: ACCENT, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          color: ACCENT_TEXT, display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}
       >
         <IconBot size={16} />

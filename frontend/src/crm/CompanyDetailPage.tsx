@@ -17,6 +17,7 @@ import {
   INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG,
   FONT_DISPLAY,
   mono,
+  BG_RAISED,
 } from '../shared/styles';
 import {
   cardStyle, stageCard,
@@ -165,8 +166,8 @@ export function CompanyDetailPage() {
               company.deals.map(d => (
                 <div key={d.id} style={{
                   ...stageCard(
-                    STAGE_COLORS[d.stage]?.bg || 'var(--color-ck-raised, #F3F1EE)',
-                    STAGE_COLORS[d.stage]?.color || 'var(--color-ck-line, #E7E4DF)',
+                    STAGE_COLORS[d.stage]?.bg || BG_RAISED,
+                    STAGE_COLORS[d.stage]?.color || LINE,
                   ),
                   padding: '12px 14px', marginBottom: 6,
                   display: 'flex', alignItems: 'center', justifyContent: 'space-between',

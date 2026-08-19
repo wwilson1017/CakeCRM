@@ -19,9 +19,10 @@ import { confirmDialog } from '../shared/confirm';
 import { toast } from '../shared/toast';
 import {
   INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, CORAL, SAGE,
-  ACCENT, ACCENT_INK,
+  ACCENT, ACCENT_TEXT, ACCENT_INK,
   FONT_DISPLAY, FONT_MONO,
   mono, inputStyle,
+  BG_RAISED,
 } from '../shared/styles';
 import {
   cardStyle, stageCard,
@@ -165,7 +166,7 @@ export function ContactDetailPage() {
                 {contact.company_id ? (
                   <span
                     onClick={() => navigate(`/crm/companies/${contact.company_id}`)}
-                    style={{ color: ACCENT, cursor: 'pointer' }}
+                    style={{ color: ACCENT_TEXT, cursor: 'pointer' }}
                   >{contact.company_name || contact.company}</span>
                 ) : contact.company}
                 {' '}{badge('company')}
@@ -182,7 +183,7 @@ export function ContactDetailPage() {
             {contact.tags.split(',').map(t => t.trim()).filter(Boolean).map(tag => (
               <span key={tag} style={{
                 fontSize: 10, padding: '2px 8px', borderRadius: 3,
-                background: 'rgba(245,239,227,0.06)', color: INK_MUTE,
+                background: BG_RAISED, color: INK_MUTE,
                 fontFamily: FONT_MONO,
                 letterSpacing: '0.1em',
               }}>{tag}</span>
@@ -212,7 +213,7 @@ export function ContactDetailPage() {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
             <span style={mono(10, INK_DIM)}>Deals</span>
             <button onClick={() => setShowAddDeal(true)} style={{
-              background: 'none', border: 'none', color: ACCENT,
+              background: 'none', border: 'none', color: ACCENT_TEXT,
               fontSize: 12, cursor: 'pointer',
             }}>+ Add</button>
           </div>
@@ -223,8 +224,8 @@ export function ContactDetailPage() {
               contact.deals.map(d => (
                 <div key={d.id} style={{
                   ...stageCard(
-                    STAGE_COLORS[d.stage]?.bg || 'var(--color-ck-raised, #F3F1EE)',
-                    STAGE_COLORS[d.stage]?.color || 'var(--color-ck-line, #E7E4DF)',
+                    STAGE_COLORS[d.stage]?.bg || BG_RAISED,
+                    STAGE_COLORS[d.stage]?.color || LINE,
                   ),
                   padding: '12px 14px', marginBottom: 6,
                   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -251,7 +252,7 @@ export function ContactDetailPage() {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
             <span style={mono(10, INK_DIM)}>Tasks</span>
             <button onClick={() => setShowAddTask(true)} style={{
-              background: 'none', border: 'none', color: ACCENT,
+              background: 'none', border: 'none', color: ACCENT_TEXT,
               fontSize: 12, cursor: 'pointer',
             }}>+ Add</button>
           </div>

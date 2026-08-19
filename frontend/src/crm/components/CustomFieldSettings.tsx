@@ -5,7 +5,8 @@ import { useIsMobile } from '../../shared/useIsMobile';
 import { confirmDialog } from '../../shared/confirm';
 import { toast } from '../../shared/toast';
 import {
-  INK, INK_MUTE, INK_DIM, CORAL, ACCENT, FONT_SANS, mono, labelStyle, inputStyle,
+  INK, INK_MUTE, INK_DIM, CORAL, ACCENT, ACCENT_TEXT, FONT_SANS, mono, labelStyle, inputStyle,
+  LINE,
 } from '../../shared/styles';
 import { cardStyle, sectionHeading, btnPrimary, btnSecondary, filterTab } from '../styles';
 
@@ -143,7 +144,7 @@ export function CustomFieldSettings() {
           ) : defs.map(f => (
             <div key={f.id} style={{
               display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
-              gap: 12, paddingBottom: 10, borderBottom: '1px solid var(--color-ck-line, #E7E4DF)',
+              gap: 12, paddingBottom: 10, borderBottom: `1px solid ${LINE}`,
             }}>
               <div>
                 <span style={{ fontSize: 13, color: INK }}>{f.name}</span>
@@ -206,7 +207,7 @@ export function CustomFieldSettings() {
         </div>
       ) : (
         <button onClick={() => setShowAdd(true)} style={{
-          background: 'none', border: 'none', color: ACCENT, fontSize: 13,
+          background: 'none', border: 'none', color: ACCENT_TEXT, fontSize: 13,
           cursor: 'pointer', padding: 0, marginTop: 16,
         }}>+ Add custom field</button>
       )}

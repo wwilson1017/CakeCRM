@@ -13,6 +13,7 @@ import { api } from '../../core/api/client';
 import { toast } from '../../shared/toast';
 import {
   INK, INK_MUTE, CORAL, SAGE, FONT_SANS, FONT_MONO, LINE_STRONG, labelStyle, inputStyle,
+  BG_RAISED,
 } from '../../shared/styles';
 import { sectionHeading, cardStyle, btnPrimary, btnSecondary, btnDanger } from '../styles';
 
@@ -142,7 +143,7 @@ export function GmailCard({ isMobile }: { isMobile: boolean }) {
     <div style={fieldWrap}>
       <label style={labelStyle}>Redirect URI (add this to your Google OAuth client)</label>
       <code style={{
-        display: 'block', fontFamily: FONT_MONO, fontSize: 12, color: INK, background: 'var(--color-ck-bg-raised, #F2EFE9)',
+        display: 'block', fontFamily: FONT_MONO, fontSize: 12, color: INK, background: BG_RAISED,
         border: `1px solid ${LINE_STRONG}`, borderRadius: 6, padding: '8px 10px', wordBreak: 'break-all',
       }}>{uri}</code>
     </div>

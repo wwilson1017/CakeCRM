@@ -60,7 +60,7 @@ export function TogetherSetup({ onConnected }: Props) {
         href="https://api.together.xyz/settings/api-keys"
         target="_blank"
         rel="noopener noreferrer"
-        className="text-xs text-ck-accent no-underline hover:underline"
+        className="text-xs text-ck-accent-text no-underline hover:underline"
       >
         Get your API key at api.together.xyz &rarr;
       </a>

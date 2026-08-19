@@ -4,7 +4,7 @@ import { api } from '../../core/api/client';
 import { useIsMobile } from '../../shared/useIsMobile';
 import type { CrmActivity } from '../../core/types';
 import { IconPhone, IconMail, IconUsers, IconFile } from '../../shared/icons';
-import { mono, INK, INK_MUTE, INK_SOFT, INK_DIM, LINE, LINE_STRONG, BG_RAISED, ACCENT, ACCENT_INK, FONT_DISPLAY, FONT_SANS } from '../../shared/styles';
+import { mono, INK, INK_MUTE, INK_SOFT, INK_DIM, LINE, LINE_STRONG, BG_RAISED, ACCENT, ACCENT_TEXT, ACCENT_INK, FONT_DISPLAY, FONT_SANS } from '../../shared/styles';
 import { modalOverlay, modalContent, mobileDragHandle, btnDanger } from '../styles';
 import { confirmDialog } from '../../shared/confirm';
 import { toast } from '../../shared/toast';
@@ -91,7 +91,7 @@ export function ActivityTimeline({ activities, onUpdate }: Props) {
             }}>
               <div style={{
                 width: 28, height: 28, borderRadius: 4,
-                background: 'rgba(245,239,227,0.06)',
+                background: BG_RAISED,
                 border: `1px solid ${LINE}`,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 color: INK_MUTE, flexShrink: 0,
@@ -175,7 +175,7 @@ export function ActivityTimeline({ activities, onUpdate }: Props) {
                     <span style={{ ...mono(10) }}>Contact</span>
                     <span
                       onClick={handleNavigateToContact}
-                      style={{ fontSize: 13, color: ACCENT, cursor: 'pointer' }}
+                      style={{ fontSize: 13, color: ACCENT_TEXT, cursor: 'pointer' }}
                     >{selected.contact_name}</span>
                   </div>
                 )}

@@ -1,10 +1,14 @@
 """Hermetic branding API contract tests.
 
-Issue #9 wires the frontend (settings page + shell wordmark/accent) to these
-endpoints, which previously had zero coverage. The branding backend is the
+Issue #9 wires the frontend (settings page + shell wordmark/logo) to these
+endpoints, which previously had zero coverage. Issue #54 retired ``accent_color``
+(the theme is fixed), so the accent round-trip coverage below became stale-key
+and ignored-field coverage instead. The branding backend is the
 sanctioned file-based carve-out; we point its storage paths at ``tmp_path`` so
 the suite stays hermetic and never touches ``backend/data/branding``.
 """
+
+import json
 
 import pytest
 from fastapi import FastAPI
@@ -32,29 +36,49 @@ def client(tmp_path, monkeypatch):
 
 def test_get_returns_defaults(client):
     assert client.get("/api/branding").json() == {
-        "company_name": "CakeCRM", "accent_color": "#B03A52", "has_logo": False,
+        "company_name": "CakeCRM", "has_logo": False,
     }
 
 
-def test_put_partial_update_roundtrips(client):
-    out = client.put(
-        "/api/branding", json={"company_name": "Acme", "accent_color": "#2563EB"}
-    ).json()
-    assert out["company_name"] == "Acme" and out["accent_color"] == "#2563EB"
+def test_put_company_name_roundtrips(client):
+    out = client.put("/api/branding", json={"company_name": "Acme"}).json()
+    assert out["company_name"] == "Acme"
     # persisted across a fresh read
     assert client.get("/api/branding").json()["company_name"] == "Acme"
 
 
-def test_put_single_field_preserves_other(client):
-    # The partial-update branch: updating only accent must not clobber company_name.
-    client.put("/api/branding", json={"company_name": "Acme", "accent_color": "#123456"})
-    out = client.put("/api/branding", json={"accent_color": "#654321"}).json()
+def test_put_omitted_field_preserves_current(client):
+    # The partial-update branch: a PUT that omits company_name must not clear it.
+    client.put("/api/branding", json={"company_name": "Acme"})
+    out = client.put("/api/branding", json={}).json()
     assert out["company_name"] == "Acme"
-    assert out["accent_color"] == "#654321"
 
 
-def test_put_rejects_non_hex_accent(client):
-    assert client.put("/api/branding", json={"accent_color": "blue"}).status_code == 400
+def test_put_ignores_retired_accent_color(client):
+    # #54 removed the accent picker. A stale browser tab still sending accent_color
+    # must succeed (Pydantic drops unknown fields) and must not persist the key.
+    r = client.put("/api/branding", json={"company_name": "Acme", "accent_color": "#2563EB"})
+    assert r.status_code == 200
+    assert "accent_color" not in r.json()
+    assert "accent_color" not in client.get("/api/branding").json()
+
+
+def test_get_strips_accent_color_from_legacy_config(client, tmp_path):
+    # An install that predates #54 has accent_color on disk; it must never be echoed
+    # back to a client, and the next save must not carry it forward.
+    (tmp_path / "config.json").write_text(
+        '{"company_name": "Legacy", "accent_color": "#B03A52"}', encoding="utf-8"
+    )
+    body = client.get("/api/branding").json()
+    assert body["company_name"] == "Legacy"
+    assert "accent_color" not in body
+    assert "accent_color" not in client.put("/api/branding", json={"company_name": "Legacy"}).json()
+    # Assert on the ON-DISK artifact, not just the response: every read goes through
+    # load_config(), which strips the key — so a response-only assertion stays green
+    # even if save_config() writes the retired key straight back to config.json.
+    on_disk = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
+    assert "accent_color" not in on_disk
+    assert on_disk["company_name"] == "Legacy"
 
 
 def test_get_derives_has_logo_when_config_corrupt(client, tmp_path):
