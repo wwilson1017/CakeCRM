@@ -10,6 +10,7 @@ Ported from chatty's SQLite ``crm_lite/client.py`` and translated to Postgres:
 """
 
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 
 from core.postgres import get_connection, pg_execute, pg_fetchall, pg_fetchone
@@ -1306,6 +1307,12 @@ def get_dashboard_stats() -> dict:
     for row in pg_fetchall("SELECT status, COUNT(*) AS count FROM contacts GROUP BY status"):
         contacts_by_status[row["status"]] = row["count"]
 
+    # Company count for the dashboard stat row (issue #76). Unfiltered, matching
+    # total_contacts: companies carry a status but no soft-archive, and the tile is a
+    # "how much is in my CRM" headline, not a pipeline aggregate.
+    companies_row = pg_fetchone("SELECT COUNT(*) AS cnt FROM companies")
+    total_companies = companies_row["cnt"] if companies_row else 0
+
     pipeline_by_stage = pg_fetchall(
         f"""SELECT stage, COUNT(*) AS count, COALESCE(SUM(value), 0) AS total_value
             FROM deals WHERE {LIVE_PREDICATE} GROUP BY stage"""
@@ -1342,6 +1349,7 @@ def get_dashboard_stats() -> dict:
 
     return {
         "total_contacts": total_contacts,
+        "total_companies": total_companies,
         "contacts_by_status": contacts_by_status,
         "pipeline_by_stage": pipeline_by_stage,
         "total_pipeline_value": total_pipeline_value,
@@ -1349,6 +1357,124 @@ def get_dashboard_stats() -> dict:
         "pending_tasks": pending_tasks,
         "recent_activity": recent_activity,
         "top_deals": top_deals,
+    }
+
+
+# ── Weekly Touches (issue #76) ────────────────────────────────────────────────
+#
+# Window resolution mirrors cake_os dashboard_service._resolve_touch_window so a
+# later port diffs cleanly, but resolves UTC calendar days rather than Central: the
+# rest of this module is UTC (see get_dashboard_stats' `today`), and in UTC there is
+# no DST boundary, so the inclusive end-day bound is a plain +1 day instead of the
+# blueprint's add-in-CT-then-convert dance.
+_TOUCH_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# Rows shown under the headline. The card is a KPI, not a deal list — the full
+# drill-down is issue #56.
+WEEKLY_TOUCHES_LIMIT = 10
+
+
+def _parse_touch_date(value: str) -> datetime:
+    """Strict YYYY-MM-DD → that day's UTC midnight.
+
+    The regex rejects shapes ``strptime`` would otherwise accept or coerce
+    (``2026-6-1``, ``20260601``), and ``strptime`` itself rejects impossible dates
+    (``2026-02-30``). Either way a malformed filter raises — surfacing as a 400 —
+    rather than silently resolving to a window the user never asked for.
+    """
+    if not _TOUCH_DATE_RE.match(value or ""):
+        raise ValueError(f"Invalid date '{value}'; expected YYYY-MM-DD")
+    return datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+
+
+def _resolve_touch_window(
+    start: str | None, end: str | None
+) -> tuple[datetime, datetime, str, bool]:
+    """Resolve the [window_start, window_end) UTC bounds, display label, custom flag.
+
+    Neither bound given → the rolling last 7 days. Both given → calendar days,
+    inclusive of the whole end day, so the exclusive bound is the NEXT day's midnight.
+    Exactly one given is an error, not a half-open range: a blank/whitespace param is
+    a cleared filter (treated as absent), so "one present" can only mean the caller
+    meant a custom range and lost half of it.
+    """
+    start = (start or "").strip() or None
+    end = (end or "").strip() or None
+    if start is None and end is None:
+        now = datetime.now(timezone.utc)
+        return now - timedelta(days=7), now, "Last 7 days", False
+    if start is None or end is None:
+        raise ValueError("Custom range requires both start and end dates")
+    start_dt = _parse_touch_date(start)
+    end_dt = _parse_touch_date(end)
+    if end_dt < start_dt:
+        raise ValueError("end date must be on or after start date")
+    return start_dt, end_dt + timedelta(days=1), f"{start} – {end}", True
+
+
+def get_weekly_touches(start: str | None = None, end: str | None = None) -> dict:
+    """Open deals touched in the window, keyed off #16's AI touch counts.
+
+    CakeCRM is single-user, so the blueprint's PER-REP breakdown
+    (cake_os ``dashboard_service.get_weekly_touches``, grouped on ``owner_email``)
+    collapses — there are no owner columns and the rep universe would always be one
+    row. It becomes per-DEAL instead, keeping the blueprint's envelope
+    (``window``/``total_touches``/``total_open_deals``) with ``deals`` where it had
+    ``reps``, so a later multi-user port is a re-grouping rather than a rewrite.
+
+    "Touched in the window" is ``deals.ai_touch_count_at`` — the newest EVIDENCE
+    timestamp behind the stored count (#16), never a wall-clock "computed at". That
+    also supplies the zero-keys gate for free: with no AI provider configured the
+    touch-count worker never runs, so every count stays NULL, ``computed_deals`` is 0,
+    and the card hides itself rather than rendering an empty or erroring panel
+    (product rule: hidden affordance, never an error).
+    """
+    window_start, window_end, label, custom = _resolve_touch_window(start, end)
+
+    # One pass for all three scalars: the denominator (open deals), the numerator
+    # (touched in-window), and computed_deals — the has-anything-been-computed gate,
+    # which counts non-NULL ai_touch_count across ALL open deals, not just in-window
+    # ones. Counting it in-window would hide the card during a quiet week even with a
+    # provider configured, which is a different (and wrong) meaning.
+    totals = pg_fetchone(
+        f"""SELECT COUNT(*) AS open_deals,
+                   COUNT(ai_touch_count) AS computed_deals,
+                   COUNT(*) FILTER (
+                       WHERE ai_touch_count_at >= %s AND ai_touch_count_at < %s
+                   ) AS touched_deals
+            FROM deals
+            WHERE {LIVE_PREDICATE} AND {OPEN_PREDICATE}""",
+        (window_start, window_end),
+    ) or {}
+
+    deals = pg_fetchall(
+        f"""SELECT d.id, d.title, d.value, d.stage,
+                   d.ai_touch_count AS touch_count,
+                   d.ai_touch_count_at AS touched_at,
+                   c.name AS contact_name, co.name AS company_name
+            FROM deals d
+            LEFT JOIN contacts c ON d.contact_id = c.id
+            LEFT JOIN companies co ON d.company_id = co.id
+            WHERE {LIVE_PREDICATE_D} AND {OPEN_PREDICATE_D}
+              AND d.ai_touch_count_at >= %s AND d.ai_touch_count_at < %s
+            ORDER BY d.ai_touch_count DESC NULLS LAST, d.id DESC
+            LIMIT %s""",
+        (window_start, window_end, WEEKLY_TOUCHES_LIMIT),
+    )
+
+    return {
+        "window": {
+            "start": window_start.isoformat(),
+            "end": window_end.isoformat(),
+            "label": label,
+            "custom": custom,
+        },
+        "deals": deals,
+        # `or 0` rather than a dict default: a SQL NULL would make the key present
+        # but None, so a plain .get(k, 0) would hand None straight to the UI.
+        "total_touches": totals.get("touched_deals") or 0,
+        "total_open_deals": totals.get("open_deals") or 0,
+        "computed_deals": totals.get("computed_deals") or 0,
     }
 
 

@@ -159,6 +159,7 @@ export interface CrmFieldValuesResult {
 
 export interface CrmDashboard {
   total_contacts: number;
+  total_companies: number;
   contacts_by_status: Record<string, number>;
   pipeline_by_stage: { stage: string; count: number; total_value: number }[];
   total_pipeline_value: number;
@@ -166,6 +167,29 @@ export interface CrmDashboard {
   pending_tasks: number;
   recent_activity: CrmActivity[];
   top_deals: CrmDeal[];
+}
+
+// GET /api/crm/dashboard/weekly-touches (issue #76). Open deals touched in a
+// window, keyed off #16's AI touch counts. Single-user, so the blueprint's per-rep
+// rows are per-deal here. `computed_deals` is the zero-keys gate: 0 means no touch
+// count has ever been computed (no AI provider), and the card renders nothing.
+export interface CrmWeeklyTouchDeal {
+  id: number;
+  title: string;
+  value: number;
+  stage: string;
+  touch_count: number | null;
+  touched_at: string | null;
+  contact_name: string | null;
+  company_name: string | null;
+}
+
+export interface CrmWeeklyTouches {
+  window: { start: string; end: string; label: string; custom: boolean };
+  deals: CrmWeeklyTouchDeal[];
+  total_touches: number;
+  total_open_deals: number;
+  computed_deals: number;
 }
 
 // GET /api/crm/analytics (issue #20). Keyless SQL analytics; win_rate_pct,

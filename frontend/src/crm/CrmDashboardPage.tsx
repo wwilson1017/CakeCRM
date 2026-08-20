@@ -6,6 +6,7 @@ import { ActivityTimeline } from './components/ActivityTimeline';
 import { DealForm } from './components/DealForm';
 import { DealDetailSheet } from './components/DealDetailSheet';
 import { StatCard } from './components/StatCard';
+import { WeeklyTouchesCard } from './components/WeeklyTouchesCard';
 import { STAGE_COLORS, STAGE_ORDER } from './constants';
 import { WarmHalo } from '../shared/WarmHalo';
 import { useIsMobile } from '../shared/useIsMobile';
@@ -147,6 +148,24 @@ export function CrmDashboardPage() {
         </h1>
       </div>
 
+      {/* Parity stat row (issue #76 — cake_os DashboardTab's four cards). Built from
+          the dashboard payload ALONE, so it survives an analytics fetch failure; the
+          Snapshot below needs /api/crm/analytics and vanishes without it, which is
+          why overdue tasks appears in both places rather than only there. */}
+      <div style={{ padding: `0 ${px} 18px`, position: 'relative', zIndex: 2 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+          <StatCard label="Contacts" value={data.total_contacts.toLocaleString()} />
+          <StatCard label="Companies" value={data.total_companies.toLocaleString()} />
+          <StatCard label="Pipeline value" value={totalPipelineValue} />
+          <StatCard
+            label="Overdue tasks"
+            value={`${data.overdue_tasks}`}
+            sub={`${data.pending_tasks} pending`}
+            color={data.overdue_tasks > 0 ? CORAL : undefined}
+          />
+        </div>
+      </div>
+
       {/* Snapshot (analytics) */}
       {analytics && wl && (
         <div style={{ padding: `0 ${px} 4px`, position: 'relative', zIndex: 2 }}>
@@ -197,6 +216,13 @@ export function CrmDashboardPage() {
           )}
         </div>
       )}
+
+      {/* Weekly touches (issue #76). Self-hiding with zero AI keys, so it owns its
+          own padding — an empty wrapper here would leave a mystery gap on the page
+          it is supposed to be invisible from. */}
+      <WeeklyTouchesCard
+        wrapperStyle={{ padding: `6px ${px} 22px`, position: 'relative', zIndex: 2 }}
+      />
 
       {/* Stage rows */}
       <div style={{ padding: `0 ${px} 28px`, position: 'relative', zIndex: 2 }}>
