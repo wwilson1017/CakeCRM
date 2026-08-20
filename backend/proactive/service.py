@@ -108,12 +108,19 @@ def _maybe_send_digest(now: datetime) -> dict:
     if not claimed:
         return {"skipped": "already_sent_today"}
 
-    summary = collect_digest()
-    title, message = format_digest(summary)
-    from notifications.delivery import deliver_notification
-    deliver_notification(title, message)          # never raises, by contract
-
-    enhanced = _maybe_enhance_digest(summary)
+    # The claim already consumed today's slot, so a failure past this point must NOT
+    # retry (that would be a notification storm on a persistently broken query). It
+    # must, however, stop reporting 'running' forever — /api/heartbeat/status shows
+    # this column, and a permanent 'running' reads as "in flight" rather than "broke".
+    try:
+        summary = collect_digest()
+        title, message = format_digest(summary)
+        from notifications.delivery import deliver_notification
+        deliver_notification(title, message)      # never raises, by contract
+        enhanced = _maybe_enhance_digest(summary)
+    except Exception:
+        pg_execute("UPDATE heartbeat_state SET last_digest_status = 'error' WHERE id = 1")
+        raise                                     # run_proactive_if_due logs it
     pg_execute("UPDATE heartbeat_state SET last_digest_status = 'ok' WHERE id = 1")
     return {"sent": True, "summary": summary, "ai_enhanced": enhanced}
 

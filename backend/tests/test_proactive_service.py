@@ -105,6 +105,23 @@ def test_digest_sends_once_when_claimed(rec, sent, monkeypatch):
     assert sent[0][0] == "Daily pipeline digest"
 
 
+def test_a_failed_digest_records_error_and_does_not_retry_today(rec, sent, monkeypatch):
+    """The claim already consumed today's slot, so a broken digest must not retry —
+    but it must stop reporting 'running', which /status renders as still in flight."""
+    from datetime import datetime, timezone
+    monkeypatch.setattr(ps.settings, "proactive_digest_hour", 8)
+
+    def boom():
+        raise RuntimeError("query broke")
+
+    monkeypatch.setattr(ps, "collect_digest", boom)
+    with pytest.raises(RuntimeError):
+        ps._maybe_send_digest(datetime(2026, 8, 19, 9, 0, tzinfo=timezone.utc))
+    assert any("last_digest_status = 'error'" in s for s, _ in rec.calls)
+    assert not any("last_digest_status = 'ok'" in s for s, _ in rec.calls)
+    assert sent == []
+
+
 # ── digest: keyless baseline vs optional AI ───────────────────────────────────
 
 def test_digest_delivers_with_zero_ai_keys(rec, sent, monkeypatch):
