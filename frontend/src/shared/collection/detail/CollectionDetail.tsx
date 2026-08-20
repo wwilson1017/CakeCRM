@@ -152,9 +152,19 @@ export default function CollectionDetail<T>({
   const fresh = canonical ?? (settled?.status === 'ready' ? settled.item : undefined);
 
   // The one-record memory (see the file docstring). Kept as state and adjusted DURING render —
-  // React's documented alternative to a syncing effect — so no cascading commit is needed. The
-  // write is guarded on `fresh` being present, which is what makes it equivalent to the effect
-  // form it replaces: when `fresh` is undefined (the record just left `items`) nothing is
+  // React's documented alternative to a syncing effect — so no cascading commit is needed.
+  //
+  // INVARIANT THIS RELIES ON: `items` holds stable element identities across renders, changing
+  // only when the data actually changes. The adjustment below settles in one extra render
+  // because the guard compares `lastResolved.item` to `fresh`; a consumer that rebuilt its item
+  // objects on every render would make that comparison never converge and React would report
+  // "too many re-renders". That invariant is not new here — `canonical`'s `useMemo`, the keyed
+  // body remount, and `useCollectionState`'s memos all already depend on it, and the layer's own
+  // `usePageAssembly` satisfies it — but it is written down because this is the one place where
+  // breaking it fails loudly rather than merely wasting work.
+  //
+  // The write is guarded on `fresh` being present, which is what makes it equivalent to the
+  // effect form it replaces: when `fresh` is undefined (the record just left `items`) nothing is
   // written, so `remembered` below still holds what the previous commit painted, which is
   // exactly what that case needs. Cleared on close so a later reopen of the same id is a genuine
   // fetch rather than a resurrection of a record that may be long gone.
