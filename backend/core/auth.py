@@ -62,13 +62,41 @@ def _check_login_rate(ip: str) -> bool:
     return _check_rate(f"login:{ip}", max_attempts=10, window=300)
 
 
+# ── Password epoch (session invalidation) ────────────────────────────────────
+#
+# Every JWT carries the password epoch it was minted under; changing the password
+# bumps it, so sessions on other devices stop working at their next request rather
+# than living on until JWT_EXPIRE_MINUTES. The value is cached in-process — the
+# deploy pins gunicorn --workers 1, and the happy path does ZERO database reads.
+# It is deliberately NOT a bare per-request read: that would put the database on
+# the critical path of every authenticated request, including SSE streaming.
+# A cache miss is self-healing rather than fatal — see get_current_user, which
+# re-reads before rejecting, so even a multi-worker deploy converges instead of
+# spuriously logging people out.
+
+_token_epoch: int | None = None
+
+
+def current_token_epoch() -> int:
+    """The cached epoch. 0 until the lifespan loads it (and in hermetic tests)."""
+    return _token_epoch if _token_epoch is not None else 0
+
+
+def refresh_token_epoch() -> int:
+    """Re-read the epoch from the database and update the cache."""
+    global _token_epoch
+    row = pg_fetchone("SELECT token_epoch FROM auth_credential WHERE id = 1")
+    _token_epoch = int(row["token_epoch"]) if row else 0
+    return _token_epoch
+
+
 # ── JWT helpers ──────────────────────────────────────────────────────────────
 
 def create_access_token(data: dict, expire_minutes: int | None = None) -> str:
-    """Create a signed JWT with the given claims and configured expiry."""
+    """Create a signed JWT with the given claims, the current password epoch, and expiry."""
     minutes = expire_minutes if expire_minutes is not None else settings.jwt.expire_minutes
     expire = datetime.now(timezone.utc) + timedelta(minutes=minutes)
-    to_encode = {**data, "exp": expire}
+    to_encode = {"pwd_epoch": current_token_epoch(), **data, "exp": expire}
     return jwt.encode(to_encode, settings.jwt.secret_key, algorithm=settings.jwt.algorithm)
 
 
@@ -109,6 +137,29 @@ async def get_current_user(request: Request) -> dict:
             detail="2FA verification required",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    # Reject sessions minted before the current password. A token predating this
+    # feature has no claim and reads as epoch 0, which is what it was minted under,
+    # so upgrading does not sign anyone out — the first password change does.
+    claimed_epoch = payload.get("pwd_epoch", 0)
+    if claimed_epoch != current_token_epoch():
+        # Only now touch the database: the cache may simply be stale (another worker
+        # processed the change). Re-read before rejecting so a valid session survives.
+        try:
+            live_epoch = refresh_token_epoch()
+        except Exception:
+            logger.exception("Could not verify the password epoch — rejecting the session")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Session could not be verified",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        if claimed_epoch != live_epoch:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Session ended by a password change",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
 
     return payload
 
@@ -156,6 +207,7 @@ def set_password(current_plain: str, new_plain: str) -> bool:
     validate against the same old credential — the migration seeds the row
     precisely so this lock always has something to hold.
     """
+    global _token_epoch
     new_hash = _hash_password(new_plain)
     with get_connection() as conn:
         cur = conn.cursor()
@@ -169,14 +221,19 @@ def set_password(current_plain: str, new_plain: str) -> bool:
         elif not _verify_env_password(current_plain):
             return False
 
+        # Bump the epoch in the SAME statement as the hash, so a session can never be
+        # left valid against a password that no longer exists.
         cur.execute(
-            """INSERT INTO auth_credential (id, password_hash, updated_at)
-               VALUES (1, %s, now())
+            """INSERT INTO auth_credential (id, password_hash, token_epoch, updated_at)
+               VALUES (1, %s, 1, now())
                ON CONFLICT (id) DO UPDATE SET
                    password_hash = excluded.password_hash,
-                   updated_at = now()""",
+                   token_epoch = auth_credential.token_epoch + 1,
+                   updated_at = now()
+               RETURNING token_epoch""",
             (new_hash,),
         )
+        _token_epoch = int(cur.fetchone()[0])
     return True
 
 
@@ -197,17 +254,23 @@ def apply_password_reset_env() -> None:
     if not reset:
         return
 
+    global _token_epoch
     try:
         with get_connection() as conn:
             cur = conn.cursor()
+            # Bump the epoch too: a rescue is exactly the moment outstanding sessions
+            # (possibly the ones that caused the lockout) must stop working.
             cur.execute(
-                """INSERT INTO auth_credential (id, password_hash, updated_at)
-                   VALUES (1, %s, now())
+                """INSERT INTO auth_credential (id, password_hash, token_epoch, updated_at)
+                   VALUES (1, %s, 1, now())
                    ON CONFLICT (id) DO UPDATE SET
                        password_hash = excluded.password_hash,
-                       updated_at = now()""",
+                       token_epoch = auth_credential.token_epoch + 1,
+                       updated_at = now()
+                   RETURNING token_epoch""",
                 (_hash_password(reset),),
             )
+            _token_epoch = int(cur.fetchone()[0])
     except Exception:
         # Log and keep booting. Raising here would turn a failed rescue attempt into a
         # total outage — worse than staying locked out, since the old password still works.

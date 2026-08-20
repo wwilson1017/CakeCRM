@@ -52,8 +52,11 @@ everything locally, with Postgres via Docker Compose.
 **Settings → Change password**; the new one is stored (bcrypt-hashed) in the
 database, and from then on `AUTH_PASSWORD` is ignored — editing it later won't
 change how you sign in, and won't override your password on the next restart.
-If two-factor authentication is on, changing the password also asks for a code
-and signs your other devices out of their trusted-device status.
+If two-factor authentication is on, changing the password also asks for a code.
+
+**Changing your password signs out every other device immediately** — the tab you
+changed it in stays signed in. Any trusted-device status for two-factor auth is
+cleared too, so other devices re-do 2FA at their next sign-in.
 
 **Locked out?** If someone forgets the password they set in-app, the operator can
 reset it without database access:

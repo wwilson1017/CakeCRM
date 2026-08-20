@@ -164,10 +164,17 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   re-check stays authoritative. It answers a wrong current password with **400, not 401**,
   because the frontend `api()` wrapper treats every 401 as an expired session and
   ejects the user to `/login`. On success it revokes trusted 2FA devices and returns
-  a fresh token; bearer tokens already issued to *other* devices stay valid until
-  they expire (`JWT_EXPIRE_MINUTES`, default 8h) — global JWT invalidation was
-  deliberately declined, since a password-epoch claim would put a DB read on every
-  authenticated request including SSE. `AUTH_PASSWORD_RESET` is the operator's
+  a fresh token. **Changing the password ends every other session immediately**:
+  `auth_credential.token_epoch` is bumped in the *same statement* as the hash and
+  stamped into every JWT as `pwd_epoch` (injected centrally in `create_access_token`,
+  so all four mint sites carry it), and `get_current_user` rejects a token whose epoch
+  is stale. The epoch is cached in-process — the deploy pins `gunicorn --workers 1` and
+  the **happy path does zero DB reads**; it is loaded once in the lifespan. A *mismatch*
+  re-reads before rejecting, so a stale cache (a multi-worker fork) self-heals instead of
+  spuriously signing valid sessions out. A token predating the feature has no claim and
+  reads as epoch 0 — deploying this signs nobody out; the first password change does.
+  `AUTH_PASSWORD_RESET` bumps the epoch too (a rescue must end the sessions that may have
+  caused the lockout). `AUTH_PASSWORD_RESET` is the operator's
   recovery lever, consumed in the lifespan right after `run_migrations()`: it
   overwrites the stored hash on **every** boot while set (a lever that disarms itself
   can only be pulled once) and logs a loud warning to remove it. Login **fails

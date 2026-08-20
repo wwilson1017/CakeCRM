@@ -10,9 +10,14 @@
 -- first password change. Locking an absent row is a no-op, which would let two
 -- concurrent first-time changes both validate against the env password.
 
+-- token_epoch is stamped into every JWT and bumped whenever the password changes,
+-- so sessions on other devices stop working at the next request instead of living
+-- on until JWT_EXPIRE_MINUTES.
+
 CREATE TABLE IF NOT EXISTS auth_credential (
     id            INTEGER PRIMARY KEY CHECK (id = 1),
     password_hash TEXT,
+    token_epoch   INTEGER NOT NULL DEFAULT 0,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
