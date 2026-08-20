@@ -296,7 +296,10 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `passWithNoTests: false`, `allowOnly: false`, and `expect.requireAssertions: true`
   (the last is NOT a vitest default) — a runner that reports "0 tests / exit 0" is a
   permanent silent green, which is worse than no runner because it looks like coverage.
-  `env: { TZ: 'UTC' }` pins the timezone so local and CI agree.
+  `env: { TZ: 'America/Chicago' }` pins the timezone so local and CI agree — deliberately
+  **not** UTC: `crm/pipelineFilters.ts` derives `ymd` from local-date getters because
+  `toISOString()` drifts a day in US evening time, and under a UTC runner that distinction
+  disappears, so a test pinning it could never fail.
 
 ## Don't Do This
 

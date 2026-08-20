@@ -43,9 +43,18 @@ export default defineConfig({
     allowOnly: false,
     expect: { requireAssertions: true },
 
-    // Pin the timezone so local runs and CI agree. Date-derived assertions otherwise pass on one
-    // machine and fail on another purely from the runner's offset. Set declaratively rather than
-    // as a `TZ=… vitest` shell prefix so it is cross-platform and stays out of package.json.
-    env: { TZ: 'UTC' },
+    // Pin the timezone so local runs and CI agree — date-derived assertions otherwise pass on one
+    // machine and fail on another purely from the runner's offset.
+    //
+    // Deliberately NOT 'UTC', which looks like the neutral choice and is the wrong one here.
+    // `crm/pipelineFilters.ts` builds its `ymd` from local-date getters precisely because
+    // `toISOString()` "would drift a day in US evening time" — its own docstring says so. Under a
+    // UTC runner local and UTC agree, so a test pinning that distinction would keep passing even
+    // if someone regressed `ymd` back to `toISOString()`: a guard that cannot fail. Any zone
+    // offset from UTC restores the distinction; this one matches the case the code documents.
+    //
+    // Set declaratively rather than as a `TZ=… vitest` shell prefix so it is cross-platform and
+    // stays out of package.json.
+    env: { TZ: 'America/Chicago' },
   },
 })
