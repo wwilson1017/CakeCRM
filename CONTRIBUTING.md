@@ -50,7 +50,8 @@ by **PostgreSQL** (mandatory — the backend refuses to start without `DATABASE_
    ```
 
 2. **Configure environment** — copy the example and set at least `AUTH_PASSWORD`
-   (the default `DATABASE_URL` already matches docker-compose):
+   (your initial login password — you can change it later in the app at Settings;
+   the default `DATABASE_URL` already matches docker-compose):
 
    ```bash
    cp .env.example .env

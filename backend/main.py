@@ -70,6 +70,12 @@ async def lifespan(app: FastAPI):
     postgres.init_pool()
     postgres.run_migrations()
 
+    # ── Operator password recovery (issue #78) ───────────────────────────────
+    # Consumes AUTH_PASSWORD_RESET, so it must run after the migration that
+    # creates auth_credential.
+    from core.auth import apply_password_reset_env
+    apply_password_reset_env()
+
     # ── AI touch-count worker (issue #16) ────────────────────────────────────
     # The in-process daemon worker marshals its provider calls onto THIS event loop
     # (see crm/touch_count_service.capture_event_loop) so the module-level provider

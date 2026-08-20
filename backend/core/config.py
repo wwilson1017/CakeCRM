@@ -39,8 +39,13 @@ def _positive_int_env(name: str, default: int) -> int:
 
 
 class AuthSettings:
-    # Plaintext or bcrypt-hashed password for single-user login
+    # Bootstrap password (plaintext or bcrypt-hashed). Only consulted while the
+    # auth_credential row holds no hash — once the user sets their own password
+    # in-app, this value is inert. See core.auth.verify_password.
     password: str = os.getenv("AUTH_PASSWORD", "changeme")
+
+    # Operator recovery lever — see core.auth.apply_password_reset_env
+    password_reset: str = os.getenv("AUTH_PASSWORD_RESET", "")
 
 
 class JWTSettings:

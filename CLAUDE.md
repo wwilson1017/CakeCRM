@@ -145,7 +145,29 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   growth). Locally `docker compose up -d`; on Railway the template provisions
   Postgres and injects `DATABASE_URL`. No Redis or other external services.
   Required env vars: `AUTH_PASSWORD` + `DATABASE_URL`; `JWT_SECRET` and
-  `ENCRYPTION_KEY` auto-generate. Schema is owned by `backend/migrations/*.sql`,
+  `ENCRYPTION_KEY` auto-generate. **The login credential is DB-backed** (#78): the
+  `auth_credential` singleton holds a bcrypt hash the logged-in user changes from
+  `/crm/settings`, and `core.auth.verify_password()` resolves DB-hash-first, falling
+  back to `AUTH_PASSWORD` only while that hash IS NULL — so the env var is a
+  *bootstrap* value that goes inert once the user sets their own password, and can
+  never silently override it on a later boot. All four credential checks in the app
+  (login + the three 2FA confirmation endpoints) route through that one function.
+  `POST /api/auth/change-password` verifies the current password and writes the new
+  hash in ONE `SELECT … FOR UPDATE` transaction (`set_password`); the migration
+  **seeds** the singleton row with a NULL hash so that lock always has a row to hold
+  — locking an absent row is a no-op, which would let two concurrent first-time
+  changes both pass. It answers a wrong current password with **400, not 401**,
+  because the frontend `api()` wrapper treats every 401 as an expired session and
+  ejects the user to `/login`. On success it revokes trusted 2FA devices and returns
+  a fresh token; bearer tokens already issued to *other* devices stay valid until
+  they expire (`JWT_EXPIRE_MINUTES`, default 8h) — global JWT invalidation was
+  deliberately declined, since a password-epoch claim would put a DB read on every
+  authenticated request including SSE. `AUTH_PASSWORD_RESET` is the operator's
+  recovery lever, consumed in the lifespan right after `run_migrations()`: it
+  overwrites the stored hash on **every** boot while set (a lever that disarms itself
+  can only be pulled once) and logs a loud warning to remove it. Login **fails
+  closed** — an unreadable credential is a 503, never a fallback to the env var.
+  Schema is owned by `backend/migrations/*.sql`,
   applied automatically at startup in lexicographic order — name migrations
   `YYYYMMDDHHMMSS_<name>.sql` (use `date +%Y%m%d%H%M%S`), never sequential
   prefixes. Access Postgres through `core/postgres.py` helpers
@@ -350,6 +372,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | CakeCRM area | Source |
 |---|---|
 | Product shell (run.py, auth, 2FA, encryption, config, Railway) | `chatty/backend/` + `chatty/run.py` |
+| DB-backed login credential + in-app password change (`auth_credential` singleton, `POST /api/auth/change-password`, `AUTH_PASSWORD_RESET` recovery lever) — **landed #78** as `backend/core/auth.py` + `frontend/src/crm/components/ChangePasswordCard.tsx` | New capability (no blueprint — back-port candidate to CAKE OS) |
 | Postgres pool + migration runner | `cake_os/backend/core/postgres.py` |
 | AI providers + pricing + setup wizard | `chatty/backend/core/providers/`, `chatty/frontend/src/setup/` |
 | CRM core (schema, router, tools, smart import) — **landed #3** as `backend/crm/` + `frontend/src/crm/` + `frontend/src/shared/` | `chatty/backend/integrations/crm_lite/`, `chatty/frontend/src/crm/` |
