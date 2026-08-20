@@ -60,7 +60,12 @@ export function WeeklyTouchesCard({ wrapperStyle }: { wrapperStyle?: CSSProperti
     // new ones land, so applying a filter doesn't blank the card.
     api<CrmWeeklyTouches>(`/api/crm/dashboard/weekly-touches${qs}`)
       .then(d => { if (id === reqId.current) setData(d); })
-      .catch(() => { if (id === reqId.current) setData(null); })
+      // Log before hiding: a 500 from a broken query would otherwise be pixel-identical
+      // to the intended zero-keys hide, so a real regression could ship unnoticed.
+      .catch(err => {
+        console.error('Failed to load weekly touches:', err);
+        if (id === reqId.current) setData(null);
+      })
       .finally(() => { if (id === reqId.current) setLoading(false); });
   }, [applied]);
 

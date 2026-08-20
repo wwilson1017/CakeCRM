@@ -143,6 +143,18 @@ def test_counts_only_live_open_deals(rec):
     assert service.OPEN_PREDICATE_D in rows_sql
 
 
+def test_computed_deals_is_not_scoped_to_the_window(rec):
+    """The gate must stay window-INDEPENDENT. If computed_deals ever gets pulled
+    inside the FILTER that scopes touched_deals, "no provider configured" silently
+    becomes "no touches this week" and the card vanishes during a quiet week on a
+    fully-configured install — the exact failure the hidden-affordance rule forbids."""
+    rec.fetchone_queue = [{"open_deals": 5, "computed_deals": 5, "touched_deals": 0}]
+    service.get_weekly_touches()
+
+    totals_sql = rec.sql_containing("FILTER")
+    assert totals_sql.index("computed_deals") < totals_sql.index("FILTER")
+
+
 def test_computed_deals_is_the_zero_keys_gate(rec):
     """No provider configured → the worker never ran → every count NULL. The payload
     is empty rather than an error, and computed_deals == 0 tells the card to hide."""
