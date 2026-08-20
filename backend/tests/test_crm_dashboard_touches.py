@@ -97,6 +97,14 @@ def test_malformed_dates_are_rejected(bad):
         service._resolve_touch_window(bad, "2026-06-20")
 
 
+def test_max_date_raises_value_error_not_overflow_error():
+    """The inclusive end-day bound adds a day, which overflows at datetime.max. The
+    date picker's year spinner reaches 9999, and OverflowError is NOT a ValueError —
+    so without the guard it escapes the router's handler as an unhandled 500."""
+    with pytest.raises(ValueError):
+        service._resolve_touch_window("9999-12-31", "9999-12-31")
+
+
 def test_reversed_range_is_rejected():
     with pytest.raises(ValueError, match="on or after"):
         service._resolve_touch_window("2026-06-20", "2026-06-16")
@@ -134,13 +142,28 @@ def test_counts_only_live_open_deals(rec):
     rec.fetchone_queue = [{"open_deals": 0, "computed_deals": 0, "touched_deals": 0}]
     service.get_weekly_touches()
 
-    totals_sql = rec.sql_containing("FILTER")
-    assert service.LIVE_PREDICATE in totals_sql
-    assert service.OPEN_PREDICATE in totals_sql
+    for sql in (rec.sql_containing("FILTER"), rec.sql_containing("LEFT JOIN companies")):
+        assert service.LIVE_PREDICATE_D in sql
+        assert service.OPEN_PREDICATE_D in sql
 
+
+def test_window_membership_uses_last_touch_not_the_ai_watermark(rec):
+    """Window membership must come from LAST_TOUCH_SQL (keyless, event-grained), NOT
+    from deals.ai_touch_count_at. That column is #16's stale-write-guard watermark: it
+    only advances when a provider answered, and it falls back to the deal's created_at
+    — so keying the window off it made every provider timeout silently drop a deal from
+    the count, and disagreed with the stale-deal panel on the same page."""
+    rec.fetchone_queue = [{"open_deals": 3, "computed_deals": 3, "touched_deals": 2}]
+    service.get_weekly_touches()
+
+    for sql in (rec.sql_containing("FILTER"), rec.sql_containing("LEFT JOIN companies")):
+        assert "ai_touch_count_at" not in sql
+        assert "GREATEST" in sql  # the LAST_TOUCH_SQL expression
+
+    # The per-deal NUMBER is still #16's count — that is the "#16 data" the issue
+    # asked to key off, and it is what drives the zero-keys gate.
     rows_sql = rec.sql_containing("LEFT JOIN companies")
-    assert service.LIVE_PREDICATE_D in rows_sql
-    assert service.OPEN_PREDICATE_D in rows_sql
+    assert "ai_touch_count AS touch_count" in rows_sql
 
 
 def test_computed_deals_is_not_scoped_to_the_window(rec):

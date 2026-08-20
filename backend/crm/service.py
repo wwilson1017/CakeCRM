@@ -1364,9 +1364,17 @@ def get_dashboard_stats() -> dict:
 #
 # Window resolution mirrors cake_os dashboard_service._resolve_touch_window so a
 # later port diffs cleanly, but resolves UTC calendar days rather than Central: the
-# rest of this module is UTC (see get_dashboard_stats' `today`), and in UTC there is
-# no DST boundary, so the inclusive end-day bound is a plain +1 day instead of the
-# blueprint's add-in-CT-then-convert dance.
+# rest of this module is UTC (see get_dashboard_stats' `today`, which decides overdue
+# against a UTC day), and in UTC there is no DST boundary, so the inclusive end-day
+# bound is a plain +1 day instead of the blueprint's add-in-CT-then-convert dance.
+#
+# simplification: a UTC calendar day is not the viewer's calendar day, so a user
+# several hours off UTC sees a window shifted by their offset. The UI labels the
+# control "UTC" so the number is honest rather than surprising. Upgrade path if that
+# stops being good enough: accept absolute ISO instants (the blueprint's ws/we branch
+# in _resolve_detail_window) and have the card send bounds computed from local
+# midnight — deferred because every other day-boundary in this app is already UTC,
+# and a per-viewer window here would disagree with the overdue-task count above it.
 _TOUCH_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 # Rows shown under the headline. The card is a KPI, not a deal list — the full
@@ -1409,7 +1417,14 @@ def _resolve_touch_window(
     end_dt = _parse_touch_date(end)
     if end_dt < start_dt:
         raise ValueError("end date must be on or after start date")
-    return start_dt, end_dt + timedelta(days=1), f"{start} – {end}", True
+    try:
+        window_end = end_dt + timedelta(days=1)
+    except OverflowError:
+        # datetime.max is 9999-12-31, and the date picker's year spinner reaches it.
+        # OverflowError is NOT a ValueError, so without this it escapes the router's
+        # handler as an unhandled 500 on ordinary user input.
+        raise ValueError(f"Invalid date '{end}'; out of range")
+    return start_dt, window_end, f"{start} – {end}", True
 
 
 def get_weekly_touches(start: str | None = None, end: str | None = None) -> dict:
@@ -1422,12 +1437,26 @@ def get_weekly_touches(start: str | None = None, end: str | None = None) -> dict
     (``window``/``total_touches``/``total_open_deals``) with ``deals`` where it had
     ``reps``, so a later multi-user port is a re-grouping rather than a rewrite.
 
-    "Touched in the window" is ``deals.ai_touch_count_at`` — the newest EVIDENCE
-    timestamp behind the stored count (#16), never a wall-clock "computed at". That
-    also supplies the zero-keys gate for free: with no AI provider configured the
-    touch-count worker never runs, so every count stays NULL, ``computed_deals`` is 0,
-    and the card hides itself rather than rendering an empty or erroring panel
-    (product rule: hidden affordance, never an error).
+    Two different signals, deliberately:
+
+    * **Window membership** is ``LAST_TOUCH_SQL`` — the same keyless GREATEST(edit,
+      newest activity, newest live note) expression the "Needs a touch" panel uses via
+      ``analytics_service.get_stale_deals``. It is exact, event-grained, and needs no
+      provider. It is emphatically NOT ``deals.ai_touch_count_at``: that column is
+      #16's stale-write-guard key (an evidence watermark that falls back to the deal's
+      ``created_at`` and is only advanced when a provider answered and the CAS
+      accepted), so using it here made every provider timeout silently delete a deal
+      from a weekly accountability number — and disagreed with the stale-deal panel
+      200px below on the same page.
+    * **The number shown per deal** is #16's ``ai_touch_count`` — that is the
+      "#16 touch-count data" the issue asked to key off, and it is what supplies the
+      zero-keys gate: with no provider the worker never runs, every count stays NULL,
+      ``computed_deals`` is 0, and the card hides itself rather than rendering an empty
+      or erroring panel (product rule: hidden affordance, never an error).
+
+    Because membership no longer depends on AI coverage, numerator and denominator are
+    both coverage-independent — a half-backfilled install can't report "1 of 40" when
+    the user really touched 15.
     """
     window_start, window_end, label, custom = _resolve_touch_window(start, end)
 
@@ -1436,27 +1465,34 @@ def get_weekly_touches(start: str | None = None, end: str | None = None) -> dict
     # which counts non-NULL ai_touch_count across ALL open deals, not just in-window
     # ones. Counting it in-window would hide the card during a quiet week even with a
     # provider configured, which is a different (and wrong) meaning.
+    # The inner SELECT evaluates LAST_TOUCH_SQL (three correlated subqueries) ONCE per
+    # row rather than once per comparison.
     totals = pg_fetchone(
         f"""SELECT COUNT(*) AS open_deals,
                    COUNT(ai_touch_count) AS computed_deals,
                    COUNT(*) FILTER (
-                       WHERE ai_touch_count_at >= %s AND ai_touch_count_at < %s
+                       WHERE last_touch >= %s AND last_touch < %s
                    ) AS touched_deals
-            FROM deals
-            WHERE {LIVE_PREDICATE} AND {OPEN_PREDICATE}""",
+            FROM (
+                SELECT d.ai_touch_count, {LAST_TOUCH_SQL} AS last_touch
+                FROM deals d
+                WHERE {LIVE_PREDICATE_D} AND {OPEN_PREDICATE_D}
+            ) t""",
         (window_start, window_end),
     ) or {}
 
+    # LATERAL so last_touch is computed once and usable in both WHERE and SELECT.
     deals = pg_fetchall(
         f"""SELECT d.id, d.title, d.value, d.stage,
                    d.ai_touch_count AS touch_count,
-                   d.ai_touch_count_at AS touched_at,
+                   t.last_touch AS touched_at,
                    c.name AS contact_name, co.name AS company_name
             FROM deals d
+            JOIN LATERAL (SELECT {LAST_TOUCH_SQL} AS last_touch) t ON TRUE
             LEFT JOIN contacts c ON d.contact_id = c.id
             LEFT JOIN companies co ON d.company_id = co.id
             WHERE {LIVE_PREDICATE_D} AND {OPEN_PREDICATE_D}
-              AND d.ai_touch_count_at >= %s AND d.ai_touch_count_at < %s
+              AND t.last_touch >= %s AND t.last_touch < %s
             ORDER BY d.ai_touch_count DESC NULLS LAST, d.id DESC
             LIMIT %s""",
         (window_start, window_end, WEEKLY_TOUCHES_LIMIT),
