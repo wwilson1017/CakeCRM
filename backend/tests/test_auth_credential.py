@@ -325,6 +325,23 @@ def test_password_reset_env_overwrites_hash_and_warns(monkeypatch, fake_conn, ca
     assert "REMOVE this variable" in caplog.text
 
 
+def test_password_reset_env_keeps_booting_when_the_write_fails(monkeypatch, caplog):
+    """A failed rescue must not take the app down — the old password still works."""
+    monkeypatch.setattr(auth.settings.auth, "password_reset", "rescue-password")
+
+    def _boom():
+        raise RuntimeError("Postgres pool not initialized")
+
+    monkeypatch.setattr(auth, "get_connection", _boom)
+
+    with caplog.at_level("ERROR"):
+        auth.apply_password_reset_env()  # must not raise
+
+    assert "could not be reset" in caplog.text
+    # The misleading success warning must NOT have been emitted.
+    assert "has been reset to its value" not in caplog.text
+
+
 def test_password_reset_env_applies_short_password_with_extra_warning(monkeypatch, fake_conn, caplog):
     """Refusing a short value would leave a locked-out operator with no lever at all."""
     monkeypatch.setattr(auth.settings.auth, "password_reset", "short")

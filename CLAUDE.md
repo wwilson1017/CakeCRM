@@ -150,13 +150,18 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `/crm/settings`, and `core.auth.verify_password()` resolves DB-hash-first, falling
   back to `AUTH_PASSWORD` only while that hash IS NULL — so the env var is a
   *bootstrap* value that goes inert once the user sets their own password, and can
-  never silently override it on a later boot. All four credential checks in the app
-  (login + the three 2FA confirmation endpoints) route through that one function.
+  never silently override it on a later boot. Every credential check in the app routes
+  through that one function (login, the three 2FA confirmation endpoints, and
+  change-password's pre-check), so the resolution order has exactly one definition.
   `POST /api/auth/change-password` verifies the current password and writes the new
   hash in ONE `SELECT … FOR UPDATE` transaction (`set_password`); the migration
   **seeds** the singleton row with a NULL hash so that lock always has a row to hold
   — locking an absent row is a no-op, which would let two concurrent first-time
-  changes both pass. It answers a wrong current password with **400, not 401**,
+  changes both pass. The endpoint also runs a **non-consuming `verify_password`
+  pre-check before the 2FA code**, because verifying a code spends it (`verify_totp_code`
+  burns the timeslot, `consume_backup_code` destroys a single-use code) and a typo in the
+  current-password field must not cost the user a recovery code; `set_password`'s locked
+  re-check stays authoritative. It answers a wrong current password with **400, not 401**,
   because the frontend `api()` wrapper treats every 401 as an expired session and
   ejects the user to `/login`. On success it revokes trusted 2FA devices and returns
   a fresh token; bearer tokens already issued to *other* devices stay valid until

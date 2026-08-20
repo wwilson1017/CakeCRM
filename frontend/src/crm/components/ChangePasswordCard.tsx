@@ -35,6 +35,7 @@ interface TokenResponse {
 export function ChangePasswordCard({ isMobile }: { isMobile: boolean }) {
   const { applyToken } = useAuth();
   const [twoFactorEnabled, setTwoFactorEnabled] = useState<boolean | null>(null);
+  const [loadError, setLoadError] = useState(false);
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -45,7 +46,7 @@ export function ChangePasswordCard({ isMobile }: { isMobile: boolean }) {
   useEffect(() => {
     api<TwoFactorStatus>('/api/auth/2fa/status')
       .then((s) => setTwoFactorEnabled(s.enabled))
-      .catch(() => setTwoFactorEnabled(null));
+      .catch(() => setLoadError(true));
   }, []);
 
   const loaded = twoFactorEnabled !== null;
@@ -94,6 +95,18 @@ export function ChangePasswordCard({ isMobile }: { isMobile: boolean }) {
       }}>
         Update the password you use to sign in. Must be at least {MIN_PASSWORD_LENGTH} characters.
       </p>
+
+      {loadError && (
+        // The form stays disabled: submitting without knowing whether 2FA is on would
+        // fail server-side anyway, and silently assuming it's off is the riskier guess.
+        <p style={{
+          fontFamily: FONT_SANS, fontSize: 13, color: CORAL, lineHeight: 1.5,
+          margin: '0 0 20px', maxWidth: 460,
+        }}>
+          Couldn't check your two-factor status, so changing your password is
+          unavailable right now. Reload the page to try again.
+        </p>
+      )}
 
       <form onSubmit={handleSubmit}>
         <div style={fieldWrap}>

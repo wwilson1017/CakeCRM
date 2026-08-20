@@ -197,16 +197,25 @@ def apply_password_reset_env() -> None:
     if not reset:
         return
 
-    with get_connection() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            """INSERT INTO auth_credential (id, password_hash, updated_at)
-               VALUES (1, %s, now())
-               ON CONFLICT (id) DO UPDATE SET
-                   password_hash = excluded.password_hash,
-                   updated_at = now()""",
-            (_hash_password(reset),),
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """INSERT INTO auth_credential (id, password_hash, updated_at)
+                   VALUES (1, %s, now())
+                   ON CONFLICT (id) DO UPDATE SET
+                       password_hash = excluded.password_hash,
+                       updated_at = now()""",
+                (_hash_password(reset),),
+            )
+    except Exception:
+        # Log and keep booting. Raising here would turn a failed rescue attempt into a
+        # total outage — worse than staying locked out, since the old password still works.
+        logger.exception(
+            "AUTH_PASSWORD_RESET is set but the password could not be reset. The previous "
+            "password is unchanged; check database connectivity and restart to retry."
         )
+        return
 
     logger.warning(
         "AUTH_PASSWORD_RESET is set — the login password has been reset to its value. "
