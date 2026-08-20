@@ -166,6 +166,16 @@ def test_window_membership_uses_last_touch_not_the_ai_watermark(rec):
     assert "ai_touch_count AS touch_count" in rows_sql
 
 
+def test_creating_a_deal_is_not_a_touch(rec):
+    """create_deal leaves updated_at == created_at, so without this guard a bulk
+    import or a sample-data load reports every brand-new deal as worked."""
+    rec.fetchone_queue = [{"open_deals": 5, "computed_deals": 5, "touched_deals": 0}]
+    service.get_weekly_touches()
+
+    for sql in (rec.sql_containing("FILTER"), rec.sql_containing("LEFT JOIN companies")):
+        assert "<> " in sql and "created_at" in sql
+
+
 def test_computed_deals_is_not_scoped_to_the_window(rec):
     """The gate must stay window-INDEPENDENT. If computed_deals ever gets pulled
     inside the FILTER that scopes touched_deals, "no provider configured" silently
@@ -179,15 +189,16 @@ def test_computed_deals_is_not_scoped_to_the_window(rec):
 
 
 def test_computed_deals_is_the_zero_keys_gate(rec):
-    """No provider configured → the worker never ran → every count NULL. The payload
-    is empty rather than an error, and computed_deals == 0 tells the card to hide."""
-    rec.fetchone_queue = [{"open_deals": 12, "computed_deals": 0, "touched_deals": 0}]
+    """No provider configured → the worker never ran → every ai_touch_count is NULL.
+    The touch COUNTS stay real (membership is keyless); it is computed_deals == 0 that
+    tells the client to hide the card rather than render rows of blank estimates."""
+    rec.fetchone_queue = [{"open_deals": 12, "computed_deals": 0, "touched_deals": 4}]
     out = service.get_weekly_touches()
 
     assert out["computed_deals"] == 0
-    assert out["deals"] == []
-    # The denominator still reports honestly — the CRM has deals, just no AI counts.
-    assert out["total_open_deals"] == 12
+    # Both sides of the ratio still report honestly — the CRM has deals and real
+    # touches, just no AI estimates to put beside them.
+    assert (out["total_touches"], out["total_open_deals"]) == (4, 12)
 
 
 def test_null_scalars_degrade_to_zero_not_none(rec):

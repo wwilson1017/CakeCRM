@@ -1448,6 +1448,14 @@ def get_weekly_touches(start: str | None = None, end: str | None = None) -> dict
       accepted), so using it here made every provider timeout silently delete a deal
       from a weekly accountability number — and disagreed with the stale-deal panel
       200px below on the same page.
+
+      Creation is NOT a touch: ``create_deal`` leaves ``updated_at == created_at``, so
+      without the ``last_touch <> created_at`` guard a fresh import or a sample-data
+      load would report every new deal as worked. The blueprint excludes deal creation
+      for exactly this reason. Note this makes ``LAST_TOUCH_SQL``'s floor on
+      ``d.updated_at`` load-bearing: any future writer that bumps ``updated_at`` on a
+      schedule (rather than on a real edit) would silently read as a touch — which is
+      why ``archive_deal`` deliberately does not bump it.
     * **The number shown per deal** is #16's ``ai_touch_count`` — that is the
       "#16 touch-count data" the issue asked to key off, and it is what supplies the
       zero-keys gate: with no provider the worker never runs, every count stays NULL,
@@ -1465,23 +1473,24 @@ def get_weekly_touches(start: str | None = None, end: str | None = None) -> dict
     # which counts non-NULL ai_touch_count across ALL open deals, not just in-window
     # ones. Counting it in-window would hide the card during a quiet week even with a
     # provider configured, which is a different (and wrong) meaning.
-    # The inner SELECT evaluates LAST_TOUCH_SQL (three correlated subqueries) ONCE per
-    # row rather than once per comparison.
+    # The inner SELECT is for readability — Postgres inlines it, so LAST_TOUCH_SQL's
+    # correlated subqueries are evaluated per comparison, not once. Fine at this scale
+    # (the sibling get_stale_deals scans the same expression on the same page load).
     totals = pg_fetchone(
         f"""SELECT COUNT(*) AS open_deals,
                    COUNT(ai_touch_count) AS computed_deals,
                    COUNT(*) FILTER (
                        WHERE last_touch >= %s AND last_touch < %s
+                         AND last_touch <> created_at
                    ) AS touched_deals
             FROM (
-                SELECT d.ai_touch_count, {LAST_TOUCH_SQL} AS last_touch
+                SELECT d.ai_touch_count, d.created_at, {LAST_TOUCH_SQL} AS last_touch
                 FROM deals d
                 WHERE {LIVE_PREDICATE_D} AND {OPEN_PREDICATE_D}
             ) t""",
         (window_start, window_end),
     ) or {}
 
-    # LATERAL so last_touch is computed once and usable in both WHERE and SELECT.
     deals = pg_fetchall(
         f"""SELECT d.id, d.title, d.value, d.stage,
                    d.ai_touch_count AS touch_count,
@@ -1493,6 +1502,7 @@ def get_weekly_touches(start: str | None = None, end: str | None = None) -> dict
             LEFT JOIN companies co ON d.company_id = co.id
             WHERE {LIVE_PREDICATE_D} AND {OPEN_PREDICATE_D}
               AND t.last_touch >= %s AND t.last_touch < %s
+              AND t.last_touch <> d.created_at
             ORDER BY d.ai_touch_count DESC NULLS LAST, d.id DESC
             LIMIT %s""",
         (window_start, window_end, WEEKLY_TOUCHES_LIMIT),

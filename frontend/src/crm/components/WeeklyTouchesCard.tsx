@@ -98,9 +98,9 @@ export function WeeklyTouchesCard(
         <span style={mono(10, INK_DIM)}>{data.window.label}</span>
       </div>
       <p style={{ fontSize: 12, color: INK_MUTE, margin: '8px 0 14px', maxWidth: 560 }}>
-        Open deals edited, noted, or logged against in this window (UTC days) — however
-        many times, each deal counts once. The number beside each deal is its AI-estimated
-        <em> lifetime</em> touch count, not this window's.
+        Open deals edited, noted, or logged against in this window — however many times,
+        each deal counts once. Creating a deal doesn't count. The number beside each deal
+        is its AI-estimated<em> lifetime</em> touch count, not this window's.
       </p>
 
       {/* Date range filter */}
@@ -134,7 +134,10 @@ export function WeeklyTouchesCard(
             opacity: canApply ? 1 : 0.4, cursor: canApply ? 'pointer' : 'not-allowed',
           }}
         >Apply</button>
-        {data.window.custom && (
+        {/* Gated on `applied`, not on the payload's `custom` flag: if a custom Apply
+            fails, `applied` is set but `data` still describes the old window, and
+            gating on the payload would hide the only control that gets back. */}
+        {(applied !== null || data.window.custom) && (
           <button
             type="button"
             onClick={reset}

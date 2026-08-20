@@ -567,9 +567,11 @@ async def weekly_touches(
     """Open deals touched in the window, from #16's AI touch counts (issue #76).
 
     Omit both params for the rolling last-7-days window; pass BOTH start and end
-    (YYYY-MM-DD, UTC calendar days, end inclusive) for a custom range. With no AI
-    provider configured the payload is simply empty (`computed_deals == 0`) and the
-    card hides itself — never an error.
+    (YYYY-MM-DD, UTC calendar days, end inclusive) for a custom range.
+
+    With no AI provider configured the counts are still real — membership is keyless —
+    but `computed_deals` is 0, which is the client's signal to hide the card rather
+    than render rows of blank estimates. Never an error either way.
     """
     try:
         return crm.get_weekly_touches(start=start, end=end)
