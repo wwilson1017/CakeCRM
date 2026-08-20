@@ -329,6 +329,14 @@ async def change_password(
         verify_totp_code,
     )
 
+    # Check the current password BEFORE the two-factor code, because verifying a code
+    # spends it: verify_totp_code burns the timeslot and consume_backup_code destroys a
+    # single-use backup code. Without this pre-check, one typo in the current-password
+    # field would cost the user a recovery code and return an error anyway. This read is
+    # advisory — set_password below re-checks under the row lock and stays authoritative.
+    if not verify_password(body.current_password):
+        raise HTTPException(status_code=400, detail="Current password is incorrect.")
+
     if is_2fa_enabled():
         code = (body.code or "").strip()
         if not code:
@@ -344,6 +352,8 @@ async def change_password(
             raise HTTPException(status_code=400, detail="Invalid two-factor code.")
 
     if not set_password(body.current_password, new_password):
+        # Lost the race with a concurrent change — the pre-check above passed against a
+        # credential that is no longer current.
         raise HTTPException(status_code=400, detail="Current password is incorrect.")
 
     # Other devices must re-authenticate with 2FA after a password change.

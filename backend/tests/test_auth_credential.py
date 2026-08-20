@@ -32,6 +32,9 @@ def _reset_rate_limiter():
     auth._attempts.clear()
 
 
+CURRENT_PW = "old-password"
+
+
 @pytest.fixture
 def no_2fa(monkeypatch):
     """Default the 2FA seam off, and record trusted-device revocations."""
@@ -40,6 +43,8 @@ def no_2fa(monkeypatch):
     revoked = []
     monkeypatch.setattr(auth_2fa, "is_2fa_enabled", lambda: False)
     monkeypatch.setattr(auth_2fa, "revoke_all_trusted_devices", lambda: revoked.append(True))
+    # The endpoint pre-checks the current password before spending a 2FA code.
+    monkeypatch.setattr(auth, "verify_password", lambda plain: plain == CURRENT_PW)
     return revoked
 
 
@@ -148,7 +153,7 @@ def test_change_password_happy_path(monkeypatch, client, no_2fa):
 
     r = client.post(
         "/api/auth/change-password",
-        json={"current_password": "old-password", "new_password": "new-password"},
+        json={"current_password": CURRENT_PW, "new_password": "new-password"},
     )
     assert r.status_code == 200
     # A fresh token keeps the acting session alive across the change.
@@ -168,10 +173,22 @@ def test_change_password_wrong_current_is_400_not_401(monkeypatch, client, no_2f
     assert "current password" in r.json()["detail"].lower()
 
 
+def test_concurrent_change_losing_the_row_lock_is_reported(monkeypatch, client, no_2fa):
+    """The advisory pre-check can pass and set_password still lose the race; the
+    locked re-check is authoritative, so the caller must still get an error."""
+    monkeypatch.setattr(auth, "set_password", lambda cur, new: False)
+
+    r = client.post(
+        "/api/auth/change-password",
+        json={"current_password": CURRENT_PW, "new_password": "new-password"},
+    )
+    assert r.status_code == 400
+
+
 def test_change_password_rejects_short_password(client, no_2fa):
     r = client.post(
         "/api/auth/change-password",
-        json={"current_password": "old-password", "new_password": "short"},
+        json={"current_password": CURRENT_PW, "new_password": "short"},
     )
     assert r.status_code == 400
     assert str(auth.MIN_PASSWORD_LENGTH) in r.json()["detail"]
@@ -181,7 +198,7 @@ def test_change_password_rejects_over_bcrypt_limit(client, no_2fa):
     """bcrypt ignores bytes past 72, so accepting them would overstate the strength."""
     r = client.post(
         "/api/auth/change-password",
-        json={"current_password": "old-password", "new_password": "a" * 73},
+        json={"current_password": CURRENT_PW, "new_password": "a" * 73},
     )
     assert r.status_code == 400
 
@@ -216,14 +233,17 @@ def with_2fa(monkeypatch):
 
     monkeypatch.setattr(auth_2fa, "is_2fa_enabled", lambda: True)
     monkeypatch.setattr(auth_2fa, "revoke_all_trusted_devices", lambda: None)
-    monkeypatch.setattr(auth, "set_password", lambda cur, new: True)
+    # Both stubs mirror the real semantics — they only accept the current password —
+    # so a test can't pass merely because a stub was unconditionally permissive.
+    monkeypatch.setattr(auth, "set_password", lambda cur, new: cur == CURRENT_PW)
+    monkeypatch.setattr(auth, "verify_password", lambda plain: plain == CURRENT_PW)
     return auth_2fa
 
 
 def test_change_password_requires_code_when_2fa_enabled(client, with_2fa):
     r = client.post(
         "/api/auth/change-password",
-        json={"current_password": "old-password", "new_password": "new-password"},
+        json={"current_password": CURRENT_PW, "new_password": "new-password"},
     )
     assert r.status_code == 400
     assert "two-factor" in r.json()["detail"].lower()
@@ -234,7 +254,7 @@ def test_change_password_accepts_valid_totp(monkeypatch, client, with_2fa):
 
     r = client.post(
         "/api/auth/change-password",
-        json={"current_password": "old-password", "new_password": "new-password", "code": "123456"},
+        json={"current_password": CURRENT_PW, "new_password": "new-password", "code": "123456"},
     )
     assert r.status_code == 200
 
@@ -246,7 +266,7 @@ def test_change_password_accepts_backup_code(monkeypatch, client, with_2fa):
 
     r = client.post(
         "/api/auth/change-password",
-        json={"current_password": "old-password", "new_password": "new-password", "code": "ABCD-1234"},
+        json={"current_password": CURRENT_PW, "new_password": "new-password", "code": "ABCD-1234"},
     )
     assert r.status_code == 200
 
@@ -257,9 +277,28 @@ def test_change_password_rejects_bad_code(monkeypatch, client, with_2fa):
 
     r = client.post(
         "/api/auth/change-password",
-        json={"current_password": "old-password", "new_password": "new-password", "code": "000000"},
+        json={"current_password": CURRENT_PW, "new_password": "new-password", "code": "000000"},
     )
     assert r.status_code == 400
+
+
+def test_wrong_current_password_does_not_spend_the_2fa_code(monkeypatch, client, with_2fa):
+    """A typo in the current-password field must not burn a single-use backup code.
+
+    verify_totp_code marks the timeslot used and consume_backup_code destroys the
+    code, so both must stay unreached until the current password has been checked.
+    """
+    spent = []
+    monkeypatch.setattr(with_2fa, "verify_totp_code", lambda code: spent.append("totp") or True)
+    monkeypatch.setattr(with_2fa, "consume_backup_code", lambda code: spent.append("backup") or True)
+
+    r = client.post(
+        "/api/auth/change-password",
+        json={"current_password": "wrong", "new_password": "new-password", "code": "ABCD-1234"},
+    )
+    assert r.status_code == 400
+    assert "current password" in r.json()["detail"].lower()
+    assert spent == [], f"a 2FA code was consumed on a wrong-password request: {spent}"
 
 
 # ── Operator recovery lever ──────────────────────────────────────────────────
