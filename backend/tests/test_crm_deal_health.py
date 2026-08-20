@@ -270,3 +270,16 @@ def test_pipeline_analytics_counts_each_deal_once_per_stage(rec):
     az.get_pipeline_analytics()
     sql = rec.sql_containing("DISTINCT ON")
     assert "DISTINCT ON (e.deal_id, e.new_stage)" in sql
+
+
+def test_tool_description_states_both_honesty_limits():
+    """Found in real-app verification: a deal created directly into 'lead' writes no
+    stage event, so lead reads entered=0 on a CRM full of leads. That is correct for a
+    TRANSITION funnel but misleading unstated, so the description must say both this and
+    the partial-history limit — those sentences are the fix, not decoration."""
+    from crm.tools import CRM_TOOL_DEFS
+
+    desc = next(d for d in CRM_TOOL_DEFS if d["name"] == "crm_get_pipeline_analytics")["description"]
+    assert "history_covers_window" in desc
+    assert "TRANSITIONS" in desc
+    assert "created directly into a stage" in desc

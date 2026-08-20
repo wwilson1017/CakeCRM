@@ -491,10 +491,16 @@ def get_deal_health(deal_id: int, stale_days: int = DEFAULT_DEAL_STALE_DAYS) -> 
 # The two tools are complementary, not overlapping: crm_analytics = outcomes and
 # activity, crm_get_pipeline_analytics = movement through the funnel.
 #
-# Honesty guard: the log only starts when Phase 1 landed, so a 90-day window can
-# cover a 3-day log. Every response carries `history_since` and `history_days` and
-# the tool description tells the model to state them, rather than let a partial
-# funnel read as a complete one.
+# Two honesty guards, because a funnel that quietly understates is worse than no funnel.
+#
+# 1. The log only starts when Phase 1 landed, so a 90-day window can cover a 3-day log.
+#    Every response carries `history_since`/`history_days`/`history_covers_window`.
+# 2. `create_deal` writes no stage event (it has no old stage to transition from — see
+#    service._write_deal_update), so a deal created directly into 'lead' never counts as
+#    having ENTERED lead. "Entered" therefore means "transitioned into", and the first
+#    stage will read low on a CRM where deals are created rather than moved in. Neither
+#    is worth distorting the data to hide; both are stated in the tool description so the
+#    assistant explains them instead of reporting a misleading zero.
 
 DEFAULT_ANALYTICS_WINDOW_DAYS = 90
 _OPEN_STAGES = ("lead", "qualified", "proposal", "negotiation")

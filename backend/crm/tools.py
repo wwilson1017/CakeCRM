@@ -580,9 +580,13 @@ CRM_TOOL_DEFS = [
             "stuck', 'how long does my sales cycle take', or conversion questions. This "
             "covers MOVEMENT through the pipeline; crm_analytics covers outcomes and "
             "activity volume — use that for win rate, deal sizes, or activity counts. "
-            "The stage history only starts from the date in history_since: when "
-            "history_covers_window is false, say how far back the data actually goes "
-            "instead of presenting the funnel as complete."
+            "Two limits to state rather than paper over: the stage history only starts "
+            "from the date in history_since, so when history_covers_window is false say "
+            "how far back the data actually goes instead of presenting the funnel as "
+            "complete; and 'entered' counts stage TRANSITIONS, so a deal created "
+            "directly into a stage is not counted as having entered it — a low entered "
+            "count for the first stage means few deals moved INTO it, not that few "
+            "deals exist. Use crm_get_pipeline for current counts by stage."
         ),
         "input_schema": {
             "type": "object",
