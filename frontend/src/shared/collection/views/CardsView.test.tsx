@@ -95,10 +95,10 @@ describe('CardsView', () => {
   });
 
   it('keeps the title shrinkable so a long token cannot push the badge out of the card', () => {
- // the blueprint. A flex item defaults to `min-width: auto`, so without `min-w-0` a title holding one
+    // A flex item defaults to `min-width: auto`, so without `min-w-0` a title holding one
     // long unbreakable token refuses to shrink, drives the `shrink-0` badge past the card's
     // content box, and the card's `overflow-hidden` clips the badge — measured at 18 of 210 cards
-    // on Auto Issues, the first adopter to default to this view.
+    // on a sibling surface's board, the first adopter to default to this view.
     //
     // What this test DOES prove: the three classes that constitute the fix are still rendered, so
     // a future tidy-up of the className strings fails here rather than silently in production.

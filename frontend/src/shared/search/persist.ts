@@ -4,16 +4,16 @@
  * `sessionStorage`, not `localStorage`, on purpose: a filter the user forgot they set and
  * that is silently still applied next week is a support call ("the board is missing cards").
  * A filter that survives a refresh and a tab-internal navigation, and dies with the tab, is
- * the behaviour every existing CAKE surface already chose.
+ * the behaviour every existing surface already chose.
  *
- * Keys carry a version suffix by convention (`kanban_cards_filters_v1`) so a future change to
+ * Keys carry a version suffix by convention (`board_filters_v1`) so a future change to
  * the stored SHAPE can bump the key rather than teach every coercion function to migrate.
  * Storing sort under its own key rather than folding it into the filter envelope keeps the
  * two independent, which is what makes adding sort to a surface that already persists filters
  * a no-migration change.
  *
  * URL-param persistence is a legitimate alternative for a surface where a filtered view is
- * worth sharing as a link — `apps/sops` does exactly that and should keep doing it. It is not
+ * worth sharing as a link — a sibling surface does exactly that and should keep doing it. It is not
  * abstracted here: one consumer is not a pattern, and pluggable persistence with a single
  * implementation is a knob with no second setting.
  */

@@ -27,7 +27,7 @@ import { acquireBodyScrollLock } from '../hooks/useBodyScrollLock';
  * **Scroll container.** `overflow-y-auto` lives on the panel element itself, NOT on an inner
  * body div, and the header is `sticky top-0` inside it. That is load-bearing, not styling:
  * a sibling surface's guided close-out bar is a `sticky bottom-0` LAST CHILD of the panel body
- * (`RequestDetailPanel.tsx`), deliberately not a modal of its own so it cannot fork `draft`
+ * (the blueprint's request detail panel), deliberately not a modal of its own so it cannot fork `draft`
  * state or double-mount the signature canvas. Move the scrollport and that bar stops
  * riding the bottom edge.
  *
@@ -306,15 +306,15 @@ export default function DetailModal({
   // Focus lands on `<body>` whenever the focused element stops being focusable, and there is a
   // reachable path in the app today: `the blueprint's card detail panel`'s `mode === 'edit'`
   // ternary unmounts the whole `CardForm` — including the Cancel button the user just pressed —
-  // when it flips back to view. `skills-matrix/ConfirmModal` documents the identical failure
+  // when it flips back to view. A sibling surface's `ConfirmModal` documents the identical failure
   // ("the browser blurs the focused (now-disabled) button to <body>") and fixes it the same way.
   //
   // The gate is `activeElement === document.body`, NOT `ImageLightbox`'s
   // `!root.contains(activeElement)`. That distinction is the whole reason this is safe to have:
   // the broader check would fire while a portaled lightbox legitimately holds focus above us —
   // and since this component keeps its own stack, we cannot tell a lightbox is there — so it
-  // would fight the lightbox for focus on every one of `RequestDetailPanel`'s per-keystroke
-  // renders.
+  // would fight the lightbox for focus on every one of the blueprint's request detail panel's
+  // per-keystroke renders.
   //
   // Be precise about what makes the NARROW check safe, because the obvious claim is false: a
   // lightbox does NOT always hold focus on a descendant of its own root. Its own docstring
@@ -427,8 +427,8 @@ export default function DetailModal({
         // Keeps clicks inside the panel off the wrapper (ConfirmModal's pattern). Note this
         // stops the NATIVE event at React's root container too, so a document-level
         // bubble-phase `click` listener will not fire for clicks in here. MOST click-away hooks
-        // in this repo use `mousedown` and are unaffected, but not all — some libraries
-        // `PalletIdSheet` and `ItemIdSheet` listen for `click`. Neither renders inside a detail
+        // in this repo use `mousedown` and are unaffected, but not all — a couple of sibling
+        // ID-lookup sheets listen for `click`. Neither renders inside a detail
         // overlay today, so there is no live bug; add a `click`-based click-away inside one and
         // it will silently never fire.
         onClick={e => e.stopPropagation()}

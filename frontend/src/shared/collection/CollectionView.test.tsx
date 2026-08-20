@@ -275,7 +275,7 @@ describe('loading / empty', () => {
     expect(document.querySelector('input[type="text"]')).toBeNull();
   });
 
-  it('a deep-link detail still opens over an EMPTY set via loadById (the blueprint regression fix)', async () => {
+  it('a deep-link detail still opens over an EMPTY set via loadById', async () => {
     // A failed/empty list load must not kill a deep link: the detail resolves the selected id
     // through loadById even though `items` is empty and the surface shows its EmptyState.
     function DeepLinkPage() {
@@ -310,8 +310,8 @@ describe('loading / empty', () => {
     expect(document.querySelector('[data-testid="detail-body"]')?.textContent).toBe('fetched 7');
   });
 
- // the blueprint: the twin of the case above, for the OTHER two branches that return early. The
- // the blueprint fix covered `items.length === 0`; the loading/error branch still returned before
+  // The twin of the case above, for the OTHER two branches that return early. An earlier fix
+  // covered `items.length === 0`; the loading/error branch still returned before
   // `detailBlock` existed, so a deep link into a surface assembling through `usePageAssembly`
   // — which reports `loading` with `items: null` for the WHOLE sweep and never a partial set —
   // showed a progress bar instead of the record the link named.

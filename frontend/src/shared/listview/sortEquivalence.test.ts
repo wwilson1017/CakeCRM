@@ -1,7 +1,7 @@
 /**
- * Regression guard for the blueprint deduplication.
+ * Regression guard for an earlier deduplication.
  *
- * the blueprint deleted `listview/sort.ts`'s `sortRows` and re-pointed `ListView` at the
+ * The blueprint deleted `listview/sort.ts`'s `sortRows` and re-pointed `ListView` at the
  * ONE shared comparator, `shared/search/sort.ts`'s `sortItems`. The whole safety
  * of that change rests on one claim: for the shape `ListView` calls it with — a
  * single non-`arrayOrder` field whose getter is the column's `sortValue` — the
@@ -66,7 +66,7 @@ const numberCases: Row[][] = [
   [{ id: 1, n: 10 }, { id: 2, n: 10 }, { id: 3, n: 5 }], // ties by input order
 ];
 const stringCases: Row[][] = [
- // The same-second ISO-timestamp trap: `localeCompare` would invert these.
+  // The same-second ISO-timestamp trap: `localeCompare` would invert these.
   [
     { id: 1, s: '2026-07-30T12:00:00.500000+00:00' },
     { id: 2, s: '2026-07-30T12:00:00+00:00' },

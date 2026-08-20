@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { IconSearch, IconX } from '../icons';
 import { useDebounce } from '../hooks/useDebounce';
 
-/** Every search box in CAKE settles at the same cadence. Not a prop until something needs a
+/** Every search box in the app settles at the same cadence. Not a prop until something needs a
  *  different one — a sibling surface's synchronous-filtering bar is the likely first caller. */
 const DEBOUNCE_MS = 250;
 
@@ -25,7 +25,7 @@ interface Props {
 }
 
 /**
- * The shared search box, generalised from the kanban card database's
+ * The shared search box, generalised from a sibling card-tracking surface's
  * `CardSearchInput`.
  *
  * The point of the component is that **typing state is local**. A controlled input wired

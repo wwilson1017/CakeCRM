@@ -1,9 +1,9 @@
 /**
- * List-view header cycle (the blueprint, relocated in the blueprint).
+ * List-view header cycle.
  *
  * `nextSortState` is the list view's own three-state column-header toggle. The
- * comparator that used to live beside it (`sortRows`) was a second copy of the
- * the blueprint core; the blueprint deleted it in favour of the single `shared/search/sort.ts`
+ * comparator that used to live beside it (`sortRows`) was a second copy of
+ * CRM's sort core; an earlier revision deleted it in favour of the single `shared/search/sort.ts`
  * comparator, whose semantics stay pinned by `shared/search/sort.test.ts`. What
  * remains to prove here is only the cycle.
  */

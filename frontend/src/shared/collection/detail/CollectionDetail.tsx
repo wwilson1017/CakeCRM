@@ -25,7 +25,7 @@
  * That fetch path is also why this file keeps a ONE-RECORD memory (`lastResolvedRef`). An open
  * record can LEAVE the canonical array while the user is reading it — CRM's `items` exclude
  * manually-hidden stages, so marking a deal Won with the Won stage hidden drops it out; a
- * A record leaves the closed-window set the same way; a background refresh can do it
+ * sibling surface's request leaves its closed-window set the same way; a background refresh can do it
  * to anyone. Without the memory the panel the user is looking at collapses to the "Loading…"
  * shell and, because the body is keyed by id, REMOUNTS — scroll position, galleries, custom-field
  * and chatter drafts all destroyed on the panel's primary gesture. So while a fetch is in flight

@@ -252,10 +252,10 @@ export default function CollectionView<T, C = unknown>({
   // The detail overlay, shared by EVERY branch below — loading, error, empty and normal. A deep
   // link (or any `selectedId` outside the canonical set) resolves through `detail.loadById`, so it
   // MUST stay mounted even when `items` is empty — otherwise a failed/empty list load would
- // kill a record deep link that the old unconditional panel served fine.
+  // kill a record deep link that the old unconditional panel served fine.
   //
   // It is declared ABOVE the loading early-return, not below it, and that order is the whole
- // point: `usePageAssembly` reports `loading` with `items: null` for the ENTIRE assembly
+  // point: `usePageAssembly` reports `loading` with `items: null` for the ENTIRE assembly
   // and never surfaces a partial set, so a shell that returned its progress panel before building
   // this block made a deep link un-openable until the last page landed — on CRM Contacts, that is
   // a shared link showing a progress bar instead of the record it names. `CollectionDetail`

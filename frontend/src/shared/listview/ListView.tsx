@@ -15,14 +15,14 @@
 import { useMemo, useState, type ReactNode } from 'react';
 // `sortRows` adapts these columns onto the ONE shared comparator in `shared/search`, so a
 // list view and the search bar's dropdown over the same page sort state can never order
-// differently (the blueprint; the listview→search direction is the resolution the original
-// the blueprint rebase plan called for). `nextSortState` is the list view's own header cycle and
+// differently (the listview→search direction is the resolution an earlier rebase plan
+// called for). `nextSortState` is the list view's own header cycle and
 // stays local.
 import { nextSortState } from './headerSort';
 import sortRows from './sortRows';
 import type { ListColumn, SortState } from './types';
 
-/** Rows rendered before the cap kicks in. Matches the Kanban app's card
+/** Rows rendered before the cap kicks in. Matches a sibling surface's card
  *  database (`the blueprint's cards tab`), the closest relative:
  *  a flattened board can be far larger than any single column, and a sibling surface's
  *  `?all_closed=true` read is genuinely uncapped. */
@@ -133,7 +133,7 @@ export default function ListView<TItem extends { id: number | string }>({
   // Compiler ruleset (see the same note in `the blueprint's cards tab`, which
   // resolves it by resetting inside its filter handlers instead). This is
   // React's documented derived-state adjustment, with in-repo precedent in
-  // `apps/crm/components/PipelineTab.tsx`. It sets state only when the count
+  // CRM's own `PipelineTab.tsx`. It sets state only when the count
   // actually changes, so it can never loop.
   const [prevCount, setPrevCount] = useState(items.length);
   if (prevCount !== items.length) {
@@ -141,7 +141,7 @@ export default function ListView<TItem extends { id: number | string }>({
     setShowAll(false);
   }
 
- // Extracted to `sortRows` in the blueprint so a page can compute this exact order for its detail
+  // Extracted to `sortRows` in an earlier revision so a page can compute this exact order for its detail
   // panel's ‹ › navigation without re-deriving it — see that module's docstring.
   const sorted = useMemo(() => sortRows(columns, items, sort), [columns, items, sort]);
 

@@ -9,9 +9,9 @@
  * controlled beneath it. Nothing here re-implements kit logic.
  *
  * Two channels, copied from `AgentUIConfig` (the one abstraction this repo has proven at
- * scale, the blueprint): **config** is declarative — data accessors, copy, policy — and its REQUIRED
- * fields are guard-enforced (`frontend/scripts/check-collection-config.mjs`: a required field
- * nothing under `shared/collection/` consumes fails CI, the blueprint dead-`subtitle` class).
+ * scale): **config** is declarative — data accessors, copy, policy — and its REQUIRED
+ * fields are guard-enforced (a build-time script checks that a required field
+ * nothing under `shared/collection/` consumes fails CI — the blueprint's dead-`subtitle` class).
  * **Props** (`CollectionViewProps`, landing with the view components in part 2 — prose
  * references to it below are forward references) are imperative — runtime data, callbacks,
  * render slots — and deliberately unguarded. Keep required config minimal: required means
@@ -61,8 +61,8 @@ export interface MultiFacetDef<T> {
   options?: FacetOption[];
   /** Popover checklist search — required for high-cardinality facets (see FacetGroup.display). */
   searchable?: boolean;
- /** Help line under the group heading — pure pass-through to `FacetGroup.hint` (the blueprint:
-   *  a sibling surface's waiting facet defuses a naming collision with it). */
+ /** Help line under the group heading — pure pass-through to `FacetGroup.hint`
+   *  (a sibling surface's waiting facet defuses a naming collision with it). */
   hint?: string;
 }
 
@@ -198,7 +198,7 @@ export interface KanbanViewConfig<T> {
 export interface CardsViewConfig<T> {
   getTitle: (item: T) => string;
   getSubtitle?: (item: T) => string | null;
-  /** Section header per item (Auto Issues-style grouping). Omit for one flat grid. */
+  /** Section header per item (a sibling surface's card-grouping style). Omit for one flat grid. */
   getSection?: (item: T) => string;
   /** Cards rendered per section before "show all". Default: CARDS_SECTION_CAP. */
   sectionCap?: number;
@@ -285,7 +285,7 @@ export interface CollectionState<T> {
 
   // handlers — the ONLY mutation paths; every one also resets caps/expansions so the
   // reset can never be a derived effect (a setState-in-effect is a build-blocking React
-  // Compiler lint error — the CardsTab lesson).
+  // Compiler lint error — a sibling surface's lesson).
   setQuery: (value: string) => void;
   setFacet: (key: string, value: unknown) => void;
   clearFacets: () => void;
@@ -342,8 +342,8 @@ export interface DetailRenderContext {
 }
 
 export interface CollectionDetailProps<T> {
-  /** The modal body. Remounted (keyed by `getItemId`) on ‹ › nav — load-bearing, per the
-   *  the blueprint `key={uuid}` lesson: per-record draft state must not leak across records. */
+  /** The modal body. Remounted (keyed by `getItemId`) on ‹ › nav — load-bearing, per
+   *  the blueprint's `key={uuid}` lesson: per-record draft state must not leak across records. */
   render: (item: T, ctx: DetailRenderContext) => ReactNode;
   /**
    * Asked before EVERY leave path — Escape, Back, ×, backdrop, ‹ › nav. Default policy when
@@ -399,7 +399,7 @@ export interface CollectionCardsProps<T> {
   /** Fixed-size thumbnail slot at the top of the card (lazy loading is the slot's business —
    *  list/card rows must not mint signed URLs eagerly; no batch endpoint exists). */
   renderThumb?: (item: T) => ReactNode;
-  /** Status badge slot beside the title (Auto Issues `StageBadge` pattern). */
+  /** Status badge slot beside the title (a sibling surface's `StageBadge` pattern). */
   renderBadge?: (item: T) => ReactNode;
   /**
    * Full-cell override for a grid whose cell needs its own interactive children — a sibling surface

@@ -9,7 +9,7 @@ import type { FacetGroup, FacetOption, SortState } from './types';
  *
  * ## What it is
  *
- * One row of chrome — keyword box, facet disclosure, sort control, result count, clear-all — that every client-side board and list in CAKE can render instead of
+ * One row of chrome — keyword box, facet disclosure, sort control, result count, clear-all — that every client-side board and list in the app can render instead of
  * hand-rolling its own. Before this, `the blueprint's card filter bar` said
  * in its own docstring that it "copied the `crm/components/PipelineFilterBar.tsx` idiom
  * rather than imported [it], [because] there is no shared FacetBar in this repo" — the repo's
@@ -26,7 +26,7 @@ import type { FacetGroup, FacetOption, SortState } from './types';
  * state, the board and the list would each need their own copy and the requirement would be a
  * discipline anyone can break. With the state in the page, it holds by construction. The same
  * arrangement is what lets a list view's column headers drive the very same `SortState` the
- * bar's dropdown drives. See `docs/SEARCH_BAR_GUIDE.md`.
+ * bar's dropdown drives.
  *
  * ## Facet groups are data, app-specific controls are slots
  *
@@ -35,7 +35,7 @@ import type { FacetGroup, FacetOption, SortState } from './types';
  * facet concept rather than two. Anything shaped differently goes in a slot — `extraFacets` for a
  * custom row inside the panel (CRM's numeric value-range inputs) and `trailing` for a control
  * that belongs in the top row (CRM's owner segmented control). Two slots with one real
- * consumer each, rather than a config schema trying to describe every control CAKE will ever
+ * consumer each, rather than a config schema trying to describe every control the app will ever
  * want.
  *
  * ## Active filters stay visible when the panel is closed
@@ -269,8 +269,8 @@ function SelectedChip({ label, groupLabel, onRemove }: { label: string; groupLab
 /**
  * One facet group inside the disclosure panel.
  *
- * A `'list'` group stays collapsed until opened and mounts its rows only then. Kanban's
- * supplier, location, tag and used-for facets each run to hundreds of values; rendering all
+ * A `'list'` group stays collapsed until opened and mounts its rows only then. A sibling
+ * surface's supplier, location, tag and used-for facets each run to hundreds of values; rendering all
  * four expanded at once is a thousand-plus checkbox nodes on a low-powered tablet, which is
  * exactly why the bar this generalises opened one checklist at a time.
  */
@@ -310,7 +310,7 @@ function FacetRow({ group }: { group: FacetGroup }) {
           const isSelected = group.selected.includes(o.value);
           // A SELECTED chip is never disabled — it must stay clickable so a filter that became
           // un-choosable (a sibling surface stage that was hidden/closed AFTER it was selected) can
- // always be undone. Only an unselected, disabled option is blocked. (the blueprint P1-1)
+          // always be undone. Only an unselected, disabled option is blocked.
           return (
             <ChipButton
               key={o.value}

@@ -4,7 +4,7 @@ import type { SortFieldDef } from './types';
 
 /**
  * These cover the comparator half of the dev-only `import.meta.env.DEV` self-check that used to
- * live in `apps/crm/pipelineSort.ts`, written when the frontend had no test runner. It has one
+ * live in the blueprint's `pipelineSort.ts`, written when the frontend had no test runner. It has one
  * now, so the block is gone and every one of its checks is a real test — the comparator
  * rules here and the CRM getters in `pipelineSort.test.ts`. (That file's persistence half went
  * away in the blueprint: CRM's sort now persists through `shared/collection`, which coerces a restored
@@ -39,7 +39,7 @@ describe('sortItems', () => {
   });
 
   it('compares date strings with < / > so same-second ISO shapes order chronologically', () => {
- // The defect: `localeCompare` gives punctuation variable weight and orders these
+    // The defect: `localeCompare` gives punctuation variable weight and orders these
     // two backwards, because Python's isoformat() omits the fraction at exactly .000000.
     const a = '2026-07-30T12:00:00+00:00';
     const b = '2026-07-30T12:00:00.500000+00:00';

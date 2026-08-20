@@ -36,7 +36,7 @@ interface Props {
  * toggle, generalised from CRM's `PipelineSortBar` with its visual language intact.
  *
  * A native `<select>` rather than a custom popover: the option list is short, and the native
- * control is the only one that is keyboard- and screen-reader-correct on the floor tablets
+ * control is the only one that is keyboard- and screen-reader-correct on low-powered tablets
  * without re-implementing a roving-focus contract the design system explicitly warns against
  * half-building.
  */

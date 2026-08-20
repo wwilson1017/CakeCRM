@@ -132,15 +132,16 @@ export default function CollectionListView<T>({
   // the `arrayOrder` one — a board-backed surface, where the hook's array order genuinely IS the
   // order and no column claims that field.
   //
- // The `arrayOrder` test is load-bearing, not decoration. `nextSortState(null, key)`
+  // The `arrayOrder` test is load-bearing, not decoration. `nextSortState(null, key)`
   // always returns `asc`, so on a LIST-ONLY surface — whose resting sort is a real field like
   // `name asc` — reporting `null` made every click on that header ask for `name asc` again:
   // descending was unreachable and the column looked unsorted while the rows were sorted. CRM
   // Contacts/Companies are the first consumers this bites, which is how it surfaced.
   //
   // No shipped adopter regresses on the change, but NOT because they all rest on `arrayOrder` —
-  // three of the four do (a pipeline board, the blueprint `catalog`, a sibling surface `board`) and
-  // Auto Issues does not: it is list-only and rests on `action asc`, a plain getter. It is
+  // three of the four do (a pipeline board, a sibling surface's `catalog`, another sibling
+  // surface's `board`) and an issue-tracking board does not: it is list-only and rests on
+  // `action asc`, a plain getter. It is
   // unaffected for a different reason — `action` is not one of its `list.columns` keys, so no
   // header binds to it, `ListView` finds no column claiming the key and renders the rows
   // unsorted exactly as `null` did, and no header shows an indicator. Check BOTH conditions

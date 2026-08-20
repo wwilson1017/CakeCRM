@@ -153,7 +153,7 @@ describe('selection column', () => {
   });
 });
 
-// the blueprint: a LIST-ONLY surface (CRM Contacts/Companies) has no `arrayOrder` field, so its resting
+// A LIST-ONLY surface (CRM Contacts/Companies) has no `arrayOrder` field, so its resting
 // sort is a real one — `name asc`. Collapsing that to `null` for the header meant every click on
 // Name saw "unsorted" and asked for asc again (`nextSortState(null, key)` always returns asc), so
 // descending was unreachable while the column rendered as unsorted. Only an `arrayOrder` resting

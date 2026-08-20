@@ -2,8 +2,8 @@
  * The collection layer's card-grid view — the one net-new view (no kit
  * component renders a card grid). Chrome comes from config (`getTitle`/`getSubtitle`,
  * sections per `getSection` in first-appearance order — the same order `visibleOrder`
- * flattens for ‹ › nav) and two app slots (`renderThumb`, `renderBadge` — the sibling surface
- * RequestCard + Auto Issues StageBadge patterns). Sections render at most `sectionCap` cards
+ * flattens for ‹ › nav) and two app slots (`renderThumb`, `renderBadge` — the sibling surface's
+ * RequestCard + StageBadge patterns). Sections render at most `sectionCap` cards
  * until expanded (`expandSection`); voided rows follow the tri-state and render struck
  * through, never hidden.
  */
@@ -58,7 +58,7 @@ export default function CardsView<T>({
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
               {shown.map(item => {
                 const id = config.getItemId(item);
- // Full-cell override: the app owns the entire cell, including selection
+                // Full-cell override: the app owns the entire cell, including selection
                 // styling and click-to-open — its cell may have interactive children a nested
                 // <button> cannot legally contain.
                 if (cards?.renderCard) {
@@ -82,7 +82,7 @@ export default function CardsView<T>({
                             title containing one long unbreakable token (`record_attachments`,
                             a part number) refuses to shrink, pushes the `shrink-0` badge past the
                             card's content box, and the card's `overflow-hidden` then CLIPS the
-                            badge. Measured on Auto Issues: 18 of 208 cards at the 4-column
+                            badge. Measured on a sibling surface's card grid: 18 of 208 cards at the 4-column
                             width. The subtitle below takes `break-words` for the same reason —
                             it is the other text node that can carry an id, a path or a part
                             number with no space to wrap at. */}

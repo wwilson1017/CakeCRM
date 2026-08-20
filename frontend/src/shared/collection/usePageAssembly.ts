@@ -1,14 +1,13 @@
 /**
  * Paged-fetch accumulator for client-loaded working sets.
  *
- * The collection layer's scope is surfaces that hold their WHOLE dataset client-side
- * (`docs/solutions/architecture-patterns/client-side-facet-filtering.md`); a server-paged
- * endpoint joins that scope by assembling every page into one array BEFORE the set is
- * presented as filterable (`bounded-transport-pagination-with-client-facets.md`) — rendering
+ * The collection layer's scope is surfaces that hold their WHOLE dataset client-side; a
+ * server-paged endpoint joins that scope by assembling every page into one array BEFORE the
+ * set is presented as filterable — rendering
  * a facet bar over one server page silently filters a subset, the exact failure the CRM
  * Contacts/Orders adoptions must avoid.
  *
- * Fetch discipline is CardsTab's, generalized: AbortController tied to unmount, a per-page
+ * Fetch discipline is a sibling surface's, generalized: AbortController tied to unmount, a per-page
  * timeout (flaky Wi-Fi HANGS rather than fails), stale-run rejection via a monotonic
  * token, and a retry that restarts the whole assembly (partial sets are never surfaced —
  * progressive rendering would make facet counts drift as pages land).
@@ -59,8 +58,8 @@ export default function usePageAssembly<T>(
    * nothing and reports `loading: true` — deliberately NOT `items: []`, which would let a facet
    * bar and its counts render over an empty set, the exact failure this module exists to prevent.
    *
-   * It is needed because "mounted" and "visible" are not the same thing: `apps/crm/CrmPage`
-   * renders all four tabs and hides the inactive ones with a `hidden` class, never unmounting
+   * It is needed because "mounted" and "visible" are not the same thing: the blueprint's CRM
+   * page shell renders all four tabs and hides the inactive ones with a `hidden` class, never unmounting
    * them, so an ungated assembly swept the entire Companies AND Contacts corpora the moment
    * anyone opened CRM on the Dashboard tab.
    *

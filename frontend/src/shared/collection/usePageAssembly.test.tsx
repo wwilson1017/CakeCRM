@@ -214,7 +214,7 @@ describe('usePageAssembly', () => {
   });
 });
 
-// the blueprint: "mounted" is not "visible". `apps/crm/CrmPage` renders all four tabs and hides the
+// "mounted" is not "visible". The blueprint's CRM page shell renders all four tabs and hides the
 // inactive ones with a `hidden` class, so without this gate opening CRM on the Dashboard swept
 // the whole Companies AND Contacts corpora immediately.
 describe('the enabled gate', () => {

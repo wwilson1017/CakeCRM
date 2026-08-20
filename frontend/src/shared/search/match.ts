@@ -12,8 +12,8 @@
  * is split into tokens (`tokenize`). A row matches when EVERY token appears somewhere in its
  * document — token-AND across the row, OR across the row's fields, substring within a token.
  * So "acme invoice" finds a row whose supplier is Acme and whose description mentions an
- * invoice, which is the Odoo-style behaviour the blueprint asks for and which no CAKE surface
- * had before: CRM and the kanban card database each required the whole phrase to appear
+ * invoice, which is the Odoo-style behaviour the blueprint asks for and which no existing surface
+ * had before: CRM and a sibling card-tracking surface each required the whole phrase to appear
  * contiguously inside ONE field.
  *
  * That makes this **strictly broader** than both matchers it replaces — every row that
@@ -23,12 +23,12 @@
  *
  * ## What this does not do, and why (the part that is easy to "restore" by mistake)
  *
- * an earlier review additionally anchors short tokens to whole words and drops stopwords. Both are
+ * An earlier review additionally anchors short tokens to whole words and drops stopwords. Both are
  * good rules **for a sibling surface's data**; neither is lifted here.
  *
  *   • **Anchoring** (a 1-char token, or a numeric token under 3 chars, must match a whole
- *     word) exists so `1` does not light up every serial number containing a 1. On kanban's
- *     card database it does the opposite, and it is the one rule that would break the
+ *     word) exists so `1` does not light up every serial number containing a 1. On the
+ *     card-tracking surface's database it does the opposite, and it is the one rule that would break the
  *     strictly-broader property: a card with part number `ACM-1234` has the document
  *     `… acm 1234 …`, so typing `ACM-1` and `ACM-12` would stop matching while `ACM` and
  *     `ACM-123` still match — results vanish at keystroke 5, stay gone at 6 and reappear at
@@ -41,13 +41,13 @@
  *     the test that pins it. Fewer moving parts, and every token the user typed still has to
  *     appear somewhere.
  *
- * Both stay app-local in `a sibling app` until a second consumer needs them; that is when
+ * Both stay app-local to the sibling surface until a second consumer needs them; that is when
  * they earn a configuration knob, not before. Do not fold them in here as a "completeness"
  * fix — they are tuned to a data shape, and this module has no idea what data it is matching.
  *
  * ## The knobs those rules earned
  *
- * a sibling surface is now that second consumer: its CollectionView adoption filters through THIS
+ * A sibling surface is now that second consumer: its CollectionView adoption filters through THIS
  * module, and adopting the shared defaults would be a real regression on the exact data the
  * rules were tuned for (`1` lighting up every card containing a 1; a sentence-shaped query
  * failing on stopwords). So the two rules moved here as OPT-INS, off by default:
@@ -57,7 +57,7 @@
  *   • `docMatchesTokens(doc, tokens, { anchorShortTokens: true })` — an `isAnchored` token
  *     matches a whole word (` token `) instead of a substring.
  *
- * Defaults are byte-identical to before, so every other consumer (kanban's card database, CRM)
+ * Defaults are byte-identical to before, so every other consumer (the card-tracking surface, CRM)
  * is untouched — the strictly-broader property above still holds for them. Only a caller that
  * passes the option gets that tuning behavior. `isAnchored` is exported so a delegate can
  * reproduce the rule and a test can pin it.
@@ -71,14 +71,6 @@
  * location has a location FACET for it — the facet is the precise instrument, the keyword box
  * is the broad one. Anything narrower than this is a per-app decision, made with knowledge of
  * that app's data.
- *
- * ## Not to be unified with `the blueprint's asset-picker filter`
- *
- * That module matches per FIELD and never across the concatenation, because it backs a
- * *picker* that files work items against the chosen asset: a confident-looking match
- * spanning a field boundary ("acme north" hitting Acme Corp in region North) misfiles real
- * work. A browse filter has no such consequence — the user sees the row and judges it. Two
- * questions, two answers; keep them apart.
  */
 
 /**
@@ -113,7 +105,7 @@ export const MAX_TOKENS = 12;
  * normalizes to exactly one token as long as the input, so the cap never binds and
  * `normalize`'s full-string regex pass runs on the main thread on every settled keystroke. No
  * realistic query is anywhere near this long — it exists so a stray multi-megabyte paste on a
- * floor tablet is a no-op rather than a freeze.
+ * low-powered tablet is a no-op rather than a freeze.
  */
 export const MAX_QUERY_CHARS = 512;
 
@@ -161,10 +153,10 @@ export function tokenize(query: string, opts?: TokenizeOptions): string[] {
 }
 
 /**
- * ONE anchoring rule (the blueprint, moved here for its second consumer the blueprint): a token matches a
+ * ONE anchoring rule (moved here for its second consumer): a token matches a
  * whole WORD rather than a substring when it is a single character, or purely numeric and
  * shorter than 3. Without it `1` lights up every serial number containing a 1 and every
- * "Oven 12". Only consulted when `docMatchesTokens` is called with `{ anchorShortTokens: true }`.
+ * "Unit 12". Only consulted when `docMatchesTokens` is called with `{ anchorShortTokens: true }`.
  */
 export function isAnchored(token: string): boolean {
   return token.length === 1 || (token.length < 3 && /^\p{N}+$/u.test(token));
@@ -193,8 +185,8 @@ export interface MatchOptions {
  * An empty token list matches everything — a blank query imposes no constraint, which lets
  * callers skip a separate "is the search active" branch.
  *
- * Pass `{ anchorShortTokens: true }` for the whole-word rule on short tokens
- *; without it every token substring-matches, byte-identical to before.
+ * Pass `{ anchorShortTokens: true }` for the whole-word rule on short tokens;
+ * without it every token substring-matches, byte-identical to before.
  */
 export function docMatchesTokens(doc: string, tokens: string[], opts?: MatchOptions): boolean {
   const anchor = opts?.anchorShortTokens === true;

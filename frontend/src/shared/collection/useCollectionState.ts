@@ -12,13 +12,13 @@
  *    fast: a config error, not a runtime condition), and a stale persisted view falls back to
  *    `defaultView` rather than rendering a view the config no longer declares.
  *  • **The drag gate** — `dragLocked = isFiltering || !manualOrder || hasTruncatedColumn`.
- *    Filtering makes a drop index unmappable (subset), a non-manual sort makes it a lie
- *, and a truncated column makes it ambiguous (the drop lands relative to rows that
+ *    Filtering makes a drop index unmappable (subset), a non-manual sort makes it a lie,
+ *    and a truncated column makes it ambiguous (the drop lands relative to rows that
  *    are not all rendered). Toggles are EXCLUDED — they remove columns, not cards.
  *  • **Resets live in handlers, never effects** — every filter/sort/view mutation also clears
  *    the expansion sets in its own handler, because deriving that reset in an effect is a
- *    setState-in-effect cascade and a build-blocking React Compiler lint error (the CardsTab
- *    lesson, verbatim).
+ *    setState-in-effect cascade and a build-blocking React Compiler lint error (a sibling
+ *    surface's lesson, verbatim).
  *  • **Config identity** — every memo keys on accessors from `config`, so the config must be
  *    referentially stable (module constant or memoized factory). DEV warns when it churns.
  *  • **Items identity** — the docs/visibleItems memos key on the `items` array reference, so
@@ -221,7 +221,7 @@ export default function useCollectionState<T>(
     return map;
   }, [items, config]);
 
- // Optional per-config search tuning: a sibling surface's stopword removal + short-token
+  // Optional per-config search tuning: a sibling surface's stopword removal + short-token
   // whole-word anchoring. Absent ⇒ the shared defaults, so every other consumer is untouched.
   const stopwordSet = useMemo(
     () =>
@@ -312,7 +312,7 @@ export default function useCollectionState<T>(
       resetExpansions();
     },
     clearFacets: () => {
-      // Clears facets + voided but PRESERVES the query — the CardFilterBar contract the kit
+      // Clears facets + voided but PRESERVES the query — the search bar's contract the kit
       // carried forward: "Clear filters" names the chips, not the search box.
       setEnvelope(prev => ({
         ...prev,

@@ -10,8 +10,8 @@
  * It is a module rather than a `useMemo` body because `ListView` is no longer the only
  * caller. A page whose detail panel navigates with ‹ › must walk the SAME order its table is
  * rendering (`shared/collection`'s `CollectionDetail` takes it as `navOrder`), and
- * re-deriving that at the call site is exactly the drift this repo keeps paying for. The
- * a dashboard-filtered list is the first such caller.
+ * re-deriving that at the call site is exactly the drift this repo keeps paying for. A sibling
+ * surface's dashboard-filtered list is the first such caller.
  *
  * Render caps are deliberately NOT applied: `ListView` slices AFTER sorting, and ‹ › walks
  * the whole sorted set — the same rule `shared/collection/visibleOrder` states for the

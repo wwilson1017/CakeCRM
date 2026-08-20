@@ -91,7 +91,7 @@ function Page({
   // canonical set — the shape CRM's Mark Won produces when the Won stage is hidden.
   items = rows,
   // A page rendering its records outside CollectionView supplies the order the user sees
- // — a sibling surface's dashboard-filtered branch is the live caller.
+  // — a sibling surface's dashboard-filtered branch is the live caller.
   navOrder,
 }: {
   config: CollectionConfig<Row>;

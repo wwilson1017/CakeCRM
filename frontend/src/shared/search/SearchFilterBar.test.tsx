@@ -124,7 +124,7 @@ describe('SearchFilterBar — disabled facet options', () => {
     expect(closed.title).toBe('Turn on Show closed');
   });
 
-  it('keeps a SELECTED disabled option clickable so the filter can be undone (P1-1)', () => {
+  it('keeps a SELECTED disabled option clickable so the filter can be undone', () => {
     const onToggle = vi.fn();
     const el = render([{ ...disabledGroup([2]), onToggle }]);
     openPanel(el);
@@ -139,7 +139,7 @@ describe('SearchFilterBar — disabled facet options', () => {
 
 describe('SearchFilterBar — high-cardinality facets', () => {
   it('does not mount a list group’s rows until that group is expanded', () => {
-    // Kanban has four of these, each with hundreds of options; mounting them all at once is a
+    // A sibling surface has four of these, each with hundreds of options; mounting them all at once is a
     // thousand-plus checkbox nodes on a low-powered tablet.
     const big: FacetGroup = {
       key: 'suppliers',

@@ -3,7 +3,7 @@
  *
  * Framework-free on purpose: everything here runs inside `useState` initialisers and
  * `useMemo`s, and all of it is node-env unit-testable. Evaluation semantics follow the house
- * pattern (`docs/solutions/architecture-patterns/client-side-facet-filtering.md`): AND across
+ * pattern for client-side facet filtering: AND across
  * facets, OR within a multi facet, and the voided gate runs FIRST so "hide voided" can never
  * be overridden by a facet match.
  *
@@ -115,7 +115,7 @@ export function selectionActive(def: FacetDef<unknown>, value: unknown): boolean
 }
 
 /** Facets constraining results right now. The voided tri-state counts when set (the
- *  the blueprint convention); the query deliberately does not ("as in CRM"). */
+ *  blueprint's convention); the query deliberately does not ("as in CRM"). */
 export function activeFacetCount<T>(
   facets: readonly FacetDef<T>[],
   selections: FacetSelections,
@@ -196,7 +196,7 @@ export function applyFacets<T>(
 /**
  * Distinct options for a multi facet from the LOADED rows (free text, not an enum) — trimmed,
  * empties dropped, label-sorted. `localeCompare` is fine HERE: these are human labels for a
- * picker, not the row ordering `shared/search/sort.ts` bans it from (the blueprint is about ISO
+ * picker, not the row ordering `shared/search/sort.ts` bans it from (that ban is about ISO
  * timestamps in row sorts).
  */
 export function deriveFacetOptions<T>(items: readonly T[], def: MultiFacetDef<T>): FacetOption[] {

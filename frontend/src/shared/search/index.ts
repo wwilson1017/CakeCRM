@@ -1,7 +1,7 @@
 /**
  * Shared search / filter / sort module.
  *
- * ONE bar for every client-side board and list in CAKE — keyword search, facet filters and
+ * ONE bar for every client-side board and list in the app — keyword search, facet filters and
  * sorting — plus the pure matching, sorting and persistence logic behind it. Import from this
  * barrel, never from a file inside the directory.
  *
@@ -9,11 +9,10 @@
  * sort; `SearchFilterBar` is fully controlled; the page computes ONE filtered-and-sorted
  * array and every view — board, list, whatever comes next — renders from it. Domain-shaped
  * things (facet definitions, predicates, state shapes, sort-field getters) stay in the app;
- * this module knows nothing about any of them. Full guide: `docs/SEARCH_BAR_GUIDE.md`.
+ * this module knows nothing about any of them.
  *
- * Scope: **client-side surfaces that have already loaded their whole dataset**, per
- * `docs/solutions/architecture-patterns/client-side-facet-filtering.md`. It makes no claim
- * over server-paginated boards (a product table, CRM contacts and companies,
+ * Scope: **client-side surfaces that have already loaded their whole dataset** — it makes no
+ * claim over server-paginated boards (a product table, CRM contacts and companies,
  * Usage), which filter on the server by design.
  */
 //
