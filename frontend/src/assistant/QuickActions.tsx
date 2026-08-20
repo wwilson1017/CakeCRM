@@ -19,7 +19,9 @@ const STARTERS: Record<ActiveRecordType, string[]> = {
     'What should my next step be on this deal?',
     'Draft a follow-up email about this deal',
     'Log a call I just had on this deal',
-    'Has this deal gone quiet?',
+    // Replaces the narrower "Has this deal gone quiet?": crm_get_deal_health answers
+    // that and the rest of the picture (score, stuck-in-stage, overdue, missing links).
+    'How healthy is this deal?',
   ],
   contact: [
     'Summarize this contact',

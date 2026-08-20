@@ -1774,16 +1774,22 @@ def _truncate_all(cur, include_definitions: bool = False) -> None:
     # deals, so Postgres REQUIRES it in the same TRUNCATE statement (truncating a
     # referenced table alone errors out). Its only writer, _write_deal_update, locks
     # the deals row first, so a later position can't invert against it.
+    # proactive_nudges (#22 Phase 3) goes last. Like crm_field_values it is polymorphic
+    # and carries NO FK, so nothing cascades it — it MUST be swept explicitly or a
+    # reseeded CRM inherits the old per-record nudge cooldowns and stays silent about
+    # records it has never actually mentioned. Its only writer is a single-statement
+    # upsert touching just this table, so its position can't invert against anything.
     if include_definitions:
         cur.execute(
             "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
             "crm_field_definitions, crm_field_values, crm_field_provenance, "
-            "deal_stage_events RESTART IDENTITY"
+            "deal_stage_events, proactive_nudges RESTART IDENTITY"
         )
     else:
         cur.execute(
             "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
-            "crm_field_values, crm_field_provenance, deal_stage_events RESTART IDENTITY"
+            "crm_field_values, crm_field_provenance, deal_stage_events, "
+            "proactive_nudges RESTART IDENTITY"
         )
 
 

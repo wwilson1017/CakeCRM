@@ -38,6 +38,20 @@ def _positive_int_env(name: str, default: int) -> int:
     return value if value >= 1 else default
 
 
+def _hour_env(name: str, default: int) -> int:
+    """Read an hour-of-day env var (0-23). Separate from ``_positive_int_env`` because
+    0 is a legitimate hour (midnight) but not a legitimate interval — reusing that
+    helper here would silently rewrite a midnight digest to the default."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if 0 <= value <= 23 else default
+
+
 class AuthSettings:
     # Plaintext or bcrypt-hashed password for single-user login
     password: str = os.getenv("AUTH_PASSWORD", "changeme")
@@ -93,6 +107,23 @@ class Settings:
     # gmail_scan scheduler job. Gated ONLY on Gmail being connected — deliberately no
     # per-feature enable flag (product rule: the integration connection IS the gate).
     gmail_scan_interval_minutes: int = _positive_int_env("GMAIL_SCAN_INTERVAL_MINUTES", 15)
+
+    # ── Proactive heartbeat: digest + nudges (issue #22, Phase 3) ───────────
+    # Cadence knobs only. The on/off switch is a DB column (heartbeat_state.
+    # proactive_enabled) rather than an env var, because it is a user-facing
+    # preference toggled in Settings — not a deploy-time concern.
+    #
+    # The digest fires once per UTC day at or after this hour. UTC (not a local
+    # timezone) because the app stores no timezone preference; documented, not
+    # solved, and the same approximation get_analytics makes for its day windows.
+    proactive_digest_hour: int = _hour_env("PROACTIVE_DIGEST_HOUR", 8)
+    # How often the nudge sweep may run. Nudges are additionally rate-limited
+    # per record by proactive_nudge_cooldown_days, so this only bounds the sweep.
+    proactive_nudge_interval_minutes: int = _positive_int_env("PROACTIVE_NUDGE_INTERVAL_MINUTES", 240)
+    # Don't mention the same record/kind again inside this many days.
+    proactive_nudge_cooldown_days: int = _positive_int_env("PROACTIVE_NUDGE_COOLDOWN_DAYS", 7)
+    # Hard cap per sweep so a long-neglected CRM produces a nudge, not a firehose.
+    proactive_max_nudges_per_run: int = _positive_int_env("PROACTIVE_MAX_NUDGES_PER_RUN", 3)
 
     # Web Push (VAPID). Leave blank to auto-generate a keypair once and persist it
     # in Postgres (vapid_keys singleton, private key Fernet-encrypted). Set both

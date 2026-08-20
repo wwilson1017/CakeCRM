@@ -19,9 +19,10 @@ archived deal is not "going stale", it is put away.
 """
 
 import logging
+from datetime import datetime, timezone
 
 from core.postgres import pg_fetchall, pg_fetchone
-from crm import provenance_service
+from crm import provenance_service, scoring_service
 from crm.service import (
     LAST_TOUCH_SQL,
     LIVE_PREDICATE,
@@ -389,3 +390,272 @@ def scan_gaps(entity_type: str = "all", limit: int = DEFAULT_LIMIT) -> dict:
     out["gaps_returned"] = sum(len(v) for k, v in out.items()
                                if isinstance(v, list) and k != "unverified_fields")
     return out
+
+
+# ── Deal health (issue #22 Phase 2) ───────────────────────────────────────────
+#
+# Composes #18's lead score with the operational signals a rep actually acts on.
+# It deliberately does NOT recompute any scoring maths: scoring_service owns that
+# model, and a second copy would drift the moment #18's weights are tuned.
+
+# A deal sitting this long in one stage is "stuck" regardless of how recently it
+# was touched — activity without progression is the classic false-comfort signal.
+STUCK_IN_STAGE_DAYS = 30
+
+
+def _health_flags(row: dict, stale_days: int) -> list[str]:
+    """Derive the actionable flags from one health row. Pure — no DB, no AI — so the
+    hermetic tests exercise every branch without a database."""
+    flags = []
+    days_since_touch = row.get("days_since_touch")
+    if days_since_touch is not None and days_since_touch >= stale_days:
+        flags.append("stale")
+    days_in_stage = row.get("days_in_stage")
+    if days_in_stage is not None and days_in_stage >= STUCK_IN_STAGE_DAYS:
+        flags.append("stuck_in_stage")
+    if not row.get("open_tasks"):
+        flags.append("no_next_step")
+    if row.get("overdue_tasks"):
+        flags.append("overdue_task")
+    if not row.get("contact_id"):
+        flags.append("missing_contact")
+    if not row.get("company_id"):
+        flags.append("missing_company")
+    return flags
+
+
+def get_deal_health(deal_id: int, stale_days: int = DEFAULT_DEAL_STALE_DAYS) -> dict | None:
+    """One deal's health: #18's lead score + factors, plus the operational signals.
+
+    Answers "should I worry about this deal, and why" in a single read — the score
+    says how promising it looks, the flags say what is actually wrong with it. The
+    two are complementary: a high-scoring deal nobody has touched in three weeks is
+    exactly the one worth surfacing, and neither half says that alone.
+
+    Returns None when the deal does not exist. Archived deals ARE returned (with
+    ``archived: true``) for the same reason ``get_deal`` resolves them — you need to
+    be able to look at one to decide whether to restore it.
+    """
+    stale_days = _bounded(stale_days, DEFAULT_DEAL_STALE_DAYS, 1, 365)
+    # Date-only TEXT comparison for overdue, matching get_dashboard_stats: a task due
+    # today is not overdue, and a malformed row can never cast-error the way ::date can.
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    row = pg_fetchone(
+        f"""
+        SELECT d.id, d.title, d.stage, d.value, d.currency, d.probability,
+               d.expected_close_date, d.lost_reason, d.contact_id, d.company_id,
+               (d.archived_at IS NOT NULL) AS archived,
+               c.name  AS contact_name,
+               co.name AS company_name,
+               FLOOR(EXTRACT(EPOCH FROM (now() - {LAST_TOUCH_SQL})) / 86400.0)::int
+                   AS days_since_touch,
+               FLOOR(EXTRACT(EPOCH FROM (now() - COALESCE(
+                   (SELECT MAX(e.changed_at) FROM deal_stage_events e
+                     WHERE e.deal_id = d.id), d.created_at))) / 86400.0)::int
+                   AS days_in_stage,
+               FLOOR(EXTRACT(EPOCH FROM (now() - d.created_at)) / 86400.0)::int AS age_days,
+               (SELECT COUNT(*) FROM tasks t
+                 WHERE t.deal_id = d.id AND t.completed = 0)::int AS open_tasks,
+               (SELECT COUNT(*) FROM tasks t
+                 WHERE t.deal_id = d.id AND t.completed = 0
+                   AND t.due_date != '' AND t.due_date < %s)::int AS overdue_tasks
+          FROM deals d
+          LEFT JOIN contacts  c  ON d.contact_id = c.id
+          LEFT JOIN companies co ON d.company_id = co.id
+         WHERE d.id = %s
+        """,
+        (today, deal_id),
+    )
+    if not row:
+        return None
+
+    # #18 owns the score. A missing score row is not an error here — score_deal reads
+    # live and only returns None for a deal that vanished between our two queries.
+    scored = scoring_service.score_deal(deal_id) or {}
+    return {
+        "deal": row,
+        "score": scored.get("score"),
+        "factors": scored.get("factors", {}),
+        "stale_days": stale_days,
+        "flags": _health_flags(row, stale_days),
+    }
+
+
+# ── Pipeline analytics (issue #22 Phase 2) ────────────────────────────────────
+#
+# The half `service.get_analytics` (#20) had to drop. #20 shipped win/loss, activity
+# volume and read-time aging, but every stage-duration metric — conversion, time in
+# stage — was cut for lack of a stage-change audit trail. Phase 1 created that trail
+# (`deal_stage_events`), so this reads it and answers the funnel questions.
+#
+# The two tools are complementary, not overlapping: crm_analytics = outcomes and
+# activity, crm_get_pipeline_analytics = movement through the funnel.
+#
+# Honesty guard: the log only starts when Phase 1 landed, so a 90-day window can
+# cover a 3-day log. Every response carries `history_since` and `history_days` and
+# the tool description tells the model to state them, rather than let a partial
+# funnel read as a complete one.
+
+DEFAULT_ANALYTICS_WINDOW_DAYS = 90
+_OPEN_STAGES = ("lead", "qualified", "proposal", "negotiation")
+
+
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return round(ordered[mid], 1)
+    return round((ordered[mid - 1] + ordered[mid]) / 2.0, 1)
+
+
+def _shape_stage_durations(rows: list[dict]) -> list[dict]:
+    """Group completed stage intervals into per-stage avg/median days. Pure shaper."""
+    by_stage: dict[str, list[float]] = {}
+    for r in rows:
+        days = r.get("days")
+        if days is None:
+            continue
+        by_stage.setdefault(r.get("stage") or "", []).append(float(days))
+    out = []
+    for stage in _OPEN_STAGES:
+        vals = by_stage.get(stage, [])
+        out.append({
+            "stage": stage,
+            "samples": len(vals),
+            "avg_days": round(sum(vals) / len(vals), 1) if vals else None,
+            "median_days": _median(vals),
+        })
+    return out
+
+
+def _shape_conversion(rows: list[dict]) -> list[dict]:
+    """Turn one row per (deal, first entry into a stage) into per-stage outcomes.
+
+    An entry's outcome is read from the deal's CURRENT stage: still sitting in the
+    stage it entered, advanced to another open stage, won, or lost. Pure shaper.
+    """
+    buckets: dict[str, dict] = {
+        s: {"stage": s, "entered": 0, "still_here": 0, "advanced": 0, "won": 0, "lost": 0}
+        for s in _OPEN_STAGES
+    }
+    for r in rows:
+        stage = r.get("stage") or ""
+        if stage not in buckets:
+            continue
+        b = buckets[stage]
+        b["entered"] += 1
+        current = (r.get("current_stage") or "").lower()
+        if current == "won":
+            b["won"] += 1
+        elif current == "lost":
+            b["lost"] += 1
+        elif current == stage:
+            b["still_here"] += 1
+        else:
+            b["advanced"] += 1
+    out = []
+    for stage in _OPEN_STAGES:
+        b = buckets[stage]
+        entered = b["entered"]
+        # Progression = got out of this stage in the right direction (moved on OR won).
+        progressed = b["advanced"] + b["won"]
+        b["progression_rate"] = round(progressed / entered, 3) if entered else None
+        b["win_rate"] = round(b["won"] / entered, 3) if entered else None
+        out.append(b)
+    return out
+
+
+def get_pipeline_analytics(window_days: int = DEFAULT_ANALYTICS_WINDOW_DAYS) -> dict:
+    """Funnel movement from the stage-change log: time in stage, conversion, velocity.
+
+    Complements ``service.get_analytics`` (win/loss, activity, aging) rather than
+    repeating it. Archived deals are excluded throughout — an archived deal did not
+    "convert", it was put away.
+    """
+    window_days = _bounded(window_days, DEFAULT_ANALYTICS_WINDOW_DAYS, 7, 365)
+
+    # Completed stage intervals: how long a deal sat in a stage before leaving it.
+    # LEAD() over the deal's own event chain gives the exit time; a NULL next event
+    # means the deal is still in that stage, which is an OPEN interval and would bias
+    # the average downward, so those rows are excluded rather than clamped to now().
+    duration_rows = pg_fetchall(
+        f"""
+        SELECT stage, EXTRACT(EPOCH FROM (next_at - changed_at)) / 86400.0 AS days
+          FROM (
+            SELECT e.new_stage AS stage, e.changed_at,
+                   LEAD(e.changed_at) OVER (
+                       PARTITION BY e.deal_id ORDER BY e.changed_at, e.id) AS next_at
+              FROM deal_stage_events e
+              JOIN deals d ON d.id = e.deal_id
+             WHERE {LIVE_PREDICATE_D}
+          ) s
+         WHERE next_at IS NOT NULL
+           AND changed_at >= now() - make_interval(days => %s)
+        """,
+        (window_days,),
+    )
+
+    # One row per (deal, stage) — the FIRST time that deal entered that stage inside
+    # the window. DISTINCT ON keeps a deal that bounced back into a stage from being
+    # counted twice in the same denominator.
+    conversion_rows = pg_fetchall(
+        f"""
+        SELECT DISTINCT ON (e.deal_id, e.new_stage)
+               e.new_stage AS stage, e.deal_id, d.stage AS current_stage
+          FROM deal_stage_events e
+          JOIN deals d ON d.id = e.deal_id
+         WHERE {LIVE_PREDICATE_D}
+           AND e.changed_at >= now() - make_interval(days => %s)
+         ORDER BY e.deal_id, e.new_stage, e.changed_at, e.id
+        """,
+        (window_days,),
+    )
+
+    # Velocity: deals won inside the window, and how long they took from their first
+    # recorded stage event. Deals that predate the log have no first event, so they
+    # are simply absent — never counted with a fabricated start date.
+    velocity_row = pg_fetchone(
+        f"""
+        SELECT COUNT(*) AS won_count,
+               AVG(EXTRACT(EPOCH FROM (won_at - first_at)) / 86400.0) AS avg_days_to_won
+          FROM (
+            SELECT e.deal_id,
+                   MIN(e.changed_at) AS first_at,
+                   MAX(e.changed_at) FILTER (WHERE e.new_stage = 'won') AS won_at
+              FROM deal_stage_events e
+              JOIN deals d ON d.id = e.deal_id
+             WHERE {LIVE_PREDICATE_D}
+             GROUP BY e.deal_id
+          ) s
+         WHERE won_at IS NOT NULL
+           AND won_at >= now() - make_interval(days => %s)
+        """,
+        (window_days,),
+    )
+
+    history_row = pg_fetchone(
+        "SELECT MIN(changed_at) AS since, "
+        "FLOOR(EXTRACT(EPOCH FROM (now() - MIN(changed_at))) / 86400.0)::int AS days "
+        "FROM deal_stage_events"
+    )
+    history_since = (history_row or {}).get("since")
+    history_days = (history_row or {}).get("days")
+
+    velocity = velocity_row or {}
+    avg_days_to_won = velocity.get("avg_days_to_won")
+    return {
+        "window_days": window_days,
+        # The log started when Phase 1 landed. When history_days < window_days the
+        # funnel below covers less ground than the window implies — say so.
+        "history_since": history_since,
+        "history_days": history_days,
+        "history_covers_window": bool(history_days is not None and history_days >= window_days),
+        "time_in_stage": _shape_stage_durations(duration_rows),
+        "conversion": _shape_conversion(conversion_rows),
+        "velocity": {
+            "won_in_window": int(velocity.get("won_count") or 0),
+            "avg_days_to_won": round(float(avg_days_to_won), 1) if avg_days_to_won is not None else None,
+        },
+    }

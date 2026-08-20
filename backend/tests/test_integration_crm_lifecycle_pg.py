@@ -63,7 +63,7 @@ def _clean(pg_db):
     pg_execute(
         "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
         "crm_field_definitions, crm_field_values, crm_field_provenance, "
-        "deal_stage_events RESTART IDENTITY"
+        "deal_stage_events, proactive_nudges RESTART IDENTITY"
     )
     yield
 

@@ -222,10 +222,12 @@ def test_clear_demo_data_truncates_when_sample_loaded(monkeypatch, fake_conn):
     stmts = [s for s, _ in conn.executed]
     # Base truncate: crm_field_values and crm_field_provenance ARE wiped, but
     # crm_field_definitions is NOT — demo-clear preserves the user's custom-field
-    # schema (only clear_all wipes it).
+    # schema (only clear_all wipes it). proactive_nudges trails: no FK, so nothing
+    # cascades it, and a stale cooldown would silence nudges on the reseeded data.
     assert any(
         "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
-        "crm_field_values, crm_field_provenance, deal_stage_events RESTART IDENTITY"
+        "crm_field_values, crm_field_provenance, deal_stage_events, "
+        "proactive_nudges RESTART IDENTITY"
         in s for s in stmts
     )
     assert not any("crm_field_definitions" in s for s in stmts)
@@ -262,7 +264,7 @@ def test_clear_all_truncates_and_resets_flag(monkeypatch, fake_conn):
     assert any(
         "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
         "crm_field_definitions, crm_field_values, crm_field_provenance, "
-        "deal_stage_events RESTART IDENTITY"
+        "deal_stage_events, proactive_nudges RESTART IDENTITY"
         in s for s in stmts
     )
     assert any("sample_data_loaded = FALSE" in s for s in stmts)
