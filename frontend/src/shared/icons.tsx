@@ -43,6 +43,7 @@ export function IconCheck(p: IconProps) { return <Ico d="M20 6 9 17l-5-5" {...p}
 export function IconX(p: IconProps) { return <Ico d="M18 6 6 18M6 6l12 12" {...p} />; }
 export function IconChevron(p: IconProps) { return <Ico d="m6 9 6 6 6-6" {...p} />; }
 export function IconChevronRight(p: IconProps) { return <Ico d="m9 6 6 6-6 6" {...p} />; }
+export function IconChevronLeft(p: IconProps) { return <Ico d="m15 6-6 6 6 6" {...p} />; }
 export function IconDot(p: IconProps) { return <Ico {...p}><circle cx="12" cy="12" r="3" fill="currentColor" /></Ico>; }
 export function IconMenu(p: IconProps) { return <Ico d="M4 6h16M4 12h16M4 18h16" {...p} />; }
 export function IconMore(p: IconProps) { return <Ico {...p}><circle cx="5" cy="12" r="1.2" fill="currentColor" /><circle cx="12" cy="12" r="1.2" fill="currentColor" /><circle cx="19" cy="12" r="1.2" fill="currentColor" /></Ico>; }

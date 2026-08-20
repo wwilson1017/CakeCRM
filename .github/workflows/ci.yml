@@ -75,7 +75,7 @@ jobs:
         run: python -m pytest -q
 
   frontend:
-    name: Frontend (build + lint)
+    name: Frontend (build + lint + test)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -101,6 +101,10 @@ jobs:
       - name: Lint (eslint)
         working-directory: frontend
         run: npm run lint
+
+      - name: Test (vitest)
+        working-directory: frontend
+        run: npm test
 
   secret-scan:
     name: Secret scan (gitleaks)

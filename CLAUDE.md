@@ -283,6 +283,20 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `@pytest.mark.integration` and deselected by default (`addopts = -m "not
   integration"`); run them with `pytest -m integration` and a reachable
   `TEST_ADMIN_DSN`. No `skip`/`xfail`/`# noqa`/`eslint-disable` — fix root causes.
+- **Frontend tests** are **vitest** (`npm test` → `vitest run`), landed with #73. Config
+  is a STANDALONE `frontend/vitest.config.ts` — vitest reads it *instead of*
+  `vite.config.ts`, so the production build config stays untouched and tests skip the
+  react/tailwind plugin pipeline. Tests are **co-located** with the code
+  (`src/**/*.{test,spec}.{ts,tsx}`), not in a separate tree. The default environment is
+  `node`; a DOM test opts in with a per-file `// @vitest-environment jsdom` docblock —
+  add them that way, never by flipping the default. Components are rendered with plain
+  `react-dom/client` `createRoot` + React's `act`; there is deliberately **no
+  `@testing-library`** dependency (`vitest` + `jsdom` are the only test devDeps). Three
+  fail-closed guards are load-bearing and must not be deleted as "defaults":
+  `passWithNoTests: false`, `allowOnly: false`, and `expect.requireAssertions: true`
+  (the last is NOT a vitest default) — a runner that reports "0 tests / exit 0" is a
+  permanent silent green, which is worse than no runner because it looks like coverage.
+  `env: { TZ: 'UTC' }` pins the timezone so local and CI agree.
 
 ## Don't Do This
 
@@ -329,7 +343,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 - **CI** (`.github/workflows/ci.yml`) runs on every PR to `main` and on `push` to
   `main`, in three jobs: **backend** (`ruff check .` → import check → `python -m
   pytest -q`, from `backend/`), **frontend** (`npm ci` → `npm run build` → `npm run
-  lint`), and **secret-scan** (gitleaks). Backend lint config is `backend/ruff.toml`
+  lint` → `npm test`), and **secret-scan** (gitleaks). Backend lint config is `backend/ruff.toml`
   (select `F,E,W,I`; `E501` ignored); dev/CI tooling is pinned in
   `backend/requirements-dev.txt`; tests live in `backend/tests/`. The import check
   imports the app with no `DATABASE_URL` (the Postgres pool inits in the lifespan
@@ -362,6 +376,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Gmail connection-race hardening (`connection_generation` optimistic lock + CAS on token persist; pending-draft binding through the shared confirm flow; ciphertext CAS on `mark_broken`; atomic clear-and-capture on disconnect/app-replace; capped recovery of attachment-stored text bodies) — **landed #43** across `backend/gmail/*` + `backend/assistant/{engine,history}.py` | Follow-up to #8 (no blueprint — back-port candidate to CAKE OS) |
 | Gmail touch-scan heartbeat job (read-only inbox scan → sender→contact match → idempotent `email` touch logging feeding #16; `gmail_scan_state`/`gmail_scanned_messages`/`gmail_unmatched_correspondents` tables; own `gmail_scan` scheduler job; "create contact?" alerts) — **landed #17** as `backend/gmail_scan/` | New capability (no blueprint — back-port candidate to CAKE OS) |
 | Kanban drag-and-drop | `cake_os/frontend/src/shared/dnd/` |
+| **Shared collection layer** (the CRM UI's interaction substrate) — **landed #73** as `frontend/src/shared/{search,listview,collection,overlay,hooks}/` with their co-located tests, plus the vitest harness. `search` (SearchInput/SearchFilterBar/SortControl + `match`/`persist`/`sort`), `listview` (ListView/ViewSwitcher + `headerSort`/`sortRows`), `collection` (CollectionView, `facets`, `useCollectionState`, `usePageAssembly`, `visibleOrder`, `views/{Cards,CollectionList,Kanban}`, `detail/CollectionDetail`, `closePolicy`), and `overlay/DetailModal` (pulled in because `CollectionDetail` wraps it). **#73 landed the layer ONLY — no CRM surface was rewired**; Pipeline/Contacts/detail adopt it in their own issues. Adaptations from the blueprint: `lucide-react` swapped for the in-repo `shared/icons.tsx` (no new dependency; `IconChevronLeft` added); the blueprint's `corrections` dependency reduced to a local 3-line `collection/voidedRowClass.ts` (the `voided` tri-state itself is generic and inert unless a config supplies `getVoided`); `shared/pagination` is NOT reachable from the layer and was not ported; the app-local `detailClosePolicy.ts` became `collection/closePolicy.ts` since CakeCRM has one CRM app; and the ported code was modernized for CakeCRM's stricter `eslint-plugin-react-hooks` v7 ruleset (`configs.recommended`, which the blueprint does not enable) — ref-writes-during-render and setState-in-effect were removed rather than suppressed. Styling: the layer keeps the blueprint's Tailwind utility classes, wired to CakeCRM's theme by **semantic aliases** in `index.css`'s `@theme static` (`cream`→`ck-card`, `sand`→`ck-bg`, `charcoal`→`ck-ink`, `muted`→`ck-ink-mute`, `line`→`ck-line-strong`, `brand`→`ck-accent`, `font-heading`→`font-display`) — declared as `var(...)` so `.dark` re-resolves them and the layer inherits dark mode with no `dark:` variants. Accent-as-TEXT deliberately routes through `text-ck-accent-text` per #54's WCAG rule, never `text-brand`. The `dock:` custom variant is defined in `index.css` for `DetailModal`'s takeover-vs-centred switch. | `cake_os/frontend/src/shared/{search,listview,collection,overlay}/` |
 | Theme + dark mode (fixed `--color-ck-*` palette, `.dark` semantic-token override, self-hosted Montserrat/Open Sans, `useTheme` + `ThemeToggle`, accent-picker removal) — **landed #54** as `frontend/src/index.css` + `core/theme/useTheme.ts` + `crm/components/ThemeToggle.tsx` | `cake_os/frontend/src/index.css` + `core/theme/useTheme.ts` (read from `origin/master`) |
 | Companies (first-class entity: `companies` table, `company_id` FKs, rollup detail page, text→FK backfill migration) — **landed #13** | `cake_os/backend/apps/crm/company_service.py` |
 | Company link coherence (shared batched `resolve_or_create_company_ids()` resolve-or-auto-create on every ingestion path; contact list/search LEFT JOIN + `company_name`; second one-shot backfill) — **landed #35** | New capability (gate decision on issue #35; shared with the #61 importer) |
