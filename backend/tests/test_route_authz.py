@@ -129,3 +129,24 @@ def test_admin_routes_do_not_also_take_the_plain_dependency(path, method):
             assert "get_current_user" not in names, (
                 f"{method} {p} depends on both require_admin and get_current_user"
             )
+
+
+# ── Blocking work must not run on the event loop ─────────────────────────────
+
+def test_credential_handlers_are_sync_defs():
+    """These handlers await nothing and do blocking psycopg2 I/O plus deliberately
+    expensive bcrypt work. As `async def`, FastAPI runs that ON the event loop, so a
+    burst of logins stalls every other request and every SSE stream. As sync `def`
+    they land in the threadpool, which is where blocking work belongs — the same
+    reason get_current_user is a sync def."""
+    import inspect
+
+    from core import auth
+    from users import router as users_router
+
+    for fn in (auth.login, auth.get_me, auth.change_password,
+               users_router.list_users, users_router.create_user,
+               users_router.update_user, users_router.reset_password):
+        assert not inspect.iscoroutinefunction(fn), (
+            f"{fn.__name__} is async but does blocking work with no await"
+        )

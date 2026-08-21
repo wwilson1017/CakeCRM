@@ -37,6 +37,7 @@ export function TeamSettings({ isMobile }: { isMobile: boolean }) {
   const [error, setError] = useState('');
   const [resettingId, setResettingId] = useState<number | null>(null);
   const [resetPassword, setResetPassword] = useState('');
+  const [resetClears2fa, setResetClears2fa] = useState(false);
 
   // Members don't get a Team card at all. The routes 403 regardless.
   if (!isAdmin) return null;
@@ -85,10 +86,14 @@ export function TeamSettings({ isMobile }: { isMobile: boolean }) {
     try {
       await api(`/api/users/${userId}/password`, {
         method: 'POST',
-        body: JSON.stringify({ new_password: resetPassword }),
+        body: JSON.stringify({
+          new_password: resetPassword,
+          clear_two_factor: resetClears2fa,
+        }),
       });
       setResettingId(null);
       setResetPassword('');
+      setResetClears2fa(false);
       toast.success('Password reset — tell them their new password');
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : 'Could not reset the password');
@@ -146,7 +151,16 @@ export function TeamSettings({ isMobile }: { isMobile: boolean }) {
               <button
                 type="button"
                 style={btnSmall}
-                onClick={() => { setResettingId(u.id); setResetPassword(''); }}
+                // Your own password goes through Change password, which asks for the
+                // current one and a 2FA code. This route deliberately asks for
+                // neither, which is right for helping a colleague and wrong as a
+                // self-service path — the server refuses it too.
+                disabled={u.id === currentUser?.id}
+                onClick={() => {
+                  setResettingId(u.id);
+                  setResetPassword('');
+                  setResetClears2fa(false);
+                }}
               >
                 Reset password
               </button>
@@ -181,6 +195,22 @@ export function TeamSettings({ isMobile }: { isMobile: boolean }) {
                 <p style={{ color: INK_MUTE, fontSize: 12, margin: 0 }}>
                   There is no email here to send a reset link to, so tell them this
                   password yourself. It ends their existing sessions.
+                </p>
+                <label style={{
+                  display: 'flex', alignItems: 'center', gap: 8, marginTop: 8,
+                  fontSize: 12, color: INK_MUTE, cursor: 'pointer',
+                }}>
+                  <input
+                    type="checkbox"
+                    checked={resetClears2fa}
+                    onChange={e => setResetClears2fa(e.target.checked)}
+                  />
+                  Also turn off their two-factor authentication
+                </label>
+                <p style={{ color: INK_MUTE, fontSize: 12, margin: '4px 0 0' }}>
+                  Only if they also lost their authenticator and their backup codes —
+                  a new password alone still leaves them stuck at the second factor.
+                  They should turn it back on once they are in.
                 </p>
               </div>
               <button type="button" style={btnPrimary} onClick={() => submitReset(resettingId)}>

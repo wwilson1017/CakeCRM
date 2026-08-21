@@ -324,23 +324,21 @@ export function CrmDashboardPage() {
           seat every row would just restate the totals above it. */}
       {analytics && perRep.length > 0 && users.length > 1 && (
         <div style={{ padding: `10px ${px} 0`, position: 'relative', zIndex: 2 }}>
-          <div style={sectionHeading(INK_SOFT)}>
-            By rep · last {analytics.window_days} days
-          </div>
+          <div style={sectionHeading(INK_SOFT)}>By rep</div>
           <div style={{ borderTop: `1px solid ${LINE}`, overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{ color: INK_SOFT, textAlign: 'left' }}>
                   <th style={repCell}>Rep</th>
-                  <th style={repNum}>Open</th>
-                  <th style={repNum}>Pipeline</th>
-                  <th style={repNum}>Won</th>
-                  <th style={repNum}>Lost</th>
-                  <th style={repNum} title="Distinct deals, contacts and companies this person touched. Compare reps on this one.">
-                    Records touched
+                  <th style={repNum} title="Deals they own right now, all time.">Open</th>
+                  <th style={repNum} title="Value of those open deals, all time.">Pipeline</th>
+                  <th style={repNum} title="Deals they own that closed won, all time.">Won</th>
+                  <th style={repNum} title="Deals they own that closed lost, all time.">Lost</th>
+                  <th style={repNum} title="Distinct deals, contacts and companies this person touched in the window. Compare reps on this one.">
+                    Records touched ({analytics.window_days}d)
                   </th>
-                  <th style={repNum} title="Every logged entry. One bulk action can inflate it.">
-                    Activity
+                  <th style={repNum} title="Every entry they logged in the window. One bulk action can inflate it.">
+                    Activity ({analytics.window_days}d)
                   </th>
                 </tr>
               </thead>
@@ -362,9 +360,11 @@ export function CrmDashboardPage() {
             </table>
           </div>
           <p style={{ color: INK_SOFT, fontSize: 12, marginTop: 6 }}>
-            Pipeline columns count deals this person owns; the activity columns count
-            work they did, wherever they did it. “Unattributed” is the assistant, the
-            Gmail scan and imported history — nobody is recorded as having done it.
+            Two different questions in one table, deliberately. The pipeline columns
+            are <strong>current state, all time</strong> — deals this person owns. The
+            two marked columns are <strong>windowed</strong> and count work they did,
+            wherever they did it. “Unattributed” is the assistant, the Gmail scan and
+            imported history — nobody is recorded as having done it.
           </p>
         </div>
       )}

@@ -23,10 +23,16 @@ export function TaskForm({ task, contactId, dealId, onClose, onSaved }: Props) {
   const [priority, setPriority] = useState(task?.priority || 'medium');
   const [selectedContact, setSelectedContact] = useState<number | null>(task?.contact_id ?? contactId ?? null);
   const [contacts, setContacts] = useState<CrmContact[]>([]);
-  // A record you create is yours by default; the picker can hand it to someone
-  // else or leave it unassigned. Always sent, like company_id — on an edit an
-  // explicit null is what clears the owner.
-  const [ownerId, setOwnerId] = useState<number | null>(task?.owner_id ?? currentUser?.id ?? null);
+  // Owner (issue #60). On an EDIT the record's own owner is used verbatim — `null`
+  // means unassigned and must survive, or saving an unrelated field would silently
+  // claim someone else's unowned record. On a CREATE the picker shows you as the
+  // default, but `owner_id` is only SENT if you actually touch it: an untouched
+  // create lets the server assign the caller, which is race-free (currentUser can
+  // still be resolving right after login) and keeps one rule in one place.
+  const [ownerId, setOwnerId] = useState<number | null>(
+    task ? (task.owner_id ?? null) : (currentUser?.id ?? null),
+  );
+  const [ownerTouched, setOwnerTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -44,7 +50,9 @@ export function TaskForm({ task, contactId, dealId, onClose, onSaved }: Props) {
     try {
       const body: Record<string, unknown> = { title, description, due_date: dueDate, priority };
       body.contact_id = selectedContact;  // always send (null unlinks the contact)
-      body.owner_id = ownerId;            // always send (null unassigns)
+      // Omitted on an untouched create so the server assigns the caller; on an
+      // edit always sent, where null unassigns.
+      if (isEdit || ownerTouched) body.owner_id = ownerId;
       if (dealId) body.deal_id = dealId;
 
       if (isEdit) {
@@ -97,7 +105,11 @@ export function TaskForm({ task, contactId, dealId, onClose, onSaved }: Props) {
               </select>
             </div>
             <div>
-              <OwnerSelect value={ownerId} onChange={setOwnerId} id="task-owner" />
+              <OwnerSelect
+              value={ownerId}
+              onChange={v => { setOwnerId(v); setOwnerTouched(true); }}
+              id="task-owner"
+            />
             </div>
           </div>
         </div>

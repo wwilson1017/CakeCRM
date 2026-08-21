@@ -59,27 +59,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
 
-  // Returns the user on success, null on failure — one round trip does both jobs
-  // (is this session still good, and who is it) rather than a second /api/me call.
-  const validateToken = useCallback(async (token: string): Promise<CurrentUser | null> => {
-    try {
-      const res = await fetch('/api/me', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) return null;
-      return (await res.json()) as CurrentUser;
-    } catch {
-      return null;
-    }
-  }, []);
+  // One round trip does both jobs — is this session still good, and who is it —
+  // rather than a second /api/me call.
+  //
+  // The three outcomes are deliberately distinct. A 401 is the server saying this
+  // token is dead, and only then may we throw it away. Anything else (503 while the
+  // database is down, a network drop, a 502 mid-deploy) means "cannot tell right
+  // now": the backend goes out of its way to answer 503 rather than 401 for exactly
+  // this reason, and collapsing that back into "logged out" would sign the whole
+  // team out during a blip and destroy sessions that were never invalid.
+  const validateToken = useCallback(
+    async (token: string): Promise<CurrentUser | 'invalid' | 'unknown'> => {
+      try {
+        const res = await fetch('/api/me', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.status === 401) return 'invalid';
+        if (!res.ok) return 'unknown';
+        return (await res.json()) as CurrentUser;
+      } catch {
+        return 'unknown';
+      }
+    },
+    [],
+  );
 
   const _completeLogin = useCallback((token: string) => {
     sessionStorage.setItem(TOKEN_KEY, token);
     setIsLoggedIn(true);
-    // Fetch the account behind the token we just stored. Failure here leaves
+    // Fetch the account behind the token we just stored. A failure leaves
     // currentUser null, which hides admin-only affordances — the safe direction,
     // and the server would refuse those routes anyway.
-    validateToken(token).then(setCurrentUser);
+    validateToken(token).then(r => setCurrentUser(typeof r === 'string' ? null : r));
     try {
       const ch = new BroadcastChannel(CHANNEL_NAME);
       ch.postMessage({ type: 'login', token });
@@ -91,10 +102,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async function init() {
       const token = sessionStorage.getItem(TOKEN_KEY);
       if (token) {
-        const user = await validateToken(token);
-        setIsLoggedIn(!!user);
-        setCurrentUser(user);
-        if (!user) sessionStorage.removeItem(TOKEN_KEY);
+        const result = await validateToken(token);
+        if (result === 'invalid') {
+          // Definitively dead — this is the only case that discards the token.
+          sessionStorage.removeItem(TOKEN_KEY);
+          setIsLoggedIn(false);
+        } else if (result === 'unknown') {
+          // Backend unreachable or erroring. Keep the token so the session survives
+          // the outage; the user lands on /login and one reload restores them once
+          // the backend is healthy again.
+          setIsLoggedIn(false);
+        } else {
+          setIsLoggedIn(true);
+          setCurrentUser(result);
+        }
       }
       setLoading(false);
     }
@@ -107,7 +128,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       channel.onmessage = async (e: MessageEvent) => {
         if (e.data?.type === 'login' && e.data.token) {
           const user = await validateToken(e.data.token);
-          if (!user) return;
+          if (typeof user === 'string') return;
           sessionStorage.setItem(TOKEN_KEY, e.data.token);
           setIsLoggedIn(true);
           setCurrentUser(user);

@@ -60,6 +60,10 @@ password keeps working — sign in with it and the bootstrap email above. Your
 two-factor setup and trusted devices carry over, and every record you already had
 becomes yours.
 
+**Take a backup first.** This upgrade changes the two-factor tables, so it is a
+one-way door: going back to an older CakeCRM build means restoring a pre-upgrade
+`pg_dump`, not just redeploying the old image.
+
 Add the rest of your team at **Settings → Team**. Two roles:
 
 - **Member** — the whole CRM: records, pipeline, tasks, notes, import, and the

@@ -111,17 +111,25 @@ def ensure_bootstrap_admin() -> dict | None:
 
         # auth_credential is left EXACTLY as it is — deliberately not cleared.
         #
-        # Clearing it looks like tidiness and is actually a downgrade hazard: the
-        # pre-#60 code reads a NULL hash as permission to fall back to AUTH_PASSWORD
-        # (core.auth.verify_password, before this issue). So during a rolling deploy,
-        # or after a rollback, an old process would happily accept the superseded env
-        # password. A duplicate bcrypt hash sitting in an unread table is much less
-        # dangerous than changing what authentication means mid-deploy.
+        # What that buys, precisely: the pre-#60 code reads a NULL hash as permission
+        # to fall back to AUTH_PASSWORD (core.auth.verify_password, before this
+        # issue). Clearing the hash would therefore let an old process accept a
+        # password the user had already replaced. Leaving it means the old code, if it
+        # ever runs again, still checks the credential the user actually chose.
+        #
+        # What it does NOT buy — and the release notes say so — is a reversible
+        # upgrade. This migration re-keys totp_config by user_id and drops its `id`
+        # column, so the pre-#60 2FA reads (WHERE id = 1) fail against the new schema.
+        # An old binary running after this migration cannot complete a login for an
+        # account with 2FA enabled. Rolling back means restoring a pre-upgrade dump,
+        # which is what the README's upgrade note tells operators to take. CakeCRM
+        # runs single-process (gunicorn --workers 1), so there is no mixed-version
+        # window to design around; a compatibility shim would be carrying real
+        # complexity for a deployment topology this product does not have.
         #
         # The table is vestigial from here on and cannot be dropped in this PR's
         # migration — migrations all run BEFORE this bootstrap, which is the one
-        # thing that still needs to read it. A later release drops it, once no
-        # install can still be rolled back to the single-user code.
+        # thing that still needs to read it. A later release drops it.
 
         seeded = {
             "id": admin_id,

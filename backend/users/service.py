@@ -231,7 +231,9 @@ def update_user(
         return updated
 
 
-def set_password_as_admin(user_id: int, new_plain: str) -> bool:
+def set_password_as_admin(
+    user_id: int, new_plain: str, clear_two_factor: bool = False
+) -> bool:
     """Admin resets another user's password. No current-password check by design.
 
     Self-hosted CakeCRM has no mail infrastructure, so an email-link reset is not
@@ -239,6 +241,14 @@ def set_password_as_admin(user_id: int, new_plain: str) -> bool:
     story (gate decision on #60). Bumping token_epoch ends that user's other
     sessions, which is the point when the reset is because their account was
     compromised.
+
+    ``clear_two_factor`` also disables that user's TOTP and drops their trusted
+    devices. It is opt-in rather than automatic because it is a real reduction in
+    that person's account security — but without it there is NO recovery path for a
+    member who lost both their authenticator and their backup codes: a new password
+    alone still leaves them stuck at the second factor. Same reasoning as
+    ``core.auth.apply_password_reset_env``, which does this unconditionally for the
+    operator's admin rescue.
     """
     with get_connection() as conn:
         cur = conn.cursor()
@@ -249,13 +259,30 @@ def set_password_as_admin(user_id: int, new_plain: str) -> bool:
             RETURNING id""",
             (hash_password(new_plain), user_id),
         )
-        return cur.fetchone() is not None
+        if cur.fetchone() is None:
+            return False
+        if clear_two_factor:
+            cur.execute(
+                """UPDATE totp_config
+                      SET enabled = FALSE, secret_enc = '', backup_codes = '[]',
+                          last_used_at = '', updated_at = now()
+                    WHERE user_id = %s""",
+                (user_id,),
+            )
+            cur.execute("DELETE FROM trusted_devices WHERE user_id = %s", (user_id,))
+        return True
 
 
 def change_own_password(user_id: int, current_plain: str, new_plain: str) -> int | None:
-    """Verify the current password and store a new one, in ONE transaction.
+    """Verify the current password, store a new one, and drop this user's trusted
+    devices — all in ONE transaction.
 
     Returns the NEW token epoch, or None when the current password doesn't match.
+
+    The device wipe belongs in here rather than in the caller: as a second
+    transaction, a failure between them returns 500 to a caller whose old JWT is
+    already dead, with no replacement token and with the device revocation the docs
+    promise not actually done.
 
     Returning the epoch is not a convenience — it closes a race. The caller mints a
     replacement token for the acting session, and if it re-read the epoch afterwards
@@ -280,7 +307,11 @@ def change_own_password(user_id: int, current_plain: str, new_plain: str) -> int
             RETURNING token_epoch""",
             (hash_password(new_plain), user_id),
         )
-        return int(cur.fetchone()[0])
+        epoch = int(cur.fetchone()[0])
+        # Scoped to this user: revoking the whole install's trusted devices because
+        # one person rotated their password would be a team-wide surprise.
+        cur.execute("DELETE FROM trusted_devices WHERE user_id = %s", (user_id,))
+        return epoch
 
 
 def bump_token_epoch(user_id: int) -> int:

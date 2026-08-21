@@ -27,10 +27,16 @@ export function ContactForm({ contact, onClose, onSaved }: Props) {
   const [tags, setTags] = useState(contact?.tags || '');
   const [notes, setNotes] = useState(contact?.notes || '');
   const [companyId, setCompanyId] = useState<number | null>(contact?.company_id ?? null);
-  // A record you create is yours by default; the picker can hand it to someone
-  // else or leave it unassigned. Always sent, like company_id — on an edit an
-  // explicit null is what clears the owner.
-  const [ownerId, setOwnerId] = useState<number | null>(contact?.owner_id ?? currentUser?.id ?? null);
+  // Owner (issue #60). On an EDIT the record's own owner is used verbatim — `null`
+  // means unassigned and must survive, or saving an unrelated field would silently
+  // claim someone else's unowned record. On a CREATE the picker shows you as the
+  // default, but `owner_id` is only SENT if you actually touch it: an untouched
+  // create lets the server assign the caller, which is race-free (currentUser can
+  // still be resolving right after login) and keeps one rule in one place.
+  const [ownerId, setOwnerId] = useState<number | null>(
+    contact ? (contact.owner_id ?? null) : (currentUser?.id ?? null),
+  );
+  const [ownerTouched, setOwnerTouched] = useState(false);
   const [companies, setCompanies] = useState<CrmCompany[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -79,7 +85,10 @@ export function ContactForm({ contact, onClose, onSaved }: Props) {
     // update endpoint keeps explicit nulls for FKs).
     const linked = companyId != null ? companyOptions.find(c => c.id === companyId) : undefined;
     const companyText = linked ? linked.name : company;
-    const body = JSON.stringify({ name, email, phone, company: companyText, title, source, status, tags, notes, company_id: companyId, owner_id: ownerId });
+    const payload: Record<string, unknown> = { name, email, phone, company: companyText, title, source, status, tags, notes, company_id: companyId };
+    // Omitted on an untouched create so the server assigns the caller.
+    if (isEdit || ownerTouched) payload.owner_id = ownerId;
+    const body = JSON.stringify(payload);
     try {
       let id: number;
       if (isEdit) {
@@ -139,7 +148,11 @@ export function ContactForm({ contact, onClose, onSaved }: Props) {
             </select>
           </div>
           <div>
-            <OwnerSelect value={ownerId} onChange={setOwnerId} id="contact-owner" />
+            <OwnerSelect
+              value={ownerId}
+              onChange={v => { setOwnerId(v); setOwnerTouched(true); }}
+              id="contact-owner"
+            />
           </div>
           <div><label style={labelStyle}>Tags (comma-separated)</label><input value={tags} onChange={e => setTags(e.target.value)} style={inputStyle} /></div>
           <div><label style={labelStyle}>Notes</label><textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3} style={{ ...inputStyle, resize: 'none' }} /></div>

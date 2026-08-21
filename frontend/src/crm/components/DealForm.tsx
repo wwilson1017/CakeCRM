@@ -30,10 +30,16 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
   const [selectedCompany, setSelectedCompany] = useState<number | null>(deal?.company_id ?? null);
   const [contacts, setContacts] = useState<CrmContact[]>([]);
   const [companies, setCompanies] = useState<CrmCompany[]>([]);
-  // A record you create is yours by default; the picker can hand it to someone
-  // else or leave it unassigned. Always sent, like company_id — on an edit an
-  // explicit null is what clears the owner.
-  const [ownerId, setOwnerId] = useState<number | null>(deal?.owner_id ?? currentUser?.id ?? null);
+  // Owner (issue #60). On an EDIT the record's own owner is used verbatim — `null`
+  // means unassigned and must survive, or saving an unrelated field would silently
+  // claim someone else's unowned record. On a CREATE the picker shows you as the
+  // default, but `owner_id` is only SENT if you actually touch it: an untouched
+  // create lets the server assign the caller, which is race-free (currentUser can
+  // still be resolving right after login) and keeps one rule in one place.
+  const [ownerId, setOwnerId] = useState<number | null>(
+    deal ? (deal.owner_id ?? null) : (currentUser?.id ?? null),
+  );
+  const [ownerTouched, setOwnerTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const cf = useCustomFieldsForm('deal', deal?.id);
@@ -90,7 +96,9 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
       };
       body.contact_id = selectedContact;  // always send (null unlinks the contact)
       body.company_id = selectedCompany;  // always send (null unlinks the company)
-      body.owner_id = ownerId;            // always send (null unassigns)
+      // Omitted on an untouched create so the server assigns the caller; on an
+      // edit always sent, where null unassigns.
+      if (isEdit || ownerTouched) body.owner_id = ownerId;
       let id: number;
       if (isEdit) {
         await api(`/api/crm/deals/${deal.id}`, { method: 'PUT', body: JSON.stringify(body) });
@@ -130,7 +138,11 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
             </select>
           </div>
           <div>
-            <OwnerSelect value={ownerId} onChange={setOwnerId} id="deal-owner" />
+            <OwnerSelect
+              value={ownerId}
+              onChange={v => { setOwnerId(v); setOwnerTouched(true); }}
+              id="deal-owner"
+            />
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div>

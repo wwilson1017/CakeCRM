@@ -49,6 +49,8 @@ class UserUpdateRequest(BaseModel):
 
 class PasswordResetRequest(BaseModel):
     new_password: str
+    # Opt-in, never automatic — see the route docstring.
+    clear_two_factor: bool = False
 
 
 def _validate_password(password: str) -> None:
@@ -67,7 +69,7 @@ def _validate_password(password: str) -> None:
 
 
 @router.get("")
-async def list_users(_user: dict = Depends(get_current_user)):
+def list_users(_user: dict = Depends(get_current_user)):
     """Every user on the install. Not admin-gated on purpose.
 
     Owner dropdowns, the pipeline owner facet and the per-rep analytics table all
@@ -79,7 +81,7 @@ async def list_users(_user: dict = Depends(get_current_user)):
 
 
 @router.post("")
-async def create_user(body: UserCreateRequest, _admin: dict = Depends(require_admin)):
+def create_user(body: UserCreateRequest, _admin: dict = Depends(require_admin)):
     """Create a user account (admin only)."""
     _validate_password(body.password)
     try:
@@ -91,7 +93,7 @@ async def create_user(body: UserCreateRequest, _admin: dict = Depends(require_ad
 
 
 @router.patch("/{user_id}")
-async def update_user(
+def update_user(
     user_id: int, body: UserUpdateRequest, admin: dict = Depends(require_admin)
 ):
     """Rename, change role, or activate/deactivate a user (admin only)."""
@@ -112,16 +114,35 @@ async def update_user(
 
 
 @router.post("/{user_id}/password")
-async def reset_password(
-    user_id: int, body: PasswordResetRequest, _admin: dict = Depends(require_admin)
+def reset_password(
+    user_id: int, body: PasswordResetRequest, admin: dict = Depends(require_admin)
 ):
-    """Set another user's password (admin only).
+    """Set ANOTHER user's password (admin only).
 
     This is the whole password-reset story for a self-hosted install: there is no
     mail infrastructure, so an email-link reset is not implementable and none is
     faked (gate decision on #60). It ends that user's existing sessions.
+
+    Resetting your OWN password here is refused. This route deliberately skips the
+    current-password check and the 2FA code that `/api/auth/change-password`
+    enforces — which is right for helping a colleague who is locked out, and wrong
+    as a self-service path, because it would let anyone who got hold of an admin
+    session set a new password without knowing the old one or passing 2FA.
+
+    `clear_two_factor` also disables the target's TOTP and drops their trusted
+    devices. Without it there is no recovery for someone who lost both their
+    authenticator and their backup codes — a new password still leaves them stuck at
+    the second factor. It is opt-in because it genuinely weakens that account, so it
+    should be a decision, not a side effect.
     """
+    if user_id == admin["id"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Use Settings → Change password to change your own password.",
+        )
     _validate_password(body.new_password)
-    if not service.set_password_as_admin(user_id, body.new_password):
+    if not service.set_password_as_admin(
+        user_id, body.new_password, clear_two_factor=body.clear_two_factor
+    ):
         raise HTTPException(status_code=404, detail="User not found.")
-    return {"ok": True}
+    return {"ok": True, "two_factor_cleared": body.clear_two_factor}

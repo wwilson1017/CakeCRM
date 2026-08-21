@@ -274,7 +274,30 @@ def test_change_password_happy_path(client, stub_user, no_2fa, monkeypatch):
     )
     assert r.status_code == 200
     assert calls == [(ADMIN_ID, CURRENT_PW, NEW_PW)]
-    assert no_2fa == [ADMIN_ID]  # only THIS user's devices were revoked
+
+
+def test_trusted_devices_are_revoked_inside_the_password_transaction(
+    client, stub_user, no_2fa, monkeypatch
+):
+    """As a second transaction after the write, a failed revocation returns 500 to a
+    caller whose old JWT is already dead — no replacement token, and the promised
+    revocation never happened. So change_own_password does it, and the route must
+    NOT also call the standalone revoke."""
+    _patch_change(monkeypatch, 9)
+    client.post(
+        "/api/auth/change-password",
+        json={"current_password": CURRENT_PW, "new_password": NEW_PW},
+    )
+    assert no_2fa == [], "the route revoked separately instead of in-transaction"
+
+
+def test_change_own_password_revokes_devices_in_one_transaction(monkeypatch, fake_conn):
+    stored = users_service.hash_password(CURRENT_PW)
+    conn = fake_conn(monkeypatch, users_service, fetchone_results=[(stored,), (9,)])
+    assert users_service.change_own_password(ADMIN_ID, CURRENT_PW, NEW_PW) == 9
+    sql = " | ".join(s for s, _ in conn.executed)
+    assert "FOR UPDATE" in sql
+    assert "DELETE FROM trusted_devices WHERE user_id = %s" in sql
 
 
 def test_replacement_token_carries_the_epoch_the_write_produced(
@@ -473,3 +496,39 @@ def test_reset_lever_failure_does_not_stop_the_app_booting(monkeypatch, caplog):
     with caplog.at_level("ERROR"):
         auth.apply_password_reset_env()
     assert "could not be reset" in caplog.text
+
+
+# ── Rate limiting must not become a self-inflicted DoS ───────────────────────
+
+def test_one_account_being_hammered_does_not_lock_out_the_team(client, stub_user, monkeypatch):
+    """Everyone in an office shares a NAT address. With a single per-IP bucket, one
+    colleague fat-fingering their password ten times would lock out the company."""
+    users = {
+        "a@x.test": _user_row(id=1, email="a@x.test"),
+        "b@x.test": _user_row(id=2, email="b@x.test"),
+    }
+    monkeypatch.setattr(users_service, "get_user_by_email", lambda e: users.get(e.strip().lower()))
+    monkeypatch.setattr("core.auth_2fa.is_2fa_enabled", lambda user_id: False)
+
+    for _ in range(10):
+        client.post("/api/login", json={"email": "a@x.test", "password": "wrong"})
+
+    # That account is now limited...
+    assert client.post(
+        "/api/login", json={"email": "a@x.test", "password": CURRENT_PW}
+    ).status_code == 429
+    # ...but their colleague on the same address is not.
+    assert client.post(
+        "/api/login", json={"email": "b@x.test", "password": CURRENT_PW}
+    ).status_code == 200
+
+
+def test_the_account_key_is_normalized(client, stub_user, monkeypatch):
+    """Otherwise 'Rep@X.test' and 'rep@x.test' are separate buckets and the limit is
+    trivially bypassed by changing the casing."""
+    monkeypatch.setattr("core.auth_2fa.is_2fa_enabled", lambda user_id: False)
+    for _ in range(10):
+        client.post("/api/login", json={"email": "admin@cakecrm.test", "password": "wrong"})
+    assert client.post(
+        "/api/login", json={"email": "  ADMIN@CakeCRM.TEST  ", "password": CURRENT_PW}
+    ).status_code == 429

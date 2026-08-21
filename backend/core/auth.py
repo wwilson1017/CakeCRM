@@ -77,8 +77,21 @@ def _check_rate(key: str, max_attempts: int, window: int) -> bool:
     return True
 
 
-def _check_login_rate(ip: str) -> bool:
-    return _check_rate(f"login:{ip}", max_attempts=10, window=300)
+def _check_login_rate(ip: str, email: str) -> bool:
+    """Rate-limit a login attempt on BOTH the source address and the account.
+
+    Two keys, because with accounts a single per-IP bucket is a denial of service on
+    your own team: everyone in one office shares a NAT address, so one person
+    fat-fingering their password ten times would lock out the whole company. The
+    per-account key does the real work (it is what an attacker has to grind), and the
+    per-IP ceiling is raised to a level a shared office can live with while still
+    bounding a broad sweep from one host.
+    """
+    account_ok = _check_rate(
+        f"login:acct:{users_service.normalize_email(email)}", max_attempts=10, window=300
+    )
+    ip_ok = _check_rate(f"login:ip:{ip}", max_attempts=50, window=300)
+    return account_ok and ip_ok
 
 
 # ── JWT helpers ──────────────────────────────────────────────────────────────
@@ -327,10 +340,16 @@ class LoginRequest(BaseModel):
 
 
 @router.post("/login")
-async def login(body: LoginRequest, request: Request):
-    """Email + password login. Returns a JWT, or a 2FA challenge."""
+def login(body: LoginRequest, request: Request):
+    """Email + password login. Returns a JWT, or a 2FA challenge.
+
+    A sync ``def`` for the same reason as ``get_current_user``: it awaits nothing and
+    does blocking psycopg2 I/O plus a deliberately expensive bcrypt verification. As
+    an ``async def`` FastAPI would run all of that on the event loop, so a burst of
+    login attempts would stall every other request and every SSE stream.
+    """
     client_ip = request.client.host if request.client else "unknown"
-    if not _check_login_rate(client_ip):
+    if not _check_login_rate(client_ip, body.email):
         raise HTTPException(status_code=429, detail="Too many login attempts. Try again in a few minutes.")
 
     try:
@@ -377,7 +396,7 @@ async def login(body: LoginRequest, request: Request):
 
 
 @router.get("/me")
-async def get_me(user: dict = Depends(get_current_user)):
+def get_me(user: dict = Depends(get_current_user)):
     """The signed-in user. Backs the frontend's session validation and "Mine" filters."""
     return user
 
@@ -392,7 +411,7 @@ class ChangePasswordRequest(BaseModel):
 
 
 @router.post("/auth/change-password")
-async def change_password(
+def change_password(
     body: ChangePasswordRequest,
     request: Request,
     user: dict = Depends(get_current_user),
@@ -423,12 +442,7 @@ async def change_password(
         raise HTTPException(status_code=400, detail="New password must differ from the current one.")
 
     # Lazy import: core.auth_2fa imports this module, so a top-level import is circular.
-    from core.auth_2fa import (
-        consume_backup_code,
-        is_2fa_enabled,
-        revoke_all_trusted_devices,
-        verify_totp_code,
-    )
+    from core.auth_2fa import consume_backup_code, is_2fa_enabled, verify_totp_code
 
     user_id = user["id"]
 
@@ -455,16 +469,14 @@ async def change_password(
         if not valid:
             raise HTTPException(status_code=400, detail="Invalid two-factor code.")
 
+    # change_own_password also drops this user's trusted devices, inside the same
+    # transaction — so the password, the epoch bump and the revocation land together
+    # or not at all.
     new_epoch = users_service.change_own_password(user_id, body.current_password, new_password)
     if new_epoch is None:
         # Lost the race with a concurrent change — the pre-check above passed against a
         # credential that is no longer current.
         raise HTTPException(status_code=400, detail="Current password is incorrect.")
-
-    # This user's other devices must re-authenticate with 2FA. Scoped to them:
-    # revoking the whole install's trusted devices because one person rotated their
-    # password would be a team-wide surprise.
-    revoke_all_trusted_devices(user_id)
 
     # Hand the acting session a fresh token stamped with the epoch THIS write
     # produced — not a re-read, which could pick up a concurrent change's later epoch

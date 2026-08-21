@@ -276,3 +276,32 @@ def test_display_name_prefers_name_then_email():
     assert service.display_name({"name": "Jo", "email": "jo@x.c"}) == "Jo"
     assert service.display_name({"name": "  ", "email": "jo@x.c"}) == "jo@x.c"
     assert service.display_name(None) == "Unassigned"
+
+
+# ── Admin reset: the 2FA escape hatch ────────────────────────────────────────
+
+def test_admin_reset_leaves_two_factor_alone_by_default(monkeypatch, fake_conn):
+    conn = fake_conn(monkeypatch, service, fetchone_results=[(1,)])
+    service.set_password_as_admin(1, "fresh-password")
+    sql = " | ".join(s for s, _ in conn.executed)
+    assert "totp_config" not in sql
+    assert "trusted_devices" not in sql
+
+
+def test_admin_reset_can_clear_two_factor_in_the_same_transaction(monkeypatch, fake_conn):
+    """Without this there is NO recovery for a member who lost both their
+    authenticator and their backup codes — a new password still leaves them stuck at
+    the second factor. Opt-in, because it genuinely weakens that account."""
+    conn = fake_conn(monkeypatch, service, fetchone_results=[(1,)])
+    service.set_password_as_admin(1, "fresh-password", clear_two_factor=True)
+    sql = " | ".join(s for s, _ in conn.executed)
+    assert "UPDATE totp_config" in sql and "enabled = FALSE" in sql
+    assert "DELETE FROM trusted_devices WHERE user_id = %s" in sql
+    # Scoped to the target, never install-wide.
+    assert all(1 in p for _, p in conn.executed if p)
+
+
+def test_a_missing_user_clears_nothing(monkeypatch, fake_conn):
+    conn = fake_conn(monkeypatch, service, fetchone_results=[None])
+    assert service.set_password_as_admin(404, "fresh-password", clear_two_factor=True) is False
+    assert "totp_config" not in " | ".join(s for s, _ in conn.executed)
