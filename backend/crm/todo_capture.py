@@ -15,6 +15,7 @@ Ported from chatty's `core/todo/capture.py`, with the settings moved from its JS
 admin-settings file onto the `crm_meta` singleton.
 """
 
+import asyncio
 import hmac
 import html
 import json
@@ -209,9 +210,20 @@ def _do_capture(text: str) -> dict:
 
 
 # ── Public mode (no token configured) ─────────────────────────────────────────
+#
+# ⚠️ EVERY handler below is a plain `def`, never `async def`, and that is
+# load-bearing on an UNAUTHENTICATED surface. All of them reach Postgres (the
+# settings read, and the capture insert), and psycopg2 blocks. FastAPI offloads a
+# sync handler to its threadpool; a blocking call inside an `async def` runs on the
+# event loop instead and never yields — so with the pool exhausted, one burst of
+# anonymous requests would stall EVERY request the app is serving (the deploy pins a
+# single worker). The two POSTs must stay async to `await request.body()`, so they
+# push the blocking half through `asyncio.to_thread` instead. Same rule as
+# crm/gtd_router.py's plain-def handlers and telegram/service.py's to_thread capture.
 
 @router.get("/capture", response_class=HTMLResponse)
-async def capture_page():
+def capture_page(request: Request):
+    _rate_or_429(request)
     _tokenless_or_404()
     return _page("/api/capture", "/capture")
 
@@ -220,16 +232,18 @@ async def capture_page():
 # No ambiguity either way: the token clamp strips dots, so a token can never
 # literally be "manifest.webmanifest".
 @router.get("/capture/manifest.webmanifest")
-async def capture_manifest():
+def capture_manifest(request: Request):
+    _rate_or_429(request)
     _tokenless_or_404()
     return _manifest("/capture")
 
 
 @router.post("/api/capture")
 async def capture_post(request: Request):
-    _tokenless_or_404()
     _rate_or_429(request)
-    return _do_capture(await _read_capture_text(request))
+    await asyncio.to_thread(_tokenless_or_404)
+    text = await _read_capture_text(request)
+    return await asyncio.to_thread(_do_capture, text)
 
 
 # ── Token mode ────────────────────────────────────────────────────────────────
@@ -246,7 +260,7 @@ def _require_token(token: str) -> str:
 
 
 @router.get("/capture/{token}", response_class=HTMLResponse)
-async def capture_page_token(token: str, request: Request):
+def capture_page_token(token: str, request: Request):
     # Rate-check BEFORE the token comparison: failed guesses must burn the same
     # per-IP budget as captures, or the secret is brute-forceable at line speed.
     _rate_or_429(request)
@@ -255,7 +269,7 @@ async def capture_page_token(token: str, request: Request):
 
 
 @router.get("/capture/{token}/manifest.webmanifest")
-async def capture_manifest_token(token: str, request: Request):
+def capture_manifest_token(token: str, request: Request):
     _rate_or_429(request)
     configured = _require_token(token)
     return _manifest(f"/capture/{configured}")
@@ -264,5 +278,6 @@ async def capture_manifest_token(token: str, request: Request):
 @router.post("/api/capture/{token}")
 async def capture_post_token(token: str, request: Request):
     _rate_or_429(request)
-    _require_token(token)
-    return _do_capture(await _read_capture_text(request))
+    await asyncio.to_thread(_require_token, token)
+    text = await _read_capture_text(request)
+    return await asyncio.to_thread(_do_capture, text)

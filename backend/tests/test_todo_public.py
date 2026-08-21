@@ -218,6 +218,81 @@ def test_the_unbuilt_frontend_503_is_still_uncacheable(client, surfaces, monkeyp
 
 # ── Tokens ────────────────────────────────────────────────────────────────────
 
+# ── The event loop must never block on these surfaces ─────────────────────────
+
+# The two POSTs legitimately stay `async def` — they must `await request.body()` —
+# and push their blocking work through asyncio.to_thread instead.
+_ASYNC_BY_DESIGN = {"capture_post", "capture_post_token"}
+
+
+def _handlers(router):
+    import inspect
+    return [(r.name, r.endpoint) for r in router.routes
+            if getattr(r, "endpoint", None) and inspect.isfunction(r.endpoint)]
+
+
+@pytest.mark.parametrize("module", [todo_capture, todo_web])
+def test_public_handlers_are_sync_so_blocking_db_calls_leave_the_event_loop(module):
+    """The single most damaging thing that could regress here.
+
+    Every one of these handlers reaches Postgres, and psycopg2 blocks. FastAPI
+    offloads a plain `def` to its threadpool; a blocking call inside an `async def`
+    runs ON the event loop and never yields. On an UNAUTHENTICATED surface, with the
+    deploy pinned to one worker, that turns an anonymous request burst into a stall of
+    every request the app is serving — login, the CRM API, SSE, health.
+    """
+    import inspect
+
+    offenders = [
+        name for name, fn in _handlers(module.router)
+        if inspect.iscoroutinefunction(fn) and name not in _ASYNC_BY_DESIGN
+    ]
+    assert not offenders, (
+        f"{module.__name__}: these public handlers are async and would block the "
+        f"event loop on their DB calls: {offenders}. Make them plain `def`, or "
+        f"offload the blocking work with asyncio.to_thread."
+    )
+
+
+def test_the_two_async_capture_posts_offload_their_blocking_work():
+    """They cannot be plain `def` (they await the request body), so prove they push
+    the DB half off the loop rather than doing it inline."""
+    import inspect
+
+    for name in _ASYNC_BY_DESIGN:
+        src = inspect.getsource(getattr(todo_capture, name))
+        # The insert and the token/settings read are the two blocking calls; both
+        # must go through to_thread, never be awaited inline.
+        assert "to_thread(_do_capture" in src, (
+            f"{name} must run _do_capture via asyncio.to_thread, not inline"
+        )
+        assert "to_thread(_tokenless_or_404" in src or "to_thread(_require_token" in src, (
+            f"{name} must run its settings/token read via asyncio.to_thread"
+        )
+
+
+def test_the_web_api_guards_are_sync():
+    """These are FastAPI dependencies, not routes, so the route scan above misses
+    them — and they gate every public CRUD call."""
+    import inspect
+
+    for guard in (todo_web._public_api_guard, todo_web._token_api_guard):
+        assert not inspect.iscoroutinefunction(guard), (
+            f"{guard.__name__} must be a plain def — it reads settings from Postgres "
+            f"on every public request."
+        )
+
+
+def test_every_tokenless_public_route_is_rate_limited():
+    """SECURITY.md promises a per-IP limit on every public endpoint; the two tokenless
+    GETs originally had none."""
+    import inspect
+
+    for name in ("capture_page", "capture_manifest"):
+        src = inspect.getsource(getattr(todo_capture, name))
+        assert "_rate_or_429" in src, f"{name} is a public route with no rate limit"
+
+
 def test_clamp_strips_path_breaking_characters():
     assert todo_tokens.clamp_token("ab/cd.ef?gh") == "abcdefgh"
     assert todo_tokens.clamp_token("  spaced  ") == "spaced"

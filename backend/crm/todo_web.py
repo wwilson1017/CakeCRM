@@ -144,12 +144,20 @@ def _manifest(base_path: str) -> Response:
 
 
 # ── Manifest ──────────────────────────────────────────────────────────────────
+#
+# ⚠️ Every handler and dependency below is a plain `def`, never `async def`. They all
+# read settings from Postgres, and psycopg2 blocks: FastAPI offloads a sync
+# handler/dependency to its threadpool, whereas a blocking call inside an `async def`
+# runs on the event loop and never yields. On this UNAUTHENTICATED surface that turns
+# an anonymous request burst into a stall of every request the app is serving, since
+# the deploy pins a single worker. Same rule as crm/todo_capture.py.
+#
 # Registered before the page catch-all so /todo/{...}/manifest.webmanifest matches
 # here first. No collision with tokens: the clamp strips dots, so a token can never
 # literally be "manifest.webmanifest".
 
 @router.get("/todo/manifest.webmanifest")
-async def todo_manifest(request: Request):
+def todo_manifest(request: Request):
     s = _settings()
     if not s["todo_web_enabled"] or s["todo_web_token"]:
         raise _not_found()
@@ -158,7 +166,7 @@ async def todo_manifest(request: Request):
 
 
 @router.get("/todo/{token}/manifest.webmanifest")
-async def todo_manifest_token(token: str, request: Request):
+def todo_manifest_token(token: str, request: Request):
     s = _settings()
     if not s["todo_web_enabled"]:
         raise _not_found()
@@ -171,7 +179,7 @@ async def todo_manifest_token(token: str, request: Request):
 
 @router.get("/todo", response_class=HTMLResponse)
 @router.get("/todo/{rest:path}", response_class=HTMLResponse)
-async def todo_web_page(request: Request, rest: str = ""):
+def todo_web_page(request: Request, rest: str = ""):
     """One handler for every in-app path so deep links and reloads work.
 
     In token mode the first path segment is the secret; everything after it is a
@@ -198,7 +206,7 @@ def _no_store(response: Response) -> None:
     response.headers["X-Robots-Tag"] = "noindex, nofollow"
 
 
-async def _public_api_guard(request: Request, response: Response):
+def _public_api_guard(request: Request, response: Response):
     s = _settings()
     if not s["todo_web_enabled"] or s["todo_web_token"]:
         raise _not_found()
@@ -206,7 +214,7 @@ async def _public_api_guard(request: Request, response: Response):
     _no_store(response)
 
 
-async def _token_api_guard(token: str, request: Request, response: Response):
+def _token_api_guard(token: str, request: Request, response: Response):
     s = _settings()
     if not s["todo_web_enabled"]:
         raise _not_found()
