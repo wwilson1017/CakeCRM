@@ -1,21 +1,50 @@
-"""DB-backed login credential + in-app password change (issue #78).
+"""Login, session validation and in-app password change (issues #78, #60).
 
-Hermetic: the auth module's Postgres access is stubbed (pg_fetchone for the read
-path, the fake connection for the FOR UPDATE transaction). bcrypt runs for real,
-so the round trips below prove actual hashes verify.
+Hermetic: the users service's Postgres access is stubbed. bcrypt runs for real, so
+the round trips below prove actual hashes verify.
+
+#78 built these behaviors against a single shared credential; #60 re-keyed them per
+user. What must still hold, and is pinned here:
+
+* a wrong current password answers 400, not 401 (a typo must not read as a logout);
+* the current-password check happens BEFORE the 2FA code, so a typo cannot spend a
+  single-use backup code;
+* a database outage on the login path is a 503, never a fallback to an env var;
+* the session-invalidation epoch is stamped at mint time from the SAME row the
+  password was verified against — never re-read afterwards.
 """
 
-from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-import bcrypt
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
-from jose import jwt
 
+from conftest import fake_admin
 from core import auth
 from core.auth import get_current_user
+from users import service as users_service
+
+CURRENT_PW = "old-password"
+NEW_PW = "brand-new-password"
+ADMIN_ID = 1
+
+
+def _user_row(**over):
+    """A users-table row as get_user returns it (password hash included)."""
+    row = {
+        "id": ADMIN_ID,
+        "email": "admin@cakecrm.test",
+        "name": "Test Admin",
+        "role": "admin",
+        "is_active": True,
+        "token_epoch": 3,
+        "password_hash": users_service.hash_password(CURRENT_PW),
+        "created_at": "2026-08-01T00:00:00+00:00",
+        "updated_at": "2026-08-01T00:00:00+00:00",
+    }
+    row.update(over)
+    return row
 
 
 def _bearer(token: str):
@@ -23,27 +52,32 @@ def _bearer(token: str):
     return SimpleNamespace(headers={"Authorization": f"Bearer {token}"})
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    """The limiter is module-level; it would leak across tests."""
+    auth._attempts.clear()
+    yield
+    auth._attempts.clear()
+
+
 @pytest.fixture
 def client():
     app = FastAPI()
     app.include_router(auth.router, prefix="/api")
-    app.dependency_overrides[get_current_user] = lambda: {"sub": "user", "role": "admin"}
+    app.dependency_overrides[get_current_user] = fake_admin
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()
 
 
-@pytest.fixture(autouse=True)
-def _reset_module_state():
-    """The limiter and the epoch cache are module-level; they'd leak across tests."""
-    auth._attempts.clear()
-    auth._token_epoch = None
-    yield
-    auth._attempts.clear()
-    auth._token_epoch = None
+@pytest.fixture
+def stub_user(monkeypatch):
+    """Point both user lookups at one row. Returns a setter so tests can mutate it."""
+    state = {"row": _user_row()}
 
-
-CURRENT_PW = "old-password"
+    monkeypatch.setattr(users_service, "get_user", lambda uid: state["row"])
+    monkeypatch.setattr(users_service, "get_user_by_email", lambda email: state["row"])
+    return state
 
 
 @pytest.fixture
@@ -52,414 +86,390 @@ def no_2fa(monkeypatch):
     import core.auth_2fa as auth_2fa
 
     revoked = []
-    monkeypatch.setattr(auth_2fa, "is_2fa_enabled", lambda: False)
-    monkeypatch.setattr(auth_2fa, "revoke_all_trusted_devices", lambda: revoked.append(True))
-    # The endpoint pre-checks the current password before spending a 2FA code.
-    monkeypatch.setattr(auth, "verify_password", lambda plain: plain == CURRENT_PW)
+    monkeypatch.setattr(auth_2fa, "is_2fa_enabled", lambda user_id: False)
+    monkeypatch.setattr(
+        auth_2fa, "revoke_all_trusted_devices", lambda user_id: revoked.append(user_id)
+    )
     return revoked
 
 
-def _stub_stored_hash(monkeypatch, value):
-    """Point core.auth's credential read at `value` (None = no DB credential yet)."""
-    row = None if value is None else {"password_hash": value}
-    monkeypatch.setattr(auth, "pg_fetchone", lambda sql, params=(): row)
+# ── Login ────────────────────────────────────────────────────────────────────
+
+def test_login_success_returns_token_bound_to_the_user(client, stub_user, monkeypatch):
+    monkeypatch.setattr("core.auth_2fa.is_2fa_enabled", lambda user_id: False)
+    r = client.post("/api/login", json={"email": "admin@cakecrm.test", "password": CURRENT_PW})
+    assert r.status_code == 200
+    payload = auth.decode_access_token(r.json()["access_token"])
+    assert payload["sub"] == str(ADMIN_ID)
+    assert payload["pwd_epoch"] == 3
+    # The role is deliberately NOT a claim — it would be stale the moment someone
+    # is demoted, and the dependency reads it live instead.
+    assert "role" not in payload
 
 
-# ── verify_password: resolution order ────────────────────────────────────────
-
-def test_db_hash_wins_over_env(monkeypatch):
-    """Once a DB hash exists, AUTH_PASSWORD is inert — the whole point of #78."""
-    monkeypatch.setattr(auth.settings.auth, "password", "env-password")
-    _stub_stored_hash(monkeypatch, auth._hash_password("db-password"))
-
-    assert auth.verify_password("db-password") is True
-    assert auth.verify_password("env-password") is False
+def test_login_wrong_password_401(client, stub_user):
+    r = client.post("/api/login", json={"email": "admin@cakecrm.test", "password": "nope"})
+    assert r.status_code == 401
 
 
-def test_falls_back_to_plaintext_env_when_no_db_hash(monkeypatch):
-    monkeypatch.setattr(auth.settings.auth, "password", "env-password")
-    _stub_stored_hash(monkeypatch, None)
+def test_unknown_email_and_wrong_password_are_indistinguishable(client, stub_user, monkeypatch):
+    """Different answers here would turn the login form into an account-enumeration oracle."""
+    monkeypatch.setattr(users_service, "get_user_by_email", lambda email: None)
+    unknown = client.post("/api/login", json={"email": "nobody@x.test", "password": "x"})
 
-    assert auth.verify_password("env-password") is True
-    assert auth.verify_password("wrong") is False
+    stub_user["row"] = _user_row()
+    monkeypatch.setattr(users_service, "get_user_by_email", lambda email: stub_user["row"])
+    wrong = client.post("/api/login", json={"email": "admin@cakecrm.test", "password": "x"})
 
-
-def test_falls_back_to_bcrypt_env_when_no_db_hash(monkeypatch):
-    hashed = bcrypt.hashpw(b"env-password", bcrypt.gensalt()).decode()
-    monkeypatch.setattr(auth.settings.auth, "password", hashed)
-    _stub_stored_hash(monkeypatch, None)
-
-    assert auth.verify_password("env-password") is True
-    assert auth.verify_password("wrong") is False
+    assert unknown.status_code == wrong.status_code == 401
+    assert unknown.json()["detail"] == wrong.json()["detail"]
 
 
-def test_absent_row_falls_back_to_env(monkeypatch):
-    """A pre-migration/empty table must behave exactly like the old env-only build."""
-    monkeypatch.setattr(auth.settings.auth, "password", "env-password")
-    monkeypatch.setattr(auth, "pg_fetchone", lambda sql, params=(): None)
+def test_unknown_email_still_spends_a_bcrypt_verification(client, monkeypatch):
+    """Answering an unknown address faster than a known one leaks which exist."""
+    monkeypatch.setattr(users_service, "get_user_by_email", lambda email: None)
+    spent = []
+    monkeypatch.setattr(users_service, "spend_dummy_verify", lambda: spent.append(True))
 
-    assert auth.verify_password("env-password") is True
+    client.post("/api/login", json={"email": "nobody@x.test", "password": "x"})
+    assert spent == [True]
 
 
-def test_login_fails_closed_when_credential_unreadable(monkeypatch, client):
-    """A DB outage must not resurrect the superseded AUTH_PASSWORD."""
-    monkeypatch.setattr(auth.settings.auth, "password", "env-password")
+def test_deactivated_user_cannot_log_in(client, stub_user):
+    stub_user["row"] = _user_row(is_active=False)
+    r = client.post("/api/login", json={"email": "admin@cakecrm.test", "password": CURRENT_PW})
+    assert r.status_code == 401
 
-    def _boom(sql, params=()):
+
+def test_login_fails_closed_when_the_user_store_is_unreadable(client, monkeypatch):
+    """A DB outage must never resurrect the AUTH_PASSWORD bootstrap value."""
+    def _boom(email):
         raise RuntimeError("Postgres pool not initialized")
 
-    monkeypatch.setattr(auth, "pg_fetchone", _boom)
-
-    r = client.post("/api/login", json={"password": "env-password"})
+    monkeypatch.setattr(users_service, "get_user_by_email", _boom)
+    r = client.post("/api/login", json={"email": "admin@cakecrm.test", "password": "x"})
     assert r.status_code == 503
 
 
-# ── set_password: transactional check-then-write ─────────────────────────────
-
-def test_set_password_locks_row_and_writes(monkeypatch, fake_conn):
-    conn = fake_conn(
-        monkeypatch, auth,
-        fetchone_results=[(auth._hash_password("old-password"),), (1,)],
-    )
-
-    assert auth.set_password("old-password", "new-password") is True
-
-    select_sql, _ = conn.executed[0]
-    assert "FOR UPDATE" in select_sql
-    insert_sql, params = conn.executed[1]
-    assert "auth_credential" in insert_sql and "ON CONFLICT" in insert_sql
-    # The stored value is a real hash of the new password, not the plaintext.
-    assert params[0] != "new-password"
-    assert bcrypt.checkpw(b"new-password", params[0].encode())
+def test_login_is_rate_limited(client, stub_user):
+    for _ in range(10):
+        client.post("/api/login", json={"email": "admin@cakecrm.test", "password": "wrong"})
+    r = client.post("/api/login", json={"email": "admin@cakecrm.test", "password": CURRENT_PW})
+    assert r.status_code == 429
 
 
-def test_set_password_rejects_wrong_current_and_writes_nothing(monkeypatch, fake_conn):
-    conn = fake_conn(monkeypatch, auth, fetchone_results=[(auth._hash_password("old-password"),)])
+def test_2fa_challenge_pending_token_names_the_user(client, stub_user, monkeypatch):
+    monkeypatch.setattr("core.auth_2fa.is_2fa_enabled", lambda user_id: True)
+    monkeypatch.setattr("core.auth_2fa.is_device_trusted", lambda token, user_id: False)
 
-    assert auth.set_password("not-the-password", "new-password") is False
-    assert len(conn.executed) == 1  # the SELECT only
-
-
-def test_set_password_accepts_env_password_on_first_change(monkeypatch, fake_conn):
-    """Bootstrap: the seeded row holds a NULL hash, so the env var authorizes change #1."""
-    monkeypatch.setattr(auth.settings.auth, "password", "env-password")
-    conn = fake_conn(monkeypatch, auth, fetchone_results=[(None,), (1,)])
-
-    assert auth.set_password("env-password", "new-password") is True
-    assert len(conn.executed) == 2
+    r = client.post("/api/login", json={"email": "admin@cakecrm.test", "password": CURRENT_PW})
+    body = r.json()
+    assert body["requires_2fa"] is True
+    payload = auth.decode_access_token(body["pending_token"])
+    assert payload["purpose"] == "2fa_pending"
+    assert payload["sub"] == str(ADMIN_ID)
+    assert payload["pwd_epoch"] == 3
 
 
-def test_set_password_bumps_the_token_epoch_in_the_same_statement(monkeypatch, fake_conn):
-    """The epoch must move with the hash, or a session could outlive its password."""
-    conn = fake_conn(
-        monkeypatch, auth,
-        fetchone_results=[(auth._hash_password("old-password"),), (7,)],
-    )
+# ── get_current_user ─────────────────────────────────────────────────────────
 
-    assert auth.set_password("old-password", "new-password") is True
-
-    write_sql, _ = conn.executed[1]
-    assert "token_epoch" in write_sql and "RETURNING token_epoch" in write_sql
-    assert auth.current_token_epoch() == 7  # cache updated without another read
+def test_valid_token_resolves_to_the_live_row(stub_user):
+    token = auth.create_user_token(stub_user["row"])
+    user = auth.get_current_user(_bearer(token))
+    assert user["id"] == ADMIN_ID
+    assert user["role"] == "admin"
+    # The credential columns must never cross the dependency boundary.
+    assert "password_hash" not in user
+    assert "token_epoch" not in user
 
 
-def test_set_password_round_trip(monkeypatch, fake_conn):
-    """The hash set_password writes is one verify_password later accepts."""
-    conn = fake_conn(
-        monkeypatch, auth,
-        fetchone_results=[(auth._hash_password("old-password"),), (1,)],
-    )
-    auth.set_password("old-password", "new-password")
-    stored = conn.executed[1][1][0]
-
-    _stub_stored_hash(monkeypatch, stored)
-    assert auth.verify_password("new-password") is True
-    assert auth.verify_password("old-password") is False
-
-
-# ── Password epoch: session invalidation ─────────────────────────────────────
-
-async def test_token_carries_the_current_epoch(monkeypatch):
-    monkeypatch.setattr(auth, "_token_epoch", 4)
-    payload = auth.decode_access_token(auth.create_access_token({"sub": "user"}))
-    assert payload["pwd_epoch"] == 4
-
-
-async def test_session_from_a_previous_epoch_is_rejected(monkeypatch):
-    """A device holding a token minted before the password changed must be signed out."""
-    monkeypatch.setattr(auth, "_token_epoch", 1)
-    stale = auth.create_access_token({"sub": "user", "role": "admin"})
-
-    monkeypatch.setattr(auth, "_token_epoch", 2)
-    monkeypatch.setattr(auth, "pg_fetchone", lambda sql, params=(): {"token_epoch": 2})
-
+def test_pre_multi_user_token_is_rejected_not_crashed(stub_user):
+    """Old tokens carry sub="user". That must 401, never 500 on the int cast."""
+    stale = auth.create_access_token({"sub": "user", "role": "admin", "pwd_epoch": 0})
     with pytest.raises(HTTPException) as exc:
-        await auth.get_current_user(_bearer(stale))
+        auth.get_current_user(_bearer(stale))
     assert exc.value.status_code == 401
-    assert "password change" in exc.value.detail.lower()
 
 
-async def test_current_session_survives(monkeypatch):
-    monkeypatch.setattr(auth, "_token_epoch", 3)
-    token = auth.create_access_token({"sub": "user", "role": "admin"})
+def test_stale_epoch_ends_the_session(stub_user):
+    token = auth.create_user_token(stub_user["row"])
+    stub_user["row"] = _user_row(token_epoch=4)  # someone changed the password
+    with pytest.raises(HTTPException) as exc:
+        auth.get_current_user(_bearer(token))
+    assert exc.value.status_code == 401
+    assert "password change" in exc.value.detail
 
-    payload = await auth.get_current_user(_bearer(token))
-    assert payload["sub"] == "user"
+
+def test_deactivation_takes_effect_on_the_next_request(stub_user):
+    """The whole point of the per-request lookup: no waiting for the JWT to expire."""
+    token = auth.create_user_token(stub_user["row"])
+    stub_user["row"] = _user_row(is_active=False)
+    with pytest.raises(HTTPException) as exc:
+        auth.get_current_user(_bearer(token))
+    assert exc.value.status_code == 401
+    assert "deactivated" in exc.value.detail
 
 
-async def test_pre_upgrade_token_without_the_claim_still_works(monkeypatch):
-    """Deploying this must not sign everyone out — only a password change should."""
-    monkeypatch.setattr(auth, "_token_epoch", 0)
-    legacy = jwt.encode(
-        {"sub": "user", "role": "admin",
-         "exp": datetime.now(timezone.utc) + timedelta(minutes=60)},
-        auth.settings.jwt.secret_key, algorithm=auth.settings.jwt.algorithm,
+def test_deleted_user_401s(stub_user, monkeypatch):
+    token = auth.create_user_token(stub_user["row"])
+    monkeypatch.setattr(users_service, "get_user", lambda uid: None)
+    with pytest.raises(HTTPException) as exc:
+        auth.get_current_user(_bearer(token))
+    assert exc.value.status_code == 401
+
+
+def test_database_outage_is_503_not_401(stub_user, monkeypatch):
+    """401 would eject every signed-in user to a login screen they also can't use."""
+    token = auth.create_user_token(stub_user["row"])
+
+    def _boom(uid):
+        raise RuntimeError("pool exhausted")
+
+    monkeypatch.setattr(users_service, "get_user", _boom)
+    with pytest.raises(HTTPException) as exc:
+        auth.get_current_user(_bearer(token))
+    assert exc.value.status_code == 503
+
+
+def test_pending_2fa_token_cannot_be_used_for_api_access(stub_user):
+    pending = auth.create_user_token(
+        stub_user["row"], expire_minutes=5, purpose="2fa_pending"
     )
-    assert "pwd_epoch" not in auth.decode_access_token(legacy)
-
-    payload = await auth.get_current_user(_bearer(legacy))
-    assert payload["sub"] == "user"
-
-
-async def test_stale_cache_is_refreshed_instead_of_signing_a_valid_session_out(monkeypatch):
-    """Guards a multi-worker deploy: a worker that missed the bump must re-read,
-    not reject a session that is actually current."""
-    monkeypatch.setattr(auth, "_token_epoch", 5)
-    token = auth.create_access_token({"sub": "user", "role": "admin"})
-
-    monkeypatch.setattr(auth, "_token_epoch", 2)  # this worker missed the change
-    reads = []
-
-    def _live(sql, params=()):
-        reads.append(sql)
-        return {"token_epoch": 5}
-
-    monkeypatch.setattr(auth, "pg_fetchone", _live)
-
-    payload = await auth.get_current_user(_bearer(token))
-    assert payload["sub"] == "user"
-    assert len(reads) == 1  # re-read only on mismatch
-    assert auth.current_token_epoch() == 5  # and the cache self-healed
+    with pytest.raises(HTTPException) as exc:
+        auth.get_current_user(_bearer(pending))
+    assert exc.value.status_code == 401
 
 
-async def test_matching_epoch_costs_no_database_read(monkeypatch):
-    """The whole point of caching: the happy path must not touch Postgres."""
-    monkeypatch.setattr(auth, "_token_epoch", 9)
-    token = auth.create_access_token({"sub": "user", "role": "admin"})
-
-    def _explode(sql, params=()):
-        raise AssertionError("get_current_user read the database on the happy path")
-
-    monkeypatch.setattr(auth, "pg_fetchone", _explode)
-    assert (await auth.get_current_user(_bearer(token)))["sub"] == "user"
+def test_require_admin_rejects_members(stub_user):
+    member = {"id": 2, "email": "m@x.test", "name": "M", "role": "member", "is_active": True}
+    with pytest.raises(HTTPException) as exc:
+        auth.require_admin(member)
+    assert exc.value.status_code == 403
 
 
-# ── POST /api/auth/change-password ───────────────────────────────────────────
+def test_require_admin_passes_the_user_through(stub_user):
+    admin = fake_admin()
+    assert auth.require_admin(admin) is admin
 
-def test_change_password_happy_path(monkeypatch, client, no_2fa):
-    monkeypatch.setattr(auth, "set_password", lambda cur, new: True)
 
+# ── Change password ──────────────────────────────────────────────────────────
+
+def _patch_change(monkeypatch, result):
+    """Stub the transactional write and record its arguments."""
+    calls = []
+
+    def _change(user_id, current_plain, new_plain):
+        calls.append((user_id, current_plain, new_plain))
+        return result
+
+    monkeypatch.setattr(users_service, "change_own_password", _change)
+    return calls
+
+
+def test_change_password_happy_path(client, stub_user, no_2fa, monkeypatch):
+    calls = _patch_change(monkeypatch, 9)
     r = client.post(
         "/api/auth/change-password",
-        json={"current_password": CURRENT_PW, "new_password": "new-password"},
+        json={"current_password": CURRENT_PW, "new_password": NEW_PW},
     )
     assert r.status_code == 200
-    # A fresh token keeps the acting session alive across the change.
-    assert auth.decode_access_token(r.json()["access_token"])["role"] == "admin"
-    assert no_2fa == [True]  # other devices must re-do 2FA
+    assert calls == [(ADMIN_ID, CURRENT_PW, NEW_PW)]
+    assert no_2fa == [ADMIN_ID]  # only THIS user's devices were revoked
 
 
-def test_change_password_wrong_current_is_400_not_401(monkeypatch, client, no_2fa):
-    """401 would make the frontend api() wrapper eject the user to /login on a typo."""
-    monkeypatch.setattr(auth, "set_password", lambda cur, new: False)
-
+def test_replacement_token_carries_the_epoch_the_write_produced(
+    client, stub_user, no_2fa, monkeypatch
+):
+    """Guards a real race: re-reading the epoch after the write could pick up a
+    concurrent change's later value and mint a token that outlives the password it
+    was issued for. The row still reports epoch 3; the write returned 9."""
+    _patch_change(monkeypatch, 9)
     r = client.post(
         "/api/auth/change-password",
-        json={"current_password": "wrong", "new_password": "new-password"},
+        json={"current_password": CURRENT_PW, "new_password": NEW_PW},
     )
-    assert r.status_code == 400
-    assert "current password" in r.json()["detail"].lower()
+    payload = auth.decode_access_token(r.json()["access_token"])
+    assert payload["pwd_epoch"] == 9
+    assert payload["sub"] == str(ADMIN_ID)
 
 
-def test_concurrent_change_losing_the_row_lock_is_reported(monkeypatch, client, no_2fa):
-    """The advisory pre-check can pass and set_password still lose the race; the
-    locked re-check is authoritative, so the caller must still get an error."""
-    monkeypatch.setattr(auth, "set_password", lambda cur, new: False)
-
+def test_change_password_wrong_current_is_400_not_401(client, stub_user, no_2fa, monkeypatch):
+    """401 would make the frontend treat a typo as an expired session and log you out."""
+    _patch_change(monkeypatch, None)
     r = client.post(
         "/api/auth/change-password",
-        json={"current_password": CURRENT_PW, "new_password": "new-password"},
-    )
-    assert r.status_code == 400
-
-
-def test_change_password_rejects_short_password(client, no_2fa):
-    r = client.post(
-        "/api/auth/change-password",
-        json={"current_password": CURRENT_PW, "new_password": "short"},
-    )
-    assert r.status_code == 400
-    assert str(auth.MIN_PASSWORD_LENGTH) in r.json()["detail"]
-
-
-def test_change_password_rejects_over_bcrypt_limit(client, no_2fa):
-    """bcrypt ignores bytes past 72, so accepting them would overstate the strength."""
-    r = client.post(
-        "/api/auth/change-password",
-        json={"current_password": CURRENT_PW, "new_password": "a" * 73},
+        json={"current_password": "wrong-password", "new_password": NEW_PW},
     )
     assert r.status_code == 400
 
 
-def test_change_password_rejects_unchanged_password(client, no_2fa):
+def test_losing_the_row_lock_race_is_reported(client, stub_user, no_2fa, monkeypatch):
+    """The advisory pre-check passed, but the locked re-check is authoritative."""
+    _patch_change(monkeypatch, None)
     r = client.post(
         "/api/auth/change-password",
-        json={"current_password": "same-password", "new_password": "same-password"},
+        json={"current_password": CURRENT_PW, "new_password": NEW_PW},
     )
     assert r.status_code == 400
 
 
-def test_change_password_rate_limited(monkeypatch, client, no_2fa):
-    monkeypatch.setattr(auth, "set_password", lambda cur, new: False)
-    body = {"current_password": "wrong", "new_password": "new-password"}
+@pytest.mark.parametrize(
+    "body,fragment",
+    [
+        ({"current_password": CURRENT_PW, "new_password": "short"}, "at least"),
+        ({"current_password": CURRENT_PW, "new_password": "x" * 73}, "at most"),
+        ({"current_password": CURRENT_PW, "new_password": CURRENT_PW}, "must differ"),
+    ],
+)
+def test_change_password_validation(client, stub_user, no_2fa, body, fragment):
+    r = client.post("/api/auth/change-password", json=body)
+    assert r.status_code == 400
+    assert fragment in r.json()["detail"]
 
+
+def test_change_password_is_rate_limited(client, stub_user, no_2fa, monkeypatch):
+    _patch_change(monkeypatch, None)
     for _ in range(5):
-        assert client.post("/api/auth/change-password", json=body).status_code == 400
-    assert client.post("/api/auth/change-password", json=body).status_code == 429
+        client.post(
+            "/api/auth/change-password",
+            json={"current_password": "wrong", "new_password": NEW_PW},
+        )
+    r = client.post(
+        "/api/auth/change-password",
+        json={"current_password": CURRENT_PW, "new_password": NEW_PW},
+    )
+    assert r.status_code == 429
 
 
-def test_change_password_route_requires_auth():
-    route = next(r for r in auth.router.routes if getattr(r, "path", "") == "/auth/change-password")
-    assert "get_current_user" in [d.call.__name__ for d in route.dependant.dependencies]
-
-
-# ── 2FA interaction ──────────────────────────────────────────────────────────
+# ── Change password with 2FA on ──────────────────────────────────────────────
 
 @pytest.fixture
 def with_2fa(monkeypatch):
     import core.auth_2fa as auth_2fa
 
-    monkeypatch.setattr(auth_2fa, "is_2fa_enabled", lambda: True)
-    monkeypatch.setattr(auth_2fa, "revoke_all_trusted_devices", lambda: None)
-    # Both stubs mirror the real semantics — they only accept the current password —
-    # so a test can't pass merely because a stub was unconditionally permissive.
-    monkeypatch.setattr(auth, "set_password", lambda cur, new: cur == CURRENT_PW)
-    monkeypatch.setattr(auth, "verify_password", lambda plain: plain == CURRENT_PW)
-    return auth_2fa
-
-
-def test_change_password_requires_code_when_2fa_enabled(client, with_2fa):
-    r = client.post(
-        "/api/auth/change-password",
-        json={"current_password": CURRENT_PW, "new_password": "new-password"},
-    )
-    assert r.status_code == 400
-    assert "two-factor" in r.json()["detail"].lower()
-
-
-def test_change_password_accepts_valid_totp(monkeypatch, client, with_2fa):
-    monkeypatch.setattr(with_2fa, "verify_totp_code", lambda code: code == "123456")
-
-    r = client.post(
-        "/api/auth/change-password",
-        json={"current_password": CURRENT_PW, "new_password": "new-password", "code": "123456"},
-    )
-    assert r.status_code == 200
-
-
-def test_change_password_accepts_backup_code(monkeypatch, client, with_2fa):
-    """Someone who lost their authenticator must still be able to rotate a leaked password."""
-    monkeypatch.setattr(with_2fa, "verify_totp_code", lambda code: False)
-    monkeypatch.setattr(with_2fa, "consume_backup_code", lambda code: code == "ABCD-1234")
-
-    r = client.post(
-        "/api/auth/change-password",
-        json={"current_password": CURRENT_PW, "new_password": "new-password", "code": "ABCD-1234"},
-    )
-    assert r.status_code == 200
-
-
-def test_change_password_rejects_bad_code(monkeypatch, client, with_2fa):
-    monkeypatch.setattr(with_2fa, "verify_totp_code", lambda code: False)
-    monkeypatch.setattr(with_2fa, "consume_backup_code", lambda code: False)
-
-    r = client.post(
-        "/api/auth/change-password",
-        json={"current_password": CURRENT_PW, "new_password": "new-password", "code": "000000"},
-    )
-    assert r.status_code == 400
-
-
-def test_wrong_current_password_does_not_spend_the_2fa_code(monkeypatch, client, with_2fa):
-    """A typo in the current-password field must not burn a single-use backup code.
-
-    verify_totp_code marks the timeslot used and consume_backup_code destroys the
-    code, so both must stay unreached until the current password has been checked.
-    """
     spent = []
-    monkeypatch.setattr(with_2fa, "verify_totp_code", lambda code: spent.append("totp") or True)
-    monkeypatch.setattr(with_2fa, "consume_backup_code", lambda code: spent.append("backup") or True)
+    monkeypatch.setattr(auth_2fa, "is_2fa_enabled", lambda user_id: True)
+    monkeypatch.setattr(auth_2fa, "revoke_all_trusted_devices", lambda user_id: None)
+    monkeypatch.setattr(
+        auth_2fa, "verify_totp_code",
+        lambda user_id, code: (spent.append(("totp", code)), code == "123456")[1],
+    )
+    monkeypatch.setattr(
+        auth_2fa, "consume_backup_code",
+        lambda user_id, code: (spent.append(("backup", code)), code == "AAAA-BBBB")[1],
+    )
+    return spent
 
+
+def test_change_password_requires_a_code_when_2fa_is_on(client, stub_user, with_2fa, monkeypatch):
+    _patch_change(monkeypatch, 4)
     r = client.post(
         "/api/auth/change-password",
-        json={"current_password": "wrong", "new_password": "new-password", "code": "ABCD-1234"},
+        json={"current_password": CURRENT_PW, "new_password": NEW_PW},
     )
     assert r.status_code == 400
-    assert "current password" in r.json()["detail"].lower()
-    assert spent == [], f"a 2FA code was consumed on a wrong-password request: {spent}"
+    assert "Two-factor code required" in r.json()["detail"]
 
 
-# ── Operator recovery lever ──────────────────────────────────────────────────
+def test_change_password_accepts_totp_then_backup(client, stub_user, with_2fa, monkeypatch):
+    _patch_change(monkeypatch, 4)
+    assert client.post(
+        "/api/auth/change-password",
+        json={"current_password": CURRENT_PW, "new_password": NEW_PW, "code": "123456"},
+    ).status_code == 200
+    auth._attempts.clear()
+    assert client.post(
+        "/api/auth/change-password",
+        json={"current_password": CURRENT_PW, "new_password": NEW_PW, "code": "AAAA-BBBB"},
+    ).status_code == 200
 
-def test_password_reset_env_noop_when_unset(monkeypatch, fake_conn):
+
+def test_change_password_rejects_a_bad_code(client, stub_user, with_2fa, monkeypatch):
+    _patch_change(monkeypatch, 4)
+    r = client.post(
+        "/api/auth/change-password",
+        json={"current_password": CURRENT_PW, "new_password": NEW_PW, "code": "000000"},
+    )
+    assert r.status_code == 400
+    assert "Invalid two-factor code" in r.json()["detail"]
+
+
+def test_a_wrong_current_password_never_spends_the_2fa_code(
+    client, stub_user, with_2fa, monkeypatch
+):
+    """Verifying a code consumes it. A typo in the password field must cost nothing."""
+    _patch_change(monkeypatch, None)
+    r = client.post(
+        "/api/auth/change-password",
+        json={"current_password": "wrong", "new_password": NEW_PW, "code": "AAAA-BBBB"},
+    )
+    assert r.status_code == 400
+    assert with_2fa == [], "the backup code was consumed by a failed password check"
+
+
+# ── AUTH_PASSWORD_RESET recovery lever ───────────────────────────────────────
+
+def test_reset_lever_is_a_no_op_when_unset(monkeypatch, fake_conn):
     monkeypatch.setattr(auth.settings.auth, "password_reset", "")
     conn = fake_conn(monkeypatch, auth)
-
     auth.apply_password_reset_env()
     assert conn.executed == []
 
 
-def test_password_reset_env_overwrites_hash_and_warns(monkeypatch, fake_conn, caplog):
+def test_reset_lever_restores_password_activation_and_clears_2fa(monkeypatch, fake_conn, caplog):
+    """A password-only rescue is useless to an operator who also lost their authenticator."""
     monkeypatch.setattr(auth.settings.auth, "password_reset", "rescue-password")
-    conn = fake_conn(monkeypatch, auth, fetchone_results=[(3,)])
-
+    conn = fake_conn(
+        monkeypatch, auth,
+        fetchone_results=[(ADMIN_ID, "admin@cakecrm.test"), (ADMIN_ID,)],
+    )
     with caplog.at_level("WARNING"):
         auth.apply_password_reset_env()
 
-    sql, params = conn.executed[0]
-    assert "auth_credential" in sql and "ON CONFLICT" in sql
-    assert bcrypt.checkpw(b"rescue-password", params[0].encode())
-    # A rescue must also end outstanding sessions, not just change the password.
-    assert "token_epoch" in sql
-    assert auth.current_token_epoch() == 3
-    # The operator must be told to remove it, or every restart re-resets the password.
+    sql = " | ".join(s for s, _ in conn.executed)
+    assert "FOR UPDATE" in sql
+    assert "is_active = TRUE" in sql
+    assert "token_epoch = token_epoch + 1" in sql
+    assert "UPDATE totp_config" in sql
+    assert "DELETE FROM trusted_devices" in sql
     assert "REMOVE this variable" in caplog.text
+    assert "Two-factor authentication was DISABLED" in caplog.text
 
 
-def test_password_reset_env_keeps_booting_when_the_write_fails(monkeypatch, caplog):
-    """A failed rescue must not take the app down — the old password still works."""
+def test_reset_lever_stays_quiet_about_2fa_when_none_was_enabled(monkeypatch, fake_conn, caplog):
+    monkeypatch.setattr(auth.settings.auth, "password_reset", "rescue-password")
+    # Second fetchone is the totp UPDATE ... RETURNING: no row means 2FA was already off.
+    fake_conn(monkeypatch, auth, fetchone_results=[(ADMIN_ID, "admin@cakecrm.test"), None])
+    with caplog.at_level("WARNING"):
+        auth.apply_password_reset_env()
+    assert "Two-factor authentication was DISABLED" not in caplog.text
+
+
+def test_reset_lever_warns_about_a_short_password(monkeypatch, fake_conn, caplog):
+    monkeypatch.setattr(auth.settings.auth, "password_reset", "short")
+    fake_conn(monkeypatch, auth, fetchone_results=[(ADMIN_ID, "admin@cakecrm.test"), None])
+    with caplog.at_level("WARNING"):
+        auth.apply_password_reset_env()
+    # Applied anyway — refusing would leave a locked-out operator with no lever.
+    assert "shorter than" in caplog.text
+
+
+def test_reset_lever_reports_an_install_with_no_admin(monkeypatch, fake_conn, caplog):
+    monkeypatch.setattr(auth.settings.auth, "password_reset", "rescue-password")
+    fake_conn(monkeypatch, auth, fetchone_results=[None])
+    with caplog.at_level("ERROR"):
+        auth.apply_password_reset_env()
+    assert "no admin account" in caplog.text
+
+
+def test_reset_lever_failure_does_not_stop_the_app_booting(monkeypatch, caplog):
+    """Raising here would turn a failed rescue into a total outage."""
     monkeypatch.setattr(auth.settings.auth, "password_reset", "rescue-password")
 
     def _boom():
-        raise RuntimeError("Postgres pool not initialized")
+        raise RuntimeError("db down")
 
     monkeypatch.setattr(auth, "get_connection", _boom)
-
     with caplog.at_level("ERROR"):
-        auth.apply_password_reset_env()  # must not raise
-
-    assert "could not be reset" in caplog.text
-    # The misleading success warning must NOT have been emitted.
-    assert "has been reset to its value" not in caplog.text
-
-
-def test_password_reset_env_applies_short_password_with_extra_warning(monkeypatch, fake_conn, caplog):
-    """Refusing a short value would leave a locked-out operator with no lever at all."""
-    monkeypatch.setattr(auth.settings.auth, "password_reset", "short")
-    conn = fake_conn(monkeypatch, auth, fetchone_results=[(1,)])
-
-    with caplog.at_level("WARNING"):
         auth.apply_password_reset_env()
-
-    assert len(conn.executed) == 1
-    assert "shorter than" in caplog.text
+    assert "could not be reset" in caplog.text

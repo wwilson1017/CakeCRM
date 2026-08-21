@@ -16,13 +16,14 @@ from fastapi.testclient import TestClient
 from core.auth import get_current_user
 from crm import provenance_service, scoring_service, service, touch_count_service
 from crm.router import router as crm_router
+from conftest import fake_admin
 
 
 @pytest.fixture
 def client():
     app = FastAPI()
     app.include_router(crm_router, prefix="/api/crm")
-    app.dependency_overrides[get_current_user] = lambda: {"sub": "u"}
+    app.dependency_overrides[get_current_user] = fake_admin
     return TestClient(app)
 
 
@@ -361,7 +362,12 @@ def test_every_route_requires_auth():
         if dependant is None:
             continue
         dep_names = [d.call.__name__ for d in dependant.dependencies]
-        assert "get_current_user" in dep_names, f"{route.path} is missing the auth dependency"
+        # require_admin depends on get_current_user, so either one authenticates the
+        # route. Which routes are admin-gated is pinned separately, in
+        # tests/test_route_authz.py.
+        assert {"get_current_user", "require_admin"} & set(dep_names), (
+            f"{route.path} is missing the auth dependency"
+        )
 
 
 # ── Companies (issue #13) ─────────────────────────────────────────────────────

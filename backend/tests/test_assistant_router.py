@@ -13,13 +13,14 @@ from fastapi.testclient import TestClient
 from assistant import router as router_mod
 from assistant.router import router as assistant_router
 from core.auth import get_current_user
+from conftest import fake_admin
 
 
 @pytest.fixture
 def client():
     app = FastAPI()
     app.include_router(assistant_router, prefix="/api/assistant")
-    app.dependency_overrides[get_current_user] = lambda: {"sub": "u"}
+    app.dependency_overrides[get_current_user] = fake_admin
     return TestClient(app)
 
 
@@ -378,4 +379,9 @@ def test_every_route_requires_auth():
         if dependant is None:
             continue
         dep_names = [d.call.__name__ for d in dependant.dependencies]
-        assert "get_current_user" in dep_names, f"{route.path} missing auth"
+        # require_admin depends on get_current_user, so either authenticates the route
+        # (PUT /identity is admin-only — the assistant is install-wide). Which routes
+        # are admin-gated is pinned in tests/test_route_authz.py.
+        assert {"get_current_user", "require_admin"} & set(dep_names), (
+            f"{route.path} missing auth"
+        )

@@ -29,7 +29,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from assistant import engine, history, identity, uploads
 from assistant.registry import ToolRegistry
-from core.auth import get_current_user
+from core.auth import get_current_user, require_admin
 from providers import get_ai_provider
 
 logger = logging.getLogger(__name__)
@@ -243,7 +243,7 @@ def get_identity(user=Depends(get_current_user)):
 
 
 @router.put("/identity")
-def update_identity(req: IdentityUpdateRequest, user=Depends(get_current_user)):
+def update_identity(req: IdentityUpdateRequest, user=Depends(require_admin)):
     if req.name is not None and not req.name.strip():
         raise HTTPException(status_code=400, detail="Name cannot be blank.")
     if req.name is not None and len(req.name) > _NAME_MAX:

@@ -86,7 +86,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, field_validator
 
-from core.auth import get_current_user
+from core.auth import get_current_user, require_admin
 from crm import (
     chatter_service,
     field_service,
@@ -417,7 +417,7 @@ async def update_deal(deal_id: int, body: DealUpdate, user=Depends(get_current_u
 async def touch_count_backfill(
     scope: str = Query("null", pattern="^(null|all)$"),
     force: bool = False,
-    user=Depends(get_current_user),
+    user=Depends(require_admin),
 ):
     """Backfill AI touch counts. scope=null (default) computes never-computed open deals;
     scope=all re-computes every open deal (repair). force bypasses the process-local
@@ -443,7 +443,7 @@ async def touch_count_backfill_status(user=Depends(get_current_user)):
 @router.post("/scores/backfill")
 async def scores_backfill(
     scope: str = Query("null", pattern="^(null|all)$"),
-    user=Depends(get_current_user),
+    user=Depends(require_admin),
 ):
     """Recompute stored lead scores. scope=null (default) scores only never-scored rows;
     scope=all rescores every deal + contact (drift repair). Pure-algorithmic and
@@ -601,7 +601,7 @@ async def demo_status(user=Depends(get_current_user)):
 
 
 @router.post("/load-sample-data")
-async def load_sample_data(user=Depends(get_current_user)):
+async def load_sample_data(user=Depends(require_admin)):
     """Seed fictional demo data on first run (idempotent — no-op if CRM has data)."""
     return crm.load_sample_data()
 
@@ -619,13 +619,13 @@ async def dismiss_ai_prompt(user=Depends(get_current_user)):
 
 
 @router.post("/demo-clear")
-async def demo_clear(user=Depends(get_current_user)):
+async def demo_clear(user=Depends(require_admin)):
     """Clear example data (guarded: no-op unless sample data was loaded)."""
     return crm.clear_demo_data()
 
 
 @router.post("/clear-all")
-async def clear_all(body: ClearAllBody, user=Depends(get_current_user)):
+async def clear_all(body: ClearAllBody, user=Depends(require_admin)):
     """Wipe ALL CRM data — deliberate real-data reset, gated by a confirmation phrase."""
     if body.confirmation != "clear crm":
         raise HTTPException(status_code=400, detail="Invalid confirmation phrase")
@@ -987,7 +987,7 @@ async def list_field_definitions(entity_type: str | None = None, user=Depends(ge
 
 
 @router.post("/fields")
-async def create_field_definition(body: FieldDefinitionCreate, user=Depends(get_current_user)):
+async def create_field_definition(body: FieldDefinitionCreate, user=Depends(require_admin)):
     try:
         return field_service.create_field_definition(body.model_dump())
     except ValueError as e:
@@ -1001,7 +1001,7 @@ async def create_field_definition(body: FieldDefinitionCreate, user=Depends(get_
 
 @router.put("/fields/{field_id}")
 async def update_field_definition(
-    field_id: int, body: FieldDefinitionUpdate, user=Depends(get_current_user)
+    field_id: int, body: FieldDefinitionUpdate, user=Depends(require_admin)
 ):
     # exclude_unset so an explicit "dropdown_options": null clears options while an
     # unsent key is left untouched (matches the service's "key present" semantics).
@@ -1021,7 +1021,7 @@ async def update_field_definition(
 
 
 @router.delete("/fields/{field_id}")
-async def delete_field_definition(field_id: int, user=Depends(get_current_user)):
+async def delete_field_definition(field_id: int, user=Depends(require_admin)):
     if not field_service.delete_field_definition(field_id):
         raise HTTPException(status_code=404, detail="Field not found")
     return {"ok": True}
@@ -1042,7 +1042,8 @@ async def get_field_values(entity_type: str, entity_id: int, user=Depends(get_cu
 async def set_field_values(
     entity_type: str, entity_id: int, body: FieldValuesUpdate, user=Depends(get_current_user)
 ):
-    # No email claim in CakeCRM JWTs (payload is {"sub","role"}); fall back to sub.
+    # Since #60 the dependency returns a live user row, so this resolves to a real
+    # address. The sub fallback stays for the degenerate case of a row with no email.
     editor = user.get("email") or user.get("sub") or ""
     # Offloaded to a thread (like the bulk CSV import): this write holds an entity
     # FOR UPDATE lock while doing up to 200 upserts, so it must not block the loop.

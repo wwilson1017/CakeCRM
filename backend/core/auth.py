@@ -1,35 +1,49 @@
 """
 CakeCRM — Authentication utilities.
 
-Single-user password login with JWT. Optional TOTP two-factor authentication.
-The login endpoint checks the password and, if 2FA is enabled, issues a
-short-lived pending token requiring a TOTP code before granting access.
+Email + password login against the `users` table, with JWT sessions and optional
+per-user TOTP two-factor authentication. The login endpoint checks the credential
+and, if that user has 2FA on, issues a short-lived pending token requiring a TOTP
+code before granting access.
 
-The credential itself is DB-backed (issue #78): the `auth_credential` singleton
-holds a bcrypt hash the logged-in user can change from Settings. AUTH_PASSWORD is
-only the bootstrap value, consulted while that hash IS NULL — so once the user
-picks their own password the env var is inert and cannot silently override it on
-the next boot. AUTH_PASSWORD_RESET is the operator's recovery lever; see
-apply_password_reset_env.
+**Authorization is exactly two enforcement points** (issue #60 Phase A):
 
-Multi-user (seats) is roughed in behind MULTI_USER_ENABLED=false for a
-future phase.
+* ``get_current_user`` — authentication *and* liveness. It does one indexed
+  primary-key lookup per request, so a deactivated user, a changed role and an ended
+  session all bite on the very next request rather than at token expiry.
+* ``require_admin`` — applied per-route to an enumerated list of install-configuration
+  and destructive operations.
+
+Record ownership is deliberately NOT a third one. ``owner_id`` is an assignment, a
+filter and an analytics dimension; any member can read, edit, delete and reassign any
+record. "No per-object ACLs" is a product decision, stated here rather than implied by
+the absence of code.
+
+The JWT carries ``sub`` (the user id) and ``pwd_epoch``. It does **not** carry the
+role: with a DB-backed dependency a role in the token could only ever be stale, and a
+demotion has to take effect on the next request, not at expiry. ``pwd_epoch`` is #78's
+session-invalidation scheme re-keyed per user — ``users.token_epoch`` is bumped by a
+password change, an admin reset and a deactivation, so those end that person's other
+sessions without touching anybody else's.
+
+Bootstrap: ``users.bootstrap.ensure_bootstrap_admin`` seeds the first admin in the
+lifespan. ``AUTH_PASSWORD`` is a first-boot seed only and is inert once a user exists;
+``AUTH_PASSWORD_RESET`` is the operator's recovery lever (see below).
 """
 
-import hmac
 import logging
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
-import bcrypt as _bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from jose import JWTError, jwt
 from pydantic import BaseModel
 
 from core.config import settings
-from core.postgres import get_connection, pg_fetchone
+from core.postgres import get_connection
+from users import service as users_service
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +56,11 @@ PENDING_TOKEN_EXPIRE_MINUTES = 5
 # ignored, so accepting them would overstate the strength being stored.
 MIN_PASSWORD_LENGTH = 8
 MAX_PASSWORD_LENGTH = 72
+
+# One message for "no such email" and "wrong password" alike. Telling them apart
+# turns the login form into an account-enumeration oracle.
+_BAD_CREDENTIALS = "Incorrect email or password"
+
 
 # ── Rate limiting (in-memory) ────────────────────────────────────────────────
 
@@ -62,42 +81,31 @@ def _check_login_rate(ip: str) -> bool:
     return _check_rate(f"login:{ip}", max_attempts=10, window=300)
 
 
-# ── Password epoch (session invalidation) ────────────────────────────────────
-#
-# Every JWT carries the password epoch it was minted under; changing the password
-# bumps it, so sessions on other devices stop working at their next request rather
-# than living on until JWT_EXPIRE_MINUTES. The value is cached in-process — the
-# deploy pins gunicorn --workers 1, and the happy path does ZERO database reads.
-# It is deliberately NOT a bare per-request read: that would put the database on
-# the critical path of every authenticated request, including SSE streaming.
-# A cache miss is self-healing rather than fatal — see get_current_user, which
-# re-reads before rejecting, so even a multi-worker deploy converges instead of
-# spuriously logging people out.
-
-_token_epoch: int | None = None
-
-
-def current_token_epoch() -> int:
-    """The cached epoch. 0 until the lifespan loads it (and in hermetic tests)."""
-    return _token_epoch if _token_epoch is not None else 0
-
-
-def refresh_token_epoch() -> int:
-    """Re-read the epoch from the database and update the cache."""
-    global _token_epoch
-    row = pg_fetchone("SELECT token_epoch FROM auth_credential WHERE id = 1")
-    _token_epoch = int(row["token_epoch"]) if row else 0
-    return _token_epoch
-
-
 # ── JWT helpers ──────────────────────────────────────────────────────────────
 
 def create_access_token(data: dict, expire_minutes: int | None = None) -> str:
-    """Create a signed JWT with the given claims, the current password epoch, and expiry."""
+    """Sign a JWT with the given claims and an expiry.
+
+    Unlike the single-user version this does NOT inject an epoch: the epoch is
+    per-user now, so only a caller that knows which user is being minted for can
+    supply it. Use ``create_user_token`` for that — it is the only correct way to
+    mint a session token.
+    """
     minutes = expire_minutes if expire_minutes is not None else settings.jwt.expire_minutes
     expire = datetime.now(timezone.utc) + timedelta(minutes=minutes)
-    to_encode = {"pwd_epoch": current_token_epoch(), **data, "exp": expire}
-    return jwt.encode(to_encode, settings.jwt.secret_key, algorithm=settings.jwt.algorithm)
+    return jwt.encode({**data, "exp": expire}, settings.jwt.secret_key, algorithm=settings.jwt.algorithm)
+
+
+def create_user_token(user: dict, expire_minutes: int | None = None, **extra) -> str:
+    """Mint a session (or pending) token for one user, stamped with their epoch."""
+    return create_access_token(
+        {
+            "sub": str(user["id"]),
+            "pwd_epoch": int(user.get("token_epoch") or 0),
+            **extra,
+        },
+        expire_minutes=expire_minutes,
+    )
 
 
 def decode_access_token(token: str) -> dict:
@@ -105,186 +113,203 @@ def decode_access_token(token: str) -> dict:
     return jwt.decode(token, settings.jwt.secret_key, algorithms=[settings.jwt.algorithm])
 
 
-async def get_current_user(request: Request) -> dict:
-    """
-    FastAPI dependency — extracts and validates the JWT from the
-    Authorization: Bearer <token> header.
+def _unauthorized(detail: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=detail,
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
-    Raises 401 if missing, invalid, expired, or if the token is a
-    2FA pending token (which cannot be used for API access).
+
+def get_current_user(request: Request) -> dict:
+    """FastAPI dependency — validate the bearer token and load the live user row.
+
+    Deliberately a **sync** ``def``. It performs blocking psycopg2 I/O, and an
+    ``async def`` dependency runs directly on the event loop — which would stall
+    every other request, including the assistant's SSE streams, on each
+    authenticated call. As a sync dependency FastAPI runs it in its worker
+    threadpool, where blocking I/O belongs.
+
+    Returns the user as a dict (``id``, ``email``, ``name``, ``role``, ``is_active``),
+    never the password hash. Raises 401 if the header is missing, the token is
+    invalid/expired, it is a 2FA pending token, the user no longer exists, has been
+    deactivated, or the session predates their current password.
+
+    This costs one indexed PK lookup per authenticated request. The single-user code
+    cached the epoch in-process to keep the happy path at zero DB reads; that cache
+    cannot survive multi-user (it was one global epoch for the whole install), and
+    liveness has to be read anyway for ``is_active`` and the current role. Folding all
+    three into one row read is both simpler and stricter than a cache that could be
+    stale — and it is why deactivating a user locks them out effectively immediately.
     """
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise _unauthorized("Not authenticated")
 
     token = auth_header.removeprefix("Bearer ").strip()
     try:
         payload = decode_access_token(token)
     except JWTError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise _unauthorized("Invalid or expired token")
 
     if payload.get("purpose") == "2fa_pending":
+        raise _unauthorized("2FA verification required")
+
+    # Pre-#60 tokens carry sub="user", which is not an int. They fail here, the
+    # frontend's existing 401 path shows the login screen, and the upgrade costs one
+    # re-login and nothing else.
+    try:
+        user_id = int(payload.get("sub", ""))
+    except (TypeError, ValueError):
+        raise _unauthorized("Invalid or expired token")
+
+    try:
+        user = users_service.get_user(user_id)
+    except Exception:
+        # A database outage must not read as "your session ended" — that would eject
+        # everyone to the login screen, where they also could not get in. 503 tells
+        # the truth and the frontend leaves the session alone.
+        logger.exception("Could not load the current user — failing closed")
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="2FA verification required",
-            headers={"WWW-Authenticate": "Bearer"},
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication service temporarily unavailable",
         )
 
-    # Reject sessions minted before the current password. A token predating this
-    # feature has no claim and reads as epoch 0, which is what it was minted under,
-    # so upgrading does not sign anyone out — the first password change does.
-    claimed_epoch = payload.get("pwd_epoch", 0)
-    if claimed_epoch != current_token_epoch():
-        # Only now touch the database: the cache may simply be stale (another worker
-        # processed the change). Re-read before rejecting so a valid session survives.
-        try:
-            live_epoch = refresh_token_epoch()
-        except Exception:
-            logger.exception("Could not verify the password epoch — rejecting the session")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Session could not be verified",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        if claimed_epoch != live_epoch:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Session ended by a password change",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+    if not user:
+        raise _unauthorized("Invalid or expired token")
+    if not user["is_active"]:
+        raise _unauthorized("This account has been deactivated")
+    if int(payload.get("pwd_epoch", 0)) != int(user["token_epoch"] or 0):
+        raise _unauthorized("Session ended by a password change")
 
-    return payload
+    return {**users_service.public_view(user), "sub": str(user["id"])}
 
 
-# ── Password storage + verification ──────────────────────────────────────────
+def require_admin(user: dict = Depends(get_current_user)) -> dict:
+    """Dependency for install-configuration and destructive routes.
 
-def _hash_password(plain: str) -> str:
-    return _bcrypt.hashpw(plain.encode(), _bcrypt.gensalt()).decode()
+    Returns the same user dict, so a route needs only this one dependency — FastAPI
+    caches ``get_current_user`` within a request, so gating a route costs no extra
+    database read.
 
-
-def _verify_env_password(plain: str) -> bool:
-    """Verify against the AUTH_PASSWORD bootstrap value (bcrypt hash or plaintext)."""
-    stored = settings.auth.password
-    if stored.startswith("$2b$") or stored.startswith("$2a$"):
-        return _bcrypt.checkpw(plain.encode(), stored.encode())
-    return hmac.compare_digest(plain, stored)
-
-
-def get_stored_hash() -> str | None:
-    """Return the DB-backed password hash, or None while the user has set none."""
-    row = pg_fetchone("SELECT password_hash FROM auth_credential WHERE id = 1")
-    return row["password_hash"] if row else None
-
-
-def verify_password(plain: str) -> bool:
-    """Verify a password against the live credential.
-
-    Resolution order: the auth_credential hash wins whenever one is set; the
-    AUTH_PASSWORD env var is the bootstrap credential, consulted only until the
-    user sets their own. Raises if the credential cannot be read — callers on the
-    login path convert that to a 503 rather than silently falling back to the env
-    var, which would let a database outage resurrect a superseded password.
+    403, not 404: the caller is authenticated and the route exists — hiding that
+    would only make a member's UI harder to debug, and the route list is in the
+    OpenAPI schema regardless.
     """
-    stored = get_stored_hash()
-    if stored is not None:
-        return _bcrypt.checkpw(plain.encode(), stored.encode())
-    return _verify_env_password(plain)
-
-
-def set_password(current_plain: str, new_plain: str) -> bool:
-    """Verify `current_plain` and store `new_plain`, in ONE transaction.
-
-    Returns False when the current password doesn't match. The row is locked
-    FOR UPDATE across the check and the write so two concurrent changes can't both
-    validate against the same old credential — the migration seeds the row
-    precisely so this lock always has something to hold.
-    """
-    global _token_epoch
-    new_hash = _hash_password(new_plain)
-    with get_connection() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT password_hash FROM auth_credential WHERE id = 1 FOR UPDATE")
-        row = cur.fetchone()
-        current_hash = row[0] if row else None
-
-        if current_hash is not None:
-            if not _bcrypt.checkpw(current_plain.encode(), current_hash.encode()):
-                return False
-        elif not _verify_env_password(current_plain):
-            return False
-
-        # Bump the epoch in the SAME statement as the hash, so a session can never be
-        # left valid against a password that no longer exists.
-        cur.execute(
-            """INSERT INTO auth_credential (id, password_hash, token_epoch, updated_at)
-               VALUES (1, %s, 1, now())
-               ON CONFLICT (id) DO UPDATE SET
-                   password_hash = excluded.password_hash,
-                   token_epoch = auth_credential.token_epoch + 1,
-                   updated_at = now()
-               RETURNING token_epoch""",
-            (new_hash,),
+    if user.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This action requires an admin account.",
         )
-        _token_epoch = int(cur.fetchone()[0])
-    return True
+    return user
+
+
+# ── Password verification ────────────────────────────────────────────────────
+
+def verify_password_for(user_id: int, plain: str) -> bool:
+    """Verify a plaintext password against one user's stored hash.
+
+    The single re-authentication primitive: login and all four confirmation
+    endpoints (2FA setup/disable/regenerate-codes, change-password) route through it,
+    so the rules live in exactly one place. Bcrypt-only and fails closed — see
+    ``users.service.verify_user_password``.
+    """
+    user = users_service.get_user(user_id)
+    if not user:
+        return False
+    return users_service.verify_user_password(plain, user.get("password_hash"))
 
 
 def apply_password_reset_env() -> None:
-    """Operator recovery lever: AUTH_PASSWORD_RESET overwrites the stored credential.
+    """Operator recovery lever: AUTH_PASSWORD_RESET resets the primary admin.
 
-    Runs at startup. A self-hosted operator who only has env-var access (Railway,
-    say) needs a way to rescue a user who forgot the password they set in-app —
-    plain AUTH_PASSWORD deliberately can't do this, since it must stay inert once a
-    DB credential exists.
+    Runs at startup, after the bootstrap. A self-hosted operator who only has env-var
+    access (Railway, say) needs a way back in when the admin password is lost —
+    plain AUTH_PASSWORD deliberately can't do it, since it is inert once accounts
+    exist, and there is no mailer to send a reset link.
+
+    Target: the **lowest-id admin**, preferring an active one.
+
+    The rescue is deliberately complete, because a partial one is useless. In ONE
+    transaction it resets the password, re-activates the account, **disables that
+    admin's TOTP and revokes their trusted devices**, and bumps the epoch. Resetting
+    only the password would still leave an operator who also lost their authenticator
+    locked out — the login flow demands a second factor before it ever issues a
+    token — which is exactly the situation this lever exists for.
+
+    Clearing 2FA here is not a privilege escalation: whoever can set an environment
+    variable on the deployment already controls the process, the database URL and the
+    encryption key. It IS a security-relevant event, so it is logged loudly and the
+    warning tells the operator to turn 2FA back on.
 
     It re-applies on every boot while the variable is set, so the operator has to
     remove it before an in-app change will survive a restart. That is deliberate: a
-    lever that disarms itself can only be pulled once, and the loud warning below
-    says so.
+    lever that disarms itself can only be pulled once.
     """
     reset = settings.auth.password_reset.strip()
     if not reset:
         return
 
-    global _token_epoch
+    cleared_2fa = False
     try:
         with get_connection() as conn:
             cur = conn.cursor()
+            cur.execute(
+                """SELECT id, email FROM users WHERE role = 'admin'
+                    ORDER BY is_active DESC, id ASC LIMIT 1 FOR UPDATE"""
+            )
+            row = cur.fetchone()
+            if not row:
+                logger.error(
+                    "AUTH_PASSWORD_RESET is set but this install has no admin account. "
+                    "Nothing was reset."
+                )
+                return
+            admin_id, admin_email = row[0], row[1]
             # Bump the epoch too: a rescue is exactly the moment outstanding sessions
             # (possibly the ones that caused the lockout) must stop working.
             cur.execute(
-                """INSERT INTO auth_credential (id, password_hash, token_epoch, updated_at)
-                   VALUES (1, %s, 1, now())
-                   ON CONFLICT (id) DO UPDATE SET
-                       password_hash = excluded.password_hash,
-                       token_epoch = auth_credential.token_epoch + 1,
-                       updated_at = now()
-                   RETURNING token_epoch""",
-                (_hash_password(reset),),
+                """UPDATE users
+                      SET password_hash = %s, is_active = TRUE,
+                          token_epoch = token_epoch + 1, updated_at = now()
+                    WHERE id = %s""",
+                (users_service.hash_password(reset), admin_id),
             )
-            _token_epoch = int(cur.fetchone()[0])
+            cur.execute(
+                """UPDATE totp_config
+                      SET enabled = FALSE, secret_enc = '', backup_codes = '[]',
+                          last_used_at = '', updated_at = now()
+                    WHERE user_id = %s AND enabled
+                RETURNING user_id""",
+                (admin_id,),
+            )
+            cleared_2fa = cur.fetchone() is not None
+            cur.execute("DELETE FROM trusted_devices WHERE user_id = %s", (admin_id,))
     except Exception:
-        # Log and keep booting. Raising here would turn a failed rescue attempt into a
-        # total outage — worse than staying locked out, since the old password still works.
+        # Log and keep booting. Raising here would turn a failed rescue attempt into
+        # a total outage — worse than staying locked out, since the old password
+        # still works.
         logger.exception(
-            "AUTH_PASSWORD_RESET is set but the password could not be reset. The previous "
-            "password is unchanged; check database connectivity and restart to retry."
+            "AUTH_PASSWORD_RESET is set but the password could not be reset. The "
+            "previous password is unchanged; check database connectivity and restart."
         )
         return
 
     logger.warning(
-        "AUTH_PASSWORD_RESET is set — the login password has been reset to its value. "
-        "REMOVE this variable and redeploy: while it is set, every restart resets the "
-        "password again and in-app password changes will not survive a restart."
+        "AUTH_PASSWORD_RESET is set — the password for admin %s has been reset to its "
+        "value and the account re-activated. REMOVE this variable and redeploy: while "
+        "it is set, every restart resets the password again and in-app password "
+        "changes will not survive a restart.",
+        admin_email,
     )
+    if cleared_2fa:
+        logger.warning(
+            "Two-factor authentication was DISABLED for admin %s as part of the "
+            "recovery, and their trusted devices were revoked — a password-only reset "
+            "cannot restore access to someone who also lost their authenticator. "
+            "Re-enable 2FA from Settings once you are back in.",
+            admin_email,
+        )
     if len(reset) < MIN_PASSWORD_LENGTH:
         # Applied anyway — refusing would leave a locked-out operator with no lever.
         logger.warning(
@@ -297,41 +322,46 @@ def apply_password_reset_env() -> None:
 # ── Login endpoint ────────────────────────────────────────────────────────────
 
 class LoginRequest(BaseModel):
+    email: str
     password: str
 
 
 @router.post("/login")
 async def login(body: LoginRequest, request: Request):
-    """Single-user password login. Returns JWT or 2FA challenge."""
+    """Email + password login. Returns a JWT, or a 2FA challenge."""
     client_ip = request.client.host if request.client else "unknown"
     if not _check_login_rate(client_ip):
         raise HTTPException(status_code=429, detail="Too many login attempts. Try again in a few minutes.")
 
     try:
-        password_ok = verify_password(body.password)
+        user = users_service.get_user_by_email(body.email)
     except Exception:
-        # Fail closed: never fall back to AUTH_PASSWORD when the stored credential
-        # is unreadable, or a database outage would resurrect a superseded password.
+        # Fail closed: an unreadable credential store is a 503, never a fallback to
+        # an env var, or a database outage would resurrect a superseded password.
         logger.exception("Credential lookup failed — blocking login")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Authentication service temporarily unavailable",
         )
 
-    if not password_ok:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect password",
-        )
+    if not user or not user["is_active"]:
+        # Spend a bcrypt verification anyway so an unknown or disabled address costs
+        # the same wall-clock time as a real one.
+        users_service.spend_dummy_verify()
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=_BAD_CREDENTIALS)
+
+    if not users_service.verify_user_password(body.password, user.get("password_hash")):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=_BAD_CREDENTIALS)
 
     try:
         from core.auth_2fa import TRUST_COOKIE_NAME, is_2fa_enabled, is_device_trusted
-        if is_2fa_enabled():
+        if is_2fa_enabled(user["id"]):
             trust_token = request.cookies.get(TRUST_COOKIE_NAME, "")
-            if not is_device_trusted(trust_token):
-                pending = create_access_token(
-                    {"sub": "user", "purpose": "2fa_pending"},
+            if not is_device_trusted(trust_token, user["id"]):
+                pending = create_user_token(
+                    user,
                     expire_minutes=PENDING_TOKEN_EXPIRE_MINUTES,
+                    purpose="2fa_pending",
                 )
                 return JSONResponse({"requires_2fa": True, "pending_token": pending})
     except ImportError:
@@ -343,17 +373,16 @@ async def login(body: LoginRequest, request: Request):
             detail="Authentication service temporarily unavailable",
         )
 
-    token = create_access_token({"sub": "user", "role": "admin"})
-    return JSONResponse({"access_token": token, "token_type": "bearer"})
+    return JSONResponse({"access_token": create_user_token(user), "token_type": "bearer"})
 
 
 @router.get("/me")
 async def get_me(user: dict = Depends(get_current_user)):
-    """Return current user info from token."""
-    return {"sub": user.get("sub"), "role": user.get("role")}
+    """The signed-in user. Backs the frontend's session validation and "Mine" filters."""
+    return user
 
 
-# ── Change password (issue #78) ───────────────────────────────────────────────
+# ── Change your own password (issue #78, re-keyed per user in #60) ────────────
 
 class ChangePasswordRequest(BaseModel):
     current_password: str
@@ -368,7 +397,7 @@ async def change_password(
     request: Request,
     user: dict = Depends(get_current_user),
 ):
-    """Change the login password, storing it in the DB-backed credential.
+    """Change your own password.
 
     A wrong current password answers 400, NOT 401: the caller is authenticated, so
     this is a bad body field rather than a dead session — and the frontend api()
@@ -401,15 +430,18 @@ async def change_password(
         verify_totp_code,
     )
 
+    user_id = user["id"]
+
     # Check the current password BEFORE the two-factor code, because verifying a code
     # spends it: verify_totp_code burns the timeslot and consume_backup_code destroys a
     # single-use backup code. Without this pre-check, one typo in the current-password
     # field would cost the user a recovery code and return an error anyway. This read is
-    # advisory — set_password below re-checks under the row lock and stays authoritative.
-    if not verify_password(body.current_password):
+    # advisory — change_own_password below re-checks under the row lock and stays
+    # authoritative.
+    if not verify_password_for(user_id, body.current_password):
         raise HTTPException(status_code=400, detail="Current password is incorrect.")
 
-    if is_2fa_enabled():
+    if is_2fa_enabled(user_id):
         code = (body.code or "").strip()
         if not code:
             raise HTTPException(status_code=400, detail="Two-factor code required.")
@@ -417,21 +449,26 @@ async def change_password(
         # lost their authenticator must still be able to rotate a leaked password.
         valid = False
         if len(code.replace("-", "")) == 6 and code.replace("-", "").isdigit():
-            valid = verify_totp_code(code)
+            valid = verify_totp_code(user_id, code)
         if not valid:
-            valid = consume_backup_code(code)
+            valid = consume_backup_code(user_id, code)
         if not valid:
             raise HTTPException(status_code=400, detail="Invalid two-factor code.")
 
-    if not set_password(body.current_password, new_password):
+    new_epoch = users_service.change_own_password(user_id, body.current_password, new_password)
+    if new_epoch is None:
         # Lost the race with a concurrent change — the pre-check above passed against a
         # credential that is no longer current.
         raise HTTPException(status_code=400, detail="Current password is incorrect.")
 
-    # Other devices must re-authenticate with 2FA after a password change.
-    revoke_all_trusted_devices()
+    # This user's other devices must re-authenticate with 2FA. Scoped to them:
+    # revoking the whole install's trusted devices because one person rotated their
+    # password would be a team-wide surprise.
+    revoke_all_trusted_devices(user_id)
 
-    # Hand the acting session a fresh token. Bearer tokens already issued to OTHER
-    # devices stay valid until they expire (JWT_EXPIRE_MINUTES) — see the PR body.
-    token = create_access_token({"sub": "user", "role": "admin"})
+    # Hand the acting session a fresh token stamped with the epoch THIS write
+    # produced — not a re-read, which could pick up a concurrent change's later epoch
+    # and mint a token that outlives the password it was issued against. Every other
+    # session for this user is now stale and 401s on its next request.
+    token = create_user_token({"id": user_id, "token_epoch": new_epoch})
     return {"access_token": token, "token_type": "bearer"}

@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from core.auth import get_current_user
 from crm import service, tools
 from crm.router import router as crm_router
+from conftest import fake_admin
 
 
 class Recorder:
@@ -62,7 +63,7 @@ def rec(monkeypatch):
 def client():
     app = FastAPI()
     app.include_router(crm_router, prefix="/api/crm")
-    app.dependency_overrides[get_current_user] = lambda: {"sub": "u"}
+    app.dependency_overrides[get_current_user] = fake_admin
     return TestClient(app)
 
 

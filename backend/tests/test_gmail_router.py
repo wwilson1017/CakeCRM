@@ -12,6 +12,7 @@ from core.auth import get_current_user
 from gmail import oauth, router as router_mod
 from gmail.router import router as gmail_router
 from providers.router import setup_router
+from conftest import fake_admin
 
 
 @pytest.fixture
@@ -19,7 +20,7 @@ def app():
     app = FastAPI()
     app.include_router(gmail_router, prefix="/api/gmail")
     app.include_router(setup_router, prefix="/api/setup")
-    app.dependency_overrides[get_current_user] = lambda: {"sub": "u"}
+    app.dependency_overrides[get_current_user] = fake_admin
     return app
 
 

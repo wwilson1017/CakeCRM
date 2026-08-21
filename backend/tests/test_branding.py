@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 from branding import storage
 from branding.router import router as branding_router
 from core.auth import get_current_user
+from conftest import fake_admin
 
 # Declared content-type is what the endpoint gates on; the stored bytes are
 # opaque, so a short marker is enough for a contract test.
@@ -30,7 +31,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "LOGO_FILE", tmp_path / "logo.png")
     app = FastAPI()
     app.include_router(branding_router, prefix="/api/branding")
-    app.dependency_overrides[get_current_user] = lambda: {"sub": "u"}
+    app.dependency_overrides[get_current_user] = fake_admin
     return TestClient(app)
 
 

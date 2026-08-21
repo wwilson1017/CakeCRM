@@ -12,13 +12,14 @@ from fastapi.testclient import TestClient
 from core.auth import get_current_user
 from reminders import router as router_mod
 from reminders.router import router as reminders_router
+from conftest import fake_admin
 
 
 @pytest.fixture
 def client():
     app = FastAPI()
     app.include_router(reminders_router, prefix="/api/reminders")
-    app.dependency_overrides[get_current_user] = lambda: {"sub": "u"}
+    app.dependency_overrides[get_current_user] = fake_admin
     return TestClient(app)
 
 
