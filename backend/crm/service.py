@@ -9,12 +9,26 @@ Ported from chatty's SQLite ``crm_lite/client.py`` and translated to Postgres:
 ``cake_os/backend/apps/crm`` services so later feature ports diff cleanly.
 """
 
+import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
 
-from core.postgres import get_connection, pg_execute, pg_fetchall, pg_fetchone
-from crm import chatter_service, field_service, scoring_service, touch_count_service
+from core.localtime import today_local
+from core.postgres import (
+    get_connection,
+    pg_execute,
+    pg_fetchall,
+    pg_fetchone,
+    row_to_dict,
+)
+from crm import (
+    chatter_service,
+    field_service,
+    gtd_common,
+    scoring_service,
+    touch_count_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +61,16 @@ LIVE_TASK_PREDICATE = (
     "(tasks.deal_id IS NULL OR EXISTS (SELECT 1 FROM deals ld "
     "WHERE ld.id = tasks.deal_id AND ld.archived_at IS NULL))"
 )
+
+# GTD's `dropped` status (#70) is a soft delete: the row is NOT completed, but it is
+# not open work either. Normal mode renders two buckets from `completed`, so without
+# this a dropped todo would reappear as a pending task the moment the user switches
+# back — and the heartbeat would nag about it. Swept exactly like LIVE_TASK_PREDICATE
+# above: every "open task" query carries one of these two forms. Queries that count
+# ALL tasks (the is-the-CRM-empty checks) deliberately do NOT — a dropped row is
+# still data.
+NOT_DROPPED_TASK = "tasks.status != 'dropped'"
+NOT_DROPPED_TASK_T = "t.status != 'dropped'"
 
 # Contact list ORDER BY fragments (allowlisted — the param is NEVER interpolated). Every
 # fragment ends with `ct.id DESC` so limit/offset pagination is deterministic (no dupes/
@@ -363,7 +387,7 @@ def get_contact_detail(contact_id: int) -> dict | None:
     )
     tasks = pg_fetchall(
         f"SELECT * FROM tasks WHERE contact_id = %s AND {LIVE_TASK_PREDICATE} "
-        "ORDER BY completed ASC, due_date ASC LIMIT 20",
+        f"AND {NOT_DROPPED_TASK} ORDER BY completed ASC, due_date ASC LIMIT 20",
         (contact_id,),
     )
     activity = pg_fetchall(
@@ -1135,13 +1159,58 @@ def create_task(
     title: str, description: str = "", due_date: str = "",
     contact_id: int | None = None, deal_id: int | None = None,
     priority: str = "medium",
+    *,
+    status: str = "next_action",
+    star: bool = False,
+    context: str = "",
+    tags: list[str] | None = None,
+    repeat: str = "",
+    auto_star_on_due: bool = False,
+    project_id: int | None = None,
+    source: str = "ui",
 ) -> dict:
+    """Create a task. The GTD keyword-only fields (#70) default to the normal-mode
+    shape, so every existing caller is unchanged.
+
+    `status` defaults to 'next_action', NOT 'inbox': a task created from the CRM form
+    or by crm_create_task is already clarified work. Only a GTD *capture* means "I
+    haven't thought about this yet", and those pass status='inbox' explicitly.
+
+    `completed` is derived from `status` in the INSERT rather than taken as a
+    parameter — the migration's coherence CHECK makes any other arrangement a
+    constraint violation.
+    """
     if priority not in TASK_PRIORITIES:
         priority = "medium"
+    gtd_common.validate_status(status)
+    if source not in gtd_common.TODO_SOURCES:
+        raise gtd_common.ValidationError(
+            f"Invalid source '{source}'. Valid: {', '.join(gtd_common.TODO_SOURCES)}"
+        )
     row = pg_fetchone(
-        """INSERT INTO tasks (title, description, due_date, contact_id, deal_id, priority)
-           VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
-        (title, description, due_date, contact_id, deal_id, priority),
+        """INSERT INTO tasks (title, description, due_date, contact_id, deal_id, priority,
+                              status, star, context, tags, repeat, auto_star_on_due,
+                              project_id, source, completed, completed_at)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s,
+                   CASE WHEN %s = 'done' THEN 1 ELSE 0 END,
+                   CASE WHEN %s = 'done' THEN now() END)
+           RETURNING id""",
+        (
+            gtd_common.validate_title(title),
+            gtd_common.validate_notes(description),
+            gtd_common.validate_due(due_date),
+            contact_id, deal_id, priority,
+            status,
+            bool(star),
+            gtd_common.validate_short(context, "context"),
+            json.dumps(gtd_common.validate_tags(tags)),
+            gtd_common.validate_repeat(repeat),
+            bool(auto_star_on_due),
+            project_id,
+            source,
+            status,
+            status,
+        ),
     )
     return get_task(row["id"])
 
@@ -1177,6 +1246,7 @@ def list_tasks(
     # tasks. Standalone tasks (deal_id NULL) are untouched. Activity is deliberately NOT
     # swept the same way — see get_activity_log.
     conditions.append(f"(t.deal_id IS NULL OR {LIVE_PREDICATE_D})")  # see LIVE_TASK_PREDICATE
+    conditions.append(NOT_DROPPED_TASK_T)  # see NOT_DROPPED_TASK
     where = f"WHERE {' AND '.join(conditions)}"
     params.append(limit)
     return pg_fetchall(
@@ -1189,33 +1259,209 @@ def list_tasks(
     )
 
 
-def complete_task(task_id: int) -> dict | None:
-    row = pg_fetchone(
-        "UPDATE tasks SET completed = 1, updated_at = %s WHERE id = %s RETURNING id",
-        (_now(), task_id),
+def _resolve_task_project_id_cur(cur, name: str) -> int:
+    """Id of the GTD project named `name`, creating it (active) if missing.
+
+    ON CONFLICT DO NOTHING + re-SELECT so two concurrent first uses of the same new
+    project name both succeed instead of one dying on the unique index. Matching is
+    case-insensitive, so `#Groceries` and `#groceries` are one project.
+    """
+    cur.execute(
+        "INSERT INTO task_projects (name) VALUES (%s) ON CONFLICT (lower(name)) DO NOTHING",
+        (name,),
     )
-    if row is None:
+    cur.execute("SELECT id FROM task_projects WHERE lower(name) = lower(%s)", (name,))
+    return cur.fetchone()[0]
+
+
+def _check_task_project_id_cur(cur, project_id) -> int | None:
+    if project_id in (None, "", 0):
         return None
-    return get_task(task_id)
+    try:
+        # bulk_update's `fields` is an untyped dict, so a non-numeric project_id
+        # reaches here — it must be a 400, not a 500.
+        pid = int(project_id)
+    except (TypeError, ValueError):
+        raise gtd_common.ValidationError(f"project_id must be an integer, got {project_id!r}")
+    cur.execute("SELECT id FROM task_projects WHERE id = %s", (pid,))
+    if not cur.fetchone():
+        raise gtd_common.ValidationError(f"Project id not found: {pid}")
+    return pid
+
+
+# Fields a task update may set. The GTD half (#70) is inert in normal mode — the UI
+# never sends those keys — but both modes write through this ONE allow-list so the
+# two surfaces can never drift into different validation rules.
+_TASK_UPDATE_FIELDS = {
+    "title", "description", "due_date", "contact_id", "deal_id", "priority", "completed",
+    "status", "star", "context", "tags", "repeat", "auto_star_on_due", "project_id",
+    "project",
+}
+
+
+def _apply_task_update_cur(cur, task_id: int, fields: dict) -> bool:
+    """Apply a validated field update to one task inside the caller's transaction.
+
+    THE single write path for `tasks.completed` / `tasks.status`. Locks the row
+    (FOR UPDATE) so a completion transition is detected exactly once, then spawns the
+    next occurrence of a repeating task on that transition. Returns False if the task
+    does not exist.
+
+    `completed` and `status` are two views of one fact (the migration enforces it with
+    a CHECK), so this function always writes them together: `completed=1` ⇒
+    status='done'; `completed=0` on a done row ⇒ back to 'next_action'. A caller may
+    send either spelling — normal mode sends `completed`, GTD sends `status`.
+    """
+    cur.execute("SELECT status FROM tasks WHERE id = %s FOR UPDATE", (task_id,))
+    row = cur.fetchone()
+    if not row:
+        return False
+    prior_status = row[0]
+
+    # Normalize `completed` into the status vocabulary BEFORE building the UPDATE, so
+    # there is exactly one code path deciding the done-transition below. An explicit
+    # `status` always wins — a caller that sends both means the status.
+    fields = dict(fields)
+    if "completed" in fields:
+        completed = bool(fields.pop("completed"))
+        if "status" not in fields:
+            if completed:
+                fields["status"] = "done"
+            elif prior_status == "done":
+                # Un-completing returns the task to actionable. 'next_action' rather
+                # than 'inbox': it was real work before it was finished.
+                fields["status"] = "next_action"
+
+    sets: list[str] = []
+    params: list = []
+    if "title" in fields:
+        sets.append("title = %s")
+        params.append(gtd_common.validate_title(fields["title"]))
+    if "description" in fields:
+        sets.append("description = %s")
+        params.append(gtd_common.validate_notes(fields["description"]))
+    if "due_date" in fields:
+        sets.append("due_date = %s")
+        params.append(gtd_common.validate_due(fields["due_date"]))
+    if "contact_id" in fields:
+        sets.append("contact_id = %s")
+        params.append(fields["contact_id"])
+    if "deal_id" in fields:
+        sets.append("deal_id = %s")
+        params.append(fields["deal_id"])
+    if "priority" in fields:
+        priority = fields["priority"]
+        sets.append("priority = %s")
+        params.append(priority if priority in TASK_PRIORITIES else "medium")
+    if "project_id" in fields:
+        sets.append("project_id = %s")
+        params.append(_check_task_project_id_cur(cur, fields["project_id"]))
+    elif "project" in fields:
+        name = gtd_common.validate_short(fields["project"], "project")
+        sets.append("project_id = %s")
+        params.append(_resolve_task_project_id_cur(cur, name) if name else None)
+    if "context" in fields:
+        sets.append("context = %s")
+        params.append(gtd_common.validate_short(fields["context"], "context"))
+    if "tags" in fields:
+        sets.append("tags = %s::jsonb")
+        params.append(json.dumps(gtd_common.validate_tags(fields["tags"])))
+    if "star" in fields:
+        sets.append("star = %s")
+        params.append(bool(fields["star"]))
+    if "repeat" in fields:
+        sets.append("repeat = %s")
+        params.append(gtd_common.validate_repeat(fields["repeat"]))
+    if "auto_star_on_due" in fields:
+        sets.append("auto_star_on_due = %s")
+        params.append(bool(fields["auto_star_on_due"]))
+
+    just_completed = False
+    if "status" in fields:
+        status = gtd_common.validate_status(fields["status"])
+        sets.append("status = %s")
+        params.append(status)
+        # `completed` is derived, never taken from the caller — this is the pairing
+        # the CHECK constraint verifies.
+        sets.append("completed = %s")
+        params.append(1 if status == "done" else 0)
+        if status == "done":
+            if prior_status != "done":
+                sets.append("completed_at = now()")
+                just_completed = True
+        else:
+            sets.append("completed_at = NULL")
+
+    if not sets:
+        return True
+    sets.append("updated_at = %s")
+    params.append(_now())
+    cur.execute(
+        f"UPDATE tasks SET {', '.join(sets)} WHERE id = %s RETURNING *",
+        (*params, task_id),
+    )
+    # row_to_dict reads cur.description, so the row MUST be converted before the next
+    # execute() on this cursor — the spawn below issues one.
+    updated = row_to_dict(cur, cur.fetchone())
+    if just_completed:
+        _spawn_next_task_occurrence_cur(cur, updated, prior_status)
+    return True
+
+
+def _spawn_next_task_occurrence_cur(cur, task: dict, prior_status: str) -> None:
+    """Completing a repeating task creates its next occurrence: same fields, due date
+    advanced, star cleared (today's priority doesn't carry over).
+
+    Reads the POST-update row, so edits saved together with the completion carry — in
+    particular, clearing `repeat` in the same write must NOT spawn.
+
+    The one exception to the cleared star is the opt-in `auto_star_on_due`: when the
+    spawned occurrence is due TODAY (i.e. this one was completed exactly one interval
+    late) it comes back already starred instead of waiting to be re-starred by hand.
+    Two or more intervals late re-anchors past today and does not star.
+    """
+    if not task.get("repeat"):
+        return
+    # A repeating task that was dropped-then-completed has no sensible prior state to
+    # return to; anything else keeps the status it was worked in.
+    status = prior_status if prior_status not in gtd_common.FINISHED_STATUSES else "next_action"
+    tags = task.get("tags")
+    auto_star = bool(task.get("auto_star_on_due"))
+    # ONE clock read, shared with the comparison below: two reads could straddle
+    # midnight and disagree about whether the spawn is due today.
+    today = today_local()
+    spawn_due = gtd_common.next_due(task["repeat"], task.get("due_date"), today=today)
+    cur.execute(
+        """INSERT INTO tasks (title, description, due_date, contact_id, deal_id, priority,
+                              status, star, context, tags, repeat, auto_star_on_due,
+                              project_id, source, completed)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, 0)""",
+        (
+            task["title"], task["description"], spawn_due,
+            task["contact_id"], task["deal_id"], task["priority"],
+            status,
+            auto_star and spawn_due == today.isoformat(),
+            task["context"],
+            tags if isinstance(tags, str) else json.dumps(tags or []),
+            task["repeat"], auto_star, task["project_id"], task["source"],
+        ),
+    )
+
+
+def complete_task(task_id: int) -> dict | None:
+    """Mark a task done. A thin adapter over the shared transition, so completing from
+    the plain normal-mode checkbox spawns a repeating task's next occurrence too."""
+    return update_task(task_id, status="done")
 
 
 def update_task(task_id: int, **fields) -> dict | None:
-    allowed = {"title", "description", "due_date", "contact_id", "deal_id", "priority", "completed"}
-    filtered = {k: v for k, v in fields.items() if k in allowed}
-    # Normalize the flag to the 0/1 invariant (a stray value like 2 is truthy in
-    # the UI but matches neither `completed = 0` nor `= 1` filters).
-    if "completed" in filtered:
-        filtered["completed"] = 1 if filtered["completed"] else 0
-    if "priority" in filtered and filtered["priority"] not in TASK_PRIORITIES:
-        filtered["priority"] = "medium"
+    filtered = {k: v for k, v in fields.items() if k in _TASK_UPDATE_FIELDS}
     if not filtered:
         return get_task(task_id)
-    set_clause = ", ".join(f"{k} = %s" for k in filtered)
-    values = list(filtered.values()) + [_now(), task_id]
-    pg_execute(
-        f"UPDATE tasks SET {set_clause}, updated_at = %s WHERE id = %s", values
-    )
-    return get_task(task_id)
+    with get_connection() as conn:
+        cur = conn.cursor()
+        found = _apply_task_update_cur(cur, task_id, filtered)
+    return get_task(task_id) if found else None
 
 
 def delete_task(task_id: int) -> bool:
@@ -1327,13 +1573,14 @@ def get_dashboard_stats() -> dict:
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     overdue_row = pg_fetchone(
         "SELECT COUNT(*) AS cnt FROM tasks WHERE completed = 0 AND due_date != '' "
-        f"AND due_date < %s AND {LIVE_TASK_PREDICATE}",
+        f"AND due_date < %s AND {LIVE_TASK_PREDICATE} AND {NOT_DROPPED_TASK}",
         (today,),
     )
     overdue_tasks = overdue_row["cnt"] if overdue_row else 0
 
     pending_row = pg_fetchone(
-        f"SELECT COUNT(*) AS cnt FROM tasks WHERE completed = 0 AND {LIVE_TASK_PREDICATE}"
+        f"SELECT COUNT(*) AS cnt FROM tasks WHERE completed = 0 AND {LIVE_TASK_PREDICATE} "
+        f"AND {NOT_DROPPED_TASK}"
     )
     pending_tasks = pending_row["cnt"] if pending_row else 0
 
@@ -1801,8 +2048,8 @@ def summarize_analytics(analytics: dict) -> dict:
 # *configuration* — it is NOT entity data, survives demo-clear, and is truncated only
 # by clear_all (see _truncate_all).
 _CRM_TABLES = (
-    "companies", "contacts", "deals", "tasks", "activity_log", "crm_chatter",
-    "crm_field_values", "crm_field_provenance",
+    "companies", "contacts", "deals", "tasks", "task_projects", "activity_log",
+    "crm_chatter", "crm_field_values", "crm_field_provenance",
 )
 
 
@@ -1830,6 +2077,7 @@ def is_crm_empty() -> bool:
                 + (SELECT COUNT(*) FROM contacts)
                 + (SELECT COUNT(*) FROM deals)
                 + (SELECT COUNT(*) FROM tasks)
+                + (SELECT COUNT(*) FROM task_projects)
                 + (SELECT COUNT(*) FROM activity_log)
                 + (SELECT COUNT(*) FROM crm_chatter)
                 + (SELECT COUNT(*) FROM crm_field_values)
@@ -1848,6 +2096,7 @@ def _crm_empty_in_txn(cur) -> bool:
                 + (SELECT COUNT(*) FROM contacts)
                 + (SELECT COUNT(*) FROM deals)
                 + (SELECT COUNT(*) FROM tasks)
+                + (SELECT COUNT(*) FROM task_projects)
                 + (SELECT COUNT(*) FROM activity_log)
                 + (SELECT COUNT(*) FROM crm_chatter)
                 + (SELECT COUNT(*) FROM crm_field_values)
@@ -1951,16 +2200,21 @@ def _truncate_all(cur, include_definitions: bool = False) -> None:
     # reseeded CRM inherits the old per-record nudge cooldowns and stays silent about
     # records it has never actually mentioned. Its only writer is a single-statement
     # upsert touching just this table, so its position can't invert against anything.
+    # task_projects (#70) is referenced BY tasks (tasks.project_id FK), so like
+    # deal_stage_events it has to share the statement — truncating tasks alone would
+    # leave orphan projects, and truncating task_projects alone errors on the FK.
+    # A GTD project is entity data (the user's own outcomes), not configuration, so it
+    # goes in BOTH variants — unlike crm_field_definitions.
     if include_definitions:
         cur.execute(
-            "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
-            "crm_field_definitions, crm_field_values, crm_field_provenance, "
+            "TRUNCATE companies, contacts, deals, activity_log, tasks, task_projects, "
+            "crm_chatter, crm_field_definitions, crm_field_values, crm_field_provenance, "
             "deal_stage_events, proactive_nudges RESTART IDENTITY"
         )
     else:
         cur.execute(
-            "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
-            "crm_field_values, crm_field_provenance, deal_stage_events, "
+            "TRUNCATE companies, contacts, deals, activity_log, tasks, task_projects, "
+            "crm_chatter, crm_field_values, crm_field_provenance, deal_stage_events, "
             "proactive_nudges RESTART IDENTITY"
         )
 

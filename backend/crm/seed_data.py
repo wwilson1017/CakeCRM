@@ -21,6 +21,22 @@ def _ts(days_ago: int, hour: int = 10) -> str:
     return dt.strftime("%Y-%m-%d %H:%M:%S+00")
 
 
+# Position of `completed` in the task seed tuples below.
+_TASK_COMPLETED_IDX = 6
+
+
+def _task_seed_params(rows: list[tuple]) -> list[tuple]:
+    """Append two extra copies of each row's `completed` flag.
+
+    The task INSERT derives `status` and `completed_at` from `completed` with two SQL
+    CASE expressions, and psycopg2 placeholders are positional — so the value has to be
+    supplied once per use. Deriving beats hand-writing the status into every literal:
+    the two columns can never disagree, which is exactly what the coherence CHECK
+    added in #70 requires.
+    """
+    return [(*row, row[_TASK_COMPLETED_IDX], row[_TASK_COMPLETED_IDX]) for row in rows]
+
+
 def seed_demo_data(conn) -> bool:
     """Insert example data into a fresh CRM. Runs on the caller's connection/
     transaction. Returns True if data was seeded, False if the CRM already has
@@ -33,6 +49,7 @@ def seed_demo_data(conn) -> bool:
                 + (SELECT COUNT(*) FROM contacts)
                 + (SELECT COUNT(*) FROM deals)
                 + (SELECT COUNT(*) FROM tasks)
+                + (SELECT COUNT(*) FROM task_projects)
                 + (SELECT COUNT(*) FROM activity_log)
                 + (SELECT COUNT(*) FROM crm_chatter)
                 + (SELECT COUNT(*) FROM crm_field_values)"""
@@ -162,11 +179,18 @@ def seed_demo_data(conn) -> bool:
     )
 
     # ── Tasks ────────────────────────────────────────────────────────────────
+    # `status`/`completed_at` are DERIVED from each row's `completed` flag rather than
+    # written into the literals below: since #70 the two columns are bound by a CHECK
+    # constraint, so a seed that set one without the other would fail on first run.
+    # _task_seed_params appends the two extra copies of `completed` the CASEs need.
     cur.executemany(
         """INSERT INTO tasks
-           (id, contact_id, deal_id, title, description, due_date, completed, priority, created_at, updated_at)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-        [
+           (id, contact_id, deal_id, title, description, due_date, completed, priority,
+            created_at, updated_at, status, completed_at)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                   CASE WHEN %s = 1 THEN 'done' ELSE 'next_action' END,
+                   CASE WHEN %s = 1 THEN now() END)""",
+        _task_seed_params([
             (1, 2, 2, "Follow up on wedding cake tasting",
              "Confirm date and flavor preferences with James.",
              _ts(-1, 9)[:10], 0, "high", _ts(5), _ts(1)),
@@ -198,7 +222,7 @@ def seed_demo_data(conn) -> bool:
             (8, 1, 1, "Invoice The Green Table — April",
              "Monthly invoice for bread supply contract.",
              _ts(3, 9)[:10], 1, "high", _ts(10), _ts(3)),
-        ],
+        ]),
     )
 
     # ── Activity log ───────────────────────────────────────────────────────────

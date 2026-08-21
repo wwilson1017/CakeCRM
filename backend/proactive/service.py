@@ -131,6 +131,7 @@ def collect_digest() -> dict:
         LIVE_PREDICATE,
         LIVE_PREDICATE_D,
         LIVE_TASK_PREDICATE,
+        NOT_DROPPED_TASK,
         OPEN_PREDICATE,
         OPEN_PREDICATE_D,
     )
@@ -143,7 +144,8 @@ def collect_digest() -> dict:
     tasks = pg_fetchone(
         f"""SELECT COUNT(*) FILTER (WHERE due_date != '' AND due_date < %s) AS overdue,
                    COUNT(*) FILTER (WHERE due_date = %s)                    AS due_today
-              FROM tasks WHERE completed = 0 AND {LIVE_TASK_PREDICATE}""",
+              FROM tasks WHERE completed = 0 AND {LIVE_TASK_PREDICATE}
+                                            AND {NOT_DROPPED_TASK}""",
         (today, today),
     ) or {}
     # Top open deals by #18's lead score, falling back to value so a CRM whose scores

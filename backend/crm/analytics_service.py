@@ -27,6 +27,7 @@ from crm.service import (
     LAST_TOUCH_SQL,
     LIVE_PREDICATE,
     LIVE_PREDICATE_D,
+    NOT_DROPPED_TASK_T,
     OPEN_PREDICATE,
     OPEN_PREDICATE_D,
 )
@@ -77,7 +78,8 @@ def get_stale_deals(stale_days: int = DEFAULT_DEAL_STALE_DAYS, limit: int = DEFA
                      WHERE e.deal_id = d.id), d.created_at))) / 86400.0)::int
                    AS days_in_stage,
                EXISTS (SELECT 1 FROM tasks t
-                        WHERE t.deal_id = d.id AND t.completed = 0) AS has_open_task
+                        WHERE t.deal_id = d.id AND t.completed = 0
+                          AND {NOT_DROPPED_TASK_T}) AS has_open_task
           FROM deals d
           LEFT JOIN contacts  c  ON d.contact_id = c.id
           LEFT JOIN companies co ON d.company_id = co.id
@@ -455,9 +457,10 @@ def get_deal_health(deal_id: int, stale_days: int = DEFAULT_DEAL_STALE_DAYS) -> 
                    AS days_in_stage,
                FLOOR(EXTRACT(EPOCH FROM (now() - d.created_at)) / 86400.0)::int AS age_days,
                (SELECT COUNT(*) FROM tasks t
-                 WHERE t.deal_id = d.id AND t.completed = 0)::int AS open_tasks,
-               (SELECT COUNT(*) FROM tasks t
                  WHERE t.deal_id = d.id AND t.completed = 0
+                   AND {NOT_DROPPED_TASK_T})::int AS open_tasks,
+               (SELECT COUNT(*) FROM tasks t
+                 WHERE t.deal_id = d.id AND t.completed = 0 AND {NOT_DROPPED_TASK_T}
                    AND t.due_date != '' AND t.due_date < %s)::int AS overdue_tasks
           FROM deals d
           LEFT JOIN contacts  c  ON d.contact_id = c.id
