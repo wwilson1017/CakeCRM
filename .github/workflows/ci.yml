@@ -118,7 +118,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # Full history so gitleaks scans every commit, not just the tip.
+          # Full history so gitleaks scans every commit, not just the tip. Note this
+          # also fetches every OTHER branch into refs/remotes/origin/* — which is why
+          # the scan below must be scoped explicitly.
           fetch-depth: 0
 
       # Run the pinned gitleaks binary directly (verified by SHA-256) rather than
@@ -133,4 +135,12 @@ jobs:
           curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o gitleaks.tar.gz
           echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
           tar -xzf gitleaks.tar.gz gitleaks
-          ./gitleaks git . --redact --verbose
+          # --log-opts=HEAD is load-bearing: gitleaks' git mode defaults to `--all`,
+          # so with the full fetch above it scans EVERY branch in the repo. One
+          # finding on any concurrent branch then turns this check red on every open
+          # PR at once, and the author has to prove the leak wasn't theirs. Scoping
+          # to HEAD keeps the whole history of *this* branch (the intent above) while
+          # excluding unrelated refs. Verified: with a planted credential on the
+          # branch, unscoped reports 2 findings and this reports 1 — it still catches
+          # real leaks, it just stops reporting other people's.
+          ./gitleaks git . --redact --verbose --log-opts="HEAD"

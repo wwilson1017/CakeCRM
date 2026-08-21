@@ -269,8 +269,11 @@ is about **chatty's** SQLite `crm_lite` (issue #3). For a cake_os port:
    CakeCRM's single `backend/crm/service.py` (plus a handful of siblings). "Same filename
    exists" is a *candidate*, never a destination — which is exactly how the intake issue words
    it.
-3. **Other apps leak in.** `apps.todo_gtd` and `apps.dimm` appear across several CRM modules.
-   CakeCRM has no equivalent, so those call sites need removing or adapting on every port.
+3. **Other apps leak in.** `apps.todo_gtd` and `apps.dimm` appear across several CRM modules,
+   so those call sites need removing or adapting on every port. Do **not** assume there is
+   nothing to map onto: CakeCRM landed a todo/GTD task mode of its own in #70, so a
+   `todo_gtd` call site may now have a real counterpart here rather than needing deletion.
+   Check the current tree before stripping.
 4. **Some CakeCRM ports deliberately fixed upstream bugs.** A faithful re-apply can silently
    reintroduce one. Check the target file's comments before overwriting behavior.
 5. **Upstream has tests, and they do not come across as-is.** cake_os's CRM is covered by ~22
