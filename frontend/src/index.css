@@ -3,6 +3,11 @@
 /* Make dark: variants follow the .dark class instead of the OS media query. */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* `dock:` = enough room for a docked/centred overlay rather than a full-screen takeover.
+   Consumed by shared/overlay/DetailModal to switch between the two presentations. Both
+   dimensions are checked on purpose: a landscape phone is wide enough and still too short. */
+@custom-variant dock (@media (min-width: 768px) and (min-height: 600px));
+
 /*
  * CakeCRM — one fixed theme, light and dark.
  *
@@ -81,6 +86,40 @@
 
   --font-display: 'Montserrat', 'Helvetica Neue', Helvetica, Arial, sans-serif;
   --font-sans: 'Open Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+
+  /* ── Semantic aliases for the shared collection layer (shared/{search,listview,collection,
+     overlay}).
+     Those modules are a port and style themselves with utility classes built on the blueprint's
+     token names. Rather than hand-rewriting every className — which would fork them from the
+     blueprint and silently drift on the next port — the names are aliased onto the `ck-*` tokens
+     above. The two palettes were compared value-by-value and agree exactly (cream #fffffa =
+     ck-card, sand #f1f1e8 = ck-bg, charcoal #292929 = ck-ink, muted #666666 = ck-ink-mute,
+     line #d1d5db = ck-line-strong, line-faint #e5e7eb = ck-line, brand #e31d3b = ck-accent), so
+     these are renames, not new colours.
+
+     They are declared as `var(...)` rather than copied hex ON PURPOSE: the `.dark` block
+     overrides the `ck-*` properties on the same element `:root` matches, so an alias re-resolves
+     to the dark value automatically and the layer inherits dark mode with no `dark:` variants —
+     the same lazy-resolution the accent-soft / chrome tokens above already rely on. Copying the
+     literals instead would pin the light palette into dark surfaces.
+
+     Accent-as-TEXT is deliberately NOT aliased here: per #54 the fixed brand red is only 3.15:1
+     on the dark card, so text/icon uses must route through `--color-ck-accent-text`. The five
+     such sites in the ported files were changed to `text-ck-accent-text` directly. `--color-brand`
+     therefore carries the FILL value only (borders, rings, backgrounds), matching #54's rule that
+     fills keep the identical brand red in both themes. */
+  --color-cream: var(--color-ck-card);
+  --color-sand: var(--color-ck-bg);
+  --color-charcoal: var(--color-ck-ink);
+  --color-muted: var(--color-ck-ink-mute);
+  --color-line: var(--color-ck-line-strong);
+  --color-line-faint: var(--color-ck-line);
+  --color-brand: var(--color-ck-accent);
+  --color-brand-dark: var(--color-ck-accent-dark);
+  --color-brand-deep: var(--color-ck-accent-deep);
+  --color-brand-maroon: var(--color-ck-accent-maroon);
+  --color-brand-wine: var(--color-ck-accent-wine);
+  --font-heading: var(--font-display);
 }
 
 :root { color-scheme: light; }
