@@ -922,7 +922,7 @@ def test_get_touch_evidence_round_trip_and_reconciliation(pg_db):
     note = chatter_service.add_note("deal", deal_id, "Called the buyer, wants a sample")
     activity = service.log_activity("email", note="replied on pricing", deal_id=deal_id)
 
-    _deal, chatter, activities, _snap, _stage = tcs._load_evidence(deal_id)
+    _deal, chatter, activities, _snap, _stage, _trunc = tcs._load_evidence(deal_id)
     entries, skipped = tcs.build_evidence_entries(_deal, chatter, activities)
     watermark = tcs.evidence_watermark(_deal, chatter, activities)
     evidence_count = len(chatter) + len(activities)
@@ -950,6 +950,15 @@ def test_get_touch_evidence_round_trip_and_reconciliation(pg_db):
     # A new note moves the evidence past what was judged.
     chatter_service.add_note("deal", deal_id, "Follow-up call booked")
     assert tcs.get_touch_evidence(deal_id)["verdict_state"] == "stale"
+
+    # Editing the judged note is caught by the stored line digest, even though the edit
+    # moves neither created_at nor the row count.
+    chatter_service.update_note(note["id"], "Completely different wording now")
+    edited = tcs.get_touch_evidence(deal_id)
+    note_row = next(e for e in edited["events"]
+                    if e["source"] == "note" and e["source_id"] == note["id"])
+    assert note_row["state"] == "edited_since"
+    assert edited["verdict_state"] in ("stale", "superseded")
 
     # Archiving the judged note removes the counted row → the sum can no longer be shown.
     chatter_service.archive_note(note["id"])

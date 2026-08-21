@@ -37,14 +37,27 @@ export function AiTouchDetail({ dealId, count }: { dealId: number; count?: numbe
   useEffect(() => {
     if (!expanded || fetched.current === dealId) return;
     fetched.current = dealId;
-    let settled = false;
+    // `cancelled` and `delivered` answer two different questions, and both are needed.
+    // cancelled: this request was superseded (deal switched, collapsed, refresh) — its
+    // response must be dropped, or a slow reply for the PREVIOUS deal could land last and
+    // overwrite the current one, after which `result.id !== dealId` hides it while the
+    // latch still says "fetched" — a spinner that never resolves.
+    // delivered: the response actually made it into state, so the latch has to stay and
+    // collapsing then re-expanding must NOT re-request.
+    let cancelled = false;
+    let delivered = false;
     setError(false);
     api<AiTouchEvidenceResponse>(`/api/crm/deals/${dealId}/touch-count/evidence`)
-      .then(data => { settled = true; setResult({ id: dealId, data }); })
-      .catch(() => { settled = true; setError(true); fetched.current = null; });
-    // Collapsing (or switching deal) mid-flight must release the latch, or re-expanding
-    // would sit on a spinner forever waiting for a request that already went nowhere.
-    return () => { if (!settled) fetched.current = null; };
+      .then(data => {
+        if (cancelled) return;
+        delivered = true;
+        setResult({ id: dealId, data });
+      })
+      .catch(() => { if (!cancelled) setError(true); });
+    return () => {
+      cancelled = true;
+      if (!delivered) fetched.current = null;
+    };
   }, [expanded, dealId, fetchTick]);
 
   // A NULL count means no provider has ever run for this deal — nothing to explain.

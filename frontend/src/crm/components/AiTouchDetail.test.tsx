@@ -152,6 +152,24 @@ describe('AiTouchDetail', () => {
     expect(container.textContent).toContain('Called the buyer');
   });
 
+  it('ignores a superseded response so the panel cannot hang', async () => {
+    // The failure this guards: switch deal mid-flight, the OLD deal's slow reply lands
+    // last and overwrites state. Because the render filters on id, `data` goes null while
+    // the fetch latch still says "already fetched this deal" — a spinner forever.
+    let resolveFirst: (v: AiTouchEvidenceResponse) => void = () => {};
+    api.mockImplementationOnce(() => new Promise(res => { resolveFirst = res; }));
+    api.mockResolvedValue(response({ deal_id: 8, ai_touch_count: 5, counted: 5 }));
+
+    render(<AiTouchDetail dealId={7} count={2} />);
+    await clickToggle();                                   // starts deal 7's request
+    render(<AiTouchDetail dealId={8} count={5} />);         // switch before it resolves
+    await act(async () => {});                             // let deal 8's request settle
+    await act(async () => { resolveFirst(response({ deal_id: 7 })); });  // 7 lands late
+
+    expect(container.textContent).toContain('5 touches');
+    expect(container.textContent).not.toContain('Loading the evidence');
+  });
+
   it('renders an unjudged event without dressing it as a ruling', async () => {
     api.mockResolvedValue(response({
       verdict_state: 'none',

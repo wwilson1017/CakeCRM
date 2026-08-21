@@ -54,15 +54,17 @@ KNOWN LIMITS (accepted for a P3 nudge badge; see the PR body):
    ``scope=all`` repairs those. Note archive/unarchive IS hooked (visible UI action).
    The detail view does not paper over this: it reports ``verdict_state`` stale/superseded
    rather than showing a list that disagrees with the badge above it.
-3. An EDITED ACTIVITY cannot be flagged ``edited_since`` the way an edited note is:
-   ``activity_log`` has no ``updated_at`` column. The upgrade path is adding that column
-   and stamping it in ``service.update_activity``; until then such a drift surfaces only
-   if it changes the visible sum (then: ``superseded``).
+3. An edit to ANY evidence row — a note, an activity, or the deal's own notes field —
+   still does not trigger a recompute, but the detail view detects it and marks the row
+   ``edited_since`` (which also forces ``verdict_state`` off "current"). It compares a
+   stored digest of the line as JUDGED against the live line (see ``_line_hash``), so it
+   needs no ``updated_at`` column — ``activity_log`` has none — and has no blind spot for
+   an edit made WHILE the model was running.
 """
 
 import asyncio
 import concurrent.futures
-import itertools
+import hashlib
 import json
 import logging
 import queue
@@ -386,13 +388,12 @@ def build_evidence_entries(deal: dict, chatter_rows: list, activity_rows: list) 
         entries.append({
             "source": "note", "source_id": row.get("id"),
             "event_at": str(row.get("created_at") or ""),
-            "updated_at": str(row.get("updated_at") or ""),
             "line": described,
         })
     for row in activity_rows or []:
         entries.append({
             "source": "activity", "source_id": row.get("id"),
-            "event_at": str(row.get("created_at") or ""), "updated_at": "",
+            "event_at": str(row.get("created_at") or ""),
             "line": _describe_activity(row),
         })
     # Sort by PARSED instant, not the raw string: psycopg2 returns session-TZ timestamps
@@ -407,10 +408,23 @@ def build_evidence_entries(deal: dict, chatter_rows: list, activity_rows: list) 
     notes = _truncate((deal or {}).get("notes") or "", MAX_DEAL_NOTES_CHARS)
     if notes:
         entries.append({
-            "source": "deal_notes", "source_id": None, "event_at": "", "updated_at": "",
+            "source": "deal_notes", "source_id": None, "event_at": "",
             "line": f"[deal notes field] {notes}",
         })
     return entries, skipped
+
+
+def _line_hash(line: str) -> str:
+    """Short digest of an evidence line, stored beside its verdict.
+
+    This is how the detail view knows a row was edited after it was judged, and it is
+    deliberately a hash of the TEXT rather than a timestamp comparison. Timestamps cannot
+    answer this: ``activity_log`` has no ``updated_at`` column at all, ``deals.notes``
+    changes without one, and comparing a note's ``updated_at`` against the snapshot's
+    ``computed_at`` silently misses an edit made WHILE the model was running (the edit
+    predates the write). Comparing the text against what was actually judged has none of
+    those holes. Not security-bearing — a digest, not a signature."""
+    return hashlib.blake2b(line.encode("utf-8"), digest_size=6).hexdigest()
 
 
 # The fence, defined once so _defang can neutralise a forged copy of it.
@@ -593,19 +607,31 @@ def _validate_verdicts(data, expected: int) -> list | None:
 def parse_touch_verdicts(text: str, expected: int) -> list | None:
     """Extract per-line verdicts from the model's reply, or None.
 
-    Lenient extraction, strict validation. Every balanced JSON slice is tried and the
-    first that VALIDATES wins — not the first that merely parses. That matters twice: a
-    model restating the schema before answering would otherwise hand us the example, and
-    a prospect who types a JSON object into a note that gets echoed back could otherwise
-    freeze that deal's badge forever (a denial-of-badge injection).
+    Lenient extraction, strict validation: only a slice that VALIDATES can win, never one
+    that merely parses. The whole reply is preferred — that IS the model's answer when it
+    obeyed the JSON-only instruction. Failing that, embedded slices are scanned and the
+    LAST validating one wins, deliberately not the first: a model that restates the schema
+    or echoes the evidence puts that material BEFORE its real answer, and the evidence is
+    untrusted, so "first match" would let a prospect who types a verdict array into a note
+    dictate that deal's badge. Taking the last slice makes the model's own answer win.
+
+    A wrong badge remains the ceiling of a successful injection here (the count can only be
+    the number of lines we sent), which is the same blast radius #16 already accepted.
     """
     if not text:
         return None
     cleaned = _strip_code_fence(text)
+    try:
+        whole = _validate_verdicts(json.loads(cleaned), expected)
+    except (json.JSONDecodeError, ValueError, TypeError):
+        whole = None
+    if whole is not None:
+        return whole
+    # Scanned lazily only once the whole reply has failed, so a well-formed reply never
+    # pays for the balanced scan at all.
+    best = None
     seen = set()
-    # Chained lazily, not unpacked into a tuple: a well-formed reply validates on `cleaned`
-    # and the balanced scan never runs at all. Unpacking would pay it on every single call.
-    for candidate in itertools.chain((cleaned,), _json_candidates(cleaned)):
+    for candidate in _json_candidates(cleaned):
         if candidate in seen:
             continue
         seen.add(candidate)
@@ -615,8 +641,8 @@ def parse_touch_verdicts(text: str, expected: int) -> list | None:
             continue
         verdicts = _validate_verdicts(data, expected)
         if verdicts is not None:
-            return verdicts
-    return None
+            best = verdicts
+    return best
 
 
 def _parse_ts(s: str) -> datetime:
@@ -651,7 +677,7 @@ def evidence_watermark(deal: dict, chatter_rows: list, activity_rows: list) -> s
 def _load_evidence(deal_id: int, always_load_evidence: bool = False) -> tuple:
     """Read deal + chatter + activities (+ snapshot + stage events) in ONE snapshot.
 
-    Returns ``(deal, chatter, activities, snapshot, stage_events)``.
+    Returns ``(deal, chatter, activities, snapshot, stage_events, truncated)``.
 
     One snapshot matters: the watermark and evidence_count that guard the write must
     describe the rows actually read, or a concurrent note lands between two reads and the
@@ -682,7 +708,7 @@ def _load_evidence(deal_id: int, always_load_evidence: bool = False) -> tuple:
         )
         deal_row = cur.fetchone()
         if not deal_row:
-            return None, [], [], None, []
+            return None, [], [], None, [], False
         deal = row_to_dict(cur, deal_row)
 
         snapshot = None
@@ -702,20 +728,27 @@ def _load_evidence(deal_id: int, always_load_evidence: bool = False) -> tuple:
             # evidence for a prompt that will never be sent. Archived deals (issue #22)
             # join closed ones here: they render on no board, so a paid AI count for one
             # would never be seen.
-            return deal, [], [], snapshot, []
+            return deal, [], [], snapshot, [], False
 
         # id DESC tie-breaks equal timestamps so the LIMIT window is deterministic.
         # crm_chatter is message-only, so the blueprint's (event_type != 'note' OR
         # archived = 0) collapses to archived = 0 (every row is a note here).
+        # The detail view asks for ONE row past each window so it can tell a deal that has
+        # exactly a full window (nothing older — not truncated) from one that has more
+        # (truncated). The extra row is trimmed below, so the evidence set both paths see
+        # is identical and the stale-guard keys still match what recompute stored.
+        probe = 1 if always_load_evidence else 0
         cur.execute(
-            """SELECT id, message, created_at, updated_at
+            """SELECT id, message, created_at
                  FROM crm_chatter
                 WHERE entity_type = 'deal' AND entity_id = %s AND archived = 0
                 ORDER BY created_at DESC, id DESC
                 LIMIT %s""",
-            (deal_id, MAX_CHATTER_EVIDENCE),
+            (deal_id, MAX_CHATTER_EVIDENCE + probe),
         )
         chatter = [row_to_dict(cur, r) for r in cur.fetchall()]
+        more_chatter = len(chatter) > MAX_CHATTER_EVIDENCE
+        del chatter[MAX_CHATTER_EVIDENCE:]
 
         cur.execute(
             """SELECT id, activity, note, created_at
@@ -723,9 +756,12 @@ def _load_evidence(deal_id: int, always_load_evidence: bool = False) -> tuple:
                 WHERE deal_id = %s
                 ORDER BY created_at DESC, id DESC
                 LIMIT %s""",
-            (deal_id, MAX_ACTIVITY_EVIDENCE),
+            (deal_id, MAX_ACTIVITY_EVIDENCE + probe),
         )
         activities = [row_to_dict(cur, r) for r in cur.fetchall()]
+        more_activities = len(activities) > MAX_ACTIVITY_EVIDENCE
+        del activities[MAX_ACTIVITY_EVIDENCE:]
+        truncated = more_chatter or more_activities
 
         stage_events: list = []
         if always_load_evidence:
@@ -740,7 +776,7 @@ def _load_evidence(deal_id: int, always_load_evidence: bool = False) -> tuple:
                 (deal_id, MAX_STAGE_EVENT_ROWS),
             )
             stage_events = [row_to_dict(cur, r) for r in cur.fetchall()]
-    return deal, chatter, activities, snapshot, stage_events
+    return deal, chatter, activities, snapshot, stage_events, truncated
 
 
 def recompute_touch_count(deal_id: int, force_write: bool = False) -> int | None:
@@ -758,7 +794,7 @@ def recompute_touch_count(deal_id: int, force_write: bool = False) -> int | None
     whose verdicts fail validation can still write the count alone (see _store_touch_count,
     which drops the now-mismatched snapshot in the same transaction).
     """
-    deal, chatter, activities, _snapshot, _stage_events = _load_evidence(deal_id)
+    deal, chatter, activities, _snapshot, _stage_events, _trunc = _load_evidence(deal_id)
     if not deal:
         return None
 
@@ -843,6 +879,9 @@ def _build_payload(count: int, watermark: str, evidence_count: int,
             {
                 "source": entry["source"], "source_id": entry["source_id"],
                 "touch": verdict["touch"], "reason": verdict["reason"],
+                # "h" = digest of the line as JUDGED, so the reader can tell that a row was
+                # rewritten after its verdict was formed (see _line_hash).
+                "h": _line_hash(entry["line"]),
             }
             for entry, verdict in zip(entries, verdicts)
         ],
@@ -1063,7 +1102,7 @@ def get_touch_evidence(deal_id: int) -> dict | None:
     contact deletion that destroyed shared activity rows, an archived note, window churn —
     `verdict_state` says so instead of showing a list that quietly contradicts its badge.
     """
-    deal, chatter, activities, snapshot, stage_events = _load_evidence(
+    deal, chatter, activities, snapshot, stage_events, truncated = _load_evidence(
         deal_id, always_load_evidence=True
     )
     if not deal:
@@ -1085,13 +1124,11 @@ def get_touch_evidence(deal_id: int) -> dict | None:
     events: list = []
     for entry in entries:
         item = stored.get((entry["source"], entry["source_id"]))
+        stored_hash = (item or {}).get("h")
         if item is None:
             state, reason = "not_evaluated", ""
-        elif (
-            entry["source"] == "note" and entry["updated_at"] and computed_at
-            and _parse_ts(entry["updated_at"]) > _parse_ts(computed_at)
-        ):
-            # The note was rewritten after it was judged. Showing the old verdict under the
+        elif stored_hash and stored_hash != _line_hash(entry["line"]):
+            # The row was rewritten after it was judged. Showing the old verdict under the
             # new text would explain wording that no longer exists.
             state, reason = "edited_since", ""
         elif item.get("touch"):
@@ -1133,15 +1170,23 @@ def get_touch_evidence(deal_id: int) -> dict | None:
     # routes means a route nobody has thought of yet still downgrades honestly.
     visible_touches = sum(1 for e in events if e["state"] == "touch")
     stored_count = payload.get("count")
+    # An edited row invalidates its own verdict WITHOUT moving the count, the watermark or
+    # the evidence count — editing a non-touch row moves none of them — so it has to be
+    # asked about separately, or the banner would say "current" over a row that says it was
+    # invalidated. Unlike watermark drift this applies to closed deals too: a frozen count
+    # is legitimate, an explanation of deleted wording is not (and the stale banner has a
+    # closed-deal variant that says the count no longer updates).
+    edited = any(e["state"] == "edited_since" for e in events)
     if not payload:
         verdict_state = "none"
     elif stored_count != deal.get("ai_touch_count") or visible_touches != stored_count:
         verdict_state = "superseded"
-    elif open_deal and (
+    elif edited or (open_deal and (
         payload.get("watermark") != evidence_watermark(deal, chatter, activities)
         or payload.get("evidence_count") != len(chatter) + len(activities)
-    ):
-        # Only an OPEN deal can be stale: a closed deal's count is legitimately frozen.
+    )):
+        # Watermark/evidence drift is checked for OPEN deals only: a closed deal's count is
+        # frozen by design, so its evidence moving on is expected, not stale.
         verdict_state = "stale"
     else:
         verdict_state = "current"
@@ -1155,9 +1200,9 @@ def get_touch_evidence(deal_id: int) -> dict | None:
         "verdict_state": verdict_state,
         "counted": stored_count if payload else None,
         "evaluated": len(stored),
-        # A bounded list must not present itself as the deal's whole history.
-        "truncated": (
-            len(chatter) >= MAX_CHATTER_EVIDENCE or len(activities) >= MAX_ACTIVITY_EVIDENCE
-        ),
+        # A bounded list must not present itself as the deal's whole history. Derived
+        # from a probe row past the window, so a deal with EXACTLY a full window and
+        # nothing older is not mislabelled.
+        "truncated": truncated,
         "events": events,
     }
