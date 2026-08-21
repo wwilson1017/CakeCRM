@@ -214,3 +214,26 @@ def test_logs_the_email_the_owner_must_now_sign_in_with(monkeypatch, fake_conn, 
         bootstrap.ensure_bootstrap_admin()
     assert ADMIN_EMAIL in caplog.text
     assert "existing password" in caplog.text
+
+
+# ── The seeded address must be one the login form will submit ────────────────
+
+@pytest.mark.parametrize("bad", ["admin", "@example.com", "admin@", "ad min@x.test", "  "])
+def test_an_unusable_admin_email_falls_back_to_the_default(monkeypatch, fake_conn, caplog, bad):
+    """Seeding a malformed address creates an account nobody can sign in to —
+    LoginPage's type="email" input refuses to submit it — and the seeding never runs
+    again, so correcting the env var afterwards does nothing. Recovery would mean
+    manual database surgery on a fresh install."""
+    monkeypatch.setattr(bootstrap.settings.auth, "admin_email", bad)
+    conn = fake_conn(monkeypatch, bootstrap, fetchone_results=_seq(credential=(None, 0)))
+    with caplog.at_level("ERROR"):
+        bootstrap.ensure_bootstrap_admin()
+    assert _insert_params(conn)[0] == bootstrap.DEFAULT_ADMIN_EMAIL
+
+
+@pytest.mark.parametrize("good", ["owner@team.test", "first.last+tag@sub.example.co.uk"])
+def test_a_usable_admin_email_is_kept(monkeypatch, fake_conn, good):
+    monkeypatch.setattr(bootstrap.settings.auth, "admin_email", good)
+    conn = fake_conn(monkeypatch, bootstrap, fetchone_results=_seq(credential=(None, 0)))
+    bootstrap.ensure_bootstrap_admin()
+    assert _insert_params(conn)[0] == good

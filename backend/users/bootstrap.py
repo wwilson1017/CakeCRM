@@ -37,9 +37,45 @@ _BOOTSTRAP_LOCK = 1901
 _OWNED_TABLES = ("contacts", "companies", "deals", "tasks")
 
 
+DEFAULT_ADMIN_EMAIL = "admin@cakecrm.local"
+
+
+def _bootstrap_email() -> str:
+    """The address to seed, guaranteed to be one the login form will actually submit.
+
+    ``create_user`` validates this for every account made through the API, but the
+    bootstrap INSERTs directly, so nothing checked it here. That gap is worse than it
+    sounds: seeding a malformed value like ``ADMIN_EMAIL=admin`` produces an account
+    nobody can sign in to, because LoginPage's ``type="email"`` input refuses to
+    submit it — and the seeding never runs again, since ``users`` is no longer empty.
+    Correcting the env var afterwards does nothing. A fresh install would need manual
+    database surgery to recover.
+
+    So a value that isn't usable is replaced with the documented default and logged,
+    rather than refusing to boot (which would strand a deploy over a typo) or seeding
+    it anyway.
+    """
+    raw = settings.auth.admin_email.strip()
+    if not raw:
+        return DEFAULT_ADMIN_EMAIL
+    # The same shape the login form enforces: something before an @, something after,
+    # and no whitespace anywhere in it.
+    local, _, domain = raw.partition("@")
+    if local and domain and not any(c.isspace() for c in raw):
+        return raw
+    logger.error(
+        "ADMIN_EMAIL=%r is not a usable email address, so the admin account was "
+        "created as %s instead. The login form will not submit a malformed address, "
+        "and this seeding runs only once — fixing the variable later has no effect.",
+        raw,
+        DEFAULT_ADMIN_EMAIL,
+    )
+    return DEFAULT_ADMIN_EMAIL
+
+
 def ensure_bootstrap_admin() -> dict | None:
     """Seed the first admin when ``users`` is empty. Returns the row, or None if skipped."""
-    email = settings.auth.admin_email.strip() or "admin@cakecrm.local"
+    email = _bootstrap_email()
     name = settings.auth.admin_name.strip() or "Admin"
 
     weak_password = False
