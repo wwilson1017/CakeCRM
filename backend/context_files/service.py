@@ -304,11 +304,16 @@ def write_file(filename: str, content: str, written_by: str = "assistant",
                expected_updated_at: str | None = None) -> dict:
     """Create or overwrite a file; returns the stored row.
 
-    ``expected_updated_at`` is an optimistic-concurrency precondition for the REST/UI
-    editor: the browser sends the ``updated_at`` it loaded, and a mismatch raises
-    ``conflict`` (409) instead of silently discarding whatever was written in between.
-    Tool writes pass None — the model always sends whole-file content it just read, and
-    a confirmation gate sits in front of it.
+    ``expected_updated_at`` is an optimistic-concurrency precondition: the caller sends
+    the ``updated_at`` it loaded, and a mismatch raises ``conflict`` (409) instead of
+    silently discarding whatever was written in between. Two callers supply it — the
+    REST/UI editor from the browser, and a CONFIRMED tool write, for which the engine
+    stamps the version at proposal time and injects it on approval
+    (``context_files.tools.pending_binding``). Note the confirmation gate is the reason
+    that second caller needs this, not a substitute for it: the gate is what creates a
+    human-length gap between composing the overwrite and running it, and the user can
+    edit the same file in the Memory page inside that gap. An UNCONFIRMED power-mode
+    write passes None, having no such gap.
 
     The precondition is enforced INSIDE the UPDATE, not by a read-then-write, for two
     reasons. A separate SELECT is a TOCTOU window — an append landing between the check

@@ -119,7 +119,7 @@ def test_binding_conflict_tolerates_an_unreachable_store(monkeypatch, get_row):
 
 async def test_placeholder_carries_the_binding_for_a_gmail_draft(at_generation):
     at_generation(9)
-    content = await engine._pending_placeholder("gmail_create_draft")
+    content = await engine._pending_placeholder("gmail_create_draft", {})
     assert json.loads(content) == {"status": history.PENDING_STATUS, "gmail_generation": 9}
 
 
@@ -127,18 +127,18 @@ async def test_bound_placeholder_is_still_recognised_as_pending(at_generation):
     """The extra key must stay inert to the pending/executing state machine —
     history's status helpers read only "status"."""
     at_generation(9)
-    content = await engine._pending_placeholder("gmail_create_draft")
+    content = await engine._pending_placeholder("gmail_create_draft", {})
     assert history.is_pending_result(content) is True
 
 
 async def test_placeholder_is_unchanged_for_non_gmail_writes(at_generation):
     at_generation(9)
-    assert await engine._pending_placeholder("crm_create_contact") == history.PENDING_RESULT_JSON
+    assert await engine._pending_placeholder("crm_create_contact", {}) == history.PENDING_RESULT_JSON
 
 
 async def test_placeholder_falls_back_when_the_binding_cannot_be_read(monkeypatch):
     monkeypatch.setattr(gmail_tools.store, "get_row", lambda: {})
-    assert await engine._pending_placeholder("gmail_create_draft") == history.PENDING_RESULT_JSON
+    assert await engine._pending_placeholder("gmail_create_draft", {}) == history.PENDING_RESULT_JSON
 
 
 # ── resolve_confirmation: the actual refusal ──────────────────────────────────

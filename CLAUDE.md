@@ -182,6 +182,22 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `get_current_user`. The editor carries an `updated_at` precondition returning **409** on a
   stale save, because the single-statement `append_daily_note` upsert guarantees
   append-vs-append only; a whole-file overwrite racing an append is still last-write-wins.
+  **A CONFIRMED tool write carries that same precondition**, and the confirmation gate is
+  the reason it needs one rather than a substitute for it: the gate is what opens a
+  human-length gap between composing an overwrite and running it, and a protected file
+  always waits. So `engine._VERSION_BOUND_WRITE_TOOLS` stamps the row version into the
+  pending placeholder via `context_files.tools.pending_binding()` and `_with_version_binding()`
+  injects it as `expected_updated_at` on approval — the server reads the version because a
+  model asked to echo its own token could silently opt out of the guard. Unlike the Gmail
+  connection binding this is **not** a pre-check: the kwarg rides into `write_file`'s
+  in-UPDATE comparison, so no check-then-write window remains. It **fails open** (an
+  unreadable version binds nothing, exactly as `gmail.tools._live_generation` does), and a
+  stale write returns a *model-facing* conflict telling Baker to re-read and re-apply — the
+  service's own message tells a browser to reload, which would just make the model retry the
+  same stale overwrite. An unconfirmed power-mode write binds nothing, having no gap; a file
+  that does not exist yet binds nothing either (documented simplification — needs an
+  expect-absent insert the service has no primitive for). The Memory page's editor likewise
+  confirms before a file switch discards an unsaved draft.
   `memory.service.delete_fact()` is a **human-only** hard purge with no agent tool — the
   assistant retires a fact with `invalidate_fact`, which preserves the temporal record.
   Phases 3 (compaction), 4 (observer/extractor/commitments-as-tasks/file-dreaming) and 5

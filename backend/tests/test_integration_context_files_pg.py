@@ -9,6 +9,7 @@ survive on independent connections.
 Marked ``integration`` and excluded from the default no-DB run.
 """
 
+import json
 import os
 import threading
 
@@ -183,6 +184,68 @@ def test_stale_write_precondition_conflicts(pg_db):
         service.write_file("topics/race.md", "v3", expected_updated_at=str(stale))
     assert exc.value.code == "conflict"
     assert service.read_file("topics/race.md")["content"] == "v2"
+
+
+class _StubRegistry:
+    """Stands in for ToolRegistry but routes to the REAL executors, so an approved write
+    actually reaches Postgres — the point of putting this test in the integration file."""
+
+    def is_write(self, tool):
+        return True
+
+    def execute_tool_sync(self, tool, args):
+        from context_files.tools import CONTEXT_FILE_TOOL_EXECUTORS
+
+        return CONTEXT_FILE_TOOL_EXECUTORS[tool](**args)
+
+
+async def test_approving_a_stale_assistant_overwrite_keeps_the_user_edit(pg_db, monkeypatch):
+    """The whole reason the pending write is version-bound, end to end on real Postgres.
+
+    Baker proposes a full rewrite of soul.md, which ALWAYS waits for approval. The user
+    edits the same file in the Memory page while it waits. Approving must not discard
+    their edit — and the token has to survive the JSON round-trip through the placeholder,
+    which is exactly where a naive str()/ISO mismatch would silently stop matching.
+    """
+    from assistant import engine, history
+    from context_files import service, tools as cf_tools
+
+    service.write_file("soul.md", "I am Baker.", written_by="user")
+
+    # 1. The confirmation gate stamps the version Baker composed against.
+    placeholder = await engine._pending_placeholder("write_context_file", {"filename": "soul.md"})
+    assert "context_updated_at" in json.loads(placeholder)
+
+    # 2. The user saves their own edit through the editor while it waits.
+    loaded = service.read_file("soul.md")
+    service.write_file("soul.md", "I am Baker, and I am the user's.", written_by="user",
+                       expected_updated_at=str(loaded["updated_at"]))
+
+    # 3. Approve. Same wiring resolve_confirmation uses, minus the history layer.
+    registry = _StubRegistry()
+    monkeypatch.setattr(history, "claim_pending_tool", lambda *a, **k: {
+        "msg_id": "m1", "tool": "write_context_file",
+        "args": {"filename": "soul.md", "content": "BAKER'S STALE REWRITE"},
+        "content": placeholder,
+    })
+    monkeypatch.setattr(history, "merge_tool_result", lambda *a: None)
+    out = engine.resolve_confirmation(registry, "c1", "t1", "approve", msg_id="m1")
+
+    # The user's edit survived and Baker was told what to do about it.
+    assert service.read_file("soul.md")["content"] == "I am Baker, and I am the user's."
+    assert "error" in out["result"]
+    assert "read the file again" in out["result"]["error"].lower()
+
+    # And with no competing edit the very same flow DOES write — the guard is not a wall.
+    placeholder2 = await engine._pending_placeholder("write_context_file", {"filename": "soul.md"})
+    monkeypatch.setattr(history, "claim_pending_tool", lambda *a, **k: {
+        "msg_id": "m2", "tool": "write_context_file",
+        "args": {"filename": "soul.md", "content": "BAKER'S FRESH REWRITE"},
+        "content": placeholder2,
+    })
+    engine.resolve_confirmation(registry, "c1", "t2", "approve", msg_id="m2")
+    assert service.read_file("soul.md")["content"] == "BAKER'S FRESH REWRITE"
+    assert cf_tools.binding_kwargs(json.loads(placeholder2))["expected_updated_at"]
 
 
 def test_a_normal_save_round_trips_over_HTTP(pg_db):

@@ -80,6 +80,11 @@ function FilesPanel({ isMobile }: { isMobile: boolean }) {
   // Guards against out-of-order responses: only the newest request may render.
   const loadSeq = useRef(0);
 
+  // Declared here, above the callbacks that depend on it, rather than beside the buttons
+  // it disables: naming it in a useCallback dep array below its own `const` would read it
+  // during render, before initialization — a TDZ crash, not a lint warning.
+  const dirty = open !== null && draft !== open.content;
+
   const refresh = useCallback(async () => {
     try {
       setFiles(sortFiles(await listContextFiles()));
@@ -95,6 +100,16 @@ function FilesPanel({ isMobile }: { isMobile: boolean }) {
   useEffect(() => { queueMicrotask(refresh); }, [refresh]);
 
   const openFile = useCallback(async (filename: string) => {
+    // Opening a file replaces the editor wholesale, so an unsaved edit to whatever is
+    // open now would be gone with no undo and nothing on screen to recover it from. Ask
+    // first — BEFORE claiming a sequence number, so declining leaves an in-flight save
+    // (which also owns loadSeq) able to finish and render.
+    if (open && dirty && !(await confirmDialog({
+      title: 'Discard unsaved changes?',
+      message: `Your edits to ${displayName(open.filename)} have not been saved.`,
+      confirmLabel: 'Discard',
+      danger: true,
+    }))) return;
     const seq = ++loadSeq.current;
     setSelected(filename);
     setOpen(null);
@@ -106,7 +121,7 @@ function FilesPanel({ isMobile }: { isMobile: boolean }) {
     } catch {
       if (seq === loadSeq.current) toast.error(`Could not open ${filename}`);
     }
-  }, []);
+  }, [dirty, open]);
 
   const save = useCallback(async () => {
     if (!open) return;
@@ -154,8 +169,6 @@ function FilesPanel({ isMobile }: { isMobile: boolean }) {
       toast.error('Could not delete that file');
     }
   }, [selected, refresh]);
-
-  const dirty = open !== null && draft !== open.content;
 
   if (loading) return <div style={{ color: INK_MUTE }}>Loading…</div>;
 

@@ -400,7 +400,7 @@ async def _chat_impl(
                 or tool_mode == "normal"
                 or (tool_mode == "power" and turn_has_untrusted_reads)
             ):
-                placeholder = await _pending_placeholder(name)
+                placeholder = await _pending_placeholder(name, args)
                 try:
                     await asyncio.to_thread(
                         history.merge_tool_result, iter_msg_id, tool_use_id, name,
@@ -518,23 +518,64 @@ async def _chat_impl(
 # same shape as _UNTRUSTED_SOURCE_TOOLS above.
 _CONNECTION_BOUND_WRITE_TOOLS = frozenset({"gmail_create_draft"})
 
+# Writes bound to the VERSION of the row they were proposed against, rather than to a
+# connection. A context-file overwrite is composed against what the assistant just read,
+# but a protected file always waits for approval — and the user can edit that same file
+# in the Memory page while it waits, so approving must not silently discard their edit
+# (#72). Hand-maintained by name, same shape as the set above.
+_VERSION_BOUND_WRITE_TOOLS = frozenset({"write_context_file"})
 
-async def _pending_placeholder(tool_name: str) -> str:
+
+async def _pending_placeholder(tool_name: str, args: dict | None) -> str:
     """The pending-approval result to persist for a gated write.
 
-    Plain PENDING_RESULT_JSON, except for a connection-bound write, which also
-    carries the identity of the connection it was proposed against. Extra keys are
-    safe: history's status helpers read only "status". The binding read touches
-    Postgres, so it is offloaded — this runs on the SSE event loop.
+    Plain PENDING_RESULT_JSON, except for a bound write, which also carries what it was
+    proposed against — the live connection for Gmail, the row version for a context
+    file. Extra keys are safe: history's status helpers read only "status". Both binding
+    reads touch Postgres, so they are offloaded — this runs on the SSE event loop.
     """
-    if tool_name not in _CONNECTION_BOUND_WRITE_TOOLS:
-        return history.PENDING_RESULT_JSON
-    from gmail import tools as gmail_tools  # lazy: keeps gmail out of engine import
+    if tool_name in _CONNECTION_BOUND_WRITE_TOOLS:
+        from gmail import tools as gmail_tools  # lazy: keeps gmail out of engine import
 
-    binding = await asyncio.to_thread(gmail_tools.pending_binding)
+        binding = await asyncio.to_thread(gmail_tools.pending_binding)
+    elif tool_name in _VERSION_BOUND_WRITE_TOOLS:
+        binding = await asyncio.to_thread(context_file_tools.pending_binding, args)
+    else:
+        return history.PENDING_RESULT_JSON
     if not binding:
         return history.PENDING_RESULT_JSON
     return json.dumps({"status": history.PENDING_STATUS, **binding})
+
+
+def _parse_pending(pending_content: str | dict | None) -> dict:
+    """The persisted pending placeholder as a mapping ({} when there is nothing to read).
+
+    Accepts an already-decoded mapping as well as the JSON string the history layer
+    stores, so a future change in how the placeholder is deserialized can't make a
+    binding check silently fail open (it would parse to nothing and find no binding).
+    """
+    if isinstance(pending_content, dict):
+        return pending_content
+    if isinstance(pending_content, str) and pending_content:
+        try:
+            parsed = json.loads(pending_content)
+        except ValueError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _with_version_binding(tool: str, args: dict | None, pending_content: str | None) -> dict:
+    """``args`` plus the precondition enforcing a stamped version binding.
+
+    Unlike the connection binding this is NOT a pre-check: the kwarg rides the
+    executor into ``service.write_file``'s in-UPDATE comparison, so there is no
+    check-then-write window for an edit to slip through.
+    """
+    if tool not in _VERSION_BOUND_WRITE_TOOLS:
+        return args or {}
+    extra = context_file_tools.binding_kwargs(_parse_pending(pending_content))
+    return {**(args or {}), **extra}
 
 
 def _binding_conflict(tool: str, pending_content: str | None) -> dict | None:
@@ -545,19 +586,7 @@ def _binding_conflict(tool: str, pending_content: str | None) -> dict | None:
         return None
     from gmail import tools as gmail_tools  # lazy: see _pending_placeholder
 
-    # Accept an already-decoded mapping as well as the JSON string the history layer
-    # stores, so a future change in how the placeholder is deserialized can't make
-    # this check silently fail open (it would parse to nothing and find no binding).
-    if isinstance(pending_content, dict):
-        parsed = pending_content
-    elif isinstance(pending_content, str) and pending_content:
-        try:
-            parsed = json.loads(pending_content)
-        except ValueError:
-            return None
-    else:
-        return None
-    return gmail_tools.binding_conflict(parsed if isinstance(parsed, dict) else {})
+    return gmail_tools.binding_conflict(_parse_pending(pending_content))
 
 
 def resolve_confirmation(registry, conversation_id: str, tool_use_id: str, decision: str,
@@ -598,7 +627,14 @@ def resolve_confirmation(registry, conversation_id: str, tool_use_id: str, decis
         # single-user v1, where the admin is the only actor; closing it fully would
         # thread the binding through every executor signature.
         conflict = _binding_conflict(tool, claimed.get("content"))
-        result = conflict if conflict is not None else registry.execute_tool_sync(tool, args)
+        if conflict is not None:
+            result = conflict
+        else:
+            # A version-bound write carries its precondition INTO the executor, so the
+            # window above does not apply to it.
+            result = registry.execute_tool_sync(
+                tool, _with_version_binding(tool, args, claimed.get("content")),
+            )
     else:  # deny
         result = {"status": history.DENIED_STATUS}
     history.merge_tool_result(claimed_msg_id, tool_use_id, tool, json.dumps(result, default=str))

@@ -66,6 +66,58 @@ def _error(exc: service.ContextFileError) -> dict:
     return {"error": exc.message}
 
 
+# ── Version binding for gated writes ─────────────────────────────────────────────
+# A gated write is composed against the file the assistant just read, but it EXECUTES
+# only once the user approves it — and for a protected file that gate fires in EVERY
+# mode, so the gap is as long as the human takes to decide. The user can edit that same
+# file in the Memory page inside the gap, and an unconditional upsert on approval would
+# discard their edit with no trace. So the version is stamped into the pending
+# placeholder when the write is PROPOSED (the server reads it; the model is never asked
+# to echo it back, because a model that forgets the token would silently opt out of the
+# guard) and enforced when the write finally runs. Same shape as gmail.tools' connection
+# binding — see engine._VERSION_BOUND_WRITE_TOOLS.
+
+_BINDING_VERSION = "context_updated_at"
+
+
+def pending_binding(args: dict | None) -> dict | None:
+    """Placeholder keys binding a pending write to the version it was proposed against.
+
+    ``None`` when there is nothing trustworthy to bind, and the write then proceeds
+    unconditionally exactly as it did before this guard existed. Failing OPEN is
+    deliberate: a bogus binding would refuse a legitimate write forever, which is worse
+    than the race it closes — the same call ``gmail.tools._live_generation`` makes.
+
+    simplification: a file that does not exist yet binds to nothing, so a file CREATED
+    inside the gap is still overwritten silently. Closing that needs an
+    expect-absent insert (``ON CONFLICT DO NOTHING`` + rowcount) which the service has
+    no primitive for; the protected files this gate exists for are seeded by the
+    migration and always exist.
+    """
+    if not isinstance(args, dict):
+        return None
+    filename = args.get("filename")
+    if not isinstance(filename, str):
+        return None
+    try:
+        row = service.read_file(filename)
+    except Exception:  # unparseable name, or the read failed — bind nothing
+        return None
+    updated_at = (row or {}).get("updated_at")
+    return {_BINDING_VERSION: str(updated_at)} if updated_at is not None else None
+
+
+def binding_kwargs(parsed: dict) -> dict:
+    """Executor kwargs that enforce a stamped binding; ``{}`` when unbound.
+
+    Merged into the canonical args at approval time rather than checked beforehand, so
+    the precondition rides ``service.write_file``'s in-UPDATE comparison and leaves no
+    check-then-write window at all (see that docstring).
+    """
+    token = parsed.get(_BINDING_VERSION) if isinstance(parsed, dict) else None
+    return {"expected_updated_at": token} if isinstance(token, str) and token else {}
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Executors
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -109,10 +161,30 @@ def _read_context_file(filename: str) -> dict:
     }
 
 
-def _write_context_file(filename: str, content: str) -> dict:
+def _write_context_file(filename: str, content: str,
+                        expected_updated_at: str | None = None) -> dict:
+    """Create or overwrite a file.
+
+    ``expected_updated_at`` is NOT in the tool schema — the engine injects it from the
+    pending placeholder when a confirmed write had a version bound to it (see
+    ``pending_binding``). An immediate power-mode write passes None: read and write land
+    in one turn with no human pause between them, so there is no gap to guard.
+    """
     try:
-        row = service.write_file(filename, content, written_by="assistant")
+        row = service.write_file(
+            filename, content, written_by="assistant",
+            expected_updated_at=expected_updated_at,
+        )
     except service.ContextFileError as exc:
+        if exc.code == "conflict":
+            # The service's message is written for the browser editor ("reload"). Tell
+            # the model what IT has to do instead, or it will just retry the same
+            # now-stale overwrite and clobber the edit on the second pass.
+            return {"error": (
+                f"'{filename}' was edited by the user after you proposed this write, so "
+                "it was NOT saved. Read the file again and re-apply your change on top "
+                "of their version."
+            )}
         return _error(exc)
     return {"filename": row.get("filename"), "ok": True, "updated_at": str(row.get("updated_at"))}
 
