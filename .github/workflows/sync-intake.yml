@@ -94,7 +94,12 @@ jobs:
       # logs are public on a public repo — so passing the payload through `env`
       # would publish every upstream path the sender listed, defeating the
       # disclosure rule the renderer enforces. Only the PATH appears in the log.
-      # It also means no `${{ }}` interpolation into shell at all.
+      #
+      # It also means no payload `${{ }}` reaches a shell anywhere in this file. The
+      # concurrency key above is the one non-shell exception, and it is unavoidable:
+      # workflow-level expressions are evaluated before any step can validate them,
+      # and Actions expressions have no sanitizer. That residual is named in
+      # docs/SYNC.md §2 rather than pretended away.
       - name: Validate, classify, and render
         id: render
         run: |
