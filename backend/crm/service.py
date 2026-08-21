@@ -1764,10 +1764,17 @@ def _shape_activity_types(rows: list[dict]) -> list[dict]:
 #
 # Both are identified by their marker prefix, which is the only thing that
 # distinguishes them; `[` has no special meaning in SQL LIKE, only % and _.
+#
+# The patterns are bound as PARAMETERS rather than inlined. psycopg2 interpolates
+# `%` in any statement it is given parameters for, so a literal `'... for %'` in the
+# SQL raises "IndexError: tuple index out of range" at execute time — which is a
+# runtime 500, not a syntax error anything catches earlier. Escaping to `%%` would
+# work and would be one careless edit away from breaking again.
 _ACTIVITY_CHATTER_EXCLUSIONS = (
-    " AND ch.message NOT LIKE 'Confirmed AI-populated value for %'"
-    " AND ch.message NOT LIKE '[Merged from deal #%'"
+    " AND ch.message NOT LIKE %s AND ch.message NOT LIKE %s"
 )
+_PROVENANCE_NOTE_PATTERN = "Confirmed AI-populated value for %"
+_MERGE_COPY_PATTERN = "[Merged from deal #%"
 
 
 def _shape_per_rep(pipeline_rows: list[dict], activity_rows: list[dict]) -> list[dict]:
@@ -1962,7 +1969,8 @@ def get_analytics(days: int = 30, stale_days: int = 14, stale_limit: int = 8) ->
         LEFT JOIN users u ON u.id = acts.actor
         GROUP BY acts.actor, u.name, u.email
         """,
-        (start_dt, end_dt, start_dt, end_dt),
+        (start_dt, end_dt, start_dt, end_dt,
+         _PROVENANCE_NOTE_PATTERN, _MERGE_COPY_PATTERN),
     )
 
     daily = _fill_activity_daily(daily_rows, days, today=today)
