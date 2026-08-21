@@ -481,6 +481,8 @@ async def create_task(body: TaskCreate, user=Depends(get_current_user)):
         return crm.create_task(**body.model_dump())
     except psycopg2.errors.ForeignKeyViolation:
         raise HTTPException(status_code=400, detail="Referenced contact or deal does not exist") from None
+    except gtd_common.ValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
 
 
 @router.put("/tasks/{task_id}")
@@ -497,6 +499,11 @@ async def update_task(task_id: int, body: TaskUpdate, user=Depends(get_current_u
         result = crm.update_task(task_id, **updates)
     except psycopg2.errors.ForeignKeyViolation:
         raise HTTPException(status_code=400, detail="Referenced contact or deal does not exist") from None
+    except gtd_common.ValidationError as e:
+        # Since #70 the task write path validates its inputs (a malformed due_date
+        # used to be stored verbatim). Bad input is the caller's, so it must surface
+        # as 400 — an uncaught ValidationError here would be a 500.
+        raise HTTPException(status_code=400, detail=str(e)) from None
     if not result:
         raise HTTPException(status_code=404, detail="Task not found")
     return result

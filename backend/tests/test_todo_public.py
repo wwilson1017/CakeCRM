@@ -190,6 +190,21 @@ def test_a_wrong_web_token_is_404(client, surfaces, monkeypatch):
     assert client.get("/todo/nope").status_code == 404
 
 
+def test_the_page_escapes_its_basename_into_both_contexts(monkeypatch):
+    """`_page` is tested directly rather than through a route: a hostile token can
+    never reach it via the URL (the clamp rejects it on write, and a `/` or `"` would
+    not survive routing anyway). That is precisely why the escaping is worth pinning
+    on its own — it is the layer that holds if the value ever arrives from elsewhere,
+    and neither layer is load-bearing alone."""
+    monkeypatch.setattr(todo_web, "_index_html", lambda: "<html><head></head></html>")
+    body = todo_web._page('/todo/a";alert(1)//<script>').body.decode()
+    # JS string literal: the quote is escaped, so the statement never closes.
+    assert 'window.__CAKECRM_TODO_BASE__ = "/todo/a\\";alert(1)//' in body
+    # HTML attribute: the quote and angle brackets are entities, not markup.
+    assert '&quot;;alert(1)//&lt;script&gt;/manifest.webmanifest' in body
+    assert "<script>alert" not in body
+
+
 def test_the_unbuilt_frontend_503_is_still_uncacheable(client, surfaces, monkeypatch):
     """This fires AFTER a successful token match, so it must not become a cacheable
     or indexable oracle for "the token was right"."""

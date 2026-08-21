@@ -18,6 +18,8 @@ Ported from chatty's `core/todo/web.py`.
 """
 
 import hmac
+import html
+import json
 import logging
 from pathlib import Path
 
@@ -110,26 +112,29 @@ def _index_html() -> str:
 
 def _page(base_path: str) -> HTMLResponse:
     """Serve the SPA with the todo-only mode and its router basename injected."""
-    html = _index_html()
-    if not html:
+    shell = _index_html()
+    if not shell:
         return HTMLResponse(_UNBUILT_HTML, status_code=503, headers=_PAGE_HEADERS)
-    # base_path is either "/todo" or "/todo/<token>", both already restricted to
-    # URL-safe characters by clamp_token, so it is safe inside a JSON string literal.
+    # base_path is "/todo" or "/todo/<token>". The token is clamped to URL-safe
+    # characters on the way IN, but this is the output boundary and the value comes
+    # from the database — so it is serialized with json.dumps rather than
+    # interpolated, and a row that somehow held a quote produces a harmless escaped
+    # string instead of injected script. Defense in depth: neither layer is load-bearing alone.
     inject = (
-        f'<script>window.__CAKECRM_TODO_BASE__ = "{base_path}";</script>\n'
+        f'<script>window.__CAKECRM_TODO_BASE__ = {json.dumps(base_path)};</script>\n'
         # Installability: the manifest makes Add to Home Screen produce a real
         # standalone app (own icon, no browser chrome, opens at base_path).
-        f'  <link rel="manifest" href="{base_path}/manifest.webmanifest">\n'
+        f'  <link rel="manifest" href="{html.escape(base_path, quote=True)}/manifest.webmanifest">\n'
         # Pre-16.4 iOS ignores the manifest; these metas are its equivalent.
         '  <meta name="mobile-web-app-capable" content="yes">\n'
         '  <meta name="apple-mobile-web-app-capable" content="yes">\n'
         '  <meta name="apple-mobile-web-app-title" content="Todos">'
     )
-    if "</head>" in html:
-        html = html.replace("</head>", f"  {inject}\n  </head>", 1)
+    if "</head>" in shell:
+        shell = shell.replace("</head>", f"  {inject}\n  </head>", 1)
     else:
-        html = inject + html
-    return HTMLResponse(html, headers=_PAGE_HEADERS)
+        shell = inject + shell
+    return HTMLResponse(shell, headers=_PAGE_HEADERS)
 
 
 def _manifest(base_path: str) -> Response:

@@ -16,6 +16,7 @@ admin-settings file onto the `crm_meta` singleton.
 """
 
 import hmac
+import html
 import json
 import logging
 
@@ -137,11 +138,18 @@ _CAPTURE_HTML = """<!doctype html>
 
 
 def _page(post_path: str, base_path: str) -> HTMLResponse:
-    html = _CAPTURE_HTML.replace("__POST_PATH__", post_path).replace("__BASE_PATH__", base_path)
+    # Both values embed a configured token. It is clamped to URL-safe characters on
+    # the way in, but this is the output boundary and the value comes from the
+    # database — so each is escaped for the context it lands in: post_path sits in a
+    # JS string literal, base_path in an HTML attribute. Defense in depth; neither
+    # layer is load-bearing alone.
+    page = (_CAPTURE_HTML
+            .replace("__POST_PATH__", json.dumps(post_path)[1:-1])
+            .replace("__BASE_PATH__", html.escape(base_path, quote=True)))
     # The tokened variant embeds the secret POST path, so caches and search indexes
     # must never keep a copy.
     return HTMLResponse(
-        html,
+        page,
         headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex, nofollow"},
     )
 
