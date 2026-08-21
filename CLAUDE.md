@@ -145,7 +145,41 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   growth). Locally `docker compose up -d`; on Railway the template provisions
   Postgres and injects `DATABASE_URL`. No Redis or other external services.
   Required env vars: `AUTH_PASSWORD` + `DATABASE_URL`; `JWT_SECRET` and
-  `ENCRYPTION_KEY` auto-generate. Schema is owned by `backend/migrations/*.sql`,
+  `ENCRYPTION_KEY` auto-generate. **The login credential is DB-backed** (#78): the
+  `auth_credential` singleton holds a bcrypt hash the logged-in user changes from
+  `/crm/settings`, and `core.auth.verify_password()` resolves DB-hash-first, falling
+  back to `AUTH_PASSWORD` only while that hash IS NULL — so the env var is a
+  *bootstrap* value that goes inert once the user sets their own password, and can
+  never silently override it on a later boot. Every credential check in the app routes
+  through that one function (login, the three 2FA confirmation endpoints, and
+  change-password's pre-check), so the resolution order has exactly one definition.
+  `POST /api/auth/change-password` verifies the current password and writes the new
+  hash in ONE `SELECT … FOR UPDATE` transaction (`set_password`); the migration
+  **seeds** the singleton row with a NULL hash so that lock always has a row to hold
+  — locking an absent row is a no-op, which would let two concurrent first-time
+  changes both pass. The endpoint also runs a **non-consuming `verify_password`
+  pre-check before the 2FA code**, because verifying a code spends it (`verify_totp_code`
+  burns the timeslot, `consume_backup_code` destroys a single-use code) and a typo in the
+  current-password field must not cost the user a recovery code; `set_password`'s locked
+  re-check stays authoritative. It answers a wrong current password with **400, not 401**,
+  because the frontend `api()` wrapper treats every 401 as an expired session and
+  ejects the user to `/login`. On success it revokes trusted 2FA devices and returns
+  a fresh token. **Changing the password ends every other session immediately**:
+  `auth_credential.token_epoch` is bumped in the *same statement* as the hash and
+  stamped into every JWT as `pwd_epoch` (injected centrally in `create_access_token`,
+  so all four mint sites carry it), and `get_current_user` rejects a token whose epoch
+  is stale. The epoch is cached in-process — the deploy pins `gunicorn --workers 1` and
+  the **happy path does zero DB reads**; it is loaded once in the lifespan. A *mismatch*
+  re-reads before rejecting, so a stale cache (a multi-worker fork) self-heals instead of
+  spuriously signing valid sessions out. A token predating the feature has no claim and
+  reads as epoch 0 — deploying this signs nobody out; the first password change does.
+  `AUTH_PASSWORD_RESET` bumps the epoch too (a rescue must end the sessions that may have
+  caused the lockout). `AUTH_PASSWORD_RESET` is the operator's
+  recovery lever, consumed in the lifespan right after `run_migrations()`: it
+  overwrites the stored hash on **every** boot while set (a lever that disarms itself
+  can only be pulled once) and logs a loud warning to remove it. Login **fails
+  closed** — an unreadable credential is a 503, never a fallback to the env var.
+  Schema is owned by `backend/migrations/*.sql`,
   applied automatically at startup in lexicographic order — name migrations
   `YYYYMMDDHHMMSS_<name>.sql` (use `date +%Y%m%d%H%M%S`), never sequential
   prefixes. Access Postgres through `core/postgres.py` helpers
@@ -376,6 +410,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | CakeCRM area | Source |
 |---|---|
 | Product shell (run.py, auth, 2FA, encryption, config, Railway) | `chatty/backend/` + `chatty/run.py` |
+| DB-backed login credential + in-app password change (`auth_credential` singleton, `POST /api/auth/change-password`, `AUTH_PASSWORD_RESET` recovery lever) — **landed #78** as `backend/core/auth.py` + `frontend/src/crm/components/ChangePasswordCard.tsx` | New capability (no blueprint — back-port candidate to CAKE OS) |
 | Postgres pool + migration runner | `cake_os/backend/core/postgres.py` |
 | AI providers + pricing + setup wizard | `chatty/backend/core/providers/`, `chatty/frontend/src/setup/` |
 | CRM core (schema, router, tools, smart import) — **landed #3** as `backend/crm/` + `frontend/src/crm/` + `frontend/src/shared/` | `chatty/backend/integrations/crm_lite/`, `chatty/frontend/src/crm/` |

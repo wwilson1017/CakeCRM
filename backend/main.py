@@ -70,6 +70,14 @@ async def lifespan(app: FastAPI):
     postgres.init_pool()
     postgres.run_migrations()
 
+    # ── Password credential (issue #78) ──────────────────────────────────────
+    # Consumes AUTH_PASSWORD_RESET, so it must run after the migration that
+    # creates auth_credential. Loading the token epoch here keeps it off the
+    # per-request path in get_current_user.
+    from core.auth import apply_password_reset_env, refresh_token_epoch
+    apply_password_reset_env()
+    refresh_token_epoch()
+
     # ── AI touch-count worker (issue #16) ────────────────────────────────────
     # The in-process daemon worker marshals its provider calls onto THIS event loop
     # (see crm/touch_count_service.capture_event_loop) so the module-level provider

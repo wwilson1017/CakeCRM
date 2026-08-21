@@ -30,6 +30,8 @@ interface AuthContextType {
   loading: boolean;
   login: (password: string) => Promise<LoginResult>;
   verify2fa: (pendingToken: string, code: string, trustDevice?: boolean) => Promise<void>;
+  /** Adopt a token minted outside the login flow (e.g. after a password change). */
+  applyToken: (token: string) => void;
   logout: () => void;
 }
 
@@ -141,7 +143,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ isLoggedIn, loading, login, verify2fa, logout }}>
+    <AuthContext.Provider value={{ isLoggedIn, loading, login, verify2fa, applyToken: _completeLogin, logout }}>
       {children}
     </AuthContext.Provider>
   );

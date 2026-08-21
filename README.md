@@ -46,6 +46,27 @@ that works your pipeline for you.
 `ENCRYPTION_KEY` auto-generate. Prefer your own hardware? `python run.py` runs
 everything locally, with Postgres via Docker Compose.
 
+### Passwords
+
+`AUTH_PASSWORD` is only the **initial** password. Change it in the app at
+**Settings → Change password**; the new one is stored (bcrypt-hashed) in the
+database, and from then on `AUTH_PASSWORD` is ignored — editing it later won't
+change how you sign in, and won't override your password on the next restart.
+If two-factor authentication is on, changing the password also asks for a code.
+
+**Changing your password signs out every other device immediately** — the tab you
+changed it in stays signed in. Any trusted-device status for two-factor auth is
+cleared too, so other devices re-do 2FA at their next sign-in.
+
+**Locked out?** If someone forgets the password they set in-app, the operator can
+reset it without database access:
+
+1. Set `AUTH_PASSWORD_RESET` to a new password and restart (on Railway, add the
+   variable — the redeploy is the restart).
+2. Sign in with that password. The logs will carry a warning that the reset ran.
+3. **Remove `AUTH_PASSWORD_RESET` and restart again.** While it is set, every
+   restart re-applies it, so a password changed in the app won't survive one.
+
 ## Lineage
 
 CakeCRM is built from two proven codebases by the same author: the agent platform
