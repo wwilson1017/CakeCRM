@@ -467,10 +467,13 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   pytest -q`, from `backend/`), **frontend** (`npm ci` → `npm run build` → `npm run
   lint` → `npm test`), and **secret-scan** (gitleaks). The scan runs `gitleaks git .` over FULL history, so
   a false positive stays found forever once committed and cannot be fixed by editing
-  the tip. `.gitleaks.toml` keeps the whole default ruleset (`extend.useDefault`) and
-  allowlists individual verified-false findings by exact `commit:file:rule:line`
-  fingerprint, with the reasoning written down — the alternative being a force-push,
-  which this repo does not do. Backend lint config is `backend/ruff.toml`
+  the tip. `.gitleaksignore` records verified-false findings by exact
+  `commit:file:rule:line` fingerprint, with the reasoning written down. Use that file,
+  NOT a `.gitleaks.toml` allowlist keyed on commit+path — the latter exempts every
+  finding in that file in that commit, including a real one. Validate any new entry
+  with a **randomly generated** token, never a canonical doc example
+  (`AKIAIOSFODNN7EXAMPLE` and friends are allowlisted by default and prove nothing).
+  The alternative is a force-push, which this repo does not do. Backend lint config is `backend/ruff.toml`
   (select `F,E,W,I`; `E501` ignored); dev/CI tooling is pinned in
   `backend/requirements-dev.txt`; tests live in `backend/tests/`. The import check
   imports the app with no `DATABASE_URL` (the Postgres pool inits in the lifespan
