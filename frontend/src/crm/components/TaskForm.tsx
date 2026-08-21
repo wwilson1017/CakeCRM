@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import { api } from '../../core/api/client';
+import { useAuth } from '../../core/auth/AuthContext';
+import { OwnerSelect } from './OwnerSelect';
 import { labelStyle, inputStyle, CORAL } from '../../shared/styles';
 import { formModalOverlay, formModalContent, formTitle, btnPrimary, btnSecondary } from '../styles';
 import type { CrmContact, CrmTask } from '../../core/types';
@@ -13,6 +15,7 @@ interface Props {
 }
 
 export function TaskForm({ task, contactId, dealId, onClose, onSaved }: Props) {
+  const { currentUser } = useAuth();
   const isEdit = !!task;
   const [title, setTitle] = useState(task?.title || '');
   const [description, setDescription] = useState(task?.description || '');
@@ -20,6 +23,10 @@ export function TaskForm({ task, contactId, dealId, onClose, onSaved }: Props) {
   const [priority, setPriority] = useState(task?.priority || 'medium');
   const [selectedContact, setSelectedContact] = useState<number | null>(task?.contact_id ?? contactId ?? null);
   const [contacts, setContacts] = useState<CrmContact[]>([]);
+  // A record you create is yours by default; the picker can hand it to someone
+  // else or leave it unassigned. Always sent, like company_id — on an edit an
+  // explicit null is what clears the owner.
+  const [ownerId, setOwnerId] = useState<number | null>(task?.owner_id ?? currentUser?.id ?? null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -37,6 +44,7 @@ export function TaskForm({ task, contactId, dealId, onClose, onSaved }: Props) {
     try {
       const body: Record<string, unknown> = { title, description, due_date: dueDate, priority };
       body.contact_id = selectedContact;  // always send (null unlinks the contact)
+      body.owner_id = ownerId;            // always send (null unassigns)
       if (dealId) body.deal_id = dealId;
 
       if (isEdit) {
@@ -87,6 +95,9 @@ export function TaskForm({ task, contactId, dealId, onClose, onSaved }: Props) {
                 <option value="medium">Medium</option>
                 <option value="high">High</option>
               </select>
+            </div>
+            <div>
+              <OwnerSelect value={ownerId} onChange={setOwnerId} id="task-owner" />
             </div>
           </div>
         </div>

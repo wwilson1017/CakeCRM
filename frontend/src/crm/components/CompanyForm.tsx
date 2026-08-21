@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { api } from '../../core/api/client';
+import { useAuth } from '../../core/auth/AuthContext';
+import { OwnerSelect } from './OwnerSelect';
 import { labelStyle, inputStyle, CORAL, LINE, INK_DIM, mono } from '../../shared/styles';
 import { formModalOverlay, formModalContent, formTitle, btnPrimary, btnSecondary } from '../styles';
 import type { CrmCompany } from '../../core/types';
@@ -13,6 +15,7 @@ interface Props {
 }
 
 export function CompanyForm({ company, onClose, onSaved }: Props) {
+  const { currentUser } = useAuth();
   const isEdit = !!company;
   const [name, setName] = useState(company?.name || '');
   const [domain, setDomain] = useState(company?.domain || '');
@@ -21,6 +24,10 @@ export function CompanyForm({ company, onClose, onSaved }: Props) {
   const [address, setAddress] = useState(company?.address || '');
   const [source, setSource] = useState(company?.source || '');
   const [status, setStatus] = useState(company?.status || 'active');
+  // A record you create is yours by default; the picker can hand it to someone
+  // else or leave it unassigned. Always sent, like company_id — on an edit an
+  // explicit null is what clears the owner.
+  const [ownerId, setOwnerId] = useState<number | null>(company?.owner_id ?? currentUser?.id ?? null);
   const [notes, setNotes] = useState(company?.notes || '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -30,7 +37,7 @@ export function CompanyForm({ company, onClose, onSaved }: Props) {
     e.preventDefault();
     if (!name.trim()) { setError('Name is required'); return; }
     setSaving(true); setError('');
-    const body = JSON.stringify({ name, domain, industry, phone, address, source, status, notes });
+    const body = JSON.stringify({ name, domain, industry, phone, address, source, status, notes, owner_id: ownerId });
     try {
       let id: number;
       if (isEdit) {
@@ -78,6 +85,9 @@ export function CompanyForm({ company, onClose, onSaved }: Props) {
               <option value="active">Active</option>
               <option value="archived">Archived</option>
             </select>
+          </div>
+          <div>
+            <OwnerSelect value={ownerId} onChange={setOwnerId} id="company-owner" />
           </div>
           <div><label style={labelStyle}>Notes</label><textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3} style={{ ...inputStyle, resize: 'none' }} /></div>
         </div>

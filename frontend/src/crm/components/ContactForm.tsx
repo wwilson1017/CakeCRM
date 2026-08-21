@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import { api } from '../../core/api/client';
+import { useAuth } from '../../core/auth/AuthContext';
+import { OwnerSelect } from './OwnerSelect';
 import { labelStyle, inputStyle, CORAL, LINE, INK_DIM, mono } from '../../shared/styles';
 import { formModalOverlay, formModalContent, formTitle, btnPrimary, btnSecondary } from '../styles';
 import type { CrmContact, CrmCompany } from '../../core/types';
@@ -13,6 +15,7 @@ interface Props {
 }
 
 export function ContactForm({ contact, onClose, onSaved }: Props) {
+  const { currentUser } = useAuth();
   const isEdit = !!contact;
   const [name, setName] = useState(contact?.name || '');
   const [email, setEmail] = useState(contact?.email || '');
@@ -24,6 +27,10 @@ export function ContactForm({ contact, onClose, onSaved }: Props) {
   const [tags, setTags] = useState(contact?.tags || '');
   const [notes, setNotes] = useState(contact?.notes || '');
   const [companyId, setCompanyId] = useState<number | null>(contact?.company_id ?? null);
+  // A record you create is yours by default; the picker can hand it to someone
+  // else or leave it unassigned. Always sent, like company_id — on an edit an
+  // explicit null is what clears the owner.
+  const [ownerId, setOwnerId] = useState<number | null>(contact?.owner_id ?? currentUser?.id ?? null);
   const [companies, setCompanies] = useState<CrmCompany[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -72,7 +79,7 @@ export function ContactForm({ contact, onClose, onSaved }: Props) {
     // update endpoint keeps explicit nulls for FKs).
     const linked = companyId != null ? companyOptions.find(c => c.id === companyId) : undefined;
     const companyText = linked ? linked.name : company;
-    const body = JSON.stringify({ name, email, phone, company: companyText, title, source, status, tags, notes, company_id: companyId });
+    const body = JSON.stringify({ name, email, phone, company: companyText, title, source, status, tags, notes, company_id: companyId, owner_id: ownerId });
     try {
       let id: number;
       if (isEdit) {
@@ -130,6 +137,9 @@ export function ContactForm({ contact, onClose, onSaved }: Props) {
               <option value="inactive">Inactive</option>
               <option value="archived">Archived</option>
             </select>
+          </div>
+          <div>
+            <OwnerSelect value={ownerId} onChange={setOwnerId} id="contact-owner" />
           </div>
           <div><label style={labelStyle}>Tags (comma-separated)</label><input value={tags} onChange={e => setTags(e.target.value)} style={inputStyle} /></div>
           <div><label style={labelStyle}>Notes</label><textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3} style={{ ...inputStyle, resize: 'none' }} /></div>

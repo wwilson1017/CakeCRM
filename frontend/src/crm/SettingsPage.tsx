@@ -29,6 +29,7 @@ import { NotificationSettings } from './components/NotificationSettings';
 import { CustomFieldSettings } from './components/CustomFieldSettings';
 import { TelegramSettings } from './components/TelegramSettings';
 import { ChangePasswordCard } from './components/ChangePasswordCard';
+import { TeamSettings } from './components/TeamSettings';
 
 // SVG is excluded: all logos are stored/served as image/png, and browsers don't
 // content-sniff SVG, so an SVG would silently never render. (Serving real SVG from
@@ -198,6 +199,7 @@ export function SettingsPage() {
       {/* Gmail connect (issue #8) — appended last in the settings card chain. */}
       <GmailCard isMobile={isMobile} />
       {/* Change password (issue #78) — appended last, per the keep-both convention above. */}
+      <TeamSettings isMobile={isMobile} />
       <ChangePasswordCard isMobile={isMobile} />
     </div>
   );

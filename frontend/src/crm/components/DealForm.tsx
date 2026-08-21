@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import { api } from '../../core/api/client';
+import { useAuth } from '../../core/auth/AuthContext';
+import { OwnerSelect } from './OwnerSelect';
 import { labelStyle, inputStyle, CORAL, LINE, INK_DIM, mono } from '../../shared/styles';
 import { formModalOverlay, formModalContent, formTitle, btnPrimary, btnSecondary } from '../styles';
 import { STAGE_ORDER } from '../constants';
@@ -16,6 +18,7 @@ interface Props {
 
 
 export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
+  const { currentUser } = useAuth();
   const isEdit = !!deal;
   const [title, setTitle] = useState(deal?.title || '');
   const [stage, setStage] = useState(deal?.stage || 'lead');
@@ -27,6 +30,10 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
   const [selectedCompany, setSelectedCompany] = useState<number | null>(deal?.company_id ?? null);
   const [contacts, setContacts] = useState<CrmContact[]>([]);
   const [companies, setCompanies] = useState<CrmCompany[]>([]);
+  // A record you create is yours by default; the picker can hand it to someone
+  // else or leave it unassigned. Always sent, like company_id — on an edit an
+  // explicit null is what clears the owner.
+  const [ownerId, setOwnerId] = useState<number | null>(deal?.owner_id ?? currentUser?.id ?? null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const cf = useCustomFieldsForm('deal', deal?.id);
@@ -83,6 +90,7 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
       };
       body.contact_id = selectedContact;  // always send (null unlinks the contact)
       body.company_id = selectedCompany;  // always send (null unlinks the company)
+      body.owner_id = ownerId;            // always send (null unassigns)
       let id: number;
       if (isEdit) {
         await api(`/api/crm/deals/${deal.id}`, { method: 'PUT', body: JSON.stringify(body) });
@@ -120,6 +128,9 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
               <option value="">No company</option>
               {companyOptions.map(co => <option key={co.id} value={co.id}>{co.name}{co.status === 'archived' ? ' (archived)' : ''}</option>)}
             </select>
+          </div>
+          <div>
+            <OwnerSelect value={ownerId} onChange={setOwnerId} id="deal-owner" />
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div>

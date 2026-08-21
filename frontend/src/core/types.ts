@@ -1,6 +1,9 @@
 // Shared CRM API types (mirrors the backend crm/service.py response shapes).
 
 export interface CrmContact {
+  /** Owner (issue #60). null = unassigned, which is a real state, not missing data.
+   *  Ownership is an assignment and a filter, never a permission. */
+  owner_id?: number | null;
   id: number;
   name: string;
   email: string;
@@ -26,6 +29,9 @@ export interface CrmContact {
 }
 
 export interface CrmDeal {
+  /** Owner (issue #60). null = unassigned, which is a real state, not missing data.
+   *  Ownership is an assignment and a filter, never a permission. */
+  owner_id?: number | null;
   id: number;
   contact_id: number | null;
   contact_name?: string;
@@ -69,6 +75,9 @@ export interface FieldProvenance {
 }
 
 export interface CrmCompany {
+  /** Owner (issue #60). null = unassigned, which is a real state, not missing data.
+   *  Ownership is an assignment and a filter, never a permission. */
+  owner_id?: number | null;
   id: number;
   name: string;
   domain: string;
@@ -88,6 +97,9 @@ export interface CrmCompany {
 }
 
 export interface CrmTask {
+  /** Owner (issue #60). null = unassigned, which is a real state, not missing data.
+   *  Ownership is an assignment and a filter, never a permission. */
+  owner_id?: number | null;
   id: number;
   contact_id: number | null;
   deal_id: number | null;
