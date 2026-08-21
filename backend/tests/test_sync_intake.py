@@ -52,17 +52,18 @@ def _file(path, status="modified", additions=1, deletions=0):
     return {"path": path, "additions": additions, "deletions": deletions, "status": status}
 
 
-def _env(files, sha="a" * 40, pr="2045", merged_at="2026-08-20T11:25:15Z"):
+def _inputs(files, sha="a" * 40, pr="2045", merged_at="2026-08-20T11:25:15Z"):
+    """Mirrors the `inputs` object inside GitHub's workflow_dispatch event payload."""
     return {
-        "SYNC_SOURCE_SHA": sha,
-        "SYNC_SOURCE_PR": pr,
-        "SYNC_MERGED_AT": merged_at,
-        "SYNC_FILES": json.dumps(files),
+        "source_sha": sha,
+        "source_pr": pr,
+        "merged_at": merged_at,
+        "files": json.dumps(files),
     }
 
 
 def _build(files, **kwargs):
-    return sync_intake.build(_env(files, **kwargs), REPO)
+    return sync_intake.build(_inputs(files, **kwargs), REPO)
 
 
 # --------------------------------------------------------------------------
@@ -304,10 +305,10 @@ def test_timestamp_is_canonicalized():
     ],
 )
 def test_files_validation_rejects(files):
-    env = _env([_file("backend/apps/crm/service.py")])
-    env["SYNC_FILES"] = files
+    payload = _inputs([_file("backend/apps/crm/service.py")])
+    payload["files"] = files
     with pytest.raises(sync_intake.PayloadError):
-        sync_intake.build(env, REPO)
+        sync_intake.build(payload, REPO)
 
 
 def test_duplicate_paths_are_rejected():
@@ -399,19 +400,67 @@ def test_json_edge_cases_raise_payload_error_not_a_traceback(payload):
     """Both are reachable inside the 65,535-char dispatch limit and neither is a
     JSONDecodeError. Letting one escape would print a traceback instead of the
     one-line, value-free rejection this module promises."""
-    env = _env([_file("backend/apps/crm/service.py")])
-    env["SYNC_FILES"] = payload
+    inputs = _inputs([_file("backend/apps/crm/service.py")])
+    inputs["files"] = payload
     with pytest.raises(sync_intake.PayloadError):
-        sync_intake.build(env, REPO)
+        sync_intake.build(inputs, REPO)
+
+
+def test_a_non_string_status_is_rejected_without_a_traceback():
+    """`[] in frozenset` raises TypeError (unhashable), so the type check has to
+    come before the membership check."""
+    payload = _inputs([_file("backend/apps/crm/service.py")])
+    payload["files"] = json.dumps(
+        [{"path": "backend/apps/crm/a.py", "additions": 1, "deletions": 0, "status": []}]
+    )
+    with pytest.raises(sync_intake.PayloadError):
+        sync_intake.build(payload, REPO)
+
+
+def test_unknown_key_names_are_never_echoed():
+    """An unknown KEY is as sender-controlled as a value, and the message is
+    printed into an Actions log that is public on a public repo."""
+    secret = "ZZPRIVATECUSTOMERZZ"
+    payload = _inputs([_file("backend/apps/crm/service.py")])
+    payload["files"] = json.dumps(
+        [
+            {
+                "path": "backend/apps/crm/a.py",
+                "additions": 1,
+                "deletions": 0,
+                "status": "modified",
+                secret: "x",
+            }
+        ]
+    )
+    with pytest.raises(sync_intake.PayloadError) as excinfo:
+        sync_intake.build(payload, REPO)
+    assert secret not in str(excinfo.value)
+
+
+def test_load_inputs_reads_the_dispatch_payload(tmp_path):
+    """The workflow hands the script GitHub's event file rather than step env
+    vars, because Actions echoes a step's env block into a public log."""
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({"inputs": _inputs([_file("backend/apps/crm/service.py")])}))
+    loaded = sync_intake.load_inputs(event)
+    assert loaded["source_pr"] == "2045"
+
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps({"no_inputs_here": True}))
+    with pytest.raises(sync_intake.PayloadError):
+        sync_intake.load_inputs(bad)
+    with pytest.raises(sync_intake.PayloadError):
+        sync_intake.load_inputs(tmp_path / "does-not-exist.json")
 
 
 def test_validation_errors_never_echo_the_rejected_value():
     """Error strings reach runner logs, so they must name the field, not the value."""
     secret = "ZZLEAKMEZZ"
-    env = _env([_file("backend/apps/crm/service.py")])
-    env["SYNC_FILES"] = json.dumps([_file(f"/{secret}/x.py")])
+    payload = _inputs([_file("backend/apps/crm/service.py")])
+    payload["files"] = json.dumps([_file(f"/{secret}/x.py")])
     with pytest.raises(sync_intake.PayloadError) as excinfo:
-        sync_intake.build(env, REPO)
+        sync_intake.build(payload, REPO)
     assert secret not in str(excinfo.value)
     assert "files[0].path" in str(excinfo.value)
 

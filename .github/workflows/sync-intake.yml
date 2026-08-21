@@ -41,6 +41,14 @@ on:
         required: true
         type: string
 
+# Serialize per SHA, not globally. A global group would be wrong -- only one run
+# may sit pending, so a burst of DISTINCT merges would silently lose intakes. Keyed
+# on the SHA it serializes exactly the duplicate deliveries that the list-then-create
+# dedupe below could otherwise race, while distinct merges still run in parallel.
+concurrency:
+  group: sync-intake-${{ github.event.inputs.source_sha }}
+  cancel-in-progress: false
+
 # The repo's default_workflow_permissions is "read", so this block is required,
 # not decorative: `gh issue create` fails without `issues: write`.
 permissions:
@@ -74,23 +82,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          # github.sha, not `main`: the guard above already proved the dispatch
+          # targeted main, and this pins the immutable commit so the classifier
+          # script cannot come from a different revision than the workflow
+          # definition if main advances between dispatch and checkout.
+          ref: ${{ github.sha }}
           persist-credentials: false
 
-      # Untrusted values go in through the environment, never interpolated into
-      # the shell command line. The script reads them from os.environ and its
-      # validation errors name fields, never values, so nothing from the sender
-      # can reach the runner log verbatim.
+      # The payload is read from GitHub's event file, NOT from step `env:` vars.
+      # Actions prints a step's whole `env:` block in the log preamble, and Actions
+      # logs are public on a public repo — so passing the payload through `env`
+      # would publish every upstream path the sender listed, defeating the
+      # disclosure rule the renderer enforces. Only the PATH appears in the log.
+      # It also means no `${{ }}` interpolation into shell at all.
       - name: Validate, classify, and render
         id: render
-        env:
-          SYNC_SOURCE_SHA: ${{ inputs.source_sha }}
-          SYNC_SOURCE_PR: ${{ inputs.source_pr }}
-          SYNC_MERGED_AT: ${{ inputs.merged_at }}
-          SYNC_FILES: ${{ inputs.files }}
         run: |
           set -euo pipefail
-          SHA="$(python3 scripts/sync_intake.py . "$RUNNER_TEMP/title.txt" "$RUNNER_TEMP/body.md")"
+          SHA="$(python3 scripts/sync_intake.py . "$GITHUB_EVENT_PATH" \
+                   "$RUNNER_TEMP/title.txt" "$RUNNER_TEMP/body.md")"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
       # Idempotent: makes a fresh clone or fork work without anyone having run
@@ -104,12 +114,16 @@ jobs:
             --description "Automated cake_os merge intake — triage at first-look" >/dev/null
 
       # Dedupe. `gh issue list` paginates behind --limit and returns issues only
-      # (the raw REST endpoint would default to open/30-per-page and include
-      # PRs). The marker carries the full 40-char SHA, so a short-SHA lookalike
-      # cannot collide. Best-effort by design: one merge fires one dispatch, so
-      # the double-file window is theoretical, and adding a `concurrency` group
-      # would risk DROPPING a distinct intake (only one run may sit pending)
-      # -- a worse failure than the duplicate it would prevent.
+      # (the raw REST endpoint would default to open/30-per-page and include PRs).
+      # The marker carries the full 40-char SHA, so a short-SHA lookalike cannot
+      # collide. The per-SHA concurrency group above closes the check-then-create
+      # race; this is the check itself.
+      #
+      # --limit 1000 is a horizon, not an oversight: at ~5 intakes/week that is
+      # ~4 years of history, and the only thing it could miss is a re-dispatch of
+      # a SHA merged years earlier — which does not happen, since a merge is
+      # dispatched once, immediately. Paginating the whole tracker on every
+      # dispatch would cost 50+ API pages forever to cover that non-scenario.
       - name: File the intake issue (skip if already filed)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -121,7 +135,11 @@ jobs:
           # duplicate on every transient API error.
           EXISTING="$(gh issue list --label sync-intake --state all --limit 1000 \
                         --json body --jq '.[].body')"
-          if printf '%s' "$EXISTING" | grep -qF "<!-- sync-source-sha: $SHA -->"; then
+          # Here-string, NOT `printf | grep -q`: under `pipefail`, grep -q exits on
+          # the first match, printf takes SIGPIPE (141), and the pipeline reports
+          # failure — so the pipe version breaks precisely when the marker IS found,
+          # filing a duplicate every time dedupe should have worked.
+          if grep -qF "<!-- sync-source-sha: $SHA -->" <<< "$EXISTING"; then
             echo "Intake for $SHA already exists — nothing to do."
             exit 0
           fi

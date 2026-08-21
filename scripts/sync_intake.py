@@ -6,7 +6,7 @@ This is the receiving half of the sync bot (issue #23). cake_os fires a
 never a PR title or body -- and this script validates it, classifies the changed
 paths, and renders the issue body. It is deliberately:
 
-  * pure -- environment in, files out. No network, no `gh`, no GitHub API. The
+  * pure -- payload in, files out. No network, no `gh`, no GitHub API. The
     workflow does the talking, so every rule below is unit-testable offline.
   * stdlib only -- the workflow installs nothing.
 
@@ -26,7 +26,6 @@ Everything else becomes a count. See docs/SYNC.md and SECURITY.md.
 from __future__ import annotations
 
 import json
-import os
 import re
 import sys
 from datetime import datetime, timezone
@@ -156,7 +155,12 @@ def normalize_merged_at(raw: str) -> str:
     except ValueError as exc:
         raise PayloadError("merged_at: must be an ISO-8601 timestamp") from exc
     _require(parsed.tzinfo is not None, "merged_at", "must carry a UTC offset")
-    return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        # Converting an extreme year across an offset can push it out of range, and
+        # OverflowError is not a ValueError — it would escape as a traceback.
+        return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except (OverflowError, OSError, ValueError) as exc:
+        raise PayloadError("merged_at: is out of the representable range") from exc
 
 
 def _validate_path(path: str, field: str) -> str:
@@ -204,7 +208,9 @@ def parse_files(raw: str) -> list[dict]:
         field = f"files[{index}]"
         _require(isinstance(item, dict), field, "must be an object")
         unknown = set(item) - allowed
-        _require(not unknown, field, f"has unknown key(s): {sorted(unknown)}")
+        # Count, never the names: an unknown KEY is as sender-controlled as a value,
+        # and this message is printed to a runner log that is public on a public repo.
+        _require(not unknown, field, f"has {len(unknown)} unknown key(s)")
         _require(allowed <= set(item), field, f"is missing key(s): {sorted(allowed - set(item))}")
 
         path = _validate_path(item["path"], f"{field}.path")
@@ -212,6 +218,9 @@ def parse_files(raw: str) -> list[dict]:
         seen.add(path)
 
         status = item["status"]
+        # Type before membership: `[] in frozenset` raises TypeError (unhashable),
+        # which would escape as a traceback rather than a clean rejection.
+        _require(isinstance(status, str), f"{field}.status", "must be a string")
         _require(status in VALID_STATUSES, f"{field}.status", "is not a recognized GitHub status")
 
         entries.append(
@@ -387,30 +396,49 @@ def render_body(pr: int, sha: str, merged_at: str, summary: dict) -> str:
     return "\n".join(lines)
 
 
-def build(env: dict, repo_root: Path) -> tuple[str, str, str]:
+def build(inputs: dict, repo_root: Path) -> tuple[str, str, str]:
     """Validate + render. Returns (normalized sha, title, body)."""
-    sha = normalize_sha(env.get("SYNC_SOURCE_SHA", ""))
-    pr = normalize_pr(env.get("SYNC_SOURCE_PR", ""))
-    merged_at = normalize_merged_at(env.get("SYNC_MERGED_AT", ""))
-    entries = parse_files(env.get("SYNC_FILES", ""))
+    sha = normalize_sha(inputs.get("source_sha", ""))
+    pr = normalize_pr(inputs.get("source_pr", ""))
+    merged_at = normalize_merged_at(inputs.get("merged_at", ""))
+    entries = parse_files(inputs.get("files", ""))
     summary = summarize(entries, repo_root)
     return sha, render_title(pr, sha, summary), render_body(pr, sha, merged_at, summary)
 
 
+def load_inputs(event_path: Path) -> dict:
+    """Read the dispatch inputs out of GitHub's event payload file.
+
+    Deliberately NOT read from step `env:` vars. Actions prints a step's whole
+    `env:` block in the log preamble, and Actions logs are public on a public
+    repo -- so copying the payload into `env` would publish every upstream path
+    the sender listed, defeating the disclosure rule the renderer enforces. The
+    event file is on disk and only its PATH appears in the log.
+    """
+    try:
+        event = json.loads(event_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PayloadError("event payload: unreadable or not valid JSON") from exc
+    inputs = event.get("inputs")
+    _require(isinstance(inputs, dict), "event payload", "has no `inputs` object")
+    return inputs
+
+
 def main(argv: list[str]) -> int:
-    if len(argv) != 4:
+    if len(argv) != 5:
         print(
-            "usage: sync_intake.py <repo-root> <title-out> <body-out>\n"
-            "inputs are read from SYNC_SOURCE_SHA / SYNC_SOURCE_PR / SYNC_MERGED_AT / "
-            "SYNC_FILES (env, not argv — untrusted values must never be interpolated "
-            "into a shell command line)",
+            "usage: sync_intake.py <repo-root> <event-json> <title-out> <body-out>\n"
+            "<event-json> is GitHub's event payload (i.e. $GITHUB_EVENT_PATH); the "
+            "dispatch inputs are read from it rather than from step env vars, which "
+            "Actions echoes into a world-readable log.",
             file=sys.stderr,
         )
         return 2
 
-    repo_root, title_out, body_out = Path(argv[1]), Path(argv[2]), Path(argv[3])
+    repo_root, event_path = Path(argv[1]), Path(argv[2])
+    title_out, body_out = Path(argv[3]), Path(argv[4])
     try:
-        sha, title, body = build(dict(os.environ), repo_root)
+        sha, title, body = build(load_inputs(event_path), repo_root)
     except PayloadError as exc:
         # Safe to print: PayloadError messages name fields, never values.
         print(f"sync-intake payload rejected — {exc}", file=sys.stderr)

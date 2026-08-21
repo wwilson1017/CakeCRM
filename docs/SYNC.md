@@ -38,8 +38,18 @@ tree — a name already public here, disclosing nothing new. Everything else bec
 Enforced three ways:
 
 - **Structurally** — the payload schema (§3) has no field that can hold prose, out-of-scope
-  paths are dropped before rendering, and validation errors name fields rather than values,
-  so nothing reaches a runner log verbatim.
+  paths are dropped before rendering, and validation errors name fields (and counts) rather
+  than values, so nothing reaches a runner log verbatim. The payload is read from GitHub's
+  event file rather than step `env:` vars for the same reason: Actions prints a step's whole
+  `env:` block in the log preamble, and Actions logs are public on a public repo.
+
+**Scope of the claim, stated precisely.** It is *"no verbatim upstream text from an honest
+sender"* — not an information-theoretic guarantee. A **compromised** sender still chooses the
+SHA, PR number and counts, and roughly 160 bits can be encoded in a fabricated 40-hex SHA. The
+receiver cannot detect that, because it has no way to authenticate the payload against the
+real upstream repo. What the design does guarantee against a compromised sender is that it
+cannot push, cannot open a PR, and cannot place *arbitrary chosen prose* in a CakeCRM
+artifact.
 - **Contractually** — the allowlist in §3 is the binding contract for the sender.
 - **By test** — `backend/tests/test_sync_intake.py` feeds sentinel-bearing paths and asserts
   no sentinel survives into the rendered body. The ledger guard additionally asserts
@@ -129,10 +139,17 @@ Each issue body opens with `<!-- sync-source-sha: <full 40-char sha> -->`. Befor
 workflow lists `sync-intake` issues (all states, paginated) and skips if the marker is
 present. The full SHA is used so a short-SHA lookalike cannot collide.
 
-This is **best-effort, deliberately not serialized**. One merge fires one dispatch, so a
-concurrent double-file is theoretical — whereas adding a `concurrency:` group would risk
-*dropping* a distinct intake, since only one run may sit pending. The worse failure is the
-one that loses data.
+List-then-create is a check-then-act race on its own, so the workflow also carries a
+`concurrency` group keyed **on the SHA** (`sync-intake-<sha>`). That distinction matters: a
+*global* group would be actively harmful, because only one run may sit pending, so a burst of
+distinct merges would silently lose intakes. Keying on the SHA serializes exactly the
+duplicate deliveries — which is the thing being deduped — while distinct merges still run in
+parallel and none is ever dropped.
+
+The `--limit 1000` on the lookup is a horizon, not an oversight: at ~5 intakes/week that is
+about four years of history, and the only thing beyond it is a re-dispatch of a SHA merged
+years earlier, which does not happen (a merge is dispatched once, immediately). Paginating
+the entire tracker on every dispatch would cost 50+ API pages forever to cover a non-scenario.
 
 `SYNC_LEDGER.md` is *not* consulted at runtime: its rows carry a short SHA, so the check
 would be inexact, and it would turn a reviewed document into a second database.

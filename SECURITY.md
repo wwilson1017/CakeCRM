@@ -81,8 +81,13 @@ repository's own files** — the counterpart path, and only when that file alrea
 here — and reduces everything else to a count.
 
 Enforced in `backend/tests/test_sync_intake.py`, which feeds sentinel-bearing paths through
-the renderer and fails CI if any sentinel appears in the output. The full contract is in
-`docs/SYNC.md`.
+the renderer and fails CI if any sentinel appears in the output.
+
+To be precise about what that guarantee covers: it is *no verbatim upstream text*. An
+upstream repo whose credential had been **stolen** would still choose the numbers it sends,
+and numbers can encode a little data. What it could never do is push code, open a pull
+request, or put arbitrary chosen prose into this repository. The full contract, including
+the residual risks, is in `docs/SYNC.md`.
 
 ## Data handling
 
