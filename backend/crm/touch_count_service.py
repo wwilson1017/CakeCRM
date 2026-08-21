@@ -1136,11 +1136,16 @@ def get_touch_evidence(deal_id: int) -> dict | None:
     for entry in entries:
         item = stored.get((entry["source"], entry["source_id"]))
         stored_hash = (item or {}).get("h")
-        if item is not None and not isinstance(stored_hash, str):
+        # A digest is usable only if it is a NON-EMPTY string. An empty one would read as
+        # "present and matching" (`"" and …` is falsy), and a non-string one would compare
+        # unequal to every real digest and so label the row "edited" — a guess, when the
+        # honest answer is that we cannot tell.
+        usable = isinstance(stored_hash, str) and bool(stored_hash)
+        if item is not None and not usable:
             unverifiable = True
         if item is None:
             state, reason = "not_evaluated", ""
-        elif stored_hash and stored_hash != _line_hash(entry["line"]):
+        elif usable and stored_hash != _line_hash(entry["line"]):
             # The row was rewritten after it was judged. Showing the old verdict under the
             # new text would explain wording that no longer exists.
             state, reason = "edited_since", ""

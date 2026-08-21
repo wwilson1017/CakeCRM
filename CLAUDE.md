@@ -292,17 +292,26 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   ceiling is 4096 output tokens (Ollama, openai_compat default), and a test pins the
   arithmetic so raising the window has to confront the ceiling. Read-only via
   `GET /api/crm/deals/:id/touch-count/evidence` → `touch_count_service.get_touch_evidence`,
-  which never re-runs AI and reports `verdict_state` **current/stale/superseded/none** by
-  reconciling the touches the user can SEE against the number on the pill — so any drift
-  route (a contact deletion destroying shared `activity_log` rows, an archived note, window
-  churn) downgrades honestly instead of showing a list that disagrees with its own badge.
-  Counts written before #56 report `none`; `?scope=all` is the documented repair, and
-  nothing is backfilled at deploy time. Zero keys still degrades cleanly: no count means no
-  pill and no drill-down, while stage moves (read from `deal_stage_events`) carry a
-  **deterministic** never-counted verdict needing no provider at all. **Field edits are
-  deliberately absent** — CakeCRM has no per-edit timeline (#15 dropped chatter's audit
-  columns and `crm_field_provenance` is current-state, not history), so synthesizing one
-  would fabricate history. `/backfill/status` also reports verdict health (ok/fallback/
+  which never re-runs AI and reports `verdict_state` **current/stale/superseded/none**. It
+  earns "current" only against FOUR checks, because three kinds of drift move none of the
+  stale-write guard keys and so are invisible to a sum comparison alone: the visible touches
+  vs. the number on the pill (catches a contact deletion that destroyed shared
+  `activity_log` rows, or an archived note), a row **edited** since it was judged (an edit
+  to a non-touch row moves nothing else), a live row the snapshot never **covered**
+  (archiving a judged row out of a full window pulls an older one in, leaving the row count
+  and newest timestamp untouched), and an item whose digest is missing so it cannot be
+  **verified** at all. Edit detection compares a stored digest of the line as judged
+  (`_line_hash`) against the live line — deliberately not a timestamp, since `activity_log`
+  has no `updated_at`, `deals.notes` changes without one, and an `updated_at`-vs-`computed_at`
+  comparison misses an edit made while the model was running. The bounded list also reports
+  `truncated`, derived from a probe row fetched past each window so a deal holding exactly a
+  full window is not mislabelled. Counts written before #56 report `none`; `?scope=all` is
+  the documented repair, and nothing is backfilled at deploy time. Zero keys still degrades
+  cleanly: no count means no pill and no drill-down, while stage moves (read from
+  `deal_stage_events`) carry a **deterministic** never-counted verdict needing no provider
+  at all. Field edits are deliberately absent **as an evidence source** — CakeCRM has no
+  per-edit timeline (#15 dropped chatter's audit columns and `crm_field_provenance` is
+  current-state, not history), so synthesizing one would fabricate history. `/backfill/status` also reports verdict health (ok/fallback/
   failed), because a model that silently stops emitting the schema would keep updating the
   badge while every detail view went empty. Contact
   import is keyless for CSV/vCard; the AI smart-import path (`get_ai_provider()`)

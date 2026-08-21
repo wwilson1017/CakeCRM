@@ -1201,6 +1201,20 @@ def test_get_touch_evidence_window_churn_downgrades_even_with_matching_keys(monk
     assert out["verdict_state"] == "stale"      # NOT "current"
 
 
+@pytest.mark.parametrize("bad_digest", [None, "", 12345, {"nope": 1}])
+def test_get_touch_evidence_treats_an_unusable_digest_as_unverifiable(monkeypatch, bad_digest):
+    """Every shape of unusable digest must downgrade — an empty string especially, since
+    `"" and …` is falsy and would otherwise read as "present, and it matched"."""
+    items = [{"source": e["source"], "source_id": e["source_id"],
+              "touch": e["source"] == "activity", "reason": "", "h": bad_digest}
+             for e in svc.build_evidence_entries({"notes": None}, CHATTER, ACTIVITIES)[0]]
+    _patch_evidence(monkeypatch, deal={**DEAL, "ai_touch_count": 1},
+                    payload=_payload(1, items))
+    out = svc.get_touch_evidence(7)
+    assert out["verdict_state"] == "stale"
+    assert {e["state"] for e in out["events"]} == {"touch", "not_touch"}
+
+
 def test_get_touch_evidence_treats_a_hashless_item_as_unverifiable(monkeypatch):
     """Fail-safe: with no digest we cannot tell whether the row was edited, so the snapshot
     must stop claiming "current" — but the row keeps its verdict rather than being labelled
