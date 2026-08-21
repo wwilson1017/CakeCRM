@@ -895,3 +895,42 @@ def test_bulk_and_single_deal_paths_cannot_drift(pg_db):
         bulk_row, bulk_events = snapshot(bulk_id)
         assert single_row == bulk_row, f"{stage_from}->{target} columns drifted"
         assert single_events == bulk_events, f"{stage_from}->{target} stage log drifted"
+
+
+def test_concurrent_bulk_moves_over_overlapping_ids_do_not_deadlock(pg_db):
+    """The locking claim, exercised rather than asserted.
+
+    `bulk_move_deals` locks `ORDER BY id ... FOR UPDATE` specifically so two batches over
+    overlapping deals can't deadlock. Two threads here submit OVERLAPPING id sets in
+    OPPOSITE request order — the classic deadlock setup — and the ascending lock order is
+    the only reason it holds. A regression that drops the ORDER BY fails here with a
+    psycopg2 DeadlockDetected, which no hermetic test can catch.
+    """
+    import threading
+
+    from crm import service
+
+    ids = [service.create_deal(f"Conc {i}", stage="lead")["id"] for i in range(30)]
+    failures: list[str] = []
+
+    def hammer(target: str, order: list[int]):
+        try:
+            for _ in range(5):
+                service.bulk_move_deals(order, target)
+        except Exception as e:  # a deadlock surfaces here, not as a bad row
+            failures.append(f"{target}: {type(e).__name__}: {e}")
+
+    t1 = threading.Thread(target=hammer, args=("qualified", ids[:22]))
+    t2 = threading.Thread(target=hammer, args=("proposal", list(reversed(ids[8:]))))
+    t1.start(), t2.start()
+    t1.join(), t2.join()
+
+    assert failures == []
+
+    from core.postgres import pg_fetchall
+    stages = {r["stage"] for r in pg_fetchall("SELECT stage FROM deals")}
+    assert stages <= {"lead", "qualified", "proposal"}, "a deal landed in a stage nobody set"
+    # Every logged transition must be a real one — a no-op must never mint an event row.
+    noops = pg_fetchall(
+        "SELECT deal_id FROM deal_stage_events WHERE old_stage = new_stage")
+    assert noops == []
