@@ -1,8 +1,13 @@
 """Heartbeat REST API (issue #6). All endpoints require JWT auth.
 
-  POST /api/heartbeat/run-now  — run one tick synchronously and return the report
-                                 (the C4 demo hook; works regardless of the env gate)
-  GET  /api/heartbeat/status   — heartbeat_state + config (for Settings + evidence)
+  POST /api/heartbeat/run-now   — run one tick synchronously and return the report
+                                  (the C4 demo hook; works regardless of the env gate)
+  GET  /api/heartbeat/status    — heartbeat_state + config (for Settings + evidence)
+  POST /api/heartbeat/proactive — toggle the daily digest + nudges (#22 Phase 3)
+
+There is deliberately no GET for the proactive toggle: /status already returns the
+whole heartbeat_state row, which is where proactive_enabled lives, so a second read
+endpoint would be a second source of truth for the same column.
 """
 
 import logging
@@ -55,4 +60,24 @@ async def status(_user: dict = Depends(get_current_user)):
         "enabled": settings.heartbeat_enabled,
         "interval_minutes": settings.heartbeat_interval_minutes,
         "provider_ready": provider_ready,
+        # #22 Phase 3. Reported here so Settings can label the toggle with the hour the
+        # digest actually fires rather than hard-coding 8am in the UI.
+        "proactive_digest_hour": settings.proactive_digest_hour,
     }
+
+
+class ProactiveRequest(BaseModel):
+    enabled: bool
+
+
+@router.post("/proactive")
+async def set_proactive(req: ProactiveRequest, _user: dict = Depends(get_current_user)):
+    """Turn the daily digest + stale-record nudges on or off (#22 Phase 3).
+
+    Keyless: both behaviors are deterministic and run with no AI provider configured,
+    so this is a genuine user preference rather than an AI gate.
+    """
+    from proactive import service as proactive
+
+    enabled = await run_in_threadpool(proactive.set_enabled, req.enabled)
+    return {"ok": True, "enabled": enabled}

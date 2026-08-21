@@ -5,12 +5,17 @@
  * preference store): toggling subscribes/unsubscribes via the native Push API.
  * "Send test notification" exercises the full pipeline with NO AI involved and
  * reports whether Web Push actually reached a device. Keyless.
+ *
+ * The second toggle (issue #22 Phase 3) controls what the server SENDS rather than
+ * where it goes: the daily pipeline digest and the stale-record nudges. That one IS
+ * server-side state (heartbeat_state.proactive_enabled), read from the existing
+ * /api/heartbeat/status payload so the column has a single source of truth.
  */
 
 import { useEffect, useState } from 'react';
 import { api } from '../../core/api/client';
 import { toast } from '../../shared/toast';
-import { INK_MUTE, FONT_SANS } from '../../shared/styles';
+import { INK_MUTE, FONT_SANS, LINE } from '../../shared/styles';
 import { sectionHeading, cardStyle, btnPrimary, btnSecondary } from '../styles';
 import {
   isPushSupported, getPushPermissionState, isSubscribed,
@@ -23,12 +28,41 @@ export function NotificationSettings({ isMobile }: { isMobile: boolean }) {
   const [subscribed, setSubscribed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
+  // null = not loaded yet, so the toggle never flashes the wrong state on mount.
+  const [proactive, setProactive] = useState<boolean | null>(null);
+  const [digestHour, setDigestHour] = useState(8);
+  const [proactiveBusy, setProactiveBusy] = useState(false);
 
   useEffect(() => {
     let active = true;
     isSubscribed().then(v => { if (active) setSubscribed(v); });
+    api<{ state: { proactive_enabled?: boolean }; proactive_digest_hour: number }>('/api/heartbeat/status')
+      .then(res => {
+        if (!active) return;
+        setProactive(res.state?.proactive_enabled ?? true);
+        setDigestHour(res.proactive_digest_hour ?? 8);
+      })
+      .catch(() => { /* leave the row hidden rather than guess the server's state */ });
     return () => { active = false; };
   }, []);
+
+  async function toggleProactive() {
+    if (proactive === null) return;
+    const next = !proactive;
+    setProactiveBusy(true);
+    try {
+      await api('/api/heartbeat/proactive', {
+        method: 'POST',
+        body: JSON.stringify({ enabled: next }),
+      });
+      setProactive(next);
+      toast.success(next ? 'Daily digest and nudges on.' : 'Daily digest and nudges off.');
+    } catch {
+      toast.error('Could not change that setting.');
+    } finally {
+      setProactiveBusy(false);
+    }
+  }
 
   async function toggle() {
     setBusy(true);
@@ -101,6 +135,31 @@ export function NotificationSettings({ isMobile }: { isMobile: boolean }) {
           )}
         </>
       )}
+
+      {proactive !== null && (
+        <div style={{ marginTop: 24, paddingTop: 20, borderTop: `1px solid ${LINE}` }}>
+          <div style={{ fontFamily: FONT_SANS, fontSize: 14, fontWeight: 600, marginBottom: 6 }}>
+            Daily digest and nudges
+          </div>
+          <p style={{ fontFamily: FONT_SANS, fontSize: 13, color: INK_MUTE, lineHeight: 1.6, margin: '0 0 14px', maxWidth: 460 }}>
+            A pipeline summary each morning around {formatHour(digestHour)}, plus a nudge when a
+            deal goes cold or a contact with open business hasn't been spoken to. Works with zero
+            AI keys.
+          </p>
+          <button
+            onClick={toggleProactive}
+            disabled={proactiveBusy}
+            style={{ ...(proactive ? btnSecondary : btnPrimary), opacity: proactiveBusy ? 0.6 : 1 }}
+          >
+            {proactiveBusy ? 'Working…' : proactive ? 'Turn off' : 'Turn on'}
+          </button>
+        </div>
+      )}
     </div>
   );
+}
+
+function formatHour(hour: number): string {
+  const h = ((hour % 12) + 12) % 12 || 12;
+  return `${h}${hour < 12 ? 'am' : 'pm'} UTC`;
 }

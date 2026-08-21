@@ -382,3 +382,26 @@ def _maybe_refresh_scores():
     except Exception:
         logger.warning("lead-score refresh errored", exc_info=True)
         return None
+
+
+# ── #22 Phase 3 proactive seam (its OWN scheduler job, like #17's above) ─────
+# Digest + nudges DELIVER — web push and Telegram, both network calls — and may run
+# one optional AI turn. By the rule the two seams above establish (local SQL rides
+# reminder_tick; network/AI-bound work gets its own job), that puts this on a
+# dedicated job: a hung push endpoint must never delay reminder delivery.
+
+def proactive_tick() -> dict | None:
+    """Dedicated scheduler job (registered in heartbeat/scheduler.py)."""
+    return _maybe_run_proactive()
+
+
+def _maybe_run_proactive():
+    """Drive #22's proactive digest + nudges if present. BOTH the lazy import (merge-order
+    independence) AND the call sit under one broad guard so nothing here — not even an
+    import-time error — can abort the proactive job. run_proactive_if_due is
+    settings-gated + due-guarded + claim-before-send, so calling it every tick is safe."""
+    try:
+        from proactive.service import run_proactive_if_due
+        return run_proactive_if_due()
+    except Exception:
+        logger.warning("proactive heartbeat errored", exc_info=True)

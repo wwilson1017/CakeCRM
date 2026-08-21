@@ -547,6 +547,57 @@ CRM_TOOL_DEFS = [
         "kind": "integration",
     },
     {
+        "name": "crm_get_deal_health",
+        "writes": False,
+        "description": (
+            "Health check on ONE deal: its lead score and the factors behind it, plus "
+            "how long since the last touch, how long it has sat in its current stage, "
+            "open and overdue follow-up tasks, and whether a contact and company are "
+            "linked. Returns a list of flags naming what is actually wrong (stale, "
+            "stuck_in_stage, no_next_step, overdue_task, missing_contact, "
+            "missing_company). Use when asked how a specific deal is doing, whether it "
+            "is at risk, or what to do about it. For the whole pipeline at once use "
+            "crm_get_stale_deals."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "deal_id": {"type": "integer", "description": "The deal to assess"},
+                "stale_days": {"type": "integer", "description": "Days without a touch to count as stale (default 14)", "default": 14},
+            },
+            "required": ["deal_id"],
+        },
+        "kind": "integration",
+    },
+    {
+        "name": "crm_get_pipeline_analytics",
+        "writes": False,
+        "description": (
+            "Funnel movement from the stage-change history: average and median days "
+            "spent in each stage, per-stage conversion (how many deals that entered a "
+            "stage moved on, won, lost, or are still sitting there), and velocity (deals "
+            "won in the window and average days to win). Use for 'where do deals get "
+            "stuck', 'how long does my sales cycle take', or conversion questions. This "
+            "covers MOVEMENT through the pipeline; crm_analytics covers outcomes and "
+            "activity volume — use that for win rate, deal sizes, or activity counts. "
+            "Two limits to state rather than paper over: the stage history only starts "
+            "from the date in history_since, so when history_covers_window is false say "
+            "how far back the data actually goes instead of presenting the funnel as "
+            "complete; and 'entered' counts stage TRANSITIONS, so a deal created "
+            "directly into a stage is not counted as having entered it — a low entered "
+            "count for the first stage means few deals moved INTO it, not that few "
+            "deals exist. Use crm_get_pipeline for current counts by stage."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "window_days": {"type": "integer", "description": "Days of history to analyze (default 90, min 7, max 365)", "default": 90},
+            },
+            "required": [],
+        },
+        "kind": "integration",
+    },
+    {
         "name": "crm_get_stale_deals",
         "writes": False,
         "description": (
@@ -1315,6 +1366,17 @@ def crm_analytics(stale_days: int = 14) -> dict:
 # Thin pass-throughs: analytics_service clamps every bound itself, so these stay
 # free of duplicated validation.
 
+def crm_get_deal_health(deal_id: int, stale_days: int = 14) -> dict:
+    health = analytics_service.get_deal_health(deal_id=deal_id, stale_days=stale_days)
+    if health is None:
+        return {"error": f"Deal {deal_id} not found"}
+    return health
+
+
+def crm_get_pipeline_analytics(window_days: int = 90) -> dict:
+    return analytics_service.get_pipeline_analytics(window_days=window_days)
+
+
 def crm_get_stale_deals(stale_days: int = 14, limit: int = 20) -> dict:
     return analytics_service.get_stale_deals(stale_days=stale_days, limit=limit)
 
@@ -1528,6 +1590,8 @@ TOOL_EXECUTORS = {
     # Analytics + sales intelligence
     "crm_dashboard": crm_dashboard,
     "crm_analytics": crm_analytics,
+    "crm_get_deal_health": crm_get_deal_health,
+    "crm_get_pipeline_analytics": crm_get_pipeline_analytics,
     "crm_get_stale_deals": crm_get_stale_deals,
     "crm_get_contact_staleness": crm_get_contact_staleness,
     "crm_find_duplicates": crm_find_duplicates,

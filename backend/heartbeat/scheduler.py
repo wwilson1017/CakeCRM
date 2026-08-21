@@ -1,15 +1,17 @@
 """APScheduler wiring for the heartbeat (issue #6).
 
-A single ``BackgroundScheduler`` with THREE jobs, deliberately decoupled so a slow
+A single ``BackgroundScheduler`` with FOUR jobs, deliberately decoupled so a slow
 system AI turn (or a slow inbox scan) never delays reminder delivery:
   * ``reminder_tick`` — every 60s: fire due reminders + drive dreaming (fast, bounded).
   * ``heartbeat_turn`` — every 5 min: run the throttled system AI turn if due.
   * ``gmail_scan`` — every 60s: run the read-only Gmail touch scan if due (#17;
     network-bound, so it runs as its OWN job rather than inside reminder_tick, and
     bounds its Gmail call with a wall-clock deadline).
-Each job is ``max_instances=1, coalesce=True`` so a slow run never stacks. The three
+  * ``proactive`` — every 60s: run the daily digest / stale nudges if due (#22 Phase 3;
+    delivers over the network and may run one AI turn, so same reasoning as gmail_scan).
+Each job is ``max_instances=1, coalesce=True`` so a slow run never stacks. The four
 jobs share APScheduler's default thread pool, whose default width (10) far exceeds the
-three low-frequency jobs here, so a slow scan can't starve reminder_tick of a worker. No persistent job store — jobs are re-registered on every boot
+four low-frequency jobs here, so a slow scan can't starve reminder_tick of a worker. No persistent job store — jobs are re-registered on every boot
 (the ticks are idempotent). ``get_scheduler()`` exposes the scheduler so other
 features (e.g. #5 dreaming, if it ever wants its own job) can register without
 touching this module.
@@ -53,8 +55,18 @@ def start_scheduler() -> None:
         service.gmail_scan_tick, "interval", seconds=60, id="gmail_scan",
         max_instances=1, coalesce=True,
     )
+    # #22 Phase 3: the proactive digest + nudges DELIVER (web push / Telegram) and may
+    # run one AI turn, so by the same rule as gmail_scan they get their own decoupled
+    # job. run_proactive_if_due is settings-gated and due-guarded (once per day for the
+    # digest, PROACTIVE_NUDGE_INTERVAL_MINUTES for nudges), so a 60s trigger is only the
+    # due-check cadence, not the send cadence.
+    _scheduler.add_job(
+        service.proactive_tick, "interval", seconds=60, id="proactive",
+        max_instances=1, coalesce=True,
+    )
     _scheduler.start()
-    logger.info("Heartbeat scheduler started (reminder_tick 60s + heartbeat_turn 300s + gmail_scan 60s)")
+    logger.info("Heartbeat scheduler started (reminder_tick 60s + heartbeat_turn 300s "
+                "+ gmail_scan 60s + proactive 60s)")
 
 
 def shutdown_scheduler() -> None:

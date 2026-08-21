@@ -31,5 +31,21 @@ def test_registers_all_jobs():
         assert sched.get_job("reminder_tick") is not None    # 60s reminder job
         assert sched.get_job("heartbeat_turn") is not None    # throttled AI-turn job
         assert sched.get_job("gmail_scan") is not None        # #17 read-only inbox touch scan
+        assert sched.get_job("proactive") is not None         # #22 P3 digest + nudges
+    finally:
+        scheduler.shutdown_scheduler()
+
+
+def test_delivery_jobs_are_decoupled_from_reminder_delivery():
+    """gmail_scan and proactive both do network I/O. They must stay on their OWN jobs,
+    each max_instances=1, so a hung push endpoint or inbox request can never delay
+    reminder delivery — the rule heartbeat/service.py documents."""
+    try:
+        scheduler.start_scheduler()
+        sched = scheduler.get_scheduler()
+        for job_id in ("reminder_tick", "gmail_scan", "proactive"):
+            job = sched.get_job(job_id)
+            assert job.max_instances == 1, job_id
+        assert sched.get_job("proactive").func is not sched.get_job("reminder_tick").func
     finally:
         scheduler.shutdown_scheduler()
