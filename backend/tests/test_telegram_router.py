@@ -7,12 +7,12 @@ deletes any webhook, and NO response ever contains the bot token.
 """
 
 
+from conftest import fake_admin
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from core.auth import get_current_user
 from telegram import router as tgrouter
-from conftest import fake_admin
 
 
 def _app():

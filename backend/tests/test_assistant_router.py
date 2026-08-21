@@ -7,13 +7,13 @@ factory, engine, and history are monkeypatched, so nothing touches a DB or SDK.
 import json
 
 import pytest
+from conftest import fake_admin
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from assistant import router as router_mod
 from assistant.router import router as assistant_router
 from core.auth import get_current_user
-from conftest import fake_admin
 
 
 @pytest.fixture

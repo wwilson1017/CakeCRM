@@ -8,13 +8,13 @@ Window resolution is a pure function, so the interesting half needs no mock at a
 from datetime import datetime, timezone
 
 import pytest
+from conftest import fake_admin
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from core.auth import get_current_user
 from crm import service
 from crm.router import router as crm_router
-from conftest import fake_admin
 
 
 class Recorder:

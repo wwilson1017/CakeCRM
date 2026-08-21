@@ -5,6 +5,7 @@ network. Callback assertions use follow_redirects=False to inspect the 302."""
 from __future__ import annotations
 
 import pytest
+from conftest import fake_admin
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -12,7 +13,6 @@ from core.auth import get_current_user
 from gmail import oauth, router as router_mod
 from gmail.router import router as gmail_router
 from providers.router import setup_router
-from conftest import fake_admin
 
 
 @pytest.fixture

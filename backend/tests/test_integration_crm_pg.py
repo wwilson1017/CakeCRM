@@ -14,9 +14,9 @@ import os
 
 import psycopg2
 import pytest
+from conftest import fake_admin
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from conftest import fake_admin
 
 pytestmark = pytest.mark.integration
 

@@ -13,13 +13,13 @@ from datetime import date, datetime
 from decimal import Decimal
 
 import pytest
+from conftest import fake_admin
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from core.auth import get_current_user
 from crm import service, tools
 from crm.router import router as crm_router
-from conftest import fake_admin
 
 
 class Recorder:

@@ -6,13 +6,13 @@ return 200 — the mapping used to be message-substring based, which this pins d
 """
 
 import pytest
+from conftest import fake_admin
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from core.auth import get_current_user
 from reminders import router as router_mod
 from reminders.router import router as reminders_router
-from conftest import fake_admin
 
 
 @pytest.fixture

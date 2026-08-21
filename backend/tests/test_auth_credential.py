@@ -17,10 +17,10 @@ user. What must still hold, and is pinned here:
 from types import SimpleNamespace
 
 import pytest
+from conftest import fake_admin
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from conftest import fake_admin
 from core import auth
 from core.auth import get_current_user
 from users import service as users_service

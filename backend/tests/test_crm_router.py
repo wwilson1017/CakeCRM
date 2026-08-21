@@ -10,13 +10,13 @@ import io
 
 import psycopg2
 import pytest
+from conftest import fake_admin
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from core.auth import get_current_user
 from crm import provenance_service, scoring_service, service, touch_count_service
 from crm.router import router as crm_router
-from conftest import fake_admin
 
 
 @pytest.fixture

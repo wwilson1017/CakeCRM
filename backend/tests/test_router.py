@@ -3,12 +3,12 @@ coupling), store + factory mocked. Covers status, connect, disconnect, active,
 models, tiers, unknown-provider 404s, malformed bodies, and the auth dependency."""
 
 import pytest
+from conftest import fake_admin
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from core.auth import get_current_user
 from providers import router as router_mod
-from conftest import fake_admin
 from providers.router import (
     _validated_ollama_url,
     router as providers_router,
