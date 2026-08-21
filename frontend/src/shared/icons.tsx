@@ -3,13 +3,24 @@ interface IconProps {
   className?: string;
   strokeWidth?: number;
   style?: React.CSSProperties;
+  /**
+   * Hide a purely decorative icon from assistive tech — the usual case when the icon sits
+   * inside a control that already carries its own `aria-label` or visible text.
+   *
+   * Declared and forwarded explicitly because `Ico` does not spread its rest props onto the
+   * `<svg>`. TypeScript does not type-check hyphenated JSX attributes, so passing
+   * `aria-hidden` to an icon that did not forward it compiled cleanly and was silently
+   * dropped on the way to the DOM — a failure with no signal at all until a screen reader
+   * hits it.
+   */
+  'aria-hidden'?: boolean | 'true' | 'false';
 }
 
-function Ico({ d, size = 18, strokeWidth = 1.75, fill = 'none', className, style, children }: IconProps & { d?: string; fill?: string; children?: React.ReactNode }) {
+function Ico({ d, size = 18, strokeWidth = 1.75, fill = 'none', className, style, children, 'aria-hidden': ariaHidden }: IconProps & { d?: string; fill?: string; children?: React.ReactNode }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill={fill} stroke="currentColor"
          strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round"
-         className={className} style={{ flexShrink: 0, ...style }}>
+         className={className} style={{ flexShrink: 0, ...style }} aria-hidden={ariaHidden}>
       {d && <path d={d} />}
       {children}
     </svg>
@@ -43,6 +54,7 @@ export function IconCheck(p: IconProps) { return <Ico d="M20 6 9 17l-5-5" {...p}
 export function IconX(p: IconProps) { return <Ico d="M18 6 6 18M6 6l12 12" {...p} />; }
 export function IconChevron(p: IconProps) { return <Ico d="m6 9 6 6 6-6" {...p} />; }
 export function IconChevronRight(p: IconProps) { return <Ico d="m9 6 6 6-6 6" {...p} />; }
+export function IconChevronLeft(p: IconProps) { return <Ico d="m15 6-6 6 6 6" {...p} />; }
 export function IconDot(p: IconProps) { return <Ico {...p}><circle cx="12" cy="12" r="3" fill="currentColor" /></Ico>; }
 export function IconMenu(p: IconProps) { return <Ico d="M4 6h16M4 12h16M4 18h16" {...p} />; }
 export function IconMore(p: IconProps) { return <Ico {...p}><circle cx="5" cy="12" r="1.2" fill="currentColor" /><circle cx="12" cy="12" r="1.2" fill="currentColor" /><circle cx="19" cy="12" r="1.2" fill="currentColor" /></Ico>; }
