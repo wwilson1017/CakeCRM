@@ -1,0 +1,16 @@
+# Verified-false gitleaks findings, one exact fingerprint per line
+# (commit:file:rule:line). This form is deliberately narrower than a .gitleaks.toml
+# allowlist keyed on commit+path, which would exempt EVERY finding in that file in
+# that commit — including a real one. A fingerprint exempts exactly one.
+#
+# The scan runs over git history, so a false positive stays found once committed and
+# cannot be fixed by editing the tip. Rewriting it out would mean a force-push, which
+# this repo does not do on shared branches.
+#
+# generic-api-key scored a run of ordinary Python identifiers as a high-entropy
+# string. backend/users/router.py:145 in aff376c was a single-line call:
+#     service.set_password_as_admin(user_id, body.new_password, clear_two_factor=...)
+# `body.new_password` is the NAME of a request field; the value it carries never
+# appears in source. Reformatted to one argument per line in eb2e23d, so only the
+# historical commit still matches.
+aff376cfbbc6002056bbc63b19ae14484a11b5d4:backend/users/router.py:generic-api-key:145
