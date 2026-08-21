@@ -61,7 +61,10 @@ export async function api<T = unknown>(
     let detail = res.statusText;
     try {
       const body = await res.json();
-      if (body.detail) detail = body.detail;
+      // Only when it's actually a string. FastAPI sends an ARRAY for a 422 (and an object
+      // for some gates), and assigning that through would make `ApiError.detail` lie about
+      // its type — a caller calling .trim() on it would throw instead of rendering a reason.
+      if (typeof body.detail === 'string' && body.detail) detail = body.detail;
     } catch { /* not JSON */ }
     throw new ApiError(`API error ${res.status}: ${detail}`, res.status, detail);
   }

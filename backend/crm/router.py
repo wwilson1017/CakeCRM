@@ -85,7 +85,7 @@ import logging
 import psycopg2
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, StrictInt, field_validator
 
 from core.auth import get_current_user
 from crm import (
@@ -177,7 +177,11 @@ class DealUpdate(BaseModel):
 
 
 class BulkDealMove(BaseModel):
-    deal_ids: list[int]
+    # StrictInt, not int: Pydantic's lax mode coerces JSON `true` to 1, `1.0` to 1 and
+    # "3" to 3, so a malformed body would silently move deal #1. Only the model can catch
+    # that — by the time the service runs, the bool has already become a real int.
+    # Positivity is checked in the service instead, so every caller gets it.
+    deal_ids: list[StrictInt]
     stage: str
     # Deliberately no Pydantic max_length on deal_ids: the service's BULK_MOVE_MAX is
     # the single definition of the cap, shared with the agent-tool path, and its

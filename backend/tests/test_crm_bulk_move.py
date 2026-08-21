@@ -53,6 +53,18 @@ def test_empty_id_list_is_refused_without_touching_the_database(monkeypatch):
     assert service.bulk_move_deals([], "qualified")["errors"] == ["No deal IDs provided"]
 
 
+def test_non_positive_ids_are_refused_at_the_service_boundary(monkeypatch):
+    """Guarded HERE, not per caller: the REST route's Pydantic model can reject a bool or a
+    float, but 0 and negatives survive as real ints, and every entry point needs the check."""
+    def explode(*a, **k):
+        raise AssertionError("bulk_move_deals opened a connection for a non-positive id")
+    monkeypatch.setattr(service, "get_connection", explode)
+    for bad in ([0], [-3], [5, 0]):
+        result = service.bulk_move_deals(bad, "qualified")
+        assert result["ok"] is False
+        assert result["errors"] == ["Deal IDs must be positive integers"]
+
+
 def test_over_the_cap_is_refused_with_a_renderable_message(monkeypatch):
     def explode(*a, **k):
         raise AssertionError("bulk_move_deals opened a connection over the cap")

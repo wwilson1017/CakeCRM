@@ -249,8 +249,12 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `deal_stage_events` **on the same cursor**, so "deals moved but the history is
   missing" is unreachable. The stage-change RULES live in exactly one place —
   `_classify_deal_update`, a pure helper shared with `_write_deal_update` — so the
-  single-deal and set-based paths cannot drift (an integration test pins twin deals
-  moved through each path to identical rows *and* identical stage events). The one
+  single-deal and set-based paths cannot drift about WHAT to write (an integration test
+  pins twin deals moved through each path to identical rows *and* identical stage
+  events). The classifier deliberately does not decide WHETHER to write, which is the one
+  place the paths still differ: bulk skips a same-stage no-op, `update_deal_stage` writes
+  and bumps `updated_at`. Left as-is because aligning it would change pre-#55 behavior,
+  and no UI path sends a same-stage move. The one
   deliberate contract difference: `_write_deal_update` raises, bulk isolates per deal
   (missing/archived deals report in `errors` while the rest still commit), because one
   archived deal must not sink a 50-deal selection. A deal already in the target stage is

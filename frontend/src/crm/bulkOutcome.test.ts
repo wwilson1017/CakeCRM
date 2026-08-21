@@ -10,8 +10,9 @@ describe('classifyBulkMove', () => {
     expect(classifyBulkMove(ok(3))).toEqual({ kind: 'clean' });
   });
 
-  it('reads per-deal errors alongside ok:true as skips', () => {
-    expect(classifyBulkMove(ok(2, ['Deal 7 not found']))).toEqual({ kind: 'skips', skipped: 1 });
+  it('reads per-deal errors alongside ok:true as skips, keeping the server reasons', () => {
+    expect(classifyBulkMove(ok(2, ['Deal 7 not found'])))
+      .toEqual({ kind: 'skips', skipped: 1, reasons: ['Deal 7 not found'] });
   });
 
   it('reads ok:false as a rejection carrying the server reason', () => {
@@ -45,15 +46,38 @@ describe('describeBulkMove', () => {
     expect(describeBulkMove({ kind: 'clean' }, 4)).toBeNull();
   });
 
-  it('reports skips as a dismissible FYI when the board reconciled', () => {
-    const notice = describeBulkMove({ kind: 'skips', skipped: 2 }, 5, true);
-    expect(notice).toEqual({ text: '2 deals skipped (no longer found)', persistent: false });
+  it('uses the server reason verbatim for a single skip', () => {
+    // The two skip causes are not interchangeable: an archived deal needs restoring, a
+    // missing one needs nothing. A generic "no longer found" would lie about the first.
+    const notice = describeBulkMove(
+      { kind: 'skips', skipped: 1, reasons: ['Cannot change the stage of archived deal #9 — restore it first'] },
+      5, true,
+    );
+    expect(notice).toEqual({
+      text: 'Cannot change the stage of archived deal #9 — restore it first.',
+      persistent: false,
+    });
+  });
+
+  it('summarises several skips but still names the first cause', () => {
+    const notice = describeBulkMove(
+      { kind: 'skips', skipped: 3, reasons: ['Deal 7 not found', 'Deal 8 not found'] }, 9, true,
+    );
+    expect(notice?.text).toBe("3 deals couldn't be moved — first: Deal 7 not found.");
+    expect(notice?.persistent).toBe(false);
+  });
+
+  it('falls back to a bare count when the server sent no reasons', () => {
+    expect(describeBulkMove({ kind: 'skips', skipped: 2, reasons: [] }, 4)?.text)
+      .toBe("2 deals couldn't be moved.");
   });
 
   it('makes a skip notice persistent and explicit when the board could not refresh', () => {
-    const notice = describeBulkMove({ kind: 'skips', skipped: 1 }, 5, false);
+    const notice = describeBulkMove(
+      { kind: 'skips', skipped: 1, reasons: ['Deal 7 not found'] }, 5, false,
+    );
     expect(notice?.persistent).toBe(true);
-    expect(notice?.text).toContain('1 deal skipped');
+    expect(notice?.text).toContain('Deal 7 not found');
     expect(notice?.text).toContain('could not be refreshed');
   });
 
@@ -93,6 +117,7 @@ describe('describeBulkMove', () => {
   it('pluralises a single deal correctly across every branch', () => {
     expect(describeBulkMove({ kind: 'rejected' }, 1)?.text).toContain('1 deal not');
     expect(describeBulkMove({ kind: 'unconfirmed' }, 1)?.text).toContain('1 deal moved');
-    expect(describeBulkMove({ kind: 'skips', skipped: 1 }, 1)?.text).toContain('1 deal skipped');
+    expect(describeBulkMove({ kind: 'skips', skipped: 1, reasons: [] }, 1)?.text)
+      .toContain('1 deal ');
   });
 });

@@ -1016,7 +1016,13 @@ def bulk_move_deals(deal_ids: list[int], stage: str) -> dict:
     A deal already in the target stage is skipped ENTIRELY — no write, so no
     ``updated_at`` bump. That is deliberate: ``LAST_TOUCH_SQL`` reads ``updated_at`` as
     a touch, so bumping it would reset the staleness clock on deals this call did not
-    actually change.
+    actually change. Note this IS a difference from ``update_deal_stage``, which writes
+    (and bumps ``updated_at``) even when the stage is unchanged. The shared classifier
+    guarantees the two paths agree on WHAT to write; it does not decide WHETHER to write,
+    and only bulk skips the no-op. Aligning the single-deal path would change behavior
+    predating this issue, so it is deliberately left alone — and the UI never sends a
+    same-stage move anyway (``handleKanbanMove`` returns early on a same-column drop and
+    the detail sheet checks ``deal.stage !== stage``).
     """
     if stage not in DEAL_STAGES:
         return {"ok": False, "updated": 0, "updated_ids": [], "errors": [f"Invalid stage: {stage}"]}
@@ -1025,6 +1031,12 @@ def bulk_move_deals(deal_ids: list[int], stage: str) -> dict:
     ids = list(dict.fromkeys(deal_ids or []))
     if not ids:
         return {"ok": False, "updated": 0, "updated_ids": [], "errors": ["No deal IDs provided"]}
+    # Checked here rather than at each entry point so every caller — REST, agent tool, any
+    # future one — gets it. A real id is always a positive int; anything else is a client
+    # bug worth naming instead of quietly reporting "not found" for id 0.
+    if any(i <= 0 for i in ids):
+        return {"ok": False, "updated": 0, "updated_ids": [],
+                "errors": ["Deal IDs must be positive integers"]}
     if len(ids) > BULK_MOVE_MAX:
         return {"ok": False, "updated": 0, "updated_ids": [],
                 "errors": [f"Too many deals ({len(ids)}); max {BULK_MOVE_MAX} per bulk move"]}

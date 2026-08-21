@@ -308,24 +308,39 @@ export function PipelinePage() {
     if (ids.length === 0) return;
 
     setBulkNotice(null);
-    // Snapshot each mover's current stage as the fallback revert target, for the same reason
-    // moveDealStage keeps `dealConfirmedStage`: a deal with no server-confirmed entry yet.
+    const moving = new Set(ids);
+    // Take the lock FIRST so no new single-deal write can start while we wait below.
+    bulkPendingRef.current = true;
+    setBulkPending(true);
+    // Same bookkeeping a drag does: an unconfirmed optimistic write exists, and a silent GET
+    // spanning it must be invalidated rather than allowed to clobber it. Incremented before
+    // the wait so a drag settling during it can't see a zero count and fire its deferred
+    // refresh into the middle of this operation.
+    pendingWrites.current++;
+    writeGen.current++;
+    clearSelection();
+
+    // The lock stops NEW single-deal writes, but a drag PUT already in flight for one of
+    // these deals would race this POST with no ordering guarantee — and last-writer-wins
+    // could leave the board on the drag's stage while we report the bulk succeeded. So wait
+    // out the per-deal chains for exactly the ids we're about to move: the same ordering
+    // guarantee moveDealStage gives two writes to one deal, extended across the batch.
+    // Chains never reject (moveDealStage handles its own errors), but settle defensively.
+    await Promise.allSettled(
+      ids.map(id => dealWriteChain.current.get(id)).filter(Boolean) as Promise<void>[],
+    );
+
+    // Snapshot and paint AFTER the wait, so a drag that reconciled during it doesn't
+    // immediately overwrite the optimistic stage we just set. `dealConfirmedStage` is a ref
+    // and therefore already live; this map is only the fallback for a deal that has no
+    // confirmed entry yet (one whose write never succeeded), so the captured `deals` is right.
     const prevStages = new Map(deals.map(d => [d.id, d.stage]));
     // Optimistic: restage every mover in one pass, positions untouched (same trick as
     // moveDealStage, so a revert needs no position bookkeeping).
-    const moving = new Set(ids);
     setData(prev => prev ? {
       ...prev,
       deals: prev.deals.map(d => moving.has(d.id) ? { ...d, stage: toStage } : d),
     } : prev);
-    clearSelection();
-
-    bulkPendingRef.current = true;
-    setBulkPending(true);
-    // Same bookkeeping a drag does: an unconfirmed optimistic write exists, and a silent GET
-    // spanning it must be invalidated rather than allowed to clobber it.
-    pendingWrites.current++;
-    writeGen.current++;
 
     // try/finally for the same reason moveDealStage has one: the lock disables drag and
     // every single-deal mutator, and a leaked pendingWrites count defers every later silent
@@ -337,6 +352,13 @@ export function PipelinePage() {
         const result = await api<BulkMoveResponse>('/api/crm/deals/bulk-move', {
           method: 'POST', body: JSON.stringify({ deal_ids: ids, stage: toStage }),
         });
+        // Record server truth for every deal that actually moved, exactly as moveDealStage
+        // does on a successful PUT. Without this, a later FAILED drag on one of these deals
+        // would revert it to its pre-bulk stage — contradicting a move that did commit —
+        // whenever the reconcile refetch below didn't land.
+        if (result.ok) {
+          for (const id of result.updated_ids ?? []) dealConfirmedStage.current.set(id, toStage);
+        }
         outcome = classifyBulkMove(result);
       } catch (err) {
         console.error('Bulk move failed:', err);

@@ -636,6 +636,18 @@ def test_bulk_move_rejects_a_malformed_body(client):
     assert client.post("/api/crm/deals/bulk-move", json={"deal_ids": [1]}).status_code == 422
 
 
+def test_bulk_move_refuses_ids_that_are_not_strictly_integers(client, monkeypatch):
+    """Pydantic's LAX int would coerce JSON `true` to 1, `1.0` to 1 and "3" to 3 — a
+    malformed body would silently move deal #1. StrictInt rejects all three at the model,
+    which is the only layer that can: by the time the service runs, the bool IS an int."""
+    def explode(*a, **k):
+        raise AssertionError("a non-strict deal id reached the service")
+    monkeypatch.setattr(service, "bulk_move_deals", explode)
+    for bad in ([True], [1.5], ["3"]):
+        assert client.post("/api/crm/deals/bulk-move",
+                           json={"deal_ids": bad, "stage": "won"}).status_code == 422
+
+
 def test_bulk_move_path_is_not_shadowed_by_the_deal_detail_route(client, monkeypatch):
     """"bulk-move" must reach the bulk handler, not POST /deals/{id}-style routing."""
     monkeypatch.setattr(service, "bulk_move_deals",

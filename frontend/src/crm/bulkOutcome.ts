@@ -45,7 +45,10 @@ export interface ThrownRequest {
 
 export type BulkMoveOutcome =
   | { kind: 'clean' }
-  | { kind: 'skips'; skipped: number }
+  // `reasons` are the server's own per-deal sentences. Carried rather than summarised
+  // because they are not interchangeable: a deal can be skipped for being gone OR for
+  // being archived ("restore it first"), and only the second is actionable.
+  | { kind: 'skips'; skipped: number; reasons: string[] }
   | { kind: 'rejected'; reason?: string }
   | { kind: 'unconfirmed' };
 
@@ -63,8 +66,10 @@ export function classifyBulkMove(
   if (!result.ok) return { kind: 'rejected', reason: result.errors?.[0] };
   // Committed. Per-deal errors alongside ok:true are benign skips — a deal archived or
   // deleted between page load and the click. The rest moved.
-  const skipped = result.errors?.length ?? 0;
-  return skipped > 0 ? { kind: 'skips', skipped } : { kind: 'clean' };
+  const reasons = result.errors ?? [];
+  return reasons.length > 0
+    ? { kind: 'skips', skipped: reasons.length, reasons }
+    : { kind: 'clean' };
 }
 
 export interface BulkNotice {
@@ -120,8 +125,18 @@ export function describeBulkMove(
   }
 
   if (outcome.kind === 'skips') {
+    // Use the server's own sentence for a single skip — it already says WHY, and the two
+    // causes differ in what the operator should do ("not found" is nothing; an archived
+    // deal needs restoring first). Only fall back to a bare count for several, where
+    // stacking every sentence would be worse than a summary plus the first cause.
+    const [first] = outcome.reasons;
+    const detail = outcome.skipped === 1 && first
+      ? first.trim().replace(/[.\s]+$/, '')
+      : first
+        ? `${plural(outcome.skipped, 'deal')} couldn't be moved — first: ${first.trim().replace(/[.\s]+$/, '')}`
+        : `${plural(outcome.skipped, 'deal')} couldn't be moved`;
     return {
-      text: `${plural(outcome.skipped, 'deal')} skipped (no longer found)${stale ? staleWarning : ''}`,
+      text: `${detail}.${stale ? staleWarning : ''}`,
       // A skip tally on a reconciled board is an FYI that can auto-dismiss. Once the
       // refetch has failed, the board is still showing those deals as moved and nothing
       // else on screen says otherwise, so the disclosure has to outlive the timer.
