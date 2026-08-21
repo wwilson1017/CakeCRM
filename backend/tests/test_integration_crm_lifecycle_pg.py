@@ -787,3 +787,111 @@ def test_a_human_edit_retires_the_badge_in_scan_gaps(pg_db):
     assert analytics_service.scan_gaps(entity_type="contact")["unverified_fields"] == []
     # ...and the two surfaces agree, which is the actual invariant.
     assert provenance_service.get_provenance("contact", contact["id"]) == []
+
+
+# ── Bulk stage moves (#55) ────────────────────────────────────────────────────
+
+def test_bulk_move_end_to_end(pg_db):
+    """The set-based path against real Postgres: `= ANY`, the grouped UPDATEs, and the
+    `unnest` multi-row audit INSERT are all constructs a mock cannot validate."""
+    from core.postgres import pg_fetchall
+    from crm import service
+
+    fresh = service.create_deal("Fresh", stage="lead")
+    reopened = service.mark_deal_lost(service.create_deal("Reopened", stage="negotiation")["id"],
+                                     lost_reason="budget")
+    already = service.create_deal("Already there", stage="qualified")
+    archived = service.create_deal("Archived", stage="lead")
+    service.archive_deal(archived["id"])
+
+    result = service.bulk_move_deals(
+        [fresh["id"], reopened["id"], already["id"], archived["id"], 999_999], "qualified")
+
+    assert result["ok"] is True
+    assert result["updated"] == 2
+    assert result["updated_ids"] == [fresh["id"], reopened["id"]]
+    # Errors arrive in REQUEST order, so the archived deal (listed 4th) precedes the
+    # bogus id (listed 5th) — the operator reads them back in the order they selected.
+    assert result["errors"] == [
+        f"Cannot change the stage of archived deal #{archived['id']} — restore it first",
+        "Deal 999999 not found",
+    ]
+
+    rows = {r["id"]: r for r in pg_fetchall(
+        "SELECT id, stage, lost_reason, archived_at FROM deals")}
+    assert rows[fresh["id"]]["stage"] == "qualified"
+    assert rows[reopened["id"]]["stage"] == "qualified"
+    assert rows[reopened["id"]]["lost_reason"] == "", "leaving 'lost' clears the reason"
+    assert rows[already["id"]]["stage"] == "qualified"
+    assert rows[archived["id"]]["stage"] == "lead", "the archived deal was left alone"
+
+    events = [(e["deal_id"], e["old_stage"], e["new_stage"]) for e in pg_fetchall(
+        "SELECT deal_id, old_stage, new_stage FROM deal_stage_events "
+        "WHERE old_stage <> new_stage AND new_stage = 'qualified' ORDER BY id")]
+    assert (fresh["id"], "lead", "qualified") in events
+    assert (reopened["id"], "lost", "qualified") in events
+    assert not any(e[0] in (already["id"], archived["id"]) for e in events)
+
+
+def test_bulk_move_into_won_settles_probability(pg_db):
+    from core.postgres import pg_fetchall
+    from crm import service
+
+    a = service.create_deal("A", stage="lead", probability=30)
+    b = service.create_deal("B", stage="proposal", probability=70)
+    assert service.bulk_move_deals([a["id"], b["id"]], "won")["updated"] == 2
+
+    probs = {r["id"]: r["probability"] for r in pg_fetchall("SELECT id, probability FROM deals")}
+    assert probs[a["id"]] == 100 and probs[b["id"]] == 100
+
+
+def test_bulk_move_leaves_updated_at_alone_for_a_same_stage_deal(pg_db):
+    """`updated_at` is read as a touch by LAST_TOUCH_SQL, so a no-op move must not
+    reset the deal's staleness clock."""
+    from core.postgres import pg_fetchone
+    from crm import service
+
+    deal = service.create_deal("Parked", stage="qualified")
+    before = pg_fetchone("SELECT updated_at FROM deals WHERE id = %s", (deal["id"],))["updated_at"]
+    service.bulk_move_deals([deal["id"]], "qualified")
+    after = pg_fetchone("SELECT updated_at FROM deals WHERE id = %s", (deal["id"],))["updated_at"]
+    assert before == after
+
+
+def test_bulk_and_single_deal_paths_cannot_drift(pg_db):
+    """The #1323 pin. Twin deals in identical states, one moved through
+    update_deal_stage and one through bulk_move_deals, must end up byte-identical —
+    that is the whole point of sharing _classify_deal_update."""
+    from core.postgres import pg_fetchall, pg_fetchone
+    from crm import service
+
+    def snapshot(deal_id):
+        row = pg_fetchone(
+            "SELECT stage, probability, lost_reason FROM deals WHERE id = %s", (deal_id,))
+        events = [(e["old_stage"], e["new_stage"]) for e in pg_fetchall(
+            "SELECT old_stage, new_stage FROM deal_stage_events WHERE deal_id = %s ORDER BY id",
+            (deal_id,))]
+        return dict(row), events
+
+    for stage_from, target, lost_reason in (
+        ("lead", "qualified", None),      # plain open move
+        ("lead", "won", None),            # closing transition settles probability
+        ("lead", "lost", None),           # the other closing transition
+        ("lost", "negotiation", "budget"),  # reopening clears the stale reason
+    ):
+        def make(name):
+            deal = service.create_deal(name, stage="negotiation", probability=45)
+            if stage_from == "lost":
+                service.mark_deal_lost(deal["id"], lost_reason=lost_reason)
+            else:
+                service.update_deal_stage(deal["id"], stage_from)
+            return deal["id"]
+
+        single_id, bulk_id = make(f"single {stage_from}->{target}"), make(f"bulk {stage_from}->{target}")
+        service.update_deal_stage(single_id, target)
+        service.bulk_move_deals([bulk_id], target)
+
+        single_row, single_events = snapshot(single_id)
+        bulk_row, bulk_events = snapshot(bulk_id)
+        assert single_row == bulk_row, f"{stage_from}->{target} columns drifted"
+        assert single_events == bulk_events, f"{stage_from}->{target} stage log drifted"

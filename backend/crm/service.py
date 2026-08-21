@@ -743,6 +743,45 @@ def list_deals(stage: str | None = None, contact_id: int | None = None, limit: i
     )
 
 
+def _classify_deal_update(
+    deal_id: int, old_stage: str, archived_at, filtered: dict,
+) -> tuple[dict, tuple[str, str] | None]:
+    """Given a deal's locked pre-image and a validated column map, resolve the final
+    column map plus the stage transition it implies (or None).
+
+    This is the ONE definition of the rules that make a stage change correct, shared by
+    ``_write_deal_update`` (one deal, raises) and ``bulk_move_deals`` (many deals,
+    collects per-deal errors). Issue #55 needed those rules on a set-based path without
+    a per-deal loop; keeping a second copy is the exact drift the blueprint had to fix
+    later, so the rules moved here instead and both paths call it. Pure — no I/O — so
+    the bulk path can classify a whole batch in memory inside its lock window.
+
+    Never mutates ``filtered`` (copies, as the single-deal path always did). Raises
+    ValueError for a stage change on an archived deal.
+    """
+    new_stage = filtered.get("stage", old_stage)
+    # An archived deal is out of every list, board and aggregate — so closing one
+    # would book revenue nothing can see (won + archived is absent from win rate
+    # and avg deal size). Same stance merge_deals takes: restore it first.
+    if new_stage != old_stage and archived_at is not None:
+        raise ValueError(
+            f"Cannot change the stage of archived deal #{deal_id} — restore it first"
+        )
+    if old_stage == "lost" and new_stage != "lost" and "lost_reason" not in filtered:
+        filtered = {**filtered, "lost_reason": ""}
+    # Closing a deal settles its win probability on every path that CHANGES the
+    # stage — the Kanban drag, crm_update_deal_stage and the edit form all come
+    # through here (create_deal handles the create-as-closed case itself).
+    # This OVERRIDES a supplied probability on purpose: "probability" means chance
+    # of winning, so it has exactly one correct value once the deal is decided, and
+    # the edit form happily posts the old 30% alongside stage='won'. Only on the
+    # TRANSITION though — editing probability on an already-closed deal stays the
+    # caller's call.
+    if new_stage != old_stage and new_stage in ("won", "lost"):
+        filtered = {**filtered, "probability": 100 if new_stage == "won" else 0}
+    return filtered, (old_stage, new_stage) if new_stage != old_stage else None
+
+
 def _write_deal_update(deal_id: int, filtered: dict) -> bool:
     """Apply a validated column map to one deal in a single transaction.
 
@@ -767,6 +806,11 @@ def _write_deal_update(deal_id: int, filtered: dict) -> bool:
        lifecycle verbs (mark won/lost) #18 never knew about. On a re-link both the
        old and the new contact changed inputs. score_on_event never raises.
 
+    Rules 1 and 2 — and the archived-deal refusal and probability settling — are
+    resolved by ``_classify_deal_update``, shared with ``bulk_move_deals`` (#55) so the
+    single-deal and set-based paths cannot drift. This function owns the I/O: the lock,
+    the write, the audit row, and the post-commit rescore.
+
     Returns False when the deal does not exist. ``filtered`` must already be
     validated/clamped by the caller — this function writes what it is given, and must
     be non-empty (an empty map would build ``SET , updated_at = …``). No caller can
@@ -784,36 +828,19 @@ def _write_deal_update(deal_id: int, filtered: dict) -> bool:
         if row is None:
             return False
         old_stage, archived_at, old_contact_id = row[0], row[1], row[2]
-        new_stage = filtered.get("stage", old_stage)
-        # An archived deal is out of every list, board and aggregate — so closing one
-        # would book revenue nothing can see (won + archived is absent from win rate
-        # and avg deal size). Same stance merge_deals takes: restore it first.
-        if new_stage != old_stage and archived_at is not None:
-            raise ValueError(
-                f"Cannot change the stage of archived deal #{deal_id} — restore it first"
-            )
-        if old_stage == "lost" and new_stage != "lost" and "lost_reason" not in filtered:
-            filtered = {**filtered, "lost_reason": ""}
-        # Closing a deal settles its win probability on every path that CHANGES the
-        # stage — the Kanban drag, crm_update_deal_stage and the edit form all come
-        # through here (create_deal handles the create-as-closed case itself).
-        # This OVERRIDES a supplied probability on purpose: "probability" means chance
-        # of winning, so it has exactly one correct value once the deal is decided, and
-        # the edit form happily posts the old 30% alongside stage='won'. Only on the
-        # TRANSITION though — editing probability on an already-closed deal stays the
-        # caller's call.
-        if new_stage != old_stage and new_stage in ("won", "lost"):
-            filtered = {**filtered, "probability": 100 if new_stage == "won" else 0}
+        filtered, stage_event = _classify_deal_update(
+            deal_id, old_stage, archived_at, filtered
+        )
         set_clause = ", ".join(f"{k} = %s" for k in filtered)
         cur.execute(
             f"UPDATE deals SET {set_clause}, updated_at = %s WHERE id = %s",
             list(filtered.values()) + [_now(), deal_id],
         )
-        if new_stage != old_stage:
+        if stage_event:
             cur.execute(
                 "INSERT INTO deal_stage_events (deal_id, old_stage, new_stage) "
                 "VALUES (%s, %s, %s)",
-                (deal_id, old_stage, new_stage),
+                (deal_id, stage_event[0], stage_event[1]),
             )
     # After commit, on purpose: a scoring read inside the transaction would see (and
     # lengthen) the FOR UPDATE window. Dedup/None-filtering is score_on_event's job.
@@ -949,6 +976,126 @@ def update_deal_stage(deal_id: int, stage: str) -> dict | None:
     if not _write_deal_update(deal_id, {"stage": stage}):
         return None
     return get_deal(deal_id)
+
+
+# ── Bulk deal operations (issue #55) ─────────────────────────────────────────
+
+# The ceiling on one bulk move, shared by the REST route and the agent tool (so the
+# cap has one definition and one renderable message). 200 rather than the blueprint's
+# 500 because CakeCRM sends ONE unchunked request: the cap has to bound both the
+# FOR UPDATE window and the post-commit rescore, which runs one advisory-locked
+# recompute per updated deal AND per linked contact. At single-user v1 scale 200
+# covers a full column — usually the whole board. Raise it only alongside client-side
+# chunking or asynchronous scoring.
+BULK_MOVE_MAX = 200
+
+
+def bulk_move_deals(deal_ids: list[int], stage: str) -> dict:
+    """Move many deals to one stage in a single transaction, set-based.
+
+    Returns ``{ok, updated, updated_ids, errors}``. Whole-request problems (bad stage,
+    empty list, over the cap) come back as ``ok: False`` having touched no connection;
+    per-deal problems ride ``errors`` while everything else still commits. That
+    per-deal isolation is the one deliberate contract difference from
+    ``_write_deal_update``, which raises: one archived deal in a 50-deal selection
+    must not sink the batch.
+
+    Correctness comes from calling the SAME ``_classify_deal_update`` the single-deal
+    path calls, once per locked row — pure in-memory work, no I/O — so the archived
+    refusal, the lost_reason clearing and the probability settling cannot drift
+    between the two paths (issue #55; the blueprint had to fix exactly that drift).
+
+    Shape of the write: rows are locked ``ORDER BY id ... FOR UPDATE`` — ascending id,
+    the same rule ``merge_deals`` documents, so two concurrent bulks queue instead of
+    deadlocking and no ordering inversion exists against single-deal writers (which
+    lock one row). Deals sharing an identical column map share ONE ``UPDATE``, and all
+    the stage events are ONE multi-row INSERT on the SAME cursor and transaction — so
+    "deals moved but the history is missing" is unreachable; a failure anywhere rolls
+    back everything.
+
+    A deal already in the target stage is skipped ENTIRELY — no write, so no
+    ``updated_at`` bump. That is deliberate: ``LAST_TOUCH_SQL`` reads ``updated_at`` as
+    a touch, so bumping it would reset the staleness clock on deals this call did not
+    actually change.
+    """
+    if stage not in DEAL_STAGES:
+        return {"ok": False, "updated": 0, "updated_ids": [], "errors": [f"Invalid stage: {stage}"]}
+    # `= ANY(%s)` needs a *list* — psycopg2 cannot adapt a set — so dedupe with
+    # dict.fromkeys, which also preserves the caller's request order.
+    ids = list(dict.fromkeys(deal_ids or []))
+    if not ids:
+        return {"ok": False, "updated": 0, "updated_ids": [], "errors": ["No deal IDs provided"]}
+    if len(ids) > BULK_MOVE_MAX:
+        return {"ok": False, "updated": 0, "updated_ids": [],
+                "errors": [f"Too many deals ({len(ids)}); max {BULK_MOVE_MAX} per bulk move"]}
+
+    errors: list[str] = []
+    write_plan: dict[int, dict] = {}
+    stage_events: list[tuple[int, str, str]] = []
+    contact_ids: list[int] = []
+    now = _now()
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, stage, archived_at, contact_id FROM deals WHERE id = ANY(%s) "
+            "ORDER BY id FOR UPDATE",
+            (ids,),
+        )
+        # Positional access, matching _write_deal_update: the raw cursor returns tuples.
+        rows_by_id = {r[0]: (r[1], r[2], r[3]) for r in cur.fetchall()}
+
+        for did in ids:
+            row = rows_by_id.get(did)
+            if row is None:
+                errors.append(f"Deal {did} not found")
+                continue
+            old_stage, archived_at, contact_id = row
+            if old_stage == stage:
+                continue  # already there — see the docstring on why this writes nothing
+            try:
+                fields, stage_event = _classify_deal_update(
+                    did, old_stage, archived_at, {"stage": stage}
+                )
+            except ValueError as e:
+                errors.append(str(e))
+                continue
+            fields["updated_at"] = now
+            write_plan[did] = fields
+            if stage_event:
+                stage_events.append((did, stage_event[0], stage_event[1]))
+            if contact_id:
+                contact_ids.append(contact_id)
+
+        # Grouped set-based flush: deals sharing an identical column/value map share one
+        # statement, so a plain stage move collapses to a single UPDATE regardless of
+        # batch size (the realistic worst case is three groups — plain movers, movers
+        # leaving 'lost', and movers closing). Column names come from
+        # _classify_deal_update and are fixed literals (stage, lost_reason, probability,
+        # updated_at), so the f-string interpolates only safe identifiers; values stay bound.
+        groups: dict[tuple, list[int]] = {}
+        for did, fields in write_plan.items():
+            groups.setdefault(tuple(sorted(fields.items())), []).append(did)
+        for shape, group_ids in groups.items():
+            cur.execute(
+                f"UPDATE deals SET {', '.join(f'{c} = %s' for c, _ in shape)} WHERE id = ANY(%s)",
+                [v for _, v in shape] + [group_ids],
+            )
+
+        if stage_events:
+            cur.execute(
+                "INSERT INTO deal_stage_events (deal_id, old_stage, new_stage) "
+                "SELECT * FROM unnest(%s::int[], %s::text[], %s::text[])",
+                ([e[0] for e in stage_events], [e[1] for e in stage_events],
+                 [e[2] for e in stage_events]),
+            )
+
+    updated_ids = [did for did in ids if did in write_plan]
+    # After commit, same rule and reason as _write_deal_update: a scoring read inside
+    # the transaction would see and lengthen the FOR UPDATE window. score_on_event
+    # dedupes, drops falsy ids, and never raises.
+    scoring_service.score_on_event(deal_ids=updated_ids, contact_ids=contact_ids)
+    return {"ok": True, "updated": len(updated_ids), "updated_ids": updated_ids, "errors": errors}
 
 
 # ── Deal lifecycle: won / lost / archive / merge (issue #22) ──────────────────

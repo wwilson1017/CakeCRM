@@ -604,3 +604,41 @@ def test_scores_backfill_default_scope_null(client, monkeypatch):
 def test_scores_backfill_bad_scope_rejected(client):
     # Query(pattern="^(null|all)$") rejects out-of-pattern values before the handler (422).
     assert client.post("/api/crm/scores/backfill?scope=everything").status_code == 422
+
+
+# ── POST /deals/bulk-move (#55) ───────────────────────────────────────────────
+
+def test_bulk_move_returns_the_service_shape_verbatim(client, monkeypatch):
+    seen = {}
+    payload = {"ok": True, "updated": 2, "updated_ids": [1, 2], "errors": ["Deal 7 not found"]}
+    monkeypatch.setattr(service, "bulk_move_deals",
+                        lambda ids, stage: seen.update(ids=ids, stage=stage) or payload)
+    r = client.post("/api/crm/deals/bulk-move", json={"deal_ids": [1, 2, 7], "stage": "won"})
+    assert r.status_code == 200
+    assert r.json() == payload
+    assert seen == {"ids": [1, 2, 7], "stage": "won"}
+
+
+def test_bulk_move_refusal_is_a_200_body_not_an_error_status(client, monkeypatch):
+    """The board's rejected-vs-unconfirmed split depends on this: only transport and
+    5xx failures may throw at the client, so a refusal has to arrive as ok:false/200."""
+    monkeypatch.setattr(service, "bulk_move_deals",
+                        lambda ids, stage: {"ok": False, "updated": 0, "updated_ids": [],
+                                            "errors": ["Invalid stage: nope"]})
+    r = client.post("/api/crm/deals/bulk-move", json={"deal_ids": [1], "stage": "nope"})
+    assert r.status_code == 200
+    assert r.json()["ok"] is False
+
+
+def test_bulk_move_rejects_a_malformed_body(client):
+    assert client.post("/api/crm/deals/bulk-move",
+                       json={"deal_ids": "all", "stage": "won"}).status_code == 422
+    assert client.post("/api/crm/deals/bulk-move", json={"deal_ids": [1]}).status_code == 422
+
+
+def test_bulk_move_path_is_not_shadowed_by_the_deal_detail_route(client, monkeypatch):
+    """"bulk-move" must reach the bulk handler, not POST /deals/{id}-style routing."""
+    monkeypatch.setattr(service, "bulk_move_deals",
+                        lambda ids, stage: {"ok": True, "updated": 1, "updated_ids": [3], "errors": []})
+    r = client.post("/api/crm/deals/bulk-move", json={"deal_ids": [3], "stage": "lead"})
+    assert r.status_code == 200 and r.json()["updated_ids"] == [3]

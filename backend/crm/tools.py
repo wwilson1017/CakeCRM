@@ -312,6 +312,31 @@ CRM_TOOL_DEFS = [
         "kind": "integration",
     },
     {
+        "name": "crm_bulk_move_deals",
+        "writes": True,
+        "description": (
+            "Move several deals between OPEN pipeline stages in one call — use this "
+            "instead of calling crm_update_deal_stage repeatedly. To CLOSE deals use "
+            "crm_mark_deal_won or crm_mark_deal_lost one deal at a time; they capture "
+            "the lost reason, which this tool does not. Deals already in the target "
+            "stage are skipped, and deals that cannot move (archived, or no longer "
+            "present) are reported individually while the rest still move."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "deal_ids": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "Deal IDs to move (maximum 200 per call).",
+                },
+                "stage": {"type": "string", "description": "Target stage: lead, qualified, proposal, negotiation"},
+            },
+            "required": ["deal_ids", "stage"],
+        },
+        "kind": "integration",
+    },
+    {
         "name": "crm_get_deal",
         "writes": False,
         "description": (
@@ -1201,6 +1226,29 @@ def crm_update_deal_stage(deal_id: int, stage: str) -> dict:
     return deal
 
 
+def crm_bulk_move_deals(deal_ids: list | None = None, stage: str = "") -> dict:
+    ids = list(dict.fromkeys(deal_ids or []))
+    if not ids:
+        return {"error": "No deal IDs provided"}
+    # Validate the ids HERE rather than letting psycopg2 raise out of the service: a
+    # model can hand back strings or floats, and an adapter error would surface to the
+    # assistant as an opaque failure instead of something it can correct. `bool` is
+    # excluded explicitly because isinstance(True, int) is True, so True would sail
+    # through as deal id 1.
+    if any(isinstance(i, bool) or not isinstance(i, int) or i <= 0 for i in ids):
+        return {"error": "deal_ids must be positive integers"}
+    result = crm.bulk_move_deals(ids, stage)
+    if result.get("ok"):
+        # Badge every deal this call actually moved, mirroring crm_update_deal_stage —
+        # otherwise the "an AI wrote this" audit silently misses bulk moves, which is
+        # exactly the surface where the assistant changes the most records at once.
+        # Best-effort and post-commit (_record_provenance never raises), bounded by
+        # the service's BULK_MOVE_MAX.
+        for did in result.get("updated_ids", []):
+            _record_provenance("deal", did, {"stage": stage}, {"stage": stage})
+    return result
+
+
 def crm_get_deal(deal_id: int) -> dict:
     result = crm.get_deal_detail(deal_id)
     if not result:
@@ -1557,8 +1605,10 @@ def crm_recompute_lead_scores(scope: str = "all") -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Executor Mapping (name -> callable(**kwargs) -> dict). 43 entries: the 42
-# schema'd tools plus the crm_log_note back-compat alias (no schema def).
+# Executor Mapping (name -> callable(**kwargs) -> dict). One entry per schema'd tool
+# in CRM_TOOL_DEFS, plus the crm_log_note back-compat alias (which has no schema def) —
+# so len(TOOL_EXECUTORS) == len(CRM_TOOL_DEFS) + 1, the invariant test_crm_tools.py
+# pins. Deliberately no literal count here: the hardcoded one went stale twice.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 TOOL_EXECUTORS = {
@@ -1575,6 +1625,7 @@ TOOL_EXECUTORS = {
     "crm_create_deal": crm_create_deal,
     "crm_update_deal": crm_update_deal,
     "crm_update_deal_stage": crm_update_deal_stage,
+    "crm_bulk_move_deals": crm_bulk_move_deals,
     "crm_get_deal": crm_get_deal,
     "crm_mark_deal_won": crm_mark_deal_won,
     "crm_mark_deal_lost": crm_mark_deal_lost,
