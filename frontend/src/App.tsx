@@ -11,13 +11,31 @@ import { ContactDetailPage } from './crm/ContactDetailPage';
 import { CompaniesPage } from './crm/CompaniesPage';
 import { CompanyDetailPage } from './crm/CompanyDetailPage';
 import { PipelinePage } from './crm/PipelinePage';
-import { TasksPage } from './crm/TasksPage';
 import { RemindersPage } from './crm/RemindersPage';
 import { SettingsPage } from './crm/SettingsPage';
+import { DonePage } from './crm/gtd/DonePage';
+import { InboxPage } from './crm/gtd/InboxPage';
+import { NextActionsPage } from './crm/gtd/NextActionsPage';
+import { ProjectDetailPage } from './crm/gtd/ProjectDetailPage';
+import { ProjectsPage } from './crm/gtd/ProjectsPage';
+import { PublicTodoApp } from './crm/gtd/PublicTodoApp';
+import { ReviewPage } from './crm/gtd/ReviewPage';
+import { SearchPage } from './crm/gtd/SearchPage';
+import { SomedayPage } from './crm/gtd/SomedayPage';
+import { TodayPage } from './crm/gtd/TodayPage';
+import { WaitingPage } from './crm/gtd/WaitingPage';
+import { isTodoPublicMode } from './crm/gtd/publicMode';
+import { TasksModeRouter } from './crm/gtd/TasksModeRouter';
 import { ToastViewport } from './shared/ToastViewport';
 import { ConfirmHost } from './shared/ConfirmHost';
 
 export default function App() {
+  // The no-login todo surface replaces the whole app: no auth provider, no CRM
+  // router, no way into anything else. Decided from the basename the backend
+  // injected, so this branch can only be taken on a page the backend actually served
+  // at /todo — see crm/gtd/publicMode.ts.
+  if (isTodoPublicMode) return <PublicTodoApp />;
+
   return (
     <AuthProvider>
       <BrowserRouter>
@@ -47,7 +65,19 @@ export default function App() {
             <Route path="companies" element={<CompaniesPage />} />
             <Route path="companies/:id" element={<CompanyDetailPage />} />
             <Route path="pipeline" element={<PipelinePage />} />
-            <Route path="tasks" element={<TasksPage />} />
+            {/* One task route, two task systems — TasksModeRouter picks by mode.
+                The GTD-only sub-routes redirect to /crm/tasks in normal mode, so a
+                bookmarked GTD URL degrades to the Tasks page instead of 404ing. */}
+            <Route path="tasks" element={<TasksModeRouter gtd={<TodayPage />} />} />
+            <Route path="tasks/inbox" element={<TasksModeRouter gtd={<InboxPage />} normal="redirect" />} />
+            <Route path="tasks/next" element={<TasksModeRouter gtd={<NextActionsPage />} normal="redirect" />} />
+            <Route path="tasks/projects" element={<TasksModeRouter gtd={<ProjectsPage />} normal="redirect" />} />
+            <Route path="tasks/projects/:id" element={<TasksModeRouter gtd={<ProjectDetailPage />} normal="redirect" />} />
+            <Route path="tasks/waiting" element={<TasksModeRouter gtd={<WaitingPage />} normal="redirect" />} />
+            <Route path="tasks/someday" element={<TasksModeRouter gtd={<SomedayPage />} normal="redirect" />} />
+            <Route path="tasks/done" element={<TasksModeRouter gtd={<DonePage />} normal="redirect" />} />
+            <Route path="tasks/review" element={<TasksModeRouter gtd={<ReviewPage />} normal="redirect" />} />
+            <Route path="tasks/search" element={<TasksModeRouter gtd={<SearchPage />} normal="redirect" />} />
             <Route path="reminders" element={<RemindersPage />} />
             <Route path="settings" element={<SettingsPage />} />
           </Route>
