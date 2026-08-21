@@ -773,9 +773,14 @@ def _load_evidence(deal_id: int, always_load_evidence: bool = False) -> tuple:
                     WHERE deal_id = %s
                     ORDER BY changed_at DESC, id DESC
                     LIMIT %s""",
-                (deal_id, MAX_STAGE_EVENT_ROWS),
+                (deal_id, MAX_STAGE_EVENT_ROWS + 1),
             )
             stage_events = [row_to_dict(cur, r) for r in cur.fetchall()]
+            # Probed and trimmed like the other two, so `truncated` describes the WHOLE
+            # list the reader sees rather than only its AI-classified part.
+            if len(stage_events) > MAX_STAGE_EVENT_ROWS:
+                truncated = True
+                del stage_events[MAX_STAGE_EVENT_ROWS:]
     return deal, chatter, activities, snapshot, stage_events, truncated
 
 
@@ -1122,9 +1127,17 @@ def get_touch_evidence(deal_id: int) -> dict | None:
     }
 
     events: list = []
+    # Set when a stored item carries no usable digest: we cannot tell whether that row was
+    # edited, so the explanation must not present itself as verified. Every payload this
+    # code writes has one, so this is a fail-safe for a hand-edited or future-shaped row —
+    # the row keeps its rendered verdict (claiming "edited" would be a guess), but the
+    # snapshot as a whole stops claiming "current".
+    unverifiable = False
     for entry in entries:
         item = stored.get((entry["source"], entry["source_id"]))
         stored_hash = (item or {}).get("h")
+        if item is not None and not isinstance(stored_hash, str):
+            unverifiable = True
         if item is None:
             state, reason = "not_evaluated", ""
         elif stored_hash and stored_hash != _line_hash(entry["line"]):
@@ -1170,18 +1183,25 @@ def get_touch_evidence(deal_id: int) -> dict | None:
     # routes means a route nobody has thought of yet still downgrades honestly.
     visible_touches = sum(1 for e in events if e["state"] == "touch")
     stored_count = payload.get("count")
-    # An edited row invalidates its own verdict WITHOUT moving the count, the watermark or
-    # the evidence count — editing a non-touch row moves none of them — so it has to be
-    # asked about separately, or the banner would say "current" over a row that says it was
-    # invalidated. Unlike watermark drift this applies to closed deals too: a frozen count
-    # is legitimate, an explanation of deleted wording is not (and the stale banner has a
-    # closed-deal variant that says the count no longer updates).
+    # Three things invalidate an explanation WITHOUT moving the count, the watermark or the
+    # evidence count, so each has to be asked about directly — otherwise the banner reads
+    # "current" directly above a row that says otherwise:
+    #   edited      — a row was rewritten after it was judged. Editing a NON-touch row
+    #                 moves none of the three keys.
+    #   uncovered   — a live row the snapshot never judged. Archiving a judged row out of a
+    #                 FULL window pulls an older row in, leaving the row count and the
+    #                 newest timestamp exactly as they were.
+    #   unverifiable — see above.
+    # All three apply to closed deals too: a frozen count is legitimate, an explanation
+    # that no longer covers what it shows is not (and the stale banner has a closed-deal
+    # variant that says the count no longer updates).
     edited = any(e["state"] == "edited_since" for e in events)
+    uncovered = any(e["state"] == "not_evaluated" for e in events)
     if not payload:
         verdict_state = "none"
     elif stored_count != deal.get("ai_touch_count") or visible_touches != stored_count:
         verdict_state = "superseded"
-    elif edited or (open_deal and (
+    elif edited or uncovered or unverifiable or (open_deal and (
         payload.get("watermark") != evidence_watermark(deal, chatter, activities)
         or payload.get("evidence_count") != len(chatter) + len(activities)
     )):

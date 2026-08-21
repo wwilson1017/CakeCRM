@@ -1032,6 +1032,20 @@ def _payload(count, items, watermark="2026-01-03T00:00:00+00:00", evidence_count
             "evidence_count": evidence_count, "items": list(items), "skipped": list(skipped)}
 
 
+def _items(touch_sources, *, deal=None, chatter=None, activities=None, reason="internal"):
+    """Snapshot items with REAL line digests, built from the same entries the reader sees.
+    `touch_sources` is the set of "source" values counted as touches."""
+    entries, _ = svc.build_evidence_entries(
+        deal if deal is not None else {**DEAL, "notes": None},
+        CHATTER if chatter is None else chatter,
+        ACTIVITIES if activities is None else activities)
+    return [{"source": e["source"], "source_id": e["source_id"],
+             "touch": e["source"] in touch_sources,
+             "reason": "" if e["source"] in touch_sources else reason,
+             "h": svc._line_hash(e["line"])}
+            for e in entries]
+
+
 def _patch_evidence(monkeypatch, *, deal=None, chatter=None, activities=None,
                     payload=None, computed_at="2026-01-04T00:00:00+00:00", stage_events=(),
                     truncated=False):
@@ -1048,9 +1062,7 @@ def _patch_evidence(monkeypatch, *, deal=None, chatter=None, activities=None,
 
 
 def test_get_touch_evidence_current_when_sums_agree(monkeypatch):
-    _patch_evidence(monkeypatch, payload=_payload(
-        1, [{"source": "activity", "source_id": 41, "touch": True, "reason": ""},
-            {"source": "note", "source_id": 11, "touch": False, "reason": "internal"}]))
+    _patch_evidence(monkeypatch, payload=_payload(1, _items({"activity"})))
     out = svc.get_touch_evidence(7)
     assert out["verdict_state"] == "current"
     assert out["counted"] == 1 and out["evaluated"] == 2 and out["ai_touch_count"] == 1
@@ -1069,9 +1081,8 @@ def test_get_touch_evidence_missing_deal_returns_none(monkeypatch):
 def test_get_touch_evidence_superseded_when_pill_disagrees_with_snapshot(monkeypatch):
     """The stored count and the deal's column drifted apart — say so rather than show a
     list that silently contradicts the badge above it."""
-    _patch_evidence(monkeypatch, deal={**DEAL, "ai_touch_count": 9}, payload=_payload(
-        1, [{"source": "activity", "source_id": 41, "touch": True, "reason": ""},
-            {"source": "note", "source_id": 11, "touch": False, "reason": "x"}]))
+    _patch_evidence(monkeypatch, deal={**DEAL, "ai_touch_count": 9},
+                    payload=_payload(1, _items({"activity"})))
     assert svc.get_touch_evidence(7)["verdict_state"] == "superseded"
 
 
@@ -1089,9 +1100,7 @@ def test_get_touch_evidence_superseded_when_a_judged_row_left_the_window(monkeyp
 
 def test_get_touch_evidence_stale_when_evidence_moved_on_an_open_deal(monkeypatch):
     _patch_evidence(monkeypatch, payload=_payload(
-        1, [{"source": "activity", "source_id": 41, "touch": True, "reason": ""},
-            {"source": "note", "source_id": 11, "touch": False, "reason": "x"}],
-        watermark="2025-12-01T00:00:00+00:00"))
+        1, _items({"activity"}), watermark="2025-12-01T00:00:00+00:00"))
     assert svc.get_touch_evidence(7)["verdict_state"] == "stale"
 
 
@@ -1099,10 +1108,8 @@ def test_get_touch_evidence_closed_deal_is_frozen_not_stale(monkeypatch):
     """A won deal stops recomputing by design, so "stale" would promise a refresh that is
     never coming."""
     _patch_evidence(monkeypatch, deal={**DEAL, "stage": "won", "ai_touch_count": 1},
-                    payload=_payload(
-                        1, [{"source": "activity", "source_id": 41, "touch": True, "reason": ""},
-                            {"source": "note", "source_id": 11, "touch": False, "reason": "x"}],
-                        watermark="2025-12-01T00:00:00+00:00"))
+                    payload=_payload(1, _items({"activity"}),
+                                     watermark="2025-12-01T00:00:00+00:00"))
     out = svc.get_touch_evidence(7)
     assert out["verdict_state"] == "current" and out["open"] is False
 
@@ -1172,6 +1179,56 @@ def test_get_touch_evidence_edited_row_downgrades_on_a_closed_deal_too(monkeypat
     assert out["open"] is False and out["verdict_state"] == "stale"
 
 
+def test_get_touch_evidence_window_churn_downgrades_even_with_matching_keys(monkeypatch):
+    """Archiving a judged NON-touch row out of a FULL window pulls an older, never-judged
+    row in. The row count and the newest timestamp are unchanged and the touch sum is
+    unchanged, so nothing in the guard keys notices — but a row now renders
+    "Awaiting next AI pass", and the banner must not say "current" above it."""
+    live = [{"id": 11, "message": "Called the buyer, wants a sample",
+             "created_at": "2026-01-03T00:00:00+00:00"},
+            {"id": 5, "message": "older note pulled into the window",
+             "created_at": "2026-01-02T12:00:00+00:00"}]
+    judged = svc.build_evidence_entries({"notes": None}, [live[0]], [])[0]
+    # The snapshot covers only the newest note; the pulled-in older row is uncovered.
+    items = [{"source": "note", "source_id": 11, "touch": True, "reason": "",
+              "h": svc._line_hash(judged[0]["line"])}]
+    _patch_evidence(monkeypatch, chatter=live, activities=[],
+                    deal={**DEAL, "ai_touch_count": 1},
+                    payload=_payload(1, items, watermark="2026-01-03T00:00:00+00:00",
+                                     evidence_count=2))
+    out = svc.get_touch_evidence(7)
+    assert "not_evaluated" in {e["state"] for e in out["events"]}
+    assert out["verdict_state"] == "stale"      # NOT "current"
+
+
+def test_get_touch_evidence_treats_a_hashless_item_as_unverifiable(monkeypatch):
+    """Fail-safe: with no digest we cannot tell whether the row was edited, so the snapshot
+    must stop claiming "current" — but the row keeps its verdict rather than being labelled
+    "edited", which would be a guess."""
+    items = [{"source": e["source"], "source_id": e["source_id"],
+              "touch": e["source"] == "activity", "reason": ""}      # no "h"
+             for e in svc.build_evidence_entries({"notes": None}, CHATTER, ACTIVITIES)[0]]
+    _patch_evidence(monkeypatch, deal={**DEAL, "ai_touch_count": 1},
+                    payload=_payload(1, items))
+    out = svc.get_touch_evidence(7)
+    assert out["verdict_state"] == "stale"
+    assert {e["state"] for e in out["events"]} == {"touch", "not_touch"}   # not edited_since
+
+
+def test_load_evidence_probes_stage_events_for_truncation(monkeypatch):
+    """`truncated` describes the whole visible list, so a deal with more stage moves than
+    the cap must not report an untruncated list."""
+    full_stage = [(i, "lead", "qualified", "2026-01-05T00:00:00+00:00")
+                  for i in range(svc.MAX_STAGE_EVENT_ROWS + 1)]
+    conn = _evidence_conn(monkeypatch, _OPEN_DEAL_ROW, with_snapshot_step=True,
+                          chatter=[_CHATTER_ROW], activities=[], stage=full_stage)
+    _d, _c, _a, _s, stage_events, truncated = svc._load_evidence(7, always_load_evidence=True)
+    assert truncated is True
+    assert len(stage_events) == svc.MAX_STAGE_EVENT_ROWS
+    limits = [params[-1] for sql, params in conn.executed if "FROM deal_stage_events" in sql]
+    assert limits == [svc.MAX_STAGE_EVENT_ROWS + 1]
+
+
 def test_get_touch_evidence_unedited_row_matches_its_digest(monkeypatch):
     """The mirror of the edit tests: an untouched row must NOT be flagged, or every row
     would permanently read "edited"."""
@@ -1200,11 +1257,9 @@ def test_get_touch_evidence_renders_rows_the_model_never_saw(monkeypatch):
 
 def test_get_touch_evidence_sorts_deal_notes_last(monkeypatch):
     """The reader is checking the AI's work, so the list must be the order the AI saw."""
-    _patch_evidence(monkeypatch, deal={**DEAL, "notes": "Prefers email", "ai_touch_count": 0},
-                    payload=_payload(0, [
-                        {"source": "activity", "source_id": 41, "touch": False, "reason": "a"},
-                        {"source": "note", "source_id": 11, "touch": False, "reason": "b"},
-                        {"source": "deal_notes", "source_id": None, "touch": False, "reason": "c"}]))
+    notes_deal = {**DEAL, "notes": "Prefers email", "ai_touch_count": 0}
+    _patch_evidence(monkeypatch, deal=notes_deal,
+                    payload=_payload(0, _items(set(), deal=notes_deal)))
     out = svc.get_touch_evidence(7)
     assert [e["source"] for e in out["events"]] == ["activity", "note", "deal_notes"]
     assert out["verdict_state"] == "current"

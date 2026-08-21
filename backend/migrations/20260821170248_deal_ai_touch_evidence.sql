@@ -28,13 +28,21 @@
 --    "watermark": <str>,        -- the ai_touch_count_at this was built on
 --    "evidence_count": <int>,
 --    "items": [{"source": "note"|"activity"|"deal_notes",
---               "source_id": <int|null>, "touch": <bool>, "reason": <str>}],
+--               "source_id": <int|null>, "touch": <bool>, "reason": <str>,
+--               "h": <str>}],   -- digest of the evidence line AS JUDGED
 --    "skipped": [{"source": "note", "source_id": <int>, "why": "empty_note"}]}
 --
 -- items deliberately store NO line text: the reader renders the LIVE line from
 -- crm_chatter/activity_log. A note edit rewrites `message` without touching
 -- `created_at` or the row count, so both stale-write guard keys stay put -- and
 -- storing the text would pin a pre-edit line beside a verdict about it.
+--
+-- "h" is how the reader detects that edit anyway: it compares the digest of the
+-- line the model actually judged against the live line. A timestamp cannot do
+-- this job -- activity_log has no updated_at column at all, deals.notes changes
+-- without one, and comparing a note's updated_at against computed_at misses an
+-- edit made WHILE the model was running. A row whose digest is missing or not a
+-- string is treated as unverifiable and drops the snapshot off "current".
 CREATE TABLE IF NOT EXISTS deal_ai_touch_evidence (
     deal_id     INTEGER PRIMARY KEY,
     verdicts    JSONB NOT NULL,
