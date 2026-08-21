@@ -141,8 +141,15 @@ def reset_password(
             detail="Use Settings → Change password to change your own password.",
         )
     _validate_password(body.new_password)
-    if not service.set_password_as_admin(
-        user_id, body.new_password, clear_two_factor=body.clear_two_factor
-    ):
+    # One argument per line: as a single line this tripped gitleaks' generic-api-key
+    # rule, which read the run of identifiers as a high-entropy string. Nothing here
+    # is a secret, but reformatting keeps the scanner honest without adding an
+    # allowlist entry that would blunt it for everything else in this file.
+    updated = service.set_password_as_admin(
+        user_id,
+        body.new_password,
+        clear_two_factor=body.clear_two_factor,
+    )
+    if not updated:
         raise HTTPException(status_code=404, detail="User not found.")
     return {"ok": True, "two_factor_cleared": body.clear_two_factor}
