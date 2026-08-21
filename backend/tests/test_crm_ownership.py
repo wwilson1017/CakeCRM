@@ -345,3 +345,39 @@ def test_analytics_reports_per_rep(monkeypatch):
     monkeypatch.setattr(crm, "pg_fetchone", lambda sql, params=(): {})
     monkeypatch.setattr(crm, "pg_fetchall", lambda sql, params=(): [])
     assert crm.get_analytics()["per_rep"] == []
+
+
+# ── An update must never invent an owner ────────────────────────────────────
+
+def test_an_update_without_owner_id_leaves_ownership_alone(client, monkeypatch):
+    """The server half of the "editing an unassigned record must not claim it" fix.
+
+    The forms now omit owner_id on an untouched create and send the record's own
+    value on an edit — but the route must also not synthesize one, or a client that
+    simply doesn't know about ownership (an older tab, a script) would reassign
+    every record it saves.
+    """
+    captured = {}
+    monkeypatch.setattr(
+        crm, "update_contact", lambda cid, **kw: captured.update(kw) or {"id": cid}
+    )
+    client.put("/api/crm/contacts/5", json={"name": "Renamed"})
+    assert "owner_id" not in captured
+
+
+@pytest.mark.parametrize(
+    "path,service_fn",
+    [
+        ("/api/crm/contacts/5", "update_contact"),
+        ("/api/crm/deals/5", "update_deal"),
+        ("/api/crm/tasks/5", "update_task"),
+        ("/api/crm/companies/5", "update_company"),
+    ],
+)
+def test_no_entity_update_synthesizes_an_owner(client, monkeypatch, path, service_fn):
+    captured = {}
+    monkeypatch.setattr(
+        crm, service_fn, lambda eid, **kw: captured.update(kw) or {"id": eid}
+    )
+    client.put(path, json={"name": "X", "title": "X"})
+    assert "owner_id" not in captured
