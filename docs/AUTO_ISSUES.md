@@ -55,6 +55,16 @@ scripts/seed-labels.sh --repo owner/n  # targets an explicit repo
 | `evidence-posted` | Verification evidence recorded on the PR. |
 | `evidence-failed` | Verification found a bug that was not fixed this pass. |
 | `reporter-greenlit` | Reporter approved the verification evidence. |
+| `sync-intake` | Filed automatically by the cake_os sync bot — triage it at first-look. |
+
+### Where `sync-intake` issues come from
+
+The **cake_os sync bot** (`docs/SYNC.md`) files an issue whenever upstream CRM code changes,
+so ports don't depend on somebody noticing. Those issues arrive **un-`greenlit` like any
+other** — default-deny still holds, and the bot never labels its own work eligible. Most are
+closed after a glance at the verdict in the title; the interesting ones get `greenlit` at
+first-look and then run the ordinary pipeline below, with no special casing anywhere in the
+loop. The port worker reads cake_os from the local clone, never from the issue body.
 
 ## Terminal outcomes
 
@@ -101,7 +111,7 @@ once, by hand, in GitHub — they are not (and cannot be) set by a PR:
    checks before merging. Add these **exact check contexts** (the CI job display names
    from `.github/workflows/ci.yml`):
    - `Backend (ruff + import check + tests)`
-   - `Frontend (build + lint)`
+   - `Frontend (build + lint + test)`
    - `Secret scan (gitleaks)`
 
    Do **not** add `AI Code Review` as a required check (see above). Without conversation

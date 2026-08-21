@@ -37,9 +37,13 @@ jobs:
       - name: Install dependencies
         run: pip install -r backend/requirements.txt -r backend/requirements-dev.txt
 
+      # `../scripts` is linted with an explicit --config: ruff discovers config by
+      # walking up from each file, and there is no ruff.toml at the repo root, so
+      # scripts/ would otherwise be linted under defaults (or, before this, not at
+      # all — `.` is backend/ here).
       - name: Lint (ruff)
         working-directory: backend
-        run: ruff check .
+        run: ruff check --config ruff.toml . ../scripts
 
       - name: Import check — verify modules load without a database
         working-directory: backend
