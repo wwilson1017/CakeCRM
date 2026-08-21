@@ -293,14 +293,20 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   arithmetic so raising the window has to confront the ceiling. Read-only via
   `GET /api/crm/deals/:id/touch-count/evidence` → `touch_count_service.get_touch_evidence`,
   which never re-runs AI and reports `verdict_state` **current/stale/superseded/none**. It
-  earns "current" only against FOUR checks, because three kinds of drift move none of the
+  earns "current" only against FIVE checks, because four kinds of drift move none of the
   stale-write guard keys and so are invisible to a sum comparison alone: the visible touches
   vs. the number on the pill (catches a contact deletion that destroyed shared
   `activity_log` rows, or an archived note), a row **edited** since it was judged (an edit
   to a non-touch row moves nothing else), a live row the snapshot never **covered**
   (archiving a judged row out of a full window pulls an older one in, leaving the row count
-  and newest timestamp untouched), and an item whose digest is missing so it cannot be
-  **verified** at all. Edit detection compares a stored digest of the line as judged
+  and newest timestamp untouched), a judged row that has **vanished** from the live set
+  (clearing a `deal_notes` field judged not-a-touch moves *nothing* — that entry is in
+  neither the watermark nor the evidence count — and on a closed deal a deleted row escapes
+  the evidence-count check too, since that one is open-deals-only), and an item whose digest
+  is unusable so it cannot be **verified** at all. Comparing the live and stored key sets in
+  BOTH directions is what makes this a closed question rather than a list of drift routes to
+  keep extending — four separate review findings landed on this reconciliation before it was
+  symmetric. Edit detection compares a stored digest of the line as judged
   (`_line_hash`) against the live line — deliberately not a timestamp, since `activity_log`
   has no `updated_at`, `deals.notes` changes without one, and an `updated_at`-vs-`computed_at`
   comparison misses an edit made while the model was running. The bounded list also reports

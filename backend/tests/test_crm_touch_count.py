@@ -1201,6 +1201,48 @@ def test_get_touch_evidence_window_churn_downgrades_even_with_matching_keys(monk
     assert out["verdict_state"] == "stale"      # NOT "current"
 
 
+def test_get_touch_evidence_flags_a_vanished_deal_notes_verdict(monkeypatch):
+    """Clearing a deal-notes field that was judged NOT a touch moves nothing at all: the
+    entry is in neither the watermark nor the evidence count, and dropping a non-touch
+    leaves the touch sum alone. The explanation still claims to cover it, so the footer
+    would read "1 of 3 evaluated" over a two-row list."""
+    judged_deal = {**DEAL, "notes": "Prefers email", "ai_touch_count": 1}
+    items = _items({"activity"}, deal=judged_deal)
+    assert any(i["source"] == "deal_notes" for i in items)      # it WAS judged
+    # ...and the notes field is now empty, so no deal_notes entry is emitted.
+    _patch_evidence(monkeypatch, deal={**DEAL, "notes": None, "ai_touch_count": 1},
+                    payload=_payload(1, items))
+    out = svc.get_touch_evidence(7)
+    assert "deal_notes" not in {e["source"] for e in out["events"]}
+    assert out["evaluated"] == 3 and len(out["events"]) == 2
+    assert out["verdict_state"] == "stale"      # NOT "current"
+
+
+def test_get_touch_evidence_flags_a_vanished_row_on_a_closed_deal(monkeypatch):
+    """The evidence-count check is open-deals-only, so on a closed deal a deleted judged
+    activity (delete_contact removes activity rows belonging to other deals) would
+    otherwise slip through every check."""
+    items = _items({"activity"})
+    _patch_evidence(monkeypatch, activities=[],          # the judged activity is gone
+                    deal={**DEAL, "stage": "won", "ai_touch_count": 1},
+                    payload=_payload(1, items))
+    out = svc.get_touch_evidence(7)
+    # The touch sum DID change here, so this one lands on superseded — the point is that it
+    # is not "current".
+    assert out["verdict_state"] in ("stale", "superseded")
+
+
+def test_get_touch_evidence_vanished_non_touch_row_on_a_closed_deal(monkeypatch):
+    """The exact hole: a NON-touch judged row deleted on a CLOSED deal. The touch sum is
+    unchanged, so superseded cannot fire, and the evidence-count check is skipped."""
+    items = _items({"activity"})                 # note=not_touch, activity=touch
+    _patch_evidence(monkeypatch, chatter=[],     # the judged NON-touch note is gone
+                    deal={**DEAL, "stage": "won", "ai_touch_count": 1},
+                    payload=_payload(1, items))
+    out = svc.get_touch_evidence(7)
+    assert out["verdict_state"] == "stale"       # NOT "current"
+
+
 @pytest.mark.parametrize("bad_digest", [None, "", 12345, {"nope": 1}])
 def test_get_touch_evidence_treats_an_unusable_digest_as_unverifiable(monkeypatch, bad_digest):
     """Every shape of unusable digest must downgrade — an empty string especially, since
