@@ -9,8 +9,8 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../../core/api/client';
 import type { AiTouchEvidenceEvent, AiTouchEvidenceResponse } from '../../core/types';
 import { INK, INK_DIM, INK_MUTE, INK_SOFT, GOLD, LINE, SAGE, mono, tint } from '../../shared/styles';
-import { TOUCH_COLORS, touchBand } from '../constants';
 import { bannerCopy, coverageNote, stateLabel, summaryLine } from '../touchEvidence';
+import { TouchCountPill } from './badges';
 
 /** A verdict-coloured pill, but only for states the AI actually judged. */
 function VerdictMarker({ event, open }: { event: AiTouchEvidenceEvent; open: boolean }) {
@@ -70,7 +70,6 @@ export function AiTouchDetail({ dealId, count }: { dealId: number; count?: numbe
   // snapshot that nothing refreshes after a recompute.
   const shownCount = data?.ai_touch_count ?? count;
   const loading = expanded && !data && !error;
-  const colors = TOUCH_COLORS[touchBand(shownCount)];
   const banner = data ? bannerCopy(data.verdict_state, data.open) : null;
   const coverage = data ? coverageNote(data.truncated) : null;
   const panelId = `ai-touch-detail-${dealId}`;
@@ -89,12 +88,11 @@ export function AiTouchDetail({ dealId, count }: { dealId: number; count?: numbe
         }}
       >
         <span style={{ ...mono(10), color: INK_DIM }}>AI TOUCH COUNT</span>
-        <span style={{
-          ...mono(11), padding: '2px 8px', borderRadius: 4,
-          background: colors.bg, color: colors.color,
-        }}>
-          {shownCount === 1 ? '1 touch' : `${shownCount} touches`}
-        </span>
+        {/* The shared pill, not a local copy: mono() forces uppercase, so a hand-rolled
+            chip renders "4 TOUCHES" next to the board's "4 touches" — the same number in
+            two casings, one click apart. Reusing it also keeps one tooltip and one colour
+            ramp app-wide (the #76 rule). */}
+        <TouchCountPill count={shownCount} />
         <span style={{ ...mono(10), color: INK_DIM, marginLeft: 'auto' }}>
           {expanded ? '▲ evidence' : '▼ evidence'}
         </span>

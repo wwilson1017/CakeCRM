@@ -685,8 +685,13 @@ def test_backfill_cooldown_blocks_repeat_unless_forced(monkeypatch):
 def test_backfill_status_shape(monkeypatch):
     seen = {}
     monkeypatch.setattr(svc, "pg_fetchall", _fetchall_capturing(seen, [{"remaining": 3}]))
+    svc._record_verdict_outcome("ok")
+    svc._record_verdict_outcome("fallback")
     out = svc.backfill_status()
     assert out["remaining_null"] == 3 and "queue_depth" in out
+    # #56: the verdict-health counters are the only signal that a model has stopped
+    # emitting the schema (the badge keeps updating while every detail view goes empty).
+    assert out["verdicts"] == {"ok": 1, "fallback": 1, "failed": 0}
     # Must match start_backfill's candidate set exactly, or "remaining" counts deals
     # the backfill will never queue and the progress signal never reaches zero.
     assert "stage NOT IN ('won', 'lost')" in seen["sql"] and "archived_at IS NULL" in seen["sql"]
@@ -1002,6 +1007,64 @@ def test_worst_case_verdict_reply_fits_smallest_provider_output_ceiling():
     assertion is here so raising MAX_*_EVIDENCE has to confront the ceiling out loud."""
     worst_case_lines = svc.MAX_CHATTER_EVIDENCE + svc.MAX_ACTIVITY_EVIDENCE + 1
     assert 300 + 55 * worst_case_lines <= 3500      # ~85% of the 4096-token ceiling
+
+
+def test_call_llm_wires_the_line_count_into_both_scaled_bounds(monkeypatch):
+    """The P1 coverage gap: nothing exercised _call_llm's n_lines plumbing, so DROPPING the
+    argument — and silently reverting to the bare-count timeout and char cap — would have
+    passed the suite green. Assert the values that actually reach wait_for and _stream_text."""
+    seen = {}
+
+    async def fake_stream(provider, prompt, max_chars=svc.MAX_LLM_RESPONSE_CHARS):
+        seen["max_chars"] = max_chars
+        return '{"touch_count": 1}'
+
+    def fake_wait_for(coro, timeout):
+        seen["timeout"] = timeout
+        return coro
+
+    monkeypatch.setattr(svc, "get_ai_provider", lambda **k: FakeProvider([]))
+    monkeypatch.setattr(svc, "_stream_text", fake_stream)
+    monkeypatch.setattr(svc.asyncio, "wait_for", fake_wait_for)
+
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+    try:
+        svc.capture_event_loop(loop)
+        assert svc._call_llm("p", 40) == '{"touch_count": 1}'
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=2)
+        loop.close()
+
+    assert seen["timeout"] == svc.verdict_timeout(40)
+    assert seen["max_chars"] == svc.response_char_cap(40)
+    # And they must genuinely differ from the unscaled defaults, or the assertions above
+    # would hold even with the plumbing removed.
+    assert seen["timeout"] != svc.LLM_TIMEOUT
+    assert seen["max_chars"] != svc.MAX_LLM_RESPONSE_CHARS
+
+
+def test_recompute_passes_the_real_line_count_to_call_llm(monkeypatch):
+    """The other half of the wiring: recompute must hand _call_llm the number of lines it
+    actually numbered, not a constant."""
+    seen = {}
+    _patch_recompute(monkeypatch, {**DEAL, "notes": "Prefers email"}, CHATTER, ACTIVITIES,
+                     VERDICTS_2)
+    monkeypatch.setattr(svc, "_call_llm",
+                        lambda prompt, n_lines=0: seen.setdefault("n", n_lines) and None
+                        or seen.get("reply"))
+    svc.recompute_touch_count(7)
+    # 1 note + 1 activity + the deal-notes blob.
+    assert seen["n"] == 3
+
+
+def test_response_char_cap_is_itself_capped():
+    """A runaway guard whose ceiling is computed from its own input stops being a guard the
+    moment the evidence window is widened."""
+    assert svc.response_char_cap(10_000) == svc.MAX_LLM_RESPONSE_CHARS_MAX
+    assert svc.response_char_cap(50) < svc.MAX_LLM_RESPONSE_CHARS_MAX   # never binds today
 
 
 def test_verdict_timeout_scales_and_caps():

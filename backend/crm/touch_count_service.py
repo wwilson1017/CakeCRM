@@ -110,6 +110,9 @@ VERDICT_SECONDS_PER_LINE = 1    # ~55 output tokens/line at a pessimistic 60 tok
 # that it is a misbehaving/runaway model — stop reading and distrust it (write nothing).
 MAX_LLM_RESPONSE_CHARS = 2000
 VERDICT_CHARS_PER_LINE = 220
+# Absolute ceiling, comfortably above the current window's worst case (~13 KB) so it never
+# binds in practice — it exists so widening the window cannot silently uncap the guard.
+MAX_LLM_RESPONSE_CHARS_MAX = 32000
 # Process-local double-fire guard for the backfill (not a cross-instance cooldown — this
 # is a single-process deployment). Stops an accidental retry loop / double-click from
 # re-spending on LLM calls; a deliberate re-run passes force=True.
@@ -141,8 +144,15 @@ def verdict_timeout(n_lines: int) -> int:
 
 
 def response_char_cap(n_lines: int) -> int:
-    """Runaway-reply ceiling, scaled by how many verdicts we actually asked for."""
-    return MAX_LLM_RESPONSE_CHARS + VERDICT_CHARS_PER_LINE * max(0, n_lines)
+    """Runaway-reply ceiling, scaled by how many verdicts we actually asked for.
+
+    Capped like verdict_timeout: the line count is bounded by the evidence window today,
+    but a runaway guard whose own ceiling is computed from its input stops being a guard
+    the moment that window is widened."""
+    return min(
+        MAX_LLM_RESPONSE_CHARS + VERDICT_CHARS_PER_LINE * max(0, n_lines),
+        MAX_LLM_RESPONSE_CHARS_MAX,
+    )
 
 
 # --- Recompute queue ------------------------------------------------------

@@ -81,6 +81,17 @@ describe('AiTouchDetail', () => {
     expect(api).not.toHaveBeenCalled();
   });
 
+  it('renders the count in the same casing as the board', () => {
+    // `text-transform` is purely visual, so textContent stays lowercase either way — no
+    // assertion on text could catch this. The bug was a hand-rolled chip built from
+    // mono(), which forces uppercase: "4 TOUCHES" here vs "4 touches" on the pipeline
+    // card, one click apart. Assert the computed property instead.
+    render(<AiTouchDetail dealId={7} count={4} />);
+    const pill = [...container.querySelectorAll('span')]
+      .find(s => s.textContent === '4 touches')!;
+    expect(pill.style.textTransform).toBe('none');
+  });
+
   it('fetches once on expand and lists each event with its verdict and reason', async () => {
     api.mockResolvedValue(response());
     render(<AiTouchDetail dealId={7} count={2} />);
