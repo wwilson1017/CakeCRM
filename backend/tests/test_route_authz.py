@@ -25,6 +25,12 @@ PUBLIC_ROUTES = {
     ("/api/branding/logo", "GET"),        # referenced from <img>/CSS with no header
     ("/api/health", "GET"),
     ("/api/health/live", "GET"),
+    # The SPA fallback — it serves index.html and the built assets, including the
+    # login page itself, so it cannot require a token. Path traversal is guarded in
+    # the handler (is_relative_to). Note it is mounted ONLY when frontend/dist
+    # exists, so this entry is inert in a backend-only checkout and present after a
+    # frontend build; listing it keeps the audit's result the same either way.
+    ("/{path:path}", "GET"),
 }
 
 # Install configuration + destructive/global operations. Members may do everything

@@ -57,6 +57,14 @@ It returns nothing.
 
 ## Data handling
 
+- **The Gmail connection is install-wide, and so is access to it.** CakeCRM has user
+  accounts (issue #60), but exactly one Gmail connection per install — whichever
+  account an admin connected. **Every active seat can have the assistant search and
+  read that mailbox and create drafts in it**, because every seat gets the assistant.
+  Connecting, replacing and disconnecting are admin-only; *using* the connection is
+  not. If that is not what you want, do not connect a personal mailbox to a shared
+  install. Per-user Gmail is the next phase of the multi-user work; the read+draft-only
+  guarantee above is unaffected either way.
 - **BYO OAuth app.** You supply your own Google Cloud OAuth client (client ID +
   secret), entered in-app (never as environment variables). The redirect URI to
   register is shown on the Settings → Gmail card

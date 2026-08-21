@@ -18,6 +18,10 @@ import {
   mono, formatNumber,
 } from '../shared/styles';
 import { sectionHeading, btnSecondary } from './styles';
+import { useUsers } from './useUsers';
+
+const repCell: React.CSSProperties = { padding: '7px 8px', fontWeight: 400, whiteSpace: 'nowrap' };
+const repNum: React.CSSProperties = { ...repCell, textAlign: 'right' };
 
 // Aging-bucket fill color: severity ramp keyed on the numeric lower bound, so a
 // backend label rename can't silently drop a bucket back to the neutral accent. The
@@ -34,6 +38,7 @@ function fmtDay(iso: string): string {
 }
 
 export function CrmDashboardPage() {
+  const { users } = useUsers();
   const [data, setData] = useState<CrmDashboard | null>(null);
   const [analytics, setAnalytics] = useState<CrmAnalytics | null>(null);
   const [loading, setLoading] = useState(true);
@@ -132,6 +137,7 @@ export function CrmDashboardPage() {
   const daily = analytics?.activity.daily ?? [];
   const maxDaily = Math.max(1, ...daily.map(d => d.count));
   const byType = analytics?.activity.by_type ?? [];
+  const perRep = analytics?.per_rep ?? [];
   const maxType = Math.max(1, ...byType.map(t => t.count));
 
   return (
@@ -313,6 +319,55 @@ export function CrmDashboardPage() {
           )}
         </div>
       </div>
+
+      {/* Per-rep (issue #60). Hidden unless the install actually has a team: on one
+          seat every row would just restate the totals above it. */}
+      {analytics && perRep.length > 0 && users.length > 1 && (
+        <div style={{ padding: `10px ${px} 0`, position: 'relative', zIndex: 2 }}>
+          <div style={sectionHeading(INK_SOFT)}>
+            By rep · last {analytics.window_days} days
+          </div>
+          <div style={{ borderTop: `1px solid ${LINE}`, overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ color: INK_SOFT, textAlign: 'left' }}>
+                  <th style={repCell}>Rep</th>
+                  <th style={repNum}>Open</th>
+                  <th style={repNum}>Pipeline</th>
+                  <th style={repNum}>Won</th>
+                  <th style={repNum}>Lost</th>
+                  <th style={repNum} title="Distinct deals, contacts and companies this person touched. Compare reps on this one.">
+                    Records touched
+                  </th>
+                  <th style={repNum} title="Every logged entry. One bulk action can inflate it.">
+                    Activity
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {perRep.map(r => (
+                  <tr key={r.user_id ?? 'unattributed'} style={{ borderTop: `1px solid ${LINE}` }}>
+                    <td style={{ ...repCell, color: r.user_id === null ? INK_SOFT : undefined }}>
+                      {r.name}
+                    </td>
+                    <td style={repNum}>{r.deals_open}</td>
+                    <td style={repNum}>${Math.round(r.open_value).toLocaleString()}</td>
+                    <td style={repNum}>{r.deals_won}</td>
+                    <td style={repNum}>{r.deals_lost}</td>
+                    <td style={repNum}>{r.records_touched}</td>
+                    <td style={{ ...repNum, color: INK_SOFT }}>{r.activity_count}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p style={{ color: INK_SOFT, fontSize: 12, marginTop: 6 }}>
+            Pipeline columns count deals this person owns; the activity columns count
+            work they did, wherever they did it. “Unattributed” is the assistant, the
+            Gmail scan and imported history — nobody is recorded as having done it.
+          </p>
+        </div>
+      )}
 
       {/* Deal aging + activity volume (analytics) */}
       {analytics && (
