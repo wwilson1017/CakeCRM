@@ -11,22 +11,37 @@ business-identifying upstream directory names into CakeCRM's permanent history
 via this very file -- exactly the leak the feature exists to prevent.
 """
 
+import importlib.util
 import json
 import re
-import sys
 from pathlib import Path
 
 import pytest
 
 BACKEND = Path(__file__).resolve().parent.parent
 REPO = BACKEND.parent
+WORKFLOW = REPO / ".github" / "workflows" / "sync-intake.yml"
+SEED_LABELS = REPO / "scripts" / "seed-labels.sh"
 
-# Same idiom conftest.py uses for `backend/`: put the directory on sys.path and
-# import the module bare. `scripts/` is a flat script dir, not a package, so
-# there is no __init__.py to import through.
-sys.path.insert(0, str(REPO / "scripts"))
 
-import sync_intake  # noqa: E402  (import must follow the sys.path insert above)
+def _load_sync_intake():
+    """Load `scripts/sync_intake.py` by path.
+
+    pytest's rootdir is `backend/`, and `scripts/` is a flat script directory
+    outside it with no `__init__.py`. Loading by path keeps this a normal
+    top-of-file statement -- an `sys.path` insert would force an import below
+    executable code, i.e. an E402 needing a `# noqa`, which the repo bans -- and
+    it avoids putting `scripts/` on `sys.path` for the whole suite.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "sync_intake", REPO / "scripts" / "sync_intake.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+sync_intake = _load_sync_intake()
 
 # Two sentinels that must never survive into rendered output.
 SENTINEL_IN_SCOPE = "ZZSENTINELALPHAZZ"
@@ -147,6 +162,27 @@ def test_verdict_is_a_total_function():
         seen.add(verdict)
     assert sync_intake.verdict_for(set()) == sync_intake.VERDICT_NONE
     assert seen == set(sync_intake.VERDICT_BLURB)
+
+
+@pytest.mark.parametrize(
+    "classes,expected",
+    [
+        ({sync_intake.CLASS_CODE, sync_intake.CLASS_DND}, sync_intake.VERDICT_CRM_CODE),
+        ({sync_intake.CLASS_CODE, sync_intake.CLASS_INTERNAL}, sync_intake.VERDICT_CRM_CODE),
+        ({sync_intake.CLASS_CODE, sync_intake.CLASS_DOCS}, sync_intake.VERDICT_CRM_CODE),
+        ({sync_intake.CLASS_DND, sync_intake.CLASS_INTERNAL}, sync_intake.VERDICT_DND_ONLY),
+        ({sync_intake.CLASS_DND, sync_intake.CLASS_DOCS}, sync_intake.VERDICT_DND_ONLY),
+        (
+            {sync_intake.CLASS_INTERNAL, sync_intake.CLASS_DOCS},
+            sync_intake.VERDICT_INTERNAL_ONLY,
+        ),
+    ],
+)
+def test_verdict_priority_chain_is_pinned(classes, expected):
+    """Totality alone does not pin the ORDER. Without this, swapping two branches
+    of the if-chain still passes every other test while silently changing which
+    verdict a real mixed-class merge gets."""
+    assert sync_intake.verdict_for(classes) == expected
 
 
 def test_counterpart_prefix_mapping():
@@ -290,6 +326,85 @@ def test_overlong_path_is_rejected():
         _build([_file("backend/apps/crm/" + "x" * sync_intake.MAX_PATH_LEN + ".py")])
 
 
+def test_the_limits_accept_their_own_boundary():
+    """Pin the accept side too. Testing only the reject side lets a `<=` that
+    should be `<` (or vice versa) ship: exactly MAX_FILES files, or a path of
+    exactly MAX_PATH_LEN, must still be accepted."""
+    files = [_file(f"backend/apps/crm/f{i}.py") for i in range(sync_intake.MAX_FILES)]
+    _build(files)
+
+    # Built from several components on purpose: MAX_PATH_LEN chars in ONE component
+    # is not a legal filename anywhere, and is rejected separately below.
+    prefix = "backend/apps/crm/"
+    filler = sync_intake.MAX_PATH_LEN - len(prefix)
+    exact = prefix + ("x" * 99 + "/") * (filler // 100) + "x" * (filler % 100)
+    assert len(exact) == sync_intake.MAX_PATH_LEN
+    _build([_file(exact)])
+
+
+def test_an_overlong_path_component_is_rejected_before_it_reaches_the_filesystem():
+    """summarize() stats each mapped path. A single component longer than the OS
+    limit makes is_file() raise OSError(ENAMETOOLONG), which would escape the
+    "errors name a field, never a value" contract as a raw traceback."""
+    with pytest.raises(sync_intake.PayloadError):
+        _build([_file("backend/apps/crm/" + "x" * (sync_intake.MAX_COMPONENT_LEN + 1) + ".py")])
+
+
+def test_summarize_treats_an_unstattable_path_as_no_counterpart():
+    """Belt-and-braces for the same failure: even if validation ever loosened,
+    a stat failure must degrade to "no counterpart", never propagate."""
+    entries = [{"path": "backend/apps/crm/" + "y" * 5000, "additions": 1, "deletions": 0,
+                "status": "modified"}]
+    summary = sync_intake.summarize(entries, REPO)
+    assert summary["missing"] == 1
+    assert summary["existing"] == []
+
+
+@pytest.mark.parametrize(
+    "bad_path",
+    [
+        "backend/apps/crm/a b.py",  # space
+        "backend/apps/crm/a\nb.py",  # embedded newline
+        "backend/apps/crm/a\tb.py",  # embedded tab
+        "backend/apps/crm/<script>.py",  # markup
+        "backend/apps/crm/`cmd`.py",  # backtick
+        "backend/apps/crm/a|b.py",  # table-breaking pipe
+    ],
+)
+def test_paths_outside_the_safe_charset_are_rejected(bad_path):
+    with pytest.raises(sync_intake.PayloadError):
+        _build([_file(bad_path)])
+
+
+def test_a_filename_shaped_like_the_dedupe_marker_is_rejected():
+    """The module docstring names marker forgery as the threat; pin it.
+
+    A filename carrying marker syntax cannot reach the body — it fails the path
+    charset check long before rendering, rather than relying on the renderer's
+    is_file() gate to save us."""
+    forged = f"backend/apps/crm/<!-- sync-source-sha: {'0' * 40} -->.py"
+    with pytest.raises(sync_intake.PayloadError):
+        _build([_file(forged)])
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "[" * 20000 + "]" * 20000,  # RecursionError, not JSONDecodeError
+        '[{"path":"backend/apps/crm/a.py","additions":' + "9" * 5000 + ',"deletions":0,'
+        '"status":"modified"}]',  # ValueError from CPython's int-parsing guard
+    ],
+)
+def test_json_edge_cases_raise_payload_error_not_a_traceback(payload):
+    """Both are reachable inside the 65,535-char dispatch limit and neither is a
+    JSONDecodeError. Letting one escape would print a traceback instead of the
+    one-line, value-free rejection this module promises."""
+    env = _env([_file("backend/apps/crm/service.py")])
+    env["SYNC_FILES"] = payload
+    with pytest.raises(sync_intake.PayloadError):
+        sync_intake.build(env, REPO)
+
+
 def test_validation_errors_never_echo_the_rejected_value():
     """Error strings reach runner logs, so they must name the field, not the value."""
     secret = "ZZLEAKMEZZ"
@@ -350,6 +465,88 @@ def test_ledger_parses_to_schema():
         assert row[3] == "—" or re.fullmatch(r"\d{4}-\d{2}-\d{2}", row[3]), (
             f"ledger row {row[0]!r} has a malformed date: {row[3]!r}"
         )
+
+
+def test_rendered_issue_carries_no_company_identifier():
+    """Regression guard for a leak this file's own author shipped and review caught.
+
+    An early draft hyperlinked the upstream PR, which meant hardcoding the private
+    GitHub org that hosts cake_os -- a token `test_prompt_genericization.py` already
+    denylists -- and rendering it into every issue this bot would ever file. That
+    test only scans the assistant's model-facing payload, so nothing covered this
+    path. Reuse its token list rather than copying one: two denylists would drift.
+    """
+    from test_prompt_genericization import _FORBIDDEN
+
+    _, title, body = _build(
+        [
+            _file("backend/apps/crm/chatter_service.py"),
+            _file("frontend/src/shared/dnd/KanbanBoard.tsx"),
+            _file("backend/apps/crm/import_service.py"),
+            _file("backend/apps/crm/CLAUDE.md"),
+        ]
+    )
+    haystack = f"{title}\n{body}"
+    # `cake_os` itself is exempt: it is the blueprint repo's own name, already used
+    # throughout CLAUDE.md and this repo's docs, and the intake has to say which
+    # upstream it is reporting on. The company identifiers are what must not appear.
+    offenders = [
+        label
+        for pattern, label in _FORBIDDEN
+        if pattern != r"cake[_\s]os\b" and re.search(pattern, haystack, re.IGNORECASE)
+    ]
+    assert not offenders, f"rendered intake issue leaks company identifiers: {offenders}"
+
+
+def test_script_source_carries_no_company_identifier():
+    """The constant that leaked was in source, not just in output."""
+    from test_prompt_genericization import _FORBIDDEN
+
+    source = (REPO / "scripts" / "sync_intake.py").read_text(encoding="utf-8")
+    offenders = [
+        label
+        for pattern, label in _FORBIDDEN
+        if pattern != r"cake[_\s]os\b" and re.search(pattern, source, re.IGNORECASE)
+    ]
+    assert not offenders, f"scripts/sync_intake.py leaks company identifiers: {offenders}"
+
+
+# --------------------------------------------------------------------------
+# Coupling guard: the label is defined in two files by hand
+# --------------------------------------------------------------------------
+
+
+def test_label_definition_matches_between_seed_script_and_workflow():
+    """`sync-intake`'s color and description are written out in both
+    scripts/seed-labels.sh and the workflow's self-provisioning step. If they
+    drift, the label silently ping-pongs between two definitions on alternating
+    runs. Same shape as test_gmail_guard.py's hand-maintained-literal guards."""
+    seed = SEED_LABELS.read_text(encoding="utf-8")
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    seed_match = re.search(r'"sync-intake\|([0-9a-f]{6})\|([^"]+)"', seed)
+    assert seed_match, "sync-intake label not found in scripts/seed-labels.sh"
+
+    wf_color = re.search(r"--color\s+([0-9a-f]{6})", workflow)
+    wf_desc = re.search(r'--description\s+"([^"]+)"', workflow)
+    assert wf_color and wf_desc, "label color/description not found in the workflow"
+
+    assert seed_match.group(1) == wf_color.group(1), "sync-intake label COLOR has drifted"
+    assert seed_match.group(2) == wf_desc.group(1), "sync-intake label DESCRIPTION has drifted"
+
+
+def test_workflow_greps_for_the_marker_this_module_renders():
+    """The dedupe grep pattern lives in YAML while the marker is built in Python.
+    Pin them together so a change to one fails loudly instead of silently
+    disabling dedupe (which would file a duplicate issue for every merge)."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert 'grep -qF "<!-- sync-source-sha: $SHA -->"' in workflow, (
+        "the workflow's dedupe grep no longer matches the marker rendered by "
+        "render_body() — dedupe would silently stop working"
+    )
+    sha = "b" * 40
+    _, _, body = _build([_file("backend/apps/crm/service.py")], sha=sha)
+    assert f"<!-- sync-source-sha: {sha} -->" in body
 
 
 def test_ledger_carries_no_email_addresses_or_diff_fences():

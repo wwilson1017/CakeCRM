@@ -114,9 +114,9 @@ Portability is not decidable from a path: an Odoo-only edit inside `router.py` c
 verdict tells you whether to *look*, never whether to *port*.
 
 `shared-dnd-only` deserves its own note: that module has **13 non-CRM consumers** in cake_os
-(bakery-scheduler, maintenance, plm, projects, rd-pipeline, sops, plus `shared/collection`
-and `shared/listview`) against one CRM consumer. A dnd-only change is far more likely
-platform work, so it does not read as a CRM signal.
+against one CRM consumer — CRM is 1 of 14. A dnd-only change is far more likely platform
+work, so it does not read as a CRM signal. (The consumers are named nowhere in this repo on
+purpose: upstream app names describe the business, and this repo is public.)
 
 Every merge files an issue whatever the verdict — even `no-watched-files`. Silence would be
 ambiguous (did the bot fire, or crash?), and the issue is both the dedupe anchor and the
@@ -137,6 +137,20 @@ one that loses data.
 `SYNC_LEDGER.md` is *not* consulted at runtime: its rows carry a short SHA, so the check
 would be inexact, and it would turn a reviewed document into a second database.
 
+**Two residual risks, named rather than papered over.** Both assume an attacker already
+holds dispatch access — i.e. the sender token leaked, or a CakeCRM collaborator went bad —
+and neither can leak data or push code; the ceiling is issue-tracker noise.
+
+- *Spam.* Since the payload is only syntax-checked, a fresh fabricated SHA per call defeats
+  dedupe and files unlimited intake issues. Accepted: the blast radius is triage time, and
+  the fix (an HMAC field, or a rate cap) buys little against a threat model where the token
+  is already compromised.
+- *Suppression.* The marker binds to the SHA alone, so pre-filing an intake for a SHA that a
+  future merge will carry would cause the real dispatch to be skipped as a duplicate. This
+  needs the attacker to predict a commit SHA in advance, which is not practical — noted for
+  completeness. Binding the marker to a hash of SHA + verdict + counts would close it if the
+  precondition ever became realistic.
+
 ---
 
 ## 3. Payload contract (the binding allowlist)
@@ -153,9 +167,12 @@ not an accident, since every added field is a new place prose could hide.
 
 Per entry:
 
-- `path` — relative, no `..` segment, no backslashes, no leading/trailing whitespace, ≤400
-  characters. Paths outside the watched roots are **accepted and dropped**, not rejected: the
-  sender may legitimately post its whole changed-file list.
+- `path` — relative, no `..` segment, characters limited to `[A-Za-z0-9._/-]`, ≤400 characters
+  total and ≤255 per component. The charset bars whitespace, control characters, and anything
+  with Markdown or HTML meaning; the per-component bound exists because the classifier `stat`s
+  each mapped path, and an over-long single name would otherwise raise `ENAMETOOLONG` instead
+  of a clean rejection. Paths outside the watched roots are **accepted and dropped**, not
+  rejected: the sender may legitimately post its whole changed-file list.
 - `additions` / `deletions` — non-negative integers. Checked with `type(v) is int`, not
   `isinstance`, because `bool` subclasses `int` and `True` would otherwise pass as a count.
 - `status` — one of GitHub's fixed values (`added`, `modified`, `removed`, `renamed`,

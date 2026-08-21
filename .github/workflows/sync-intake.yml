@@ -61,8 +61,14 @@ jobs:
       # design does not have.)
       - name: Refuse non-main refs
         if: github.ref != 'refs/heads/main'
+        # Via env, not `${{ }}` inside the script — same rule as the payload below.
+        # A ref name cannot currently be hostile (creating one needs Contents:write,
+        # which the sender's token lacks), but the workflow shouldn't have one rule
+        # for untrusted values and an exception three lines away.
+        env:
+          DISPATCHED_REF: ${{ github.ref }}
         run: |
-          echo "::error::sync-intake must be dispatched against main (got ${{ github.ref }})"
+          echo "::error::sync-intake must be dispatched against main (got $DISPATCHED_REF)"
           exit 1
 
       - name: Checkout

@@ -63,10 +63,24 @@ VALID_STATUSES: frozenset[str] = frozenset(
 
 MAX_FILES = 500
 MAX_PATH_LEN = 400
+# No filesystem allows a longer single name, and `summarize()` stats these paths:
+# a 400-char path in ONE component is legal by MAX_PATH_LEN but makes is_file()
+# raise OSError(ENAMETOOLONG), which would escape the PayloadError contract.
+MAX_COMPONENT_LEN = 255
 SHA_RE = re.compile(r"\A[0-9a-fA-F]{40}\Z")
 PR_RE = re.compile(r"\A[1-9][0-9]{0,6}\Z")
+# Conservative path charset. Rejecting control characters and anything with
+# Markdown/HTML meaning is defense in depth: rendering is already gated on an
+# exact is_file() match against this repo, but that invariant lives in the
+# renderer, and validation should not depend on it holding forever.
+PATH_RE = re.compile(r"\A[A-Za-z0-9._/-]+\Z")
 
-CAKEOS_PR_URL = "https://github.com/tncheesecake/cake_os/pull/{pr}"
+# Deliberately NOT a hyperlink to the upstream PR. Building one would require
+# hardcoding the private org that hosts cake_os, which `test_prompt_genericization.py`
+# already denylists as a company identifier -- and this repo goes public with
+# permanent history. Rendering the org into every issue is exactly the disclosure
+# this feature exists to prevent, so the reader opens the PR from their own clone.
+# `test_sync_intake.py` pins this with a company-token scan over the rendered body.
 
 # Per-file classes, and the verdicts derived from them. The verdicts are
 # deliberately FACTUAL rather than portability judgments: portability is not
@@ -150,8 +164,12 @@ def _validate_path(path: str, field: str) -> str:
     _require(len(path) <= MAX_PATH_LEN, field, f"exceeds {MAX_PATH_LEN} characters")
     _require(not path.startswith("/"), field, "must be relative")
     _require(".." not in path.split("/"), field, "must not contain a '..' segment")
-    _require("\\" not in path, field, "must use forward slashes")
-    _require(path == path.strip(), field, "must not have leading or trailing whitespace")
+    _require(bool(PATH_RE.match(path)), field, "contains characters outside [A-Za-z0-9._/-]")
+    _require(
+        all(len(part) <= MAX_COMPONENT_LEN for part in path.split("/")),
+        field,
+        f"has a path component longer than {MAX_COMPONENT_LEN} characters",
+    )
     return path
 
 
@@ -167,7 +185,12 @@ def parse_files(raw: str) -> list[dict]:
     """Validate the `files` input and return normalized entries."""
     try:
         data = json.loads(raw or "")
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, RecursionError, ValueError) as exc:
+        # Not just JSONDecodeError: deeply nested JSON raises RecursionError, and an
+        # absurdly long integer literal raises ValueError from CPython's int-parsing
+        # guard. Both are reachable well inside the 65,535-char dispatch limit, and
+        # letting either escape would print a traceback instead of the one-line,
+        # value-free rejection this module promises.
         raise PayloadError("files: must be valid JSON") from exc
 
     _require(isinstance(data, list), "files", "must be a JSON array")
@@ -251,6 +274,13 @@ def counterpart(path: str) -> str | None:
     return None
 
 
+def _is_file(path: Path) -> bool:
+    try:
+        return path.is_file()
+    except OSError:
+        return False
+
+
 def summarize(entries: list[dict], repo_root: Path) -> dict:
     """Classify the payload and resolve which counterparts actually exist here."""
     counts = {CLASS_CODE: 0, CLASS_DND: 0, CLASS_DOCS: 0, CLASS_INTERNAL: 0}
@@ -266,7 +296,11 @@ def summarize(entries: list[dict], repo_root: Path) -> dict:
             continue
         mapped = counterpart(entry["path"])
         # is_file(), not exists(): a directory sharing the name is not a counterpart.
-        if mapped and (repo_root / mapped).is_file():
+        # The filesystem is an external boundary, so a stat failure means "no
+        # counterpart" rather than an exception — validation bounds path and
+        # component length, but this must not be the only thing standing between a
+        # crafted path and an uncaught OSError.
+        if mapped and _is_file(repo_root / mapped):
             existing.append((mapped, entry["status"]))
         else:
             missing += 1
@@ -295,8 +329,7 @@ def render_body(pr: int, sha: str, merged_at: str, summary: dict) -> str:
         "",
         f"**Verdict:** `{summary['verdict']}` — {VERDICT_BLURB[summary['verdict']]}",
         "",
-        f"**Source:** cake_os PR [#{pr}]({CAKEOS_PR_URL.format(pr=pr)}) · "
-        f"merged {merged_at} · `{sha[:7]}`",
+        f"**Source:** cake_os PR #{pr} · merged {merged_at} · `{sha[:7]}`",
         "",
         "| In-scope files | Count |",
         "|---|---|",
@@ -335,7 +368,9 @@ def render_body(pr: int, sha: str, merged_at: str, summary: dict) -> str:
     lines += [
         "### Next steps",
         "",
-        "1. Open the cake_os PR above and decide whether the change is worth porting.",
+        "1. Open that PR in your own cake_os clone and decide whether it is worth porting. "
+        "(Deliberately not linked — a URL would name the private org that hosts cake_os, "
+        "and this repo is public.)",
         "2. If it is, label this issue `greenlit` and the normal `/auto-issues` pipeline "
         "ports it — reading cake_os source from the local clone, never from this issue.",
         "3. The port PR adds its own row to `SYNC_LEDGER.md`.",
