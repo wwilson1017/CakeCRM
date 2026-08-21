@@ -13,6 +13,8 @@ import logging
 import re
 from datetime import datetime, timedelta, timezone
 
+import psycopg2
+
 from core.postgres import get_connection, pg_execute, pg_fetchall, pg_fetchone
 from crm import chatter_service, field_service, scoring_service, touch_count_service
 
@@ -779,7 +781,11 @@ def _classify_deal_update(
     # caller's call.
     if new_stage != old_stage and new_stage in ("won", "lost"):
         filtered = {**filtered, "probability": 100 if new_stage == "won" else 0}
-    return filtered, (old_stage, new_stage) if new_stage != old_stage else None
+    # Copy unconditionally: when neither branch above fires, `filtered` is still the
+    # caller's own dict, and bulk_move_deals then stamps `updated_at` into what it gets
+    # back. That is safe today only because bulk builds a fresh literal per iteration —
+    # returning a copy means it stays safe for the next caller too.
+    return dict(filtered), (old_stage, new_stage) if new_stage != old_stage else None
 
 
 def _write_deal_update(deal_id: int, filtered: dict) -> bool:
@@ -1020,9 +1026,17 @@ def bulk_move_deals(deal_ids: list[int], stage: str) -> dict:
     (and bumps ``updated_at``) even when the stage is unchanged. The shared classifier
     guarantees the two paths agree on WHAT to write; it does not decide WHETHER to write,
     and only bulk skips the no-op. Aligning the single-deal path would change behavior
-    predating this issue, so it is deliberately left alone — and the UI never sends a
-    same-stage move anyway (``handleKanbanMove`` returns early on a same-column drop and
-    the detail sheet checks ``deal.stage !== stage``).
+    predating this issue, so it is deliberately left alone.
+
+    Don't read that as "unreachable" — it isn't. The *UI* never sends a same-stage move
+    (``handleKanbanMove`` returns early on a same-column drop and the detail sheet checks
+    ``deal.stage !== stage``), but two non-UI callers do reach it: ``crm_update_deal_stage``
+    re-asserting a deal's current stage (an easy assistant redundancy) and
+    ``PUT /api/crm/deals/{id}`` with an unchanged stage. Both bump ``updated_at`` and so
+    reset that deal's staleness clock for the whole window, dropping it out of
+    ``get_stale_deals`` and the heartbeat nudges with nothing actually changed. Fixing it
+    belongs with the single-deal path; note the parity integration test has no same-stage
+    case, so nothing currently catches it.
     """
     if stage not in DEAL_STAGES:
         return {"ok": False, "updated": 0, "updated_ids": [], "errors": [f"Invalid stage: {stage}"]}
@@ -1032,9 +1046,11 @@ def bulk_move_deals(deal_ids: list[int], stage: str) -> dict:
     if not ids:
         return {"ok": False, "updated": 0, "updated_ids": [], "errors": ["No deal IDs provided"]}
     # Checked here rather than at each entry point so every caller — REST, agent tool, any
-    # future one — gets it. A real id is always a positive int; anything else is a client
-    # bug worth naming instead of quietly reporting "not found" for id 0.
-    if any(i <= 0 for i in ids):
+    # future one — gets it. The isinstance half matters as much as the range half: a bare
+    # `i <= 0` raises TypeError on a str or None, which would make this a 500 instead of a
+    # refusal and leave the guard depending on callers having type-checked first. `bool` is
+    # excluded explicitly because isinstance(True, int) is True.
+    if any(isinstance(i, bool) or not isinstance(i, int) or i <= 0 for i in ids):
         return {"ok": False, "updated": 0, "updated_ids": [],
                 "errors": ["Deal IDs must be positive integers"]}
     if len(ids) > BULK_MOVE_MAX:
@@ -1047,60 +1063,81 @@ def bulk_move_deals(deal_ids: list[int], stage: str) -> dict:
     contact_ids: list[int] = []
     now = _now()
 
-    with get_connection() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT id, stage, archived_at, contact_id FROM deals WHERE id = ANY(%s) "
-            "ORDER BY id FOR UPDATE",
-            (ids,),
-        )
-        # Positional access, matching _write_deal_update: the raw cursor returns tuples.
-        rows_by_id = {r[0]: (r[1], r[2], r[3]) for r in cur.fetchall()}
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            # Bound the wait, same idiom and reason as dreaming.processor. This is the
+            # longest lock-holding transaction in the app: Postgres locks the matched rows
+            # one at a time in id order, so a batch blocked on the 50th deal is already
+            # HOLDING the previous 49 — and without a timeout it holds them for as long as
+            # the blocker lives. Every single-deal write, archive and rescore on those deals
+            # then queues behind it until the 10-slot pool fills and get_connection's
+            # semaphore stops serving requests at all. _write_deal_update has the same
+            # exposure over one row; this has it over up to BULK_MOVE_MAX.
+            cur.execute("SET LOCAL lock_timeout = '10s'")
+            cur.execute("SET LOCAL statement_timeout = '30s'")
+            cur.execute(
+                "SELECT id, stage, archived_at, contact_id FROM deals WHERE id = ANY(%s) "
+                "ORDER BY id FOR UPDATE",
+                (ids,),
+            )
+            # Positional access, matching _write_deal_update: the raw cursor returns tuples.
+            # Converted BEFORE the next execute() — cursor.description is per-statement, so
+            # deferring this would read the wrong column metadata.
+            rows_by_id = {r[0]: (r[1], r[2], r[3]) for r in cur.fetchall()}
 
-        for did in ids:
-            row = rows_by_id.get(did)
-            if row is None:
-                errors.append(f"Deal {did} not found")
-                continue
-            old_stage, archived_at, contact_id = row
-            if old_stage == stage:
-                continue  # already there — see the docstring on why this writes nothing
-            try:
-                fields, stage_event = _classify_deal_update(
-                    did, old_stage, archived_at, {"stage": stage}
+            for did in ids:
+                row = rows_by_id.get(did)
+                if row is None:
+                    errors.append(f"Deal {did} not found")
+                    continue
+                old_stage, archived_at, contact_id = row
+                if old_stage == stage:
+                    continue  # already there — see the docstring on why this writes nothing
+                try:
+                    fields, stage_event = _classify_deal_update(
+                        did, old_stage, archived_at, {"stage": stage}
+                    )
+                except ValueError as e:
+                    errors.append(str(e))
+                    continue
+                fields["updated_at"] = now
+                write_plan[did] = fields
+                if stage_event:
+                    stage_events.append((did, stage_event[0], stage_event[1]))
+                if contact_id:
+                    contact_ids.append(contact_id)
+
+            # Grouped set-based flush: deals sharing an identical column/value map share one
+            # statement, so a plain stage move collapses to a single UPDATE regardless of
+            # batch size (the realistic worst case is three groups — plain movers, movers
+            # leaving 'lost', and movers closing). Column names come from
+            # _classify_deal_update and are fixed literals (stage, lost_reason, probability,
+            # updated_at), so the f-string interpolates only safe identifiers; values stay bound.
+            groups: dict[tuple, list[int]] = {}
+            for did, fields in write_plan.items():
+                groups.setdefault(tuple(sorted(fields.items())), []).append(did)
+            for shape, group_ids in groups.items():
+                cur.execute(
+                    f"UPDATE deals SET {', '.join(f'{c} = %s' for c, _ in shape)} WHERE id = ANY(%s)",
+                    [v for _, v in shape] + [group_ids],
                 )
-            except ValueError as e:
-                errors.append(str(e))
-                continue
-            fields["updated_at"] = now
-            write_plan[did] = fields
-            if stage_event:
-                stage_events.append((did, stage_event[0], stage_event[1]))
-            if contact_id:
-                contact_ids.append(contact_id)
 
-        # Grouped set-based flush: deals sharing an identical column/value map share one
-        # statement, so a plain stage move collapses to a single UPDATE regardless of
-        # batch size (the realistic worst case is three groups — plain movers, movers
-        # leaving 'lost', and movers closing). Column names come from
-        # _classify_deal_update and are fixed literals (stage, lost_reason, probability,
-        # updated_at), so the f-string interpolates only safe identifiers; values stay bound.
-        groups: dict[tuple, list[int]] = {}
-        for did, fields in write_plan.items():
-            groups.setdefault(tuple(sorted(fields.items())), []).append(did)
-        for shape, group_ids in groups.items():
-            cur.execute(
-                f"UPDATE deals SET {', '.join(f'{c} = %s' for c, _ in shape)} WHERE id = ANY(%s)",
-                [v for _, v in shape] + [group_ids],
-            )
-
-        if stage_events:
-            cur.execute(
-                "INSERT INTO deal_stage_events (deal_id, old_stage, new_stage) "
-                "SELECT * FROM unnest(%s::int[], %s::text[], %s::text[])",
-                ([e[0] for e in stage_events], [e[1] for e in stage_events],
-                 [e[2] for e in stage_events]),
-            )
+            if stage_events:
+                cur.execute(
+                    "INSERT INTO deal_stage_events (deal_id, old_stage, new_stage) "
+                    "SELECT * FROM unnest(%s::int[], %s::text[], %s::text[])",
+                    ([e[0] for e in stage_events], [e[1] for e in stage_events],
+                     [e[2] for e in stage_events]),
+                )
+    except (psycopg2.errors.LockNotAvailable, psycopg2.errors.QueryCanceled):
+        # Either timeout fired, so the transaction rolled back and NOTHING was written.
+        # Answered as a refusal rather than raising: an honest "nothing happened, try again"
+        # is strictly better than a 500, which the board would have to treat as an unknown
+        # outcome and refuse to revert.
+        logger.warning("bulk_move_deals timed out waiting on row locks for %d deals", len(ids))
+        return {"ok": False, "updated": 0, "updated_ids": [],
+                "errors": ["Those deals are busy right now — try again in a moment"]}
 
     updated_ids = [did for did in ids if did in write_plan]
     # After commit, same rule and reason as _write_deal_update: a scoring read inside
@@ -2103,8 +2140,9 @@ def _truncate_all(cur, include_definitions: bool = False) -> None:
     # touching provenance), so it inverts against no writer either.
     # deal_stage_events trails everything: it is the one CRM table with a real FK to
     # deals, so Postgres REQUIRES it in the same TRUNCATE statement (truncating a
-    # referenced table alone errors out). Its only writer, _write_deal_update, locks
-    # the deals row first, so a later position can't invert against it.
+    # referenced table alone errors out). Both its writers — _write_deal_update and
+    # bulk_move_deals (#55) — lock the deals row(s) first, so a later position can't
+    # invert against either.
     # proactive_nudges (#22 Phase 3) goes last. Like crm_field_values it is polymorphic
     # and carries NO FK, so nothing cascades it — it MUST be swept explicitly or a
     # reseeded CRM inherits the old per-record nudge cooldowns and stays silent about

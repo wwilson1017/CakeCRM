@@ -9,6 +9,7 @@ that the rules come from ``_classify_deal_update`` (the shared classifier) rathe
 second copy, and that the stage-event INSERT rides the same cursor as the deal UPDATEs.
 """
 
+import psycopg2
 import pytest
 
 from crm import scoring_service, service
@@ -108,14 +109,60 @@ def test_a_plain_batch_collapses_to_one_update_and_one_event_insert(monkeypatch,
     assert result == {"ok": True, "updated": 3, "updated_ids": [1, 2, 3], "errors": []}
 
 
-def test_the_audit_insert_rides_the_same_cursor_as_the_deal_updates(monkeypatch, fake_conn, no_scoring):
-    """#1274: deals and their stage history commit together or not at all. Both
-    statements landing on the one recorded cursor IS that guarantee, hermetically."""
+def test_the_audit_insert_rides_the_same_transaction_as_the_deal_updates(monkeypatch, fake_conn, no_scoring):
+    """#1274: deals and their stage history commit together or not at all.
+
+    Asserting merely that both statements ran would NOT pin this — one FakeConn is reused
+    for every ``with get_connection()`` block, so splitting the deal UPDATE and the audit
+    INSERT into two transactions (exactly the "deals moved, history missing" regression)
+    would leave that version of the test green. So this asserts the transaction SHAPE:
+    one connection entry, one cursor, and both statements on it.
+    """
     conn = fake_conn(monkeypatch, service, fetchall_results=_rows((1, "lead", None, None)))
     service.bulk_move_deals([1], "won")
-    kinds = [s for s, _ in conn.executed]
-    assert any("UPDATE deals SET" in s for s in kinds)
-    assert any("INSERT INTO deal_stage_events" in s for s in kinds)
+
+    stmts = [s for s, _ in conn.executed]
+    update_at = next(i for i, s in enumerate(stmts) if "UPDATE deals SET" in s)
+    audit_at = next(i for i, s in enumerate(stmts) if "INSERT INTO deal_stage_events" in s)
+    assert conn.entries == 1, "the whole write must be ONE transaction"
+    assert conn.cursors == 1, "one cursor — a second would mean a second transaction"
+    assert conn.executed_by[update_at] == conn.executed_by[audit_at], \
+        "the audit INSERT must ride the same cursor as the deal UPDATE"
+
+
+def test_the_lock_wait_is_bounded(monkeypatch, fake_conn, no_scoring):
+    """This transaction holds up to BULK_MOVE_MAX row locks while it works; an unbounded
+    wait would let one stalled writer park them all and exhaust the connection pool."""
+    conn = fake_conn(monkeypatch, service, fetchall_results=_rows((1, "lead", None, None)))
+    service.bulk_move_deals([1], "qualified")
+    stmts = [s for s, _ in conn.executed]
+    assert "SET LOCAL lock_timeout = '10s'" in stmts
+    assert "SET LOCAL statement_timeout = '30s'" in stmts
+    # Must precede the locking SELECT, or the wait it is meant to bound already happened.
+    assert stmts.index("SET LOCAL lock_timeout = '10s'") < \
+        next(i for i, s in enumerate(stmts) if "FOR UPDATE" in s)
+
+
+@pytest.mark.parametrize("exc", [
+    psycopg2.errors.LockNotAvailable, psycopg2.errors.QueryCanceled,
+])
+def test_a_timeout_is_reported_as_a_refusal_not_a_crash(monkeypatch, exc, no_scoring):
+    """The transaction rolled back, so NOTHING was written — that is a refusal the board can
+    revert from. Raising instead would surface as a 500, which the client must treat as an
+    unknown outcome and refuse to revert, leaving a wrong board on screen."""
+    from contextlib import contextmanager
+
+    @contextmanager
+    def boom():
+        raise exc("canceling statement due to lock timeout")
+        yield  # unreachable; makes this a generator
+
+    monkeypatch.setattr(service, "get_connection", boom)
+    result = service.bulk_move_deals([1, 2], "qualified")
+    assert result["ok"] is False
+    assert result["updated"] == 0 and result["updated_ids"] == []
+    assert "try again" in result["errors"][0]
+    assert no_scoring == [], "nothing committed, so nothing to rescore"
 
 
 def test_groups_split_when_a_deal_leaves_lost_and_clears_its_reason(monkeypatch, fake_conn, no_scoring):
