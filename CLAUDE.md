@@ -185,8 +185,29 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   env password. That table is vestigial and a later release drops it.
   `AUTH_PASSWORD_RESET` now also re-activates the target admin and **clears their
   2FA** — a password-only rescue cannot help an operator who lost their
-  authenticator. 2FA itself is re-keyed per user, and enabling or disabling it wipes
-  that user's trusted devices in the SAME transaction.
+  authenticator. The same reasoning gives `POST /api/users/{id}/password` an **opt-in**
+  `clear_two_factor`, which is the only recovery for a MEMBER who lost both their
+  authenticator and their backup codes; it is opt-in rather than automatic because it
+  genuinely weakens that account. That route also **refuses a self-reset** — it skips
+  the current-password and 2FA checks `/api/auth/change-password` enforces, which is
+  right for helping a colleague and wrong as a second, weaker self-service path. 2FA
+  itself is re-keyed per user, and enabling or disabling it wipes that user's trusted
+  devices in the SAME transaction — as does a password change, which is one
+  transaction covering the hash, the epoch bump and the revocation.
+  **The upgrade is a one-way door.** The migration drops `totp_config.id`, so a
+  pre-#60 binary cannot complete a login for a 2FA account afterwards; rolling back
+  means restoring a `pg_dump`, and the README says so. Preserving `auth_credential`
+  buys only that an old process would still check the credential the user chose
+  rather than the stale `AUTH_PASSWORD` — it does not make the schema reversible.
+  Login is rate-limited **per account and per IP** (10/5min and 50/5min): a single
+  per-IP bucket is a denial of service on your own team, since one office shares a
+  NAT address. `login`, `/api/me`, change-password and the `/api/users` handlers are
+  sync `def`s for the same reason `get_current_user` is — they do blocking psycopg2
+  and bcrypt work and would otherwise run it on the event loop.
+  In the UI, `SettingsPage` hides the install-configuration cards (branding,
+  Telegram, custom fields, Gmail) from members, the way the Team card hides itself;
+  Notifications and Change password stay, because they configure the person, not the
+  install.
   **Still install-wide, deliberately (Phase B):** assistant chat history and memory,
   the Gmail connection, the Telegram binding, reminders, notifications and alerts.
   Every active seat gets the assistant (Will's §15 ruling — no temporary admin gate
@@ -444,7 +465,12 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 - **CI** (`.github/workflows/ci.yml`) runs on every PR to `main` and on `push` to
   `main`, in three jobs: **backend** (`ruff check .` → import check → `python -m
   pytest -q`, from `backend/`), **frontend** (`npm ci` → `npm run build` → `npm run
-  lint` → `npm test`), and **secret-scan** (gitleaks). Backend lint config is `backend/ruff.toml`
+  lint` → `npm test`), and **secret-scan** (gitleaks). The scan runs `gitleaks git .` over FULL history, so
+  a false positive stays found forever once committed and cannot be fixed by editing
+  the tip. `.gitleaks.toml` keeps the whole default ruleset (`extend.useDefault`) and
+  allowlists individual verified-false findings by exact `commit:file:rule:line`
+  fingerprint, with the reasoning written down — the alternative being a force-push,
+  which this repo does not do. Backend lint config is `backend/ruff.toml`
   (select `F,E,W,I`; `E501` ignored); dev/CI tooling is pinned in
   `backend/requirements-dev.txt`; tests live in `backend/tests/`. The import check
   imports the app with no `DATABASE_URL` (the Postgres pool inits in the lifespan
