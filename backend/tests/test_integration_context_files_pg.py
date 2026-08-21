@@ -61,15 +61,26 @@ def clean(pg_db):
 
 
 def test_migration_seeds_the_two_protected_files(pg_db):
+    from assistant.identity import DEFAULT_SOUL
     from context_files import service
+    from core.postgres import pg_fetchone
 
     for name in ("soul.md", "MEMORY.md"):
         row = service.read_file(name)
         assert row is not None, f"{name} should be seeded by the migration"
         assert row["is_protected"] is True
-        # Seeded EMPTY on purpose: the default text lives in identity.DEFAULT_SOUL so a
-        # later boot can never overwrite a soul the user or assistant rewrote.
-        assert row["content"] == ""
+        # STORED empty on purpose, checked against the column rather than through
+        # read_file: the default text lives in identity.DEFAULT_SOUL so a later boot can
+        # never overwrite a soul the user or the assistant rewrote.
+        stored = pg_fetchone(
+            "SELECT content FROM assistant_context_files WHERE filename = %s", (name,)
+        )
+        assert stored["content"] == ""
+
+    # ...but a READ of the blank soul resolves the built-in text, so the prompt, the
+    # assistant's own read tool and the Memory editor all show the identity that is live.
+    assert service.read_file("soul.md")["content"] == DEFAULT_SOUL
+    assert service.read_file("MEMORY.md")["content"] == ""
 
 
 def test_kind_is_generated_and_cannot_drift(pg_db):

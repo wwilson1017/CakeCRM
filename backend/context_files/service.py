@@ -221,12 +221,24 @@ def list_files(kind: str | None = None, include_archived: bool = False, limit: i
 
 def read_file(filename: str) -> dict | None:
     """One file with its body, or None. Archived files ARE returned — the Memory UI must
-    still be able to show and restore something dreaming put away."""
+    still be able to show and restore something dreaming put away.
+
+    A blank ``soul.md`` resolves to the built-in ``identity.DEFAULT_SOUL``. Resolving it
+    HERE rather than only where the prompt is built is what keeps the three views
+    honest: otherwise the system prompt carries the default text while the assistant's
+    own ``read_context_file`` and the Memory editor both show an empty file — so Baker
+    would be governed by identity text it cannot see, and the user would be shown a
+    document that is not what is running.
+    """
     name = normalize_filename(filename)
-    return pg_fetchone(
+    row = pg_fetchone(
         f"SELECT {_COLUMNS}, archived_at FROM assistant_context_files WHERE filename = %s",
         (name,),
     )
+    if row and name == SOUL_FILE and not (row.get("content") or "").strip():
+        from assistant.identity import DEFAULT_SOUL
+        row["content"] = DEFAULT_SOUL
+    return row
 
 
 def read_daily_note(day: str | None = None) -> str:
@@ -381,14 +393,28 @@ def append_daily_note(content: str, day: str | None = None,
     # date and time headings, so it resolves to the FIRST entry's first line — which no
     # later append changes. Recomputing it would need the merged body back from the DB,
     # turning an atomic upsert into a read-modify-write for a value that cannot differ.
-    pg_execute(
+    # The size guard lives in the WHERE of the upsert, not in Python: checking the merged
+    # length beforehand would need a read first, reopening the race this single statement
+    # exists to close. Capping only the new entry (as this first did) lets a note grow
+    # without bound across many valid appends until Postgres fails building search_tsv.
+    appended = pg_execute(
         "INSERT INTO assistant_context_files (filename, content, headline, written_by) "
         "VALUES (%s, %s, %s, %s) "
         "ON CONFLICT (filename) DO UPDATE SET "
         "  content = rtrim(assistant_context_files.content, E' \\n\\t') || %s, "
-        "  written_by = EXCLUDED.written_by, archived_at = NULL, updated_at = now()",
-        (name, first, _first_headline(first), written_by, "\n" + entry),
+        "  written_by = EXCLUDED.written_by, archived_at = NULL, updated_at = now() "
+        "WHERE length(assistant_context_files.content) + %s <= %s",
+        (name, first, _first_headline(first), written_by,
+         "\n" + entry, len(entry) + 1, MAX_FILE_CHARS),
     )
+    if not appended:
+        # An INSERT always reports one row, so zero means the conflict path ran and its
+        # WHERE rejected the append — the note is full.
+        raise ContextFileError(
+            f"Today's note has reached the {MAX_FILE_CHARS}-character limit; "
+            "record this in a topic file instead.",
+            code="too_large",
+        )
     return {"filename": name, "date": day_str, "ok": True}
 
 

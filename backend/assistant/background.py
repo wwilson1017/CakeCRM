@@ -30,6 +30,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 
+from assistant import delimiters
 from assistant.write_budget import WRITE_BUDGET_BACKGROUND, BudgetAction, BudgetState
 from providers import get_ai_provider
 
@@ -167,7 +168,11 @@ async def _run_turn(provider, registry, system_prompt, user_message: str,
             else:
                 result = await registry.execute_tool(name, args)
 
-            content = json.dumps(result, default=str)
+            # Fence exactly as the interactive loop does. An unattended turn has no human
+            # to notice a planted instruction, and its read allowlist reaches both Gmail
+            # and Baker's context files — a stored `Headline:` line is attacker-authored
+            # text that must arrive as DATA, not as raw JSON (issue #72).
+            content = delimiters.fence_tool_result(name, json.dumps(result, default=str))
             results.append({"tool_use_id": tool_use_id, "tool_name": name, "content": content})
             tool_log.append({"tool": name, "args": _short(args, 200), "result": _short(result, 500)})
             if terminated:

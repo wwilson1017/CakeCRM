@@ -91,10 +91,17 @@ async def dreaming_runs(
 
     Read directly rather than through a service call: ``dreaming`` exposes no list API,
     and inventing one for a single read-only table would be more code than the query.
+
+    Columns are listed explicitly, NOT ``SELECT *``. ``dreaming_runs.details`` embeds the
+    top-scoring facts' ids and subjects, so returning it would let a fact the user
+    hard-deleted for being wrong or private stay readable in an audit row — which would
+    quietly contradict what DELETE /facts/{id} promises.
     """
     runs = await run_in_threadpool(
         pg_fetchall,
-        "SELECT * FROM dreaming_runs ORDER BY id DESC LIMIT %s",
+        "SELECT id, started_at, finished_at, status, facts_scored, facts_archived, "
+        "       duration_ms, error "
+        "FROM dreaming_runs ORDER BY id DESC LIMIT %s",
         (limit,),
     )
     return {"runs": runs, "count": len(runs)}

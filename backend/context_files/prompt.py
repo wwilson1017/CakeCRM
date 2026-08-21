@@ -37,15 +37,24 @@ logger = logging.getLogger(__name__)
 # Chatty's MAX_CONTEXT_CHARS is 200_000. That is a personal assistant's whole disk; for a
 # prompt we want cached and cheap, a fifth of that is already generous.
 MAX_SOUL_CHARS = 20_000
-MAX_KNOWLEDGE_CHARS = 20_000
 # PER-SECTION budgets, not just an overall one. With a single shared cap the first
-# section can eat the whole thing: a 20k MEMORY.md would truncate today's note and BOTH
+# section eats the whole thing: a 20k MEMORY.md would truncate today's note and BOTH
 # manifests to nothing — silently disabling the very mechanism that makes un-loaded files
-# discoverable. Bodies are bounded here so the (small, row-bounded) manifests always fit.
+# discoverable. Every section is bounded in CHARACTERS (an entry cap alone is not enough:
+# 40 entries of maximum-length filename + headline is ~10k on its own).
 MAX_MEMORY_CHARS = 8_000
 MAX_TODAY_CHARS = 6_000
+MAX_TOPIC_MANIFEST_CHARS = 4_000
+MAX_DAILY_MANIFEST_CHARS = 3_000
 MAX_TOPIC_MANIFEST_ENTRIES = 40
 MAX_DAILY_MANIFEST_ENTRIES = 30
+# The overall cap is a BACKSTOP that must never bite before the per-section caps do,
+# otherwise the last section (the daily manifest) is evicted by the earlier ones. Derived
+# from the parts with slack for headers/separators rather than hand-tuned, so changing a
+# section budget can't silently reintroduce the eviction bug.
+MAX_KNOWLEDGE_CHARS = (
+    MAX_MEMORY_CHARS + MAX_TODAY_CHARS + MAX_TOPIC_MANIFEST_CHARS + MAX_DAILY_MANIFEST_CHARS
+) + 2_000
 _TRUNCATED = "(Truncated — context size limit reached)"
 
 _MEMORY_HEADER = "## MEMORY\n\nYour living snapshot (MEMORY.md):"
@@ -77,23 +86,20 @@ def _cap(text: str, limit: int) -> str:
 def build_soul_block() -> str:
     """soul.md for the STATIC half — unfenced.
 
-    Blank stored content resolves to ``identity.DEFAULT_SOUL``: the migration seeds the
-    row EMPTY so a later boot can never overwrite a soul the user or the assistant
-    rewrote, which means the built-in text has to be applied at read time. Same
-    blank-means-default contract as ``assistant_identity.personality``.
-
-    Imported inside the function to keep the module-level dependency one-way
-    (``assistant.engine`` imports this module).
+    ``service.read_file`` already resolves a blank soul to ``identity.DEFAULT_SOUL`` —
+    the migration seeds the row EMPTY so a later boot can never overwrite a rewritten
+    soul, so the built-in text is applied at read time, in ONE place, and the prompt,
+    the assistant's own ``read_context_file`` and the Memory editor all agree.
     """
-    from assistant.identity import DEFAULT_SOUL
-
     try:
         row = service.read_file(service.SOUL_FILE)
         stored = ((row or {}).get("content") or "").strip()
     except Exception:
+        # Degrade to the built-in soul rather than to no identity at all.
+        from assistant.identity import DEFAULT_SOUL
         logger.warning("build_soul_block failed — falling back to the built-in soul", exc_info=True)
-        stored = ""
-    content = _cap(stored or DEFAULT_SOUL, MAX_SOUL_CHARS)
+        stored = DEFAULT_SOUL
+    content = _cap(stored, MAX_SOUL_CHARS)
     return f"## Your soul\n\n{content}" if content else ""
 
 
@@ -118,7 +124,8 @@ def build_knowledge_block() -> str:
         topics = service.topic_manifest()[:MAX_TOPIC_MANIFEST_ENTRIES]
         if topics:
             lines = [f"- {t['filename']} · {t.get('headline') or '(no summary yet)'}" for t in topics]
-            sections.append(f"{_TOPIC_HEADER}\n\n" + "\n".join(lines))
+            body = _cap("\n".join(lines), MAX_TOPIC_MANIFEST_CHARS)
+            sections.append(f"{_TOPIC_HEADER}\n\n{body}")
 
         dailies = service.daily_manifest()[:MAX_DAILY_MANIFEST_ENTRIES]
         if dailies:
@@ -126,7 +133,8 @@ def build_knowledge_block() -> str:
                 f"- {d['filename'][len('daily/'):-len('.md')]} · {d.get('headline') or '(no summary yet)'}"
                 for d in dailies
             ]
-            sections.append(f"{_DAILY_HEADER}\n\n" + "\n".join(lines))
+            body = _cap("\n".join(lines), MAX_DAILY_MANIFEST_CHARS)
+            sections.append(f"{_DAILY_HEADER}\n\n{body}")
 
         if not sections:
             return ""

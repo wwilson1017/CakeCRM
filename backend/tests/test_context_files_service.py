@@ -97,6 +97,45 @@ def test_headline_of_empty_is_empty():
 
 # ── writes ────────────────────────────────────────────────────────────────────────
 
+def test_blank_soul_resolves_to_the_builtin_at_the_read_boundary(monkeypatch):
+    """Resolved HERE, not only where the prompt is built: otherwise the system prompt
+    would carry the default text while read_context_file and the Memory editor both
+    showed an empty file — Baker governed by identity text it cannot see."""
+    from assistant.identity import DEFAULT_SOUL
+
+    monkeypatch.setattr(service, "pg_fetchone", lambda *a, **k: {"content": "  "})
+    assert service.read_file("soul.md")["content"] == DEFAULT_SOUL
+
+
+def test_a_written_soul_is_returned_verbatim(monkeypatch):
+    monkeypatch.setattr(service, "pg_fetchone", lambda *a, **k: {"content": "my own words"})
+    assert service.read_file("soul.md")["content"] == "my own words"
+
+
+def test_the_fallback_is_soul_only(monkeypatch):
+    monkeypatch.setattr(service, "pg_fetchone", lambda *a, **k: {"content": ""})
+    assert service.read_file("MEMORY.md")["content"] == ""
+
+
+def test_append_daily_note_refuses_to_grow_past_the_file_cap(monkeypatch):
+    """The guard is in the upsert's WHERE, so a full note reports zero rows. Capping only
+    the new ENTRY would let many valid appends grow a note without bound until Postgres
+    failed building search_tsv."""
+    monkeypatch.setattr(service, "pg_execute", lambda *a, **k: 0)
+    with pytest.raises(service.ContextFileError) as exc:
+        service.append_daily_note("one more entry", day="2026-08-21")
+    assert exc.value.code == "too_large"
+
+
+def test_append_daily_note_bounds_the_merged_length_in_sql(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(service, "pg_execute",
+                        lambda sql, params: captured.update(sql=sql, params=params) or 1)
+    service.append_daily_note("entry", day="2026-08-21")
+    assert "WHERE length(assistant_context_files.content) + %s <= %s" in captured["sql"]
+    assert captured["params"][-1] == service.MAX_FILE_CHARS
+
+
 def test_write_file_rejects_oversize_content(monkeypatch):
     monkeypatch.setattr(service, "pg_execute", lambda *a, **k: 1)
     with pytest.raises(service.ContextFileError) as exc:

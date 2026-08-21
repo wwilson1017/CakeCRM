@@ -48,7 +48,12 @@ def requires_confirmation(tool_name: str, args: dict | None) -> bool:
     """
     if tool_name not in _TARGETED_WRITE_TOOLS:
         return False
-    filename = (args or {}).get("filename")
+    # isinstance, not `args or {}`: a provider can decode malformed tool JSON to a list,
+    # string or number, and `.get` on that raises INSIDE the engine's gate — before the
+    # registry's bad-argument handling — killing the turn instead of failing closed.
+    if not isinstance(args, dict):
+        return True
+    filename = args.get("filename")
     if not isinstance(filename, str):
         return True
     try:

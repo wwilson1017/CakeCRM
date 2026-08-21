@@ -58,16 +58,11 @@ _RECORDED_CONTEXT_MARKER = "<recorded_context"
 # tool result as a plain string on a user message would otherwise let file content choose
 # which memories surface. Same defence _usable already applies to Gmail content.
 _NON_USER_MARKERS = _UNTRUSTED_MARKERS + (_RECORDED_CONTEXT_MARKER,)
-# Reads whose result carries stored file text, so their results are fenced. The list and
-# search tools belong here too even though they return "just metadata": `headline` is
-# DERIVED FROM THE BODY and _first_headline honours an explicit `Headline:` line, so a
-# file can plant arbitrary text there and have it surface unfenced in a manifest listing.
-_CONTEXT_READ_TOOLS = {
-    "read_context_file", "read_daily_note", "list_context_files", "search_context_files",
-}
+# Defined in delimiters so the background runner fences identically (issue #72).
+_CONTEXT_READ_TOOLS = delimiters.CONTEXT_READ_TOOLS
 # Read tools whose output is untrusted external content. Reading it must not let a
 # prompt injection inside that content drive an unconfirmed write in power mode.
-_UNTRUSTED_SOURCE_TOOLS = {"gmail_search", "gmail_read_thread"}
+_UNTRUSTED_SOURCE_TOOLS = delimiters.UNTRUSTED_SOURCE_TOOLS
 
 # Transient user turn appended on resume to keep a trailing-assistant sequence valid.
 _CONTINUATION_ACK = "Please continue based on the results shown above."

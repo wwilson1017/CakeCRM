@@ -110,14 +110,20 @@ function FilesPanel({ isMobile }: { isMobile: boolean }) {
 
   const save = useCallback(async () => {
     if (!open) return;
+    // Same stale-response guard as openFile: if the user opens another file while this
+    // save is in flight, a late response must not replace their editor state and discard
+    // the draft they have started.
+    const seq = ++loadSeq.current;
     setSaving(true);
     try {
       const saved = await saveContextFile(open.filename, draft, open.updated_at);
+      if (seq !== loadSeq.current) return;
       setOpen(saved);
       setDraft(saved.content);
       toast.success(`Saved ${displayName(open.filename)}`);
       void refresh();
     } catch (e) {
+      if (seq !== loadSeq.current) return;
       // A 409 means Baker (or another tab) changed the file while it was open. Say so
       // plainly rather than losing whichever version was written second.
       const msg = e instanceof Error ? e.message : 'Save failed';

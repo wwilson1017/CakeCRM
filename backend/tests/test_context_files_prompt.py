@@ -10,7 +10,13 @@ from context_files import prompt, service
 
 
 def _stub_store(monkeypatch, *, soul="", memory="", today="", topics=(), dailies=()):
-    files = {service.SOUL_FILE: soul, service.MEMORY_FILE: memory}
+    """Stands in for the real store, MIRRORING read_file's blank-soul fallback — the
+    fallback lives in the service so the prompt, the assistant's own read tool and the
+    Memory editor all agree, and a stub that skipped it would test a contract nothing
+    ships with."""
+    from assistant.identity import DEFAULT_SOUL
+
+    files = {service.SOUL_FILE: soul or DEFAULT_SOUL, service.MEMORY_FILE: memory}
     monkeypatch.setattr(
         prompt.service, "read_file",
         lambda name: {"content": files.get(name, "")} if name in files else None,
@@ -82,6 +88,35 @@ def test_a_huge_memory_cannot_evict_the_manifests(monkeypatch):
     assert "topics/pricing.md" in block, "the topic manifest was evicted by a large body"
     assert "2026-08-20" in block, "the daily manifest was evicted by a large body"
     assert prompt._TRUNCATED in block
+
+
+def test_the_overall_cap_cannot_bite_before_the_section_caps(monkeypatch):
+    """Arithmetic, not vibes: if the sum of the section budgets exceeded the overall cap,
+    the LAST section (the daily manifest) would be silently evicted whenever every
+    earlier section was full — the bug the per-section caps were added to fix."""
+    assert (
+        prompt.MAX_MEMORY_CHARS + prompt.MAX_TODAY_CHARS
+        + prompt.MAX_TOPIC_MANIFEST_CHARS + prompt.MAX_DAILY_MANIFEST_CHARS
+    ) <= prompt.MAX_KNOWLEDGE_CHARS
+
+
+def test_maximum_length_manifests_still_both_appear(monkeypatch):
+    """40 topic entries at maximum filename+headline length is ~10k on its own, so an
+    entry cap alone does not bound the section."""
+    long_name = "t" * 100
+    long_headline = "h" * 120
+    _stub_store(
+        monkeypatch,
+        memory="m" * 100_000,
+        today="t" * 100_000,
+        topics=[{"filename": f"topics/{long_name}{i}.md", "headline": long_headline}
+                for i in range(200)],
+        dailies=[{"filename": f"daily/2026-01-{i:02d}.md", "headline": long_headline}
+                 for i in range(1, 31)],
+    )
+    block = prompt.build_knowledge_block()
+    assert "Recent daily notes" in block, "the daily manifest was evicted"
+    assert "2026-01-" in block
 
 
 def test_manifest_entry_counts_are_bounded(monkeypatch):
