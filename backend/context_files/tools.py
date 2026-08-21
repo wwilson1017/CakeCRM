@@ -101,7 +101,11 @@ def pending_binding(args: dict | None) -> dict | None:
         return None
     try:
         row = service.read_file(filename)
-    except Exception:  # unparseable name, or the read failed — bind nothing
+    except Exception:
+        # Unparseable name, or the read failed. Bind nothing — but say so: a guard that
+        # disables itself in silence is indistinguishable from one that is working.
+        logger.warning("context_files: no version to bind for %r; write will be unconditional",
+                       filename, exc_info=True)
         return None
     updated_at = (row or {}).get("updated_at")
     return {_BINDING_VERSION: str(updated_at)} if updated_at is not None else None
