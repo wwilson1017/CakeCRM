@@ -183,11 +183,15 @@ def _write_context_file(filename: str, content: str,
         if exc.code == "conflict":
             # The service's message is written for the browser editor ("reload"). Tell
             # the model what IT has to do instead, or it will just retry the same
-            # now-stale overwrite and clobber the edit on the second pass.
+            # now-stale overwrite and clobber the edit on the second pass. Deliberately
+            # does NOT blame the user: an earlier pending write of Baker's own, approved
+            # first, lands here too, and a wrong cause sends it off to ask about an edit
+            # nobody made.
             return {"error": (
-                f"'{filename}' was edited by the user after you proposed this write, so "
-                "it was NOT saved. Read the file again and re-apply your change on top "
-                "of their version."
+                f"'{filename}' changed after you proposed this write, so it was NOT "
+                "saved — the user may have edited it, or an earlier write of yours "
+                "landed first. Read the file again and re-apply your change on top of "
+                "what is there now."
             )}
         return _error(exc)
     return {"filename": row.get("filename"), "ok": True, "updated_at": str(row.get("updated_at"))}
