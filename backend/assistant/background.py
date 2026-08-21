@@ -189,6 +189,28 @@ async def _run_turn(provider, registry, system_prompt, user_message: str,
                             model_used=provider.model)
 
 
+def _with_fence_safety(system_prompt):
+    """Append the untrusted-content contract to a background turn's STATIC prompt.
+
+    Fencing the results (see ``_run_turn``) only helps if the model has been told what a
+    fence means. Each caller's prompt frames its own input — the reminder prompt covers
+    reminder text, the heartbeat prompt covers CRM record text — but the background
+    allowlist also reaches Gmail and Baker's context files, and nothing explained those
+    tags. Applied HERE rather than in each caller so a future background job cannot ship
+    without it.
+
+    Accepts either a ``(static, volatile)`` pair or a plain string, matching what
+    providers take.
+    """
+    note = delimiters.UNTRUSTED_CONTENT_SAFETY_INSTRUCTION
+    if isinstance(system_prompt, tuple) and len(system_prompt) == 2:
+        static, volatile = system_prompt
+        return (f"{static}\n\n{note}" if static else note), volatile
+    if isinstance(system_prompt, str):
+        return f"{system_prompt}\n\n{note}" if system_prompt else note
+    return system_prompt
+
+
 def run_background_turn(system_prompt, user_message: str, *, allowed_tools: set[str],
                        registry=None, model_tier: str = "light",
                        max_iterations: int = DEFAULT_MAX_ITERATIONS,
@@ -225,7 +247,7 @@ def run_background_turn(system_prompt, user_message: str, *, allowed_tools: set[
             pass  # no running loop — safe to asyncio.run
 
     coro = asyncio.wait_for(
-        _run_turn(provider, registry, system_prompt, user_message,
+        _run_turn(provider, registry, _with_fence_safety(system_prompt), user_message,
                   allowed_tools, max_iterations, write_budget_limit),
         timeout=timeout,
     )

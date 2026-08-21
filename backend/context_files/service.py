@@ -322,7 +322,12 @@ def write_file(filename: str, content: str, written_by: str = "assistant",
     without this a name dreaming had put away could never be reused.
     """
     name = normalize_filename(filename)
-    body = content if isinstance(content, str) else ""
+    # Reject, never coerce. Silently turning a non-string into "" means a schema-invalid
+    # but parseable call like {"content": []} ERASES the file — and for an ordinary topic
+    # file that runs unconfirmed in power mode.
+    if not isinstance(content, str):
+        raise ContextFileError("content must be a string")
+    body = content
     if len(body) > MAX_FILE_CHARS:
         raise ContextFileError(
             f"content is {len(body)} characters; the limit is {MAX_FILE_CHARS}. "
@@ -388,6 +393,14 @@ def append_daily_note(content: str, day: str | None = None,
     stamp = now_local().strftime("%I:%M %p %Z").lstrip("0")
     entry = f"\n### {stamp}\n\n{body}\n"
     first = f"# {day_str}\n{entry}"
+    # The upsert's WHERE only guards the CONFLICT branch. On a fresh note there is no
+    # conflict, so a body sitting exactly at the cap would slip past with the date and
+    # timestamp scaffolding pushing it over.
+    if len(first) > MAX_FILE_CHARS:
+        raise ContextFileError(
+            f"entry is too long; the limit is {MAX_FILE_CHARS} characters.",
+            code="too_large",
+        )
 
     # The headline is set on INSERT only, never on append: _first_headline skips bare
     # date and time headings, so it resolves to the FIRST entry's first line — which no

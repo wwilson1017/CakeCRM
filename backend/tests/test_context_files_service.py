@@ -117,6 +117,24 @@ def test_the_fallback_is_soul_only(monkeypatch):
     assert service.read_file("MEMORY.md")["content"] == ""
 
 
+def test_write_file_rejects_non_string_content(monkeypatch):
+    """Coercing to '' would let a schema-invalid but parseable {"content": []} ERASE the
+    file — unconfirmed, for an ordinary topic file in power mode."""
+    monkeypatch.setattr(service, "pg_execute", lambda *a, **k: 1)
+    for bad in ([], {}, 42, None, True):
+        with pytest.raises(service.ContextFileError):
+            service.write_file("topics/x.md", bad)
+
+
+def test_append_daily_note_guards_the_insert_path_too(monkeypatch):
+    """The upsert's WHERE only covers the CONFLICT branch; a fresh note needs its own
+    check or the date/timestamp scaffolding pushes an at-the-cap body over."""
+    monkeypatch.setattr(service, "pg_execute", lambda *a, **k: 1)
+    with pytest.raises(service.ContextFileError) as exc:
+        service.append_daily_note("x" * service.MAX_FILE_CHARS, day="2026-08-21")
+    assert exc.value.code == "too_large"
+
+
 def test_append_daily_note_refuses_to_grow_past_the_file_cap(monkeypatch):
     """The guard is in the upsert's WHERE, so a full note reports zero rows. Capping only
     the new ENTRY would let many valid appends grow a note without bound until Postgres

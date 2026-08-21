@@ -114,12 +114,16 @@ function FilesPanel({ isMobile }: { isMobile: boolean }) {
     // save is in flight, a late response must not replace their editor state and discard
     // the draft they have started.
     const seq = ++loadSeq.current;
+    const submitted = draft;
     setSaving(true);
     try {
-      const saved = await saveContextFile(open.filename, draft, open.updated_at);
+      const saved = await saveContextFile(open.filename, submitted, open.updated_at);
       if (seq !== loadSeq.current) return;
+      // Always take the server's new version token, but only overwrite the editor when
+      // the user has not typed since submitting — the textarea stays live during a save,
+      // and clobbering it would silently drop those keystrokes.
       setOpen(saved);
-      setDraft(saved.content);
+      setDraft((current) => (current === submitted ? saved.content : current));
       toast.success(`Saved ${displayName(open.filename)}`);
       void refresh();
     } catch (e) {

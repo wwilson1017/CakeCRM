@@ -122,6 +122,26 @@ def test_a_planted_headline_is_carried_by_the_listing(monkeypatch):
     assert service._first_headline(f"{planted}\n\n# Real title") == planted[len("Headline: "):]
 
 
+def test_background_prompts_explain_what_a_fence_means():
+    """Fencing a result only helps if the model was told what the tag means. Each
+    caller's prompt frames its own input; nothing explained the Gmail and context-file
+    tags the background allowlist can reach."""
+    from assistant import background, delimiters
+
+    static, volatile = background._with_fence_safety(("Do the thing.", "now"))
+    assert delimiters.UNTRUSTED_CONTENT_SAFETY_INSTRUCTION in static
+    assert "Do the thing." in static
+    assert volatile == "now"
+    # A plain-string prompt is the other shape providers accept.
+    assert delimiters.UNTRUSTED_CONTENT_SAFETY_INSTRUCTION in background._with_fence_safety("x")
+
+
+def test_the_safety_instruction_covers_the_recorded_context_tag():
+    from assistant import delimiters
+
+    assert "<recorded_context" in delimiters.UNTRUSTED_CONTENT_SAFETY_INSTRUCTION
+
+
 def test_the_background_loop_fences_the_same_tools_as_the_engine():
     """An unattended turn has no human to notice a planted instruction, and its read
     allowlist reaches both Gmail and the context files. Both loops share one fencer so
