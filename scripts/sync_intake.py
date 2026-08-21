@@ -66,7 +66,13 @@ MAX_PATH_LEN = 400
 # a 400-char path in ONE component is legal by MAX_PATH_LEN but makes is_file()
 # raise OSError(ENAMETOOLONG), which would escape the PayloadError contract.
 MAX_COMPONENT_LEN = 255
-SHA_RE = re.compile(r"\A[0-9a-fA-F]{40}\Z")
+# Lowercase ONLY, not merely normalized-to-lowercase. The workflow's concurrency
+# group keys on the RAW input (expressions are evaluated before any validation can
+# run), while the dedupe marker keys on the validated SHA. If we accepted mixed
+# case, two deliveries differing only in case would land in different concurrency
+# groups, run in parallel, both miss the marker, and double-file -- the exact race
+# the group exists to close. Requiring one canonical form makes them agree.
+SHA_RE = re.compile(r"\A[0-9a-f]{40}\Z")
 PR_RE = re.compile(r"\A[1-9][0-9]{0,6}\Z")
 # Conservative path charset. Rejecting control characters and anything with
 # Markdown/HTML meaning is defense in depth: rendering is already gated on an
@@ -100,14 +106,15 @@ VERDICT_NONE = "no-watched-files"
 VERDICT_BLURB = {
     VERDICT_CRM_CODE: "CRM code changed upstream — worth a look.",
     VERDICT_DND_ONLY: (
-        "Only `shared/dnd/` changed. That module has 13 non-CRM consumers in cake_os "
-        "(CRM is 1 of 14), so this is most likely platform work, not CRM work."
+        "No CRM code changed — the only in-scope code is in `shared/dnd/`, which has 13 "
+        "non-CRM consumers upstream (CRM is 1 of 14), so this is most likely platform work."
     ),
     VERDICT_INTERNAL_ONLY: (
-        "Only known internal-only paths changed (Odoo / lead-import). Nothing to port — "
-        "close unless you know otherwise."
+        "No portable code changed — the in-scope code is entirely in the known "
+        "internal-only bulk-import paths, which are bound to upstream-only systems. "
+        "Nothing to port."
     ),
-    VERDICT_DOCS_ONLY: "Only Markdown changed under the watched paths. Nothing to port.",
+    VERDICT_DOCS_ONLY: "No code changed under the watched paths, only Markdown. Nothing to port.",
     VERDICT_NONE: (
         "Nothing under the watched paths changed. Filed for the audit trail — close it."
     ),
@@ -129,8 +136,12 @@ def _require(condition: bool, field: str, why: str) -> None:
 
 
 def normalize_sha(raw: str) -> str:
-    _require(bool(SHA_RE.match(raw or "")), "source_sha", "must be exactly 40 hex characters")
-    return raw.lower()
+    _require(
+        bool(SHA_RE.match(raw or "")),
+        "source_sha",
+        "must be exactly 40 LOWERCASE hex characters",
+    )
+    return raw
 
 
 def normalize_pr(raw: str) -> int:

@@ -272,10 +272,13 @@ def test_scalar_validation_rejects(kwargs):
         _build([_file("backend/apps/crm/service.py")], **kwargs)
 
 
-def test_sha_is_normalized_to_lowercase():
-    sha, _, body = _build([_file("backend/apps/crm/service.py")], sha="A" * 40)
-    assert sha == "a" * 40
-    assert f"<!-- sync-source-sha: {'a' * 40} -->" in body
+def test_an_uppercase_sha_is_rejected_rather_than_normalized():
+    """Accepting mixed case and lowercasing it would split the concurrency group
+    (which keys on the RAW input, pre-validation) from the dedupe marker (which
+    keys on the validated value) — so two deliveries differing only in case would
+    run in parallel and both double-file."""
+    with pytest.raises(sync_intake.PayloadError):
+        _build([_file("backend/apps/crm/service.py")], sha="A" * 40)
 
 
 def test_timestamp_is_canonicalized():

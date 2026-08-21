@@ -43,6 +43,15 @@ Enforced three ways:
   event file rather than step `env:` vars for the same reason: Actions prints a step's whole
   `env:` block in the log preamble, and Actions logs are public on a public repo.
 
+- **Contractually** — the allowlist in §3 is the binding contract for the sender.
+- **By test** — `backend/tests/test_sync_intake.py` feeds sentinel-bearing paths and asserts
+  no sentinel survives into the rendered body. It also scans the rendered body *and* the
+  script source against the company-token denylist that `test_prompt_genericization.py`
+  owns — a first-party constant leaked that way once already. The ledger guard additionally
+  asserts `SYNC_LEDGER.md` parses to schema and carries no email addresses or diff fences. It
+  deliberately does **not** encode staff-name patterns: a denylist would publish the very
+  PII it protects.
+
 **Scope of the claim, stated precisely.** It is *"no verbatim upstream text from an honest
 sender"* — not an information-theoretic guarantee. A **compromised** sender still chooses the
 SHA, PR number and counts, and roughly 160 bits can be encoded in a fabricated 40-hex SHA. The
@@ -50,12 +59,13 @@ receiver cannot detect that, because it has no way to authenticate the payload a
 real upstream repo. What the design does guarantee against a compromised sender is that it
 cannot push, cannot open a PR, and cannot place *arbitrary chosen prose* in a CakeCRM
 artifact.
-- **Contractually** — the allowlist in §3 is the binding contract for the sender.
-- **By test** — `backend/tests/test_sync_intake.py` feeds sentinel-bearing paths and asserts
-  no sentinel survives into the rendered body. The ledger guard additionally asserts
-  `SYNC_LEDGER.md` parses to schema and carries no email addresses or diff fences. It
-  deliberately does **not** encode staff-name patterns: a denylist would publish the very
-  PII it protects.
+
+**On upstream names that do appear here.** This document names two non-CRM upstream modules
+(`apps.todo_gtd`, `apps.dimm`) and the three internal-only file paths, because a porter has to
+recognise those couplings when stripping them. They were reviewed and kept deliberately: they
+describe engineering function rather than the business, unlike the upstream *application*
+names — which are named nowhere in this repo, and which an earlier draft of this file
+wrongly listed. Nothing in this class is rendered into an intake issue.
 
 ---
 
@@ -167,6 +177,13 @@ and neither can leak data or push code; the ceiling is issue-tracker noise.
   needs the attacker to predict a commit SHA in advance, which is not practical — noted for
   completeness. Binding the marker to a hash of SHA + verdict + counts would close it if the
   precondition ever became realistic.
+- *Cancellation annotations.* The `concurrency` group interpolates the **raw** `source_sha`,
+  because workflow-level expressions are evaluated before any validation can run. When a
+  pending run is superseded, GitHub prints an annotation naming the group — so a compromised
+  sender could get a chosen string onto that surface by dispatching the same value twice.
+  Validation cannot reach it and expressions cannot sanitise, so it is named rather than
+  fixed; the ceiling is one line on a cancelled run's page, strictly less than the issue
+  spam the same attacker could already produce.
 
 ---
 
@@ -177,7 +194,7 @@ not an accident, since every added field is a new place prose could hide.
 
 | Input | Type | Validation |
 |---|---|---|
-| `source_sha` | string | exactly 40 hex characters; normalized to lowercase |
+| `source_sha` | string | exactly 40 **lowercase** hex characters |
 | `source_pr` | string | `[1-9][0-9]{0,6}` — no zero, no leading zeros |
 | `merged_at` | string | ISO-8601 with a UTC offset; re-emitted canonically |
 | `files` | string | JSON array of `{path, additions, deletions, status}` |
@@ -189,7 +206,12 @@ Per entry:
   with Markdown or HTML meaning; the per-component bound exists because the classifier `stat`s
   each mapped path, and an over-long single name would otherwise raise `ENAMETOOLONG` instead
   of a clean rejection. Paths outside the watched roots are **accepted and dropped**, not
-  rejected: the sender may legitimately post its whole changed-file list.
+  rejected, so a stray extra entry is harmless — but the **filtered list of §6.1 is the
+  contract**, not merely a suggestion. The caps apply to the payload as sent, and an
+  oversized payload is rejected whole, which files *no* intake at all. The three watched roots
+  hold ~115 files in total, so a filtered sender can never approach the 500 cap; an unfiltered
+  one can, because real merges have touched 200+ files repo-wide and a formatting sweep can
+  touch far more. Filter at the source.
 - `additions` / `deletions` — non-negative integers. Checked with `type(v) is int`, not
   `isinstance`, because `bool` subclasses `int` and `True` would otherwise pass as a count.
 - `status` — one of GitHub's fixed values (`added`, `modified`, `removed`, `renamed`,
@@ -327,11 +349,27 @@ not literally "may fire only this one workflow."
 Fine-grained PATs expire within a year. Rotation is a recurring chore; the sender should fail
 loudly, not silently, when the token stops working.
 
-### 6.3 Failure behavior
+### 6.3 Failure behavior — the dispatch API does NOT validate the payload
 
-A dispatch that is rejected (4xx) means the payload violated §3. The sender should surface
-that as a failed check on the cake_os side — never retry blindly, and never fall back to
-sending more data than the contract allows.
+This trips people up, so it is worth being blunt: `POST .../dispatches` returns **204 No
+Content** immediately and checks only the *envelope* — authentication, that the `ref` exists,
+that the input names are known, and the 65,535-character total. It does not look at the
+values.
+
+So a **4xx means auth, a missing ref, or an unknown input name** — not a §3 violation. Every
+§3 violation (bad SHA case, >500 files, an unrecognised `status`, a malformed timestamp,
+unparseable JSON) returns **204 to the sender** and then fails minutes later *inside the run*,
+where the sender never sees it.
+
+A sender that treats 204 as "accepted" will therefore lose intakes silently. It must do one
+of these:
+
+1. **Poll the run** it just triggered and check its conclusion. The same *Actions: write*
+   permission includes read, so no extra scope is needed. This is the recommended option.
+2. Or explicitly rely on GitHub's failed-run notification to the PAT owner as the detection
+   channel — acceptable only if someone actually reads those.
+
+Never retry blindly, and never fall back to sending more data than the contract allows.
 
 ---
 
