@@ -46,6 +46,10 @@ def test_protected_names_are_case_insensitive(raw):
     "daily/2026-13-01.md",          # regex-valid, calendar-invalid
     "daily/2026-02-30.md",
     "daily/not-a-date.md",
+    # fromisoformat() accepts these, but they are DIFFERENT names for a day whose
+    # canonical filename is hyphenated — a second row read_daily_note could never reach.
+    "daily/20260821.md",
+    "daily/2026-W34-5.md",
     "topics/bad\x00name.md",
 ])
 def test_normalize_rejects(raw):
@@ -115,20 +119,40 @@ def test_write_file_unarchives(monkeypatch):
     assert "archived_at = NULL" in captured["sql"]
 
 
-def test_write_file_conflicts_on_stale_precondition(monkeypatch):
-    monkeypatch.setattr(service, "pg_fetchone", lambda *a, **k: {"updated_at": "2026-08-21T10:00:00Z"})
+def test_write_file_conflicts_when_precondition_matches_no_row(monkeypatch):
+    monkeypatch.setattr(service, "pg_execute", lambda *a, **k: 0)   # 0 rows updated
     with pytest.raises(service.ContextFileError) as exc:
         service.write_file("topics/x.md", "body", expected_updated_at="2026-08-20T09:00:00Z")
     assert exc.value.code == "conflict"
 
 
 def test_write_file_passes_matching_precondition(monkeypatch):
-    monkeypatch.setattr(service, "pg_fetchone", lambda *a, **k: {"updated_at": "2026-08-21T10:00:00Z"})
     monkeypatch.setattr(service, "pg_execute", lambda *a, **k: 1)
     monkeypatch.setattr(service, "read_file", lambda f: {"filename": f})
     assert service.write_file(
         "topics/x.md", "body", expected_updated_at="2026-08-21T10:00:00Z",
     )["filename"] == "topics/x.md"
+
+
+def test_precondition_is_enforced_in_one_statement(monkeypatch):
+    """A SELECT-then-UPDATE would be a TOCTOU window: an append landing between the two
+    would be silently discarded, which is the exact loss the token exists to prevent."""
+    calls = []
+    monkeypatch.setattr(service, "pg_execute", lambda sql, params: calls.append(sql) or 1)
+    monkeypatch.setattr(service, "read_file", lambda f: {"filename": f})
+    service.write_file("topics/x.md", "body", expected_updated_at="2026-08-21T10:00:00Z")
+    assert len(calls) == 1
+    assert "WHERE filename = %s AND updated_at = %s::timestamptz" in calls[0]
+
+
+def test_unparseable_version_token_is_a_conflict_not_a_crash(monkeypatch):
+    def explode(*a, **k):
+        raise ValueError("bad timestamp literal")
+
+    monkeypatch.setattr(service, "pg_execute", explode)
+    with pytest.raises(service.ContextFileError) as exc:
+        service.write_file("topics/x.md", "body", expected_updated_at="not-a-timestamp")
+    assert exc.value.code == "conflict"
 
 
 def test_delete_refuses_protected_files(monkeypatch):

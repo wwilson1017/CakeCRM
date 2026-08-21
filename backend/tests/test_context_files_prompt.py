@@ -29,11 +29,24 @@ def test_soul_block_is_unfenced(monkeypatch):
     assert "recorded_context" not in block, "the soul is the ONE knowledge file loaded unfenced"
 
 
-def test_soul_block_is_empty_when_unset(monkeypatch):
-    """A fresh install seeds soul.md with EMPTY content — the default text lives in
-    identity.DEFAULT_SOUL, so the block must not emit a bare heading here."""
+def test_blank_soul_falls_back_to_the_built_in_default(monkeypatch):
+    """The migration seeds soul.md EMPTY so a boot can never overwrite a rewritten soul,
+    which means the built-in text has to be applied at READ time. Without this the
+    constant is dead code and a fresh install ships with no soul at all."""
+    from assistant.identity import DEFAULT_SOUL
+
     _stub_store(monkeypatch, soul="")
-    assert prompt.build_soul_block() == ""
+    block = prompt.build_soul_block()
+    assert DEFAULT_SOUL[:40] in block
+
+
+def test_a_written_soul_replaces_the_default(monkeypatch):
+    from assistant.identity import DEFAULT_SOUL
+
+    _stub_store(monkeypatch, soul="I have my own words now.")
+    block = prompt.build_soul_block()
+    assert "I have my own words now." in block
+    assert DEFAULT_SOUL[:40] not in block
 
 
 def test_soul_block_is_capped(monkeypatch):
@@ -44,11 +57,42 @@ def test_soul_block_is_capped(monkeypatch):
 
 
 def test_soul_block_survives_a_store_outage(monkeypatch):
+    """Degrades to the built-in soul rather than to no identity at all."""
+    from assistant.identity import DEFAULT_SOUL
+
     def explode(*a, **k):
         raise RuntimeError("db down")
 
     monkeypatch.setattr(prompt.service, "read_file", explode)
-    assert prompt.build_soul_block() == ""
+    assert DEFAULT_SOUL[:40] in prompt.build_soul_block()
+
+
+def test_a_huge_memory_cannot_evict_the_manifests(monkeypatch):
+    """With one shared budget the first section eats everything: a 20k MEMORY.md would
+    truncate both manifests to nothing, silently disabling the mechanism that makes
+    un-loaded files discoverable."""
+    _stub_store(
+        monkeypatch,
+        memory="m" * 100_000,
+        today="t" * 100_000,
+        topics=[{"filename": "topics/pricing.md", "headline": "How we price"}],
+        dailies=[{"filename": "daily/2026-08-20.md", "headline": "Closed Acme"}],
+    )
+    block = prompt.build_knowledge_block()
+    assert "topics/pricing.md" in block, "the topic manifest was evicted by a large body"
+    assert "2026-08-20" in block, "the daily manifest was evicted by a large body"
+    assert prompt._TRUNCATED in block
+
+
+def test_manifest_entry_counts_are_bounded(monkeypatch):
+    _stub_store(
+        monkeypatch,
+        topics=[{"filename": f"topics/t{i}.md", "headline": "h"} for i in range(500)],
+        dailies=[{"filename": f"daily/2026-01-{i:02d}.md", "headline": "h"} for i in range(1, 32)],
+    )
+    block = prompt.build_knowledge_block()
+    assert block.count("topics/t") <= prompt.MAX_TOPIC_MANIFEST_ENTRIES
+    assert block.count("- 2026-01-") <= prompt.MAX_DAILY_MANIFEST_ENTRIES
 
 
 # ── knowledge (volatile, fenced) ──────────────────────────────────────────────────

@@ -174,6 +174,55 @@ def test_stale_write_precondition_conflicts(pg_db):
     assert service.read_file("topics/race.md")["content"] == "v2"
 
 
+def test_a_normal_save_round_trips_over_HTTP(pg_db):
+    """The bug this test exists for: the version token crosses a JSON boundary. psycopg
+    returns a datetime whose str() is space-separated, while FastAPI serializes the ISO
+    'T' form the browser sends back — so comparing them as Python strings rejected EVERY
+    legitimate save with a 409. Service-level tests missed it because they never
+    serialized. Exercise the real round trip.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from context_files.router import router as cf_router
+    from core.auth import get_current_user
+
+    app = FastAPI()
+    app.include_router(cf_router, prefix="/api/context-files")
+    app.dependency_overrides[get_current_user] = lambda: {"sub": "u"}
+    client = TestClient(app)
+
+    loaded = client.get("/api/context-files/file/soul.md").json()
+    saved = client.put(
+        "/api/context-files/file/soul.md",
+        json={"content": "I am Baker.", "expected_updated_at": loaded["updated_at"]},
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["content"] == "I am Baker."
+    assert saved.json()["written_by"] == "user"
+
+    # Re-using the now-stale token must conflict.
+    again = client.put(
+        "/api/context-files/file/soul.md",
+        json={"content": "clobber", "expected_updated_at": loaded["updated_at"]},
+    )
+    assert again.status_code == 409
+    assert client.get("/api/context-files/file/soul.md").json()["content"] == "I am Baker."
+
+
+def test_a_stale_token_cannot_resurrect_a_deleted_file(pg_db):
+    from context_files import service
+
+    service.write_file("topics/gone.md", "body")
+    token = str(service.read_file("topics/gone.md")["updated_at"])
+    service.delete_file("topics/gone.md")
+
+    with pytest.raises(service.ContextFileError) as exc:
+        service.write_file("topics/gone.md", "resurrected", expected_updated_at=token)
+    assert exc.value.code == "conflict"
+    assert service.read_file("topics/gone.md") is None
+
+
 def test_headline_is_derived_on_write(pg_db):
     from context_files import service
 

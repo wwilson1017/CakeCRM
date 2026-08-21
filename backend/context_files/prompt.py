@@ -38,6 +38,14 @@ logger = logging.getLogger(__name__)
 # prompt we want cached and cheap, a fifth of that is already generous.
 MAX_SOUL_CHARS = 20_000
 MAX_KNOWLEDGE_CHARS = 20_000
+# PER-SECTION budgets, not just an overall one. With a single shared cap the first
+# section can eat the whole thing: a 20k MEMORY.md would truncate today's note and BOTH
+# manifests to nothing — silently disabling the very mechanism that makes un-loaded files
+# discoverable. Bodies are bounded here so the (small, row-bounded) manifests always fit.
+MAX_MEMORY_CHARS = 8_000
+MAX_TODAY_CHARS = 6_000
+MAX_TOPIC_MANIFEST_ENTRIES = 40
+MAX_DAILY_MANIFEST_ENTRIES = 30
 _TRUNCATED = "(Truncated — context size limit reached)"
 
 _MEMORY_HEADER = "## MEMORY\n\nYour living snapshot (MEMORY.md):"
@@ -67,18 +75,26 @@ def _cap(text: str, limit: int) -> str:
 
 
 def build_soul_block() -> str:
-    """soul.md for the STATIC half — unfenced, or ``""`` when it has no content.
+    """soul.md for the STATIC half — unfenced.
 
-    Falls back to nothing (not to DEFAULT_SOUL) — the caller in ``identity`` owns the
-    blank-means-default resolution, so the default text has exactly one home.
+    Blank stored content resolves to ``identity.DEFAULT_SOUL``: the migration seeds the
+    row EMPTY so a later boot can never overwrite a soul the user or the assistant
+    rewrote, which means the built-in text has to be applied at read time. Same
+    blank-means-default contract as ``assistant_identity.personality``.
+
+    Imported inside the function to keep the module-level dependency one-way
+    (``assistant.engine`` imports this module).
     """
+    from assistant.identity import DEFAULT_SOUL
+
     try:
         row = service.read_file(service.SOUL_FILE)
-        content = _cap((row or {}).get("content") or "", MAX_SOUL_CHARS)
-        return f"## Your soul\n\n{content}" if content else ""
+        stored = ((row or {}).get("content") or "").strip()
     except Exception:
-        logger.warning("build_soul_block failed — proceeding without soul.md", exc_info=True)
-        return ""
+        logger.warning("build_soul_block failed — falling back to the built-in soul", exc_info=True)
+        stored = ""
+    content = _cap(stored or DEFAULT_SOUL, MAX_SOUL_CHARS)
+    return f"## Your soul\n\n{content}" if content else ""
 
 
 def build_knowledge_block() -> str:
@@ -91,20 +107,20 @@ def build_knowledge_block() -> str:
         sections: list[str] = []
 
         memory = service.read_file(service.MEMORY_FILE)
-        memory_text = _cap((memory or {}).get("content") or "", MAX_KNOWLEDGE_CHARS)
+        memory_text = _cap((memory or {}).get("content") or "", MAX_MEMORY_CHARS)
         if memory_text:
             sections.append(f"{_MEMORY_HEADER}\n\n{memory_text}")
 
-        today = _cap(service.read_daily_note(), MAX_KNOWLEDGE_CHARS)
+        today = _cap(service.read_daily_note(), MAX_TODAY_CHARS)
         if today:
             sections.append(f"{_TODAY_HEADER}\n\n{today}")
 
-        topics = service.topic_manifest()
+        topics = service.topic_manifest()[:MAX_TOPIC_MANIFEST_ENTRIES]
         if topics:
             lines = [f"- {t['filename']} · {t.get('headline') or '(no summary yet)'}" for t in topics]
             sections.append(f"{_TOPIC_HEADER}\n\n" + "\n".join(lines))
 
-        dailies = service.daily_manifest()
+        dailies = service.daily_manifest()[:MAX_DAILY_MANIFEST_ENTRIES]
         if dailies:
             lines = [
                 f"- {d['filename'][len('daily/'):-len('.md')]} · {d.get('headline') or '(no summary yet)'}"

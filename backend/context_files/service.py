@@ -55,6 +55,7 @@ _TIME_HEADING_RE = re.compile(r"^\d{1,2}:\d{2}\s*(am|pm)?", re.IGNORECASE)
 # memory/service.py's tokenizer takes ("keeps 'José' and non-Latin scripts").
 _SEGMENT_RE = re.compile(r"^[^\W_][\w.-]*$")
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+_ISO_DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 _LIVE = "archived_at IS NULL"
 _COLUMNS = "id, filename, kind, content, headline, is_protected, written_by, created_at, updated_at"
@@ -149,9 +150,13 @@ def normalize_filename(filename: str) -> str:
     segment = f"{stem}.md"
 
     if prefix == "daily":
-        # Strict calendar validity, not just a regex: '2026-02-30.md' matches any
-        # \d{4}-\d{2}-\d{2} pattern but is not a day, and would create a note no
-        # date-driven read could ever reach.
+        # BOTH checks are needed. The regex alone would accept '2026-02-30', a day that
+        # does not exist. fromisoformat alone accepts '20260821' and ISO week forms like
+        # '2026-W34-5' — each a *different* filename for a day whose canonical name is
+        # hyphenated, so a second row would shadow a day that read_daily_note (which
+        # formats %Y-%m-%d) can never reach.
+        if not _ISO_DAY_RE.match(stem):
+            raise ContextFileError("daily notes are named daily/YYYY-MM-DD.md")
         try:
             date.fromisoformat(stem)
         except ValueError:
@@ -293,6 +298,14 @@ def write_file(filename: str, content: str, written_by: str = "assistant",
     Tool writes pass None — the model always sends whole-file content it just read, and
     a confirmation gate sits in front of it.
 
+    The precondition is enforced INSIDE the UPDATE, not by a read-then-write, for two
+    reasons. A separate SELECT is a TOCTOU window — an append landing between the check
+    and the write would be silently discarded, which is the exact failure the token
+    exists to prevent. And the comparison has to happen in Postgres: psycopg returns a
+    ``datetime`` whose ``str()`` is space-separated ('2026-08-21 10:00:00+00'), while the
+    browser round-trips the ISO 'T' form FastAPI serialized, so comparing the two as
+    Python strings rejects every legitimate save. ``%s::timestamptz`` parses both.
+
     A write to an archived name UNARCHIVES it. The UNIQUE(filename) index is global, so
     without this a name dreaming had put away could never be reused.
     """
@@ -305,14 +318,26 @@ def write_file(filename: str, content: str, written_by: str = "assistant",
             code="too_large",
         )
     if expected_updated_at is not None:
-        current = pg_fetchone(
-            "SELECT updated_at FROM assistant_context_files WHERE filename = %s", (name,)
-        )
-        if current and str(current.get("updated_at")) != str(expected_updated_at):
+        try:
+            updated = pg_execute(
+                "UPDATE assistant_context_files SET "
+                "  content = %s, headline = %s, written_by = %s, "
+                "  archived_at = NULL, updated_at = now() "
+                "WHERE filename = %s AND updated_at = %s::timestamptz",
+                (body, _first_headline(body), written_by, name, expected_updated_at),
+            )
+        except Exception as exc:   # an unparseable token is a client error, not a 500
+            raise ContextFileError(
+                "Invalid version token; reload the file before saving.", code="conflict",
+            ) from exc
+        if not updated:
+            # Zero rows: the file changed under us, or it is gone. Either way the editor
+            # must reload rather than resurrect a deleted file from a stale buffer.
             raise ContextFileError(
                 "This file changed since you opened it. Reload before saving.",
                 code="conflict",
             )
+        return read_file(name) or {}
     pg_execute(
         "INSERT INTO assistant_context_files (filename, content, headline, written_by) "
         "VALUES (%s, %s, %s, %s) "
