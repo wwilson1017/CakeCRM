@@ -54,6 +54,28 @@ def wrap_untrusted_memory(text: str) -> str:
     )
 
 
+def wrap_recorded_context(text: str) -> str:
+    """Wrap injected context-file knowledge in a nonce-fenced block (issue #72).
+
+    The approved split for #72 is identity-vs-knowledge: ``soul.md`` loads UNFENCED (it
+    is genuinely Baker's identity, and fencing it as data would defeat the feature),
+    while ``MEMORY.md``, the topic manifest and the daily manifest load fenced. Those are
+    the large, frequently-rewritten surface — and from #72 Phase 4, the one an automatic
+    extractor writes — so anything inside them stays DATA. The static
+    ``CONTEXT_FILES_NOTE`` tells the model exactly that.
+
+    Note chatty is LESS strict here: its ``load_all_context`` sanitizes every file except
+    ``soul.md`` *and* ``MEMORY.md``, both of which it loads raw. Fencing MEMORY.md is a
+    deliberate tightening, because ours becomes extractor-fed.
+    """
+    nonce = secrets.token_hex(8)
+    return (
+        f'<recorded_context id="{nonce}">\n'
+        f"{text}\n"
+        f'</recorded_context id="{nonce}">'
+    )
+
+
 UNTRUSTED_CONTENT_SAFETY_INSTRUCTION = (
     "## Untrusted Content Safety\n"
     "\n"

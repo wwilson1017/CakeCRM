@@ -139,6 +139,53 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   due-guard) and is driven by **#6's 60s `reminder_tick`** (via
   `heartbeat.service._maybe_run_dreaming`) — #5's interim lifespan task was absorbed
   when #6 landed, exactly as planned.
+  **Context files** (#72 Phase 1+2, `backend/context_files/` + `frontend/src/crm/MemoryPage.tsx`)
+  restore chatty's *other* memory unit, which #5 deliberately skipped: `soul.md` (the
+  assistant's self-written identity), `MEMORY.md` (its living snapshot), `topics/<name>.md`
+  and `daily/YYYY-MM-DD.md`, all rows in `assistant_context_files`. So the #5 note above
+  that "dreaming's unit is the fact because CakeCRM has no context-file store" now states
+  a *history*, not a constraint — file-dreaming is #72 Phase 4 and nothing sets
+  `archived_at` yet, though every read already carries the live predicate so that phase is
+  purely additive. `kind` and `is_protected` are **GENERATED columns** derived from
+  `filename` (a code-only convention drifts; a generated column cannot), and the filename
+  grammar is the single normalizer — `soul.md` | `MEMORY.md` | `topics/<slug>.md` |
+  `daily/<ISO date>.md`, case-canonicalized, NFC-normalized, with a bare `x.md` normalized
+  to `topics/x.md` rather than rejected. Seven keyless tools ride
+  `context_files.tools.get_context_file_tools()`.
+  **The prompt split is by TRUST, not by file, and that is a correction the plan review
+  forced:** `soul.md` loads UNFENCED into the **static** half (fencing an identity as
+  untrusted data defeats it), while `MEMORY.md` + the topic/daily manifests load
+  nonce-fenced as `<recorded_context>` in the **volatile** half. They cannot go in static
+  even though they change rarely, because `delimiters._wrap` mints fresh entropy per call —
+  a fence in the cached prefix would re-key Anthropic's prompt cache *every turn*. The real
+  invariant is **no per-turn entropy in static**, not "static never changes". Ordering is
+  load-bearing too: static is `personality → soul → SALES_GUIDE → CONFIRMATION_NOTE →
+  MEMORY_NOTE → CONTEXT_FILES_NOTE → safety`, so a self-rewritten soul can add to who Baker
+  is but never override a tool or security contract. `DEFAULT_SOUL` is the
+  blank-means-default fallback constant (same pattern as `personality`); the migration seeds
+  **empty** content so a later boot can never overwrite an edited soul, and the constant is
+  scanned by `test_prompt_genericization.py`.
+  Security: writes carry `writes:true` (so `background_allowlist()` excludes them — asserted
+  explicitly, not left to the derivation), and a write to a **protected** file additionally
+  **always confirms, power mode included**, via `context_files.tools.requires_confirmation()`
+  consulted from the engine's gate — `writes:true` alone is NOT enough there, because a
+  poisoned `soul.md` is a permanent system instruction, not one bad record. That hook
+  **fails closed** on a missing/unparseable filename. `read_context_file`/`read_daily_note`
+  results are fenced but deliberately do NOT taint the turn (`_UNTRUSTED_SOURCE_TOOLS`
+  encodes *third-party* origin; Baker reading its own notes must not kill power mode) — the
+  same call #5 made for facts — while `_NON_USER_MARKERS` DOES exclude the fence from
+  `_last_user_text`, so file content can never choose which memories surface. Note the four
+  context READS are background-callable, widening the hostile-text on-ramp exactly as #22's
+  reads did; the ceiling is still one `notify_user`.
+  REST is two routers — `/api/context-files` (files; `{filename:path}`, since topic names
+  contain `/`) and `/api/memory` (facts + dreaming runs) — both keyless, both behind
+  `get_current_user`. The editor carries an `updated_at` precondition returning **409** on a
+  stale save, because the single-statement `append_daily_note` upsert guarantees
+  append-vs-append only; a whole-file overwrite racing an append is still last-write-wins.
+  `memory.service.delete_fact()` is a **human-only** hard purge with no agent tool — the
+  assistant retires a fact with `invalidate_fact`, which preserves the temporal record.
+  Phases 3 (compaction), 4 (observer/extractor/commitments-as-tasks/file-dreaming) and 5
+  (optional embeddings re-ranker) are follow-ups; #72 stays open as the tracker.
   Multi-user is future work (authz/ownership), not just a `user_id` column.
 - **One database: PostgreSQL, and it's mandatory** — the backend refuses to start
   without `DATABASE_URL` (decided 2026-07-18; single engine, ready for multi-user
@@ -415,6 +462,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | AI providers + pricing + setup wizard | `chatty/backend/core/providers/`, `chatty/frontend/src/setup/` |
 | CRM core (schema, router, tools, smart import) — **landed #3** as `backend/crm/` + `frontend/src/crm/` + `frontend/src/shared/` | `chatty/backend/integrations/crm_lite/`, `chatty/frontend/src/crm/` |
 | Assistant engine — **chat loop, tool registry, confirmations, uploads landed #4** as `backend/assistant/` + `frontend/src/assistant/`; **memory (facts + FTS) + dreaming (pure-algorithmic usage scoring + fact soft-archival) landed #5** as `backend/memory/` + `backend/dreaming/` (dreaming's archival unit is the fact row, not context files — CakeCRM has no file store; driven by #6's reminder tick) | `chatty/backend/core/agents/` |
+| Context files + Memory UI (`assistant_context_files` with GENERATED `kind`/`is_protected`; soul unfenced in static, knowledge nonce-fenced in volatile; 7 keyless tools; always-confirm on protected files; `/api/context-files` + `/api/memory`; `MemoryPage`) — **landed #72 Phase 1+2** as `backend/context_files/` + `backend/memory/router.py` + `frontend/src/crm/MemoryPage.tsx`. Chatty's `_load-order.json`, GCS sync, `atomic_write`, meetings/transcripts and `relevance_prefetch` do not translate and were not ported; its flat namespace became `topics/`+`daily/` prefixes to fit one table; its regex `sanitize_memory_content` was dropped in favour of this repo's nonce fencing (forge-proof where a blocklist is not). Fencing `MEMORY.md` is deliberately STRICTER than chatty, which loads it raw, because ours becomes extractor-fed in Phase 4 | `chatty/backend/core/agents/context_manager.py` + `tools/context_tools.py` + `ai_service._knowledge_management_instructions()` |
 | Heartbeat + background AI turn — **landed #6** as `backend/heartbeat/` (60s APScheduler tick) + `backend/assistant/background.py` (non-SSE `run_background_turn`: auto-approved writes under a server-enforced tool allowlist + `WRITE_BUDGET_BACKGROUND`). The scheduler now runs **four** jobs, split by one rule the code states explicitly: **local SQL rides `reminder_tick`** (#5 dreaming, #18's score refresh), **network- or AI-bound work gets its OWN `add_job`** (`heartbeat_turn`, #17's `gmail_scan`, #22 Phase 3's `proactive`) so a hung request can never delay reminder delivery | `chatty/backend/core/agents/background_runner.py` + `main.py` scheduler wiring |
 | Reminders (own table, recurrence math, agent tools + **net-new full CRUD REST/UI**) — **landed #6** as `backend/reminders/` + `frontend/src/crm/RemindersPage.tsx` | `chatty/backend/core/agents/reminders/` |
 | Notifications (Web Push VAPID keys persisted in Postgres, `notify_user` tool, bell) + system alerts — **landed #6** as `backend/notifications/` + `backend/alerts/` + `frontend/src/crm/components/{NotificationsBell,NotificationSettings}.tsx` + `frontend/public/sw.js`. Telegram delivery goes out through `telegram.service.notify_linked_user` (the pure-sync channel #7 landed), via `_send_telegram`; WhatsApp not ported. Chatty's user-configurable `scheduled_actions` subsystem (leases/active-hours/triage/dashboards) deliberately deferred | `chatty/backend/core/agents/notifications/` + `alerts/` |

@@ -32,6 +32,7 @@ from collections.abc import AsyncGenerator
 
 from assistant import assembly, delimiters, history, identity
 from assistant.write_budget import WRITE_BUDGET_PER_TURN, BudgetAction, BudgetState
+from context_files import prompt as context_prompt, tools as context_file_tools
 from memory import context as memory_context
 from providers.base import AIProvider, _sse
 from providers.windows import context_usage_event
@@ -46,6 +47,19 @@ _UNTRUSTED_MARKER = "<untrusted_file_content"
 # them exactly like uploaded-file content does.
 _UNTRUSTED_EXTERNAL_MARKER = "<untrusted_external_content"
 _UNTRUSTED_MARKERS = (_UNTRUSTED_MARKER, _UNTRUSTED_EXTERNAL_MARKER)
+# Baker's own recorded knowledge (issue #72), fenced when a context-file read is handed
+# back to the model. Deliberately NOT in _UNTRUSTED_MARKERS: that tuple drives the
+# power→normal downgrade and encodes THIRD-PARTY origin (email, uploads). Context files
+# are written by the user, or by the assistant under a confirmation gate, so tainting
+# them would kill power mode every time Baker reads its own notes — a cost with no
+# matching risk, and the same call #5 already made for memory facts.
+_RECORDED_CONTEXT_MARKER = "<recorded_context"
+# ...but it IS excluded from "what did the user type", because a provider that stores a
+# tool result as a plain string on a user message would otherwise let file content choose
+# which memories surface. Same defence _usable already applies to Gmail content.
+_NON_USER_MARKERS = _UNTRUSTED_MARKERS + (_RECORDED_CONTEXT_MARKER,)
+# Reads that return a stored document verbatim, so their results carry the fence.
+_CONTEXT_READ_TOOLS = {"read_context_file", "read_daily_note"}
 # Read tools whose output is untrusted external content. Reading it must not let a
 # prompt injection inside that content drive an unconfirmed write in power mode.
 _UNTRUSTED_SOURCE_TOOLS = {"gmail_search", "gmail_read_thread"}
@@ -69,7 +83,7 @@ def _last_user_text(messages: list[dict]) -> str | None:
             isinstance(text, str)
             and text.strip()
             and text != _CONTINUATION_ACK
-            and not any(mark in text for mark in _UNTRUSTED_MARKERS)
+            and not any(mark in text for mark in _NON_USER_MARKERS)
         )
 
     for m in reversed(messages):
@@ -238,13 +252,23 @@ async def _chat_impl(
     memory_block = await asyncio.to_thread(
         memory_context.build_memory_context, _last_user_text(current_messages)
     )
-    # ONE unified pre-loop build: the record context (#14) and the memory block (#5)
-    # are both per-turn injections that ride the VOLATILE half of the system prompt —
-    # never assembled/persisted messages, never the cached static block. BOTH kwargs
-    # must be passed here; dropping either silently loses that feature's injection.
+    # Baker's context files (issue #72), loaded the same way. Split by trust, not by
+    # file: the soul is a stable unfenced document and rides the cacheable STATIC half,
+    # while MEMORY.md and the manifests are freshly nonce-fenced every turn and so MUST
+    # ride the volatile half — a fresh nonce in the static block would re-key Anthropic's
+    # prompt cache on every single turn. Neither builder raises.
+    soul_block, knowledge_block = await asyncio.gather(
+        asyncio.to_thread(context_prompt.build_soul_block),
+        asyncio.to_thread(context_prompt.build_knowledge_block),
+    )
+    # ONE unified pre-loop build: the record context (#14), the memory block (#5) and the
+    # context-file blocks (#72) are all per-turn injections — never assembled/persisted
+    # messages. ALL kwargs must be passed here; dropping any silently loses that
+    # feature's injection.
     # This same system_prompt feeds the main loop and the confirmation wrap-up turn.
     system_prompt = identity.build_system_prompt(
         ident, context=context, memory_context=memory_block,
+        soul=soul_block, knowledge_context=knowledge_block,
     )
 
     # ── Main tool-execution loop ───────────────────────────────────────────────
@@ -365,7 +389,17 @@ async def _chat_impl(
             # turn, so injected instructions in that content can't auto-execute a
             # write (issue #8). Persist the pending placeholder BEFORE emitting
             # confirm (so /confirm can find it), then wait for approval.
-            if is_write and (tool_mode == "normal" or (tool_mode == "power" and turn_has_untrusted_reads)):
+            # A write to a PROTECTED context file (soul.md / MEMORY.md) confirms in every
+            # mode, power included (issue #72). `writes: True` alone is not enough there:
+            # a poisoned soul is not one bad record, it is a permanent system instruction
+            # replayed on every later turn — including background ones — that survives
+            # deleting the conversation. Same shape as the Gmail binding check below.
+            always_confirms = context_file_tools.requires_confirmation(name, args)
+            if is_write and (
+                always_confirms
+                or tool_mode == "normal"
+                or (tool_mode == "power" and turn_has_untrusted_reads)
+            ):
                 placeholder = await _pending_placeholder(name)
                 try:
                     await asyncio.to_thread(
@@ -398,6 +432,12 @@ async def _chat_impl(
             if name in _UNTRUSTED_SOURCE_TOOLS:
                 turn_has_untrusted_reads = True
                 content = delimiters.wrap_untrusted_external(name, content)
+            # A context-file read hands back a whole document Baker (or the user) wrote
+            # earlier, which may quote an email or an upload. Fence it as DATA for the
+            # same reason the prompt-injected copy is fenced (issue #72) — but do NOT
+            # taint the turn: see _RECORDED_CONTEXT_MARKER.
+            elif name in _CONTEXT_READ_TOOLS:
+                content = delimiters.wrap_recorded_context(content)
             results.append({"tool_use_id": tool_use_id, "tool_name": name, "content": content})
             persisted = True
             try:
