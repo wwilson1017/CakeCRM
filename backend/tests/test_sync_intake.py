@@ -105,6 +105,15 @@ def test_existing_cakecrm_counterpart_is_rendered_as_our_own_path():
     assert "no same-named CakeCRM counterpart" not in body
 
 
+def test_a_rename_out_of_a_watched_root_still_surfaces_its_counterpart():
+    """Per docs/SYNC.md §3 the sender sends the WATCHED side of a rename as `path`,
+    so a file moved out of the CRM still produces an intake naming the CakeCRM file
+    that may now need removing. Filtering on GitHub's `filename` alone would drop
+    it silently — there would be no entry at all, not merely no status."""
+    _, _, body = _build([_file("backend/apps/crm/chatter_service.py", status="renamed")])
+    assert "| `backend/crm/chatter_service.py` | renamed |" in body
+
+
 def test_missing_counterpart_becomes_a_count_only():
     _, _, body = _build([_file(f"backend/apps/crm/{SENTINEL_IN_SCOPE}.py")])
     assert "**1** in-scope file(s) with no same-named CakeCRM counterpart" in body

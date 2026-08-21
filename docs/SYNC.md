@@ -219,9 +219,17 @@ Per entry:
   becoming a free-text field.
 - The array must be non-empty, ≤500 entries, with no duplicate paths.
 
+**Renames: send the watched-root side as `path`.** GitHub reports a rename with `filename`
+set to the *destination* and the origin only in `previous_filename`. So a file renamed **out**
+of a watched root would vanish from a §6.1-filtered payload entirely — no entry, no `status`,
+no intake — precisely when CakeCRM most needs telling, because its own counterpart may now
+need removing. The rule that covers all three directions without adding a field: whichever
+side of the rename is under a watched root is the one sent as `path`, with `status: renamed`.
+(Renamed *into* a watched root, or *within* one, already works from `filename`.)
+
 **Not in the contract, and never will be:** PR title, PR body, commit message, author,
-branch name, diff text, or `previous_filename`. A rename is conveyed by its `status`; the
-porting worker reads the real repo anyway, so nothing is lost.
+branch name, or diff text. `previous_filename` is not sent either — the rule above makes it
+unnecessary, and every field omitted is one less place prose could hide.
 
 **This is syntax validation only.** The receiver cannot prove the SHA, PR number, timestamp
 and counts actually belong together — that would require authenticated cake_os access. The
@@ -317,8 +325,13 @@ POST /repos/wwilson1017/CakeCRM/actions/workflows/sync-intake.yml/dispatches
 `ref` **must** be `main`. The receiver refuses anything else: a dispatch names the ref, and
 GitHub takes both the workflow and the classifier script from that ref.
 
-Send only files under the three watched roots. The receiver drops the rest anyway, and
-filtering at the source keeps the payload comfortably inside the 65,535-character limit.
+Send only files under the three watched roots — this filter is the contract, not a
+suggestion (see §3 on the caps). The receiver drops the rest anyway, and filtering at the
+source keeps the payload well inside the 65,535-character limit.
+
+**A file counts as watched if EITHER `filename` OR `previous_filename` is under a watched
+root**, and the watched side is what goes in `path`. Filtering on `filename` alone silently
+drops every file renamed *out* of the CRM — see §3.
 
 ### 6.2 Credential — the part that matters
 
