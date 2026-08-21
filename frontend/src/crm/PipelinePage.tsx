@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import type { PointerEvent as ReactPointerEvent, MouseEvent as ReactMouseEvent, KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { api } from '../core/api/client';
+import { api, ApiError } from '../core/api/client';
 import type { CrmDeal } from '../core/types';
 import { DealForm } from './components/DealForm';
 import { DealDetailSheet } from './components/DealDetailSheet';
@@ -11,8 +12,8 @@ import { useIsMobile } from '../shared/useIsMobile';
 import { LoadError } from '../shared/LoadError';
 import { toast } from '../shared/toast';
 import {
-  INK, INK_MUTE, INK_DIM, LINE, BG_CARD,
-  FONT_DISPLAY, mono, formatNumber,
+  INK, INK_MUTE, INK_DIM, LINE, BG_CARD, ACCENT,
+  FONT_DISPLAY, mono, formatNumber, inputStyle, tint,
 } from '../shared/styles';
 import { pageHeading, btnPrimary, btnSecondary, btnSmall, stageCard } from './styles';
 import { KanbanBoard, type MoveEvent } from '../shared/dnd';
@@ -21,6 +22,8 @@ import {
   type PipelineFilterState, type AdvancedFilters,
   EMPTY_FILTER_STATE, dealMatchesAdvanced, hasAdvanced, loadFilterState, saveFilterState,
 } from './pipelineFilters';
+import { applicableBulkIds } from './bulkSelection';
+import { classifyBulkMove, describeBulkMove, type BulkMoveResponse, type BulkNotice } from './bulkOutcome';
 
 // The /api/crm/deals payload also carries server-computed `stage_summary` and
 // `total_pipeline_value`, but the board derives every total client-side from
@@ -92,17 +95,31 @@ export function PipelinePage() {
   // still update after a sheet dismissal even when a drag PUT overlapped the refresh.
   const pendingRefresh = useRef(false);
 
+  // Bulk stage moves (issue #55). Selection is a plain Set of deal ids; `bulkPending` has a
+  // ref twin because the mutators read it SYNCHRONOUSLY to bail out, and state wouldn't have
+  // updated yet. The lock is held from the click until the reconcile refetch settles — that
+  // is what stops a drag or a silent refresh from racing the server truth we're about to
+  // fetch. `bulkNotice` is the one message that must outlive a toast (see bulkOutcome.ts).
+  const [bulkSelected, setBulkSelected] = useState<Set<number>>(() => new Set());
+  const [bulkPending, setBulkPending] = useState(false);
+  const bulkPendingRef = useRef(false);
+  const [bulkNotice, setBulkNotice] = useState<BulkNotice | null>(null);
+  const [bulkStage, setBulkStage] = useState('');
+
   // `silent` refetches without the loading spinner — used to refresh the board after the
   // detail sheet closes, so a deal touched in-sheet (a logged note/activity) leaves the
   // "no activity" bucket without flashing the whole board. `data` stays the single source
   // of truth (issue #12): this re-derives everything from the server, no second optimistic layer.
-  const load = useCallback(async (silent = false) => {
+  // Returns whether fresh server data was actually APPLIED — the bulk flow needs that fact
+  // to word an "outcome unknown" notice honestly (a board that couldn't refresh may still be
+  // showing the optimistic result). Existing callers ignore the value.
+  const load = useCallback(async (silent = false): Promise<boolean> => {
     // `=== true` guards against a truthy non-boolean arg (e.g. a bare `onClick={load}`
     // handing in a MouseEvent) accidentally forcing silent mode.
     const isSilent = silent === true;
     // A silent refresh must not clobber an optimistic drag. If a stage write is already in
     // flight, don't even fire the GET — defer it (moveDealStage re-fires when writes settle).
-    if (isSilent && pendingWrites.current > 0) { pendingRefresh.current = true; return; }
+    if (isSilent && pendingWrites.current > 0) { pendingRefresh.current = true; return false; }
     const startGen = writeGen.current;
     if (!isSilent) setLoading(true);
     try {
@@ -111,12 +128,14 @@ export function PipelinePage() {
       // payload stale — defer+retry rather than clobber a succeeded move OR lose the refresh.
       if (isSilent && (pendingWrites.current > 0 || writeGen.current !== startGen)) {
         pendingRefresh.current = true;
-        return;
+        return false;
       }
       setData(d);
       dealConfirmedStage.current = new Map(d.deals.map(deal => [deal.id, deal.stage]));
+      return true;
     } catch { /* data stays null → LoadError below (silent: keep the current board) */ }
     finally { if (!isSilent) setLoading(false); }
+    return false;
   }, []);
 
   useEffect(() => { queueMicrotask(load); }, [load]);
@@ -141,6 +160,10 @@ export function PipelinePage() {
   // the board rolls back to the true server stage instead of an intermediate stage
   // that never persisted.
   const moveDealStage = useCallback((deal: CrmDeal, toStage: string, fromStage: string) => {
+    // A bulk move in flight owns the board until its reconcile refetch lands. A single-deal
+    // write started now could reconcile (or roll back) against the stage the bulk request is
+    // in the middle of changing, clobbering server truth we're about to fetch.
+    if (bulkPendingRef.current) return;
     const dealId = deal.id;
     const seq = (dealOpSeq.current.get(dealId) ?? 0) + 1;
     dealOpSeq.current.set(dealId, seq);
@@ -224,6 +247,29 @@ export function PipelinePage() {
 
   const deals = useMemo(() => data?.deals ?? [], [data]);
 
+  // ── Bulk selection + apply (issue #55) ─────────────────────────────────────
+  const toggleSelect = useCallback((dealId: number) => {
+    if (bulkPendingRef.current) return;
+    setBulkSelected(prev => {
+      const next = new Set(prev);
+      if (!next.delete(dealId)) next.add(dealId);
+      return next;
+    });
+  }, []);
+
+  const toggleColumn = useCallback((columnIds: number[], select: boolean) => {
+    if (bulkPendingRef.current) return;
+    setBulkSelected(prev => {
+      const next = new Set(prev);
+      for (const id of columnIds) {
+        if (select) next.add(id); else next.delete(id);
+      }
+      return next;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => setBulkSelected(new Set()), []);
+
   const isFiltering = search.trim() !== '' || hasAdvanced(advanced);
 
   // The board loads every deal, so advanced filtering is a pure client-side predicate
@@ -245,6 +291,101 @@ export function PipelinePage() {
       return dealMatchesAdvanced(d, advanced, now);
     });
   }, [deals, search, advanced, isFiltering]);
+
+  // The issue's "bulk actions operate on the currently filtered set" invariant, enforced
+  // ONCE: `filteredDeals` already embeds #21's facet predicate (including the stage facet
+  // that hides whole columns), and this single intersection feeds BOTH the bar's count and
+  // the apply payload — so what the operator is told and what the server is sent cannot
+  // disagree, even if the selection changed since the last render.
+  const bulkIds = useMemo(
+    () => applicableBulkIds(bulkSelected, filteredDeals),
+    [bulkSelected, filteredDeals],
+  );
+
+  const applyBulkMove = useCallback(async (toStage: string) => {
+    if (bulkPendingRef.current || !toStage) return;
+    const ids = applicableBulkIds(bulkSelected, filteredDeals);
+    if (ids.length === 0) return;
+
+    setBulkNotice(null);
+    // Snapshot each mover's current stage as the fallback revert target, for the same reason
+    // moveDealStage keeps `dealConfirmedStage`: a deal with no server-confirmed entry yet.
+    const prevStages = new Map(deals.map(d => [d.id, d.stage]));
+    // Optimistic: restage every mover in one pass, positions untouched (same trick as
+    // moveDealStage, so a revert needs no position bookkeeping).
+    const moving = new Set(ids);
+    setData(prev => prev ? {
+      ...prev,
+      deals: prev.deals.map(d => moving.has(d.id) ? { ...d, stage: toStage } : d),
+    } : prev);
+    clearSelection();
+
+    bulkPendingRef.current = true;
+    setBulkPending(true);
+    // Same bookkeeping a drag does: an unconfirmed optimistic write exists, and a silent GET
+    // spanning it must be invalidated rather than allowed to clobber it.
+    pendingWrites.current++;
+    writeGen.current++;
+
+    // try/finally for the same reason moveDealStage has one: the lock disables drag and
+    // every single-deal mutator, and a leaked pendingWrites count defers every later silent
+    // refresh — a throw that skipped either release would wedge the board until a reload.
+    let writeSettled = false;
+    try {
+      let outcome;
+      try {
+        const result = await api<BulkMoveResponse>('/api/crm/deals/bulk-move', {
+          method: 'POST', body: JSON.stringify({ deal_ids: ids, stage: toStage }),
+        });
+        outcome = classifyBulkMove(result);
+      } catch (err) {
+        console.error('Bulk move failed:', err);
+        outcome = classifyBulkMove({
+          thrown: err instanceof ApiError ? { status: err.status, reason: err.detail } : {},
+        });
+      }
+
+      if (outcome.kind === 'rejected') {
+        // Nothing was written, so put the board back to server truth — stronger than undoing
+        // to `prevStages`, which could itself be an optimistic value that never persisted.
+        setData(prev => prev ? {
+          ...prev,
+          deals: prev.deals.map(d => moving.has(d.id)
+            ? { ...d, stage: dealConfirmedStage.current.get(d.id) ?? prevStages.get(d.id) ?? d.stage }
+            : d),
+        } : prev);
+      }
+      if (outcome.kind === 'rejected' || outcome.kind === 'unconfirmed') {
+        // Retain the submitted ids so the operator can fix the cause and retry without
+        // re-selecting. Merged, not assigned, so a selection made mid-flight survives.
+        // Deliberately NOT done for skips: those deals DID move, and the skipped ones are
+        // gone from the board — re-selecting them would offer a retry that cannot succeed.
+        setBulkSelected(prev => new Set([...prev, ...ids]));
+      }
+
+      pendingWrites.current--;
+      writeSettled = true;
+      // Reconcile from server truth before releasing the lock — the refetch is the authority
+      // on what actually saved, and holding the lock across it keeps a drag from racing it.
+      const reconciled = await load(true);
+      const notice = describeBulkMove(outcome, ids.length, reconciled);
+      if (notice) {
+        if (notice.persistent) setBulkNotice(notice);
+        else if (outcome.kind === 'rejected') toast.error(notice.text);
+        else toast.info(notice.text);
+      }
+      // Fire a refresh that deferred while this write was in flight (same check moveDealStage
+      // does), so a sheet dismissal during the bulk still lands its fresh derived fields.
+      if (pendingWrites.current === 0 && pendingRefresh.current) {
+        pendingRefresh.current = false;
+        load(true);
+      }
+    } finally {
+      if (!writeSettled) pendingWrites.current--;
+      bulkPendingRef.current = false;
+      setBulkPending(false);
+    }
+  }, [bulkSelected, filteredDeals, deals, clearSelection, load]);
 
   // #18: within each stage column, order by lead_score (hottest first); unscored rows
   // (null) sink below scored ones. Array.sort is stable, so the server's updated_at DESC
@@ -345,6 +486,29 @@ export function PipelinePage() {
         />
       </div>
 
+      {bulkNotice && (
+        <div style={{
+          ...stageCard(BG_CARD, ACCENT), padding: '12px 14px', marginBottom: 12,
+          display: 'flex', alignItems: 'flex-start', gap: 12,
+        }}>
+          <span style={{ fontSize: 13, color: INK, lineHeight: 1.45, flex: 1 }}>{bulkNotice.text}</span>
+          <button onClick={() => setBulkNotice(null)} style={{ ...btnSecondary, ...btnSmall, flexShrink: 0 }}>
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {!isMobile && bulkIds.length > 0 && (
+        <BulkBar
+          count={bulkIds.length}
+          stage={bulkStage}
+          pending={bulkPending}
+          onStageChange={setBulkStage}
+          onApply={() => applyBulkMove(bulkStage)}
+          onClear={clearSelection}
+        />
+      )}
+
       {isFiltering && filteredDeals.length === 0 ? (
         <EmptyFilterState onClear={() => setFilters(EMPTY_FILTER_STATE)} />
       ) : (
@@ -359,7 +523,9 @@ export function PipelinePage() {
         // (unlike the blueprint, whose board persisted intra-column order and disabled drag).
         // A drop that makes a deal stop matching an active facet just removes it from the
         // filtered view — correct filter semantics.
-        dragDisabled={isMobile}
+        // Also disabled while a bulk move is in flight: `moveDealStage` would bail out
+        // anyway, so a drag would animate and then silently snap back.
+        dragDisabled={isMobile || bulkPending}
         // The ported KanbanBoard/KanbanColumn expose only className hooks (no style
         // prop), so board-scroller and column-body layout use Tailwind here; the
         // card and header visuals below use the CRM's inline design tokens.
@@ -380,13 +546,25 @@ export function PipelinePage() {
                 scrollSnapAlign: isMobile ? 'center' : undefined,
               }}
             >
-              <StageHeader stage={stage} count={colDeals.length} total={total} />
+              <StageHeader
+                stage={stage} count={colDeals.length} total={total}
+                // Select-all operates on this column's FILTERED ids, so it can never pick
+                // up a deal the current facets are hiding.
+                columnDealIds={isMobile ? [] : colDeals.map(d => d.id)}
+                selectedIds={bulkSelected}
+                onToggleColumn={toggleColumn}
+              />
               {children}
             </div>
           );
         }}
         renderCard={(deal, columnId) => (
-          <DealBoardCard deal={deal} columnStage={String(columnId)} onOpen={() => setSelectedDeal(deal)} />
+          <DealBoardCard
+            deal={deal} columnStage={String(columnId)} onOpen={() => setSelectedDeal(deal)}
+            selectable={!isMobile}
+            isSelected={bulkSelected.has(deal.id)}
+            onToggleSelect={() => toggleSelect(deal.id)}
+          />
         )}
         renderEmptyColumn={() => (
           <div style={{
@@ -431,10 +609,77 @@ function EmptyFilterState({ onClear }: { onClear: () => void }) {
   );
 }
 
-function StageHeader({ stage, count, total }: { stage: string; count: number; total: number }) {
+// The inline bulk bar (issue #55). An inline bar rather than the blueprint's modal: one
+// action does not need a dropdown behind a dialog.
+function BulkBar({ count, stage, pending, onStageChange, onApply, onClear }: {
+  count: number; stage: string; pending: boolean;
+  onStageChange: (s: string) => void; onApply: () => void; onClear: () => void;
+}) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12,
+      padding: '10px 14px', borderRadius: 6,
+      background: tint(ACCENT, 8), border: `1px solid ${tint(ACCENT, 30)}`,
+    }}>
+      <span style={{ fontFamily: FONT_DISPLAY, fontSize: 14, color: INK }}>
+        {count} deal{count !== 1 ? 's' : ''} selected
+      </span>
+      <select
+        value={stage}
+        onChange={e => onStageChange(e.target.value)}
+        disabled={pending}
+        aria-label="Move selected deals to stage"
+        style={{ ...inputStyle, width: 'auto', textTransform: 'capitalize', marginLeft: 'auto' }}
+      >
+        <option value="">Move to…</option>
+        {STAGE_ORDER.map(s => <option key={s} value={s}>{s}</option>)}
+      </select>
+      <button
+        onClick={onApply}
+        disabled={pending || !stage}
+        style={{ ...btnPrimary, ...btnSmall, opacity: pending || !stage ? 0.5 : 1 }}
+      >
+        {pending ? 'Moving…' : 'Apply'}
+      </button>
+      <button onClick={onClear} disabled={pending} style={{ ...btnSecondary, ...btnSmall }}>Clear</button>
+    </div>
+  );
+}
+
+// Stops a checkbox interaction from reaching the card beneath it. All three matter: CakeCRM's
+// KanbanCard spreads the dnd-kit pointer listeners over the WHOLE card (there is no dedicated
+// drag grip), and the card itself is a role="button" that opens the detail sheet on click and
+// on Space. Without these, ticking a checkbox would start a drag, open the sheet, or both.
+const stopCardInteraction = {
+  onPointerDown: (e: ReactPointerEvent) => e.stopPropagation(),
+  onClick: (e: ReactMouseEvent) => e.stopPropagation(),
+  onKeyDown: (e: ReactKeyboardEvent) => e.stopPropagation(),
+};
+
+const checkboxStyle = { accentColor: ACCENT, width: 14, height: 14, cursor: 'pointer', flexShrink: 0 };
+
+function StageHeader({ stage, count, total, columnDealIds = [], selectedIds, onToggleColumn }: {
+  stage: string; count: number; total: number;
+  columnDealIds?: number[];
+  selectedIds?: ReadonlySet<number>;
+  onToggleColumn?: (ids: number[], select: boolean) => void;
+}) {
   const color = STAGE_COLORS[stage]?.color || INK_DIM;
+  const selectedHere = selectedIds ? columnDealIds.filter(id => selectedIds.has(id)).length : 0;
+  const allSelected = columnDealIds.length > 0 && selectedHere === columnDealIds.length;
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, padding: '0 2px' }}>
+      {columnDealIds.length > 0 && onToggleColumn && (
+        <input
+          type="checkbox"
+          checked={allSelected}
+          // Indeterminate is not an attribute — it has to be set on the DOM node.
+          ref={el => { if (el) el.indeterminate = selectedHere > 0 && !allSelected; }}
+          onChange={() => onToggleColumn(columnDealIds, !allSelected)}
+          aria-label={`Select all ${stage} deals`}
+          style={checkboxStyle}
+        />
+      )}
       <span style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: color }} />
       <span style={{
         fontFamily: FONT_DISPLAY,
@@ -447,7 +692,10 @@ function StageHeader({ stage, count, total }: { stage: string; count: number; to
   );
 }
 
-function DealBoardCard({ deal, columnStage, onOpen }: { deal: CrmDeal; columnStage: string; onOpen: () => void }) {
+function DealBoardCard({ deal, columnStage, onOpen, selectable = false, isSelected = false, onToggleSelect }: {
+  deal: CrmDeal; columnStage: string; onOpen: () => void;
+  selectable?: boolean; isSelected?: boolean; onToggleSelect?: () => void;
+}) {
   // Colour from the column the card currently sits in (its bucket) rather than
   // deal.stage — during an optimistic drop the bucket updates before the deal's
   // own stage field does, so this keeps the accent correct instantly.
@@ -459,9 +707,22 @@ function DealBoardCard({ deal, columnStage, onOpen }: { deal: CrmDeal; columnSta
       tabIndex={0}
       onClick={onOpen}
       onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); } }}
-      style={{ ...stageCard(bg, color), padding: '10px 12px', cursor: 'pointer' }}
+      style={{
+        ...stageCard(bg, color), padding: '10px 12px', cursor: 'pointer',
+        ...(isSelected ? { borderColor: ACCENT, boxShadow: `0 0 0 1px ${tint(ACCENT, 40)}` } : {}),
+      }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
+        {selectable && onToggleSelect && (
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={onToggleSelect}
+            aria-label={`Select ${deal.title}`}
+            style={{ ...checkboxStyle, alignSelf: 'center' }}
+            {...stopCardInteraction}
+          />
+        )}
         <span style={{ fontSize: 13, color: INK, lineHeight: 1.3 }}>{deal.title}</span>
         <span style={{
           fontFamily: FONT_DISPLAY,
