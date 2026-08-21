@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import type { CSSProperties } from 'react';
+import type { CSSProperties, KeyboardEvent } from 'react';
 import { api } from '../../core/api/client';
 import type { CrmWeeklyTouches } from '../../core/types';
 import {
@@ -37,7 +37,13 @@ import { touchCountColor } from '../constants';
  */
 
 export function WeeklyTouchesCard(
-  { wrapperStyle, refreshKey = 0 }: { wrapperStyle?: CSSProperties; refreshKey?: number },
+  { wrapperStyle, refreshKey = 0, onOpenDeal }: {
+    wrapperStyle?: CSSProperties;
+    refreshKey?: number;
+    // issue #56: opening the deal sheet is the drill-down #76 deliberately deferred —
+    // the sheet carries the per-event evidence behind each of these numbers.
+    onOpenDeal?: (dealId: number) => void;
+  },
 ) {
   // Applied window: null = the rolling default (last 7 days); otherwise an
   // inclusive custom range. Only Apply commits the inputs, so typing a half-entered
@@ -172,10 +178,25 @@ export function WeeklyTouchesCard(
       ) : (
         <div style={{ borderTop: `1px solid ${LINE}` }}>
           {data.deals.map(deal => (
-            <div key={deal.id} style={{
-              padding: '10px 0', borderBottom: `1px solid ${LINE}`,
-              display: 'flex', alignItems: 'center', gap: 12,
-            }}>
+            <div
+              key={deal.id}
+              {...(onOpenDeal ? {
+                role: 'button',
+                tabIndex: 0,
+                onClick: () => onOpenDeal(deal.id),
+                onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onOpenDeal(deal.id);
+                  }
+                },
+              } : {})}
+              style={{
+                padding: '10px 0', borderBottom: `1px solid ${LINE}`,
+                display: 'flex', alignItems: 'center', gap: 12,
+                cursor: onOpenDeal ? 'pointer' : undefined,
+              }}
+            >
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{
                   fontSize: 14, color: INK,

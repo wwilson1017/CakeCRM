@@ -75,6 +75,9 @@ def _no_touch_count_daemon(monkeypatch):
     monkeypatch.setattr(tcs, "_pending", {})
     monkeypatch.setattr(tcs, "_worker", None)
     monkeypatch.setattr(tcs, "_last_backfill_at", None)
+    # #56's verdict-health counters are module-level too — a fresh dict per test keeps
+    # one test's ok/fallback/failed tallies out of the next one's assertions.
+    monkeypatch.setattr(tcs, "_verdict_stats", {"ok": 0, "fallback": 0, "failed": 0})
     yield
 
 

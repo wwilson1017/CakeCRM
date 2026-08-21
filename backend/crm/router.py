@@ -26,6 +26,7 @@ Deals:
   PUT    /api/crm/deals/:id             — update
   POST   /api/crm/deals/touch-count/backfill        — recompute AI touch counts (?scope=null|all&force=)
   GET    /api/crm/deals/touch-count/backfill/status — backfill progress
+  GET    /api/crm/deals/:id/touch-count/evidence    — per-event verdicts behind the count
 
 Tasks:
   GET    /api/crm/tasks                 — filtered list
@@ -431,8 +432,26 @@ async def touch_count_backfill(
 
 @router.get("/deals/touch-count/backfill/status")
 async def touch_count_backfill_status(user=Depends(get_current_user)):
-    """Backfill progress: remaining never-computed open deals + this process's queue depth."""
+    """Backfill progress: remaining never-computed open deals + this process's queue depth,
+    plus per-line verdict health (ok/fallback/failed) since process start (issue #56)."""
     return touch_count_service.backfill_status()
+
+
+@router.get("/deals/{deal_id}/touch-count/evidence")
+async def touch_count_evidence(deal_id: int, user=Depends(get_current_user)):
+    """Every evidence event behind a deal's AI touch count, with its verdict (issue #56).
+
+    Reads stored facts only — never re-runs AI. `verdict_state` says how current the
+    explanation is (current/stale/superseded/none). Deterministic stage-move rows come from
+    deal_stage_events and need no provider; field edits have no event log in CakeCRM at all
+    and so are absent. No pagination: bounded by construction (MAX_CHATTER_EVIDENCE +
+    MAX_ACTIVITY_EVIDENCE + MAX_STAGE_EVENT_ROWS + 1). Counts written before #56 report
+    verdict_state "none" — POST /deals/touch-count/backfill?scope=all is the repair that
+    fills them in."""
+    result = await run_in_threadpool(touch_count_service.get_touch_evidence, deal_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    return result
 
 
 # ── Lead scores (issue #18) ───────────────────────────────────────────────────
