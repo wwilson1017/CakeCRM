@@ -20,12 +20,13 @@ def test_def_and_executor_counts():
     # 6 (#19 custom fields) + 2 (#18 lead scores) + 1 (#20 crm_analytics) + 9 (#22
     # Casey parity: search_deals, mark_deal_won/lost, archive_deal, merge_deals,
     # get_stale_deals, get_contact_staleness, find_duplicates, scan_gaps) + 2 (#22
-    # Phase 2: get_deal_health, get_pipeline_analytics) + N (sibling
+    # Phase 2: get_deal_health, get_pipeline_analytics) + 2 (#70 task parity:
+    # crm_update_task, crm_delete_task) + N (sibling
     # additions) — SUM the additions, never overwrite the number. On rebase behind a
     # sibling that also adds a tool, recompute cumulative (do NOT keep-both a single
     # number). The executor count is always defs + 1 (crm_log_note alias).
-    assert len(CRM_TOOL_DEFS) == 44
-    assert len(TOOL_EXECUTORS) == 45
+    assert len(CRM_TOOL_DEFS) == 46
+    assert len(TOOL_EXECUTORS) == 47
     # Relative invariant (robust to any future additions): exactly one alias-only executor.
     assert len(TOOL_EXECUTORS) == len(CRM_TOOL_DEFS) + 1
 
@@ -102,6 +103,7 @@ _OWNED_WRITE_TOOLS = {
     "crm_create_contact", "crm_update_contact", "crm_delete_contact",
     "crm_create_deal", "crm_update_deal", "crm_update_deal_stage",
     "crm_log_activity", "crm_create_task", "crm_complete_task",
+    "crm_update_task", "crm_delete_task",  # #70
     "crm_set_contact_fields", "crm_set_company_fields", "crm_set_deal_fields",
     "crm_recompute_lead_scores",  # #18
 }

@@ -79,6 +79,12 @@ def parse_capture(text: str) -> str | None:
     return (text[m.end():] or "").strip()
 
 
+def today_local_str() -> str:
+    """Today's date as 'YYYY-MM-DD' in the configured timezone — the form due dates
+    are stored and compared in."""
+    return today_local().isoformat()
+
+
 def validate_status(status: str) -> str:
     if status not in TODO_STATUSES:
         raise ValidationError(f"Invalid status '{status}'. Valid: {', '.join(TODO_STATUSES)}")

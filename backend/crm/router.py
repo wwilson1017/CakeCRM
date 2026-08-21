@@ -90,9 +90,11 @@ from core.auth import get_current_user
 from crm import (
     chatter_service,
     field_service,
+    gtd_common,
     provenance_service,
     scoring_service,
     service as crm,
+    todo_tokens,
     touch_count_service,
 )
 from crm.smart_import import csv_cell
@@ -616,6 +618,85 @@ async def dismiss_onboarding(user=Depends(get_current_user)):
 async def dismiss_ai_prompt(user=Depends(get_current_user)):
     """Dismiss the 'add an AI key to hire your assistant' nudge (durable)."""
     return crm.dismiss_ai_prompt()
+
+
+# ── Task mode + no-login todo surfaces (#70) ──────────────────────────────────
+
+class TaskModeBody(BaseModel):
+    mode: str = Field(max_length=16)
+
+
+@router.post("/task-mode")
+async def set_task_mode(body: TaskModeBody, user=Depends(get_current_user)):
+    """Switch between normal tasks and Todo-GTD mode.
+
+    Switching migrates nothing — GTD is a view over the same task rows — so this is
+    instant and reversible in both directions.
+    """
+    try:
+        return crm.set_task_mode(body.mode)
+    except gtd_common.ValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class TodoSurfacesBody(BaseModel):
+    """All-optional: an omitted field is left untouched.
+
+    `capture_token`/`web_token` accept a literal '' to turn the surface tokenless,
+    which for capture means PUBLIC — hence `regenerate` as the safe way to get a
+    fresh secret without ever transiting a caller-chosen one.
+    """
+    capture_token: str | None = Field(default=None, max_length=128)
+    web_enabled: bool | None = None
+    web_token: str | None = Field(default=None, max_length=128)
+    regenerate_capture: bool = False
+    regenerate_web: bool = False
+
+
+@router.get("/todo-surfaces")
+async def get_todo_surfaces(user=Depends(get_current_user)):
+    """Current state of the two no-login todo surfaces, including their live URLs.
+
+    Returns the tokens themselves: they ARE the credential, and the settings page has
+    to render a copyable link. This endpoint is authenticated.
+    """
+    return _todo_surfaces_payload()
+
+
+@router.post("/todo-surfaces")
+async def update_todo_surfaces(body: TodoSurfacesBody, user=Depends(get_current_user)):
+    """Enable/disable the public todo app and set or rotate either token."""
+    capture_token = body.capture_token
+    web_token = body.web_token
+    if body.regenerate_capture:
+        capture_token = todo_tokens.mint_token()
+    elif capture_token is not None:
+        capture_token = todo_tokens.clamp_token(capture_token)
+    if body.regenerate_web:
+        web_token = todo_tokens.mint_token()
+    elif web_token is not None:
+        web_token = todo_tokens.clamp_token(web_token)
+    crm.set_todo_public_settings(
+        capture_token=capture_token,
+        web_enabled=body.web_enabled,
+        web_token=web_token,
+    )
+    return _todo_surfaces_payload()
+
+
+def _todo_surfaces_payload() -> dict:
+    """One definition of what a todo surface link looks like — the settings UI must
+    never assemble these paths itself, or the two would drift."""
+    s = crm.get_todo_public_settings()
+    capture_token = s["todo_capture_token"]
+    web_token = s["todo_web_token"]
+    return {
+        **s,
+        "capture_path": f"/capture/{capture_token}" if capture_token else "/capture",
+        "capture_public": not capture_token,
+        "web_path": (f"/todo/{web_token}" if web_token else "/todo") if s["todo_web_enabled"] else None,
+        "web_public": s["todo_web_enabled"] and not web_token,
+    }
 
 
 @router.post("/demo-clear")

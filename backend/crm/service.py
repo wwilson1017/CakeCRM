@@ -2116,7 +2116,86 @@ def get_demo_status() -> dict:
         "sample_data_loaded": sample_loaded,
         "show_onboarding": empty and not sample_loaded and not dismissed,
         "ai_key_prompt_dismissed": bool(meta.get("ai_key_prompt_dismissed")),
+        # Folded in here rather than given its own endpoint: CrmLayout already
+        # fetches demo-status on mount, so the task mode costs zero extra requests.
+        "task_mode": get_task_mode(),
     }
+
+
+# ── Task mode + public todo surfaces (#70) ────────────────────────────────────
+
+def get_task_mode() -> str:
+    """'normal' or 'gtd'. NEVER raises.
+
+    Read on every tool-registry build and on the Telegram hot path, so an unreadable
+    row must degrade to the safe default rather than break the assistant — the same
+    fail-safe posture as gmail.tools' connection check. An unmigrated database
+    (column absent) also lands here and reads as 'normal'.
+    """
+    try:
+        row = pg_fetchone("SELECT task_mode FROM crm_meta WHERE id = 1")
+    except Exception:
+        logger.warning("crm_meta.task_mode unreadable — defaulting to normal mode")
+        return "normal"
+    mode = (row or {}).get("task_mode")
+    return mode if mode in ("normal", "gtd") else "normal"
+
+
+def set_task_mode(mode: str) -> dict:
+    """Switch task mode. Switching migrates NOTHING — GTD is a view over the same
+    rows, so the change is instant and losslessly reversible in both directions."""
+    if mode not in ("normal", "gtd"):
+        raise gtd_common.ValidationError("task_mode must be 'normal' or 'gtd'")
+    pg_execute(
+        "UPDATE crm_meta SET task_mode = %s, updated_at = %s WHERE id = 1",
+        (mode, _now()),
+    )
+    return {"ok": True, "task_mode": mode}
+
+
+def get_todo_public_settings() -> dict:
+    """The three no-login-surface settings. Fail-safe like get_task_mode: if the row
+    can't be read, report the surfaces as OFF rather than guessing them open."""
+    try:
+        row = pg_fetchone(
+            "SELECT todo_capture_token, todo_web_enabled, todo_web_token "
+            "FROM crm_meta WHERE id = 1"
+        ) or {}
+    except Exception:
+        logger.warning("crm_meta todo surface settings unreadable — reporting disabled")
+        return {"todo_capture_token": "", "todo_web_enabled": False, "todo_web_token": ""}
+    return {
+        "todo_capture_token": row.get("todo_capture_token") or "",
+        "todo_web_enabled": bool(row.get("todo_web_enabled")),
+        "todo_web_token": row.get("todo_web_token") or "",
+    }
+
+
+def set_todo_public_settings(
+    *,
+    capture_token: str | None = None,
+    web_enabled: bool | None = None,
+    web_token: str | None = None,
+) -> dict:
+    """Update whichever of the three settings were supplied. Tokens are clamped by
+    the caller (crm/todo_tokens.py) before they arrive — they are URL path segments,
+    so an unclamped value could change which route matches."""
+    sets: list[str] = []
+    params: list = []
+    if capture_token is not None:
+        sets.append("todo_capture_token = %s")
+        params.append(capture_token)
+    if web_enabled is not None:
+        sets.append("todo_web_enabled = %s")
+        params.append(bool(web_enabled))
+    if web_token is not None:
+        sets.append("todo_web_token = %s")
+        params.append(web_token)
+    if sets:
+        sets.append("updated_at = %s")
+        params.append(_now())
+        pg_execute(f"UPDATE crm_meta SET {', '.join(sets)} WHERE id = 1", params)
+    return get_todo_public_settings()
 
 
 def load_sample_data() -> dict:
