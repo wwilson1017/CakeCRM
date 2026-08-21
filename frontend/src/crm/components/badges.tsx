@@ -1,4 +1,5 @@
 import { FONT_MONO, CORAL, GOLD, SAGE, INK, INK_SOFT, INK_DIM, AI, tint } from '../../shared/styles';
+import { TOUCH_COLORS, touchBand } from '../constants';
 
 const badgeBase: React.CSSProperties = {
   fontSize: 12, padding: '4px 12px', borderRadius: 4,
@@ -35,19 +36,13 @@ export function StatusBadge({ status }: { status: string }) {
 export const AI_BLUE = AI;
 export const AI_BLUE_SOFT = tint(AI, 12);
 
-// AI-estimated touch count (issue #16). Three "12-touches" bands: 0-4 dead zone (amber),
-// 5-12 closing window (green), 13+ long-cycle (blue). A NULL count renders nothing — the
-// zero-keys degradation rule holds by construction (no count is written without a provider).
-const TOUCH_COLORS = {
-  low: { bg: tint(GOLD, 12), color: GOLD },   // 0-4
-  mid: { bg: tint(SAGE, 12), color: SAGE },   // 5-12
-  high: { bg: AI_BLUE_SOFT, color: AI_BLUE },          // 13+
-} as const;
-
+// The touch-count ramp lives in crm/constants.ts so the dashboard's Weekly Touches
+// card (#76) renders the same number in the same colour as this pill. A NULL count
+// renders nothing here — the zero-keys degradation rule holds by construction (no
+// count is written without a provider).
 export function TouchCountPill({ count }: { count?: number | null }) {
   if (count == null) return null;
-  const band = count <= 4 ? 'low' : count <= 12 ? 'mid' : 'high';
-  const c = TOUCH_COLORS[band];
+  const c = TOUCH_COLORS[touchBand(count)];
   const label = count === 1 ? '1 touch' : `${count} touches`;
   return (
     <span

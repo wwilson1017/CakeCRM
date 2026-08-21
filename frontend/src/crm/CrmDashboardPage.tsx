@@ -6,6 +6,7 @@ import { ActivityTimeline } from './components/ActivityTimeline';
 import { DealForm } from './components/DealForm';
 import { DealDetailSheet } from './components/DealDetailSheet';
 import { StatCard } from './components/StatCard';
+import { WeeklyTouchesCard } from './components/WeeklyTouchesCard';
 import { STAGE_COLORS, STAGE_ORDER } from './constants';
 import { WarmHalo } from '../shared/WarmHalo';
 import { useIsMobile } from '../shared/useIsMobile';
@@ -38,6 +39,8 @@ export function CrmDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [selectedDeal, setSelectedDeal] = useState<CrmDeal | null>(null);
   const [editDeal, setEditDeal] = useState<CrmDeal | null>(null);
+  // Bumped by reload() to refetch the weekly-touches card alongside the rest.
+  const [touchesKey, setTouchesKey] = useState(0);
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   // Monotonic id so a slow in-flight analytics request can't overwrite a newer
@@ -55,9 +58,12 @@ export function CrmDashboardPage() {
 
   function reload() {
     // refresh after a mutation; stale data beats a blank page. Refetches BOTH
-    // dashboard and analytics so win/loss, activity, and staleness stay current.
+    // dashboard and analytics so win/loss, activity, and staleness stay current,
+    // and bumps touchesKey so the weekly-touches card refetches with them —
+    // otherwise logging an activity here updates every panel except that one.
     api<CrmDashboard>('/api/crm/dashboard').then(setData).catch(() => {});
     loadAnalytics();
+    setTouchesKey(k => k + 1);
   }
 
   function openDeal(id: number) {
@@ -147,6 +153,24 @@ export function CrmDashboardPage() {
         </h1>
       </div>
 
+      {/* Parity stat row (issue #76 — cake_os DashboardTab's four cards). Built from
+          the dashboard payload ALONE, so it survives an analytics fetch failure; the
+          Snapshot below needs /api/crm/analytics and vanishes without it, which is
+          why overdue tasks appears in both places rather than only there. */}
+      <div style={{ padding: `0 ${px} 18px`, position: 'relative', zIndex: 2 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+          <StatCard label="Contacts" value={data.total_contacts.toLocaleString()} />
+          <StatCard label="Companies" value={data.total_companies.toLocaleString()} />
+          <StatCard label="Pipeline value" value={totalPipelineValue} />
+          <StatCard
+            label="Overdue tasks"
+            value={`${data.overdue_tasks}`}
+            sub={`${data.pending_tasks} pending`}
+            color={data.overdue_tasks > 0 ? CORAL : undefined}
+          />
+        </div>
+      </div>
+
       {/* Snapshot (analytics) */}
       {analytics && wl && (
         <div style={{ padding: `0 ${px} 4px`, position: 'relative', zIndex: 2 }}>
@@ -175,12 +199,9 @@ export function CrmDashboardPage() {
               value={`${wl.open_deals}`}
               sub={`worth $${formatNumber(wl.total_pipeline_value)}`}
             />
-            <StatCard
-              label="Overdue tasks"
-              value={`${data.overdue_tasks}`}
-              sub={`${data.pending_tasks} pending`}
-              color={data.overdue_tasks > 0 ? CORAL : undefined}
-            />
+            {/* Overdue tasks deliberately NOT repeated here — it is the fourth tile of
+                the always-on parity row above (#76), and rendering it twice on one
+                screen read as an unfinished merge. */}
           </div>
           {closed > 0 ? (
             <div style={{ marginTop: 14, maxWidth: 420 }}>
@@ -197,6 +218,14 @@ export function CrmDashboardPage() {
           )}
         </div>
       )}
+
+      {/* Weekly touches (issue #76). Self-hiding with zero AI keys, so it owns its
+          own padding — an empty wrapper here would leave a mystery gap on the page
+          it is supposed to be invisible from. */}
+      <WeeklyTouchesCard
+        refreshKey={touchesKey}
+        wrapperStyle={{ padding: `6px ${px} 22px`, position: 'relative', zIndex: 2 }}
+      />
 
       {/* Stage rows */}
       <div style={{ padding: `0 ${px} 28px`, position: 'relative', zIndex: 2 }}>

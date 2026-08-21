@@ -64,6 +64,7 @@ Lead scores (issue #18):
 
 Other:
   GET    /api/crm/dashboard             — summary stats
+  GET    /api/crm/dashboard/weekly-touches — open deals touched in a window (?start, ?end)
   GET    /api/crm/analytics             — win/loss, activity volume, deal aging (?days, ?stale_days)
   GET    /api/crm/demo-status           — first-run onboarding / sample-data state
   POST   /api/crm/load-sample-data      — seed fictional demo data (first run)
@@ -555,6 +556,28 @@ async def delete_activity(activity_id: int, user=Depends(get_current_user)):
 @router.get("/dashboard")
 async def dashboard(user=Depends(get_current_user)):
     return crm.get_dashboard_stats()
+
+
+@router.get("/dashboard/weekly-touches")
+async def weekly_touches(
+    start: str | None = Query(None),
+    end: str | None = Query(None),
+    user=Depends(get_current_user),
+):
+    """Open deals touched in the window, from #16's AI touch counts (issue #76).
+
+    Omit both params for the rolling last-7-days window; pass BOTH start and end
+    (YYYY-MM-DD, UTC calendar days, end inclusive) for a custom range.
+
+    With no AI provider configured the counts are still real — membership is keyless —
+    but `computed_deals` is 0, which is the client's signal to hide the card rather
+    than render rows of blank estimates. Never an error either way.
+    """
+    try:
+        return crm.get_weekly_touches(start=start, end=end)
+    except ValueError as e:
+        # Malformed / half-specified range — the caller's input, not a server fault.
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/analytics")
