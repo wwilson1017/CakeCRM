@@ -97,6 +97,50 @@ It returns nothing.
   malicious email cannot silently drive the assistant to create a draft or change
   CRM data without your approval.
 
+## The no-login todo links
+
+Todo-GTD task mode can publish **two unauthenticated surfaces**. Both are opt-in, both
+are off or inert until you turn them on, and both are described here so you can decide
+with your eyes open. If you never enable Todo-GTD mode, neither exists.
+
+They are authorized by an unguessable **secret token in the URL path**, not by a
+session — that is what makes them work as a phone bookmark or a home-screen app. A URL
+is a credential: anyone you send it to has the access it grants, it will sit in browser
+history and may appear in referrer headers or a proxy log. Treat it like a password.
+
+| | Quick capture | Full todo app |
+|---|---|---|
+| Path | `/capture` or `/capture/{token}` | `/todo` or `/todo/{token}` |
+| Grants | **Write-only** — creates one inbox item | **Read and write** on every todo |
+| Default | Reachable without a token (harmless: nothing is readable) | **Off entirely** |
+| Manage | Settings → Tasks | Settings → Tasks |
+
+- **Capture is genuinely write-only.** It accepts a block of text, files it in your
+  inbox, and answers with nothing but the new item's id. There is no read endpoint on
+  that surface — a caller cannot list, search or retrieve anything.
+- **The full app is the one that matters.** Its token grants the whole todo store,
+  read and write. It is off by default, and switching it on mints a secret token in
+  the same action rather than publishing your list at a guessable address. You *can*
+  clear the token to make it truly public; the Settings card says plainly what that
+  means.
+- **These tokens reach the todos and nothing else.** The public mount serves only the
+  todo/project endpoints. Contacts, deals, settings, the assistant and every other
+  part of the CRM stay behind your login.
+- **Rotating a token immediately kills the old link**, including any home-screen app
+  installed from it.
+- **Unknown tokens get a 404, never a 401 or 403** — an uninvited caller learns
+  nothing about whether a surface exists. Comparison is constant-time, and a
+  non-ASCII probe is a 404 rather than a server error.
+- **Abuse protection ships with the feature**: per-IP rate limits on every public
+  endpoint, with a separate, stricter budget that only *wrong* tokens consume — so
+  guessing costs an attacker 30 tries per five minutes per IP while normal use never
+  touches it. Request bodies are size-checked before they are parsed. Every response
+  carries `Cache-Control: no-store` and `X-Robots-Tag: noindex, nofollow`.
+- **What a stranger can do at worst**, with capture public: add junk to your inbox,
+  up to the rate limit. That text is data — it is never treated as instructions,
+  including by the background assistant turn, whose ceiling remains a single
+  notification with no ability to write to the CRM.
+
 ## Reporting a vulnerability
 
 Please use GitHub's **private vulnerability reporting** on this repository

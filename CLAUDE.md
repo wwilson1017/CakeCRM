@@ -317,6 +317,54 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   (a live user/assistant-editable, provenance-tracked field) — and `lead_score` is never
   user/tool/assistant-writable. Deals sort by score client-side (within kanban column);
   contacts have a server-sorted `lead_score` column (`DESC NULLS LAST`).
+- **Tasks have two modes over ONE store** (#70). `crm_meta.task_mode` is `normal` or
+  `gtd`; GTD is a presentation + tool surface over the *same* `tasks` rows, never a
+  second table — which is what keeps the dashboard counts, contact/deal rollups,
+  `crm_get_stale_deals`' open-follow-up check, the heartbeat nudge and the CRM reset
+  aware of GTD todos, and makes switching modes a **no-op** (nothing migrates,
+  instantly reversible). `tasks` gained `status` (7 GTD values), `star`, `context`,
+  `tags` (JSONB — deliberately unlike `contacts.tags` TEXT, because the facet filters
+  with `jsonb_exists`), `repeat` (+ `weekdays`/`every:N`), `auto_star_on_due`,
+  `project_id` → new `task_projects`, `completed_at`, `source`; plus the one
+  invariant that makes one store safe — a DB CHECK `completed = CASE WHEN status =
+  'done' THEN 1 ELSE 0 END`. **Every task write funnels through
+  `service._apply_task_update_cur`** (`SELECT status … FOR UPDATE` → write both
+  columns together → `_spawn_next_task_occurrence_cur` on a real done-transition), so
+  `complete_task`/`update_task` are thin adapters and completing a repeating task from
+  the plain normal-mode checkbox still spawns its next occurrence. The spawn reads the
+  POST-update row (clearing `repeat` while completing must not spawn) and takes ONE
+  clock read shared with the auto-star comparison. The migration backfills BEFORE
+  adding the CHECK, and `seed_data.py` DERIVES `status`/`completed_at` from
+  `completed` — hand-writing either would break first-run seeding. GTD's `dropped`
+  status is a soft delete that is neither done nor open, so `NOT_DROPPED_TASK(_T)` is
+  swept across the seven open-task query sites exactly like `LIVE_TASK_PREDICATE`;
+  the is-the-CRM-empty counts deliberately do NOT filter it. `task_projects` is
+  FK-referenced by `tasks`, so it MUST stay in both TRUNCATE variants. Tool surfaces
+  SWAP by mode: `crm.gtd_tools.get_gtd_tools()` returns `([], {})` in normal mode (the
+  `get_gmail_tools` precedent) and `get_crm_tools()` hides its five task tools in GTD
+  mode — advertising both would give the model two vocabularies for one store — while
+  executors stay reachable in both so a call proposed just before a flip still
+  resolves. `crm_update_task`/`crm_delete_task` close the long-standing parity gap in
+  BOTH modes. `identity.GTD_GUIDE` appends to the static prompt only in GTD mode (a
+  rare, deliberate cache invalidation, same class as editing the personality), and the
+  heartbeat prompt names `todo_list` instead of `crm_list_tasks`. Telegram gains a
+  deterministic `capture …` intercept that runs BEFORE the model — zero AI cost, works
+  with no provider configured.
+- **The two no-login todo surfaces are opt-in and asymmetric** (#70, ported from
+  chatty). `/capture[/{token}]` is **write-only** (creates one inbox row, returns only
+  its id — no read endpoint exists on it) and is reachable while no token is set;
+  `/todo[/{token}]` serves the **whole todo app read+write** and is **off** until
+  `todo_web_enabled`, which mints a token in the same action rather than publishing
+  the list at a guessable address. Both mount ONLY `gtd_router.build_router` — the
+  token reaches todos and nothing else — and both carry `core/ratelimit.IPRateLimiter`
+  (a separate strict budget burned only by WRONG tokens), 404-never-401,
+  `hmac.compare_digest` on **bytes** (a non-ASCII probe must be a 404, not a 500),
+  `no-store` + `noindex` on every response *including* the unbuilt-frontend 503, and a
+  body-size check BEFORE JSON parsing. All four routers mount before the SPA catch-all
+  in `main.py` or the catch-all swallows them. Tokens are clamped to `[A-Za-z0-9_-]`
+  and rejected if they equal a page slug (`RESERVED_TODO_WEB_SLUGS`) — `todos` is
+  reserved because `/api/todo-web/todos/…` would otherwise shadow the API mount.
+  Documented in SECURITY.md.
 - **API keys are entered in-app, encrypted at rest** (Fernet; key from env →
   OS keychain → file fallback) — never as env vars.
 - **Backend tests** live in `backend/tests/` (config in `backend/pytest.ini`,
@@ -351,6 +399,13 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 - Never create runtime SQLite stores or ad-hoc schema — Postgres migrations own
   the schema. When a check-then-write spans reads and updates, do it in one
   transaction with `SELECT ... FOR UPDATE` (see `core/auth_2fa.py`).
+- Never write `tasks.completed` or `tasks.status` outside
+  `service._apply_task_update_cur` — a DB CHECK binds them, so any other writer is a
+  constraint violation waiting to happen (#70). Adding a task READER means adding
+  `NOT_DROPPED_TASK` to it too, unless it is deliberately counting every row.
+- Never add a route to `crm/gtd_router.build_router` that should stay private: that
+  factory is mounted TWICE, and its second mount is the no-login public web app.
+  Authenticated-only routes belong on the module-level `router` instead.
 - Never commit TN Cheesecake internals: no real prospect/customer data, no TNC
   staff/product names, no internal hostnames or secrets. Ported prompts (Casey's)
   must be genericized. This repo goes public at launch and history is forever.
@@ -434,4 +489,5 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Scoring, analytics — analytics **landed #20** as `service.get_analytics()`/`summarize_analytics()` + `GET /api/crm/analytics` + `crm_analytics` tool + enriched `CrmDashboardPage` (win/loss, activity volume, read-time deal aging from existing timestamps — no migration; stage-duration metrics dropped, no stage-change audit trail; scoring landed separately in #18 above) | `cake_os/backend/apps/crm/*_service.py` |
 | Dashboard parity (stat row + Weekly Touches) — **landed #76** as `service.get_weekly_touches()` + `GET /api/crm/dashboard/weekly-touches` + `frontend/src/crm/components/WeeklyTouchesCard.tsx`, plus `total_companies` on `get_dashboard_stats()` and a four-tile stat row on `CrmDashboardPage`. Ported for CONTENT parity, **additively** — the blueprint component is written against Tailwind classes (`bg-cream`/`text-charcoal`/`font-heading`) that #54 removed, and a literal replacement would have deleted #20's analytics sections. The blueprint's PER-REP grouping collapses to per-DEAL (no owner columns, single-user); the envelope keeps `window`/`total_touches`/`total_open_deals` with `deals` where it had `reps`, so a later multi-user port is a re-grouping. **Two separate signals, deliberately:** window MEMBERSHIP is `LAST_TOUCH_SQL` — the same keyless GREATEST(edit, newest activity, newest live note) expression `analytics_service.get_stale_deals` uses, so the card and the "Needs a touch" panel on the same page can never disagree about what a touch is — while the per-deal NUMBER is #16's `ai_touch_count`, which is what supplies the zero-keys gate (no provider ⇒ every count NULL ⇒ `computed_deals == 0` ⇒ the card renders `null`; it owns its own wrapper padding, so hiding leaves no gap). Membership is emphatically NOT `deals.ai_touch_count_at`: that column is #16's stale-write-guard watermark (it only advances when a provider answered and the CAS accepted, and falls back to the deal's `created_at`), so keying a window off it made every provider timeout silently drop a deal from an accountability number — and left numerator and denominator with different coverage on a half-backfilled install. Because membership is keyless, both sides of the ratio are coverage-independent. The touch-count colour ramp moved to `crm/constants.ts` and is shared with `TouchCountPill` (one number, one colour, app-wide). Window math mirrors the blueprint but on UTC calendar days — no CT convention here (and `get_dashboard_stats` already decides overdue against a UTC day), so the inclusive end-day bound is a plain +1 day, guarded against the `datetime.max` OverflowError that is not a `ValueError`; the filter is labelled UTC rather than converting per viewer. Drill-down deliberately omitted (issue #56). | `cake_os/frontend/src/apps/crm/components/DashboardTab.tsx` + `WeeklyTouchesCard.tsx` + `backend/apps/crm/dashboard_service.py` |
 | Assistant tool set + sales behaviors — **Phase 1 landed #22**: 9 new tools (`crm_search_deals`, `crm_mark_deal_won`/`_lost`, `crm_archive_deal`, `crm_merge_deals`, `crm_get_stale_deals`, `crm_get_contact_staleness`, `crm_find_duplicates`, `crm_scan_gaps`) in `backend/crm/analytics_service.py` + `service.py`, parity closes (embedded `custom_fields`, tool-side `limit_per_stage`, `limit` on find/search, company chatter), the genericized static `identity.SALES_GUIDE` prompt block + sales `QuickActions`. **Phases 2 + 3 landed together** once #17/#18/#20 all merged (the three-PR split was dependency ordering, and every dependency cleared at once): **Phase 2** = `crm_get_deal_health` + `crm_get_pipeline_analytics` in `analytics_service.py` (see the CRM bullet above); **Phase 3** = `backend/proactive/` — a daily pipeline digest and stale-deal / untouched-contact nudges on their own `proactive` scheduler job. Both are **keyless-first**: the digest is deterministic SQL and the nudges read Phase 1's pure-SQL detectors, with an optional single `run_background_turn` (read tools + `notify_user`, digest numbers in the USER message) adding at most one extra notification when a provider exists. Every send **claims before it delivers** — the digest via a one-statement rowcount UPDATE on `heartbeat_state` (so two ticks can't both push), each nudge via a conditional upsert on `proactive_nudges` — because a crash that loses one notification beats one that re-sends every tick. `proactive_nudges` is polymorphic and FK-less, so it MUST stay in the `_truncate_all` sweep. NOT ported: `get_rep_performance` (no owner columns), `enrich_field` (no web tools), lead-import tools (own issue) | `cake_os/backend/apps/crm/tools/` + the blueprint sales agent's config |
+| Todo-GTD task mode (one store: widened `tasks` + `task_projects`; `crm/gtd_{common,service,router,tools}.py`, `crm/todo_{capture,web,pwa,tokens}.py`, `core/{ratelimit,localtime}.py`; `frontend/src/crm/gtd/*` + `components/TaskModeCard.tsx`) — **landed #70**. **Source note, because the issue says otherwise:** the `<!-- auto-answer -->` directed "port from chatty, not cake_os" on the premise that cake_os was behind. It is not — cake_os's `todo_gtd/common.py` header states it IS chatty's todo ported to Postgres, extended with `weekdays`/`every:N` repeats, a Today view, quick-add and `auto_star_on_due`. Chatty's is SQLite behind a process-wide write lock. So each half came from whichever tree is genuinely ahead, and the answer's file-level instructions were followed exactly where it gave them: **public capture + web app + rate limiter + PWA manifest from chatty** (`capture.py`/`web.py`/`ratelimit.py`/`pwa.py`, named explicitly in the answer), **GTD core from cake_os** (already Postgres, already on `pg_fetchall`/`row_to_dict`, and the only tree with the three features the issue's own scope list demands). NOT ported: owner scoping (single-user), the Projects/CRM card-link connector (`tasks` already carries contact_id/deal_id — `RecordChip` is the native replacement), `todo_get_capture_link`/`todo_get_web_link` (links are secrets; they live in Settings, not in a chat transcript), cake_os's `ConcurrencyGate` (chatty's limiter is what the answer named), `always_confirm` (no engine support — all six mutating tools carry `writes:true` instead), and the copy buttons (not in the issue's scope). `ProjectsPage` renders a plain card grid rather than `shared/collection`: #73 landed that layer without rewiring any CRM surface, so adoption belongs with the rest in #77. | `chatty/backend/core/todo/{capture,web,pwa,ratelimit}.py` + `chatty/frontend/src/todo/publicMode.ts`; `cake_os/backend/apps/todo_gtd/*` + `cake_os/frontend/src/apps/todo-gtd/*` |
 | Pipeline facet filtering (client-side, no backend query params: `frontend/src/crm/pipelineFilters.ts` pure predicate + `components/PipelineFilterBar.tsx`, spliced into `PipelinePage`'s useMemo seam as `deals`→`filteredDeals`→`grouped`; facets = keyword/stage/value/close-date/last-activity; sessionStorage `crm_pipeline_filters`) — **landed #21**. Owner facet dropped (single-tenant); `get_pipeline()` gains a derived `last_activity_at` = MAX(deal `activity_log` rows + un-archived deal `crm_chatter` notes) via one UNION-ALL/GROUP BY join (NULL = no activity), plus `company_name`. Drag stays enabled while filtering (board is stage-only, index-safe). | `cake_os/docs/CRM_FILTER_DESIGN.md` + `cake_os/docs/solutions/architecture-patterns/client-side-facet-filtering.md` |
