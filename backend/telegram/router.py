@@ -16,7 +16,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from core.auth import get_current_user
+from core.auth import get_current_user, require_admin
 
 from . import client, poller, store
 
@@ -29,13 +29,19 @@ class ConnectRequest(BaseModel):
     bot_token: str
 
 
-def _status_payload() -> dict:
-    """The connection/link status the frontend renders. Never includes the token."""
+def _status_payload(include_link: bool) -> dict:
+    """The connection/link status the frontend renders. Never includes the token.
+
+    ``include_link`` gates the single-use link code. Telegram binding is still an
+    install-wide singleton until Phase B of #60 gives it per-user bindings, so the
+    code claims the ONE seat that receives every notification and can drive the
+    assistant from a phone. Handing it to every authenticated member would let any of
+    them take that binding — which would make connect/disconnect being admin-only
+    pointless. Admins see it; members see only whether Telegram is connected.
+    """
     s = store.get_settings()
     username = s.get("bot_username") or ""
-    code = s.get("link_code") or ""
-    # link_code/link_url are returned only to the authenticated owner (JWT-gated), who
-    # needs them to link their phone — never exposed to Telegram senders.
+    code = (s.get("link_code") or "") if include_link else ""
     link_url = f"https://t.me/{username}?start={code}" if username and code else ""
     return {
         "connected": bool(s.get("connected")),
@@ -49,11 +55,11 @@ def _status_payload() -> dict:
 
 @router.get("/status")
 def get_status(user=Depends(get_current_user)):
-    return _status_payload()
+    return _status_payload(include_link=user.get("role") == "admin")
 
 
 @router.post("/connect")
-async def connect(body: ConnectRequest, user=Depends(get_current_user)):
+async def connect(body: ConnectRequest, user=Depends(require_admin)):
     token = (body.bot_token or "").strip()
     if not token:
         raise HTTPException(status_code=400, detail="Bot token is required.")
@@ -79,21 +85,21 @@ async def connect(body: ConnectRequest, user=Depends(get_current_user)):
         # failure the prior config simply resumes).
         poller.start()
     logger.info("telegram bot connected (@%s)", username)
-    return await asyncio.to_thread(_status_payload)
+    return await asyncio.to_thread(_status_payload, True)
 
 
 @router.post("/disconnect")
-async def disconnect(user=Depends(get_current_user)):
+async def disconnect(user=Depends(require_admin)):
     await poller.stop()
     try:
         await asyncio.to_thread(store.disconnect)
     finally:
         poller.start()  # always resume the task (it idles until a token is connected)
     logger.info("telegram bot disconnected")
-    return await asyncio.to_thread(_status_payload)
+    return await asyncio.to_thread(_status_payload, True)
 
 
 @router.post("/link-code/regenerate")
-def regenerate_link_code(user=Depends(get_current_user)):
+def regenerate_link_code(user=Depends(require_admin)):
     store.regenerate_link_code()
-    return _status_payload()
+    return _status_payload(include_link=True)

@@ -6,6 +6,7 @@ return 200 — the mapping used to be message-substring based, which this pins d
 """
 
 import pytest
+from conftest import fake_admin
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -18,7 +19,7 @@ from reminders.router import router as reminders_router
 def client():
     app = FastAPI()
     app.include_router(reminders_router, prefix="/api/reminders")
-    app.dependency_overrides[get_current_user] = lambda: {"sub": "u"}
+    app.dependency_overrides[get_current_user] = fake_admin
     return TestClient(app)
 
 

@@ -8,8 +8,10 @@
  * tested, should a runner ever be added) independently of the React component.
  *
  * Adapted from the CAKE OS blueprint (`apps/crm/pipelineFilters.ts`) to CakeCRM's flat
- * deal model: stages are strings (not numeric ids), there is no owner concept (single-
- * user v1), and "open" is computed from the stage (deals have no `status` field).
+ * deal model: stages are strings (not numeric ids) and "open" is computed from the
+ * stage (deals have no `status` field). The owner facet the blueprint carried was
+ * dropped at #21 because CakeCRM was single-user; #60 gave records an owner, so it is
+ * back — and stays client-side, because the board already holds every deal.
  *
  * Date semantics intentionally use LOCAL dates (YYYY-MM-DD via en-CA), never
  * `toISOString()`, which would drift a day in US evening time. `now` is injected into
@@ -22,6 +24,11 @@ import { STAGE_ORDER, OPEN_STAGES } from './constants';
 
 /** Relative close-date buckets (single-select). */
 export type ClosePreset = 'overdue' | 'next7' | 'thisMonth' | 'noDate';
+/** An owner filter entry: a user id, or the literal 'unassigned' for owner_id NULL.
+ *  Unassigned is a real bucket, not an absence — it is how you find work nobody has
+ *  picked up, which is the main thing this facet is for. */
+export type OwnerFilterValue = number | 'unassigned';
+
 /** Relative last-activity buckets (single-select). Activity is DEAL-scoped
  *  (deal-level activity_log rows + un-archived deal chatter); contact-level
  *  activity is not counted — hence "no activity logged", not "never contacted". */
@@ -30,6 +37,8 @@ export type ActivityPreset = 'le7' | 'le30' | 'stale30' | 'none';
 export interface AdvancedFilters {
   /** Stage keys to include. Empty = all stages. */
   stages: string[];
+  /** Owners to include. Empty = every owner (and unassigned). */
+  owners: OwnerFilterValue[];
   /** Inclusive minimum deal value, or null for no lower bound. */
   valueMin: number | null;
   /** Inclusive maximum deal value, or null for no upper bound. */
@@ -40,6 +49,7 @@ export interface AdvancedFilters {
 
 export const EMPTY_ADVANCED: AdvancedFilters = {
   stages: [],
+  owners: [],
   valueMin: null,
   valueMax: null,
   closeDate: null,
@@ -47,8 +57,7 @@ export const EMPTY_ADVANCED: AdvancedFilters = {
 };
 
 /** Full persisted filter state: free-text search plus the advanced facets, kept in
- *  one envelope so there is a single load/save/clear path. (The blueprint also carried
- *  an owner pill; CakeCRM has no owner, so it is dropped, not deferred.) */
+ *  one envelope so there is a single load/save/clear path. */
 export interface PipelineFilterState {
   search: string;
   advanced: AdvancedFilters;
@@ -135,9 +144,17 @@ function matchesLastActivity(deal: CrmDeal, preset: ActivityPreset, now: Date): 
   }
 }
 
+function matchesOwner(deal: CrmDeal, owners: OwnerFilterValue[]): boolean {
+  // owner_id is absent on a payload from a pre-#60 backend and null when unassigned;
+  // both mean "nobody owns this", so both answer to the 'unassigned' bucket.
+  const owner = deal.owner_id ?? null;
+  return owner === null ? owners.includes('unassigned') : owners.includes(owner);
+}
+
 /** True if `deal` passes every active advanced facet (AND across facets). */
 export function dealMatchesAdvanced(deal: CrmDeal, f: AdvancedFilters, now: Date): boolean {
   if (f.stages.length > 0 && !f.stages.includes(deal.stage)) return false;
+  if (f.owners.length > 0 && !matchesOwner(deal, f.owners)) return false;
   if (!matchesValue(deal, f)) return false;
   if (f.closeDate && !matchesCloseDate(deal, f.closeDate, now)) return false;
   if (f.lastActivity && !matchesLastActivity(deal, f.lastActivity, now)) return false;
@@ -150,6 +167,7 @@ export function dealMatchesAdvanced(deal: CrmDeal, f: AdvancedFilters, now: Date
 export function advancedActiveCount(f: AdvancedFilters): number {
   let n = 0;
   if (f.stages.length > 0) n++;
+  if (f.owners.length > 0) n++;
   if (f.valueMin !== null || f.valueMax !== null) n++;
   if (f.closeDate) n++;
   if (f.lastActivity) n++;
@@ -185,6 +203,16 @@ export function loadFilterState(): PipelineFilterState {
       advanced: {
         stages: Array.isArray(adv.stages)
           ? [...new Set(adv.stages.filter((s): s is string => typeof s === 'string' && STAGE_ORDER.includes(s)))]
+          : [],
+        // Owner ids are NOT validated against the live roster: this runs before the
+        // users fetch resolves, and a deactivated owner is still a legitimate filter.
+        // A stale id simply matches no deal, and the pill stays clearable — unlike a
+        // bad stage, which would also hide the column.
+        owners: Array.isArray(adv.owners)
+          ? [...new Set(adv.owners.filter(
+              (o): o is OwnerFilterValue =>
+                o === 'unassigned' || (typeof o === 'number' && Number.isInteger(o)),
+            ))]
           : [],
         valueMin: coerceNumOrNull(adv.valueMin),
         valueMax: coerceNumOrNull(adv.valueMax),

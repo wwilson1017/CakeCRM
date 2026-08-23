@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from core.auth import get_current_user
+from core.auth import get_current_user, require_admin
 
 from . import storage
 
@@ -41,7 +41,7 @@ async def get_branding(user=Depends(get_current_user)):
 
 
 @router.put("")
-async def update_branding(body: BrandingUpdateRequest, user=Depends(get_current_user)):
+async def update_branding(body: BrandingUpdateRequest, user=Depends(require_admin)):
     """Update company name."""
     return storage.save_config(company_name=body.company_name)
 
@@ -49,7 +49,7 @@ async def update_branding(body: BrandingUpdateRequest, user=Depends(get_current_
 @router.post("/logo")
 async def upload_logo(
     file: UploadFile = File(...),
-    user=Depends(get_current_user),
+    user=Depends(require_admin),
 ):
     """Upload a logo image (PNG, JPEG, GIF, WebP). Max 2 MB."""
     if file.content_type not in ALLOWED_IMAGE_TYPES:
@@ -66,7 +66,7 @@ async def upload_logo(
 
 
 @router.delete("/logo")
-async def delete_logo(user=Depends(get_current_user)):
+async def delete_logo(user=Depends(require_admin)):
     """Remove the logo."""
     storage.delete_logo()
     return {"ok": True, "has_logo": False}
