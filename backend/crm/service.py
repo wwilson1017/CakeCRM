@@ -99,6 +99,7 @@ def create_contact(
     name: str, email: str = "", phone: str = "", company: str = "",
     title: str = "", source: str = "", status: str = "active",
     tags: str = "", notes: str = "", company_id: int | None = None,
+    owner_id: int | None = None,
 ) -> dict:
     if status not in CONTACT_STATUSES:
         status = "active"  # unknown status would hide the contact from every status tab
@@ -124,9 +125,10 @@ def create_contact(
     # check the leading columns) stay valid; a bad FK raises ForeignKeyViolation
     # which the router maps to 400.
     row = pg_fetchone(
-        """INSERT INTO contacts (name, email, phone, company, title, source, status, tags, notes, company_id)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-        (name, email, phone, company, title, source, status, _normalize_tags(tags), notes, company_id),
+        """INSERT INTO contacts (name, email, phone, company, title, source, status, tags, notes, company_id, owner_id)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+        (name, email, phone, company, title, source, status, _normalize_tags(tags), notes,
+         company_id, owner_id),
     )
     scoring_service.score_on_event(contact_ids=(row["id"],))  # #18: seed lead_score (never raises)
     return get_contact(row["id"])
@@ -145,7 +147,9 @@ def get_contact(contact_id: int) -> dict | None:
     )
 
 
-def _contact_search_where(query: str, status: str | None, tags: str | None) -> tuple[str, list]:
+def _contact_search_where(
+    query: str, status: str | None, tags: str | None, owner_id: int | None = None
+) -> tuple[str, list]:
     """Build the shared WHERE clause + params for contact free-text search.
 
     Assumes the caller's FROM is ``contacts ct LEFT JOIN companies co ON
@@ -166,6 +170,14 @@ def _contact_search_where(query: str, status: str | None, tags: str | None) -> t
     authoritative label beats hiding a record because the user remembered the old
     name. Scoping it to ``ct.company_id IS NULL`` would silently drop those hits.
     Pinned by test_search_matches_old_company_spelling_but_displays_new_name.
+
+    ``owner_id`` (issue #60) narrows to one person's records — "Mine" is simply this
+    parameter set to the caller's own id, so there is no separate flag or magic
+    value. Absent means everyone, which is what keeps the endpoint's behavior
+    identical for an install that never assigns owners. It lives in this SHARED
+    builder precisely so it can never reach the page query without also reaching the
+    COUNT: a filter present in one and not the other does not fail, it just reports
+    a total that disagrees with the rows.
     """
     like = f"%{query}%"
     conditions = [
@@ -176,6 +188,9 @@ def _contact_search_where(query: str, status: str | None, tags: str | None) -> t
     if status:
         conditions.append("ct.status = %s")
         params.append(status)
+    if owner_id is not None:
+        conditions.append("ct.owner_id = %s")
+        params.append(owner_id)
     if tags:
         labels = [tag.strip() for tag in tags.split(",") if tag.strip()]
         if labels:
@@ -188,8 +203,9 @@ def _contact_search_where(query: str, status: str | None, tags: str | None) -> t
 def search_contacts(
     query: str, status: str | None = None, tags: str | None = None,
     limit: int = 20, offset: int = 0, sort: str = "updated_at",
+    owner_id: int | None = None,
 ) -> list[dict]:
-    where, params = _contact_search_where(query, status, tags)
+    where, params = _contact_search_where(query, status, tags, owner_id)
     return pg_fetchall(
         f"""SELECT ct.*, co.name AS company_name
             FROM contacts ct LEFT JOIN companies co ON ct.company_id = co.id
@@ -198,14 +214,17 @@ def search_contacts(
     )
 
 
-def count_search_contacts(query: str, status: str | None = None, tags: str | None = None) -> int:
+def count_search_contacts(
+    query: str, status: str | None = None, tags: str | None = None,
+    owner_id: int | None = None,
+) -> int:
     """Total number of contacts matching a search (for accurate pagination totals).
 
     Carries the same join as search_contacts because the shared WHERE references
     co.name. LEFT JOIN on the companies PRIMARY KEY yields at most one company row
     per contact, so COUNT(*) is still a count of contacts, not of pairs.
     """
-    where, params = _contact_search_where(query, status, tags)
+    where, params = _contact_search_where(query, status, tags, owner_id)
     row = pg_fetchone(
         f"""SELECT COUNT(*) AS cnt
             FROM contacts ct LEFT JOIN companies co ON ct.company_id = co.id
@@ -218,6 +237,7 @@ def count_search_contacts(query: str, status: str | None = None, tags: str | Non
 def list_contacts(
     offset: int = 0, limit: int = 50, status: str | None = None,
     tags: str | None = None, sort: str = "updated_at",
+    owner_id: int | None = None,
 ) -> dict:
     order_by = _contact_order_by(sort)
 
@@ -226,6 +246,12 @@ def list_contacts(
     if status:
         conditions.append("ct.status = %s")
         params.append(status)
+    # One condition list feeds BOTH the COUNT and the page query below. Adding an
+    # owner filter to only one of them would silently return a total that disagrees
+    # with the rows on the page.
+    if owner_id is not None:
+        conditions.append("ct.owner_id = %s")
+        params.append(owner_id)
     if tags:
         labels = [tag.strip() for tag in tags.split(",") if tag.strip()]
         if labels:
@@ -263,7 +289,8 @@ def list_distinct_tags() -> list[str]:
 
 
 def update_contact(contact_id: int, **fields) -> dict | None:
-    allowed = {"name", "email", "phone", "company", "title", "source", "status", "tags", "notes", "company_id"}
+    allowed = {"name", "email", "phone", "company", "title", "source", "status", "tags", "notes",
+               "company_id", "owner_id"}
     filtered = {k: v for k, v in fields.items() if k in allowed}
     if "tags" in filtered:
         filtered["tags"] = _normalize_tags(filtered["tags"] or "")
@@ -378,13 +405,14 @@ def get_contact_detail(contact_id: int) -> dict | None:
 def create_company(
     name: str, domain: str = "", industry: str = "", phone: str = "",
     address: str = "", notes: str = "", source: str = "", status: str = "active",
+    owner_id: int | None = None,
 ) -> dict:
     if status not in COMPANY_STATUSES:
         status = "active"
     row = pg_fetchone(
-        """INSERT INTO companies (name, domain, industry, phone, address, notes, source, status)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-        (name.strip(_WS), domain, industry, phone, address, notes, source, status),
+        """INSERT INTO companies (name, domain, industry, phone, address, notes, source, status, owner_id)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+        (name.strip(_WS), domain, industry, phone, address, notes, source, status, owner_id),
     )
     return get_company(row["id"])
 
@@ -429,6 +457,14 @@ def resolve_or_create_company_ids(names: list[str]) -> dict[str, int]:
     would close it; not worth the branch until the app is multi-user, when this
     becomes a get-or-create that locks the conflicting row.
     """
+    # Auto-created companies are left UNASSIGNED (owner_id NULL), deliberately — this
+    # is not an oversight in the #60 ownership sweep. A company that appears as a side
+    # effect of linking a contact was never something anyone chose to own, and NULL is
+    # a fully supported state meaning exactly that. Stamping the importer would
+    # fabricate ownership of an organisation record they never picked up; the
+    # consequence is simply that a bulk import puts contacts in your "Mine" and leaves
+    # the companies for someone to claim. Pinned by
+    # test_auto_created_companies_are_left_unassigned.
     # Exact-string dedupe, order-preserving (first spelling wins the stored
     # name). str.strip(_WS) matches btrim's byte set, so Python and SQL agree on
     # what counts as blank.
@@ -465,36 +501,49 @@ def resolve_or_create_company_ids(names: list[str]) -> dict[str, int]:
     return {row["raw"]: row["id"] for row in rows}
 
 
-def _company_search_where(query: str, status: str | None) -> tuple[str, list]:
-    """Build the shared WHERE clause + params for company free-text search."""
+def _company_search_where(
+    query: str, status: str | None, owner_id: int | None = None
+) -> tuple[str, list]:
+    """Build the shared WHERE clause + params for company free-text search.
+
+    ``owner_id`` (issue #60) belongs here rather than at each call site so the search
+    and its COUNT can never disagree about what is being counted.
+    """
     like = f"%{query}%"
     conditions = ["(name ILIKE %s OR domain ILIKE %s OR industry ILIKE %s OR notes ILIKE %s)"]
     params: list = [like, like, like, like]
     if status:
         conditions.append("status = %s")
         params.append(status)
+    if owner_id is not None:
+        conditions.append("owner_id = %s")
+        params.append(owner_id)
     return " AND ".join(conditions), params
 
 
 def search_companies(
     query: str, status: str | None = None, limit: int = 20, offset: int = 0,
+    owner_id: int | None = None,
 ) -> list[dict]:
-    where, params = _company_search_where(query, status)
+    where, params = _company_search_where(query, status, owner_id)
     return pg_fetchall(
         f"SELECT * FROM companies WHERE {where} ORDER BY updated_at DESC, id DESC LIMIT %s OFFSET %s",
         params + [limit, offset],
     )
 
 
-def count_search_companies(query: str, status: str | None = None) -> int:
+def count_search_companies(
+    query: str, status: str | None = None, owner_id: int | None = None
+) -> int:
     """Total number of companies matching a search (for accurate pagination totals)."""
-    where, params = _company_search_where(query, status)
+    where, params = _company_search_where(query, status, owner_id)
     row = pg_fetchone(f"SELECT COUNT(*) AS cnt FROM companies WHERE {where}", params)
     return row["cnt"] if row else 0
 
 
 def list_companies(
     offset: int = 0, limit: int = 50, status: str | None = None, sort: str = "name",
+    owner_id: int | None = None,
 ) -> dict:
     allowed_sorts = {"name", "industry", "created_at", "updated_at"}
     sort_col = sort if sort in allowed_sorts else "name"
@@ -507,6 +556,10 @@ def list_companies(
     if status:
         conditions.append("status = %s")
         params.append(status)
+    # Shared by the COUNT and the page query below — see list_contacts.
+    if owner_id is not None:
+        conditions.append("owner_id = %s")
+        params.append(owner_id)
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
     total_row = pg_fetchone(f"SELECT COUNT(*) AS cnt FROM companies {where}", params)
@@ -522,10 +575,17 @@ def list_companies(
 
 def update_company(company_id: int, **fields) -> dict | None:
     allowed = {"name", "domain", "industry", "phone", "address", "notes", "source", "status"}
-    # Drop None values: every company column is NOT NULL, and a tool call sending
-    # an explicit null (the HTTP route already filters these out) would otherwise
-    # raise a NotNullViolation. None means "field not provided" here.
+    # Drop None values: every one of those columns is NOT NULL, and a tool call
+    # sending an explicit null (the HTTP route already filters these out) would
+    # otherwise raise a NotNullViolation. None means "field not provided" here.
     filtered = {k: v for k, v in fields.items() if k in allowed and v is not None}
+    # owner_id is the exception, and the reason is the column, not the caller: it is
+    # NULLABLE, and NULL is a meaningful value there — "unassigned". Folding it into
+    # the set above would make an owner impossible to CLEAR once set, since the drop
+    # would swallow the only way to say so. Key presence is the signal, as in
+    # update_contact's company_id.
+    if "owner_id" in fields:
+        filtered["owner_id"] = fields["owner_id"]
     if "name" in filtered:
         # Reject a name that is blank once ALL whitespace is ignored (guards the
         # tool path, which bypasses the router's 400). Store it trimmed of the
@@ -634,6 +694,7 @@ def create_deal(
     title: str, contact_id: int | None = None, stage: str = "lead",
     value: float = 0, notes: str = "", expected_close_date: str = "",
     probability: int = 0, currency: str = "USD", company_id: int | None = None,
+    owner_id: int | None = None,
 ) -> dict:
     # Coerce an unknown stage to 'lead' (mirrors update_deal's validation): a
     # deal with a stage outside DEAL_STAGES would be summed into the pipeline
@@ -648,9 +709,10 @@ def create_deal(
         probability = 100 if stage == "won" else 0
     # company_id appended last (see create_contact); a bad FK -> ForeignKeyViolation.
     row = pg_fetchone(
-        """INSERT INTO deals (title, contact_id, stage, value, notes, expected_close_date, probability, currency, company_id)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-        (title, contact_id, stage, value, notes, expected_close_date, probability, currency, company_id),
+        """INSERT INTO deals (title, contact_id, stage, value, notes, expected_close_date, probability, currency, company_id, owner_id)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+        (title, contact_id, stage, value, notes, expected_close_date, probability, currency,
+         company_id, owner_id),
     )
     scoring_service.score_on_event(deal_ids=(row["id"],), contact_ids=(contact_id,))  # #18
     return get_deal(row["id"])
@@ -693,6 +755,17 @@ def get_pipeline(stage: str | None = None) -> dict:
     # unpaginated all-deals board is the binding constraint, not this once-per-load aggregate.
     # If deal/activity volume ever grows, switch to a per-deal LATERAL MAX (indexes exist:
     # idx_activity_deal, idx_crm_chatter_entity) or a maintained last-activity column.
+    #
+    # There is deliberately NO owner_id parameter here, unlike list_contacts/
+    # list_companies/list_tasks (issue #60). The board is not paginated — it already
+    # loads every live deal in one request and every other facet (#21: keyword, stage,
+    # value, close date, last activity) filters client-side over that array. Owner
+    # joins them, so `d.owner_id` simply rides along in `d.*` and the picker resolves
+    # names from the /api/users call the owner dropdowns need anyway. A server
+    # parameter would buy nothing and cost a second code path — and worse, this
+    # function returns `deals` AND a separately-computed `stage_summary`, so a filter
+    # applied to one and not the other would show filtered cards under unfiltered
+    # totals.
     where = f"WHERE {LIVE_PREDICATE_D}" + (" AND d.stage = %s" if stage else "")
     deals = pg_fetchall(
         f"""SELECT d.*, c.name AS contact_name, co.name AS company_name,
@@ -930,7 +1003,8 @@ def update_deal(deal_id: int, **fields) -> dict | None:
     # lost_reason is deliberately NOT in `allowed`: mark_deal_lost is its single
     # writer, so a reason always arrives with the close (and its timeline note) and
     # can never be set on a deal that isn't lost.
-    allowed = {"title", "stage", "value", "notes", "expected_close_date", "probability", "currency", "contact_id", "company_id"}
+    allowed = {"title", "stage", "value", "notes", "expected_close_date", "probability", "currency",
+               "contact_id", "company_id", "owner_id"}
     filtered = {k: v for k, v in fields.items() if k in allowed}
     if "stage" in filtered and filtered["stage"] not in DEAL_STAGES:
         return None
@@ -1134,14 +1208,14 @@ def merge_deals(target_deal_id: int, source_deal_id: int) -> dict:
 def create_task(
     title: str, description: str = "", due_date: str = "",
     contact_id: int | None = None, deal_id: int | None = None,
-    priority: str = "medium",
+    priority: str = "medium", owner_id: int | None = None,
 ) -> dict:
     if priority not in TASK_PRIORITIES:
         priority = "medium"
     row = pg_fetchone(
-        """INSERT INTO tasks (title, description, due_date, contact_id, deal_id, priority)
-           VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
-        (title, description, due_date, contact_id, deal_id, priority),
+        """INSERT INTO tasks (title, description, due_date, contact_id, deal_id, priority, owner_id)
+           VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+        (title, description, due_date, contact_id, deal_id, priority, owner_id),
     )
     return get_task(row["id"])
 
@@ -1154,9 +1228,14 @@ def list_tasks(
     contact_id: int | None = None, deal_id: int | None = None,
     completed: bool | None = None, due_before: str | None = None,
     priority: str | None = None, limit: int = 50,
+    owner_id: int | None = None,
 ) -> list[dict]:
     conditions = []
     params: list = []
+    if owner_id is not None:
+        # On a task, owner_id reads as "assigned to" (issue #60).
+        conditions.append("t.owner_id = %s")
+        params.append(owner_id)
     if contact_id is not None:
         conditions.append("t.contact_id = %s")
         params.append(contact_id)
@@ -1200,7 +1279,8 @@ def complete_task(task_id: int) -> dict | None:
 
 
 def update_task(task_id: int, **fields) -> dict | None:
-    allowed = {"title", "description", "due_date", "contact_id", "deal_id", "priority", "completed"}
+    allowed = {"title", "description", "due_date", "contact_id", "deal_id", "priority", "completed",
+               "owner_id"}
     filtered = {k: v for k, v in fields.items() if k in allowed}
     # Normalize the flag to the 0/1 invariant (a stray value like 2 is truthy in
     # the UI but matches neither `completed = 0` nor `= 1` filters).
@@ -1225,11 +1305,20 @@ def delete_task(task_id: int) -> bool:
 # ── Activity log ──────────────────────────────────────────────────────────────
 
 def log_activity(activity: str, note: str = "", contact_id: int | None = None,
-                 deal_id: int | None = None) -> dict:
+                 deal_id: int | None = None, actor_id: int | None = None) -> dict:
+    """Record something that happened. ``actor_id`` is WHO DID IT (issue #60).
+
+    Deliberately distinct from ownership: per-rep activity credits the person who did
+    the work, even on a colleague's record. NULL is a real and supported value — the
+    Gmail touch scan and the assistant's background turn both log activity that no
+    human performed, and Phase A does not thread identity into tool executors (that
+    is Phase B). Those rows roll up as "Unattributed" rather than being credited to
+    whoever happens to own the record.
+    """
     row = pg_fetchone(
-        """INSERT INTO activity_log (activity, note, contact_id, deal_id)
-           VALUES (%s, %s, %s, %s) RETURNING id""",
-        (activity, note, contact_id, deal_id),
+        """INSERT INTO activity_log (activity, note, contact_id, deal_id, actor_id)
+           VALUES (%s, %s, %s, %s, %s) RETURNING id""",
+        (activity, note, contact_id, deal_id, actor_id),
     )
     result = pg_fetchone("SELECT * FROM activity_log WHERE id = %s", (row["id"],)) or {}
     # An activity on a deal is fresh touch-count evidence — queue a recompute (O(1), never
@@ -1665,6 +1754,83 @@ def _shape_activity_types(rows: list[dict]) -> list[dict]:
 
 # ── Analytics: query + assemble ───────────────────────────────────────────────
 
+# Chatter rows that are NOT somebody's work, and must never inflate a rep's numbers.
+#
+#   1. provenance_service.confirm inserts its audit note DIRECTLY, bypassing
+#      add_note — confirming AI-populated fields would otherwise read as engagement.
+#   2. merge_deals COPIES the source deal's notes onto the target and leaves the
+#      originals in place on the archived source. Both copies are archived = 0, so
+#      filtering on that alone counts one person's note twice.
+#
+# Both are identified by their marker prefix, which is the only thing that
+# distinguishes them; `[` has no special meaning in SQL LIKE, only % and _.
+#
+# The patterns are bound as PARAMETERS rather than inlined. psycopg2 interpolates
+# `%` in any statement it is given parameters for, so a literal `'... for %'` in the
+# SQL raises "IndexError: tuple index out of range" at execute time — which is a
+# runtime 500, not a syntax error anything catches earlier. Escaping to `%%` would
+# work and would be one careless edit away from breaking again.
+_ACTIVITY_CHATTER_EXCLUSIONS = (
+    " AND ch.message NOT LIKE %s AND ch.message NOT LIKE %s"
+)
+_PROVENANCE_NOTE_PATTERN = "Confirmed AI-populated value for %"
+_MERGE_COPY_PATTERN = "[Merged from deal #%"
+
+
+def _shape_per_rep(pipeline_rows: list[dict], activity_rows: list[dict]) -> list[dict]:
+    """Merge the owner-scoped and actor-scoped halves into one row per person.
+
+    Two DIFFERENT attributions in one table, which is the whole point (cake_os
+    #1454/#1532): pipeline numbers follow OWNERSHIP, activity numbers follow who
+    ACTED. A rep is credited for work on a colleague's record, so the row is
+    mixed-attribution by design rather than by accident.
+
+    ``records_touched`` is the number to compare reps on. ``activity_count`` is
+    inflatable by a single bulk action.
+    """
+    merged: dict[int | None, dict] = {}
+
+    def _slot(user_id, name="", email=""):
+        if user_id not in merged:
+            merged[user_id] = {
+                "user_id": user_id,
+                "name": (name or "").strip() or email or "",
+                "email": email or "",
+                "deals_open": 0, "open_value": 0.0,
+                "deals_won": 0, "deals_lost": 0, "won_value": 0.0,
+                "activity_count": 0, "records_touched": 0,
+            }
+        return merged[user_id]
+
+    for r in pipeline_rows:
+        slot = _slot(r.get("user_id"), r.get("name"), r.get("email"))
+        slot["deals_open"] = int(r.get("deals_open") or 0)
+        slot["open_value"] = _as_float(r.get("open_value"))
+        slot["deals_won"] = int(r.get("deals_won") or 0)
+        slot["deals_lost"] = int(r.get("deals_lost") or 0)
+        slot["won_value"] = _as_float(r.get("won_value"))
+
+    for r in activity_rows:
+        slot = _slot(r.get("user_id"), r.get("name"), r.get("email"))
+        slot["activity_count"] = int(r.get("activity_count") or 0)
+        slot["records_touched"] = int(r.get("records_touched") or 0)
+
+    for user_id, row in merged.items():
+        if user_id is None:
+            # Work nobody is recorded as having done: the Gmail touch scan, the
+            # assistant's background turn, imported history, and — until Phase B
+            # threads identity into tool executors — every assistant-performed write.
+            # Surfaced as its own row rather than dropped, so the numbers still add up.
+            row["name"] = "Unattributed"
+
+    # Busiest first on the honest metric, then pipeline size; Unattributed sinks to
+    # the bottom so it never leads a table of people.
+    return sorted(
+        merged.values(),
+        key=lambda r: (r["user_id"] is None, -r["records_touched"], -r["open_value"]),
+    )
+
+
 def get_analytics(days: int = 30, stale_days: int = 14, stale_limit: int = 8) -> dict:
     """Keyless SQL analytics for the enriched dashboard (issue #20): win/loss,
     activity volume, and read-time deal aging. Pure aggregation — no AI, no gate;
@@ -1747,6 +1913,66 @@ def get_analytics(days: int = 30, stale_days: int = 14, stale_limit: int = 8) ->
         (start_dt, end_dt),
     )
 
+    # ── Per-rep (issue #60) ──────────────────────────────────────────────────
+    # Owner-scoped half. LEFT JOIN, not INNER: an unowned deal still belongs in the
+    # totals, as its own "Unattributed" row rather than silently missing.
+    per_rep_pipeline = pg_fetchall(
+        f"""
+        SELECT d.owner_id AS user_id, u.name, u.email,
+               COUNT(*) FILTER (WHERE {OPEN_PREDICATE_D})                    AS deals_open,
+               COALESCE(SUM(d.value) FILTER (WHERE {OPEN_PREDICATE_D}), 0)   AS open_value,
+               COUNT(*) FILTER (WHERE d.stage = 'won')                       AS deals_won,
+               COUNT(*) FILTER (WHERE d.stage = 'lost')                      AS deals_lost,
+               COALESCE(SUM(d.value) FILTER (WHERE d.stage = 'won'), 0)      AS won_value
+        FROM deals d
+        LEFT JOIN users u ON u.id = d.owner_id
+        WHERE {LIVE_PREDICATE_D}
+        GROUP BY d.owner_id, u.name, u.email
+        """
+    )
+
+    # Actor-scoped half, over the SAME window as the activity queries above.
+    #
+    # UNION ALL, never UNION: the two tables are disjoint event streams and every row
+    # is a separate event, so UNION would dedupe identical rows and undercount.
+    #
+    # An activity may link BOTH a contact and a deal, and the CASE can name only one.
+    # Deal-first precedence, deliberately: an activity on a deal is a deal touch, and
+    # counting it as two records touched would double-credit one action. An activity
+    # linked to NEITHER is a reachable path (log_activity requires neither id) — it
+    # maps to 'activity' so activity_count stays total, and the FILTER then excludes
+    # it from records_touched, which counts CRM records. An all-NULL row constructor
+    # could not do that job: COUNT(DISTINCT (NULL, NULL)) counts as one value.
+    per_rep_activity = pg_fetchall(
+        f"""
+        SELECT acts.actor AS user_id, u.name, u.email,
+               COUNT(*) AS activity_count,
+               COUNT(DISTINCT (acts.record_type, acts.record_id))
+                   FILTER (WHERE acts.record_type <> 'activity') AS records_touched
+        FROM (
+            SELECT a.actor_id AS actor,
+                   CASE WHEN a.deal_id    IS NOT NULL THEN 'deal'
+                        WHEN a.contact_id IS NOT NULL THEN 'contact'
+                        ELSE 'activity' END AS record_type,
+                   COALESCE(a.deal_id, a.contact_id, a.id) AS record_id
+              FROM activity_log a
+             WHERE a.created_at >= %s AND a.created_at < %s
+            UNION ALL
+            -- entity_type is lowered so both branches emit the same record-type
+            -- vocabulary: the branch above builds lowercase literals, so a raw
+            -- value here could split ('deal', 10) from ('Deal', 10).
+            SELECT ch.author_id, lower(btrim(ch.entity_type)), ch.entity_id
+              FROM crm_chatter ch
+             WHERE ch.created_at >= %s AND ch.created_at < %s
+               AND ch.archived = 0{_ACTIVITY_CHATTER_EXCLUSIONS}
+        ) acts
+        LEFT JOIN users u ON u.id = acts.actor
+        GROUP BY acts.actor, u.name, u.email
+        """,
+        (start_dt, end_dt, start_dt, end_dt,
+         _PROVENANCE_NOTE_PATTERN, _MERGE_COPY_PATTERN),
+    )
+
     daily = _fill_activity_daily(daily_rows, days, today=today)
     stale_deals, stale_count = _stale_open_deals(open_rows, stale_days, stale_limit)
     return {
@@ -1763,6 +1989,7 @@ def get_analytics(days: int = 30, stale_days: int = 14, stale_limit: int = 8) ->
             "stale_count": stale_count,
             "stale_deals": stale_deals,
         },
+        "per_rep": _shape_per_rep(per_rep_pipeline, per_rep_activity),
     }
 
 

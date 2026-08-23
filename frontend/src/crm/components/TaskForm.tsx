@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import { api } from '../../core/api/client';
+import { useAuth } from '../../core/auth/AuthContext';
+import { OwnerSelect } from './OwnerSelect';
 import { labelStyle, inputStyle, CORAL } from '../../shared/styles';
 import { formModalOverlay, formModalContent, formTitle, btnPrimary, btnSecondary } from '../styles';
 import type { CrmContact, CrmTask } from '../../core/types';
@@ -13,6 +15,7 @@ interface Props {
 }
 
 export function TaskForm({ task, contactId, dealId, onClose, onSaved }: Props) {
+  const { currentUser } = useAuth();
   const isEdit = !!task;
   const [title, setTitle] = useState(task?.title || '');
   const [description, setDescription] = useState(task?.description || '');
@@ -20,6 +23,16 @@ export function TaskForm({ task, contactId, dealId, onClose, onSaved }: Props) {
   const [priority, setPriority] = useState(task?.priority || 'medium');
   const [selectedContact, setSelectedContact] = useState<number | null>(task?.contact_id ?? contactId ?? null);
   const [contacts, setContacts] = useState<CrmContact[]>([]);
+  // Owner (issue #60). On an EDIT the record's own owner is used verbatim — `null`
+  // means unassigned and must survive, or saving an unrelated field would silently
+  // claim someone else's unowned record. On a CREATE the picker shows you as the
+  // default, but `owner_id` is only SENT if you actually touch it: an untouched
+  // create lets the server assign the caller, which is race-free (currentUser can
+  // still be resolving right after login) and keeps one rule in one place.
+  const [ownerId, setOwnerId] = useState<number | null>(
+    task ? (task.owner_id ?? null) : (currentUser?.id ?? null),
+  );
+  const [ownerTouched, setOwnerTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -37,6 +50,9 @@ export function TaskForm({ task, contactId, dealId, onClose, onSaved }: Props) {
     try {
       const body: Record<string, unknown> = { title, description, due_date: dueDate, priority };
       body.contact_id = selectedContact;  // always send (null unlinks the contact)
+      // Omitted on an untouched create so the server assigns the caller; on an
+      // edit always sent, where null unassigns.
+      if (isEdit || ownerTouched) body.owner_id = ownerId;
       if (dealId) body.deal_id = dealId;
 
       if (isEdit) {
@@ -87,6 +103,13 @@ export function TaskForm({ task, contactId, dealId, onClose, onSaved }: Props) {
                 <option value="medium">Medium</option>
                 <option value="high">High</option>
               </select>
+            </div>
+            <div>
+              <OwnerSelect
+              value={ownerId}
+              onChange={v => { setOwnerId(v); setOwnerTouched(true); }}
+              id="task-owner"
+            />
             </div>
           </div>
         </div>

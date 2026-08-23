@@ -39,6 +39,7 @@ from providers.router import router as providers_router, setup_router as ai_setu
 from reminders.router import router as reminders_router
 from telegram import poller as telegram_poller
 from telegram.router import router as telegram_router
+from users.router import router as users_router
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -72,13 +73,18 @@ async def lifespan(app: FastAPI):
     postgres.init_pool()
     postgres.run_migrations()
 
-    # ── Password credential (issue #78) ──────────────────────────────────────
-    # Consumes AUTH_PASSWORD_RESET, so it must run after the migration that
-    # creates auth_credential. Loading the token epoch here keeps it off the
-    # per-request path in get_current_user.
-    from core.auth import apply_password_reset_env, refresh_token_epoch
+    # ── Accounts (issues #78, #60) ───────────────────────────────────────────
+    # Order matters. ensure_bootstrap_admin() seeds the first admin when `users` is
+    # empty — including carrying an upgrading install's live password hash out of the
+    # pre-#60 auth_credential singleton, which is why it cannot live in the migration
+    # (migrations all run above this line, and it needs both that hash and an env
+    # var). apply_password_reset_env() then consumes AUTH_PASSWORD_RESET, and must
+    # run AFTER the bootstrap so the operator's lever has an admin row to target on a
+    # first boot that also sets it.
+    from core.auth import apply_password_reset_env
+    from users.bootstrap import ensure_bootstrap_admin
+    ensure_bootstrap_admin()
     apply_password_reset_env()
-    refresh_token_epoch()
 
     # ── AI touch-count worker (issue #16) ────────────────────────────────────
     # The in-process daemon worker marshals its provider calls onto THIS event loop
@@ -195,6 +201,7 @@ app.add_middleware(
 
 app.include_router(auth_router, prefix="/api")
 app.include_router(auth_2fa_router, prefix="/api", tags=["auth-2fa"])
+app.include_router(users_router, prefix="/api/users", tags=["users"])
 app.include_router(branding_router, prefix="/api/branding", tags=["branding"])
 app.include_router(providers_router, prefix="/api/providers", tags=["providers"])
 app.include_router(ai_setup_router, prefix="/api/setup", tags=["setup"])

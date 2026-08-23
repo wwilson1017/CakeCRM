@@ -5,6 +5,7 @@ network. Callback assertions use follow_redirects=False to inspect the 302."""
 from __future__ import annotations
 
 import pytest
+from conftest import fake_admin
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -19,7 +20,7 @@ def app():
     app = FastAPI()
     app.include_router(gmail_router, prefix="/api/gmail")
     app.include_router(setup_router, prefix="/api/setup")
-    app.dependency_overrides[get_current_user] = lambda: {"sub": "u"}
+    app.dependency_overrides[get_current_user] = fake_admin
     return app
 
 
