@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../core/api/client';
+import { useAuth } from '../core/auth/AuthContext';
+import { OwnerScopeToggle, useOwnerScope } from './components/OwnerScopeToggle';
 import type { CrmCompany } from '../core/types';
 import { CompanyForm } from './components/CompanyForm';
 import { StatusBadge } from './components/badges';
@@ -20,6 +22,8 @@ const COLS = '2fr 1.5fr 1.5fr 1.2fr 80px';
 const PAGE_SIZE = 50;
 
 export function CompaniesPage() {
+  const { currentUser } = useAuth();
+  const [mineOnly, setMineOnly] = useOwnerScope('crm_companies_mine');
   const [companies, setCompanies] = useState<CrmCompany[]>([]);
   const [total, setTotal] = useState(0);
   const [search, setSearch] = useState('');
@@ -39,10 +43,12 @@ export function CompaniesPage() {
     const params = new URLSearchParams();
     if (search) params.set('q', search);
     if (status !== 'all') params.set('status', status);
+    // 'Mine' is just owner_id=<me>; omitting it means everyone (issue #60).
+    if (mineOnly && currentUser) params.set('owner_id', String(currentUser.id));
     params.set('limit', String(PAGE_SIZE));
     params.set('offset', String(offset));
     return api<{ companies: CrmCompany[]; total: number }>(`/api/crm/companies?${params}`);
-  }, [search, status]);
+  }, [search, status, mineOnly, currentUser]);
 
   const reload = useCallback(async () => {
     const id = ++loadIdRef.current;
@@ -134,6 +140,7 @@ export function CompaniesPage() {
             <button key={tab} onClick={() => setStatus(tab)} style={filterTab(isMobile, status === tab)}>{tab}</button>
           ))}
         </div>
+        <OwnerScopeToggle mineOnly={mineOnly} onChange={setMineOnly} />
       </div>
 
       {loading ? (

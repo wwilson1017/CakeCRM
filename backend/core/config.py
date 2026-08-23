@@ -53,10 +53,16 @@ def _hour_env(name: str, default: int) -> int:
 
 
 class AuthSettings:
-    # Bootstrap password (plaintext or bcrypt-hashed). Only consulted while the
-    # auth_credential row holds no hash — once the user sets their own password
-    # in-app, this value is inert. See core.auth.verify_password.
+    # First-boot bootstrap password (plaintext or bcrypt-hashed) for the admin
+    # account. Consulted ONLY while the users table is empty; once any account
+    # exists, passwords live in the database and this value is inert. See
+    # users.bootstrap.ensure_bootstrap_admin.
     password: str = os.getenv("AUTH_PASSWORD", "changeme")
+
+    # Identity of that first admin. Only used at bootstrap — renaming the account
+    # afterwards is done in Settings, not here.
+    admin_email: str = os.getenv("ADMIN_EMAIL", "admin@cakecrm.local")
+    admin_name: str = os.getenv("ADMIN_NAME", "Admin")
 
     # Operator recovery lever — see core.auth.apply_password_reset_env
     password_reset: str = os.getenv("AUTH_PASSWORD_RESET", "")
@@ -81,9 +87,6 @@ class Settings:
         ).split(",")
         if o.strip()
     ] + ([RAILWAY_PUBLIC_URL] if RAILWAY_PUBLIC_URL else [])
-
-    # Multi-user (seats) is roughed in for a future phase
-    multi_user_enabled: bool = os.getenv("MULTI_USER_ENABLED", "false").lower() in ("1", "true", "yes")
 
     # URLs — auto-detect from Railway if not explicitly set
     frontend_url: str = os.getenv("FRONTEND_URL", "") or RAILWAY_PUBLIC_URL or "http://localhost:5173"

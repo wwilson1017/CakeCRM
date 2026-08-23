@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../core/api/client';
+import { useAuth } from '../core/auth/AuthContext';
+import { OwnerScopeToggle, useOwnerScope } from './components/OwnerScopeToggle';
 import type { CrmTask } from '../core/types';
 import { TaskForm } from './components/TaskForm';
 import { PriorityBadge } from './components/badges';
@@ -30,6 +32,9 @@ export function TasksPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [selectedTask, setSelectedTask] = useState<CrmTask | null>(null);
   const [editTask, setEditTask] = useState<CrmTask | null>(null);
+  const { currentUser } = useAuth();
+  // On a task, 'Mine' means assigned to me.
+  const [mineOnly, setMineOnly] = useOwnerScope('crm_tasks_mine');
   const isMobile = useIsMobile();
 
   const load = useCallback(async () => {
@@ -40,6 +45,7 @@ export function TasksPage() {
     else if (filter === 'completed') params.set('completed', 'true');
     else if (filter === 'due_today') { params.set('completed', 'false'); params.set('due_before', today); }
     else if (filter === 'overdue') { params.set('completed', 'false'); params.set('due_before', today); }
+    if (mineOnly && currentUser) params.set('owner_id', String(currentUser.id));
     params.set('limit', '100');
     try {
       const data = await api<{ tasks: CrmTask[] }>(`/api/crm/tasks?${params}`);
@@ -52,7 +58,7 @@ export function TasksPage() {
       setLoadFailed(true);
     }
     setLoading(false);
-  }, [filter]);
+  }, [filter, mineOnly, currentUser]);
 
   useEffect(() => { queueMicrotask(load); }, [load]);
 
@@ -100,6 +106,7 @@ export function TasksPage() {
             <button key={tab.key} onClick={() => setFilter(tab.key)} style={filterTab(isMobile, isActive)}>{tab.label}</button>
           );
         })}
+        <OwnerScopeToggle mineOnly={mineOnly} onChange={setMineOnly} />
       </div>
 
       {loading ? (

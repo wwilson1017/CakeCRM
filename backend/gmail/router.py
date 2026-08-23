@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
-from core.auth import get_current_user
+from core.auth import get_current_user, require_admin
 from core.config import settings
 from gmail import client, oauth, ops, store
 
@@ -48,7 +48,7 @@ def gmail_status(user=Depends(get_current_user)):
 
 
 @router.post("/app")
-def save_app(body: AppCredentials, user=Depends(get_current_user)):
+def save_app(body: AppCredentials, user=Depends(require_admin)):
     """Store BYO Google OAuth app credentials (client_id + client_secret).
 
     Replacing the app invalidates any tokens minted under the old client, so the
@@ -69,7 +69,7 @@ def save_app(body: AppCredentials, user=Depends(get_current_user)):
 
 
 @router.post("/oauth/start")
-def oauth_start(user=Depends(get_current_user)):
+def oauth_start(user=Depends(require_admin)):
     """Mint a single-use CSRF state and return the Google consent URL."""
     client_id, client_secret = store.get_app_credentials()
     if not client_id or not client_secret:
@@ -181,7 +181,7 @@ def oauth_callback(code: str = "", state: str = "", error: str = ""):
 
 
 @router.delete("/connection")
-def disconnect(user=Depends(get_current_user)):
+def disconnect(user=Depends(require_admin)):
     """Disconnect Gmail: clear the connection locally — capturing the token it held
     in the same statement — then best-effort revoke exactly that token at Google
     (keeping app credentials for a one-click reconnect)."""

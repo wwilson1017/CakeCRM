@@ -7,6 +7,7 @@ deletes any webhook, and NO response ever contains the bot token.
 """
 
 
+from conftest import fake_admin
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -56,7 +57,7 @@ def test_status_requires_auth(monkeypatch):
 def test_connect_rejects_invalid_token(monkeypatch):
     _fake_backend(monkeypatch, valid_token=False)
     app = _app()
-    app.dependency_overrides[get_current_user] = lambda: {"user": "t"}
+    app.dependency_overrides[get_current_user] = fake_admin
     resp = TestClient(app).post("/api/telegram/connect", json={"bot_token": "bad"})
     assert resp.status_code == 400
 
@@ -64,7 +65,7 @@ def test_connect_rejects_invalid_token(monkeypatch):
 def test_connect_wires_poller_and_never_leaks_token(monkeypatch):
     calls = _fake_backend(monkeypatch)
     app = _app()
-    app.dependency_overrides[get_current_user] = lambda: {"user": "t"}
+    app.dependency_overrides[get_current_user] = fake_admin
     resp = TestClient(app).post("/api/telegram/connect", json={"bot_token": "123:REAL"})
     assert resp.status_code == 200
     names = [c[0] for c in calls]
@@ -80,7 +81,7 @@ def test_connect_wires_poller_and_never_leaks_token(monkeypatch):
 def test_disconnect_restarts_poller(monkeypatch):
     calls = _fake_backend(monkeypatch)
     app = _app()
-    app.dependency_overrides[get_current_user] = lambda: {"user": "t"}
+    app.dependency_overrides[get_current_user] = fake_admin
     resp = TestClient(app).post("/api/telegram/disconnect")
     assert resp.status_code == 200
     names = [c[0] for c in calls]
@@ -90,6 +91,22 @@ def test_disconnect_restarts_poller(monkeypatch):
 
 def test_status_payload_excludes_token(monkeypatch):
     _fake_backend(monkeypatch)
-    payload = tgrouter._status_payload()
+    payload = tgrouter._status_payload(include_link=True)
     assert "bot_token" not in payload and "bot_token_enc" not in payload
     assert payload["link_url"] == "https://t.me/acmebot?start=CODE123"
+
+
+def test_status_payload_redacts_the_link_code_for_members(monkeypatch):
+    """A member must not be able to claim the install-wide Telegram binding.
+
+    Until Phase B gives Telegram per-user bindings, the link code hands whoever
+    uses it the ONE seat that receives every notification and can drive the
+    assistant from a phone — so gating connect/disconnect but leaking the code
+    would gate nothing.
+    """
+    _fake_backend(monkeypatch)
+    payload = tgrouter._status_payload(include_link=False)
+    assert payload["link_code"] == ""
+    assert payload["link_url"] == ""
+    # Connection state itself is not secret.
+    assert payload["connected"] is True

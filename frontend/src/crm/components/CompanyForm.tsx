@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { api } from '../../core/api/client';
+import { useAuth } from '../../core/auth/AuthContext';
+import { OwnerSelect } from './OwnerSelect';
 import { labelStyle, inputStyle, CORAL, LINE, INK_DIM, mono } from '../../shared/styles';
 import { formModalOverlay, formModalContent, formTitle, btnPrimary, btnSecondary } from '../styles';
 import type { CrmCompany } from '../../core/types';
@@ -13,6 +15,7 @@ interface Props {
 }
 
 export function CompanyForm({ company, onClose, onSaved }: Props) {
+  const { currentUser } = useAuth();
   const isEdit = !!company;
   const [name, setName] = useState(company?.name || '');
   const [domain, setDomain] = useState(company?.domain || '');
@@ -21,6 +24,16 @@ export function CompanyForm({ company, onClose, onSaved }: Props) {
   const [address, setAddress] = useState(company?.address || '');
   const [source, setSource] = useState(company?.source || '');
   const [status, setStatus] = useState(company?.status || 'active');
+  // Owner (issue #60). On an EDIT the record's own owner is used verbatim — `null`
+  // means unassigned and must survive, or saving an unrelated field would silently
+  // claim someone else's unowned record. On a CREATE the picker shows you as the
+  // default, but `owner_id` is only SENT if you actually touch it: an untouched
+  // create lets the server assign the caller, which is race-free (currentUser can
+  // still be resolving right after login) and keeps one rule in one place.
+  const [ownerId, setOwnerId] = useState<number | null>(
+    company ? (company.owner_id ?? null) : (currentUser?.id ?? null),
+  );
+  const [ownerTouched, setOwnerTouched] = useState(false);
   const [notes, setNotes] = useState(company?.notes || '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -30,7 +43,10 @@ export function CompanyForm({ company, onClose, onSaved }: Props) {
     e.preventDefault();
     if (!name.trim()) { setError('Name is required'); return; }
     setSaving(true); setError('');
-    const body = JSON.stringify({ name, domain, industry, phone, address, source, status, notes });
+    const payload: Record<string, unknown> = { name, domain, industry, phone, address, source, status, notes };
+    // Omitted on an untouched create so the server assigns the caller.
+    if (isEdit || ownerTouched) payload.owner_id = ownerId;
+    const body = JSON.stringify(payload);
     try {
       let id: number;
       if (isEdit) {
@@ -78,6 +94,13 @@ export function CompanyForm({ company, onClose, onSaved }: Props) {
               <option value="active">Active</option>
               <option value="archived">Archived</option>
             </select>
+          </div>
+          <div>
+            <OwnerSelect
+              value={ownerId}
+              onChange={v => { setOwnerId(v); setOwnerTouched(true); }}
+              id="company-owner"
+            />
           </div>
           <div><label style={labelStyle}>Notes</label><textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3} style={{ ...inputStyle, resize: 'none' }} /></div>
         </div>

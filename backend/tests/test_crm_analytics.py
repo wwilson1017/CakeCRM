@@ -13,6 +13,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 import pytest
+from conftest import fake_admin
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -62,7 +63,7 @@ def rec(monkeypatch):
 def client():
     app = FastAPI()
     app.include_router(crm_router, prefix="/api/crm")
-    app.dependency_overrides[get_current_user] = lambda: {"sub": "u"}
+    app.dependency_overrides[get_current_user] = fake_admin
     return TestClient(app)
 
 

@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from core.auth import get_current_user
+from core.auth import get_current_user, require_admin
 from core.config import settings
 from providers.credentials import CredentialStore
 
@@ -98,7 +98,7 @@ class SetTiersRequest(BaseModel):
 
 
 @router.put("/tiers")
-async def set_tiers(body: SetTiersRequest, user=Depends(get_current_user)):
+async def set_tiers(body: SetTiersRequest, user=Depends(require_admin)):
     """Persist user tier overrides for a provider, validating each requested model
     id against the provider's current (cached) model list before writing."""
     from providers import get_ai_provider, model_tiers
@@ -141,7 +141,7 @@ class ConnectKeyRequest(BaseModel):
 
 
 @router.post("/{provider}/connect-key")
-async def connect_key(provider: str, body: ConnectKeyRequest, user=Depends(get_current_user)):
+async def connect_key(provider: str, body: ConnectKeyRequest, user=Depends(require_admin)):
     """Validate and store an API key for a key-based provider. Validation is inline
     (no separate test route). The NEW key's live catalog is fetched — warming the
     model cache and materializing inferred tier defaults — and the active model is
@@ -237,7 +237,7 @@ def _validated_ollama_url(raw: str) -> str:
 
 
 @router.post("/ollama/connect")
-async def connect_ollama(body: OllamaConnectRequest, user=Depends(get_current_user)):
+async def connect_ollama(body: OllamaConnectRequest, user=Depends(require_admin)):
     """Validate Ollama is reachable and store the connection."""
     from providers.ollama_provider import OllamaProvider
     base_url = _validated_ollama_url(body.base_url)
@@ -276,7 +276,7 @@ async def ollama_status(user=Depends(get_current_user)):
 # ── Disconnect ────────────────────────────────────────────────────────────────
 
 @router.post("/{provider}/disconnect")
-async def disconnect_provider(provider: str, user=Depends(get_current_user)):
+async def disconnect_provider(provider: str, user=Depends(require_admin)):
     """Remove credentials for a provider."""
     if provider not in ALL_PROVIDERS:
         raise HTTPException(status_code=404, detail="Unknown provider")
@@ -293,7 +293,7 @@ class SetActiveRequest(BaseModel):
 
 
 @router.put("/active")
-async def set_active(body: SetActiveRequest, user=Depends(get_current_user)):
+async def set_active(body: SetActiveRequest, user=Depends(require_admin)):
     """Atomically switch the active provider AND model. If the requested model
     isn't in the provider's catalog, derive a provider-local default (top tier)
     so switching providers never carries over another provider's model. Returns

@@ -90,6 +90,18 @@ class FakeCursor:
     def __init__(self, conn):
         self._conn = conn
 
+    @property
+    def description(self):
+        """Column metadata, for flows that convert rows with core.postgres.row_to_dict.
+
+        Set ``conn.description = ["id", "email", ...]`` on the FakeConn. Kept real
+        rather than monkeypatching row_to_dict away: that helper's cursor/description
+        reuse across statements in a FOR UPDATE flow is itself a live bug class, and
+        stubbing it would hide exactly the mistake worth catching.
+        """
+        cols = self._conn.description
+        return None if cols is None else [(c,) for c in cols]
+
     def execute(self, sql, params=()):
         self._conn.executed.append((" ".join(sql.split()), params))
 
@@ -104,10 +116,13 @@ class FakeCursor:
 
 
 class FakeConn:
-    def __init__(self, fetchone_results=None, fetchall_results=None):
+    def __init__(self, fetchone_results=None, fetchall_results=None, description=None):
         self.executed = []
         self.fetchone_results = list(fetchone_results or [])
         self.fetchall_results = list(fetchall_results or [])
+        # Column names for cursor.description, when the code under test converts
+        # rows with row_to_dict. None mirrors a cursor that returned no rows.
+        self.description = list(description) if description else None
 
     def cursor(self):
         return FakeCursor(self)
@@ -126,9 +141,52 @@ def fake_conn():
     it for assertions. Usage: ``conn = fake_conn(monkeypatch, providers.credentials,
     fetchone_results=[...], fetchall_results=[...])``."""
 
-    def _install(monkeypatch, module, *, fetchone_results=None, fetchall_results=None):
-        conn = FakeConn(fetchone_results=fetchone_results, fetchall_results=fetchall_results)
+    def _install(monkeypatch, module, *, fetchone_results=None, fetchall_results=None,
+                 description=None):
+        conn = FakeConn(
+            fetchone_results=fetchone_results,
+            fetchall_results=fetchall_results,
+            description=description,
+        )
         monkeypatch.setattr(module, "get_connection", _make_get_connection(conn))
         return conn
 
     return _install
+
+
+# ── Test identity (issue #60) ────────────────────────────────────────────────
+#
+# Since multi-user landed, get_current_user returns a live DB-backed user row and
+# `require_admin` reads `role` off it. Router tests override the dependency rather
+# than hitting the database, so they need a dict of the same SHAPE — a bare
+# {"sub": "u"} silently 403s every admin-gated route.
+#
+# One definition, imported everywhere, so the shape can only drift in one place.
+FAKE_ADMIN: dict = {
+    "id": 1,
+    "email": "admin@cakecrm.test",
+    "name": "Test Admin",
+    "role": "admin",
+    "is_active": True,
+    "sub": "1",
+}
+
+FAKE_MEMBER: dict = {
+    "id": 2,
+    "email": "member@cakecrm.test",
+    "name": "Test Member",
+    "role": "member",
+    "is_active": True,
+    "sub": "2",
+}
+
+
+def fake_admin() -> dict:
+    """Dependency override returning an admin. Use as `lambda: fake_admin()`-free:
+    `app.dependency_overrides[get_current_user] = fake_admin`."""
+    return dict(FAKE_ADMIN)
+
+
+def fake_member() -> dict:
+    """Dependency override returning a non-admin member."""
+    return dict(FAKE_MEMBER)

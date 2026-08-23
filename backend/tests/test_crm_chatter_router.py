@@ -6,6 +6,7 @@ and missing paths monkeypatch the service functions.
 """
 
 import pytest
+from conftest import fake_admin
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -18,7 +19,7 @@ from crm.router import router as crm_router
 def client():
     app = FastAPI()
     app.include_router(crm_router, prefix="/api/crm")
-    app.dependency_overrides[get_current_user] = lambda: {"sub": "u"}
+    app.dependency_overrides[get_current_user] = fake_admin
     return TestClient(app)
 
 
@@ -52,10 +53,19 @@ def test_get_chatter_passes_include_archived(client, monkeypatch):
 # ── POST /chatter/{type}/{id}/note ──────────────────────────────────────────────
 
 def test_add_note_returns_created(client, monkeypatch):
-    monkeypatch.setattr(chatter_service, "add_note", lambda t, i, m: {"id": 7, "message": m})
+    captured = {}
+
+    def _add(t, i, m, author_id=None):
+        captured.update(entity_type=t, entity_id=i, author_id=author_id)
+        return {"id": 7, "message": m}
+
+    monkeypatch.setattr(chatter_service, "add_note", _add)
     r = client.post("/api/crm/chatter/deal/3/note", json={"message": "hello"})
     assert r.status_code == 200
     assert r.json() == {"id": 7, "message": "hello"}
+    # The note is credited to the human who wrote it (issue #60), not to the record's
+    # owner — per-rep activity is attributed by actor.
+    assert captured == {"entity_type": "deal", "entity_id": 3, "author_id": 1}
 
 
 def test_add_note_blank_message_400(client):

@@ -4,8 +4,9 @@
 
 Free, open-source, self-hostable CRM with a built-in AI sales assistant. Seeded from
 Chatty's product shell and agent engine; CRM features ported from the CAKE OS CRM;
-assistant capability bar is Casey (CAKE OS's sales agent). Single-user for v1
-(multi-user/seats is the headline roadmap item). PostgreSQL, FastAPI, React/Vite.
+assistant capability bar is Casey (CAKE OS's sales agent). **Multi-user since #60**
+(accounts, admin/member roles, record ownership; assistant + channel isolation is
+Phase B). PostgreSQL, FastAPI, React/Vite.
 Deploy targets: `python run.py` locally (Postgres via Docker Compose), Railway
 one-click in the cloud (the template provisions a PostgreSQL service).
 
@@ -139,13 +140,88 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   due-guard) and is driven by **#6's 60s `reminder_tick`** (via
   `heartbeat.service._maybe_run_dreaming`) — #5's interim lifespan task was absorbed
   when #6 landed, exactly as planned.
-  Multi-user is future work (authz/ownership), not just a `user_id` column.
+  Assistant chat history and memory are still install-wide — Phase B of #60.
+- **Accounts, roles and record ownership** (#60 Phase A) — the install has real
+  `users` (email + bcrypt + `admin`/`member` + `is_active` + per-user `token_epoch`),
+  and the shared `AUTH_PASSWORD` login is gone. Authorization has exactly **two**
+  enforcement points: `core.auth.get_current_user` (authentication AND liveness — one
+  indexed PK lookup per request, so a deactivation, a demotion or a password change
+  bites on the *next* request, not at token expiry) and `require_admin`, applied
+  per-route to an enumerated set that `backend/tests/test_route_authz.py` pins **in
+  both directions** — adding an ungated admin route fails CI, and so does removing a
+  gate. The JWT carries `sub` (user id) and `pwd_epoch` and deliberately **not**
+  `role`: a role in a token can only ever be stale. `get_current_user` is a sync
+  `def` on purpose — it does blocking psycopg2 I/O, and an `async` dependency would
+  run it on the event loop and stall every SSE stream.
+  **Ownership is NOT access control.** `owner_id` on contacts/companies/deals/tasks
+  is an assignment, a filter and an analytics dimension; any member can read, edit,
+  delete and reassign any record (no per-object ACLs — a product decision, stated
+  rather than implied). It is nullable forever: `NULL` = unassigned, a real state the
+  Gmail scan, the assistant and #61's importer all legitimately produce. Owner
+  filters live in the **shared** WHERE builders so they reach the COUNT and the page
+  query together — a one-sided filter doesn't fail, it silently reports a total that
+  disagrees with the rows. The pipeline board deliberately has **no** server-side
+  owner param: it is unpaginated, every other #21 facet is client-side, and
+  `get_pipeline` returns deals alongside a separately-computed `stage_summary` that a
+  one-sided filter would put out of step with the cards.
+  **Ownership and authorship are different columns** (the cake_os #1454/#1532
+  lesson): `activity_log.actor_id` and `crm_chatter.author_id` record who DID the
+  work, so per-rep activity credits a rep for work on a colleague's record. Only the
+  human REST paths stamp them — the assistant's tool executors don't thread identity
+  in Phase A, so their writes stay NULL and roll up as "Unattributed". Phase A
+  therefore **undercounts** assistant-delegated work but never **misattributes** it.
+  The per-rep query excludes `provenance_service.confirm`'s housekeeping notes and
+  `merge_deals`' copies (the copies leave the originals on the archived source, so
+  both read `archived = 0` and one note would count twice).
+  **Bootstrap** (`users/bootstrap.py`, lifespan, after migrations, before
+  `apply_password_reset_env`) seeds the first admin when `users` is empty and, on an
+  upgrade, **carries the bcrypt hash out of the pre-#60 `auth_credential` singleton**
+  — an owner who changed their password in-app doesn't know `AUTH_PASSWORD` any more
+  (#78 made it inert), so re-deriving from the env var would lock them out. It also
+  claims the orphaned `totp_config`/`trusted_devices` rows and backfills `owner_id`,
+  all in one transaction under an advisory lock. It does **not** clear
+  `auth_credential`: pre-#60 code reads a NULL hash as permission to fall back to
+  `AUTH_PASSWORD`, so clearing it would let a rolled-back build accept the superseded
+  env password. That table is vestigial and a later release drops it.
+  `AUTH_PASSWORD_RESET` now also re-activates the target admin and **clears their
+  2FA** — a password-only rescue cannot help an operator who lost their
+  authenticator. The same reasoning gives `POST /api/users/{id}/password` an **opt-in**
+  `clear_two_factor`, which is the only recovery for a MEMBER who lost both their
+  authenticator and their backup codes; it is opt-in rather than automatic because it
+  genuinely weakens that account. That route also **refuses a self-reset** — it skips
+  the current-password and 2FA checks `/api/auth/change-password` enforces, which is
+  right for helping a colleague and wrong as a second, weaker self-service path. 2FA
+  itself is re-keyed per user, and enabling or disabling it wipes that user's trusted
+  devices in the SAME transaction — as does a password change, which is one
+  transaction covering the hash, the epoch bump and the revocation.
+  **The upgrade is a one-way door.** The migration drops `totp_config.id`, so a
+  pre-#60 binary cannot complete a login for a 2FA account afterwards; rolling back
+  means restoring a `pg_dump`, and the README says so. Preserving `auth_credential`
+  buys only that an old process would still check the credential the user chose
+  rather than the stale `AUTH_PASSWORD` — it does not make the schema reversible.
+  Login is rate-limited **per account and per IP** (10/5min and 50/5min): a single
+  per-IP bucket is a denial of service on your own team, since one office shares a
+  NAT address. `login`, `/api/me`, change-password and the `/api/users` handlers are
+  sync `def`s for the same reason `get_current_user` is — they do blocking psycopg2
+  and bcrypt work and would otherwise run it on the event loop.
+  In the UI, `SettingsPage` hides the install-configuration cards (branding,
+  Telegram, custom fields, Gmail) from members, the way the Team card hides itself;
+  Notifications and Change password stay, because they configure the person, not the
+  install.
+  **Still install-wide, deliberately (Phase B):** assistant chat history and memory,
+  the Gmail connection, the Telegram binding, reminders, notifications and alerts.
+  Every active seat gets the assistant (Will's §15 ruling — no temporary admin gate
+  someone has to remember to remove), so a member can have it read the admin's
+  connected mailbox. `GET /api/telegram/status` redacts the link code for members,
+  since that code claims the one binding and would otherwise defeat the admin gate on
+  connect/disconnect. The dead `MULTI_USER_ENABLED` flag was deleted — grep found
+  only its own definition and the docstring advertising it.
 - **One database: PostgreSQL, and it's mandatory** — the backend refuses to start
   without `DATABASE_URL` (decided 2026-07-18; single engine, ready for multi-user
   growth). Locally `docker compose up -d`; on Railway the template provisions
   Postgres and injects `DATABASE_URL`. No Redis or other external services.
-  Required env vars: `AUTH_PASSWORD` + `DATABASE_URL`; `JWT_SECRET` and
-  `ENCRYPTION_KEY` auto-generate. **The login credential is DB-backed** (#78): the
+  Required env vars: `AUTH_PASSWORD` + `DATABASE_URL`; `ADMIN_EMAIL`/`ADMIN_NAME`
+  seed the first admin's identity; `JWT_SECRET` and `ENCRYPTION_KEY` auto-generate. **The login credential is DB-backed** (#78): the
   `auth_credential` singleton holds a bcrypt hash the logged-in user changes from
   `/crm/settings`, and `core.auth.verify_password()` resolves DB-hash-first, falling
   back to `AUTH_PASSWORD` only while that hash IS NULL — so the env var is a
@@ -434,6 +510,21 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 - See `docs/AUTO_ISSUES.md` for the operator guide (label vocabulary, terminal
   outcomes, bring-up sequence, and repo prerequisites like branch protection).
   `scripts/seed-labels.sh` idempotently creates/normalizes the loop's labels.
+- **`sync-intake` issues are ordinary issues.** The cake_os sync bot (#23,
+  `docs/SYNC.md`) files them when upstream CRM code changes, un-`greenlit` like
+  everything else — default-deny holds, and the bot never marks its own work
+  eligible. There is **no special case anywhere in the loop**: a greenlit intake
+  runs the normal pipeline, and the port worker reads cake_os from the local clone
+  at `~/ai/cake_os`, never from the issue body. Ports add a `SYNC_LEDGER.md` row.
+- **Porting from cake_os: both sides are Postgres.** cake_os's CRM is PostgreSQL
+  (no `apps/crm/db.py`; `core.postgres` helpers; `%s`), so the SQLite items in
+  `docs/solutions/database-issues/cakecrm-sqlite-to-postgres-crm-port.md` apply only
+  to the chatty-origin port, not to cake_os ports. What does bite every time:
+  tenancy stripping (`user_email`/`owner_email` threads ~25% of upstream CRM
+  functions and has nowhere to land here), the module-topology collapse (~20 cake_os
+  service modules → CakeCRM's single `crm/service.py`, so a same-named file is a
+  *candidate*, never a destination), the `apps.todo_gtd`/`apps.dimm` call sites, and
+  the PII scrub. Full playbook in `docs/SYNC.md`.
 - Keep this CLAUDE.md updated in the same PR as any change to architecture,
   conventions, or the rules above.
 
@@ -442,7 +533,15 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 - **CI** (`.github/workflows/ci.yml`) runs on every PR to `main` and on `push` to
   `main`, in three jobs: **backend** (`ruff check .` → import check → `python -m
   pytest -q`, from `backend/`), **frontend** (`npm ci` → `npm run build` → `npm run
-  lint` → `npm test`), and **secret-scan** (gitleaks). Backend lint config is `backend/ruff.toml`
+  lint` → `npm test`), and **secret-scan** (gitleaks). The scan runs `gitleaks git .` over FULL history, so
+  a false positive stays found forever once committed and cannot be fixed by editing
+  the tip. `.gitleaksignore` records verified-false findings by exact
+  `commit:file:rule:line` fingerprint, with the reasoning written down. Use that file,
+  NOT a `.gitleaks.toml` allowlist keyed on commit+path — the latter exempts every
+  finding in that file in that commit, including a real one. Validate any new entry
+  with a **randomly generated** token, never a canonical doc example
+  (`AKIAIOSFODNN7EXAMPLE` and friends are allowlisted by default and prove nothing).
+  The alternative is a force-push, which this repo does not do. Backend lint config is `backend/ruff.toml`
   (select `F,E,W,I`; `E501` ignored); dev/CI tooling is pinned in
   `backend/requirements-dev.txt`; tests live in `backend/tests/`. The import check
   imports the app with no `DATABASE_URL` (the Postgres pool inits in the lifespan
@@ -463,6 +562,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | CakeCRM area | Source |
 |---|---|
 | Product shell (run.py, auth, 2FA, encryption, config, Railway) | `chatty/backend/` + `chatty/run.py` |
+| Accounts, roles, per-user 2FA, record ownership + per-rep analytics — **landed #60 (Phase A)** as `backend/users/` (`service`/`router`/`bootstrap`) + reworked `core/{auth,auth_2fa,config}.py` + `20260821100126_multi_user.sql` + `frontend/src/crm/{useUsers.ts,components/{TeamSettings,OwnerSelect,OwnerScopeToggle}.tsx}`. Phase B (assistant memory/chat partitioning, per-user Telegram, owner-routed notifications, owner-aware agent tools) is a separate plan. Corrects the issue's premise: cake_os uses `owner_email` TEXT with no FK, so this is an FK design, not a carry | New capability (no blueprint — `cake_os/backend/apps/crm/analytics_service.get_rep_performance` for the per-rep shape only) |
 | DB-backed login credential + in-app password change (`auth_credential` singleton, `POST /api/auth/change-password`, `AUTH_PASSWORD_RESET` recovery lever) — **landed #78** as `backend/core/auth.py` + `frontend/src/crm/components/ChangePasswordCard.tsx` | New capability (no blueprint — back-port candidate to CAKE OS) |
 | Postgres pool + migration runner | `cake_os/backend/core/postgres.py` |
 | AI providers + pricing + setup wizard | `chatty/backend/core/providers/`, `chatty/frontend/src/setup/` |
@@ -488,3 +588,4 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Dashboard parity (stat row + Weekly Touches) — **landed #76** as `service.get_weekly_touches()` + `GET /api/crm/dashboard/weekly-touches` + `frontend/src/crm/components/WeeklyTouchesCard.tsx`, plus `total_companies` on `get_dashboard_stats()` and a four-tile stat row on `CrmDashboardPage`. Ported for CONTENT parity, **additively** — the blueprint component is written against Tailwind classes (`bg-cream`/`text-charcoal`/`font-heading`) that #54 removed, and a literal replacement would have deleted #20's analytics sections. The blueprint's PER-REP grouping collapses to per-DEAL (no owner columns, single-user); the envelope keeps `window`/`total_touches`/`total_open_deals` with `deals` where it had `reps`, so a later multi-user port is a re-grouping. **Two separate signals, deliberately:** window MEMBERSHIP is `LAST_TOUCH_SQL` — the same keyless GREATEST(edit, newest activity, newest live note) expression `analytics_service.get_stale_deals` uses, so the card and the "Needs a touch" panel on the same page can never disagree about what a touch is — while the per-deal NUMBER is #16's `ai_touch_count`, which is what supplies the zero-keys gate (no provider ⇒ every count NULL ⇒ `computed_deals == 0` ⇒ the card renders `null`; it owns its own wrapper padding, so hiding leaves no gap). Membership is emphatically NOT `deals.ai_touch_count_at`: that column is #16's stale-write-guard watermark (it only advances when a provider answered and the CAS accepted, and falls back to the deal's `created_at`), so keying a window off it made every provider timeout silently drop a deal from an accountability number — and left numerator and denominator with different coverage on a half-backfilled install. Because membership is keyless, both sides of the ratio are coverage-independent. The touch-count colour ramp moved to `crm/constants.ts` and is shared with `TouchCountPill` (one number, one colour, app-wide). Window math mirrors the blueprint but on UTC calendar days — no CT convention here (and `get_dashboard_stats` already decides overdue against a UTC day), so the inclusive end-day bound is a plain +1 day, guarded against the `datetime.max` OverflowError that is not a `ValueError`; the filter is labelled UTC rather than converting per viewer. Drill-down landed with #56: each row opens the deal sheet via `onOpenDeal`, whose evidence section explains that deal's number event by event. | `cake_os/frontend/src/apps/crm/components/DashboardTab.tsx` + `WeeklyTouchesCard.tsx` + `backend/apps/crm/dashboard_service.py` |
 | Assistant tool set + sales behaviors — **Phase 1 landed #22**: 9 new tools (`crm_search_deals`, `crm_mark_deal_won`/`_lost`, `crm_archive_deal`, `crm_merge_deals`, `crm_get_stale_deals`, `crm_get_contact_staleness`, `crm_find_duplicates`, `crm_scan_gaps`) in `backend/crm/analytics_service.py` + `service.py`, parity closes (embedded `custom_fields`, tool-side `limit_per_stage`, `limit` on find/search, company chatter), the genericized static `identity.SALES_GUIDE` prompt block + sales `QuickActions`. **Phases 2 + 3 landed together** once #17/#18/#20 all merged (the three-PR split was dependency ordering, and every dependency cleared at once): **Phase 2** = `crm_get_deal_health` + `crm_get_pipeline_analytics` in `analytics_service.py` (see the CRM bullet above); **Phase 3** = `backend/proactive/` — a daily pipeline digest and stale-deal / untouched-contact nudges on their own `proactive` scheduler job. Both are **keyless-first**: the digest is deterministic SQL and the nudges read Phase 1's pure-SQL detectors, with an optional single `run_background_turn` (read tools + `notify_user`, digest numbers in the USER message) adding at most one extra notification when a provider exists. Every send **claims before it delivers** — the digest via a one-statement rowcount UPDATE on `heartbeat_state` (so two ticks can't both push), each nudge via a conditional upsert on `proactive_nudges` — because a crash that loses one notification beats one that re-sends every tick. `proactive_nudges` is polymorphic and FK-less, so it MUST stay in the `_truncate_all` sweep. NOT ported: `get_rep_performance` (no owner columns), `enrich_field` (no web tools), lead-import tools (own issue) | `cake_os/backend/apps/crm/tools/` + the blueprint sales agent's config |
 | Pipeline facet filtering (client-side, no backend query params: `frontend/src/crm/pipelineFilters.ts` pure predicate + `components/PipelineFilterBar.tsx`, spliced into `PipelinePage`'s useMemo seam as `deals`→`filteredDeals`→`grouped`; facets = keyword/stage/value/close-date/last-activity; sessionStorage `crm_pipeline_filters`) — **landed #21**. Owner facet dropped (single-tenant); `get_pipeline()` gains a derived `last_activity_at` = MAX(deal `activity_log` rows + un-archived deal `crm_chatter` notes) via one UNION-ALL/GROUP BY join (NULL = no activity), plus `company_name`. Drag stays enabled while filtering (board is stage-only, index-safe). | `cake_os/docs/CRM_FILTER_DESIGN.md` + `cake_os/docs/solutions/architecture-patterns/client-side-facet-filtering.md` |
+| **Sync bot — receiving half** (`.github/workflows/sync-intake.yml` + `scripts/sync_intake.py` + `SYNC_LEDGER.md` + `docs/SYNC.md`) — **landed #23**. cake_os fires a keyless `workflow_dispatch` carrying merge **metadata only**; CakeCRM validates, classifies the paths, dedupes on a full-SHA marker, and files an **un-`greenlit`** `sync-intake` issue. Translation is NOT done here — an intake issue enters the ordinary `/auto-issues` pipeline, whose worker reads cake_os from the local clone. **Two structural guarantees:** (1) *never a push* — the sender's token holds **Actions: write** only, which cannot push/PR/create-issue (`repository_dispatch` was rejected because its token needs **Contents: write**, i.e. push-capable against an unprotected `main`); (2) *no upstream text* — the payload has no free-text field, and **no cake_os path is rendered either**, because a path is only *prefix*-constrained and the filename after it is free text that could carry a customer name or forge the dedupe marker. The issue instead names **CakeCRM's own counterpart path**, and only when that file already exists here (already-public name); everything else becomes a count. Asserted, not argued: `test_sync_intake.py` feeds sentinel paths and fails CI if one survives rendering. Verdicts (`crm-code`/`shared-dnd-only`/`internal-paths-only`/`docs-only`/`no-watched-files`) are deliberately **factual, not portability judgments** — portability isn't decidable from a path. `shared-dnd-only` is its own verdict because cake_os's `shared/dnd/` has **13 non-CRM consumers** (CRM is 1 of 14), so a dnd touch is weak CRM evidence. Dedupe is the full-SHA marker check **plus a per-SHA `concurrency` group** (`sync-intake-<sha>`) closing the check-then-create race. The distinction is the whole point: a *global* group would drop distinct intakes (only one run may sit pending), while keying on the SHA serializes exactly the duplicate deliveries and drops nothing. The workflow self-provisions its label and declares `permissions: issues: write` explicitly (the repo default is `read`). **The sender half lives in cake_os and is not built yet** — `docs/SYNC.md` §6 is its spec. | New capability (no blueprint — the cake_os half is its own issue there) |

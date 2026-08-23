@@ -7,6 +7,7 @@ new /{entity_type}/{entity_id}/fields paths don't shadow existing routes.
 
 import psycopg2
 import pytest
+from conftest import fake_admin
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -19,7 +20,7 @@ from crm.router import router as crm_router
 def client():
     app = FastAPI()
     app.include_router(crm_router, prefix="/api/crm")
-    app.dependency_overrides[get_current_user] = lambda: {"sub": "u"}
+    app.dependency_overrides[get_current_user] = fake_admin
     return TestClient(app)
 
 
@@ -108,8 +109,10 @@ def test_set_values_forwards_sub_as_editor(client, monkeypatch):
     monkeypatch.setattr(field_service, "set_field_values", fake_set)
     r = client.put("/api/crm/contact/5/fields", json={"values": {"9": "A"}})
     assert r.status_code == 200
-    # No email claim in the token → attribution falls back to the JWT sub ("u").
-    assert captured == {"et": "contact", "eid": 5, "values": {"9": "A"}, "email": "u"}
+    # Since #60 the dependency returns a live user row, so the editor is a real address.
+    assert captured == {
+        "et": "contact", "eid": 5, "values": {"9": "A"}, "email": "admin@cakecrm.test",
+    }
 
 
 def test_set_values_valueerror_400(client, monkeypatch):

@@ -66,6 +66,11 @@ def check_node():
     print(f"  Node.js {version}")
 
 
+def _shell_safe(value: str) -> str:
+    """Escape a value for single-quoted .env syntax (handles =, #, spaces, quotes)."""
+    return value.replace("'", "'\\''")
+
+
 def setup_env():
     if ENV_FILE.exists():
         print("  .env file already exists, skipping.")
@@ -75,19 +80,26 @@ def setup_env():
     else:
         content = (
             "AUTH_PASSWORD=changeme\n"
+            "ADMIN_EMAIL=admin@cakecrm.local\n"
             "JWT_SECRET=change-me-in-production\n"
         )
     # Auto-generate a secure JWT secret
     content = content.replace("change-me-in-production", secrets.token_hex(32))
-    # Prompt for password
+    # Prompt for the first admin account (issue #60: you sign in with an email now).
     print()
+    email = input("  Admin email (or press Enter for 'admin@cakecrm.local'): ").strip()
+    if email:
+        content = content.replace(
+            "ADMIN_EMAIL=admin@cakecrm.local", f"ADMIN_EMAIL='{_shell_safe(email)}'"
+        )
     password = input("  Choose a login password (or press Enter for 'changeme'): ").strip()
     if password:
-        # Quote the value to handle special characters (=, #, spaces)
-        safe_password = password.replace("'", "'\\''")
-        content = content.replace("AUTH_PASSWORD=changeme", f"AUTH_PASSWORD='{safe_password}'")
+        content = content.replace(
+            "AUTH_PASSWORD=changeme", f"AUTH_PASSWORD='{_shell_safe(password)}'"
+        )
     ENV_FILE.write_text(content, encoding="utf-8")
     print("  Created .env file.")
+    print(f"  Sign in with {email or 'admin@cakecrm.local'} and that password.")
 
 
 def setup_venv():

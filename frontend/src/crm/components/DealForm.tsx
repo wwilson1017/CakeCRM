@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import { api } from '../../core/api/client';
+import { useAuth } from '../../core/auth/AuthContext';
+import { OwnerSelect } from './OwnerSelect';
 import { labelStyle, inputStyle, CORAL, LINE, INK_DIM, mono } from '../../shared/styles';
 import { formModalOverlay, formModalContent, formTitle, btnPrimary, btnSecondary } from '../styles';
 import { STAGE_ORDER } from '../constants';
@@ -16,6 +18,7 @@ interface Props {
 
 
 export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
+  const { currentUser } = useAuth();
   const isEdit = !!deal;
   const [title, setTitle] = useState(deal?.title || '');
   const [stage, setStage] = useState(deal?.stage || 'lead');
@@ -27,6 +30,16 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
   const [selectedCompany, setSelectedCompany] = useState<number | null>(deal?.company_id ?? null);
   const [contacts, setContacts] = useState<CrmContact[]>([]);
   const [companies, setCompanies] = useState<CrmCompany[]>([]);
+  // Owner (issue #60). On an EDIT the record's own owner is used verbatim — `null`
+  // means unassigned and must survive, or saving an unrelated field would silently
+  // claim someone else's unowned record. On a CREATE the picker shows you as the
+  // default, but `owner_id` is only SENT if you actually touch it: an untouched
+  // create lets the server assign the caller, which is race-free (currentUser can
+  // still be resolving right after login) and keeps one rule in one place.
+  const [ownerId, setOwnerId] = useState<number | null>(
+    deal ? (deal.owner_id ?? null) : (currentUser?.id ?? null),
+  );
+  const [ownerTouched, setOwnerTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const cf = useCustomFieldsForm('deal', deal?.id);
@@ -83,6 +96,9 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
       };
       body.contact_id = selectedContact;  // always send (null unlinks the contact)
       body.company_id = selectedCompany;  // always send (null unlinks the company)
+      // Omitted on an untouched create so the server assigns the caller; on an
+      // edit always sent, where null unassigns.
+      if (isEdit || ownerTouched) body.owner_id = ownerId;
       let id: number;
       if (isEdit) {
         await api(`/api/crm/deals/${deal.id}`, { method: 'PUT', body: JSON.stringify(body) });
@@ -120,6 +136,13 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
               <option value="">No company</option>
               {companyOptions.map(co => <option key={co.id} value={co.id}>{co.name}{co.status === 'archived' ? ' (archived)' : ''}</option>)}
             </select>
+          </div>
+          <div>
+            <OwnerSelect
+              value={ownerId}
+              onChange={v => { setOwnerId(v); setOwnerTouched(true); }}
+              id="deal-owner"
+            />
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div>

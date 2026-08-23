@@ -8,6 +8,7 @@ Window resolution is a pure function, so the interesting half needs no mock at a
 from datetime import datetime, timezone
 
 import pytest
+from conftest import fake_admin
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -235,7 +236,7 @@ def test_dashboard_stats_reports_company_count(rec):
 def client():
     app = FastAPI()
     app.include_router(crm_router, prefix="/api/crm")
-    app.dependency_overrides[get_current_user] = lambda: {"username": "test"}
+    app.dependency_overrides[get_current_user] = fake_admin
     return TestClient(app)
 
 

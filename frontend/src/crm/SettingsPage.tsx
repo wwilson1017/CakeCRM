@@ -12,6 +12,7 @@
 
 import { useState } from 'react';
 import { api } from '../core/api/client';
+import { useAuth } from '../core/auth/AuthContext';
 import { useBranding } from '../core/branding/BrandingContext';
 import type { BrandingConfig } from '../core/branding/brandingConfig';
 import { useIsMobile } from '../shared/useIsMobile';
@@ -29,6 +30,7 @@ import { NotificationSettings } from './components/NotificationSettings';
 import { CustomFieldSettings } from './components/CustomFieldSettings';
 import { TelegramSettings } from './components/TelegramSettings';
 import { ChangePasswordCard } from './components/ChangePasswordCard';
+import { TeamSettings } from './components/TeamSettings';
 
 // SVG is excluded: all logos are stored/served as image/png, and browsers don't
 // content-sniff SVG, so an SVG would silently never render. (Serving real SVG from
@@ -44,6 +46,7 @@ const srOnly: React.CSSProperties = {
 };
 
 export function SettingsPage() {
+  const { isAdmin } = useAuth();
   const isMobile = useIsMobile();
   const { branding, loadError, patchBranding, logoVersion, bumpLogoVersion } = useBranding();
   const loaded = branding !== null;
@@ -115,6 +118,13 @@ export function SettingsPage() {
     <div style={pagePadding(isMobile)}>
       <h1 style={pageHeading(isMobile)}>Settings</h1>
 
+      {/* Everything from here to the Notifications card configures the INSTALL, and
+          every one of those routes is admin-only since #60. Rendering the controls to
+          a member would invite an action that can only 403 — so they are hidden, the
+          same way the Team card hides itself. The server gate is the real one; this
+          is about not offering what cannot work. Members keep Notifications (their
+          own browser's push) and Change password (their own credential). */}
+      {isAdmin && (
       <div style={{ ...cardStyle, padding: isMobile ? 20 : 28, marginTop: 24, maxWidth: 620 }}>
         <div style={sectionHeading()}>Branding</div>
         <p style={{
@@ -189,15 +199,18 @@ export function SettingsPage() {
         </div>
       </div>
 
-      <TelegramSettings />
+      )}
+
+      {isAdmin && <TelegramSettings />}
       <NotificationSettings isMobile={isMobile} />
       {/* Custom-field definitions manager (issue #19). Appended at the END of the
           settings card chain so a keep-both merge with the Telegram (#7) /
           Notifications (#6) cards stays trivial. */}
-      <CustomFieldSettings />
+      {isAdmin && <CustomFieldSettings />}
       {/* Gmail connect (issue #8) — appended last in the settings card chain. */}
-      <GmailCard isMobile={isMobile} />
+      {isAdmin && <GmailCard isMobile={isMobile} />}
       {/* Change password (issue #78) — appended last, per the keep-both convention above. */}
+      <TeamSettings isMobile={isMobile} />
       <ChangePasswordCard isMobile={isMobile} />
     </div>
   );

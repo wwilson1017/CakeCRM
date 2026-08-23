@@ -11,6 +11,7 @@ the suite stays hermetic and never touches ``backend/data/branding``.
 import json
 
 import pytest
+from conftest import fake_admin
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -30,7 +31,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "LOGO_FILE", tmp_path / "logo.png")
     app = FastAPI()
     app.include_router(branding_router, prefix="/api/branding")
-    app.dependency_overrides[get_current_user] = lambda: {"sub": "u"}
+    app.dependency_overrides[get_current_user] = fake_admin
     return TestClient(app)
 
 
