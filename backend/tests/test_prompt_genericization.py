@@ -63,6 +63,7 @@ def _all_tool_defs() -> list[dict]:
     test_the_guard_covers_every_registered_tool.
     """
     from assistant.registry import ToolRegistry
+    from context_files.tools import get_context_file_tools
     from crm.tools import CRM_TOOL_DEFS
     from gmail.tools import GMAIL_TOOL_DEFS
     from memory.tools import get_memory_tools
@@ -71,6 +72,7 @@ def _all_tool_defs() -> list[dict]:
 
     defs = list(CRM_TOOL_DEFS) + list(GMAIL_TOOL_DEFS)
     defs += list(get_memory_tools()[0]) + list(get_reminder_tools()[0])
+    defs += list(get_context_file_tools()[0])
     defs += list(get_notification_tools(ToolRegistry())[0])
     return defs
 
@@ -95,6 +97,11 @@ def model_facing(monkeypatch):
     texts = [
         ("assistant system prompt (static)", static),
         ("assistant system prompt (volatile)", volatile),
+        # The built-in soul (#72) seeds soul.md, which loads UNFENCED into the static
+        # half — so its text reaches the model verbatim and must be scanned. It is not
+        # part of `static` above because build_system_prompt takes it as a kwarg the
+        # engine supplies from the DB.
+        ("default soul", identity.DEFAULT_SOUL),
         ("heartbeat prompt", f"{hb_static}\n{hb_volatile}"),
         ("reminder prompt", f"{rm_static}\n{rm_volatile}"),
         ("quick-action starters", _TS_COMMENTS.sub("", QUICK_ACTIONS.read_text(encoding="utf-8"))),

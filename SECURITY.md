@@ -139,6 +139,38 @@ the residual risks, is in `docs/SYNC.md`.
   malicious email cannot silently drive the assistant to create a draft or change
   CRM data without your approval.
 
+## The assistant's self-written identity (`soul.md`)
+
+The assistant keeps its own knowledge in markdown files you can read and edit at
+**Settings → Assistant memory**. One of them, `soul.md`, is its description of
+itself, and the assistant can rewrite it. That file is loaded into the assistant's
+system prompt **unfenced** — as instructions rather than as data — because an
+identity the model is told to distrust is not an identity at all.
+
+That is a real escalation over anything else the assistant can save, and it is
+treated as one. A poisoned `soul.md` would not be one bad record: it would be a
+standing instruction replayed on every future conversation, including unattended
+background ones, and it would survive deleting the conversation that created it.
+Four things bound that risk:
+
+- **Every edit needs your approval.** Writing or deleting `soul.md` or `MEMORY.md`
+  always routes through the human-confirmation gate — including in "power" mode,
+  where ordinary writes run automatically. You see the file and the new content
+  before anything is stored.
+- **Background turns can never write them.** The unattended assistant (heartbeat,
+  reminders, proactive nudges) runs under a read-only allowlist, so a prompt
+  injection arriving through a reminder or a CRM record cannot reach these files
+  at all.
+- **Only the identity file is unfenced.** `MEMORY.md`, topic files and daily notes
+  are wrapped in the same tamper-proof data fence as email and uploaded documents,
+  so text inside them is never read as instructions. The assistant's working rules,
+  confirmation contract and safety instructions are also assembled *after* the soul
+  text, so a rewritten soul can add to who the assistant is but cannot override how
+  it behaves.
+- **Changes are visible.** Every file on the Memory page shows who last wrote it
+  ("Baker" or "You") and when, so an unexpected rewrite is discoverable rather than
+  silent.
+
 ## Reporting a vulnerability
 
 Please use GitHub's **private vulnerability reporting** on this repository

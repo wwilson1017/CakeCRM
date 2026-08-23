@@ -30,6 +30,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 
+from assistant import delimiters
 from assistant.write_budget import WRITE_BUDGET_BACKGROUND, BudgetAction, BudgetState
 from providers import get_ai_provider
 
@@ -167,7 +168,11 @@ async def _run_turn(provider, registry, system_prompt, user_message: str,
             else:
                 result = await registry.execute_tool(name, args)
 
-            content = json.dumps(result, default=str)
+            # Fence exactly as the interactive loop does. An unattended turn has no human
+            # to notice a planted instruction, and its read allowlist reaches both Gmail
+            # and Baker's context files — a stored `Headline:` line is attacker-authored
+            # text that must arrive as DATA, not as raw JSON (issue #72).
+            content = delimiters.fence_tool_result(name, json.dumps(result, default=str))
             results.append({"tool_use_id": tool_use_id, "tool_name": name, "content": content})
             tool_log.append({"tool": name, "args": _short(args, 200), "result": _short(result, 500)})
             if terminated:
@@ -182,6 +187,28 @@ async def _run_turn(provider, registry, system_prompt, user_message: str,
     return BackgroundResult(text=(text_out.strip() or "(max iterations reached)"), error=True,
                             tool_log=tool_log, input_tokens=in_tok, output_tokens=out_tok,
                             model_used=provider.model)
+
+
+def _with_fence_safety(system_prompt):
+    """Append the untrusted-content contract to a background turn's STATIC prompt.
+
+    Fencing the results (see ``_run_turn``) only helps if the model has been told what a
+    fence means. Each caller's prompt frames its own input — the reminder prompt covers
+    reminder text, the heartbeat prompt covers CRM record text — but the background
+    allowlist also reaches Gmail and Baker's context files, and nothing explained those
+    tags. Applied HERE rather than in each caller so a future background job cannot ship
+    without it.
+
+    Accepts either a ``(static, volatile)`` pair or a plain string, matching what
+    providers take.
+    """
+    note = delimiters.UNTRUSTED_CONTENT_SAFETY_INSTRUCTION
+    if isinstance(system_prompt, tuple) and len(system_prompt) == 2:
+        static, volatile = system_prompt
+        return (f"{static}\n\n{note}" if static else note), volatile
+    if isinstance(system_prompt, str):
+        return f"{system_prompt}\n\n{note}" if system_prompt else note
+    return system_prompt
 
 
 def run_background_turn(system_prompt, user_message: str, *, allowed_tools: set[str],
@@ -220,7 +247,7 @@ def run_background_turn(system_prompt, user_message: str, *, allowed_tools: set[
             pass  # no running loop — safe to asyncio.run
 
     coro = asyncio.wait_for(
-        _run_turn(provider, registry, system_prompt, user_message,
+        _run_turn(provider, registry, _with_fence_safety(system_prompt), user_message,
                   allowed_tools, max_iterations, write_budget_limit),
         timeout=timeout,
     )

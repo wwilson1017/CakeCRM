@@ -32,6 +32,7 @@ from collections.abc import AsyncGenerator
 
 from assistant import assembly, delimiters, history, identity
 from assistant.write_budget import WRITE_BUDGET_PER_TURN, BudgetAction, BudgetState
+from context_files import prompt as context_prompt, tools as context_file_tools
 from memory import context as memory_context
 from providers.base import AIProvider, _sse
 from providers.windows import context_usage_event
@@ -46,9 +47,22 @@ _UNTRUSTED_MARKER = "<untrusted_file_content"
 # them exactly like uploaded-file content does.
 _UNTRUSTED_EXTERNAL_MARKER = "<untrusted_external_content"
 _UNTRUSTED_MARKERS = (_UNTRUSTED_MARKER, _UNTRUSTED_EXTERNAL_MARKER)
+# Baker's own recorded knowledge (issue #72), fenced when a context-file read is handed
+# back to the model. Deliberately NOT in _UNTRUSTED_MARKERS: that tuple drives the
+# power→normal downgrade and encodes THIRD-PARTY origin (email, uploads). Context files
+# are written by the user, or by the assistant under a confirmation gate, so tainting
+# them would kill power mode every time Baker reads its own notes — a cost with no
+# matching risk, and the same call #5 already made for memory facts.
+_RECORDED_CONTEXT_MARKER = "<recorded_context"
+# ...but it IS excluded from "what did the user type", because a provider that stores a
+# tool result as a plain string on a user message would otherwise let file content choose
+# which memories surface. Same defence _usable already applies to Gmail content.
+_NON_USER_MARKERS = _UNTRUSTED_MARKERS + (_RECORDED_CONTEXT_MARKER,)
+# Defined in delimiters so the background runner fences identically (issue #72).
+_CONTEXT_READ_TOOLS = delimiters.CONTEXT_READ_TOOLS
 # Read tools whose output is untrusted external content. Reading it must not let a
 # prompt injection inside that content drive an unconfirmed write in power mode.
-_UNTRUSTED_SOURCE_TOOLS = {"gmail_search", "gmail_read_thread"}
+_UNTRUSTED_SOURCE_TOOLS = delimiters.UNTRUSTED_SOURCE_TOOLS
 
 # Transient user turn appended on resume to keep a trailing-assistant sequence valid.
 _CONTINUATION_ACK = "Please continue based on the results shown above."
@@ -69,7 +83,7 @@ def _last_user_text(messages: list[dict]) -> str | None:
             isinstance(text, str)
             and text.strip()
             and text != _CONTINUATION_ACK
-            and not any(mark in text for mark in _UNTRUSTED_MARKERS)
+            and not any(mark in text for mark in _NON_USER_MARKERS)
         )
 
     for m in reversed(messages):
@@ -238,13 +252,23 @@ async def _chat_impl(
     memory_block = await asyncio.to_thread(
         memory_context.build_memory_context, _last_user_text(current_messages)
     )
-    # ONE unified pre-loop build: the record context (#14) and the memory block (#5)
-    # are both per-turn injections that ride the VOLATILE half of the system prompt —
-    # never assembled/persisted messages, never the cached static block. BOTH kwargs
-    # must be passed here; dropping either silently loses that feature's injection.
+    # Baker's context files (issue #72), loaded the same way. Split by trust, not by
+    # file: the soul is a stable unfenced document and rides the cacheable STATIC half,
+    # while MEMORY.md and the manifests are freshly nonce-fenced every turn and so MUST
+    # ride the volatile half — a fresh nonce in the static block would re-key Anthropic's
+    # prompt cache on every single turn. Neither builder raises.
+    soul_block, knowledge_block = await asyncio.gather(
+        asyncio.to_thread(context_prompt.build_soul_block),
+        asyncio.to_thread(context_prompt.build_knowledge_block),
+    )
+    # ONE unified pre-loop build: the record context (#14), the memory block (#5) and the
+    # context-file blocks (#72) are all per-turn injections — never assembled/persisted
+    # messages. ALL kwargs must be passed here; dropping any silently loses that
+    # feature's injection.
     # This same system_prompt feeds the main loop and the confirmation wrap-up turn.
     system_prompt = identity.build_system_prompt(
         ident, context=context, memory_context=memory_block,
+        soul=soul_block, knowledge_context=knowledge_block,
     )
 
     # ── Main tool-execution loop ───────────────────────────────────────────────
@@ -365,8 +389,18 @@ async def _chat_impl(
             # turn, so injected instructions in that content can't auto-execute a
             # write (issue #8). Persist the pending placeholder BEFORE emitting
             # confirm (so /confirm can find it), then wait for approval.
-            if is_write and (tool_mode == "normal" or (tool_mode == "power" and turn_has_untrusted_reads)):
-                placeholder = await _pending_placeholder(name)
+            # A write to a PROTECTED context file (soul.md / MEMORY.md) confirms in every
+            # mode, power included (issue #72). `writes: True` alone is not enough there:
+            # a poisoned soul is not one bad record, it is a permanent system instruction
+            # replayed on every later turn — including background ones — that survives
+            # deleting the conversation. Same shape as the Gmail binding check below.
+            always_confirms = context_file_tools.requires_confirmation(name, args)
+            if is_write and (
+                always_confirms
+                or tool_mode == "normal"
+                or (tool_mode == "power" and turn_has_untrusted_reads)
+            ):
+                placeholder = await _pending_placeholder(name, args)
                 try:
                     await asyncio.to_thread(
                         history.merge_tool_result, iter_msg_id, tool_use_id, name,
@@ -398,6 +432,12 @@ async def _chat_impl(
             if name in _UNTRUSTED_SOURCE_TOOLS:
                 turn_has_untrusted_reads = True
                 content = delimiters.wrap_untrusted_external(name, content)
+            # A context-file read hands back a whole document Baker (or the user) wrote
+            # earlier, which may quote an email or an upload. Fence it as DATA for the
+            # same reason the prompt-injected copy is fenced (issue #72) — but do NOT
+            # taint the turn: see _RECORDED_CONTEXT_MARKER.
+            elif name in _CONTEXT_READ_TOOLS:
+                content = delimiters.wrap_recorded_context(content)
             results.append({"tool_use_id": tool_use_id, "tool_name": name, "content": content})
             persisted = True
             try:
@@ -478,23 +518,64 @@ async def _chat_impl(
 # same shape as _UNTRUSTED_SOURCE_TOOLS above.
 _CONNECTION_BOUND_WRITE_TOOLS = frozenset({"gmail_create_draft"})
 
+# Writes bound to the VERSION of the row they were proposed against, rather than to a
+# connection. A context-file overwrite is composed against what the assistant just read,
+# but a protected file always waits for approval — and the user can edit that same file
+# in the Memory page while it waits, so approving must not silently discard their edit
+# (#72). Hand-maintained by name, same shape as the set above.
+_VERSION_BOUND_WRITE_TOOLS = frozenset({"write_context_file"})
 
-async def _pending_placeholder(tool_name: str) -> str:
+
+async def _pending_placeholder(tool_name: str, args: dict | None) -> str:
     """The pending-approval result to persist for a gated write.
 
-    Plain PENDING_RESULT_JSON, except for a connection-bound write, which also
-    carries the identity of the connection it was proposed against. Extra keys are
-    safe: history's status helpers read only "status". The binding read touches
-    Postgres, so it is offloaded — this runs on the SSE event loop.
+    Plain PENDING_RESULT_JSON, except for a bound write, which also carries what it was
+    proposed against — the live connection for Gmail, the row version for a context
+    file. Extra keys are safe: history's status helpers read only "status". Both binding
+    reads touch Postgres, so they are offloaded — this runs on the SSE event loop.
     """
-    if tool_name not in _CONNECTION_BOUND_WRITE_TOOLS:
-        return history.PENDING_RESULT_JSON
-    from gmail import tools as gmail_tools  # lazy: keeps gmail out of engine import
+    if tool_name in _CONNECTION_BOUND_WRITE_TOOLS:
+        from gmail import tools as gmail_tools  # lazy: keeps gmail out of engine import
 
-    binding = await asyncio.to_thread(gmail_tools.pending_binding)
+        binding = await asyncio.to_thread(gmail_tools.pending_binding)
+    elif tool_name in _VERSION_BOUND_WRITE_TOOLS:
+        binding = await asyncio.to_thread(context_file_tools.pending_binding, args)
+    else:
+        return history.PENDING_RESULT_JSON
     if not binding:
         return history.PENDING_RESULT_JSON
     return json.dumps({"status": history.PENDING_STATUS, **binding})
+
+
+def _parse_pending(pending_content: str | dict | None) -> dict:
+    """The persisted pending placeholder as a mapping ({} when there is nothing to read).
+
+    Accepts an already-decoded mapping as well as the JSON string the history layer
+    stores, so a future change in how the placeholder is deserialized can't make a
+    binding check silently fail open (it would parse to nothing and find no binding).
+    """
+    if isinstance(pending_content, dict):
+        return pending_content
+    if isinstance(pending_content, str) and pending_content:
+        try:
+            parsed = json.loads(pending_content)
+        except ValueError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _with_version_binding(tool: str, args: dict | None, pending_content: str | None) -> dict:
+    """``args`` plus the precondition enforcing a stamped version binding.
+
+    Unlike the connection binding this is NOT a pre-check: the kwarg rides the
+    executor into ``service.write_file``'s in-UPDATE comparison, so there is no
+    check-then-write window for an edit to slip through.
+    """
+    if tool not in _VERSION_BOUND_WRITE_TOOLS:
+        return args or {}
+    extra = context_file_tools.binding_kwargs(_parse_pending(pending_content))
+    return {**(args or {}), **extra}
 
 
 def _binding_conflict(tool: str, pending_content: str | None) -> dict | None:
@@ -505,19 +586,7 @@ def _binding_conflict(tool: str, pending_content: str | None) -> dict | None:
         return None
     from gmail import tools as gmail_tools  # lazy: see _pending_placeholder
 
-    # Accept an already-decoded mapping as well as the JSON string the history layer
-    # stores, so a future change in how the placeholder is deserialized can't make
-    # this check silently fail open (it would parse to nothing and find no binding).
-    if isinstance(pending_content, dict):
-        parsed = pending_content
-    elif isinstance(pending_content, str) and pending_content:
-        try:
-            parsed = json.loads(pending_content)
-        except ValueError:
-            return None
-    else:
-        return None
-    return gmail_tools.binding_conflict(parsed if isinstance(parsed, dict) else {})
+    return gmail_tools.binding_conflict(_parse_pending(pending_content))
 
 
 def resolve_confirmation(registry, conversation_id: str, tool_use_id: str, decision: str,
@@ -558,7 +627,14 @@ def resolve_confirmation(registry, conversation_id: str, tool_use_id: str, decis
         # single-user v1, where the admin is the only actor; closing it fully would
         # thread the binding through every executor signature.
         conflict = _binding_conflict(tool, claimed.get("content"))
-        result = conflict if conflict is not None else registry.execute_tool_sync(tool, args)
+        if conflict is not None:
+            result = conflict
+        else:
+            # A version-bound write carries its precondition INTO the executor, so the
+            # window above does not apply to it.
+            result = registry.execute_tool_sync(
+                tool, _with_version_binding(tool, args, claimed.get("content")),
+            )
     else:  # deny
         result = {"status": history.DENIED_STATUS}
     history.merge_tool_result(claimed_msg_id, tool_use_id, tool, json.dumps(result, default=str))
