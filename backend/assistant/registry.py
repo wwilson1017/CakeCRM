@@ -34,6 +34,7 @@ import logging
 from collections.abc import Callable
 
 from context_files.tools import get_context_file_tools
+from crm.gtd_tools import get_gtd_tools
 from crm.tools import get_crm_tools
 from gmail.tools import get_gmail_tools
 from memory.tools import get_memory_tools
@@ -55,6 +56,7 @@ class ToolRegistry:
         # pair. Features append here; second-to-land resolves keep-both.
         sources: list[tuple[list[dict], dict[str, Callable[..., dict]]]] = [
             get_crm_tools(),
+            get_gtd_tools(),
             get_reminder_tools(),
             get_memory_tools(),
             get_context_file_tools(),

@@ -168,6 +168,42 @@ SALES_GUIDE = (
     "mailbox connected: say so plainly rather than offering to look."
 )
 
+# Appended to the static block ONLY when GTD task mode is active (#70). Genericized
+# from the blueprint's coaching text.
+#
+# Note on caching: the static half must be byte-identical turn to turn, and it is —
+# this block changes only when the user flips the task mode, which is a deliberate,
+# rare cache invalidation of the same class as editing the personality. It must NOT
+# vary with anything per-turn.
+GTD_GUIDE = (
+    "## Working the todo system (GTD)\n"
+    "The user runs their tasks GTD-style. Work the system with them:\n\n"
+    "**Capture everything.** When the user mentions an obligation, an idea, or "
+    '"I should...", offer to todo_create it immediately. Anything unclear goes to the '
+    "inbox — capture first, organize later.\n\n"
+    "**Clarify the inbox to zero.** For each item: is it actionable? If it takes under "
+    "two minutes, suggest doing it now instead of tracking it. If it is not a next "
+    "action, move it to waiting_for / delegated / someday_maybe. Otherwise setting the "
+    "context is the LAST step — it files the item as a next_action and clears it out of "
+    "the inbox, so agree on the context before you write it.\n\n"
+    "**Next actions are physical, visible verbs.** \"Call the dentist to book a "
+    'cleaning", not "dentist". Rewrite vague todos when you touch them.\n\n'
+    "**Statuses:** inbox (unprocessed), next_action (ready to do), waiting_for (blocked "
+    "on someone — note who, and since when, in the notes), delegated (handed off — track "
+    "the follow-up), someday_maybe (not now), done, dropped.\n\n"
+    "**Projects are outcomes needing more than one action.** Every active project should "
+    "have at least one next_action — flag the ones that don't.\n\n"
+    "**Context vs tags.** Context is where or how the task can be done (@calls, @office, "
+    "@errands, @computer); tags are for anything else. `star` marks today's priorities — "
+    "keep starred items to a handful. Set a due date only for a real deadline, never an "
+    "aspiration.\n\n"
+    "**Weekly review.** When asked — or when things look stale — walk it through: empty "
+    "the inbox, confirm every active project has a next action, review waiting_for and "
+    "delegated items for follow-ups, prune someday_maybe, and note what got done.\n\n"
+    "**Use bulk updates.** When filing several inbox items the same way, todo_bulk_update "
+    "is one confirmation instead of many."
+)
+
 # Static (cacheable) explanation of the assistant's long-term memory (issue #5). The
 # per-turn facts themselves ride the VOLATILE half of the prompt (see
 # build_system_prompt); only this constant framing lives in the cached static block.
@@ -253,6 +289,16 @@ def update_identity(name: str | None = None, personality: str | None = None) -> 
     return get_identity()
 
 
+def _task_mode() -> str:
+    """The current task mode, imported lazily so identity stays importable without a
+    database (the hermetic suite builds prompts with no pool)."""
+    try:
+        from crm.service import get_task_mode
+        return get_task_mode()
+    except Exception:
+        return "normal"
+
+
 def build_system_prompt(
     identity: dict, context: dict | None = None, memory_context: str = "",
     soul: str = "", knowledge_context: str = "",
@@ -260,7 +306,8 @@ def build_system_prompt(
     """Build the ``(static, volatile)`` system prompt for stream_turn().
 
     Static: personality (name-interpolated) + Baker's soul (#72) + sales working
-    practices + confirmation note + memory framing + context-file framing +
+    practices (+ the GTD working practices while task mode is GTD, #70) +
+    confirmation note + memory framing + context-file framing +
     upload-safety instruction (cacheable — MUST stay byte-identical whether or not a
     record context or memory block is present, so Anthropic's prompt cache is never
     poisoned). Volatile: the current date/time (changes every turn), plus — when a
@@ -286,11 +333,15 @@ def build_system_prompt(
     """
     name = identity.get("name") or DEFAULT_NAME
     personality = (identity.get("personality") or DEFAULT_PERSONALITY).replace("{name}", name)
+    blocks = [personality, soul, SALES_GUIDE]
+    # GTD mode swaps the task tool surface, so the working practices have to swap with
+    # it — coaching the model to use crm_create_task while only todo_* is advertised
+    # is how a turn stalls. Read fail-safe: an unreadable mode is 'normal'.
+    if _task_mode() == "gtd":
+        blocks.append(GTD_GUIDE)
     static = "\n\n".join([
         part for part in [
-            personality,
-            soul,
-            SALES_GUIDE,
+            *blocks,
             CONFIRMATION_NOTE,
             MEMORY_NOTE,
             CONTEXT_FILES_NOTE,

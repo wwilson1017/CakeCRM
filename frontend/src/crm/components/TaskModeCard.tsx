@@ -1,0 +1,221 @@
+/**
+ * TaskModeCard — pick the task experience, and manage the two no-login todo
+ * surfaces (#70).
+ *
+ * Switching modes migrates nothing: GTD is a view over the same task rows, so the
+ * change is instant and losslessly reversible. The card says so plainly, because
+ * "switch task system" otherwise reads like a destructive operation.
+ *
+ * The public-surface half is deliberately blunt about what each link exposes. A
+ * tokenless capture URL is a write-only inbox drop that anyone with the address can
+ * post to; a tokenless todo URL hands over the whole list, read and write. Users
+ * should not have to infer that from the word "public".
+ */
+
+import { useEffect, useState } from 'react';
+
+import { api } from '../../core/api/client';
+import { CORAL, FONT_SANS, INK_MUTE, labelStyle } from '../../shared/styles';
+import { toast } from '../../shared/toast';
+import { btnPrimary, btnSecondary, cardStyle, sectionHeading } from '../styles';
+
+type TaskMode = 'normal' | 'gtd';
+
+interface Surfaces {
+  todo_capture_token: string;
+  todo_web_enabled: boolean;
+  todo_web_token: string;
+  capture_path: string;
+  capture_public: boolean;
+  web_path: string | null;
+  web_public: boolean;
+}
+
+interface DemoStatus { task_mode?: TaskMode }
+
+export function TaskModeCard({ isMobile }: { isMobile: boolean }) {
+  const [mode, setMode] = useState<TaskMode | null>(null);
+  const [surfaces, setSurfaces] = useState<Surfaces | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api<DemoStatus>('/api/crm/demo-status')
+      .then(s => setMode(s.task_mode ?? 'normal'))
+      .catch(() => setMode('normal'));
+    api<Surfaces>('/api/crm/todo-surfaces').then(setSurfaces).catch(() => { /* keep unknown */ });
+  }, []);
+
+  async function switchMode(next: TaskMode) {
+    if (busy || next === mode) return;
+    setBusy(true);
+    try {
+      await api('/api/crm/task-mode', { method: 'POST', body: JSON.stringify({ mode: next }) });
+      setMode(next);
+      toast.success(
+        next === 'gtd'
+          ? 'Todo-GTD mode on. Your existing tasks are all still there, as next actions.'
+          : 'Back to normal tasks. Nothing was lost.',
+      );
+    } catch {
+      toast.error('Failed to switch task mode.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function patchSurfaces(body: Record<string, unknown>) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      setSurfaces(await api<Surfaces>('/api/crm/todo-surfaces', {
+        method: 'POST', body: JSON.stringify(body),
+      }));
+    } catch {
+      toast.error('Failed to update the public todo links.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const linkFor = (path: string) => `${window.location.origin}${path}`;
+
+  async function copy(path: string) {
+    try {
+      await navigator.clipboard.writeText(linkFor(path));
+      toast.success('Link copied.');
+    } catch {
+      toast.error('Could not copy — select the link and copy it manually.');
+    }
+  }
+
+  const modeButton = (value: TaskMode, label: string, hint: string) => (
+    <button
+      type="button"
+      onClick={() => void switchMode(value)}
+      disabled={busy || mode === null}
+      aria-pressed={mode === value}
+      style={{
+        ...(mode === value ? btnPrimary : btnSecondary),
+        flex: 1, textAlign: 'left', padding: '12px 14px',
+        opacity: busy || mode === null ? 0.6 : 1,
+      }}
+    >
+      <span style={{ display: 'block', fontWeight: 700 }}>{label}</span>
+      <span style={{ display: 'block', fontSize: 12, fontWeight: 400, marginTop: 2 }}>{hint}</span>
+    </button>
+  );
+
+  return (
+    <div style={cardStyle}>
+      <h2 style={sectionHeading()}>Tasks</h2>
+      <p style={{ ...labelStyle, fontFamily: FONT_SANS, color: INK_MUTE, marginBottom: 12 }}>
+        Switching is safe and reversible — both modes read the same tasks. Nothing is
+        migrated, copied or deleted.
+      </p>
+      <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 10 }}>
+        {modeButton('normal', 'Normal tasks', 'A simple list with due dates and priorities.')}
+        {modeButton('gtd', 'Todo-GTD', 'Inbox, contexts, projects, repeats and a weekly review.')}
+      </div>
+
+      {mode === 'gtd' && surfaces && (
+        <div style={{ marginTop: 20, borderTop: '1px solid var(--color-ck-line)', paddingTop: 16 }}>
+          <h3 style={{ ...sectionHeading(), fontSize: 15 }}>No-login links</h3>
+
+          <div style={{ marginTop: 12 }}>
+            <p style={{ ...labelStyle, marginBottom: 4 }}>Quick capture (write-only)</p>
+            <p style={{ fontFamily: FONT_SANS, fontSize: 13, color: INK_MUTE, margin: '0 0 8px' }}>
+              A phone bookmark that drops text straight into your inbox. It cannot read
+              anything back.{' '}
+              {surfaces.capture_public
+                ? <strong style={{ color: CORAL }}>Anyone who knows this address can add to your inbox — add a secret link to restrict it.</strong>
+                : 'Only someone with the secret link can post to it.'}
+            </p>
+            <SurfaceRow
+              path={surfaces.capture_path}
+              linkFor={linkFor}
+              onCopy={() => void copy(surfaces.capture_path)}
+              onRegenerate={() => void patchSurfaces({ regenerate_capture: true })}
+              onClear={surfaces.todo_capture_token
+                ? () => void patchSurfaces({ capture_token: '' })
+                : undefined}
+              busy={busy}
+              secretLabel={surfaces.todo_capture_token ? 'Secret link' : 'Public link'}
+            />
+          </div>
+
+          <div style={{ marginTop: 20 }}>
+            <p style={{ ...labelStyle, marginBottom: 4 }}>Full todo app (read and write)</p>
+            <p style={{ fontFamily: FONT_SANS, fontSize: 13, color: INK_MUTE, margin: '0 0 8px' }}>
+              The whole todo app, with no login. Off by default.{' '}
+              {surfaces.todo_web_enabled && surfaces.web_public && (
+                <strong style={{ color: CORAL }}>
+                  Anyone who knows this address can read and edit every todo. Add a secret link.
+                </strong>
+              )}
+            </p>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: FONT_SANS, fontSize: 14 }}>
+              <input
+                type="checkbox"
+                checked={surfaces.todo_web_enabled}
+                disabled={busy}
+                onChange={e => void patchSurfaces({
+                  web_enabled: e.target.checked,
+                  // Turning it on without a token would publish the whole list, so mint
+                  // one in the same request unless the user already chose one.
+                  ...(e.target.checked && !surfaces.todo_web_token ? { regenerate_web: true } : {}),
+                })}
+              />
+              Enable the no-login todo app
+            </label>
+            {surfaces.todo_web_enabled && surfaces.web_path && (
+              <div style={{ marginTop: 8 }}>
+                <SurfaceRow
+                  path={surfaces.web_path}
+                  linkFor={linkFor}
+                  onCopy={() => void copy(surfaces.web_path!)}
+                  onRegenerate={() => void patchSurfaces({ regenerate_web: true })}
+                  busy={busy}
+                  secretLabel={surfaces.todo_web_token ? 'Secret link' : 'Public link'}
+                />
+                <p style={{ fontFamily: FONT_SANS, fontSize: 12, color: INK_MUTE, marginTop: 6 }}>
+                  Regenerating immediately breaks the old link, including any home-screen
+                  app installed from it.
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SurfaceRow({ path, linkFor, onCopy, onRegenerate, onClear, busy, secretLabel }: {
+  path: string;
+  linkFor: (p: string) => string;
+  onCopy: () => void;
+  onRegenerate: () => void;
+  onClear?: () => void;
+  busy: boolean;
+  secretLabel: string;
+}) {
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+      <code style={{
+        flex: '1 1 240px', minWidth: 0, overflowWrap: 'anywhere',
+        fontSize: 12, padding: '6px 8px', borderRadius: 6,
+        background: 'var(--color-ck-bg)', color: 'var(--color-ck-ink)',
+      }}>{linkFor(path)}</code>
+      <span style={{ fontFamily: FONT_SANS, fontSize: 12, color: INK_MUTE }}>{secretLabel}</span>
+      <button type="button" onClick={onCopy} disabled={busy} style={btnSecondary}>Copy</button>
+      <button type="button" onClick={onRegenerate} disabled={busy} style={btnSecondary}>
+        New secret link
+      </button>
+      {onClear && (
+        <button type="button" onClick={onClear} disabled={busy} style={btnSecondary}>
+          Make public
+        </button>
+      )}
+    </div>
+  );
+}

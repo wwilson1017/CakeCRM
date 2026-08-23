@@ -529,6 +529,46 @@ CRM_TOOL_DEFS = [
         },
         "kind": "integration",
     },
+    {
+        "name": "crm_update_task",
+        "writes": True,
+        "description": (
+            "Edit an existing CRM task — retitle it, move its due date, change priority, "
+            "re-link it to a contact or deal, or reopen a completed one. Use when the user "
+            "wants to change a task they already have rather than create a new one."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "integer", "description": "Task ID to update"},
+                "title": {"type": "string", "description": "New title"},
+                "description": {"type": "string"},
+                "due_date": {"type": "string", "description": "New due date (YYYY-MM-DD), or '' to clear"},
+                "contact_id": {"type": "integer", "description": "Re-link to this contact"},
+                "deal_id": {"type": "integer", "description": "Re-link to this deal"},
+                "priority": {"type": "string", "description": "low, medium, or high"},
+                "completed": {"type": "boolean", "description": "true=done, false=reopen"},
+            },
+            "required": ["task_id"],
+        },
+        "kind": "integration",
+    },
+    {
+        "name": "crm_delete_task",
+        "writes": True,
+        "description": (
+            "Permanently delete a CRM task. Use only when the task was created in error — "
+            "to record that a task is finished, complete it instead so it stays in the history."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "integer", "description": "Task ID to delete"},
+            },
+            "required": ["task_id"],
+        },
+        "kind": "integration",
+    },
 
     # ── Analytics + sales intelligence (6 tools) ──────────────────────────────
     # The four intelligence reads below are pure SQL — they work with zero AI keys,
@@ -1358,6 +1398,21 @@ def crm_complete_task(task_id: int) -> dict:
     return result
 
 
+def crm_update_task(task_id: int, **kwargs) -> dict:
+    # The service filters to its own allow-list, so an unknown key is ignored rather
+    # than reaching the UPDATE.
+    result = crm.update_task(task_id, **kwargs)
+    if not result:
+        return {"error": f"Task {task_id} not found"}
+    return result
+
+
+def crm_delete_task(task_id: int) -> dict:
+    if not crm.delete_task(task_id):
+        return {"error": f"Task {task_id} not found"}
+    return {"ok": True, "deleted": task_id}
+
+
 # ── Companies ─────────────────────────────────────────────────────────────────
 
 def crm_search_companies(query: str, status: str | None = None, limit: int = 20) -> dict:
@@ -1638,6 +1693,8 @@ TOOL_EXECUTORS = {
     "crm_create_task": crm_create_task,
     "crm_list_tasks": crm_list_tasks,
     "crm_complete_task": crm_complete_task,
+    "crm_update_task": crm_update_task,
+    "crm_delete_task": crm_delete_task,
     # Analytics + sales intelligence
     "crm_dashboard": crm_dashboard,
     "crm_analytics": crm_analytics,
@@ -1672,11 +1729,30 @@ TOOL_EXECUTORS = {
 }
 
 
+# The five task tools, hidden while GTD mode is active — the ten richer `todo_*`
+# tools (crm/gtd_tools.py) cover the same ground there. Advertising both would give
+# the model two vocabularies for one store and it WILL mix them mid-conversation.
+# Named rather than filtered by prefix: `crm_scan_gaps` also starts with a task-ish
+# word, and a prefix rule would silently capture future tools.
+_TASK_TOOL_NAMES = frozenset({
+    "crm_create_task", "crm_list_tasks", "crm_complete_task",
+    "crm_update_task", "crm_delete_task",
+})
+
+
 def get_crm_tools() -> tuple[list[dict], dict[str, Callable[..., dict]]]:
     """Return (tool definitions, executor map) for the CRM.
 
     CRM tools are first-class core: always collected, with NO per-integration
-    enable gate (unlike their chatty origin). The assistant engine — a later
-    issue — consumes this; nothing calls it yet.
+    enable gate (unlike their chatty origin) — except the task tools, which swap out
+    for the GTD tool set when the user has chosen GTD task mode (#70).
+
+    The executors are returned UNFILTERED on purpose. The registry fails closed on
+    unknown tool NAMES, and advertisement is what actually steers the model; keeping
+    every executor reachable means a call that was proposed just before a mode flip
+    still resolves instead of erroring at confirmation time.
     """
-    return CRM_TOOL_DEFS, TOOL_EXECUTORS
+    defs = CRM_TOOL_DEFS
+    if crm.get_task_mode() == "gtd":
+        defs = [d for d in CRM_TOOL_DEFS if d["name"] not in _TASK_TOOL_NAMES]
+    return defs, TOOL_EXECUTORS

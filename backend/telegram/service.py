@@ -23,6 +23,7 @@ import logging
 from assistant import engine
 from assistant.history import list_pending_tool_uses
 from assistant.registry import ToolRegistry
+from crm import gtd_common, gtd_service
 from providers import get_ai_provider
 
 from . import client, store
@@ -134,7 +135,51 @@ async def _handle_message(msg: dict) -> None:
         await _send_text(chat_id, _LINK_HELP, token)
         return
 
+    if await _try_capture(chat_id, text, token):
+        return
+
     await _run_turn(s, token, user_text=text)
+
+
+async def _try_capture(chat_id: str, text: str, token: str) -> bool:
+    """Deterministic GTD capture intercept — returns True when it handled the message.
+
+    "capture buy vanilla" / "/capture buy vanilla" creates an inbox todo BEFORE the
+    model runs: zero AI cost, zero confirmation friction, and it works with no
+    provider configured at all. That is what makes deferring a public capture link
+    reasonable for anyone who has Telegram linked.
+
+    GTD mode only — in normal mode "capture ..." is just conversation.
+    """
+    mode = await asyncio.to_thread(_task_mode)
+    if mode != "gtd":
+        return False
+    payload = gtd_common.parse_capture(text)
+    if payload is None:
+        return False
+    if not payload:
+        await _send_text(chat_id, "Send `capture <what's on your mind>` to add to your inbox.", token)
+        return True
+    try:
+        todo = await asyncio.to_thread(gtd_service.capture, payload, "telegram")
+    except gtd_common.ValidationError as e:
+        await _send_text(chat_id, f"Couldn't capture that: {e}", token)
+        return True
+    except Exception:
+        logger.exception("telegram: capture failed")
+        await _send_text(chat_id, "Couldn't capture that — try again.", token)
+        return True
+    await _send_text(chat_id, f"Captured: {todo['title']}", token)
+    return True
+
+
+def _task_mode() -> str:
+    """Current task mode; fail-safe to 'normal' so a read error never eats a message."""
+    try:
+        from crm.service import get_task_mode
+        return get_task_mode()
+    except Exception:
+        return "normal"
 
 
 async def _handle_callback(cb: dict) -> None:

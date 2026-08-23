@@ -12,30 +12,26 @@ module's single ``start_scheduler()`` / ``stop_scheduler()`` call-site in ``main
 deleted. The pure due-logic here (``is_due`` / slot helpers) is unit-tested independently.
 
 Timezone is explicit (``TIMEZONE`` env, default UTC) — never the process-local time,
-which is UTC on Railway regardless of intent.
+which is UTC on Railway regardless of intent. The helper itself lives in
+``core.localtime`` since #70's GTD date math needs the same notion of "local";
+``now_local`` is re-exported here so this module's existing callers are unchanged.
 """
 
 import asyncio
 import logging
-import os
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
+
+from core.localtime import now_local
 
 logger = logging.getLogger(__name__)
 
 RUN_HOUR = 3                    # 03:00 local — arbitrary "overnight" slot; #6 may retune
 _STARTUP_DELAY_SECONDS = 120    # let migrations/pool settle; stay off the boot path
 
-
-def _tz() -> ZoneInfo:
-    try:
-        return ZoneInfo(os.getenv("TIMEZONE") or "UTC")
-    except Exception:
-        return ZoneInfo("UTC")
-
-
-def now_local() -> datetime:
-    return datetime.now(_tz())
+__all__ = [
+    "RUN_HOUR", "DreamingScheduler", "is_due", "most_recent_slot", "now_local",
+    "seconds_until_next_slot", "start_scheduler", "stop_scheduler",
+]
 
 
 def most_recent_slot(now: datetime) -> datetime:

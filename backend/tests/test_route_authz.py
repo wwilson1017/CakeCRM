@@ -31,7 +31,32 @@ PUBLIC_ROUTES = {
     # exists, so this entry is inert in a backend-only checkout and present after a
     # frontend build; listing it keeps the audit's result the same either way.
     ("/{path:path}", "GET"),
+    # The no-login todo surfaces (#70). These are the FEATURE: quick-capture and the
+    # todo web app are meant to be openable on a phone with no login. Each handler
+    # 404s the surface unless the install has explicitly configured it and matches
+    # the URL token, and rate-limits by IP — tests/test_todo_public.py pins all of
+    # that. Nothing here reads or writes a CRM record other than a task.
+    ("/capture", "GET"),                                # write-only capture page
+    ("/capture/{token}", "GET"),
+    ("/capture/manifest.webmanifest", "GET"),           # PWA manifests, static
+    ("/capture/{token}/manifest.webmanifest", "GET"),
+    ("/api/capture", "POST"),                           # the capture write itself
+    ("/api/capture/{token}", "POST"),
+    ("/todo", "GET"),                                   # the todo app's HTML shell
+    ("/todo/{rest:path}", "GET"),
+    ("/todo/manifest.webmanifest", "GET"),
+    ("/todo/{token}/manifest.webmanifest", "GET"),
 }
+
+# The todo web app's JSON API (#70) is mounted TWICE from one route set — bare and
+# token-prefixed — by gtd_router.build_router, so listing paths here would mean two
+# entries per endpoint that silently rot as the route set grows. Recognize its two
+# guards by name instead: both are router-level dependencies that 404 unless the
+# surface is enabled, match the token, and rate-limit. The property this audit
+# protects — no route reaches a handler with NO guard at all — is preserved, and
+# build_router's own docstring carries the warning that everything added there is
+# public.
+PUBLIC_SURFACE_GUARDS = {"_public_api_guard", "_token_api_guard"}
 
 # Install configuration + destructive/global operations. Members may do everything
 # else, including all record CRUD — ownership is not access control.
@@ -93,6 +118,7 @@ def test_every_route_authenticates():
         (path, method)
         for path, method, names in _app_routes()
         if not ({"get_current_user", "require_admin"} & names)
+        and not (PUBLIC_SURFACE_GUARDS & names)
         and (path, method) not in PUBLIC_ROUTES
     ]
     assert unguarded == [], f"routes reachable without authentication: {unguarded}"

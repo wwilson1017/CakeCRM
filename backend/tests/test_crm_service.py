@@ -54,6 +54,75 @@ def rec(monkeypatch):
     return r
 
 
+# Columns the task UPDATE ... RETURNING * produces, in migration order. The spawn step
+# reads them through the REAL row_to_dict, so the described cursor below must supply a
+# matching `description` — a cursor returning bare tuples (or a monkeypatched
+# row_to_dict) would hide a description-reuse bug entirely.
+_TASK_COLS = [
+    "id", "contact_id", "deal_id", "title", "description", "due_date", "completed",
+    "priority", "created_at", "updated_at", "status", "star", "context", "tags",
+    "repeat", "auto_star_on_due", "project_id", "completed_at", "source",
+]
+
+
+class _TaskCursor:
+    """Cursor that mimics psycopg2's per-execute ``cursor.description``.
+
+    steps are driven by the statement: the first SELECT ... FOR UPDATE yields the prior
+    status (or nothing, for a missing row); the UPDATE ... RETURNING * yields a full
+    task row so the recurrence spawn can read it.
+    """
+
+    def __init__(self, prior_status, returning_row=None):
+        self._prior = prior_status
+        self._returning = returning_row
+        self.description = None
+        self._rows: list = []
+        self.executed: list = []
+
+    def execute(self, sql, params=()):
+        norm = " ".join(sql.split())
+        self.executed.append((norm, params))
+        if "FOR UPDATE" in norm:
+            self.description = [("status",)]
+            self._rows = [(self._prior,)] if self._prior is not None else []
+        elif "RETURNING *" in norm:
+            self.description = [(c,) for c in _TASK_COLS]
+            self._rows = [self._returning] if self._returning else []
+        else:
+            self.description = None
+            self._rows = []
+
+    def fetchone(self):
+        return self._rows.pop(0) if self._rows else None
+
+
+@pytest.fixture
+def task_txn():
+    """Install a described cursor on service.get_connection for the task write path."""
+    from contextlib import contextmanager
+
+    def _install(monkeypatch, *, prior_status, returning_row=None):
+        if returning_row is None:
+            returning_row = tuple(
+                {"id": 1, "title": "T", "repeat": "", "tags": "[]"}.get(c) for c in _TASK_COLS
+            )
+        cur = _TaskCursor(prior_status, returning_row)
+
+        class _Conn:
+            def cursor(self):
+                return cur
+
+        @contextmanager
+        def _get_connection():
+            yield _Conn()
+
+        monkeypatch.setattr(service, "get_connection", _get_connection)
+        return cur
+
+    return _install
+
+
 # ── Contacts ──────────────────────────────────────────────────────────────────
 
 def test_create_contact_insert_returning_and_tag_normalization(rec):
@@ -141,18 +210,33 @@ def test_list_tasks_completed_as_int_and_due_before_guard(rec):
     assert "2026-01-01" in params
 
 
-def test_update_task_coerces_completed_to_0_or_1(rec):
+def test_update_task_writes_completed_and_status_together(monkeypatch, rec, task_txn):
+    """`completed` and `status` are two views of one fact, bound by a CHECK constraint
+    since #70 — a stray truthy value must still normalize to exactly 1, and the paired
+    status must be written in the SAME statement."""
+    cur = task_txn(monkeypatch, prior_status="next_action")
     rec.fetchone_queue = [{"id": 1, "completed": 1}]
     service.update_task(1, completed=2)  # stray truthy value must normalize to 1
-    params = rec.params_for("UPDATE tasks SET")
-    assert params[0] == 1 and 2 not in params
+    sql, params = next((s, p) for s, p in cur.executed if "UPDATE tasks SET" in s)
+    assert "status = %s" in sql and "completed = %s" in sql
+    assert "done" in params and 1 in params and 2 not in params
 
 
-def test_complete_task_uses_returning_and_none_when_missing(rec):
-    rec.fetchone_queue = [None]  # UPDATE ... RETURNING id finds nothing
+def test_update_task_uncompleting_a_done_task_reopens_it(monkeypatch, rec, task_txn):
+    cur = task_txn(monkeypatch, prior_status="done")
+    rec.fetchone_queue = [{"id": 1}]
+    service.update_task(1, completed=False)
+    sql, params = next((s, p) for s, p in cur.executed if "UPDATE tasks SET" in s)
+    assert "next_action" in params and 0 in params
+    assert "completed_at = NULL" in sql
+
+
+def test_complete_task_locks_the_row_and_none_when_missing(monkeypatch, rec, task_txn):
+    cur = task_txn(monkeypatch, prior_status=None)  # row absent
     assert service.complete_task(999) is None
-    assert "UPDATE tasks SET completed = 1" in rec.sql_containing("UPDATE tasks")
-    assert "RETURNING id" in rec.sql_containing("UPDATE tasks")
+    assert any("SELECT status FROM tasks WHERE id = %s FOR UPDATE" in s
+               for s, _ in cur.executed)
+    assert not any("UPDATE tasks SET" in s for s, _ in cur.executed)
 
 
 def test_delete_task_rowcount(rec):
@@ -227,8 +311,8 @@ def test_clear_demo_data_truncates_when_sample_loaded(monkeypatch, fake_conn):
     # deal_ai_touch_evidence (#56) trails it for the same FK-less reason — a reused deal
     # id would otherwise inherit a deleted deal's per-event explanation.
     assert any(
-        "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
-        "crm_field_values, crm_field_provenance, deal_stage_events, "
+        "TRUNCATE companies, contacts, deals, activity_log, tasks, task_projects, "
+        "crm_chatter, crm_field_values, crm_field_provenance, deal_stage_events, "
         "proactive_nudges, deal_ai_touch_evidence RESTART IDENTITY"
         in s for s in stmts
     )
@@ -264,8 +348,8 @@ def test_clear_all_truncates_and_resets_flag(monkeypatch, fake_conn):
     # consistent with both set_field_values entity→defs and delete_field_definition
     # defs→values); crm_field_provenance trails both.
     assert any(
-        "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
-        "crm_field_definitions, crm_field_values, crm_field_provenance, "
+        "TRUNCATE companies, contacts, deals, activity_log, tasks, task_projects, "
+        "crm_chatter, crm_field_definitions, crm_field_values, crm_field_provenance, "
         "deal_stage_events, proactive_nudges, deal_ai_touch_evidence RESTART IDENTITY"
         in s for s in stmts
     )

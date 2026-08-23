@@ -205,14 +205,16 @@ def test_demo_state_machine_over_http(pg_db):
     client = _client()
 
     status = client.get("/api/crm/demo-status").json()
+    # task_mode rides this payload (#70) so CrmLayout can pick the task surface
+    # without a second request.
     assert status == {"empty": True, "sample_data_loaded": False, "show_onboarding": True,
-                      "ai_key_prompt_dismissed": False}
+                      "ai_key_prompt_dismissed": False, "task_mode": "normal"}
 
     seeded = client.post("/api/crm/load-sample-data").json()
     assert seeded["seeded"] is True
     after = client.get("/api/crm/demo-status").json()
     assert after == {"empty": False, "sample_data_loaded": True, "show_onboarding": False,
-                     "ai_key_prompt_dismissed": False}
+                     "ai_key_prompt_dismissed": False, "task_mode": "normal"}
 
     # guarded clear wipes example data and restarts identities
     cleared = client.post("/api/crm/demo-clear").json()

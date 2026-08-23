@@ -14,6 +14,8 @@ import { BrandLogo } from './components/BrandLogo';
 import { NotificationsBell } from './components/NotificationsBell';
 import { ThemeToggle } from './components/ThemeToggle';
 import { ActiveRecordProvider } from './RecordContext';
+import { TaskModeContext } from './gtd/TaskModeContext';
+import type { TaskMode } from './gtd/TaskModeContext';
 
 const NAV_ITEMS = [
   { to: '/crm', label: 'Dashboard', end: true },
@@ -29,6 +31,8 @@ interface DemoStatus {
   sample_data_loaded: boolean;
   show_onboarding: boolean;
   ai_key_prompt_dismissed: boolean;
+  /** #70. Absent on an older backend, which reads as normal mode. */
+  task_mode?: TaskMode;
 }
 
 /** First-run prompt: offer to load fictional sample data (or start fresh). */
@@ -150,6 +154,9 @@ const actionLink: React.CSSProperties = {
 // Fail-closed demo-status: prompt nothing (incl. the AI nudge) when the fetch fails.
 const DEMO_STATUS_UNKNOWN: DemoStatus = {
   empty: false, sample_data_loaded: false, show_onboarding: false, ai_key_prompt_dismissed: true,
+  // A failed fetch must not strand /crm/tasks on a blank screen, so fall back to the
+  // default mode rather than leaving it unknown forever.
+  task_mode: 'normal',
 };
 
 interface SetupStatus { ai_ready: boolean; credentials_present: boolean; }
@@ -351,7 +358,11 @@ export function CrmLayout() {
       )}
 
       <div key={refreshKey} style={{ flex: 1, overflow: 'auto', position: 'relative' }}>
-        <Outlet />
+        {/* The task mode rides the demo-status payload this layout already fetches,
+            so /crm/tasks costs no extra request to decide which task system to show. */}
+        <TaskModeContext.Provider value={status ? (status.task_mode ?? 'normal') : null}>
+          <Outlet />
+        </TaskModeContext.Provider>
       </div>
 
       {/* Persistent assistant affordance — always present, degrades gracefully. */}

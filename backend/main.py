@@ -30,7 +30,14 @@ from core.auth import router as auth_router
 from core.auth_2fa import router as auth_2fa_router
 from core.config import settings
 from core.storage import atomic_write
+from crm.gtd_router import router as gtd_router
 from crm.router import router as crm_router
+from crm.todo_capture import router as todo_capture_router
+from crm.todo_web import (
+    public_api_router as todo_web_public_api,
+    router as todo_web_router,
+    token_api_router as todo_web_token_api,
+)
 from gmail.router import router as gmail_router
 from heartbeat.router import router as heartbeat_router
 from memory.router import router as memory_router
@@ -215,6 +222,23 @@ app.include_router(alerts_router, prefix="/api/alerts", tags=["alerts"])
 app.include_router(heartbeat_router, prefix="/api/heartbeat", tags=["heartbeat"])
 app.include_router(context_files_router, prefix="/api/context-files", tags=["context-files"])
 app.include_router(memory_router, prefix="/api/memory", tags=["memory"])
+app.include_router(gtd_router, prefix="/api/crm/gtd", tags=["todo-gtd"])
+
+# ── No-login todo surfaces (#70) ──────────────────────────────────────────────
+# All four mounts MUST come before the SPA catch-all at the bottom of this file, or
+# `/todo` and `/capture` would be swallowed by it and always serve the app shell.
+#
+# The token mount is registered before the bare public one for the same reason chatty
+# documents: `/api/todo-web/{token}` would otherwise read a literal path segment like
+# `todos` as a token guess. `todos` is in RESERVED_TODO_WEB_SLUGS precisely so that
+# collision cannot happen from the other direction either.
+#
+# Both surfaces are inert until configured: capture answers only while the CRM has a
+# capture token or none is set, and the web app 404s entirely until todo_web_enabled.
+app.include_router(todo_capture_router, tags=["todo-capture"])
+app.include_router(todo_web_public_api, prefix="/api/todo-web", tags=["todo-web"])
+app.include_router(todo_web_token_api, prefix="/api/todo-web/{token}", tags=["todo-web"])
+app.include_router(todo_web_router, tags=["todo-web"])
 
 
 # ── Health endpoints ──────────────────────────────────────────────────────────

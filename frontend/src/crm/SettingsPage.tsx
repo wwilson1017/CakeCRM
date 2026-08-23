@@ -30,6 +30,7 @@ import { NotificationSettings } from './components/NotificationSettings';
 import { CustomFieldSettings } from './components/CustomFieldSettings';
 import { TelegramSettings } from './components/TelegramSettings';
 import { ChangePasswordCard } from './components/ChangePasswordCard';
+import { TaskModeCard } from './components/TaskModeCard';
 import { MemoryCard } from './components/MemoryCard';
 import { TeamSettings } from './components/TeamSettings';
 
@@ -218,6 +219,8 @@ export function SettingsPage() {
           nav is for business objects (Pipeline, Contacts, Deals…), and every other
           assistant-facing surface — identity, Telegram, Gmail — already lives here. */}
       <MemoryCard />
+      {/* Task mode + the no-login todo links (issue #70) — appended last, same convention. */}
+      <TaskModeCard isMobile={isMobile} />
     </div>
   );
 }

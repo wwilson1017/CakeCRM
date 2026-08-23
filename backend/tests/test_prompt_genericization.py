@@ -40,6 +40,9 @@ _FORBIDDEN = [
     (r"restaurant_type", "vertical-specific field key from blueprint examples"),
     (r"\bcuisine\b", "vertical-specific field value from blueprint examples"),
     (r"distributor_tier", "vertical-specific field key from blueprint examples"),
+    # The #70 issue body proposed "@oven-room" as an example GTD context. The shipped
+    # tool descriptions use @calls/@office/@errands instead; this keeps it that way.
+    (r"\boven\b", "vertical-specific context from blueprint examples"),
 ]
 
 # Strips // line comments and /* */ blocks from the TSX so a provenance comment there
@@ -64,13 +67,16 @@ def _all_tool_defs() -> list[dict]:
     """
     from assistant.registry import ToolRegistry
     from context_files.tools import get_context_file_tools
+    from crm.gtd_tools import GTD_TOOL_DEFS
     from crm.tools import CRM_TOOL_DEFS
     from gmail.tools import GMAIL_TOOL_DEFS
     from memory.tools import get_memory_tools
     from notifications.tools import get_notification_tools
     from reminders.tools import get_reminder_tools
 
-    defs = list(CRM_TOOL_DEFS) + list(GMAIL_TOOL_DEFS)
+    # GTD_TOOL_DEFS is read directly, not through get_gtd_tools(): that returns ([], {})
+    # unless GTD mode is active, so calling it here would silently scan nothing (#70).
+    defs = list(CRM_TOOL_DEFS) + list(GTD_TOOL_DEFS) + list(GMAIL_TOOL_DEFS)
     defs += list(get_memory_tools()[0]) + list(get_reminder_tools()[0])
     defs += list(get_context_file_tools()[0])
     defs += list(get_notification_tools(ToolRegistry())[0])
@@ -88,12 +94,20 @@ def model_facing(monkeypatch):
         identity, "get_identity",
         lambda: {"name": "Baker", "personality": "", "using_default": True},
     )
+    # Normal mode first — patching the mode below is one-way for this fixture.
     static, volatile = identity.build_system_prompt({"name": "Baker", "personality": ""})
     hb_static, hb_volatile = heartbeat_service._heartbeat_prompt()
-
     rm_static, rm_volatile = heartbeat_service._reminder_prompt(
         {"id": 1, "message": "", "context": ""}
     )
+
+    # GTD mode appends GTD_GUIDE to the static half and renames the heartbeat's task
+    # tool, so both prompts are assembled a SECOND time under that mode — otherwise
+    # every GTD-only string reaches the model unscanned (#70).
+    monkeypatch.setattr(identity, "_task_mode", lambda: "gtd")
+    monkeypatch.setattr(heartbeat_service, "_task_mode", lambda: "gtd")
+    gtd_static, _ = identity.build_system_prompt({"name": "Baker", "personality": ""})
+    gtd_hb_static, _ = heartbeat_service._heartbeat_prompt()
     texts = [
         ("assistant system prompt (static)", static),
         ("assistant system prompt (volatile)", volatile),
@@ -108,6 +122,8 @@ def model_facing(monkeypatch):
         # The touch-count worker (#16) is a second provider caller with its own system
         # prompt, and it was never scanned here until #56 rewrote it for per-line verdicts.
         ("touch count prompt", touch_count_service.TOUCH_COUNT_SYSTEM_PROMPT),
+        ("assistant system prompt (static, GTD mode)", gtd_static),
+        ("heartbeat prompt (GTD mode)", gtd_hb_static),
     ]
     # Tool defs go to the provider verbatim — name, description AND the JSON schema
     # (property descriptions, enums and defaults are all example-text hiding places).
