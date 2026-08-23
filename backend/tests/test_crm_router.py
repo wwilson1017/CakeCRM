@@ -523,6 +523,36 @@ def test_touch_count_backfill_status_200(client, monkeypatch):
     assert r.status_code == 200 and r.json()["remaining_null"] == 3
 
 
+def test_touch_count_evidence_200_shape(client, monkeypatch):
+    """The #56 drill-down endpoint, through the real ASGI stack. Four path segments, so it
+    must not be swallowed by /deals/{deal_id} or the literal touch-count routes."""
+    seen = {}
+
+    def fake_evidence(deal_id):
+        seen["deal_id"] = deal_id
+        return {"deal_id": deal_id, "open": True, "stage": "qualified",
+                "ai_touch_count": 2, "computed_at": "2026-08-19T10:00:00+00:00",
+                "verdict_state": "current", "counted": 2, "evaluated": 3,
+                "truncated": False,
+                "events": [{"source": "note", "source_id": 11,
+                            "event_at": "2026-08-18T00:00:00+00:00",
+                            "line": "2026-08-18 [note] called", "state": "touch",
+                            "reason": ""}]}
+
+    monkeypatch.setattr(touch_count_service, "get_touch_evidence", fake_evidence)
+    r = client.get("/api/crm/deals/7/touch-count/evidence")
+    assert r.status_code == 200
+    assert seen["deal_id"] == 7                      # the path param really arrived
+    body = r.json()
+    assert body["verdict_state"] == "current" and body["counted"] == 2
+    assert body["events"][0]["state"] == "touch"
+
+
+def test_touch_count_evidence_404_for_a_missing_deal(client, monkeypatch):
+    monkeypatch.setattr(touch_count_service, "get_touch_evidence", lambda deal_id: None)
+    assert client.get("/api/crm/deals/999/touch-count/evidence").status_code == 404
+
+
 def test_get_provenance_200_shape(client, monkeypatch):
     monkeypatch.setattr(provenance_service, "get_provenance",
                         lambda et, eid: [{"field_name": "phone", "stale": False}])

@@ -351,6 +351,7 @@ def delete_contact(contact_id: int) -> bool:
         # do the same FOR UPDATE lock + these DELETEs for entity_type='deal', AND (per #18)
         # capture the deal's contact_id before delete and score_on_event(contact_ids=(...))
         # after commit — a removed deal changes its former contact's deal-linkage factor.
+        # It must also DELETE the deal's deal_ai_touch_evidence row (#56, FK-less too).
         cur.execute(
             "DELETE FROM crm_chatter WHERE entity_type = 'contact' AND entity_id = %s",
             (contact_id,),
@@ -2178,17 +2179,23 @@ def _truncate_all(cur, include_definitions: bool = False) -> None:
     # reseeded CRM inherits the old per-record nudge cooldowns and stays silent about
     # records it has never actually mentioned. Its only writer is a single-statement
     # upsert touching just this table, so its position can't invert against anything.
+    # deal_ai_touch_evidence (#56) trails everything. Same FK-less reasoning: nothing
+    # cascades it, so missing it here would let a deal that reuses a truncated SERIAL id
+    # inherit a deleted deal's per-event explanation. Its only writer
+    # (touch_count_service._store_touch_count) locks the deals row first and then writes
+    # this table — the same deals-before-it order TRUNCATE takes, so no inversion. RESTART
+    # IDENTITY is a no-op for it: the PK is deal_id, so it owns no sequence.
     if include_definitions:
         cur.execute(
             "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
             "crm_field_definitions, crm_field_values, crm_field_provenance, "
-            "deal_stage_events, proactive_nudges RESTART IDENTITY"
+            "deal_stage_events, proactive_nudges, deal_ai_touch_evidence RESTART IDENTITY"
         )
     else:
         cur.execute(
             "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
             "crm_field_values, crm_field_provenance, deal_stage_events, "
-            "proactive_nudges RESTART IDENTITY"
+            "proactive_nudges, deal_ai_touch_evidence RESTART IDENTITY"
         )
 
 

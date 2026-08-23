@@ -79,6 +79,7 @@ def _all_tool_defs() -> list[dict]:
 def model_facing(monkeypatch):
     """(label, text) pairs for everything that actually reaches the AI provider."""
     from assistant import identity
+    from crm import touch_count_service
     from heartbeat import service as heartbeat_service
 
     monkeypatch.setattr(
@@ -97,6 +98,9 @@ def model_facing(monkeypatch):
         ("heartbeat prompt", f"{hb_static}\n{hb_volatile}"),
         ("reminder prompt", f"{rm_static}\n{rm_volatile}"),
         ("quick-action starters", _TS_COMMENTS.sub("", QUICK_ACTIONS.read_text(encoding="utf-8"))),
+        # The touch-count worker (#16) is a second provider caller with its own system
+        # prompt, and it was never scanned here until #56 rewrote it for per-line verdicts.
+        ("touch count prompt", touch_count_service.TOUCH_COUNT_SYSTEM_PROMPT),
     ]
     # Tool defs go to the provider verbatim — name, description AND the JSON schema
     # (property descriptions, enums and defaults are all example-text hiding places).
