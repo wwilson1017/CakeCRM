@@ -1,0 +1,156 @@
+name: Sync intake (cake_os)
+
+# Receiving half of the cake_os -> CakeCRM sync bot (issue #23).
+#
+# cake_os fires this workflow with merge METADATA ONLY -- a SHA, a PR number, a
+# timestamp, and a changed-file list. Never diff text, never a PR title or body.
+# We validate it, classify the paths, dedupe, and file an un-greenlit
+# `sync-intake` issue. Translation into CakeCRM's stack is NOT done here: an
+# intake issue enters the normal /auto-issues pipeline like any other issue, and
+# that worker reads cake_os from the local clone. See docs/SYNC.md.
+#
+# Why `workflow_dispatch` and not `repository_dispatch`: the cross-repo token for
+# `repository_dispatch` must hold "Contents: write" -- i.e. it could push to
+# `main`. `workflow_dispatch` needs only "Actions: write", which cannot push,
+# cannot open a PR, and cannot create an issue. The "never a direct push"
+# guarantee is therefore structural rather than a promise. The issue itself is
+# authored by github-actions[bot] via this workflow's own `github.token`.
+#
+# Note: `workflow_dispatch` only fires for a workflow present on the DEFAULT
+# branch, so this file is inert until it lands on `main`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: "cake_os merge commit SHA (40 hex)"
+        required: true
+        type: string
+      source_pr:
+        description: "cake_os pull request number"
+        required: true
+        type: string
+      merged_at:
+        description: "Merge timestamp, ISO-8601 UTC (e.g. 2026-08-20T11:25:15Z)"
+        required: true
+        type: string
+      files:
+        description: >-
+          JSON array of {path, additions, deletions, status}. Paths only --
+          no diff text, no titles, no bodies.
+        required: true
+        type: string
+
+# Serialize per SHA, not globally. A global group would be wrong -- only one run
+# may sit pending, so a burst of DISTINCT merges would silently lose intakes. Keyed
+# on the SHA it serializes exactly the duplicate deliveries that the list-then-create
+# dedupe below could otherwise race, while distinct merges still run in parallel.
+concurrency:
+  group: sync-intake-${{ github.event.inputs.source_sha }}
+  cancel-in-progress: false
+
+# The repo's default_workflow_permissions is "read", so this block is required,
+# not decorative: `gh issue create` fails without `issues: write`.
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  intake:
+    name: Classify and file intake issue
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # A dispatch names the ref it runs on, and GitHub takes the workflow AND
+      # the scripts from that ref. Refuse anything but `main` so a stale or
+      # wrong-branch dispatch can't run a different classifier. (This guards
+      # against accident, not against someone who already has push access --
+      # creating a branch needs Contents: write, which the sender's token by
+      # design does not have.)
+      - name: Refuse non-main refs
+        if: github.ref != 'refs/heads/main'
+        # Via env, not `${{ }}` inside the script — same rule as the payload below.
+        # A ref name cannot currently be hostile (creating one needs Contents:write,
+        # which the sender's token lacks), but the workflow shouldn't have one rule
+        # for untrusted values and an exception three lines away.
+        env:
+          DISPATCHED_REF: ${{ github.ref }}
+        run: |
+          echo "::error::sync-intake must be dispatched against main (got $DISPATCHED_REF)"
+          exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # github.sha, not `main`: the guard above already proved the dispatch
+          # targeted main, and this pins the immutable commit so the classifier
+          # script cannot come from a different revision than the workflow
+          # definition if main advances between dispatch and checkout.
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      # The payload is read from GitHub's event file, NOT from step `env:` vars.
+      # Actions prints a step's whole `env:` block in the log preamble, and Actions
+      # logs are public on a public repo — so passing the payload through `env`
+      # would publish every upstream path the sender listed, defeating the
+      # disclosure rule the renderer enforces. Only the PATH appears in the log.
+      #
+      # It also means no payload `${{ }}` reaches a shell anywhere in this file. The
+      # concurrency key above is the one non-shell exception, and it is unavoidable:
+      # workflow-level expressions are evaluated before any step can validate them,
+      # and Actions expressions have no sanitizer. That residual is named in
+      # docs/SYNC.md §2 rather than pretended away.
+      - name: Validate, classify, and render
+        id: render
+        run: |
+          set -euo pipefail
+          SHA="$(python3 scripts/sync_intake.py . "$GITHUB_EVENT_PATH" \
+                   "$RUNNER_TEMP/title.txt" "$RUNNER_TEMP/body.md")"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      # Idempotent: makes a fresh clone or fork work without anyone having run
+      # scripts/seed-labels.sh first. --force is create-or-update.
+      - name: Ensure the sync-intake label exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create sync-intake --force \
+            --color fbca04 \
+            --description "Automated cake_os merge intake — triage at first-look" >/dev/null
+
+      # Dedupe. `gh issue list` paginates behind --limit and returns issues only
+      # (the raw REST endpoint would default to open/30-per-page and include PRs).
+      # The marker carries the full 40-char SHA, so a short-SHA lookalike cannot
+      # collide. The per-SHA concurrency group above closes the check-then-create
+      # race; this is the check itself.
+      #
+      # --limit 1000 is a horizon, not an oversight: at ~5 intakes/week that is
+      # ~4 years of history, and the only thing it could miss is a re-dispatch of
+      # a SHA merged years earlier — which does not happen, since a merge is
+      # dispatched once, immediately. Paginating the whole tracker on every
+      # dispatch would cost 50+ API pages forever to cover that non-scenario.
+      - name: File the intake issue (skip if already filed)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.render.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # Fetch into a variable FIRST so a gh/network failure aborts the step.
+          # Inline in the `if` condition it would be swallowed and we would file a
+          # duplicate on every transient API error.
+          EXISTING="$(gh issue list --label sync-intake --state all --limit 1000 \
+                        --json body --jq '.[].body')"
+          # Here-string, NOT `printf | grep -q`: under `pipefail`, grep -q exits on
+          # the first match, printf takes SIGPIPE (141), and the pipeline reports
+          # failure — so the pipe version breaks precisely when the marker IS found,
+          # filing a duplicate every time dedupe should have worked.
+          if grep -qF "<!-- sync-source-sha: $SHA -->" <<< "$EXISTING"; then
+            echo "Intake for $SHA already exists — nothing to do."
+            exit 0
+          fi
+          # Never --greenlit: intake issues are default-deny like every other
+          # issue, and a human admits them at first-look.
+          gh issue create \
+            --title "$(cat "$RUNNER_TEMP/title.txt")" \
+            --body-file "$RUNNER_TEMP/body.md" \
+            --label sync-intake
