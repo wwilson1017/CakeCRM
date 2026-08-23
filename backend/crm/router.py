@@ -24,6 +24,7 @@ Deals:
   GET    /api/crm/deals/:id             — detail
   POST   /api/crm/deals                 — create
   PUT    /api/crm/deals/:id             — update
+  POST   /api/crm/deals/bulk-move       — move many deals to one stage (one transaction)
   POST   /api/crm/deals/touch-count/backfill        — recompute AI touch counts (?scope=null|all&force=)
   GET    /api/crm/deals/touch-count/backfill/status — backfill progress
   GET    /api/crm/deals/:id/touch-count/evidence    — per-event verdicts behind the count
@@ -85,7 +86,7 @@ import logging
 import psycopg2
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, StrictInt, field_validator
 
 from core.auth import get_current_user, require_admin
 from crm import (
@@ -178,6 +179,18 @@ class DealUpdate(BaseModel):
     currency: str | None = None
     company_id: int | None = None
     owner_id: int | None = None
+
+
+class BulkDealMove(BaseModel):
+    # StrictInt, not int: Pydantic's lax mode coerces JSON `true` to 1, `1.0` to 1 and
+    # "3" to 3, so a malformed body would silently move deal #1. Only the model can catch
+    # that — by the time the service runs, the bool has already become a real int.
+    # Positivity is checked in the service instead, so every caller gets it.
+    deal_ids: list[StrictInt]
+    stage: str
+    # Deliberately no Pydantic max_length on deal_ids: the service's BULK_MOVE_MAX is
+    # the single definition of the cap, shared with the agent-tool path, and its
+    # refusal is a renderable sentence where a Pydantic 422 detail array is not.
 
 
 class CompanyCreate(BaseModel):
@@ -444,6 +457,25 @@ async def update_deal(deal_id: int, body: DealUpdate, user=Depends(get_current_u
     if not result:
         raise HTTPException(status_code=404, detail="Deal not found or invalid stage")
     return result
+
+
+# Placed right after PUT /deals/{deal_id}, the route it batches. No path collision:
+# create is POST /deals and the touch-count routes have three segments, so there is no
+# other POST /deals/{something} for "bulk-move" to shadow.
+@router.post("/deals/bulk-move")
+async def bulk_move_deals(body: BulkDealMove, user=Depends(get_current_user)):
+    """Move many deals to one stage in a single transaction (issue #55).
+
+    Always HTTP 200 on a reached handler: whole-request refusals come back as
+    ``{"ok": false, "errors": [...]}`` and per-deal problems ride ``errors`` alongside
+    ``ok: true``. That split is what lets the board tell "the server refused, nothing
+    was written" apart from "the request never completed, the outcome is unknown" —
+    only transport and 5xx failures throw at the client.
+
+    Off the event loop because the post-commit rescore recomputes one lead score per
+    updated deal and linked contact, bounded by BULK_MOVE_MAX.
+    """
+    return await run_in_threadpool(crm.bulk_move_deals, body.deal_ids, body.stage)
 
 
 # ── AI touch counts (issue #16) ───────────────────────────────────────────────

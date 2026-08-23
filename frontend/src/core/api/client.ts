@@ -5,6 +5,30 @@
 
 import { getToken, TOKEN_KEY } from '../auth/tokenUtils';
 
+/**
+ * A failed response, carrying the HTTP status so a caller can tell a REFUSAL from an
+ * UNKNOWN outcome (issue #55). A 4xx means the request never reached a write, so
+ * nothing changed; a 5xx or a transport failure is genuinely ambiguous — the
+ * connection can drop after Postgres has committed but before the ack arrives.
+ * Reporting those the same way would either manufacture doubt or claim knowledge we
+ * do not have.
+ *
+ * Extends Error, so every existing `catch` that treats it as one keeps working.
+ */
+export class ApiError extends Error {
+  // Declared explicitly rather than as constructor parameter properties: this project
+  // compiles with `erasableSyntaxOnly`, which bans that shorthand.
+  status: number;
+  detail: string;
+
+  constructor(message: string, status: number, detail: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
 export async function api<T = unknown>(
   path: string,
   options: RequestInit = {},
@@ -37,9 +61,12 @@ export async function api<T = unknown>(
     let detail = res.statusText;
     try {
       const body = await res.json();
-      if (body.detail) detail = body.detail;
+      // Only when it's actually a string. FastAPI sends an ARRAY for a 422 (and an object
+      // for some gates), and assigning that through would make `ApiError.detail` lie about
+      // its type — a caller calling .trim() on it would throw instead of rendering a reason.
+      if (typeof body.detail === 'string' && body.detail) detail = body.detail;
     } catch { /* not JSON */ }
-    throw new Error(`API error ${res.status}: ${detail}`);
+    throw new ApiError(`API error ${res.status}: ${detail}`, res.status, detail);
   }
 
   return res.json();
