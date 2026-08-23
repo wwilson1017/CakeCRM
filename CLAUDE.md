@@ -140,6 +140,69 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   due-guard) and is driven by **#6's 60s `reminder_tick`** (via
   `heartbeat.service._maybe_run_dreaming`) — #5's interim lifespan task was absorbed
   when #6 landed, exactly as planned.
+  **Context files** (#72 Phase 1+2, `backend/context_files/` + `frontend/src/crm/MemoryPage.tsx`)
+  restore chatty's *other* memory unit, which #5 deliberately skipped: `soul.md` (the
+  assistant's self-written identity), `MEMORY.md` (its living snapshot), `topics/<name>.md`
+  and `daily/YYYY-MM-DD.md`, all rows in `assistant_context_files`. So the #5 note above
+  that "dreaming's unit is the fact because CakeCRM has no context-file store" now states
+  a *history*, not a constraint — file-dreaming is #72 Phase 4 and nothing sets
+  `archived_at` yet, though every read already carries the live predicate so that phase is
+  purely additive. `kind` and `is_protected` are **GENERATED columns** derived from
+  `filename` (a code-only convention drifts; a generated column cannot), and the filename
+  grammar is the single normalizer — `soul.md` | `MEMORY.md` | `topics/<slug>.md` |
+  `daily/<ISO date>.md`, case-canonicalized, NFC-normalized, with a bare `x.md` normalized
+  to `topics/x.md` rather than rejected. Seven keyless tools ride
+  `context_files.tools.get_context_file_tools()`.
+  **The prompt split is by TRUST, not by file, and that is a correction the plan review
+  forced:** `soul.md` loads UNFENCED into the **static** half (fencing an identity as
+  untrusted data defeats it), while `MEMORY.md` + the topic/daily manifests load
+  nonce-fenced as `<recorded_context>` in the **volatile** half. They cannot go in static
+  even though they change rarely, because `delimiters._wrap` mints fresh entropy per call —
+  a fence in the cached prefix would re-key Anthropic's prompt cache *every turn*. The real
+  invariant is **no per-turn entropy in static**, not "static never changes". Ordering is
+  load-bearing too: static is `personality → soul → SALES_GUIDE → CONFIRMATION_NOTE →
+  MEMORY_NOTE → CONTEXT_FILES_NOTE → safety`, so a self-rewritten soul can add to who Baker
+  is but never override a tool or security contract. `DEFAULT_SOUL` is the
+  blank-means-default fallback constant (same pattern as `personality`); the migration seeds
+  **empty** content so a later boot can never overwrite an edited soul, and the constant is
+  scanned by `test_prompt_genericization.py`.
+  Security: writes carry `writes:true` (so `background_allowlist()` excludes them — asserted
+  explicitly, not left to the derivation), and a write to a **protected** file additionally
+  **always confirms, power mode included**, via `context_files.tools.requires_confirmation()`
+  consulted from the engine's gate — `writes:true` alone is NOT enough there, because a
+  poisoned `soul.md` is a permanent system instruction, not one bad record. That hook
+  **fails closed** on a missing/unparseable filename. `read_context_file`/`read_daily_note`
+  results are fenced but deliberately do NOT taint the turn (`_UNTRUSTED_SOURCE_TOOLS`
+  encodes *third-party* origin; Baker reading its own notes must not kill power mode) — the
+  same call #5 made for facts — while `_NON_USER_MARKERS` DOES exclude the fence from
+  `_last_user_text`, so file content can never choose which memories surface. Note the four
+  context READS are background-callable, widening the hostile-text on-ramp exactly as #22's
+  reads did; the ceiling is still one `notify_user`.
+  REST is two routers — `/api/context-files` (files; `{filename:path}`, since topic names
+  contain `/`) and `/api/memory` (facts + dreaming runs) — both keyless, both behind
+  `get_current_user`. The editor carries an `updated_at` precondition returning **409** on a
+  stale save, because the single-statement `append_daily_note` upsert guarantees
+  append-vs-append only; a whole-file overwrite racing an append is still last-write-wins.
+  **A CONFIRMED tool write carries that same precondition**, and the confirmation gate is
+  the reason it needs one rather than a substitute for it: the gate is what opens a
+  human-length gap between composing an overwrite and running it, and a protected file
+  always waits. So `engine._VERSION_BOUND_WRITE_TOOLS` stamps the row version into the
+  pending placeholder via `context_files.tools.pending_binding()` and `_with_version_binding()`
+  injects it as `expected_updated_at` on approval — the server reads the version because a
+  model asked to echo its own token could silently opt out of the guard. Unlike the Gmail
+  connection binding this is **not** a pre-check: the kwarg rides into `write_file`'s
+  in-UPDATE comparison, so no check-then-write window remains. It **fails open** (an
+  unreadable version binds nothing, exactly as `gmail.tools._live_generation` does), and a
+  stale write returns a *model-facing* conflict telling Baker to re-read and re-apply — the
+  service's own message tells a browser to reload, which would just make the model retry the
+  same stale overwrite. An unconfirmed power-mode write binds nothing, having no gap; a file
+  that does not exist yet binds nothing either (documented simplification — needs an
+  expect-absent insert the service has no primitive for). The Memory page's editor likewise
+  confirms before a file switch discards an unsaved draft.
+  `memory.service.delete_fact()` is a **human-only** hard purge with no agent tool — the
+  assistant retires a fact with `invalidate_fact`, which preserves the temporal record.
+  Phases 3 (compaction), 4 (observer/extractor/commitments-as-tasks/file-dreaming) and 5
+  (optional embeddings re-ranker) are follow-ups; #72 stays open as the tracker.
   Assistant chat history and memory are still install-wide — Phase B of #60.
 - **Accounts, roles and record ownership** (#60 Phase A) — the install has real
   `users` (email + bcrypt + `admin`/`member` + `is_active` + per-user `token_epoch`),
@@ -373,7 +436,60 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   nudge pill; and `crm/provenance_service.py` (`crm_field_provenance`) records which
   standard fields the assistant wrote (recorded inside the assistant's write-tool
   executors — human router edits don't), badged until confirmed or overwritten. Both are
-  invisible with zero keys (no count is computed, no provenance is written). Contact
+  invisible with zero keys (no count is computed, no provenance is written).
+  **Since #56 the touch count is explainable, and that changed what the number means:**
+  the model now judges EVERY numbered evidence line and `ai_touch_count` is the **derived
+  sum** of the lines it marked as touches, so the pill and the drill-down cannot
+  contradict each other (one note describing three calls now counts once — the price of a
+  number you can audit). The per-line verdicts live in `deal_ai_touch_evidence`, **one
+  JSONB snapshot row per deal** (not a normalized table: verdicts are replaced wholesale,
+  never queried across deals, and the synthetic `[deal notes field]` line has no source
+  row; not a column on `deals` either, or a multi-KB blob would ride every pipeline card).
+  It is FK-less per the audit-table convention and therefore MUST stay in both
+  `_truncate_all` strings, but is deliberately **excluded** from `is_crm_empty` /
+  `_crm_empty_in_txn` / the seed guards (derived, not entity data — same side as
+  `deal_stage_events`/`proactive_nudges`) and owns no sequence (PK is `deal_id`).
+  `service._store_touch_count` writes count and snapshot in ONE transaction with the #16
+  stale-write guard unchanged (ordering key on the event path, CAS on `force_write`), and
+  the snapshot write is **gated on the UPDATE's rowcount**, so a recompute that loses the
+  guard leaves no explanation of a number it never stored. Items store **no line text** —
+  the reader renders the live row, because a note edit rewrites `message` without moving
+  either guard key. A reply whose verdicts fail validation writes the **count alone and
+  deletes the stale snapshot** (an explanation of a different inference must not survive
+  beside a new number); incomplete coverage is a rejection, never a partial merge. The
+  classified window shrank to **35 chatter + 15 activities** because the reply now scales
+  with it and `stream_turn` exposes no `max_tokens` knob — the smallest fixed provider
+  ceiling is 4096 output tokens (Ollama, openai_compat default), and a test pins the
+  arithmetic so raising the window has to confront the ceiling. Read-only via
+  `GET /api/crm/deals/:id/touch-count/evidence` → `touch_count_service.get_touch_evidence`,
+  which never re-runs AI and reports `verdict_state` **current/stale/superseded/none**. It
+  earns "current" only against FIVE checks, because four kinds of drift move none of the
+  stale-write guard keys and so are invisible to a sum comparison alone: the visible touches
+  vs. the number on the pill (catches a contact deletion that destroyed shared
+  `activity_log` rows, or an archived note), a row **edited** since it was judged (an edit
+  to a non-touch row moves nothing else), a live row the snapshot never **covered**
+  (archiving a judged row out of a full window pulls an older one in, leaving the row count
+  and newest timestamp untouched), a judged row that has **vanished** from the live set
+  (clearing a `deal_notes` field judged not-a-touch moves *nothing* — that entry is in
+  neither the watermark nor the evidence count — and on a closed deal a deleted row escapes
+  the evidence-count check too, since that one is open-deals-only), and an item whose digest
+  is unusable so it cannot be **verified** at all. Comparing the live and stored key sets in
+  BOTH directions is what makes this a closed question rather than a list of drift routes to
+  keep extending — four separate review findings landed on this reconciliation before it was
+  symmetric. Edit detection compares a stored digest of the line as judged
+  (`_line_hash`) against the live line — deliberately not a timestamp, since `activity_log`
+  has no `updated_at`, `deals.notes` changes without one, and an `updated_at`-vs-`computed_at`
+  comparison misses an edit made while the model was running. The bounded list also reports
+  `truncated`, derived from a probe row fetched past each window so a deal holding exactly a
+  full window is not mislabelled. Counts written before #56 report `none`; `?scope=all` is
+  the documented repair, and nothing is backfilled at deploy time. Zero keys still degrades
+  cleanly: no count means no pill and no drill-down, while stage moves (read from
+  `deal_stage_events`) carry a **deterministic** never-counted verdict needing no provider
+  at all. Field edits are deliberately absent **as an evidence source** — CakeCRM has no
+  per-edit timeline (#15 dropped chatter's audit columns and `crm_field_provenance` is
+  current-state, not history), so synthesizing one would fabricate history. `/backfill/status` also reports verdict health (ok/fallback/
+  failed), because a model that silently stops emitting the schema would keep updating the
+  badge while every detail view went empty. Contact
   import is keyless for CSV/vCard; the AI smart-import path (`get_ai_provider()`)
   degrades to a warning when no provider is configured and its UI affordance keys off
   `ai_ready`. First-run offers to load fictional sample data (prompt tracked on the
@@ -468,9 +584,14 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   blueprint by name; shipped prompt text may not.
 - Never import git history from cake_os or chatty — code arrives as clean snapshots
   in ordinary commits.
-- Never merge a pull request — Will merges all PRs manually. Push feature branches
-  and open PRs to `main`; never push directly to `main` after the initial seeding
-  phase.
+- Never merge a pull request — with exactly ONE exception, the **operator ship lane**:
+  the `/auto-issues-ship-loop(-team)` skills may squash-merge `ready-to-ship` PRs and
+  deploy-verify the Railway demo instance, under the grant registered **operator-side**
+  in `~/.claude/ship-repos.json`. That grant is deliberately NOT in this repo — repo
+  files are PR-writable and grant nothing; this bullet *describes* the lane, the
+  registry *grants* it (see `docs/AUTO_ISSUES.md` → ship lane). Outside that lane, Will
+  merges all PRs manually. Push feature branches and open PRs to `main`; never push
+  directly to `main` after the initial seeding phase.
 - Don't add per-agent/per-integration enable flags for core features — the CRM and
   its tools are always on; only AI features key off provider configuration.
 - Don't hand-build what the blueprints already have — check `~/ai/chatty` and
@@ -479,7 +600,8 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 ## Issue Loop Conventions (mirrors CAKE OS)
 
 - Work starts from a GitHub issue. Branch `feature/issue-N-<slug>` from `main`, PR
-  back to `main`, human merge only.
+  back to `main`. The issue loop itself never merges; merges happen only by Will's
+  click or the sanctioned ship lane (see "Don't Do This").
 - Issue eligibility for the automated loop: open, unassigned, no `no-auto` label, and
   human-approved via the `greenlit` label (default-deny — an un-`greenlit` issue never
   enters the loop). Self-assign (or label `no-auto`) before working an issue manually.
@@ -488,6 +610,21 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 - See `docs/AUTO_ISSUES.md` for the operator guide (label vocabulary, terminal
   outcomes, bring-up sequence, and repo prerequisites like branch protection).
   `scripts/seed-labels.sh` idempotently creates/normalizes the loop's labels.
+- **`sync-intake` issues are ordinary issues.** The cake_os sync bot (#23,
+  `docs/SYNC.md`) files them when upstream CRM code changes, un-`greenlit` like
+  everything else — default-deny holds, and the bot never marks its own work
+  eligible. There is **no special case anywhere in the loop**: a greenlit intake
+  runs the normal pipeline, and the port worker reads cake_os from the local clone
+  at `~/ai/cake_os`, never from the issue body. Ports add a `SYNC_LEDGER.md` row.
+- **Porting from cake_os: both sides are Postgres.** cake_os's CRM is PostgreSQL
+  (no `apps/crm/db.py`; `core.postgres` helpers; `%s`), so the SQLite items in
+  `docs/solutions/database-issues/cakecrm-sqlite-to-postgres-crm-port.md` apply only
+  to the chatty-origin port, not to cake_os ports. What does bite every time:
+  tenancy stripping (`user_email`/`owner_email` threads ~25% of upstream CRM
+  functions and has nowhere to land here), the module-topology collapse (~20 cake_os
+  service modules → CakeCRM's single `crm/service.py`, so a same-named file is a
+  *candidate*, never a destination), the `apps.todo_gtd`/`apps.dimm` call sites, and
+  the PII scrub. Full playbook in `docs/SYNC.md`.
 - Keep this CLAUDE.md updated in the same PR as any change to architecture,
   conventions, or the rules above.
 
@@ -531,6 +668,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | AI providers + pricing + setup wizard | `chatty/backend/core/providers/`, `chatty/frontend/src/setup/` |
 | CRM core (schema, router, tools, smart import) — **landed #3** as `backend/crm/` + `frontend/src/crm/` + `frontend/src/shared/` | `chatty/backend/integrations/crm_lite/`, `chatty/frontend/src/crm/` |
 | Assistant engine — **chat loop, tool registry, confirmations, uploads landed #4** as `backend/assistant/` + `frontend/src/assistant/`; **memory (facts + FTS) + dreaming (pure-algorithmic usage scoring + fact soft-archival) landed #5** as `backend/memory/` + `backend/dreaming/` (dreaming's archival unit is the fact row, not context files — CakeCRM has no file store; driven by #6's reminder tick) | `chatty/backend/core/agents/` |
+| Context files + Memory UI (`assistant_context_files` with GENERATED `kind`/`is_protected`; soul unfenced in static, knowledge nonce-fenced in volatile; 7 keyless tools; always-confirm on protected files; `/api/context-files` + `/api/memory`; `MemoryPage`) — **landed #72 Phase 1+2** as `backend/context_files/` + `backend/memory/router.py` + `frontend/src/crm/MemoryPage.tsx`. Chatty's `_load-order.json`, GCS sync, `atomic_write`, meetings/transcripts and `relevance_prefetch` do not translate and were not ported; its flat namespace became `topics/`+`daily/` prefixes to fit one table; its regex `sanitize_memory_content` was dropped in favour of this repo's nonce fencing (forge-proof where a blocklist is not). Fencing `MEMORY.md` is deliberately STRICTER than chatty, which loads it raw, because ours becomes extractor-fed in Phase 4 | `chatty/backend/core/agents/context_manager.py` + `tools/context_tools.py` + `ai_service._knowledge_management_instructions()` |
 | Heartbeat + background AI turn — **landed #6** as `backend/heartbeat/` (60s APScheduler tick) + `backend/assistant/background.py` (non-SSE `run_background_turn`: auto-approved writes under a server-enforced tool allowlist + `WRITE_BUDGET_BACKGROUND`). The scheduler now runs **four** jobs, split by one rule the code states explicitly: **local SQL rides `reminder_tick`** (#5 dreaming, #18's score refresh), **network- or AI-bound work gets its OWN `add_job`** (`heartbeat_turn`, #17's `gmail_scan`, #22 Phase 3's `proactive`) so a hung request can never delay reminder delivery | `chatty/backend/core/agents/background_runner.py` + `main.py` scheduler wiring |
 | Reminders (own table, recurrence math, agent tools + **net-new full CRUD REST/UI**) — **landed #6** as `backend/reminders/` + `frontend/src/crm/RemindersPage.tsx` | `chatty/backend/core/agents/reminders/` |
 | Notifications (Web Push VAPID keys persisted in Postgres, `notify_user` tool, bell) + system alerts — **landed #6** as `backend/notifications/` + `backend/alerts/` + `frontend/src/crm/components/{NotificationsBell,NotificationSettings}.tsx` + `frontend/public/sw.js`. Telegram delivery goes out through `telegram.service.notify_linked_user` (the pure-sync channel #7 landed), via `_send_telegram`; WhatsApp not ported. Chatty's user-configurable `scheduled_actions` subsystem (leases/active-hours/triage/dashboards) deliberately deferred | `chatty/backend/core/agents/notifications/` + `alerts/` |
@@ -545,10 +683,11 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Company link coherence (shared batched `resolve_or_create_company_ids()` resolve-or-auto-create on every ingestion path; contact list/search LEFT JOIN + `company_name`; second one-shot backfill) — **landed #35** | New capability (gate decision on issue #35; shared with the #61 importer) |
 | Chatter/notes (`crm_chatter`) — **landed #15** as `backend/crm/chatter_service.py` + `frontend/src/crm/components/NotesThread.tsx` | `cake_os/backend/apps/crm/chatter_service.py` |
 | Custom fields (EAV `crm_field_definitions`/`crm_field_values`, Settings editor, entity-form + detail-page value inputs, 6 `crm_*_fields` tools) — **landed #19** as `backend/crm/field_service.py` + `frontend/src/crm/components/{CustomFieldSettings,CustomFieldsSection,CustomFieldInputs}.tsx` | `cake_os/backend/apps/crm/field_service.py` |
-| Touch counts + field provenance (`deals.ai_touch_*` cols + in-process recompute worker; `crm_field_provenance` + `AiBadge`/`ProvenanceBadge`/`TouchCountPill`) — **landed #16** as `backend/crm/touch_count_service.py` + `provenance_service.py` | `cake_os/backend/apps/crm/touch_count_service.py`, `provenance_service.py` |
+| Touch counts + field provenance (`deals.ai_touch_*` cols + in-process recompute worker; `crm_field_provenance` + `AiBadge`/`ProvenanceBadge`/`TouchCountPill`) — **landed #16** as `backend/crm/touch_count_service.py` + `provenance_service.py`. **Per-event verdict detail view landed #56**: the `deal_ai_touch_evidence` JSONB snapshot (FK-less, one row per deal, written in the count's own transaction and rowcount-gated), `touch_count_service.get_touch_evidence` + `GET /api/crm/deals/:id/touch-count/evidence`, and `frontend/src/crm/{touchEvidence.ts,components/AiTouchDetail.tsx}` — at which point `ai_touch_count` became the **derived sum of per-line verdicts** so the pill and its explanation cannot disagree (see the CRM bullet for the window shrink and the `verdict_state` reconciliation) | `cake_os/backend/apps/crm/touch_count_service.py`, `provenance_service.py` (the detail view + its evidence table are ported from the blueprint CRM's touch-count evidence feature) |
 | Lead scoring (pure-algorithmic `lead_score` 0-100 on deals+contacts; event-triggered inline recompute serialized by a per-entity advisory lock + a bounded daily heartbeat refresh + backfill endpoint/tools `crm_get_lead_score`/`crm_recompute_lead_scores`; sortable contact list + `ScorePill`) — **landed #18** as `backend/crm/scoring_service.py`. Since the #22 merge the write-event chokepoint for deal-column writes is `service._write_deal_update` (one hook covers the #22 lifecycle verbs too), with `archive_deal`/`merge_deals` hooked separately; archived deals are excluded from the contact deal-linkage aggregate | `cake_os/backend/apps/crm/scoring_service.py` |
 | Scoring, analytics — analytics **landed #20** as `service.get_analytics()`/`summarize_analytics()` + `GET /api/crm/analytics` + `crm_analytics` tool + enriched `CrmDashboardPage` (win/loss, activity volume, read-time deal aging from existing timestamps — no migration; stage-duration metrics dropped, no stage-change audit trail; scoring landed separately in #18 above) | `cake_os/backend/apps/crm/*_service.py` |
-| Dashboard parity (stat row + Weekly Touches) — **landed #76** as `service.get_weekly_touches()` + `GET /api/crm/dashboard/weekly-touches` + `frontend/src/crm/components/WeeklyTouchesCard.tsx`, plus `total_companies` on `get_dashboard_stats()` and a four-tile stat row on `CrmDashboardPage`. Ported for CONTENT parity, **additively** — the blueprint component is written against Tailwind classes (`bg-cream`/`text-charcoal`/`font-heading`) that #54 removed, and a literal replacement would have deleted #20's analytics sections. The blueprint's PER-REP grouping collapses to per-DEAL (no owner columns, single-user); the envelope keeps `window`/`total_touches`/`total_open_deals` with `deals` where it had `reps`, so a later multi-user port is a re-grouping. **Two separate signals, deliberately:** window MEMBERSHIP is `LAST_TOUCH_SQL` — the same keyless GREATEST(edit, newest activity, newest live note) expression `analytics_service.get_stale_deals` uses, so the card and the "Needs a touch" panel on the same page can never disagree about what a touch is — while the per-deal NUMBER is #16's `ai_touch_count`, which is what supplies the zero-keys gate (no provider ⇒ every count NULL ⇒ `computed_deals == 0` ⇒ the card renders `null`; it owns its own wrapper padding, so hiding leaves no gap). Membership is emphatically NOT `deals.ai_touch_count_at`: that column is #16's stale-write-guard watermark (it only advances when a provider answered and the CAS accepted, and falls back to the deal's `created_at`), so keying a window off it made every provider timeout silently drop a deal from an accountability number — and left numerator and denominator with different coverage on a half-backfilled install. Because membership is keyless, both sides of the ratio are coverage-independent. The touch-count colour ramp moved to `crm/constants.ts` and is shared with `TouchCountPill` (one number, one colour, app-wide). Window math mirrors the blueprint but on UTC calendar days — no CT convention here (and `get_dashboard_stats` already decides overdue against a UTC day), so the inclusive end-day bound is a plain +1 day, guarded against the `datetime.max` OverflowError that is not a `ValueError`; the filter is labelled UTC rather than converting per viewer. Drill-down deliberately omitted (issue #56). | `cake_os/frontend/src/apps/crm/components/DashboardTab.tsx` + `WeeklyTouchesCard.tsx` + `backend/apps/crm/dashboard_service.py` |
+| Dashboard parity (stat row + Weekly Touches) — **landed #76** as `service.get_weekly_touches()` + `GET /api/crm/dashboard/weekly-touches` + `frontend/src/crm/components/WeeklyTouchesCard.tsx`, plus `total_companies` on `get_dashboard_stats()` and a four-tile stat row on `CrmDashboardPage`. Ported for CONTENT parity, **additively** — the blueprint component is written against Tailwind classes (`bg-cream`/`text-charcoal`/`font-heading`) that #54 removed, and a literal replacement would have deleted #20's analytics sections. The blueprint's PER-REP grouping collapses to per-DEAL (no owner columns, single-user); the envelope keeps `window`/`total_touches`/`total_open_deals` with `deals` where it had `reps`, so a later multi-user port is a re-grouping. **Two separate signals, deliberately:** window MEMBERSHIP is `LAST_TOUCH_SQL` — the same keyless GREATEST(edit, newest activity, newest live note) expression `analytics_service.get_stale_deals` uses, so the card and the "Needs a touch" panel on the same page can never disagree about what a touch is — while the per-deal NUMBER is #16's `ai_touch_count`, which is what supplies the zero-keys gate (no provider ⇒ every count NULL ⇒ `computed_deals == 0` ⇒ the card renders `null`; it owns its own wrapper padding, so hiding leaves no gap). Membership is emphatically NOT `deals.ai_touch_count_at`: that column is #16's stale-write-guard watermark (it only advances when a provider answered and the CAS accepted, and falls back to the deal's `created_at`), so keying a window off it made every provider timeout silently drop a deal from an accountability number — and left numerator and denominator with different coverage on a half-backfilled install. Because membership is keyless, both sides of the ratio are coverage-independent. The touch-count colour ramp moved to `crm/constants.ts` and is shared with `TouchCountPill` (one number, one colour, app-wide). Window math mirrors the blueprint but on UTC calendar days — no CT convention here (and `get_dashboard_stats` already decides overdue against a UTC day), so the inclusive end-day bound is a plain +1 day, guarded against the `datetime.max` OverflowError that is not a `ValueError`; the filter is labelled UTC rather than converting per viewer. Drill-down landed with #56: each row opens the deal sheet via `onOpenDeal`, whose evidence section explains that deal's number event by event. | `cake_os/frontend/src/apps/crm/components/DashboardTab.tsx` + `WeeklyTouchesCard.tsx` + `backend/apps/crm/dashboard_service.py` |
 | Assistant tool set + sales behaviors — **Phase 1 landed #22**: 9 new tools (`crm_search_deals`, `crm_mark_deal_won`/`_lost`, `crm_archive_deal`, `crm_merge_deals`, `crm_get_stale_deals`, `crm_get_contact_staleness`, `crm_find_duplicates`, `crm_scan_gaps`) in `backend/crm/analytics_service.py` + `service.py`, parity closes (embedded `custom_fields`, tool-side `limit_per_stage`, `limit` on find/search, company chatter), the genericized static `identity.SALES_GUIDE` prompt block + sales `QuickActions`. **Phases 2 + 3 landed together** once #17/#18/#20 all merged (the three-PR split was dependency ordering, and every dependency cleared at once): **Phase 2** = `crm_get_deal_health` + `crm_get_pipeline_analytics` in `analytics_service.py` (see the CRM bullet above); **Phase 3** = `backend/proactive/` — a daily pipeline digest and stale-deal / untouched-contact nudges on their own `proactive` scheduler job. Both are **keyless-first**: the digest is deterministic SQL and the nudges read Phase 1's pure-SQL detectors, with an optional single `run_background_turn` (read tools + `notify_user`, digest numbers in the USER message) adding at most one extra notification when a provider exists. Every send **claims before it delivers** — the digest via a one-statement rowcount UPDATE on `heartbeat_state` (so two ticks can't both push), each nudge via a conditional upsert on `proactive_nudges` — because a crash that loses one notification beats one that re-sends every tick. `proactive_nudges` is polymorphic and FK-less, so it MUST stay in the `_truncate_all` sweep. NOT ported: `get_rep_performance` (no owner columns), `enrich_field` (no web tools), lead-import tools (own issue) | `cake_os/backend/apps/crm/tools/` + the blueprint sales agent's config |
 | Bulk deal operations (per-stage Select All + card multi-select, inline bulk bar, atomic set-based backend, `crm_bulk_move_deals` tool) — **landed #55** as `service.bulk_move_deals` + `_classify_deal_update` + `POST /api/crm/deals/bulk-move` + `PipelinePage` selection UI + pure `crm/bulk{Selection,Outcome}.ts` (+ `ApiError` in `core/api/client.ts`). NOT ported, each because the column does not exist here: the `status` dual-write and its multiple-assignment fix (won/lost ARE stages in CakeCRM), the ~60-line `display_order` request-order replay (deals carry no rank column — columns sort by `lead_score`), and the `owner_email` branch (single-user; #60 owns ownership). Also cut: the chatter translation layer (`log_events_bulk`, `lost_reason_note`/`lost_reason_cleared` kinds) because CakeCRM's stage audit IS `deal_stage_events` and a single-deal move writes no chatter either — so bulk writing none is parity, not a gap; client-side chunking (`BULK_CHUNK_SIZE` + the multi-chunk fold) since one request under a 200-cap covers an unpaginated single-user board, though the rejected-vs-unconfirmed distinction it protects survives in the collapsed `bulkOutcome.ts`; `reconcileBulkResult` (the blueprint's own PipelineTab never uses it — it serves the list surfaces, which patch rows in place, where the board always reconciles by refetching); the `BulkUpdateModal` (an inline bar is enough for one action); and bulk mark-won/mark-lost (the issue scopes bulk to stage-move; `crm_mark_deal_lost` stays the reason-capturing close). Two deliberate divergences FROM the blueprint: its bulk fetch takes no row locks, ours takes `ORDER BY id FOR UPDATE`; and its rejected path cannot revert, ours reverts to each deal's server-confirmed stage. | `cake_os/backend/apps/crm/deal_service.bulk_update_deals` + `frontend/src/apps/crm/{bulkSelection,bulkUpdateOutcome}.ts` + the PipelineTab selection/BulkBar |
 | Pipeline facet filtering (client-side, no backend query params: `frontend/src/crm/pipelineFilters.ts` pure predicate + `components/PipelineFilterBar.tsx`, spliced into `PipelinePage`'s useMemo seam as `deals`→`filteredDeals`→`grouped`; facets = keyword/stage/value/close-date/last-activity; sessionStorage `crm_pipeline_filters`) — **landed #21**. Owner facet dropped (single-tenant); `get_pipeline()` gains a derived `last_activity_at` = MAX(deal `activity_log` rows + un-archived deal `crm_chatter` notes) via one UNION-ALL/GROUP BY join (NULL = no activity), plus `company_name`. Drag stays enabled while filtering (board is stage-only, index-safe). | `cake_os/docs/CRM_FILTER_DESIGN.md` + `cake_os/docs/solutions/architecture-patterns/client-side-facet-filtering.md` |
+| **Sync bot — receiving half** (`.github/workflows/sync-intake.yml` + `scripts/sync_intake.py` + `SYNC_LEDGER.md` + `docs/SYNC.md`) — **landed #23**. cake_os fires a keyless `workflow_dispatch` carrying merge **metadata only**; CakeCRM validates, classifies the paths, dedupes on a full-SHA marker, and files an **un-`greenlit`** `sync-intake` issue. Translation is NOT done here — an intake issue enters the ordinary `/auto-issues` pipeline, whose worker reads cake_os from the local clone. **Two structural guarantees:** (1) *never a push* — the sender's token holds **Actions: write** only, which cannot push/PR/create-issue (`repository_dispatch` was rejected because its token needs **Contents: write**, i.e. push-capable against an unprotected `main`); (2) *no upstream text* — the payload has no free-text field, and **no cake_os path is rendered either**, because a path is only *prefix*-constrained and the filename after it is free text that could carry a customer name or forge the dedupe marker. The issue instead names **CakeCRM's own counterpart path**, and only when that file already exists here (already-public name); everything else becomes a count. Asserted, not argued: `test_sync_intake.py` feeds sentinel paths and fails CI if one survives rendering. Verdicts (`crm-code`/`shared-dnd-only`/`internal-paths-only`/`docs-only`/`no-watched-files`) are deliberately **factual, not portability judgments** — portability isn't decidable from a path. `shared-dnd-only` is its own verdict because cake_os's `shared/dnd/` has **13 non-CRM consumers** (CRM is 1 of 14), so a dnd touch is weak CRM evidence. Dedupe is the full-SHA marker check **plus a per-SHA `concurrency` group** (`sync-intake-<sha>`) closing the check-then-create race. The distinction is the whole point: a *global* group would drop distinct intakes (only one run may sit pending), while keying on the SHA serializes exactly the duplicate deliveries and drops nothing. The workflow self-provisions its label and declares `permissions: issues: write` explicitly (the repo default is `read`). **The sender half lives in cake_os and is not built yet** — `docs/SYNC.md` §6 is its spec. | New capability (no blueprint — the cake_os half is its own issue there) |

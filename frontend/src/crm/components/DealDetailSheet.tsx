@@ -6,7 +6,8 @@ import { mono, INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, ACCENT_INK, GOLD, SAGE
 import { modalOverlay, modalContent, mobileDragHandle, btnDanger } from '../styles';
 import { ActivityTimeline } from './ActivityTimeline';
 import { NotesThread } from './NotesThread';
-import { ScorePill, TouchCountPill } from './badges';
+import { ScorePill } from './badges';
+import { AiTouchDetail } from './AiTouchDetail';
 import { ProvenanceBadge } from './ProvenanceBadge';
 import { useProvenance } from '../useProvenance';
 import { CustomFieldsSection } from './CustomFieldsSection';
@@ -104,8 +105,12 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
             Stage: <span style={{ color: STAGE_COLORS[deal.stage]?.color || INK }}>{deal.stage}</span>
           </span>
           {badge('stage')}
-          <TouchCountPill count={touchCount} />
         </div>
+
+        {/* issue #56: the touch count and, on demand, every event behind it. Replaces the
+            bare pill that used to sit in the stage row above. Renders nothing when the
+            count is NULL, so a keyless install sees no affordance at all. */}
+        <AiTouchDetail dealId={deal.id} count={touchCount} />
 
         {deal.notes && (
           <p style={{ fontSize: 14, color: INK_MUTE, marginBottom: 16, lineHeight: 1.5 }}>

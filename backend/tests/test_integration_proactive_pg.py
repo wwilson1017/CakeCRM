@@ -65,7 +65,7 @@ def _clean(pg_db):
     from core.postgres import pg_execute
     pg_execute("TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
                "crm_field_values, crm_field_provenance, deal_stage_events, "
-               "proactive_nudges RESTART IDENTITY")
+               "proactive_nudges, deal_ai_touch_evidence RESTART IDENTITY")
     pg_execute("UPDATE heartbeat_state SET last_digest_at = NULL, last_digest_status = '', "
                "last_nudge_at = NULL, proactive_enabled = TRUE WHERE id = 1")
 

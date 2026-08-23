@@ -231,6 +231,9 @@ export function CrmDashboardPage() {
       <WeeklyTouchesCard
         refreshKey={touchesKey}
         wrapperStyle={{ padding: `6px ${px} 22px`, position: 'relative', zIndex: 2 }}
+        // issue #56: the sheet carries the per-event evidence behind each touch count,
+        // which is the drill-down #76 deferred to this issue.
+        onOpenDeal={openDeal}
       />
 
       {/* Stage rows */}

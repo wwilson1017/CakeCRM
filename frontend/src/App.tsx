@@ -14,6 +14,7 @@ import { PipelinePage } from './crm/PipelinePage';
 import { TasksPage } from './crm/TasksPage';
 import { RemindersPage } from './crm/RemindersPage';
 import { SettingsPage } from './crm/SettingsPage';
+import { MemoryPage } from './crm/MemoryPage';
 import { ToastViewport } from './shared/ToastViewport';
 import { ConfirmHost } from './shared/ConfirmHost';
 
@@ -49,6 +50,7 @@ export default function App() {
             <Route path="pipeline" element={<PipelinePage />} />
             <Route path="tasks" element={<TasksPage />} />
             <Route path="reminders" element={<RemindersPage />} />
+            <Route path="memory" element={<MemoryPage />} />
             <Route path="settings" element={<SettingsPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/crm" replace />} />

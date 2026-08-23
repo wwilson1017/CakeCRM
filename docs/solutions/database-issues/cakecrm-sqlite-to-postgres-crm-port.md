@@ -79,5 +79,14 @@ prompt) through a real booted app, not just TestClient.
 
 ## When to Apply
 
-Any future cake_os→CakeCRM feature port, and any SQLite→Postgres migration of code that keeps its original
-query/serialization idioms.
+Any SQLite→Postgres migration of code that keeps its original query/serialization idioms.
+
+**For a cake_os→CakeCRM port, apply only the second half.** cake_os's CRM is **PostgreSQL**, not
+SQLite — there is no `backend/apps/crm/db.py`, and its services use the same `core.postgres` helpers
+with `%s` placeholders that CakeCRM does. So the placeholder / `lastrowid` / `LIKE`→`ILIKE` /
+threading-lock items above are inert for that direction and applying them is wasted motion. The
+CakeCRM-side items still bite, because they are about *this* repo's conventions rather than the source
+engine: the `new Date(iso + 'Z')` "Invalid Date" trap, `DOUBLE PRECISION` vs `REAL` for money, the
+`exclude_unset` partial-update filter, enum coercion in the service layer, real pagination totals, and
+`run_in_threadpool` for bulk loops. See `docs/SYNC.md` for the full cake_os port playbook (tenancy
+stripping, module-topology collapse, the `apps.todo_gtd`/`apps.dimm` couplings, and the PII scrub).

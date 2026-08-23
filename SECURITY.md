@@ -55,6 +55,40 @@ grep -rnE "messages\(\)\.send|drafts\(\)\.send|/messages/send|send_email|reply_t
 
 It returns nothing.
 
+## The sync-bot guarantee: metadata only, and never a push
+
+CakeCRM's CRM features are ported from a private upstream repo (CAKE OS), and a **sync
+bot** notifies this repo when upstream CRM code changes. Two properties of that bot are
+guarantees rather than settings.
+
+**It can never push.** The bot files issues. Every port becomes an ordinary pull request
+that a human reviews and merges. This is structural: the upstream credential is a
+fine-grained token holding *Actions: write* on this repository and nothing else, which
+cannot push a commit, cannot open a pull request, and cannot even create an issue. The
+intake issue is authored by `github-actions[bot]` through the receiving workflow's own
+token. The alternative transport (`repository_dispatch`) was rejected specifically because
+its credential would have required *Contents: write* — a push-capable token.
+
+**It carries no upstream text.** The wire format is merge **metadata only** — a commit
+SHA, a pull request number, a timestamp, and a changed-file list with line counts. There is
+no field for a diff, a title, a body, a commit message, or an author, so those cannot cross
+even by mistake.
+
+Upstream *paths* do not cross either, which is less obvious but matters more. A path is
+only constrained by its leading directory; the filename after it is free text chosen
+upstream and could carry a person's or customer's name. So an intake issue names **this
+repository's own files** — the counterpart path, and only when that file already exists
+here — and reduces everything else to a count.
+
+Enforced in `backend/tests/test_sync_intake.py`, which feeds sentinel-bearing paths through
+the renderer and fails CI if any sentinel appears in the output.
+
+To be precise about what that guarantee covers: it is *no verbatim upstream text*. An
+upstream repo whose credential had been **stolen** would still choose the numbers it sends,
+and numbers can encode a little data. What it could never do is push code, open a pull
+request, or put arbitrary chosen prose into this repository. The full contract, including
+the residual risks, is in `docs/SYNC.md`.
+
 ## Data handling
 
 - **The Gmail connection is install-wide, and so is access to it.** CakeCRM has user
@@ -104,6 +138,38 @@ It returns nothing.
   are routed through the human-confirmation gate even in "power" mode — so a
   malicious email cannot silently drive the assistant to create a draft or change
   CRM data without your approval.
+
+## The assistant's self-written identity (`soul.md`)
+
+The assistant keeps its own knowledge in markdown files you can read and edit at
+**Settings → Assistant memory**. One of them, `soul.md`, is its description of
+itself, and the assistant can rewrite it. That file is loaded into the assistant's
+system prompt **unfenced** — as instructions rather than as data — because an
+identity the model is told to distrust is not an identity at all.
+
+That is a real escalation over anything else the assistant can save, and it is
+treated as one. A poisoned `soul.md` would not be one bad record: it would be a
+standing instruction replayed on every future conversation, including unattended
+background ones, and it would survive deleting the conversation that created it.
+Four things bound that risk:
+
+- **Every edit needs your approval.** Writing or deleting `soul.md` or `MEMORY.md`
+  always routes through the human-confirmation gate — including in "power" mode,
+  where ordinary writes run automatically. You see the file and the new content
+  before anything is stored.
+- **Background turns can never write them.** The unattended assistant (heartbeat,
+  reminders, proactive nudges) runs under a read-only allowlist, so a prompt
+  injection arriving through a reminder or a CRM record cannot reach these files
+  at all.
+- **Only the identity file is unfenced.** `MEMORY.md`, topic files and daily notes
+  are wrapped in the same tamper-proof data fence as email and uploaded documents,
+  so text inside them is never read as instructions. The assistant's working rules,
+  confirmation contract and safety instructions are also assembled *after* the soul
+  text, so a rewritten soul can add to who the assistant is but cannot override how
+  it behaves.
+- **Changes are visible.** Every file on the Memory page shows who last wrote it
+  ("Baker" or "You") and when, so an unexpected rewrite is discoverable rather than
+  silent.
 
 ## Reporting a vulnerability
 
