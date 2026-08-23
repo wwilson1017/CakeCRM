@@ -2,8 +2,9 @@
 
 CakeCRM drains its open-issue backlog with the **auto-issues loop**: an orchestrator
 spawns one worker per eligible GitHub issue, and each worker takes its issue all the way
-to a reviewed, tested, **ready-to-ship** pull request. A human merges every PR — the loop
-never merges.
+to a reviewed, tested, **ready-to-ship** pull request. The issue loop itself never
+merges. Merging happens either by the maintainer's own click or through a separate,
+explicitly-granted **ship lane** (see "How `ready-to-ship` PRs actually ship" below).
 
 Two interchangeable orchestrators share the same state (labels, PR markers, `OUTCOME:`
 vocabulary), so you can start a backlog with one and finish with the other:
@@ -49,7 +50,7 @@ scripts/seed-labels.sh --repo owner/n  # targets an explicit repo
 | `awaiting-approval` | Parked: waiting on human approval of the plan. |
 | `awaiting-question` | Parked at settle: a review finding needs a human decision. |
 | `needs-settle` | PR open but not yet mergeable — re-queued for the settle lane. |
-| `ready-to-ship` | Settled + verified — one click from merge (never auto-merged). |
+| `ready-to-ship` | Settled + verified — eligible for the maintainer's ship lane (the issue loop itself never merges). |
 | `needs-review` | Settle did not converge (standalone) — needs a human review. |
 | `auto-failed` | Loop hit a technical dead-end after bounded retries. |
 | `evidence-posted` | Verification evidence recorded on the PR. |
@@ -73,6 +74,30 @@ Every worker ends in exactly one state, printed on its last line as
   and the next run re-plans it fresh.
 - **FAILED** — technical dead-end after bounded retries; a draft PR + `auto-failed`.
 - **SKIPPED** — triage judged it non-actionable for one autonomous pass.
+
+## How `ready-to-ship` PRs actually ship (the maintainer's ship lane)
+
+The issue loop ends at `ready-to-ship`; a separate **ship train** (the operator-side
+`/auto-issues-ship-loop(-team)` skills, run on the maintainer's machine) takes it from
+there:
+
+- **Authority is operator-side, on purpose.** The lane is enabled per repo by an entry
+  in a registry file on the maintainer's machine (`~/.claude/ship-repos.json`) — never
+  by anything in this repo. Repo files are PR-writable, so nothing checked in here can
+  grant merge authority or name an executable to run; this document *describes* the
+  lane and cannot *grant* it. No registry entry → the train refuses to merge.
+- **Per-PR gates before every merge:** fresh CI green (a red or missing check is never
+  merged past — it is triaged and either fixed, re-run, or escalated to a human), base
+  = `main`, head matching the lane's allowed branch patterns, and a
+  destructive-migration gate (a `DROP`/`RENAME`/`TRUNCATE`/column-type change in
+  `backend/migrations/` routes to a human — a destructive migration ships to every
+  self-hoster's upgrade path, which no demo rollback can undo).
+- **Deploy verification:** the public demo instance (Railway) auto-deploys `main` with
+  Wait-for-CI enabled; after each merge (or merge batch) a watcher deep-smokes the live
+  deployment and **rolls back automatically** if the smoke fails. Every failure is
+  recorded durably on the PR plus a filed fix issue; repeated failures stop the train.
+- **Contributors see nothing unusual:** a normal squash-merge by the maintainer's
+  account, then the source issue closes. Nothing about the contributor PR flow changes.
 
 ## The AI Code Review workflow
 

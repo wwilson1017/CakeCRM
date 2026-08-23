@@ -437,9 +437,14 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   blueprint by name; shipped prompt text may not.
 - Never import git history from cake_os or chatty — code arrives as clean snapshots
   in ordinary commits.
-- Never merge a pull request — Will merges all PRs manually. Push feature branches
-  and open PRs to `main`; never push directly to `main` after the initial seeding
-  phase.
+- Never merge a pull request — with exactly ONE exception, the **operator ship lane**:
+  the `/auto-issues-ship-loop(-team)` skills may squash-merge `ready-to-ship` PRs and
+  deploy-verify the Railway demo instance, under the grant registered **operator-side**
+  in `~/.claude/ship-repos.json`. That grant is deliberately NOT in this repo — repo
+  files are PR-writable and grant nothing; this bullet *describes* the lane, the
+  registry *grants* it (see `docs/AUTO_ISSUES.md` → ship lane). Outside that lane, Will
+  merges all PRs manually. Push feature branches and open PRs to `main`; never push
+  directly to `main` after the initial seeding phase.
 - Don't add per-agent/per-integration enable flags for core features — the CRM and
   its tools are always on; only AI features key off provider configuration.
 - Don't hand-build what the blueprints already have — check `~/ai/chatty` and
@@ -448,7 +453,8 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 ## Issue Loop Conventions (mirrors CAKE OS)
 
 - Work starts from a GitHub issue. Branch `feature/issue-N-<slug>` from `main`, PR
-  back to `main`, human merge only.
+  back to `main`. The issue loop itself never merges; merges happen only by Will's
+  click or the sanctioned ship lane (see "Don't Do This").
 - Issue eligibility for the automated loop: open, unassigned, no `no-auto` label, and
   human-approved via the `greenlit` label (default-deny — an un-`greenlit` issue never
   enters the loop). Self-assign (or label `no-auto`) before working an issue manually.
