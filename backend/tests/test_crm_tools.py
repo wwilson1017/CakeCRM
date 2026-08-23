@@ -21,12 +21,12 @@ def test_def_and_executor_counts():
     # Casey parity: search_deals, mark_deal_won/lost, archive_deal, merge_deals,
     # get_stale_deals, get_contact_staleness, find_duplicates, scan_gaps) + 2 (#22
     # Phase 2: get_deal_health, get_pipeline_analytics) + 2 (#70 task parity:
-    # crm_update_task, crm_delete_task) + N (sibling
+    # crm_update_task, crm_delete_task) + 1 (#55 crm_bulk_move_deals) + N (sibling
     # additions) — SUM the additions, never overwrite the number. On rebase behind a
     # sibling that also adds a tool, recompute cumulative (do NOT keep-both a single
     # number). The executor count is always defs + 1 (crm_log_note alias).
-    assert len(CRM_TOOL_DEFS) == 46
-    assert len(TOOL_EXECUTORS) == 47
+    assert len(CRM_TOOL_DEFS) == 47
+    assert len(TOOL_EXECUTORS) == 48
     # Relative invariant (robust to any future additions): exactly one alias-only executor.
     assert len(TOOL_EXECUTORS) == len(CRM_TOOL_DEFS) + 1
 
@@ -106,6 +106,7 @@ _OWNED_WRITE_TOOLS = {
     "crm_update_task", "crm_delete_task",  # #70
     "crm_set_contact_fields", "crm_set_company_fields", "crm_set_deal_fields",
     "crm_recompute_lead_scores",  # #18
+    "crm_bulk_move_deals",  # #55
 }
 _OWNED_READ_TOOLS = {
     "crm_find_contact", "crm_get_contact", "crm_list_contacts", "crm_get_pipeline",
@@ -422,6 +423,82 @@ def test_won_and_lost_record_provenance(monkeypatch):
                         lambda et, eid, fields: recorded.append((et, eid, sorted(fields))))
     tools.crm_mark_deal_won(4)
     assert recorded == [("deal", 4, ["probability", "stage"])]
+
+
+# ── crm_bulk_move_deals (#55) ────────────────────────────────────────────────
+
+def _refuse_service(monkeypatch):
+    """Make the service a tripwire: these guards must answer before any DB work."""
+    def explode(*a, **k):
+        raise AssertionError("the executor reached the service with invalid deal_ids")
+    monkeypatch.setattr(service, "bulk_move_deals", explode)
+
+
+def test_bulk_move_rejects_an_empty_id_list(monkeypatch):
+    _refuse_service(monkeypatch)
+    assert tools.crm_bulk_move_deals([], "qualified") == {"error": "No deal IDs provided"}
+    assert tools.crm_bulk_move_deals(None, "qualified") == {"error": "No deal IDs provided"}
+
+
+def test_bulk_move_rejects_non_positive_and_non_integer_ids(monkeypatch):
+    _refuse_service(monkeypatch)
+    for bad in ([0], [-3], ["7"], [1.5], [None]):
+        assert tools.crm_bulk_move_deals(bad, "qualified") == {
+            "error": "deal_ids must be positive integers"
+        }
+
+
+def test_bulk_move_rejects_booleans_that_masquerade_as_ints(monkeypatch):
+    """isinstance(True, int) is True, so an unguarded check would move deal 1."""
+    _refuse_service(monkeypatch)
+    assert "error" in tools.crm_bulk_move_deals([True, 2], "qualified")
+
+
+def test_bulk_move_records_provenance_for_every_moved_deal(monkeypatch):
+    """crm_update_deal_stage badges the stage it wrote; bulk must too, or the
+    'an AI wrote this' audit misses the surface that changes the most records."""
+    from crm import provenance_service
+    recorded = []
+    monkeypatch.setattr(service, "bulk_move_deals",
+                        lambda ids, stage: {"ok": True, "updated": 2,
+                                            "updated_ids": [4, 9], "errors": []})
+    monkeypatch.setattr(provenance_service, "record_fields",
+                        lambda et, eid, fields: recorded.append((et, eid, sorted(fields))))
+    tools.crm_bulk_move_deals([4, 9], "proposal")
+    assert recorded == [("deal", 4, ["stage"]), ("deal", 9, ["stage"])]
+
+
+def test_bulk_move_badges_only_the_deals_that_actually_moved(monkeypatch):
+    from crm import provenance_service
+    recorded = []
+    monkeypatch.setattr(service, "bulk_move_deals",
+                        lambda ids, stage: {"ok": True, "updated": 1, "updated_ids": [4],
+                                            "errors": ["Deal 9 not found"]})
+    monkeypatch.setattr(provenance_service, "record_fields",
+                        lambda et, eid, fields: recorded.append((et, eid)))
+    tools.crm_bulk_move_deals([4, 9], "proposal")
+    assert recorded == [("deal", 4)]
+
+
+def test_bulk_move_passes_a_service_refusal_through_verbatim(monkeypatch):
+    """An ok:false body is already a renderable sentence — the executor must not
+    reshape it into a provenance write or a different error key."""
+    from crm import provenance_service
+    refusal = {"ok": False, "updated": 0, "updated_ids": [],
+               "errors": ["Invalid stage: nonsense"]}
+    monkeypatch.setattr(service, "bulk_move_deals", lambda ids, stage: refusal)
+    monkeypatch.setattr(provenance_service, "record_fields",
+                        lambda *a: (_ for _ in ()).throw(AssertionError("badged a refusal")))
+    assert tools.crm_bulk_move_deals([1], "nonsense") == refusal
+
+
+def test_bulk_move_dedupes_ids_before_calling_the_service(monkeypatch):
+    seen = []
+    monkeypatch.setattr(service, "bulk_move_deals",
+                        lambda ids, stage: seen.append(ids) or {"ok": True, "updated": 0,
+                                                               "updated_ids": [], "errors": []})
+    tools.crm_bulk_move_deals([9, 5, 9], "qualified")
+    assert seen == [[9, 5]]
 
 
 def test_bounded_limit_clamps_model_supplied_values():

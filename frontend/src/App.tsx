@@ -13,6 +13,7 @@ import { CompanyDetailPage } from './crm/CompanyDetailPage';
 import { PipelinePage } from './crm/PipelinePage';
 import { RemindersPage } from './crm/RemindersPage';
 import { SettingsPage } from './crm/SettingsPage';
+import { MemoryPage } from './crm/MemoryPage';
 import { DonePage } from './crm/gtd/DonePage';
 import { InboxPage } from './crm/gtd/InboxPage';
 import { NextActionsPage } from './crm/gtd/NextActionsPage';
@@ -79,6 +80,7 @@ export default function App() {
             <Route path="tasks/review" element={<TasksModeRouter gtd={<ReviewPage />} normal="redirect" />} />
             <Route path="tasks/search" element={<TasksModeRouter gtd={<SearchPage />} normal="redirect" />} />
             <Route path="reminders" element={<RemindersPage />} />
+            <Route path="memory" element={<MemoryPage />} />
             <Route path="settings" element={<SettingsPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/crm" replace />} />

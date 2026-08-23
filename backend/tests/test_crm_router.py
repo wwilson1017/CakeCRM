@@ -523,6 +523,36 @@ def test_touch_count_backfill_status_200(client, monkeypatch):
     assert r.status_code == 200 and r.json()["remaining_null"] == 3
 
 
+def test_touch_count_evidence_200_shape(client, monkeypatch):
+    """The #56 drill-down endpoint, through the real ASGI stack. Four path segments, so it
+    must not be swallowed by /deals/{deal_id} or the literal touch-count routes."""
+    seen = {}
+
+    def fake_evidence(deal_id):
+        seen["deal_id"] = deal_id
+        return {"deal_id": deal_id, "open": True, "stage": "qualified",
+                "ai_touch_count": 2, "computed_at": "2026-08-19T10:00:00+00:00",
+                "verdict_state": "current", "counted": 2, "evaluated": 3,
+                "truncated": False,
+                "events": [{"source": "note", "source_id": 11,
+                            "event_at": "2026-08-18T00:00:00+00:00",
+                            "line": "2026-08-18 [note] called", "state": "touch",
+                            "reason": ""}]}
+
+    monkeypatch.setattr(touch_count_service, "get_touch_evidence", fake_evidence)
+    r = client.get("/api/crm/deals/7/touch-count/evidence")
+    assert r.status_code == 200
+    assert seen["deal_id"] == 7                      # the path param really arrived
+    body = r.json()
+    assert body["verdict_state"] == "current" and body["counted"] == 2
+    assert body["events"][0]["state"] == "touch"
+
+
+def test_touch_count_evidence_404_for_a_missing_deal(client, monkeypatch):
+    monkeypatch.setattr(touch_count_service, "get_touch_evidence", lambda deal_id: None)
+    assert client.get("/api/crm/deals/999/touch-count/evidence").status_code == 404
+
+
 def test_get_provenance_200_shape(client, monkeypatch):
     monkeypatch.setattr(provenance_service, "get_provenance",
                         lambda et, eid: [{"field_name": "phone", "stale": False}])
@@ -610,3 +640,53 @@ def test_scores_backfill_default_scope_null(client, monkeypatch):
 def test_scores_backfill_bad_scope_rejected(client):
     # Query(pattern="^(null|all)$") rejects out-of-pattern values before the handler (422).
     assert client.post("/api/crm/scores/backfill?scope=everything").status_code == 422
+
+
+# ── POST /deals/bulk-move (#55) ───────────────────────────────────────────────
+
+def test_bulk_move_returns_the_service_shape_verbatim(client, monkeypatch):
+    seen = {}
+    payload = {"ok": True, "updated": 2, "updated_ids": [1, 2], "errors": ["Deal 7 not found"]}
+    monkeypatch.setattr(service, "bulk_move_deals",
+                        lambda ids, stage: seen.update(ids=ids, stage=stage) or payload)
+    r = client.post("/api/crm/deals/bulk-move", json={"deal_ids": [1, 2, 7], "stage": "won"})
+    assert r.status_code == 200
+    assert r.json() == payload
+    assert seen == {"ids": [1, 2, 7], "stage": "won"}
+
+
+def test_bulk_move_refusal_is_a_200_body_not_an_error_status(client, monkeypatch):
+    """The board's rejected-vs-unconfirmed split depends on this: only transport and
+    5xx failures may throw at the client, so a refusal has to arrive as ok:false/200."""
+    monkeypatch.setattr(service, "bulk_move_deals",
+                        lambda ids, stage: {"ok": False, "updated": 0, "updated_ids": [],
+                                            "errors": ["Invalid stage: nope"]})
+    r = client.post("/api/crm/deals/bulk-move", json={"deal_ids": [1], "stage": "nope"})
+    assert r.status_code == 200
+    assert r.json()["ok"] is False
+
+
+def test_bulk_move_rejects_a_malformed_body(client):
+    assert client.post("/api/crm/deals/bulk-move",
+                       json={"deal_ids": "all", "stage": "won"}).status_code == 422
+    assert client.post("/api/crm/deals/bulk-move", json={"deal_ids": [1]}).status_code == 422
+
+
+def test_bulk_move_refuses_ids_that_are_not_strictly_integers(client, monkeypatch):
+    """Pydantic's LAX int would coerce JSON `true` to 1, `1.0` to 1 and "3" to 3 — a
+    malformed body would silently move deal #1. StrictInt rejects all three at the model,
+    which is the only layer that can: by the time the service runs, the bool IS an int."""
+    def explode(*a, **k):
+        raise AssertionError("a non-strict deal id reached the service")
+    monkeypatch.setattr(service, "bulk_move_deals", explode)
+    for bad in ([True], [1.5], ["3"]):
+        assert client.post("/api/crm/deals/bulk-move",
+                           json={"deal_ids": bad, "stage": "won"}).status_code == 422
+
+
+def test_bulk_move_path_is_not_shadowed_by_the_deal_detail_route(client, monkeypatch):
+    """"bulk-move" must reach the bulk handler, not POST /deals/{id}-style routing."""
+    monkeypatch.setattr(service, "bulk_move_deals",
+                        lambda ids, stage: {"ok": True, "updated": 1, "updated_ids": [3], "errors": []})
+    r = client.post("/api/crm/deals/bulk-move", json={"deal_ids": [3], "stage": "lead"})
+    assert r.status_code == 200 and r.json()["updated_ids"] == [3]

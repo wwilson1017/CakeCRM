@@ -31,6 +31,7 @@ import { CustomFieldSettings } from './components/CustomFieldSettings';
 import { TelegramSettings } from './components/TelegramSettings';
 import { ChangePasswordCard } from './components/ChangePasswordCard';
 import { TaskModeCard } from './components/TaskModeCard';
+import { MemoryCard } from './components/MemoryCard';
 import { TeamSettings } from './components/TeamSettings';
 
 // SVG is excluded: all logos are stored/served as image/png, and browsers don't
@@ -213,6 +214,11 @@ export function SettingsPage() {
       {/* Change password (issue #78) — appended last, per the keep-both convention above. */}
       <TeamSettings isMobile={isMobile} />
       <ChangePasswordCard isMobile={isMobile} />
+      {/* Assistant memory (issue #72) — appended last, per the keep-both convention above.
+          Deliberately a Settings entry rather than a seventh top-level nav tab: the CRM
+          nav is for business objects (Pipeline, Contacts, Deals…), and every other
+          assistant-facing surface — identity, Telegram, Gmail — already lives here. */}
+      <MemoryCard />
       {/* Task mode + the no-login todo links (issue #70) — appended last, same convention. */}
       <TaskModeCard isMobile={isMobile} />
     </div>

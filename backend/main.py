@@ -24,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from alerts.router import router as alerts_router
 from assistant.router import router as assistant_router
 from branding.router import router as branding_router
+from context_files.router import router as context_files_router
 from core import postgres
 from core.auth import router as auth_router
 from core.auth_2fa import router as auth_2fa_router
@@ -39,6 +40,7 @@ from crm.todo_web import (
 )
 from gmail.router import router as gmail_router
 from heartbeat.router import router as heartbeat_router
+from memory.router import router as memory_router
 from notifications.router import router as notifications_router
 from providers.router import router as providers_router, setup_router as ai_setup_router
 from reminders.router import router as reminders_router
@@ -218,6 +220,8 @@ app.include_router(reminders_router, prefix="/api/reminders", tags=["reminders"]
 app.include_router(notifications_router, prefix="/api/notifications", tags=["notifications"])
 app.include_router(alerts_router, prefix="/api/alerts", tags=["alerts"])
 app.include_router(heartbeat_router, prefix="/api/heartbeat", tags=["heartbeat"])
+app.include_router(context_files_router, prefix="/api/context-files", tags=["context-files"])
+app.include_router(memory_router, prefix="/api/memory", tags=["memory"])
 app.include_router(gtd_router, prefix="/api/crm/gtd", tags=["todo-gtd"])
 
 # ── No-login todo surfaces (#70) ──────────────────────────────────────────────

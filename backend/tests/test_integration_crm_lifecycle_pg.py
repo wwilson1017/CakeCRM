@@ -63,7 +63,7 @@ def _clean(pg_db):
     pg_execute(
         "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
         "crm_field_definitions, crm_field_values, crm_field_provenance, "
-        "deal_stage_events, proactive_nudges RESTART IDENTITY"
+        "deal_stage_events, proactive_nudges, deal_ai_touch_evidence RESTART IDENTITY"
     )
     yield
 
@@ -787,3 +787,328 @@ def test_a_human_edit_retires_the_badge_in_scan_gaps(pg_db):
     assert analytics_service.scan_gaps(entity_type="contact")["unverified_fields"] == []
     # ...and the two surfaces agree, which is the actual invariant.
     assert provenance_service.get_provenance("contact", contact["id"]) == []
+
+
+# ── Bulk stage moves (#55) ────────────────────────────────────────────────────
+
+def test_bulk_move_end_to_end(pg_db):
+    """The set-based path against real Postgres: `= ANY`, the grouped UPDATEs, and the
+    `unnest` multi-row audit INSERT are all constructs a mock cannot validate."""
+    from core.postgres import pg_fetchall
+    from crm import service
+
+    fresh = service.create_deal("Fresh", stage="lead")
+    reopened = service.mark_deal_lost(service.create_deal("Reopened", stage="negotiation")["id"],
+                                     lost_reason="budget")
+    already = service.create_deal("Already there", stage="qualified")
+    archived = service.create_deal("Archived", stage="lead")
+    service.archive_deal(archived["id"])
+
+    result = service.bulk_move_deals(
+        [fresh["id"], reopened["id"], already["id"], archived["id"], 999_999], "qualified")
+
+    assert result["ok"] is True
+    assert result["updated"] == 2
+    assert result["updated_ids"] == [fresh["id"], reopened["id"]]
+    # Errors arrive in REQUEST order, so the archived deal (listed 4th) precedes the
+    # bogus id (listed 5th) — the operator reads them back in the order they selected.
+    assert result["errors"] == [
+        f"Cannot change the stage of archived deal #{archived['id']} — restore it first",
+        "Deal 999999 not found",
+    ]
+
+    rows = {r["id"]: r for r in pg_fetchall(
+        "SELECT id, stage, lost_reason, archived_at FROM deals")}
+    assert rows[fresh["id"]]["stage"] == "qualified"
+    assert rows[reopened["id"]]["stage"] == "qualified"
+    assert rows[reopened["id"]]["lost_reason"] == "", "leaving 'lost' clears the reason"
+    assert rows[already["id"]]["stage"] == "qualified"
+    assert rows[archived["id"]]["stage"] == "lead", "the archived deal was left alone"
+
+    events = [(e["deal_id"], e["old_stage"], e["new_stage"]) for e in pg_fetchall(
+        "SELECT deal_id, old_stage, new_stage FROM deal_stage_events "
+        "WHERE old_stage <> new_stage AND new_stage = 'qualified' ORDER BY id")]
+    assert (fresh["id"], "lead", "qualified") in events
+    assert (reopened["id"], "lost", "qualified") in events
+    assert not any(e[0] in (already["id"], archived["id"]) for e in events)
+
+
+def test_bulk_move_into_won_settles_probability(pg_db):
+    from core.postgres import pg_fetchall
+    from crm import service
+
+    a = service.create_deal("A", stage="lead", probability=30)
+    b = service.create_deal("B", stage="proposal", probability=70)
+    assert service.bulk_move_deals([a["id"], b["id"]], "won")["updated"] == 2
+
+    probs = {r["id"]: r["probability"] for r in pg_fetchall("SELECT id, probability FROM deals")}
+    assert probs[a["id"]] == 100 and probs[b["id"]] == 100
+
+
+def test_bulk_move_leaves_updated_at_alone_for_a_same_stage_deal(pg_db):
+    """`updated_at` is read as a touch by LAST_TOUCH_SQL, so a no-op move must not
+    reset the deal's staleness clock."""
+    from core.postgres import pg_fetchone
+    from crm import service
+
+    deal = service.create_deal("Parked", stage="qualified")
+    before = pg_fetchone("SELECT updated_at FROM deals WHERE id = %s", (deal["id"],))["updated_at"]
+    service.bulk_move_deals([deal["id"]], "qualified")
+    after = pg_fetchone("SELECT updated_at FROM deals WHERE id = %s", (deal["id"],))["updated_at"]
+    assert before == after
+
+
+def test_bulk_and_single_deal_paths_cannot_drift(pg_db):
+    """The #1323 pin. Twin deals in identical states, one moved through
+    update_deal_stage and one through bulk_move_deals, must end up byte-identical —
+    that is the whole point of sharing _classify_deal_update."""
+    from core.postgres import pg_fetchall, pg_fetchone
+    from crm import service
+
+    def snapshot(deal_id):
+        row = pg_fetchone(
+            "SELECT stage, probability, lost_reason FROM deals WHERE id = %s", (deal_id,))
+        events = [(e["old_stage"], e["new_stage"]) for e in pg_fetchall(
+            "SELECT old_stage, new_stage FROM deal_stage_events WHERE deal_id = %s ORDER BY id",
+            (deal_id,))]
+        return dict(row), events
+
+    for stage_from, target, lost_reason in (
+        ("lead", "qualified", None),      # plain open move
+        ("lead", "won", None),            # closing transition settles probability
+        ("lead", "lost", None),           # the other closing transition
+        ("lost", "negotiation", "budget"),  # reopening clears the stale reason
+    ):
+        def make(name):
+            deal = service.create_deal(name, stage="negotiation", probability=45)
+            if stage_from == "lost":
+                service.mark_deal_lost(deal["id"], lost_reason=lost_reason)
+            else:
+                service.update_deal_stage(deal["id"], stage_from)
+            return deal["id"]
+
+        single_id, bulk_id = make(f"single {stage_from}->{target}"), make(f"bulk {stage_from}->{target}")
+        service.update_deal_stage(single_id, target)
+        service.bulk_move_deals([bulk_id], target)
+
+        single_row, single_events = snapshot(single_id)
+        bulk_row, bulk_events = snapshot(bulk_id)
+        assert single_row == bulk_row, f"{stage_from}->{target} columns drifted"
+        assert single_events == bulk_events, f"{stage_from}->{target} stage log drifted"
+
+
+def test_concurrent_bulk_moves_over_overlapping_ids_do_not_deadlock(pg_db):
+    """The locking claim, exercised rather than asserted.
+
+    `bulk_move_deals` locks `ORDER BY id ... FOR UPDATE` specifically so two batches over
+    overlapping deals can't deadlock. Two threads here submit OVERLAPPING id sets in
+    OPPOSITE request order — the classic deadlock setup — and the ascending lock order is
+    the only reason it holds. A regression that drops the ORDER BY fails here with a
+    psycopg2 DeadlockDetected, which no hermetic test can catch.
+    """
+    import threading
+
+    from crm import service
+
+    ids = [service.create_deal(f"Conc {i}", stage="lead")["id"] for i in range(30)]
+    failures: list[str] = []
+
+    def hammer(target: str, order: list[int]):
+        try:
+            for _ in range(5):
+                service.bulk_move_deals(order, target)
+        except Exception as e:  # a deadlock surfaces here, not as a bad row
+            failures.append(f"{target}: {type(e).__name__}: {e}")
+
+    t1 = threading.Thread(target=hammer, args=("qualified", ids[:22]))
+    t2 = threading.Thread(target=hammer, args=("proposal", list(reversed(ids[8:]))))
+    t1.start(), t2.start()
+    t1.join(), t2.join()
+
+    assert failures == []
+
+    from core.postgres import pg_fetchall
+    stages = {r["stage"] for r in pg_fetchall("SELECT stage FROM deals")}
+    assert stages <= {"lead", "qualified", "proposal"}, "a deal landed in a stage nobody set"
+    # Every logged transition must be a real one — a no-op must never mint an event row.
+    noops = pg_fetchall(
+        "SELECT deal_id FROM deal_stage_events WHERE old_stage = new_stage")
+    assert noops == []
+
+
+# ── Touch-count evidence snapshot (issue #56) ─────────────────────────────────
+
+def test_migration_created_touch_evidence_table_without_an_inbound_fk(pg_db):
+    """FK-less by design: Postgres refuses to TRUNCATE a referenced table unless the
+    referencing table rides the SAME statement, and that statement's exact text is pinned
+    by tests in a hot, often sibling-owned file. (The autouse fixture's TRUNCATE above
+    would already be failing if this table held an inbound FK — assert it explicitly so
+    the reason is recorded, not just implied.)"""
+    from core.postgres import pg_fetchall
+
+    cols = {r["column_name"]: (r["data_type"], r["is_nullable"]) for r in pg_fetchall(
+        "SELECT column_name, data_type, is_nullable FROM information_schema.columns "
+        "WHERE table_name = 'deal_ai_touch_evidence'")}
+    assert cols["deal_id"][0] == "integer"
+    assert cols["verdicts"] == ("jsonb", "NO")
+    assert "computed_at" in cols
+
+    fks = pg_fetchall(
+        "SELECT constraint_type FROM information_schema.table_constraints "
+        "WHERE table_name = 'deal_ai_touch_evidence'")
+    kinds = {r["constraint_type"] for r in fks}
+    assert "FOREIGN KEY" not in kinds
+    assert "PRIMARY KEY" in kinds          # one snapshot row per deal
+
+
+def _seed_deal(title="Evidence deal", stage="qualified"):
+    from crm import service
+    return service.create_deal(title=title, stage=stage)["id"]
+
+
+def test_store_touch_count_writes_count_and_snapshot_atomically(pg_db):
+    from core.postgres import pg_fetchone
+    from crm import touch_count_service as tcs
+
+    deal_id = _seed_deal()
+    deal = {"ai_touch_count_at": None, "ai_touch_evidence_count": None}
+    payload = {"v": 1, "count": 2, "watermark": "2026-01-03T00:00:00+00:00",
+               "evidence_count": 2,
+               "items": [{"source": "note", "source_id": 1, "touch": True, "reason": ""},
+                         {"source": "activity", "source_id": 1, "touch": True, "reason": ""}],
+               "skipped": []}
+    assert tcs._store_touch_count(
+        deal_id, 2, "2026-01-03T00:00:00+00:00", 2, False, deal, payload) == 2
+
+    row = pg_fetchone("SELECT ai_touch_count, ai_touch_evidence_count FROM deals WHERE id = %s",
+                      (deal_id,))
+    snap = pg_fetchone("SELECT verdicts FROM deal_ai_touch_evidence WHERE deal_id = %s",
+                       (deal_id,))
+    assert row["ai_touch_count"] == 2 and row["ai_touch_evidence_count"] == 2
+    assert snap["verdicts"]["count"] == 2 and len(snap["verdicts"]["items"]) == 2
+
+
+def test_store_touch_count_losing_the_cas_leaves_no_orphaned_explanation(pg_db):
+    """A repair that loses the compare-and-swap must not overwrite the explanation that
+    belongs to the count that DID win."""
+    from core.postgres import pg_fetchone
+    from crm import touch_count_service as tcs
+
+    deal_id = _seed_deal()
+    winner = {"v": 1, "count": 1, "watermark": "2026-01-03T00:00:00+00:00",
+              "evidence_count": 1, "items": [], "skipped": []}
+    tcs._store_touch_count(deal_id, 1, "2026-01-03T00:00:00+00:00", 1, False,
+                           {"ai_touch_count_at": None, "ai_touch_evidence_count": None}, winner)
+
+    # A force_write whose CAS keys describe a snapshot that has since moved on.
+    stale_deal = {"ai_touch_count_at": "2020-01-01T00:00:00+00:00",
+                  "ai_touch_evidence_count": 99}
+    loser = {"v": 1, "count": 42, "watermark": "2026-02-01T00:00:00+00:00",
+             "evidence_count": 7, "items": [], "skipped": []}
+    assert tcs._store_touch_count(
+        deal_id, 42, "2026-02-01T00:00:00+00:00", 7, True, stale_deal, loser) is None
+
+    row = pg_fetchone("SELECT ai_touch_count FROM deals WHERE id = %s", (deal_id,))
+    snap = pg_fetchone("SELECT verdicts FROM deal_ai_touch_evidence WHERE deal_id = %s",
+                       (deal_id,))
+    assert row["ai_touch_count"] == 1            # count untouched
+    assert snap["verdicts"]["count"] == 1        # explanation untouched
+
+
+def test_store_touch_count_fallback_drops_the_stale_snapshot(pg_db):
+    from core.postgres import pg_fetchone
+    from crm import touch_count_service as tcs
+
+    deal_id = _seed_deal()
+    payload = {"v": 1, "count": 1, "watermark": "2026-01-03T00:00:00+00:00",
+               "evidence_count": 1, "items": [], "skipped": []}
+    tcs._store_touch_count(deal_id, 1, "2026-01-03T00:00:00+00:00", 1, False,
+                           {"ai_touch_count_at": None, "ai_touch_evidence_count": None}, payload)
+    # A later reply whose verdicts failed validation: count only, snapshot removed.
+    assert tcs._store_touch_count(
+        deal_id, 5, "2026-01-04T00:00:00+00:00", 2, False,
+        {"ai_touch_count_at": "2026-01-03T00:00:00+00:00", "ai_touch_evidence_count": 1},
+        None) == 5
+    assert pg_fetchone("SELECT ai_touch_count FROM deals WHERE id = %s",
+                       (deal_id,))["ai_touch_count"] == 5
+    assert pg_fetchone("SELECT 1 AS x FROM deal_ai_touch_evidence WHERE deal_id = %s",
+                       (deal_id,)) is None
+
+
+def test_truncate_sweep_includes_touch_evidence_and_blocks_id_reuse(pg_db):
+    """Nothing cascades an FK-less table, so a missed sweep would let a deal that reuses a
+    truncated SERIAL id inherit a deleted deal's explanation."""
+    from core.postgres import pg_execute, pg_fetchone
+    from crm import service, touch_count_service as tcs
+
+    deal_id = _seed_deal()
+    tcs._store_touch_count(deal_id, 3, "2026-01-03T00:00:00+00:00", 1, False,
+                           {"ai_touch_count_at": None, "ai_touch_evidence_count": None},
+                           {"v": 1, "count": 3, "watermark": "2026-01-03T00:00:00+00:00",
+                            "evidence_count": 1, "items": [], "skipped": []})
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM deal_ai_touch_evidence")["c"] == 1
+
+    service.clear_all()
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM deal_ai_touch_evidence")["c"] == 0
+
+    # RESTART IDENTITY hands the same id to the next deal — it must inherit nothing.
+    reused_id = _seed_deal(title="Fresh deal")
+    assert reused_id == deal_id
+    out = tcs.get_touch_evidence(reused_id)
+    assert out["verdict_state"] == "none" and out["counted"] is None and out["events"] == []
+    pg_execute("SELECT 1")          # connection still usable after the sweep
+
+
+def test_get_touch_evidence_round_trip_and_reconciliation(pg_db):
+    """End-to-end over real rows: verdicts render against live notes/activities, a new note
+    makes the explanation stale, archiving a judged note makes it superseded, and a stage
+    change shows up as a deterministic never-counted row."""
+    from crm import chatter_service, service, touch_count_service as tcs
+
+    deal_id = _seed_deal()
+    note = chatter_service.add_note("deal", deal_id, "Called the buyer, wants a sample")
+    activity = service.log_activity("email", note="replied on pricing", deal_id=deal_id)
+
+    _deal, chatter, activities, _snap, _stage, _trunc = tcs._load_evidence(deal_id)
+    entries, skipped = tcs.build_evidence_entries(_deal, chatter, activities)
+    watermark = tcs.evidence_watermark(_deal, chatter, activities)
+    evidence_count = len(chatter) + len(activities)
+    verdicts = [{"touch": e["source_id"] == note["id"] and e["source"] == "note",
+                 "reason": "" if e["source"] == "note" else "bulk mail, no reply"}
+                for e in entries]
+    payload = tcs._build_payload(1, watermark, evidence_count, entries, verdicts, skipped)
+    assert tcs._store_touch_count(deal_id, 1, watermark, evidence_count, False,
+                                  {"ai_touch_count_at": None,
+                                   "ai_touch_evidence_count": None}, payload) == 1
+
+    out = tcs.get_touch_evidence(deal_id)
+    assert out["verdict_state"] == "current" and out["counted"] == 1
+    by_source = {(e["source"], e["source_id"]): e for e in out["events"]}
+    assert by_source[("note", note["id"])]["state"] == "touch"
+    assert by_source[("activity", activity["id"])]["state"] == "not_touch"
+    assert by_source[("activity", activity["id"])]["reason"] == "bulk mail, no reply"
+
+    # A stage change adds a deterministic row that needs no AI at all.
+    service.update_deal_stage(deal_id, "proposal")
+    stage_rows = [e for e in tcs.get_touch_evidence(deal_id)["events"]
+                  if e["source"] == "stage_move"]
+    assert len(stage_rows) == 1 and stage_rows[0]["state"] == "stage_move"
+
+    # A new note moves the evidence past what was judged.
+    chatter_service.add_note("deal", deal_id, "Follow-up call booked")
+    assert tcs.get_touch_evidence(deal_id)["verdict_state"] == "stale"
+
+    # Editing the judged note is caught by the stored line digest, even though the edit
+    # moves neither created_at nor the row count.
+    chatter_service.update_note(note["id"], "Completely different wording now")
+    edited = tcs.get_touch_evidence(deal_id)
+    note_row = next(e for e in edited["events"]
+                    if e["source"] == "note" and e["source_id"] == note["id"])
+    assert note_row["state"] == "edited_since"
+    assert edited["verdict_state"] in ("stale", "superseded")
+
+    # Archiving the judged note removes the counted row → the sum can no longer be shown.
+    chatter_service.archive_note(note["id"])
+    after = tcs.get_touch_evidence(deal_id)
+    assert after["verdict_state"] == "superseded"
+    assert ("note", note["id"]) not in {(e["source"], e["source_id"]) for e in after["events"]}

@@ -207,7 +207,9 @@ def test_invalidate_fact_bad_id(rec):
 
 def test_invalidate_fact_not_found(rec):
     rec(fetchone=None)
-    assert service.invalidate_fact(999) == {"error": "Fact 999 not found"}
+    # The structured `not_found` flag (issue #72) lets the REST layer answer 404 rather
+    # than 400 without matching on the message wording.
+    assert service.invalidate_fact(999) == {"error": "Fact 999 not found", "not_found": True}
 
 
 # ── track_retrieval_for ─────────────────────────────────────────────────────────

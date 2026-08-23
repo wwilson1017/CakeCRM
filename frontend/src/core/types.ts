@@ -256,3 +256,33 @@ export interface CrmAnalytics {
     }[];
   };
 }
+
+// GET /api/crm/deals/:id/touch-count/evidence (issue #56) — the per-event verdicts
+// behind the AI touch count. Read-only stored facts; the endpoint never re-runs AI.
+export type AiTouchEventState =
+  | 'touch' | 'not_touch' | 'not_evaluated' | 'edited_since' | 'excluded_empty' | 'stage_move';
+
+// How current the stored explanation is. 'none' also covers counts written before #56.
+export type AiTouchVerdictState = 'current' | 'stale' | 'superseded' | 'none';
+
+export interface AiTouchEvidenceEvent {
+  source: 'note' | 'activity' | 'deal_notes' | 'stage_move';
+  source_id: number | null;
+  event_at: string;
+  line: string;
+  state: AiTouchEventState;
+  reason: string;
+}
+
+export interface AiTouchEvidenceResponse {
+  deal_id: number;
+  open: boolean;
+  stage: string;
+  ai_touch_count: number | null;
+  computed_at: string | null;
+  verdict_state: AiTouchVerdictState;
+  counted: number | null;
+  evaluated: number;
+  truncated: boolean;
+  events: AiTouchEvidenceEvent[];
+}

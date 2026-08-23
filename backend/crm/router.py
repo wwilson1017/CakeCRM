@@ -24,8 +24,10 @@ Deals:
   GET    /api/crm/deals/:id             — detail
   POST   /api/crm/deals                 — create
   PUT    /api/crm/deals/:id             — update
+  POST   /api/crm/deals/bulk-move       — move many deals to one stage (one transaction)
   POST   /api/crm/deals/touch-count/backfill        — recompute AI touch counts (?scope=null|all&force=)
   GET    /api/crm/deals/touch-count/backfill/status — backfill progress
+  GET    /api/crm/deals/:id/touch-count/evidence    — per-event verdicts behind the count
 
 Tasks:
   GET    /api/crm/tasks                 — filtered list
@@ -84,7 +86,7 @@ import logging
 import psycopg2
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, StrictInt, field_validator
 
 from core.auth import get_current_user, require_admin
 from crm import (
@@ -179,6 +181,18 @@ class DealUpdate(BaseModel):
     currency: str | None = None
     company_id: int | None = None
     owner_id: int | None = None
+
+
+class BulkDealMove(BaseModel):
+    # StrictInt, not int: Pydantic's lax mode coerces JSON `true` to 1, `1.0` to 1 and
+    # "3" to 3, so a malformed body would silently move deal #1. Only the model can catch
+    # that — by the time the service runs, the bool has already become a real int.
+    # Positivity is checked in the service instead, so every caller gets it.
+    deal_ids: list[StrictInt]
+    stage: str
+    # Deliberately no Pydantic max_length on deal_ids: the service's BULK_MOVE_MAX is
+    # the single definition of the cap, shared with the agent-tool path, and its
+    # refusal is a renderable sentence where a Pydantic 422 detail array is not.
 
 
 class CompanyCreate(BaseModel):
@@ -447,6 +461,25 @@ async def update_deal(deal_id: int, body: DealUpdate, user=Depends(get_current_u
     return result
 
 
+# Placed right after PUT /deals/{deal_id}, the route it batches. No path collision:
+# create is POST /deals and the touch-count routes have three segments, so there is no
+# other POST /deals/{something} for "bulk-move" to shadow.
+@router.post("/deals/bulk-move")
+async def bulk_move_deals(body: BulkDealMove, user=Depends(get_current_user)):
+    """Move many deals to one stage in a single transaction (issue #55).
+
+    Always HTTP 200 on a reached handler: whole-request refusals come back as
+    ``{"ok": false, "errors": [...]}`` and per-deal problems ride ``errors`` alongside
+    ``ok: true``. That split is what lets the board tell "the server refused, nothing
+    was written" apart from "the request never completed, the outcome is unknown" —
+    only transport and 5xx failures throw at the client.
+
+    Off the event loop because the post-commit rescore recomputes one lead score per
+    updated deal and linked contact, bounded by BULK_MOVE_MAX.
+    """
+    return await run_in_threadpool(crm.bulk_move_deals, body.deal_ids, body.stage)
+
+
 # ── AI touch counts (issue #16) ───────────────────────────────────────────────
 # Recompute happens event-driven off note/activity writes; these endpoints are the
 # operator repair/observability surface. The path prefix (/deals/touch-count/…) has a
@@ -470,8 +503,26 @@ async def touch_count_backfill(
 
 @router.get("/deals/touch-count/backfill/status")
 async def touch_count_backfill_status(user=Depends(get_current_user)):
-    """Backfill progress: remaining never-computed open deals + this process's queue depth."""
+    """Backfill progress: remaining never-computed open deals + this process's queue depth,
+    plus per-line verdict health (ok/fallback/failed) since process start (issue #56)."""
     return touch_count_service.backfill_status()
+
+
+@router.get("/deals/{deal_id}/touch-count/evidence")
+async def touch_count_evidence(deal_id: int, user=Depends(get_current_user)):
+    """Every evidence event behind a deal's AI touch count, with its verdict (issue #56).
+
+    Reads stored facts only — never re-runs AI. `verdict_state` says how current the
+    explanation is (current/stale/superseded/none). Deterministic stage-move rows come from
+    deal_stage_events and need no provider; field edits have no event log in CakeCRM at all
+    and so are absent. No pagination: bounded by construction (MAX_CHATTER_EVIDENCE +
+    MAX_ACTIVITY_EVIDENCE + MAX_STAGE_EVENT_ROWS + 1). Counts written before #56 report
+    verdict_state "none" — POST /deals/touch-count/backfill?scope=all is the repair that
+    fills them in."""
+    result = await run_in_threadpool(touch_count_service.get_touch_evidence, deal_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    return result
 
 
 # ── Lead scores (issue #18) ───────────────────────────────────────────────────

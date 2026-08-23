@@ -75,6 +75,9 @@ def _no_touch_count_daemon(monkeypatch):
     monkeypatch.setattr(tcs, "_pending", {})
     monkeypatch.setattr(tcs, "_worker", None)
     monkeypatch.setattr(tcs, "_last_backfill_at", None)
+    # #56's verdict-health counters are module-level too — a fresh dict per test keeps
+    # one test's ok/fallback/failed tallies out of the next one's assertions.
+    monkeypatch.setattr(tcs, "_verdict_stats", {"ok": 0, "fallback": 0, "failed": 0})
     yield
 
 
@@ -84,8 +87,13 @@ class FakeCursor:
     adapter: raw psycopg2 cursors return TUPLES (positional), which is what
     credentials._load and model_tiers.set_overrides consume."""
 
-    def __init__(self, conn):
+    def __init__(self, conn, cursor_id=0):
         self._conn = conn
+        # Which cursor ran a statement, so a test can prove two writes shared ONE
+        # transaction. Without it, statements from separate `with get_connection()` blocks
+        # are indistinguishable — every cursor appends to the same `executed` list — and a
+        # test asserting atomicity would pass even if the code split the work in two.
+        self.cursor_id = cursor_id
 
     @property
     def description(self):
@@ -101,9 +109,11 @@ class FakeCursor:
 
     def execute(self, sql, params=()):
         self._conn.executed.append((" ".join(sql.split()), params))
+        self._conn.executed_by.append(self.cursor_id)
 
     def executemany(self, sql, seq_of_params):
         self._conn.executed.append((" ".join(sql.split()), list(seq_of_params)))
+        self._conn.executed_by.append(self.cursor_id)
 
     def fetchone(self):
         return self._conn.fetchone_results.pop(0) if self._conn.fetchone_results else None
@@ -117,17 +127,26 @@ class FakeConn:
         self.executed = []
         self.fetchone_results = list(fetchone_results or [])
         self.fetchall_results = list(fetchall_results or [])
+        # Transaction-shape bookkeeping. `entries` counts `with get_connection()` blocks and
+        # `executed_by` records which cursor ran each statement, so a test can assert "these
+        # two writes rode ONE transaction" — an atomicity claim that is otherwise unfalsifiable
+        # here, since one FakeConn is reused for every block.
+        self.entries = 0
+        self.cursors = 0
+        self.executed_by = []
         # Column names for cursor.description, when the code under test converts
         # rows with row_to_dict. None mirrors a cursor that returned no rows.
         self.description = list(description) if description else None
 
     def cursor(self):
-        return FakeCursor(self)
+        self.cursors += 1
+        return FakeCursor(self, cursor_id=self.cursors)
 
 
 def _make_get_connection(conn):
     @contextmanager
     def _get_connection():
+        conn.entries += 1
         yield conn
     return _get_connection
 

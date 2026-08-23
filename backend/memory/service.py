@@ -320,10 +320,29 @@ def invalidate_fact(fact_id: int, valid_to: str | None = None) -> dict:
     # repeat call is idempotent rather than a misleading "not found".
     existing = pg_fetchone("SELECT id, valid_to FROM memory_facts WHERE id = %s", (fact_id,))
     if not existing:
-        return {"error": f"Fact {fact_id} not found"}
+        # Structured flag alongside the message so the REST layer (#72) can answer 404
+        # instead of 400 without matching on the wording — rephrasing this string must
+        # never change an HTTP status. Tool callers ignore the extra key.
+        return {"error": f"Fact {fact_id} not found", "not_found": True}
     existing["ok"] = True
     existing["already_invalidated"] = True
     return existing
+
+
+def delete_fact(fact_id: int) -> bool:
+    """Hard-delete a fact. Returns False when there was no such row.
+
+    Deliberately NOT exposed as an agent tool — the assistant's way to retire a fact is
+    ``invalidate_fact``, which preserves the temporal record so point-in-time queries
+    stay honest. This exists only for the human's Memory page (issue #72): a user who
+    finds something wrong, private, or captured in error needs it GONE, not
+    valid_to-stamped and still readable.
+    """
+    try:
+        fact_id = int(fact_id)
+    except (TypeError, ValueError):
+        return False
+    return bool(pg_execute("DELETE FROM memory_facts WHERE id = %s", (fact_id,)))
 
 
 # ---------------------------------------------------------------------------
