@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../core/api/client';
+import { useAuth } from '../core/auth/AuthContext';
+import { OwnerScopeToggle, useOwnerScope } from './components/OwnerScopeToggle';
 import type { CrmContact } from '../core/types';
 import { ContactForm } from './components/ContactForm';
 import { SmartImportModal } from './components/SmartImportModal';
@@ -21,6 +23,8 @@ const COLS = '2fr 1.5fr 2fr 1.2fr 80px 72px';
 const PAGE_SIZE = 50;
 
 export function ContactsPage() {
+  const { currentUser } = useAuth();
+  const [mineOnly, setMineOnly] = useOwnerScope('crm_contacts_mine');
   const [contacts, setContacts] = useState<CrmContact[]>([]);
   const [total, setTotal] = useState(0);
   const [search, setSearch] = useState('');
@@ -57,10 +61,12 @@ export function ContactsPage() {
     if (status !== 'all') params.set('status', status);
     if (tagFilter.length) params.set('tags', tagFilter.join(','));
     if (sort !== 'updated_at') params.set('sort', sort);  // #18
+    // 'Mine' is just owner_id=<me>; omitting it means everyone (issue #60).
+    if (mineOnly && currentUser) params.set('owner_id', String(currentUser.id));
     params.set('limit', String(PAGE_SIZE));
     params.set('offset', String(offset));
     return api<{ contacts: CrmContact[]; total: number }>(`/api/crm/contacts?${params}`);
-  }, [search, status, tagFilter, sort]);
+  }, [search, status, tagFilter, sort, mineOnly, currentUser]);
 
   const reload = useCallback(async () => {
     const id = ++loadIdRef.current;
@@ -168,6 +174,7 @@ export function ContactsPage() {
             );
           })}
         </div>
+        <OwnerScopeToggle mineOnly={mineOnly} onChange={setMineOnly} />
         {availableTags.length > 0 && (
           <div ref={tagDropdownRef} style={{ position: 'relative', flexShrink: 0 }}>
             <button onClick={() => setTagDropdownOpen(v => !v)} style={{

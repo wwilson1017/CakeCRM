@@ -1,6 +1,10 @@
 /**
  * CakeCRM — Login page.
- * Password step, then optional TOTP 2FA step (code or backup code).
+ * Email + password step, then optional TOTP 2FA step (code or backup code).
+ *
+ * The email field arrived with accounts (issue #60). An install upgrading from the
+ * password-only build signs in with the bootstrap admin address, which the backend
+ * logs on first boot and the README documents as admin@cakecrm.local by default.
  */
 
 import { useState, useEffect, useRef, type FormEvent } from 'react';
@@ -10,6 +14,7 @@ import { useAuth } from '../core/auth/AuthContext';
 export function LoginPage() {
   const { login, verify2fa } = useAuth();
   const navigate = useNavigate();
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -31,7 +36,7 @@ export function LoginPage() {
     setError('');
     setLoading(true);
     try {
-      const result = await login(password);
+      const result = await login(email, password);
       if ('requires2fa' in result) {
         setPendingToken(result.pendingToken);
         setStep('2fa');
@@ -78,19 +83,43 @@ export function LoginPage() {
 
         {step === 'password' ? (
           <form onSubmit={handlePasswordSubmit}>
-            <label className="block text-xs font-medium uppercase tracking-wider text-ck-ink-soft mb-1.5">
-              Password
+            <label
+              htmlFor="login-email"
+              className="block text-xs font-medium uppercase tracking-wider text-ck-ink-soft mb-1.5"
+            >
+              Email
             </label>
             <input
-              type="password"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              placeholder="Enter your password"
+              id="login-email"
+              type="email"
+              autoComplete="username"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              placeholder="you@example.com"
               autoFocus
               className={inputClass}
             />
+            <label
+              htmlFor="login-password"
+              className="block text-xs font-medium uppercase tracking-wider text-ck-ink-soft mb-1.5 mt-4"
+            >
+              Password
+            </label>
+            <input
+              id="login-password"
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              placeholder="Enter your password"
+              className={inputClass}
+            />
             {error && <p className="text-ck-red text-sm mt-3 mb-0">{error}</p>}
-            <button type="submit" disabled={loading || !password} className={`${buttonClass} mt-5`}>
+            <button
+              type="submit"
+              disabled={loading || !email || !password}
+              className={`${buttonClass} mt-5`}
+            >
               {loading ? 'Signing in...' : 'Sign in'}
             </button>
           </form>

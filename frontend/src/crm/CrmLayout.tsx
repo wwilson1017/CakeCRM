@@ -164,7 +164,7 @@ interface SetupStatus { ai_ready: boolean; credentials_present: boolean; }
 export function CrmLayout() {
   const isMobile = useIsMobile();
   const navigate = useNavigate();
-  const { logout } = useAuth();
+  const { logout, isAdmin } = useAuth();
   const { branding, logoVersion } = useBranding();
   const [showMenu, setShowMenu] = useState(false);
   const [status, setStatus] = useState<DemoStatus | null>(null);
@@ -293,7 +293,7 @@ export function CrmLayout() {
                 <ThemeToggle />
                 <NotificationsBell />
                 <Link to="/crm/settings" style={actionLink}>Settings</Link>
-                <Link to="/setup" style={actionLink}>AI Setup</Link>
+                {isAdmin && <Link to="/setup" style={actionLink}>AI Setup</Link>}
                 <button onClick={logout} style={actionLink}>Sign out</button>
               </div>
             </>
@@ -345,11 +345,15 @@ export function CrmLayout() {
         <MobileMenuDrawer onClose={() => setShowMenu(false)} navigate={navigate} onSignOut={logout} />
       )}
 
-      {status?.sample_data_loaded && (
+      {/* Both banners lead somewhere admin-only since #60 — demo-clear is a
+          destructive global operation, and the AI nudge links to provider setup — so
+          a member is shown neither. Same rule as the settings cards: don't offer an
+          action that can only 403. */}
+      {status?.sample_data_loaded && isAdmin && (
         <DemoBanner onClear={handleClearDemo} isMobile={isMobile} />
       )}
 
-      {showAiNudge && (
+      {showAiNudge && isAdmin && (
         <AiKeyNudge onDismiss={handleDismissAiPrompt} isMobile={isMobile} />
       )}
 

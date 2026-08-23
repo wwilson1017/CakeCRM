@@ -75,6 +75,11 @@ LABELS=(
   "evidence-posted|0e8a16|Verification evidence recorded on the PR"
   "evidence-failed|b60205|Verification found a bug that was not fixed this pass"
   "reporter-greenlit|0e8a16|Reporter approved the verification evidence"
+  # Intake marker for the cake_os sync bot (docs/SYNC.md). The sync-intake
+  # workflow also creates this label itself, so keep the color/description here
+  # identical to the one in .github/workflows/sync-intake.yml — otherwise the two
+  # would take turns overwriting each other.
+  "sync-intake|fbca04|Automated cake_os merge intake — triage at first-look"
 )
 
 # One list call, reused for the create/update messaging. The high limit + `--force` on

@@ -85,9 +85,15 @@ def _bounded_offset(offset: int) -> int:
     return max(0, offset)
 
 
-def add_note(entity_type: str, entity_id: int, message: str) -> dict:
+def add_note(entity_type: str, entity_id: int, message: str,
+             author_id: int | None = None) -> dict:
     """Append a note to a deal or contact. Raises ValueError on invalid input or a
     non-existent target.
+
+    ``author_id`` is who WROTE the note (issue #60), which is not who owns the record
+    — per-rep activity credits the author. NULL means unattributed, which is the
+    honest answer for a note the assistant wrote on someone's behalf: Phase A does
+    not thread identity into tool executors, so it undercounts rather than guessing.
 
     The existence check and the INSERT run in one transaction with the target row
     locked FOR UPDATE (CLAUDE.md: check-then-write spans reads and updates → one
@@ -104,9 +110,9 @@ def add_note(entity_type: str, entity_id: int, message: str) -> dict:
         if cur.fetchone() is None:
             raise ValueError(f"No {entity_type} with id {entity_id}")
         cur.execute(
-            """INSERT INTO crm_chatter (entity_type, entity_id, message, created_at)
-               VALUES (%s, %s, %s, %s) RETURNING *""",
-            (entity_type, entity_id, text, now),
+            """INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, author_id)
+               VALUES (%s, %s, %s, %s, %s) RETURNING *""",
+            (entity_type, entity_id, text, now, author_id),
         )
         # Hydrate from the INSERT's own row, inside the transaction — a post-commit
         # re-select could return None if a concurrent delete removes the row first.

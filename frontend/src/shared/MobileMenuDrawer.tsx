@@ -1,4 +1,5 @@
 import type { ComponentType, ReactNode } from 'react';
+import { useAuth } from '../core/auth/AuthContext';
 import { IconChart, IconUsers, IconBuilding, IconFunnel, IconCheck, IconCalendar, IconSettings, IconSparkle, IconLock } from './icons';
 import { BG_CARD, INK, INK_MUTE, LINE, ACCENT_TEXT, FONT_DISPLAY } from './styles';
 
@@ -16,6 +17,7 @@ interface NavItem {
 }
 
 export function MobileMenuDrawer({ onClose, navigate, onSignOut, children }: MobileMenuDrawerProps) {
+  const { isAdmin } = useAuth();
   const go = (path: string) => () => { onClose(); navigate(path); };
   const items: NavItem[] = [
     { icon: IconChart, label: 'Dashboard', action: go('/crm') },
@@ -25,8 +27,12 @@ export function MobileMenuDrawer({ onClose, navigate, onSignOut, children }: Mob
     { icon: IconCheck, label: 'Tasks', action: go('/crm/tasks') },
     { icon: IconCalendar, label: 'Reminders', action: go('/crm/reminders') },
     { icon: IconSettings, label: 'Settings', action: go('/crm/settings') },
-    { icon: IconSparkle, label: 'AI Setup', action: go('/setup') },
   ];
+  // AI provider setup is admin-only since #60, so a member is not offered the
+  // route — the desktop header applies the same rule.
+  if (isAdmin) {
+    items.push({ icon: IconSparkle, label: 'AI Setup', action: go('/setup') });
+  }
   if (onSignOut) {
     items.push({ icon: IconLock, label: 'Sign out', action: () => { onClose(); onSignOut(); } });
   }

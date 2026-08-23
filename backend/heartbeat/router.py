@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-from core.auth import get_current_user
+from core.auth import get_current_user, require_admin
 from core.config import settings
 from core.postgres import pg_fetchone
 from heartbeat import service
@@ -32,7 +32,7 @@ class RunNowRequest(BaseModel):
 
 
 @router.post("/run-now")
-async def run_now(req: RunNowRequest, _user: dict = Depends(get_current_user)):
+async def run_now(req: RunNowRequest, _user: dict = Depends(require_admin)):
     """Run one heartbeat tick now. Reminders always fire (deterministic baseline
     delivery); the system AI turn runs only when ``run_ai_turn`` is true."""
     report = await run_in_threadpool(
@@ -71,7 +71,7 @@ class ProactiveRequest(BaseModel):
 
 
 @router.post("/proactive")
-async def set_proactive(req: ProactiveRequest, _user: dict = Depends(get_current_user)):
+async def set_proactive(req: ProactiveRequest, _user: dict = Depends(require_admin)):
     """Turn the daily digest + stale-record nudges on or off (#22 Phase 3).
 
     Keyless: both behaviors are deterministic and run with no AI provider configured,

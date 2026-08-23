@@ -14,6 +14,7 @@ import os
 
 import psycopg2
 import pytest
+from conftest import fake_admin
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -80,7 +81,7 @@ def _client():
     from crm.router import router as crm_router
     app = FastAPI()
     app.include_router(crm_router, prefix="/api/crm")
-    app.dependency_overrides[get_current_user] = lambda: {"sub": "u"}
+    app.dependency_overrides[get_current_user] = fake_admin
     return TestClient(app)
 
 

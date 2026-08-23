@@ -19,10 +19,12 @@ import pytest
 from crm import gtd_service, service
 
 # Columns of `tasks` after the #70 migration, in the order RETURNING * yields them.
+# `owner_id` sits between the original columns and the GTD ones because #60's
+# migration is the earlier timestamp, so ALTER TABLE appends it first.
 _TASK_COLS = [
     "id", "contact_id", "deal_id", "title", "description", "due_date", "completed",
-    "priority", "created_at", "updated_at", "status", "star", "context", "tags",
-    "repeat", "auto_star_on_due", "project_id", "completed_at", "source",
+    "priority", "created_at", "updated_at", "owner_id", "status", "star", "context",
+    "tags", "repeat", "auto_star_on_due", "project_id", "completed_at", "source",
 ]
 
 
@@ -31,6 +33,7 @@ def _task_row(**overrides) -> tuple:
         "id": 1, "contact_id": None, "deal_id": None, "title": "Water the plants",
         "description": "", "due_date": "2026-08-14", "completed": 1,
         "priority": "medium", "created_at": None, "updated_at": None,
+        "owner_id": None,
         "status": "done", "star": False, "context": "@home", "tags": "[]",
         "repeat": "weekly", "auto_star_on_due": False, "project_id": None,
         "completed_at": None, "source": "ui",
@@ -111,6 +114,15 @@ def test_completing_a_repeating_task_spawns_the_next_occurrence(txn):
     assert "2026-08-21" in spawn[1]
 
 
+def test_the_spawned_occurrence_keeps_the_owner(txn):
+    """A repeating task someone owns (#60) must not come back unassigned — the spawn
+    is the one task-INSERT that copies its fields from an existing row."""
+    cur = txn(prior_status="next_action", repeat="weekly", owner_id=7)
+    service.update_task(1, status="done")
+    _, params = cur.inserted()
+    assert params[6] == 7
+
+
 def test_a_second_complete_does_not_spawn_again(txn):
     """The row lock plus the prior-status read make the transition fire exactly once —
     two concurrent completes serialize, and the second sees status='done' already."""
@@ -137,9 +149,10 @@ def test_the_spawned_occurrence_clears_the_star(txn):
     cur = txn(prior_status="next_action", repeat="weekly", star=True, due_date="2026-08-14")
     service.update_task(1, status="done")
     _, params = cur.inserted()
-    # star is the 8th INSERT column (title, description, due_date, contact_id,
-    # deal_id, priority, status, star, ...) — today's priority does not carry over.
-    assert params[7] is False
+    # star is the 9th INSERT column (title, description, due_date, contact_id,
+    # deal_id, priority, owner_id, status, star, ...) — today's priority does not
+    # carry over.
+    assert params[8] is False
 
 
 def test_auto_star_restars_only_when_the_spawn_is_due_today(txn):
@@ -147,7 +160,7 @@ def test_auto_star_restars_only_when_the_spawn_is_due_today(txn):
               auto_star_on_due=True, due_date="2026-08-14")
     service.update_task(1, status="done")
     _, params = cur.inserted()
-    assert params[7] is True  # next occurrence is 2026-08-21 == today
+    assert params[8] is True  # next occurrence is 2026-08-21 == today
 
 
 def test_auto_star_does_not_restar_when_completed_two_intervals_late(txn):
@@ -155,7 +168,7 @@ def test_auto_star_does_not_restar_when_completed_two_intervals_late(txn):
               auto_star_on_due=True, due_date="2026-08-01")
     service.update_task(1, status="done")
     _, params = cur.inserted()
-    assert params[7] is False  # re-anchored past today, so not starred
+    assert params[8] is False  # re-anchored past today, so not starred
 
 
 def test_a_dropped_repeating_task_returns_as_a_next_action(txn):
