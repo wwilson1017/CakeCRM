@@ -86,7 +86,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, field_validator
 
-from core.auth import get_current_user
+from core.auth import get_current_user, require_admin
 from crm import (
     chatter_service,
     field_service,
@@ -136,6 +136,7 @@ class ContactCreate(BaseModel):
     tags: str = ""
     notes: str = ""
     company_id: int | None = None
+    owner_id: int | None = None
 
 
 class ContactUpdate(BaseModel):
@@ -149,6 +150,7 @@ class ContactUpdate(BaseModel):
     tags: str | None = None
     notes: str | None = None
     company_id: int | None = None
+    owner_id: int | None = None
 
 
 class DealCreate(BaseModel):
@@ -161,6 +163,7 @@ class DealCreate(BaseModel):
     probability: int = 0
     currency: str = "USD"
     company_id: int | None = None
+    owner_id: int | None = None
 
 
 class DealUpdate(BaseModel):
@@ -173,6 +176,7 @@ class DealUpdate(BaseModel):
     probability: int | None = None
     currency: str | None = None
     company_id: int | None = None
+    owner_id: int | None = None
 
 
 class CompanyCreate(BaseModel):
@@ -184,6 +188,7 @@ class CompanyCreate(BaseModel):
     notes: str = ""
     source: str = ""
     status: str = "active"
+    owner_id: int | None = None
 
 
 class CompanyUpdate(BaseModel):
@@ -195,6 +200,7 @@ class CompanyUpdate(BaseModel):
     notes: str | None = None
     source: str | None = None
     status: str | None = None
+    owner_id: int | None = None
 
 
 class TaskCreate(BaseModel):
@@ -204,6 +210,7 @@ class TaskCreate(BaseModel):
     contact_id: int | None = None
     deal_id: int | None = None
     priority: str = "medium"
+    owner_id: int | None = None
 
 
 class TaskUpdate(BaseModel):
@@ -214,6 +221,7 @@ class TaskUpdate(BaseModel):
     deal_id: int | None = None
     priority: str | None = None
     completed: int | None = None
+    owner_id: int | None = None
 
 
 class ActivityCreate(BaseModel):
@@ -285,20 +293,27 @@ class FieldValuesUpdate(BaseModel):
 async def list_contacts(
     q: str = "", status: str = "", tags: str = "", sort: str = "",
     limit: int = Query(50, ge=1, le=1000), offset: int = Query(0, ge=0),
+    owner_id: int | None = None,
     user=Depends(get_current_user),
 ):
+    # owner_id absent = everyone, so an install that never assigns owners behaves
+    # exactly as before. "Mine" is just this param set to the caller's own id — no
+    # separate flag, no magic value.
     # #18: sort is allowlisted in the service layer (unknown -> updated_at); applied to
     # BOTH the search (?q=) and browse branches so the UI's active sort is never ignored.
     sort = sort or "updated_at"
     if q:
         contacts = crm.search_contacts(
             q, status=status or None, tags=tags or None, limit=limit, offset=offset, sort=sort,
+            owner_id=owner_id,
         )
-        total = crm.count_search_contacts(q, status=status or None, tags=tags or None)
+        total = crm.count_search_contacts(
+            q, status=status or None, tags=tags or None, owner_id=owner_id
+        )
         return {"contacts": contacts, "total": total}
     return crm.list_contacts(
         offset=offset, limit=limit,
-        status=status or None, tags=tags or None, sort=sort,
+        status=status or None, tags=tags or None, sort=sort, owner_id=owner_id,
     )
 
 
@@ -316,12 +331,34 @@ async def get_contact(contact_id: int, user=Depends(get_current_user)):
     return result
 
 
+def _create_payload(body, user: dict) -> dict:
+    """model_dump() for a create, defaulting the owner to the caller (issue #60).
+
+    Pydantic's model_dump() collapses "field absent" and "field explicitly null" into
+    the same None, so model_fields_set is the only way to tell them apart — and here
+    they mean opposite things:
+
+      owner_id absent   -> you created it, so it is yours (the common case; every
+                           pre-#60 client and every existing test hits this path)
+      owner_id: null    -> deliberately unassigned
+      owner_id: <id>    -> assigned to that person
+
+    Assignment to a DEACTIVATED user is allowed on purpose: reassigning a departed
+    rep's records to their own name is how history stays honest. The UI simply does
+    not offer inactive users in the picker.
+    """
+    data = body.model_dump()
+    if "owner_id" not in body.model_fields_set:
+        data["owner_id"] = user["id"]
+    return data
+
+
 @router.post("/contacts")
 async def create_contact(body: ContactCreate, user=Depends(get_current_user)):
     if not body.name.strip():
         raise HTTPException(status_code=400, detail="Name is required")
     try:
-        return crm.create_contact(**body.model_dump())
+        return crm.create_contact(**_create_payload(body, user))
     except psycopg2.errors.ForeignKeyViolation:
         raise HTTPException(status_code=400, detail="Referenced company does not exist") from None
 
@@ -333,7 +370,7 @@ async def update_contact(contact_id: int, body: ContactUpdate, user=Depends(get_
     # unlinked from its company. Other columns are NOT NULL — dropping their nulls.
     updates = {
         k: v for k, v in body.model_dump(exclude_unset=True).items()
-        if v is not None or k == "company_id"
+        if v is not None or k in ("company_id", "owner_id")
     }
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
@@ -379,7 +416,7 @@ async def create_deal(body: DealCreate, user=Depends(get_current_user)):
     if not body.title.strip():
         raise HTTPException(status_code=400, detail="Title is required")
     try:
-        return crm.create_deal(**body.model_dump())
+        return crm.create_deal(**_create_payload(body, user))
     except psycopg2.errors.ForeignKeyViolation:
         raise HTTPException(status_code=400, detail="Referenced contact or company does not exist") from None
 
@@ -391,7 +428,7 @@ async def update_deal(deal_id: int, body: DealUpdate, user=Depends(get_current_u
     # can be unlinked. Other columns are NOT NULL — dropping their nulls.
     updates = {
         k: v for k, v in body.model_dump(exclude_unset=True).items()
-        if v is not None or k in ("contact_id", "company_id")
+        if v is not None or k in ("contact_id", "company_id", "owner_id")
     }
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
@@ -417,7 +454,7 @@ async def update_deal(deal_id: int, body: DealUpdate, user=Depends(get_current_u
 async def touch_count_backfill(
     scope: str = Query("null", pattern="^(null|all)$"),
     force: bool = False,
-    user=Depends(get_current_user),
+    user=Depends(require_admin),
 ):
     """Backfill AI touch counts. scope=null (default) computes never-computed open deals;
     scope=all re-computes every open deal (repair). force bypasses the process-local
@@ -443,7 +480,7 @@ async def touch_count_backfill_status(user=Depends(get_current_user)):
 @router.post("/scores/backfill")
 async def scores_backfill(
     scope: str = Query("null", pattern="^(null|all)$"),
-    user=Depends(get_current_user),
+    user=Depends(require_admin),
 ):
     """Recompute stored lead scores. scope=null (default) scores only never-scored rows;
     scope=all rescores every deal + contact (drift repair). Pure-algorithmic and
@@ -461,12 +498,13 @@ async def list_tasks(
     contact_id: int | None = None, deal_id: int | None = None,
     completed: bool | None = None, due_before: str = "",
     priority: str = "", limit: int = Query(50, ge=1, le=1000),
+    owner_id: int | None = None,
     user=Depends(get_current_user),
 ):
     tasks = crm.list_tasks(
         contact_id=contact_id, deal_id=deal_id,
         completed=completed, due_before=due_before or None,
-        priority=priority or None, limit=limit,
+        priority=priority or None, limit=limit, owner_id=owner_id,
     )
     return {"tasks": tasks, "count": len(tasks)}
 
@@ -476,7 +514,7 @@ async def create_task(body: TaskCreate, user=Depends(get_current_user)):
     if not body.title.strip():
         raise HTTPException(status_code=400, detail="Title is required")
     try:
-        return crm.create_task(**body.model_dump())
+        return crm.create_task(**_create_payload(body, user))
     except psycopg2.errors.ForeignKeyViolation:
         raise HTTPException(status_code=400, detail="Referenced contact or deal does not exist") from None
 
@@ -487,7 +525,7 @@ async def update_task(task_id: int, body: TaskUpdate, user=Depends(get_current_u
     # be unlinked from its contact/deal. Other columns are NOT NULL.
     updates = {
         k: v for k, v in body.model_dump(exclude_unset=True).items()
-        if v is not None or k in ("contact_id", "deal_id")
+        if v is not None or k in ("contact_id", "deal_id", "owner_id")
     }
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
@@ -531,7 +569,11 @@ async def log_activity(body: ActivityCreate, user=Depends(get_current_user)):
     if not body.activity.strip():
         raise HTTPException(status_code=400, detail="Activity type is required")
     try:
-        return crm.log_activity(**body.model_dump())
+        # actor_id is the human on this request. Only the REST paths stamp it: the
+        # assistant's tool executors do not thread identity in Phase A, so their
+        # writes stay NULL and roll up as "Unattributed" rather than being credited
+        # to whoever owns the record (issue #60).
+        return crm.log_activity(**body.model_dump(), actor_id=user["id"])
     except psycopg2.errors.ForeignKeyViolation:
         raise HTTPException(status_code=400, detail="Referenced contact or deal does not exist") from None
 
@@ -601,7 +643,7 @@ async def demo_status(user=Depends(get_current_user)):
 
 
 @router.post("/load-sample-data")
-async def load_sample_data(user=Depends(get_current_user)):
+async def load_sample_data(user=Depends(require_admin)):
     """Seed fictional demo data on first run (idempotent — no-op if CRM has data)."""
     return crm.load_sample_data()
 
@@ -619,13 +661,13 @@ async def dismiss_ai_prompt(user=Depends(get_current_user)):
 
 
 @router.post("/demo-clear")
-async def demo_clear(user=Depends(get_current_user)):
+async def demo_clear(user=Depends(require_admin)):
     """Clear example data (guarded: no-op unless sample data was loaded)."""
     return crm.clear_demo_data()
 
 
 @router.post("/clear-all")
-async def clear_all(body: ClearAllBody, user=Depends(get_current_user)):
+async def clear_all(body: ClearAllBody, user=Depends(require_admin)):
     """Wipe ALL CRM data — deliberate real-data reset, gated by a confirmation phrase."""
     if body.confirmation != "clear crm":
         raise HTTPException(status_code=400, detail="Invalid confirmation phrase")
@@ -724,6 +766,7 @@ async def import_csv(file: UploadFile = File(...), user=Depends(get_current_user
                     source=csv_cell(row, _resolve("source")),
                     tags=csv_cell(row, _resolve("tags")),
                     notes=csv_cell(row, _resolve("notes")),
+                    owner_id=user["id"],
                 )
                 imported += 1
             except Exception as e:
@@ -804,6 +847,7 @@ async def smart_import_confirm(body: SmartImportConfirm, user=Depends(get_curren
                     source=str(entry.get("source", "") or "").strip(),
                     tags=str(entry.get("tags", "") or "").strip(),
                     notes=str(entry.get("notes", "") or "").strip(),
+                    owner_id=user["id"],
                 )
                 imported += 1
             except Exception as e:
@@ -848,7 +892,9 @@ async def add_chatter_note(
     entity_type: str, entity_id: int, body: ChatterNoteBody, user=Depends(get_current_user),
 ):
     try:
-        return chatter_service.add_note(entity_type, entity_id, body.message)
+        return chatter_service.add_note(
+            entity_type, entity_id, body.message, author_id=user["id"]
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
 
@@ -918,13 +964,18 @@ async def confirm_provenance(
 async def list_companies(
     q: str = "", status: str = "", sort: str = "name",
     limit: int = Query(50, ge=1, le=1000), offset: int = Query(0, ge=0),
+    owner_id: int | None = None,
     user=Depends(get_current_user),
 ):
     if q:
-        companies = crm.search_companies(q, status=status or None, limit=limit, offset=offset)
-        total = crm.count_search_companies(q, status=status or None)
+        companies = crm.search_companies(
+            q, status=status or None, limit=limit, offset=offset, owner_id=owner_id
+        )
+        total = crm.count_search_companies(q, status=status or None, owner_id=owner_id)
         return {"companies": companies, "total": total}
-    return crm.list_companies(offset=offset, limit=limit, status=status or None, sort=sort)
+    return crm.list_companies(
+        offset=offset, limit=limit, status=status or None, sort=sort, owner_id=owner_id
+    )
 
 
 @router.get("/companies/{company_id}")
@@ -940,7 +991,7 @@ async def create_company(body: CompanyCreate, user=Depends(get_current_user)):
     if not body.name.strip():
         raise HTTPException(status_code=400, detail="Name is required")
     try:
-        return crm.create_company(**body.model_dump())
+        return crm.create_company(**_create_payload(body, user))
     except psycopg2.errors.UniqueViolation:
         raise HTTPException(status_code=400, detail="A company with that name already exists") from None
 
@@ -948,7 +999,10 @@ async def create_company(body: CompanyCreate, user=Depends(get_current_user)):
 @router.put("/companies/{company_id}")
 async def update_company(company_id: int, body: CompanyUpdate, user=Depends(get_current_user)):
     # All company columns are NOT NULL, so drop nulls (clear a field by sending "").
-    updates = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
+    updates = {
+        k: v for k, v in body.model_dump(exclude_unset=True).items()
+        if v is not None or k == "owner_id"
+    }
     if "name" in updates and not updates["name"].strip():
         raise HTTPException(status_code=400, detail="Name is required")
     if not updates:
@@ -987,7 +1041,7 @@ async def list_field_definitions(entity_type: str | None = None, user=Depends(ge
 
 
 @router.post("/fields")
-async def create_field_definition(body: FieldDefinitionCreate, user=Depends(get_current_user)):
+async def create_field_definition(body: FieldDefinitionCreate, user=Depends(require_admin)):
     try:
         return field_service.create_field_definition(body.model_dump())
     except ValueError as e:
@@ -1001,7 +1055,7 @@ async def create_field_definition(body: FieldDefinitionCreate, user=Depends(get_
 
 @router.put("/fields/{field_id}")
 async def update_field_definition(
-    field_id: int, body: FieldDefinitionUpdate, user=Depends(get_current_user)
+    field_id: int, body: FieldDefinitionUpdate, user=Depends(require_admin)
 ):
     # exclude_unset so an explicit "dropdown_options": null clears options while an
     # unsent key is left untouched (matches the service's "key present" semantics).
@@ -1021,7 +1075,7 @@ async def update_field_definition(
 
 
 @router.delete("/fields/{field_id}")
-async def delete_field_definition(field_id: int, user=Depends(get_current_user)):
+async def delete_field_definition(field_id: int, user=Depends(require_admin)):
     if not field_service.delete_field_definition(field_id):
         raise HTTPException(status_code=404, detail="Field not found")
     return {"ok": True}
@@ -1042,7 +1096,8 @@ async def get_field_values(entity_type: str, entity_id: int, user=Depends(get_cu
 async def set_field_values(
     entity_type: str, entity_id: int, body: FieldValuesUpdate, user=Depends(get_current_user)
 ):
-    # No email claim in CakeCRM JWTs (payload is {"sub","role"}); fall back to sub.
+    # Since #60 the dependency returns a live user row, so this resolves to a real
+    # address. The sub fallback stays for the degenerate case of a row with no email.
     editor = user.get("email") or user.get("sub") or ""
     # Offloaded to a thread (like the bulk CSV import): this write holds an entity
     # FOR UPDATE lock while doing up to 200 upserts, so it must not block the loop.

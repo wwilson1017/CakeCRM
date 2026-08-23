@@ -16,8 +16,10 @@ that works your pipeline for you.
 - Contacts, companies, deals, and tasks with an activity timeline
 - Kanban pipeline with drag-and-drop stages and per-stage value totals
 - CSV import, custom fields, lead scoring, analytics dashboard
+- Accounts for your whole team: admin/member roles, an owner on every record, and
+  "Mine vs Everyone" filters on the lists, the board and the dashboard
 - PostgreSQL storage — the Railway template provisions it automatically; locally
-  `python run.py` starts it via Docker Compose. Built to grow into multi-user
+  `python run.py` starts it via Docker Compose
 
 **The assistant** (bring any AI API key):
 - Chats in a context-aware drawer inside the CRM — it knows which deal or contact
@@ -46,26 +48,69 @@ that works your pipeline for you.
 `ENCRYPTION_KEY` auto-generate. Prefer your own hardware? `python run.py` runs
 everything locally, with Postgres via Docker Compose.
 
+### Accounts
+
+You sign in with an **email and a password**. On first start CakeCRM creates one
+admin account for you: the address is `ADMIN_EMAIL` (default
+`admin@cakecrm.local`) and the password is `AUTH_PASSWORD`. Both are printed to the
+logs on that first boot, so check them if you are not sure what was used.
+
+Upgrading an install that predates accounts? Nothing is lost. Your existing
+password keeps working — sign in with it and the bootstrap email above. Your
+two-factor setup and trusted devices carry over, and every record you already had
+becomes yours.
+
+**Take a backup first.** This upgrade changes the two-factor tables, so it is a
+one-way door: going back to an older CakeCRM build means restoring a pre-upgrade
+`pg_dump`, not just redeploying the old image.
+
+Add the rest of your team at **Settings → Team**. Two roles:
+
+- **Member** — the whole CRM: records, pipeline, tasks, notes, import, and the
+  assistant.
+- **Admin** — all of that, plus managing users, AI keys, branding, integrations and
+  the destructive operations (clear-all, sample data, backfills).
+
+**Ownership is not a permission.** Every contact, company, deal and task can carry
+an owner, which drives the "Mine" filters and the per-rep numbers — but any member
+can still see and edit anything. There are no per-record permissions, deliberately.
+
+**Sharing to be aware of.** The assistant's chat history and memory, the Gmail
+connection, the Telegram link, reminders and notifications are still **shared by
+the whole install**. If the admin connects their personal Gmail, any seat can have
+the assistant read it. Per-user isolation of those surfaces is the next phase of
+this work.
+
 ### Passwords
 
-`AUTH_PASSWORD` is only the **initial** password. Change it in the app at
-**Settings → Change password**; the new one is stored (bcrypt-hashed) in the
-database, and from then on `AUTH_PASSWORD` is ignored — editing it later won't
+`AUTH_PASSWORD` is only the **initial** password for that first admin. Change it in
+the app at **Settings → Change password**; the new one is stored (bcrypt-hashed) in
+the database, and from then on `AUTH_PASSWORD` is ignored — editing it later won't
 change how you sign in, and won't override your password on the next restart.
 If two-factor authentication is on, changing the password also asks for a code.
+
+Forgot a **member's** password? An admin resets it at **Settings → Team → Reset
+password**, then tells them the new one. There is no email-link reset, because a
+self-hosted CakeCRM has no mail server to send one.
 
 **Changing your password signs out every other device immediately** — the tab you
 changed it in stays signed in. Any trusted-device status for two-factor auth is
 cleared too, so other devices re-do 2FA at their next sign-in.
 
-**Locked out?** If someone forgets the password they set in-app, the operator can
-reset it without database access:
+**Locked out of the admin account?** The operator can rescue it without database
+access:
 
 1. Set `AUTH_PASSWORD_RESET` to a new password and restart (on Railway, add the
    variable — the redeploy is the restart).
-2. Sign in with that password. The logs will carry a warning that the reset ran.
+2. Sign in as the admin with that password. The logs will carry a warning that the
+   reset ran.
 3. **Remove `AUTH_PASSWORD_RESET` and restart again.** While it is set, every
    restart re-applies it, so a password changed in the app won't survive one.
+
+The lever targets the first admin account, re-activates it if it was deactivated,
+and **turns that account's two-factor authentication off** — a password-only reset
+is no help to someone who also lost their authenticator. Turn 2FA back on from
+Settings once you are in.
 
 ## Lineage
 

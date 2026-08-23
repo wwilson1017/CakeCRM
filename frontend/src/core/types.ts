@@ -1,6 +1,9 @@
 // Shared CRM API types (mirrors the backend crm/service.py response shapes).
 
 export interface CrmContact {
+  /** Owner (issue #60). null = unassigned, which is a real state, not missing data.
+   *  Ownership is an assignment and a filter, never a permission. */
+  owner_id?: number | null;
   id: number;
   name: string;
   email: string;
@@ -26,6 +29,9 @@ export interface CrmContact {
 }
 
 export interface CrmDeal {
+  /** Owner (issue #60). null = unassigned, which is a real state, not missing data.
+   *  Ownership is an assignment and a filter, never a permission. */
+  owner_id?: number | null;
   id: number;
   contact_id: number | null;
   contact_name?: string;
@@ -69,6 +75,9 @@ export interface FieldProvenance {
 }
 
 export interface CrmCompany {
+  /** Owner (issue #60). null = unassigned, which is a real state, not missing data.
+   *  Ownership is an assignment and a filter, never a permission. */
+  owner_id?: number | null;
   id: number;
   name: string;
   domain: string;
@@ -88,6 +97,9 @@ export interface CrmCompany {
 }
 
 export interface CrmTask {
+  /** Owner (issue #60). null = unassigned, which is a real state, not missing data.
+   *  Ownership is an assignment and a filter, never a permission. */
+  owner_id?: number | null;
   id: number;
   contact_id: number | null;
   deal_id: number | null;
@@ -213,6 +225,22 @@ export interface CrmAnalytics {
     by_type: { activity: string; count: number }[];
     total: number;
   };
+  /** Per-rep rows (issue #60). Pipeline numbers follow OWNERSHIP; activity numbers
+   *  follow whoever ACTED, so a rep is credited for work on a colleague's record.
+   *  user_id null is the "Unattributed" bucket. Compare reps on records_touched —
+   *  activity_count is inflatable by a single bulk action. */
+  per_rep: {
+    user_id: number | null;
+    name: string;
+    email: string;
+    deals_open: number;
+    open_value: number;
+    deals_won: number;
+    deals_lost: number;
+    won_value: number;
+    activity_count: number;
+    records_touched: number;
+  }[];
   aging: {
     buckets: { label: string; min_days: number; max_days: number | null; count: number }[];
     stale_count: number;

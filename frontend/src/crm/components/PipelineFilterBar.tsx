@@ -7,6 +7,8 @@ import {
   advancedActiveCount,
 } from '../pipelineFilters';
 import { STAGE_ORDER, STAGE_COLORS } from '../constants';
+import { useUsers } from '../useUsers';
+import type { OwnerFilterValue } from '../pipelineFilters';
 import {
   INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, BG_RAISED, BG_ELEV,
   ACCENT, ACCENT_TEXT, ACCENT_INK, FONT_SANS,
@@ -46,6 +48,15 @@ export default function PipelineFilterBar({ search, advanced, onSearchChange, on
   const closeLabel = CLOSE_OPTIONS.find(o => o.value === advanced.closeDate)?.label;
   const activityLabel = ACTIVITY_OPTIONS.find(o => o.value === advanced.lastActivity)?.label;
   const hasValue = advanced.valueMin !== null || advanced.valueMax !== null;
+
+  const { users, nameFor } = useUsers();
+
+  const toggleOwner = (owner: OwnerFilterValue) => {
+    const next = advanced.owners.includes(owner)
+      ? advanced.owners.filter(o => o !== owner)
+      : [...advanced.owners, owner];
+    onAdvancedChange({ ...advanced, owners: next });
+  };
 
   const toggleStage = (stage: string) => {
     const next = advanced.stages.includes(stage)
@@ -103,6 +114,40 @@ export default function PipelineFilterBar({ search, advanced, onSearchChange, on
         </div>
       </FacetButton>
 
+      {/* Owner facet (issue #60). Client-side like every other facet here: the board
+          already holds every deal, and owner names come from the /api/users call the
+          pickers need anyway. Hidden on a single-seat install, where it selects
+          nothing — but "Unassigned" is offered whenever it IS shown, since finding
+          work nobody has picked up is the main use. */}
+      {users.length > 1 && (
+        <FacetButton
+          label={advanced.owners.length > 0 ? `Owner · ${advanced.owners.length}` : 'Owner'}
+          active={advanced.owners.length > 0}
+        >
+          <div style={{ width: 200, maxHeight: 260, overflowY: 'auto' }}>
+            {([['unassigned', 'Unassigned'] as const] as [OwnerFilterValue, string][])
+              .concat(users.map(u => [u.id, (u.name.trim() || u.email) + (u.is_active ? '' : ' (deactivated)')]))
+              .map(([value, label]) => (
+                <label key={String(value)} style={{
+                  display: 'flex', alignItems: 'center', gap: 8, padding: '5px 6px',
+                  borderRadius: 4, cursor: 'pointer', fontSize: 13, color: INK,
+                }}>
+                  <input
+                    type="checkbox"
+                    checked={advanced.owners.includes(value)}
+                    onChange={() => toggleOwner(value)}
+                    style={{ width: 14, height: 14, accentColor: ACCENT }}
+                  />
+                  <span>{label}</span>
+                </label>
+              ))}
+            {advanced.owners.length > 0 && (
+              <button onClick={() => onAdvancedChange({ ...advanced, owners: [] })} style={clearLinkStyle}>Clear owners</button>
+            )}
+          </div>
+        </FacetButton>
+      )}
+
       {/* Value facet */}
       <FacetButton label={valueSummary()} active={hasValue}>
         <div style={{ width: 200, display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -137,6 +182,13 @@ export default function PipelineFilterBar({ search, advanced, onSearchChange, on
       </FacetButton>
 
       {/* Active facet pills */}
+      {advanced.owners.map(owner => (
+        <Pill
+          key={`ow-${owner}`}
+          label={owner === 'unassigned' ? 'Unassigned' : nameFor(owner)}
+          onRemove={() => toggleOwner(owner)}
+        />
+      ))}
       {advanced.stages.map(stage => (
         <Pill key={`st-${stage}`} label={stage} capitalize onRemove={() => toggleStage(stage)} />
       ))}
