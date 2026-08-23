@@ -12,7 +12,7 @@ problem_type: convention
 Issue #10 added the first CI/repo-hygiene infrastructure to CakeCRM (`wwilson1017/CakeCRM`,
 default branch `main`), a repo seeded from the cake_os/Chatty product shell. The auto-issues
 pipeline (issue-worker → review-super → `/pr` → settle → evidence) is built for
-`tncheesecake/cake_os` on `master` with its own PR bots, so running it verbatim on a fresh
+the private upstream cake_os repo on `master` with its own PR bots, so running it verbatim on a fresh
 `main`-based personal repo misfires in several silent ways. Verified: PR #27, all 3 CI jobs green.
 
 ## Guidance
@@ -38,7 +38,7 @@ unsigned PRs.
 **Adapting the cake_os-shaped skills to `main`:**
 - Base ref: pass `origin/main` explicitly to review-super; `gh pr create --base main`. `master`
   doesn't exist, and local `main` is stale pre-seed so three-dot `main...HEAD` balloons.
-- Swap hardcoded `owner:"tncheesecake", name:"cake_os"` → `wwilson1017/CakeCRM` and `base master`
+- Swap the hardcoded upstream `owner`/`name:"cake_os"` pair → `wwilson1017/CakeCRM` and `base master`
   → `main` in every settle `gh api`/graphql call.
 - Before waiting on the settle/evidence reviewers, check they exist: CakeCRM has no
   `chatgpt-codex-connector` or "AI Code Review" check, so the review-thread poll is a no-op and
