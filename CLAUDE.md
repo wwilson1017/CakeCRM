@@ -390,10 +390,34 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `_classify_deal_update`, a pure helper shared with `_write_deal_update` — so the
   single-deal and set-based paths cannot drift about WHAT to write (an integration test
   pins twin deals moved through each path to identical rows *and* identical stage
-  events). The classifier deliberately does not decide WHETHER to write, which is the one
-  place the paths still differ: bulk skips a same-stage no-op, `update_deal_stage` writes
-  and bumps `updated_at`. Left as-is because aligning it would change pre-#55 behavior,
-  and no UI path sends a same-stage move. The one
+  events). The classifier deliberately does not decide WHETHER to write; each path decides
+  that for itself, and **since #96 they agree**. Bulk skips a same-stage deal in Python on
+  its locked pre-image; `_write_deal_update` instead carries an `IS DISTINCT FROM` test
+  over exactly the columns it is about to SET, so a write that changes nothing matches no
+  row and `updated_at` never moves. **The decision is made in SQL, not Python, and that is
+  load-bearing**: the assistant's tool arguments are not runtime schema-validated, and
+  `1.0 == True` is True in Python where Postgres correctly refuses a boolean into a
+  `DOUBLE PRECISION` column — so a Python pre-image comparison would turn invalid writes
+  into silent no-ops, and would mishandle NULL (an unlinked `contact_id`) besides. Bulk can
+  stay in Python because it writes exactly one caller-controlled column, a `DEAL_STAGES`
+  string validated before the connection opens. The `deal_stage_events` INSERT is gated on
+  the UPDATE's rowcount as well (a real stage change always differs, so this is structural
+  rather than reachable), but the post-commit **rescore is deliberately NOT gated** — it is
+  the one place the paths still diverge and the asymmetry is correct: `score_on_event` is
+  swallowed on failure and `_maybe_refresh_scores` excludes terminal deals that already
+  carry a score, so re-calling `mark_deal_won` is the only repair route for a won deal whose
+  rescore failed. Two consequences are accepted rather than incidental: a **custom-field-only
+  save no longer bumps `deals.updated_at`** (`DealForm` always PUTs the standard fields and
+  then writes changed custom fields separately, and `set_field_values` never touches the
+  parent row — so that bump was a side effect of an unchanged-form PUT, and the detail
+  page's `CustomFieldsSection` never produced one at all; **custom-field edits are not deal
+  touches, uniformly**, and making them one is a separate call belonging in
+  `set_field_values`), and a no-op save no longer floats a deal up an `updated_at DESC`
+  ordering — including `crm_get_pipeline`'s first-25-per-stage window. Provenance is
+  deliberately untouched: `crm_update_deal_stage` still badges a skipped write where
+  `crm_bulk_move_deals` badges only `updated_ids`, a real audit-state divergence kept
+  because `provenance_service.record` documents re-badging an identical rewrite as
+  intended ("EVERY AI (re)write resets confirmation"), making bulk the outlier there. The one
   deliberate contract difference: `_write_deal_update` raises, bulk isolates per deal
   (missing/archived deals report in `errors` while the rest still commit), because one
   archived deal must not sink a 50-deal selection. A deal already in the target stage is

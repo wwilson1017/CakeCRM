@@ -878,6 +878,7 @@ def test_bulk_and_single_deal_paths_cannot_drift(pg_db):
         ("lead", "won", None),            # closing transition settles probability
         ("lead", "lost", None),           # the other closing transition
         ("lost", "negotiation", "budget"),  # reopening clears the stale reason
+        ("qualified", "qualified", None),   # #96: the no-op, which must write nothing
     ):
         def make(name):
             deal = service.create_deal(name, stage="negotiation", probability=45)
@@ -895,6 +896,81 @@ def test_bulk_and_single_deal_paths_cannot_drift(pg_db):
         bulk_row, bulk_events = snapshot(bulk_id)
         assert single_row == bulk_row, f"{stage_from}->{target} columns drifted"
         assert single_events == bulk_events, f"{stage_from}->{target} stage log drifted"
+
+
+def test_same_stage_move_touches_nothing_on_either_path(pg_db):
+    """The parity test issue #96 asks for, and the one nothing covered before it.
+
+    `LAST_TOUCH_SQL` reads `deals.updated_at` as a touch, so a redundant stage write must
+    not move it — otherwise the deal silently drops out of `get_stale_deals` and the
+    heartbeat's nudges for a full window with nothing changed. `bulk_move_deals` skipped
+    the no-op from the start; `update_deal_stage` bumped it until #96. Both paths are
+    asserted here so the fix cannot regress on one of them alone.
+    """
+    from core.postgres import pg_fetchone
+    from crm import service
+
+    def snapshot(deal_id):
+        return (
+            pg_fetchone("SELECT updated_at FROM deals WHERE id = %s", (deal_id,))["updated_at"],
+            pg_fetchone("SELECT count(*) AS n FROM deal_stage_events WHERE deal_id = %s",
+                        (deal_id,))["n"],
+        )
+
+    single = service.create_deal("Single parked", stage="qualified")["id"]
+    bulk = service.create_deal("Bulk parked", stage="qualified")["id"]
+    before_single, before_bulk = snapshot(single), snapshot(bulk)
+
+    assert service.update_deal_stage(single, "qualified")["stage"] == "qualified"
+    assert service.bulk_move_deals([bulk], "qualified")["ok"] is True
+
+    assert snapshot(single) == before_single, "single-deal path reset the staleness clock"
+    assert snapshot(bulk) == before_bulk, "bulk path reset the staleness clock"
+
+    # And the guard is not a blanket refusal to write: a real move still moves.
+    service.update_deal_stage(single, "proposal")
+    assert snapshot(single) != before_single
+
+
+def test_an_unchanged_full_form_save_is_not_a_touch(pg_db):
+    """`PUT /api/crm/deals/{id}` resaving an untouched form — the second caller #96 names.
+
+    Deliberately exercises every writable type together, because the no-op test lives in
+    Postgres: TEXT (title/notes/currency), DOUBLE PRECISION (value), INTEGER
+    (probability), a date carried as TEXT (expected_close_date), and nullable FKs
+    (contact_id/company_id/owner_id, where `=` would swallow NULL and `IS DISTINCT FROM`
+    does not). Comparing these in Python instead of SQL is what would go wrong quietly.
+
+    This also pins the accepted consequence: `DealForm` always PUTs the standard fields
+    and then writes changed custom fields separately, and `set_field_values` never touches
+    the parent row — so a custom-field-only save no longer bumps `deals.updated_at`.
+    Custom-field edits are not deal touches, uniformly (the detail page's
+    `CustomFieldsSection` never made them one either).
+    """
+    from core.postgres import pg_fetchone
+    from crm import service
+
+    contact = service.create_contact("Form Tester", email="form@example.test")
+    deal = service.create_deal(
+        "Form deal", stage="proposal", value=1234.56, probability=40,
+        expected_close_date="2026-09-01", notes="as discussed", contact_id=contact["id"],
+    )
+    form = {
+        "title": "Form deal", "stage": "proposal", "value": 1234.56, "probability": 40,
+        "expected_close_date": "2026-09-01", "notes": "as discussed", "currency": "USD",
+        "contact_id": contact["id"], "company_id": None, "owner_id": None,
+    }
+
+    def updated_at():
+        return pg_fetchone("SELECT updated_at FROM deals WHERE id = %s", (deal["id"],))["updated_at"]
+
+    before = updated_at()
+    assert service.update_deal(deal["id"], **form)["id"] == deal["id"]
+    assert updated_at() == before, "an unchanged form save reset the staleness clock"
+
+    # One changed field in the same shape still writes — the guard skips no-ops, not edits.
+    service.update_deal(deal["id"], **{**form, "value": 2000.0})
+    assert updated_at() != before
 
 
 def test_concurrent_bulk_moves_over_overlapping_ids_do_not_deadlock(pg_db):

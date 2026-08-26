@@ -80,6 +80,93 @@ def test_write_on_a_missing_deal_returns_none_without_updating(monkeypatch, rec,
     assert not any("UPDATE deals SET" in s for s, _ in conn.executed)
 
 
+# ── No-op writes leave the staleness clock alone (issue #96) ─────────────────
+#
+# LAST_TOUCH_SQL reads deals.updated_at as a touch, so a write that changes nothing must
+# not happen at all. The decision is made by Postgres (an IS DISTINCT FROM test on the
+# very columns being SET), so these assert the SQL shape and the branching; the real
+# semantics are exercised against Postgres in test_integration_crm_lifecycle_pg.py.
+#
+# `rowcounts` queues one cursor.rowcount per execute(): [1, 0] is "the FOR UPDATE SELECT
+# found the row, then the conditional UPDATE matched nothing".
+
+def test_the_update_only_fires_when_a_column_would_actually_change(monkeypatch, rec, fake_conn):
+    """Without the IS DISTINCT FROM test, a redundant call bumps updated_at and silently
+    drops the deal out of get_stale_deals and the heartbeat nudges for a whole window."""
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("lead", None, None)])
+    rec.fetchone_queue = [{"id": 1}]
+    service.update_deal(1, value=500)
+    sql, params = next((s, p) for s, p in conn.executed if "UPDATE deals SET" in s)
+    assert "value IS DISTINCT FROM %s" in sql
+    # Bound twice: once to SET the column, once to compare it. updated_at is SET only —
+    # the question the WHERE asks is whether anything ELSE changed.
+    assert params[0] == 500 and params[-1] == 500
+    assert "updated_at IS DISTINCT FROM" not in sql
+
+
+def test_every_written_column_is_in_the_distinctness_test(monkeypatch, rec, fake_conn):
+    """A column that is SET but not compared would make any write carrying it a
+    guaranteed match — the PUT path sends the whole form, so one gap re-opens #96."""
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("lead", None, None)])
+    rec.fetchone_queue = [{"id": 1}]
+    service.update_deal(1, title="T", value=5, notes="n", probability=20,
+                        expected_close_date="2026-09-01", currency="USD",
+                        contact_id=None, company_id=3, owner_id=None)
+    sql, _ = next((s, p) for s, p in conn.executed if "UPDATE deals SET" in s)
+    written = {c.split(" = ")[0] for c in sql.split(" SET ")[1].split(" WHERE ")[0].split(", ")}
+    for col in written - {"updated_at"}:
+        assert f"{col} IS DISTINCT FROM %s" in sql, f"{col} is SET but never compared"
+
+
+def test_a_same_stage_move_cannot_match_its_own_row(monkeypatch, rec, fake_conn):
+    """crm_update_deal_stage re-asserting a deal's current stage — the assistant
+    redundancy #96 was filed for. The UPDATE is still ISSUED (Postgres does the
+    deciding), so what has to hold hermetically is that its WHERE compares `stage`
+    against the value already stored, which no row can satisfy."""
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("qualified", None, None)],
+                     rowcounts=[1, 0])
+    rec.fetchone_queue = [{"id": 1, "stage": "qualified"}]
+    service.update_deal_stage(1, "qualified")
+    sql, params = next((s, p) for s, p in conn.executed if "UPDATE deals SET" in s)
+    assert "stage IS DISTINCT FROM %s" in sql
+    assert params[-1] == "qualified"     # compared against the stage the deal already has
+    assert not any("deal_stage_events" in s for s, _ in conn.executed)
+
+
+def test_no_stage_event_is_logged_when_the_update_matched_no_row(monkeypatch, rec, fake_conn):
+    """Belt-and-braces on the audit log. A real stage change always differs, so the
+    UPDATE always fires — gating the INSERT on rowcount too makes "no write, no history"
+    structural rather than something you have to re-derive from the classifier."""
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("lead", None, None)],
+                     rowcounts=[1, 0])
+    rec.fetchone_queue = [{"id": 1}]
+    service.update_deal_stage(1, "won")
+    assert any("UPDATE deals SET" in s for s, _ in conn.executed)
+    assert not any("deal_stage_events" in s for s, _ in conn.executed)
+
+
+def test_a_no_op_write_still_returns_the_deal(monkeypatch, rec, fake_conn):
+    """False from _write_deal_update means "no such deal" and every caller turns it into
+    None — a 404 / a tool error. A deal that already holds the requested state must come
+    back, or a harmless redundant call starts reporting the deal missing."""
+    fake_conn(monkeypatch, service, fetchone_results=[("won", None, None)], rowcounts=[1, 0])
+    rec.fetchone_queue = [{"id": 1, "stage": "won"}]
+    assert service.mark_deal_won(1) == {"id": 1, "stage": "won"}
+
+
+def test_a_no_op_write_still_rescores(monkeypatch, rec, fake_conn):
+    """Deliberately NOT gated on whether the row changed. score_on_event is swallowed on
+    failure and the daily refresh skips terminal deals that already carry a score, so a
+    mark_deal_won whose rescore failed can only be repaired by calling it again."""
+    from crm import scoring_service
+    calls = []
+    monkeypatch.setattr(scoring_service, "score_on_event", lambda **kw: calls.append(kw))
+    fake_conn(monkeypatch, service, fetchone_results=[("won", None, None)], rowcounts=[1, 0])
+    rec.fetchone_queue = [{"id": 1, "stage": "won"}]
+    service.mark_deal_won(1)
+    assert calls == [{"deal_ids": (1,), "contact_ids": (None, None)}]
+
+
 def test_update_deal_ignores_a_model_supplied_lost_reason(monkeypatch, rec, fake_conn):
     """mark_deal_lost is lost_reason's only writer, so the reason always arrives with
     the close (and its timeline note) and can't be set on a deal that isn't lost."""

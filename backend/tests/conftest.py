@@ -107,9 +107,23 @@ class FakeCursor:
         cols = self._conn.description
         return None if cols is None else [(c,) for c in cols]
 
+    @property
+    def rowcount(self):
+        """Rows affected by the LAST statement, for code that branches on it.
+
+        Set ``conn.rowcounts = [0]`` on the FakeConn to queue per-statement answers;
+        anything past the queue reports 1 (a write that matched), which is what every
+        test written before conditional writes existed assumes. A real cursor reports
+        -1 before any statement runs, so the queue is consumed by execute(), not here.
+        """
+        return self._conn.rowcount
+
     def execute(self, sql, params=()):
         self._conn.executed.append((" ".join(sql.split()), params))
         self._conn.executed_by.append(self.cursor_id)
+        self._conn.rowcount = (
+            self._conn.rowcounts.pop(0) if self._conn.rowcounts else 1
+        )
 
     def executemany(self, sql, seq_of_params):
         self._conn.executed.append((" ".join(sql.split()), list(seq_of_params)))
@@ -123,10 +137,17 @@ class FakeCursor:
 
 
 class FakeConn:
-    def __init__(self, fetchone_results=None, fetchall_results=None, description=None):
+    def __init__(self, fetchone_results=None, fetchall_results=None, description=None,
+                 rowcounts=None):
         self.executed = []
         self.fetchone_results = list(fetchone_results or [])
         self.fetchall_results = list(fetchall_results or [])
+        # cursor.rowcount answers, consumed one per execute(); the default of 1 keeps
+        # every pre-existing test on the "the write matched a row" path. A conditional
+        # UPDATE (see crm.service._write_deal_update, #96) branches on this, so queueing
+        # a 0 is how a test drives the no-op branch.
+        self.rowcounts = list(rowcounts or [])
+        self.rowcount = 1
         # Transaction-shape bookkeeping. `entries` counts `with get_connection()` blocks and
         # `executed_by` records which cursor ran each statement, so a test can assert "these
         # two writes rode ONE transaction" — an atomicity claim that is otherwise unfalsifiable
@@ -158,11 +179,12 @@ def fake_conn():
     fetchone_results=[...], fetchall_results=[...])``."""
 
     def _install(monkeypatch, module, *, fetchone_results=None, fetchall_results=None,
-                 description=None):
+                 description=None, rowcounts=None):
         conn = FakeConn(
             fetchone_results=fetchone_results,
             fetchall_results=fetchall_results,
             description=description,
+            rowcounts=rowcounts,
         )
         monkeypatch.setattr(module, "get_connection", _make_get_connection(conn))
         return conn
