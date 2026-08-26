@@ -23,9 +23,20 @@ name has no such excuse anywhere, which is why the second surface exists at all 
 was fully green on both a hardcoded upstream org URL and six real upstream directory
 names, and multi-persona review caught them, which is luck rather than a control.
 
-The committed-file scan reads the WORKING TREE (``git ls-files``), not history: a token
-that was committed and later scrubbed still sits in the log, where only a rewrite can
-reach it. This guard stops the next one; it does not clean up the last one.
+Three limits are known and accepted, and are written down here so nobody has to
+rediscover them:
+
+* **History is out of scope.** The scan reads the working tree, not the log. A token
+  committed and later scrubbed still sits in history, where only a rewrite reaches it.
+  This guard stops the next one; it does not clean up the last one.
+* **The file list comes from the index, the content from the working tree.** They agree
+  in CI — which is where this guard has authority — but locally you could stage a leak
+  and then scrub it unstaged, and the scan would read the scrubbed copy. Pushing it
+  still fails CI.
+* **An allowance counts occurrences, not their content.** Deleting the sanctioned
+  mention in an exempted file and adding a real one keeps the count intact. Pinning
+  exact snippets instead was rejected as too brittle to survive ordinary reflowing;
+  what the count does buy is that any change in the NUMBER is a visible edit here.
 """
 
 import functools
@@ -46,34 +57,45 @@ QUICK_ACTIONS = ROOT / "frontend" / "src" / "assistant" / "QuickActions.tsx"
 # Class membership decides WHERE a token is banned, so a new token goes in the narrowest
 # class that is honest about it. Every pattern is matched case-insensitively.
 
+# Token boundaries, deliberately NOT `\b`. Python's `\b` treats "_" as a word character,
+# so `\btnc\b` misses `tnc_internal` and `cake_os\b` misses `cake_os_prompt` — which are
+# exactly the shapes these names take inside real identifiers, filenames and env vars
+# (six such bypasses were measured before this changed). These break on anything that is
+# not a letter or digit, so "_", "-" and "." all end a token. Under re.IGNORECASE the
+# character class covers A-Z too.
+_L = r"(?<![0-9a-z])"
+_R = r"(?![0-9a-z])"
+
 # The company itself. Never legitimate in a repo that goes public with permanent
 # history — not in a doc, not in a comment, not in a test fixture.
 _COMPANY = [
     (r"tncheesecake", "company domain"),
-    (r"tn\s+cheesecake", "company name"),
-    (r"\btnc\b", "company abbreviation"),
+    (r"tn[\s_.-]+cheesecake", "company name"),
+    (_L + r"tnc" + _R, "company abbreviation"),
     (r"cheesecake", "company product"),
 ]
 
 # Trade-vertical jargon carried in from the blueprint's prompt examples. It describes
 # one industry's business, so it neither reaches the model nor gets committed.
 _VERTICAL = [
-    (r"\biddba\b", "trade-show acronym from blueprint examples"),
-    (r"\bnra\s*\d", "trade-show acronym from blueprint examples"),
-    (r"restaurant_type", "vertical-specific field key from blueprint examples"),
-    (r"\bcuisine\b", "vertical-specific field value from blueprint examples"),
-    (r"distributor_tier", "vertical-specific field key from blueprint examples"),
+    (_L + r"iddba" + _R, "trade-show acronym from blueprint examples"),
+    (_L + r"nra[\s_.-]*\d", "trade-show acronym from blueprint examples"),
+    (r"restaurant[\s_.-]*type", "vertical-specific field key from blueprint examples"),
+    (_L + r"cuisines?" + _R, "vertical-specific field value from blueprint examples"),
+    (r"distributor[\s_.-]*tier", "vertical-specific field key from blueprint examples"),
     # The #70 issue body proposed "@oven-room" as an example GTD context. The shipped
     # tool descriptions use @calls/@office/@errands instead; this keeps it that way.
-    (r"\boven\b", "vertical-specific context from blueprint examples"),
+    (_L + r"ovens?" + _R, "vertical-specific context from blueprint examples"),
 ]
 
 # Blueprint identifiers. Banned from the model-facing payload — a shipped product must
 # not name the codebase it was ported from — but ALLOWED in committed prose, where
 # citing the source is the convention the whole repo is built on.
 _BLUEPRINT = [
-    (r"\bcasey\b", "blueprint agent name (this assistant is user-named)"),
-    (r"cake[_\s]os\b", "blueprint product name"),
+    (_L + r"casey" + _R, "blueprint agent name (this assistant is user-named)"),
+    (r"cake[\s_.-]?os" + _R, "blueprint product name"),
+    # Left literal on purpose: this repo's own name is CakeCRM, so widening the
+    # separators here would match the product name in every file that mentions it.
     (r"cake_crm_", "blueprint tool prefix (CakeCRM uses crm_)"),
 ]
 
@@ -95,7 +117,9 @@ def _offenders(text: str, label: str, patterns: list[tuple[str, str]] = _FORBIDD
 
 # --- the committed-file surface (#90) -----------------------------------------------
 
-# This file necessarily spells out every forbidden token, so it cannot scan itself.
+# This file necessarily spells out every forbidden token — but it is NOT exempt. It gets
+# a counted allowance like any other file, below, so that the one file with the most
+# license to hold these strings is not also the one place nobody is watching.
 _GUARD = Path(__file__).resolve().relative_to(ROOT).as_posix()
 
 # Deliberate exemptions: path -> ({pattern: how many occurrences are expected}, why).
@@ -116,43 +140,75 @@ _GUARD = Path(__file__).resolve().relative_to(ROOT).as_posix()
 # lands); test_repo_allowlist_has_no_dead_entries validates every entry whose file exists.
 _REPO_ALLOW = {
     "CLAUDE.md": (
-        {r"tn\s+cheesecake": 1, r"\btnc\b": 1, r"cheesecake": 1},
+        {r"tn[\s_.-]+cheesecake": 1, _L + r"tnc" + _R: 1, r"cheesecake": 1},
         "the 'Don't Do This' rule has to name what it forbids — one bullet, one mention each",
     ),
     ".claude/coach-lessons.md": (
-        {r"\boven\b": 1},
+        {_L + r"ovens?" + _R: 1},
         "a lesson about this guard quotes the very token the guard was missing",
     ),
     "frontend/src/crm/stageCriteria.test.ts": (
         {r"cheesecake": 1},
         "sibling guard (#74/PR #109): one denylist literal for the stage-criteria copy",
     ),
+    # The guard scans itself. The numbers below are its own denylist patterns and the
+    # prose explaining them; they will need updating whenever this file's wording
+    # changes, and that friction is the point — the alternative is a blanket exemption
+    # on the single file most able to hide a real name.
+    _GUARD: (
+        {
+            r"tncheesecake": 2,
+            r"tn[\s_.-]+cheesecake": 1,
+            _L + r"tnc" + _R: 5,
+            r"cheesecake": 10,
+            _L + r"iddba" + _R: 3,
+            _L + r"cuisines?" + _R: 2,
+            _L + r"ovens?" + _R: 4,
+        },
+        "the denylist patterns themselves, plus the prose that explains them",
+    ),
 }
 
 
-def _decode(raw: bytes) -> str | None:
-    """The file's text, or None if it is genuinely binary.
+def _looks_utf16(raw: bytes) -> bool:
+    """Heuristic for BOM-less UTF-16: its ASCII characters are NUL-interleaved."""
+    head = raw[:1024]
+    if len(head) < 8:
+        return False
+    return max(head[0::2].count(0), head[1::2].count(0)) > len(head) // 4
 
-    Deliberately NOT a "does it contain a NUL byte" probe. UTF-16 is NUL-dense and is
-    still TEXT — and a CSV or spreadsheet export written by a Windows tool is exactly
-    the shape of file most likely to carry real customer names, so skipping it on a NUL
-    would hide a leak in the highest-risk case. Known limitation: BOM-less UTF-16 still
-    reads as binary, as git itself treats it.
+
+def _decode(raw: bytes) -> str:
+    """The file's text. This never gives up, because every file it declines to read is a
+    blind spot, and a leaked name is exactly as permanent inside a blob as inside a .md.
+
+    Two OPPOSITE traps are handled explicitly, and a single decode attempt walks into one
+    or the other:
+
+    * BOM-less UTF-16 is byte-wise VALID UTF-8, so it decodes "successfully" into
+      NUL-interleaved text that matches no regex at all — it hides in the SUCCESS path.
+      This is the likely shape of a CSV or spreadsheet export of real customer names.
+    * A mostly-binary file carrying a plain ASCII name fails UTF-8 decoding, so treating
+      the error (or the NUL bytes) as "binary, skip" hides it in the FAILURE path.
+
+    latin-1 is the backstop: it never raises and maps every byte 1:1, so an ASCII name
+    embedded anywhere stays visible. A false positive costs one line in _REPO_ALLOW; a
+    false negative is public and permanent, so this errs toward reading too much.
     """
     if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
         return raw.decode("utf-16", "replace")
+    if _looks_utf16(raw):
+        # No BOM to say which way round it is, so read it both ways and scan both.
+        return raw.decode("utf-16-le", "replace") + "\n" + raw.decode("utf-16-be", "replace")
     try:
         return raw.decode("utf-8")
     except UnicodeDecodeError:
-        pass
-    if b"\x00" in raw:
-        return None  # undecodable AND NUL-bearing — a real binary
-    return raw.decode("utf-8", "replace")  # legacy 8-bit text; scan what survives
+        return raw.decode("latin-1")
 
 
 @functools.cache
-def _committed_files() -> tuple[tuple[str, str | None], ...]:
-    """(repo-relative path, text or None) for every committed file except this one.
+def _committed_files() -> tuple[tuple[str, str], ...]:
+    """(repo-relative path, text) for every committed file — this one included.
 
     ``git ls-files`` IS the definition of "committed", so the scan covers a file CLASS
     rather than a hand-maintained directory list: a new docs/, scripts/ or .github/ file
@@ -173,7 +229,7 @@ def _committed_files() -> tuple[tuple[str, str | None], ...]:
         ) from exc
     files = []
     for rel in listing.split("\0"):
-        if not rel or rel == _GUARD:
+        if not rel:
             continue
         path = ROOT / rel
         if path.is_symlink():
@@ -401,18 +457,33 @@ def test_a_leaked_filename_is_caught_even_when_the_content_is_binary():
     assert found and "filename contains" in found[0], found
 
 
-def test_the_decoder_scans_text_and_skips_only_real_binaries():
-    """UTF-16 is NUL-dense but is TEXT — a CSV export saved by a Windows tool is the
-    likeliest carrier of real customer names, and a NUL probe would drop it silently."""
+def test_the_decoder_reads_every_encoding_a_leak_could_hide_in():
+    """One decode attempt walks into one of two opposite traps, so both are pinned here.
+    Each case is a measured bypass of the previous NUL-probe implementation."""
     plain = next(p for p, _ in _COMPANY if p.isalnum())
     doc = f"customer,{plain}\n"
+
     assert _decode(doc.encode("utf-8")) == doc
-    for bom_codec in ("utf-16-le", "utf-16-be"):
-        raw = doc.encode("utf-16")  # encodes WITH a BOM
-        assert _decode(raw) == doc, f"UTF-16 text was not decoded ({bom_codec})"
-        assert _repo_offenders((("docs/export.csv", _decode(raw)),)), "UTF-16 leak missed"
-    assert _decode(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\xff\xfe\x01") is None
-    assert _decode(b"caf\xe9 latin-1 text") == "caf� latin-1 text"
+
+    # UTF-16 WITH a BOM, both byte orders — built explicitly, because encoding twice with
+    # "utf-16" would just produce the runner's native order twice and never test the other.
+    for codec, bom in (("utf-16-le", b"\xff\xfe"), ("utf-16-be", b"\xfe\xff")):
+        raw = bom + doc.encode(codec)
+        assert _decode(raw) == doc, f"UTF-16 text was not decoded ({codec})"
+        assert _repo_offenders((("docs/export.csv", _decode(raw)),)), f"leak missed ({codec})"
+
+    # BOM-less UTF-16: byte-wise VALID UTF-8, so it decodes "fine" into NUL-interleaved
+    # mush that matches nothing. The trap that hides in the success path.
+    for codec in ("utf-16-le", "utf-16-be"):
+        text = _decode(doc.encode(codec))
+        assert _repo_offenders((("docs/export.csv", text),)), f"BOM-less leak missed ({codec})"
+
+    # A plain ASCII name inside an otherwise-binary blob: the trap in the failure path.
+    blob = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + plain.encode() + b"\xff\xfe\x01"
+    assert _repo_offenders((("docs/logo.png", _decode(blob)),)), "ASCII-in-binary leak missed"
+
+    # Legacy 8-bit text still reads; nothing is ever skipped outright.
+    assert "latin-1 text" in _decode(b"caf\xe9 latin-1 text")
 
 
 def test_repo_allowlist_has_no_dead_entries():
@@ -425,7 +496,16 @@ def test_repo_allowlist_has_no_dead_entries():
     like a fix. The number has to keep matching reality, so changing it is a visible,
     deliberate edit to this list rather than a knob that turns the guard down."""
     present = dict(_committed_files())
+    known = {p for p, _ in _REPO_FORBIDDEN}
     for rel, (budget, why) in _REPO_ALLOW.items():
+        # An allowance is keyed by the pattern STRING, so a retyped or stale copy would
+        # silently never match and quietly grant nothing — which then reads as a real
+        # leak in a file everyone believes is exempt. Pin the keys to the denylist.
+        unknown = set(budget) - known
+        assert not unknown, (
+            f"_REPO_ALLOW[{rel!r}] names patterns that are not in _REPO_FORBIDDEN: "
+            f"{sorted(unknown)}. Reference the same expression the denylist uses."
+        )
         if rel not in present:
             continue  # not landed on this branch yet — see the note on _REPO_ALLOW
         text = present[rel] or ""

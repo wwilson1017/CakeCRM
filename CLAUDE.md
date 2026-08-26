@@ -656,13 +656,26 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   fails CI **in both directions** — a stale or inflated allowance is caught as surely
   as a new occurrence — so turning the guard down takes a visible edit to that list
   rather than a bumped number. Scrub the file instead whenever scrubbing is possible.
-  The guard excludes exactly its own path, since it necessarily spells every token
-  out. Two surfaces beyond file *content* are covered because they leak just as
-  permanently: every committed **filename** (the only scannable surface a binary asset
-  has), and **UTF-16** text, which a NUL-byte "is this binary?" probe would silently
-  skip — precisely the shape a spreadsheet or CSV export of real customer names
-  arrives in. The scan reads the working tree, **not history**: tokens committed
-  before a scrub stay in the log.
+  **No file is exempt, the guard included** — it holds a counted allowance for its own
+  denylist literals like everything else, so the one file with the most licence to
+  carry these strings is not also the one place nobody is watching. Two surfaces
+  beyond file *content* are covered because they leak just as permanently: every
+  committed **filename** (the only scannable surface a binary asset has), and text in
+  encodings a naive reader drops — a NUL-byte "is this binary?" probe silently skips
+  **UTF-16**, which is exactly the shape a spreadsheet or CSV export of real customer
+  names arrives in, while BOM-less UTF-16 is byte-wise *valid UTF-8* and so decodes
+  "successfully" into NUL-interleaved mush that matches nothing. The decoder therefore
+  never gives up: BOM'd UTF-16, BOM-less UTF-16 read both ways, then UTF-8, then
+  latin-1 as a backstop that never raises. Token boundaries are `(?<![0-9a-z])`, **not
+  `\b`** — `\b` counts `_` as a word character, so a token went invisible the moment an
+  underscore followed it (`cake_os\b` misses `cake_os_prompt`; the company abbreviation
+  vanished the same way inside `<abbrev>_internal`), which are precisely the shapes
+  these names take in identifiers, filenames and env vars (six such bypasses were
+  measured, and this very bullet tripped the guard by naming one). The scan
+  reads the working tree, **not history**: tokens committed before a scrub stay in the
+  log. `test_sync_intake.py` consumes `_REPO_FORBIDDEN` by name for the same reason —
+  it used to hand-copy the blueprint regex to exclude it, which silently stopped
+  excluding anything the moment that pattern was widened.
 - Never import git history from cake_os or chatty — code arrives as clean snapshots
   in ordinary commits.
 - Never merge a pull request — with exactly ONE exception, the **operator ship lane**:
