@@ -9,6 +9,12 @@ export type TaskMode = 'normal' | 'gtd';
  * `null` means "not known yet". The router below waits rather than guessing: rendering
  * the normal Tasks page and then swapping to GTD a moment later would flash the wrong
  * task system on every load.
+ *
+ * That `null` is also what closes the switch-while-loading race a review raised: while
+ * the demo-status GET is in flight the mode is null, TaskModeCard's buttons are disabled
+ * on `mode === null`, and the layout fires that GET exactly once — so there is no window
+ * in which a completed switch can be overwritten by a late response carrying the old
+ * mode. Keep the disabled-until-known guard if either half is ever refactored.
  */
 export const TaskModeContext = createContext<TaskMode | null>(null);
 

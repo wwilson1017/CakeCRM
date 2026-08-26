@@ -122,15 +122,17 @@ export function TaskModeCard({ isMobile }: { isMobile: boolean }) {
         {modeButton('normal', 'Simple list', 'Just tasks with due dates and priorities — no inbox or contexts.')}
       </div>
 
-      {/* #102: also show this section in normal mode whenever a surface is actually
-          CONFIGURED. Switching mode does not turn either surface off (set_task_mode
-          writes task_mode and nothing else), so gating purely on `mode === 'gtd'` meant
-          an admin who enabled the public read+write todo app and then took the "Simple
-          list" opt-out — the very path #102 makes routine — could no longer see it was
-          live, rotate its token, or switch it off, while it kept serving. A live surface
-          must never lose its off switch. Tokenless capture is deliberately NOT a trigger:
-          that is the default state on every install, not something anyone turned on. */}
-      {(mode === 'gtd' || surfaces?.todo_web_enabled || surfaces?.todo_capture_token) && surfaces && (
+      {/* #102: shown in BOTH modes, because neither surface depends on the task mode.
+          They are mounted unconditionally and gated only on their own settings, and
+          switching mode does not turn either off (set_task_mode writes task_mode and
+          nothing else) — so gating this section on `mode === 'gtd'` hid the controls for
+          endpoints that kept serving. Two ways that bit, both made routine by #102
+          making "Simple list" the opt-out every flipped install is invited to take: an
+          admin who enabled the public read+write todo app could no longer see it was
+          live, rotate its token or switch it off; and tokenless `/capture` — publicly
+          writable on EVERY install by default — offered no way to add a token and
+          restrict it. A reachable surface must never lose its off switch. */}
+      {surfaces && (
         <div style={{ marginTop: 20, borderTop: '1px solid var(--color-ck-line)', paddingTop: 16 }}>
           <h3 style={{ ...sectionHeading(), fontSize: 15 }}>No-login links</h3>
 

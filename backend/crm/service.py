@@ -2562,14 +2562,22 @@ def get_task_mode() -> str:
 
     Read on every tool-registry build and on the Telegram hot path, so an unreadable
     row must degrade to a default rather than break the assistant — the same fail-safe
-    posture as gmail.tools' connection check. An unmigrated database (column absent)
-    also lands here.
+    posture as gmail.tools' connection check.
 
     That default is GTD since #102, and it follows the PRODUCT default deliberately:
     a row we cannot read tells us nothing about what the user chose, so the honest
     guess is the experience a new install gets, not the legacy one. The three thin
     `_task_mode()` wrappers (assistant.identity, heartbeat.service, telegram.service)
     say the same thing, so there is one default rather than four.
+
+    Reviewed and rejected twice: "an unmigrated database (column absent) lands here and
+    would advertise GTD tools the schema cannot serve." A SERVING process cannot be in
+    that state. `main.lifespan` calls `run_migrations()` unguarded before the app yields
+    and `run_migrations` re-raises on any failure, so a migration that did not apply is
+    a fatal boot error, not a degraded runtime — and #70's migration is what creates
+    this column. The reachable callers of this except are the hermetic suite and any
+    embedding that builds a registry with no pool, where GTD is simply the answer we
+    want. If that startup contract ever changes, revisit this line first.
     """
     try:
         row = pg_fetchone("SELECT task_mode FROM crm_meta WHERE id = 1")

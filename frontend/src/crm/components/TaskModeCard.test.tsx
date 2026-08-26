@@ -131,9 +131,10 @@ describe('TaskModeCard mode ownership (issue #102)', () => {
     expect(container.textContent).toContain('Enable the no-login todo app');
   });
 
-  it('does not show the no-login section in simple-list mode when nothing is configured', async () => {
-    // Tokenless capture is the DEFAULT on every install, not something anyone enabled,
-    // so it alone does not drag GTD-flavoured settings into the simple-list experience.
+  it('offers a way to restrict tokenless capture in the simple-list mode too', async () => {
+    // Bare /capture is publicly writable on EVERY install until a token is set, in
+    // either mode — so the control that ADDS that token has to be reachable in either
+    // mode. Hiding it left a live public endpoint with no way to restrict it.
     api.mockReset();
     api.mockResolvedValue({
       todo_capture_token: '', todo_web_enabled: false, todo_web_token: '',
@@ -143,7 +144,8 @@ describe('TaskModeCard mode ownership (issue #102)', () => {
     const seen: TaskMode[] = [];
     await act(async () => root.render(<Owner initial="normal" seen={seen} />));
 
-    expect(container.textContent).not.toContain('Full todo app');
+    expect(container.textContent).toContain('Quick capture');
+    expect(container.textContent).toContain('New secret link');
   });
 
   it('disables both buttons until the mode is known', async () => {
