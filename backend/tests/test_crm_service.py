@@ -1007,23 +1007,35 @@ def test_an_ordinary_list_still_counts_the_whole_filtered_set(rec):
 @pytest.mark.parametrize(
     "call",
     [
-        lambda: service.list_contacts(sort="id", status="active"),
         lambda: service.list_contacts(sort="id", after_id=900),
-        lambda: service.list_companies(sort="id", status="active"),
         lambda: service.list_companies(sort="id", after_id=900),
     ],
 )
-def test_an_assembly_request_skips_the_count_entirely(rec, call):
-    """Not a micro-optimisation: `sort=id` IS the corpus sweep, it derives hasMore from an
-    extra row and never reads `total`, and it issues up to MAX_PAGES requests. Counting
-    anyway would add a scan of the whole filtered set to each one, on the heaviest read
-    path in the app, for a number with no consumer.
-
-    `total` is None there rather than a stale or wrong integer.
-    """
+def test_a_cursor_page_skips_the_count_entirely(rec, call):
+    """Not a micro-optimisation: a corpus sweep is up to MAX_PAGES requests and never reads
+    `total`, so counting on each would add a scan of the whole filtered set to the heaviest
+    read path in the app. `total` is None there rather than a stale or wrong integer."""
     result = call()
     assert result["total"] is None
     assert not any("COUNT(*)" in sql for sql, _ in rec.calls)
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: service.list_contacts(sort="id", offset=50),
+        lambda: service.list_companies(sort="id", offset=50),
+    ],
+)
+def test_plain_offset_pagination_on_the_id_order_still_gets_a_total(rec, call):
+    """`sort=id` alone is ordinary offset pagination, not a sweep.
+
+    Keying the skip on the SORT would strip `total` from a caller paging with
+    `?sort=id&offset=N`, who needs it to know how many pages remain — and the sweep's own
+    first page is indistinguishable from that request anyway, so it pays one COUNT.
+    """
+    rec.fetchone_queue = [{"cnt": 4200}]
+    assert call()["total"] == 4200
 
 
 @pytest.mark.parametrize(

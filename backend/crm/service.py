@@ -115,9 +115,9 @@ _TASK_SORTS = {
 }
 
 
-def _count_or_none(sort: str, sql: str, params: list) -> int | None:
-    """Total matching rows, or None for an assembly request (see list_contacts for why)."""
-    if sort == "id":
+def _count_or_none(after_id: int | None, sql: str, params: list) -> int | None:
+    """Total matching rows, or None on a CURSOR page (see list_contacts for why)."""
+    if after_id is not None:
         return None
     row = pg_fetchone(sql, params)
     return row["cnt"] if row else 0
@@ -374,12 +374,13 @@ def list_contacts(
 
     # The count needs no join — its WHERE only touches ct columns (the alias is
     # here so the shared qualified conditions parse).
-    # `sort=id` IS the corpus sweep, and the sweep never reads `total` — it derives
-    # hasMore from an extra row. Counting anyway would add a scan of the whole filtered
-    # set to every one of up to MAX_PAGES requests, on the heaviest read path in the app,
-    # for a number with no consumer. `total` is None there, never a wrong integer; every
-    # other caller is unaffected.
-    total = _count_or_none(sort, f"SELECT COUNT(*) AS cnt FROM contacts ct {where}", params)
+    # Keyed on the CURSOR, not on `sort=id`. A corpus sweep is up to MAX_PAGES requests and
+    # never reads `total`, so counting on each would add a scan of the whole filtered set to
+    # the heaviest read path in the app — but only its continuation pages can be identified
+    # as a sweep. Its first page looks exactly like an ordinary `?sort=id&offset=N`, which
+    # is legitimate offset pagination whose caller does need the total. So the sweep pays
+    # exactly one COUNT and no envelope loses a field it used to carry.
+    total = _count_or_none(after_id, f"SELECT COUNT(*) AS cnt FROM contacts ct {where}", params)
 
     # The cursor is deliberately NOT in the shared conditions above. That rule exists for
     # FILTERS — a status or owner narrowing the rows but not the COUNT reports a total that
@@ -694,8 +695,8 @@ def list_companies(
         params.append(owner_id)
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
-    # Skipped for an assembly request — see list_contacts.
-    total = _count_or_none(sort_col, f"SELECT COUNT(*) AS cnt FROM companies {where}", params)
+    # Skipped on a cursor page — see list_contacts.
+    total = _count_or_none(after_id, f"SELECT COUNT(*) AS cnt FROM companies {where}", params)
 
     # Window, not filter — see the same note in list_contacts.
     row_conditions = conditions + (["id > %s"] if after_id is not None else [])
