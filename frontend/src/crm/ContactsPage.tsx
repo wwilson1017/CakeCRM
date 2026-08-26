@@ -59,7 +59,7 @@ export function ContactsPage() {
   const { upsert, remove, retry } = corpus;
 
   if (id !== undefined) {
-    return <ContactDetailPage onChanged={upsert} onDeleted={remove} />;
+    return <ContactDetailPage onChanged={upsert} onDeleted={remove} onWriteUncertain={retry} />;
   }
 
   return (

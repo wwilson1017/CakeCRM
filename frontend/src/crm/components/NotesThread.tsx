@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '../../core/api/client';
+import { writeMayHaveLanded } from '../usePatchableAssembly';
 import type { CrmNote } from '../../core/types';
 import { mono, INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, ACCENT, ACCENT_INK, inputStyle } from '../../shared/styles';
 import { toast } from '../../shared/toast';
@@ -73,8 +74,12 @@ export function NotesThread({ entityType, entityId, onChanged }: Props) {
       setDraft('');
       load();
       onChanged?.();
-    } catch {
+    } catch (err) {
       toast.error('Failed to add note.');
+      // The write may still have committed and moved this contact's last_contact_at, so
+      // reload rather than leave the thread — and the host's column — showing the old
+      // state. A definite 4xx wrote nothing (#77).
+      if (writeMayHaveLanded(err)) { load(); onChanged?.(); }
     } finally {
       setSubmitting(false);
     }
@@ -91,8 +96,12 @@ export function NotesThread({ entityType, entityId, onChanged }: Props) {
       setEditText('');
       load();
       onChanged?.();
-    } catch {
+    } catch (err) {
       toast.error('Failed to save note.');
+      // The write may still have committed and moved this contact's last_contact_at, so
+      // reload rather than leave the thread — and the host's column — showing the old
+      // state. A definite 4xx wrote nothing (#77).
+      if (writeMayHaveLanded(err)) { load(); onChanged?.(); }
     }
   }
 
@@ -101,8 +110,10 @@ export function NotesThread({ entityType, entityId, onChanged }: Props) {
       await api(`/api/crm/chatter/note/${id}/${archived ? 'archive' : 'unarchive'}`, { method: 'POST' });
       load();
       onChanged?.();
-    } catch {
+    } catch (err) {
       toast.error(`Failed to ${archived ? 'archive' : 'restore'} note.`);
+      // See addNote: archiving the newest note changes last_contact_at too.
+      if (writeMayHaveLanded(err)) { load(); onChanged?.(); }
     }
   }
 

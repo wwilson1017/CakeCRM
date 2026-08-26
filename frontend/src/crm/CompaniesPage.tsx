@@ -43,7 +43,7 @@ export function CompaniesPage() {
   const { upsert, remove, retry } = corpus;
 
   if (id !== undefined) {
-    return <CompanyDetailPage onChanged={upsert} onDeleted={remove} />;
+    return <CompanyDetailPage onChanged={upsert} onDeleted={remove} onWriteUncertain={retry} />;
   }
 
   return (

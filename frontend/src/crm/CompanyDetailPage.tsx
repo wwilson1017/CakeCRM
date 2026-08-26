@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../core/api/client';
+import { writeMayHaveLanded } from './usePatchableAssembly';
 import type { CrmCompany } from '../core/types';
 import { CompanyForm } from './components/CompanyForm';
 import { ActivityTimeline } from './components/ActivityTimeline';
@@ -28,9 +29,12 @@ import {
 interface CompanyDetailPageProps {
   onChanged?: (company: CrmCompany) => void;
   onDeleted?: (id: number) => void;
+  /** A write here whose outcome is unknown — the host re-sweeps, since only the server
+   *  can now say what this record looks like, or whether it still exists (#77). */
+  onWriteUncertain?: () => void;
 }
 
-export function CompanyDetailPage({ onChanged, onDeleted }: CompanyDetailPageProps = {}) {
+export function CompanyDetailPage({ onChanged, onDeleted, onWriteUncertain }: CompanyDetailPageProps = {}) {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
@@ -75,8 +79,11 @@ export function CompanyDetailPage({ onChanged, onDeleted }: CompanyDetailPagePro
     if (!ok) return;
     try {
       await api(`/api/crm/companies/${id}`, { method: 'DELETE' });
-    } catch {
+    } catch (err) {
       toast.error('Failed to delete company.');
+      // The DELETE may have committed before the response was lost, in which case the
+      // list is still showing a row that no longer exists.
+      if (writeMayHaveLanded(err)) onWriteUncertain?.();
       return;
     }
     onDeleted?.(Number(id));
@@ -218,7 +225,7 @@ export function CompanyDetailPage({ onChanged, onDeleted }: CompanyDetailPagePro
         sectionStyle={{ marginTop: 24, borderTop: `1px solid ${LINE_STRONG}`, paddingTop: 24 }}
       />
 
-      {showEdit && <CompanyForm company={company} onClose={() => setShowEdit(false)} onSaved={() => { setShowEdit(false); load(); setCfVersion(v => v + 1); }} />}
+      {showEdit && <CompanyForm company={company} onWriteUncertain={onWriteUncertain} onClose={() => setShowEdit(false)} onSaved={() => { setShowEdit(false); load(); setCfVersion(v => v + 1); }} />}
     </div>
   );
 }
