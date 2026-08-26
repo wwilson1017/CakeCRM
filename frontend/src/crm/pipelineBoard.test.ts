@@ -1,3 +1,10 @@
+// @vitest-environment jsdom
+//
+// jsdom, not the default node env, ONLY because the hidden-stage persistence tests touch
+// sessionStorage. Worth stating plainly: this file passed locally under `node` because
+// Node 26 exposes `sessionStorage` as a global, while CI's Node does not — so the suite was
+// green on a global it never declared, and went red the first time it ran on a different
+// runtime. Everything else here is pure and indifferent to the environment.
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { CrmDeal } from '../core/types';
 import {
