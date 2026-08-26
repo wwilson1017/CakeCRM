@@ -10,6 +10,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
+import { ActiveRecordProvider } from './RecordContext';
 
 import type { CrmDeal } from '../core/types';
 
@@ -24,6 +25,16 @@ vi.mock('../core/api/client', () => ({
 
 // The board is desktop-only for selection; pin it so the bulk affordances render.
 vi.mock('../shared/useIsMobile', () => ({ useIsMobile: () => false }));
+
+// The deal sheet is stubbed: what these tests are about is whether the PAGE routes a
+// selection to it, not what it renders. The real one pulls in the record context, the
+// activity timeline, chatter, custom fields and the touch-count drill-down — a dependency
+// tree with its own suites, and mocking all of it would test the mocks.
+vi.mock('./components/DealDetailSheet', () => ({
+  DealDetailSheet: ({ deal }: { deal: { id: number; title: string } }) => (
+    <div data-testid="deal-sheet" data-deal-id={deal.id}>{deal.title}</div>
+  ),
+}));
 
 const { PipelinePage } = await import('./PipelinePage');
 
@@ -46,9 +57,13 @@ let container: HTMLDivElement;
 let root: Root;
 
 function route(path: string) {
+  // The deal sheet publishes itself as the active record (#14), so opening one — which the
+  // list-row test does — needs the provider the real app mounts above the CRM routes.
   return (
     <MemoryRouter initialEntries={[path]}>
-      <PipelinePage />
+      <ActiveRecordProvider>
+        <PipelinePage />
+      </ActiveRecordProvider>
     </MemoryRouter>
   );
 }
@@ -72,9 +87,16 @@ beforeEach(() => {
   // rather than about jsdom's gaps.
   Element.prototype.scrollIntoView = vi.fn();
   api.mockReset();
-  api.mockImplementation((url: string) => {
+  api.mockImplementation((url: string, init: { body: string }) => {
     if (url === '/api/users') return Promise.resolve({ users: [] });
     if (url === '/api/crm/deals') return Promise.resolve({ deals: DEALS });
+    // A bulk move must answer in the real envelope: `{}` reads as ok:false, which
+    // classifyBulkMove correctly calls a REFUSAL — a silently wrong premise for any test
+    // asserting on what happens after a successful move.
+    if (url === '/api/crm/deals/bulk-move') {
+      const ids = JSON.parse(init.body).deal_ids as number[];
+      return Promise.resolve({ ok: true, updated: ids.length, updated_ids: ids, errors: [] });
+    }
     return Promise.resolve({});
   });
   container = document.createElement('div');
@@ -258,5 +280,64 @@ describe('stage visibility is reachable and reversible through the UI', () => {
     expect(text()).toContain('Alpha contract');
     expect(text()).toContain('Beta renewal');
     expect(sessionStorage.getItem('crm_pipeline_hidden_stages')).toBe('[]');
+  });
+});
+
+describe('a list row opens the deal, like a board card does', () => {
+  it('clicking a row selects that deal', async () => {
+    await mount();
+    await act(async () => { buttonByText('List')!.click(); });
+
+    // The row advertises a click (ListView gives every row a pointer cursor); it must land.
+    const row = [...document.querySelectorAll('tbody tr')]
+      .find(tr => (tr.textContent ?? '').includes('Beta renewal'));
+    expect(row).toBeDefined();
+    await act(async () => { (row as HTMLElement).click(); });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(document.querySelector('[data-testid="deal-sheet"]')?.getAttribute('data-deal-id'))
+      .toBe('2');
+  });
+});
+
+describe('moving a deal into a hidden stage reveals that column', () => {
+  it('a bulk move to a hidden stage un-hides it rather than vanishing the deals', async () => {
+    sessionStorage.setItem('crm_pipeline_hidden_stages', JSON.stringify(['proposal']));
+    await mount();
+
+    const check = document.querySelector<HTMLInputElement>('input[aria-label="Select Alpha contract"]')!;
+    await act(async () => { check.click(); });
+    const select = document.querySelector<HTMLSelectElement>(
+      'select[aria-label="Move selected deals to stage"]',
+    )!;
+    await act(async () => {
+      select.value = 'proposal';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await act(async () => { buttonByText('Apply')!.click(); });
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await Promise.resolve(); });
+
+    // Proposal is visible again, so the moved deal has somewhere to land in view.
+    expect(JSON.parse(sessionStorage.getItem('crm_pipeline_hidden_stages')!)).toEqual([]);
+    expect(text()).not.toContain('1 stage hidden');
+  });
+});
+
+describe('an empty board shows ONE explanation, not two', () => {
+  it('does not stack the filter message on the layer\'s own empty state', async () => {
+    api.mockImplementation((url: string) => {
+      if (url === '/api/users') return Promise.resolve({ users: [] });
+      if (url === '/api/crm/deals') return Promise.resolve({ deals: [] });
+      return Promise.resolve({});
+    });
+    // A persisted query from a previous session, on an install that has no deals yet.
+    sessionStorage.setItem(
+      'collection_crm_pipeline_v1',
+      JSON.stringify({ query: 'anything', facets: {}, voided: null, toggles: {} }),
+    );
+    await mount();
+    expect(text()).toContain('No deals to show.');
+    expect(text()).not.toContain('No deals match your filters.');
   });
 });

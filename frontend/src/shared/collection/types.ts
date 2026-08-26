@@ -458,5 +458,15 @@ export interface CollectionViewProps<T, C = unknown> {
    *  clear-all and the drag gate. */
   toolbarExtras?: ReactNode;
   searchPlaceholder?: string;
+  /**
+   * Bump to empty the search box on a PROGRAMMATIC clear. Needed because `SearchInput` adopts
+   * an external value only when it CHANGES: a page that clears while `state.query` is already
+   * `''` leaves locally-typed text whose debounce has not settled, which then re-filters a
+   * moment after the clear. The bar owns the same mechanism for its own Clear button; this
+   * routes a page-initiated clear (a deep link, an app-level "reset filters") to it, instead
+   * of the caller re-keying the whole subtree and losing the disclosure panel, the list's
+   * show-all and the board's scroll position with it.
+   */
+  searchResetNonce?: number;
   loading?: CollectionLoadingProps;
 }

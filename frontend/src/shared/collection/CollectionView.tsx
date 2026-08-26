@@ -74,6 +74,7 @@ export default function CollectionView<T, C = unknown>({
   detail,
   toolbarExtras,
   searchPlaceholder,
+  searchResetNonce,
   loading,
 }: CollectionViewProps<T, C>) {
   const facets = useMemo(() => config.facets ?? [], [config]);
@@ -315,6 +316,7 @@ export default function CollectionView<T, C = unknown>({
         query={state.query}
         onQueryChange={state.setQuery}
         placeholder={searchPlaceholder ?? `Search ${noun}...`}
+        resetNonce={searchResetNonce}
         groups={groups}
         extraFacets={panelExtras.length > 0 ? <>{panelExtras}</> : undefined}
         extraChips={chipExtras.length > 0 ? <>{chipExtras}</> : undefined}

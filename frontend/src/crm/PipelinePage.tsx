@@ -69,6 +69,15 @@ export function PipelinePage() {
   const [hiddenStages, setHiddenStages] = useState<Set<string>>(loadHiddenStages);
   useEffect(() => { saveHiddenStages(hiddenStages); }, [hiddenStages]);
 
+  // A stage move is an explicit request to put a deal THERE, so a destination the user had
+  // put away gives way — the same call the deep link makes. Without this, moving deals into a
+  // hidden stage makes them vanish from the board with no feedback at all: `describeBulkMove`
+  // is deliberately silent on a clean run, and drag can't reach a hidden stage, so these two
+  // paths (the bulk bar and the sheet's Mark Won/Lost) are the only ways to hit it.
+  const revealStage = useCallback((stage: string) => {
+    setHiddenStages(prev => (prev.has(stage) ? new Set([...prev].filter(s => s !== stage)) : prev));
+  }, []);
+
   const columnRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   // Last stage the deep-link effect scrolled to — re-fires per NEW target, once each.
   const scrolledStage = useRef<string | null>(null);
@@ -255,10 +264,13 @@ export function PipelinePage() {
   // the board (like onClose) so an in-sheet note/activity logged before this dismissal lands
   // its last_activity_at; if a stage move fired, the refresh defers until that PUT settles.
   const updateDealStage = useCallback((deal: CrmDeal, stage: string) => {
-    if (deal.stage !== stage) moveDealStage(deal, stage, deal.stage);
+    if (deal.stage !== stage) {
+      moveDealStage(deal, stage, deal.stage);
+      revealStage(stage);
+    }
     setSelectedDealId(null);
     load(true);
-  }, [moveDealStage, load]);
+  }, [moveDealStage, load, revealStage]);
 
   const deals = useMemo(() => data?.deals ?? [], [data]);
 
@@ -434,6 +446,9 @@ export function PipelinePage() {
       // Reconcile from server truth before releasing the lock — the refetch is the authority
       // on what actually saved, and holding the lock across it keeps a drag from racing it.
       const reconciled = await load(true);
+        // Same reasoning as updateDealStage: if any deal actually landed in a stage the user
+      // had put away, show that column rather than letting the rows disappear silently.
+      if (outcome.kind !== 'rejected') revealStage(toStage);
       const notice = describeBulkMove(outcome, ids.length, reconciled);
       if (notice) {
         if (notice.persistent) setBulkNotice(notice);
@@ -451,11 +466,17 @@ export function PipelinePage() {
       bulkPendingRef.current = false;
       setBulkPending(false);
     }
-  }, [bulkSelected, state.visibleItems, deals, clearSelection, load]);
+  }, [bulkSelected, state.visibleItems, deals, clearSelection, load, revealStage]);
 
   // ── Board derivations ──────────────────────────────────────────────────────
+  // Trimmed to match `facets.ts`, which normalizes both sides of a multi-facet comparison
+  // through `facetKey`. Comparing raw here would let a persisted `" won "` keep Won deals in
+  // `visibleItems` (and so in the bulk count AND payload) while rendering no Won column —
+  // the exact split the no-getVoided rule exists to prevent. `coerceSelection` accepts any
+  // scalar, so a hand-edited or legacy envelope can carry one.
   const stageFacet = useMemo(
-    () => (state.facetSelections.stage ?? []) as (string | number)[],
+    () => ((state.facetSelections.stage ?? []) as (string | number)[])
+      .map(v => (typeof v === 'string' ? v.trim() : v)),
     [state.facetSelections.stage],
   );
 
@@ -483,7 +504,11 @@ export function PipelinePage() {
 
   // Filters active but nothing matched: show one explanation instead of a row of empty
   // columns reading as "there are no deals at all".
-  const filteredToNothing = state.isFiltering && state.visibleItems.length === 0;
+  // `items.length > 0` matters: when the board holds nothing at all, the collection layer
+  // early-returns its OWN empty state (before its toolbar), so without this guard a fresh
+  // install carrying a persisted query would stack "No deals to show." on top of "No deals
+  // match your filters." — two different explanations for one blank screen.
+  const filteredToNothing = items.length > 0 && state.isFiltering && state.visibleItems.length === 0;
 
   // Open-pipeline $/count reflect the visible set so the header describes what's shown
   // (the toolbar's own "N of M deals" readout signals when a filter is narrowing the board).
@@ -540,12 +565,12 @@ export function PipelinePage() {
     );
     for (const el of columnRefs.current.values()) observer.observe(el);
     return () => observer.disconnect();
-    // `state.view` and `resetSeq` are deliberate dependencies even though the body reads
-    // neither: both remount the board WITHOUT necessarily changing `columns` (a view switch,
-    // and the deep-link reset that re-keys CollectionView), which would leave this observer
-    // watching detached column nodes through a stale scroller root — the active chip would
-    // silently stop following swipes.
-  }, [isMobile, state.view, columns, resetSeq]);
+    // `state.view` is a deliberate dependency even though the body reads it once: switching
+    // views remounts the board WITHOUT necessarily changing `columns`, which would leave this
+    // observer watching detached column nodes through a stale scroller root — the active chip
+    // would silently stop following swipes. (`resetSeq` no longer belongs here: it is routed
+    // to the search box as a nonce now and remounts nothing.)
+  }, [isMobile, state.view, columns]);
 
   const scrollToStage = useCallback((stage: string) => {
     columnRefs.current.get(stage)?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
@@ -644,7 +669,7 @@ export function PipelinePage() {
         </div>
       )}
 
-      {isMobile && state.view === 'kanban' && !filteredToNothing && (
+      {isMobile && state.view === 'kanban' && items.length > 0 && !filteredToNothing && (
         <StageChipBar
           stages={columns.map(c => ({ stage: c.data.stage, count: c.data.count }))}
           // Derived from the RENDERED columns, so a facet that just hid the active stage
@@ -659,11 +684,18 @@ export function PipelinePage() {
       )}
 
       <CollectionView<CrmDeal, StageColumn>
-        key={resetSeq}
         config={config}
         state={state}
         items={items}
         searchPlaceholder="Search deals, contacts, companies..."
+        // What opens a deal from the LIST view: `CollectionListView` wires every row to
+        // `onSelect`, and `ListView` gives each row a pointer cursor and a hover highlight
+        // unconditionally — so without this the rows advertise a click and swallow it.
+        // This mounts no `CollectionDetail`: the layer gates that on `detail && config.detail`,
+        // and the pipeline declares neither until #75. The board card has its own onOpen.
+        selectedId={selectedDealId}
+        onSelect={id => setSelectedDealId(id === null ? null : Number(id))}
+        searchResetNonce={resetSeq}
         // Desktop only: card checkboxes and the bulk bar have always been a pointer-and-keyboard
         // affordance here, and passing `selection` unconditionally would put a bulk bar on
         // phones as a side effect of adopting the layer.
