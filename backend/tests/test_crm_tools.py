@@ -705,6 +705,22 @@ def test_every_open_stage_still_reaches_the_service(monkeypatch):
     assert seen == [(kind, s) for s in service.OPEN_STAGES for kind in ("bulk", "single")]
 
 
+def test_the_guard_refuses_ONLY_closed_stages_not_every_invalid_one(monkeypatch):
+    """The guard is `stage in CLOSED_STAGES`, not `stage not in OPEN_STAGES` — a typo
+    must still get the service's own invalid-stage answer, not advice to close the
+    deal. Widening the guard to the complement would break exactly this."""
+    monkeypatch.setattr(service, "update_deal_stage", lambda did, stage: None)
+    monkeypatch.setattr(service, "bulk_move_deals", lambda ids, stage: {
+        "ok": False, "updated": 0, "updated_ids": [], "errors": [f"Invalid stage: {stage}"]})
+    for bad in ("banana", "Won", " lost"):
+        single = tools.crm_update_deal_stage(7, bad)
+        assert "crm_mark_deal_won" not in single["error"], bad
+        assert bad in single["error"], bad
+        bulk = tools.crm_bulk_move_deals([1], bad)
+        assert bulk["ok"] is False, bad
+        assert bulk["errors"] == [f"Invalid stage: {bad}"], bad
+
+
 def test_open_predicate_sql_agrees_with_the_closed_stages_tuple():
     """OPEN_PREDICATE is the SQL spelling of CLOSED_STAGES and stays a hand-written
     literal (every deal-reading query embeds it). This is what keeps the two in step."""
