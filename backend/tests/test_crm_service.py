@@ -8,7 +8,7 @@ writes go through ``get_connection`` and use the shared ``fake_conn`` fixture.
 
 import pytest
 
-from crm import service
+from crm import scoring_service, service
 
 
 class Recorder:
@@ -143,12 +143,19 @@ def test_search_contacts_ilike_and_tag_boundary(rec):
     sql = rec.sql_containing("FROM contacts ct")
     # name/email/company/co.name/notes + tag clauses (issue #35 added the join term)
     assert sql.count("ILIKE") >= 5
-    assert "LIKE %s" not in sql.replace("ILIKE %s", "")  # no case-sensitive LIKE
+    # No case-sensitive LIKE among the SEARCH terms. The #77 last-contact join adds one
+    # deliberate `NOT LIKE`, which is not a search matcher: it excludes provenance
+    # housekeeping notes by an exact prefix our own code writes, so case-sensitivity is
+    # correct there. Stripped by its exact shape, so any OTHER bare LIKE still fails.
+    assert "LIKE %s" not in sql.replace("ILIKE %s", "").replace("NOT LIKE %s", "")
     assert "ct.status = %s" in sql
     assert "LEFT JOIN companies co ON ct.company_id = co.id" in sql
     assert "co.name ILIKE %s" in sql  # linked contacts findable by company name
     params = rec.params_for("FROM contacts ct")
-    assert params[:5] == ["%acme%"] * 5
+    # The last-contact LATERAL sits in the FROM clause, so its pattern binds ahead of
+    # every WHERE parameter (#77).
+    assert params[0] == scoring_service.HOUSEKEEPING_NOTE_LIKE
+    assert params[1:6] == ["%acme%"] * 5
     assert "active" in params
     assert "%,vip,%" in params and "%,lead,%" in params
     assert params[-2:] == [15, 0]  # LIMIT %s OFFSET %s (default offset 0)
@@ -681,8 +688,10 @@ def test_list_contacts_company_sort_uses_effective_name(rec):
     rec.fetchone_queue = [{"cnt": 0}]
     rec.fetchall_queue = [[]]
     service.list_contacts(sort="company")
-    # sorts by what the UI renders (link first, legacy text as fallback)
-    assert "ORDER BY COALESCE(co.name, ct.company) DESC" in rec.sql_containing("ORDER BY")
+    # Sorts by what the UI renders (link first, legacy text as fallback), ASCENDING —
+    # a name sort means A→Z, which is what ?sort=company advertises and what
+    # list_companies has always done. It answered Z→A until #77.
+    assert "ORDER BY COALESCE(co.name, ct.company) ASC, ct.id ASC" in rec.sql_containing("ORDER BY")
 
 
 def test_update_deal_accepts_company_id(monkeypatch, rec, fake_conn):
@@ -901,3 +910,139 @@ def test_list_contacts_unknown_sort_falls_back_to_updated_at(rec):
 def test_search_contacts_honors_lead_score_sort(rec):
     service.search_contacts("acme", sort="lead_score")
     assert "lead_score DESC NULLS LAST" in rec.sql_containing("FROM contacts ct")
+
+
+# ── #77: the list pages' keyset assembly, and the reads it needs ──────────────
+
+
+def test_list_tasks_default_order_gains_an_id_tiebreaker(rec):
+    """The historical due order, made deterministic.
+
+    Every pre-#77 caller (the crm_list_tasks tool, the heartbeat, the rollups) still gets
+    `completed ASC, due_date ASC` — but ties among tasks sharing a due date used to be
+    resolved arbitrarily by Postgres, so a LIMIT window could omit one task and repeat
+    another between two identical requests.
+    """
+    service.list_tasks()
+    sql = rec.sql_containing("FROM tasks t")
+    assert "ORDER BY t.completed ASC, t.due_date ASC, t.id ASC LIMIT %s" in sql
+    assert "OFFSET" not in sql  # this endpoint never had one and still does not
+    assert rec.params_for("FROM tasks t")[-1] == 50
+
+
+def test_list_tasks_id_sort_is_the_assembly_key(rec):
+    service.list_tasks(sort="id", after_id=500, limit=501)
+    sql = rec.sql_containing("FROM tasks t")
+    assert "ORDER BY t.id ASC LIMIT %s" in sql
+    assert "t.id > %s" in sql
+    params = rec.params_for("FROM tasks t")
+    assert params[-2:] == [500, 501]  # cursor binds in the WHERE, limit last
+
+
+def test_list_tasks_unknown_sort_falls_back_to_the_due_order(rec):
+    service.list_tasks(sort="bogus")
+    assert "ORDER BY t.completed ASC, t.due_date ASC, t.id ASC" in rec.sql_containing("FROM tasks t")
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: service.list_contacts(after_id=5, sort="updated_at"),
+        lambda: service.list_contacts(after_id=5),  # the DEFAULT sort is not id either
+        lambda: service.list_companies(after_id=5, sort="name"),
+        lambda: service.list_tasks(after_id=5, sort="due"),
+        lambda: service.list_tasks(after_id=5),
+    ],
+)
+def test_a_cursor_against_a_mutable_order_is_refused(rec, call):
+    """Fail loudly rather than paginate wrong.
+
+    `after_id` means "the rows after this one in the current order"; under updated_at or
+    name that is not well defined (not unique, not stable), so the window would silently
+    skip and repeat rows. Silently IGNORING the parameter would be worse still — it looks
+    exactly like a client stuck re-reading page one.
+    """
+    rec.fetchone_queue = [{"cnt": 0}]
+    with pytest.raises(ValueError):
+        call()
+
+
+def test_contact_name_and_company_sorts_ascend(rec):
+    rec.fetchone_queue = [{"cnt": 0}]
+    service.list_contacts(sort="name")
+    assert "ORDER BY ct.name ASC, ct.id ASC" in rec.sql_containing("ORDER BY")
+
+
+def test_contact_and_company_id_sorts_are_plain_ascending_keys(rec):
+    rec.fetchone_queue = [{"cnt": 0}]
+    service.list_contacts(sort="id", after_id=7)
+    contact_sql = rec.sql_containing("FROM contacts ct LEFT JOIN")
+    assert "ORDER BY ct.id ASC LIMIT" in contact_sql
+    assert "ct.id > %s" in contact_sql
+
+    rec.calls.clear()
+    rec.fetchone_queue = [{"cnt": 0}]
+    service.list_companies(sort="id", after_id=7)
+    company_sql = rec.sql_containing("FROM companies WHERE")
+    # Its own tie-breaker — emitting "id ASC, id ASC" would be redundant SQL.
+    assert "ORDER BY id ASC LIMIT" in company_sql
+    assert "id ASC, id ASC" not in company_sql
+    assert "id > %s" in company_sql
+
+
+def test_a_cursor_narrows_the_rows_but_not_the_total(rec):
+    """A cursor is the WINDOW, not a filter.
+
+    The repo rule that a filter must reach the COUNT and the page query together exists so
+    a total cannot disagree with the rows. `after_id` is like OFFSET, which the COUNT has
+    always ignored: `total` stays the size of the whole matching set, which is what a
+    caller paging through it needs.
+    """
+    rec.fetchone_queue = [{"cnt": 4200}]
+    result = service.list_contacts(sort="id", after_id=900, status="active")
+    count_sql = rec.sql_containing("COUNT(*)")
+    assert "ct.id > %s" not in count_sql
+    assert "ct.status = %s" in count_sql  # a real filter DOES reach it
+    assert result["total"] == 4200
+
+
+def test_contact_list_search_and_detail_all_derive_last_contact_at(rec):
+    """One definition of "when did we last talk to this person", used by three reads."""
+    for prime, call in (
+        ([{"cnt": 0}], lambda: service.list_contacts()),
+        ([], lambda: service.search_contacts("acme")),
+        ([{"id": 1}, None, None], lambda: service.get_contact_detail(1)),
+    ):
+        rec.calls.clear()
+        rec.fetchone_queue = list(prime)
+        rec.fetchall_queue = [[], [], [], []]
+        call()
+        sql = rec.sql_containing("last_contact_at")
+        assert "lt.last_at AS last_contact_at" in sql
+        # Both signals, and the archived + housekeeping exclusions.
+        assert "FROM activity_log a WHERE a.contact_id = ct.id" in sql
+        assert "ch.entity_type = 'contact'" in sql
+        assert "ch.archived = 0" in sql
+        assert "ch.message NOT LIKE %s" in sql
+        assert rec.params_for("last_contact_at")[0] == scoring_service.HOUSEKEEPING_NOTE_LIKE
+
+
+def test_the_contact_count_query_stays_join_free(rec):
+    """The COUNT must not pay for the derived touch — it does not select it."""
+    rec.fetchone_queue = [{"cnt": 0}]
+    service.list_contacts()
+    count_sql = rec.sql_containing("COUNT(*)")
+    assert "LEFT JOIN" not in count_sql
+    assert "crm_chatter" not in count_sql
+
+
+def test_get_task_returns_a_list_shaped_row(rec):
+    """Task writes return get_task, and the list patches itself from those bodies (#77).
+
+    Without the joins a saved task loses its contact/deal label in the list — and a task
+    re-linked to another contact would keep showing the old name.
+    """
+    service.get_task(1)
+    sql = rec.sql_containing("FROM tasks t")
+    assert "c.name AS contact_name" in sql
+    assert "d.title AS deal_title" in sql

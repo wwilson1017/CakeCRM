@@ -149,8 +149,16 @@ function matchesCloseDate(deal: CrmDeal, preset: ClosePreset, now: Date): boolea
   }
 }
 
-function matchesLastActivity(deal: CrmDeal, preset: ActivityPreset, now: Date): boolean {
-  const act = activityLocalDate(deal.last_activity_at);
+/**
+ * Recency bucket for ANY last-touch timestamp — the deal-shaped wrapper below is one
+ * caller, the Contacts list's Last-contact facet (#77) is the other. Extracted rather than
+ * copied so both surfaces agree on where "stale" begins; the pipeline's behaviour is
+ * unchanged.
+ */
+export function matchesActivityPreset(
+  ts: string | null | undefined, preset: ActivityPreset, now: Date,
+): boolean {
+  const act = activityLocalDate(ts);
   switch (preset) {
     case 'none':
       return !act;
@@ -159,9 +167,13 @@ function matchesLastActivity(deal: CrmDeal, preset: ActivityPreset, now: Date): 
     case 'le30':
       return !!act && act >= ymd(now, -30);
     case 'stale30':
-      // No logged deal activity in the last 30 days — includes deals with none at all.
+      // No logged activity in the last 30 days — includes records with none at all.
       return !act || act < ymd(now, -30);
   }
+}
+
+function matchesLastActivity(deal: CrmDeal, preset: ActivityPreset, now: Date): boolean {
+  return matchesActivityPreset(deal.last_activity_at, preset, now);
 }
 
 function matchesOwner(deal: CrmDeal, owners: OwnerFilterValue[]): boolean {

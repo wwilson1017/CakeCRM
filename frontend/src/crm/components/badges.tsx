@@ -1,5 +1,5 @@
 import { FONT_MONO, CORAL, GOLD, SAGE, INK, INK_SOFT, INK_DIM, AI, tint } from '../../shared/styles';
-import { TOUCH_COLORS, touchBand } from '../constants';
+import { TOUCH_COLORS, touchBand, scoreBand } from '../constants';
 
 const badgeBase: React.CSSProperties = {
   fontSize: 12, padding: '4px 12px', borderRadius: 4,
@@ -65,8 +65,9 @@ const SCORE_COLORS = {
 
 export function ScorePill({ score, compact }: { score?: number | null; compact?: boolean }) {
   if (score == null) return null;
-  const band = score >= 70 ? 'hot' : score >= 40 ? 'warm' : 'cool';
-  const c = SCORE_COLORS[band];
+  // Bands live in crm/constants.ts so the Contacts list's Score facet (#77) selects exactly
+  // the rows this pill colours.
+  const c = SCORE_COLORS[scoreBand(score)];
   return (
     <span
       title="Computed lead score (0-100) from stage, engagement, value, links & recency. Ask the assistant for the full breakdown."

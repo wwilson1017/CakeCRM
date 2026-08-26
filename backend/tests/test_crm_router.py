@@ -766,3 +766,61 @@ def test_contact_id_zero_is_a_filter_not_a_fallthrough(client, monkeypatch):
     monkeypatch.setattr(service, "list_deals", lambda **kw: [])
     assert client.get("/api/crm/deals?contact_id=0").status_code == 200
     assert client.get("/api/crm/deals?contact_id=0&include_archived=true").status_code == 400
+
+
+# ── #77: the list pages' keyset assembly parameters ──────────────────────────
+
+def test_list_params_reach_the_service_with_backward_compatible_defaults(client, monkeypatch):
+    """`after_id`/`sort` are forwarded, and an omitting caller sees the old behaviour."""
+    seen: dict = {}
+
+    def fake_tasks(**kw):
+        seen.update(kw)
+        return []
+
+    monkeypatch.setattr(service, "list_tasks", fake_tasks)
+
+    assert client.get("/api/crm/tasks?after_id=500&sort=id&limit=501").status_code == 200
+    assert (seen["after_id"], seen["sort"], seen["limit"]) == (500, "id", 501)
+
+    seen.clear()
+    assert client.get("/api/crm/tasks").status_code == 200
+    # Every pre-#77 caller keeps the historical order and no cursor.
+    assert seen["after_id"] is None and seen["sort"] == "due"
+
+
+def test_contacts_and_companies_forward_the_cursor(client, monkeypatch):
+    seen: dict = {}
+    monkeypatch.setattr(service, "list_contacts", lambda **kw: seen.update(kw) or {"contacts": [], "total": 0})
+    monkeypatch.setattr(service, "list_companies", lambda **kw: seen.update(kw) or {"companies": [], "total": 0})
+
+    assert client.get("/api/crm/contacts?after_id=42&sort=id").status_code == 200
+    assert (seen["after_id"], seen["sort"]) == (42, "id")
+
+    seen.clear()
+    assert client.get("/api/crm/companies?after_id=42&sort=id").status_code == 200
+    assert (seen["after_id"], seen["sort"]) == (42, "id")
+
+
+def test_a_cursor_against_a_mutable_order_is_a_400_not_a_500(client, monkeypatch):
+    """The service refuses the pairing; the route must surface it as a client error.
+
+    Left unhandled this is a ValueError → 500, which reads as "the server is broken"
+    rather than "that request does not mean anything".
+    """
+    def boom(**kw):
+        raise ValueError("after_id is only valid with sort='id'")
+
+    for name, path in (
+        ("list_tasks", "/api/crm/tasks?after_id=5&sort=due"),
+        ("list_contacts", "/api/crm/contacts?after_id=5&sort=name"),
+        ("list_companies", "/api/crm/companies?after_id=5&sort=name"),
+    ):
+        monkeypatch.setattr(service, name, boom)
+        res = client.get(path)
+        assert res.status_code == 400, path
+        assert "sort='id'" in res.json()["detail"]
+
+
+def test_a_negative_cursor_is_rejected_by_validation(client):
+    assert client.get("/api/crm/tasks?after_id=-1").status_code == 422

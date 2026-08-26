@@ -22,6 +22,11 @@ export interface CrmContact {
   updated_at: string;
   lead_score?: number | null;           // computed lead score 0-100 (issue #18); null = never scored
   lead_score_at?: string | null;
+  // Derived last touch (issue #77): newest of the contact's activity_log rows and its
+  // un-archived, non-housekeeping chatter — the same two signals
+  // analytics_service.get_contact_staleness reads. Present on the list, search and detail
+  // responses; null = never contacted, a real state and the most urgent one.
+  last_contact_at?: string | null;
   // Detail view extras
   deals?: CrmDeal[];
   tasks?: CrmTask[];
@@ -112,6 +117,11 @@ export interface CrmTask {
   priority: string;
   created_at: string;
   updated_at: string;
+  // GTD column (#70) that rides every `SELECT t.*` response. Normal mode neither shows nor
+  // edits it, but the Tasks list reads it for one decision: completing a REPEATING task
+  // spawns its next occurrence server-side, a row no local patch can invent, so that one
+  // path re-sweeps instead of patching (#77). '' = does not repeat.
+  repeat?: string;
 }
 
 export interface CrmActivity {
