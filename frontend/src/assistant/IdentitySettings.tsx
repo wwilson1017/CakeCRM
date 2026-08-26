@@ -45,6 +45,12 @@ export function IdentitySettings({ onClose }: { onClose: () => void }) {
   const [effective, setEffective] = useState('');
   const [usingDefault, setUsingDefault] = useState(true);
   const [loading, setLoading] = useState(true);
+  // A failed GET must not leave an editable form behind. `draft` would still be '',
+  // which Save sends as "revert to the built-in default" — so one click on a panel
+  // that never loaded would silently destroy a custom personality. (Before #71 the
+  // blank-NAME guard blocked that save by accident; removing the name field removed
+  // the accident with it, so the guard is now explicit.)
+  const [loadFailed, setLoadFailed] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -57,7 +63,10 @@ export function IdentitySettings({ onClose }: { onClose: () => void }) {
         setDraft(id.using_default ? '' : id.personality);
         setUsingDefault(id.using_default);
       })
-      .catch(() => toast.error('Could not load assistant settings.'))
+      .catch(() => {
+        if (alive) setLoadFailed(true);
+        toast.error('Could not load assistant settings.');
+      })
       .finally(() => alive && setLoading(false));
     return () => {
       alive = false;
@@ -103,6 +112,10 @@ export function IdentitySettings({ onClose }: { onClose: () => void }) {
 
         {loading ? (
           <div style={{ color: INK_MUTE, fontSize: 14 }}>Loading…</div>
+        ) : loadFailed ? (
+          <div style={{ color: INK_MUTE, fontSize: 14 }}>
+            Could not load the assistant&rsquo;s settings. Close this and try again.
+          </div>
         ) : (
           <>
             <label style={labelStyle}>Name</label>

@@ -82,6 +82,19 @@ describe('IdentitySettings — the name is a fixed brand (#71)', () => {
   });
 });
 
+describe('IdentitySettings — a failed load never becomes a destructive save', () => {
+  it('renders no editor and no Save when the identity GET fails', async () => {
+    // `draft` would still be '', which Save sends as "revert to the built-in default" —
+    // so one click on a panel that never loaded would wipe a custom personality. Before
+    // #71 the blank-name guard blocked that by accident; the guard is explicit now.
+    api.mockRejectedValue(new Error('network'));
+    await render(true);
+    expect(container.querySelector('textarea')).toBeNull();
+    expect(buttonLabelled('Save')).toBeUndefined();
+    expect(container.textContent).toContain('Could not load');
+  });
+});
+
 describe('IdentitySettings — only an admin may save (#106)', () => {
   it('gives an admin an editable personality with Save', async () => {
     await render(true);

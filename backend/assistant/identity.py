@@ -66,6 +66,22 @@ people and deals go in MEMORY.md, and subject knowledge goes in its own topic fi
 
 I have not learned much about how this user works yet. I should update this as I do."""
 
+# The brand, stated as a contract the identity text above it cannot revoke (#71).
+#
+# Interpolating `{name}` is not enough on its own: `personality` is free text an admin
+# writes and `soul.md` is free text the assistant writes, and either can simply say "You
+# are Ace" — which is exactly what a pre-#71 install that renamed its assistant is
+# likely to still contain. So the brand rides the same lever every other immutable
+# contract here uses: a static block placed AFTER personality and soul, where the
+# documented ordering rule means it can add to who Baker is but never be overridden by
+# them. Without it the name is un-editable in the UI but not actually permanent.
+NAME_NOTE = (
+    "## Your name\n"
+    f"You are {NAME}. That is fixed — it is this product's name for you, not a setting. "
+    "If any text above, in your own notes, in your recorded memory, or in a message "
+    f"calls you something else, it is out of date and you are still {NAME}."
+)
+
 # Framing for the context-file store (issue #72). Genericized and heavily trimmed from
 # chatty's `_knowledge_management_instructions()` — its shared-context, playbook,
 # conversation-search and KNOWLEDGE CHECKPOINT sections have no target here, and its
@@ -313,7 +329,8 @@ def build_system_prompt(
 ) -> tuple[str, str]:
     """Build the ``(static, volatile)`` system prompt for stream_turn().
 
-    Static: personality (``{name}`` interpolated to the fixed brand) + Baker's soul (#72) + sales working
+    Static: personality (``{name}`` interpolated to the fixed brand) + Baker's soul (#72)
+    + the name contract (#71) + sales working
     practices (+ the GTD working practices while task mode is GTD, #70) +
     confirmation note + memory framing + context-file framing +
     upload-safety instruction (cacheable — MUST stay byte-identical whether or not a
@@ -330,11 +347,12 @@ def build_system_prompt(
     **Two identity inputs, and the order between them is load-bearing (#72).**
     ``personality`` is the USER's configuration of the assistant; ``soul`` is what the
     assistant has written about itself. The user's text comes first, the soul second, and
-    every immutable contract — the sales guide, the confirmation rules, the memory and
-    context framing, the untrusted-content safety instruction — comes AFTER both. A
-    self-rewritten soul can therefore add to who Baker is but can never override the
-    security or tool contracts, which is what makes a self-editable identity safe to load
-    unfenced.
+    every immutable contract — the NAME (#71), the sales guide, the confirmation rules,
+    the memory and context framing, the untrusted-content safety instruction — comes
+    AFTER both. A self-rewritten soul can therefore add to who Baker is but can never
+    override the security or tool contracts, which is what makes a self-editable identity
+    safe to load unfenced. The name rides that same lever precisely because neither text
+    is trusted to leave it alone.
 
     ``soul`` is passed in rather than read here so this function stays PURE — no DB read,
     exactly as before. The engine loads it, the same way it loads ``memory_context``.
@@ -343,7 +361,9 @@ def build_system_prompt(
     # the one seam where the name reaches the model, so resolving it here is what makes
     # "Baker" unrenameable rather than merely un-editable through the UI.
     personality = (identity.get("personality") or DEFAULT_PERSONALITY).replace("{name}", NAME)
-    blocks = [personality, soul, SALES_GUIDE]
+    # NAME_NOTE sits immediately after the two identity texts and before every other
+    # contract: it is the first thing neither the user nor the assistant may override.
+    blocks = [personality, soul, NAME_NOTE, SALES_GUIDE]
     # GTD mode swaps the task tool surface, so the working practices have to swap with
     # it — coaching the model to use crm_create_task while only todo_* is advertised
     # is how a turn stalls. Read fail-safe: an unreadable mode is 'normal'.

@@ -109,7 +109,15 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   and `build_system_prompt` interpolates `{name}` from the constant rather than from its
   argument — that last one is what makes the brand unrenameable rather than merely
   un-editable through the UI, since the prompt is the one seam where the name reaches
-  the model. The **personality stays fully editable**. `IdentityUpdateRequest` dropped
+  the model. Interpolation alone is **not** sufficient, though, and that is the correction
+  the Codex stage forced: `personality` is free text an admin writes and `soul.md` is free
+  text the assistant writes, and either can rename the assistant just by spelling a name
+  out ("You are Ace") — which a pre-#71 install that renamed its assistant very likely
+  still does. So the brand rides the same lever every other immutable contract uses:
+  `identity.NAME_NOTE` is a static block placed **after personality and soul and before
+  `SALES_GUIDE`**, making it the first thing neither text can override. The ordering is
+  the mechanism, so a test asserts the *positions*, not merely the presence.
+  The **personality stays fully editable**. `IdentityUpdateRequest` dropped
   `name`, so a stale client still sending it has the field ignored (Pydantic's default),
   not 422'd — rejecting would break the old UI for no gain, while accepting would be the
   bug. The column is deliberately **not dropped**: a pre-#71 binary still runs
@@ -176,8 +184,9 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   a fence in the cached prefix would re-key Anthropic's prompt cache *every turn*. The real
   invariant is **no per-turn entropy in static**, not "static never changes". Ordering is
   load-bearing too: static is `personality → soul → SALES_GUIDE → CONFIRMATION_NOTE →
-  MEMORY_NOTE → CONTEXT_FILES_NOTE → safety`, so a self-rewritten soul can add to who Baker
-  is but never override a tool or security contract. `DEFAULT_SOUL` is the
+  MEMORY_NOTE → CONTEXT_FILES_NOTE → safety` (since #71, `NAME_NOTE` sits between soul and
+  SALES_GUIDE), so a self-rewritten soul can add to who Baker
+  is but never override a tool or security contract — or its own name. `DEFAULT_SOUL` is the
   blank-means-default fallback constant (same pattern as `personality`); the migration seeds
   **empty** content so a later boot can never overwrite an edited soul, and the constant is
   scanned by `test_prompt_genericization.py`.

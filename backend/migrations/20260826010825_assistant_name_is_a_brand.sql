@@ -6,6 +6,13 @@
 -- in exactly one place — an install that renamed its assistant before #71 and then
 -- rolls back to a pre-#71 binary would otherwise resurrect the old name.
 --
+-- Note the column stays writable, so a rolled-back binary can rename the assistant
+-- again and this one-shot will not re-run to undo it. That is accepted rather than
+-- enforced with a CHECK constraint: the forward code never reads the column, so the
+-- only reader affected is an old binary that legitimately supports renaming — and a
+-- constraint would make THAT binary's identity endpoint throw instead of merely showing
+-- a stale name, which is a worse rollback, not a better one.
+--
 -- The column is deliberately NOT dropped. Dropping it would make the upgrade a
 -- one-way door (a rolled-back binary still does `SELECT name, personality`, and a
 -- missing column breaks the identity read outright — a dead assistant, not merely a

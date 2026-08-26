@@ -75,6 +75,24 @@ def test_update_identity_none_personality_writes_nothing(pg, monkeypatch):
     assert out["personality"] == "Be terse."
 
 
+def test_name_contract_outranks_a_personality_that_renames_the_assistant():
+    """Interpolating `{name}` alone would leave the brand nominal: `personality` is free
+    text an admin writes (and a pre-#71 install that renamed its assistant probably still
+    says so in it), so it can rename the assistant just by spelling a name out. The
+    contract block has to come AFTER both identity texts to outrank them — asserting the
+    ORDER is the test, since the same two strings in the other order say the opposite."""
+    static, _ = identity.build_system_prompt(
+        {"name": "Baker", "personality": "You are Ace, a helper.", "using_default": False},
+        soul="I am Ace and I always have been.",
+    )
+    assert "You are Ace, a helper." in static      # the admin's text is not censored
+    assert identity.NAME_NOTE in static            # but the contract is present
+    assert static.index("You are Ace, a helper.") < static.index(identity.NAME_NOTE)
+    assert static.index("I am Ace and I always have been.") < static.index(identity.NAME_NOTE)
+    # …and every other immutable contract still follows it.
+    assert static.index(identity.NAME_NOTE) < static.index(identity.SALES_GUIDE)
+
+
 def test_build_system_prompt_ignores_a_name_in_the_identity_dict():
     """The prompt is the one seam where the name reaches the model, so it resolves the
     brand from the constant — not from its argument. A caller that hands over a stale or
