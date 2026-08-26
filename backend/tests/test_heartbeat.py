@@ -31,8 +31,6 @@ def mocks(monkeypatch):
                         lambda **k: state["alerts"].append(k))
     monkeypatch.setattr(service.alerts, "resolve_by_source",
                         lambda s, sid: state["resolved"].append((s, sid)) or 0)
-    # Prompt builders read the identity singleton — mock it so no DB is touched.
-    monkeypatch.setattr(service.identity, "get_identity", lambda: {"name": "Baker"})
     return state
 
 
