@@ -14,7 +14,7 @@ import os
 
 import psycopg2
 import pytest
-from conftest import fake_admin
+from conftest import FAKE_ADMIN, fake_admin
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -41,6 +41,19 @@ def pg_db():
     postgres.close_pool()
     postgres.init_pool()
     postgres.run_migrations()  # applies EVERY migration, incl. crm_core
+
+    # Seed the user that `_client()`'s fake_admin override claims to be. These tests
+    # mount the CRM router on a bare FastAPI app, so the lifespan that would normally
+    # run ensure_bootstrap_admin() never fires and `users` stays empty — while #60 gave
+    # crm_chatter.author_id / activity_log.actor_id real FKs to it. Without this row,
+    # every authored write in this module dies on a ForeignKeyViolation.
+    # (Pre-existing gap, unrelated to #102; fixed here because #102 leans on this
+    # module as its end-to-end proof that the migration works.)
+    postgres.pg_execute(
+        "INSERT INTO users (id, email, name, password_hash, role) "
+        "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
+        (FAKE_ADMIN["id"], FAKE_ADMIN["email"], FAKE_ADMIN["name"], "x", FAKE_ADMIN["role"]),
+    )
     yield dsn
 
     postgres.close_pool()
@@ -101,6 +114,19 @@ def test_migration_created_tables_and_singleton(pg_db):
     assert meta and meta["sample_data_loaded"] is False
     # issue #9 migration: durable AI-key-nudge dismissal, default FALSE
     assert meta["ai_key_prompt_dismissed"] is False
+    # issue #102: GTD is the default task mode. Two separate assertions because the
+    # migration has two halves and only ONE of them does any work here. The singleton
+    # row predates the task_mode column (crm_meta is inserted by the crm_core
+    # migration), so the column DEFAULT is consumed once at ADD COLUMN time and never
+    # again — the row value below comes from #102's UPDATE, not from the DDL default.
+    # Asserting only the row would let someone delete the backfill and keep a green
+    # suite on a fresh database while every install still read 'normal'.
+    assert meta["task_mode"] == "gtd"
+    assert pg_fetchone(
+        "SELECT column_default FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name = 'crm_meta' "
+        "AND column_name = 'task_mode'"
+    )["column_default"].startswith("'gtd'")
     # issue #16 migration: the three AI-touch-count columns on deals (NULL by default)
     deal_cols = {
         r["column_name"]
@@ -206,15 +232,17 @@ def test_demo_state_machine_over_http(pg_db):
 
     status = client.get("/api/crm/demo-status").json()
     # task_mode rides this payload (#70) so CrmLayout can pick the task surface
-    # without a second request.
+    # without a second request. GTD since #102 — and because this database was built
+    # by running every migration, this assertion IS the end-to-end check that #102's
+    # backfill works: a freshly migrated install reports GTD over HTTP.
     assert status == {"empty": True, "sample_data_loaded": False, "show_onboarding": True,
-                      "ai_key_prompt_dismissed": False, "task_mode": "normal"}
+                      "ai_key_prompt_dismissed": False, "task_mode": "gtd"}
 
     seeded = client.post("/api/crm/load-sample-data").json()
     assert seeded["seeded"] is True
     after = client.get("/api/crm/demo-status").json()
     assert after == {"empty": False, "sample_data_loaded": True, "show_onboarding": False,
-                     "ai_key_prompt_dismissed": False, "task_mode": "normal"}
+                     "ai_key_prompt_dismissed": False, "task_mode": "gtd"}
 
     # guarded clear wipes example data and restarts identities
     cleared = client.post("/api/crm/demo-clear").json()

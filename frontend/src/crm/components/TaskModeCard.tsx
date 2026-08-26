@@ -2,9 +2,16 @@
  * TaskModeCard — pick the task experience, and manage the two no-login todo
  * surfaces (#70).
  *
+ * Todo-GTD is the DEFAULT since #102, so this card frames it first and presents the
+ * flat list as the simpler opt-out — including for the installs #102's migration
+ * flipped, whose owners arrive here looking for exactly that.
+ *
  * Switching modes migrates nothing: GTD is a view over the same task rows, so the
  * change is instant and losslessly reversible. The card says so plainly, because
  * "switch task system" otherwise reads like a destructive operation.
+ *
+ * The mode itself is NOT local state (#102): CrmLayout owns it for the whole CRM, and
+ * a second copy here meant a switch did not reach /crm/tasks until a page reload.
  *
  * The public-surface half is deliberately blunt about what each link exposes. A
  * tokenless capture URL is a write-only inbox drop that anyone with the address can
@@ -17,9 +24,9 @@ import { useEffect, useState } from 'react';
 import { api } from '../../core/api/client';
 import { CORAL, FONT_SANS, INK_MUTE, labelStyle } from '../../shared/styles';
 import { toast } from '../../shared/toast';
+import { useSetTaskMode, useTaskMode } from '../gtd/TaskModeContext';
+import type { TaskMode } from '../gtd/TaskModeContext';
 import { btnPrimary, btnSecondary, cardStyle, sectionHeading } from '../styles';
-
-type TaskMode = 'normal' | 'gtd';
 
 interface Surfaces {
   todo_capture_token: string;
@@ -31,17 +38,15 @@ interface Surfaces {
   web_public: boolean;
 }
 
-interface DemoStatus { task_mode?: TaskMode }
-
 export function TaskModeCard({ isMobile }: { isMobile: boolean }) {
-  const [mode, setMode] = useState<TaskMode | null>(null);
+  // Read AND write the mode through the layout that owns it — no local copy (#102).
+  // `null` = not known yet, which disables the buttons below.
+  const mode = useTaskMode();
+  const setMode = useSetTaskMode();
   const [surfaces, setSurfaces] = useState<Surfaces | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    api<DemoStatus>('/api/crm/demo-status')
-      .then(s => setMode(s.task_mode ?? 'normal'))
-      .catch(() => setMode('normal'));
     api<Surfaces>('/api/crm/todo-surfaces').then(setSurfaces).catch(() => { /* keep unknown */ });
   }, []);
 
@@ -54,7 +59,7 @@ export function TaskModeCard({ isMobile }: { isMobile: boolean }) {
       toast.success(
         next === 'gtd'
           ? 'Todo-GTD mode on. Your existing tasks are all still there, as next actions.'
-          : 'Back to normal tasks. Nothing was lost.',
+          : 'Switched to the simple task list. Nothing was lost — your todos are all still there.',
       );
     } catch {
       toast.error('Failed to switch task mode.');
@@ -113,8 +118,8 @@ export function TaskModeCard({ isMobile }: { isMobile: boolean }) {
         migrated, copied or deleted.
       </p>
       <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 10 }}>
-        {modeButton('normal', 'Normal tasks', 'A simple list with due dates and priorities.')}
-        {modeButton('gtd', 'Todo-GTD', 'Inbox, contexts, projects, repeats and a weekly review.')}
+        {modeButton('gtd', 'Todo-GTD (default)', 'Inbox, contexts, projects, repeats and a weekly review.')}
+        {modeButton('normal', 'Simple list', 'Just tasks with due dates and priorities — no inbox or contexts.')}
       </div>
 
       {mode === 'gtd' && surfaces && (

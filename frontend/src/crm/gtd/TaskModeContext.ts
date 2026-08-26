@@ -15,3 +15,22 @@ export const TaskModeContext = createContext<TaskMode | null>(null);
 export function useTaskMode(): TaskMode | null {
   return useContext(TaskModeContext);
 }
+
+/**
+ * Write side of the same state (#102). CrmLayout owns the mode for the whole CRM, and
+ * Settings and Tasks live under that one persistent layout — so the Settings card has
+ * to push its change UP rather than keep a second copy. When it kept its own state, a
+ * user who switched mode in Settings and navigated to Tasks still got the OLD task
+ * system until a full page reload.
+ *
+ * That matters more since #102 made GTD the default: "switch back in Settings" is the
+ * opt-out for every install the migration flipped, so it has to visibly work.
+ *
+ * A no-op default keeps the card renderable outside the layout (tests, storybook-style
+ * isolation) instead of throwing.
+ */
+export const TaskModeSetterContext = createContext<(mode: TaskMode) => void>(() => {});
+
+export function useSetTaskMode(): (mode: TaskMode) => void {
+  return useContext(TaskModeSetterContext);
+}

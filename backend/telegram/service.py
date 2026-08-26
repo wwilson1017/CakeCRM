@@ -174,12 +174,18 @@ async def _try_capture(chat_id: str, text: str, token: str) -> bool:
 
 
 def _task_mode() -> str:
-    """Current task mode; fail-safe to 'normal' so a read error never eats a message."""
+    """Current task mode; fail-safe to the product default ('gtd' since #102), matching
+    the other three readers.
+
+    The exception path covers an import failure only — `get_task_mode` never raises —
+    and even under 'gtd' a genuinely broken database makes `gtd_service.capture` fail,
+    which answers the user honestly rather than silently swallowing the message.
+    """
     try:
         from crm.service import get_task_mode
         return get_task_mode()
     except Exception:
-        return "normal"
+        return "gtd"
 
 
 async def _handle_callback(cb: dict) -> None:

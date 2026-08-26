@@ -14,7 +14,7 @@ import { BrandLogo } from './components/BrandLogo';
 import { NotificationsBell } from './components/NotificationsBell';
 import { ThemeToggle } from './components/ThemeToggle';
 import { ActiveRecordProvider } from './RecordContext';
-import { TaskModeContext } from './gtd/TaskModeContext';
+import { TaskModeContext, TaskModeSetterContext } from './gtd/TaskModeContext';
 import type { TaskMode } from './gtd/TaskModeContext';
 
 const NAV_ITEMS = [
@@ -31,7 +31,10 @@ interface DemoStatus {
   sample_data_loaded: boolean;
   show_onboarding: boolean;
   ai_key_prompt_dismissed: boolean;
-  /** #70. Absent on an older backend, which reads as normal mode. */
+  /**
+   * #70. Absent on an older backend — see the `?? 'normal'` at the provider below,
+   * which is deliberately NOT the same fallback as a failed fetch.
+   */
   task_mode?: TaskMode;
 }
 
@@ -155,8 +158,10 @@ const actionLink: React.CSSProperties = {
 const DEMO_STATUS_UNKNOWN: DemoStatus = {
   empty: false, sample_data_loaded: false, show_onboarding: false, ai_key_prompt_dismissed: true,
   // A failed fetch must not strand /crm/tasks on a blank screen, so fall back to the
-  // default mode rather than leaving it unknown forever.
-  task_mode: 'normal',
+  // default mode rather than leaving it unknown forever. GTD since #102, mirroring the
+  // backend: get_task_mode() answers 'gtd' when it cannot read the row, so guessing
+  // 'normal' here would disagree with what the server would have told us.
+  task_mode: 'gtd',
 };
 
 interface SetupStatus { ai_ready: boolean; credentials_present: boolean; }
@@ -188,6 +193,17 @@ export function CrmLayout() {
     api<SetupStatus>('/api/setup/status')
       .then(setSetup)
       .catch(() => { /* keep unknown */ });
+  }, []);
+
+  // #102: the Settings card switches the mode, but this layout owns it for the whole
+  // CRM and does not refetch on navigation — so the card pushes the new value up here
+  // instead of keeping its own copy. Without this, switching mode in Settings left
+  // /crm/tasks rendering the old task system until a full page reload.
+  //
+  // Dropping the update while `status` is still null is correct: the card disables its
+  // buttons until the mode is known, so there is nothing to lose.
+  const handleSetTaskMode = useCallback((mode: TaskMode) => {
+    setStatus(s => (s ? { ...s, task_mode: mode } : s));
   }, []);
 
   const handleLoadSample = useCallback(async () => {
@@ -359,9 +375,18 @@ export function CrmLayout() {
 
       <div key={refreshKey} style={{ flex: 1, overflow: 'auto', position: 'relative' }}>
         {/* The task mode rides the demo-status payload this layout already fetches,
-            so /crm/tasks costs no extra request to decide which task system to show. */}
+            so /crm/tasks costs no extra request to decide which task system to show.
+
+            `?? 'normal'` is deliberately NOT the 'gtd' fallback used for a FAILED fetch
+            (DEMO_STATUS_UNKNOWN above). These answer different questions: a failed
+            fetch means the mode is unknown, so mirror the product default; an ABSENT
+            field on a SUCCESSFUL response means a backend that predates #70 and has no
+            GTD endpoints at all, where normal is the only mode that renders a working
+            page — 'gtd' would render a shell whose every request 404s. */}
         <TaskModeContext.Provider value={status ? (status.task_mode ?? 'normal') : null}>
-          <Outlet />
+          <TaskModeSetterContext.Provider value={handleSetTaskMode}>
+            <Outlet />
+          </TaskModeSetterContext.Provider>
         </TaskModeContext.Provider>
       </div>
 
