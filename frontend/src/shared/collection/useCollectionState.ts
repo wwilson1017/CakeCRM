@@ -15,6 +15,10 @@
  *    Filtering makes a drop index unmappable (subset), a non-manual sort makes it a lie,
  *    and a truncated column makes it ambiguous (the drop lands relative to rows that
  *    are not all rendered). Toggles are EXCLUDED — they remove columns, not cards.
+ *    All three are about the drop INDEX, so a board that declares
+ *    `KanbanViewConfig.dragPolicy: 'column'` (a drop assigns a column and nothing else,
+ *    because no rank column exists to persist a position into) opts out of the gate
+ *    entirely and keeps only its own `kanban.dragDisabled` extras.
  *  • **Resets live in handlers, never effects** — every filter/sort/view mutation also clears
  *    the expansion sets in its own handler, because deriving that reset in an effect is a
  *    setState-in-effect cascade and a build-blocking React Compiler lint error (a sibling
@@ -279,7 +283,12 @@ export default function useCollectionState<T>(
     return truncated;
   }, [kanbanItems, config, expandedColumns]);
 
-  const dragLocked = isFiltering || !manualOrder || truncatedColumns.size > 0;
+  // Under `dragPolicy: 'column'` a drop assigns only a column and the app discards `newIndex`,
+  // so none of the three ambiguities below can arise — the layer contributes no lock and the
+  // app's own `kanban.dragDisabled` extras become the whole gate. See KanbanViewConfig.
+  const dragPolicy = config.kanban?.dragPolicy ?? 'index';
+  const dragLocked =
+    dragPolicy === 'column' ? false : isFiltering || !manualOrder || truncatedColumns.size > 0;
 
   // ── Handlers — the only mutation paths; each carries its own expansion reset ──
   const resetExpansions = () => {

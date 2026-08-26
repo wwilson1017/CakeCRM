@@ -326,7 +326,14 @@ export default function CollectionView<T, C = unknown>({
                 defaultSort: resting,
                 onChange: state.setSort,
                 active: sortActive,
-                note: state.view === 'kanban' && !state.manualOrder ? '· drag paused' : undefined,
+                // Reads `dragLocked` as well as `manualOrder` so the note cannot lie on a
+                // `dragPolicy: 'column'` board, where a non-manual sort does NOT pause drag.
+                // Under the default 'index' policy `!manualOrder` implies `dragLocked`, so
+                // this is byte-identical there.
+                note:
+                  state.view === 'kanban' && state.dragLocked && !state.manualOrder
+                    ? '· drag paused'
+                    : undefined,
                 ariaLabel: `Sort ${noun}`,
               }
             : undefined

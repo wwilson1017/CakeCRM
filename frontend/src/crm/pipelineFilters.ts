@@ -16,9 +16,19 @@
  * Date semantics intentionally use LOCAL dates (YYYY-MM-DD via en-CA), never
  * `toISOString()`, which would drift a day in US evening time. `now` is injected into
  * the predicate so the logic stays pure and time-deterministic for testing.
+ *
+ * SCOPE NOTE (#74): this module used to own the whole filter envelope — the search text,
+ * an active-facet count, and sessionStorage under `crm_pipeline_filters`. All three now
+ * belong to the shared collection layer (`collection_crm_pipeline_v1`), which persists,
+ * coerces and counts every facet it declares. What stays here is the part the layer cannot
+ * know: the PREDICATE, and the two bucket definitions that make it non-obvious —
+ * `overdue` counts open deals only (a won deal with a past close date is not overdue), and
+ * `stale30` includes never-contacted deals (so `le30` and `stale30` partition the open set
+ * rather than leaving a gap). `pipelineCollection.ts` delegates to `dealMatchesAdvanced`
+ * for exactly that reason instead of restating the rules in a facet definition.
  */
 import type { CrmDeal } from '../core/types';
-import { STAGE_ORDER, OPEN_STAGES } from './constants';
+import { OPEN_STAGES } from './constants';
 
 // ── Filter model ────────────────────────────────────────────────────────────
 
@@ -54,18 +64,6 @@ export const EMPTY_ADVANCED: AdvancedFilters = {
   valueMax: null,
   closeDate: null,
   lastActivity: null,
-};
-
-/** Full persisted filter state: free-text search plus the advanced facets, kept in
- *  one envelope so there is a single load/save/clear path. */
-export interface PipelineFilterState {
-  search: string;
-  advanced: AdvancedFilters;
-}
-
-export const EMPTY_FILTER_STATE: PipelineFilterState = {
-  search: '',
-  advanced: EMPTY_ADVANCED,
 };
 
 // ── Date helpers (local timezone) ───────────────────────────────────────────
@@ -159,76 +157,4 @@ export function dealMatchesAdvanced(deal: CrmDeal, f: AdvancedFilters, now: Date
   if (f.closeDate && !matchesCloseDate(deal, f.closeDate, now)) return false;
   if (f.lastActivity && !matchesLastActivity(deal, f.lastActivity, now)) return false;
   return true;
-}
-
-// ── Active-state helpers ────────────────────────────────────────────────────
-
-/** Number of distinct advanced facets currently constraining results. */
-export function advancedActiveCount(f: AdvancedFilters): number {
-  let n = 0;
-  if (f.stages.length > 0) n++;
-  if (f.owners.length > 0) n++;
-  if (f.valueMin !== null || f.valueMax !== null) n++;
-  if (f.closeDate) n++;
-  if (f.lastActivity) n++;
-  return n;
-}
-
-export function hasAdvanced(f: AdvancedFilters): boolean {
-  return advancedActiveCount(f) > 0;
-}
-
-// ── Session persistence ─────────────────────────────────────────────────────
-
-const STORAGE_KEY = 'crm_pipeline_filters';
-
-const CLOSE_PRESETS: ClosePreset[] = ['overdue', 'next7', 'thisMonth', 'noDate'];
-const ACTIVITY_PRESETS: ActivityPreset[] = ['le7', 'le30', 'stale30', 'none'];
-
-function coerceNumOrNull(v: unknown): number | null {
-  return typeof v === 'number' && Number.isFinite(v) ? v : null;
-}
-
-/** Load persisted filter state, tolerating malformed/legacy payloads. Restored stage
- *  keys are validated against `STAGE_ORDER` so a stale/corrupt payload can never hide
- *  every column (an unknown stage would match no deal AND leave no visible column). */
-export function loadFilterState(): PipelineFilterState {
-  try {
-    const raw = sessionStorage.getItem(STORAGE_KEY);
-    if (!raw) return EMPTY_FILTER_STATE;
-    const p = JSON.parse(raw) as Partial<PipelineFilterState>;
-    const adv = (p.advanced ?? {}) as Partial<AdvancedFilters>;
-    return {
-      search: typeof p.search === 'string' ? p.search : '',
-      advanced: {
-        stages: Array.isArray(adv.stages)
-          ? [...new Set(adv.stages.filter((s): s is string => typeof s === 'string' && STAGE_ORDER.includes(s)))]
-          : [],
-        // Owner ids are NOT validated against the live roster: this runs before the
-        // users fetch resolves, and a deactivated owner is still a legitimate filter.
-        // A stale id simply matches no deal, and the pill stays clearable — unlike a
-        // bad stage, which would also hide the column.
-        owners: Array.isArray(adv.owners)
-          ? [...new Set(adv.owners.filter(
-              (o): o is OwnerFilterValue =>
-                o === 'unassigned' || (typeof o === 'number' && Number.isInteger(o)),
-            ))]
-          : [],
-        valueMin: coerceNumOrNull(adv.valueMin),
-        valueMax: coerceNumOrNull(adv.valueMax),
-        closeDate: CLOSE_PRESETS.includes(adv.closeDate as ClosePreset) ? (adv.closeDate as ClosePreset) : null,
-        lastActivity: ACTIVITY_PRESETS.includes(adv.lastActivity as ActivityPreset) ? (adv.lastActivity as ActivityPreset) : null,
-      },
-    };
-  } catch {
-    return EMPTY_FILTER_STATE;
-  }
-}
-
-export function saveFilterState(state: PipelineFilterState): void {
-  try {
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  } catch {
-    /* sessionStorage unavailable (private mode / quota) — non-fatal */
-  }
 }

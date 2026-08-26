@@ -6,22 +6,28 @@ import type { CrmDeal } from '../core/types';
 import { DealForm } from './components/DealForm';
 import { DealDetailSheet } from './components/DealDetailSheet';
 import { ScorePill, TouchCountPill } from './components/badges';
-import { STAGE_COLORS, STAGE_ORDER, OPEN_STAGES } from './constants';
+import { STAGE_COLORS, STAGE_ORDER } from './constants';
 import { IconPlus } from '../shared/icons';
 import { useIsMobile } from '../shared/useIsMobile';
 import { LoadError } from '../shared/LoadError';
 import { toast } from '../shared/toast';
 import {
-  INK, INK_MUTE, INK_DIM, LINE, BG_CARD, ACCENT,
+  INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, BG_CARD, BG_ELEV, ACCENT, SHADOW,
   FONT_DISPLAY, mono, formatNumber, inputStyle, tint,
 } from '../shared/styles';
 import { pageHeading, btnPrimary, btnSecondary, btnSmall, stageCard } from './styles';
-import { KanbanBoard, type MoveEvent } from '../shared/dnd';
-import PipelineFilterBar from './components/PipelineFilterBar';
+import type { KanbanColumnDef } from '../shared/dnd';
+import { CollectionView, useCollectionState } from '../shared/collection';
+import type { CollectionMoveEvent, CollectionSelectionProps } from '../shared/collection';
+import { useUsers } from './useUsers';
 import {
-  type PipelineFilterState, type AdvancedFilters,
-  EMPTY_FILTER_STATE, dealMatchesAdvanced, hasAdvanced, loadFilterState, saveFilterState,
-} from './pipelineFilters';
+  boardOrder, loadHiddenStages, openPipelineTotals, saveHiddenStages,
+  stageFromToggleKey, stageLabel, stageToggleKey, visibleStageKeys,
+} from './pipelineBoard';
+import { makePipelineCollectionConfig } from './pipelineCollection';
+import { buildPipelineListColumns } from './components/pipelineListColumns';
+import StageChipBar from './components/StageChipBar';
+import { STAGE_CRITERIA } from './stageCriteria';
 import { applicableBulkIds } from './bulkSelection';
 import { classifyBulkMove, describeBulkMove, type BulkMoveResponse, type BulkNotice } from './bulkOutcome';
 
@@ -33,40 +39,35 @@ interface PipelineData {
   deals: CrmDeal[];
 }
 
+/** Per-column chrome the board renders, computed from the EXACT set of cards on screen. */
+interface StageColumn {
+  stage: string;
+  count: number;
+  total: number;
+  dealIds: number[];
+}
+
 export function PipelinePage() {
   const [data, setData] = useState<PipelineData | null>(null);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [editDeal, setEditDeal] = useState<CrmDeal | null>(null);
-  const [selectedDeal, setSelectedDeal] = useState<CrmDeal | null>(null);
+  // Id, not the record: the open deal is looked up from `data` each render, so a sheet left
+  // open across a refresh (or an optimistic move) shows the current row rather than a frozen
+  // copy — and #75 can swap the sheet for the collection layer's detail panel by changing one
+  // render site instead of a state shape.
+  const [selectedDealId, setSelectedDealId] = useState<number | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const isMobile = useIsMobile();
+  const { users, nameFor } = useUsers();
 
-  // Client-side facet filtering (issue #21). One envelope (search + advanced facets)
-  // restored from / persisted to sessionStorage so a reload keeps the view, but it
-  // never leaves the browser — filtering is a pure predicate over the already-loaded
-  // board, no backend query params. Held as ONE object so restore/persist/clear-all
-  // are single-path.
-  const [filters, setFilters] = useState<PipelineFilterState>(loadFilterState);
-  const { search, advanced } = filters;
-  useEffect(() => { saveFilterState(filters); }, [filters]);
-  const setSearch = useCallback((s: string) => setFilters(f => ({ ...f, search: s })), []);
-  const setAdvanced = useCallback((a: AdvancedFilters) => setFilters(f => ({ ...f, advanced: a })), []);
-
-  // Dashboard deep-link (?stage=X) — an explicit "show me this column" intent that overrides
-  // restored session filters ENTIRELY (any restored facet could hide the target column or
-  // match zero deals → the empty state, no columns, scroll no-ops). Handled REACTIVELY via
-  // React's render-time "reset state when an input changes" pattern (a state compare, NOT an
-  // effect — so no cascading setState-in-effect), so it fires whether the page just mounted OR
-  // was already mounted when the search param changed. `seenDeepLink` starts null so a mount
-  // with ?stage=X triggers the reset; an unknown stage is ignored (matches the scroll guard).
-  const deepLinkStage = searchParams.get('stage');
-  const validDeepLink = deepLinkStage && STAGE_ORDER.includes(deepLinkStage) ? deepLinkStage : null;
-  const [seenDeepLink, setSeenDeepLink] = useState<string | null>(null);
-  if (validDeepLink !== seenDeepLink) {
-    setSeenDeepLink(validDeepLink);
-    if (validDeepLink) setFilters(EMPTY_FILTER_STATE);
-  }
+  // Per-stage column visibility (issue #74). Client state, unlike the blueprint's `stages.hidden`
+  // column — CakeCRM's stages are the STAGE_ORDER constants, so there is no row to persist to.
+  // The page owns it because it also owns `items` (hidden stages are filtered out BEFORE the
+  // collection layer sees them, see `items` below); deriving it from `state.toggles` instead
+  // would be circular, since `items` is an input to the hook that produces them.
+  const [hiddenStages, setHiddenStages] = useState<Set<string>>(loadHiddenStages);
+  useEffect(() => { saveHiddenStages(hiddenStages); }, [hiddenStages]);
 
   const columnRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   // Last stage the deep-link effect scrolled to — re-fires per NEW target, once each.
@@ -151,6 +152,12 @@ export function PipelinePage() {
   // per-deal last-confirmed stage (server truth, not a board snapshot), and a
   // concurrent change made elsewhere (detail sheet, new deal) is never clobbered.
   //
+  // Adopting the collection layer (#74) inserted `useCollectionState` between `data` and the
+  // board, and it deliberately did NOT add a second owner: the hook keeps no copy of the deals
+  // (only query/facets/toggles/sort/view), deriving `visibleItems`/`kanbanItems` as pure memos
+  // over the `items` array this page computes from `data`. Every write below still goes through
+  // `setData` and nothing else caches a deal.
+  //
   // Rapid moves of the SAME deal are made safe three ways: (1) the PUTs are chained
   // per deal so the server applies them in action order; (2) a per-deal op sequence
   // means only the latest op reconciles/reverts the client (no intermediate flicker
@@ -222,7 +229,15 @@ export function PipelinePage() {
   // Drag handler. Resolves immediately so the Kanban hook ends its gesture and
   // re-syncs from `data` right away; persistence + rollback are data-driven (via
   // moveDealStage), never snapshot-driven, so this never needs to throw.
-  const handleKanbanMove = useCallback((event: MoveEvent<CrmDeal>): Promise<void> => {
+  //
+  // `CollectionKanbanProps.onMove` documents "do not patch before this resolves", whose stated
+  // reason is that `shared/dnd` rolls back on reject and a pre-resolve canonical write would
+  // then double-apply. That branch is unreachable here: this function returns a RESOLVED promise
+  // on every path — a failed PUT is handled inside `moveDealStage` against `data`, never by
+  // rejecting — so the exemption the type's docstring names applies, and `useKanbanState`'s
+  // `commitMove` records the same thing from the other side. Any edit that lets this reject
+  // must also stop patching `data` first.
+  const handleKanbanMove = useCallback((event: CollectionMoveEvent<CrmDeal>): Promise<void> => {
     const from = String(event.fromColumnId);
     const to = String(event.toColumnId);
     if (from === to) {
@@ -241,11 +256,67 @@ export function PipelinePage() {
   // its last_activity_at; if a stage move fired, the refresh defers until that PUT settles.
   const updateDealStage = useCallback((deal: CrmDeal, stage: string) => {
     if (deal.stage !== stage) moveDealStage(deal, stage, deal.stage);
-    setSelectedDeal(null);
+    setSelectedDealId(null);
     load(true);
   }, [moveDealStage, load]);
 
   const deals = useMemo(() => data?.deals ?? [], [data]);
+
+  // ── The collection layer (issue #74) ───────────────────────────────────────
+  const listColumns = useMemo(() => buildPipelineListColumns(nameFor), [nameFor]);
+  const config = useMemo(
+    () => makePipelineCollectionConfig({ users, ownerName: nameFor, listColumns }),
+    [users, nameFor, listColumns],
+  );
+
+  // The canonical array the layer filters, sorts and groups. Two things happen here and
+  // nowhere else: hidden stages are removed (so their deals are invisible to search, sort, the
+  // list view, the header totals AND the bulk intersection by construction, rather than each
+  // having to re-apply the rule), and the rest are put in board order — stage-major, then
+  // lead_score DESC — which is what the `boardOrder` arrayOrder sort field reads back at rest.
+  const items = useMemo(
+    () => boardOrder(hiddenStages.size === 0 ? deals : deals.filter(d => !hiddenStages.has(d.stage))),
+    [deals, hiddenStages],
+  );
+
+  // The visibility checkboxes render through the layer's bar but the VALUES live here, so the
+  // hook's controlled-toggle branch hands each click straight back (useCollectionState routes
+  // any key present in `values` to `onToggle` and writes nothing itself).
+  const toggleValues = useMemo(() => {
+    const out: Record<string, boolean> = {};
+    for (const stage of STAGE_ORDER) out[stageToggleKey(stage)] = !hiddenStages.has(stage);
+    return out;
+  }, [hiddenStages]);
+
+  const onToggleStage = useCallback((key: string, visible: boolean) => {
+    const stage = stageFromToggleKey(key);
+    if (!stage) return;
+    setHiddenStages(prev => {
+      const next = new Set(prev);
+      if (visible) next.delete(stage); else next.add(stage);
+      return next;
+    });
+  }, []);
+
+  const controlledToggles = useMemo(
+    () => ({ values: toggleValues, onToggle: onToggleStage }),
+    [toggleValues, onToggleStage],
+  );
+
+  const state = useCollectionState(config, items, { controlledToggles });
+
+  // Bumped whenever the page clears the filters programmatically, and used as the
+  // CollectionView key. A remount is what actually empties the search box: SearchInput adopts
+  // an external value only when it CHANGES, and clearing while `state.query` is already `''`
+  // leaves locally-typed text whose 250ms debounce has not settled — which would then re-filter
+  // the board a moment after the reset. `useCollectionState` lives here and is NOT remounted,
+  // so only the toolbar's own transient state resets, which is exactly the state at fault.
+  const [resetSeq, setResetSeq] = useState(0);
+  const clearAllFilters = useCallback(() => {
+    state.setQuery('');
+    state.clearFacets();
+    setResetSeq(n => n + 1);
+  }, [state]);
 
   // ── Bulk selection + apply (issue #55) ─────────────────────────────────────
   const toggleSelect = useCallback((dealId: number) => {
@@ -270,41 +341,14 @@ export function PipelinePage() {
 
   const clearSelection = useCallback(() => setBulkSelected(new Set()), []);
 
-  const isFiltering = search.trim() !== '' || hasAdvanced(advanced);
-
-  // The board loads every deal, so advanced filtering is a pure client-side predicate
-  // over `deals` — no refetch. This memo is spliced between `deals` and `grouped`; when
-  // nothing is active it returns `deals` by reference so unfiltered renders don't churn.
-  // `now` is snapshotted per recompute (on any deals/search/advanced change), so an IDLE
-  // tab left open across midnight keeps yesterday's date-bucket boundaries until the next
-  // interaction — accepted (self-heals on any filter/drag/refresh; same class as the
-  // documented UTC-vs-local date-part skew in pipelineFilters.ts).
-  const filteredDeals = useMemo(() => {
-    if (!isFiltering) return deals;
-    const q = search.trim().toLowerCase();
-    const now = new Date();
-    return deals.filter(d => {
-      if (q) {
-        const hay = [d.title, d.contact_name, d.company_name].filter(Boolean).join(' ').toLowerCase();
-        if (!hay.includes(q)) return false;
-      }
-      return dealMatchesAdvanced(d, advanced, now);
-    });
-  }, [deals, search, advanced, isFiltering]);
-
-  // The issue's "bulk actions operate on the currently filtered set" invariant, enforced
-  // ONCE: `filteredDeals` already embeds #21's facet predicate (including the stage facet
-  // that hides whole columns), and this single intersection feeds BOTH the bar's count and
-  // the apply payload — so what the operator is told and what the server is sent cannot
-  // disagree, even if the selection changed since the last render.
-  const bulkIds = useMemo(
-    () => applicableBulkIds(bulkSelected, filteredDeals),
-    [bulkSelected, filteredDeals],
-  );
-
   const applyBulkMove = useCallback(async (toStage: string) => {
     if (bulkPendingRef.current || !toStage) return;
-    const ids = applicableBulkIds(bulkSelected, filteredDeals);
+    // Recomputed at CLICK time rather than reusing the set the layer handed the bar at render
+    // time — the selection can change in between. The two agree because both intersect the
+    // selection with `state.visibleItems`: the layer's own count comes from the current view's
+    // items, and the config declares no `getVoided`, which is what keeps `kanbanItems` and
+    // `visibleItems` the same array. Hidden-stage deals are in neither, being absent from `items`.
+    const ids = applicableBulkIds(bulkSelected, state.visibleItems);
     if (ids.length === 0) return;
 
     setBulkNotice(null);
@@ -407,55 +451,128 @@ export function PipelinePage() {
       bulkPendingRef.current = false;
       setBulkPending(false);
     }
-  }, [bulkSelected, filteredDeals, deals, clearSelection, load]);
+  }, [bulkSelected, state.visibleItems, deals, clearSelection, load]);
 
-  // #18: within each stage column, order by lead_score (hottest first); unscored rows
-  // (null) sink below scored ones. Array.sort is stable, so the server's updated_at DESC
-  // order is preserved for equal scores — matching the backend's DESC NULLS LAST idiom.
-  // Sorts the fresh array `.filter()` returns, so #21's `filteredDeals` is never mutated.
-  const grouped = useMemo(
-    () => STAGE_ORDER.reduce<Record<string, CrmDeal[]>>((acc, stage) => {
-      acc[stage] = filteredDeals
-        .filter(d => d.stage === stage)
-        .sort((a, b) => (b.lead_score ?? -1) - (a.lead_score ?? -1));
-      return acc;
-    }, {}),
-    [filteredDeals],
+  // ── Board derivations ──────────────────────────────────────────────────────
+  const stageFacet = useMemo(
+    () => (state.facetSelections.stage ?? []) as (string | number)[],
+    [state.facetSelections.stage],
   );
 
-  // Stage facet doubles as a column filter: selecting stages hides the rest.
-  const visibleStages = useMemo(
-    () => (advanced.stages.length ? STAGE_ORDER.filter(s => advanced.stages.includes(s)) : STAGE_ORDER),
-    [advanced.stages],
-  );
-
-  const kanbanColumns = useMemo(
-    () => visibleStages.map(stage => ({ id: stage, data: { stage } })),
-    [visibleStages],
-  );
-
-  // Per-stage value totals for the column headers — precomputed once per data
-  // change so drag re-renders (which fire at pointer-move frequency) don't re-reduce
-  // every column on every frame.
-  const columnTotals = useMemo(() => {
-    const totals: Record<string, number> = {};
-    for (const stage of STAGE_ORDER) {
-      totals[stage] = (grouped[stage] || []).reduce((s, d) => s + (d.value || 0), 0);
+  // Column chrome from the EXACT rendered set, so a header's count, its $ total and its
+  // select-all checkbox all describe what is actually on screen under the current filters.
+  const columns = useMemo<KanbanColumnDef<StageColumn>[]>(() => {
+    const byStage = new Map<string, CrmDeal[]>();
+    for (const d of state.kanbanItems) {
+      const list = byStage.get(d.stage);
+      if (list) list.push(d); else byStage.set(d.stage, [d]);
     }
-    return totals;
-  }, [grouped]);
+    return visibleStageKeys(hiddenStages, stageFacet).map(stage => {
+      const list = byStage.get(stage) ?? [];
+      return {
+        id: stage,
+        data: {
+          stage,
+          count: list.length,
+          total: list.reduce((s, d) => s + (d.value || 0), 0),
+          dealIds: list.map(d => d.id),
+        },
+      };
+    });
+  }, [state.kanbanItems, hiddenStages, stageFacet]);
 
-  // Open-pipeline $/count reflect the FILTERED set so the header describes what's shown
-  // (a "showing X of Y" annotation below signals when a filter is narrowing the board).
-  const { openTotal, openCount } = useMemo(() => {
-    const open = filteredDeals.filter(d => OPEN_STAGES.includes(d.stage));
-    return { openTotal: open.reduce((s, d) => s + (d.value || 0), 0), openCount: open.length };
-  }, [filteredDeals]);
+  // Filters active but nothing matched: show one explanation instead of a row of empty
+  // columns reading as "there are no deals at all".
+  const filteredToNothing = state.isFiltering && state.visibleItems.length === 0;
 
-  // Dashboard deep-link (/crm/pipeline?stage=X): once `data` has rendered the columns (refs
-  // populated), scroll the requested column into view, then clear the `stage` param
-  // (preserving any others). Reactive per target — `scrolledStage` guards a re-scroll for the
-  // same stage; the render-time guard above already cleared filters so every column is mounted.
+  // Open-pipeline $/count reflect the visible set so the header describes what's shown
+  // (the toolbar's own "N of M deals" readout signals when a filter is narrowing the board).
+  const { openTotal, openCount } = useMemo(
+    () => openPipelineTotals(state.visibleItems),
+    [state.visibleItems],
+  );
+
+  const selectedDeal = useMemo(
+    () => (selectedDealId === null ? null : deals.find(d => d.id === selectedDealId) ?? null),
+    [deals, selectedDealId],
+  );
+
+  const handleSelectionChange = useCallback((next: Set<string | number>) => {
+    // Same synchronous bail as toggleSelect/toggleColumn: a bulk move in flight owns the board.
+    if (bulkPendingRef.current) return;
+    setBulkSelected(new Set([...next].map(Number)));
+  }, []);
+
+  const selection = useMemo<CollectionSelectionProps>(() => ({
+    selectedIds: bulkSelected,
+    onChange: handleSelectionChange,
+    // The layer passes only ids that are BOTH selected and in the current view, and renders
+    // this at all only when that set is non-empty — so the count shown and the payload
+    // `applyBulkMove` recomputes describe the same deals (see the note there).
+    renderBulkBar: (_ids, count) => (
+      <BulkBar
+        count={count}
+        stage={bulkStage}
+        pending={bulkPending}
+        onStageChange={setBulkStage}
+        onApply={() => applyBulkMove(bulkStage)}
+        onClear={clearSelection}
+      />
+    ),
+  }), [bulkSelected, handleSelectionChange, bulkStage, bulkPending, applyBulkMove, clearSelection]);
+
+  // ── Mobile: which board column is currently snapped into view ──────────────
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const [activeStage, setActiveStage] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isMobile || state.view !== 'kanban') return;
+    const root = scrollerRef.current;
+    if (!root) return;
+    const observer = new IntersectionObserver(
+      entries => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const stage = (entry.target as HTMLElement).dataset.stage;
+          if (stage) setActiveStage(stage);
+        }
+      },
+      { root, threshold: 0.6 },
+    );
+    for (const el of columnRefs.current.values()) observer.observe(el);
+    return () => observer.disconnect();
+    // `state.view` is a deliberate dependency even though the body reads it once: switching
+    // views remounts the board without changing `columns`, so the old observer would be
+    // watching detached nodes.
+  }, [isMobile, state.view, columns]);
+
+  const scrollToStage = useCallback((stage: string) => {
+    columnRefs.current.get(stage)?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+  }, []);
+
+  // Dashboard deep-link (?stage=X) — an explicit "show me this column" intent that overrides
+  // restored session filters ENTIRELY (any restored facet could hide the target column or
+  // match zero deals → the empty state, no columns, scroll no-ops). Handled REACTIVELY via
+  // React's render-time "reset state when an input changes" pattern (a state compare, NOT an
+  // effect — so no cascading setState-in-effect), so it fires whether the page just mounted OR
+  // was already mounted when the search param changed. `seenDeepLink` starts null so a mount
+  // with ?stage=X triggers the reset; an unknown stage is ignored (matches the scroll guard).
+  const deepLinkStage = searchParams.get('stage');
+  const validDeepLink = deepLinkStage && STAGE_ORDER.includes(deepLinkStage) ? deepLinkStage : null;
+  const [seenDeepLink, setSeenDeepLink] = useState<string | null>(null);
+  if (validDeepLink !== seenDeepLink) {
+    setSeenDeepLink(validDeepLink);
+    if (validDeepLink) {
+      clearAllFilters();
+      // A persisted List view has no column to scroll to, and a stage the user put away has no
+      // column at all — the link is an explicit request to look at one, so both give way.
+      if (state.view !== 'kanban') state.setView('kanban');
+      setHiddenStages(prev => (prev.has(validDeepLink) ? new Set([...prev].filter(s => s !== validDeepLink)) : prev));
+    }
+  }
+
+  // Once `data` has rendered the columns (refs populated), scroll the requested column into
+  // view, then clear the `stage` param (preserving any others). Reactive per target —
+  // `scrolledStage` guards a re-scroll for the same stage.
   useEffect(() => {
     if (!data) return;
     const s = searchParams.get('stage');
@@ -484,8 +601,8 @@ export function PipelinePage() {
           <h1 style={pageHeading(isMobile)}>Pipeline</h1>
           <p style={{ fontSize: isMobile ? 14 : 20, color: INK_MUTE, marginTop: 6 }}>
             ${formatNumber(openTotal)} open · {openCount} open deal{openCount !== 1 ? 's' : ''}
-            {isFiltering && (
-              <span style={{ color: INK_DIM }}> · showing {filteredDeals.length} of {deals.length}</span>
+            {hiddenStages.size > 0 && (
+              <span style={{ color: INK_DIM }}> · {hiddenStages.size} stage{hiddenStages.size !== 1 ? 's' : ''} hidden</span>
             )}
           </p>
         </div>
@@ -496,16 +613,6 @@ export function PipelinePage() {
         }}>
           <IconPlus size={13} strokeWidth={2.25} /> {isMobile ? 'Add' : 'Add Deal'}
         </button>
-      </div>
-
-      <div style={{ marginBottom: isMobile ? 12 : 16 }}>
-        <PipelineFilterBar
-          search={search}
-          advanced={advanced}
-          onSearchChange={setSearch}
-          onAdvancedChange={setAdvanced}
-          isMobile={isMobile}
-        />
       </div>
 
       {bulkNotice && (
@@ -520,48 +627,51 @@ export function PipelinePage() {
         </div>
       )}
 
-      {!isMobile && bulkIds.length > 0 && (
-        <BulkBar
-          count={bulkIds.length}
-          stage={bulkStage}
-          pending={bulkPending}
-          onStageChange={setBulkStage}
-          onApply={() => applyBulkMove(bulkStage)}
-          onClear={clearSelection}
+      {isMobile && state.view === 'kanban' && !filteredToNothing && (
+        <StageChipBar
+          stages={columns.map(c => ({ stage: c.data.stage, count: c.data.count }))}
+          // Derived from the RENDERED columns, so a facet that just hid the active stage
+          // cannot leave the bar highlighting a column that is no longer there.
+          activeStage={
+            activeStage && columns.some(c => c.data.stage === activeStage)
+              ? activeStage
+              : columns[0]?.data.stage ?? null
+          }
+          onSelect={scrollToStage}
         />
       )}
 
-      {isFiltering && filteredDeals.length === 0 ? (
-        <EmptyFilterState onClear={() => setFilters(EMPTY_FILTER_STATE)} />
-      ) : (
-      <KanbanBoard<CrmDeal, { stage: string }>
-        columns={kanbanColumns}
-        items={grouped}
-        onMove={handleKanbanMove}
-        // Drag stays ENABLED while filtering (only `isMobile` disables it). CakeCRM's
-        // board is stage-only: `handleKanbanMove` ignores `MoveEvent.newIndex`, same-column
-        // drops persist nothing, and `moveDealStage` restages by deal id against the full
-        // `data.deals` — so a drop while a filter hides cards is index-safe by construction
-        // (unlike the blueprint, whose board persisted intra-column order and disabled drag).
-        // A drop that makes a deal stop matching an active facet just removes it from the
-        // filtered view — correct filter semantics.
-        // Also disabled while a bulk move is in flight: `moveDealStage` would bail out
-        // anyway, so a drag would animate and then silently snap back.
-        dragDisabled={isMobile || bulkPending}
-        // The ported KanbanBoard/KanbanColumn expose only className hooks (no style
-        // prop), so board-scroller and column-body layout use Tailwind here; the
-        // card and header visuals below use the CRM's inline design tokens.
-        className={`flex gap-4 overflow-x-auto pb-3 pt-1${isMobile ? ' snap-x snap-mandatory' : ''}`}
-        columnClassName="flex flex-col gap-2 overflow-y-auto max-h-[70vh] min-h-[80px] pr-1"
-        renderColumn={(col, children) => {
-          const stage = col.data.stage;
-          const colDeals = grouped[stage] || [];
-          const total = columnTotals[stage] || 0;
-          return (
+      <CollectionView<CrmDeal, StageColumn>
+        key={resetSeq}
+        config={config}
+        state={state}
+        items={items}
+        searchPlaceholder="Search deals, contacts, companies..."
+        // Desktop only: card checkboxes and the bulk bar have always been a pointer-and-keyboard
+        // affordance here, and passing `selection` unconditionally would put a bulk bar on
+        // phones as a side effect of adopting the layer.
+        selection={isMobile ? undefined : selection}
+        kanban={{
+          // No columns while filtered to nothing — the explanation below replaces the board
+          // rather than sitting under a row of empty stage columns.
+          columns: filteredToNothing ? [] : columns,
+          onMove: handleKanbanMove,
+          // The layer's own gate is off (`dragPolicy: 'column'`), so these are the whole gate:
+          // touch drag conflicts with the board's horizontal scroll, and a bulk move in flight
+          // owns the board — moveDealStage would bail anyway, so a drag would animate then
+          // silently snap back.
+          dragDisabled: isMobile || bulkPending,
+          scrollerRef,
+          // The ported KanbanBoard/KanbanColumn expose only className hooks (no style
+          // prop), so board-scroller and column-body layout use Tailwind here; the
+          // card and header visuals below use the CRM's inline design tokens.
+          className: `flex gap-4 overflow-x-auto pb-3 pt-1${isMobile ? ' snap-x snap-mandatory' : ''}`,
+          columnClassName: 'flex flex-col gap-2 overflow-y-auto max-h-[70vh] min-h-[80px] pr-1',
+          renderColumn: (col, children) => (
             <div
               key={col.id}
-              data-stage={stage}
-              ref={el => { if (el) columnRefs.current.set(stage, el); else columnRefs.current.delete(stage); }}
+              data-stage={col.data.stage}
+              ref={el => { if (el) columnRefs.current.set(col.data.stage, el); else columnRefs.current.delete(col.data.stage); }}
               style={{
                 flexShrink: 0,
                 width: isMobile ? '85vw' : 288,
@@ -569,37 +679,43 @@ export function PipelinePage() {
               }}
             >
               <StageHeader
-                stage={stage} count={colDeals.length} total={total}
+                stage={col.data.stage} count={col.data.count} total={col.data.total}
                 // Select-all operates on this column's FILTERED ids, so it can never pick
                 // up a deal the current facets are hiding.
-                columnDealIds={isMobile ? [] : colDeals.map(d => d.id)}
+                columnDealIds={isMobile ? [] : col.data.dealIds}
                 selectedIds={bulkSelected}
                 onToggleColumn={toggleColumn}
+                onHide={() => onToggleStage(stageToggleKey(col.data.stage), false)}
               />
               {children}
             </div>
-          );
+          ),
+          renderCard: (deal, columnId) => (
+            <DealBoardCard
+              deal={deal} columnStage={String(columnId)} onOpen={() => setSelectedDealId(deal.id)}
+              selectable={!isMobile}
+              isSelected={bulkSelected.has(deal.id)}
+              onToggleSelect={() => toggleSelect(deal.id)}
+            />
+          ),
+          renderEmptyColumn: () => (
+            <div style={{
+              fontSize: 12, color: INK_DIM, textAlign: 'center',
+              padding: '16px 8px', border: `1px dashed ${LINE}`, borderRadius: 6,
+            }}>No deals</div>
+          ),
         }}
-        renderCard={(deal, columnId) => (
-          <DealBoardCard
-            deal={deal} columnStage={String(columnId)} onOpen={() => setSelectedDeal(deal)}
-            selectable={!isMobile}
-            isSelected={bulkSelected.has(deal.id)}
-            onToggleSelect={() => toggleSelect(deal.id)}
-          />
-        )}
-        renderEmptyColumn={() => (
-          <div style={{
-            fontSize: 12, color: INK_DIM, textAlign: 'center',
-            padding: '16px 8px', border: `1px dashed ${LINE}`, borderRadius: 6,
-          }}>No deals</div>
-        )}
       />
-      )}
+
+      {state.view === 'kanban' && filteredToNothing && <EmptyFilterState onClear={clearAllFilters} />}
 
       {showCreate && <DealForm onClose={() => setShowCreate(false)} onSaved={() => { setShowCreate(false); load(); }} />}
-      {editDeal && <DealForm deal={editDeal} onClose={() => setEditDeal(null)} onSaved={() => { setEditDeal(null); setSelectedDeal(null); load(); }} />}
+      {editDeal && <DealForm deal={editDeal} onClose={() => setEditDeal(null)} onSaved={() => { setEditDeal(null); setSelectedDealId(null); load(); }} />}
 
+      {/* ── THE DEAL-DETAIL SEAM ────────────────────────────────────────────────
+          Issue #75 replaces exactly this block: add `detail: { getTitle, loadById }` to the
+          config, pass `selectedId`/`detail` to CollectionView above, delete these lines. The
+          open deal is already tracked by ID for that reason. ─────────────────────────────── */}
       {selectedDeal && (
         <DealDetailSheet
           key={selectedDeal.id}
@@ -608,8 +724,8 @@ export function PipelinePage() {
           // Silent-refresh the board on close so an in-sheet note/activity log updates the
           // deal's last_activity_at (and touch count) without a spinner flash — closes the
           // "filter stale deals → log a touch → it leaves the stale bucket" loop.
-          onClose={() => { setSelectedDeal(null); load(true); }}
-          onEdit={(d) => { setSelectedDeal(null); setEditDeal(d); }}
+          onClose={() => { setSelectedDealId(null); load(true); }}
+          onEdit={(d) => { setSelectedDealId(null); setEditDeal(d); }}
           onStageChange={updateDealStage}
         />
       )}
@@ -639,7 +755,7 @@ function BulkBar({ count, stage, pending, onStageChange, onApply, onClear }: {
 }) {
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12,
+      display: 'flex', alignItems: 'center', gap: 10,
       padding: '10px 14px', borderRadius: 6,
       background: tint(ACCENT, 8), border: `1px solid ${tint(ACCENT, 30)}`,
     }}>
@@ -680,36 +796,98 @@ const stopCardInteraction = {
 
 const checkboxStyle = { accentColor: ACCENT, width: 14, height: 14, cursor: 'pointer', flexShrink: 0 };
 
-function StageHeader({ stage, count, total, columnDealIds = [], selectedIds, onToggleColumn }: {
+function StageHeader({ stage, count, total, columnDealIds = [], selectedIds, onToggleColumn, onHide }: {
   stage: string; count: number; total: number;
   columnDealIds?: number[];
   selectedIds?: ReadonlySet<number>;
   onToggleColumn?: (ids: number[], select: boolean) => void;
+  onHide?: () => void;
 }) {
   const color = STAGE_COLORS[stage]?.color || INK_DIM;
   const selectedHere = selectedIds ? columnDealIds.filter(id => selectedIds.has(id)).length : 0;
   const allSelected = columnDealIds.length > 0 && selectedHere === columnDealIds.length;
+  const [showCriteria, setShowCriteria] = useState(false);
+  const criteria = STAGE_CRITERIA[stage];
+
+  // Escape closes the popover, matching every other dismissible surface in the CRM.
+  useEffect(() => {
+    if (!showCriteria) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setShowCriteria(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [showCriteria]);
+
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, padding: '0 2px' }}>
-      {columnDealIds.length > 0 && onToggleColumn && (
-        <input
-          type="checkbox"
-          checked={allSelected}
-          // Indeterminate is not an attribute — it has to be set on the DOM node.
-          ref={el => { if (el) el.indeterminate = selectedHere > 0 && !allSelected; }}
-          onChange={() => onToggleColumn(columnDealIds, !allSelected)}
-          aria-label={`Select all ${stage} deals`}
-          style={checkboxStyle}
-        />
+    <div style={{ marginBottom: 10, padding: '0 2px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {columnDealIds.length > 0 && onToggleColumn && (
+          <input
+            type="checkbox"
+            checked={allSelected}
+            // Indeterminate is not an attribute — it has to be set on the DOM node.
+            ref={el => { if (el) el.indeterminate = selectedHere > 0 && !allSelected; }}
+            onChange={() => onToggleColumn(columnDealIds, !allSelected)}
+            aria-label={`Select all ${stage} deals`}
+            style={checkboxStyle}
+          />
+        )}
+        <span style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: color }} />
+        {criteria ? (
+          <button
+            type="button"
+            onClick={() => setShowCriteria(v => !v)}
+            aria-expanded={showCriteria}
+            title={`What belongs in ${stageLabel(stage)}?`}
+            style={{
+              fontFamily: FONT_DISPLAY,
+              fontSize: 15, letterSpacing: '-0.01em',
+              color: INK, cursor: 'help', padding: 0,
+              background: 'none', border: 'none',
+              borderBottom: `1px dashed ${LINE_STRONG}`,
+            }}
+          >{stageLabel(stage)}</button>
+        ) : (
+          <span style={{ fontFamily: FONT_DISPLAY, fontSize: 15, letterSpacing: '-0.01em', color: INK }}>
+            {stageLabel(stage)}
+          </span>
+        )}
+        <span style={mono(10, INK_DIM)}>{count}</span>
+        <span style={{ ...mono(10, INK_MUTE), marginLeft: 'auto' }}>${total.toLocaleString()}</span>
+        {onHide && (
+          <button
+            type="button"
+            onClick={onHide}
+            aria-label={`Hide ${stageLabel(stage)} column`}
+            title={`Hide ${stageLabel(stage)} column`}
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px',
+              color: INK_DIM, fontSize: 14, lineHeight: 1, flexShrink: 0,
+            }}
+          >×</button>
+        )}
+      </div>
+      {showCriteria && criteria && (
+        // Rendered INLINE rather than absolutely positioned: the board is a horizontal
+        // `overflow-x: auto` scroller, which clips an absolutely-positioned popover no matter
+        // what z-index it carries. Expanding the header instead is immune to that.
+        <div style={{
+          marginTop: 8, padding: 12, borderRadius: 6,
+          background: BG_ELEV, border: `1px solid ${LINE_STRONG}`,
+          boxShadow: `0 8px 40px ${SHADOW}`,
+        }}>
+          <p style={{ fontSize: 12, color: INK_MUTE, margin: 0, lineHeight: 1.5 }}>{criteria.summary}</p>
+          <p style={{ fontSize: 12, color: INK, margin: '10px 0 6px', fontWeight: 500 }}>
+            Criteria to enter this stage:
+          </p>
+          <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {criteria.checklist.map(item => (
+              <li key={item} style={{ fontSize: 12, color: INK_MUTE, lineHeight: 1.45, display: 'flex', gap: 6 }}>
+                <span style={{ color: INK_DIM, flexShrink: 0 }}>☐</span>{item}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
-      <span style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: color }} />
-      <span style={{
-        fontFamily: FONT_DISPLAY,
-        fontSize: 15, letterSpacing: '-0.01em', textTransform: 'capitalize',
-        color: INK,
-      }}>{stage}</span>
-      <span style={mono(10, INK_DIM)}>{count}</span>
-      <span style={{ ...mono(10, INK_MUTE), marginLeft: 'auto' }}>${total.toLocaleString()}</span>
     </div>
   );
 }

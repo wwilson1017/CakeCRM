@@ -379,3 +379,36 @@ describe('loading / empty', () => {
     expect(numberInputs.map(i => i.value)).toEqual(['1000', '50000']);
   });
 });
+
+describe('the "drag paused" note tells the truth under each drag policy', () => {
+  const sortFields = [
+    { value: 'manual', label: 'Board order', arrayOrder: true as const },
+    { value: 'name', label: 'Name', get: (r: Row) => r.name },
+  ];
+
+  function boardConfig(key: string, dragPolicy?: 'index' | 'column'): CollectionConfig<Row> {
+    return makeConfig(key, {
+      defaultView: 'kanban',
+      sort: { fields: sortFields },
+      kanban: { getColumnId: r => r.stage, ...(dragPolicy ? { dragPolicy } : {}) },
+      // A kanban board needs no getVoided here; leaving the base one is fine.
+    });
+  }
+
+  it('shows the note on a default board once the sort stops being manual', () => {
+    renderPage({ config: boardConfig('note_index'), data: rows });
+    expect(document.body.textContent).not.toContain('drag paused');
+    act(() => state().setSort({ field: 'name', dir: 'asc' }));
+    expect(state().dragLocked).toBe(true);
+    expect(document.body.textContent).toContain('drag paused');
+  });
+
+  it("does NOT show the note on a 'column' board, where a non-manual sort does not pause drag", () => {
+    renderPage({ config: boardConfig('note_column', 'column'), data: rows });
+    act(() => state().setSort({ field: 'name', dir: 'asc' }));
+    expect(state().manualOrder).toBe(false);
+    expect(state().dragLocked).toBe(false);
+    // The old condition keyed on manualOrder alone and would have claimed drag was paused.
+    expect(document.body.textContent).not.toContain('drag paused');
+  });
+});

@@ -64,6 +64,7 @@ Note that `chatty` rows are historical only. chatty was **retired as a sync sour
 | Theme + dark mode (fixed palette) | `cake_os/frontend/src/index.css` | #54 | — |
 | Shared collection layer | `cake_os/frontend/src/shared/{search,listview,collection,overlay}/` | #73 | — |
 | Dashboard parity (stat row + Weekly Touches) | `cake_os/frontend/src/apps/crm/components/DashboardTab.tsx` | #76 | — |
+| Pipeline parity (board + list on the collection layer) | `cake_os/frontend/src/apps/crm/components/PipelineTab.tsx` (+ `StageChipBar.tsx`, `pipelineListColumns.tsx`, `collectionConfig.ts`, `pipelineSort.ts`, `pipelineBoard.ts`) | #74 | — |
 | DB-backed login credential + password change | New capability (no blueprint) | #78 | — |
 | Sync bot receiving half (this file) | New capability | #23 | — |
 
