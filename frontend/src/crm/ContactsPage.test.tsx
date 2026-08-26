@@ -199,7 +199,9 @@ describe('the corpus sweep across multiple pages', () => {
     expect(new Set(sent)).toEqual(new Set([String(CRM_LIST_PAGE_SIZE)]));
 
     // Every row from both pages landed, exactly once — asserted on the corpus size the
-    // bar reports rather than on rendered rows, because ListView caps rendering at 300.
+    // bar reports rather than on rendered rows, because ListView renders its first 300 and
+    // offers a "show all" for the remainder (so nothing is unreachable, just not yet in
+    // the DOM).
     expect(container.textContent).toContain(String(TOTAL));
     // Rows that DID render are unique — a mis-threaded cursor would repeat the boundary.
     const ids = [...container.querySelectorAll('td')]
