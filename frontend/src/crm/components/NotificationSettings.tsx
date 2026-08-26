@@ -14,6 +14,7 @@
 
 import { useEffect, useState } from 'react';
 import { api } from '../../core/api/client';
+import { useAuth } from '../../core/auth/AuthContext';
 import { toast } from '../../shared/toast';
 import { INK_MUTE, FONT_SANS, LINE } from '../../shared/styles';
 import { btnPrimary, btnSecondary, settingsSubheading } from '../styles';
@@ -24,6 +25,10 @@ import {
 } from '../../core/notifications/pushSubscription';
 
 export function NotificationSettings({ isMobile }: { isMobile: boolean }) {
+  // The Web Push half configures this browser and is everyone's. The digest half below
+  // configures the INSTALL (`heartbeat_state.proactive_enabled`) and its route is
+  // `require_admin`, so it is admin-only — the card is member-visible, the toggle is not.
+  const { isAdmin } = useAuth();
   const [supported] = useState(isPushSupported());
   const [permission, setPermission] = useState<NotificationPermission | 'unsupported'>(() => getPushPermissionState());
   const [subscribed, setSubscribed] = useState(false);
@@ -136,7 +141,7 @@ export function NotificationSettings({ isMobile }: { isMobile: boolean }) {
         </>
       )}
 
-      {proactive !== null && (
+      {isAdmin && proactive !== null && (
         <div style={{ marginTop: 24, paddingTop: 20, borderTop: `1px solid ${LINE}` }}>
           <h3 style={settingsSubheading}>Daily digest and nudges</h3>
           <p style={{ fontFamily: FONT_SANS, fontSize: 13, color: INK_MUTE, lineHeight: 1.6, margin: '0 0 14px', maxWidth: 460 }}>

@@ -101,7 +101,7 @@ the residual risks, is in `docs/SYNC.md`.
   guarantee above is unaffected either way.
 - **BYO OAuth app.** You supply your own Google Cloud OAuth client (client ID +
   secret), entered in-app (never as environment variables). The redirect URI to
-  register is shown on the Settings → Gmail card
+  register is shown on the Settings → Integrations → Gmail card
   (`{BACKEND_URL}/api/gmail/oauth/callback`); self-hosters behind a reverse proxy
   must set `BACKEND_URL` to their public URL.
 - **Encryption at rest.** The Google client secret and the OAuth access/refresh
@@ -155,7 +155,7 @@ history and may appear in referrer headers or a proxy log. Treat it like a passw
 | Path | `/capture` or `/capture/{token}` | `/todo` or `/todo/{token}` |
 | Grants | **Write-only** — creates one inbox item | **Read and write** on every todo |
 | Default | Reachable without a token (harmless: nothing is readable) | **Off entirely** |
-| Manage | Settings → Tasks | Settings → Tasks |
+| Manage | Settings → Assistant → Task mode | Settings → Assistant → Task mode |
 
 - **Capture is genuinely write-only.** It accepts a block of text, files it in your
   inbox, and answers with nothing but the new item's id. There is no read endpoint on
@@ -186,7 +186,7 @@ history and may appear in referrer headers or a proxy log. Treat it like a passw
 ## The assistant's self-written identity (`soul.md`)
 
 The assistant keeps its own knowledge in markdown files you can read and edit at
-**Settings → Assistant memory**. One of them, `soul.md`, is its description of
+**Settings → Assistant → Assistant memory**. One of them, `soul.md`, is its description of
 itself, and the assistant can rewrite it. That file is loaded into the assistant's
 system prompt **unfenced** — as instructions rather than as data — because an
 identity the model is told to distrust is not an identity at all.
