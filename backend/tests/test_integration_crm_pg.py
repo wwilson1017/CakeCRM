@@ -178,9 +178,17 @@ def test_the_task_mode_migration_is_scoped_and_replayable(pg_db):
     )
 
     # Flip case: an upgrading install still on the DDL default gets moved.
-    pg_execute("UPDATE crm_meta SET task_mode = 'normal' WHERE id = 1")
-    pg_execute(sql)
-    assert pg_fetchone("SELECT task_mode FROM crm_meta WHERE id = 1")["task_mode"] == "gtd"
+    #
+    # try/finally because `_clean_crm` does NOT reset task_mode: without it, a failure
+    # between these two statements would leave the singleton on 'normal' and cascade
+    # into test_demo_state_machine_over_http, which would then fail with a misleading
+    # message about demo-status instead of naming the real cause.
+    try:
+        pg_execute("UPDATE crm_meta SET task_mode = 'normal' WHERE id = 1")
+        pg_execute(sql)
+        assert pg_fetchone("SELECT task_mode FROM crm_meta WHERE id = 1")["task_mode"] == "gtd"
+    finally:
+        pg_execute("UPDATE crm_meta SET task_mode = 'gtd' WHERE id = 1")
 
 
 # ── Fresh empty install (the acceptance clause, at the data layer) ────────────
