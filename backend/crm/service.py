@@ -964,15 +964,6 @@ def _write_deal_update(deal_id: int, filtered: dict) -> bool:
     """
     if not filtered:
         raise ValueError("_write_deal_update requires at least one column to set")
-    # Named explicitly rather than left to KeyError on the cast lookup below: an
-    # undeclared column would otherwise fail deep inside SQL construction with a bare
-    # column name and no hint that the fix is to declare its type.
-    undeclared = set(filtered) - _DEAL_COLUMN_TYPES.keys()
-    if undeclared:
-        raise ValueError(
-            f"_write_deal_update: no declared type for {sorted(undeclared)} — "
-            "add it to _DEAL_COLUMN_TYPES"
-        )
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -987,16 +978,26 @@ def _write_deal_update(deal_id: int, filtered: dict) -> bool:
             deal_id, old_stage, archived_at, filtered
         )
         # Rule 5. Postgres decides whether anything would actually change, not Python:
-        # the row is already locked, so `IS DISTINCT FROM` on the very columns being SET
-        # is an exact statement of "this write is a no-op", evaluated with the column's
-        # own type semantics. Comparing a pre-image in Python instead would be subtly
-        # wrong on types the tool layer can reach — the assistant's arguments are not
-        # runtime schema-validated, and `1.0 == True` is True in Python where Postgres
-        # correctly REFUSES to assign a boolean to a DOUBLE PRECISION column. Doing it in
-        # SQL preserves the existing coercion AND error behavior exactly, and handles
-        # NULL (an unlinked contact_id) the way `=` would not.
+        # the row is already locked, so `IS DISTINCT FROM` over the very columns being SET
+        # is an exact statement of "this write is a no-op", evaluated with each column's
+        # own type semantics (see _DEAL_COLUMN_TYPES for why the cast is mandatory) and
+        # handling NULL — an unlinked contact_id — the way `=` would not. Comparing a
+        # pre-image in Python instead would be subtly wrong on types the tool layer can
+        # reach: the assistant's arguments are not runtime schema-validated, and
+        # `1.0 == True` is True in Python where Postgres REFUSES to assign a boolean to a
+        # DOUBLE PRECISION column, which would turn an invalid write into a silent no-op.
         # `updated_at` is set but deliberately NOT part of the test: the question is
         # whether anything ELSE changed. Values bind twice — once to SET, once to compare.
+        #
+        # Checked HERE, not on the way in: _classify_deal_update can ADD columns
+        # (lost_reason, probability), so this is the first point the final written map
+        # exists. Named explicitly rather than left to a bare KeyError on the cast lookup.
+        undeclared = set(filtered) - _DEAL_COLUMN_TYPES.keys()
+        if undeclared:
+            raise ValueError(
+                f"_write_deal_update: no declared type for {sorted(undeclared)} — "
+                "add it to _DEAL_COLUMN_TYPES"
+            )
         set_clause = ", ".join(f"{k} = %s" for k in filtered)
         distinct_clause = " OR ".join(
             f"{k} IS DISTINCT FROM %s::{_DEAL_COLUMN_TYPES[k]}" for k in filtered
