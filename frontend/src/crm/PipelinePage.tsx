@@ -765,9 +765,15 @@ export function PipelinePage() {
       {editDeal && <DealForm deal={editDeal} onClose={() => setEditDeal(null)} onSaved={() => { setEditDeal(null); setSelectedDealId(null); load(); }} />}
 
       {/* ── THE DEAL-DETAIL SEAM ────────────────────────────────────────────────
-          Issue #75 replaces exactly this block: add `detail: { getTitle, loadById }` to the
-          config, pass `selectedId`/`detail` to CollectionView above, delete these lines. The
-          open deal is already tracked by ID for that reason. ─────────────────────────────── */}
+          Issue #75 replaces exactly this block, in three steps: add
+          `detail: { getTitle, loadById }` to the config in `pipelineCollection.ts`; pass the
+          `detail` prop to CollectionView above (`selectedId` and `onSelect` are ALREADY
+          passed — they drive list-row selection today, so that half needs no edit); then
+          delete these lines. `DealDetailBody` renders inside `CollectionDetail`'s render
+          prop, never here — the page keeps owning only WHICH deal is open, by id, which is
+          what makes this a one-file swap. `kanbanColumnIds` already flows
+          CollectionView → CollectionDetail off `kanban.columns`, so ‹ › walks the board
+          column-major with no extra wiring. ──────────────────────────────────────────── */}
       {selectedDeal && (
         <DealDetailSheet
           key={selectedDeal.id}
