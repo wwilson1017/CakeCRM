@@ -174,12 +174,25 @@ async def _try_capture(chat_id: str, text: str, token: str) -> bool:
 
 
 def _task_mode() -> str:
-    """Current task mode; fail-safe to 'normal' so a read error never eats a message."""
+    """Current task mode; fail-safe to the product default ('gtd' since #102), matching
+    the other three readers.
+
+    THIS except covers an import failure only — `get_task_mode` never raises. The path
+    that actually yields a wrong 'gtd' on a deliberately-normal install is
+    `get_task_mode`'s OWN except: one failed `pg_fetchone` (pool exhaustion, a dropped
+    connection, a statement timeout), which does not mean the database is broken — the
+    next query may well succeed. In that window `capture the Henderson quote` is
+    intercepted and filed as an inbox todo instead of reaching the assistant.
+
+    Accepted, not overlooked: the blast radius is one misrouted message, the user is
+    told what happened ("Captured: …"), and the todo lands in the same `tasks` store
+    either mode reads. A retry here would buy little and add a hot-path round trip.
+    """
     try:
         from crm.service import get_task_mode
         return get_task_mode()
     except Exception:
-        return "normal"
+        return "gtd"
 
 
 async def _handle_callback(cb: dict) -> None:

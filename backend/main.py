@@ -233,8 +233,11 @@ app.include_router(gtd_router, prefix="/api/crm/gtd", tags=["todo-gtd"])
 # `todos` as a token guess. `todos` is in RESERVED_TODO_WEB_SLUGS precisely so that
 # collision cannot happen from the other direction either.
 #
-# Both surfaces are inert until configured: capture answers only while the CRM has a
-# capture token or none is set, and the web app 404s entirely until todo_web_enabled.
+# The two surfaces are ASYMMETRIC, and neither consults the task mode (#102 made GTD the
+# default; these mounts are unchanged by it). Capture is LIVE by default — the bare
+# /capture path answers until a token is set, which is the deliberate #70 design: it is
+# write-only, so an uninvited caller can add to the inbox but read nothing back. The web
+# app is the one that grants reads, so it 404s entirely until todo_web_enabled.
 app.include_router(todo_capture_router, tags=["todo-capture"])
 app.include_router(todo_web_public_api, prefix="/api/todo-web", tags=["todo-web"])
 app.include_router(todo_web_token_api, prefix="/api/todo-web/{token}", tags=["todo-web"])

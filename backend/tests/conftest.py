@@ -206,3 +206,20 @@ def fake_admin() -> dict:
 def fake_member() -> dict:
     """Dependency override returning a non-admin member."""
     return dict(FAKE_MEMBER)
+
+
+@pytest.fixture
+def task_mode(monkeypatch):
+    """Pin the #70 task mode for one test.
+
+    The hermetic suite runs with no database, so `crm.service.get_task_mode()` answers
+    from its fail-safe — which #102 flipped from 'normal' to 'gtd'. Any test that
+    builds a tool registry or a system prompt therefore has an opinion about the mode
+    whether it states one or not, and three tests were silently relying on the old
+    fail-safe. Depend on this fixture and say which mode you mean.
+    """
+    def _set(value: str) -> None:
+        from crm import gtd_tools, tools
+        monkeypatch.setattr(gtd_tools.service, "get_task_mode", lambda: value)
+        monkeypatch.setattr(tools.crm, "get_task_mode", lambda: value)
+    return _set

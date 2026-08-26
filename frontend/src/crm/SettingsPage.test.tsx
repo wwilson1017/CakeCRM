@@ -2,7 +2,7 @@
 //
 // What this pins is the Settings SHELL's contract, not any card's internals (#103):
 //
-//   • the gating partition survives the restructure — a member reaches exactly four cards
+//   • the gating partition survives the restructure — a member reaches exactly three cards
 //     across two sections, an admin exactly nine across four, and walking the nav is the
 //     only way to prove it, because the page renders one section at a time;
 //   • the nav is real navigation — anchors with hrefs, one `aria-current="page"`, and no
@@ -17,14 +17,18 @@
 //
 // Two firsts for this repo's harness: no other test renders under a Router, and none
 // renders a `useIsMobile` consumer (jsdom has no `matchMedia`, so the hook is module-mocked
-// rather than shimmed).
+// rather than shimmed). The task-mode providers are real, not mocked — `useSetTaskMode()`
+// throws without one by design (#102), so omitting them fails loudly rather than silently.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getToasts, _resetForTesting as resetToasts } from '../shared/toast';
+import { TaskModeContext, TaskModeSetterContext } from './gtd/TaskModeContext';
 import { invalidateUsers } from './useUsers';
+
+const setTaskMode = vi.fn();
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 // Relative to THIS file; the cards' own `../../core/...` imports resolve to the same
@@ -106,15 +110,27 @@ afterEach(() => {
   container.remove();
 });
 
+/**
+ * The page as it is actually mounted in the app: under a router, and under the two task-mode
+ * providers `CrmLayout` owns. Both are required — `useSetTaskMode()` THROWS without its
+ * provider by design (#102), rather than defaulting to a silent no-op, so a harness that
+ * omitted it would fail loudly here exactly as a real missing mount point would.
+ */
+function tree(url: string) {
+  return (
+    <MemoryRouter initialEntries={[url]}>
+      <TaskModeContext.Provider value="gtd">
+        <TaskModeSetterContext.Provider value={setTaskMode}>
+          <SettingsPage />
+          <LocationProbe />
+        </TaskModeSetterContext.Provider>
+      </TaskModeContext.Provider>
+    </MemoryRouter>
+  );
+}
+
 async function render(url = '/crm/settings') {
-  await act(async () => {
-    root.render(
-      <MemoryRouter initialEntries={[url]}>
-        <SettingsPage />
-        <LocationProbe />
-      </MemoryRouter>,
-    );
-  });
+  await act(async () => { root.render(tree(url)); });
 }
 
 /** Exposes the live query string so a test can see what GmailCard rewrote it to. */
@@ -150,7 +166,7 @@ async function allReachableTitles(): Promise<string[]> {
 }
 
 describe('SettingsPage — the gating partition survives the restructure', () => {
-  it('reaches a member exactly the four member-visible cards, across two sections', async () => {
+  it('reaches a member exactly the member-visible cards, across two sections', async () => {
     await render();
     expect(navLabels()).toEqual(['Personal', 'Assistant']);
 
@@ -344,12 +360,7 @@ describe('SettingsPage — the role is never frozen', () => {
 
     auth.isAdmin = true;
     await act(async () => {
-      root.render(
-        <MemoryRouter initialEntries={['/crm/settings?section=integrations']}>
-          <SettingsPage />
-          <LocationProbe />
-        </MemoryRouter>,
-      );
+      root.render(tree('/crm/settings?section=integrations'));
     });
 
     expect(navLabels()).toEqual(['Personal', 'Assistant', 'Workspace', 'Integrations']);
@@ -365,12 +376,7 @@ describe('SettingsPage — the role is never frozen', () => {
 
     auth.isAdmin = false;
     await act(async () => {
-      root.render(
-        <MemoryRouter initialEntries={['/crm/settings?section=workspace']}>
-          <SettingsPage />
-          <LocationProbe />
-        </MemoryRouter>,
-      );
+      root.render(tree('/crm/settings?section=workspace'));
     });
 
     expect(navLabels()).toEqual(['Personal', 'Assistant']);

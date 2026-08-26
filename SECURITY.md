@@ -141,9 +141,15 @@ the residual risks, is in `docs/SYNC.md`.
 
 ## The no-login todo links
 
-Todo-GTD task mode can publish **two unauthenticated surfaces**. Both are opt-in, both
-are off or inert until you turn them on, and both are described here so you can decide
-with your eyes open. If you never enable Todo-GTD mode, neither exists.
+CakeCRM has **two unauthenticated todo surfaces**, and they are asymmetric — read the
+Default row in the table below before you assume both are off.
+
+Neither depends on which task mode you are in. They are mounted always and gated only
+on their own settings, so switching between Todo-GTD and normal tasks does not turn
+either one on or off — and because it does not, Settings → Tasks shows their controls in
+either mode, whether or not either surface is currently configured. Switching to the
+simple task list never hides a link that is still serving, and never hides the control
+that restricts one. Those controls are **admin-only**.
 
 They are authorized by an unguessable **secret token in the URL path**, not by a
 session — that is what makes them work as a phone bookmark or a home-screen app. A URL
