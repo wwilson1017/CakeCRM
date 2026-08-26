@@ -143,18 +143,27 @@ describe('SettingsCard is the only owner of card chrome', () => {
   // fingerprint of that wrapper, and it has legitimate consumers elsewhere in the app —
   // so this is scoped to the nine settings cards by name.
   //
-  // Read through Vite's `?raw` glob rather than `node:fs`: `tsconfig.app.json` types are
-  // `["vite/client"]` only, so importing node builtins here would fail `tsc -b` (and
-  // adding @types/node to buy one readFileSync is not worth a dependency).
+  // Read through Vite's `?raw` glob rather than `node:fs` because `tsconfig.app.json`
+  // sets `types: ["vite/client"]`, so a node builtin would not type-check under `tsc -b`.
   const SOURCES = import.meta.glob('./components/*.tsx', {
     query: '?raw', import: 'default', eager: true,
   }) as Record<string, string>;
 
-  const SETTINGS_CARD_FILES = [
-    'BrandingCard.tsx', 'ChangePasswordCard.tsx', 'CustomFieldSettings.tsx',
-    'GmailCard.tsx', 'MemoryCard.tsx', 'NotificationSettings.tsx',
-    'TaskModeCard.tsx', 'TeamSettings.tsx', 'TelegramSettings.tsx',
-  ];
+  // filename → the registry id that file must render as. A card id does not mechanically
+  // map to a filename, so this is hand-maintained — the count check below is what stops
+  // it drifting from the registry.
+  const CARD_FILE_IDS: Record<string, SettingsCardId> = {
+    'BrandingCard.tsx': 'branding',
+    'ChangePasswordCard.tsx': 'change_password',
+    'CustomFieldSettings.tsx': 'custom_fields',
+    'GmailCard.tsx': 'gmail',
+    'MemoryCard.tsx': 'memory',
+    'NotificationSettings.tsx': 'notifications',
+    'TaskModeCard.tsx': 'task_mode',
+    'TeamSettings.tsx': 'team',
+    'TelegramSettings.tsx': 'telegram',
+  };
+  const SETTINGS_CARD_FILES = Object.keys(CARD_FILE_IDS);
 
   const sourceOf = (file: string): string => {
     const source = SOURCES[`./components/${file}`];
@@ -182,6 +191,13 @@ describe('SettingsCard is the only owner of card chrome', () => {
     // its module-level mock answers every caller identically — so it is pinned here.
     expect(sourceOf(file)).not.toMatch(/\buseIsMobile\b/);
     expect(sourceOf(file)).toMatch(/isMobile/);
+  });
+
+  it.each(SETTINGS_CARD_FILES)('%s renders under its own registry id', (file) => {
+    // `SettingsCardId` constrains the `id` prop to ONE OF the nine, never to the one this
+    // component is registered as — so a copy-pasted `id` type-checks, renders, and mints a
+    // duplicate DOM id plus an ambiguous `aria-labelledby` target. Bind it here.
+    expect(sourceOf(file)).toMatch(new RegExp(`id="${CARD_FILE_IDS[file]}"`));
   });
 
   it('renders its own chrome from cardStyle', () => {

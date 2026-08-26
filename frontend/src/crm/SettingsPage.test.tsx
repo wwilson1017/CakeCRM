@@ -77,7 +77,6 @@ const RESPONSES: Record<string, unknown> = {
   },
   '/api/auth/2fa/status': { enabled: false },
   '/api/crm/demo-status': { task_mode: 'normal' },
-  '/api/crm/todo-surfaces': null,
 };
 
 const ADMIN_ONLY_TITLES = ['Branding', 'Team', 'Custom Fields', 'Telegram', 'Gmail'];
@@ -169,6 +168,20 @@ describe('SettingsPage — the gating partition survives the restructure', () =>
     const reachable = await allReachableTitles();
     expect(reachable).toHaveLength(9);
     expect(reachable.sort()).toEqual([...MEMBER_TITLES, ...ADMIN_ONLY_TITLES].sort());
+  });
+
+  it('hides the install-wide digest toggle from a member, inside a member-visible card', async () => {
+    // The partition is card-granular, but Notifications straddles it: the Web Push half
+    // configures this browser (everyone's), while "Daily digest and nudges" writes
+    // install state through a `require_admin` route. Offering a member a control that
+    // can only 403 is exactly what the card-level gating exists to prevent.
+    await render();
+    expect(cardTitles()).toContain('Notifications');
+    expect(container.textContent).not.toContain('Daily digest and nudges');
+
+    auth.isAdmin = true;
+    await render();
+    expect(container.textContent).toContain('Daily digest and nudges');
   });
 
   it('sends a member deep-linked to an admin section back to Personal', async () => {
