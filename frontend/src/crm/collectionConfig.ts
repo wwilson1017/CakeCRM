@@ -124,7 +124,10 @@ export interface ContactsConfigDeps {
 export function makeContactsCollectionConfig(deps: ContactsConfigDeps): CollectionConfig<CrmContact> {
   const facets: FacetDef<CrmContact>[] = [
     { key: 'status', label: 'Status', getValue: c => c.status || null },
-    { key: 'tags', label: 'Tags', getValue: c => parseTags(c.tags), searchable: true },
+    // `?? ''` is not defensive noise: the layer calls getValue for EVERY row to derive the
+    // option list, so one row missing the field would throw inside a render and take the
+    // whole page down rather than just that facet.
+    { key: 'tags', label: 'Tags', getValue: c => parseTags(c.tags ?? ''), searchable: true },
     ...(deps.owners ? [ownerFacet<CrmContact>(deps.owners)] : []),
     {
       kind: 'single', key: 'score', label: 'Score',
