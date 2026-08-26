@@ -305,7 +305,11 @@ CRM_TOOL_DEFS = [
             "type": "object",
             "properties": {
                 "deal_id": {"type": "integer"},
-                "stage": {"type": "string", "description": "New stage: lead, qualified, proposal, negotiation"},
+                "stage": {
+                    "type": "string",
+                    "enum": list(crm.OPEN_STAGES),
+                    "description": f"New stage: {', '.join(crm.OPEN_STAGES)}",
+                },
             },
             "required": ["deal_id", "stage"],
         },
@@ -330,7 +334,11 @@ CRM_TOOL_DEFS = [
                     "items": {"type": "integer"},
                     "description": "Deal IDs to move (maximum 200 per call).",
                 },
-                "stage": {"type": "string", "description": "Target stage: lead, qualified, proposal, negotiation"},
+                "stage": {
+                    "type": "string",
+                    "enum": list(crm.OPEN_STAGES),
+                    "description": f"Target stage: {', '.join(crm.OPEN_STAGES)}",
+                },
             },
             "required": ["deal_ids", "stage"],
         },
@@ -1256,6 +1264,18 @@ def crm_update_deal(deal_id: int, **kwargs) -> dict:
 
 
 def crm_update_deal_stage(deal_id: int, stage: str) -> dict:
+    # Keep this tool's own open-stage-only promise (#99). The schema enum above only
+    # steers — nothing validates tool arguments server-side — so the executor is the
+    # enforcement point, exactly like the deal_ids guard in crm_bulk_move_deals below.
+    # The service, the REST route and crm_update_deal stay permissive by design; the
+    # contract being kept here is this tool's description, not a data-integrity rule.
+    if stage in crm.CLOSED_STAGES:
+        return {"error": (
+            f"crm_update_deal_stage moves a deal between open pipeline stages only — "
+            f"refusing to move deal {deal_id} to '{stage}'. To close it, use "
+            f"crm_mark_deal_won or crm_mark_deal_lost; crm_mark_deal_lost can record "
+            f"the lost reason, which a stage move cannot."
+        )}
     try:
         deal = crm.update_deal_stage(deal_id, stage)
     except ValueError as e:
@@ -1277,6 +1297,18 @@ def crm_bulk_move_deals(deal_ids: list | None = None, stage: str = "") -> dict:
     # through as deal id 1.
     if any(isinstance(i, bool) or not isinstance(i, int) or i <= 0 for i in ids):
         return {"error": "deal_ids must be positive integers"}
+    # Keep the open-stage-only promise (#99), and keep it here rather than in the
+    # service: the REST route's contract is deliberately generic and pinned permissive
+    # by its own tests, so the promise being enforced is this tool's. This is also the
+    # one surface where a single call could close up to BULK_MOVE_MAX deals with no
+    # loss reasons — and in power mode there is no confirmation in front of it.
+    if stage in crm.CLOSED_STAGES:
+        return {"error": (
+            f"crm_bulk_move_deals moves deals between open pipeline stages only — "
+            f"refusing to move {len(ids)} deal(s) to '{stage}'. To close deals, call "
+            f"crm_mark_deal_won or crm_mark_deal_lost for each one; crm_mark_deal_lost "
+            f"can record the lost reason, which a bulk move cannot."
+        )}
     result = crm.bulk_move_deals(ids, stage)
     if result.get("ok"):
         # Badge every deal this call actually moved, mirroring crm_update_deal_stage —

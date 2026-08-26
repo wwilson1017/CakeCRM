@@ -402,7 +402,16 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   Whole-request refusals come back as `ok:false` with HTTP 200, never a 4xx, because the
   board's honesty depends on only transport/5xx failures throwing: a refusal means
   nothing was written (revert), a thrown 5xx means the outcome is genuinely unknown
-  (never revert — a connection can drop after the commit). Chatter now also attaches to
+  (never revert — a connection can drop after the commit). **The open-stage-only promise
+  is kept at the TOOL layer only** (#99): `crm_update_deal_stage` and
+  `crm_bulk_move_deals` both advertise it, so both carry a schema `enum` of
+  `service.OPEN_STAGES` *and* an executor refusal of `CLOSED_STAGES` — the enum only
+  steers (nothing validates tool args server-side), so the executor is the enforcement
+  point. `CLOSED_STAGES` sits beside `DEAL_STAGES` and `OPEN_PREDICATE` is its SQL
+  spelling (a test pins them in agreement). The service, the REST route and
+  `crm_update_deal`/`crm_create_deal` stay permissive by design — this is interface
+  honesty, not a data-integrity boundary; closes route to `crm_mark_deal_won`/`_lost`,
+  which *can* record a lost reason. Chatter now also attaches to
   **companies** (zero-migration: `entity_type` is
   free TEXT), cleaned in `delete_company`. **Phase 2** adds the two composing reads:
   `crm_get_deal_health` (one deal — #18's `score_deal()` plus days-in-stage,
