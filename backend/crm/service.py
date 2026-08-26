@@ -2502,7 +2502,11 @@ def _shape_activity_types(rows: list[dict]) -> list[dict]:
 _ACTIVITY_CHATTER_EXCLUSIONS = (
     " AND ch.message NOT LIKE %s AND ch.message NOT LIKE %s"
 )
-_PROVENANCE_NOTE_PATTERN = "Confirmed AI-populated value for %"
+# The SAME literal scoring_service excludes from engagement and the #77 last-contact
+# join excludes from recency — imported rather than retyped, because a fourth copy of
+# a pattern that must mirror provenance_service.confirm's writer is exactly the drift
+# making it public was meant to end.
+_PROVENANCE_NOTE_PATTERN = scoring_service.HOUSEKEEPING_NOTE_LIKE
 _MERGE_COPY_PATTERN = "[Merged from deal #%"
 
 

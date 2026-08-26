@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../core/api/client';
-import { writeMayHaveLanded } from './usePatchableAssembly';
+import { rowIsGone, writeMayHaveLanded } from './usePatchableAssembly';
 import type { CrmCompany } from '../core/types';
 import { CompanyForm } from './components/CompanyForm';
 import { ActivityTimeline } from './components/ActivityTimeline';
@@ -60,12 +60,14 @@ export function CompanyDetailPage({ onChanged, onDeleted, onWriteUncertain }: Co
       if (reqId !== loadIdRef.current) return;
       setCompany(data);
       onChanged?.(data);
-    } catch {
+    } catch (err) {
       if (reqId !== loadIdRef.current) return;
       setCompany(null);
+      // See ContactDetailPage: a 404 from a stale list row is a ghost, not an error.
+      if (rowIsGone(err)) onDeleted?.(Number(id));
     }
     if (reqId === loadIdRef.current) setLoading(false);
-  }, [id, onChanged]);
+  }, [id, onChanged, onDeleted]);
 
   useEffect(() => { queueMicrotask(load); }, [load]);
 

@@ -77,6 +77,25 @@ describe('useLocalDay', () => {
     expect(state().today).toBe('2026-05-03');
   });
 
+  it('re-arms even when the timer fires on the SAME day', () => {
+    // setToday(sameValue) is a React bail-out — no re-render, no effect, no new timer — so
+    // re-arming cannot ride the day value. Reachable when the clock is stepped backwards
+    // (NTP correction, VM restore) after the timeout was armed, which would otherwise
+    // freeze the day for the life of the tab.
+    vi.setSystemTime(new Date(2026, 4, 1, 23, 59, 30));
+    act(() => { root.render(<Probe />); });
+
+    // Fire the pending timeout while it is still the 1st: the value does not change…
+    vi.setSystemTime(new Date(2026, 4, 1, 22, 0));
+    act(() => { vi.advanceTimersByTime(60_000); });
+    expect(state().today).toBe('2026-05-01');
+
+    // …but a fresh timer must still be armed, so the real midnight is not missed.
+    vi.setSystemTime(new Date(2026, 4, 2, 0, 0, 5));
+    act(() => { vi.advanceTimersByTime(2 * 60 * 60 * 1000); });
+    expect(state().today).toBe('2026-05-02');
+  });
+
   it('keeps `now` consistent with `today`, and stable within the day', () => {
     vi.setSystemTime(new Date(2026, 4, 1, 23, 30));
     act(() => { root.render(<Probe />); });
