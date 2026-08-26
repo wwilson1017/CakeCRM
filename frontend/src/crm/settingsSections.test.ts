@@ -114,6 +114,13 @@ describe('settingsSections — URL parsing', () => {
     expect(wantedSection(new URLSearchParams('gmail=error&reason=denied'))).toBe(GMAIL_SECTION);
     expect(wantedSection(new URLSearchParams('section=personal&gmail=error'))).toBe(GMAIL_SECTION);
   });
+
+  it('ignores an empty ?gmail=, matching GmailCard\'s own early return', () => {
+    // The two must agree on what counts as a callback. If this honoured a bare key while
+    // the card skipped it, the URL would select a section nothing ever cleans up.
+    expect(wantedSection(new URLSearchParams('gmail='))).toBe(DEFAULT_SECTION);
+    expect(wantedSection(new URLSearchParams('section=assistant&gmail='))).toBe('assistant');
+  });
 });
 
 describe('settingsSections — every card has a home', () => {

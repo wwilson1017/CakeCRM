@@ -521,10 +521,16 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `cardStyle`. The section is deep-linkable as `?section=<id>` and is a pure function of
   URL + role recomputed every render (nothing memoises `isAdmin`, in either direction).
   That is load-bearing for the **Gmail OAuth callback**, which lands on `?gmail=…` with
-  no `section`: `wantedSection()` maps a present `gmail` to Integrations so `GmailCard`
-  mounts and its effect can toast and strip the params, and that same effect writes
-  `section=integrations` back as it strips — without which removing `gmail` would drop
-  the view to the default section. Both halves are pinned by `SettingsPage.test.tsx`.
+  no `section`: `wantedSection()` maps a **non-empty** `gmail` to Integrations so
+  `GmailCard` mounts and its effect can toast and strip the params, and that same effect
+  writes `section=integrations` back as it strips — without which removing `gmail` would
+  drop the view to the default section. Two details keep that from becoming a trap, since
+  `gmail` outranks `section`: the non-empty test is exactly `GmailCard`'s own
+  `if (!result) return`, so the page cannot select a section the card then declines to
+  clean up; and the nav **deletes** `CALLBACK_PARAMS` from its links (it preserves every
+  other param), because a one-shot callback param riding along would pin the view to
+  Integrations and make every tab inert — permanently for a MEMBER, who never mounts
+  `GmailCard` and so never strips it. All of it is pinned by `SettingsPage.test.tsx`.
   Only the active section mounts, so Telegram's 4 s link-poll runs only while
   Integrations is on screen; the cost is that switching sections remounts (unsaved
   in-card drafts are lost — acceptable, since the tabs are links and switching is a
