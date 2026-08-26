@@ -1,231 +1,135 @@
 /**
- * SettingsPage — CRM settings, currently the Branding section (issue #9).
+ * SettingsPage — the Settings shell: a section nav, and the active section's cards (#103).
  *
- * Consumes the already-built /api/branding backend: company name and logo. Saves
- * push through BrandingContext so the shell wordmark updates live. Mutations stay
- * disabled until the branding fetch resolves. Form fields fall back to the fetched
- * branding until the user edits them (no seeding effect). Logo mutations use
- * patchBranding (functional) so an in-flight name save can't be clobbered by an
- * out-of-order logo response. The accent picker was removed in #54 — the theme is
- * fixed (light/dark), so branding is company name + logo only.
+ * This page used to BE the list — nine cards appended in merge order, each with its own
+ * layout habits. Now it owns three things and nothing else: the heading, the nav, and the
+ * 620 px column the cards sit in. Which cards exist, where they live and who may see them
+ * is declared once in `settingsSections.ts`; how a card looks is `components/SettingsCard.tsx`.
+ *
+ * The nav is `<Link>`s in a `<nav>`, not an ARIA tablist — these tabs navigate (they write
+ * the URL and create history entries), which is the "underline tabs for navigation" side of
+ * the repo's tab rule and gets the native keyboard model for free. The active section is
+ * therefore a pure function of the URL and the role, recomputed every render: nothing
+ * freezes `isAdmin`, so the post-login false→true flip just appends tabs (member sections
+ * are ordered first precisely so the strip grows at the end and the visible section
+ * never moves).
+ *
+ * `?gmail=…` is the one query contract that is not ours: Google's OAuth callback lands on
+ * /crm/settings?gmail=connected|error with no `section`, and only a MOUNTED GmailCard can
+ * toast that result and clear the params. So a bare `gmail` selects Integrations
+ * (`wantedSection`), and GmailCard's existing cleanup writes `section=integrations` back as
+ * it strips — which is why removing the params cannot bounce the view to the default.
+ * A member never mounts GmailCard and so never strips the param, exactly as before.
  */
 
-import { useState } from 'react';
-import { api } from '../core/api/client';
+import type { ComponentType } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
+
 import { useAuth } from '../core/auth/AuthContext';
-import { useBranding } from '../core/branding/BrandingContext';
-import type { BrandingConfig } from '../core/branding/brandingConfig';
 import { useIsMobile } from '../shared/useIsMobile';
-import { toast } from '../shared/toast';
-import { IconX } from '../shared/icons';
+import { INK, INK_MUTE, LINE, ACCENT } from '../shared/styles';
+import { pagePadding, pageHeading } from './styles';
 import {
-  INK_MUTE, CORAL, FONT_SANS, labelStyle, inputStyle,
-} from '../shared/styles';
-import {
-  pagePadding, pageHeading, sectionHeading, cardStyle, btnPrimary, btnSecondary, btnDanger,
-} from './styles';
-import { BrandLogo } from './components/BrandLogo';
-import { GmailCard } from './components/GmailCard';
-import { NotificationSettings } from './components/NotificationSettings';
-import { CustomFieldSettings } from './components/CustomFieldSettings';
-import { TelegramSettings } from './components/TelegramSettings';
+  SETTINGS_SECTIONS, resolveSection, visibleCards, visibleSections, wantedSection,
+  type SettingsCardId, type SettingsSection, type SettingsSectionId,
+} from './settingsSections';
+import { BrandingCard } from './components/BrandingCard';
 import { ChangePasswordCard } from './components/ChangePasswordCard';
-import { TaskModeCard } from './components/TaskModeCard';
+import { CustomFieldSettings } from './components/CustomFieldSettings';
+import { GmailCard } from './components/GmailCard';
 import { MemoryCard } from './components/MemoryCard';
+import { NotificationSettings } from './components/NotificationSettings';
+import { TaskModeCard } from './components/TaskModeCard';
 import { TeamSettings } from './components/TeamSettings';
+import { TelegramSettings } from './components/TelegramSettings';
 
-// SVG is excluded: all logos are stored/served as image/png, and browsers don't
-// content-sniff SVG, so an SVG would silently never render. (Serving real SVG from
-// the unauthenticated logo endpoint would also be a stored-XSS surface.)
-const ALLOWED_LOGO_TYPES = 'image/png,image/jpeg,image/gif,image/webp';
-const MAX_LOGO_BYTES = 2 * 1024 * 1024; // 2 MB — mirrors the backend cap
-
-// Visually hidden but still in the a11y tree and keyboard-focusable (unlike
-// display:none), so the file input is reachable by Tab and operable by Enter.
-const srOnly: React.CSSProperties = {
-  position: 'absolute', width: 1, height: 1, padding: 0, margin: -1,
-  overflow: 'hidden', clip: 'rect(0,0,0,0)', border: 0,
+// A total Record over the card-id union: adding an id to the registry without a component
+// here is a compile error, not a blank space on the page.
+const CARD_COMPONENTS: Record<SettingsCardId, ComponentType<{ isMobile: boolean }>> = {
+  notifications: NotificationSettings,
+  change_password: ChangePasswordCard,
+  memory: MemoryCard,
+  task_mode: TaskModeCard,
+  branding: BrandingCard,
+  team: TeamSettings,
+  custom_fields: CustomFieldSettings,
+  telegram: TelegramSettings,
+  gmail: GmailCard,
 };
+
+const COLUMN_MAX_WIDTH = 620;
+
+function SettingsNav({ sections, shown, isMobile, params }: {
+  sections: SettingsSection[];
+  shown: SettingsSectionId;
+  isMobile: boolean;
+  params: URLSearchParams;
+}) {
+  return (
+    <nav
+      aria-label="Settings sections"
+      style={{
+        display: 'flex', gap: isMobile ? 0 : 4,
+        borderBottom: `1px solid ${LINE}`,
+        marginBottom: isMobile ? 16 : 24,
+        overflowX: isMobile ? 'auto' : undefined,
+        WebkitOverflowScrolling: 'touch',
+      }}
+    >
+      {sections.map(section => {
+        const isActive = section.id === shown;
+        // Preserve any other param the URL is carrying; only `section` is ours.
+        const next = new URLSearchParams(params);
+        next.set('section', section.id);
+        return (
+          <Link
+            key={section.id}
+            to={{ search: `?${next}` }}
+            aria-current={isActive ? 'page' : undefined}
+            style={{
+              fontSize: isMobile ? 13 : 15,
+              padding: isMobile ? '8px 10px' : '8px 14px',
+              whiteSpace: 'nowrap', textDecoration: 'none',
+              color: isActive ? INK : INK_MUTE,
+              borderBottom: `2px solid ${isActive ? ACCENT : 'transparent'}`,
+              marginBottom: -1,
+            }}
+          >
+            {section.label}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
 
 export function SettingsPage() {
   const { isAdmin } = useAuth();
   const isMobile = useIsMobile();
-  const { branding, loadError, patchBranding, logoVersion, bumpLogoVersion } = useBranding();
-  const loaded = branding !== null;
+  const [params] = useSearchParams();
 
-  // Edits override the fetched value; until edited, fields mirror `branding`.
-  const [nameEdit, setNameEdit] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [logoBusy, setLogoBusy] = useState(false);
-
-  const nameVal = nameEdit ?? branding?.company_name ?? '';
-
-  async function handleSave() {
-    setSaving(true);
-    try {
-      const updated = await api<BrandingConfig>('/api/branding', {
-        method: 'PUT',
-        body: JSON.stringify({ company_name: nameVal.trim() }),
-      });
-      // Patch only the fields this save owns — never has_logo — so a slow save
-      // can't clobber a logo uploaded/removed while it was in flight.
-      patchBranding({ company_name: updated.company_name });
-      toast.success('Branding saved.');
-    } catch {
-      toast.error('Failed to save branding.');
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function handleLogoUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    e.target.value = ''; // allow re-selecting the same file after an error
-    if (!file) return;
-    if (file.size > MAX_LOGO_BYTES) {
-      toast.error('Logo must be under 2 MB.');
-      return;
-    }
-    setLogoBusy(true);
-    try {
-      const form = new FormData();
-      form.append('file', file);
-      await api('/api/branding/logo', { method: 'POST', body: form });
-      patchBranding({ has_logo: true });
-      bumpLogoVersion();
-      toast.success('Logo updated.');
-    } catch {
-      toast.error('Failed to upload logo.');
-    } finally {
-      setLogoBusy(false);
-    }
-  }
-
-  async function handleLogoRemove() {
-    setLogoBusy(true);
-    try {
-      await api('/api/branding/logo', { method: 'DELETE' });
-      patchBranding({ has_logo: false });
-      bumpLogoVersion();
-    } catch {
-      toast.error('Failed to remove logo.');
-    } finally {
-      setLogoBusy(false);
-    }
-  }
-
-  const fieldWrap: React.CSSProperties = { marginBottom: 20, maxWidth: 420 };
+  // Every one of these is a plain call made during render. Nothing memoises the role, so
+  // an isAdmin flip in either direction is reflected on the very next render.
+  const sections = visibleSections(isAdmin);
+  const shown = resolveSection(wantedSection(params), isAdmin);
+  const section = sections.find(s => s.id === shown) ?? sections[0];
+  const cards = visibleCards(section ?? SETTINGS_SECTIONS[0], isAdmin);
 
   return (
     <div style={pagePadding(isMobile)}>
       <h1 style={pageHeading(isMobile)}>Settings</h1>
 
-      {/* Everything from here to the Notifications card configures the INSTALL, and
-          every one of those routes is admin-only since #60. Rendering the controls to
-          a member would invite an action that can only 403 — so they are hidden, the
-          same way the Team card hides itself. The server gate is the real one; this
-          is about not offering what cannot work. Members keep Notifications (their
-          own browser's push) and Change password (their own credential). */}
-      {isAdmin && (
-      <div style={{ ...cardStyle, padding: isMobile ? 20 : 28, marginTop: 24, maxWidth: 620 }}>
-        <div style={sectionHeading()}>Branding</div>
-        <p style={{
-          fontFamily: FONT_SANS, fontSize: 13, color: INK_MUTE, lineHeight: 1.6,
-          margin: '0 0 24px', maxWidth: 460,
-        }}>
-          Personalize how CakeCRM looks — your company name and logo appear
-          throughout the app.
-        </p>
+      <div style={{ maxWidth: COLUMN_MAX_WIDTH, marginTop: 20 }}>
+        <SettingsNav sections={sections} shown={shown} isMobile={isMobile} params={params} />
 
-        {loadError && (
-          <p style={{
-            fontFamily: FONT_SANS, fontSize: 13, color: CORAL, lineHeight: 1.5,
-            margin: '0 0 20px',
-          }}>
-            Couldn't load your current branding. Reload the page before editing —
-            saving now would overwrite it with defaults.
-          </p>
-        )}
-
-        <div style={fieldWrap}>
-          <label htmlFor="branding-company-name" style={labelStyle}>Company name</label>
-          <input
-            id="branding-company-name"
-            style={inputStyle}
-            value={nameVal}
-            disabled={!loaded}
-            placeholder="CakeCRM"
-            onChange={e => setNameEdit(e.target.value)}
-          />
-        </div>
-
-        <div style={fieldWrap}>
-          <label style={labelStyle}>Logo</label>
-          {branding?.has_logo && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
-              <BrandLogo
-                key={logoVersion}
-                src={`/api/branding/logo?v=${logoVersion}`}
-                alt="Current logo"
-                style={{ height: 44, maxWidth: 160, objectFit: 'contain' }}
-                fallback={<span style={{ fontFamily: FONT_SANS, fontSize: 13, color: INK_MUTE }}>Logo unavailable</span>}
-              />
-              <button
-                onClick={handleLogoRemove}
-                disabled={logoBusy}
-                style={{ ...btnDanger, padding: '6px 12px', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}
-              ><IconX size={14} /> Remove</button>
-            </div>
-          )}
-          <label style={{ ...btnSecondary, position: 'relative', display: 'inline-flex', cursor: loaded && !logoBusy ? 'pointer' : 'default', opacity: loaded && !logoBusy ? 1 : 0.6 }}>
-            {logoBusy ? 'Uploading…' : branding?.has_logo ? 'Replace logo' : 'Upload logo'}
-            <input
-              type="file"
-              accept={ALLOWED_LOGO_TYPES}
-              disabled={!loaded || logoBusy}
-              onChange={handleLogoUpload}
-              style={srOnly}
-            />
-          </label>
-          <p style={{ fontFamily: FONT_SANS, fontSize: 12, color: INK_MUTE, margin: '8px 0 0' }}>
-            PNG, JPEG, GIF, or WebP — up to 2&nbsp;MB.
-          </p>
-        </div>
-
-        <div style={{ display: 'flex', gap: 12, marginTop: 28 }}>
-          <button
-            onClick={handleSave}
-            disabled={!loaded || saving}
-            style={{ ...btnPrimary, opacity: !loaded || saving ? 0.6 : 1, cursor: !loaded || saving ? 'wait' : 'pointer' }}
-          >{saving ? 'Saving…' : 'Save branding'}</button>
+        {/* The page owns the gap between cards; SettingsCard owns what's inside one. */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+          {cards.map(card => {
+            const Card = CARD_COMPONENTS[card.id];
+            return <Card key={card.id} isMobile={isMobile} />;
+          })}
         </div>
       </div>
-
-      )}
-
-      {isAdmin && <TelegramSettings />}
-      <NotificationSettings isMobile={isMobile} />
-      {/* Custom-field definitions manager (issue #19). Appended at the END of the
-          settings card chain so a keep-both merge with the Telegram (#7) /
-          Notifications (#6) cards stays trivial. */}
-      {isAdmin && <CustomFieldSettings />}
-      {/* Gmail connect (issue #8) — appended last in the settings card chain. */}
-      {isAdmin && <GmailCard isMobile={isMobile} />}
-      {/* Change password (issue #78) — appended last, per the keep-both convention above. */}
-      <TeamSettings isMobile={isMobile} />
-      <ChangePasswordCard isMobile={isMobile} />
-      {/* Assistant memory (issue #72) — appended last, per the keep-both convention above.
-          Deliberately a Settings entry rather than a seventh top-level nav tab: the CRM
-          nav is for business objects (Pipeline, Contacts, Deals…), and every other
-          assistant-facing surface — identity, Telegram, Gmail — already lives here. */}
-      <MemoryCard />
-      {/* Task mode + the no-login todo links (issue #70) — appended last, same convention.
-          Admin-only since #102, joining the other install-configuration cards above:
-          task_mode is a crm_meta singleton (one member switching it changes everyone's
-          task experience) and the links section can mint an unauthenticated read+write
-          URL for the whole todo store. Both routes now require_admin, so an ungated card
-          would only render controls the API refuses. */}
-      {isAdmin && <TaskModeCard isMobile={isMobile} />}
     </div>
   );
 }

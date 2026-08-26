@@ -26,7 +26,11 @@ import { CORAL, FONT_SANS, INK_MUTE, labelStyle } from '../../shared/styles';
 import { toast } from '../../shared/toast';
 import { useSetTaskMode, useTaskMode } from '../gtd/TaskModeContext';
 import type { TaskMode } from '../gtd/TaskModeContext';
-import { btnPrimary, btnSecondary, cardStyle, sectionHeading } from '../styles';
+// #102's body + #103's shell: the card chrome and heading helpers are gone because
+// SettingsCard owns both now (settingsSections.test.ts pins that no settings card
+// imports them).
+import { btnPrimary, btnSecondary, settingsSubheading } from '../styles';
+import { SettingsCard } from './SettingsCard';
 
 interface Surfaces {
   todo_capture_token: string;
@@ -111,12 +115,12 @@ export function TaskModeCard({ isMobile }: { isMobile: boolean }) {
   );
 
   return (
-    <div style={cardStyle}>
-      <h2 style={sectionHeading()}>Tasks</h2>
-      <p style={{ ...labelStyle, fontFamily: FONT_SANS, color: INK_MUTE, marginBottom: 12 }}>
-        Switching is safe and reversible — both modes read the same tasks. Nothing is
-        migrated, copied or deleted.
-      </p>
+    <SettingsCard
+      id="task_mode"
+      title="Task mode"
+      description="Switching is safe and reversible — both modes read the same tasks. Nothing is migrated, copied or deleted."
+      isMobile={isMobile}
+    >
       <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 10 }}>
         {modeButton('gtd', 'Todo-GTD (default)', 'Inbox, contexts, projects, repeats and a weekly review.')}
         {modeButton('normal', 'Simple list', 'Just tasks with due dates and priorities — no inbox or contexts.')}
@@ -134,7 +138,7 @@ export function TaskModeCard({ isMobile }: { isMobile: boolean }) {
           restrict it. A reachable surface must never lose its off switch. */}
       {surfaces && (
         <div style={{ marginTop: 20, borderTop: '1px solid var(--color-ck-line)', paddingTop: 16 }}>
-          <h3 style={{ ...sectionHeading(), fontSize: 15 }}>No-login links</h3>
+          <h3 style={settingsSubheading}>No-login links</h3>
 
           <div style={{ marginTop: 12 }}>
             <p style={{ ...labelStyle, marginBottom: 4 }}>Quick capture (write-only)</p>
@@ -201,7 +205,7 @@ export function TaskModeCard({ isMobile }: { isMobile: boolean }) {
           </div>
         </div>
       )}
-    </div>
+    </SettingsCard>
   );
 }
 
