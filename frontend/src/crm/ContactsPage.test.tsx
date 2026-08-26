@@ -23,18 +23,15 @@ import { act, StrictMode, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes, useNavigate, type NavigateFunction } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { CRM_LIST_PAGE_SIZE } from './assemblyPage';
 
 const apiMock = vi.fn();
 vi.mock('../core/api/client', () => ({
   api: (...args: unknown[]) => apiMock(...args),
   ApiError: class extends Error { status = 0; detail = ''; },
 }));
-vi.mock('./useUsers', () => ({
-  useUsers: () => ({ users: [], loading: false }),
-  UNASSIGNED_LABEL: 'Unassigned',
-}));
-vi.mock('../core/auth/AuthContext', () => ({
-  useAuth: () => ({ currentUser: { id: 1 } }),
+vi.mock('./useOwnerOptions', () => ({
+  useOwnerOptions: () => ({ options: null, loading: false }),
 }));
 // The detail page is a heavy, separately-tested surface; this test is about which
 // component the ROUTER mounts, not what the detail renders.
@@ -162,5 +159,65 @@ describe('the contacts route', () => {
     // Two separate <Route> elements would unmount ContactsPage on the way in and re-fetch
     // the entire corpus on the way back.
     expect(listCalls().length).toBe(afterFirstLoad);
+  });
+});
+
+describe('the corpus sweep across multiple pages', () => {
+  /** A page of `n` contacts starting at `startId`. */
+  const page = (startId: number, n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      id: startId + i, name: `C${startId + i}`, status: 'active', tags: '',
+    }));
+
+  it('threads the cursor from the last KEPT row and merges every page', async () => {
+    // The mock answers the CURSOR rather than the call order — StrictMode mounts twice,
+    // so a sequence of mockResolvedValueOnce would be consumed by the second mount's
+    // first page and the sweep would never reach page two.
+    const TOTAL = CRM_LIST_PAGE_SIZE + 3;
+    apiMock.mockReset();
+    apiMock.mockImplementation(async (url: string) => {
+      const after = Number(new URL(url, 'http://x').searchParams.get('after_id') ?? 0);
+      // Serve ids after the cursor, up to the over-ask (SIZE + 1) the sweep requests.
+      const start = after + 1;
+      const n = Math.max(0, Math.min(CRM_LIST_PAGE_SIZE + 1, TOTAL - after));
+      return { contacts: page(start, n) };
+    });
+
+    mountAt('/crm/contacts');
+    await settle(14);
+
+    // Asserted as a SET, not by position: StrictMode mounts twice, so the two mounts'
+    // requests interleave and calls[1] is the other mount's page one.
+    const cursors = listCalls().map(u => new URL(u, 'http://x').searchParams.get('after_id'));
+    // A first page carries no cursor…
+    expect(cursors).toContain(null);
+    // …and the next resumes from the last row KEPT, not the probe row that was dropped —
+    // so the probe returns as the head of page two rather than being skipped. Every
+    // cursor sent must be that id; any other value would mean a skipped or repeated row.
+    const sent = cursors.filter(c => c !== null);
+    expect(sent.length).toBeGreaterThan(0);
+    expect(new Set(sent)).toEqual(new Set([String(CRM_LIST_PAGE_SIZE)]));
+
+    // Every row from both pages landed, exactly once — asserted on the corpus size the
+    // bar reports rather than on rendered rows, because ListView caps rendering at 300.
+    expect(container.textContent).toContain(String(TOTAL));
+    // Rows that DID render are unique — a mis-threaded cursor would repeat the boundary.
+    const ids = [...container.querySelectorAll('td')]
+      .map(td => td.textContent ?? '')
+      .filter(t => /^C\d+$/.test(t));
+    expect(ids.length).toBeGreaterThan(0);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('stops after one page when the response does not overflow', async () => {
+    apiMock.mockReset();
+    apiMock.mockResolvedValue({ contacts: page(1, CRM_LIST_PAGE_SIZE) });
+    mountAt('/crm/contacts');
+    await settle(14);
+    // An exactly-full page is the case a length-based hasMore would get wrong, costing a
+    // needless extra round-trip (and, on the last allowed page, a spurious failure).
+    const perMount = listCalls().length;
+    expect(perMount).toBeLessThanOrEqual(2);   // StrictMode double-invoke, one call each
+    expect(listCalls().every(u => !u.includes('after_id'))).toBe(true);
   });
 });

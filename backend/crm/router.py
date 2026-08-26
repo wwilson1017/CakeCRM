@@ -310,7 +310,7 @@ class FieldValuesUpdate(BaseModel):
 async def list_contacts(
     q: str = "", status: str = "", tags: str = "", sort: str = "",
     limit: int = Query(50, ge=1, le=1000), offset: int = Query(0, ge=0),
-    owner_id: int | None = None, after_id: int | None = Query(None, ge=0),
+    owner_id: int | None = None, after_id: int | None = Query(None, ge=0, le=2_147_483_647),
     user=Depends(get_current_user),
 ):
     # owner_id absent = everyone, so an install that never assigns owners behaves
@@ -322,6 +322,11 @@ async def list_contacts(
     # service refuses any other pairing rather than paginating wrong).
     sort = sort or "updated_at"
     if q:
+        # search_contacts has no cursor, so honouring `after_id` here is impossible —
+        # and silently dropping it looks exactly like a client stuck re-reading page one,
+        # which is the failure _check_assembly_cursor exists to prevent. Refuse instead.
+        if after_id is not None:
+            raise HTTPException(status_code=400, detail="after_id cannot be combined with q")
         contacts = crm.search_contacts(
             q, status=status or None, tags=tags or None, limit=limit, offset=offset, sort=sort,
             owner_id=owner_id,
@@ -600,7 +605,7 @@ async def list_tasks(
     contact_id: int | None = None, deal_id: int | None = None,
     completed: bool | None = None, due_before: str = "",
     priority: str = "", limit: int = Query(50, ge=1, le=1000),
-    owner_id: int | None = None, after_id: int | None = Query(None, ge=0),
+    owner_id: int | None = None, after_id: int | None = Query(None, ge=0, le=2_147_483_647),
     sort: str = "",
     user=Depends(get_current_user),
 ):
@@ -1174,10 +1179,13 @@ async def confirm_provenance(
 async def list_companies(
     q: str = "", status: str = "", sort: str = "name",
     limit: int = Query(50, ge=1, le=1000), offset: int = Query(0, ge=0),
-    owner_id: int | None = None, after_id: int | None = Query(None, ge=0),
+    owner_id: int | None = None, after_id: int | None = Query(None, ge=0, le=2_147_483_647),
     user=Depends(get_current_user),
 ):
     if q:
+        # See list_contacts: the search branch cannot honour a cursor, so it says so.
+        if after_id is not None:
+            raise HTTPException(status_code=400, detail="after_id cannot be combined with q")
         companies = crm.search_companies(
             q, status=status or None, limit=limit, offset=offset, owner_id=owner_id
         )

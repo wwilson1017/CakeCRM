@@ -824,3 +824,30 @@ def test_a_cursor_against_a_mutable_order_is_a_400_not_a_500(client, monkeypatch
 
 def test_a_negative_cursor_is_rejected_by_validation(client):
     assert client.get("/api/crm/tasks?after_id=-1").status_code == 422
+
+
+def test_a_cursor_is_refused_on_the_search_branch(client, monkeypatch):
+    """search_* has no cursor, so accepting one would silently return page one forever.
+
+    That is the same failure `_check_assembly_cursor` exists to prevent, and it looks
+    identical to a client stuck in a loop — so the route refuses instead of ignoring.
+    """
+    monkeypatch.setattr(service, "search_contacts", lambda *a, **k: [])
+    monkeypatch.setattr(service, "count_search_contacts", lambda *a, **k: 0)
+    monkeypatch.setattr(service, "search_companies", lambda *a, **k: [])
+    monkeypatch.setattr(service, "count_search_companies", lambda *a, **k: 0)
+
+    for path in ("/api/crm/contacts", "/api/crm/companies"):
+        res = client.get(f"{path}?q=acme&after_id=5&sort=id")
+        assert res.status_code == 400, path
+        assert "after_id" in res.json()["detail"]
+        # …and a plain search still works.
+        assert client.get(f"{path}?q=acme").status_code == 200, path
+
+
+def test_an_out_of_range_cursor_is_a_422_not_a_500(client):
+    """id columns are int4. Without an upper bound Postgres raises a range error that is
+    NOT a ValueError, so it would escape the route's handler as an unhandled 500."""
+    too_big = 2_147_483_648
+    for path in ("/api/crm/tasks", "/api/crm/contacts", "/api/crm/companies"):
+        assert client.get(f"{path}?after_id={too_big}&sort=id").status_code == 422, path

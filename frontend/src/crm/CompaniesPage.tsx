@@ -9,18 +9,17 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../core/api/client';
-import { useAuth } from '../core/auth/AuthContext';
 import type { CrmCompany } from '../core/types';
 import { CompanyDetailPage } from './CompanyDetailPage';
 import { CompanyForm } from './components/CompanyForm';
-import { useUsers } from './useUsers';
+import { useOwnerOptions } from './useOwnerOptions';
 import { CollectionView, useCollectionState } from '../shared/collection';
 import type { FacetOption } from '../shared/search';
 import { IconPlus } from '../shared/icons';
 import { useIsMobile } from '../shared/useIsMobile';
 import { INK_DIM, mono } from '../shared/styles';
 import { pageHeading, btnPrimary, btnSmall } from './styles';
-import { buildOwnerOptions, makeCompaniesCollectionConfig } from './collectionConfig';
+import { makeCompaniesCollectionConfig } from './collectionConfig';
 import { buildCompanyColumns } from './listColumns';
 import { useCrmCorpus, type CrmCorpus } from './usePatchableAssembly';
 import { RefreshButton } from './components/RefreshButton';
@@ -32,8 +31,7 @@ export function CompaniesPage() {
   const { id } = useParams<{ id: string }>();
   const isMobile = useIsMobile();
   const [showCreate, setShowCreate] = useState(false);
-  const { users, loading: usersLoading } = useUsers();
-  const { currentUser } = useAuth();
+  const { options: owners, loading: usersLoading } = useOwnerOptions();
 
   const corpus = useCrmCorpus<CrmCompany>(
     useCallback(async (params, signal) => {
@@ -43,11 +41,6 @@ export function CompaniesPage() {
     id === undefined,
   );
   const { upsert, remove, retry } = corpus;
-
-  const owners = useMemo(
-    () => buildOwnerOptions(users, currentUser?.id ?? null),
-    [users, currentUser?.id],
-  );
 
   if (id !== undefined) {
     return <CompanyDetailPage onChanged={upsert} onDeleted={remove} />;

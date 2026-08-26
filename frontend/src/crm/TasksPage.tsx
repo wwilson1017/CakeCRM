@@ -17,12 +17,11 @@
  */
 import { useCallback, useMemo, useState } from 'react';
 import { api } from '../core/api/client';
-import { useAuth } from '../core/auth/AuthContext';
 import type { CrmTask } from '../core/types';
 import { TaskForm } from './components/TaskForm';
 import { PriorityBadge } from './components/badges';
 import { RefreshButton } from './components/RefreshButton';
-import { useUsers } from './useUsers';
+import { useOwnerOptions } from './useOwnerOptions';
 import { CollectionView, useCollectionState } from '../shared/collection';
 import type { FacetOption } from '../shared/search';
 import { IconPlus } from '../shared/icons';
@@ -32,7 +31,7 @@ import {
   INK, INK_MUTE, INK_DIM, LINE_STRONG, CORAL, SAGE, ACCENT_INK, HOVER, mono,
 } from '../shared/styles';
 import { pageHeading, btnPrimary, btnSecondary, btnSmall } from './styles';
-import { buildOwnerOptions, makeTasksCollectionConfig } from './collectionConfig';
+import { makeTasksCollectionConfig } from './collectionConfig';
 import { buildTaskColumns, buildDoneFacetRenderers } from './listColumns';
 import { useCrmCorpus, writeMayHaveLanded, type CrmCorpus } from './usePatchableAssembly';
 import { ymd } from './pipelineFilters';
@@ -46,8 +45,7 @@ export function TasksPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [editTask, setEditTask] = useState<CrmTask | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const { users, loading: usersLoading } = useUsers();
-  const { currentUser } = useAuth();
+  const { options: owners, loading: usersLoading } = useOwnerOptions();
 
   const corpus = useCrmCorpus<CrmTask>(
     useCallback(async (params, signal) => {
@@ -80,11 +78,6 @@ export function TasksPage() {
   }, [upsert, retry]);
 
   const columns = useMemo(() => buildTaskColumns(toggleComplete), [toggleComplete]);
-  const owners = useMemo(
-    () => buildOwnerOptions(users, currentUser?.id ?? null),
-    [users, currentUser?.id],
-  );
-
   return (
     <div style={{ padding: isMobile ? '20px 16px' : '32px 44px', maxWidth: 900 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: isMobile ? 16 : 24 }}>
