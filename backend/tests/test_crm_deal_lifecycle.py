@@ -124,6 +124,42 @@ def test_every_written_column_is_compared_and_cast(monkeypatch, rec, fake_conn):
         assert f"{col} IS DISTINCT FROM %s::{cast}" in sql, f"{col} SET but not compared-and-cast"
 
 
+def test_every_user_writable_column_has_a_declared_type():
+    """The coupling between the two column lists, pinned in the direction that is SAFE.
+
+    `_DEAL_USER_WRITABLE` is the security boundary — what `crm_update_deal`'s raw model
+    kwargs and `PUT /api/crm/deals/{id}`'s body may write — and it is hand-maintained and
+    default-closed. `_DEAL_COLUMN_TYPES` is the wider set the write chokepoint can be asked
+    to write, internal-only columns included. Deriving the boundary FROM the map (as this
+    briefly did) is default-OPEN: declaring a type for a new internal column would silently
+    make it writable by unvalidated input in the same commit.
+
+    So the guarantee runs one way only — every user-writable column must have a declared
+    type — and it is asserted here, in the hermetic suite that CI actually runs, rather
+    than in the integration suite that is deselected by default.
+    """
+    undeclared = service._DEAL_USER_WRITABLE - service._DEAL_COLUMN_TYPES.keys()
+    assert not undeclared, f"user-writable but no declared type: {sorted(undeclared)}"
+
+
+def test_update_deal_refuses_the_columns_unvalidated_input_must_never_reach(
+    monkeypatch, rec, fake_conn):
+    """Asserted through `update_deal` rather than against the constant, because the hazard
+    is HOW the allowlist is computed, not what the frozenset happens to contain: a later
+    change deriving `allowed` from `_DEAL_COLUMN_TYPES` again would widen the boundary
+    while leaving the frozenset untouched. `crm_update_deal` forwards the model's raw
+    kwargs here, so these are reachable from an unvalidated caller.
+
+    `lead_score` is never user/tool/assistant-writable (#18) and `archived_at` is owned by
+    `archive_deal`; `lost_reason` has its own test above.
+    """
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("lead", None, None)])
+    rec.fetchone_queue = [{"id": 1}]
+    service.update_deal(1, lead_score=99, archived_at="2026-01-01T00:00:00+00:00")
+    assert not any("UPDATE deals SET" in s for s, _ in conn.executed)
+    assert not any("lead_score" in s or "archived_at" in s for s, _ in conn.executed)
+
+
 def test_a_same_stage_move_cannot_match_its_own_row(monkeypatch, rec, fake_conn):
     """crm_update_deal_stage re-asserting a deal's current stage — the assistant
     redundancy #96 was filed for. The UPDATE is still ISSUED (Postgres does the

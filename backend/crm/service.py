@@ -844,8 +844,19 @@ def list_deals(stage: str | None = None, contact_id: int | None = None, limit: i
 
 
 # Every `deals` column `_write_deal_update` can be asked to write, mapped to its
-# destination type — the single source of truth for BOTH `update_deal`'s allowlist and the
-# cast in the distinctness test, so a writable column cannot exist without a declared type.
+# destination type for the cast in the distinctness test.
+#
+# NOTE: these VALUES are interpolated into SQL (`%s::{type}`), so they are type names, not
+# data — keep them fixed literals here and never let a caller reach this map.
+#
+# This is deliberately NOT the same set as what a user or the assistant may write: it
+# covers internal-only columns too (`lost_reason`, whose sole writer is `mark_deal_lost`),
+# and it grows whenever a new internal write path routes through the chokepoint. The
+# user-facing allowlist is `_DEAL_USER_WRITABLE`, hand-maintained and default-closed;
+# deriving one from the other would mean declaring a type for an internal column silently
+# made it writable by `crm_update_deal` and `PUT /api/crm/deals/{id}` in the same commit.
+# A hermetic test asserts `_DEAL_USER_WRITABLE <= _DEAL_COLUMN_TYPES.keys()`, which keeps
+# "no writable column without a declared type" without inverting the safe direction.
 #
 # The cast is not optional, because assignment context and comparison context do NOT agree
 # and they disagree in opposite directions:
@@ -860,13 +871,27 @@ def list_deals(stage: str | None = None, contact_id: int | None = None, limit: i
 #     psycopg2 error there escapes as the registry's generic "please try again", looping
 #     the model on a permanent condition.
 # Casting ONLY the comparison operand leaves assignment behavior — including its type
-# errors, e.g. a boolean into an INTEGER column — exactly as it was.
+# errors, e.g. a boolean into an INTEGER column — as it was. (One SQLSTATE moves: a boolean
+# into `value` now raises CannotCoerce 42846 from the cast rather than DatatypeMismatch
+# 42804 from the SET. Both still raise, and nothing anywhere catches either code — they
+# land in the same generic handler — so there is no behavioral difference.)
 _DEAL_COLUMN_TYPES = {
     "title": "text", "stage": "text", "notes": "text", "currency": "text",
     "expected_close_date": "text", "lost_reason": "text",
     "value": "float8",
     "probability": "int", "contact_id": "int", "company_id": "int", "owner_id": "int",
 }
+
+# The security boundary: what unvalidated input — `crm_update_deal` forwards the model's
+# raw kwargs, and `PUT /api/crm/deals/{id}` its body — may write through `update_deal`.
+# Hand-maintained and default-CLOSED on purpose: a column becomes writable here only by
+# being typed out, never as a side effect of some other list growing. `lead_score` (never
+# user/tool/assistant-writable) and `archived_at` (owned by `archive_deal`) are absent and
+# must stay absent.
+_DEAL_USER_WRITABLE = frozenset({
+    "title", "stage", "value", "notes", "expected_close_date", "probability", "currency",
+    "contact_id", "company_id", "owner_id",
+})
 
 
 def _classify_deal_update(
@@ -1139,13 +1164,10 @@ def search_deals(
 
 
 def update_deal(deal_id: int, **fields) -> dict | None:
-    # Derived from _DEAL_COLUMN_TYPES so a column cannot become writable here without a
-    # declared destination type for the no-op comparison — the coverage half of that map's
-    # contract, made structural instead of asserted.
-    # lost_reason is deliberately subtracted: mark_deal_lost is its single writer, so a
-    # reason always arrives with the close (and its timeline note) and can never be set on
-    # a deal that isn't lost.
-    allowed = _DEAL_COLUMN_TYPES.keys() - {"lost_reason"}
+    # lost_reason is deliberately absent from _DEAL_USER_WRITABLE: mark_deal_lost is its
+    # single writer, so a reason always arrives with the close (and its timeline note) and
+    # can never be set on a deal that isn't lost.
+    allowed = _DEAL_USER_WRITABLE
     filtered = {k: v for k, v in fields.items() if k in allowed}
     if "stage" in filtered and filtered["stage"] not in DEAL_STAGES:
         return None

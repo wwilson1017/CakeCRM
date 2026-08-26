@@ -409,10 +409,16 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   assignment and has NO comparison operator (`title = 12345` has always stored `'12345'`,
   but an uncast comparison raises `operator does not exist: text = integer` — live, since
   `crm_update_deal` forwards raw unvalidated LLM arguments). Only the comparison is cast,
-  so assignment behavior and its type errors are untouched. That map is also the source
-  `update_deal`'s allowlist is derived from, so a writable column cannot exist without a
-  declared type, and an integration test pins each declared type against
-  `information_schema`. The `deal_stage_events` INSERT is
+  so assignment behavior and its type errors are untouched. **`_DEAL_COLUMN_TYPES` is
+  deliberately NOT the allowlist**: it covers internal-only columns (`lost_reason`) and grows
+  whenever a new internal write path routes through the chokepoint, so deriving
+  `update_deal`'s allowlist from it would be default-OPEN — declaring a type for an internal
+  column would silently make it writable by `crm_update_deal`'s raw model kwargs and
+  `PUT /api/crm/deals/{id}` in the same commit. The boundary is the hand-maintained,
+  default-CLOSED `_DEAL_USER_WRITABLE` (no `lead_score`, no `archived_at`), and a **hermetic**
+  test asserts only the safe direction, `_DEAL_USER_WRITABLE ⊆ _DEAL_COLUMN_TYPES` — so
+  "no writable column without a declared type" still holds, in the suite CI actually runs.
+  An integration test pins each declared type against `information_schema`. The `deal_stage_events` INSERT is
   gated on the UPDATE's rowcount as well (a real stage change always differs, so this is
   structural rather than reachable). Two consequences are accepted rather than incidental: a
   **custom-field-only save no longer bumps `deals.updated_at`** (`DealForm` always PUTs the
