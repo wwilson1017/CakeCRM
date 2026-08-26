@@ -19,7 +19,12 @@ vi.mock('../core/auth/AuthContext', () => ({ useAuth }));
 
 const { IdentitySettings } = await import('./IdentitySettings');
 
-const IDENTITY = { name: 'Baker', personality: 'Be terse.', using_default: false };
+const IDENTITY = {
+  name: 'Baker',
+  personality: 'Be terse, {name}.',            // the raw template, for the editor
+  personality_rendered: 'Be terse, Baker.',    // the rendered text, for reading
+  using_default: false,
+};
 
 let container: HTMLDivElement;
 let root: Root;
@@ -72,7 +77,9 @@ describe('IdentitySettings — the name is a fixed brand (#71)', () => {
       setValue.call(ta, 'Be warm.');
       ta.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    api.mockResolvedValueOnce({ ...IDENTITY, personality: 'Be warm.' });
+    api.mockResolvedValueOnce({
+      ...IDENTITY, personality: 'Be warm.', personality_rendered: 'Be warm.',
+    });
     await act(async () => { buttonLabelled('Save')!.click(); });
 
     const [url, init] = api.mock.calls.at(-1)!;
@@ -101,6 +108,9 @@ describe('IdentitySettings — only an admin may save (#106)', () => {
     expect(buttonLabelled('Save')).toBeDefined();
     expect(buttonLabelled('Reset to default')).toBeDefined();
     expect(personality().readOnly).toBe(false);
+    // The other half of the raw/rendered split: an EDITOR gets the raw template, or
+    // saving would bake the brand into the admin's own text.
+    expect(personality().value).toBe('Be terse, {name}.');
   });
 
   it('gives a member the personality read-only, with no Save', async () => {
@@ -108,15 +118,22 @@ describe('IdentitySettings — only an admin may save (#106)', () => {
     expect(buttonLabelled('Save')).toBeUndefined();
     expect(buttonLabelled('Reset to default')).toBeUndefined();
     expect(personality().readOnly).toBe(true);
-    expect(personality().value).toBe('Be terse.');
+    expect(personality().value).toBe('Be terse, Baker.');
     expect(container.textContent).toContain('Only an admin can change');
   });
 
   it('shows a member the built-in default text, not an empty box', async () => {
     // The GET resolves `personality` server-side, so "using the default" must still
     // render the text that is actually governing the assistant.
-    api.mockResolvedValue({ name: 'Baker', personality: 'BUILT-IN', using_default: true });
+    api.mockResolvedValue({
+      name: 'Baker',
+      personality: 'You are {name}, the built-in assistant.',
+      personality_rendered: 'You are Baker, the built-in assistant.',
+      using_default: true,
+    });
     await render(false);
-    expect(personality().value).toBe('BUILT-IN');
+    // The default template contains a literal {name}; a reader must never see it.
+    expect(personality().value).toBe('You are Baker, the built-in assistant.');
+    expect(personality().value).not.toContain('{name}');
   });
 });

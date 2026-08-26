@@ -31,7 +31,10 @@ import {
 
 interface Identity {
   name: string;
+  /** The raw stored template — what an editor must show, `{name}` and all. */
   personality: string;
+  /** The same text with `{name}` substituted — what the read-only view must show. */
+  personality_rendered: string;
   using_default: boolean;
 }
 
@@ -40,7 +43,9 @@ export function IdentitySettings({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState('');
   // The admin's draft: '' means "use the built-in default", which is why it is not
   // simply the resolved text. `effective` is what the assistant actually runs on and
-  // is what a member is shown.
+  // is what a member is shown — it comes from the server's `personality_rendered`,
+  // NOT from `personality`: the built-in default contains a literal `{name}`, so the
+  // raw text would show a reader a placeholder instead of the assistant's name.
   const [draft, setDraft] = useState('');
   const [effective, setEffective] = useState('');
   const [usingDefault, setUsingDefault] = useState(true);
@@ -59,7 +64,7 @@ export function IdentitySettings({ onClose }: { onClose: () => void }) {
       .then((id) => {
         if (!alive) return;
         setName(id.name);
-        setEffective(id.personality);
+        setEffective(id.personality_rendered);
         setDraft(id.using_default ? '' : id.personality);
         setUsingDefault(id.using_default);
       })
@@ -81,7 +86,7 @@ export function IdentitySettings({ onClose }: { onClose: () => void }) {
         body: JSON.stringify({ personality: draft }),
       });
       setUsingDefault(id.using_default);
-      setEffective(id.personality);
+      setEffective(id.personality_rendered);
       toast.success('Assistant settings saved.');
       onClose();
     } catch {

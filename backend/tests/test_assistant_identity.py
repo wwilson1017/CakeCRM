@@ -78,6 +78,35 @@ def test_update_identity_none_personality_writes_nothing(pg, monkeypatch):
     assert out["personality"] == "Be terse."
 
 
+def test_get_identity_returns_both_raw_and_rendered_personality(monkeypatch):
+    """They are NOT interchangeable, which is why both ship. The built-in default holds
+    a literal ``{name}``, so a read-only view fed the raw text shows the reader a
+    placeholder instead of the assistant's name — while an editor fed the rendered text
+    would bake the brand into whatever the admin saves next."""
+    monkeypatch.setattr(identity, "pg_fetchone", lambda *a: {"personality": ""})
+    out = identity.get_identity()
+    assert "{name}" in out["personality"]                    # the template, for editing
+    assert "{name}" not in out["personality_rendered"]       # the text, for reading
+    assert out["personality_rendered"].startswith("You are Baker,")
+
+    monkeypatch.setattr(identity, "pg_fetchone",
+                        lambda *a: {"personality": "Be terse, {name}."})
+    out = identity.get_identity()
+    assert out["personality"] == "Be terse, {name}."
+    assert out["personality_rendered"] == "Be terse, Baker."
+
+
+def test_render_personality_is_the_only_substitution_rule():
+    """build_system_prompt and get_identity must agree by CONSTRUCTION, not by both
+    happening to call .replace() the same way — a second implementation (a frontend
+    one especially) is how the model's prompt and the panel's read-only view diverge."""
+    template = "You are {name}. Always {name}."
+    assert identity.render_personality(template) == "You are Baker. Always Baker."
+    static, _ = identity.build_system_prompt(
+        {"name": "Baker", "personality": template, "using_default": False})
+    assert identity.render_personality(template) in static
+
+
 def test_name_contract_outranks_a_personality_that_renames_the_assistant():
     """Interpolating `{name}` alone would leave the brand nominal: `personality` is free
     text an admin writes (and a pre-#71 install that renamed its assistant probably still

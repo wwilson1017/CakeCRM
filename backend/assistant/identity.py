@@ -280,6 +280,18 @@ def build_context_note(record_type, record_id) -> str | None:
     )
 
 
+def render_personality(text: str) -> str:
+    """Substitute the brand into a personality template.
+
+    ONE definition, because two consumers need the rendered text: the system prompt
+    (what the model reads) and the identity panel's read-only view (what a member is
+    shown). Re-implementing this substitution anywhere else — a frontend `.replace()`
+    especially, across a language boundary — is how the two silently diverge the next
+    time the placeholder syntax changes.
+    """
+    return text.replace("{name}", NAME)
+
+
 def get_identity() -> dict:
     """Return the identity singleton, resolving the default personality.
 
@@ -289,12 +301,23 @@ def get_identity() -> dict:
 
     ``personality`` is the stored custom text, or the built-in default when the
     stored text is blank. ``using_default`` reflects which one is in effect.
+
+    ``personality_rendered`` is that same text with ``{name}`` substituted. The two are
+    deliberately BOTH returned and are not interchangeable: an editor must show the raw
+    template (rendering it would bake the brand into the next save), while a read-only
+    view must show what actually governs the assistant — the built-in default contains a
+    literal ``{name}``, so showing it raw displays a placeholder to the reader.
     """
     row = pg_fetchone("SELECT personality FROM assistant_identity WHERE id = 1")
     stored = ((row or {}).get("personality") or "").strip()
     using_default = not stored
     personality = DEFAULT_PERSONALITY if using_default else stored
-    return {"name": NAME, "personality": personality, "using_default": using_default}
+    return {
+        "name": NAME,
+        "personality": personality,
+        "personality_rendered": render_personality(personality),
+        "using_default": using_default,
+    }
 
 
 def update_identity(personality: str | None = None) -> dict:
@@ -360,7 +383,7 @@ def build_system_prompt(
     # The brand is read from the constant, NOT from the passed-in dict (#71): this is
     # the one seam where the name reaches the model, so resolving it here is what makes
     # "Baker" unrenameable rather than merely un-editable through the UI.
-    personality = (identity.get("personality") or DEFAULT_PERSONALITY).replace("{name}", NAME)
+    personality = render_personality(identity.get("personality") or DEFAULT_PERSONALITY)
     # NAME_NOTE sits immediately after the two identity texts and before every other
     # contract: it is the first thing neither the user nor the assistant may override.
     blocks = [personality, soul, NAME_NOTE, SALES_GUIDE]
