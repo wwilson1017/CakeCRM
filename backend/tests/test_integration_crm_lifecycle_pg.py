@@ -980,7 +980,7 @@ def test_an_unchanged_full_form_save_is_not_a_touch(pg_db):
 def test_a_fractional_value_that_rounds_to_the_stored_one_is_not_a_touch(pg_db):
     """Postgres coerces on ASSIGNMENT but promotes on COMPARISON, so `probability=40.1`
     into an INTEGER column stores 40 (no change) while a bare `IS DISTINCT FROM 40.1`
-    would call it distinct and bump `updated_at` anyway. `_DEAL_INT_COLUMNS` casts the
+    would call it distinct and bump `updated_at` anyway. `_DEAL_COLUMN_TYPES` casts the
     comparison to the destination type to close that. Reachable because the assistant's
     tool arguments are not runtime schema-validated — `update_deal` clamps probability
     into range but does not make it an int.
@@ -1004,30 +1004,56 @@ def test_a_fractional_value_that_rounds_to_the_stored_one_is_not_a_touch(pg_db):
     assert after["probability"] == 41 and after["updated_at"] != before["updated_at"]
 
 
-def test_the_integer_column_list_matches_the_real_deals_schema(pg_db):
-    """`_DEAL_INT_COLUMNS` is a hand-written list of destination types, so it can drift off
-    the schema — a column silently retyped or added would lose the cast and reopen the
-    fractional-no-op hole. Restate the writable set independently here and check it against
-    `information_schema` rather than against the constant that is under test.
-
-    The writable set is restated by hand on purpose — deriving it from the service would
-    make the assertion tautological. The trade-off is that a NEW writable column added to
-    `update_deal` and to neither this list nor `_DEAL_INT_COLUMNS` goes unnoticed here.
+def test_the_declared_column_types_match_the_real_deals_schema(pg_db):
+    """`_DEAL_COLUMN_TYPES` is hand-written, so it can drift off the schema — a column
+    silently retyped would get the wrong cast and either reopen the no-op hole or start
+    raising. Coverage drift is already structural (`update_deal`'s allowlist is derived
+    from the map), so what is left to check is that each declared type is the REAL one.
+    Read from `information_schema` rather than from the constant under test.
     """
     from core.postgres import pg_fetchall
     from crm import service
 
-    writable = {"title", "stage", "value", "notes", "expected_close_date", "probability",
-                "currency", "contact_id", "company_id", "owner_id", "lost_reason"}
     # Scoped to the active schema: another visible schema owning a `deals` table would
     # otherwise merge into this dict and validate the wrong columns.
-    types = {r["column_name"]: r["data_type"] for r in pg_fetchall(
+    actual = {r["column_name"]: r["data_type"] for r in pg_fetchall(
         "SELECT column_name, data_type FROM information_schema.columns "
         "WHERE table_name = 'deals' AND table_schema = current_schema()")}
+    expected = {"text": "text", "float8": "double precision", "int": "integer"}
 
-    missing = writable - types.keys()
-    assert not missing, f"writable columns absent from the deals table: {sorted(missing)}"
-    assert {c for c in writable if types[c] == "integer"} == service._DEAL_INT_COLUMNS
+    missing = service._DEAL_COLUMN_TYPES.keys() - actual.keys()
+    assert not missing, f"declared columns absent from the deals table: {sorted(missing)}"
+    wrong = {c: (declared, actual[c])
+             for c, declared in service._DEAL_COLUMN_TYPES.items()
+             if actual[c] != expected[declared]}
+    assert not wrong, f"declared type does not match the schema: {wrong}"
+
+
+def test_an_untyped_value_for_a_text_column_still_writes(pg_db):
+    """Regression guard. Postgres accepts an I/O conversion into TEXT on ASSIGNMENT but has
+    no operator for it in COMPARISON, so an uncast `title IS DISTINCT FROM 12345` raises
+    `operator does not exist: text = integer` on a write that worked before this change.
+    `crm_update_deal` forwards raw, unvalidated LLM arguments, so a bare number for a text
+    field is reachable — and the resulting psycopg2 error escapes as the registry's generic
+    "please try again", looping the model on a permanent condition.
+    """
+    from core.postgres import pg_fetchone
+    from crm import service
+
+    deal = service.create_deal("12345", stage="proposal", expected_close_date="2026-09-01")
+
+    def row():
+        return pg_fetchone("SELECT updated_at, title FROM deals WHERE id = %s", (deal["id"],))
+
+    before = row()
+    # Numerically equal to the stored text: must be recognised as a no-op, not raise.
+    service.update_deal(deal["id"], title=12345)
+    assert row() == before, "an untyped no-op for a TEXT column reset the staleness clock"
+
+    # A different number is a real edit and must still land as text.
+    service.update_deal(deal["id"], title=999)
+    after = row()
+    assert after["title"] == "999" and after["updated_at"] != before["updated_at"]
 
 
 def test_re_marking_a_deal_lost_with_the_same_reason_is_not_a_touch(pg_db):

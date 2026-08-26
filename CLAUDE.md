@@ -401,22 +401,36 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   into silent no-ops, and would mishandle NULL (an unlinked `contact_id`) besides. Bulk can
   stay in Python because it writes exactly one caller-controlled column, a `DEAL_STAGES`
   string validated before the connection opens. Postgres coerces on **assignment** but
-  promotes on **comparison**, so the distinctness test casts the parameter to the
-  destination type for the INTEGER columns (`_DEAL_INT_COLUMNS`) — otherwise
-  `probability=40.1` stores 40 (unchanged) while `probability IS DISTINCT FROM 40.1`
-  promotes the stored 40 to float, calls it distinct and bumps `updated_at` anyway, which
-  is the very harm this closes. Only the comparison is cast, so assignment behavior and
-  its type errors are untouched; an integration test pins the list against
-  `information_schema` so it cannot drift off the schema. The `deal_stage_events` INSERT is
+  promotes on **comparison**, so the distinctness test casts the parameter to the column's
+  destination type, declared once in `_DEAL_COLUMN_TYPES`. The two contexts disagree in
+  OPPOSITE directions, so the cast is not optional: INTEGER promotes on comparison
+  (`probability=40.1` stores 40 unchanged, but an uncast `IS DISTINCT FROM 40.1` calls it
+  distinct and bumps `updated_at` anyway), while TEXT accepts an I/O conversion on
+  assignment and has NO comparison operator (`title = 12345` has always stored `'12345'`,
+  but an uncast comparison raises `operator does not exist: text = integer` — live, since
+  `crm_update_deal` forwards raw unvalidated LLM arguments). Only the comparison is cast,
+  so assignment behavior and its type errors are untouched. That map is also the source
+  `update_deal`'s allowlist is derived from, so a writable column cannot exist without a
+  declared type, and an integration test pins each declared type against
+  `information_schema`. The `deal_stage_events` INSERT is
   gated on the UPDATE's rowcount as well (a real stage change always differs, so this is
   structural rather than reachable). Two consequences are accepted rather than incidental: a
   **custom-field-only save no longer bumps `deals.updated_at`** (`DealForm` always PUTs the
   standard fields and then writes changed custom fields separately, and `set_field_values`
   never touches the parent row — so that bump was a side effect of an unchanged-form PUT,
-  and the detail page's `CustomFieldsSection` never produced one at all; **custom-field
-  edits are not deal touches, uniformly**, and making them one is a separate call belonging
-  in `set_field_values`), and a no-op save no longer floats a deal up an `updated_at DESC`
-  ordering — including `crm_get_pipeline`'s first-25-per-stage window.
+  and the detail page's `CustomFieldsSection` never produced one at all), and a no-op save
+  no longer floats a deal up an `updated_at DESC` ordering — including `crm_get_pipeline`'s
+  first-25-per-stage window.
+  The custom-field one **resolves an inconsistency by picking uniformity, not by picking
+  the more accurate answer**, and that is worth stating plainly: a user who edits only a
+  custom field has done real work on that deal, and nothing in `LAST_TOUCH_SQL` now records
+  it, so the deal keeps getting nudged until someone logs a note. It was arbitrary before
+  (bumped from the edit modal, not from the detail page) and is consistently
+  **not-a-touch** now. Taking the other branch belongs in `set_field_values`, which already
+  holds the entity row `FOR UPDATE` — but it is a product call about what a "touch" means
+  across contacts and companies too, and it needs its own change detection first: both UIs
+  send only changed values, while the `crm_set_*_fields` tools can send unchanged ones, so
+  a naive bump there would reopen exactly this bug against `crm_field_values`.
   **Deliberate divergences between the two paths**, each with its own reason: *where* the
   no-op is decided (SQL vs Python, above); the **error contract** — `_write_deal_update`
   raises, bulk isolates per deal (missing/archived deals report in `errors` while the rest

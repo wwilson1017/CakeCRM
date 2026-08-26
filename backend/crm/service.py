@@ -843,16 +843,30 @@ def list_deals(stage: str | None = None, contact_id: int | None = None, limit: i
     )
 
 
-# The `deals` columns typed INTEGER among those `_write_deal_update` can be asked to
-# write. Its distinctness test casts the parameter to the destination type for these,
-# because Postgres coerces on ASSIGNMENT but PROMOTES on COMPARISON: writing 40.1 into an
-# INTEGER column stores 40, but a bare `probability IS DISTINCT FROM 40.1` promotes the
-# stored 40 to float, calls it distinct, and fires the UPDATE — bumping `updated_at` for a
-# write that changed nothing, which is the exact harm #96 exists to stop. Only the
-# COMPARISON is cast, so assignment behavior is untouched, including its type errors (a
-# boolean into this column still raises, as it did before). Pinned against
-# `information_schema` by an integration test so the list cannot drift off the schema.
-_DEAL_INT_COLUMNS = frozenset({"probability", "contact_id", "company_id", "owner_id"})
+# Every `deals` column `_write_deal_update` can be asked to write, mapped to its
+# destination type — the single source of truth for BOTH `update_deal`'s allowlist and the
+# cast in the distinctness test, so a writable column cannot exist without a declared type.
+#
+# The cast is not optional, because assignment context and comparison context do NOT agree
+# and they disagree in opposite directions:
+#   * INTEGER promotes on comparison. `probability = 40.1` STORES 40 (unchanged), but a
+#     bare `probability IS DISTINCT FROM 40.1` promotes the stored 40 to float, calls it
+#     distinct and fires the UPDATE — bumping `updated_at` for a write that changed
+#     nothing, the exact harm #96 exists to stop.
+#   * TEXT accepts an I/O conversion on assignment and has NO operator for comparison.
+#     `title = 12345` stores '12345' and always has, but a bare
+#     `title IS DISTINCT FROM 12345` raises `operator does not exist: text = integer`.
+#     That path is live: `crm_update_deal` forwards raw, unvalidated LLM arguments, and a
+#     psycopg2 error there escapes as the registry's generic "please try again", looping
+#     the model on a permanent condition.
+# Casting ONLY the comparison operand leaves assignment behavior — including its type
+# errors, e.g. a boolean into an INTEGER column — exactly as it was.
+_DEAL_COLUMN_TYPES = {
+    "title": "text", "stage": "text", "notes": "text", "currency": "text",
+    "expected_close_date": "text", "lost_reason": "text",
+    "value": "float8",
+    "probability": "int", "contact_id": "int", "company_id": "int", "owner_id": "int",
+}
 
 
 def _classify_deal_update(
@@ -950,6 +964,15 @@ def _write_deal_update(deal_id: int, filtered: dict) -> bool:
     """
     if not filtered:
         raise ValueError("_write_deal_update requires at least one column to set")
+    # Named explicitly rather than left to KeyError on the cast lookup below: an
+    # undeclared column would otherwise fail deep inside SQL construction with a bare
+    # column name and no hint that the fix is to declare its type.
+    undeclared = set(filtered) - _DEAL_COLUMN_TYPES.keys()
+    if undeclared:
+        raise ValueError(
+            f"_write_deal_update: no declared type for {sorted(undeclared)} — "
+            "add it to _DEAL_COLUMN_TYPES"
+        )
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -976,9 +999,7 @@ def _write_deal_update(deal_id: int, filtered: dict) -> bool:
         # whether anything ELSE changed. Values bind twice — once to SET, once to compare.
         set_clause = ", ".join(f"{k} = %s" for k in filtered)
         distinct_clause = " OR ".join(
-            f"{k} IS DISTINCT FROM %s::int" if k in _DEAL_INT_COLUMNS
-            else f"{k} IS DISTINCT FROM %s"
-            for k in filtered
+            f"{k} IS DISTINCT FROM %s::{_DEAL_COLUMN_TYPES[k]}" for k in filtered
         )
         values = list(filtered.values())
         cur.execute(
@@ -1117,11 +1138,13 @@ def search_deals(
 
 
 def update_deal(deal_id: int, **fields) -> dict | None:
-    # lost_reason is deliberately NOT in `allowed`: mark_deal_lost is its single
-    # writer, so a reason always arrives with the close (and its timeline note) and
-    # can never be set on a deal that isn't lost.
-    allowed = {"title", "stage", "value", "notes", "expected_close_date", "probability", "currency",
-               "contact_id", "company_id", "owner_id"}
+    # Derived from _DEAL_COLUMN_TYPES so a column cannot become writable here without a
+    # declared destination type for the no-op comparison — the coverage half of that map's
+    # contract, made structural instead of asserted.
+    # lost_reason is deliberately subtracted: mark_deal_lost is its single writer, so a
+    # reason always arrives with the close (and its timeline note) and can never be set on
+    # a deal that isn't lost.
+    allowed = _DEAL_COLUMN_TYPES.keys() - {"lost_reason"}
     filtered = {k: v for k, v in fields.items() if k in allowed}
     if "stage" in filtered and filtered["stage"] not in DEAL_STAGES:
         return None

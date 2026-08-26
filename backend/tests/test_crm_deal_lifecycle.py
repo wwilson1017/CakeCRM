@@ -105,9 +105,12 @@ def test_the_update_only_fires_when_a_column_would_actually_change(monkeypatch, 
     assert "updated_at IS DISTINCT FROM" not in sql
 
 
-def test_every_written_column_is_in_the_distinctness_test(monkeypatch, rec, fake_conn):
-    """A column that is SET but not compared would make any write carrying it a
-    guaranteed match — the PUT path sends the whole form, so one gap re-opens #96."""
+def test_every_written_column_is_compared_and_cast(monkeypatch, rec, fake_conn):
+    """Two ways to re-open #96 in one assertion. A column that is SET but never compared
+    makes any write carrying it a guaranteed match (the PUT path sends the whole form, so
+    one gap is enough). A comparison left UNCAST is just as bad: assignment and comparison
+    contexts disagree, so an uncast INTEGER silently bumps on a fractional no-op and an
+    uncast TEXT raises outright."""
     conn = fake_conn(monkeypatch, service, fetchone_results=[("lead", None, None)])
     rec.fetchone_queue = [{"id": 1}]
     service.update_deal(1, title="T", value=5, notes="n", probability=20,
@@ -115,8 +118,10 @@ def test_every_written_column_is_in_the_distinctness_test(monkeypatch, rec, fake
                         contact_id=None, company_id=3, owner_id=None)
     sql, _ = next((s, p) for s, p in conn.executed if "UPDATE deals SET" in s)
     written = {c.split(" = ")[0] for c in sql.split(" SET ")[1].split(" WHERE ")[0].split(", ")}
+    assert written - {"updated_at"}, "the test wrote no deal columns"
     for col in written - {"updated_at"}:
-        assert f"{col} IS DISTINCT FROM %s" in sql, f"{col} is SET but never compared"
+        cast = service._DEAL_COLUMN_TYPES[col]
+        assert f"{col} IS DISTINCT FROM %s::{cast}" in sql, f"{col} SET but not compared-and-cast"
 
 
 def test_a_same_stage_move_cannot_match_its_own_row(monkeypatch, rec, fake_conn):
