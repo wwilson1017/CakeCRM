@@ -272,11 +272,16 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   visible iff one of its cards is — so an all-admin group (Workspace, Integrations)
   can never render as an empty section or a dead tab for a member. Team also keeps
   its internal `return null` as defence in depth. Members see exactly Notifications,
-  Change password, Assistant memory and Task mode; note that is **member-visible**,
-  not "non-install" — task mode and the no-login todo surfaces are global `crm_meta`
-  values whose routes are deliberately authenticated-but-not-admin
-  (`backend/crm/router.py`), so the UI partition mirrors the server's rather than
-  inventing one. `settingsSections.test.ts` pins that partition in both directions.
+  Change password and Assistant memory. **Task mode is admin-only since #102**:
+  `task_mode` is a `crm_meta` singleton, so one member flipping it changes everyone's
+  task surface, and the card's no-login section can mint an unauthenticated read+write
+  link to the whole todo store whose lifetime is **not** tied to the account that
+  created it (deactivating that user revokes their JWT via `token_epoch`/`is_active`,
+  not the URL). `/api/crm/task-mode` and both `/api/crm/todo-surfaces` methods are
+  `require_admin`, pinned in `test_route_authz.ADMIN_ONLY`. #102 gated that at its
+  call site; this page **replaced** that call site, so the gate is now the registry's
+  `adminOnly` flag — same semantics, one place. The UI partition mirrors the server's
+  rather than inventing one, and `settingsSections.test.ts` pins it in both directions.
   The registry is **card-granular**, and one card straddles that line: Notifications'
   Web Push half configures this browser (everyone's), while its "Daily digest and
   nudges" half writes install state through the `require_admin`
