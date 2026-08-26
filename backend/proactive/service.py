@@ -228,8 +228,9 @@ def _maybe_enhance_digest(summary: dict) -> bool:
 
 def _digest_prompt() -> tuple[str, str]:
     from assistant import identity
-    ident = identity.get_identity()
-    name = ident["name"]   # always the fixed brand since #71 — no fallback to reach
+    # The brand is a constant, so this reads it directly rather than paying a DB
+    # round-trip per tick to fetch a dict whose only used key is now fixed (#71).
+    name = identity.NAME
     static = (
         f"You are {name}. The user has just received an automatic daily pipeline "
         "digest with the raw numbers. Your job is to add ONE piece of judgement they "

@@ -118,7 +118,9 @@ export function IdentitySettings({ onClose }: { onClose: () => void }) {
           </div>
         ) : (
           <>
-            <label style={labelStyle}>Name</label>
+            {/* A caption, not a form label: the input this used to describe is gone, and
+                a <label> pointing at no labelable control is an orphan to assistive tech. */}
+            <div style={labelStyle}>Name</div>
             <div style={{ fontSize: 14, fontWeight: 600, color: INK }}>{name}</div>
             <div style={{ fontSize: 12, color: INK_MUTE, marginTop: 4 }}>
               Your assistant is always called {name}.

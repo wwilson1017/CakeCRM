@@ -50,7 +50,10 @@ def test_get_identity_never_selects_the_name_column(monkeypatch):
     seen = {}
 
     def _fetchone(sql, params=()):
-        seen["sql"] = " ".join(sql.split())
+        # Lower-cased on purpose: these two guards are the ONLY automated defense against
+        # a `SELECT name` reappearing, and a case-sensitive scan would wave `SELECT NAME`
+        # straight through the thing it exists to forbid.
+        seen["sql"] = " ".join(sql.split()).lower()
         return {"name": "Ace", "personality": ""}
 
     monkeypatch.setattr(identity, "pg_fetchone", _fetchone)
@@ -64,7 +67,7 @@ def test_update_identity_takes_no_name_argument(pg, monkeypatch):
     assert "name" not in inspect.signature(identity.update_identity).parameters
     monkeypatch.setattr(identity, "pg_fetchone", lambda *a: {"personality": ""})
     identity.update_identity(personality="Be terse.")
-    sql = pg["execute"][0][0]
+    sql = pg["execute"][0][0].lower()   # case-insensitive, same reason as the read guard
     assert "name" not in sql
 
 

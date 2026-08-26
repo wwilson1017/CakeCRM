@@ -177,8 +177,9 @@ def _finish_and_alert(reminder: dict, error: str) -> None:
 
 
 def _reminder_prompt(reminder: dict) -> tuple[str, str]:
-    ident = identity.get_identity()
-    name = ident["name"]   # always the fixed brand since #71 — no fallback to reach
+    # The brand is a constant, so this reads it directly rather than paying a DB
+    # round-trip per tick to fetch a dict whose only used key is now fixed (#71).
+    name = identity.NAME
     static = (
         f"You are {name}, running a background action for this CRM. A reminder just "
         "fired and the user has ALREADY received the reminder notification itself. "
@@ -283,8 +284,9 @@ def _task_mode() -> str:
 
 
 def _heartbeat_prompt() -> tuple[str, str]:
-    ident = identity.get_identity()
-    name = ident["name"]   # always the fixed brand since #71 — no fallback to reach
+    # The brand is a constant, so this reads it directly rather than paying a DB
+    # round-trip per tick to fetch a dict whose only used key is now fixed (#71).
+    name = identity.NAME
     # The task-listing tool swaps with the task mode (#70) — naming crm_list_tasks in
     # GTD mode would point the turn at a tool that is no longer advertised.
     task_tool = "todo_list" if _task_mode() == "gtd" else "crm_list_tasks"
