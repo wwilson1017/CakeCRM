@@ -124,7 +124,6 @@ export function buildCompanyColumns(): ListColumn<CrmCompany>[] {
  * cell uses for its cross-navigation button.
  */
 export function buildTaskColumns(onToggleComplete: (task: CrmTask) => void): ListColumn<CrmTask>[] {
-  const today = ymd(new Date());
   const cols: (ListColumn<CrmTask> & { key: TaskSortKey | Display<'done'> })[] = [
     {
       key: 'done',
@@ -169,10 +168,16 @@ export function buildTaskColumns(onToggleComplete: (task: CrmTask) => void): Lis
       header: 'Due',
       render: t => {
         if (!t.due_date) return <span className="text-muted">{DASH}</span>;
-        const { text, overdue } = dueLabel(t.due_date, today);
+        // "Today" is read at RENDER time, not when the columns were built: the column array
+        // is memoized for the life of the page, so hoisting this would freeze the boundary
+        // and a tab left open past midnight would stop flagging anything as overdue.
+        const { text, overdue } = dueLabel(t.due_date, ymd(new Date()));
         // An overdue COMPLETED task is just a task that was finished late — no alarm.
         const late = overdue && !t.completed;
-        return <span className={late ? 'font-semibold text-ck-accent-text' : 'text-muted'}>{text}</span>;
+        // ck-red, not the brand accent: red-as-danger is the app-wide convention for
+        // overdue (TaskDetailBody, the dashboard tiles, the badges), and the two tokens
+        // are genuinely different colours in both themes.
+        return <span className={late ? 'font-semibold text-ck-red' : 'text-muted'}>{text}</span>;
       },
     },
   ];

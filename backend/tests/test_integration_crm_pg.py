@@ -41,6 +41,16 @@ def pg_db():
     postgres.close_pool()
     postgres.init_pool()
     postgres.run_migrations()  # applies EVERY migration, incl. crm_core
+
+    # Seed the user the HTTP tests authenticate as. Since #60 every human write stamps
+    # `owner_id`/`author_id` with a real FK to `users`, so without this row any routed
+    # write (CSV import, a chatter note) dies on a ForeignKeyViolation that has nothing
+    # to do with what the test is asserting. `fake_admin` is id 1.
+    postgres.pg_execute(
+        "INSERT INTO users (id, email, name, password_hash, role) "
+        "VALUES (%s, %s, %s, 'x', 'admin') ON CONFLICT (id) DO NOTHING",
+        (fake_admin()["id"], fake_admin()["email"], fake_admin()["name"]),
+    )
     yield dsn
 
     postgres.close_pool()
@@ -1222,3 +1232,204 @@ def test_provenance_confirm_notes_excluded_from_engagement(pg_db):
     assert scoring_service.score_deal(deal["id"])["factors"]["engagement"]["value"] == 0
     chatter_service.add_note("deal", deal["id"], "Real customer note")
     assert scoring_service.score_deal(deal["id"])["factors"]["engagement"]["value"] == 1
+
+
+# ── #77: keyset assembly + the derived last-contact, against real Postgres ────
+#
+# The hermetic suite asserts SQL STRING SHAPE, which cannot catch a syntax error in the
+# new LATERAL, a wrong GREATEST/NULL interaction, or a placeholder bound in the wrong
+# position — all of which would pass every other test and fail on the first real request.
+
+def _mk_contact(name: str, **cols) -> int:
+    from core.postgres import pg_fetchone
+    row = pg_fetchone(
+        "INSERT INTO contacts (name, email, phone, company, title, source, status, tags, notes) "
+        "VALUES (%s, '', '', '', '', '', %s, '', '') RETURNING id",
+        (name, cols.get("status", "active")),
+    )
+    return row["id"]
+
+
+def test_keyset_sweep_visits_every_row_exactly_once(pg_db):
+    """The property the whole assembly rests on, proven end-to-end rather than by shape."""
+    from crm import service
+    ids = [_mk_contact(f"C{i:03d}") for i in range(25)]
+
+    seen: list[int] = []
+    cursor = None
+    for _ in range(20):  # generous bound; the walk should finish in 4
+        page = service.list_contacts(sort="id", after_id=cursor, limit=8)["contacts"]
+        if not page:
+            break
+        seen.extend(r["id"] for r in page)
+        cursor = page[-1]["id"]
+
+    assert seen == sorted(ids)                 # every row, in order
+    assert len(seen) == len(set(seen))         # none twice
+
+
+def test_a_row_inserted_mid_sweep_lands_past_the_cursor(pg_db):
+    """Why the assembly key must be immutable and append-only.
+
+    Under a mutable order (updated_at) or a DESC created_at, a row created between two
+    pages can land BEHIND the cursor and displace the window, skipping a real row. Under
+    `id ASC` it can only sort past it.
+    """
+    from crm import service
+    first = [_mk_contact(f"A{i}") for i in range(5)]
+    page1 = service.list_contacts(sort="id", limit=3)["contacts"]
+    cursor = page1[-1]["id"]
+
+    fresh = _mk_contact("inserted-mid-sweep")  # a concurrent write
+
+    rest = service.list_contacts(sort="id", after_id=cursor, limit=50)["contacts"]
+    got = [r["id"] for r in page1] + [r["id"] for r in rest]
+    # Nothing from the original set was skipped, and the new row simply appears at the end.
+    assert set(first) <= set(got)
+    assert got[-1] == fresh
+    assert len(got) == len(set(got))
+
+
+def test_cursor_pages_skip_the_count_but_still_window(pg_db):
+    from crm import service
+    for i in range(6):
+        _mk_contact(f"N{i}")
+    first = service.list_contacts(sort="id", limit=2)
+    assert first["total"] == 6                       # page one reports the real total
+    later = service.list_contacts(sort="id", after_id=first["contacts"][-1]["id"], limit=2)
+    assert later["total"] is None                    # …and later pages do not re-count
+    assert [r["id"] for r in later["contacts"]] == [first["contacts"][-1]["id"] + 1,
+                                                    first["contacts"][-1]["id"] + 2]
+
+
+def test_last_contact_at_takes_the_newest_of_both_signals(pg_db):
+    """activity_log and un-archived chatter, whichever is newer; NULL when neither exists."""
+    from core.postgres import pg_execute
+    from crm import service
+
+    never = _mk_contact("Never Contacted")
+    by_activity = _mk_contact("By Activity")
+    by_note = _mk_contact("By Note")
+    both = _mk_contact("Both")
+
+    pg_execute(
+        "INSERT INTO activity_log (contact_id, activity, note, created_at) "
+        "VALUES (%s, 'call', '', '2026-03-01T10:00:00Z')", (by_activity,))
+    pg_execute(
+        "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at) "
+        "VALUES ('contact', %s, 'talked', '2026-03-05T10:00:00Z')", (by_note,))
+    # Newer note than activity — GREATEST must pick the note.
+    pg_execute(
+        "INSERT INTO activity_log (contact_id, activity, note, created_at) "
+        "VALUES (%s, 'call', '', '2026-01-01T10:00:00Z')", (both,))
+    pg_execute(
+        "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at) "
+        "VALUES ('contact', %s, 'later note', '2026-06-01T10:00:00Z')", (both,))
+
+    rows = {r["id"]: r for r in service.list_contacts(sort="id", limit=50)["contacts"]}
+    # pg helpers post-process TIMESTAMPTZ to an ISO string (the shape the frontend's
+    # parseUTC expects), so these compare as text — but the GREATEST that produced them
+    # ran on real timestamps, both columns being TIMESTAMPTZ.
+    assert rows[never]["last_contact_at"] is None
+    assert rows[by_activity]["last_contact_at"].startswith("2026-03-01")
+    assert rows[by_note]["last_contact_at"].startswith("2026-03-05")
+    # Newer note beats older activity — the case a one-signal query would get wrong.
+    assert rows[both]["last_contact_at"].startswith("2026-06-01")
+
+
+def test_last_contact_at_ignores_archived_and_housekeeping_notes(pg_db):
+    """An archived note is retracted; a provenance confirm is bookkeeping, not a conversation."""
+    from core.postgres import pg_execute
+    from crm import scoring_service, service
+
+    archived_only = _mk_contact("Archived Only")
+    housekeeping_only = _mk_contact("Housekeeping Only")
+
+    pg_execute(
+        "INSERT INTO crm_chatter (entity_type, entity_id, message, archived, created_at) "
+        "VALUES ('contact', %s, 'retracted', 1, '2026-05-01T10:00:00Z')", (archived_only,))
+    pg_execute(
+        "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at) VALUES "
+        "('contact', %s, %s, '2026-05-01T10:00:00Z')",
+        (housekeeping_only,
+         scoring_service.HOUSEKEEPING_NOTE_LIKE.replace("%", "'title'.")),
+    )
+
+    rows = {r["id"]: r for r in service.list_contacts(sort="id", limit=50)["contacts"]}
+    assert rows[archived_only]["last_contact_at"] is None
+    # The assistant confirming an AI-populated field must not reset the staleness clock.
+    assert rows[housekeeping_only]["last_contact_at"] is None
+
+
+def test_search_and_detail_derive_the_same_last_contact(pg_db):
+    """One definition across all three reads — the list, the search, and the detail page."""
+    from core.postgres import pg_execute
+    from crm import service
+
+    cid = _mk_contact("Findable Person")
+    pg_execute(
+        "INSERT INTO activity_log (contact_id, activity, note, created_at) "
+        "VALUES (%s, 'call', '', '2026-04-02T09:00:00Z')", (cid,))
+
+    listed = service.list_contacts(sort="id", limit=50)["contacts"][0]["last_contact_at"]
+    searched = service.search_contacts("Findable")[0]["last_contact_at"]
+    detail = service.get_contact_detail(cid)["last_contact_at"]
+    assert listed == searched == detail
+    assert listed is not None
+
+
+def test_get_contact_staleness_agrees_with_the_list(pg_db):
+    """The tool and the column must not contradict each other about what a touch is."""
+    from core.postgres import pg_execute
+    from crm import analytics_service, scoring_service, service
+
+    cid = _mk_contact("Only Housekeeping")
+    pg_execute(
+        "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at) VALUES "
+        "('contact', %s, %s, now())",
+        (cid, scoring_service.HOUSEKEEPING_NOTE_LIKE.replace("%", "'phone'.")),
+    )
+    listed = service.list_contacts(sort="id", limit=50)["contacts"][0]
+    stale = analytics_service.get_contact_staleness(stale_days=1)["contacts"]
+
+    assert listed["last_contact_at"] is None
+    # …and the staleness read reports the same contact as never touched.
+    assert [c["id"] for c in stale] == [cid]
+    assert stale[0]["last_contact_at"] is None
+
+
+def test_task_keyset_and_get_task_joins(pg_db):
+    from core.postgres import pg_fetchone
+    from crm import service
+
+    cid = _mk_contact("Task Owner")
+    made = [service.create_task(f"T{i}", contact_id=cid)["id"] for i in range(5)]
+
+    walked: list[int] = []
+    cursor = None
+    for _ in range(10):
+        page = service.list_tasks(sort="id", after_id=cursor, limit=2)
+        if not page:
+            break
+        walked.extend(t["id"] for t in page)
+        cursor = page[-1]["id"]
+    assert walked == sorted(made)
+
+    # get_task is what every task WRITE returns, so it must carry the joined names the
+    # list renders — otherwise a saved task loses its contact label.
+    got = service.get_task(made[0])
+    assert got["contact_name"] == "Task Owner"
+    assert got["deal_title"] is None
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM tasks")["c"] == 5
+
+
+def test_a_cursor_against_a_mutable_order_raises(pg_db):
+    from crm import service
+    _mk_contact("Anyone")
+    for call in (
+        lambda: service.list_contacts(after_id=1, sort="updated_at"),
+        lambda: service.list_companies(after_id=1, sort="name"),
+        lambda: service.list_tasks(after_id=1, sort="due"),
+    ):
+        with pytest.raises(ValueError):
+            call()

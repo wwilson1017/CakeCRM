@@ -18,19 +18,18 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../core/api/client';
-import { useAuth } from '../core/auth/AuthContext';
 import type { CrmContact } from '../core/types';
 import { ContactDetailPage } from './ContactDetailPage';
 import { ContactForm } from './components/ContactForm';
 import { SmartImportModal } from './components/SmartImportModal';
-import { useUsers } from './useUsers';
+import { useOwnerOptions } from './useOwnerOptions';
 import { CollectionView, useCollectionState } from '../shared/collection';
 import type { FacetOption } from '../shared/search';
 import { IconPlus } from '../shared/icons';
 import { useIsMobile } from '../shared/useIsMobile';
 import { INK_DIM, mono } from '../shared/styles';
 import { pageHeading, btnPrimary, btnSecondary, btnSmall } from './styles';
-import { buildOwnerOptions, makeContactsCollectionConfig } from './collectionConfig';
+import { makeContactsCollectionConfig } from './collectionConfig';
 import { buildContactColumns } from './listColumns';
 import { useCrmCorpus, type CrmCorpus } from './usePatchableAssembly';
 import { RefreshButton } from './components/RefreshButton';
@@ -45,8 +44,7 @@ export function ContactsPage() {
   const isMobile = useIsMobile();
   const [showCreate, setShowCreate] = useState(false);
   const [showImport, setShowImport] = useState(false);
-  const { users, loading: usersLoading } = useUsers();
-  const { currentUser } = useAuth();
+  const { options: owners, loading: usersLoading } = useOwnerOptions();
 
   const corpus = useCrmCorpus<CrmContact>(
     useCallback(async (params, signal) => {
@@ -58,11 +56,6 @@ export function ContactsPage() {
     id === undefined,
   );
   const { upsert, remove, retry } = corpus;
-
-  const owners = useMemo(
-    () => buildOwnerOptions(users, currentUser?.id ?? null),
-    [users, currentUser?.id],
-  );
 
   if (id !== undefined) {
     return <ContactDetailPage onChanged={upsert} onDeleted={remove} />;

@@ -990,20 +990,40 @@ def test_contact_and_company_id_sorts_are_plain_ascending_keys(rec):
     assert "id > %s" in company_sql
 
 
-def test_a_cursor_narrows_the_rows_but_not_the_total(rec):
+def test_the_first_page_counts_the_whole_filtered_set(rec):
     """A cursor is the WINDOW, not a filter.
 
     The repo rule that a filter must reach the COUNT and the page query together exists so
-    a total cannot disagree with the rows. `after_id` is like OFFSET, which the COUNT has
-    always ignored: `total` stays the size of the whole matching set, which is what a
-    caller paging through it needs.
+    a total cannot disagree with the rows. A real filter (status, owner) therefore does
+    reach the COUNT; the cursor never does.
     """
     rec.fetchone_queue = [{"cnt": 4200}]
-    result = service.list_contacts(sort="id", after_id=900, status="active")
+    result = service.list_contacts(sort="id", status="active")
     count_sql = rec.sql_containing("COUNT(*)")
-    assert "ct.id > %s" not in count_sql
     assert "ct.status = %s" in count_sql  # a real filter DOES reach it
+    assert "ct.id > %s" not in count_sql  # the window does not
     assert result["total"] == 4200
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: service.list_contacts(sort="id", after_id=900, status="active"),
+        lambda: service.list_companies(sort="id", after_id=900, status="active"),
+    ],
+)
+def test_a_cursor_page_skips_the_count_entirely(rec, call):
+    """Not a micro-optimisation: a corpus sweep is up to MAX_PAGES requests, and counting
+    the whole filtered set on every one of them would roughly double the query volume of
+    the heaviest read path in the app — for a number the client reads once, on page one.
+
+    `total` is None on those pages rather than a stale or wrong integer.
+    """
+    result = call()
+    assert result["total"] is None
+    assert not any("COUNT(*)" in sql for sql, _ in rec.calls)
+    # The rows still come back, windowed by the cursor.
+    assert any("id > %s" in sql for sql, _ in rec.calls)
 
 
 def test_contact_list_search_and_detail_all_derive_last_contact_at(rec):

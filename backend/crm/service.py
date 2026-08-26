@@ -115,6 +115,14 @@ _TASK_SORTS = {
 }
 
 
+def _count_or_none(after_id: int | None, sql: str, params: list) -> int | None:
+    """Total matching rows, or None on a cursor page (see list_contacts for why)."""
+    if after_id is not None:
+        return None
+    row = pg_fetchone(sql, params)
+    return row["cnt"] if row else 0
+
+
 def _check_assembly_cursor(after_id: int | None, sort: str) -> None:
     """Refuse a keyset cursor against any order but the immutable id one (#77).
 
@@ -358,8 +366,14 @@ def list_contacts(
 
     # The count needs no join — its WHERE only touches ct columns (the alias is
     # here so the shared qualified conditions parse).
-    total_row = pg_fetchone(f"SELECT COUNT(*) AS cnt FROM contacts ct {where}", params)
-    total = total_row["cnt"] if total_row else 0
+    # A cursor request is by definition a continuation, and the client already has the
+    # total from the first page — so skip the COUNT there. It is not free: a corpus sweep
+    # is up to MAX_PAGES requests, and re-counting the whole filtered set on every one of
+    # them would roughly double the query volume of the heaviest read path in the app for
+    # a number nobody reads twice. `total` is None on those pages, never a wrong integer.
+    total = _count_or_none(
+        after_id, f"SELECT COUNT(*) AS cnt FROM contacts ct {where}", params
+    )
 
     # The cursor is deliberately NOT in the shared conditions above. That rule exists for
     # FILTERS — a status or owner narrowing the rows but not the COUNT reports a total that
@@ -674,8 +688,8 @@ def list_companies(
         params.append(owner_id)
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
-    total_row = pg_fetchone(f"SELECT COUNT(*) AS cnt FROM companies {where}", params)
-    total = total_row["cnt"] if total_row else 0
+    # Skipped on a cursor page — see list_contacts.
+    total = _count_or_none(after_id, f"SELECT COUNT(*) AS cnt FROM companies {where}", params)
 
     # Window, not filter — see the same note in list_contacts.
     row_conditions = conditions + (["id > %s"] if after_id is not None else [])
