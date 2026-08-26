@@ -53,9 +53,13 @@ def pg_db():
         "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
         (FAKE_ADMIN["id"], FAKE_ADMIN["email"], FAKE_ADMIN["name"], "x", FAKE_ADMIN["role"]),
     )
-    # An explicit id does NOT consume the SERIAL, so the next default-id insert would be
-    # handed 1 again and die on the primary key — far from here, looking like a bug in
-    # whatever inserted next. Push the sequence past what we just seeded.
+    # An explicit id does NOT consume the SERIAL sequence, so without this the next
+    # default-id insert into `users` is handed 1 again and dies on a duplicate key —
+    # far from this fixture, in whichever test first creates a user through the API.
+    # Latent in this module today; #77 adds exactly such tests. Verified against a
+    # throwaway database: after the insert above the sequence is still (1, False),
+    # the next default-id insert raises UniqueViolation on users_pkey, and this
+    # setval makes it yield 2.
     postgres.pg_execute(
         "SELECT setval(pg_get_serial_sequence('users', 'id'), "
         "(SELECT MAX(id) FROM users), true)"
