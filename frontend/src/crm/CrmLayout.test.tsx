@@ -136,6 +136,20 @@ describe('CrmLayout task-mode ownership (issue #102)', () => {
     expect(publishedMode()).toBe('normal');
   });
 
+  it('publishes NOTHING while the demo-status fetch is still in flight', async () => {
+    // This is what closes the switch-while-loading race, and it was disputed twice in
+    // review — so it is pinned here rather than argued. `status` starts null and
+    // DEMO_STATUS_UNKNOWN is reachable ONLY from the .catch, so the pending state
+    // publishes null, which disables TaskModeCard's buttons. With no window in which a
+    // switch can be made, there is no window in which a late GET can overwrite one.
+    //
+    // If someone ever seeds `useState` with DEMO_STATUS_UNKNOWN instead of null, this
+    // fails — and the race becomes real.
+    api.mockReturnValue(new Promise(() => { /* never settles */ }));
+    await renderLayout();
+    expect(publishedMode()).toBe('unknown');
+  });
+
   it('routes a mode switch from a child straight into the published context', async () => {
     api.mockResolvedValue({
       empty: false, sample_data_loaded: true, show_onboarding: false,
