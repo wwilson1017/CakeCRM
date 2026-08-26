@@ -30,7 +30,7 @@ import { useIsMobile } from '../shared/useIsMobile';
 import { INK, INK_MUTE, LINE, ACCENT } from '../shared/styles';
 import { pagePadding, pageHeading } from './styles';
 import {
-  SETTINGS_SECTIONS, resolveSection, visibleCards, visibleSections, wantedSection,
+  resolveSection, visibleCards, visibleSections, wantedSection,
   type SettingsCardId, type SettingsSection, type SettingsSectionId,
 } from './settingsSections';
 import { BrandingCard } from './components/BrandingCard';
@@ -112,8 +112,10 @@ export function SettingsPage() {
   // an isAdmin flip in either direction is reflected on the very next render.
   const sections = visibleSections(isAdmin);
   const shown = resolveSection(wantedSection(params), isAdmin);
+  // `resolveSection` only ever returns an id that is in `sections`, so the find always
+  // hits — the `??` is a type guard, not a second failure mode to reason about.
   const section = sections.find(s => s.id === shown) ?? sections[0];
-  const cards = visibleCards(section ?? SETTINGS_SECTIONS[0], isAdmin);
+  const cards = visibleCards(section, isAdmin);
 
   return (
     <div style={pagePadding(isMobile)}>
