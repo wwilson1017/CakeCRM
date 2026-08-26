@@ -22,15 +22,19 @@ import {
   type SettingsCardId,
 } from './settingsSections';
 
-const MEMBER_CARDS: SettingsCardId[] = ['notifications', 'change_password', 'memory', 'task_mode'];
-const ADMIN_ONLY_CARDS: SettingsCardId[] = ['branding', 'team', 'custom_fields', 'telegram', 'gmail'];
+const MEMBER_CARDS: SettingsCardId[] = ['notifications', 'change_password', 'memory'];
+const ADMIN_ONLY_CARDS: SettingsCardId[] = [
+  'branding', 'team', 'custom_fields', 'telegram', 'gmail',
+  // #102 made the task-mode + todo-surface routes require_admin.
+  'task_mode',
+];
 
 function visibleCardIds(isAdmin: boolean): SettingsCardId[] {
   return visibleSections(isAdmin).flatMap(s => visibleCards(s, isAdmin)).map(c => c.id);
 }
 
 describe('settingsSections — the member/admin partition', () => {
-  it('shows a member exactly the four member-visible cards', () => {
+  it('shows a member exactly the member-visible cards', () => {
     expect(visibleCardIds(false).sort()).toEqual([...MEMBER_CARDS].sort());
   });
 
@@ -173,12 +177,15 @@ describe('SettingsCard is the only owner of card chrome', () => {
     return source;
   };
 
-  it('lists every card the registry declares', () => {
+  it('maps every registry card to exactly one file, and no file to a stale id', () => {
     // Hand-maintained by necessity — a card id ('custom_fields') does not mechanically
-    // map to a filename ('CustomFieldSettings.tsx'). Pinning the COUNT is what stops a
-    // tenth card from quietly escaping both guards below.
-    const declared = SETTINGS_SECTIONS.flatMap(s => s.cards).length;
-    expect(SETTINGS_CARD_FILES).toHaveLength(declared);
+    // map to a filename ('CustomFieldSettings.tsx'). Both halves are needed: the length
+    // catches a card added to the registry but not here, and the SET equality catches a
+    // copy-pasted duplicate value (which keeps the length right while silently leaving
+    // one registry id bound to no file at all).
+    const declared = SETTINGS_SECTIONS.flatMap(s => s.cards).map(c => c.id);
+    expect(SETTINGS_CARD_FILES).toHaveLength(declared.length);
+    expect(new Set(Object.values(CARD_FILE_IDS))).toEqual(new Set(declared));
   });
 
   it.each(SETTINGS_CARD_FILES)('%s does not import cardStyle', (file) => {

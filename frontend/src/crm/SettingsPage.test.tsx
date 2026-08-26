@@ -79,8 +79,9 @@ const RESPONSES: Record<string, unknown> = {
   '/api/crm/demo-status': { task_mode: 'normal' },
 };
 
-const ADMIN_ONLY_TITLES = ['Branding', 'Team', 'Custom Fields', 'Telegram', 'Gmail'];
-const MEMBER_TITLES = ['Notifications', 'Change password', 'Assistant memory', 'Task mode'];
+// 'Task mode' is admin-only as of #102, which makes its routes require_admin.
+const ADMIN_ONLY_TITLES = ['Branding', 'Team', 'Custom Fields', 'Telegram', 'Gmail', 'Task mode'];
+const MEMBER_TITLES = ['Notifications', 'Change password', 'Assistant memory'];
 
 let container: HTMLDivElement;
 let root: Root;
@@ -319,7 +320,8 @@ describe('SettingsPage — the Gmail OAuth callback', () => {
     }
     await clickTab('Assistant');
     expect(container.querySelector('[aria-current="page"]')!.textContent).toBe('Assistant');
-    expect(cardTitles()).toEqual(['Assistant memory', 'Task mode']);
+    // Task mode is admin-only (#102), so a member's Assistant section is memory alone.
+    expect(cardTitles()).toEqual(['Assistant memory']);
   });
 
   it('ignores an empty ?gmail= rather than pinning the view to a card that skips it', async () => {
