@@ -29,26 +29,34 @@ export default function StageChipBar({
   onSelect: (stage: string) => void;
 }) {
   const chipRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+  const railRef = useRef<HTMLDivElement>(null);
 
   // Keep the active chip visible as the board scrolls under the finger — without this the
   // highlight walks off the end of the bar and stops being a position readout.
+  //
+  // Scrolls the RAIL rather than calling scrollIntoView on the chip: scrollIntoView walks
+  // every scrollable ancestor including the document, so once the bar itself has scrolled
+  // out of view, swiping between columns would yank the whole page back up to it. Adjusting
+  // only the rail's own scrollLeft cannot move the viewport.
   useEffect(() => {
     if (!activeStage) return;
-    chipRefs.current.get(activeStage)?.scrollIntoView({
-      behavior: 'smooth',
-      inline: 'center',
-      block: 'nearest',
-    });
+    const rail = railRef.current;
+    const chip = chipRefs.current.get(activeStage);
+    if (!rail || !chip) return;
+    const target = chip.offsetLeft - (rail.clientWidth - chip.offsetWidth) / 2;
+    rail.scrollTo({ left: Math.max(0, target), behavior: 'smooth' });
   }, [activeStage]);
 
   if (stages.length === 0) return null;
 
   return (
     <div
+      ref={railRef}
       style={{
         display: 'flex',
         gap: 6,
         overflowX: 'auto',
+        position: 'relative',
         paddingBottom: 8,
         marginBottom: 4,
         scrollbarWidth: 'none',

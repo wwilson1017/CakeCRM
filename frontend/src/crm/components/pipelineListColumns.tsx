@@ -26,10 +26,23 @@ interface PipelineColumn extends Omit<ListColumn<CrmDeal>, 'key' | 'sortValue'> 
   key: PipelineColumnKey;
 }
 
-/** Local date, or an em dash. Deals store `expected_close_date` as a plain YYYY-MM-DD string. */
-function shortDate(iso: string | null | undefined): string {
-  if (!iso) return '—';
-  const d = new Date(iso);
+/**
+ * The two date columns hold DIFFERENT kinds of value and must be parsed differently.
+ *
+ * `expected_close_date` is a date-only `YYYY-MM-DD` string that is ALREADY a local calendar
+ * date. `new Date('2026-05-15')` reads it as UTC midnight, which renders as May 14 anywhere
+ * west of UTC — the same off-by-a-day `pipelineFilters.ymd` exists to avoid on the filtering
+ * side. So a date-only string is rebuilt from its calendar parts.
+ *
+ * `last_activity_at` is a full TIMESTAMPTZ, where ordinary parsing (and conversion to the
+ * viewer's zone) is exactly right.
+ */
+function shortDate(value: string | null | undefined): string {
+  if (!value) return '—';
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  const d = dateOnly
+    ? new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]))
+    : new Date(value);
   return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString();
 }
 

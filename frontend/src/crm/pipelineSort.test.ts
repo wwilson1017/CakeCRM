@@ -103,3 +103,28 @@ describe('list columns and sort fields cannot drift', () => {
     ]);
   });
 });
+
+describe('date columns are parsed by KIND, not uniformly', () => {
+  // Regression: `new Date('2026-05-15')` is UTC midnight, which renders as May 14 anywhere
+  // west of UTC. The suite runs under TZ=America/Chicago precisely so this can fail.
+  const cell = (key: string, d: CrmDeal) => {
+    const col = buildPipelineListColumns(() => 'x').find(c => c.key === key)!;
+    return col.render(d) as string;
+  };
+
+  it('a date-only expected_close_date renders its own calendar day', () => {
+    expect(cell('closeDate', deal({ id: 1, expected_close_date: '2026-05-15' })))
+      .toBe(new Date(2026, 4, 15).toLocaleDateString());
+  });
+
+  it('a full timestamp last_activity_at converts to the viewer local day', () => {
+    // 03:00 UTC on the 16th is 22:00 on the 15th in Chicago — the conversion is correct here.
+    expect(cell('lastActivity', deal({ id: 1, last_activity_at: '2026-05-16T03:00:00Z' })))
+      .toBe(new Date(2026, 4, 15).toLocaleDateString());
+  });
+
+  it('renders an em dash for an absent date rather than "Invalid Date"', () => {
+    expect(cell('closeDate', deal({ id: 1, expected_close_date: '' }))).toBe('—');
+    expect(cell('lastActivity', deal({ id: 1, last_activity_at: null }))).toBe('—');
+  });
+});

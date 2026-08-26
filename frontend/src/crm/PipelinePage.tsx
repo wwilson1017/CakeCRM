@@ -540,10 +540,12 @@ export function PipelinePage() {
     );
     for (const el of columnRefs.current.values()) observer.observe(el);
     return () => observer.disconnect();
-    // `state.view` is a deliberate dependency even though the body reads it once: switching
-    // views remounts the board without changing `columns`, so the old observer would be
-    // watching detached nodes.
-  }, [isMobile, state.view, columns]);
+    // `state.view` and `resetSeq` are deliberate dependencies even though the body reads
+    // neither: both remount the board WITHOUT necessarily changing `columns` (a view switch,
+    // and the deep-link reset that re-keys CollectionView), which would leave this observer
+    // watching detached column nodes through a stale scroller root — the active chip would
+    // silently stop following swipes.
+  }, [isMobile, state.view, columns, resetSeq]);
 
   const scrollToStage = useCallback((stage: string) => {
     columnRefs.current.get(stage)?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
