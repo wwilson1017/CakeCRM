@@ -146,8 +146,9 @@ Default row in the table below before you assume both are off.
 
 Neither depends on which task mode you are in. They are mounted always and gated only
 on their own settings, so switching between Todo-GTD and normal tasks does not turn
-either one on or off. Since GTD is the default task mode, the Settings → Tasks card
-that manages them is visible on a new install.
+either one on or off — and because it does not, Settings → Tasks keeps showing their
+controls in either mode for as long as either surface is configured. Switching to the
+simple task list never hides a link that is still serving.
 
 They are authorized by an unguessable **secret token in the URL path**, not by a
 session — that is what makes them work as a phone bookmark or a home-screen app. A URL

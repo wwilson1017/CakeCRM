@@ -22,9 +22,12 @@ vi.mock('../../shared/toast', () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
+// Type-only import: erased at compile time, so it does not execute the module ahead of
+// the vi.mock hoisting the dynamic imports below are working around.
+import type { TaskMode } from '../gtd/TaskModeContext';
+
 const { TaskModeCard } = await import('./TaskModeCard');
 const { TaskModeContext, TaskModeSetterContext } = await import('../gtd/TaskModeContext');
-type TaskMode = 'normal' | 'gtd';
 
 let container: HTMLDivElement;
 let root: Root;
@@ -109,6 +112,38 @@ describe('TaskModeCard mode ownership (issue #102)', () => {
     await click(modeButtons()[1]);
 
     expect(seen.at(-1)).toBe('gtd');
+  });
+
+  it('keeps a CONFIGURED no-login surface manageable in the simple-list mode', async () => {
+    // A live public surface must never lose its off switch. Switching mode does not
+    // disable it (set_task_mode writes task_mode and nothing else), so the section that
+    // rotates and turns off the token has to survive the switch.
+    api.mockReset();
+    api.mockResolvedValue({
+      todo_capture_token: '', todo_web_enabled: true, todo_web_token: 'sekrit',
+      capture_path: '/capture', capture_public: true,
+      web_path: '/todo/sekrit', web_public: false,
+    });
+    const seen: TaskMode[] = [];
+    await act(async () => root.render(<Owner initial="normal" seen={seen} />));
+
+    expect(container.textContent).toContain('Full todo app');
+    expect(container.textContent).toContain('Enable the no-login todo app');
+  });
+
+  it('does not show the no-login section in simple-list mode when nothing is configured', async () => {
+    // Tokenless capture is the DEFAULT on every install, not something anyone enabled,
+    // so it alone does not drag GTD-flavoured settings into the simple-list experience.
+    api.mockReset();
+    api.mockResolvedValue({
+      todo_capture_token: '', todo_web_enabled: false, todo_web_token: '',
+      capture_path: '/capture', capture_public: true,
+      web_path: null, web_public: false,
+    });
+    const seen: TaskMode[] = [];
+    await act(async () => root.render(<Owner initial="normal" seen={seen} />));
+
+    expect(container.textContent).not.toContain('Full todo app');
   });
 
   it('disables both buttons until the mode is known', async () => {

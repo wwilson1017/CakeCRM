@@ -127,6 +127,8 @@ def test_migration_created_tables_and_singleton(pg_db):
         "WHERE table_schema = 'public' AND table_name = 'crm_meta' "
         "AND column_name = 'task_mode'"
     )["column_default"].startswith("'gtd'")
+
+
     # issue #16 migration: the three AI-touch-count columns on deals (NULL by default)
     deal_cols = {
         r["column_name"]
@@ -136,6 +138,29 @@ def test_migration_created_tables_and_singleton(pg_db):
         )
     }
     assert {"ai_touch_count", "ai_touch_count_at", "ai_touch_evidence_count"} <= deal_cols
+
+
+def test_the_task_mode_backfill_leaves_a_deliberate_gtd_row_alone(pg_db):
+    """#102's backfill is scoped `WHERE task_mode = 'normal'`, so re-running it is a
+    no-op on a row already in GTD — it must not bump `updated_at` on an install it has
+    nothing to say about.
+
+    A fresh migrated database can never exercise this (the row is 'normal' when the
+    migration runs), so the statement is replayed here. Without it, dropping the WHERE
+    clause — unconditionally rewriting every row — would keep the whole suite green.
+    """
+    from core.postgres import pg_execute, pg_fetchone
+
+    before = pg_fetchone("SELECT task_mode, updated_at FROM crm_meta WHERE id = 1")
+    assert before["task_mode"] == "gtd"
+
+    pg_execute(
+        "UPDATE crm_meta SET task_mode = 'gtd', updated_at = now() "
+        "WHERE task_mode = 'normal'"
+    )
+
+    after = pg_fetchone("SELECT task_mode, updated_at FROM crm_meta WHERE id = 1")
+    assert after["updated_at"] == before["updated_at"]
 
 
 # ── Fresh empty install (the acceptance clause, at the data layer) ────────────
