@@ -87,8 +87,9 @@ def test_write_on_a_missing_deal_returns_none_without_updating(monkeypatch, rec,
 # very columns being SET), so these assert the SQL shape and the branching; the real
 # semantics are exercised against Postgres in test_integration_crm_lifecycle_pg.py.
 #
-# `rowcounts` queues one cursor.rowcount per execute(): [1, 0] is "the FOR UPDATE SELECT
-# found the row, then the conditional UPDATE matched nothing".
+# `rowcounts={"UPDATE deals SET": 0}` makes the conditional UPDATE report "matched no
+# row" — i.e. Postgres found nothing to change. It is keyed on the statement rather than
+# its position, so adding a query to the flow can't silently re-target it.
 
 def test_the_update_only_fires_when_a_column_would_actually_change(monkeypatch, rec, fake_conn):
     """Without the IS DISTINCT FROM test, a redundant call bumps updated_at and silently
@@ -124,7 +125,7 @@ def test_a_same_stage_move_cannot_match_its_own_row(monkeypatch, rec, fake_conn)
     deciding), so what has to hold hermetically is that its WHERE compares `stage`
     against the value already stored, which no row can satisfy."""
     conn = fake_conn(monkeypatch, service, fetchone_results=[("qualified", None, None)],
-                     rowcounts=[1, 0])
+                     rowcounts={"UPDATE deals SET": 0})
     rec.fetchone_queue = [{"id": 1, "stage": "qualified"}]
     service.update_deal_stage(1, "qualified")
     sql, params = next((s, p) for s, p in conn.executed if "UPDATE deals SET" in s)
@@ -138,30 +139,37 @@ def test_no_stage_event_is_logged_when_the_update_matched_no_row(monkeypatch, re
     UPDATE always fires — gating the INSERT on rowcount too makes "no write, no history"
     structural rather than something you have to re-derive from the classifier."""
     conn = fake_conn(monkeypatch, service, fetchone_results=[("lead", None, None)],
-                     rowcounts=[1, 0])
+                     rowcounts={"UPDATE deals SET": 0})
     rec.fetchone_queue = [{"id": 1}]
     service.update_deal_stage(1, "won")
     assert any("UPDATE deals SET" in s for s, _ in conn.executed)
     assert not any("deal_stage_events" in s for s, _ in conn.executed)
 
 
-def test_a_no_op_write_still_returns_the_deal(monkeypatch, rec, fake_conn):
+# The next two do NOT guard the #96 fix — both invariants predate it and survive a
+# revert. They guard the two plausible ways someone EXTENDS `changed` too far now that
+# the flag exists, which is a live hazard precisely because the flag is new.
+
+def test_the_changed_flag_must_not_reach_the_return_value(monkeypatch, rec, fake_conn):
     """False from _write_deal_update means "no such deal" and every caller turns it into
-    None — a 404 / a tool error. A deal that already holds the requested state must come
-    back, or a harmless redundant call starts reporting the deal missing."""
-    fake_conn(monkeypatch, service, fetchone_results=[("won", None, None)], rowcounts=[1, 0])
+    None — a 404 / a tool error. Wiring the new `changed` flag into the return would make
+    a harmless redundant call start reporting the deal missing."""
+    fake_conn(monkeypatch, service, fetchone_results=[("won", None, None)],
+              rowcounts={"UPDATE deals SET": 0})
     rec.fetchone_queue = [{"id": 1, "stage": "won"}]
     assert service.mark_deal_won(1) == {"id": 1, "stage": "won"}
 
 
-def test_a_no_op_write_still_rescores(monkeypatch, rec, fake_conn):
-    """Deliberately NOT gated on whether the row changed. score_on_event is swallowed on
-    failure and the daily refresh skips terminal deals that already carry a score, so a
-    mark_deal_won whose rescore failed can only be repaired by calling it again."""
+def test_the_changed_flag_must_not_gate_the_rescore(monkeypatch, rec, fake_conn):
+    """The rescore is deliberately unconditional. score_on_event is swallowed on failure
+    and the daily refresh skips terminal deals that already carry a score, so re-calling
+    mark_deal_won is the only repair route for a won deal whose rescore failed — gating
+    it on `changed` would close that route."""
     from crm import scoring_service
     calls = []
     monkeypatch.setattr(scoring_service, "score_on_event", lambda **kw: calls.append(kw))
-    fake_conn(monkeypatch, service, fetchone_results=[("won", None, None)], rowcounts=[1, 0])
+    fake_conn(monkeypatch, service, fetchone_results=[("won", None, None)],
+              rowcounts={"UPDATE deals SET": 0})
     rec.fetchone_queue = [{"id": 1, "stage": "won"}]
     service.mark_deal_won(1)
     assert calls == [{"deal_ids": (1,), "contact_ids": (None, None)}]

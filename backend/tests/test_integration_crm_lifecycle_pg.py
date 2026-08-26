@@ -878,7 +878,11 @@ def test_bulk_and_single_deal_paths_cannot_drift(pg_db):
         ("lead", "won", None),            # closing transition settles probability
         ("lead", "lost", None),           # the other closing transition
         ("lost", "negotiation", "budget"),  # reopening clears the stale reason
-        ("qualified", "qualified", None),   # #96: the no-op, which must write nothing
+        # A no-op move: both paths must agree it changes no column and logs no event.
+        # NOT the #96 guard — snapshot() never reads updated_at, so this row passes with
+        # or without the fix. test_same_stage_move_touches_nothing_on_either_path is the
+        # guard; this row only pins that the two paths still classify a no-op alike.
+        ("qualified", "qualified", None),
     ):
         def make(name):
             deal = service.create_deal(name, stage="negotiation", probability=45)
@@ -971,6 +975,40 @@ def test_an_unchanged_full_form_save_is_not_a_touch(pg_db):
     # One changed field in the same shape still writes — the guard skips no-ops, not edits.
     service.update_deal(deal["id"], **{**form, "value": 2000.0})
     assert updated_at() != before
+
+
+def test_re_marking_a_deal_lost_with_the_same_reason_is_not_a_touch(pg_db):
+    """The third column-map shape reaching `_write_deal_update`, after `{stage}` and the
+    full form: `{stage, probability, lost_reason}`. Worth its own case because
+    `lost_reason` is the one column `_classify_deal_update` injects on its own, so a bug
+    specific to that combination would miss both other tests.
+
+    The chatter note is deliberately still appended on the second call — a note is a real
+    event that `LAST_TOUCH_SQL` reads in its own right, so this asserts the DEAL row is
+    untouched, not that the whole call became a no-op.
+    """
+    from core.postgres import pg_fetchone
+    from crm import service
+
+    deal = service.create_deal("Doomed", stage="negotiation")
+    service.mark_deal_lost(deal["id"], lost_reason="chose a competitor")
+
+    def row():
+        return pg_fetchone(
+            "SELECT updated_at, stage, probability, lost_reason FROM deals WHERE id = %s",
+            (deal["id"],),
+        )
+
+    before = row()
+    assert before["stage"] == "lost" and before["probability"] == 0
+
+    service.mark_deal_lost(deal["id"], lost_reason="chose a competitor")
+    assert row() == before, "re-marking lost with the same reason reset the staleness clock"
+
+    # A DIFFERENT reason is a real edit and must still land.
+    service.mark_deal_lost(deal["id"], lost_reason="budget cut")
+    after = row()
+    assert after["lost_reason"] == "budget cut" and after["updated_at"] != before["updated_at"]
 
 
 def test_concurrent_bulk_moves_over_overlapping_ids_do_not_deadlock(pg_db):

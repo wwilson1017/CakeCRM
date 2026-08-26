@@ -1144,9 +1144,10 @@ def bulk_move_deals(deal_ids: list[int], stage: str) -> dict:
     Returns ``{ok, updated, updated_ids, errors}``. Whole-request problems (bad stage,
     empty list, over the cap) come back as ``ok: False`` having touched no connection;
     per-deal problems ride ``errors`` while everything else still commits. That
-    per-deal isolation is the one deliberate contract difference from
-    ``_write_deal_update``, which raises: one archived deal in a 50-deal selection
-    must not sink the batch.
+    per-deal isolation is one of the two deliberate contract differences from
+    ``_write_deal_update``, which raises (the other is where the no-op decision is made
+    — see the closing paragraph): one archived deal in a 50-deal selection must not sink
+    the batch.
 
     Correctness comes from calling the SAME ``_classify_deal_update`` the single-deal
     path calls, once per locked row — pure in-memory work, no I/O — so the archived
