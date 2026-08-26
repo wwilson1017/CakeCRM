@@ -430,10 +430,11 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `provenance_service.record` documents re-badging an identical rewrite as intended
   ("EVERY AI (re)write resets confirmation"), which makes bulk the outlier there, not the
   single-deal path.
-  In **bulk specifically**, a deal already in the target stage is skipped before any SQL is
-  issued — no write, so no `updated_at` bump, which `LAST_TOUCH_SQL` would otherwise read
-  as a touch and reset the staleness clock on a deal nothing changed. (The single-deal path
-  reaches the same end state differently: it *issues* the UPDATE, which then matches no row.)
+  In **bulk specifically**, a deal already in the target stage is dropped from the write
+  plan after the locking `SELECT … FOR UPDATE` and before any write SQL is issued — so no
+  `updated_at` bump, which `LAST_TOUCH_SQL` would otherwise read as a touch and reset the
+  staleness clock on a deal nothing changed. (The single-deal path reaches the same end
+  state differently: it *issues* the UPDATE, which then matches no row.)
   Whole-request refusals come back as `ok:false` with HTTP 200, never a 4xx, because the
   board's honesty depends on only transport/5xx failures throwing: a refusal means
   nothing was written (revert), a thrown 5xx means the outcome is genuinely unknown

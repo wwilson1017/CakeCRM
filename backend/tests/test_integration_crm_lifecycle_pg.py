@@ -1009,15 +1009,21 @@ def test_the_integer_column_list_matches_the_real_deals_schema(pg_db):
     the schema — a column silently retyped or added would lose the cast and reopen the
     fractional-no-op hole. Restate the writable set independently here and check it against
     `information_schema` rather than against the constant that is under test.
+
+    The writable set is restated by hand on purpose — deriving it from the service would
+    make the assertion tautological. The trade-off is that a NEW writable column added to
+    `update_deal` and to neither this list nor `_DEAL_INT_COLUMNS` goes unnoticed here.
     """
     from core.postgres import pg_fetchall
     from crm import service
 
     writable = {"title", "stage", "value", "notes", "expected_close_date", "probability",
                 "currency", "contact_id", "company_id", "owner_id", "lost_reason"}
+    # Scoped to the active schema: another visible schema owning a `deals` table would
+    # otherwise merge into this dict and validate the wrong columns.
     types = {r["column_name"]: r["data_type"] for r in pg_fetchall(
         "SELECT column_name, data_type FROM information_schema.columns "
-        "WHERE table_name = 'deals'")}
+        "WHERE table_name = 'deals' AND table_schema = current_schema()")}
 
     missing = writable - types.keys()
     assert not missing, f"writable columns absent from the deals table: {sorted(missing)}"
