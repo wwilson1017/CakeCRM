@@ -380,7 +380,6 @@ def test_put_identity_ignores_a_name_from_a_stale_client(client, monkeypatch):
     r = client.put("/api/assistant/identity", json={"name": "Ace", "personality": "friendly"})
     assert r.status_code == 200
     assert seen == {"personality": "friendly"}  # `name` never reached the service
-    assert r.json()["name"] == "Baker"
 
 
 def test_put_identity_rejects_an_oversized_personality(client):

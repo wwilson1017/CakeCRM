@@ -229,7 +229,7 @@ def _maybe_enhance_digest(summary: dict) -> bool:
 def _digest_prompt() -> tuple[str, str]:
     from assistant import identity
     ident = identity.get_identity()
-    name = ident.get("name") or "the assistant"
+    name = ident["name"]   # always the fixed brand since #71 — no fallback to reach
     static = (
         f"You are {name}. The user has just received an automatic daily pipeline "
         "digest with the raw numbers. Your job is to add ONE piece of judgement they "
