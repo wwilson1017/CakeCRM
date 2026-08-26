@@ -124,6 +124,12 @@ def get_contact_staleness(
     been contacted is included with ``days_since_contact: null`` and sorts first —
     "never" is the most urgent case, not a missing value to skip.
 
+    Provenance housekeeping notes are excluded (#77): the assistant confirming an
+    AI-populated field writes a ``crm_chatter`` row, and counting it as contact meant a
+    record could stop looking stale without anyone having talked to the person.
+    ``scoring_service`` already excluded them from engagement; the Contacts list's derived
+    ``last_contact_at`` uses the same predicate, so all three now agree.
+
     Archived/inactive contacts are excluded: deliberately parked, not neglected.
 
     Scale note: the CTE derives a last-touch date for EVERY active contact before
@@ -144,7 +150,8 @@ def get_contact_staleness(
                   WHERE a.contact_id = ct.id),
                 (SELECT MAX(ch.created_at) FROM crm_chatter ch
                   WHERE ch.entity_type = 'contact' AND ch.entity_id = ct.id
-                    AND ch.archived = 0)
+                    AND ch.archived = 0
+                    AND ch.message NOT LIKE %s)
             ) AS touched_at
               FROM contacts ct
         )
@@ -164,7 +171,8 @@ def get_contact_staleness(
          ORDER BY lt.touched_at ASC NULLS FIRST, ct.id ASC
          LIMIT %s
         """,
-        (stale_days, limit),
+        # The housekeeping pattern binds inside the CTE, so it precedes both WHERE params.
+        (scoring_service.HOUSEKEEPING_NOTE_LIKE, stale_days, limit),
     )
     return {"stale_days": stale_days, "contacts": rows, "count": len(rows)}
 

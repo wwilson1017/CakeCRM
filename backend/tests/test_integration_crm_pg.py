@@ -14,7 +14,7 @@ import os
 
 import psycopg2
 import pytest
-from conftest import fake_admin
+from conftest import FAKE_ADMIN, fake_admin
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -41,6 +41,29 @@ def pg_db():
     postgres.close_pool()
     postgres.init_pool()
     postgres.run_migrations()  # applies EVERY migration, incl. crm_core
+
+    # Seed the user that `_client()`'s fake_admin override claims to be. These tests
+    # mount the CRM router on a bare FastAPI app, so the lifespan that would normally
+    # run ensure_bootstrap_admin() never fires and `users` stays empty — while #60 gave
+    # crm_chatter.author_id / activity_log.actor_id real FKs to it. Without this row,
+    # every authored write in this module dies on a ForeignKeyViolation.
+    # (Pre-existing gap; #102 and #77 hit it independently and fixed it the same way.)
+    postgres.pg_execute(
+        "INSERT INTO users (id, email, name, password_hash, role) "
+        "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
+        (FAKE_ADMIN["id"], FAKE_ADMIN["email"], FAKE_ADMIN["name"], "x", FAKE_ADMIN["role"]),
+    )
+    # An explicit id does NOT consume the SERIAL sequence, so without this the next
+    # default-id insert into `users` is handed 1 again and dies on a duplicate key —
+    # far from this fixture, in whichever test first creates a user through the API.
+    # Latent in this module today; #77 adds exactly such tests. Verified against a
+    # throwaway database: after the insert above the sequence is still (1, False),
+    # the next default-id insert raises UniqueViolation on users_pkey, and this
+    # setval makes it yield 2.
+    postgres.pg_execute(
+        "SELECT setval(pg_get_serial_sequence('users', 'id'), "
+        "(SELECT MAX(id) FROM users), true)"
+    )
     yield dsn
 
     postgres.close_pool()
@@ -101,6 +124,21 @@ def test_migration_created_tables_and_singleton(pg_db):
     assert meta and meta["sample_data_loaded"] is False
     # issue #9 migration: durable AI-key-nudge dismissal, default FALSE
     assert meta["ai_key_prompt_dismissed"] is False
+    # issue #102: GTD is the default task mode. Two separate assertions because the
+    # migration has two halves and only ONE of them does any work here. The singleton
+    # row predates the task_mode column (crm_meta is inserted by the crm_core
+    # migration), so the column DEFAULT is consumed once at ADD COLUMN time and never
+    # again — the row value below comes from #102's UPDATE, not from the DDL default.
+    # Asserting only the row would let someone delete the backfill and keep a green
+    # suite on a fresh database while every install still read 'normal'.
+    assert meta["task_mode"] == "gtd"
+    assert pg_fetchone(
+        "SELECT column_default FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name = 'crm_meta' "
+        "AND column_name = 'task_mode'"
+    )["column_default"].startswith("'gtd'")
+
+
     # issue #16 migration: the three AI-touch-count columns on deals (NULL by default)
     deal_cols = {
         r["column_name"]
@@ -110,6 +148,57 @@ def test_migration_created_tables_and_singleton(pg_db):
         )
     }
     assert {"ai_touch_count", "ai_touch_count_at", "ai_touch_evidence_count"} <= deal_cols
+
+
+def test_the_task_mode_migration_is_scoped_and_replayable(pg_db):
+    """#102's migration must do BOTH halves of its contract, and only those:
+
+      * it flips a row still at the DDL default ('normal') to 'gtd';
+      * it leaves a row already at 'gtd' completely alone — not even an `updated_at`
+        bump on an install it has nothing to say about.
+
+    A freshly migrated database proves neither: the row is 'normal' when the migration
+    runs, so the skip case never occurs, and the flip case is only observed as an end
+    state. So the migration FILE is re-executed here.
+
+    Reading the real file is the load-bearing part. An earlier version of this test
+    replayed a hand-copied `UPDATE … WHERE task_mode = 'normal'` literal, which made it
+    a test of SQL semantics rather than of this repo: deleting the WHERE clause from the
+    migration left the whole suite green while every install got its `updated_at`
+    stamped. `ALTER … SET DEFAULT` is idempotent, so replaying the file is safe.
+    """
+    from pathlib import Path
+
+    from core.postgres import pg_execute, pg_fetchone
+
+    sql = (
+        Path(__file__).resolve().parents[1]
+        / "migrations" / "20260825222000_default_task_mode_gtd.sql"
+    ).read_text(encoding="utf-8")
+
+    # Skip case: already 'gtd' (where the migration left it) — replaying changes nothing.
+    before = pg_fetchone("SELECT task_mode, updated_at FROM crm_meta WHERE id = 1")
+    assert before["task_mode"] == "gtd"
+    pg_execute(sql)
+    after = pg_fetchone("SELECT task_mode, updated_at FROM crm_meta WHERE id = 1")
+    assert after["task_mode"] == "gtd"
+    assert after["updated_at"] == before["updated_at"], (
+        "the backfill must be scoped WHERE task_mode = 'normal' — an already-GTD "
+        "install must not be rewritten"
+    )
+
+    # Flip case: an upgrading install still on the DDL default gets moved.
+    #
+    # try/finally because `_clean_crm` does NOT reset task_mode: without it, a failure
+    # between these two statements would leave the singleton on 'normal' and cascade
+    # into test_demo_state_machine_over_http, which would then fail with a misleading
+    # message about demo-status instead of naming the real cause.
+    try:
+        pg_execute("UPDATE crm_meta SET task_mode = 'normal' WHERE id = 1")
+        pg_execute(sql)
+        assert pg_fetchone("SELECT task_mode FROM crm_meta WHERE id = 1")["task_mode"] == "gtd"
+    finally:
+        pg_execute("UPDATE crm_meta SET task_mode = 'gtd' WHERE id = 1")
 
 
 # ── Fresh empty install (the acceptance clause, at the data layer) ────────────
@@ -206,15 +295,17 @@ def test_demo_state_machine_over_http(pg_db):
 
     status = client.get("/api/crm/demo-status").json()
     # task_mode rides this payload (#70) so CrmLayout can pick the task surface
-    # without a second request.
+    # without a second request. GTD since #102 — and because this database was built
+    # by running every migration, this assertion IS the end-to-end check that #102's
+    # backfill works: a freshly migrated install reports GTD over HTTP.
     assert status == {"empty": True, "sample_data_loaded": False, "show_onboarding": True,
-                      "ai_key_prompt_dismissed": False, "task_mode": "normal"}
+                      "ai_key_prompt_dismissed": False, "task_mode": "gtd"}
 
     seeded = client.post("/api/crm/load-sample-data").json()
     assert seeded["seeded"] is True
     after = client.get("/api/crm/demo-status").json()
     assert after == {"empty": False, "sample_data_loaded": True, "show_onboarding": False,
-                     "ai_key_prompt_dismissed": False, "task_mode": "normal"}
+                     "ai_key_prompt_dismissed": False, "task_mode": "gtd"}
 
     # guarded clear wipes example data and restarts identities
     cleared = client.post("/api/crm/demo-clear").json()
@@ -1222,3 +1313,209 @@ def test_provenance_confirm_notes_excluded_from_engagement(pg_db):
     assert scoring_service.score_deal(deal["id"])["factors"]["engagement"]["value"] == 0
     chatter_service.add_note("deal", deal["id"], "Real customer note")
     assert scoring_service.score_deal(deal["id"])["factors"]["engagement"]["value"] == 1
+
+
+# ── #77: keyset assembly + the derived last-contact, against real Postgres ────
+#
+# The hermetic suite asserts SQL STRING SHAPE, which cannot catch a syntax error in the
+# new LATERAL, a wrong GREATEST/NULL interaction, or a placeholder bound in the wrong
+# position — all of which would pass every other test and fail on the first real request.
+
+def _mk_contact(name: str, **cols) -> int:
+    from core.postgres import pg_fetchone
+    row = pg_fetchone(
+        "INSERT INTO contacts (name, email, phone, company, title, source, status, tags, notes) "
+        "VALUES (%s, '', '', '', '', '', %s, '', '') RETURNING id",
+        (name, cols.get("status", "active")),
+    )
+    return row["id"]
+
+
+def test_keyset_sweep_visits_every_row_exactly_once(pg_db):
+    """The property the whole assembly rests on, proven end-to-end rather than by shape."""
+    from crm import service
+    ids = [_mk_contact(f"C{i:03d}") for i in range(25)]
+
+    seen: list[int] = []
+    cursor = None
+    for _ in range(20):  # generous bound; the walk should finish in 4
+        page = service.list_contacts(sort="id", after_id=cursor, limit=8)["contacts"]
+        if not page:
+            break
+        seen.extend(r["id"] for r in page)
+        cursor = page[-1]["id"]
+
+    assert seen == sorted(ids)                 # every row, in order
+    assert len(seen) == len(set(seen))         # none twice
+
+
+def test_a_row_inserted_mid_sweep_lands_past_the_cursor(pg_db):
+    """Why the assembly key must be immutable and append-only.
+
+    Under a mutable order (updated_at) or a DESC created_at, a row created between two
+    pages can land BEHIND the cursor and displace the window, skipping a real row. Under
+    `id ASC` it can only sort past it.
+    """
+    from crm import service
+    first = [_mk_contact(f"A{i}") for i in range(5)]
+    page1 = service.list_contacts(sort="id", limit=3)["contacts"]
+    cursor = page1[-1]["id"]
+
+    fresh = _mk_contact("inserted-mid-sweep")  # a concurrent write
+
+    rest = service.list_contacts(sort="id", after_id=cursor, limit=50)["contacts"]
+    got = [r["id"] for r in page1] + [r["id"] for r in rest]
+    # Nothing from the original set was skipped, and the new row simply appears at the end.
+    assert set(first) <= set(got)
+    assert got[-1] == fresh
+    assert len(got) == len(set(got))
+
+
+def test_cursor_pages_skip_the_count_but_still_window(pg_db):
+    """The sweep's CONTINUATION pages need no total; its first page is indistinguishable
+    from ordinary `?sort=id&offset=N` pagination, whose caller does need one."""
+    from crm import service
+    for i in range(6):
+        _mk_contact(f"N{i}")
+
+    assert service.list_contacts(limit=2)["total"] == 6           # ordinary list: counted
+    first = service.list_contacts(sort="id", limit=2)
+    assert first["total"] == 6                                    # so is the sweep's page 1
+    later = service.list_contacts(sort="id", after_id=first["contacts"][-1]["id"], limit=2)
+    assert later["total"] is None                                 # continuations are not
+    # …and the window is still correct: the next two ids, in order, nothing skipped.
+    assert [r["id"] for r in later["contacts"]] == [first["contacts"][-1]["id"] + 1,
+                                                    first["contacts"][-1]["id"] + 2]
+
+
+def test_last_contact_at_takes_the_newest_of_both_signals(pg_db):
+    """activity_log and un-archived chatter, whichever is newer; NULL when neither exists."""
+    from core.postgres import pg_execute
+    from crm import service
+
+    never = _mk_contact("Never Contacted")
+    by_activity = _mk_contact("By Activity")
+    by_note = _mk_contact("By Note")
+    both = _mk_contact("Both")
+
+    pg_execute(
+        "INSERT INTO activity_log (contact_id, activity, note, created_at) "
+        "VALUES (%s, 'call', '', '2026-03-01T10:00:00Z')", (by_activity,))
+    pg_execute(
+        "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at) "
+        "VALUES ('contact', %s, 'talked', '2026-03-05T10:00:00Z')", (by_note,))
+    # Newer note than activity — GREATEST must pick the note.
+    pg_execute(
+        "INSERT INTO activity_log (contact_id, activity, note, created_at) "
+        "VALUES (%s, 'call', '', '2026-01-01T10:00:00Z')", (both,))
+    pg_execute(
+        "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at) "
+        "VALUES ('contact', %s, 'later note', '2026-06-01T10:00:00Z')", (both,))
+
+    rows = {r["id"]: r for r in service.list_contacts(sort="id", limit=50)["contacts"]}
+    # pg helpers post-process TIMESTAMPTZ to an ISO string (the shape the frontend's
+    # parseUTC expects), so these compare as text — but the GREATEST that produced them
+    # ran on real timestamps, both columns being TIMESTAMPTZ.
+    assert rows[never]["last_contact_at"] is None
+    assert rows[by_activity]["last_contact_at"].startswith("2026-03-01")
+    assert rows[by_note]["last_contact_at"].startswith("2026-03-05")
+    # Newer note beats older activity — the case a one-signal query would get wrong.
+    assert rows[both]["last_contact_at"].startswith("2026-06-01")
+
+
+def test_last_contact_at_ignores_archived_and_housekeeping_notes(pg_db):
+    """An archived note is retracted; a provenance confirm is bookkeeping, not a conversation."""
+    from core.postgres import pg_execute
+    from crm import scoring_service, service
+
+    archived_only = _mk_contact("Archived Only")
+    housekeeping_only = _mk_contact("Housekeeping Only")
+
+    pg_execute(
+        "INSERT INTO crm_chatter (entity_type, entity_id, message, archived, created_at) "
+        "VALUES ('contact', %s, 'retracted', 1, '2026-05-01T10:00:00Z')", (archived_only,))
+    pg_execute(
+        "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at) VALUES "
+        "('contact', %s, %s, '2026-05-01T10:00:00Z')",
+        (housekeeping_only,
+         scoring_service.HOUSEKEEPING_NOTE_LIKE.replace("%", "'title'.")),
+    )
+
+    rows = {r["id"]: r for r in service.list_contacts(sort="id", limit=50)["contacts"]}
+    assert rows[archived_only]["last_contact_at"] is None
+    # The assistant confirming an AI-populated field must not reset the staleness clock.
+    assert rows[housekeeping_only]["last_contact_at"] is None
+
+
+def test_search_and_detail_derive_the_same_last_contact(pg_db):
+    """One definition across all three reads — the list, the search, and the detail page."""
+    from core.postgres import pg_execute
+    from crm import service
+
+    cid = _mk_contact("Findable Person")
+    pg_execute(
+        "INSERT INTO activity_log (contact_id, activity, note, created_at) "
+        "VALUES (%s, 'call', '', '2026-04-02T09:00:00Z')", (cid,))
+
+    listed = service.list_contacts(sort="id", limit=50)["contacts"][0]["last_contact_at"]
+    searched = service.search_contacts("Findable")[0]["last_contact_at"]
+    detail = service.get_contact_detail(cid)["last_contact_at"]
+    assert listed == searched == detail
+    assert listed is not None
+
+
+def test_get_contact_staleness_agrees_with_the_list(pg_db):
+    """The tool and the column must not contradict each other about what a touch is."""
+    from core.postgres import pg_execute
+    from crm import analytics_service, scoring_service, service
+
+    cid = _mk_contact("Only Housekeeping")
+    pg_execute(
+        "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at) VALUES "
+        "('contact', %s, %s, now())",
+        (cid, scoring_service.HOUSEKEEPING_NOTE_LIKE.replace("%", "'phone'.")),
+    )
+    listed = service.list_contacts(sort="id", limit=50)["contacts"][0]
+    stale = analytics_service.get_contact_staleness(stale_days=1)["contacts"]
+
+    assert listed["last_contact_at"] is None
+    # …and the staleness read reports the same contact as never touched.
+    assert [c["id"] for c in stale] == [cid]
+    assert stale[0]["last_contact_at"] is None
+
+
+def test_task_keyset_and_get_task_joins(pg_db):
+    from core.postgres import pg_fetchone
+    from crm import service
+
+    cid = _mk_contact("Task Owner")
+    made = [service.create_task(f"T{i}", contact_id=cid)["id"] for i in range(5)]
+
+    walked: list[int] = []
+    cursor = None
+    for _ in range(10):
+        page = service.list_tasks(sort="id", after_id=cursor, limit=2)
+        if not page:
+            break
+        walked.extend(t["id"] for t in page)
+        cursor = page[-1]["id"]
+    assert walked == sorted(made)
+
+    # get_task is what every task WRITE returns, so it must carry the joined names the
+    # list renders — otherwise a saved task loses its contact label.
+    got = service.get_task(made[0])
+    assert got["contact_name"] == "Task Owner"
+    assert got["deal_title"] is None
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM tasks")["c"] == 5
+
+
+def test_a_cursor_against_a_mutable_order_raises(pg_db):
+    from crm import service
+    _mk_contact("Anyone")
+    for call in (
+        lambda: service.list_contacts(after_id=1, sort="updated_at"),
+        lambda: service.list_companies(after_id=1, sort="name"),
+        lambda: service.list_tasks(after_id=1, sort="due"),
+    ):
+        with pytest.raises(ValueError):
+            call()

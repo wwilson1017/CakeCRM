@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../core/api/client';
+import { writeMayHaveLanded } from '../usePatchableAssembly';
 import { useIsMobile } from '../../shared/useIsMobile';
 import type { CrmActivity } from '../../core/types';
 import { IconPhone, IconMail, IconUsers, IconFile } from '../../shared/icons';
@@ -21,9 +22,16 @@ const ACTIVITY_ICONS: Record<string, React.ComponentType<{ size?: number; stroke
 interface Props {
   activities: CrmActivity[];
   onUpdate?: () => void;
+  /**
+   * A write here whose outcome is unknown (#77). Activity rows are one of the two signals
+   * behind a contact's derived `last_contact_at`, and deleting the newest one moves that
+   * value BACKWARDS — so a host rendering it has to reconcile rather than assume the
+   * failure means nothing changed. A definite 4xx never fires it.
+   */
+  onUncertainWrite?: () => void;
 }
 
-export function ActivityTimeline({ activities, onUpdate }: Props) {
+export function ActivityTimeline({ activities, onUpdate, onUncertainWrite }: Props) {
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const [selected, setSelected] = useState<CrmActivity | null>(null);
@@ -58,7 +66,10 @@ export function ActivityTimeline({ activities, onUpdate }: Props) {
       });
       setSelected(null);
       onUpdate?.();
-    } catch { toast.error('Failed to save activity.'); }
+    } catch (err) {
+      toast.error('Failed to save activity.');
+      if (writeMayHaveLanded(err)) onUncertainWrite?.();
+    }
     setSaving(false);
   }
 
@@ -75,7 +86,10 @@ export function ActivityTimeline({ activities, onUpdate }: Props) {
       await api(`/api/crm/activity/${selected.id}`, { method: 'DELETE' });
       setSelected(null);
       onUpdate?.();
-    } catch { toast.error('Failed to delete activity.'); }
+    } catch (err) {
+      toast.error('Failed to delete activity.');
+      if (writeMayHaveLanded(err)) onUncertainWrite?.();
+    }
   }
 
   return (

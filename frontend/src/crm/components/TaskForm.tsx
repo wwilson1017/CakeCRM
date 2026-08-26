@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../../core/api/client';
+import { writeMayHaveLanded } from '../usePatchableAssembly';
 import { useAuth } from '../../core/auth/AuthContext';
 import { OwnerSelect } from './OwnerSelect';
 import { labelStyle, inputStyle, CORAL } from '../../shared/styles';
@@ -11,10 +12,21 @@ interface Props {
   contactId?: number;
   dealId?: number;
   onClose: () => void;
-  onSaved: () => void;
+  /** Receives the saved task (joined with contact/deal names) so the Tasks list can
+   *  patch its row without a refetch (#77). */
+  onSaved: (saved: CrmTask) => void;
+  /**
+   * Fired when a save FAILS in a way that may still have committed (#77).
+   *
+   * A host holding a client-loaded corpus can no longer rely on the next filter change to
+   * refetch, so a write whose response was lost would leave the list stale indefinitely.
+   * The host decides what to do — in practice, re-sweep. Optional; a 4xx never fires it,
+   * because a refusal wrote nothing.
+   */
+  onWriteUncertain?: (err: unknown) => void;
 }
 
-export function TaskForm({ task, contactId, dealId, onClose, onSaved }: Props) {
+export function TaskForm({ task, contactId, dealId, onClose, onSaved, onWriteUncertain }: Props) {
   const { currentUser } = useAuth();
   const isEdit = !!task;
   const [title, setTitle] = useState(task?.title || '');
@@ -55,13 +67,18 @@ export function TaskForm({ task, contactId, dealId, onClose, onSaved }: Props) {
       if (isEdit || ownerTouched) body.owner_id = ownerId;
       if (dealId) body.deal_id = dealId;
 
-      if (isEdit) {
-        await api(`/api/crm/tasks/${task.id}`, { method: 'PUT', body: JSON.stringify(body) });
-      } else {
-        await api('/api/crm/tasks', { method: 'POST', body: JSON.stringify(body) });
-      }
-      onSaved();
-    } catch (err: unknown) { setError(err instanceof Error ? err.message : 'Failed to save'); }
+      // Both endpoints return get_task, which since #77 carries contact_name/deal_title —
+      // so the list can fold the saved row in rather than re-sweep.
+      const saved = isEdit
+        ? await api<CrmTask>(`/api/crm/tasks/${task.id}`, { method: 'PUT', body: JSON.stringify(body) })
+        : await api<CrmTask>('/api/crm/tasks', { method: 'POST', body: JSON.stringify(body) });
+      onSaved(saved);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to save');
+      // A 4xx refused the write, so the host's copy is still correct. Anything else may
+      // have committed and lost the response — tell the host so it can re-sweep (#77).
+      if (writeMayHaveLanded(err)) onWriteUncertain?.(err);
+    }
     setSaving(false);
   }
 

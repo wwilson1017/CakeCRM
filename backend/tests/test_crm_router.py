@@ -690,3 +690,88 @@ def test_bulk_move_path_is_not_shadowed_by_the_deal_detail_route(client, monkeyp
                         lambda ids, stage: {"ok": True, "updated": 1, "updated_ids": [3], "errors": []})
     r = client.post("/api/crm/deals/bulk-move", json={"deal_ids": [3], "stage": "lead"})
     assert r.status_code == 200 and r.json()["updated_ids"] == [3]
+
+
+# ── #77: the list pages' keyset assembly parameters ──────────────────────────
+
+def test_list_params_reach_the_service_with_backward_compatible_defaults(client, monkeypatch):
+    """`after_id`/`sort` are forwarded, and an omitting caller sees the old behaviour."""
+    seen: dict = {}
+
+    def fake_tasks(**kw):
+        seen.update(kw)
+        return []
+
+    monkeypatch.setattr(service, "list_tasks", fake_tasks)
+
+    assert client.get("/api/crm/tasks?after_id=500&sort=id&limit=501").status_code == 200
+    assert (seen["after_id"], seen["sort"], seen["limit"]) == (500, "id", 501)
+
+    seen.clear()
+    assert client.get("/api/crm/tasks").status_code == 200
+    # Every pre-#77 caller keeps the historical order and no cursor.
+    assert seen["after_id"] is None and seen["sort"] == "due"
+
+
+def test_contacts_and_companies_forward_the_cursor(client, monkeypatch):
+    seen: dict = {}
+    monkeypatch.setattr(service, "list_contacts", lambda **kw: seen.update(kw) or {"contacts": [], "total": 0})
+    monkeypatch.setattr(service, "list_companies", lambda **kw: seen.update(kw) or {"companies": [], "total": 0})
+
+    assert client.get("/api/crm/contacts?after_id=42&sort=id").status_code == 200
+    assert (seen["after_id"], seen["sort"]) == (42, "id")
+
+    seen.clear()
+    assert client.get("/api/crm/companies?after_id=42&sort=id").status_code == 200
+    assert (seen["after_id"], seen["sort"]) == (42, "id")
+
+
+def test_a_cursor_against_a_mutable_order_is_a_400_not_a_500(client, monkeypatch):
+    """The service refuses the pairing; the route must surface it as a client error.
+
+    Left unhandled this is a ValueError → 500, which reads as "the server is broken"
+    rather than "that request does not mean anything".
+    """
+    def boom(**kw):
+        raise ValueError("after_id is only valid with sort='id'")
+
+    for name, path in (
+        ("list_tasks", "/api/crm/tasks?after_id=5&sort=due"),
+        ("list_contacts", "/api/crm/contacts?after_id=5&sort=name"),
+        ("list_companies", "/api/crm/companies?after_id=5&sort=name"),
+    ):
+        monkeypatch.setattr(service, name, boom)
+        res = client.get(path)
+        assert res.status_code == 400, path
+        assert "sort='id'" in res.json()["detail"]
+
+
+def test_a_negative_cursor_is_rejected_by_validation(client):
+    assert client.get("/api/crm/tasks?after_id=-1").status_code == 422
+
+
+def test_a_cursor_is_refused_on_the_search_branch(client, monkeypatch):
+    """search_* has no cursor, so accepting one would silently return page one forever.
+
+    That is the same failure `_check_assembly_cursor` exists to prevent, and it looks
+    identical to a client stuck in a loop — so the route refuses instead of ignoring.
+    """
+    monkeypatch.setattr(service, "search_contacts", lambda *a, **k: [])
+    monkeypatch.setattr(service, "count_search_contacts", lambda *a, **k: 0)
+    monkeypatch.setattr(service, "search_companies", lambda *a, **k: [])
+    monkeypatch.setattr(service, "count_search_companies", lambda *a, **k: 0)
+
+    for path in ("/api/crm/contacts", "/api/crm/companies"):
+        res = client.get(f"{path}?q=acme&after_id=5&sort=id")
+        assert res.status_code == 400, path
+        assert "after_id" in res.json()["detail"]
+        # …and a plain search still works.
+        assert client.get(f"{path}?q=acme").status_code == 200, path
+
+
+def test_an_out_of_range_cursor_is_a_422_not_a_500(client):
+    """id columns are int4. Without an upper bound Postgres raises a range error that is
+    NOT a ValueError, so it would escape the route's handler as an unhandled 500."""
+    too_big = 2_147_483_648
+    for path in ("/api/crm/tasks", "/api/crm/contacts", "/api/crm/companies"):
+        assert client.get(f"{path}?after_id={too_big}&sort=id").status_code == 422, path

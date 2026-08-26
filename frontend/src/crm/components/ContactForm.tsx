@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../../core/api/client';
+import { writeMayHaveLanded } from '../usePatchableAssembly';
 import { useAuth } from '../../core/auth/AuthContext';
 import { OwnerSelect } from './OwnerSelect';
 import { labelStyle, inputStyle, CORAL, LINE, INK_DIM, mono } from '../../shared/styles';
@@ -11,10 +12,20 @@ import { useCustomFieldsForm, putCustomFields } from './useCustomFieldsForm';
 interface Props {
   contact?: CrmContact;
   onClose: () => void;
-  onSaved: () => void;
+  /** Receives the saved record so a list page can patch its row without a refetch (#77). */
+  onSaved: (saved: CrmContact) => void;
+  /**
+   * Fired when a save FAILS in a way that may still have committed (#77).
+   *
+   * A host holding a client-loaded corpus can no longer rely on the next filter change to
+   * refetch, so a write whose response was lost would leave the list stale indefinitely.
+   * The host decides what to do — in practice, re-sweep. Optional; a 4xx never fires it,
+   * because a refusal wrote nothing.
+   */
+  onWriteUncertain?: (err: unknown) => void;
 }
 
-export function ContactForm({ contact, onClose, onSaved }: Props) {
+export function ContactForm({ contact, onClose, onSaved, onWriteUncertain }: Props) {
   const { currentUser } = useAuth();
   const isEdit = !!contact;
   const [name, setName] = useState(contact?.name || '');
@@ -90,19 +101,22 @@ export function ContactForm({ contact, onClose, onSaved }: Props) {
     if (isEdit || ownerTouched) payload.owner_id = ownerId;
     const body = JSON.stringify(payload);
     try {
-      let id: number;
-      if (isEdit) {
-        await api(`/api/crm/contacts/${contact.id}`, { method: 'PUT', body });
-        id = contact.id;
-      } else {
-        const created = await api<CrmContact>('/api/crm/contacts', { method: 'POST', body });
-        id = created.id;
-      }
+      // Both endpoints return the saved row; keep it so the caller can fold it into a
+      // client-loaded list instead of re-sweeping the corpus (#77).
+      const saved = isEdit
+        ? await api<CrmContact>(`/api/crm/contacts/${contact.id}`, { method: 'PUT', body })
+        : await api<CrmContact>('/api/crm/contacts', { method: 'POST', body });
+      const id = saved.id;
       // Save custom fields after the contact itself — a values failure toasts but
       // never loses the saved contact.
       await putCustomFields('contact', id, cf.changedForSave(), isEdit ? 'Contact saved' : 'Contact created');
-      onSaved();
-    } catch (err: unknown) { setError(err instanceof Error ? err.message : 'Failed to save'); }
+      onSaved(saved);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to save');
+      // A 4xx refused the write, so the host's copy is still correct. Anything else may
+      // have committed and lost the response — tell the host so it can re-sweep (#77).
+      if (writeMayHaveLanded(err)) onWriteUncertain?.(err);
+    }
     setSaving(false);
   }
 

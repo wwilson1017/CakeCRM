@@ -75,3 +75,4 @@ export function IconSun(p: IconProps) { return <Ico {...p}><circle cx="12" cy="1
 export function IconCircle(p: IconProps) { return <Ico {...p}><circle cx="12" cy="12" r="9" /></Ico>; }
 export function IconTarget(p: IconProps) { return <Ico {...p}><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="5" /><circle cx="12" cy="12" r="1" fill="currentColor" /></Ico>; }
 export function IconBuilding(p: IconProps) { return <Ico {...p}><rect x="4" y="3" width="16" height="18" rx="1" /><path d="M9 21v-4h6v4M8 7h2M14 7h2M8 11h2M14 11h2M8 15h2M14 15h2" /></Ico>; }
+export function IconRefresh(p: IconProps) { return <Ico d="M21 12a9 9 0 1 1-2.6-6.4M21 3v6h-6" {...p} />; }

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../core/api/client';
+import { rowIsGone, writeMayHaveLanded } from './usePatchableAssembly';
 import type { CrmContact } from '../core/types';
 import { ContactForm } from './components/ContactForm';
 import { DealForm } from './components/DealForm';
@@ -29,7 +30,17 @@ import {
   btnSecondary, btnDanger, btnPrimary, btnSmall,
 } from './styles';
 
-export function ContactDetailPage() {
+/** Optional hooks for the host list page (#77): it keeps a client-loaded corpus and patches
+ *  its row from what this page loads, rather than re-sweeping after every edit. */
+interface ContactDetailPageProps {
+  onChanged?: (contact: CrmContact) => void;
+  onDeleted?: (id: number) => void;
+  /** A write here whose outcome is unknown — the host re-sweeps, since only the server
+   *  can now say what this record looks like, or whether it still exists (#77). */
+  onWriteUncertain?: () => void;
+}
+
+export function ContactDetailPage({ onChanged, onDeleted, onWriteUncertain }: ContactDetailPageProps = {}) {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
@@ -71,12 +82,19 @@ export function ContactDetailPage() {
       const data = await api<CrmContact>(`/api/crm/contacts/${id}`);
       if (reqId !== loadIdRef.current) return;
       setContact(data);
-    } catch {
+      // Every path that changes this contact — the edit form, a logged activity, a note —
+      // already ends in load(), so notifying here covers them all with one call. The body
+      // carries the derived last_contact_at, so the list's column stays truthful too.
+      onChanged?.(data);
+    } catch (err) {
       if (reqId !== loadIdRef.current) return;
       setContact(null);
+      // Opened from a swept list whose copy is stale: a 404 means the record is gone, so
+      // the host should drop its row rather than keep offering a dead link.
+      if (rowIsGone(err)) onDeleted?.(Number(id));
     }
     if (reqId === loadIdRef.current) setLoading(false);
-  }, [id]);
+  }, [id, onChanged, onDeleted]);
 
   useEffect(() => { queueMicrotask(load); }, [load]);
 
@@ -91,8 +109,12 @@ export function ContactDetailPage() {
       setLogActivity('');
       setLogNote('');
       load();
-    } catch {
+    } catch (err) {
       toast.error('Failed to log activity.');
+      // An activity row is one of the two signals behind last_contact_at, so a write that
+      // may have committed has to be reconciled — load() re-reads the derived value and
+      // hands it to the list through onChanged (#77).
+      if (writeMayHaveLanded(err)) load();
     } finally {
       setLogging(false);
     }
@@ -108,10 +130,14 @@ export function ContactDetailPage() {
     if (!ok) return;
     try {
       await api(`/api/crm/contacts/${id}`, { method: 'DELETE' });
-    } catch {
+    } catch (err) {
       toast.error('Failed to delete contact.');
+      // The DELETE may have committed before the response was lost, in which case the
+      // list is still showing a row that no longer exists.
+      if (writeMayHaveLanded(err)) onWriteUncertain?.();
       return;
     }
+    onDeleted?.(Number(id));
     navigate('/crm/contacts');
   }
 
@@ -327,7 +353,7 @@ export function ContactDetailPage() {
       {/* Activity history */}
       <div style={{ marginTop: 24, borderTop: `1px solid ${LINE}`, paddingTop: 24 }}>
         <span style={{ ...mono(10, INK_DIM), display: 'block', marginBottom: 12 }}>Activity History</span>
-        <ActivityTimeline activities={contact.activity || []} onUpdate={load} />
+        <ActivityTimeline onUncertainWrite={load} activities={contact.activity || []} onUpdate={load} />
       </div>
 
       {/* Custom fields — renders nothing when no contact fields are defined */}
@@ -336,10 +362,13 @@ export function ContactDetailPage() {
       {/* Chatter — editable notes thread */}
       <div style={{ marginTop: 24, borderTop: `1px solid ${LINE}`, paddingTop: 24 }}>
         <span style={{ ...mono(10, INK_DIM), display: 'block', marginBottom: 12 }}>Chatter</span>
-        <NotesThread key={`contact-${contact.id}`} entityType="contact" entityId={contact.id} />
+        <NotesThread key={`contact-${contact.id}`} entityType="contact" entityId={contact.id}
+          // A note is one of the two signals behind last_contact_at, so reload the
+          // contact — which is also what tells a host list page to patch its row (#77).
+          onChanged={load} />
       </div>
 
-      {showEdit && <ContactForm contact={contact} onClose={() => setShowEdit(false)} onSaved={() => { setShowEdit(false); load(); setCfVersion(v => v + 1); refreshProvenance(); }} />}
+      {showEdit && <ContactForm contact={contact} onWriteUncertain={onWriteUncertain} onClose={() => setShowEdit(false)} onSaved={() => { setShowEdit(false); load(); setCfVersion(v => v + 1); refreshProvenance(); }} />}
       {showAddDeal && <DealForm contactId={contact.id} onClose={() => setShowAddDeal(false)} onSaved={() => { setShowAddDeal(false); load(); }} />}
       {showAddTask && <TaskForm contactId={contact.id} onClose={() => setShowAddTask(false)} onSaved={() => { setShowAddTask(false); load(); }} />}
     </div>

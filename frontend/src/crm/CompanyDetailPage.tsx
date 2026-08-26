@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../core/api/client';
+import { rowIsGone, writeMayHaveLanded } from './usePatchableAssembly';
 import type { CrmCompany } from '../core/types';
 import { CompanyForm } from './components/CompanyForm';
 import { ActivityTimeline } from './components/ActivityTimeline';
@@ -24,7 +25,16 @@ import {
   btnSecondary, btnDanger, btnSmall,
 } from './styles';
 
-export function CompanyDetailPage() {
+/** Optional hooks for the host list page (#77) — see ContactDetailPageProps. */
+interface CompanyDetailPageProps {
+  onChanged?: (company: CrmCompany) => void;
+  onDeleted?: (id: number) => void;
+  /** A write here whose outcome is unknown — the host re-sweeps, since only the server
+   *  can now say what this record looks like, or whether it still exists (#77). */
+  onWriteUncertain?: () => void;
+}
+
+export function CompanyDetailPage({ onChanged, onDeleted, onWriteUncertain }: CompanyDetailPageProps = {}) {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
@@ -49,12 +59,15 @@ export function CompanyDetailPage() {
       const data = await api<CrmCompany>(`/api/crm/companies/${id}`);
       if (reqId !== loadIdRef.current) return;
       setCompany(data);
-    } catch {
+      onChanged?.(data);
+    } catch (err) {
       if (reqId !== loadIdRef.current) return;
       setCompany(null);
+      // See ContactDetailPage: a 404 from a stale list row is a ghost, not an error.
+      if (rowIsGone(err)) onDeleted?.(Number(id));
     }
     if (reqId === loadIdRef.current) setLoading(false);
-  }, [id]);
+  }, [id, onChanged, onDeleted]);
 
   useEffect(() => { queueMicrotask(load); }, [load]);
 
@@ -68,10 +81,14 @@ export function CompanyDetailPage() {
     if (!ok) return;
     try {
       await api(`/api/crm/companies/${id}`, { method: 'DELETE' });
-    } catch {
+    } catch (err) {
       toast.error('Failed to delete company.');
+      // The DELETE may have committed before the response was lost, in which case the
+      // list is still showing a row that no longer exists.
+      if (writeMayHaveLanded(err)) onWriteUncertain?.();
       return;
     }
+    onDeleted?.(Number(id));
     navigate('/crm/companies');
   }
 
@@ -210,7 +227,7 @@ export function CompanyDetailPage() {
         sectionStyle={{ marginTop: 24, borderTop: `1px solid ${LINE_STRONG}`, paddingTop: 24 }}
       />
 
-      {showEdit && <CompanyForm company={company} onClose={() => setShowEdit(false)} onSaved={() => { setShowEdit(false); load(); setCfVersion(v => v + 1); }} />}
+      {showEdit && <CompanyForm company={company} onWriteUncertain={onWriteUncertain} onClose={() => setShowEdit(false)} onSaved={() => { setShowEdit(false); load(); setCfVersion(v => v + 1); }} />}
     </div>
   );
 }
