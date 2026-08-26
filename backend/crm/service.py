@@ -843,6 +843,18 @@ def list_deals(stage: str | None = None, contact_id: int | None = None, limit: i
     )
 
 
+# The `deals` columns typed INTEGER among those `_write_deal_update` can be asked to
+# write. Its distinctness test casts the parameter to the destination type for these,
+# because Postgres coerces on ASSIGNMENT but PROMOTES on COMPARISON: writing 40.1 into an
+# INTEGER column stores 40, but a bare `probability IS DISTINCT FROM 40.1` promotes the
+# stored 40 to float, calls it distinct, and fires the UPDATE — bumping `updated_at` for a
+# write that changed nothing, which is the exact harm #96 exists to stop. Only the
+# COMPARISON is cast, so assignment behavior is untouched, including its type errors (a
+# boolean into this column still raises, as it did before). Pinned against
+# `information_schema` by an integration test so the list cannot drift off the schema.
+_DEAL_INT_COLUMNS = frozenset({"probability", "contact_id", "company_id", "owner_id"})
+
+
 def _classify_deal_update(
     deal_id: int, old_stage: str, archived_at, filtered: dict,
 ) -> tuple[dict, tuple[str, str] | None]:
@@ -963,7 +975,11 @@ def _write_deal_update(deal_id: int, filtered: dict) -> bool:
         # `updated_at` is set but deliberately NOT part of the test: the question is
         # whether anything ELSE changed. Values bind twice — once to SET, once to compare.
         set_clause = ", ".join(f"{k} = %s" for k in filtered)
-        distinct_clause = " OR ".join(f"{k} IS DISTINCT FROM %s" for k in filtered)
+        distinct_clause = " OR ".join(
+            f"{k} IS DISTINCT FROM %s::int" if k in _DEAL_INT_COLUMNS
+            else f"{k} IS DISTINCT FROM %s"
+            for k in filtered
+        )
         values = list(filtered.values())
         cur.execute(
             f"UPDATE deals SET {set_clause}, updated_at = %s "
@@ -1144,10 +1160,9 @@ def bulk_move_deals(deal_ids: list[int], stage: str) -> dict:
     Returns ``{ok, updated, updated_ids, errors}``. Whole-request problems (bad stage,
     empty list, over the cap) come back as ``ok: False`` having touched no connection;
     per-deal problems ride ``errors`` while everything else still commits. That
-    per-deal isolation is one of the two deliberate contract differences from
-    ``_write_deal_update``, which raises (the other is where the no-op decision is made
-    — see the closing paragraph): one archived deal in a 50-deal selection must not sink
-    the batch.
+    per-deal isolation is a deliberate contract difference from ``_write_deal_update``,
+    which raises: one archived deal in a 50-deal selection must not sink the batch. (It is
+    not the only difference — the closing paragraph covers the others.)
 
     Correctness comes from calling the SAME ``_classify_deal_update`` the single-deal
     path calls, once per locked row — pure in-memory work, no I/O — so the archived
@@ -1178,14 +1193,15 @@ def bulk_move_deals(deal_ids: list[int], stage: str) -> dict:
     re-asserting a deal's current stage (an easy assistant redundancy) and
     ``PUT /api/crm/deals/{id}`` with an unchanged form.
 
-    Two differences from the single-deal path survive on purpose. ``_write_deal_update``
-    raises where bulk collects per-deal ``errors`` — one archived deal must not sink a
-    50-deal selection. And bulk's skip is decided in Python on the locked pre-image
-    (``old_stage == stage``) rather than in SQL, which is sound HERE and only here: bulk
-    writes exactly one caller-controlled column, ``stage``, always a ``DEAL_STAGES``
-    string validated before the connection opens, so there is no cross-type comparison to
-    get wrong. The single-deal path writes an arbitrary column map from unvalidated tool
-    arguments and must let Postgres judge.
+    Differences from the single-deal path that survive on purpose: this one raises vs
+    collects ``errors`` (above); it rescores only ``updated_ids`` where the single-deal
+    path rescores unconditionally (see ``_write_deal_update``'s note on why); and its
+    no-op skip is decided in Python on the locked pre-image (``old_stage == stage``)
+    rather than in SQL. That last one is sound HERE and only here: bulk writes exactly one
+    caller-controlled column, ``stage``, always a ``DEAL_STAGES`` string validated before
+    the connection opens, so there is no cross-type comparison to get wrong. The
+    single-deal path writes an arbitrary column map from unvalidated tool arguments and
+    must let Postgres judge.
     """
     if stage not in DEAL_STAGES:
         return {"ok": False, "updated": 0, "updated_ids": [], "errors": [f"Invalid stage: {stage}"]}

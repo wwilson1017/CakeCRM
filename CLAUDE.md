@@ -400,9 +400,16 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `DOUBLE PRECISION` column — so a Python pre-image comparison would turn invalid writes
   into silent no-ops, and would mishandle NULL (an unlinked `contact_id`) besides. Bulk can
   stay in Python because it writes exactly one caller-controlled column, a `DEAL_STAGES`
-  string validated before the connection opens. The `deal_stage_events` INSERT is gated on
-  the UPDATE's rowcount as well (a real stage change always differs, so this is structural
-  rather than reachable). Two consequences are accepted rather than incidental: a
+  string validated before the connection opens. Postgres coerces on **assignment** but
+  promotes on **comparison**, so the distinctness test casts the parameter to the
+  destination type for the INTEGER columns (`_DEAL_INT_COLUMNS`) — otherwise
+  `probability=40.1` stores 40 (unchanged) while `probability IS DISTINCT FROM 40.1`
+  promotes the stored 40 to float, calls it distinct and bumps `updated_at` anyway, which
+  is the very harm this closes. Only the comparison is cast, so assignment behavior and
+  its type errors are untouched; an integration test pins the list against
+  `information_schema` so it cannot drift off the schema. The `deal_stage_events` INSERT is
+  gated on the UPDATE's rowcount as well (a real stage change always differs, so this is
+  structural rather than reachable). Two consequences are accepted rather than incidental: a
   **custom-field-only save no longer bumps `deals.updated_at`** (`DealForm` always PUTs the
   standard fields and then writes changed custom fields separately, and `set_field_values`
   never touches the parent row — so that bump was a side effect of an unchanged-form PUT,
@@ -410,19 +417,19 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   edits are not deal touches, uniformly**, and making them one is a separate call belonging
   in `set_field_values`), and a no-op save no longer floats a deal up an `updated_at DESC`
   ordering — including `crm_get_pipeline`'s first-25-per-stage window.
-  **Three deliberate divergences between the two paths remain**, and they are the whole
-  list: (1) *where* the no-op is decided — SQL vs Python, above; (2) the **error contract**
-  — `_write_deal_update` raises, bulk isolates per deal (missing/archived deals report in
-  `errors` while the rest still commit), because one archived deal must not sink a 50-deal
-  selection; (3) the post-commit **rescore**, which the single-deal path runs
-  unconditionally while bulk rescores only `updated_ids`. (3) is correct rather than an
-  oversight: `score_on_event` is swallowed on failure and `_maybe_refresh_scores` excludes
-  terminal deals that already carry a score, so re-calling `mark_deal_won` is the only
-  repair route for a won deal whose rescore failed. Provenance is a *fourth* asymmetry left
-  alone on purpose — `crm_update_deal_stage` badges a skipped write where
-  `crm_bulk_move_deals` badges only `updated_ids` — because `provenance_service.record`
-  documents re-badging an identical rewrite as intended ("EVERY AI (re)write resets
-  confirmation"), which makes bulk the outlier there, not the single-deal path.
+  **Deliberate divergences between the two paths**, each with its own reason: *where* the
+  no-op is decided (SQL vs Python, above); the **error contract** — `_write_deal_update`
+  raises, bulk isolates per deal (missing/archived deals report in `errors` while the rest
+  still commit), because one archived deal must not sink a 50-deal selection; the
+  post-commit **rescore**, which the single-deal path runs unconditionally while bulk
+  rescores only `updated_ids` (correct rather than an oversight — `score_on_event` is
+  swallowed on failure and `_maybe_refresh_scores` excludes terminal deals that already
+  carry a score, so re-calling `mark_deal_won` is the only repair route for a won deal
+  whose rescore failed); and **provenance**, where `crm_update_deal_stage` badges a skipped
+  write while `crm_bulk_move_deals` badges only `updated_ids` — left alone because
+  `provenance_service.record` documents re-badging an identical rewrite as intended
+  ("EVERY AI (re)write resets confirmation"), which makes bulk the outlier there, not the
+  single-deal path.
   In **bulk specifically**, a deal already in the target stage is skipped before any SQL is
   issued — no write, so no `updated_at` bump, which `LAST_TOUCH_SQL` would otherwise read
   as a touch and reset the staleness clock on a deal nothing changed. (The single-deal path

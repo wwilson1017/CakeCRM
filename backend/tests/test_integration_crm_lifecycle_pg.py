@@ -977,6 +977,53 @@ def test_an_unchanged_full_form_save_is_not_a_touch(pg_db):
     assert updated_at() != before
 
 
+def test_a_fractional_value_that_rounds_to_the_stored_one_is_not_a_touch(pg_db):
+    """Postgres coerces on ASSIGNMENT but promotes on COMPARISON, so `probability=40.1`
+    into an INTEGER column stores 40 (no change) while a bare `IS DISTINCT FROM 40.1`
+    would call it distinct and bump `updated_at` anyway. `_DEAL_INT_COLUMNS` casts the
+    comparison to the destination type to close that. Reachable because the assistant's
+    tool arguments are not runtime schema-validated — `update_deal` clamps probability
+    into range but does not make it an int.
+    """
+    from core.postgres import pg_fetchone
+    from crm import service
+
+    deal = service.create_deal("Fractional", stage="proposal", probability=40)
+
+    def row():
+        return pg_fetchone("SELECT updated_at, probability FROM deals WHERE id = %s",
+                           (deal["id"],))
+
+    before = row()
+    service.update_deal(deal["id"], probability=40.1)   # stores 40 — nothing changed
+    assert row() == before, "a fractional no-op reset the staleness clock"
+
+    # Rounding that lands on a DIFFERENT value is a real edit and must still write.
+    service.update_deal(deal["id"], probability=40.6)   # stores 41
+    after = row()
+    assert after["probability"] == 41 and after["updated_at"] != before["updated_at"]
+
+
+def test_the_integer_column_list_matches_the_real_deals_schema(pg_db):
+    """`_DEAL_INT_COLUMNS` is a hand-written list of destination types, so it can drift off
+    the schema — a column silently retyped or added would lose the cast and reopen the
+    fractional-no-op hole. Restate the writable set independently here and check it against
+    `information_schema` rather than against the constant that is under test.
+    """
+    from core.postgres import pg_fetchall
+    from crm import service
+
+    writable = {"title", "stage", "value", "notes", "expected_close_date", "probability",
+                "currency", "contact_id", "company_id", "owner_id", "lost_reason"}
+    types = {r["column_name"]: r["data_type"] for r in pg_fetchall(
+        "SELECT column_name, data_type FROM information_schema.columns "
+        "WHERE table_name = 'deals'")}
+
+    missing = writable - types.keys()
+    assert not missing, f"writable columns absent from the deals table: {sorted(missing)}"
+    assert {c for c in writable if types[c] == "integer"} == service._DEAL_INT_COLUMNS
+
+
 def test_re_marking_a_deal_lost_with_the_same_reason_is_not_a_touch(pg_db):
     """The third column-map shape reaching `_write_deal_update`, after `{stage}` and the
     full form: `{stage, probability, lost_reason}`. Worth its own case because
