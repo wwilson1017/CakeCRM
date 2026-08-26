@@ -157,8 +157,24 @@ describe('SettingsCard is the only owner of card chrome', () => {
     return source;
   };
 
+  it('lists every card the registry declares', () => {
+    // Hand-maintained by necessity — a card id ('custom_fields') does not mechanically
+    // map to a filename ('CustomFieldSettings.tsx'). Pinning the COUNT is what stops a
+    // tenth card from quietly escaping both guards below.
+    const declared = SETTINGS_SECTIONS.flatMap(s => s.cards).length;
+    expect(SETTINGS_CARD_FILES).toHaveLength(declared);
+  });
+
   it.each(SETTINGS_CARD_FILES)('%s does not import cardStyle', (file) => {
     expect(sourceOf(file)).not.toMatch(/\bcardStyle\b/);
+  });
+
+  it.each(SETTINGS_CARD_FILES)('%s takes isMobile as a prop rather than calling the hook', (file) => {
+    // The page already knows the viewport and passes it down, so every card reads it the
+    // same way. A card reaching for `useIsMobile` itself is invisible to the page test —
+    // its module-level mock answers every caller identically — so it is pinned here.
+    expect(sourceOf(file)).not.toMatch(/\buseIsMobile\b/);
+    expect(sourceOf(file)).toMatch(/isMobile/);
   });
 
   it('renders its own chrome from cardStyle', () => {

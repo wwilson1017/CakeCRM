@@ -215,6 +215,19 @@ describe('SettingsPage — the nav is navigation, not a tablist', () => {
     expect(container.querySelectorAll('[role="tablist"]')).toHaveLength(0);
   });
 
+  it('carries unrelated query params through a tab click', async () => {
+    // The nav copies the live params rather than minting a fresh set, so a param this
+    // page does not own (a future deep-link, an analytics tag) survives navigation.
+    auth.isAdmin = true;
+    await render('/crm/settings?keep=me');
+    for (const link of navLinks()) {
+      expect(link.getAttribute('href')).toContain('keep=me');
+    }
+    await clickTab('Workspace');
+    expect(searchNow()).toContain('keep=me');
+    expect(searchNow()).toContain('section=workspace');
+  });
+
   it('gives the page a real h1 → h2 heading outline', async () => {
     await render();
     expect(container.querySelector('h1')!.textContent).toBe('Settings');
@@ -258,6 +271,21 @@ describe('SettingsPage — the Gmail OAuth callback', () => {
     expect(getToasts().map(t => t.message)).toContain('You declined the Google consent screen.');
     expect(container.querySelector('[aria-current="page"]')!.textContent).toBe('Integrations');
     expect(searchNow()).not.toContain('reason');
+  });
+
+  it('renders the connected badge in the shell, beside the card title', async () => {
+    // The shell's `badge` slot is the only place a card can put a status chip now, so a
+    // card silently dropping it would otherwise go unnoticed.
+    auth.isAdmin = true;
+    api.mockImplementation((path: string) => Promise.resolve(
+      path.startsWith('/api/gmail/status')
+        ? { ...(RESPONSES['/api/gmail/status'] as object), connected: true, email: 'a@b.test' }
+        : RESPONSES[path.split('?')[0]] ?? {},
+    ));
+    await render('/crm/settings?section=integrations');
+    const gmailHeading = container.querySelector('#gmail-title')!;
+    expect(gmailHeading.textContent).toContain('Gmail');
+    expect(gmailHeading.textContent).toContain('connected');
   });
 
   it('leaves a member on Personal and never toasts a connection they cannot see', async () => {
