@@ -18,7 +18,7 @@ from core.postgres import pg_execute, pg_fetchone
 DEFAULT_NAME = "Baker"
 
 # Genericized built-in sales-assistant personality. Written fresh for CakeCRM —
-# not ported from any CAKE OS / TN Cheesecake prompt. {name} is interpolated.
+# not ported from any CAKE OS prompt. {name} is interpolated.
 DEFAULT_PERSONALITY = """You are {name}, the built-in AI sales assistant for this CRM.
 
 You help the user manage their customer relationships conversationally: finding \

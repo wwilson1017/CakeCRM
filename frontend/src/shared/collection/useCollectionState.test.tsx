@@ -319,7 +319,7 @@ describe('searchTuning', () => {
   // Rows whose searchText contains a short numeric token embedded in a longer token, so that
   // substring-matching '1' would hit the wrong row while whole-word anchoring would not.
   const tuned: Row[] = [
-    { id: 1, name: 'Oven 1', stage: 1, priority: false, voided: false },
+    { id: 1, name: 'Unit 1', stage: 1, priority: false, voided: false },
     { id: 2, name: 'Serial A1B2', stage: 1, priority: false, voided: false },
   ];
 
@@ -329,7 +329,7 @@ describe('searchTuning', () => {
     });
     renderState(config, tuned);
     act(() => state().setQuery('1'));
-    // Only "Oven 1" has a standalone ' 1 '; "Serial A1B2" (→ ' serial a1b2 ') does not.
+    // Only "Unit 1" has a standalone ' 1 '; "Serial A1B2" (→ ' serial a1b2 ') does not.
     expect(state().visibleItems.map(r => r.id)).toEqual([1]);
   });
 

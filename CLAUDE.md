@@ -632,11 +632,26 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 - Never commit TN Cheesecake internals: no real prospect/customer data, no TNC
   staff/product names, no internal hostnames or secrets. Ported prompts (Casey's)
   must be genericized. This repo goes public at launch and history is forever.
-  Enforced by `backend/tests/test_prompt_genericization.py` (#22), which scans the
-  **model-facing payload** — the assembled system prompt, every tool
-  name/description/schema, the heartbeat prompt, and the UI starter chips — and fails
-  CI on any company/product/vertical token. Source *comments* may still cite the
-  blueprint by name; shipped prompt text may not.
+  Enforced by `backend/tests/test_prompt_genericization.py` (#22, widened repo-wide in
+  #90), which scans **two** surfaces against **two** denylists, split by what a token
+  IS rather than by which file holds it. `_FORBIDDEN` (= `_COMPANY + _VERTICAL +
+  _BLUEPRINT`) covers the **model-facing payload** — the assembled system prompt,
+  every tool name/description/schema, the heartbeat prompt, the UI starter chips. The
+  narrower `_REPO_FORBIDDEN` (= `_COMPANY + _VERTICAL`) covers **every committed text
+  file**, enumerated by `git ls-files`, so the scope is a file CLASS: a new `docs/`,
+  `scripts/` or `.github/` file is guarded the moment it is *staged* — there is no
+  directory list to remember to update, which is the whole point (the gap #90 closed
+  let a hardcoded upstream org URL and six real upstream directory names reach CI
+  green). `_BLUEPRINT` (`cake_os`, `casey`) is the deliberate asymmetry: banned from
+  the payload — a shipped product must not name what it was ported from — but
+  legitimate in committed prose, since the Source Map and every port comment cite the
+  blueprint by name. Deliberate exemptions live in `_REPO_ALLOW` (path → patterns +
+  a written reason) and exist ONLY for text that must talk *about* the denylist: this
+  rule, a coach lesson quoting a token the guard was missing, a sibling guard's own
+  literals. Scrub the file instead whenever scrubbing is possible — the list is meant
+  to stay readable in full, and a dead entry fails CI. The guard excludes exactly its
+  own path, since it necessarily spells every token out. Note the scan covers the
+  working tree, **not history**: tokens committed before a scrub stay in the log.
 - Never import git history from cake_os or chatty — code arrives as clean snapshots
   in ordinary commits.
 - Never merge a pull request — with exactly ONE exception, the **operator ship lane**:
