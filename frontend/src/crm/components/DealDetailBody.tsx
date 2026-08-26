@@ -358,7 +358,13 @@ export function DealDetailBody({ deal, onBoard, stageWritable, ctx, onMarkWon, o
   const { nameFor } = useUsers();
 
   // The detail read: activity, touch count and lead score, plus — off the board — the whole row.
-  const [fetched, setFetched] = useState<CrmDeal | null>(null);
+  //
+  // SEEDED from an already-detailed prop, which matters on the deep-link path: `?deal=N` for a
+  // deal that IS on the board resolves through `loadById` first (one row beats the whole board),
+  // then the board lands and the layer swaps `deal` to the canonical row — which carries no
+  // `activity`. Without the seed the detail we already hold is dropped on that swap: the timeline
+  // empties, and the effect below re-fetches the identical bytes to refill it.
+  const [fetched, setFetched] = useState<CrmDeal | null>(() => (deal.activity !== undefined ? deal : null));
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState<DealFormState>(() => toDealForm(deal));
   const [baseline, setBaseline] = useState<DealFormState>(() => toDealForm(deal));
@@ -417,13 +423,21 @@ export function DealDetailBody({ deal, onBoard, stageWritable, ctx, onMarkWon, o
   }, [dealId]);
 
   // A deal the layer resolved through `loadById` arrives with the full detail payload already —
-  // `activity` is the marker, since a board or list row never carries it. Fetching again would
-  // double every cold deep link's request count for the same bytes.
-  const alreadyDetailed = deal.activity !== undefined;
+  // `activity` is the marker, since a board or list row never carries it — and the seed above has
+  // already taken it. Fetching again would double every deep link's request count for the same
+  // bytes.
+  //
+  // The decision is made ONCE per mount and latched in a ref rather than re-derived from the prop,
+  // because the prop's identity changes underneath a mounted body: on the deep-link path the
+  // canonical board row replaces the detail payload mid-life, and re-reading `deal.activity` there
+  // would fire exactly the fetch this exists to avoid. The body is keyed by record id, so a fresh
+  // record is a fresh mount and a fresh latch.
+  const detailLoadedRef = useRef(deal.activity !== undefined);
   useEffect(() => {
-    if (alreadyDetailed) return;
+    if (detailLoadedRef.current) return;
+    detailLoadedRef.current = true;
     queueMicrotask(loadDetail);
-  }, [alreadyDetailed, loadDetail]);
+  }, [loadDetail]);
 
   const activity: CrmActivity[] = fetched?.activity ?? deal.activity ?? [];
   const touchCount = fetched?.ai_touch_count ?? deal.ai_touch_count;

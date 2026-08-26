@@ -111,7 +111,7 @@ export function PipelinePage() {
   const scrolledStage = useRef<string | null>(null);
   // Per-deal operation counter so out-of-order responses from rapid moves of the
   // SAME deal can't clobber each other — only the latest op reconciles/reverts.
-  const dealOpSeq = useRef<Map<number, number>>(new Map());
+  const dealOpSeq = useRef<Map<number, { seq: number; hasStage: boolean }>>(new Map());
   // Per-deal write chain: each deal's PUT is queued behind its prior in-flight
   // write so the SERVER applies moves in the user's action order (ending at the
   // latest intent), never racing two concurrent writes for the same deal.
@@ -217,8 +217,8 @@ export function PipelinePage() {
     }
     const dealId = deal.id;
     const toStage = patch.stage;
-    const seq = (dealOpSeq.current.get(dealId) ?? 0) + 1;
-    dealOpSeq.current.set(dealId, seq);
+    const seq = (dealOpSeq.current.get(dealId)?.seq ?? 0) + 1;
+    dealOpSeq.current.set(dealId, { seq, hasStage: toStage !== undefined });
     // Optimistic: restage the CURRENT record (not the captured drag snapshot, which
     // could be missing fields edited meanwhile), keeping its list position. Only the stage is
     // painted ahead of the server — a field edit has no drag gesture to keep up with, and its
@@ -246,7 +246,7 @@ export function PipelinePage() {
         // ground truth is whatever the server actually stored.
         dealConfirmedStage.current.set(dealId, updated.stage);
         settle();
-        if (dealOpSeq.current.get(dealId) !== seq) return; // a newer move superseded this one
+        if (dealOpSeq.current.get(dealId)?.seq !== seq) return; // a newer move superseded this one
         setData(prev => prev ? {
           ...prev,
           deals: prev.deals.map(d => d.id === dealId ? { ...d, ...updated } : d),
@@ -255,11 +255,25 @@ export function PipelinePage() {
         // The caller always learns the outcome, superseded or not — the detail form has to keep
         // the user's draft on screen either way, and only the drag path can afford to shrug.
         fail(err);
-        if (dealOpSeq.current.get(dealId) !== seq) return; // superseded — leave the newer state
+        const latest = dealOpSeq.current.get(dealId);
+        if (latest?.seq !== seq) {
+          // Superseded — leave the newer state, which will reconcile the board itself. But say so
+          // if this op wrote a STAGE and the op replacing it does not: "leave the newer state" was
+          // written when only another stage write could supersede one, and a newer stage intent
+          // genuinely subsumes an older one. A fields-only save expresses no stage intent, so when
+          // it succeeds its response quietly puts the card back where it started — the rep's drag
+          // undone with nothing on screen to say it failed. The revert is still the superseder's
+          // job; only the report is ours.
+          if (toStage !== undefined && latest && !latest.hasStage) {
+            console.error('Failed to write deal:', err);
+            toast.error('Failed to move deal.');
+          }
+          return;
+        }
         console.error('Failed to write deal:', err);
         // THE LAST WRITER TO FAIL OWNS THE RECONCILIATION, whatever it happened to be writing.
-        // A superseded stage write returns above without reverting (correctly — a newer op is
-        // painting), so the optimistic stage it left on the board is only ever cleaned up by
+        // A superseded stage write returns above without reverting (correctly — the op that
+        // replaced it owns the board now), so the optimistic stage it left behind is cleaned up by
         // whichever op for this deal ends up being the latest — and since the detail form shares
         // this chain, that op may well be a fields-only save carrying no stage of its own. Gating
         // the revert on `toStage` therefore stranded a stage nobody stored: drag to won (seq 1),
@@ -279,7 +293,7 @@ export function PipelinePage() {
         // The TOAST stays stage-only, unlike the revert. A fields-only write announced no move,
         // so announcing a failed one would report a board change nobody asked for — its form
         // shows the error inline, next to the draft it is asking the user to retry. (A superseded
-        // stage write staying silent is the deliberate "leave the newer state" rule above.)
+        // stage write is reported by the branch above instead, on its own terms.)
         if (toStage !== undefined) toast.error('Failed to move deal.');
       } finally {
         pendingWrites.current--; // write settled (reconciled or reverted)
@@ -638,25 +652,18 @@ export function PipelinePage() {
     />
   );
 
-  if (loading) {
-    return (
-      <div style={{ display: 'flex', justifyContent: 'center', padding: '80px 0' }}>
-        <div className="w-6 h-6 border-2 border-ck-accent border-t-transparent rounded-full animate-spin" />
-        {detailPanel}
-      </div>
-    );
-  }
-
-  if (!data) {
-    return (
-      <>
-        <LoadError label="Couldn't load pipeline" onRetry={() => load()} />
-        {detailPanel}
-      </>
-    );
-  }
-
-  return (
+  // ONE return, with the branch as a SIBLING of the panel rather than each branch carrying its
+  // own copy. Three returns would put `detailPanel` at a different position in the element tree
+  // per branch, so React unmounts and remounts it on every transition — and the very first
+  // transition (loading → loaded) is one a `?deal=` link hits every time, throwing away the
+  // record the layer had already fetched, its one-record memory, and any draft the body held.
+  const board = loading ? (
+    <div style={{ display: 'flex', justifyContent: 'center', padding: '80px 0' }}>
+      <div className="w-6 h-6 border-2 border-ck-accent border-t-transparent rounded-full animate-spin" />
+    </div>
+  ) : !data ? (
+    <LoadError label="Couldn't load pipeline" onRetry={() => load()} />
+  ) : (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, padding: isMobile ? '20px 16px' : '32px 44px' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: isMobile ? 16 : 24 }}>
         <div>
@@ -778,9 +785,14 @@ export function PipelinePage() {
 
       {/* Create only — editing a deal is inline in the detail panel now. */}
       {showCreate && <DealForm onClose={() => setShowCreate(false)} onSaved={() => { setShowCreate(false); load(); }} />}
-
-      {detailPanel}
     </div>
+  );
+
+  return (
+    <>
+      {board}
+      {detailPanel}
+    </>
   );
 }
 

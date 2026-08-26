@@ -108,7 +108,10 @@ beforeEach(() => {
     if (path === '/api/crm/deals') return Promise.resolve({ deals: BOARD });
     if (/^\/api\/crm\/deals\/\d+$/.test(path)) {
       const id = Number(path.split('/').pop());
-      return Promise.resolve({ ...deal(id, { title: `Fetched ${id}` }), activity: [] });
+      return Promise.resolve({
+        ...deal(id, { title: `Fetched ${id}` }),
+        activity: [{ id: 900 + id, activity: 'call', note: 'Left a voicemail', created_at: '2026-08-19T00:00:00Z' }],
+      });
     }
     if (path.startsWith('/api/crm/provenance/')) return Promise.resolve({ provenance: [] });
     if (path.startsWith('/api/crm/chatter/')) return Promise.resolve({ notes: [] });
@@ -151,6 +154,11 @@ async function settle(rounds = 6) {
     await act(async () => { await Promise.resolve(); });
   }
 }
+
+/** GETs of a single deal — the detail read, as opposed to the board's `/api/crm/deals`. */
+const detailGets = () =>
+  (api.mock.calls as [string, ApiCallOptions | undefined][])
+    .filter(([p, o]) => /^\/api\/crm\/deals\/\d+$/.test(p) && (o?.method ?? 'GET') === 'GET');
 
 const dialogTitle = () => document.querySelector('[role="dialog"] h2')?.textContent ?? null;
 
@@ -237,6 +245,33 @@ describe('the deal deep link', () => {
     await act(async () => { releaseBoard({ deals: BOARD }); await Promise.resolve(); });
     await settle();
     expect(dialogTitle()).toBe('Wholesale order');
+  });
+
+  it('keeps the detail it already fetched when the board lands underneath it', async () => {
+    // The ordering that actually happens on a shared link to an ON-board deal: `loadById` wins
+    // the race (one row beats the whole board), the body mounts holding the detail payload, and
+    // then the canonical board row — which carries no `activity` — replaces the prop. Reading
+    // `deal.activity` again at that moment drops the detail on the floor: the timeline empties
+    // and an identical second GET is issued to refill it.
+    let releaseBoard: (v: unknown) => void = () => {};
+    const defaults = api.getMockImplementation()!;
+    api.mockImplementation((path: string, options?: ApiCallOptions) =>
+      path === '/api/crm/deals'
+        ? new Promise(res => { releaseBoard = res; })
+        : defaults(path, options));
+
+    renderAt('/crm/pipeline?deal=5');
+    await settle();
+    expect(container.textContent).toContain('Left a voicemail');
+    const beforeBoard = detailGets().length;
+
+    await act(async () => { releaseBoard({ deals: BOARD }); await Promise.resolve(); });
+    await settle();
+    // The canonical row now supplies the title; the detail we already hold still supplies the
+    // timeline, and nothing was re-fetched to make that true.
+    expect(dialogTitle()).toBe('Wholesale order');
+    expect(container.textContent).toContain('Left a voicemail');
+    expect(detailGets().length).toBe(beforeBoard);
   });
 });
 
@@ -329,6 +364,50 @@ describe('writeDeal: a fields-only save', () => {
 });
 
 describe('writeDeal: a chain where BOTH writes fail', () => {
+  it('reports a superseded stage failure that a fields-only success quietly undid', async () => {
+    // The other half of the same family, and the one nothing announces. Stage write paints 'won'
+    // (seq 1) and FAILS; a fields-only save (seq 2) SUCCEEDS behind it, and its response carries
+    // the server's real stage — so the card slides back to 'lead' on its own, correctly. The
+    // board ends up right, but the rep's drag was undone with nothing on screen to say so.
+    //
+    // "Superseded — leave the newer state" was written when only another stage write could
+    // supersede one, and a newer stage intent genuinely subsumes an older one. A fields-only save
+    // expresses no stage intent at all, so it cannot stand in for the report.
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const pendingPuts: { resolve: (v: unknown) => void; reject: (err: unknown) => void }[] = [];
+    const defaults = api.getMockImplementation()!;
+    api.mockImplementation((path: string, options?: ApiCallOptions) =>
+      options?.method === 'PUT'
+        ? new Promise((resolve, reject) => { pendingPuts.push({ resolve, reject }); })
+        : defaults(path, options));
+
+    renderAt('/crm/pipeline?deal=5');
+    await settle();
+
+    click(buttonByText('Mark Won'));
+    await settle();
+    expect(stageColumn('won')!.textContent).toContain('Wholesale order');
+
+    click(buttonByText('Edit'));
+    await settle();
+    setField('deal-title', 'Renamed');
+    click(buttonByText('Save'));
+    await settle();
+
+    await act(async () => { pendingPuts[0].reject(new Error('stage write failed')); });
+    await settle();
+
+    // seq 2 succeeds, and the server says the deal is still in `lead`.
+    await act(async () => {
+      pendingPuts[1].resolve({ ...deal(5, { title: 'Renamed', stage: 'lead' }) });
+    });
+    await settle();
+
+    expect(stageColumn('lead')!.textContent).toContain('Renamed');
+    expect(toast.error).toHaveBeenCalledWith('Failed to move deal.');
+    consoleError.mockRestore();
+  });
+
   it('reverts the optimistic stage even though the last write carried no stage', async () => {
     // The failure the `toStage !== undefined` revert gate could not see. A stage write paints 'won'
     // (seq 1); an inline field save queues behind it on the same per-deal chain (seq 2); the stage

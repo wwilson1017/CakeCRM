@@ -10,8 +10,10 @@
 //     the optional display label.
 // Cleanup is OWNERSHIP-based (per-publisher token), not equality-based, so under
 // React Strict Mode's double-invoked effects — or the detail shell's keyed remount
-// on ‹ › navigation, which is exactly an old publisher unmounting after a new one
-// mounted — an older publisher can never clear a newer one's value. Publishers are
+// on ‹ › navigation, where an old publisher's cleanup and a new one's publish run in
+// the same commit — an older publisher can never clear a newer one's value. (React
+// runs the removed fiber's cleanup before the new fiber's create, so today the order
+// favours us; ownership is what makes it not matter.) Publishers are
 // mutually exclusive by routing (only one detail page renders via <Outlet/> at a
 // time, and the deal detail is rendered only by Pipeline/Dashboard), so a
 // single-entry store suffices — there is never a stack of overlapping records.
