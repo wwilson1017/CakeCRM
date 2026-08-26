@@ -38,10 +38,12 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
   const ready = aiReady === true;
 
   // Baker is the permanent product brand (#71) — a static label, no identity fetch.
-  // Keyless (aiReady === false) deliberately does NOT say "Ask Baker": there's no
-  // assistant hired yet, so the copy matches AiKeyNudge's existing "Hire your
-  // assistant" wording and keeps the /setup routing self-explanatory.
-  const launcherLabel = ready ? 'Ask Baker' : loading ? 'Assistant' : 'Hire your assistant';
+  // "Baker" alone (loading) just names the assistant; "Ask Baker" (ready) is the
+  // call-to-action once we know it can actually respond. Keyless (aiReady === false)
+  // deliberately does NOT say "Ask"/"Baker" at all: there's no assistant hired yet,
+  // so the copy matches AiKeyNudge's existing "Hire your assistant" wording and keeps
+  // the /setup routing self-explanatory.
+  const launcherLabel = ready ? 'Ask Baker' : loading ? 'Baker' : 'Hire your assistant';
 
   // Dialog dismissal: Escape (returns focus to the button) and outside-click (a
   // scrim click is "outside" the panel/button, so it closes via the same handler).
