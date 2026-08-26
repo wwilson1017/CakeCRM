@@ -360,15 +360,32 @@ def test_get_identity(client, monkeypatch):
     assert client.get("/api/assistant/identity").json()["name"] == "Baker"
 
 
-def test_put_identity_blank_name_400(client):
-    assert client.put("/api/assistant/identity", json={"name": "   "}).status_code == 400
-
-
 def test_put_identity_updates(client, monkeypatch):
     monkeypatch.setattr(router_mod.identity, "update_identity",
-                        lambda name, personality: {"name": name, "personality": personality or "", "using_default": not personality})
+                        lambda personality: {"name": "Baker", "personality": personality or "", "using_default": not personality})
+    r = client.put("/api/assistant/identity", json={"personality": "friendly"})
+    assert r.json() == {"name": "Baker", "personality": "friendly", "using_default": False}
+
+
+def test_put_identity_ignores_a_name_from_a_stale_client(client, monkeypatch):
+    """The name is a fixed brand (#71). An old build still sending `name` must have it
+    dropped, not honored and not 422'd — the request's personality still applies."""
+    seen = {}
+
+    def _update(personality=None, **kwargs):
+        seen.update(kwargs, personality=personality)
+        return {"name": "Baker", "personality": personality or "", "using_default": not personality}
+
+    monkeypatch.setattr(router_mod.identity, "update_identity", _update)
     r = client.put("/api/assistant/identity", json={"name": "Ace", "personality": "friendly"})
-    assert r.json()["name"] == "Ace"
+    assert r.status_code == 200
+    assert seen == {"personality": "friendly"}  # `name` never reached the service
+    assert r.json()["name"] == "Baker"
+
+
+def test_put_identity_rejects_an_oversized_personality(client):
+    r = client.put("/api/assistant/identity", json={"personality": "x" * 20_001})
+    assert r.status_code == 400
 
 
 # ── Auth audit ────────────────────────────────────────────────────────────────

@@ -1,9 +1,20 @@
-// CakeCRM — assistant identity editor (name + personality).
-// Fulfills the issue's "user-editable in settings" without a training wizard.
+// CakeCRM — assistant identity panel.
+//
+// Two rules shape this component:
+//
+//  • **The name is a brand, not a field (#71).** Baker is fixed. The server ignores a
+//    `name` in the PUT body and resolves the name from a constant, so this shows it
+//    read-only rather than offering an input that cannot take effect.
+//  • **Only an admin may save (#106).** `PUT /api/assistant/identity` is `require_admin`
+//    (one assistant per install), while the GET is member-legal. Every seat gets the
+//    assistant, so a member opening this drawer must see the personality that governs
+//    it — but showing them a Save button that can only 403 is offering a control that
+//    cannot work. Members get the same text, read-only.
 
 import { useEffect, useState } from 'react';
 
 import { api } from '../core/api/client';
+import { useAuth } from '../core/auth/AuthContext';
 import { IconX } from '../shared/icons';
 import { toast } from '../shared/toast';
 import {
@@ -25,8 +36,13 @@ interface Identity {
 }
 
 export function IdentitySettings({ onClose }: { onClose: () => void }) {
+  const { isAdmin } = useAuth();
   const [name, setName] = useState('');
-  const [personality, setPersonality] = useState('');
+  // The admin's draft: '' means "use the built-in default", which is why it is not
+  // simply the resolved text. `effective` is what the assistant actually runs on and
+  // is what a member is shown.
+  const [draft, setDraft] = useState('');
+  const [effective, setEffective] = useState('');
   const [usingDefault, setUsingDefault] = useState(true);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -37,7 +53,8 @@ export function IdentitySettings({ onClose }: { onClose: () => void }) {
       .then((id) => {
         if (!alive) return;
         setName(id.name);
-        setPersonality(id.using_default ? '' : id.personality);
+        setEffective(id.personality);
+        setDraft(id.using_default ? '' : id.personality);
         setUsingDefault(id.using_default);
       })
       .catch(() => toast.error('Could not load assistant settings.'))
@@ -48,17 +65,14 @@ export function IdentitySettings({ onClose }: { onClose: () => void }) {
   }, []);
 
   const save = async () => {
-    if (!name.trim()) {
-      toast.error('Name cannot be blank.');
-      return;
-    }
     setSaving(true);
     try {
       const id = await api<Identity>('/api/assistant/identity', {
         method: 'PUT',
-        body: JSON.stringify({ name: name.trim(), personality }),
+        body: JSON.stringify({ personality: draft }),
       });
       setUsingDefault(id.using_default);
+      setEffective(id.personality);
       toast.success('Assistant settings saved.');
       onClose();
     } catch {
@@ -92,39 +106,61 @@ export function IdentitySettings({ onClose }: { onClose: () => void }) {
         ) : (
           <>
             <label style={labelStyle}>Name</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} maxLength={80} style={inputStyle} />
+            <div style={{ fontSize: 14, fontWeight: 600, color: INK }}>{name}</div>
+            <div style={{ fontSize: 12, color: INK_MUTE, marginTop: 4 }}>
+              Your assistant is always called {name}.
+            </div>
 
             <label style={{ ...labelStyle, marginTop: 12 }}>Personality</label>
-            <textarea
-              value={personality}
-              onChange={(e) => setPersonality(e.target.value)}
-              maxLength={20000}
-              placeholder={usingDefault ? 'Using the built-in default. Type here to customize.' : ''}
-              rows={7}
-              style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }}
-            />
-            <div style={{ fontSize: 12, color: INK_MUTE, marginTop: 4 }}>
-              Leave blank to use the built-in default personality.
-            </div>
+            {isAdmin ? (
+              <>
+                <textarea
+                  aria-label="Personality"
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  maxLength={20000}
+                  placeholder={usingDefault ? 'Using the built-in default. Type here to customize.' : ''}
+                  rows={7}
+                  style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }}
+                />
+                <div style={{ fontSize: 12, color: INK_MUTE, marginTop: 4 }}>
+                  Leave blank to use the built-in default personality.
+                </div>
 
-            <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-              <button
-                onClick={save}
-                disabled={saving}
-                style={{
-                  padding: '7px 14px', fontSize: 14, fontWeight: 600, background: ACCENT, color: ACCENT_INK,
-                  border: 'none', borderRadius: 8, cursor: saving ? 'default' : 'pointer', opacity: saving ? 0.6 : 1,
-                }}
-              >
-                {saving ? 'Saving…' : 'Save'}
-              </button>
-              <button
-                onClick={() => setPersonality('')}
-                style={{ padding: '7px 14px', fontSize: 14, background: 'none', color: INK_MUTE, border: `1px solid ${LINE}`, borderRadius: 8, cursor: 'pointer' }}
-              >
-                Reset to default
-              </button>
-            </div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+                  <button
+                    onClick={save}
+                    disabled={saving}
+                    style={{
+                      padding: '7px 14px', fontSize: 14, fontWeight: 600, background: ACCENT, color: ACCENT_INK,
+                      border: 'none', borderRadius: 8, cursor: saving ? 'default' : 'pointer', opacity: saving ? 0.6 : 1,
+                    }}
+                  >
+                    {saving ? 'Saving…' : 'Save'}
+                  </button>
+                  <button
+                    onClick={() => setDraft('')}
+                    style={{ padding: '7px 14px', fontSize: 14, background: 'none', color: INK_MUTE, border: `1px solid ${LINE}`, borderRadius: 8, cursor: 'pointer' }}
+                  >
+                    Reset to default
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <textarea
+                  aria-label="Personality"
+                  value={effective}
+                  readOnly
+                  rows={7}
+                  style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit', color: INK_MUTE }}
+                />
+                <div style={{ fontSize: 12, color: INK_MUTE, marginTop: 4 }}>
+                  {usingDefault ? 'Using the built-in default personality. ' : ''}
+                  Only an admin can change {name}&rsquo;s personality.
+                </div>
+              </>
+            )}
           </>
         )}
       </div>

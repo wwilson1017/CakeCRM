@@ -101,7 +101,22 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   (`stream_turn`/`add_tool_results`/`build_tool_turn`) is consumed by the built-in
   assistant engine (`backend/assistant/`, landed #4): an SSE streaming tool loop
   with write-tool confirmation modes and file uploads, mounted at `/api/assistant`
-  and gated off `ai_ready`. The assistant's sales working practices live in
+  and gated off `ai_ready`.
+  **The assistant is named Baker and that name is a brand, not a setting** (#71):
+  `identity.NAME` is the only source (the old `DEFAULT_NAME` spelling is gone — a
+  "default" implies something may override it), `get_identity()` does not select the
+  `assistant_identity.name` column at all, `update_identity()` has no `name` parameter,
+  and `build_system_prompt` interpolates `{name}` from the constant rather than from its
+  argument — that last one is what makes the brand unrenameable rather than merely
+  un-editable through the UI, since the prompt is the one seam where the name reaches
+  the model. The **personality stays fully editable**. `IdentityUpdateRequest` dropped
+  `name`, so a stale client still sending it has the field ignored (Pydantic's default),
+  not 422'd — rejecting would break the old UI for no gain, while accepting would be the
+  bug. The column is deliberately **not dropped**: a pre-#71 binary still runs
+  `SELECT name, personality`, so dropping it would make a rollback a *dead* assistant
+  rather than a misnamed one — the same call `auth_credential` got. A one-shot migration
+  resets every row to 'Baker' so the stored value agrees with the code even on that path.
+  The assistant's sales working practices live in
   `identity.SALES_GUIDE` — a **static** constant appended alongside
   `CONFIRMATION_NOTE`/`MEMORY_NOTE`, deliberately NOT inside `DEFAULT_PERSONALITY`,
   because a user-written personality replaces that string wholesale and would silently
@@ -270,7 +285,14 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   In the UI, `SettingsPage` hides the install-configuration cards (branding,
   Telegram, custom fields, Gmail) from members, the way the Team card hides itself;
   Notifications and Change password stay, because they configure the person, not the
-  install.
+  install. The **assistant drawer's identity panel** obeys the same rule (#106,
+  `frontend/src/assistant/IdentitySettings.tsx`): `PUT /api/assistant/identity` is
+  `require_admin` while the GET is member-legal, so members see the personality
+  **read-only** with no Save rather than a control that can only 403 — "don't offer what
+  can only 403" is about controls, not cards, and hiding the panel outright would deny a
+  member the text governing an assistant every seat gets. That file is the whole exposure:
+  the rest of `frontend/src/assistant/` calls only `/chat`, `/confirm` and
+  `/conversations*`, none of which appear in `test_route_authz.ADMIN_ONLY`.
   **Still install-wide, deliberately (Phase B):** assistant chat history and memory,
   the Gmail connection, the Telegram binding, reminders, notifications and alerts.
   Every active seat gets the assistant (Will's §15 ruling — no temporary admin gate
@@ -724,6 +746,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | CRM core (schema, router, tools, smart import) — **landed #3** as `backend/crm/` + `frontend/src/crm/` + `frontend/src/shared/` | `chatty/backend/integrations/crm_lite/`, `chatty/frontend/src/crm/` |
 | Assistant engine — **chat loop, tool registry, confirmations, uploads landed #4** as `backend/assistant/` + `frontend/src/assistant/`; **memory (facts + FTS) + dreaming (pure-algorithmic usage scoring + fact soft-archival) landed #5** as `backend/memory/` + `backend/dreaming/` (dreaming's archival unit is the fact row, not context files — CakeCRM has no file store; driven by #6's reminder tick) | `chatty/backend/core/agents/` |
 | Context files + Memory UI (`assistant_context_files` with GENERATED `kind`/`is_protected`; soul unfenced in static, knowledge nonce-fenced in volatile; 7 keyless tools; always-confirm on protected files; `/api/context-files` + `/api/memory`; `MemoryPage`) — **landed #72 Phase 1+2** as `backend/context_files/` + `backend/memory/router.py` + `frontend/src/crm/MemoryPage.tsx`. Chatty's `_load-order.json`, GCS sync, `atomic_write`, meetings/transcripts and `relevance_prefetch` do not translate and were not ported; its flat namespace became `topics/`+`daily/` prefixes to fit one table; its regex `sanitize_memory_content` was dropped in favour of this repo's nonce fencing (forge-proof where a blocklist is not). Fencing `MEMORY.md` is deliberately STRICTER than chatty, which loads it raw, because ours becomes extractor-fed in Phase 4 | `chatty/backend/core/agents/context_manager.py` + `tools/context_tools.py` + `ai_service._knowledge_management_instructions()` |
+| Assistant brand + identity-panel role gate (`identity.NAME` fixed as "Baker": no `name` column read, no `name` write path, prompt interpolation from the constant; one-shot `UPDATE assistant_identity SET name='Baker'` migration with the column kept for rollback safety; `IdentitySettings.tsx` renders the name read-only and gates the personality editor on `useAuth().isAdmin`, members read-only) — **landed #71 (bundling #106)** as `backend/assistant/{identity,router}.py` + `20260826010825_assistant_name_is_a_brand.sql` + `frontend/src/assistant/IdentitySettings.tsx` (+ co-located vitest). Personality stays user-editable; only the name became permanent | New capability (product decision on issue #71 — no blueprint) |
 | Heartbeat + background AI turn — **landed #6** as `backend/heartbeat/` (60s APScheduler tick) + `backend/assistant/background.py` (non-SSE `run_background_turn`: auto-approved writes under a server-enforced tool allowlist + `WRITE_BUDGET_BACKGROUND`). The scheduler now runs **four** jobs, split by one rule the code states explicitly: **local SQL rides `reminder_tick`** (#5 dreaming, #18's score refresh), **network- or AI-bound work gets its OWN `add_job`** (`heartbeat_turn`, #17's `gmail_scan`, #22 Phase 3's `proactive`) so a hung request can never delay reminder delivery | `chatty/backend/core/agents/background_runner.py` + `main.py` scheduler wiring |
 | Reminders (own table, recurrence math, agent tools + **net-new full CRUD REST/UI**) — **landed #6** as `backend/reminders/` + `frontend/src/crm/RemindersPage.tsx` | `chatty/backend/core/agents/reminders/` |
 | Notifications (Web Push VAPID keys persisted in Postgres, `notify_user` tool, bell) + system alerts — **landed #6** as `backend/notifications/` + `backend/alerts/` + `frontend/src/crm/components/{NotificationsBell,NotificationSettings}.tsx` + `frontend/public/sw.js`. Telegram delivery goes out through `telegram.service.notify_linked_user` (the pure-sync channel #7 landed), via `_send_telegram`; WhatsApp not ported. Chatty's user-configurable `scheduled_actions` subsystem (leases/active-hours/triage/dashboards) deliberately deferred | `chatty/backend/core/agents/notifications/` + `alerts/` |
