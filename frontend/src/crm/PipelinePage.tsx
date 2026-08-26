@@ -12,7 +12,7 @@ import { useIsMobile } from '../shared/useIsMobile';
 import { LoadError } from '../shared/LoadError';
 import { toast } from '../shared/toast';
 import {
-  INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, BG_CARD, BG_ELEV, ACCENT, SHADOW,
+  INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, BG_CARD, BG_ELEV, ACCENT, ACCENT_TEXT, SHADOW,
   FONT_DISPLAY, mono, formatNumber, inputStyle, tint,
 } from '../shared/styles';
 import { pageHeading, btnPrimary, btnSecondary, btnSmall, stageCard } from './styles';
@@ -602,7 +602,22 @@ export function PipelinePage() {
           <p style={{ fontSize: isMobile ? 14 : 20, color: INK_MUTE, marginTop: 6 }}>
             ${formatNumber(openTotal)} open · {openCount} open deal{openCount !== 1 ? 's' : ''}
             {hiddenStages.size > 0 && (
-              <span style={{ color: INK_DIM }}> · {hiddenStages.size} stage{hiddenStages.size !== 1 ? 's' : ''} hidden</span>
+              <>
+                <span style={{ color: INK_DIM }}> · {hiddenStages.size} stage{hiddenStages.size !== 1 ? 's' : ''} hidden</span>{' '}
+                {/* The way back is HERE, above CollectionView, and not inside it. Hiding every
+                    stage empties `items`, and the layer answers an empty `items` with a bare
+                    empty state rendered BEFORE its toolbar — so the visibility checkboxes that
+                    would undo it are gone at exactly the moment they are needed. This button is
+                    always mounted while anything is hidden, so no combination of hides (or a
+                    restored all-hidden preference) can strand the board. */}
+                <button
+                  onClick={() => setHiddenStages(new Set())}
+                  style={{
+                    background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                    font: 'inherit', color: ACCENT_TEXT, textDecoration: 'underline',
+                  }}
+                >Show all</button>
+              </>
             )}
           </p>
         </div>
@@ -767,10 +782,12 @@ function BulkBar({ count, stage, pending, onStageChange, onApply, onClear }: {
         onChange={e => onStageChange(e.target.value)}
         disabled={pending}
         aria-label="Move selected deals to stage"
-        style={{ ...inputStyle, width: 'auto', textTransform: 'capitalize', marginLeft: 'auto' }}
+        style={{ ...inputStyle, width: 'auto', marginLeft: 'auto' }}
       >
         <option value="">Move to…</option>
-        {STAGE_ORDER.map(s => <option key={s} value={s}>{s}</option>)}
+        {/* stageLabel, not a CSS text-transform: one title-casing rule for every stage name
+            on this page, so a future multi-word stage cannot render three ways. */}
+        {STAGE_ORDER.map(s => <option key={s} value={s}>{stageLabel(s)}</option>)}
       </select>
       <button
         onClick={onApply}

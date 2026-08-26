@@ -9,9 +9,8 @@
  *
  * Adapted from the CAKE OS blueprint (`apps/crm/pipelineFilters.ts`) to CakeCRM's flat
  * deal model: stages are strings (not numeric ids) and "open" is computed from the
- * stage (deals have no `status` field). The owner facet the blueprint carried was
- * dropped at #21 because CakeCRM was single-user; #60 gave records an owner, so it is
- * back — and stays client-side, because the board already holds every deal.
+ * stage (deals have no `status` field). All filtering stays client-side because the board
+ * already holds every deal.
  *
  * Date semantics intentionally use LOCAL dates (YYYY-MM-DD via en-CA), never
  * `toISOString()`, which would drift a day in US evening time. `now` is injected into
@@ -34,34 +33,22 @@ import { OPEN_STAGES } from './constants';
 
 /** Relative close-date buckets (single-select). */
 export type ClosePreset = 'overdue' | 'next7' | 'thisMonth' | 'noDate';
-/** An owner filter entry: a user id, or the literal 'unassigned' for owner_id NULL.
- *  Unassigned is a real bucket, not an absence — it is how you find work nobody has
- *  picked up, which is the main thing this facet is for. */
-export type OwnerFilterValue = number | 'unassigned';
-
 /** Relative last-activity buckets (single-select). Activity is DEAL-scoped
  *  (deal-level activity_log rows + un-archived deal chatter); contact-level
  *  activity is not counted — hence "no activity logged", not "never contacted". */
 export type ActivityPreset = 'le7' | 'le30' | 'stale30' | 'none';
 
+/** The two buckets whose RULES are non-obvious enough to be worth a shared predicate.
+ *  Stage, owner and value used to live here too; since #74 they are plain `FacetDef`s in
+ *  `pipelineCollection.ts` (a set membership, a nullish-coalesce and a numeric range — the
+ *  collection layer expresses all three directly), so keeping a second copy here would have
+ *  left two homes for one rule with nothing forcing them to agree. */
 export interface AdvancedFilters {
-  /** Stage keys to include. Empty = all stages. */
-  stages: string[];
-  /** Owners to include. Empty = every owner (and unassigned). */
-  owners: OwnerFilterValue[];
-  /** Inclusive minimum deal value, or null for no lower bound. */
-  valueMin: number | null;
-  /** Inclusive maximum deal value, or null for no upper bound. */
-  valueMax: number | null;
   closeDate: ClosePreset | null;
   lastActivity: ActivityPreset | null;
 }
 
 export const EMPTY_ADVANCED: AdvancedFilters = {
-  stages: [],
-  owners: [],
-  valueMin: null,
-  valueMax: null,
   closeDate: null,
   lastActivity: null,
 };
@@ -104,13 +91,6 @@ function activityLocalDate(ts: string | null | undefined): string {
 
 // ── Predicate ───────────────────────────────────────────────────────────────
 
-function matchesValue(deal: CrmDeal, f: AdvancedFilters): boolean {
-  const v = deal.value ?? 0;
-  if (f.valueMin !== null && v < f.valueMin) return false;
-  if (f.valueMax !== null && v > f.valueMax) return false;
-  return true;
-}
-
 function matchesCloseDate(deal: CrmDeal, preset: ClosePreset, now: Date): boolean {
   const close = closeDatePart(deal.expected_close_date);
   switch (preset) {
@@ -142,18 +122,8 @@ function matchesLastActivity(deal: CrmDeal, preset: ActivityPreset, now: Date): 
   }
 }
 
-function matchesOwner(deal: CrmDeal, owners: OwnerFilterValue[]): boolean {
-  // owner_id is absent on a payload from a pre-#60 backend and null when unassigned;
-  // both mean "nobody owns this", so both answer to the 'unassigned' bucket.
-  const owner = deal.owner_id ?? null;
-  return owner === null ? owners.includes('unassigned') : owners.includes(owner);
-}
-
 /** True if `deal` passes every active advanced facet (AND across facets). */
 export function dealMatchesAdvanced(deal: CrmDeal, f: AdvancedFilters, now: Date): boolean {
-  if (f.stages.length > 0 && !f.stages.includes(deal.stage)) return false;
-  if (f.owners.length > 0 && !matchesOwner(deal, f.owners)) return false;
-  if (!matchesValue(deal, f)) return false;
   if (f.closeDate && !matchesCloseDate(deal, f.closeDate, now)) return false;
   if (f.lastActivity && !matchesLastActivity(deal, f.lastActivity, now)) return false;
   return true;

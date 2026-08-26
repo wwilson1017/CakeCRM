@@ -171,3 +171,92 @@ describe('failure handling', () => {
     expect(text()).toContain("Couldn't load pipeline");
   });
 });
+
+describe('the bulk bar count and the bulk-move payload cannot disagree', () => {
+  const checkbox = (label: string) =>
+    document.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`);
+  const bulkMoveCall = (): [string, { body: string }] | undefined =>
+    api.mock.calls.find(c => c[0] === '/api/crm/deals/bulk-move') as
+      | [string, { body: string }]
+      | undefined;
+
+  it('sends exactly the deals the bar said were selected', async () => {
+    await mount();
+    // Select two deals in different stages.
+    await act(async () => { checkbox('Select Alpha contract')!.click(); });
+    await act(async () => { checkbox('Select Beta renewal')!.click(); });
+    expect(text()).toContain('2 deals selected');
+
+    const select = document.querySelector<HTMLSelectElement>(
+      'select[aria-label="Move selected deals to stage"]',
+    )!;
+    await act(async () => {
+      select.value = 'proposal';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await act(async () => { buttonByText('Apply')!.click(); });
+    await act(async () => { await Promise.resolve(); });
+
+    const call = bulkMoveCall();
+    expect(call).toBeDefined();
+    const body = JSON.parse(call![1].body);
+    expect(new Set(body.deal_ids)).toEqual(new Set([1, 2]));
+    expect(body.stage).toBe('proposal');
+  });
+
+  it('drops a selected deal whose stage was hidden after selecting it — bar and payload both', async () => {
+    await mount();
+    await act(async () => { checkbox('Select Alpha contract')!.click(); });
+    await act(async () => { checkbox('Select Beta renewal')!.click(); });
+    expect(text()).toContain('2 deals selected');
+
+    // Put Beta's column away. Beta leaves `items` entirely, so it must leave both the
+    // count the operator is shown AND the payload the server is sent.
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button[aria-label="Hide Qualified column"]')!.click();
+    });
+    expect(text()).toContain('1 deal selected');
+
+    const select = document.querySelector<HTMLSelectElement>(
+      'select[aria-label="Move selected deals to stage"]',
+    )!;
+    await act(async () => {
+      select.value = 'proposal';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await act(async () => { buttonByText('Apply')!.click(); });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(JSON.parse(bulkMoveCall()![1].body).deal_ids).toEqual([1]);
+  });
+});
+
+describe('stage visibility is reachable and reversible through the UI', () => {
+  it('the column Hide button removes the column and persists the preference', async () => {
+    await mount();
+    expect(text()).toContain('Beta renewal');
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button[aria-label="Hide Qualified column"]')!.click();
+    });
+    expect(text()).not.toContain('Beta renewal');
+    expect(JSON.parse(sessionStorage.getItem('crm_pipeline_hidden_stages')!)).toEqual(['qualified']);
+  });
+
+  it('"Show all" restores every hidden stage — including when ALL of them are hidden', async () => {
+    // The dead end this guards: hiding every stage empties `items`, and the collection layer
+    // answers an empty `items` with a bare empty state rendered BEFORE its toolbar — so the
+    // visibility checkboxes that would undo it are gone. The header's Show all must survive.
+    sessionStorage.setItem(
+      'crm_pipeline_hidden_stages',
+      JSON.stringify(['lead', 'qualified', 'proposal', 'negotiation', 'won', 'lost']),
+    );
+    await mount();
+    expect(text()).toContain('6 stages hidden');
+    const showAll = buttonByText('Show all');
+    expect(showAll).toBeDefined();
+    await act(async () => { showAll!.click(); });
+    expect(text()).toContain('Alpha contract');
+    expect(text()).toContain('Beta renewal');
+    expect(sessionStorage.getItem('crm_pipeline_hidden_stages')).toBe('[]');
+  });
+});

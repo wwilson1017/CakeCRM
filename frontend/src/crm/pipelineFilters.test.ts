@@ -1,7 +1,9 @@
 /**
  * The #21 facet predicate had no test suite. #74 rewrote everything around it — the filter
  * bar, the persistence, the page — so this pins the rules that survived, before the port can
- * quietly change one.
+ * quietly change one. Stage, owner and value are NOT here: since #74 they are plain
+ * `FacetDef`s the collection layer evaluates, and `pipelineCollection.test.ts` pins their
+ * semantics at that new home. What remains is the pair whose rules are genuinely non-obvious.
  *
  * The timezone matters here: `vitest.config.ts` pins `TZ: 'America/Chicago'` precisely so
  * `ymd`'s local-date getters are distinguishable from `toISOString()`. Under a UTC runner the
@@ -52,45 +54,6 @@ describe('ymd — local dates, not UTC', () => {
 describe('dealMatchesAdvanced — no active facet matches everything', () => {
   it('matches with EMPTY_ADVANCED', () => {
     expect(dealMatchesAdvanced(deal(), EMPTY_ADVANCED, new Date())).toBe(true);
-  });
-});
-
-describe('stage facet', () => {
-  it('includes a listed stage and excludes an unlisted one', () => {
-    const f = adv({ stages: ['qualified', 'proposal'] });
-    expect(dealMatchesAdvanced(deal({ stage: 'qualified' }), f, new Date())).toBe(true);
-    expect(dealMatchesAdvanced(deal({ stage: 'lead' }), f, new Date())).toBe(false);
-  });
-});
-
-describe('owner facet', () => {
-  it("'unassigned' matches BOTH a null owner_id and an absent one", () => {
-    const f = adv({ owners: ['unassigned'] });
-    expect(dealMatchesAdvanced(deal({ owner_id: null }), f, new Date())).toBe(true);
-    expect(dealMatchesAdvanced(deal(), f, new Date())).toBe(true);
-    expect(dealMatchesAdvanced(deal({ owner_id: 7 }), f, new Date())).toBe(false);
-  });
-
-  it('a numeric owner matches only that owner, and not the unassigned bucket', () => {
-    const f = adv({ owners: [7] });
-    expect(dealMatchesAdvanced(deal({ owner_id: 7 }), f, new Date())).toBe(true);
-    expect(dealMatchesAdvanced(deal({ owner_id: 8 }), f, new Date())).toBe(false);
-    expect(dealMatchesAdvanced(deal({ owner_id: null }), f, new Date())).toBe(false);
-  });
-});
-
-describe('value range', () => {
-  it('is inclusive at both bounds', () => {
-    const f = adv({ valueMin: 100, valueMax: 200 });
-    expect(dealMatchesAdvanced(deal({ value: 100 }), f, new Date())).toBe(true);
-    expect(dealMatchesAdvanced(deal({ value: 200 }), f, new Date())).toBe(true);
-    expect(dealMatchesAdvanced(deal({ value: 99 }), f, new Date())).toBe(false);
-    expect(dealMatchesAdvanced(deal({ value: 201 }), f, new Date())).toBe(false);
-  });
-
-  it('a one-sided bound leaves the other end open', () => {
-    expect(dealMatchesAdvanced(deal({ value: 10_000 }), adv({ valueMin: 500 }), new Date())).toBe(true);
-    expect(dealMatchesAdvanced(deal({ value: 10 }), adv({ valueMax: 500 }), new Date())).toBe(true);
   });
 });
 
@@ -163,16 +126,16 @@ describe('last-activity buckets', () => {
   });
 });
 
-describe('facets combine with AND', () => {
+describe('the two buckets combine with AND', () => {
   const now = new Date(2026, 4, 15, 12, 0, 0);
+  const daysAgo = (n: number) => new Date(2026, 4, 15 - n, 12, 0, 0).toISOString();
 
-  it('a deal must satisfy every active facet', () => {
-    const f = adv({ stages: ['proposal'], valueMin: 500, closeDate: 'overdue' });
-    const match = deal({ stage: 'proposal', value: 900, expected_close_date: '2026-05-01' });
+  it('a deal must satisfy both active buckets, not either', () => {
+    const f = adv({ closeDate: 'overdue', lastActivity: 'stale30' });
+    const match = deal({ stage: 'proposal', expected_close_date: '2026-05-01', last_activity_at: daysAgo(40) });
     expect(dealMatchesAdvanced(match, f, now)).toBe(true);
-    // Each of the three, broken one at a time.
-    expect(dealMatchesAdvanced({ ...match, stage: 'lead' }, f, now)).toBe(false);
-    expect(dealMatchesAdvanced({ ...match, value: 100 }, f, now)).toBe(false);
+    // Break each half in turn.
     expect(dealMatchesAdvanced({ ...match, expected_close_date: '2026-06-30' }, f, now)).toBe(false);
+    expect(dealMatchesAdvanced({ ...match, last_activity_at: daysAgo(2) }, f, now)).toBe(false);
   });
 });
