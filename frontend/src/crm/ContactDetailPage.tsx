@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../core/api/client';
+import { writeMayHaveLanded } from './usePatchableAssembly';
 import type { CrmContact } from '../core/types';
 import { ContactForm } from './components/ContactForm';
 import { DealForm } from './components/DealForm';
@@ -34,9 +35,12 @@ import {
 interface ContactDetailPageProps {
   onChanged?: (contact: CrmContact) => void;
   onDeleted?: (id: number) => void;
+  /** A write here whose outcome is unknown — the host re-sweeps, since only the server
+   *  can now say what this record looks like, or whether it still exists (#77). */
+  onWriteUncertain?: () => void;
 }
 
-export function ContactDetailPage({ onChanged, onDeleted }: ContactDetailPageProps = {}) {
+export function ContactDetailPage({ onChanged, onDeleted, onWriteUncertain }: ContactDetailPageProps = {}) {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
@@ -119,8 +123,11 @@ export function ContactDetailPage({ onChanged, onDeleted }: ContactDetailPagePro
     if (!ok) return;
     try {
       await api(`/api/crm/contacts/${id}`, { method: 'DELETE' });
-    } catch {
+    } catch (err) {
       toast.error('Failed to delete contact.');
+      // The DELETE may have committed before the response was lost, in which case the
+      // list is still showing a row that no longer exists.
+      if (writeMayHaveLanded(err)) onWriteUncertain?.();
       return;
     }
     onDeleted?.(Number(id));
@@ -354,7 +361,7 @@ export function ContactDetailPage({ onChanged, onDeleted }: ContactDetailPagePro
           onChanged={load} />
       </div>
 
-      {showEdit && <ContactForm contact={contact} onClose={() => setShowEdit(false)} onSaved={() => { setShowEdit(false); load(); setCfVersion(v => v + 1); refreshProvenance(); }} />}
+      {showEdit && <ContactForm contact={contact} onWriteUncertain={onWriteUncertain} onClose={() => setShowEdit(false)} onSaved={() => { setShowEdit(false); load(); setCfVersion(v => v + 1); refreshProvenance(); }} />}
       {showAddDeal && <DealForm contactId={contact.id} onClose={() => setShowAddDeal(false)} onSaved={() => { setShowAddDeal(false); load(); }} />}
       {showAddTask && <TaskForm contactId={contact.id} onClose={() => setShowAddTask(false)} onSaved={() => { setShowAddTask(false); load(); }} />}
     </div>

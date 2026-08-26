@@ -65,6 +65,12 @@ def pg_db():
         "SELECT setval(pg_get_serial_sequence('users', 'id'), "
         "(SELECT MAX(id) FROM users), true)"
     )
+    # An explicit id does NOT advance the SERIAL, so the next default-id insert would also
+    # get 1 and fail on the primary key. Push the sequence past what we just seeded.
+    postgres.pg_execute(
+        "SELECT setval(pg_get_serial_sequence('users', 'id'), "
+        "(SELECT MAX(id) FROM users), true)"
+    )
     yield dsn
 
     postgres.close_pool()

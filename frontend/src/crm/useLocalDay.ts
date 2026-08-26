@@ -40,7 +40,15 @@ export function useLocalDay(): LocalDay {
     // Re-armed whenever the day changes, so this schedules one hop per day rather than a
     // polling interval. A machine waking from sleep past midnight fires it late, and the
     // recomputed value is still correct because it is read from the clock, not counted.
-    const timer = setTimeout(() => setToday(ymd(new Date())), untilNextLocalDay(new Date()));
+    //
+    // Delay 0 when the day has ALREADY moved: `today` is captured during render but this
+    // runs later, so midnight can fall in between (React may defer passive effects). Left
+    // alone, that would arm the next hop ~24h out while rendering a stale day for the
+    // whole of it. Correcting on the next tick — rather than setting state in the effect
+    // body — also keeps this clear of react-hooks/set-state-in-effect.
+    const now = new Date();
+    const delay = ymd(now) === today ? untilNextLocalDay(now) : 0;
+    const timer = setTimeout(() => setToday(ymd(new Date())), delay);
     return () => clearTimeout(timer);
   }, [today]);
 
