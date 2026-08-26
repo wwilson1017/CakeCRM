@@ -709,16 +709,27 @@ def test_the_guard_refuses_ONLY_closed_stages_not_every_invalid_one(monkeypatch)
     """The guard is `stage in CLOSED_STAGES`, not `stage not in OPEN_STAGES` — a typo
     must still get the service's own invalid-stage answer, not advice to close the
     deal. Widening the guard to the complement would break exactly this."""
-    monkeypatch.setattr(service, "update_deal_stage", lambda did, stage: None)
-    monkeypatch.setattr(service, "bulk_move_deals", lambda ids, stage: {
-        "ok": False, "updated": 0, "updated_ids": [], "errors": [f"Invalid stage: {stage}"]})
+    reached = []
+
+    def fake_single(deal_id, stage):
+        reached.append(("single", stage))
+        return None  # the service's own "invalid stage" answer
+
+    def fake_bulk(ids, stage):
+        reached.append(("bulk", stage))
+        return {"ok": False, "updated": 0, "updated_ids": [], "errors": [f"Invalid stage: {stage}"]}
+
+    monkeypatch.setattr(service, "update_deal_stage", fake_single)
+    monkeypatch.setattr(service, "bulk_move_deals", fake_bulk)
     for bad in ("banana", "Won", " lost"):
         single = tools.crm_update_deal_stage(7, bad)
         assert "crm_mark_deal_won" not in single["error"], bad
-        assert bad in single["error"], bad
         bulk = tools.crm_bulk_move_deals([1], bad)
-        assert bulk["ok"] is False, bad
         assert bulk["errors"] == [f"Invalid stage: {bad}"], bad
+    # Delegation, not just wording: the guard let every one of these through to the
+    # service. Asserting only on the message would pass if the guard swallowed them.
+    assert reached == [(kind, s) for s in ("banana", "Won", " lost")
+                       for kind in ("single", "bulk")]
 
 
 def test_open_predicate_sql_agrees_with_the_closed_stages_tuple():
