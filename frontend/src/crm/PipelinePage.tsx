@@ -446,8 +446,11 @@ export function PipelinePage() {
       // Reconcile from server truth before releasing the lock — the refetch is the authority
       // on what actually saved, and holding the lock across it keeps a drag from racing it.
       const reconciled = await load(true);
-        // Same reasoning as updateDealStage: if any deal actually landed in a stage the user
+      // Same reasoning as updateDealStage: if any deal actually landed in a stage the user
       // had put away, show that column rather than letting the rows disappear silently.
+      // Deliberately includes `skips` — classifyBulkMove carries no updated-count to gate on,
+      // and revealing a column for a batch that skipped everything is the safe direction to
+      // be wrong in (the skip notice explains itself; hidden rows would not).
       if (outcome.kind !== 'rejected') revealStage(toStage);
       const notice = describeBulkMove(outcome, ids.length, reconciled);
       if (notice) {

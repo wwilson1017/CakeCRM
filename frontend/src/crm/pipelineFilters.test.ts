@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { CrmDeal } from '../core/types';
-import { EMPTY_ADVANCED, dealMatchesAdvanced, ymd, type AdvancedFilters } from './pipelineFilters';
+import { EMPTY_ADVANCED, dealMatchesAdvanced, matchesActivityPreset, ymd, type AdvancedFilters } from './pipelineFilters';
 
 function deal(over: Partial<CrmDeal> = {}): CrmDeal {
   return {
@@ -137,5 +137,41 @@ describe('the two buckets combine with AND', () => {
     // Break each half in turn.
     expect(dealMatchesAdvanced({ ...match, expected_close_date: '2026-06-30' }, f, now)).toBe(false);
     expect(dealMatchesAdvanced({ ...match, last_activity_at: daysAgo(2) }, f, now)).toBe(false);
+  });
+});
+
+describe('activity timestamps parse through parseUTC, not bare Date', () => {
+  const now = new Date(2026, 4, 15, 12, 0, 0); // Fri 2026-05-15 12:00 local (CDT, UTC-5)
+
+  it('reads a zone-less timestamp as UTC, which can move it across a bucket boundary', () => {
+    // The falsifiable half of the fix. `le7`'s boundary here is 2026-05-08. A Postgres
+    // TIMESTAMPTZ rendered without a zone suffix MEANS UTC — but `new Date()` reads it as
+    // LOCAL, which lands it on the 8th (inside the window) instead of the 7th (outside).
+    // parseUTC appends the Z, so the deal is correctly outside `le7`.
+    const naive = '2026-05-08T02:00:00';
+    expect(dealMatchesAdvanced(
+      deal({ last_activity_at: naive }), adv({ lastActivity: 'le7' }), now,
+    )).toBe(false);
+    expect(dealMatchesAdvanced(
+      deal({ last_activity_at: naive }), adv({ lastActivity: 'stale30' }), now,
+    )).toBe(false); // still inside 30 days — only the 7-day edge moved
+  });
+
+  it('handles the SIX-fractional-digit form the backend actually emits', () => {
+    // Honest note: this one CANNOT fail on Node — V8 parses microseconds happily. It is
+    // Safari that only guarantees three digits, and the build targets Safari, which is why
+    // parseUTC truncates. Kept as a statement of the input shape, not as a regression guard.
+    const sixDigits = '2026-05-13T09:15:30.123456+00:00';
+    expect(dealMatchesAdvanced(
+      deal({ last_activity_at: sixDigits }), adv({ lastActivity: 'le7' }), now,
+    )).toBe(true);
+  });
+
+  it('exposes the bucket rule for other surfaces without duplicating it', () => {
+    // #77's Contacts list filters `last_contact_at` through this same export, so the two
+    // surfaces cannot drift about where "stale" begins.
+    expect(matchesActivityPreset('2026-05-13T09:15:30.123456+00:00', 'le7', now)).toBe(true);
+    expect(matchesActivityPreset(null, 'none', now)).toBe(true);
+    expect(matchesActivityPreset(null, 'stale30', now)).toBe(true);
   });
 });

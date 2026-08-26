@@ -204,6 +204,8 @@ export interface KanbanViewConfig<T> {
    *    `CollectionKanbanProps.dragDisabled` extras (mobile, a bulk write in flight) apply.
    *    Declaring this while still persisting `newIndex` would silently save a position derived
    *    from a partial list, so it is a claim about the app's `onMove`, not a styling choice.
+   *    The type cannot enforce that yet — making `newIndex` structurally unavailable under
+   *    `'column'` is tracked in issue #112.
    */
   dragPolicy?: 'index' | 'column';
 }
@@ -466,6 +468,11 @@ export interface CollectionViewProps<T, C = unknown> {
    * routes a page-initiated clear (a deep link, an app-level "reset filters") to it, instead
    * of the caller re-keying the whole subtree and losing the disclosure panel, the list's
    * show-all and the board's scroll position with it.
+   *
+   * MUST only ever INCREASE. It is summed with the bar's own internal counter, and both are
+   * compared with `!==`, so a monotone value can never be cancelled out by the other source;
+   * a caller that decremented could land on a sum the box has already seen and swallow a
+   * reset. Bump it (`n => n + 1`), never assign it.
    */
   searchResetNonce?: number;
   loading?: CollectionLoadingProps;
