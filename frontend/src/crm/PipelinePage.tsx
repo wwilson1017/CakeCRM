@@ -37,6 +37,22 @@ interface PipelineData {
   deals: CrmDeal[];
 }
 
+/**
+ * The refusal `writeDeal` raises while a bulk move owns the board — its own type, not a bare
+ * `Error`, so a caller can tell "we never sent this" apart from "the server rejected it".
+ *
+ * That distinction is what keeps the toasts honest. `writeDeal` already reports a failed stage
+ * PUT itself, so a caller that reported every rejection would double-toast a genuine server
+ * failure; one that reported none would let a bulk-lock refusal — which `writeDeal` cannot
+ * toast, since it rejects before doing any work — vanish silently.
+ */
+class BulkLockError extends Error {
+  constructor() {
+    super('A bulk update is in progress — try again in a moment.');
+    this.name = 'BulkLockError';
+  }
+}
+
 // The `CollectionDetail` host config is shared with `CrmDashboardPage` — see `dealDetailConfig.ts`
 // for why (both hosts open deals into the same shell, and `loadById` is what resolves an
 // off-board or archived deal for a shared `?deal=` link; its board-position writes are then
@@ -185,10 +201,11 @@ export function PipelinePage() {
   // The detail panel's inline Save comes through here too, carrying its changed columns in the
   // SAME patch as any stage change — one PUT, because the server settles `probability` to 100/0
   // inside the transaction that moves the stage, so a stage write and a probability write split
-  // across two requests is a race whose loser silently wins. Everything stage-specific below is
-  // therefore conditional on the patch actually carrying a stage; a fields-only write still takes
-  // a sequence number and still rides this deal's chain, so it is ordered against a concurrent
-  // drag of the same card rather than racing it.
+  // across two requests is a race whose loser silently wins. What a fields-only write does NOT do
+  // is therefore conditional on the patch carrying a stage — it paints nothing, records no
+  // confirmed stage, and announces no failed move — while still taking a sequence number and
+  // riding this deal's chain, so it is ordered against a concurrent drag rather than racing it.
+  // The REVERT is the one step that is unconditional; see the catch block for why.
   const writeDeal = useCallback((deal: CrmDeal, patch: DealPatch, fromStage?: string): Promise<void> => {
     // A bulk move in flight owns the board until its reconcile refetch lands. A single-deal
     // write started now could reconcile (or roll back) against the stage the bulk request is
@@ -196,7 +213,7 @@ export function PipelinePage() {
     // than returning quietly: dropping a redundant drag is invisible and fine, but dropping the
     // field edit someone just typed is not — the caller surfaces it and keeps the form open.
     if (bulkPendingRef.current) {
-      return Promise.reject(new Error('A bulk update is in progress — try again in a moment.'));
+      return Promise.reject(new BulkLockError());
     }
     const dealId = deal.id;
     const toStage = patch.stage;
@@ -240,21 +257,30 @@ export function PipelinePage() {
         fail(err);
         if (dealOpSeq.current.get(dealId) !== seq) return; // superseded — leave the newer state
         console.error('Failed to write deal:', err);
-        if (toStage !== undefined) {
-          toast.error('Failed to move deal.');
-          // Revert to the last server-confirmed stage, not this op's optimistic
-          // fromStage: if an earlier chained write for this deal also failed, fromStage
-          // is an intermediate the server never stored, so it would leave the board out
-          // of sync until the next load. `?? fromStage` covers a deal with no confirmed
-          // entry yet (a first move, where fromStage IS the confirmed stage).
-          const confirmed = dealConfirmedStage.current.get(dealId) ?? fromStage ?? deal.stage;
-          setData(prev => prev ? {
-            ...prev,
-            deals: prev.deals.map(d => d.id === dealId ? { ...d, stage: confirmed } : d),
-          } : prev);
-        }
-        // A fields-only write painted nothing, so there is nothing to revert and no toast: the
-        // form shows the error inline, next to the draft it is asking the user to retry.
+        // THE LAST WRITER TO FAIL OWNS THE RECONCILIATION, whatever it happened to be writing.
+        // A superseded stage write returns above without reverting (correctly — a newer op is
+        // painting), so the optimistic stage it left on the board is only ever cleaned up by
+        // whichever op for this deal ends up being the latest — and since the detail form shares
+        // this chain, that op may well be a fields-only save carrying no stage of its own. Gating
+        // the revert on `toStage` therefore stranded a stage nobody stored: drag to won (seq 1),
+        // save a field (seq 2), both fail, board keeps showing won until the next full load.
+        //
+        // So restore from server truth unconditionally. Where no optimistic paint is outstanding
+        // this writes back the value already on screen (a harmless no-op); where one IS, this is
+        // exactly the repair. Server-confirmed rather than this op's `fromStage`, because an
+        // earlier failed write in the chain makes `fromStage` an intermediate that never
+        // persisted; `?? fromStage` covers a deal with no confirmed entry yet (a first move,
+        // where fromStage IS the confirmed stage).
+        const confirmed = dealConfirmedStage.current.get(dealId) ?? fromStage ?? deal.stage;
+        setData(prev => prev ? {
+          ...prev,
+          deals: prev.deals.map(d => d.id === dealId ? { ...d, stage: confirmed } : d),
+        } : prev);
+        // The TOAST stays stage-only, unlike the revert. A fields-only write announced no move,
+        // so announcing a failed one would report a board change nobody asked for — its form
+        // shows the error inline, next to the draft it is asking the user to retry. (A superseded
+        // stage write staying silent is the deliberate "leave the newer state" rule above.)
+        if (toStage !== undefined) toast.error('Failed to move deal.');
       } finally {
         pendingWrites.current--; // write settled (reconciled or reverted)
         // Once ALL writes have settled, fire any silent refresh that was deferred while a
@@ -289,17 +315,34 @@ export function PipelinePage() {
     return Promise.resolve();
   }, [writeDeal]);
 
-  // Detail-panel handler (Mark Won / Lost) — optimistic move + close the panel. Also refresh
-  // the board (like the close path) so a note/activity logged in the panel before this dismissal
-  // lands its last_activity_at; if a stage move fired, the refresh defers until that PUT settles.
-  const updateDealStage = useCallback((deal: CrmDeal, stage: string) => {
-    if (deal.stage !== stage) void writeDeal(deal, { stage }, deal.stage).catch(() => {});
+  // Detail-panel handler (Mark Won / Lost) — optimistic move, then close the panel ON SUCCESS
+  // ONLY. Closing is this page's way of saying "that deal is closed now", so it has to wait for
+  // the write: `writeDeal` REJECTS outright under the bulk lock, before any toast of its own, and
+  // a fire-and-forget close there dismissed the panel as though the deal had been closed when
+  // nothing was even sent. On rejection the panel stays open with the reason on screen, which is
+  // also the honest answer for a server refusal (an archived deal cannot change stage).
+  // The refresh on the way out is the close path's, so a note/activity logged in the panel before
+  // this dismissal lands its last_activity_at; it defers until the stage PUT settles.
+  const updateDealStage = useCallback(async (deal: CrmDeal, stage: string) => {
+    if (deal.stage !== stage) {
+      try {
+        await writeDeal(deal, { stage }, deal.stage);
+      } catch (err) {
+        // Report ONLY the refusal `writeDeal` cannot report itself. A stage PUT that reached the
+        // server and failed has already raised its own toast in there; toasting again here would
+        // say the same thing twice.
+        if (err instanceof BulkLockError) toast.error(err.message);
+        return;
+      }
+    }
     setSelectedDealId(null);
     load(true);
   }, [writeDeal, load]);
 
-  const markWon = useCallback((deal: CrmDeal) => updateDealStage(deal, 'won'), [updateDealStage]);
-  const markLost = useCallback((deal: CrmDeal) => updateDealStage(deal, 'lost'), [updateDealStage]);
+  // `void` rather than returning the promise: the body's `onMarkWon`/`onMarkLost` are `void`
+  // callbacks it fires without awaiting — the host owns its own error reporting, above.
+  const markWon = useCallback((deal: CrmDeal) => { void updateDealStage(deal, 'won'); }, [updateDealStage]);
+  const markLost = useCallback((deal: CrmDeal) => { void updateDealStage(deal, 'lost'); }, [updateDealStage]);
   // The inline form's ONE save. The patch may carry `stage`; `writeDeal` handles that itself.
   const saveDeal = useCallback(
     (deal: CrmDeal, patch: DealPatch) => writeDeal(deal, patch, deal.stage),
@@ -526,13 +569,21 @@ export function PipelinePage() {
   // with it left the param stuck in the address bar forever the second time the same stage was
   // linked, since the guard returned before the delete could run.
   //
+  // A stage that is NOT in STAGE_ORDER (a typo, a renamed stage, an empty `?stage=`) is deleted
+  // immediately and regardless of `data`: waiting for the board is only meaningful for a value
+  // something will eventually scroll to, and nothing ever scrolls to a column that cannot exist —
+  // so the old `data && valid` gate left a bad parameter in the address bar forever.
+  //
   // ?deal=N: already consumed into state at render time above, so it is deleted unconditionally
   // — a board that never loads at all must still leave a clean address bar.
   useEffect(() => {
     const next = new URLSearchParams(searchParams);
     const s = searchParams.get('stage');
-    if (!s) scrolledStage.current = null; // re-arm, so a later link to the same stage scrolls again
-    if (data && s && STAGE_ORDER.includes(s)) {
+    if (s === null) {
+      scrolledStage.current = null; // re-arm, so a later link to the same stage scrolls again
+    } else if (!STAGE_ORDER.includes(s)) {
+      next.delete('stage');
+    } else if (data) {
       if (scrolledStage.current !== s) {
         scrolledStage.current = s;
         columnRefs.current.get(s)?.scrollIntoView({ behavior: 'smooth', inline: 'start', block: 'nearest' });

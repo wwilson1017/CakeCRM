@@ -248,4 +248,39 @@ describe('the inline save', () => {
     expect(callsTo('/api/crm/dashboard').length).toBe(dashboardLoadsBefore + 1);
     expect(callsTo('/api/crm/analytics').length).toBeGreaterThan(1);
   });
+
+  it('shows the saved value immediately, without waiting for the reload to answer', async () => {
+    // `DealDetailBody`'s `view` deliberately lets the HOST row win over its own detail fetch for a
+    // deal the host holds canonically — and a `top_deals` row is exactly that. So the reload is not
+    // enough on its own: until it lands, the panel repaints the PRE-SAVE row the moment edit mode
+    // closes, and if the reload never lands it does so permanently. The PUT's own response is what
+    // closes that window.
+    //
+    // The reload here never resolves, which is what makes the assertion about the patch and not
+    // about the refetch.
+    let dashboardLoads = 0;
+    api.mockImplementation((path: string, options?: ApiCallOptions) => {
+      if (path === '/api/crm/dashboard') {
+        dashboardLoads += 1;
+        return dashboardLoads === 1 ? Promise.resolve(DASHBOARD) : new Promise(() => {});
+      }
+      if (options?.method === 'PUT') return Promise.resolve({ ...TOP_DEAL, title: 'Renamed' });
+      return routeApi(path, options);
+    });
+
+    render();
+    await settle();
+    click(rowContaining('Wholesale order'));
+    await settle();
+    click(buttonByText('Edit'));
+    await settle();
+    setField('deal-title', 'Renamed');
+    click(buttonByText('Save'));
+    await settle();
+
+    // The shell's title comes from the row the host holds (`items`), so this asserts the patch
+    // itself rather than anything the body could have kept from its own draft.
+    expect(dialogTitle()).toBe('Renamed');
+    expect(container.querySelector('[role="dialog"] h3')?.textContent).toBe('Renamed');
+  });
 });

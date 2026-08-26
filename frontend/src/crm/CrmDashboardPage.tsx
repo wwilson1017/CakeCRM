@@ -97,10 +97,24 @@ export function CrmDashboardPage() {
   }
 
   // The inline form's ONE save — stage and columns in the same PUT (see `DealPatch`). It rethrows
-  // so the body can keep the user's draft on screen; there is no board here to reconcile, so a
-  // plain reload is the whole reconciliation.
+  // so the body can keep the user's draft on screen.
+  //
+  // The canonical row is patched from the PUT's own response BEFORE the broader reload starts,
+  // and that is not belt-and-braces: `DealDetailBody`'s `view` deliberately lets the HOST row win
+  // over its own detail fetch for any deal the host holds canonically, and a `top_deals` row is
+  // exactly that. Leaving the stale row in place therefore shows pre-save values the moment edit
+  // mode closes — and keeps showing them for good if the reload never lands. `reload()` is still
+  // the reconciliation for everything else on the page (there is no board to patch a row into).
   async function saveDeal(deal: CrmDeal, patch: DealPatch) {
-    await api(`/api/crm/deals/${deal.id}`, { method: 'PUT', body: JSON.stringify(patch) });
+    const updated = await api<CrmDeal>(`/api/crm/deals/${deal.id}`, {
+      method: 'PUT', body: JSON.stringify(patch),
+    });
+    setData(prev => prev ? {
+      // Merged, not replaced: the PUT response and the dashboard's `top_deals` query select
+      // different columns. A deal that is not in the list is left alone.
+      ...prev,
+      top_deals: prev.top_deals.map(d => d.id === deal.id ? { ...d, ...updated } : d),
+    } : prev);
     reload();
   }
 

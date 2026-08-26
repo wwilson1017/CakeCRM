@@ -443,9 +443,23 @@ export function DealDetailBody({ deal, onBoard, stageWritable, ctx, onMarkWon, o
   );
   useEffect(() => ctx.registerCloseGuard(canLeave), [ctx, canLeave]);
 
-  /** A leave this body performs itself, so the layer never sees it — ask the same guard. */
+  /**
+   * A leave this body performs itself, so the layer never sees it — ask the same guard, and hold
+   * the same ONE-IN-FLIGHT lock `CollectionDetail.request`'s `pendingRef` holds. The body's own
+   * exits bypass `request()` entirely, so without this they were the one unlocked leave path:
+   * `canLeave` is async, and when the body is NOT dirty it resolves in a microtask with no dialog
+   * at all, so two fast clicks both cleared it and ran the action twice — a double stage write,
+   * or two navigations.
+   */
+  const leavingRef = useRef(false);
   const leaveVia = useCallback(async (run: () => void) => {
-    if (await canLeave('button')) run();
+    if (leavingRef.current) return;
+    leavingRef.current = true;
+    try {
+      if (await canLeave('button')) run();
+    } finally {
+      leavingRef.current = false;
+    }
   }, [canLeave]);
 
   function startEditing() {
@@ -524,7 +538,10 @@ export function DealDetailBody({ deal, onBoard, stageWritable, ctx, onMarkWon, o
       await navigator.clipboard.writeText(`${window.location.origin}${dealDeepLink(view.id)}`);
       toast.success('Link copied.');
     } catch {
-      toast.error('Could not copy — select the link and copy it manually.');
+      // No "select it manually" fallback offered, because there is nothing to select: this panel
+      // renders no link, and the address bar has had `?deal=` stripped by design. Naming the
+      // cause is the only instruction the user can actually act on.
+      toast.error('Could not copy the link — the browser blocked clipboard access.');
     }
   }
 

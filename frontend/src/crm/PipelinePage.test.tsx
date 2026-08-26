@@ -169,6 +169,12 @@ const cardTitled = (title: string) =>
   [...container.querySelectorAll<HTMLElement>('[role="button"]')]
     .find(el => el.textContent?.includes(title)) ?? null;
 
+/** Which column a card is RENDERED in — the board's own answer, not `data.deals`' stage field.
+ *  `renderColumn` stamps `data-stage`, and the detail panel is a sibling of the whole board, so
+ *  a column's text is only its own cards. */
+const stageColumn = (stage: string) =>
+  container.querySelector<HTMLElement>(`[data-stage="${stage}"]`);
+
 /** React tracks the DOM value node-side, so a bare `el.value = x` is swallowed as a no-op. */
 function setValue(el: HTMLInputElement | HTMLSelectElement | null, value: string) {
   const target = el as HTMLInputElement | HTMLSelectElement;
@@ -259,6 +265,15 @@ describe('the two deep-link params together', () => {
     expect(probe.search).toBe('');
   });
 
+  it('strips a stage that is not a stage at all', async () => {
+    // Deleting only VALID stages left `?stage=bogus` in the address bar forever: it never matches
+    // `STAGE_ORDER`, so the delete never ran. Nothing will ever scroll to a column that cannot
+    // exist, so there is nothing for the parameter to be waiting on.
+    renderAt('/crm/pipeline?stage=bogus');
+    await settle();
+    expect(probe.search).toBe('');
+  });
+
   // The SCROLL half of that guard is not asserted here: the `KanbanBoard` stub renders columns
   // but jsdom does no layout, so `scrollIntoView` is a stub with nothing to measure. The parameter
   // handling above is the part that broke and the part this suite owns; the scroll itself is
@@ -313,6 +328,58 @@ describe('writeDeal: a fields-only save', () => {
   });
 });
 
+describe('writeDeal: a chain where BOTH writes fail', () => {
+  it('reverts the optimistic stage even though the last write carried no stage', async () => {
+    // The failure the `toStage !== undefined` revert gate could not see. A stage write paints 'won'
+    // (seq 1); an inline field save queues behind it on the same per-deal chain (seq 2); the stage
+    // PUT fails, but by then it is SUPERSEDED so it returns before reverting — correctly, since a
+    // newer op owns the board. The newer op then fails too, and it is carrying no stage of its own,
+    // so gating its revert on `toStage` left the board showing a stage the server never stored,
+    // silently, until the next full load.
+    //
+    // The rule that replaces it: the last writer to fail owns the reconciliation, whatever it was
+    // writing.
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const pendingPuts: { reject: (err: unknown) => void }[] = [];
+    const defaults = api.getMockImplementation()!;
+    api.mockImplementation((path: string, options?: ApiCallOptions) =>
+      options?.method === 'PUT'
+        ? new Promise((_resolve, reject) => { pendingPuts.push({ reject }); })
+        : defaults(path, options));
+
+    renderAt('/crm/pipeline?deal=5');
+    await settle();
+    expect(stageColumn('lead')!.textContent).toContain('Wholesale order');
+
+    // seq 1 — a stage write, painted optimistically and left in flight.
+    click(buttonByText('Mark Won'));
+    await settle();
+    expect(stageColumn('won')!.textContent).toContain('Wholesale order');
+    expect(pendingPuts).toHaveLength(1);
+
+    // seq 2 — a fields-only save, queued BEHIND seq 1 (its PUT has not been issued yet).
+    click(buttonByText('Edit'));
+    await settle();
+    setField('deal-title', 'Renamed');
+    click(buttonByText('Save'));
+    await settle();
+    expect(pendingPuts).toHaveLength(1);
+
+    // seq 1 fails while superseded: no revert here, by design.
+    await act(async () => { pendingPuts[0].reject(new Error('stage write failed')); });
+    await settle();
+    expect(pendingPuts).toHaveLength(2);
+    expect(stageColumn('won')!.textContent).toContain('Wholesale order');
+
+    // seq 2 fails, and it is the latest — so IT reconciles, back to the server-confirmed stage.
+    await act(async () => { pendingPuts[1].reject(new Error('field write failed')); });
+    await settle();
+    expect(stageColumn('lead')!.textContent).toContain('Wholesale order');
+    expect(stageColumn('won')!.textContent).not.toContain('Wholesale order');
+    consoleError.mockRestore();
+  });
+});
+
 describe('the bulk lock', () => {
   it('rejects an inline field save while a bulk move is in flight, rather than silently succeeding', async () => {
     // Dropping a redundant drag under the lock is invisible and fine; dropping the field edit
@@ -353,6 +420,77 @@ describe('the bulk lock', () => {
     // Let the bulk finish so the page unmounts with nothing in flight.
     await act(async () => { releaseBulk({ ok: true, updated_ids: [5, 6] }); });
     await settle();
+  });
+
+  it('keeps the panel OPEN when Mark Won is refused, instead of reporting a close that never happened', async () => {
+    // Closing the panel is this page's way of saying "that deal is closed now". Under the lock
+    // `writeDeal` rejects before it sends anything and before any toast of its own, so a
+    // fire-and-forget close dismissed the panel on a write the server never saw — the deal stayed
+    // open, and nothing on screen said so.
+    let releaseBulk: (v: unknown) => void = () => {};
+    const defaults = api.getMockImplementation()!;
+    api.mockImplementation((path: string, options?: ApiCallOptions) =>
+      path === '/api/crm/deals/bulk-move'
+        ? new Promise(res => { releaseBulk = res; })
+        : defaults(path, options));
+
+    renderAt('/crm/pipeline');
+    await settle();
+    click(byLabel('Select all lead deals'));
+    setValue(byLabel<HTMLSelectElement>('Move selected deals to stage'), 'proposal');
+    click(buttonByText('Apply'));
+    await settle();
+
+    click(cardTitled('Wholesale order'));
+    await settle();
+    expect(dialogTitle()).toBe('Wholesale order');
+
+    click(buttonByText('Mark Won'));
+    await settle();
+
+    expect(dialogTitle()).toBe('Wholesale order');
+    expect(callsWithMethod('PUT')).toHaveLength(0);
+    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('A bulk update is in progress'));
+
+    await act(async () => { releaseBulk({ ok: true, updated_ids: [5, 6] }); });
+    await settle();
+  });
+});
+
+describe('the body\'s own exits', () => {
+  it('reports a SERVER-refused Mark Won exactly once, not once per layer', async () => {
+    // `writeDeal` already toasts a failed stage PUT itself, so the caller must report only the
+    // refusal `writeDeal` cannot — the bulk lock, which rejects before doing any work. Reporting
+    // every rejection says the same thing twice; reporting none loses the lock refusal entirely.
+    // The two are told apart by TYPE (`BulkLockError`), never by matching the message text.
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const defaults = api.getMockImplementation()!;
+    api.mockImplementation((path: string, options?: ApiCallOptions) =>
+      options?.method === 'PUT'
+        ? Promise.reject(new Error('boom'))
+        : defaults(path, options));
+
+    renderAt('/crm/pipeline?deal=5');
+    await settle();
+    click(buttonByText('Mark Won'));
+    await settle();
+
+    expect(toast.error.mock.calls).toEqual([['Failed to move deal.']]);
+    consoleError.mockRestore();
+  });
+
+  it('runs Mark Won once when the button is double-clicked', async () => {
+    // The body's own leave paths never reach `CollectionDetail.request()`, so they never had its
+    // one-in-flight lock. `leaveVia` awaits `canLeave`, and on a CLEAN body that resolves in a
+    // microtask with no dialog at all — so two clicks landing in the same task both cleared the
+    // guard and both ran the action: two stage writes for one gesture (or, on the contact/company
+    // links, two navigations).
+    renderAt('/crm/pipeline?deal=5');
+    await settle();
+    const markWon = buttonByText('Mark Won')!;
+    act(() => { markWon.click(); markWon.click(); });
+    await settle();
+    expect(callsWithMethod('PUT')).toHaveLength(1);
   });
 });
 
