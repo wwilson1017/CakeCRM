@@ -341,3 +341,30 @@ describe('an empty board shows ONE explanation, not two', () => {
     expect(text()).not.toContain('No deals match your filters.');
   });
 });
+
+describe('a selected card is styled without mixing border shorthand and longhand', () => {
+  it('sets the border shorthand on selection, never the borderColor longhand', async () => {
+    await mount();
+    const card = [...document.querySelectorAll('[role="button"]')]
+      .find(el => (el.textContent ?? '').includes('Alpha contract')) as HTMLElement;
+    expect(card).toBeDefined();
+
+    await act(async () => {
+      document.querySelector<HTMLInputElement>('input[aria-label="Select Alpha contract"]')!.click();
+    });
+
+    // React warns on every selection toggle when a longhand lands in an object that already
+    // carries the shorthand, and which wins becomes order-dependent. The selected card must
+    // therefore restate `border`/`border-left`, and leave `border-color` alone.
+    // Asserting on the raw attribute, and only on the part jsdom can actually represent:
+    // its CSS parser drops a `border` SHORTHAND whose value contains `var()`, so the
+    // shorthand is invisible here even though a browser applies it. What survives — and what
+    // the React warning was actually about — is whether a `border-color` LONGHAND appears
+    // alongside it. It must not.
+    const style = card.getAttribute('style') ?? '';
+    expect(style).not.toContain('border-color');
+    // ...and the selected styling really did apply (accent left edge + ring).
+    expect(style).toContain('border-left: 3px solid var(--color-ck-accent)');
+    expect(style).toContain('box-shadow');
+  });
+});

@@ -960,7 +960,20 @@ function DealBoardCard({ deal, columnStage, onOpen, selectable = false, isSelect
       onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); } }}
       style={{
         ...stageCard(bg, color), padding: '10px 12px', cursor: 'pointer',
-        ...(isSelected ? { borderColor: ACCENT, boxShadow: `0 0 0 1px ${tint(ACCENT, 40)}` } : {}),
+        // Restates the same two properties `stageCard` sets rather than reaching for the
+        // `borderColor` longhand: mixing a longhand into an object that already carries the
+        // `border` shorthand makes React warn on every selection toggle ("Updating a style
+        // property during rerender when a conflicting property is set"), and which one wins
+        // is then order-dependent. Visually identical — the whole border goes accent, the
+        // left edge keeps its 3px weight. Pre-existing since #55; fixed here because this
+        // PR owns the file.
+        ...(isSelected
+          ? {
+              border: `1px solid ${ACCENT}`,
+              borderLeft: `3px solid ${ACCENT}`,
+              boxShadow: `0 0 0 1px ${tint(ACCENT, 40)}`,
+            }
+          : {}),
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
