@@ -126,15 +126,15 @@ _TASK_SORTS = {
 }
 
 
-def _count_or_none(after_id: int | None, sql: str, params: list) -> int | None:
-    """Total matching rows, or None on a cursor page (see list_contacts for why)."""
-    if after_id is not None:
+def _count_or_none(sort: str, sql: str, params: list) -> int | None:
+    """Total matching rows, or None for an assembly request (see list_contacts for why)."""
+    if sort == "id":
         return None
     row = pg_fetchone(sql, params)
     return row["cnt"] if row else 0
 
 
-def _check_assembly_cursor(after_id: int | None, sort: str) -> None:
+def _check_assembly_cursor(after_id: int | None, sort: str, offset: int = 0) -> None:
     """Refuse a keyset cursor against any order but the immutable id one (#77).
 
     ``after_id`` means "the rows after this one IN THE CURRENT ORDER". Under `updated_at`
@@ -142,9 +142,17 @@ def _check_assembly_cursor(after_id: int | None, sort: str) -> None:
     stable — so the window would silently skip and repeat rows. Failing loudly beats
     paginating wrong, and beats silently ignoring the parameter (which looks identical to
     a client bug that re-reads page one forever).
+
+    A cursor combined with a non-zero OFFSET is refused for the same reason: the two are
+    competing ways to say where the window starts, and applying both skips exactly
+    `offset` eligible rows with no error.
     """
-    if after_id is not None and sort != "id":
+    if after_id is None:
+        return
+    if sort != "id":
         raise ValueError("after_id is only valid with sort='id'")
+    if offset:
+        raise ValueError("after_id cannot be combined with a non-zero offset")
 
 # The six ASCII whitespace bytes (space, tab, LF, CR, FF, VT). Company names are
 # trimmed with THIS set (not Python's Unicode-aware str.strip()) so the value the
@@ -352,7 +360,7 @@ def list_contacts(
     tags: str | None = None, sort: str = "updated_at",
     owner_id: int | None = None, after_id: int | None = None,
 ) -> dict:
-    _check_assembly_cursor(after_id, sort)
+    _check_assembly_cursor(after_id, sort, offset)
     order_by = _contact_order_by(sort)
 
     conditions = []
@@ -377,14 +385,12 @@ def list_contacts(
 
     # The count needs no join — its WHERE only touches ct columns (the alias is
     # here so the shared qualified conditions parse).
-    # A cursor request is by definition a continuation, and the client already has the
-    # total from the first page — so skip the COUNT there. It is not free: a corpus sweep
-    # is up to MAX_PAGES requests, and re-counting the whole filtered set on every one of
-    # them would roughly double the query volume of the heaviest read path in the app for
-    # a number nobody reads twice. `total` is None on those pages, never a wrong integer.
-    total = _count_or_none(
-        after_id, f"SELECT COUNT(*) AS cnt FROM contacts ct {where}", params
-    )
+    # `sort=id` IS the corpus sweep, and the sweep never reads `total` — it derives
+    # hasMore from an extra row. Counting anyway would add a scan of the whole filtered
+    # set to every one of up to MAX_PAGES requests, on the heaviest read path in the app,
+    # for a number with no consumer. `total` is None there, never a wrong integer; every
+    # other caller is unaffected.
+    total = _count_or_none(sort, f"SELECT COUNT(*) AS cnt FROM contacts ct {where}", params)
 
     # The cursor is deliberately NOT in the shared conditions above. That rule exists for
     # FILTERS — a status or owner narrowing the rows but not the COUNT reports a total that
@@ -678,7 +684,7 @@ def list_companies(
     offset: int = 0, limit: int = 50, status: str | None = None, sort: str = "name",
     owner_id: int | None = None, after_id: int | None = None,
 ) -> dict:
-    _check_assembly_cursor(after_id, sort)
+    _check_assembly_cursor(after_id, sort, offset)
     allowed_sorts = {"name", "industry", "created_at", "updated_at", "id"}
     sort_col = sort if sort in allowed_sorts else "name"
     # Names/industry read best ascending; timestamps newest-first. Append an id
@@ -699,8 +705,8 @@ def list_companies(
         params.append(owner_id)
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
-    # Skipped on a cursor page — see list_contacts.
-    total = _count_or_none(after_id, f"SELECT COUNT(*) AS cnt FROM companies {where}", params)
+    # Skipped for an assembly request — see list_contacts.
+    total = _count_or_none(sort_col, f"SELECT COUNT(*) AS cnt FROM companies {where}", params)
 
     # Window, not filter — see the same note in list_contacts.
     row_conditions = conditions + (["id > %s"] if after_id is not None else [])

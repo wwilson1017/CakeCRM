@@ -32,6 +32,7 @@ import { pageHeading, btnPrimary, btnSecondary, btnSmall } from './styles';
 import { makeContactsCollectionConfig } from './collectionConfig';
 import { buildContactColumns } from './listColumns';
 import { useCrmCorpus, type CrmCorpus } from './usePatchableAssembly';
+import { useLocalDay } from './useLocalDay';
 import { RefreshButton } from './components/RefreshButton';
 
 // Module scope: the columns take no runtime deps, and the config they feed must be
@@ -87,6 +88,9 @@ export function ContactsPage() {
         <ContactForm
           onClose={() => setShowCreate(false)}
           onSaved={saved => { setShowCreate(false); upsert(saved); }}
+          // A save whose outcome is unknown may have committed — re-sweep rather
+          // than keep rendering a corpus we can no longer vouch for.
+          onWriteUncertain={retry}
         />
       )}
       {showImport && (
@@ -105,9 +109,12 @@ function ContactsCollection(
   { corpus, owners }: { corpus: CrmCorpus<CrmContact>; owners: FacetOption[] | null },
 ) {
   const navigate = useNavigate();
+  // `now` changes once a day, which is what re-runs the Last-contact facet against the
+  // new boundary — a predicate alone never would, since nothing re-renders at midnight.
+  const { now } = useLocalDay();
   const config = useMemo(
-    () => makeContactsCollectionConfig({ columns: CONTACT_COLUMNS, owners }),
-    [owners],
+    () => makeContactsCollectionConfig({ columns: CONTACT_COLUMNS, owners, now }),
+    [owners, now],
   );
   const rows = corpus.items ?? NO_ROWS;
   const state = useCollectionState(config, rows);

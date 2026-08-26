@@ -119,6 +119,8 @@ export interface ContactsConfigDeps {
   columns: ListColumn<CrmContact>[];
   /** null ⇒ single-seat install, no Owner facet. */
   owners: FacetOption[] | null;
+  /** The viewer's current local day (see useLocalDay) — the recency buckets pivot on it. */
+  now: Date;
 }
 
 export function makeContactsCollectionConfig(deps: ContactsConfigDeps): CollectionConfig<CrmContact> {
@@ -137,9 +139,10 @@ export function makeContactsCollectionConfig(deps: ContactsConfigDeps): Collecti
     {
       kind: 'single', key: 'lastContact', label: 'Last contact',
       options: LAST_CONTACT_OPTIONS,
-      // `now` is read per evaluation rather than captured, so a tab left open overnight
-      // re-buckets against today instead of the day it was opened.
-      predicate: (c, v) => matchesActivityPreset(c.last_contact_at, v as ActivityPreset, new Date()),
+      // `now` is passed in rather than read here, because a predicate only runs when
+      // React re-renders — see useLocalDay. Taking it as a parameter also makes the
+      // config's day-dependence explicit, which is what advances it at midnight.
+      predicate: (c, v) => matchesActivityPreset(c.last_contact_at, v as ActivityPreset, deps.now),
     },
   ];
   return {
@@ -209,6 +212,14 @@ export const TASK_PRIORITY_OPTIONS: FacetOption[] = [
 const PRIORITY_RANK: Record<string, number> = { high: 3, medium: 2, low: 1 };
 
 export const TASK_SORT_FIELDS = [
+  // The server's historical order (`completed ASC, due_date ASC`) as ONE getter, because
+  // the layer sorts by a single value per field. Without it the "All" view interleaves
+  // done and open tasks, which the old tab bar never did. '~' sorts after every digit in
+  // ASCII, so an undated task lands last WITHIN its group rather than last overall.
+  {
+    value: 'open_due', label: 'Open first, then due',
+    get: (t: CrmTask) => `${t.completed ? 1 : 0}|${t.due_date || '~'}`,
+  },
   // due_date is a date-only string, so lexicographic order IS chronological; '' (unset)
   // maps to null and therefore sorts LAST in both directions — an improvement on the
   // server order, which put undated tasks first.
@@ -218,7 +229,7 @@ export const TASK_SORT_FIELDS = [
   { value: 'created_at', label: 'Recently added', get: (t: CrmTask) => isoMillis(t.created_at) },
 ] as const satisfies readonly SortFieldDef<CrmTask>[];
 
-export const TASK_DEFAULT_SORT: SortState = { field: 'due', dir: 'asc' };
+export const TASK_DEFAULT_SORT: SortState = { field: 'open_due', dir: 'asc' };
 
 export type DuePreset = 'overdue' | 'today' | 'next7' | 'none';
 
@@ -277,6 +288,8 @@ export interface TasksConfigDeps {
   columns: ListColumn<CrmTask>[];
   owners: FacetOption[] | null;
   doneFacet: DoneFacetRenderers;
+  /** The viewer's current local day (see useLocalDay) — the due buckets pivot on it. */
+  now: Date;
 }
 
 export function makeTasksCollectionConfig(deps: TasksConfigDeps): CollectionConfig<CrmTask> {
@@ -302,7 +315,7 @@ export function makeTasksCollectionConfig(deps: TasksConfigDeps): CollectionConf
     {
       kind: 'single', key: 'due', label: 'Due',
       options: TASK_DUE_OPTIONS,
-      predicate: (t, v) => matchesDuePreset(t, v as DuePreset, new Date()),
+      predicate: (t, v) => matchesDuePreset(t, v as DuePreset, deps.now),
     },
     { key: 'priority', label: 'Priority', getValue: t => t.priority || null, options: TASK_PRIORITY_OPTIONS },
     ...(deps.owners ? [ownerFacet<CrmTask>(deps.owners)] : []),

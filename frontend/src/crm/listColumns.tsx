@@ -24,7 +24,6 @@ import type { CrmCompany, CrmContact, CrmTask } from '../core/types';
 import { PriorityBadge, ScorePill, StatusBadge } from './components/badges';
 import { LINE_STRONG, SAGE, tint } from '../shared/styles';
 import { formatAge, dueLabel } from './gtd/util';
-import { ymd } from './pipelineFilters';
 import {
   CONTACT_SORT_FIELDS, COMPANY_SORT_FIELDS, TASK_SORT_FIELDS,
   DONE_OPTIONS, type DoneFacetRenderers, type DonePreset,
@@ -123,7 +122,9 @@ export function buildCompanyColumns(): ListColumn<CrmCompany>[] {
  * open the row's detail — hence `stopPropagation`, the same trick the blueprint's Company
  * cell uses for its cross-navigation button.
  */
-export function buildTaskColumns(onToggleComplete: (task: CrmTask) => void): ListColumn<CrmTask>[] {
+export function buildTaskColumns(
+  onToggleComplete: (task: CrmTask) => void, today: string,
+): ListColumn<CrmTask>[] {
   const cols: (ListColumn<CrmTask> & { key: TaskSortKey | Display<'done'> })[] = [
     {
       key: 'done',
@@ -168,10 +169,10 @@ export function buildTaskColumns(onToggleComplete: (task: CrmTask) => void): Lis
       header: 'Due',
       render: t => {
         if (!t.due_date) return <span className="text-muted">{DASH}</span>;
-        // "Today" is read at RENDER time, not when the columns were built: the column array
-        // is memoized for the life of the page, so hoisting this would freeze the boundary
-        // and a tab left open past midnight would stop flagging anything as overdue.
-        const { text, overdue } = dueLabel(t.due_date, ymd(new Date()));
+        // `today` is passed in from useLocalDay rather than read from the clock here: a
+        // renderer only runs when React re-renders, so a tab left open past midnight would
+        // otherwise keep comparing against the day it was opened.
+        const { text, overdue } = dueLabel(t.due_date, today);
         // An overdue COMPLETED task is just a task that was finished late — no alarm.
         const late = overdue && !t.completed;
         // ck-red, not the brand accent: red-as-danger is the app-wide convention for
