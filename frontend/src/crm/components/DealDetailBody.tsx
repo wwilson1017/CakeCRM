@@ -175,10 +175,11 @@ const actionButtonStyle = {
  * jump to the end of the field on each keystroke.
  */
 function DealEditForm({
-  form, onChange, stageWritable, contacts, companies, saving, error, onSave, onCancel,
+  form, onChange, onPickContact, stageWritable, contacts, companies, saving, error, onSave, onCancel,
 }: {
   form: DealFormState;
   onChange: (patch: Partial<DealFormState>) => void;
+  onPickContact: (id: number | null) => void;
   stageWritable: boolean;
   contacts: CrmContact[];
   companies: CrmCompany[];
@@ -202,7 +203,7 @@ function DealEditForm({
         <select
           id="deal-contact"
           value={form.contact_id ?? ''}
-          onChange={e => onChange({ contact_id: e.target.value ? Number(e.target.value) : null })}
+          onChange={e => onPickContact(e.target.value ? Number(e.target.value) : null)}
           style={inputStyle}
         >
           <option value="">No contact</option>
@@ -476,6 +477,19 @@ export function DealDetailBody({ deal, onBoard, stageWritable, ctx, onMarkWon, o
     }
   }, [canLeave]);
 
+  // Choosing a contact fills the company from that contact ONLY when none is set yet — the rule
+  // `DealForm` has always applied, and losing it in the move to an inline editor would quietly
+  // leave newly-linked deals out of their company's rollups. Deal↔company links are independent,
+  // so a company the user picked deliberately is never overwritten (or nulled) by a contact change.
+  function pickContact(id: number | null) {
+    setForm(prev => {
+      if (id === null) return { ...prev, contact_id: null };
+      const c = contacts.find(x => x.id === id);
+      const company = prev.company_id ?? (c?.company_id ?? null);
+      return { ...prev, contact_id: id, company_id: company };
+    });
+  }
+
   function startEditing() {
     const snapshot = toDealForm(view);
     setForm(snapshot);
@@ -582,6 +596,7 @@ export function DealDetailBody({ deal, onBoard, stageWritable, ctx, onMarkWon, o
         <DealEditForm
           form={form}
           onChange={patch => setForm(prev => ({ ...prev, ...patch }))}
+          onPickContact={pickContact}
           stageWritable={stageWritable}
           contacts={contacts}
           companies={companies}

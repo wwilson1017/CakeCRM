@@ -46,10 +46,12 @@ import { acquireBodyScrollLock } from '../hooks/useBodyScrollLock';
  * also not a per-surface opt-in in practice — `CollectionDetail` passes it unconditionally, so
  * every collection detail inherits the rule with nothing to remember.
  *
- * Residual, disclosed: the Tab trap below engages only while focus is inside the panel, so after
- * the drawer closes and returns focus to its external button, Tab can walk the covered page.
- * That is not a regression — the hand-rolled sheet this replaced had no trap at all — but a real
- * launcher/detail focus contract is its own piece of work.
+ * The Tab trap therefore admits ONE element outside the panel in this mode — whatever carries
+ * `data-detail-companion` — so the launcher is reachable by keyboard and not only by pointer.
+ * Residual, disclosed: once the drawer itself closes and returns focus to that button, a Tab
+ * pressed while focus sits outside BOTH surfaces still walks the covered page. That is not a
+ * regression (the hand-rolled sheet this replaced had no trap at all), but a full launcher /
+ * detail / drawer focus contract is its own piece of work.
  *
  * **`role="dialog"` WITHOUT `aria-modal`, on purpose.** `aria-modal="true"` promises assistive
  * tech that everything outside is unavailable, which is only true with a portal AND a really
@@ -199,6 +201,25 @@ const FOCUSABLE_SELECTOR = [
 function visibleFocusables(root: HTMLElement): HTMLElement[] {
   return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
     .filter(el => el.getClientRects().length > 0);
+}
+
+/**
+ * The ONE control an `underLauncher` modal deliberately does not cover, marked so the Tab trap
+ * can let keyboard users reach it.
+ *
+ * Rendering the launcher above the panel makes it reachable by POINTER; without this the trap
+ * still cycles strictly among the panel's own descendants, so a keyboard-only user could not
+ * reach it at all — worse than the untrapped sheet this replaced, and it would hollow out the
+ * whole point of the mode. An attribute rather than a ref keeps the shared file free of any
+ * knowledge of which app control it is.
+ */
+const COMPANION_SELECTOR = '[data-detail-companion]';
+
+function visibleCompanion(root: HTMLElement): HTMLElement | null {
+  for (const el of document.querySelectorAll<HTMLElement>(COMPANION_SELECTOR)) {
+    if (!root.contains(el) && el.getClientRects().length > 0) return el;
+  }
+  return null;
 }
 
 export default function DetailModal({
@@ -389,7 +410,21 @@ export default function DetailModal({
     // panel without anything having claimed it. A future nested overlay may satisfy only one.
     if (e.defaultPrevented) return;
     const root = panelRef.current;
-    if (!root || !root.contains(document.activeElement)) return;
+    if (!root) return;
+
+    if (!root.contains(document.activeElement)) return;
+
+    // In `underLauncher` mode the wrap at either END hands off to the companion instead of
+    // cycling, so the one control this mode deliberately leaves uncovered is reachable by
+    // keyboard and not only by pointer.
+    //
+    // Only the OUTBOUND direction is ours to implement: this trap is a React `onKeyDown` on the
+    // panel, so it fires only for keys whose target is inside the panel's subtree — a Tab pressed
+    // while focus sits ON the companion never reaches this handler at all. Getting back is
+    // therefore native order, which is the honest behaviour for a `role="dialog"` that
+    // deliberately does not claim `aria-modal`: this panel does not own the whole screen, and
+    // says so.
+    const companion = underLauncher ? visibleCompanion(root) : null;
 
     const focusables = visibleFocusables(root);
     if (focusables.length === 0) {
@@ -406,6 +441,11 @@ export default function DetailModal({
     if (index === -1) {
       e.preventDefault();
       (e.shiftKey ? last : first).focus();
+      return;
+    }
+    if (companion && ((e.shiftKey && document.activeElement === first) || (!e.shiftKey && document.activeElement === last))) {
+      e.preventDefault();
+      companion.focus();
       return;
     }
     if (e.shiftKey && document.activeElement === first) {

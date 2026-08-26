@@ -174,6 +174,9 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
         onClick={handleClick}
         aria-label="Assistant"
         aria-haspopup="dialog"
+        // Admits this button into an `underLauncher` DetailModal's Tab cycle — rendering above
+        // the panel makes it reachable by pointer, this makes it reachable by keyboard too.
+        data-detail-companion=""
         aria-expanded={ready ? open : undefined}
         title={ready ? 'Assistant' : loading ? 'Assistant' : 'Hire your assistant'}
         disabled={loading}

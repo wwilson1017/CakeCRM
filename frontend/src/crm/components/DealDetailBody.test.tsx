@@ -469,6 +469,53 @@ describe('the entity pickers', () => {
   });
 });
 
+describe('the contact→company inference', () => {
+  it('fills an EMPTY company from the contact just picked', async () => {
+    // `DealForm` has always done this, and losing it in the move to an inline editor would
+    // quietly leave newly-linked deals out of their company's rollups — invisible until someone
+    // wonders why a company page is short a deal.
+    api.mockImplementation((path: string, options?: { method?: string }) => {
+      if (path.startsWith('/api/crm/contacts')) {
+        return Promise.resolve({ contacts: [{ id: 99, name: 'New Lead', company: '', company_name: '', company_id: 42 }] });
+      }
+      return routeApi()(path, options);
+    });
+    const props = render({ deal: makeDeal({ contact_id: null, contact_name: undefined, company_id: null, company_name: undefined }) });
+    await settle();
+    click(buttonByText('Edit'));
+    await settle();
+
+    setField('deal-contact', '99');
+    click(buttonByText('Save'));
+    await settle();
+
+    const [, patch] = (props.onSaveDeal as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(patch).toEqual({ contact_id: 99, company_id: 42 });
+  });
+
+  it('never overwrites a company the user already chose', async () => {
+    // Deal↔company links are independent. Changing the contact must not drag the deal out of the
+    // company someone deliberately put it in.
+    api.mockImplementation((path: string, options?: { method?: string }) => {
+      if (path.startsWith('/api/crm/contacts')) {
+        return Promise.resolve({ contacts: [{ id: 99, name: 'New Lead', company: '', company_name: '', company_id: 42 }] });
+      }
+      return routeApi()(path, options);
+    });
+    const props = render({ deal: makeDeal() });   // company_id: 5 already set
+    await settle();
+    click(buttonByText('Edit'));
+    await settle();
+
+    setField('deal-contact', '99');
+    click(buttonByText('Save'));
+    await settle();
+
+    const [, patch] = (props.onSaveDeal as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(patch).toEqual({ contact_id: 99 });
+  });
+});
+
 // ── Copy link ────────────────────────────────────────────────────────────────────────────────
 
 describe('copy link', () => {
