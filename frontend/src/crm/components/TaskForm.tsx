@@ -11,7 +11,9 @@ interface Props {
   contactId?: number;
   dealId?: number;
   onClose: () => void;
-  onSaved: () => void;
+  /** Receives the saved task (joined with contact/deal names) so the Tasks list can
+   *  patch its row without a refetch (#77). */
+  onSaved: (saved: CrmTask) => void;
 }
 
 export function TaskForm({ task, contactId, dealId, onClose, onSaved }: Props) {
@@ -55,12 +57,12 @@ export function TaskForm({ task, contactId, dealId, onClose, onSaved }: Props) {
       if (isEdit || ownerTouched) body.owner_id = ownerId;
       if (dealId) body.deal_id = dealId;
 
-      if (isEdit) {
-        await api(`/api/crm/tasks/${task.id}`, { method: 'PUT', body: JSON.stringify(body) });
-      } else {
-        await api('/api/crm/tasks', { method: 'POST', body: JSON.stringify(body) });
-      }
-      onSaved();
+      // Both endpoints return get_task, which since #77 carries contact_name/deal_title —
+      // so the list can fold the saved row in rather than re-sweep.
+      const saved = isEdit
+        ? await api<CrmTask>(`/api/crm/tasks/${task.id}`, { method: 'PUT', body: JSON.stringify(body) })
+        : await api<CrmTask>('/api/crm/tasks', { method: 'POST', body: JSON.stringify(body) });
+      onSaved(saved);
     } catch (err: unknown) { setError(err instanceof Error ? err.message : 'Failed to save'); }
     setSaving(false);
   }

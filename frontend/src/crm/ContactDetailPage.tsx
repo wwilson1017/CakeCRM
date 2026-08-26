@@ -29,7 +29,14 @@ import {
   btnSecondary, btnDanger, btnPrimary, btnSmall,
 } from './styles';
 
-export function ContactDetailPage() {
+/** Optional hooks for the host list page (#77): it keeps a client-loaded corpus and patches
+ *  its row from what this page loads, rather than re-sweeping after every edit. */
+interface ContactDetailPageProps {
+  onChanged?: (contact: CrmContact) => void;
+  onDeleted?: (id: number) => void;
+}
+
+export function ContactDetailPage({ onChanged, onDeleted }: ContactDetailPageProps = {}) {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
@@ -71,12 +78,16 @@ export function ContactDetailPage() {
       const data = await api<CrmContact>(`/api/crm/contacts/${id}`);
       if (reqId !== loadIdRef.current) return;
       setContact(data);
+      // Every path that changes this contact — the edit form, a logged activity, a note —
+      // already ends in load(), so notifying here covers them all with one call. The body
+      // carries the derived last_contact_at, so the list's column stays truthful too.
+      onChanged?.(data);
     } catch {
       if (reqId !== loadIdRef.current) return;
       setContact(null);
     }
     if (reqId === loadIdRef.current) setLoading(false);
-  }, [id]);
+  }, [id, onChanged]);
 
   useEffect(() => { queueMicrotask(load); }, [load]);
 
@@ -112,6 +123,7 @@ export function ContactDetailPage() {
       toast.error('Failed to delete contact.');
       return;
     }
+    onDeleted?.(Number(id));
     navigate('/crm/contacts');
   }
 
@@ -336,7 +348,10 @@ export function ContactDetailPage() {
       {/* Chatter — editable notes thread */}
       <div style={{ marginTop: 24, borderTop: `1px solid ${LINE}`, paddingTop: 24 }}>
         <span style={{ ...mono(10, INK_DIM), display: 'block', marginBottom: 12 }}>Chatter</span>
-        <NotesThread key={`contact-${contact.id}`} entityType="contact" entityId={contact.id} />
+        <NotesThread key={`contact-${contact.id}`} entityType="contact" entityId={contact.id}
+          // A note is one of the two signals behind last_contact_at, so reload the
+          // contact — which is also what tells a host list page to patch its row (#77).
+          onChanged={load} />
       </div>
 
       {showEdit && <ContactForm contact={contact} onClose={() => setShowEdit(false)} onSaved={() => { setShowEdit(false); load(); setCfVersion(v => v + 1); refreshProvenance(); }} />}

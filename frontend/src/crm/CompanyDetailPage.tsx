@@ -24,7 +24,13 @@ import {
   btnSecondary, btnDanger, btnSmall,
 } from './styles';
 
-export function CompanyDetailPage() {
+/** Optional hooks for the host list page (#77) — see ContactDetailPageProps. */
+interface CompanyDetailPageProps {
+  onChanged?: (company: CrmCompany) => void;
+  onDeleted?: (id: number) => void;
+}
+
+export function CompanyDetailPage({ onChanged, onDeleted }: CompanyDetailPageProps = {}) {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
@@ -49,12 +55,13 @@ export function CompanyDetailPage() {
       const data = await api<CrmCompany>(`/api/crm/companies/${id}`);
       if (reqId !== loadIdRef.current) return;
       setCompany(data);
+      onChanged?.(data);
     } catch {
       if (reqId !== loadIdRef.current) return;
       setCompany(null);
     }
     if (reqId === loadIdRef.current) setLoading(false);
-  }, [id]);
+  }, [id, onChanged]);
 
   useEffect(() => { queueMicrotask(load); }, [load]);
 
@@ -72,6 +79,7 @@ export function CompanyDetailPage() {
       toast.error('Failed to delete company.');
       return;
     }
+    onDeleted?.(Number(id));
     navigate('/crm/companies');
   }
 

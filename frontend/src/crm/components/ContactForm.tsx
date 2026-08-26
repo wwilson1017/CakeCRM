@@ -11,7 +11,8 @@ import { useCustomFieldsForm, putCustomFields } from './useCustomFieldsForm';
 interface Props {
   contact?: CrmContact;
   onClose: () => void;
-  onSaved: () => void;
+  /** Receives the saved record so a list page can patch its row without a refetch (#77). */
+  onSaved: (saved: CrmContact) => void;
 }
 
 export function ContactForm({ contact, onClose, onSaved }: Props) {
@@ -90,18 +91,16 @@ export function ContactForm({ contact, onClose, onSaved }: Props) {
     if (isEdit || ownerTouched) payload.owner_id = ownerId;
     const body = JSON.stringify(payload);
     try {
-      let id: number;
-      if (isEdit) {
-        await api(`/api/crm/contacts/${contact.id}`, { method: 'PUT', body });
-        id = contact.id;
-      } else {
-        const created = await api<CrmContact>('/api/crm/contacts', { method: 'POST', body });
-        id = created.id;
-      }
+      // Both endpoints return the saved row; keep it so the caller can fold it into a
+      // client-loaded list instead of re-sweeping the corpus (#77).
+      const saved = isEdit
+        ? await api<CrmContact>(`/api/crm/contacts/${contact.id}`, { method: 'PUT', body })
+        : await api<CrmContact>('/api/crm/contacts', { method: 'POST', body });
+      const id = saved.id;
       // Save custom fields after the contact itself — a values failure toasts but
       // never loses the saved contact.
       await putCustomFields('contact', id, cf.changedForSave(), isEdit ? 'Contact saved' : 'Contact created');
-      onSaved();
+      onSaved(saved);
     } catch (err: unknown) { setError(err instanceof Error ? err.message : 'Failed to save'); }
     setSaving(false);
   }

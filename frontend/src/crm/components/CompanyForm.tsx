@@ -11,7 +11,8 @@ import { useCustomFieldsForm, putCustomFields } from './useCustomFieldsForm';
 interface Props {
   company?: CrmCompany;
   onClose: () => void;
-  onSaved: () => void;
+  /** Receives the saved record so a list page can patch its row without a refetch (#77). */
+  onSaved: (saved: CrmCompany) => void;
 }
 
 export function CompanyForm({ company, onClose, onSaved }: Props) {
@@ -48,16 +49,14 @@ export function CompanyForm({ company, onClose, onSaved }: Props) {
     if (isEdit || ownerTouched) payload.owner_id = ownerId;
     const body = JSON.stringify(payload);
     try {
-      let id: number;
-      if (isEdit) {
-        await api(`/api/crm/companies/${company.id}`, { method: 'PUT', body });
-        id = company.id;
-      } else {
-        const created = await api<CrmCompany>('/api/crm/companies', { method: 'POST', body });
-        id = created.id;
-      }
+      // Both endpoints return the saved row; keep it so the caller can fold it into a
+      // client-loaded list instead of re-sweeping the corpus (#77).
+      const saved = isEdit
+        ? await api<CrmCompany>(`/api/crm/companies/${company.id}`, { method: 'PUT', body })
+        : await api<CrmCompany>('/api/crm/companies', { method: 'POST', body });
+      const id = saved.id;
       await putCustomFields('company', id, cf.changedForSave(), isEdit ? 'Company saved' : 'Company created');
-      onSaved();
+      onSaved(saved);
     } catch (err: unknown) { setError(err instanceof Error ? err.message : 'Failed to save'); }
     setSaving(false);
   }

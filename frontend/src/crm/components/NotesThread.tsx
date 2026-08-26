@@ -8,6 +8,15 @@ import { formatDate } from '../../shared/formatDate';
 interface Props {
   entityType: 'deal' | 'contact' | 'company';
   entityId: number;
+  /**
+   * Fired after a note is added, edited, archived or restored (#77).
+   *
+   * A contact's notes are one of the two signals behind its derived `last_contact_at`,
+   * so a host that renders that value has to be told: adding a note should update it,
+   * archiving the newest one should reveal the previous timestamp, and restoring it
+   * should put the newer one back. Optional — the deal and company call sites ignore it.
+   */
+  onChanged?: () => void;
 }
 
 // Mirrors chatter_service.MAX_MESSAGE_LEN — caps input client-side so an oversized
@@ -21,7 +30,7 @@ const MAX_NOTE_LEN = 10000;
  * so it drops into the contact page, the company page, or the pipeline deal sheet
  * unchanged.
  */
-export function NotesThread({ entityType, entityId }: Props) {
+export function NotesThread({ entityType, entityId, onChanged }: Props) {
   const [notes, setNotes] = useState<CrmNote[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -63,6 +72,7 @@ export function NotesThread({ entityType, entityId }: Props) {
       });
       setDraft('');
       load();
+      onChanged?.();
     } catch {
       toast.error('Failed to add note.');
     } finally {
@@ -80,6 +90,7 @@ export function NotesThread({ entityType, entityId }: Props) {
       setEditingId(null);
       setEditText('');
       load();
+      onChanged?.();
     } catch {
       toast.error('Failed to save note.');
     }
@@ -89,6 +100,7 @@ export function NotesThread({ entityType, entityId }: Props) {
     try {
       await api(`/api/crm/chatter/note/${id}/${archived ? 'archive' : 'unarchive'}`, { method: 'POST' });
       load();
+      onChanged?.();
     } catch {
       toast.error(`Failed to ${archived ? 'archive' : 'restore'} note.`);
     }

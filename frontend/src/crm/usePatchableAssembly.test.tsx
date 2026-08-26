@@ -2,8 +2,11 @@
 import { StrictMode, act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import usePatchableAssembly, { applyOverlay, type PatchableAssembly } from './usePatchableAssembly';
+import usePatchableAssembly, {
+  applyOverlay, writeMayHaveLanded, type PatchableAssembly,
+} from './usePatchableAssembly';
 import type { PageAssembly } from '../shared/collection';
+import { ApiError } from '../core/api/client';
 
 interface Row { id: number; name: string; note?: string | null }
 
@@ -142,5 +145,30 @@ describe('usePatchableAssembly', () => {
     // …and it applies once the sweep completes.
     render(stub(rows({ id: 1, name: 'a' }), retry));
     expect(state().items).toEqual([{ id: 1, name: 'written-mid-sweep' }]);
+  });
+});
+
+// ── write-outcome triage ────────────────────────────────────────────────────
+
+describe('writeMayHaveLanded', () => {
+  it('trusts the corpus after a definite 4xx refusal', () => {
+    // Nothing was written, so the rows on screen are still correct — re-sweeping here
+    // would just be a slow way to render the same thing.
+    for (const status of [400, 404, 409, 422, 499]) {
+      expect(writeMayHaveLanded(new ApiError('nope', status, ''))).toBe(false);
+    }
+  });
+
+  it('does NOT trust it after a 5xx, which may have committed before failing', () => {
+    for (const status of [500, 502, 503]) {
+      expect(writeMayHaveLanded(new ApiError('boom', status, ''))).toBe(true);
+    }
+  });
+
+  it('does NOT trust it after a transport failure, which carries no status at all', () => {
+    // The connection can drop after Postgres commits but before the ack arrives, so
+    // "no status" is the most ambiguous outcome of the three, not the safest.
+    expect(writeMayHaveLanded(new TypeError('Failed to fetch'))).toBe(true);
+    expect(writeMayHaveLanded('something thrown that is not an Error')).toBe(true);
   });
 });

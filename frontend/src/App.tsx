@@ -7,9 +7,7 @@ import { BrandingProvider } from './core/branding/BrandingContext';
 import { CrmLayout } from './crm/CrmLayout';
 import { CrmDashboardPage } from './crm/CrmDashboardPage';
 import { ContactsPage } from './crm/ContactsPage';
-import { ContactDetailPage } from './crm/ContactDetailPage';
 import { CompaniesPage } from './crm/CompaniesPage';
-import { CompanyDetailPage } from './crm/CompanyDetailPage';
 import { PipelinePage } from './crm/PipelinePage';
 import { RemindersPage } from './crm/RemindersPage';
 import { SettingsPage } from './crm/SettingsPage';
@@ -61,10 +59,12 @@ export default function App() {
             }
           >
             <Route index element={<CrmDashboardPage />} />
-            <Route path="contacts" element={<ContactsPage />} />
-            <Route path="contacts/:id" element={<ContactDetailPage />} />
-            <Route path="companies" element={<CompaniesPage />} />
-            <Route path="companies/:id" element={<CompanyDetailPage />} />
+            {/* One route per entity, list and detail both (#77). The list page renders the
+                detail page when :id is present, so the route element never changes and its
+                swept corpus survives open → back without re-fetching. Every existing
+                /crm/contacts/42 link still resolves. */}
+            <Route path="contacts/:id?" element={<ContactsPage />} />
+            <Route path="companies/:id?" element={<CompaniesPage />} />
             <Route path="pipeline" element={<PipelinePage />} />
             {/* One task route, two task systems — TasksModeRouter picks by mode.
                 The GTD-only sub-routes redirect to /crm/tasks in normal mode, so a
