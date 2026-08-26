@@ -30,7 +30,7 @@ import { useIsMobile } from '../shared/useIsMobile';
 import { INK, INK_MUTE, LINE, ACCENT } from '../shared/styles';
 import { pagePadding, pageHeading } from './styles';
 import {
-  resolveSection, visibleCards, visibleSections, wantedSection,
+  CALLBACK_PARAMS, resolveSection, visibleCards, visibleSections, wantedSection,
   type SettingsCardId, type SettingsSection, type SettingsSectionId,
 } from './settingsSections';
 import { BrandingCard } from './components/BrandingCard';
@@ -80,6 +80,11 @@ function SettingsNav({ sections, shown, isMobile, params }: {
         const isActive = section.id === shown;
         // Preserve any other param the URL is carrying; only `section` is ours.
         const next = new URLSearchParams(params);
+        // ...except the OAuth callback's one-shot params. They outrank `section` in
+        // `wantedSection`, so carrying them into a nav link would pin the view to
+        // Integrations and make every tab a no-op — worst for a MEMBER, who never
+        // mounts GmailCard and so never strips them: their nav would be dead for good.
+        for (const param of CALLBACK_PARAMS) next.delete(param);
         next.set('section', section.id);
         return (
           <Link

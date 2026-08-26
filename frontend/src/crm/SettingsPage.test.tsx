@@ -295,6 +295,29 @@ describe('SettingsPage — the Gmail OAuth callback', () => {
     expect(container.querySelector('[aria-current="page"]')!.textContent).toBe('Personal');
     expect(getToasts()).toHaveLength(0);
   });
+
+  it('does not leave a member with a dead nav after landing on ?gmail=', async () => {
+    // The trap this closes: `gmail` outranks `section`, and a member never mounts
+    // GmailCard, so nothing ever strips it. If the nav carried the param, every tab
+    // would resolve back to Personal and the nav would be permanently inert.
+    await render('/crm/settings?gmail=connected');
+    for (const link of navLinks()) {
+      expect(link.getAttribute('href')).not.toContain('gmail');
+    }
+    await clickTab('Assistant');
+    expect(container.querySelector('[aria-current="page"]')!.textContent).toBe('Assistant');
+    expect(cardTitles()).toEqual(['Assistant memory', 'Task mode']);
+  });
+
+  it('ignores an empty ?gmail= rather than pinning the view to a card that skips it', async () => {
+    // GmailCard's effect early-returns on an empty value, so if the page treated the bare
+    // key as a callback it would select a section nothing then cleans up.
+    auth.isAdmin = true;
+    await render('/crm/settings?gmail=');
+    expect(container.querySelector('[aria-current="page"]')!.textContent).toBe('Personal');
+    await clickTab('Workspace');
+    expect(container.querySelector('[aria-current="page"]')!.textContent).toBe('Workspace');
+  });
 });
 
 describe('SettingsPage — the role is never frozen', () => {

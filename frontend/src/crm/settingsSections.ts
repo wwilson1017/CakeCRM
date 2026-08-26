@@ -105,13 +105,25 @@ export function resolveSection(wanted: SettingsSectionId, isAdmin: boolean): Set
 }
 
 /**
+ * The query params the Gmail OAuth callback delivers. They are ONE-SHOT: `GmailCard`
+ * consumes them (toast + strip) on the render it mounts. The nav drops them from its
+ * links for that reason — see `CALLBACK_PARAMS` use in `SettingsPage.tsx`.
+ */
+export const CALLBACK_PARAMS = ['gmail', 'reason'] as const;
+
+/**
  * Which section this URL is asking for, before the role is applied.
  *
  * `gmail` wins over an explicit `section` because the toast must fire and the params must
  * be stripped — otherwise a stale result re-toasts on the next visit. GmailCard's cleanup
  * writes `section=integrations` back, so the URL and the view agree afterwards.
+ *
+ * The value must be NON-EMPTY, which is exactly `GmailCard`'s own `if (!result) return`
+ * condition. The two have to agree: if this said "any `gmail` key at all" while the card
+ * ignored an empty one, `?gmail=` would select a section whose card then declines to
+ * clean up — and with the param riding along, nothing could ever move off it.
  */
 export function wantedSection(params: URLSearchParams): SettingsSectionId {
-  if (params.has('gmail')) return GMAIL_SECTION;
+  if (params.get('gmail')) return GMAIL_SECTION;
   return parseSection(params.get('section')) ?? DEFAULT_SECTION;
 }
