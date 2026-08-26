@@ -1,20 +1,33 @@
 // @vitest-environment jsdom
 //
-// The pipeline's URL contract, which is the half of the Copy-link feature nobody can eyeball:
-// the parameter is stripped the instant it is read, so "did the link open the right deal, and
-// did the address bar come out clean" is only answerable from a test.
+// The pipeline's page-level contracts — the ones that only exist where the board, the detail
+// panel and the write path meet, so neither `DealDetailBody.test.tsx` nor `boardNavOrder.test.ts`
+// can see them:
 //
-// The single-effect assertion is the load-bearing one. `?stage=` and `?deal=` are stripped by
-// ONE effect on purpose — two would each compute their next params from the same pre-navigation
-// snapshot, so the second `replace` would put back the key the first had just deleted. That bug
-// is invisible in the common case (one parameter at a time) and only appears when a dashboard
-// link carries both.
+//  • The URL contract, which is the half of the Copy-link feature nobody can eyeball: the
+//    parameter is stripped the instant it is read, so "did the link open the right deal, and did
+//    the address bar come out clean" is only answerable from a test. The single-effect assertion
+//    is the load-bearing one — `?stage=` and `?deal=` are stripped by ONE effect on purpose, since
+//    two would each compute their next params from the same pre-navigation snapshot and the second
+//    `replace` would put back the key the first had just deleted. That bug is invisible in the
+//    common case (one parameter at a time) and only appears when a dashboard link carries both.
+//
+//  • `writeDeal`'s stage-vs-fields split. Every stage-specific step is conditional on the patch
+//    actually CARRYING a stage; drop that condition and a fields-only save starts painting
+//    optimistic restages and toasting "Failed to move deal." at someone who moved nothing.
+//
+//  • The bulk lock REJECTING rather than returning quietly, which is the whole difference between
+//    "your edit was refused, try again" and losing what someone just typed.
+//
+//  • `navOrder` actually reaching the layer, in the board's column-major order rather than the
+//    array's.
 import { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, useLocation, useNavigate, type NavigateFunction } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CrmDeal } from '../core/types';
+import type { KanbanBoardProps } from '../shared/dnd';
 
 const api = vi.hoisted(() => vi.fn());
 vi.mock('../core/api/client', () => ({
@@ -25,9 +38,25 @@ vi.mock('../core/api/client', () => ({
   },
 }));
 
-// The board itself is not under test here and drags nothing in jsdom; stubbing it keeps the
-// suite about routing rather than about pointer sensors.
-vi.mock('../shared/dnd', () => ({ KanbanBoard: () => null }));
+// dnd-kit's pointer sensors do nothing in jsdom, so the DRAG half of the board is stubbed out.
+// Its RENDER contract is not: `renderColumn` / `renderCard` are PipelinePage's own code, and the
+// bulk-selection affordances live inside them (`StageHeader`'s Select-all checkbox, each card's
+// own checkbox, the card click that opens the detail). So this stub reproduces exactly what the
+// real `KanbanBoard` does with those two props — columns in order, each column's items through
+// `renderCard` — and stands in for nothing else. Every component the tests below click on is real.
+vi.mock('../shared/dnd', () => ({
+  KanbanBoard: ({ columns, items, renderColumn, renderCard, renderEmptyColumn }:
+    KanbanBoardProps<CrmDeal, { stage: string }>) => (
+    <div>
+      {columns.map(col => {
+        const colItems = items[String(col.id)] ?? [];
+        return renderColumn(col, colItems.length === 0
+          ? renderEmptyColumn?.(col)
+          : colItems.map(item => <div key={item.id}>{renderCard(item, col.id, false)}</div>));
+      })}
+    </div>
+  ),
+}));
 
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), info: vi.fn() }));
 vi.mock('../shared/toast', () => ({ toast }));
@@ -83,10 +112,17 @@ beforeEach(() => {
     }
     if (path.startsWith('/api/crm/provenance/')) return Promise.resolve({ provenance: [] });
     if (path.startsWith('/api/crm/chatter/')) return Promise.resolve({ notes: [] });
+    // The edit form's two pickers. Answered properly rather than left to the catch-all, because a
+    // rejected picker now raises its own toast and would drown out the ones under test here.
+    if (path.startsWith('/api/crm/contacts')) return Promise.resolve({ contacts: [] });
+    if (path.startsWith('/api/crm/companies')) return Promise.resolve({ companies: [] });
     if (/\/fields$/.test(path)) return Promise.resolve([]);
     if (path.startsWith('/api/users')) return Promise.resolve({ users: [] });
     return Promise.resolve({});
   });
+  toast.success.mockReset();
+  toast.error.mockReset();
+  toast.info.mockReset();
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -117,6 +153,42 @@ async function settle(rounds = 6) {
 }
 
 const dialogTitle = () => document.querySelector('[role="dialog"] h2')?.textContent ?? null;
+
+// ── DOM helpers ──────────────────────────────────────────────────────────────────────────────
+
+const click = (el: Element | null) => act(() => { (el as HTMLElement).click(); });
+
+const buttonByText = (text: string) =>
+  [...container.querySelectorAll('button')].find(b => b.textContent?.trim() === text) ?? null;
+
+const byLabel = <E extends Element>(label: string) =>
+  container.querySelector<E>(`[aria-label="${label}"]`);
+
+/** Card opener: the board card is a `role="button"` div; its checkbox stops propagation itself. */
+const cardTitled = (title: string) =>
+  [...container.querySelectorAll<HTMLElement>('[role="button"]')]
+    .find(el => el.textContent?.includes(title)) ?? null;
+
+/** React tracks the DOM value node-side, so a bare `el.value = x` is swallowed as a no-op. */
+function setValue(el: HTMLInputElement | HTMLSelectElement | null, value: string) {
+  const target = el as HTMLInputElement | HTMLSelectElement;
+  act(() => {
+    const proto = target instanceof HTMLSelectElement
+      ? HTMLSelectElement.prototype
+      : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(proto, 'value')!.set!.call(target, value);
+    target.dispatchEvent(new Event('input', { bubbles: true }));
+    target.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+}
+
+const setField = (id: string, value: string) =>
+  setValue(container.querySelector<HTMLInputElement>(`#${id}`), value);
+
+interface ApiCallOptions { method?: string; body?: string }
+const callsWithMethod = (method: string) =>
+  (api.mock.calls as [string, ApiCallOptions | undefined][])
+    .filter(([, options]) => options?.method === method);
 
 describe('the deal deep link', () => {
   it('opens the linked deal and empties the address bar', async () => {
@@ -187,8 +259,132 @@ describe('the two deep-link params together', () => {
     expect(probe.search).toBe('');
   });
 
-  // The SCROLL half of that guard is not asserted here: `KanbanBoard` is mocked away, so no
-  // column refs are ever registered and `scrollIntoView` has nothing to call. The parameter
+  // The SCROLL half of that guard is not asserted here: the `KanbanBoard` stub renders columns
+  // but jsdom does no layout, so `scrollIntoView` is a stub with nothing to measure. The parameter
   // handling above is the part that broke and the part this suite owns; the scroll itself is
   // covered on the PR's evidence run.
+});
+
+describe('writeDeal: a fields-only save', () => {
+  it('PUTs only the changed column, with no stage key at all', async () => {
+    // The whole reason `writeDeal` generalised from `moveDealStage`: an inline edit rides the same
+    // per-deal chain and the same sequence numbering as a drag, but it must not SEND a stage.
+    // Sending one turns a title edit into a stage write, and `_classify_deal_update` overrides
+    // `probability` to 100/0 inside any transaction that changes the stage.
+    renderAt('/crm/pipeline?deal=5');
+    await settle();
+    click(buttonByText('Edit'));
+    await settle();
+    setField('deal-title', 'Renamed');
+    click(buttonByText('Save'));
+    await settle();
+
+    const puts = callsWithMethod('PUT');
+    expect(puts).toHaveLength(1);
+    expect(puts[0][0]).toBe('/api/crm/deals/5');
+    expect(JSON.parse(puts[0][1]!.body!)).toEqual({ title: 'Renamed' });
+  });
+
+  it('stays quiet when it fails — "Failed to move deal." is about a MOVE', async () => {
+    // This is the assertion that pins the `toStage !== undefined` conditionals. A fields-only write
+    // painted nothing optimistically, so there is nothing to revert and nothing to announce: the
+    // form keeps the draft and shows the error inline, next to what it is asking the user to retry.
+    // Toasting a move failure here would report a board change that never happened.
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const defaults = api.getMockImplementation()!;
+    api.mockImplementation((path: string, options?: ApiCallOptions) =>
+      options?.method === 'PUT'
+        ? Promise.reject(new Error('Deal is archived'))
+        : defaults(path, options));
+
+    renderAt('/crm/pipeline?deal=5');
+    await settle();
+    click(buttonByText('Edit'));
+    await settle();
+    setField('deal-title', 'Renamed');
+    click(buttonByText('Save'));
+    await settle();
+
+    expect(toast.error).not.toHaveBeenCalled();
+    // ...and the draft plus its reason are still on screen, which is where the report belongs.
+    expect(container.querySelector<HTMLInputElement>('#deal-title')!.value).toBe('Renamed');
+    expect(container.textContent).toContain('Deal is archived');
+    consoleError.mockRestore();
+  });
+});
+
+describe('the bulk lock', () => {
+  it('rejects an inline field save while a bulk move is in flight, rather than silently succeeding', async () => {
+    // Dropping a redundant drag under the lock is invisible and fine; dropping the field edit
+    // someone just typed is not. A quiet `Promise.resolve()` here would close the form on a write
+    // that never happened, and the reconcile refetch would then paint the pre-edit values back.
+    let releaseBulk: (v: unknown) => void = () => {};
+    const defaults = api.getMockImplementation()!;
+    api.mockImplementation((path: string, options?: ApiCallOptions) =>
+      path === '/api/crm/deals/bulk-move'
+        ? new Promise(res => { releaseBulk = res; })
+        : defaults(path, options));
+
+    renderAt('/crm/pipeline');
+    await settle();
+
+    // The real flow: Select-all on the lead column, pick a target stage, Apply. The POST above
+    // never settles, so the lock is still held for the rest of this test.
+    click(byLabel('Select all lead deals'));
+    setValue(byLabel<HTMLSelectElement>('Move selected deals to stage'), 'proposal');
+    click(buttonByText('Apply'));
+    await settle();
+
+    // Now open a deal from the board and try to save a field edit through the detail panel.
+    click(cardTitled('Wholesale order'));
+    await settle();
+    expect(dialogTitle()).toBe('Wholesale order');
+    click(buttonByText('Edit'));
+    await settle();
+    setField('deal-title', 'Renamed mid-bulk');
+    click(buttonByText('Save'));
+    await settle();
+
+    // Refused, said so, and kept the draft — no PUT reached the server.
+    expect(callsWithMethod('PUT')).toHaveLength(0);
+    expect(container.textContent).toContain('A bulk update is in progress');
+    expect(container.querySelector<HTMLInputElement>('#deal-title')!.value).toBe('Renamed mid-bulk');
+
+    // Let the bulk finish so the page unmounts with nothing in flight.
+    await act(async () => { releaseBulk({ ok: true, updated_ids: [5, 6] }); });
+    await settle();
+  });
+});
+
+describe('‹ › record navigation', () => {
+  it('follows the board\'s column-major order, not the order deals arrived in', async () => {
+    // `navOrder` is supplied by the page (the board runs no `useCollectionState` for the layer to
+    // read), so nothing else proves it is actually wired through. The fixture arrives
+    // qualified-first while the BOARD renders lead first, which is exactly the case where the two
+    // orders disagree — and where `[]` (arrows dead) and `deals.map(d => d.id)` (array order) both
+    // give different answers from the right one.
+    const twoStages = [
+      deal(8, { title: 'Qualified deal', stage: 'qualified' }),
+      deal(9, { title: 'Lead deal', stage: 'lead' }),
+    ];
+    const defaults = api.getMockImplementation()!;
+    api.mockImplementation((path: string, options?: ApiCallOptions) =>
+      path === '/api/crm/deals' ? Promise.resolve({ deals: twoStages }) : defaults(path, options));
+
+    renderAt('/crm/pipeline?deal=8');
+    await settle();
+    expect(dialogTitle()).toBe('Qualified deal');
+
+    // 'lead' precedes 'qualified' in STAGE_ORDER, so the lead deal is index 0 — reachable only
+    // BACKWARDS from here, the opposite of what the array order would say.
+    click(byLabel('Previous record'));
+    await settle();
+    expect(dialogTitle()).toBe('Lead deal');
+    expect(byLabel<HTMLButtonElement>('Previous record')!.disabled).toBe(true);
+
+    click(byLabel('Next record'));
+    await settle();
+    expect(dialogTitle()).toBe('Qualified deal');
+    expect(byLabel<HTMLButtonElement>('Next record')!.disabled).toBe(true);
+  });
 });

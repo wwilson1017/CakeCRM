@@ -4,7 +4,8 @@ import { api } from '../core/api/client';
 import type { CrmDashboard, CrmDeal, CrmAnalytics } from '../core/types';
 import { ActivityTimeline } from './components/ActivityTimeline';
 import { DealDetailBody, type DealPatch } from './components/DealDetailBody';
-import { CollectionDetail, denyEscapeBackdrop, type DetailHostConfig } from '../shared/collection';
+import { CollectionDetail, denyEscapeBackdrop } from '../shared/collection';
+import { DEAL_DETAIL_CONFIG } from './dealDetailConfig';
 import { StatCard } from './components/StatCard';
 import { WeeklyTouchesCard } from './components/WeeklyTouchesCard';
 import { STAGE_COLORS, STAGE_ORDER } from './constants';
@@ -37,20 +38,9 @@ function fmtDay(iso: string): string {
   return new Date(`${iso}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-/**
- * What `CollectionDetail` reads on this page. Same `loadById` as the pipeline's — the dashboard
- * opens deals from three different queries, and only the top-deals rows are ever in `items`, so
- * every other row resolves through the fetch.
- */
-const DEAL_DETAIL_CONFIG: DetailHostConfig<CrmDeal> = {
-  getItemId: d => d.id,
-  detail: {
-    getTitle: d => d.title,
-    // `top_deals` joins the contact name but not the company's, so this tolerates either.
-    getSubtitle: d => [d.contact_name, d.company_name].filter(Boolean).join(' · ') || null,
-    loadById: id => api<CrmDeal>(`/api/crm/deals/${id}`),
-  },
-};
+// The `CollectionDetail` host config is shared with `PipelinePage` — see `dealDetailConfig.ts`.
+// This page leans hardest on its `loadById`: it opens deals from three different queries and only
+// the top-deals rows are ever in `items`, so every other row resolves through that fetch.
 
 export function CrmDashboardPage() {
   const { users } = useUsers();

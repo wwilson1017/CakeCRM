@@ -446,6 +446,27 @@ describe('the entity pickers', () => {
     expect(container.textContent).toContain('Dana Reyes');
     expect(container.textContent).toContain('Northwind');
   });
+
+  it('reports a failed picker fetch rather than presenting the fallback as the whole list', async () => {
+    // Both pickers degrade to a list holding only this deal's own link, which on screen is
+    // indistinguishable from "this install has no other contacts" — so a network blip reads as
+    // data. ONE message for the pair: they fail together far more often than separately.
+    const defaults = api.getMockImplementation()!;
+    api.mockImplementation((path: string, options?: { method?: string }) =>
+      path.startsWith('/api/crm/contacts') || path.startsWith('/api/crm/companies')
+        ? Promise.reject(new Error('offline'))
+        : defaults(path, options));
+
+    render({ deal: makeDeal() });
+    await settle();
+    click(buttonByText('Edit'));
+    await settle();
+
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    // The fallback still stands — reporting the failure must not also empty the selects.
+    expect((input('deal-contact') as HTMLSelectElement).value).toBe('3');
+    expect((input('deal-company') as HTMLSelectElement).value).toBe('5');
+  });
 });
 
 // ── Copy link ────────────────────────────────────────────────────────────────────────────────

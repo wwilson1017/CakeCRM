@@ -5,8 +5,9 @@ import { api, ApiError } from '../core/api/client';
 import type { CrmDeal } from '../core/types';
 import { DealForm } from './components/DealForm';
 import { DealDetailBody, type DealPatch } from './components/DealDetailBody';
-import { CollectionDetail, denyEscapeBackdrop, type DetailHostConfig } from '../shared/collection';
+import { CollectionDetail, denyEscapeBackdrop } from '../shared/collection';
 import { boardNavOrder } from './boardNavOrder';
+import { DEAL_DETAIL_CONFIG } from './dealDetailConfig';
 import { DEAL_PARAM, parseDealParam } from './dealDeepLink';
 import { ScorePill, TouchCountPill } from './components/badges';
 import { STAGE_COLORS, STAGE_ORDER, OPEN_STAGES } from './constants';
@@ -36,23 +37,10 @@ interface PipelineData {
   deals: CrmDeal[];
 }
 
-/**
- * What `CollectionDetail` reads. The board runs no `useCollectionState` — it keeps its own
- * filter bar and its own kanban — so it supplies this four-field literal and its own `navOrder`
- * instead of a full `CollectionConfig`.
- *
- * `loadById` is what makes a shared link work: `GET /api/crm/deals/:id` deliberately carries no
- * live-deal predicate, so an archived deal still resolves and can be read (its board-position
- * writes are then hidden by `onBoard`).
- */
-const DEAL_DETAIL_CONFIG: DetailHostConfig<CrmDeal> = {
-  getItemId: d => d.id,
-  detail: {
-    getTitle: d => d.title,
-    getSubtitle: d => [d.contact_name, d.company_name].filter(Boolean).join(' · ') || null,
-    loadById: id => api<CrmDeal>(`/api/crm/deals/${id}`),
-  },
-};
+// The `CollectionDetail` host config is shared with `CrmDashboardPage` — see `dealDetailConfig.ts`
+// for why (both hosts open deals into the same shell, and `loadById` is what resolves an
+// off-board or archived deal for a shared `?deal=` link; its board-position writes are then
+// hidden here by `onBoard`).
 
 export function PipelinePage() {
   const [data, setData] = useState<PipelineData | null>(null);

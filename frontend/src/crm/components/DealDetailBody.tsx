@@ -280,6 +280,9 @@ function DealEditForm({
   );
 }
 
+/** Keys a dynamic merge must never copy — see the `view` memo below for why this exists. */
+const UNSAFE_MERGE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
 const LOG_TYPES = ['call', 'email', 'meeting', 'note'] as const;
 
 /**
@@ -381,6 +384,11 @@ export function DealDetailBody({ deal, onBoard, stageWritable, ctx, onMarkWon, o
     if (!fetched) return deal;
     const merged = { ...fetched };
     for (const [key, value] of Object.entries(deal)) {
+      // Defence in depth, not a live hole: `CrmDeal` is a closed interface fed by a fixed Pydantic
+      // response, so no such key can arrive today. But the cast below discards every compile-time
+      // check, so the day anything spreads dynamic keys onto a deal this becomes a prototype sink
+      // with no warning. Three names is cheaper than that discovery.
+      if (UNSAFE_MERGE_KEYS.has(key)) continue;
       if (value !== undefined) (merged as Record<string, unknown>)[key] = value;
     }
     return merged;
@@ -446,13 +454,23 @@ export function DealDetailBody({ deal, onBoard, stageWritable, ctx, onMarkWon, o
     setBaseline(snapshot);
     setFormError('');
     setEditing(true);
+    // Either picker failing degrades to a list holding only this deal's own linked record — which
+    // is indistinguishable, on screen, from "this install has no other contacts". Say so once, so a
+    // network blip cannot be misread as data. One flag for both requests: the two fail together far
+    // more often than separately, and two stacked toasts describe one outage twice.
+    let reported = false;
+    const reportPickerFailure = () => {
+      if (reported) return;
+      reported = true;
+      toast.error('Could not load the contact and company lists — only this deal’s links are shown.');
+    };
     // Fetched on Edit, not on mount: opening a deal to read it should cost no extra requests.
     api<{ contacts: CrmContact[] }>('/api/crm/contacts?limit=200')
       .then(d => setContacts(withFallbackContact(d.contacts, view)))
-      .catch(() => setContacts(withFallbackContact([], view)));
+      .catch(() => { setContacts(withFallbackContact([], view)); reportPickerFailure(); });
     api<{ companies: CrmCompany[] }>('/api/crm/companies?limit=200')
       .then(d => setCompanies(withFallbackCompany(d.companies, view)))
-      .catch(() => setCompanies(withFallbackCompany([], view)));
+      .catch(() => { setCompanies(withFallbackCompany([], view)); reportPickerFailure(); });
   }
 
   async function handleSave() {
