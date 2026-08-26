@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../core/api/client';
-import { writeMayHaveLanded } from './usePatchableAssembly';
+import { rowIsGone, writeMayHaveLanded } from './usePatchableAssembly';
 import type { CrmContact } from '../core/types';
 import { ContactForm } from './components/ContactForm';
 import { DealForm } from './components/DealForm';
@@ -86,12 +86,15 @@ export function ContactDetailPage({ onChanged, onDeleted, onWriteUncertain }: Co
       // already ends in load(), so notifying here covers them all with one call. The body
       // carries the derived last_contact_at, so the list's column stays truthful too.
       onChanged?.(data);
-    } catch {
+    } catch (err) {
       if (reqId !== loadIdRef.current) return;
       setContact(null);
+      // Opened from a swept list whose copy is stale: a 404 means the record is gone, so
+      // the host should drop its row rather than keep offering a dead link.
+      if (rowIsGone(err)) onDeleted?.(Number(id));
     }
     if (reqId === loadIdRef.current) setLoading(false);
-  }, [id, onChanged]);
+  }, [id, onChanged, onDeleted]);
 
   useEffect(() => { queueMicrotask(load); }, [load]);
 
@@ -106,8 +109,12 @@ export function ContactDetailPage({ onChanged, onDeleted, onWriteUncertain }: Co
       setLogActivity('');
       setLogNote('');
       load();
-    } catch {
+    } catch (err) {
       toast.error('Failed to log activity.');
+      // An activity row is one of the two signals behind last_contact_at, so a write that
+      // may have committed has to be reconciled — load() re-reads the derived value and
+      // hands it to the list through onChanged (#77).
+      if (writeMayHaveLanded(err)) load();
     } finally {
       setLogging(false);
     }
@@ -346,7 +353,7 @@ export function ContactDetailPage({ onChanged, onDeleted, onWriteUncertain }: Co
       {/* Activity history */}
       <div style={{ marginTop: 24, borderTop: `1px solid ${LINE}`, paddingTop: 24 }}>
         <span style={{ ...mono(10, INK_DIM), display: 'block', marginBottom: 12 }}>Activity History</span>
-        <ActivityTimeline activities={contact.activity || []} onUpdate={load} />
+        <ActivityTimeline onUncertainWrite={load} activities={contact.activity || []} onUpdate={load} />
       </div>
 
       {/* Custom fields — renders nothing when no contact fields are defined */}

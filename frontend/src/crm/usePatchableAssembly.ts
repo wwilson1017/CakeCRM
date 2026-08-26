@@ -132,6 +132,25 @@ export function writeMayHaveLanded(err: unknown): boolean {
   return !(err instanceof ApiError && err.status >= 400 && err.status < 500);
 }
 
+/**
+ * Whether a failed request says the row no longer exists.
+ *
+ * The one 4xx that proves the CORPUS wrong even though it proves the WRITE never
+ * happened. Since #60 rows are deleted by other seats — and by the assistant, Telegram
+ * and the capture surface — behind a swept corpus's back, so a 404 here means the local
+ * copy is a ghost: `writeMayHaveLanded` alone would leave it on screen, failing the same
+ * way on every click, until someone hit Refresh. Before #77 the next keystroke refetched
+ * and it vanished on its own.
+ */
+export function rowIsGone(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 404;
+}
+
+/** How stale a backgrounded corpus may be before returning to the tab re-sweeps it.
+ *  Long enough that flicking between tabs never refetches; short enough that a morning's
+ *  worth of other people's writes is never silently filtered against. */
+export const CORPUS_MAX_AGE_MS = 10 * 60 * 1000;
+
 /** What a page needs to render a swept corpus: the rows plus the assembly's own progress. */
 export interface CrmCorpus<T> extends PatchableAssembly<T> {
   loading: boolean;
@@ -178,6 +197,36 @@ export function useCrmCorpus<T extends { id: number }>(
   const assembly = usePageAssembly<T>(fetchPage, enabled);
   const getId = useCallback((row: T) => row.id, []);
   const patchable = usePatchableAssembly(assembly, getId);
+
+  // Bound how stale the corpus can get while nobody touches it.
+  //
+  // A swept corpus never reloads on its own, and this app has several writers the page
+  // cannot see: the assistant's CRM tools, Telegram capture, the Gmail touch scan, other
+  // seats (#60), a second tab. Before #77 any keystroke round-tripped and picked those up
+  // incidentally; now only Refresh does, so a tab left open for a week would filter and
+  // search week-old data with nothing on screen saying so.
+  //
+  // Re-sweeping when the tab is brought back to the foreground after a long absence is the
+  // cheap general answer — it covers every one of those writers rather than wiring the
+  // page to any particular one, and it costs nothing while the tab is in use.
+  const swept = assembly.items !== null;
+  const patchableRetry = patchable.retry;
+  const sweptAt = useRef(0);
+  useEffect(() => {
+    if (swept) sweptAt.current = Date.now();
+  }, [swept]);
+  useEffect(() => {
+    if (!enabled) return;
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (sweptAt.current === 0) return;                       // nothing assembled yet
+      if (Date.now() - sweptAt.current < CORPUS_MAX_AGE_MS) return;
+      patchableRetry();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [enabled, patchableRetry]);
+
   return {
     ...patchable,
     loading: assembly.loading,

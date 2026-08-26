@@ -33,7 +33,7 @@ import {
 import { pageHeading, btnPrimary, btnSecondary, btnSmall } from './styles';
 import { makeTasksCollectionConfig } from './collectionConfig';
 import { buildTaskColumns, buildDoneFacetRenderers } from './listColumns';
-import { useCrmCorpus, writeMayHaveLanded, type CrmCorpus } from './usePatchableAssembly';
+import { useCrmCorpus, rowIsGone, writeMayHaveLanded, type CrmCorpus } from './usePatchableAssembly';
 import { useLocalDay } from './useLocalDay';
 
 import { dueLabel } from './gtd/util';
@@ -57,7 +57,7 @@ export function TasksPage() {
       return res.tasks;
     }, []),
   );
-  const { upsert, retry } = corpus;
+  const { upsert, remove, retry } = corpus;
 
   const toggleComplete = useCallback(async (task: CrmTask) => {
     let saved: CrmTask;
@@ -67,9 +67,11 @@ export function TasksPage() {
         : await api<CrmTask>(`/api/crm/tasks/${task.id}/complete`, { method: 'PUT' });
     } catch (err) {
       toast.error('Failed to update task.');
-      // A 4xx wrote nothing, so the list is still right. Anything else may have committed
-      // and lost the response — re-sweep rather than keep showing a row we cannot vouch for.
-      if (writeMayHaveLanded(err)) retry();
+      // A 404 says someone else already deleted it, so drop the ghost rather than keep
+      // failing on it. Any other 4xx wrote nothing and the list is still right; anything
+      // else may have committed and lost the response, so re-sweep.
+      if (rowIsGone(err)) remove(task.id);
+      else if (writeMayHaveLanded(err)) retry();
       return;
     }
     // Completing a REPEATING task spawns its next occurrence server-side (#70) — a row no
@@ -77,7 +79,7 @@ export function TasksPage() {
     // response reflects the state it actually used to decide whether to spawn.
     if (!task.completed && saved.repeat) retry();
     else upsert(saved);
-  }, [upsert, retry]);
+  }, [upsert, remove, retry]);
 
   const columns = useMemo(() => buildTaskColumns(toggleComplete, today), [toggleComplete, today]);
   return (

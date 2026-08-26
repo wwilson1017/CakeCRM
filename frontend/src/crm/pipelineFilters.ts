@@ -18,6 +18,7 @@
  * the predicate so the logic stays pure and time-deterministic for testing.
  */
 import type { CrmDeal } from '../core/types';
+import { parseUTC } from './gtd/util';
 import { STAGE_ORDER, OPEN_STAGES } from './constants';
 
 // ── Filter model ────────────────────────────────────────────────────────────
@@ -100,7 +101,12 @@ function closeDatePart(ts: string | null | undefined): string {
  *  (a slice(0,10) would use the UTC date and misbucket an evening touch near midnight). */
 function activityLocalDate(ts: string | null | undefined): string {
   if (!ts) return '';
-  const d = new Date(ts);
+  // parseUTC, not `new Date(ts)`: the backend emits datetime.isoformat(), i.e. SIX
+  // fractional digits, and ECMAScript only guarantees parsing of three — which is why
+  // this repo has parseUTC at all. The sort getter and formatAge beside this facet
+  // already use it, so a bare Date here could bucket a contact as "Never" while the
+  // column next to it reads "3d".
+  const d = parseUTC(ts);
   return Number.isNaN(d.getTime()) ? '' : ymdOf(d);
 }
 

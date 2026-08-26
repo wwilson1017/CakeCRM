@@ -35,6 +35,12 @@ export interface LocalDay {
 
 export function useLocalDay(): LocalDay {
   const [today, setToday] = useState(() => ymd(new Date()));
+  // Re-arming rides a monotonic tick rather than `today`, because `setToday(sameValue)` is
+  // a React bail-out: no re-render, no effect, no new timer. That happens whenever the
+  // timer fires while the day has NOT changed — a clock stepped backwards by NTP, a VM
+  // restore, a manual change — after which the tab would keep that day forever, the exact
+  // failure this hook exists to prevent.
+  const [tick, setTick] = useState(0);
 
   useEffect(() => {
     // Re-armed whenever the day changes, so this schedules one hop per day rather than a
@@ -48,9 +54,14 @@ export function useLocalDay(): LocalDay {
     // body — also keeps this clear of react-hooks/set-state-in-effect.
     const now = new Date();
     const delay = ymd(now) === today ? untilNextLocalDay(now) : 0;
-    const timer = setTimeout(() => setToday(ymd(new Date())), delay);
+    const timer = setTimeout(() => {
+      setToday(ymd(new Date()));
+      setTick(t => t + 1);
+    }, delay);
     return () => clearTimeout(timer);
-  }, [today]);
+    // `today` is read above, and `tick` is what guarantees the effect re-runs even when
+    // the day did not actually change.
+  }, [today, tick]);
 
   // DERIVED from `today` rather than read from the clock again, so the two can never
   // disagree — and at local NOON, which keeps the calendar-field arithmetic the recency

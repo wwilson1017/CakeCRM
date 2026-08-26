@@ -3,7 +3,7 @@ import { StrictMode, act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import usePatchableAssembly, {
-  applyOverlay, writeMayHaveLanded, type PatchableAssembly,
+  applyOverlay, rowIsGone, writeMayHaveLanded, type PatchableAssembly,
 } from './usePatchableAssembly';
 import type { PageAssembly } from '../shared/collection';
 import { ApiError } from '../core/api/client';
@@ -170,5 +170,22 @@ describe('writeMayHaveLanded', () => {
     // "no status" is the most ambiguous outcome of the three, not the safest.
     expect(writeMayHaveLanded(new TypeError('Failed to fetch'))).toBe(true);
     expect(writeMayHaveLanded('something thrown that is not an Error')).toBe(true);
+  });
+});
+
+describe('rowIsGone', () => {
+  it('singles out the one 4xx that proves the CORPUS wrong', () => {
+    // 404 means somebody else already deleted the row, so the local copy is a ghost —
+    // even though, like every 4xx, the write itself never happened.
+    expect(rowIsGone(new ApiError('gone', 404, ''))).toBe(true);
+    expect(writeMayHaveLanded(new ApiError('gone', 404, ''))).toBe(false);
+  });
+
+  it('is false for every other failure, including ones with no status', () => {
+    for (const status of [400, 403, 409, 422, 500, 503]) {
+      expect(rowIsGone(new ApiError('x', status, '')), String(status)).toBe(false);
+    }
+    expect(rowIsGone(new TypeError('Failed to fetch'))).toBe(false);
+    expect(rowIsGone('not an error')).toBe(false);
   });
 });
