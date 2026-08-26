@@ -268,9 +268,16 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   sync `def`s for the same reason `get_current_user` is — they do blocking psycopg2
   and bcrypt work and would otherwise run it on the event loop.
   In the UI, `SettingsPage` hides the install-configuration cards (branding,
-  Telegram, custom fields, Gmail) from members, the way the Team card hides itself;
-  Notifications and Change password stay, because they configure the person, not the
-  install.
+  Telegram, custom fields, Gmail, and since #102 the Tasks card) from members, the way
+  the Team card hides itself; Notifications and Change password stay, because they
+  configure the person, not the install. The Tasks card joined that list when #102 made
+  GTD the default: `task_mode` is a `crm_meta` singleton, so one member flipping it
+  changes everyone's task surface, and the card's no-login section can mint an
+  unauthenticated read+write link to the whole todo store whose lifetime is **not** tied
+  to the account that created it (deactivating that user revokes their JWT via
+  `token_epoch`/`is_active`, not the URL). `/api/crm/task-mode` and both
+  `/api/crm/todo-surfaces` methods are `require_admin` and pinned in
+  `test_route_authz.ADMIN_ONLY`.
   **Still install-wide, deliberately (Phase B):** assistant chat history and memory,
   the Gmail connection, the Telegram binding, reminders, notifications and alerts.
   Every active seat gets the assistant (Will's §15 ruling — no temporary admin gate

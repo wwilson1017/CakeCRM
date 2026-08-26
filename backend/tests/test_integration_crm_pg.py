@@ -140,27 +140,47 @@ def test_migration_created_tables_and_singleton(pg_db):
     assert {"ai_touch_count", "ai_touch_count_at", "ai_touch_evidence_count"} <= deal_cols
 
 
-def test_the_task_mode_backfill_leaves_a_deliberate_gtd_row_alone(pg_db):
-    """#102's backfill is scoped `WHERE task_mode = 'normal'`, so re-running it is a
-    no-op on a row already in GTD — it must not bump `updated_at` on an install it has
-    nothing to say about.
+def test_the_task_mode_migration_is_scoped_and_replayable(pg_db):
+    """#102's migration must do BOTH halves of its contract, and only those:
 
-    A fresh migrated database can never exercise this (the row is 'normal' when the
-    migration runs), so the statement is replayed here. Without it, dropping the WHERE
-    clause — unconditionally rewriting every row — would keep the whole suite green.
+      * it flips a row still at the DDL default ('normal') to 'gtd';
+      * it leaves a row already at 'gtd' completely alone — not even an `updated_at`
+        bump on an install it has nothing to say about.
+
+    A freshly migrated database proves neither: the row is 'normal' when the migration
+    runs, so the skip case never occurs, and the flip case is only observed as an end
+    state. So the migration FILE is re-executed here.
+
+    Reading the real file is the load-bearing part. An earlier version of this test
+    replayed a hand-copied `UPDATE … WHERE task_mode = 'normal'` literal, which made it
+    a test of SQL semantics rather than of this repo: deleting the WHERE clause from the
+    migration left the whole suite green while every install got its `updated_at`
+    stamped. `ALTER … SET DEFAULT` is idempotent, so replaying the file is safe.
     """
+    from pathlib import Path
+
     from core.postgres import pg_execute, pg_fetchone
 
+    sql = (
+        Path(__file__).resolve().parents[1]
+        / "migrations" / "20260825222000_default_task_mode_gtd.sql"
+    ).read_text(encoding="utf-8")
+
+    # Skip case: already 'gtd' (where the migration left it) — replaying changes nothing.
     before = pg_fetchone("SELECT task_mode, updated_at FROM crm_meta WHERE id = 1")
     assert before["task_mode"] == "gtd"
-
-    pg_execute(
-        "UPDATE crm_meta SET task_mode = 'gtd', updated_at = now() "
-        "WHERE task_mode = 'normal'"
+    pg_execute(sql)
+    after = pg_fetchone("SELECT task_mode, updated_at FROM crm_meta WHERE id = 1")
+    assert after["task_mode"] == "gtd"
+    assert after["updated_at"] == before["updated_at"], (
+        "the backfill must be scoped WHERE task_mode = 'normal' — an already-GTD "
+        "install must not be rewritten"
     )
 
-    after = pg_fetchone("SELECT task_mode, updated_at FROM crm_meta WHERE id = 1")
-    assert after["updated_at"] == before["updated_at"]
+    # Flip case: an upgrading install still on the DDL default gets moved.
+    pg_execute("UPDATE crm_meta SET task_mode = 'normal' WHERE id = 1")
+    pg_execute(sql)
+    assert pg_fetchone("SELECT task_mode FROM crm_meta WHERE id = 1")["task_mode"] == "gtd"
 
 
 # ── Fresh empty install (the acceptance clause, at the data layer) ────────────

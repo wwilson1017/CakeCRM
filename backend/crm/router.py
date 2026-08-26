@@ -727,11 +727,16 @@ class TaskModeBody(BaseModel):
 
 
 @router.post("/task-mode")
-async def set_task_mode(body: TaskModeBody, user=Depends(get_current_user)):
+async def set_task_mode(body: TaskModeBody, user=Depends(require_admin)):
     """Switch between normal tasks and Todo-GTD mode.
 
     Switching migrates nothing — GTD is a view over the same task rows — so this is
     instant and reversible in both directions.
+
+    Admin-only since #102, on the same rule as `/api/assistant/identity`: `task_mode`
+    lives on the `crm_meta` singleton, so one member flipping it changes the task
+    experience for EVERYONE on the install. #102 made this reachable in practice by
+    turning GTD on everywhere, which is what surfaced the gap.
     """
     try:
         return crm.set_task_mode(body.mode)
@@ -754,18 +759,27 @@ class TodoSurfacesBody(BaseModel):
 
 
 @router.get("/todo-surfaces")
-async def get_todo_surfaces(user=Depends(get_current_user)):
+async def get_todo_surfaces(user=Depends(require_admin)):
     """Current state of the two no-login todo surfaces, including their live URLs.
 
     Returns the tokens themselves: they ARE the credential, and the settings page has
-    to render a copyable link. This endpoint is authenticated.
+    to render a copyable link — which is exactly why this is **admin-only** since #102
+    (it was merely authenticated before, and the `mode === 'gtd'` UI gate was the only
+    thing keeping it off a normal-mode member's screen).
     """
     return _todo_surfaces_payload()
 
 
 @router.post("/todo-surfaces")
-async def update_todo_surfaces(body: TodoSurfacesBody, user=Depends(get_current_user)):
-    """Enable/disable the public todo app and set or rotate either token."""
+async def update_todo_surfaces(body: TodoSurfacesBody, user=Depends(require_admin)):
+    """Enable/disable the public todo app and set or rotate either token.
+
+    Admin-only since #102. Enabling the web app mints an unauthenticated URL granting
+    read+write over the whole todo store, and that token has NO lifecycle tie to the
+    account that created it — deactivating that user does not revoke the link, the way
+    `token_epoch`/`is_active` revoke their JWT. A credential that outlives its creator's
+    account belongs behind the install-configuration gate.
+    """
     capture_token = body.capture_token
     web_token = body.web_token
     if body.regenerate_capture:

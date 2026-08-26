@@ -32,11 +32,20 @@ export function useTaskMode(): TaskMode | null {
  * That matters more since #102 made GTD the default: "switch back in Settings" is the
  * opt-out for every install the migration flipped, so it has to visibly work.
  *
- * A no-op default keeps the card renderable outside the layout (tests, storybook-style
- * isolation) instead of throwing.
+ * It THROWS without a provider, matching `useActiveRecord` in RecordContext.tsx rather
+ * than defaulting to a no-op. This is the read and write halves being separate
+ * providers: the easy future mistake is keeping the value provider and dropping the
+ * setter one (a refactor, a second mount point, a new route tree). Under a no-op
+ * default that failure is silent and looks like success — the POST returns 200, the
+ * toast says the mode switched, and /crm/tasks keeps rendering the old task system.
+ * That is precisely the bug #102 exists to fix, restored with no error to notice.
  */
-export const TaskModeSetterContext = createContext<(mode: TaskMode) => void>(() => {});
+export const TaskModeSetterContext = createContext<((mode: TaskMode) => void) | null>(null);
 
 export function useSetTaskMode(): (mode: TaskMode) => void {
-  return useContext(TaskModeSetterContext);
+  const setMode = useContext(TaskModeSetterContext);
+  if (!setMode) {
+    throw new Error('useSetTaskMode must be used within a TaskModeSetterContext.Provider');
+  }
+  return setMode;
 }

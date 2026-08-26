@@ -219,8 +219,13 @@ export function SettingsPage() {
           nav is for business objects (Pipeline, Contacts, Deals…), and every other
           assistant-facing surface — identity, Telegram, Gmail — already lives here. */}
       <MemoryCard />
-      {/* Task mode + the no-login todo links (issue #70) — appended last, same convention. */}
-      <TaskModeCard isMobile={isMobile} />
+      {/* Task mode + the no-login todo links (issue #70) — appended last, same convention.
+          Admin-only since #102, joining the other install-configuration cards above:
+          task_mode is a crm_meta singleton (one member switching it changes everyone's
+          task experience) and the links section can mint an unauthenticated read+write
+          URL for the whole todo store. Both routes now require_admin, so an ungated card
+          would only render controls the API refuses. */}
+      {isAdmin && <TaskModeCard isMobile={isMobile} />}
     </div>
   );
 }

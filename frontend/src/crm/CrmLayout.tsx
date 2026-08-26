@@ -158,9 +158,14 @@ const actionLink: React.CSSProperties = {
 const DEMO_STATUS_UNKNOWN: DemoStatus = {
   empty: false, sample_data_loaded: false, show_onboarding: false, ai_key_prompt_dismissed: true,
   // A failed fetch must not strand /crm/tasks on a blank screen, so fall back to the
-  // default mode rather than leaving it unknown forever. GTD since #102, mirroring the
-  // backend: get_task_mode() answers 'gtd' when it cannot read the row, so guessing
-  // 'normal' here would disagree with what the server would have told us.
+  // default mode rather than leaving it unknown forever. GTD since #102.
+  //
+  // Note this is NOT the same event as the backend's fail-safe, and the reason matters:
+  // get_task_mode() falls back when THE SERVER cannot read crm_meta, whereas this .catch
+  // fires on a network blip or a 5xx, where the server may be perfectly healthy and
+  // would have said 'normal' on a normal-mode install. So this is not mirroring the
+  // backend — it is guessing the product default, which post-#102 is what nearly every
+  // install is actually on, and is therefore right far more often than 'normal' was.
   task_mode: 'gtd',
 };
 
