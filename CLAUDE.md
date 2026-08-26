@@ -645,13 +645,24 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   green). `_BLUEPRINT` (`cake_os`, `casey`) is the deliberate asymmetry: banned from
   the payload — a shipped product must not name what it was ported from — but
   legitimate in committed prose, since the Source Map and every port comment cite the
-  blueprint by name. Deliberate exemptions live in `_REPO_ALLOW` (path → patterns +
-  a written reason) and exist ONLY for text that must talk *about* the denylist: this
-  rule, a coach lesson quoting a token the guard was missing, a sibling guard's own
-  literals. Scrub the file instead whenever scrubbing is possible — the list is meant
-  to stay readable in full, and a dead entry fails CI. The guard excludes exactly its
-  own path, since it necessarily spells every token out. Note the scan covers the
-  working tree, **not history**: tokens committed before a scrub stay in the log.
+  blueprint by name. Deliberate exemptions live in `_REPO_ALLOW` as path → **{pattern:
+  exact expected count}** + a written reason, and the count is the whole point: a
+  file-keyed exemption would repeat the mistake the gitleaks bullet under "CI &
+  Contributing" already records — it "exempts every finding in that file, including a
+  real one" — and CLAUDE.md is the most-edited file in the repo, so an unbounded
+  exemption *here* would be the widest hole of all. Entries exist ONLY for text that
+  must talk *about* the denylist: this rule, a coach lesson quoting a token the guard
+  was missing, a sibling guard's own literals. A count that stops matching reality
+  fails CI **in both directions** — a stale or inflated allowance is caught as surely
+  as a new occurrence — so turning the guard down takes a visible edit to that list
+  rather than a bumped number. Scrub the file instead whenever scrubbing is possible.
+  The guard excludes exactly its own path, since it necessarily spells every token
+  out. Two surfaces beyond file *content* are covered because they leak just as
+  permanently: every committed **filename** (the only scannable surface a binary asset
+  has), and **UTF-16** text, which a NUL-byte "is this binary?" probe would silently
+  skip — precisely the shape a spreadsheet or CSV export of real customer names
+  arrives in. The scan reads the working tree, **not history**: tokens committed
+  before a scrub stay in the log.
 - Never import git history from cake_os or chatty — code arrives as clean snapshots
   in ordinary commits.
 - Never merge a pull request — with exactly ONE exception, the **operator ship lane**:
