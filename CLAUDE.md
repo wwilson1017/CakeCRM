@@ -789,7 +789,18 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   gained the contact/deal joins (every task write returns it), and `get_contact_detail`
   carries `last_contact_at`. A failed write is triaged on the status `ApiError` already
   carries (#55): a definite 4xx wrote nothing, anything else may have committed and been
-  lost, so it re-sweeps. The one write no patch can express is completing a **repeating**
+  lost, so it re-sweeps — and a **404 is the one 4xx that proves the CORPUS wrong even
+  though it proves the write never happened** (`rowIsGone`), because another seat, the
+  assistant or Telegram deleted the row behind a swept list's back; that row is dropped
+  rather than left to fail on every click. EVERY mutation path reports an uncertain
+  outcome, not only the obvious ones — the detail pages host the EDIT forms, and an
+  activity row or a note is one of the two signals behind `last_contact_at`. Because a
+  swept corpus otherwise never reloads on its own (any keystroke used to round-trip and
+  pick up other writers incidentally), returning to a backgrounded tab re-sweeps once the
+  corpus is older than `CORPUS_MAX_AGE_MS`, alongside an explicit Refresh control. A write
+  the assistant makes while the list is open is still invisible until one of those fires —
+  the accepted ceiling, stated rather than hidden.
+  The one write no patch can express is completing a **repeating**
   task, which spawns its next occurrence server-side (#70) — that path re-sweeps, decided
   from the SERVER's copy of `repeat`, never the pre-write one.
   **Last contact** has no column behind it: it is derived per contact from the same two
@@ -817,7 +828,17 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   state to reproduce the old Pending-by-default page; a layer *toggle* would have been
   wrong twice (the hook never filters rows on toggles, and two states cannot express the
   Done-only tab that existed). Its due buckets use the LOCAL day via `ymd`, fixing a UTC
-  drift that made an evening "due tomorrow" read as "due today". `OwnerScopeToggle` is
+  drift that made an evening "due tomorrow" read as "due today" — and the day itself is
+  `useLocalDay`, **state that advances on a timer aimed at local midnight**, fed into the
+  configs so the dependency is real. Reading the clock inside a predicate is necessary but
+  NOT sufficient: a predicate only runs when React re-renders, and time passing is not a
+  render, so a tab left open overnight would keep yesterday's boundaries and stop flagging
+  anything overdue. Its `now` is derived FROM the day string (at local noon, clear of both
+  DST edges) so the two cannot disagree, and it re-arms on a monotonic tick rather than the
+  day value, because `setState(sameValue)` is a React bail-out that would strand a clock
+  stepped backwards. Tasks' default sort is a **composite** `open_due` key, since the layer
+  sorts by one value per field and "All" would otherwise interleave done and open tasks the
+  way the old tab bar never did. `OwnerScopeToggle` is
   **deleted** — an Owner facet with an Unassigned bucket replaces it and can select any
   owner, hiding itself on a single-seat install the same way.
 - **Tasks have two modes over ONE store** (#70), and **GTD is the default** (#102).
