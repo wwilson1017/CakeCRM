@@ -267,10 +267,28 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   NAT address. `login`, `/api/me`, change-password and the `/api/users` handlers are
   sync `def`s for the same reason `get_current_user` is — they do blocking psycopg2
   and bcrypt work and would otherwise run it on the event loop.
-  In the UI, `SettingsPage` hides the install-configuration cards (branding,
-  Telegram, custom fields, Gmail) from members, the way the Team card hides itself;
-  Notifications and Change password stay, because they configure the person, not the
-  install.
+  In the UI, which Settings cards a member sees is decided in ONE place,
+  `crm/settingsSections.ts` (#103): each card declares `adminOnly`, and a section is
+  visible iff one of its cards is — so an all-admin group (Workspace, Integrations)
+  can never render as an empty section or a dead tab for a member. Team also keeps
+  its internal `return null` as defence in depth. Members see exactly Notifications,
+  Change password and Assistant memory. **Task mode is admin-only since #102**:
+  `task_mode` is a `crm_meta` singleton, so one member flipping it changes everyone's
+  task surface, and the card's no-login section can mint an unauthenticated read+write
+  link to the whole todo store whose lifetime is **not** tied to the account that
+  created it (deactivating that user revokes their JWT via `token_epoch`/`is_active`,
+  not the URL). `/api/crm/task-mode` and both `/api/crm/todo-surfaces` methods are
+  `require_admin`, pinned in `test_route_authz.ADMIN_ONLY`. #102 gated that at its
+  call site; this page **replaced** that call site, so the gate is now the registry's
+  `adminOnly` flag — same semantics, one place. The UI partition mirrors the server's
+  rather than inventing one, and `settingsSections.test.ts` pins it in both directions.
+  The registry is **card-granular**, and one card straddles that line: Notifications'
+  Web Push half configures this browser (everyone's), while its "Daily digest and
+  nudges" half writes install state through the `require_admin`
+  `POST /api/heartbeat/proactive` — so that block carries its own `isAdmin` gate
+  *inside* a member-visible card (pinned in `SettingsPage.test.tsx`). Any future card
+  mixing personal and install controls needs the same second gate: the registry cannot
+  express it, and "don't offer what can only 403" is a rule about controls, not cards.
   **Still install-wide, deliberately (Phase B):** assistant chat history and memory,
   the Gmail connection, the Telegram binding, reminders, notifications and alerts.
   Every active seat gets the assistant (Will's §15 ruling — no temporary admin gate
@@ -498,7 +516,38 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   launcher (never the home page), and shows a **dismissible** "add an AI key" nudge —
   never a gate, gated on `!credentials_present`, dismissal tracked on
   `crm_meta.ai_key_prompt_dismissed`. Branding (company name / logo) is edited at
-  `/crm/settings`, consuming the existing `/api/branding`. The **theme itself is fixed**
+  `/crm/settings`, consuming the existing `/api/branding`.
+  **The Settings page is a shell, not a list** (#103): four sections — Personal →
+  Assistant → Workspace → Integrations, member-visible first so a member's nav is a
+  *prefix* of an admin's and the post-login `isAdmin` flip only appends tabs, never
+  inserts one before the section on screen — rendered by `SettingsPage.tsx` as an
+  underline tab strip of `<Link>`s in `<nav aria-label="Settings sections">`
+  (navigation ⇒ underline tabs, the `ViewSwitcher` rule; deliberately **not** an ARIA
+  tablist, because these tabs navigate and a `role="tab"` would promise arrow-key
+  roving this does not implement) over the active section's cards **only**. Every card
+  wraps itself in `components/SettingsCard.tsx` (`<section aria-labelledby>` + a real
+  `<h2>` + optional description/badge), which owns padding; the page owns column width
+  and inter-card spacing, so a card carries no `marginTop`/`maxWidth`/padding of its
+  own — cards **replace** their old outer `<div>` rather than nesting inside the shell,
+  and `settingsSections.test.ts` fails the build if a settings card still imports
+  `cardStyle`. The section is deep-linkable as `?section=<id>` and is a pure function of
+  URL + role recomputed every render (nothing memoises `isAdmin`, in either direction).
+  That is load-bearing for the **Gmail OAuth callback**, which lands on `?gmail=…` with
+  no `section`: `wantedSection()` maps a **non-empty** `gmail` to Integrations so
+  `GmailCard` mounts and its effect can toast and strip the params, and that same effect
+  writes `section=integrations` back as it strips — without which removing `gmail` would
+  drop the view to the default section. Two details keep that from becoming a trap, since
+  `gmail` outranks `section`: the non-empty test is exactly `GmailCard`'s own
+  `if (!result) return`, so the page cannot select a section the card then declines to
+  clean up; and the nav **deletes** `CALLBACK_PARAMS` from its links (it preserves every
+  other param), because a one-shot callback param riding along would pin the view to
+  Integrations and make every tab inert — permanently for a MEMBER, who never mounts
+  `GmailCard` and so never strips it. All of it is pinned by `SettingsPage.test.tsx`.
+  Only the active section mounts, so Telegram's 4 s link-poll runs only while
+  Integrations is on screen; the cost is that switching sections remounts (unsaved
+  in-card drafts are lost — acceptable, since the tabs are links and switching is a
+  navigation). Branding's form lives in `components/BrandingCard.tsx`.
+  The **theme itself is fixed**
   (#54) — one polished CakeCRM look in light and dark, defined as `--color-ck-*` tokens
   in `index.css` with a `.dark` override block; there is **no user-configurable accent**
   (`accent_color` was removed from `/api/branding`, and a stale key on disk is stripped
@@ -622,8 +671,8 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   way the old tab bar never did. `OwnerScopeToggle` is
   **deleted** — an Owner facet with an Unassigned bucket replaces it and can select any
   owner, hiding itself on a single-seat install the same way.
-- **Tasks have two modes over ONE store** (#70). `crm_meta.task_mode` is `normal` or
-  `gtd`; GTD is a presentation + tool surface over the *same* `tasks` rows, never a
+- **Tasks have two modes over ONE store** (#70), and **GTD is the default** (#102).
+  `crm_meta.task_mode` is `normal` or `gtd`; GTD is a presentation + tool surface over the *same* `tasks` rows, never a
   second table — which is what keeps the dashboard counts, contact/deal rollups,
   `crm_get_stale_deals`' open-follow-up check, the heartbeat nudge and the CRM reset
   aware of GTD todos, and makes switching modes a **no-op** (nothing migrates,
@@ -651,12 +700,40 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   executors stay reachable in both so a call proposed just before a flip still
   resolves. `crm_update_task`/`crm_delete_task` close the long-standing parity gap in
   BOTH modes. `identity.GTD_GUIDE` appends to the static prompt only in GTD mode (a
-  rare, deliberate cache invalidation, same class as editing the personality), and the
+  rare, deliberate cache invalidation, same class as editing the personality — and since
+  #102 that is the steady state for nearly every install rather than a flip-flop), and the
   heartbeat prompt names `todo_list` instead of `crm_list_tasks`. Telegram gains a
   deterministic `capture …` intercept that runs BEFORE the model — zero AI cost, works
   with no provider configured.
-- **The two no-login todo surfaces are opt-in and asymmetric** (#70, ported from
-  chatty). `/capture[/{token}]` is **write-only** (creates one inbox row, returns only
+  **#102 made GTD the default and the fail-safe.** Four readers resolve the mode —
+  `service.get_task_mode()` plus thin `_task_mode()` wrappers in `assistant.identity`,
+  `heartbeat.service` and `telegram.service` — and all four degrade to `gtd`, because a
+  row we cannot read says nothing about what the user chose, so the honest guess is the
+  experience a new install gets. A test asserts the four agree, so they cannot drift.
+  **The migration's UPDATE is the whole mechanism, not a policy add-on layered on a
+  default change — do not "simplify" it away.** `crm_meta`'s singleton row is inserted by
+  the `crm_core` migration long before `task_mode` exists, so `ADD COLUMN … DEFAULT` was
+  consumed once at ADD COLUMN time and nothing ever inserts `crm_meta` again (every writer
+  UPDATEs it; both TRUNCATE sweeps exclude it). Flipping only the column default would
+  therefore change nothing on any install, fresh ones included — which is also why the
+  issue's "fresh-installs-only, no backfill" option was unreachable without mutating an
+  already-applied migration. `SET DEFAULT 'gtd'` is kept anyway so the schema does not
+  contradict the product default for whoever next adds an inserter, and the integration
+  test pins BOTH halves separately. Rows already at `gtd` are untouched; a user who
+  deliberately chose `normal` in the four days since #70 is flipped once and re-toggles
+  (Will's accepted trade on #102) — one click, since switching migrates nothing.
+  The mode now has ONE owner in the UI: `CrmLayout` holds it and publishes both
+  `TaskModeContext` and `TaskModeSetterContext`, so `TaskModeCard` writes through the
+  setter instead of keeping a second copy. Before #102 the card's local state left the
+  layout's context stale, so switching mode in Settings did not take effect on
+  `/crm/tasks` until a full page reload — which would have broken the very opt-out that
+  makes flipping every existing install acceptable.
+  Neither no-login surface consults `task_mode` (they gate on `todo_capture_token` /
+  `todo_web_enabled`), so this flip does not widen them.
+- **The two no-login todo surfaces are asymmetric, and only ONE of them is opt-in** (#70,
+  ported from chatty — the heading used to say both were, which the body below has always
+  contradicted). Neither consults `task_mode`, so #102's default flip leaves both exactly
+  as they were. `/capture[/{token}]` is **write-only** (creates one inbox row, returns only
   its id — no read endpoint exists on it) and is reachable while no token is set;
   `/todo[/{token}]` serves the **whole todo app read+write** and is **off** until
   `todo_web_enabled`, which mints a token in the same action rather than publishing
@@ -833,4 +910,5 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Bulk deal operations (per-stage Select All + card multi-select, inline bulk bar, atomic set-based backend, `crm_bulk_move_deals` tool) — **landed #55** as `service.bulk_move_deals` + `_classify_deal_update` + `POST /api/crm/deals/bulk-move` + `PipelinePage` selection UI + pure `crm/bulk{Selection,Outcome}.ts` (+ `ApiError` in `core/api/client.ts`). NOT ported, each because the column does not exist here: the `status` dual-write and its multiple-assignment fix (won/lost ARE stages in CakeCRM), the ~60-line `display_order` request-order replay (deals carry no rank column — columns sort by `lead_score`), and the `owner_email` branch (single-user; #60 owns ownership). Also cut: the chatter translation layer (`log_events_bulk`, `lost_reason_note`/`lost_reason_cleared` kinds) because CakeCRM's stage audit IS `deal_stage_events` and a single-deal move writes no chatter either — so bulk writing none is parity, not a gap; client-side chunking (`BULK_CHUNK_SIZE` + the multi-chunk fold) since one request under a 200-cap covers an unpaginated single-user board, though the rejected-vs-unconfirmed distinction it protects survives in the collapsed `bulkOutcome.ts`; `reconcileBulkResult` (the blueprint's own PipelineTab never uses it — it serves the list surfaces, which patch rows in place, where the board always reconciles by refetching); the `BulkUpdateModal` (an inline bar is enough for one action); and bulk mark-won/mark-lost (the issue scopes bulk to stage-move; `crm_mark_deal_lost` stays the reason-capturing close). Two deliberate divergences FROM the blueprint: its bulk fetch takes no row locks, ours takes `ORDER BY id FOR UPDATE`; and its rejected path cannot revert, ours reverts to each deal's server-confirmed stage. | `cake_os/backend/apps/crm/deal_service.bulk_update_deals` + `frontend/src/apps/crm/{bulkSelection,bulkUpdateOutcome}.ts` + the PipelineTab selection/BulkBar |
 | Pipeline facet filtering (client-side, no backend query params: `frontend/src/crm/pipelineFilters.ts` pure predicate + `components/PipelineFilterBar.tsx`, spliced into `PipelinePage`'s useMemo seam as `deals`→`filteredDeals`→`grouped`; facets = keyword/stage/value/close-date/last-activity; sessionStorage `crm_pipeline_filters`) — **landed #21**. Owner facet dropped (single-tenant); `get_pipeline()` gains a derived `last_activity_at` = MAX(deal `activity_log` rows + un-archived deal `crm_chatter` notes) via one UNION-ALL/GROUP BY join (NULL = no activity), plus `company_name`. Drag stays enabled while filtering (board is stage-only, index-safe). | `cake_os/docs/CRM_FILTER_DESIGN.md` + `cake_os/docs/solutions/architecture-patterns/client-side-facet-filtering.md` |
 | **List-page parity on the collection layer** (Contacts/Companies/Tasks: keyset corpus sweep + client-side search/facets/sort, derived `last_contact_at`, routed-detail-as-selection, Owner facet) — **landed #77** as `frontend/src/crm/{collectionConfig.ts,listColumns.tsx,assemblyPage.ts,usePatchableAssembly.ts,ContactsPage,CompaniesPage,TasksPage}` + `components/RefreshButton.tsx` + `sort=id`/`after_id` on the three list endpoints. **The issue's premise is wrong about Tasks**: `cake_os/.../components/TasksTab.tsx` does not exist — that CRM has four tabs (Dashboard/Contacts/Companies/Pipeline) and keeps tasks in a separate `todo-gtd` app that never adopted the layer, so the Tasks page is designed here in the layer's idiom rather than ported. NOT ported: `listRow.ts` (its `toListRow` strip exists because the blueprint's detail BODIES gate enrichment on field presence; CakeCRM's detail pages fetch by id unconditionally, and the overlay merges rather than replaces, so a detail-shaped row is harmless), `lastContact.ts` (deal-specific, with a custom-field precedence that has no analogue — `gtd/util.formatAge` renders ours), the bulk bar (no bulk contact endpoint exists here), `CrmContext`/`pendingNavigation` (real routes, not a tab shell), `useFetchOnce`/`fetchCrmTeam` (`useUsers` is the equivalent), and a Cards view (list-only with responsive column hiding, the blueprint's own call). Two deliberate divergences FROM the blueprint: it pages the sweep by OFFSET over `created_at asc`, ours is a keyset walk on `id` (neither CakeCRM endpoint had an ascending immutable order, and both hard-delete); and its detail rides the modal shell, ours stays routed for the z-index/deep-link reasons in the CRM bullet | `cake_os/frontend/src/apps/crm/{components/{ContactsTab,CompaniesTab,crmListColumns}.tsx,collectionConfig.ts,hooks/usePatchableAssembly.ts}` (Tasks: no blueprint) |
+| Settings page shell (four-section IA in `crm/settingsSections.ts`; underline-tab `<nav>` of `<Link>`s with `?section=` deep links; `components/SettingsCard.tsx` heading/description/padding shell adopted by all nine cards; `components/BrandingCard.tsx` extracted out of the page; member/admin partition, nav and Gmail-callback tests) — **landed #103** as `frontend/src/crm/{SettingsPage.tsx,settingsSections.ts,styles.ts}` + `frontend/src/crm/components/{SettingsCard,BrandingCard}.tsx` + shell adoption in the eight existing cards. Behaviour-preserving apart from three deliberate repairs the chain had accumulated: Team / Assistant memory / Task mode rendered bare `cardStyle` and so had **no padding at all**, Telegram hard-coded `padding: 28` (it took no `isMobile` prop), and Task mode's description spread `labelStyle` and rendered its sentence as 10 px tracked uppercase. Normalising onto `settingsDescription` also moves Assistant memory's description `maxWidth` 560 → 460 and Branding's + Change password's description margin 24 → 20, and Task mode's "No-login links" `<h3>` moves from mono-uppercase `sectionHeading()` to sans-semibold `settingsSubheading`. The Task-mode card's TITLE was renamed **"Tasks" → "Task mode"** (beside "Assistant memory" the bare noun read as the tasks page) — `README.md` and `SECURITY.md` navigation paths were updated for that and for the new section level. `CustomFieldSettings`' entity strip stays `filterTab` but gains `role="group"` + `aria-pressed`, so AT hears a filter there and navigation in the strip above it. Review also gated Notifications' install-wide digest toggle behind `isAdmin` (see the multi-user bullet) — a pre-existing leak this PR's own gating claim made untenable | New capability (no blueprint) |
 | **Sync bot — receiving half** (`.github/workflows/sync-intake.yml` + `scripts/sync_intake.py` + `SYNC_LEDGER.md` + `docs/SYNC.md`) — **landed #23**. cake_os fires a keyless `workflow_dispatch` carrying merge **metadata only**; CakeCRM validates, classifies the paths, dedupes on a full-SHA marker, and files an **un-`greenlit`** `sync-intake` issue. Translation is NOT done here — an intake issue enters the ordinary `/auto-issues` pipeline, whose worker reads cake_os from the local clone. **Two structural guarantees:** (1) *never a push* — the sender's token holds **Actions: write** only, which cannot push/PR/create-issue (`repository_dispatch` was rejected because its token needs **Contents: write**, i.e. push-capable against an unprotected `main`); (2) *no upstream text* — the payload has no free-text field, and **no cake_os path is rendered either**, because a path is only *prefix*-constrained and the filename after it is free text that could carry a customer name or forge the dedupe marker. The issue instead names **CakeCRM's own counterpart path**, and only when that file already exists here (already-public name); everything else becomes a count. Asserted, not argued: `test_sync_intake.py` feeds sentinel paths and fails CI if one survives rendering. Verdicts (`crm-code`/`shared-dnd-only`/`internal-paths-only`/`docs-only`/`no-watched-files`) are deliberately **factual, not portability judgments** — portability isn't decidable from a path. `shared-dnd-only` is its own verdict because cake_os's `shared/dnd/` has **13 non-CRM consumers** (CRM is 1 of 14), so a dnd touch is weak CRM evidence. Dedupe is the full-SHA marker check **plus a per-SHA `concurrency` group** (`sync-intake-<sha>`) closing the check-then-create race. The distinction is the whole point: a *global* group would drop distinct intakes (only one run may sit pending), while keying on the SHA serializes exactly the duplicate deliveries and drops nothing. The workflow self-provisions its label and declares `permissions: issues: write` explicitly (the repo default is `read`). **The sender half lives in cake_os and is not built yet** — `docs/SYNC.md` §6 is its spec. | New capability (no blueprint — the cake_os half is its own issue there) |

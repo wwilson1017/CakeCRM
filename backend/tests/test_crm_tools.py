@@ -77,11 +77,19 @@ def test_every_def_has_executor_and_alias_is_the_extra():
     assert set(TOOL_EXECUTORS) == def_names | {"crm_log_note"}
 
 
-def test_get_crm_tools_returns_full_set_unconditionally():
+def test_get_crm_tools_has_no_enable_gate(task_mode):
+    """The CRM tools are always on — there is no per-integration enable flag.
+
+    The mode is pinned explicitly because #70 made the def list conditional on ONE
+    thing (GTD hides the five task tools) and #102 made GTD the fail-safe answer with
+    no database. Before that this test read the full list by accident of the old
+    'normal' fallback; asking for normal mode is what it always meant.
+    """
+    task_mode("normal")
     defs, execs = get_crm_tools()
     assert defs is CRM_TOOL_DEFS
     assert execs is TOOL_EXECUTORS
-    # No enable gate: the accessor takes no required args and never filters.
+    # No enable gate: the accessor takes no required args.
     sig = inspect.signature(get_crm_tools)
     assert not [p for p in sig.parameters.values()
                 if p.default is inspect.Parameter.empty and p.kind in

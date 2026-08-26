@@ -315,8 +315,11 @@ def get_gtd_tools() -> tuple[list[dict], dict[str, Callable[..., dict]]]:
     Returns ([], {}) unless GTD task mode is active — the `get_gmail_tools`
     precedent: an unused surface is hidden from the model entirely rather than
     advertised and refused. MUST never raise; `get_task_mode()` is itself fail-safe,
-    so a registry built with no database (the hermetic suite does this) simply sees
-    normal mode.
+    so a registry built with no database sees the product default — GTD since #102, so
+    this returns the full todo set there rather than nothing.
+
+    (Historic note: before #102 that same no-database path read as normal mode and this
+    returned `([], {})`.)
     """
     if service.get_task_mode() != "gtd":
         return [], {}

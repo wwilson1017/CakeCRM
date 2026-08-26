@@ -274,12 +274,13 @@ def maybe_run_heartbeat_turn(force: bool = False) -> dict:
 
 
 def _task_mode() -> str:
-    """Current task mode; fail-safe to 'normal' so a read error never breaks a tick."""
+    """Current task mode; fail-safe to the product default ('gtd' since #102) so a read
+    error never breaks a tick, and never disagrees with the other three readers."""
     try:
         from crm.service import get_task_mode
         return get_task_mode()
     except Exception:
-        return "normal"
+        return "gtd"
 
 
 def _heartbeat_prompt() -> tuple[str, str]:

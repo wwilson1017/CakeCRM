@@ -14,7 +14,7 @@ import os
 
 import psycopg2
 import pytest
-from conftest import fake_admin
+from conftest import FAKE_ADMIN, fake_admin
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -42,17 +42,20 @@ def pg_db():
     postgres.init_pool()
     postgres.run_migrations()  # applies EVERY migration, incl. crm_core
 
-    # Seed the user the HTTP tests authenticate as. Since #60 every human write stamps
-    # `owner_id`/`author_id` with a real FK to `users`, so without this row any routed
-    # write (CSV import, a chatter note) dies on a ForeignKeyViolation that has nothing
-    # to do with what the test is asserting. `fake_admin` is id 1.
+    # Seed the user that `_client()`'s fake_admin override claims to be. These tests
+    # mount the CRM router on a bare FastAPI app, so the lifespan that would normally
+    # run ensure_bootstrap_admin() never fires and `users` stays empty — while #60 gave
+    # crm_chatter.author_id / activity_log.actor_id real FKs to it. Without this row,
+    # every authored write in this module dies on a ForeignKeyViolation.
+    # (Pre-existing gap; #102 and #77 hit it independently and fixed it the same way.)
     postgres.pg_execute(
         "INSERT INTO users (id, email, name, password_hash, role) "
-        "VALUES (%s, %s, %s, 'x', 'admin') ON CONFLICT (id) DO NOTHING",
-        (fake_admin()["id"], fake_admin()["email"], fake_admin()["name"]),
+        "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
+        (FAKE_ADMIN["id"], FAKE_ADMIN["email"], FAKE_ADMIN["name"], "x", FAKE_ADMIN["role"]),
     )
-    # An explicit id does NOT advance the SERIAL, so the next default-id insert would also
-    # get 1 and fail on the primary key. Push the sequence past what we just seeded.
+    # An explicit id does NOT consume the SERIAL, so the next default-id insert would be
+    # handed 1 again and die on the primary key — far from here, looking like a bug in
+    # whatever inserted next. Push the sequence past what we just seeded.
     postgres.pg_execute(
         "SELECT setval(pg_get_serial_sequence('users', 'id'), "
         "(SELECT MAX(id) FROM users), true)"
@@ -117,6 +120,21 @@ def test_migration_created_tables_and_singleton(pg_db):
     assert meta and meta["sample_data_loaded"] is False
     # issue #9 migration: durable AI-key-nudge dismissal, default FALSE
     assert meta["ai_key_prompt_dismissed"] is False
+    # issue #102: GTD is the default task mode. Two separate assertions because the
+    # migration has two halves and only ONE of them does any work here. The singleton
+    # row predates the task_mode column (crm_meta is inserted by the crm_core
+    # migration), so the column DEFAULT is consumed once at ADD COLUMN time and never
+    # again — the row value below comes from #102's UPDATE, not from the DDL default.
+    # Asserting only the row would let someone delete the backfill and keep a green
+    # suite on a fresh database while every install still read 'normal'.
+    assert meta["task_mode"] == "gtd"
+    assert pg_fetchone(
+        "SELECT column_default FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name = 'crm_meta' "
+        "AND column_name = 'task_mode'"
+    )["column_default"].startswith("'gtd'")
+
+
     # issue #16 migration: the three AI-touch-count columns on deals (NULL by default)
     deal_cols = {
         r["column_name"]
@@ -126,6 +144,57 @@ def test_migration_created_tables_and_singleton(pg_db):
         )
     }
     assert {"ai_touch_count", "ai_touch_count_at", "ai_touch_evidence_count"} <= deal_cols
+
+
+def test_the_task_mode_migration_is_scoped_and_replayable(pg_db):
+    """#102's migration must do BOTH halves of its contract, and only those:
+
+      * it flips a row still at the DDL default ('normal') to 'gtd';
+      * it leaves a row already at 'gtd' completely alone — not even an `updated_at`
+        bump on an install it has nothing to say about.
+
+    A freshly migrated database proves neither: the row is 'normal' when the migration
+    runs, so the skip case never occurs, and the flip case is only observed as an end
+    state. So the migration FILE is re-executed here.
+
+    Reading the real file is the load-bearing part. An earlier version of this test
+    replayed a hand-copied `UPDATE … WHERE task_mode = 'normal'` literal, which made it
+    a test of SQL semantics rather than of this repo: deleting the WHERE clause from the
+    migration left the whole suite green while every install got its `updated_at`
+    stamped. `ALTER … SET DEFAULT` is idempotent, so replaying the file is safe.
+    """
+    from pathlib import Path
+
+    from core.postgres import pg_execute, pg_fetchone
+
+    sql = (
+        Path(__file__).resolve().parents[1]
+        / "migrations" / "20260825222000_default_task_mode_gtd.sql"
+    ).read_text(encoding="utf-8")
+
+    # Skip case: already 'gtd' (where the migration left it) — replaying changes nothing.
+    before = pg_fetchone("SELECT task_mode, updated_at FROM crm_meta WHERE id = 1")
+    assert before["task_mode"] == "gtd"
+    pg_execute(sql)
+    after = pg_fetchone("SELECT task_mode, updated_at FROM crm_meta WHERE id = 1")
+    assert after["task_mode"] == "gtd"
+    assert after["updated_at"] == before["updated_at"], (
+        "the backfill must be scoped WHERE task_mode = 'normal' — an already-GTD "
+        "install must not be rewritten"
+    )
+
+    # Flip case: an upgrading install still on the DDL default gets moved.
+    #
+    # try/finally because `_clean_crm` does NOT reset task_mode: without it, a failure
+    # between these two statements would leave the singleton on 'normal' and cascade
+    # into test_demo_state_machine_over_http, which would then fail with a misleading
+    # message about demo-status instead of naming the real cause.
+    try:
+        pg_execute("UPDATE crm_meta SET task_mode = 'normal' WHERE id = 1")
+        pg_execute(sql)
+        assert pg_fetchone("SELECT task_mode FROM crm_meta WHERE id = 1")["task_mode"] == "gtd"
+    finally:
+        pg_execute("UPDATE crm_meta SET task_mode = 'gtd' WHERE id = 1")
 
 
 # ── Fresh empty install (the acceptance clause, at the data layer) ────────────
@@ -222,15 +291,17 @@ def test_demo_state_machine_over_http(pg_db):
 
     status = client.get("/api/crm/demo-status").json()
     # task_mode rides this payload (#70) so CrmLayout can pick the task surface
-    # without a second request.
+    # without a second request. GTD since #102 — and because this database was built
+    # by running every migration, this assertion IS the end-to-end check that #102's
+    # backfill works: a freshly migrated install reports GTD over HTTP.
     assert status == {"empty": True, "sample_data_loaded": False, "show_onboarding": True,
-                      "ai_key_prompt_dismissed": False, "task_mode": "normal"}
+                      "ai_key_prompt_dismissed": False, "task_mode": "gtd"}
 
     seeded = client.post("/api/crm/load-sample-data").json()
     assert seeded["seeded"] is True
     after = client.get("/api/crm/demo-status").json()
     assert after == {"empty": False, "sample_data_loaded": True, "show_onboarding": False,
-                     "ai_key_prompt_dismissed": False, "task_mode": "normal"}
+                     "ai_key_prompt_dismissed": False, "task_mode": "gtd"}
 
     # guarded clear wipes example data and restarts identities
     cleared = client.post("/api/crm/demo-clear").json()

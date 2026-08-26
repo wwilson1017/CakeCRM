@@ -64,7 +64,7 @@ becomes yours.
 one-way door: going back to an older CakeCRM build means restoring a pre-upgrade
 `pg_dump`, not just redeploying the old image.
 
-Add the rest of your team at **Settings → Team**. Two roles:
+Add the rest of your team at **Settings → Workspace → Team**. Two roles:
 
 - **Member** — the whole CRM: records, pipeline, tasks, notes, import, and the
   assistant.
@@ -84,13 +84,13 @@ this work.
 ### Passwords
 
 `AUTH_PASSWORD` is only the **initial** password for that first admin. Change it in
-the app at **Settings → Change password**; the new one is stored (bcrypt-hashed) in
+the app at **Settings → Personal → Change password**; the new one is stored (bcrypt-hashed) in
 the database, and from then on `AUTH_PASSWORD` is ignored — editing it later won't
 change how you sign in, and won't override your password on the next restart.
 If two-factor authentication is on, changing the password also asks for a code.
 
-Forgot a **member's** password? An admin resets it at **Settings → Team → Reset
-password**, then tells them the new one. There is no email-link reset, because a
+Forgot a **member's** password? An admin resets it at **Settings → Workspace → Team →
+Reset password**, then tells them the new one. There is no email-link reset, because a
 self-hosted CakeCRM has no mail server to send one.
 
 **Changing your password signs out every other device immediately** — the tab you

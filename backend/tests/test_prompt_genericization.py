@@ -95,6 +95,12 @@ def model_facing(monkeypatch):
         lambda: {"name": "Baker", "personality": "", "using_default": True},
     )
     # Normal mode first — patching the mode below is one-way for this fixture.
+    # Pinned EXPLICITLY: with no database the fail-safe answers 'gtd' since #102, so
+    # relying on it here would assemble the GTD prompt twice and leave every
+    # normal-mode-only string (the crm_list_tasks heartbeat wording) unscanned. A
+    # silent loss of coverage in a test whose whole job is to catch leaked strings.
+    monkeypatch.setattr(identity, "_task_mode", lambda: "normal")
+    monkeypatch.setattr(heartbeat_service, "_task_mode", lambda: "normal")
     static, volatile = identity.build_system_prompt({"name": "Baker", "personality": ""})
     hb_static, hb_volatile = heartbeat_service._heartbeat_prompt()
     rm_static, rm_volatile = heartbeat_service._reminder_prompt(
