@@ -28,6 +28,9 @@ const user = (id: number, over: Partial<CrmUser> = {}): CrmUser => ({
   id, email: `u${id}@example.com`, name: `User ${id}`, role: 'member', is_active: true, ...over,
 });
 
+const NOW = new Date(2026, 4, 1, 12, 0);
+const TODAY = '2026-05-01';
+
 const getters = <T,>(fields: readonly { value: string; get?: (i: T) => unknown }[]) =>
   fields.filter(f => f.get).map(f => [f.value, f.get!] as const);
 
@@ -52,8 +55,27 @@ describe('sort getters', () => {
   it('return null for every blank task field, including an unset due date', () => {
     const blank = task({ title: '', due_date: '', priority: '', created_at: '' });
     for (const [name, get] of getters<CrmTask>(TASK_SORT_FIELDS)) {
+      // `open_due` is exempt and must be: it is a COMPOSITE whose first component
+      // (completion) is never unknown, so it always has a real position. Its own
+      // "undated sorts last" is handled inside the string, not by the null rule.
+      if (name === 'open_due') continue;
       expect(get(blank), `task sort field "${name}"`).toBeNull();
     }
+  });
+
+  it('orders open-before-done, then by due date, in ONE composite key', () => {
+    // The server's historical order. Without it the "All" view interleaves done and open
+    // tasks, which the tab bar this page replaces never did.
+    const get = TASK_SORT_FIELDS.find(f => f.value === 'open_due')!.get;
+    const key = (over: Partial<CrmTask>) => get(task(over)) as string;
+    const openEarly = key({ completed: 0, due_date: '2026-01-01' });
+    const openLate = key({ completed: 0, due_date: '2026-12-01' });
+    const openUndated = key({ completed: 0, due_date: '' });
+    const doneEarly = key({ completed: 1, due_date: '2026-01-01' });
+
+    expect(openEarly < openLate).toBe(true);          // due date orders within a group
+    expect(openLate < openUndated).toBe(true);        // undated last WITHIN the open group
+    expect(openUndated < doneEarly).toBe(true);       // …but still ahead of anything done
   });
 
   it('sorts lead score numerically, not as text', () => {
@@ -106,7 +128,7 @@ describe('buildOwnerOptions', () => {
 
 describe('owner facet', () => {
   const ownerFacetOf = (owners: ReturnType<typeof buildOwnerOptions>) =>
-    makeContactsCollectionConfig({ columns: buildContactColumns(), owners })
+    makeContactsCollectionConfig({ columns: buildContactColumns(), owners, now: NOW })
       .facets!.find(f => f.key === 'owner');
 
   it('buckets a null OR absent owner_id as unassigned', () => {
@@ -176,7 +198,7 @@ describe('matchesDuePreset', () => {
 describe('the Done facet', () => {
   it('defaults to Open, reproducing the old Pending-by-default page', () => {
     const config = makeTasksCollectionConfig({
-      columns: buildTaskColumns(() => {}), owners: null, doneFacet: buildDoneFacetRenderers(),
+      columns: buildTaskColumns(() => {}, TODAY), owners: null, doneFacet: buildDoneFacetRenderers(), now: NOW,
     });
     const done = config.facets!.find(f => f.key === 'done')!;
     expect(done.kind).toBe('custom');
@@ -187,7 +209,7 @@ describe('the Done facet', () => {
 
   it('reports itself ACTIVE while it is hiding rows, so the bar can say why', () => {
     const config = makeTasksCollectionConfig({
-      columns: buildTaskColumns(() => {}), owners: null, doneFacet: buildDoneFacetRenderers(),
+      columns: buildTaskColumns(() => {}, TODAY), owners: null, doneFacet: buildDoneFacetRenderers(), now: NOW,
     });
     const isActive = (config.facets!.find(f => f.key === 'done') as { isActive: (v: unknown) => boolean }).isActive;
     expect(isActive('open')).toBe(true);
@@ -231,15 +253,15 @@ describe('column keys line up with sort fields', () => {
   it('for contacts, companies and tasks', () => {
     check(buildContactColumns(), CONTACT_SORT_FIELDS, ['phone']);
     check(buildCompanyColumns(), COMPANY_SORT_FIELDS, ['phone']);
-    check(buildTaskColumns(() => {}), TASK_SORT_FIELDS, ['done']);
+    check(buildTaskColumns(() => {}, TODAY), TASK_SORT_FIELDS, ['done']);
   });
 });
 
 describe('config shape', () => {
   const configs = () => [
-    makeContactsCollectionConfig({ columns: buildContactColumns(), owners: null }),
+    makeContactsCollectionConfig({ columns: buildContactColumns(), owners: null, now: NOW }),
     makeCompaniesCollectionConfig({ columns: buildCompanyColumns(), owners: null }),
-    makeTasksCollectionConfig({ columns: buildTaskColumns(() => {}), owners: null, doneFacet: buildDoneFacetRenderers() }),
+    makeTasksCollectionConfig({ columns: buildTaskColumns(() => {}, TODAY), owners: null, doneFacet: buildDoneFacetRenderers(), now: NOW }),
   ];
 
   it('declares the list view it defaults to (the hook throws otherwise)', () => {

@@ -1290,14 +1290,21 @@ def test_a_row_inserted_mid_sweep_lands_past_the_cursor(pg_db):
     assert len(got) == len(set(got))
 
 
-def test_cursor_pages_skip_the_count_but_still_window(pg_db):
+def test_an_assembly_request_never_counts_but_still_windows(pg_db):
+    """`sort=id` IS the sweep, and the sweep derives hasMore from an extra row — so it
+    never reads `total` and the server should not pay for one on ANY of its pages. An
+    ordinary list still reports it."""
     from crm import service
     for i in range(6):
         _mk_contact(f"N{i}")
+
+    assert service.list_contacts(limit=2)["total"] == 6          # ordinary list: counted
+
     first = service.list_contacts(sort="id", limit=2)
-    assert first["total"] == 6                       # page one reports the real total
+    assert first["total"] is None
     later = service.list_contacts(sort="id", after_id=first["contacts"][-1]["id"], limit=2)
-    assert later["total"] is None                    # …and later pages do not re-count
+    assert later["total"] is None
+    # …and the window is still correct: the next two ids, in order, nothing skipped.
     assert [r["id"] for r in later["contacts"]] == [first["contacts"][-1]["id"] + 1,
                                                     first["contacts"][-1]["id"] + 2]
 

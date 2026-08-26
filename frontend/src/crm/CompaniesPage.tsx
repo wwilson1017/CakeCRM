@@ -66,6 +66,9 @@ export function CompaniesPage() {
         <CompanyForm
           onClose={() => setShowCreate(false)}
           onSaved={saved => { setShowCreate(false); upsert(saved); }}
+          // A save whose outcome is unknown may have committed — re-sweep rather
+          // than keep rendering a corpus we can no longer vouch for.
+          onWriteUncertain={retry}
         />
       )}
     </div>

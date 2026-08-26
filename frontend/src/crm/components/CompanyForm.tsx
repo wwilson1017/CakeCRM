@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { api } from '../../core/api/client';
+import { writeMayHaveLanded } from '../usePatchableAssembly';
 import { useAuth } from '../../core/auth/AuthContext';
 import { OwnerSelect } from './OwnerSelect';
 import { labelStyle, inputStyle, CORAL, LINE, INK_DIM, mono } from '../../shared/styles';
@@ -13,9 +14,18 @@ interface Props {
   onClose: () => void;
   /** Receives the saved record so a list page can patch its row without a refetch (#77). */
   onSaved: (saved: CrmCompany) => void;
+  /**
+   * Fired when a save FAILS in a way that may still have committed (#77).
+   *
+   * A host holding a client-loaded corpus can no longer rely on the next filter change to
+   * refetch, so a write whose response was lost would leave the list stale indefinitely.
+   * The host decides what to do — in practice, re-sweep. Optional; a 4xx never fires it,
+   * because a refusal wrote nothing.
+   */
+  onWriteUncertain?: (err: unknown) => void;
 }
 
-export function CompanyForm({ company, onClose, onSaved }: Props) {
+export function CompanyForm({ company, onClose, onSaved, onWriteUncertain }: Props) {
   const { currentUser } = useAuth();
   const isEdit = !!company;
   const [name, setName] = useState(company?.name || '');
@@ -57,7 +67,12 @@ export function CompanyForm({ company, onClose, onSaved }: Props) {
       const id = saved.id;
       await putCustomFields('company', id, cf.changedForSave(), isEdit ? 'Company saved' : 'Company created');
       onSaved(saved);
-    } catch (err: unknown) { setError(err instanceof Error ? err.message : 'Failed to save'); }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to save');
+      // A 4xx refused the write, so the host's copy is still correct. Anything else may
+      // have committed and lost the response — tell the host so it can re-sweep (#77).
+      if (writeMayHaveLanded(err)) onWriteUncertain?.(err);
+    }
     setSaving(false);
   }
 

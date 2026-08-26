@@ -34,7 +34,8 @@ import { pageHeading, btnPrimary, btnSecondary, btnSmall } from './styles';
 import { makeTasksCollectionConfig } from './collectionConfig';
 import { buildTaskColumns, buildDoneFacetRenderers } from './listColumns';
 import { useCrmCorpus, writeMayHaveLanded, type CrmCorpus } from './usePatchableAssembly';
-import { ymd } from './pipelineFilters';
+import { useLocalDay } from './useLocalDay';
+
 import { dueLabel } from './gtd/util';
 
 const NO_ROWS: CrmTask[] = [];
@@ -46,6 +47,7 @@ export function TasksPage() {
   const [editTask, setEditTask] = useState<CrmTask | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const { options: owners, loading: usersLoading } = useOwnerOptions();
+  const { today, now } = useLocalDay();
 
   const corpus = useCrmCorpus<CrmTask>(
     useCallback(async (params, signal) => {
@@ -77,7 +79,7 @@ export function TasksPage() {
     else upsert(saved);
   }, [upsert, retry]);
 
-  const columns = useMemo(() => buildTaskColumns(toggleComplete), [toggleComplete]);
+  const columns = useMemo(() => buildTaskColumns(toggleComplete, today), [toggleComplete, today]);
   return (
     <div style={{ padding: isMobile ? '20px 16px' : '32px 44px', maxWidth: 900 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: isMobile ? 16 : 24 }}>
@@ -97,6 +99,8 @@ export function TasksPage() {
             corpus={corpus}
             columns={columns}
             owners={owners}
+            now={now}
+            today={today}
             selectedId={selectedId}
             onSelect={setSelectedId}
             onEdit={task => { setSelectedId(null); setEditTask(task); }}
@@ -108,6 +112,7 @@ export function TasksPage() {
         <TaskForm
           onClose={() => setShowCreate(false)}
           onSaved={saved => { setShowCreate(false); upsert(saved); }}
+          onWriteUncertain={retry}
         />
       )}
       {editTask && (
@@ -115,6 +120,7 @@ export function TasksPage() {
           task={editTask}
           onClose={() => setEditTask(null)}
           onSaved={saved => { setEditTask(null); upsert(saved); }}
+          onWriteUncertain={retry}
         />
       )}
     </div>
@@ -125,6 +131,8 @@ interface CollectionProps {
   corpus: CrmCorpus<CrmTask>;
   columns: ReturnType<typeof buildTaskColumns>;
   owners: FacetOption[] | null;
+  now: Date;
+  today: string;
   selectedId: number | null;
   onSelect: (id: number | null) => void;
   onEdit: (task: CrmTask) => void;
@@ -132,11 +140,11 @@ interface CollectionProps {
 }
 
 function TasksCollection(
-  { corpus, columns, owners, selectedId, onSelect, onEdit, onToggleComplete }: CollectionProps,
+  { corpus, columns, owners, now, today, selectedId, onSelect, onEdit, onToggleComplete }: CollectionProps,
 ) {
   const config = useMemo(
-    () => makeTasksCollectionConfig({ columns, owners, doneFacet: DONE_FACET }),
-    [columns, owners],
+    () => makeTasksCollectionConfig({ columns, owners, doneFacet: DONE_FACET, now }),
+    [columns, owners, now],
   );
   const rows = corpus.items ?? NO_ROWS;
   const state = useCollectionState(config, rows);
@@ -160,6 +168,7 @@ function TasksCollection(
             task={task}
             onEdit={() => onEdit(task)}
             onToggleComplete={() => onToggleComplete(task)}
+            today={today}
           />
         ),
         // Escape and backdrop are allowed to close, unlike the CRM's routed panels. That
@@ -173,10 +182,9 @@ function TasksCollection(
 
 /** The task detail — title and subtitle come from `config.detail`, so this is the body only. */
 function TaskDetailBody(
-  { task, onEdit, onToggleComplete }:
-  { task: CrmTask; onEdit: () => void; onToggleComplete: () => void | Promise<void> },
+  { task, onEdit, onToggleComplete, today }:
+  { task: CrmTask; onEdit: () => void; onToggleComplete: () => void | Promise<void>; today: string },
 ) {
-  const today = ymd(new Date());
   const due = task.due_date ? dueLabel(task.due_date, today) : null;
   const late = !!due?.overdue && !task.completed;
   return (
