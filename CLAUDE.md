@@ -642,7 +642,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `scripts/` or `.github/` file is guarded the moment it is *staged* — there is no
   directory list to remember to update, which is the whole point (the gap #90 closed
   let a hardcoded upstream org URL and six real upstream directory names reach CI
-  green). `_BLUEPRINT` (`cake_os`, `casey`) is the deliberate asymmetry: banned from
+  green). `_BLUEPRINT` (`cake_os`, `casey`, `cake_crm_`) is the deliberate asymmetry: banned from
   the payload — a shipped product must not name what it was ported from — but
   legitimate in committed prose, since the Source Map and every port comment cite the
   blueprint by name. Deliberate exemptions live in `_REPO_ALLOW` as path → **{pattern:
@@ -658,24 +658,34 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   rather than a bumped number. Scrub the file instead whenever scrubbing is possible.
   **No file is exempt, the guard included** — it holds a counted allowance for its own
   denylist literals like everything else, so the one file with the most licence to
-  carry these strings is not also the one place nobody is watching. Two surfaces
-  beyond file *content* are covered because they leak just as permanently: every
-  committed **filename** (the only scannable surface a binary asset has), and text in
-  encodings a naive reader drops — a NUL-byte "is this binary?" probe silently skips
-  **UTF-16**, which is exactly the shape a spreadsheet or CSV export of real customer
-  names arrives in, while BOM-less UTF-16 is byte-wise *valid UTF-8* and so decodes
-  "successfully" into NUL-interleaved mush that matches nothing. The decoder therefore
-  never gives up: BOM'd UTF-16, BOM-less UTF-16 read both ways, then UTF-8, then
-  latin-1 as a backstop that never raises. Token boundaries are `(?<![0-9a-z])`, **not
+  carry these strings is not also the one place nobody is watching. Surfaces beyond
+  plain file *content* are covered because they leak just as permanently: every
+  committed **filename** (for a compressed container like a .xlsx, whose bytes no
+  decoder can read, that is the only surface there is), **invisible characters** (a
+  name pasted out of Word or a PDF can carry a soft hyphen or zero-width space inside
+  it and match nothing while reading perfectly — stripped before matching), and text
+  in encodings a naive reader drops. On that last: a NUL-byte "is this binary?" probe
+  silently skips **UTF-16**, exactly the shape a spreadsheet or CSV export of real
+  customer names arrives in, while BOM-less UTF-16 of ASCII content is byte-wise
+  *valid UTF-8* and so decodes "successfully" into NUL-interleaved mush that matches
+  nothing. The decoder therefore never gives up: BOM'd UTF-16, BOM-less UTF-16 read
+  both ways, then UTF-8, then latin-1 as a backstop that never raises — and the
+  wide-reading branch keeps the latin-1 reading too, or a NUL-dense PNG naming a
+  customer in a `tEXt` comment would decode to mush and escape. Boundaries are
+  `(?<![0-9a-z])`, **not
   `\b`** — `\b` counts `_` as a word character, so a token went invisible the moment an
   underscore followed it (`cake_os\b` misses `cake_os_prompt`; the company abbreviation
   vanished the same way inside `<abbrev>_internal`), which are precisely the shapes
   these names take in identifiers, filenames and env vars (six such bypasses were
   measured, and this very bullet tripped the guard by naming one). The scan
   reads the working tree, **not history**: tokens committed before a scrub stay in the
-  log. `test_sync_intake.py` consumes `_REPO_FORBIDDEN` by name for the same reason —
-  it used to hand-copy the blueprint regex to exclude it, which silently stopped
-  excluding anything the moment that pattern was widened.
+  log. `test_sync_intake.py` consumes `_REPO_FORBIDDEN` **by name** for the same
+  reason: it used to hand-copy the blueprint regex in a `pattern != …` exclusion, so
+  widening that pattern turned the exclusion into a no-op and failed that test — loudly
+  and fail-closed, but on a file nothing was wrong with. Naming the class instead means
+  both of #88's scans inherit every future widening automatically. It deliberately
+  narrows what they scan (blueprint tokens are legitimate outside the payload) and
+  keeps the rendered-issue-body scan, which is coverage no file scan can provide.
 - Never import git history from cake_os or chatty — code arrives as clean snapshots
   in ordinary commits.
 - Never merge a pull request — with exactly ONE exception, the **operator ship lane**:

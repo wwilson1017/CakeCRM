@@ -23,8 +23,15 @@ name has no such excuse anywhere, which is why the second surface exists at all 
 was fully green on both a hardcoded upstream org URL and six real upstream directory
 names, and multi-persona review caught them, which is luck rather than a control.
 
-Three limits are known and accepted, and are written down here so nobody has to
+Four limits are known and accepted, and are written down here so nobody has to
 rediscover them:
+
+* **Compressed containers are opaque.** A .xlsx, .docx or .zip stores its text
+  deflate-compressed, so no byte-level reader sees inside one and only its filename is
+  scanned. Worth knowing because the motivating scenario below — a spreadsheet export
+  of real customer names — arrives as .xlsx at least as often as .csv. Nothing of the
+  sort is committed today; if that changes, the cheap fail-closed move is to refuse
+  archive extensions outright rather than to teach this scan to unzip.
 
 * **History is out of scope.** The scan reads the working tree, not the log. A token
   committed and later scrubbed still sits in history, where only a rewrite reaches it.
@@ -107,7 +114,21 @@ _REPO_FORBIDDEN = _COMPANY + _VERTICAL  # nothing here may be committed, anywher
 _TS_COMMENTS = re.compile(r"//[^\n]*|/\*.*?\*/", re.DOTALL)
 
 
+# Format characters that are invisible in an editor and in `git diff` but that a reader
+# never sees at all: a name pasted out of Word, a PDF or a web page can arrive with a
+# soft hyphen or a zero-width space inside it, read perfectly to every human, and match
+# nothing. Measured: "chee<ZWSP>secake" and "cheese<SHY>cake" both walked straight
+# through. Stripped before matching — none of them is a newline, so reported line
+# numbers stay correct. Homoglyph substitution (a Cyrillic "с") is still open by
+# construction; this is an anti-accident control, and a determined committer defeats any
+# content scan.
+# Written as escapes on purpose: a literal here would be an invisible character in this
+# file, which is precisely the problem it exists to solve.
+_INVISIBLE = re.compile("[\u00ad\u200b-\u200f\u2060\ufeff]")
+
+
 def _offenders(text: str, label: str, patterns: list[tuple[str, str]] = _FORBIDDEN) -> list[str]:
+    text = _INVISIBLE.sub("", text)
     found = []
     for pattern, why in patterns:
         for m in re.finditer(pattern, text, re.IGNORECASE):
@@ -138,6 +159,11 @@ _GUARD = Path(__file__).resolve().relative_to(ROOT).as_posix()
 # An entry may name a file that has not landed on this branch yet (feature branches merge
 # in arbitrary order, and the guard must not turn main red the moment a sibling PR
 # lands); test_repo_allowlist_has_no_dead_entries validates every entry whose file exists.
+#
+# Counts COMPOUND across overlapping patterns: one written company name spends two
+# budgets at once, because the broadest pattern in a class carries no boundaries and so
+# also matches inside the narrower one. That catches out everyone editing an allowed
+# line for the first time, hence this note.
 _REPO_ALLOW = {
     "CLAUDE.md": (
         {r"tn[\s_.-]+cheesecake": 1, _L + r"tnc" + _R: 1, r"cheesecake": 1},
@@ -198,8 +224,19 @@ def _decode(raw: bytes) -> str:
     if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
         return raw.decode("utf-16", "replace")
     if _looks_utf16(raw):
-        # No BOM to say which way round it is, so read it both ways and scan both.
-        return raw.decode("utf-16-le", "replace") + "\n" + raw.decode("utf-16-be", "replace")
+        # No BOM to say which way round it is, so read it both ways — AND keep the
+        # latin-1 reading. Most real binaries are NUL-dense enough to reach this branch,
+        # and returning only the wide readings would put the backstop out of reach for
+        # exactly the files it exists for: a PNG whose tEXt comment names a customer
+        # decodes to mush. latin-1 of genuine UTF-16 is itself NUL-interleaved and
+        # matches nothing, so carrying it costs no false positives.
+        return "\n".join(
+            (
+                raw.decode("utf-16-le", "replace"),
+                raw.decode("utf-16-be", "replace"),
+                raw.decode("latin-1"),
+            )
+        )
     try:
         return raw.decode("utf-8")
     except UnicodeDecodeError:
@@ -257,6 +294,7 @@ def _repo_offenders(files: tuple[tuple[str, str | None], ...] | None = None) -> 
     """
     found = []
     for rel, text in files if files is not None else _committed_files():
+        text = _INVISIBLE.sub("", text) if text else text
         budget, _ = _REPO_ALLOW.get(rel, ({}, ""))
         for pattern, why in _REPO_FORBIDDEN:
             # The PATH is scanned too, and for a binary file it is the only thing there
@@ -389,7 +427,11 @@ def test_no_company_tokens_in_committed_files():
     assert not offenders, (
         "Company- or vertical-specific text is committed to a repo that goes public "
         "with permanent history. Genericize it — or, if the file genuinely has to name "
-        "the token, add a commented entry to _REPO_ALLOW:\n" + shown + extra
+        "the token, add a commented entry to _REPO_ALLOW.\n"
+        "If the match is inside a machine-generated hash (a package-lock.json integrity "
+        "line, say), it is a coincidence in base64: regenerate the artifact, which "
+        "rerolls the hash. Do NOT add an allowance for it — the count would break on the "
+        "next regeneration.\n" + shown + extra
     )
 
 
@@ -479,11 +521,34 @@ def test_the_decoder_reads_every_encoding_a_leak_could_hide_in():
         assert _repo_offenders((("docs/export.csv", text),)), f"BOM-less leak missed ({codec})"
 
     # A plain ASCII name inside an otherwise-binary blob: the trap in the failure path.
-    blob = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + plain.encode() + b"\xff\xfe\x01"
+    # The NUL padding is load-bearing — real binaries are NUL-dense enough to trip the
+    # BOM-less-UTF-16 heuristic, and a short tidy fixture would take a different branch
+    # and quietly stop testing this at all.
+    blob = (
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+        + b"\x00" * 1000
+        + b"tEXtComment\x00Exported for " + plain.encode() + b" sales meeting\x00"
+    )
+    assert _looks_utf16(blob), "fixture no longer exercises the NUL-dense branch"
     assert _repo_offenders((("docs/logo.png", _decode(blob)),)), "ASCII-in-binary leak missed"
 
     # Legacy 8-bit text still reads; nothing is ever skipped outright.
     assert "latin-1 text" in _decode(b"caf\xe9 latin-1 text")
+
+
+def test_invisible_characters_cannot_split_a_token():
+    """A name pasted out of Word, a PDF or a web page can carry a soft hyphen or a
+    zero-width space inside it: invisible in every editor and in `git diff`, absent to
+    every reader, and enough to match nothing. Measured as a real bypass before the
+    strip existed. This is an accident route, not just an adversarial one."""
+    plain = next(p for p, _ in _COMPANY if p.isalnum())
+    # chr() rather than literals: typing these into the file would put invisible
+    # characters in the very guard that exists to strip them.
+    for name, code in (("soft hyphen", 0x00AD), ("zero-width space", 0x200B),
+                       ("word joiner", 0x2060), ("zero-width nbsp", 0xFEFF)):
+        split = plain[:4] + chr(code) + plain[4:]
+        assert _repo_offenders((("docs/x.md", split),)), f"{name} split the token"
+        assert _offenders(split, "probe"), f"{name} split it on the model surface"
 
 
 def test_repo_allowlist_has_no_dead_entries():
