@@ -16,7 +16,8 @@ import { useEffect, useState } from 'react';
 import { api } from '../../core/api/client';
 import { toast } from '../../shared/toast';
 import { INK_MUTE, FONT_SANS, LINE } from '../../shared/styles';
-import { sectionHeading, cardStyle, btnPrimary, btnSecondary } from '../styles';
+import { btnPrimary, btnSecondary, settingsSubheading } from '../styles';
+import { SettingsCard } from './SettingsCard';
 import {
   isPushSupported, getPushPermissionState, isSubscribed,
   subscribeToPush, unsubscribeFromPush,
@@ -99,13 +100,12 @@ export function NotificationSettings({ isMobile }: { isMobile: boolean }) {
   }
 
   return (
-    <div style={{ ...cardStyle, padding: isMobile ? 20 : 28, marginTop: 24, maxWidth: 620 }}>
-      <div style={sectionHeading()}>Notifications</div>
-      <p style={{ fontFamily: FONT_SANS, fontSize: 13, color: INK_MUTE, lineHeight: 1.6, margin: '0 0 20px', maxWidth: 460 }}>
-        Get browser push notifications when reminders fire and when the assistant has
-        something worth flagging. Works with zero AI keys.
-      </p>
-
+    <SettingsCard
+      id="notifications"
+      title="Notifications"
+      description="Get browser push notifications when reminders fire and when the assistant has something worth flagging. Works with zero AI keys."
+      isMobile={isMobile}
+    >
       {!supported ? (
         <p style={{ fontFamily: FONT_SANS, fontSize: 13, color: INK_MUTE }}>
           This browser doesn't support Web Push.
@@ -138,9 +138,7 @@ export function NotificationSettings({ isMobile }: { isMobile: boolean }) {
 
       {proactive !== null && (
         <div style={{ marginTop: 24, paddingTop: 20, borderTop: `1px solid ${LINE}` }}>
-          <div style={{ fontFamily: FONT_SANS, fontSize: 14, fontWeight: 600, marginBottom: 6 }}>
-            Daily digest and nudges
-          </div>
+          <h3 style={settingsSubheading}>Daily digest and nudges</h3>
           <p style={{ fontFamily: FONT_SANS, fontSize: 13, color: INK_MUTE, lineHeight: 1.6, margin: '0 0 14px', maxWidth: 460 }}>
             A pipeline summary each morning around {formatHour(digestHour)}, plus a nudge when a
             deal goes cold or a contact with open business hasn't been spoken to. Works with zero
@@ -155,7 +153,7 @@ export function NotificationSettings({ isMobile }: { isMobile: boolean }) {
           </button>
         </div>
       )}
-    </div>
+    </SettingsCard>
   );
 }
 

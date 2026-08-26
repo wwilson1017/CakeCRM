@@ -3,7 +3,7 @@ import {
   INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG,
   BG_ELEV, BG_CARD, ACCENT, ACCENT_INK, ACCENT_SOFT, CORAL,
   HOVER, SCRIM, SHADOW, tint,
-  FONT_DISPLAY, mono,
+  FONT_DISPLAY, FONT_SANS, mono,
 } from '../shared/styles';
 
 // ── Layout ───────────────────────────────────────────────────────────────────
@@ -38,6 +38,22 @@ export function stageCard(bg: string, color: string): CSSProperties {
     borderRadius: 6,
   };
 }
+
+// ── Settings ─────────────────────────────────────────────────────────────────
+//
+// The lead paragraph and the in-card sub-heading every Settings card used to
+// hand-roll. Both are consumed through `components/SettingsCard.tsx` (#103) so the
+// nine cards share one look instead of nine near-identical copies.
+
+export const settingsDescription: CSSProperties = {
+  fontFamily: FONT_SANS, fontSize: 13, color: INK_MUTE, lineHeight: 1.6,
+  margin: '0 0 20px', maxWidth: 460,
+};
+
+export const settingsSubheading: CSSProperties = {
+  fontFamily: FONT_SANS, fontSize: 14, fontWeight: 600, color: INK,
+  margin: '0 0 6px',
+};
 
 // ── Modals ────────────────────────────────────────────────────────────────────
 

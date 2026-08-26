@@ -17,7 +17,8 @@ import { useEffect, useState } from 'react';
 import { api } from '../../core/api/client';
 import { CORAL, FONT_SANS, INK_MUTE, labelStyle } from '../../shared/styles';
 import { toast } from '../../shared/toast';
-import { btnPrimary, btnSecondary, cardStyle, sectionHeading } from '../styles';
+import { btnPrimary, btnSecondary, settingsSubheading } from '../styles';
+import { SettingsCard } from './SettingsCard';
 
 type TaskMode = 'normal' | 'gtd';
 
@@ -106,12 +107,12 @@ export function TaskModeCard({ isMobile }: { isMobile: boolean }) {
   );
 
   return (
-    <div style={cardStyle}>
-      <h2 style={sectionHeading()}>Tasks</h2>
-      <p style={{ ...labelStyle, fontFamily: FONT_SANS, color: INK_MUTE, marginBottom: 12 }}>
-        Switching is safe and reversible — both modes read the same tasks. Nothing is
-        migrated, copied or deleted.
-      </p>
+    <SettingsCard
+      id="task_mode"
+      title="Task mode"
+      description="Switching is safe and reversible — both modes read the same tasks. Nothing is migrated, copied or deleted."
+      isMobile={isMobile}
+    >
       <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 10 }}>
         {modeButton('normal', 'Normal tasks', 'A simple list with due dates and priorities.')}
         {modeButton('gtd', 'Todo-GTD', 'Inbox, contexts, projects, repeats and a weekly review.')}
@@ -119,7 +120,7 @@ export function TaskModeCard({ isMobile }: { isMobile: boolean }) {
 
       {mode === 'gtd' && surfaces && (
         <div style={{ marginTop: 20, borderTop: '1px solid var(--color-ck-line)', paddingTop: 16 }}>
-          <h3 style={{ ...sectionHeading(), fontSize: 15 }}>No-login links</h3>
+          <h3 style={settingsSubheading}>No-login links</h3>
 
           <div style={{ marginTop: 12 }}>
             <p style={{ ...labelStyle, marginBottom: 4 }}>Quick capture (write-only)</p>
@@ -186,7 +187,7 @@ export function TaskModeCard({ isMobile }: { isMobile: boolean }) {
           </div>
         </div>
       )}
-    </div>
+    </SettingsCard>
   );
 }
 
