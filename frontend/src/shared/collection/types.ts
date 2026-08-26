@@ -341,6 +341,22 @@ export interface DetailRenderContext {
   registerCloseGuard: (guard: DetailCloseGuard) => () => void;
 }
 
+/**
+ * What `CollectionDetail` actually reads out of a `CollectionConfig` — nothing else.
+ *
+ * A page that renders its OWN views (the pipeline board, which keeps issue #21's filter bar and
+ * its own kanban) still wants the shared detail contract, but it runs no `useCollectionState`,
+ * so it has no `CollectionConfig` to hand over: minting one would mean inventing a `storage` key
+ * (a second filter store shadowing the page's real one) and a `defaultView` for a hook that never
+ * runs. Narrowing the prop to exactly the fields the component consumes lets such a page pass a
+ * four-field literal, while a full `CollectionConfig` still satisfies it structurally — so
+ * `CollectionView` and every existing caller are unaffected.
+ */
+export type DetailHostConfig<T> = Pick<
+  CollectionConfig<T>,
+  'getItemId' | 'detail' | 'kanban' | 'cards'
+>;
+
 export interface CollectionDetailProps<T> {
   /** The modal body. Remounted (keyed by `getItemId`) on ‹ › nav — load-bearing, per
    *  the blueprint's `key={uuid}` lesson: per-record draft state must not leak across records. */

@@ -31,6 +31,26 @@ import { acquireBodyScrollLock } from '../hooks/useBodyScrollLock';
  * state or double-mount the signature canvas. Move the scrollport and that bar stops
  * riding the bottom edge.
  *
+ * **Stacking, and the assistant launcher (`underLauncher`).** The CRM floats one persistent
+ * launcher button (`crm/components/AssistantLauncher.tsx`, `zIndex: 40`) on every page, and it is
+ * the only control that must stay reachable OVER an open record detail: it opens the assistant
+ * drawer carrying that record's context (#14), which is the one moment such context exists. So a
+ * caller may pass `underLauncher` to render the CENTRED modal at `dock:z-[39]`, beneath the
+ * button, while the full-screen takeover stays at `z-50` above it — a takeover cannot share the
+ * corner with a floating button, and on a phone a poked-through launcher would sit on the panel's
+ * own bottom-left controls and steal taps. The drawer itself (z-59, scrim 58), `ConfirmHost`
+ * (z-150) and the toast viewport (z-200) stay above both branches either way.
+ *
+ * It is a PROP and not the default because "beneath the launcher" is a fact about record
+ * details, not about every overlay: a form modal or a confirm SHOULD occlude the button. It is
+ * also not a per-surface opt-in in practice — `CollectionDetail` passes it unconditionally, so
+ * every collection detail inherits the rule with nothing to remember.
+ *
+ * Residual, disclosed: the Tab trap below engages only while focus is inside the panel, so after
+ * the drawer closes and returns focus to its external button, Tab can walk the covered page.
+ * That is not a regression — the hand-rolled sheet this replaced had no trap at all — but a real
+ * launcher/detail focus contract is its own piece of work.
+ *
  * **`role="dialog"` WITHOUT `aria-modal`, on purpose.** `aria-modal="true"` promises assistive
  * tech that everything outside is unavailable, which is only true with a portal AND a really
  * `inert` background — and making `#root` inert would take the platform alert banner
@@ -69,6 +89,14 @@ interface DetailModalProps {
    * surfaces have no dirty-close confirm pass `false` rather than shipping silent data loss.
    */
   closeOnEscape?: boolean;
+  /**
+   * Stack the CENTRED modal beneath the assistant launcher. Default `false` (plain `z-50`).
+   *
+   * `shared/collection`'s `CollectionDetail` passes it unconditionally and is its only caller —
+   * see the "Stacking" note above for why the rule belongs to record details rather than to
+   * every overlay.
+   */
+  underLauncher?: boolean;
   children: ReactNode;
 }
 
@@ -180,6 +208,7 @@ export default function DetailModal({
   headerActions,
   onBackdropClick,
   closeOnEscape = true,
+  underLauncher = false,
   children,
 }: DetailModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
@@ -393,7 +422,14 @@ export default function DetailModal({
     // there is room to centre. When `onBackdropClick` is undefined the click simply does
     // nothing — the element still absorbs it, which is the point.
     <div
-      className="fixed inset-0 z-50 dock:flex dock:items-center dock:justify-center dock:bg-black/50 dock:p-4"
+      // Both class strings are written out in full rather than composed from a shared prefix:
+      // Tailwind scans source text for complete class names, and a concatenated `z-50 ${…}`
+      // would leave `dock:z-[39]` ungenerated.
+      className={
+        underLauncher
+          ? 'fixed inset-0 z-50 dock:z-[39] dock:flex dock:items-center dock:justify-center dock:bg-black/50 dock:p-4'
+          : 'fixed inset-0 z-50 dock:flex dock:items-center dock:justify-center dock:bg-black/50 dock:p-4'
+      }
       // A backdrop dismissal must be a CLICK ON THE BACKDROP, not merely a click event that
       // reached it. When mousedown and mouseup land on different elements the browser fires
       // `click` on their nearest common ancestor — and this wrapper is the panel's PARENT, so

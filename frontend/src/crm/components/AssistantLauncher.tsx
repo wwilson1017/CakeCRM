@@ -178,6 +178,10 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
         title={ready ? 'Assistant' : loading ? 'Assistant' : 'Hire your assistant'}
         disabled={loading}
         style={{
+          // zIndex 40 — above a centred `DetailModal` under `underLauncher` (`dock:z-[39]`) so a
+          // record detail can hand its context to the drawer (#14), and below that modal's
+          // full-screen takeover (`z-50`), where a poked-through button would sit on the panel's
+          // own controls. Keep the three in step.
           position: 'fixed', left: 24, bottom: 24, zIndex: 40,
           width: 52, height: 52, borderRadius: '50%',
           background: ACCENT, color: ACCENT_INK, border: 'none',

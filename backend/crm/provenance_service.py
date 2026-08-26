@@ -34,7 +34,7 @@ from core.postgres import (
 VALID_ENTITY_TYPES = {"deal", "contact"}
 ENTITY_TABLE_MAP = {"deal": "deals", "contact": "contacts"}
 # Standard columns only for v1, scoped to exactly the fields the detail views render a
-# badge for (ContactDetailPage / DealDetailSheet) — so every recorded row is visible AND
+# badge for (ContactDetailPage / DealDetailBody) — so every recorded row is visible AND
 # confirmable ("badged until confirmed or overwritten" holds for all of them). Entity
 # identity / FK columns the assistant also writes (name, title, source, status, currency,
 # contact_id, company_id) are deliberately NOT tracked in v1: the whole entity is already

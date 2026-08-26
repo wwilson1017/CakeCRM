@@ -15,6 +15,7 @@ import type {
   CollectionDetailProps,
   CollectionState,
   DetailCloseGuard,
+  DetailHostConfig,
   DetailRenderContext,
 } from '../types';
 
@@ -463,5 +464,72 @@ describe('loadById deep links', () => {
     expect(dialogTitle()).toBe('fetched');
     expect(document.querySelector('[data-testid="body"]')?.textContent).toBe('fetched');
     expect(loadById).toHaveBeenCalledWith(99);
+  });
+});
+
+// A page that renders its OWN views — CRM's pipeline board keeps its own filter bar and its own
+// kanban — has no `useCollectionState` to hand over. Before this it had to mint a whole
+// `CollectionConfig` anyway: a sessionStorage key that would shadow its real filter store, and a
+// `defaultView` naming a view block for a hook it never runs. So `config` narrows to the four
+// fields this component actually reads and `state` became optional.
+describe('CollectionDetail hosted without collection state', () => {
+  /** Exactly what such a page passes: no storage, no defaultView, no view blocks. */
+  const hostConfig: DetailHostConfig<Row> = {
+    getItemId: r => r.id,
+    detail: { getTitle: r => r.name },
+  };
+
+  function BarePage({
+    initialId,
+    navOrder,
+  }: {
+    initialId: number;
+    navOrder?: readonly (string | number)[];
+  }) {
+    const [selected, setSelected] = useState<string | number | null>(initialId);
+    return (
+      <CollectionDetail
+        config={hostConfig}
+        items={rows}
+        selectedId={selected}
+        onSelect={id => {
+          selectCalls.push(id);
+          setSelected(id);
+        }}
+        detail={plainDetail}
+        navOrder={navOrder}
+      />
+    );
+  }
+
+  it('renders the record and walks the order the page supplied', async () => {
+    act(() => root.render(<StrictMode><BarePage initialId={2} navOrder={[3, 2, 1]} /></StrictMode>));
+    expect(dialogTitle()).toBe('beta');
+
+    // The page's order, not the canonical array's: prev from 2 is 3 here, not 1.
+    act(() => navButton('Previous record').click());
+    await settle();
+    expect(selectCalls).toEqual([3]);
+    expect(dialogTitle()).toBe('gamma');
+  });
+
+  it('disables both arrows when there is neither state nor navOrder, and still shows the record', () => {
+    // Same rule an unlocatable record already gets: the layer can derive an order only from
+    // `state`, so with no order at all it declines to guess rather than inventing `items` order.
+    act(() => root.render(<StrictMode><BarePage initialId={2} /></StrictMode>));
+    expect(dialogTitle()).toBe('beta');
+    expect(document.querySelector('[data-testid="body"]')?.textContent).toBe('beta');
+    expect(navButton('Previous record').disabled).toBe(true);
+    expect(navButton('Next record').disabled).toBe(true);
+  });
+
+  it('asks the modal to sit beneath the assistant launcher, for every consumer', () => {
+    // Unconditional, and that is the whole point of it being here rather than a prop each
+    // surface passes: an opt-in someone must remember is why CRM's list pages refused this
+    // layer outright rather than adopting it. `DetailModal.test.tsx` pins what the flag renders;
+    // this pins that the layer actually raises it.
+    act(() => root.render(<StrictMode><BarePage initialId={2} /></StrictMode>));
+    const wrapper = document.querySelector('.fixed.inset-0') as HTMLElement;
+    expect(wrapper.className.split(/\s+/)).toContain('dock:z-[39]');
   });
 });

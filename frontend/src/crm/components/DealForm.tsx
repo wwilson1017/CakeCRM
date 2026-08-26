@@ -9,66 +9,64 @@ import type { CrmDeal, CrmContact, CrmCompany } from '../../core/types';
 import { CustomFieldInputs } from './CustomFieldInputs';
 import { useCustomFieldsForm, putCustomFields } from './useCustomFieldsForm';
 
+/**
+ * CREATE only since issue #75 — editing a deal is inline in `DealDetailBody`, inside the shared
+ * detail panel, so this form no longer has an edit mode to carry.
+ */
 interface Props {
-  deal?: CrmDeal;
   contactId?: number;
   onClose: () => void;
   onSaved: () => void;
 }
 
 
-export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
+export function DealForm({ contactId, onClose, onSaved }: Props) {
   const { currentUser } = useAuth();
-  const isEdit = !!deal;
-  const [title, setTitle] = useState(deal?.title || '');
-  const [stage, setStage] = useState(deal?.stage || 'lead');
-  const [value, setValue] = useState(deal?.value?.toString() || '');
-  const [probability, setProbability] = useState(deal?.probability?.toString() || '');
-  const [expectedClose, setExpectedClose] = useState(deal?.expected_close_date || '');
-  const [notes, setNotes] = useState(deal?.notes || '');
-  const [selectedContact, setSelectedContact] = useState<number | null>(deal?.contact_id ?? contactId ?? null);
-  const [selectedCompany, setSelectedCompany] = useState<number | null>(deal?.company_id ?? null);
+  const [title, setTitle] = useState('');
+  const [stage, setStage] = useState('lead');
+  const [value, setValue] = useState('');
+  const [probability, setProbability] = useState('');
+  const [expectedClose, setExpectedClose] = useState('');
+  const [notes, setNotes] = useState('');
+  const [selectedContact, setSelectedContact] = useState<number | null>(contactId ?? null);
+  const [selectedCompany, setSelectedCompany] = useState<number | null>(null);
   const [contacts, setContacts] = useState<CrmContact[]>([]);
   const [companies, setCompanies] = useState<CrmCompany[]>([]);
-  // Owner (issue #60). On an EDIT the record's own owner is used verbatim — `null`
-  // means unassigned and must survive, or saving an unrelated field would silently
-  // claim someone else's unowned record. On a CREATE the picker shows you as the
-  // default, but `owner_id` is only SENT if you actually touch it: an untouched
-  // create lets the server assign the caller, which is race-free (currentUser can
-  // still be resolving right after login) and keeps one rule in one place.
-  const [ownerId, setOwnerId] = useState<number | null>(
-    deal ? (deal.owner_id ?? null) : (currentUser?.id ?? null),
-  );
+  // Owner (issue #60). The picker shows you as the default, but `owner_id` is only
+  // SENT if you actually touch it: an untouched create lets the server assign the
+  // caller, which is race-free (currentUser can still be resolving right after login)
+  // and keeps one rule in one place.
+  const [ownerId, setOwnerId] = useState<number | null>(currentUser?.id ?? null);
   const [ownerTouched, setOwnerTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const cf = useCustomFieldsForm('deal', deal?.id);
+  const cf = useCustomFieldsForm('deal');
 
   useEffect(() => {
     api<{ contacts: CrmContact[] }>('/api/crm/contacts?limit=200')
       .then(d => setContacts(d.contacts)).catch(() => {});
     api<{ companies: CrmCompany[] }>('/api/crm/companies?limit=200')
       .then(d => setCompanies(d.companies)).catch(() => {});
-    // Deal opened from a contact (create mode): default the company to THAT
-    // contact's company so the deal lands in its rollups. Fetch the contact
-    // directly rather than searching the capped 200-row list — an older linked
-    // contact may fall outside that page, which would silently skip the default.
-    if (!deal && contactId != null) {
+    // Deal opened from a contact: default the company to THAT contact's company so
+    // the deal lands in its rollups. Fetch the contact directly rather than searching
+    // the capped 200-row list — an older linked contact may fall outside that page,
+    // which would silently skip the default.
+    if (contactId != null) {
       api<CrmContact>(`/api/crm/contacts/${contactId}`)
         .then(c => { if (c.company_id != null) setSelectedCompany(prev => prev ?? c.company_id); })
         .catch(() => {});
     }
-  }, [deal, contactId]);
+  }, [contactId]);
 
   // Same capped-page hazard the contact fetch above already guards against, now
   // binding for companies too: #35 auto-creates a company per distinct imported
-  // name, so a deal's linked company can fall outside the alphabetical first 200
-  // and the <select> would render blank — reading as "No company". Append the
-  // deal's own company so the control shows the truth.
+  // name, so the company inherited from a contact can fall outside the alphabetical
+  // first 200 and the <select> would render blank — reading as "No company". Append
+  // it so the control shows the truth.
   const companyOptions = selectedCompany != null && !companies.some(c => c.id === selectedCompany)
     ? [...companies, {
         id: selectedCompany,
-        name: deal?.company_name || `Company #${selectedCompany}`,
+        name: `Company #${selectedCompany}`,
         status: 'active',
       }]
     : companies;
@@ -96,18 +94,10 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
       };
       body.contact_id = selectedContact;  // always send (null unlinks the contact)
       body.company_id = selectedCompany;  // always send (null unlinks the company)
-      // Omitted on an untouched create so the server assigns the caller; on an
-      // edit always sent, where null unassigns.
-      if (isEdit || ownerTouched) body.owner_id = ownerId;
-      let id: number;
-      if (isEdit) {
-        await api(`/api/crm/deals/${deal.id}`, { method: 'PUT', body: JSON.stringify(body) });
-        id = deal.id;
-      } else {
-        const created = await api<CrmDeal>('/api/crm/deals', { method: 'POST', body: JSON.stringify(body) });
-        id = created.id;
-      }
-      await putCustomFields('deal', id, cf.changedForSave(), isEdit ? 'Deal saved' : 'Deal created');
+      // Omitted on an untouched create so the server assigns the caller.
+      if (ownerTouched) body.owner_id = ownerId;
+      const created = await api<CrmDeal>('/api/crm/deals', { method: 'POST', body: JSON.stringify(body) });
+      await putCustomFields('deal', created.id, cf.changedForSave(), 'Deal created');
       onSaved();
     } catch (err: unknown) { setError(err instanceof Error ? err.message : 'Failed to save'); }
     setSaving(false);
@@ -116,9 +106,7 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
   return (
     <div style={formModalOverlay} onClick={onClose}>
       <form onClick={e => e.stopPropagation()} onSubmit={handleSubmit} style={formModalContent()}>
-        <h2 style={formTitle}>
-          {isEdit ? 'Edit Deal' : 'New Deal'}
-        </h2>
+        <h2 style={formTitle}>New Deal</h2>
         {error && <p style={{ color: CORAL, fontSize: 12, marginBottom: 12 }}>{error}</p>}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -171,7 +159,7 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
           <button type="button" onClick={onClose} style={{ ...btnSecondary, flex: 1 }}>Cancel</button>
           <button type="submit" disabled={saving} style={{
             ...btnPrimary, flex: 1, opacity: saving ? 0.5 : 1,
-          }}>{saving ? 'Saving...' : isEdit ? 'Update' : 'Create'}</button>
+          }}>{saving ? 'Saving...' : 'Create'}</button>
         </div>
       </form>
     </div>

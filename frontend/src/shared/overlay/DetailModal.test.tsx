@@ -137,6 +137,31 @@ describe('DetailModal takeover vs centred modal', () => {
     expect(p.some(c => /^(max-w-|rounded-|border$|left-auto|right-0|top-)/.test(c))).toBe(false);
   });
 
+  // The assistant launcher floats at zIndex 40 on every CRM page, and it is the one control that
+  // must stay reachable over a record detail — it opens the drawer carrying that record's context
+  // (#14). So `underLauncher` drops the CENTRED modal beneath it while the takeover stays above.
+  // Both halves are pinned, because either one alone is the bug: leave the takeover low and a
+  // phone gets a button sitting on the panel's own controls; leave the centred one high and the
+  // drawer becomes unreachable for exactly the records that publish context to it.
+  it('stacks at a plain z-50 by default, occluding the launcher like any other overlay', () => {
+    render(modal());
+    const w = tokens(wrapperEl());
+    expect(w).toContain('z-50');
+    expect(w.filter(c => c.startsWith('dock:z-'))).toEqual([]);
+  });
+
+  it('drops only the CENTRED modal beneath the launcher when underLauncher is set', () => {
+    render(modal({ underLauncher: true }));
+    const w = tokens(wrapperEl());
+    expect(w).toContain('z-50');            // takeover: above the button
+    expect(w).toContain('dock:z-[39]');     // centred: beneath it
+    // Exactly those two — a stray third z token would make the winner depend on source order.
+    expect(w.filter(c => /(^|:)z-/.test(c)).sort()).toEqual(['dock:z-[39]', 'z-50']);
+    // The panel never carries its own z: it would open a stacking context and the wrapper's
+    // number would stop deciding anything.
+    expect(tokens(panelEl()).filter(c => /(^|:)z-/.test(c))).toEqual([]);
+  });
+
   it("keeps the header's VERTICAL padding on dock: and its horizontal padding on md:", () => {
     render(modal());
     const header = tokens(panelEl().firstElementChild as HTMLElement);
