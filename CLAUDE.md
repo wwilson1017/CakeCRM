@@ -777,7 +777,11 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   its page SELECT in **two separate transactions**, so an insert between them would make a
   `total`-based test report "done" and truncate the corpus. The cursor is the *window*,
   not a filter — it deliberately does NOT reach the COUNT, exactly like OFFSET, so `total`
-  stays the size of the whole matching set. Residual and stated rather than argued away: a
+  stays the size of the whole matching set. Continuation pages skip the COUNT altogether
+  (the sweep never reads it, and re-counting on every page would put a scan of the whole
+  filtered set on the heaviest read path in the app); the skip is keyed on the CURSOR and
+  not on `sort=id`, because the sweep's first page is indistinguishable from ordinary
+  `?sort=id&offset=N` pagination, whose caller does need the total. Residual and stated rather than argued away: a
   row whose SERIAL id was allocated before the cursor passed it but which commits after is
   missed until the next sweep; the answer is each page's **Refresh** control, which is also
   what replaces the incidental reloading that server-side filtering used to give for free.
