@@ -196,12 +196,17 @@ _REPO_ALLOW = {
 }
 
 
-def _looks_utf16(raw: bytes) -> bool:
-    """Heuristic for BOM-less UTF-16: its ASCII characters are NUL-interleaved."""
-    head = raw[:1024]
-    if len(head) < 8:
-        return False
-    return max(head[0::2].count(0), head[1::2].count(0)) > len(head) // 4
+def _denul(raw: bytes) -> str:
+    """The bytes with NULs dropped, read as latin-1.
+
+    This one reading covers EVERY fixed-width encoding of ASCII at once — UTF-16 and
+    UTF-32, either byte order, BOM or none — without having to detect which is which,
+    because all of them differ only in how many NULs they pad each character with.
+    That generality is the point: guessing the encoding meant a heuristic, and the
+    heuristic had a hole (it keyed on NUL density, which most real binaries also have,
+    and UTF-32 slipped past the UTF-16 BOM check because they share a two-byte prefix).
+    """
+    return raw.replace(b"\x00", b"").decode("latin-1")
 
 
 def _decode(raw: bytes) -> str:
@@ -221,26 +226,22 @@ def _decode(raw: bytes) -> str:
     embedded anywhere stays visible. A false positive costs one line in _REPO_ALLOW; a
     false negative is public and permanent, so this errs toward reading too much.
     """
-    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
-        return raw.decode("utf-16", "replace")
-    if _looks_utf16(raw):
-        # No BOM to say which way round it is, so read it both ways — AND keep the
-        # latin-1 reading. Most real binaries are NUL-dense enough to reach this branch,
-        # and returning only the wide readings would put the backstop out of reach for
-        # exactly the files it exists for: a PNG whose tEXt comment names a customer
-        # decodes to mush. latin-1 of genuine UTF-16 is itself NUL-interleaved and
-        # matches nothing, so carrying it costs no false positives.
-        return "\n".join(
-            (
-                raw.decode("utf-16-le", "replace"),
-                raw.decode("utf-16-be", "replace"),
-                raw.decode("latin-1"),
-            )
-        )
-    try:
-        return raw.decode("utf-8")
-    except UnicodeDecodeError:
-        return raw.decode("latin-1")
+    if raw[:4] in (b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff"):
+        readings = [raw.decode("utf-32", "replace")]  # before UTF-16: shared BOM prefix
+    elif raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        readings = [raw.decode("utf-16", "replace")]
+    else:
+        try:
+            readings = [raw.decode("utf-8")]
+        except UnicodeDecodeError:
+            readings = [raw.decode("latin-1")]
+    if b"\x00" in raw:
+        # Anything NUL-bearing gets the de-NUL reading appended as well: a BOM-less wide
+        # encoding, or an ASCII name sitting inside an otherwise-binary blob. Costs
+        # nothing on the ~all-NUL-free files in this repo, and the reading is additive,
+        # so the primary one above still supplies the line numbers.
+        readings.append(_denul(raw))
+    return "\n".join(readings)
 
 
 @functools.cache
@@ -294,13 +295,16 @@ def _repo_offenders(files: tuple[tuple[str, str | None], ...] | None = None) -> 
     """
     found = []
     for rel, text in files if files is not None else _committed_files():
+        # The PATH is normalized too. A filename can carry a zero-width space just as a
+        # body can, and for a file whose bytes no decoder reads it is the only surface.
+        scanned_rel = _INVISIBLE.sub("", rel)
         text = _INVISIBLE.sub("", text) if text else text
         budget, _ = _REPO_ALLOW.get(rel, ({}, ""))
         for pattern, why in _REPO_FORBIDDEN:
             # The PATH is scanned too, and for a binary file it is the only thing there
             # is to scan: a file named after the company leaks exactly as permanently as
             # one that spells the name inside.
-            for m in re.finditer(pattern, rel, re.IGNORECASE):
+            for m in re.finditer(pattern, scanned_rel, re.IGNORECASE):
                 found.append(f"{rel} — filename contains {m.group(0)!r} ({why})")
             if text is None:
                 continue
@@ -509,27 +513,32 @@ def test_the_decoder_reads_every_encoding_a_leak_could_hide_in():
 
     # UTF-16 WITH a BOM, both byte orders — built explicitly, because encoding twice with
     # "utf-16" would just produce the runner's native order twice and never test the other.
+    # The assertion is that the token is FINDABLE, not that _decode returns one canonical
+    # string: for NUL-bearing input it deliberately returns several readings joined.
     for codec, bom in (("utf-16-le", b"\xff\xfe"), ("utf-16-be", b"\xfe\xff")):
         raw = bom + doc.encode(codec)
-        assert _decode(raw) == doc, f"UTF-16 text was not decoded ({codec})"
+        assert doc.strip() in _decode(raw), f"UTF-16 text was not decoded ({codec})"
         assert _repo_offenders((("docs/export.csv", _decode(raw)),)), f"leak missed ({codec})"
 
-    # BOM-less UTF-16: byte-wise VALID UTF-8, so it decodes "fine" into NUL-interleaved
-    # mush that matches nothing. The trap that hides in the success path.
+    # UTF-32 shares its first two bytes with a UTF-16 BOM, so a naive BOM check sends it
+    # down the wrong branch and it stays NUL-interleaved. Measured bypass.
+    for raw in (doc.encode("utf-32"), doc.encode("utf-32-le"), doc.encode("utf-32-be")):
+        assert _repo_offenders((("docs/export.csv", _decode(raw)),)), "UTF-32 leak missed"
+
+    # BOM-less wide encodings: byte-wise VALID UTF-8, so they decode "fine" into
+    # NUL-interleaved mush that matches nothing. The trap that hides in the success path.
     for codec in ("utf-16-le", "utf-16-be"):
         text = _decode(doc.encode(codec))
         assert _repo_offenders((("docs/export.csv", text),)), f"BOM-less leak missed ({codec})"
 
     # A plain ASCII name inside an otherwise-binary blob: the trap in the failure path.
-    # The NUL padding is load-bearing — real binaries are NUL-dense enough to trip the
-    # BOM-less-UTF-16 heuristic, and a short tidy fixture would take a different branch
-    # and quietly stop testing this at all.
+    # The NUL padding is load-bearing — real binaries are NUL-dense, and a short tidy
+    # fixture would not represent one.
     blob = (
         b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
         + b"\x00" * 1000
         + b"tEXtComment\x00Exported for " + plain.encode() + b" sales meeting\x00"
     )
-    assert _looks_utf16(blob), "fixture no longer exercises the NUL-dense branch"
     assert _repo_offenders((("docs/logo.png", _decode(blob)),)), "ASCII-in-binary leak missed"
 
     # Legacy 8-bit text still reads; nothing is ever skipped outright.
@@ -549,6 +558,15 @@ def test_invisible_characters_cannot_split_a_token():
         split = plain[:4] + chr(code) + plain[4:]
         assert _repo_offenders((("docs/x.md", split),)), f"{name} split the token"
         assert _offenders(split, "probe"), f"{name} split it on the model surface"
+
+
+def test_an_invisible_character_cannot_hide_in_a_filename_either():
+    """The path is the only surface a compressed container or binary asset has, so a
+    zero-width space in a filename would otherwise be a free pass on exactly the
+    files whose contents nothing can read."""
+    plain = next(p for p, _ in _COMPANY if p.isalnum())
+    name = f"docs/{plain[:4]}{chr(0x200B)}{plain[4:]}-export.xlsx"
+    assert _repo_offenders(((name, None),)), "invisible character hid a leaked filename"
 
 
 def test_repo_allowlist_has_no_dead_entries():

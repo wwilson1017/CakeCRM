@@ -663,15 +663,19 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   committed **filename** (for a compressed container like a .xlsx, whose bytes no
   decoder can read, that is the only surface there is), **invisible characters** (a
   name pasted out of Word or a PDF can carry a soft hyphen or zero-width space inside
-  it and match nothing while reading perfectly — stripped before matching), and text
-  in encodings a naive reader drops. On that last: a NUL-byte "is this binary?" probe
-  silently skips **UTF-16**, exactly the shape a spreadsheet or CSV export of real
-  customer names arrives in, while BOM-less UTF-16 of ASCII content is byte-wise
-  *valid UTF-8* and so decodes "successfully" into NUL-interleaved mush that matches
-  nothing. The decoder therefore never gives up: BOM'd UTF-16, BOM-less UTF-16 read
-  both ways, then UTF-8, then latin-1 as a backstop that never raises — and the
-  wide-reading branch keeps the latin-1 reading too, or a NUL-dense PNG naming a
-  customer in a `tEXt` comment would decode to mush and escape. Boundaries are
+  it and match nothing while reading perfectly — stripped from paths as well as
+  bodies), and text in encodings a naive reader drops. On that last: a NUL-byte "is
+  this binary?" probe silently skips **UTF-16**, exactly the shape a spreadsheet or
+  CSV export of real customer names arrives in, while BOM-less UTF-16 of ASCII content
+  is byte-wise *valid UTF-8* and so decodes "successfully" into NUL-interleaved mush
+  that matches nothing. The decoder therefore never gives up, and covers the whole
+  family in **one** move instead of guessing an encoding: it takes the BOM'd reading
+  (UTF-32 tested before UTF-16, which share a two-byte prefix) or falls back UTF-8 →
+  latin-1, and for anything NUL-bearing it *additionally* scans the bytes with the
+  NULs removed. That one extra reading catches every fixed-width encoding of ASCII at
+  once — UTF-16 and UTF-32, either byte order, BOM or none — plus a plain ASCII name
+  sitting inside an otherwise-binary blob. Guessing instead meant a NUL-density
+  heuristic, and that had a hole: most real binaries are NUL-dense too. Boundaries are
   `(?<![0-9a-z])`, **not
   `\b`** — `\b` counts `_` as a word character, so a token went invisible the moment an
   underscore followed it (`cake_os\b` misses `cake_os_prompt`; the company abbreviation
