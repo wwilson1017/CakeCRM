@@ -423,7 +423,10 @@ async def list_deals(
     stage/contact_id: that branch is a different service function which keeps the sweep,
     and silently dropping an advertised flag is worse than saying no.
     """
-    if stage or contact_id:
+    # `contact_id is not None`, not a truthiness test: `?contact_id=0` is falsy, so a
+    # truthiness test would drop it through to the board branch — returning the whole
+    # pipeline for a request that asked to filter, and slipping past the refusal below.
+    if stage or contact_id is not None:
         if include_archived:
             raise HTTPException(
                 status_code=400,

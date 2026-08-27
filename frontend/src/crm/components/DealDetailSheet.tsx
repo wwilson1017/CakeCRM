@@ -244,7 +244,11 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
             border: `1px solid ${LINE_STRONG}`, background: 'transparent',
             color: INK_MUTE, fontSize: 13, cursor: 'pointer',
           }}>Close</button>
-          <button onClick={() => onEdit(deal)} style={{
+          {/* Hand the edit form the RE-FETCHED archived state, not the frozen board row:
+              otherwise a deal archived after the board loaded shows the banner here while
+              DealForm still sees `archived_at: null`, leaves Stage editable, and lets the
+              user compose an update the server will reject wholesale. */}
+          <button onClick={() => onEdit({ ...deal, archived_at: archivedAt })} style={{
             padding: '10px 16px', borderRadius: 6,
             border: `1px solid ${LINE_STRONG}`, background: 'transparent',
             color: INK, fontSize: 13, cursor: 'pointer',

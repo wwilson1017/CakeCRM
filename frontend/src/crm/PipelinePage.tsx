@@ -303,10 +303,30 @@ export function PipelinePage() {
   // The board then re-derives everything: under 'only' the predicate drops it, under
   // 'include' it becomes live, draggable and selectable.
   const restoreDeal = useCallback((restored: CrmDeal) => {
+    // Invalidate any load already in flight. Without this, a silent refresh that STARTED
+    // before the restore resolves afterwards, passes the generation check, and writes the
+    // deal back to archived — undoing a write the server has already committed.
+    loadGen.current++;
     setData(prev => (prev
-      ? { ...prev, deals: prev.deals.map(d => (d.id === restored.id ? restored : d)) }
+      ? {
+        ...prev,
+        // MERGE, never replace. `POST /restore` returns `get_deal`'s projection, which is
+        // narrower than the board's: `get_pipeline` also derives `last_activity_at`, and a
+        // wholesale swap would drop it and drop the restored deal into the "no activity
+        // logged" bucket of the Deal-activity facet.
+        deals: prev.deals.map(d => (d.id === restored.id ? { ...d, ...restored } : d)),
+      }
       : prev));
     dealConfirmedStage.current.set(restored.id, restored.stage);
+    // Restoring is not a selection gesture. An id can still be sitting in `bulkSelected`
+    // from before the deal was archived — masked everywhere while it stays archived — and
+    // would otherwise silently rejoin the next bulk move the moment it came back.
+    setBulkSelected(prev => {
+      if (!prev.has(restored.id)) return prev;
+      const next = new Set(prev);
+      next.delete(restored.id);
+      return next;
+    });
     setSelectedDeal(null);
   }, []);
 

@@ -754,3 +754,15 @@ def test_there_is_no_archive_route(client):
     """Scope ceiling: view + restore only. Archiving stays an assistant verb until a UI
     affordance for it is designed — an unreachable write route is risk for nothing."""
     assert client.post("/api/crm/deals/3/archive").status_code == 404
+
+
+def test_contact_id_zero_is_a_filter_not_a_fallthrough(client, monkeypatch):
+    """`?contact_id=0` is falsy, so a truthiness test would route it to the BOARD branch —
+    returning the whole pipeline for a request that asked to filter, and slipping the
+    include_archived refusal at the same time."""
+    def explode(**kw):
+        raise AssertionError("contact_id=0 reached the board branch")
+    monkeypatch.setattr(service, "get_pipeline", explode)
+    monkeypatch.setattr(service, "list_deals", lambda **kw: [])
+    assert client.get("/api/crm/deals?contact_id=0").status_code == 200
+    assert client.get("/api/crm/deals?contact_id=0&include_archived=true").status_code == 400

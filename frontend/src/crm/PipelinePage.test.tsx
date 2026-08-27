@@ -18,7 +18,12 @@
 //   • the fetch  — the Archived facet is the ONE facet that widens the request, because a
 //                  client predicate cannot filter rows the server never sent.
 //   • restore    — the sheet's row is patched into the board IN PLACE (no refetch), which
-//                  is why POST /restore returns the deal instead of {"ok": true}.
+//                  is why POST /restore returns the deal instead of {"ok": true}; the patch
+//                  MERGES (the detail projection is narrower than the board's), it
+//                  invalidates any board GET already in flight (which would otherwise land
+//                  afterwards and undo a committed server write), and it drops the id from
+//                  the bulk selection, where it can have been sitting since before the
+//                  deal was archived.
 //   • failure    — a failed non-silent load toasts, because under "Archived only" a
 //                  swallowed failure renders an empty board that reads as "none archived".
 //
@@ -170,6 +175,22 @@ async function pickArchivedFacet(option: 'Include archived' | 'Archived only') {
   await click(button(option), option);
 }
 
+/** Open the Deal-activity facet popover and pick one of its buckets. The facet button is
+ *  labelled 'Deal activity' until something is chosen, which is all these tests need. */
+async function pickActivityFacet(option: 'No activity logged') {
+  await click(button('Deal activity'), 'Deal activity facet');
+  await click(button(option), option);
+}
+
+/** A promise whose resolution the test controls, so one board GET can be pinned in flight
+ *  across other interactions and landed afterwards. Ordering is the whole subject of the
+ *  in-flight-load test below, and `await`ing the mock cannot express it. */
+function deferred<T>() {
+  let settle!: (value: T) => void;
+  const promise = new Promise<T>(resolve => { settle = resolve; });
+  return { promise, resolve: settle };
+}
+
 function stageColumn(stage: string): HTMLElement {
   const el = container.querySelector(`[data-stage="${stage}"]`);
   if (!el) throw new Error(`no rendered column for stage "${stage}"`);
@@ -301,6 +322,105 @@ describe('PipelinePage — archived deals', () => {
     // ...and none of that depended on a refetch, which is the point: a silent refresh can
     // fail invisibly and leave the board showing a deal as archived after a real restore.
     expect(boardRequests()).toHaveLength(before);
+  });
+
+  it('discards a board load that was already in flight when the restore landed', async () => {
+    // The restore is the only write on this page the server commits WITHOUT the board
+    // starting it, so it is the only one a stale GET can silently undo. The reachable
+    // ordering: closing the sheet fires a silent refresh, the user reopens the archived
+    // deal and restores it, and only then does that GET come back — carrying a payload
+    // requested BEFORE the restore, which still calls the deal archived. Applying it would
+    // put the deal back in a state the server no longer holds, with nothing on screen to
+    // say so. `writeGen` doesn't cover this: it guards a refresh against a racing *write*,
+    // and a restore never touches the drag bookkeeping it counts.
+    const held = deferred<{ deals: CrmDeal[] }>();
+    let archivedLoads = 0;
+    routeApi({
+      over: path => {
+        if (path === `/api/crm/deals/${ARCHIVED.id}/restore`) return RESTORED;
+        // The SECOND board GET is the one the sheet's Close fires; hold it open.
+        if (path === ARCHIVED_PATH && ++archivedLoads === 2) return held.promise;
+        return undefined;
+      },
+    });
+    await render();
+    await pickArchivedFacet('Include archived');
+
+    await click(card('Zebra rebuild'), 'archived card');
+    await click(button('Close'), 'Close');
+    await click(card('Zebra rebuild'), 'archived card again');
+    await click(button('Restore'), 'Restore');
+    expect(card('Zebra rebuild')?.textContent).not.toContain('ARCHIVED');
+
+    // ...and now the payload that was already in the air lands, still describing the deal
+    // as archived. It is stale by construction and must be dropped on the floor.
+    await act(async () => { held.resolve({ deals: [LIVE, ARCHIVED] }); });
+    await flush();
+
+    expect(card('Zebra rebuild')?.textContent).not.toContain('ARCHIVED');
+    expect(columnTotal('lead')).toBe('$100,099');
+  });
+
+  it('MERGES the restored row into the board rather than replacing it', async () => {
+    // Two different projections of one deal: `POST /restore` answers with `get_deal`'s,
+    // while the board's rows come from `get_pipeline`, which additionally derives
+    // `last_activity_at`. Swapping the row wholesale drops that field — and a dropped
+    // field is not a blank cell here, it is a wrong answer: the deal falls into the
+    // Deal-activity facet's "No activity logged" bucket, so a deal with a fortnight of
+    // logged calls on it reads as never touched the moment it is restored.
+    const touched = deal({
+      id: 2, title: 'Zebra rebuild', stage: 'lead', value: 99_999,
+      archived_at: '2026-08-20T00:00:00+00:00',
+      last_activity_at: new Date().toISOString(),
+    });
+    // RESTORED carries no `last_activity_at` KEY at all (not the key set to undefined),
+    // which is exactly what the detail projection sends — and what makes a merge preserve
+    // the board's copy rather than blank it.
+    routeApi({
+      live: [LIVE], withArchived: [LIVE, touched],
+      over: path => {
+        if (path === `/api/crm/deals/2/restore`) return RESTORED;
+        if (path === '/api/crm/deals/2') return touched;
+        return undefined;
+      },
+    });
+    await render();
+    await pickArchivedFacet('Include archived');
+    await click(card('Zebra rebuild'), 'archived card');
+    await click(button('Restore'), 'Restore');
+
+    await pickActivityFacet('No activity logged');
+    // Acme has genuinely never been touched, so the bucket is non-empty either way and the
+    // board keeps rendering — the only question the assertion asks is whether the restored
+    // deal joined it.
+    expect(card('Acme renewal')).toBeTruthy();
+    expect(card('Zebra rebuild')).toBeUndefined();
+  });
+
+  it('drops a restored deal from the bulk selection instead of silently re-arming it', async () => {
+    // The mirror of the archived-while-selected test above. That one proves the id is
+    // MASKED while the deal stays archived; this one proves it is actually GONE, because
+    // masking alone is a trap: the selection Set still holds the id, and restoring — a
+    // recovery gesture, not a selection one — would hand it straight back to the next bulk
+    // move, on a deal the operator selected before it was ever archived.
+    const zebraLive = deal({ id: 2, title: 'Zebra rebuild', stage: 'lead', value: 99_999 });
+    routeApi({
+      live: [LIVE, zebraLive],
+      over: path => (path === `/api/crm/deals/2/restore` ? RESTORED : undefined),
+    });
+    await render();
+    await click(cardCheckbox('Zebra rebuild'), 'Zebra rebuild checkbox');
+    expect(container.textContent).toContain('1 deal selected');
+
+    // Archived elsewhere (the assistant, a merge) — the id is masked, not dropped.
+    await pickArchivedFacet('Include archived');
+    expect(container.textContent).not.toContain('deal selected');
+
+    await click(card('Zebra rebuild'), 'archived card');
+    await click(button('Restore'), 'Restore');
+
+    expect(cardCheckbox('Zebra rebuild')?.checked).toBe(false);
+    expect(container.textContent).not.toContain('deal selected');
   });
 
   it('says so when a non-silent load fails instead of rendering a misleading board', async () => {
