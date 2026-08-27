@@ -21,12 +21,18 @@ const CSS: string = typeof __INDEX_CSS__ === 'string' ? __INDEX_CSS__ : '';
  * The test reads the SHIPPED index.css rather than a copy of the palette: a duplicated table
  * would drift silently, which is the exact failure mode this is here to stop.
  *
- * "Surface" is deliberately more than the three raw background tokens. Chips and row hovers
- * composite a translucent wash over them, and that wash is what actually binds the ramp: in
- * both themes the worst surface is a 6% ink chip inside a hovered row — over `raised` in
- * light (4.67:1, hover 5%) and over `card` in dark (4.56:1, hover 6%). Every composite below
- * is a pairing that exists in the app; see `surfaces()` for the call site each one comes
- * from, and note that the hover alpha is read from the stylesheet, not assumed.
+ * "Surface" is deliberately more than the three raw background tokens: chips, row hovers and
+ * stage washes composite a translucent layer over them, and such a layer — never a raw token —
+ * is what binds the ramp in both themes. 43 surfaces are checked; `surfaces()` documents the
+ * rule for which combinations are built and why. The two binding pairs are a 6% ink chip on a
+ * 12% lost-stage deal card over the page bg (light, 4.72:1) and a 6% ink chip inside a hovered
+ * row over `card` (dark, 4.56:1), the hover alpha being read from the stylesheet, not assumed.
+ *
+ * Out of scope, deliberately: ink text on an ACCENT wash — `MemoryPage`'s selected row puts
+ * INK/INK_MUTE/INK_DIM on `tint(ACCENT_TEXT,8)`, and `filterTab` active / the tag button use
+ * ACCENT_SOFT. Those clear AA today (worst measured 5.38:1) but they are governed by the accent
+ * tokens, which #54 tunes per theme on its own rule; folding them in here would need this guard
+ * to resolve `var()` and `color-mix()` values. Retuning `accent-text` should re-check them.
  */
 
 const AA_NORMAL_TEXT = 4.5;
@@ -113,6 +119,9 @@ const INK_TOKENS = ['ink', 'ink-mute', 'ink-soft', 'ink-dim'] as const;
 /** The `tint(INK, …)` percentages components actually use for chips. */
 const CHIP_PCTS = [5, 6] as const;
 
+/** The three opaque background tokens every wash is painted over. */
+const BASES = ['card', 'bg', 'raised'] as const;
+
 /**
  * `--color-ck-hover`'s alpha as a percentage. `HOVER` is an ink tint declared literally per
  * theme (the one documented exception to deriving tints with `color-mix`), and the two themes
@@ -120,9 +129,17 @@ const CHIP_PCTS = [5, 6] as const;
  * Read rather than assumed: changing that alpha in `index.css` must move this guard with it.
  */
 function hoverPercent(t: Record<string, string>): number {
-  const m = /^rgba\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*,\s*([\d.]+)\s*\)$/.exec(t.hover ?? '');
-  if (!m) throw new Error(`index.css: could not read --color-ck-hover's alpha (got ${t.hover})`);
-  return Number(m[1]) * 100;
+  const m = /^rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([\d.]+)\s*\)$/.exec(t.hover ?? '');
+  if (!m) throw new Error(`index.css: could not read --color-ck-hover (got ${t.hover})`);
+  // The model below composites the INK token at this alpha, which is only valid while HOVER's
+  // rgb IS ink. It is today, but that token is hand-written per theme, so assert rather than
+  // assume — a recoloured hover would otherwise be measured as the wrong wash, silently.
+  const rgb = [m[1], m[2], m[3]].map(Number);
+  const ink = hexToRgb(t.ink);
+  if (rgb.some((c, i) => c !== ink[i])) {
+    throw new Error(`index.css: --color-ck-hover is no longer an ink tint (${t.hover} vs ${t.ink})`);
+  }
+  return Number(m[4]) * 100;
 }
 
 /**
@@ -145,6 +162,16 @@ const STAGES = Object.keys(LIGHT_TOKENS)
  * Every background an ink-family token is painted on, per the components that render them.
  * Keys are `<wash>/<base>` so a failure names the exact composite.
  *
+ * TWO RULES, and the split is deliberate:
+ *
+ *  - A SINGLE wash is cross-producted over all three base surfaces. Chips and washed rows move
+ *    between containers freely, enumerating exact placements would be a list to keep extending,
+ *    and the whole cross-product passes — so the superset is free and closes the question.
+ *  - A STACKED wash (two translucent layers) is enumerated at the containers that actually
+ *    produce it. Stacking is where a cross-product stops being free and starts inventing
+ *    surfaces: a 6% chip on a stage-washed card exists on the pipeline board (over `bg`) and
+ *    nowhere else, and asserting it over `card` too would fail on a pixel nothing renders.
+ *
  * Deliberately NOT covered, because it is a different question: a brand-hue chip that carries
  * its OWN hue as text (`tint(CORAL,15)` + CORAL in `PriorityBadge urgent`, `tint(SAGE,12)` +
  * SAGE, …). Those pairs are about the status/stage hues, which #54 already tuned per theme;
@@ -154,36 +181,54 @@ const STAGES = Object.keys(LIGHT_TOKENS)
 function surfaces(t: Record<string, string>): Record<string, Rgb> {
   const ink = hexToRgb(t.ink);
   const hoverPct = hoverPercent(t);
+  const rgb = (k: string) => hexToRgb(t[k]);
   const out: Record<string, Rgb> = {};
-  for (const base of ['card', 'bg', 'raised'] as const) {
-    const b = hexToRgb(t[base]);
+
+  // ── Single washes, over every base ────────────────────────────────────────
+  for (const base of BASES) {
+    const b = rgb(base);
     out[base] = b;
 
     // Ink-washed chips: `tint(INK,5)` StatusBadge inactive (ink-dim text) and `tint(INK,6)`
     // PriorityBadge low / ScorePill cool / AiTouchDetail (ink-soft text). Both live in both
-    // themes — the percentage is a per-component constant, not a per-theme one.
-    for (const chip of CHIP_PCTS) {
-      out[`ink${chip}/${base}`] = over(ink, chip, b);
-      // …and a chip inside a hovered list row stacks that chip on the hover overlay. This
-      // stacked surface is what actually binds the ramp in both themes.
-      //
-      // The hover percentage is READ FROM THE STYLESHEET (`--color-ck-hover`'s alpha), not
-      // assumed: `HOVER` is itself an ink tint and it differs per theme — 5% in light
-      // (rgba(41,41,41,.05)), 6% in dark (rgba(240,239,232,.06)). Hard-coding one number
-      // would invent a light 6-over-6 stack that no component produces, and quietly hold the
-      // light ramp to a stricter bar than reality while claiming these are all real pairings.
-      out[`ink${chip}/hover${hoverPct}/${base}`] = over(ink, chip, over(ink, hoverPct, b));
-    }
+    // themes — the percentage is a per-component constant, not a per-theme one. This also
+    // covers the bare row/tab hover overlay, which is itself an ink tint at one of these.
+    for (const chip of CHIP_PCTS) out[`ink${chip}/${base}`] = over(ink, chip, b);
 
     // `AiTouchDetail`'s stale/superseded banner: `tint(GOLD,10)` carrying INK.
-    out[`gold10/${base}`] = over(hexToRgb(t.amber), 10, b);
-    // `shared/collection`'s `hover:bg-line/50` rows, which carry `text-muted` (= ink-mute).
-    out[`line50/${base}`] = over(hexToRgb(t.line), 50, b);
+    out[`gold10/${base}`] = over(rgb('amber'), 10, b);
 
-    // Pipeline deal cards and deal chips: `tint(STAGE_COLORS[s].color, 12)` carrying
-    // ink-dim / ink-mute text (crm/constants.ts `stage()`).
-    for (const s of STAGES) out[`stage12-${s}/${base}`] = over(hexToRgb(t[`stage-${s}`]), 12, b);
+    // `shared/collection` / `shared/search`'s `hover:bg-line/50` controls, which carry
+    // `text-muted` (= ink-mute). NOTE the Tailwind alias `line` maps to `ck-line-STRONG`
+    // (`ck-line` is aliased as `line-faint`), so this composites the strong token — using the
+    // faint one lands optimistically in BOTH themes, the error direction `over()` refuses.
+    out[`lineStrong50/${base}`] = over(rgb('line-strong'), 50, b);
+
+    // Deal chips and pipeline cards: `tint(STAGE_COLORS[s].color, 12)` carrying ink-dim /
+    // ink-mute text (crm/constants.ts `stage()`).
+    for (const s of STAGES) out[`stage12-${s}/${base}`] = over(rgb(`stage-${s}`), 12, b);
   }
+
+  // ── Stacked washes, at the containers that produce them ───────────────────
+
+  // A chip inside a HOVERED list row. Those rows are the Contacts / Companies / Tasks desktop
+  // lists (on the page `bg`) and the shared collection layer's rows (on `card`); no `raised`
+  // panel has hovering rows that carry chips. The hover percentage is READ FROM THE STYLESHEET
+  // (`--color-ck-hover`'s alpha) because it differs per theme — 5% light, 6% dark — so
+  // hard-coding one would invent a light 6-over-6 stack no component produces.
+  for (const base of ['bg', 'card'] as const) {
+    const hover = over(ink, hoverPct, rgb(base));
+    for (const chip of CHIP_PCTS) {
+      out[`ink${chip}/hover${hoverPct}/${base}`] = over(ink, chip, hover);
+    }
+  }
+
+  // A 6% ink chip (ScorePill cool, TouchCountPill) inside a stage-washed `DealBoardCard`,
+  // which only ever sits on a pipeline column over the page `bg`.
+  for (const s of STAGES) {
+    out[`ink6/stage12-${s}/bg`] = over(ink, 6, over(rgb(`stage-${s}`), 12, rgb('bg')));
+  }
+
   return out;
 }
 
@@ -198,7 +243,7 @@ describe.each([
     // STAGES is derived, so assert it is non-empty — an empty derivation would quietly drop
     // every stage wash from the surface list while the ratio test still went green.
     expect(STAGES.length, 'no --color-ck-stage-* tokens parsed from index.css').toBeGreaterThan(0);
-    for (const k of [...INK_TOKENS, 'card', 'bg', 'raised', 'line', 'amber', ...STAGES.map(s => `stage-${s}`)]) {
+    for (const k of [...INK_TOKENS, 'card', 'bg', 'raised', 'line-strong', 'amber', ...STAGES.map(s => `stage-${s}`)]) {
       // Must be a literal hex: every one of these is composited numerically below, and this
       // guard cannot resolve `var()` / `rgb()` / `color-mix()`. Rewriting one of them in another
       // syntax is legitimate — it just has to fail HERE and be handled, not slip through.
@@ -209,10 +254,11 @@ describe.each([
 
   it('clears WCAG AA 4.5:1 on every surface it is painted on', () => {
     const surf = surfaces(tokens);
-    // 3 raw + per base (2 ink washes + 2 stacked + gold + line + one per stage) × 3 bases.
+    // 3 raw + 3 bases × (2 chips + gold + lineStrong + one per stage)
+    //   + 2 hover bases × 2 chips + one stage-card chip per stage.
     // Derived rather than hard-coded, so it still catches a key COLLISION (two compositions
     // overwriting each other) without failing every time a stage is added.
-    expect(Object.keys(surf).length).toBe(3 + 3 * (2 + 2 + 2 + STAGES.length));
+    expect(Object.keys(surf).length).toBe(3 + 3 * (2 + 2 + STAGES.length) + 2 * 2 + STAGES.length);
 
     const failures: string[] = [];
     for (const token of INK_TOKENS) {

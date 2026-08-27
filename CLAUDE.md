@@ -522,21 +522,21 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `labelStyle` label, every `sectionHeading()` and most empty states — so every step must
   clear 4.5:1, and a 4-step neutral ramp cannot do that and keep its old spread. Will's gate
   chose to **re-space the token values, not migrate the ~117 call sites**, so `ink-dim` sits
-  just inside the lightest passing value (`#595959`, edge `#5b5b5b` / `#adaba5`, edge
+  just inside the lightest passing value (`#595959`, edge `#5c5c5c` / `#adaba5`, edge
   `#acaaa4`) with `ink-soft`/`ink-mute`
   above it at even CIE L* steps. The three secondaries stay as distinct from each other as
   they were (~6-7 L*; the old LIGHT ramp's own mute→soft step was already only 6) — what
   shrank is the primary→secondary gap, 27 L* → 9 light and 31 → 10 dark. The binding surface
   is **never a raw token**: `tint()` chips and row hovers composite an ink wash over
   bg/card/raised, and a chip inside a hovered row stacks two, so the floor is set by
-  a 6% ink chip inside a hovered row — over `raised` (light, 4.67:1) and over `card` (dark,
-  4.56:1); the hover wash beneath is 5% in light and 6% in dark, which the guard reads out of
-  `--color-ck-hover` rather than assuming.
+  a 6% ink chip on a 12% lost-stage deal card over the page bg (light, 4.72:1) and a 6% ink
+  chip inside a hovered row over `card` (dark, 4.56:1); the hover wash beneath is 5% in light
+  and 6% in dark, which the guard reads out of `--color-ck-hover` rather than assuming.
   That compression is also why `.dark .hljs-comment` moved to `ink-dim`: the new `ink-mute`
   sits 10 L* from `ink` and would have rendered code comments at nearly the weight of the
   code around them. `core/theme/inkContrast.test.ts` parses the **shipped** `index.css`
   (never a copy of the palette — a duplicated table drifts silently, which is the failure it
-  exists to stop) and fails CI on any of the 39 surfaces × 4 tokens × 2 themes falling under
+  exists to stop) and fails CI on any of the 43 surfaces × 4 tokens × 2 themes falling under
   4.5:1 — so **adding a new `tint()` background under ink text means adding it to that
   surface list.** Fonts are **self-hosted**
   via `@fontsource` (Montserrat for

@@ -51,19 +51,19 @@
      ink wash over those three (`StatusBadge inactive` = ink 5%, `PriorityBadge low` /
      `ScorePill cool` / `AiTouchDetail` = ink 6%, and a chip inside a hovered row stacks two),
      and pipeline deal cards sit on a 12% stage-hue wash. The binding surface is therefore
-     never a raw token — it is a 6% ink chip inside a hovered row: over `raised` in light
-     (4.67:1) and over `card` in dark (4.56:1). Note the hover wash under it is 5% in light
-     and 6% in dark, so the two themes bind on genuinely different stacks.
-     `core/theme/inkContrast.test.ts` enumerates all 39 surfaces — reading that hover alpha
-     out of `--color-ck-hover` rather than assuming it — and fails CI on any pair under
-     4.5:1, so this ramp cannot silently drift.
+     never a raw token — the two binding pairs are a 6% ink chip on a 12% lost-stage deal card
+     over the page bg (light, 4.72:1) and a 6% ink chip inside a hovered row over `card`
+     (dark, 4.56:1). The themes bind on genuinely different stacks, partly because the hover
+     wash is itself 5% in light and 6% in dark. `core/theme/inkContrast.test.ts` checks 43
+     such surfaces — reading that hover alpha out of `--color-ck-hover` rather than assuming
+     it — and fails CI on any pair under 4.5:1, so this ramp cannot silently drift.
 
      The consequence, accepted deliberately on issue #68: the ramp is COMPRESSED. A 4-step
      neutral ramp cannot clear 4.5:1 everywhere and keep its old spread — the lightest light
-     value that clears it is #5b5b5b (4.53:1), already darker than the old `ink-mute`
+     value that clears it is #5c5c5c (4.50:1), already darker than the old `ink-mute`
      (#666666), which is why Will's gate chose to re-space the ramp rather than migrate call
      sites. Both `ink-dim` values sit just inside their edge rather than on it: light
-     #595959 is 4.67:1 (edge #5b5b5b), dark #adaba5 is 4.56:1 (edge #acaaa4, 4.51:1). The three
+     #595959 is 4.72:1 (edge #5c5c5c), dark #adaba5 is 4.56:1 (edge #acaaa4, 4.51:1). The three
      secondary steps sit ABOVE the new `ink-dim` at even CIE L* increments (~6 L* light,
      ~7 L* dark — the old LIGHT ramp's own mute→soft step was only 6 L*, so the three stay as
      distinct from each other as they ever were). What actually shrank is the gap between
@@ -170,7 +170,7 @@
   /* Same contrast-bound ramp as the light block above (issue #68), mirrored: each step
      LIGHTENS until it clears 4.5:1 on the LIGHTEST surface it can land on — a chip inside a
      hovered row over `card`, not `card` itself. Warm-gray character is kept (g two and b
-     eight points under r, as the pre-#68 values had). */
+     eight or nine points under r, as the pre-#68 values had). */
   --color-ck-ink-mute: #d4d2cc;
   --color-ck-ink-soft: #c0beb8;
   --color-ck-ink-dim: #adaba5;
