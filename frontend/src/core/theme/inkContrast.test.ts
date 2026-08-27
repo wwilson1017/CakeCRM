@@ -16,16 +16,17 @@ const CSS: string = typeof __INDEX_CSS__ === 'string' ? __INDEX_CSS__ : '';
  * form label (`shared/styles.labelStyle`), every uppercase section heading
  * (`crm/styles.sectionHeading`) and most empty states — so each has to clear AA's 4.5:1 on
  * every surface it can land on, in both themes. Before #68 none of `ink-dim`/`ink-soft` did
- * (2.14:1 at worst), and `ink-mute` failed on the composited surfaces too.
+ * (1.91:1 at worst), and `ink-mute` failed on the composited surfaces too (3.72:1).
  *
  * The test reads the SHIPPED index.css rather than a copy of the palette: a duplicated table
  * would drift silently, which is the exact failure mode this is here to stop.
  *
  * "Surface" is deliberately more than the three raw background tokens. Chips and row hovers
  * composite a translucent wash over them, and that wash is what actually binds the ramp: in
- * BOTH themes the worst surface is a 6% ink chip inside a 6%-ink-hovered row — over `raised`
- * in light (4.59:1) and over `card` in dark (4.56:1). Every composite below is a pairing that
- * exists in the app; see `surfaces()` for the call site each one comes from.
+ * both themes the worst surface is a 6% ink chip inside a hovered row — over `raised` in
+ * light (4.67:1, hover 5%) and over `card` in dark (4.56:1, hover 6%). Every composite below
+ * is a pairing that exists in the app; see `surfaces()` for the call site each one comes
+ * from, and note that the hover alpha is read from the stylesheet, not assumed.
  */
 
 const AA_NORMAL_TEXT = 4.5;
@@ -60,10 +61,11 @@ function contrast(fg: Rgb, bg: Rgb): number {
  * alpha pct/100; source-over compositing onto an opaque backdrop is then a plain lerp.
  *
  * Channels stay FLOAT — deliberately not rounded to 8-bit per layer. A browser composites a
- * whole stack in one high-precision pass, so rounding between layers models something that
- * does not happen, and it rounds in the optimistic direction: on the stacked chip-in-hovered-row
- * surface it reported 4.601:1 where exact composition gives 4.591:1. Harmless at today's values,
- * but it is exactly the wrong error to carry in a threshold guard.
+ * whole stack in one high-precision pass, so rounding between layers models something that does
+ * not happen. The error is small but signed unpredictably — on the two binding stacks, per-layer
+ * rounding reports 4.650:1 where exact gives 4.673:1 (light) and 4.565:1 where exact gives
+ * 4.559:1 (dark), i.e. pessimistic in one theme and optimistic in the other. Harmless at today's
+ * values; exactly the wrong error to carry in a threshold guard.
  */
 function over(color: Rgb, pct: number, under: Rgb): Rgb {
   const a = pct / 100;
@@ -108,6 +110,21 @@ const DARK_TOKENS = { ...LIGHT_TOKENS, ...declarations(DARK_BLOCK) };
 
 const INK_TOKENS = ['ink', 'ink-mute', 'ink-soft', 'ink-dim'] as const;
 
+/** The `tint(INK, …)` percentages components actually use for chips. */
+const CHIP_PCTS = [5, 6] as const;
+
+/**
+ * `--color-ck-hover`'s alpha as a percentage. `HOVER` is an ink tint declared literally per
+ * theme (the one documented exception to deriving tints with `color-mix`), and the two themes
+ * do NOT use the same alpha, so the stacked chip-on-hovered-row surface differs per theme.
+ * Read rather than assumed: changing that alpha in `index.css` must move this guard with it.
+ */
+function hoverPercent(t: Record<string, string>): number {
+  const m = /^rgba\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*,\s*([\d.]+)\s*\)$/.exec(t.hover ?? '');
+  if (!m) throw new Error(`index.css: could not read --color-ck-hover's alpha (got ${t.hover})`);
+  return Number(m[1]) * 100;
+}
+
 /**
  * The pipeline stages, DERIVED from the stylesheet rather than copied from
  * `crm/constants.ts`'s `STAGE_ORDER`. Two reasons: nothing under `core/` imports from `crm/`
@@ -136,23 +153,26 @@ const STAGES = Object.keys(LIGHT_TOKENS)
  */
 function surfaces(t: Record<string, string>): Record<string, Rgb> {
   const ink = hexToRgb(t.ink);
+  const hoverPct = hoverPercent(t);
   const out: Record<string, Rgb> = {};
   for (const base of ['card', 'bg', 'raised'] as const) {
     const b = hexToRgb(t[base]);
     out[base] = b;
 
-    // A single ink wash covers two things that happen to composite identically:
-    //   - the row/tab hover overlay `shared/styles.HOVER`, which is itself an ink tint —
-    //     5% in light (`rgba(41,41,41,.05)`) and 6% in dark (`rgba(240,239,232,.06)`);
-    //   - an ink-washed chip — `tint(INK,5)` StatusBadge inactive (ink-dim text) and
-    //     `tint(INK,6)` PriorityBadge low / ScorePill cool / AiTouchDetail (ink-soft text).
-    // Both percentages are live in both themes, so both are checked against both.
-    for (const pct of [5, 6]) {
-      const wash = over(ink, pct, b);
-      out[`ink${pct}/${base}`] = wash;
-      // …and a chip sitting inside a hovered row stacks the two. This is the surface that
-      // actually binds the ramp in both themes.
-      out[`ink${pct}/ink${pct}/${base}`] = over(ink, pct, wash);
+    // Ink-washed chips: `tint(INK,5)` StatusBadge inactive (ink-dim text) and `tint(INK,6)`
+    // PriorityBadge low / ScorePill cool / AiTouchDetail (ink-soft text). Both live in both
+    // themes — the percentage is a per-component constant, not a per-theme one.
+    for (const chip of CHIP_PCTS) {
+      out[`ink${chip}/${base}`] = over(ink, chip, b);
+      // …and a chip inside a hovered list row stacks that chip on the hover overlay. This
+      // stacked surface is what actually binds the ramp in both themes.
+      //
+      // The hover percentage is READ FROM THE STYLESHEET (`--color-ck-hover`'s alpha), not
+      // assumed: `HOVER` is itself an ink tint and it differs per theme — 5% in light
+      // (rgba(41,41,41,.05)), 6% in dark (rgba(240,239,232,.06)). Hard-coding one number
+      // would invent a light 6-over-6 stack that no component produces, and quietly hold the
+      // light ramp to a stricter bar than reality while claiming these are all real pairings.
+      out[`ink${chip}/hover${hoverPct}/${base}`] = over(ink, chip, over(ink, hoverPct, b));
     }
 
     // `AiTouchDetail`'s stale/superseded banner: `tint(GOLD,10)` carrying INK.
@@ -213,7 +233,9 @@ describe.each([
     };
     const steps = INK_TOKENS.map(t => lstar(tokens[t]));
     const gaps = steps.slice(1).map((v, i) => v - steps[i]);
-    // Light inks darken away from ink; dark inks lighten. Either way, all gaps share a sign.
+    // Stepping ink → mute → soft → dim moves TOWARD the page in both themes: light inks
+    // lighten (L* rises from 16.6), dark inks darken (L* falls from 94.3). Either way, all
+    // three gaps must share a sign, or a step has jumped the wrong side of its neighbour.
     const sign = themeName === 'light' ? 1 : -1;
     for (const [i, g] of gaps.entries()) {
       expect(g * sign, `${INK_TOKENS[i]}→${INK_TOKENS[i + 1]} runs the wrong way`).toBeGreaterThan(0);

@@ -522,13 +522,16 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `labelStyle` label, every `sectionHeading()` and most empty states — so every step must
   clear 4.5:1, and a 4-step neutral ramp cannot do that and keep its old spread. Will's gate
   chose to **re-space the token values, not migrate the ~117 call sites**, so `ink-dim` sits
-  at the lightest passing value (`#595959` light / `#adaba5` dark) with `ink-soft`/`ink-mute`
+  just inside the lightest passing value (`#595959`, edge `#5b5b5b` / `#adaba5`, edge
+  `#acaaa4`) with `ink-soft`/`ink-mute`
   above it at even CIE L* steps. The three secondaries stay as distinct from each other as
   they were (~6-7 L*; the old LIGHT ramp's own mute→soft step was already only 6) — what
-  shrank is the primary→secondary gap, 26 L* → 9 light and 31 → 10 dark. The binding surface
+  shrank is the primary→secondary gap, 27 L* → 9 light and 31 → 10 dark. The binding surface
   is **never a raw token**: `tint()` chips and row hovers composite an ink wash over
   bg/card/raised, and a chip inside a hovered row stacks two, so the floor is set by
-  `ink 6% over ink 6% over raised` (light, 4.59:1) and the same over `card` (dark, 4.56:1).
+  a 6% ink chip inside a hovered row — over `raised` (light, 4.67:1) and over `card` (dark,
+  4.56:1); the hover wash beneath is 5% in light and 6% in dark, which the guard reads out of
+  `--color-ck-hover` rather than assuming.
   That compression is also why `.dark .hljs-comment` moved to `ink-dim`: the new `ink-mute`
   sits 10 L* from `ink` and would have rendered code comments at nearly the weight of the
   code around them. `core/theme/inkContrast.test.ts` parses the **shipped** `index.css`
