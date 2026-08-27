@@ -67,15 +67,43 @@ describe('AttachmentLightbox', () => {
   it('closes on Escape', async () => {
     const onClose = render();
     await settle();
-    act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); });
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('claims Escape in the CAPTURE phase so a modal underneath does not also close', async () => {
+    // The contract shared/overlay/DetailModal.tsx documents for this component role: it
+    // listens in BUBBLE and defers to defaultPrevented, so a lightbox over a modal must
+    // take the key in capture — or one Escape dismisses both the picture and the sheet
+    // behind it. Latent until #77 puts detail surfaces on CollectionDetail; pinned now.
+    const modalSaw: KeyboardEvent[] = [];
+    const modalListener = (e: Event) => modalSaw.push(e as KeyboardEvent);
+    document.addEventListener('keydown', modalListener);       // bubble, like DetailModal
+    try {
+      const onClose = render();
+      await settle();
+      act(() => {
+        document.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'Escape', bubbles: true, cancelable: true,
+        }));
+      });
+      expect(onClose).toHaveBeenCalledTimes(1);
+      // The modal's own listener either never runs, or sees the key already claimed.
+      expect(modalSaw.every(e => e.defaultPrevented)).toBe(true);
+    } finally {
+      document.removeEventListener('keydown', modalListener);
+    }
   });
 
   it('ignores other keys', async () => {
     const onClose = render();
     await settle();
-    act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })); });
-    act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'a' })); });
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true }));
+    });
     expect(onClose).not.toHaveBeenCalled();
   });
 
@@ -102,7 +130,9 @@ describe('AttachmentLightbox', () => {
     await settle();
     act(() => root.unmount());
     root = createRoot(container);
-    act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); });
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
     expect(onClose).not.toHaveBeenCalled();
   });
 

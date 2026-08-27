@@ -26,10 +26,25 @@ interface Props {
 export function AttachmentLightbox({ attachment, onClose }: Props) {
   const { url, error } = useAuthedBlobUrl(filePath(attachment.id));
 
+  // Escape — DOCUMENT, CAPTURE phase, with preventDefault. That is not a style choice: it
+  // is the other half of a contract `shared/overlay/DetailModal.tsx` already documents for
+  // exactly this component role. DetailModal listens in the BUBBLE phase and defers to
+  // `e.defaultPrevented`, so a lightbox opened over a modal must claim the key in capture —
+  // capture always runs before bubble — or ONE Escape closes both, dismissing the sheet
+  // behind the picture the user was only trying to close.
+  //
+  // Unreachable today (no current host closes on Escape) and deliberately fixed anyway:
+  // #77 moves the detail surfaces onto `shared/collection`, whose `CollectionDetail` wraps
+  // DetailModal, at which point it becomes live.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      onClose();
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
   }, [onClose]);
 
   return (
