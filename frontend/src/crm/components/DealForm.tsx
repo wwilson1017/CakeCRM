@@ -95,10 +95,18 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
     setSaving(true); setError('');
     try {
       const body: Record<string, unknown> = {
-        title, stage, value: parseFloat(value) || 0,
+        title, value: parseFloat(value) || 0,
         probability: parseInt(probability) || 0,
         expected_close_date: expectedClose, notes,
       };
+      // Send `stage` only when it can be user intent. On an archived deal the select is
+      // disabled, so its value is just whatever the row carried when this form opened —
+      // and if the deal moved stage elsewhere since (the assistant, another tab) that
+      // stale value differs from the server's, which refuses a stage change on an archived
+      // deal by rejecting the WHOLE update. Omitting the field leaves it unset, so every
+      // other edit still saves. This is the same data-loss the disabled select exists to
+      // prevent; locking the control alone did not close it.
+      if (!isArchived) body.stage = stage;
       body.contact_id = selectedContact;  // always send (null unlinks the contact)
       body.company_id = selectedCompany;  // always send (null unlinks the company)
       // Omitted on an untouched create so the server assigns the caller; on an

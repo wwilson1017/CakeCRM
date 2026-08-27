@@ -802,6 +802,13 @@ def get_pipeline(stage: str | None = None, include_archived: bool = False) -> di
     # accidental archive recoverable without an AI provider: the board's Archived facet
     # sets it, the card renders inert, and the deal sheet offers Restore.
     #
+    # Scale note, distinct from the one above: the live board is unpaginated but bounded by
+    # OPEN WORKLOAD, whereas the widened board is bounded by all-time history — every merge
+    # archives a source, and junk archives never leave. So this branch grows monotonically
+    # where the default one does not. Fine at v1 scale, and the facet is off by default; the
+    # upgrade path is a server-side cap on this branch, or the paginated archived-deals view
+    # that issue #83 deliberately left out of scope.
+    #
     # It opens the DEALS QUERY ONLY. stage_summary below keeps LIVE_PREDICATE
     # unconditionally, which looks like exactly the one-sided filter the owner_id note
     # above forbids — but the asymmetry is the rule here, not a bug in it. Owner is a

@@ -150,6 +150,26 @@ interface RouteOptions {
   over?: (path: string, init?: RequestInit) => unknown;
 }
 
+/** Deals the fake server has restored during this test. `POST /restore` is the only write
+ *  these tests make that the server REMEMBERS, and a restore now fires a follow-up board
+ *  GET — so a fixture that kept answering "archived" would be asserting its own opinion
+ *  over the component's behaviour. Reset per test. */
+const restoredIds = new Set<number>();
+
+/** A board row as the server would now serve it. */
+function asServed(d: CrmDeal): CrmDeal {
+  return restoredIds.has(d.id) ? { ...d, archived_at: null } : d;
+}
+
+/** What `POST /restore` answers: `get_deal`'s projection — the row, live, WITHOUT the
+ *  board-only fields `get_pipeline` derives. Narrower than a board row on purpose; that
+ *  difference is the entire subject of the MERGE test. */
+function detailProjection(d: CrmDeal): CrmDeal {
+  const row: CrmDeal = { ...d, archived_at: null };
+  delete row.last_activity_at;
+  return row;
+}
+
 /** Route the whole component tree's fetches. The two board paths answer DIFFERENT payloads
  *  on purpose — that is the server contract the facet exists to reach, and routing them
  *  identically would make the fetch-widening assertion meaningless. */
@@ -159,8 +179,16 @@ function routeApi(opts: RouteOptions = {}) {
   api.mockImplementation(async (path: string, init?: RequestInit) => {
     const custom = opts.over?.(path, init);
     if (custom !== undefined) return custom;
-    if (path === LIVE_PATH) return { deals: live };
-    if (path === ARCHIVED_PATH) return { deals: withArchived };
+    const restoring = /^\/api\/crm\/deals\/(\d+)\/restore$/.exec(path);
+    if (restoring) {
+      const id = Number(restoring[1]);
+      const row = [...withArchived, ...live].find(d => d.id === id);
+      if (!row) throw new Error(`restore called for deal ${id}, which no payload contains`);
+      restoredIds.add(id);
+      return detailProjection(row);
+    }
+    if (path === LIVE_PATH) return { deals: live.map(asServed) };
+    if (path === ARCHIVED_PATH) return { deals: withArchived.map(asServed) };
     if (path === '/api/users') return { users: [] };
     if (path === `/api/crm/deals/${ARCHIVED.id}`) return ARCHIVED;
     if (path === `/api/crm/deals/${LIVE.id}`) return LIVE;
@@ -193,6 +221,7 @@ beforeEach(() => {
   // The filter envelope is persisted to sessionStorage, so a facet left on by one test
   // would silently arm the next one.
   sessionStorage.clear();
+  restoredIds.clear();
   api.mockReset();
   toast.error.mockReset();
   toast.info.mockReset();
@@ -391,8 +420,22 @@ describe('PipelinePage — archived deals', () => {
     expect(boardRequests()).toEqual([LIVE_PATH, ARCHIVED_PATH]);
   });
 
-  it('patches a restored deal into the board in place, with no further board fetch', async () => {
-    routeApi({ over: path => (path === `/api/crm/deals/${ARCHIVED.id}/restore` ? RESTORED : undefined) });
+  it('applies a restore IMMEDIATELY, and only then refreshes behind it', async () => {
+    // The board must be right the instant `POST /restore` returns, not once a follow-up GET
+    // lands: that GET is silent and can fail invisibly, which would leave the board calling
+    // a deal archived after a restore the server actually performed. So the patch is the
+    // correctness mechanism and the refresh is additive — it exists because a restore closes
+    // the sheet exactly as Close does, and that path refreshes so an in-sheet note reaches
+    // the board's derived `last_activity_at`.
+    //
+    // The refresh is therefore held open across the assertions. That is not an artificial
+    // pause: it is precisely the case the patch was designed for — a refresh that is slow,
+    // fails, or never arrives — with the board still expected to be correct.
+    const refresh = deferred<{ deals: CrmDeal[] }>();
+    let archivedLoads = 0;
+    routeApi({
+      over: path => (path === ARCHIVED_PATH && ++archivedLoads === 2 ? refresh.promise : undefined),
+    });
     await render();
     await pickArchivedFacet('Include archived');
     const before = boardRequests().length;
@@ -405,9 +448,15 @@ describe('PipelinePage — archived deals', () => {
     // ...it has lost the ARCHIVED label and gained a bulk checkbox...
     expect(card('Zebra rebuild')?.textContent).not.toContain('ARCHIVED');
     expect(cardCheckbox('Zebra rebuild')).not.toBeNull();
-    // ...and none of that depended on a refetch, which is the point: a silent refresh can
-    // fail invisibly and leave the board showing a deal as archived after a real restore.
-    expect(boardRequests()).toHaveLength(before);
+    // ...all of it with the refresh still in the air. The refresh WAS issued — the sheet's
+    // own Close fires one too — it simply has no say in whether the board above is right.
+    expect(boardRequests()).toHaveLength(before + 1);
+
+    // And when it does land it agrees, rather than undoing anything.
+    await act(async () => { refresh.resolve({ deals: [LIVE, RESTORED] }); });
+    await flush();
+    expect(columnTotal('lead')).toBe('$100,099');
+    expect(card('Zebra rebuild')?.textContent).not.toContain('ARCHIVED');
   });
 
   it('discards a board load that was already in flight when the restore landed', async () => {
@@ -422,12 +471,10 @@ describe('PipelinePage — archived deals', () => {
     const held = deferred<{ deals: CrmDeal[] }>();
     let archivedLoads = 0;
     routeApi({
-      over: path => {
-        if (path === `/api/crm/deals/${ARCHIVED.id}/restore`) return RESTORED;
-        // The SECOND board GET is the one the sheet's Close fires; hold it open.
-        if (path === ARCHIVED_PATH && ++archivedLoads === 2) return held.promise;
-        return undefined;
-      },
+      // The SECOND board GET is the one the sheet's Close fires; hold it open. The THIRD is
+      // the restore's own follow-up refresh, which is left to resolve normally against a
+      // server that now reports the deal live.
+      over: path => (path === ARCHIVED_PATH && ++archivedLoads === 2 ? held.promise : undefined),
     });
     await render();
     await pickArchivedFacet('Include archived');
@@ -436,10 +483,13 @@ describe('PipelinePage — archived deals', () => {
     await click(button('Close'), 'Close');
     await click(card('Zebra rebuild'), 'archived card again');
     await click(button('Restore'), 'Restore');
+    await flush();
     expect(card('Zebra rebuild')?.textContent).not.toContain('ARCHIVED');
 
-    // ...and now the payload that was already in the air lands, still describing the deal
-    // as archived. It is stale by construction and must be dropped on the floor.
+    // ...and only NOW does the payload that was already in the air land, still describing
+    // the deal as archived. Resolving it LAST is what makes this a test of the discard and
+    // not of the refresh: nothing follows it that could quietly put the board right again,
+    // so if it were applied the board would end the test showing the deal archived.
     await act(async () => { held.resolve({ deals: [LIVE, ARCHIVED] }); });
     await flush();
 
@@ -462,11 +512,17 @@ describe('PipelinePage — archived deals', () => {
     // RESTORED carries no `last_activity_at` KEY at all (not the key set to undefined),
     // which is exactly what the detail projection sends — and what makes a merge preserve
     // the board's copy rather than blank it.
+    const refresh = deferred<{ deals: CrmDeal[] }>();
+    let archivedLoads = 0;
     routeApi({
       live: [LIVE], withArchived: [LIVE, touched],
       over: path => {
-        if (path === `/api/crm/deals/2/restore`) return RESTORED;
         if (path === '/api/crm/deals/2') return touched;
+        // Hold the restore's follow-up refresh open for good. The server would re-supply
+        // `last_activity_at` on that GET and paper straight over a patch that dropped it —
+        // which is the whole failure this test exists to catch, and would make it vacuous.
+        // The board's guarantee is that the PATCH is right on its own.
+        if (path === ARCHIVED_PATH && ++archivedLoads === 2) return refresh.promise;
         return undefined;
       },
     });
@@ -490,10 +546,7 @@ describe('PipelinePage — archived deals', () => {
     // recovery gesture, not a selection one — would hand it straight back to the next bulk
     // move, on a deal the operator selected before it was ever archived.
     const zebraLive = deal({ id: 2, title: 'Zebra rebuild', stage: 'lead', value: 99_999 });
-    routeApi({
-      live: [LIVE, zebraLive],
-      over: path => (path === `/api/crm/deals/2/restore` ? RESTORED : undefined),
-    });
+    routeApi({ live: [LIVE, zebraLive] });
     await render();
     await click(cardCheckbox('Zebra rebuild'), 'Zebra rebuild checkbox');
     expect(container.textContent).toContain('1 deal selected');
@@ -504,7 +557,11 @@ describe('PipelinePage — archived deals', () => {
 
     await click(card('Zebra rebuild'), 'archived card');
     await click(button('Restore'), 'Restore');
+    await flush();
 
+    // The deal is back and selectable — and the follow-up refresh, which reports it LIVE,
+    // is exactly what would hand a surviving id back to the bulk bar. The selection has to
+    // have been dropped at the restore for it to still be clear here.
     expect(cardCheckbox('Zebra rebuild')?.checked).toBe(false);
     expect(container.textContent).not.toContain('deal selected');
   });
@@ -629,13 +686,16 @@ describe('PipelinePage — archived deals', () => {
     expect(container.textContent).not.toContain('deal selected');
   });
 
-  it('replays a deferred facet load LOUDLY, so its failure is still reported', async () => {
-    // Deferral must not launder a user-initiated load into a background one. The replay
-    // inherits the loudness of whatever was deferred, and the failure toast is the reason
-    // that matters: a silent replay swallows the error, leaving the previous payload on
-    // screen — which under "Archived only" is an empty board, i.e. the exact false answer
-    // "you have no archived deals" to a question the server never actually answered. The
-    // spinner is the cosmetic half of the same rule; this is the half that lies.
+  it('reports a deferred facet load\'s failure without taking the page to do it', async () => {
+    // Deferral must not launder a user-initiated load into a background one — but the two
+    // halves of "user-initiated" part company here, and only one of them survives the
+    // replay. Error REPORTING is carried across (`reportErrors`): a swallowed failure
+    // leaves the previous payload on screen, which under "Archived only" is an empty board
+    // — the exact false answer "you have no archived deals" to a question the server never
+    // answered. The SPINNER is deliberately not carried across, because `loading` returns
+    // the spinner INSTEAD of the page, and a replay fires whenever a write happens to
+    // settle: taking the page at that moment blanks an open form mid-edit and loses what
+    // the user typed. So: the toast fires, and the board stays put.
     const put = deferred<CrmDeal>();
     routeApi({
       over: (path, init) => {
@@ -659,6 +719,11 @@ describe('PipelinePage — archived deals', () => {
     await flush();
     await flush();
     expect(toast.error).toHaveBeenCalledWith('Failed to load deals.');
+    // ...and the page is still the page. When `loading` is true this container holds the
+    // spinner and NOTHING else — no heading, no filter bar, no open form — so the heading
+    // still being here is the assertion that the replay did not take the screen.
+    expect(container.textContent).toContain('Pipeline');
+    expect(container.querySelector('.animate-spin')).toBeNull();
   });
 
   it('re-fires a load that the settling write left nobody to replay', async () => {

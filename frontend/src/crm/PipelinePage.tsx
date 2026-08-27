@@ -95,16 +95,27 @@ export function PipelinePage() {
   // dropped: moveDealStage re-fires it once the last write settles, so activity/derived fields
   // still update after a sheet dismissal even when a drag PUT overlapped the refresh.
   const pendingRefresh = useRef(false);
-  // ...and whether the deferred load should replay SILENTLY. A user-initiated load (an
-  // Archived-facet change) that gets deferred behind a write must come back as the loud
-  // load it was: replaying it silently would drop both its spinner and — the part that
-  // matters — its failure toast, which is the only thing separating "the fetch failed"
-  // from "you have no archived deals". A loud request wins over a silent one.
-  const pendingRefreshSilent = useRef(true);
+  // ...and whether a deferred load must still REPORT a failure when it replays. Set when
+  // the deferred load was user-initiated (an Archived-facet change): replaying it as a
+  // plain background refresh would swallow its error, and under "Archived only" a swallowed
+  // error renders an empty board that reads as "you have no archived deals".
+  //
+  // Only the error reporting is carried over, NOT the spinner: `loading` early-returns the
+  // spinner INSTEAD OF the page, and a replay fires whenever the last write happens to
+  // settle — so replaying loudly would blank an open DealForm or detail sheet mid-edit and
+  // lose everything the user had typed. Reporting is what the user needs; the spinner
+  // belongs to the interaction that asked for it, and that interaction is over.
+  const pendingRefreshReportErrors = useRef(false);
+  // Whether a payload has ever rendered. A failed load with no data yet already reports
+  // itself through `LoadError`; toasting as well just stacks a second message on top of
+  // the error screen, once per retry click.
+  const hasLoadedOnce = useRef(false);
   // `load` referenced by the deferral path below, which has to re-fire it. A ref because
   // the callback cannot name itself, and assigned in an effect because a ref write during
   // render is a build-blocking lint error under this repo's react-hooks ruleset.
-  const loadRef = useRef<(silent?: boolean) => Promise<boolean>>(() => Promise.resolve(false));
+  const loadRef = useRef<(silent?: boolean, opts?: { reportErrors?: boolean }) => Promise<boolean>>(
+    () => Promise.resolve(false),
+  );
   // Load generation (issue #83) — see `load`. Distinct from `writeGen`: that one guards a
   // refresh against a racing WRITE; this one guards a load against a newer LOAD, which the
   // Archived facet made reachable by changing the request itself.
@@ -138,10 +149,17 @@ export function PipelinePage() {
   // Returns whether fresh server data was actually APPLIED — the bulk flow needs that fact
   // to word an "outcome unknown" notice honestly (a board that couldn't refresh may still be
   // showing the optimistic result). Existing callers ignore the value.
-  const load = useCallback(async (silent = false): Promise<boolean> => {
+  const load = useCallback(async (
+    silent = false,
+    opts?: { reportErrors?: boolean },
+  ): Promise<boolean> => {
     // `=== true` guards against a truthy non-boolean arg (e.g. a bare `onClick={load}`
     // handing in a MouseEvent) accidentally forcing silent mode.
     const isSilent = silent === true;
+    // A background refresh normally stays quiet, but a REPLAYED user action must still
+    // report its failure even though it no longer takes the spinner — see
+    // `pendingRefreshReportErrors`.
+    const reportErrors = !isSilent || opts?.reportErrors === true;
     // NO load may clobber an optimistic drag — not just a silent one. If a stage write is
     // already in flight, don't even fire the GET; defer it (moveDealStage re-fires it once
     // writes settle, and it reads the CURRENT facet from the ref, so a deferred refresh
@@ -150,7 +168,7 @@ export function PipelinePage() {
     // action that could land a pre-write board on top of a drag the user had just made.
     if (pendingWrites.current > 0) {
       pendingRefresh.current = true;
-      if (!isSilent) pendingRefreshSilent.current = false;
+      if (reportErrors) pendingRefreshReportErrors.current = true;
       return false;
     }
     const startGen = writeGen.current;
@@ -184,7 +202,7 @@ export function PipelinePage() {
       // Applies to every load, for the same reason as the pre-flight check above.
       if (pendingWrites.current > 0 || writeGen.current !== startGen) {
         pendingRefresh.current = true;
-        if (!isSilent) pendingRefreshSilent.current = false;
+        if (reportErrors) pendingRefreshReportErrors.current = true;
         // A deferred load is normally replayed by the settling write's `finally`. But the
         // write that invalidated this payload may have STARTED AND FINISHED entirely
         // inside this GET's flight, in which case its finally already ran and saw nothing
@@ -193,13 +211,14 @@ export function PipelinePage() {
         // be the deferred load, it would read as the board ignoring the click outright.
         if (pendingWrites.current === 0) {
           pendingRefresh.current = false;
-          const replaySilent = pendingRefreshSilent.current;
-          pendingRefreshSilent.current = true;
-          queueMicrotask(() => { void loadRef.current(replaySilent); });
+          const report = pendingRefreshReportErrors.current;
+          pendingRefreshReportErrors.current = false;
+          queueMicrotask(() => { void loadRef.current(true, { reportErrors: report }); });
         }
         return false;
       }
       setData(d);
+      hasLoadedOnce.current = true;
       dealConfirmedStage.current = new Map(d.deals.map(deal => [deal.id, deal.stage]));
       // Intersect the selection with the deals this payload says are LIVE. Masking an
       // archived deal in `bulkIds` and on its card is not enough: the id stays in the Set,
@@ -223,7 +242,9 @@ export function PipelinePage() {
       // the previous payload keeps rendering, and under "Archived only" that means an
       // empty board — indistinguishable from "you have no archived deals". Say so.
       // (Silent refreshes stay quiet; being unobtrusive is their whole contract.)
-      if (!isSilent && loadGen.current === myLoad) toast.error('Failed to load deals.');
+      if (reportErrors && loadGen.current === myLoad && hasLoadedOnce.current) {
+        toast.error('Failed to load deals.');
+      }
     }
     finally { if (!isSilent && spinnerGen.current === mySpinner) setLoading(false); }
     return false;
@@ -316,9 +337,9 @@ export function PipelinePage() {
         // but reads the CURRENT facet from the ref, so it still widens the board.
         if (pendingWrites.current === 0 && pendingRefresh.current) {
           pendingRefresh.current = false;
-          const replaySilent = pendingRefreshSilent.current;
-          pendingRefreshSilent.current = true;
-          load(replaySilent);
+          const report = pendingRefreshReportErrors.current;
+          pendingRefreshReportErrors.current = false;
+          load(true, { reportErrors: report });
         }
       }
     });
@@ -384,6 +405,13 @@ export function PipelinePage() {
       return next;
     });
     setSelectedDeal(null);
+    // Then refresh in the background. The patch above is what makes the board CORRECT — it
+    // deliberately does not depend on this landing — but a restore closes the sheet the same
+    // way `onClose` does, and that path refreshes so an in-sheet note reaches the board's
+    // derived `last_activity_at`. Without it, restoring a deal you just logged a note on
+    // leaves it in the "No activity logged" bucket. It also replaces the in-flight load the
+    // generation bump above just discarded.
+    queueMicrotask(() => { void loadRef.current(true); });
   }, []);
 
   const deals = useMemo(() => data?.deals ?? [], [data]);
@@ -561,9 +589,9 @@ export function PipelinePage() {
       // does), so a sheet dismissal during the bulk still lands its fresh derived fields.
       if (pendingWrites.current === 0 && pendingRefresh.current) {
         pendingRefresh.current = false;
-        const replaySilent = pendingRefreshSilent.current;
-        pendingRefreshSilent.current = true;
-        load(replaySilent);
+        const report = pendingRefreshReportErrors.current;
+        pendingRefreshReportErrors.current = false;
+        load(true, { reportErrors: report });
       }
     } finally {
       if (!writeSettled) pendingWrites.current--;

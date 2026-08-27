@@ -91,6 +91,11 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
       onRestored?.(restored);
     } catch {
       toast.error('Failed to restore deal.');
+    } finally {
+      // Reset on BOTH paths. A host that closes the sheet on `onRestored` unmounts this
+      // anyway, but `onRestored` is optional and the banner renders on every host — leaving
+      // `restoring` stuck true would strand the button on "Restoring…" for any host that
+      // keeps the sheet open.
       setRestoring(false);
     }
   }

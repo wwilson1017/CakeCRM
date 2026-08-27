@@ -45,6 +45,10 @@ let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  // Clear, not just re-stub: `api.mock.calls` otherwise accumulates across tests in
+  // this file, and the assertions below search those calls for a PUT — a later test
+  // would happily find an EARLIER test's request and pass on it.
+  api.mockClear();
   api.mockImplementation(async (path: string) => {
     if (path.startsWith('/api/crm/contacts')) return { contacts: [] };
     if (path.startsWith('/api/crm/companies')) return { companies: [] };
@@ -87,6 +91,16 @@ function titleInput(): HTMLInputElement {
   return input as HTMLInputElement;
 }
 
+/** Type into a controlled input the way React can see. Assigning `.value` directly is
+ *  invisible to React: it caches the last value on the DOM node, sees no change, and never
+ *  re-runs onChange — so the form state would keep its original value and the assertion
+ *  would silently be about nothing. */
+function typeInto(el: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  setter?.call(el, value);
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
 describe('DealForm — archived deals', () => {
   it('locks the Stage select on an archived deal and says why', async () => {
     await render(deal({ archived_at: '2026-08-20T00:00:00+00:00' }));
@@ -108,5 +122,40 @@ describe('DealForm — archived deals', () => {
 
     expect(stageSelect().disabled).toBe(false);
     expect(container.textContent).not.toContain(STAGE_HINT);
+  });
+
+  it('OMITS stage from an archived deal\'s update, so a stale value cannot sink the save', async () => {
+    // Locking the control is not enough on its own. The form still sent `stage` from the
+    // row it opened with, and that row can be stale: if the deal moved stage elsewhere
+    // (the assistant, another tab) after the board loaded, the value behind the disabled
+    // select no longer matches the server's — and the server refuses a stage CHANGE on an
+    // archived deal by rejecting the whole update. The user would lose every field they
+    // just typed, behind a control the UI had disabled and captioned as safe.
+    //
+    // A disabled select's value is by definition not user intent, so the field is simply
+    // not sent. Omitted, not "sent unchanged": only omission is immune to the drift.
+    await render(deal({ stage: 'lead', archived_at: '2026-08-20T00:00:00+00:00' }));
+    await act(async () => { typeInto(titleInput(), 'Corrected title'); });
+    await act(async () => {
+      container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+
+    const put = api.mock.calls.find(([p, init]) => p === '/api/crm/deals/7' && init?.method === 'PUT');
+    expect(put).toBeTruthy();
+    const body = JSON.parse(put![1].body as string) as Record<string, unknown>;
+    expect(body).not.toHaveProperty('stage');
+    // ...while the edit the user actually made still goes.
+    expect(body.title).toBe('Corrected title');
+  });
+
+  it('still sends stage for a LIVE deal, where the select IS user intent', async () => {
+    await render(deal({ stage: 'qualified' }));
+    await act(async () => {
+      container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+
+    const put = api.mock.calls.find(([p, init]) => p === '/api/crm/deals/7' && init?.method === 'PUT');
+    const body = JSON.parse(put![1].body as string) as Record<string, unknown>;
+    expect(body.stage).toBe('qualified');
   });
 });
