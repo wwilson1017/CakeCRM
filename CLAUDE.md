@@ -516,7 +516,26 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   red is identical in both themes as a **fill**, but accent used as *text or an icon*
   routes through `--color-ck-accent-text` (`ACCENT_TEXT`), which the `.dark` block
   lightens — the fixed red is only 3.15:1 on the dark card and fails WCAG AA as body
-  text, the same reason the status and stage hues lighten. Fonts are **self-hosted**
+  text, the same reason the status and stage hues lighten. **The neutral ink ramp is bound
+  by the same rule and is COMPRESSED because of it** (#68): all four of
+  `ink`/`ink-mute`/`ink-soft`/`ink-dim` are body text — `ink-dim` alone paints every
+  `labelStyle` label, every `sectionHeading()` and most empty states — so every step must
+  clear 4.5:1, and a 4-step neutral ramp cannot do that and keep its old spread. Will's gate
+  chose to **re-space the token values, not migrate the ~117 call sites**, so `ink-dim` sits
+  at the lightest passing value (`#595959` light / `#adaba5` dark) with `ink-soft`/`ink-mute`
+  above it at even CIE L* steps. The three secondaries stay as distinct from each other as
+  they were (~6-7 L*; the old LIGHT ramp's own mute→soft step was already only 6) — what
+  shrank is the primary→secondary gap, 26 L* → 9 light and 31 → 10 dark. The binding surface
+  is **never a raw token**: `tint()` chips and row hovers composite an ink wash over
+  bg/card/raised, and a chip inside a hovered row stacks two, so the floor is set by
+  `ink 6% over ink 6% over raised` (light, 4.60:1) and the same over `card` (dark, 4.57:1).
+  That compression is also why `.dark .hljs-comment` moved to `ink-dim`: the new `ink-mute`
+  sits 10 L* from `ink` and would have rendered code comments at nearly the weight of the
+  code around them. `core/theme/inkContrast.test.ts` parses the **shipped** `index.css`
+  (never a copy of the palette — a duplicated table drifts silently, which is the failure it
+  exists to stop) and fails CI on any of the 33 surfaces × 4 tokens × 2 themes falling under
+  4.5:1 — so **adding a new `tint()` background under ink text means adding it to that
+  surface list.** Fonts are **self-hosted**
   via `@fontsource` (Montserrat for
   headings + buttons, Open Sans for body) — no Google Fonts CDN request, so an offline
   deploy renders correctly; `index.css` also carries a `.dark .hljs*` block because
