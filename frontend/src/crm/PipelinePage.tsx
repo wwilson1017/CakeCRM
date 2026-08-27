@@ -99,13 +99,16 @@ export function PipelinePage() {
   // refresh against a racing WRITE; this one guards a load against a newer LOAD, which the
   // Archived facet made reachable by changing the request itself.
   const loadGen = useRef(0);
+  // In-flight NON-SILENT loads. Owns the spinner; see `load`.
+  const spinnerLoads = useRef(0);
 
   // Archived deals are swept out of the board payload server-side, so the Archived facet
   // is the one facet that must widen the FETCH as well as filter. Derived as a boolean on
-  // purpose: `load` depends on this rather than on `advanced`, or every keystroke and
+  // purpose: the refetch keys off this rather than on `advanced`, or every keystroke and
   // every unrelated facet change would refetch the whole board. 'include' and 'only' need
   // the same payload — the difference between them is purely the client predicate.
   const includeArchived = advanced.archived !== null;
+  const includeArchivedRef = useRef(includeArchived);
 
   // Bulk stage moves (issue #55). Selection is a plain Set of deal ids; `bulkPending` has a
   // ref twin because the mutators read it SYNCHRONOUSLY to bail out, and state wouldn't have
@@ -139,10 +142,21 @@ export function PipelinePage() {
     // request itself, since two quick facet flips can otherwise resolve out of order and
     // leave the board showing the wrong content set.
     const myLoad = ++loadGen.current;
-    if (!isSilent) setLoading(true);
+    // The SPINNER is owned separately from that generation, and it has to be: `loadGen` is
+    // bumped by silent refreshes too, so gating `setLoading(false)` on it would strand the
+    // spinner forever whenever a silent refresh (a settling drag, a closing sheet) started
+    // after a non-silent one — the loser would skip the reset and the winner, being silent,
+    // never touches `loading` at all. A count of in-flight non-silent loads clears the
+    // spinner when the LAST of them settles, whoever won.
+    if (!isSilent) { spinnerLoads.current++; setLoading(true); }
     try {
+      // Read the facet from the ref, never from a closure: `load` is stable, and the
+      // deferred refreshes that `moveDealStage`/`applyBulkMove` fire when their writes
+      // settle can outlive the facet they were created under. A captured value would let
+      // one of them re-fetch the live-only board over the archived rows the user just
+      // asked to see — and, because the newest load wins, do it deterministically.
       const d = await api<PipelineData>(
-        `/api/crm/deals${includeArchived ? '?include_archived=true' : ''}`,
+        `/api/crm/deals${includeArchivedRef.current ? '?include_archived=true' : ''}`,
       );
       if (loadGen.current !== myLoad) return false;
       // A write that STARTED during this GET's flight (generation changed) may have made the
@@ -161,11 +175,20 @@ export function PipelinePage() {
       // (Silent refreshes stay quiet; being unobtrusive is their whole contract.)
       if (!isSilent && loadGen.current === myLoad) toast.error('Failed to load deals.');
     }
-    finally { if (!isSilent && loadGen.current === myLoad) setLoading(false); }
+    finally { if (!isSilent && --spinnerLoads.current === 0) setLoading(false); }
     return false;
-  }, [includeArchived]);
+  }, []);
 
-  useEffect(() => { queueMicrotask(load); }, [load]);
+  // Mount, and again whenever the Archived facet changes WHICH deals the server should
+  // send. The ref is synced here rather than during render (a render-phase ref write is a
+  // lint error under this repo's react-hooks ruleset) and, being in the same effect,
+  // always lands before the load it triggers. A full non-silent load on purpose: the
+  // board's content set is being replaced wholesale, and the spinner is the honest signal
+  // for that — a silent swap would leave the old set on screen looking authoritative.
+  useEffect(() => {
+    includeArchivedRef.current = includeArchived;
+    queueMicrotask(load);
+  }, [includeArchived, load]);
 
   // `data` is the single source of truth for the board. A stage change is applied
   // to it optimistically — the deal is re-staged IN PLACE (its list position is

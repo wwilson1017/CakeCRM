@@ -25,7 +25,7 @@ const NOW = new Date('2026-08-26T12:00:00Z');
 function deal(over: Partial<CrmDeal> = {}): CrmDeal {
   return {
     id: 1, title: 'Wholesale order', stage: 'lead', value: 1000, probability: 20,
-    expected_close_date: '', notes: '', contact_id: null, company_id: null,
+    expected_close_date: '', notes: '', contact_id: null, company_id: null, currency: 'USD',
     created_at: '2026-08-01T00:00:00+00:00', updated_at: '2026-08-01T00:00:00+00:00',
     ...over,
   } as CrmDeal;

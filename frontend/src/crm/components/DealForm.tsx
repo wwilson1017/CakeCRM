@@ -5,6 +5,7 @@ import { OwnerSelect } from './OwnerSelect';
 import { labelStyle, inputStyle, CORAL, LINE, INK_DIM, mono } from '../../shared/styles';
 import { formModalOverlay, formModalContent, formTitle, btnPrimary, btnSecondary } from '../styles';
 import { STAGE_ORDER } from '../constants';
+import { isArchivedDeal } from '../pipelineFilters';
 import type { CrmDeal, CrmContact, CrmCompany } from '../../core/types';
 import { CustomFieldInputs } from './CustomFieldInputs';
 import { useCustomFieldsForm, putCustomFields } from './useCustomFieldsForm';
@@ -21,7 +22,9 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
   const { currentUser } = useAuth();
   const isEdit = !!deal;
   // A soft-archived deal (issue #83) can be edited, but not re-staged — see the Stage field.
-  const isArchived = deal?.archived_at != null;
+  // Shares the board's predicate rather than re-deriving `archived_at != null`, so there is
+  // exactly one definition of "archived" in the app.
+  const isArchived = !!deal && isArchivedDeal(deal);
   const [title, setTitle] = useState(deal?.title || '');
   const [stage, setStage] = useState(deal?.stage || 'lead');
   const [value, setValue] = useState(deal?.value?.toString() || '');

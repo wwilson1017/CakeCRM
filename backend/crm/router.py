@@ -500,10 +500,13 @@ async def bulk_move_deals(body: BulkDealMove, user=Depends(get_current_user)):
 # source-archival) was permanent. ARCHIVE deliberately gets no route here — the gate scope
 # is view + restore only; a UI archive affordance lands with the deal-detail parity port.
 #
-# Sync `def` on purpose (the convention core/auth.py's handlers follow): it does blocking
-# psycopg2 work plus a lead-score recompute, and FastAPI runs a sync endpoint in a
-# threadpool rather than on the event loop. No path collision — /deals/touch-count/backfill
-# shares the segment count but differs in its terminal segment.
+# Sync `def` on purpose, which makes this the one non-async handler in the file: the work
+# is blocking psycopg2 plus a lead-score recompute, and FastAPI runs a sync endpoint in a
+# threadpool instead of on the event loop. Its `async def` neighbours do the same blocking
+# work directly on the loop — that is pre-existing and out of scope here, not a convention
+# worth propagating (bulk-move already opts out via run_in_threadpool for the same reason).
+# No path collision — /deals/touch-count/backfill shares the segment count but differs in
+# its terminal segment.
 #
 # Restoring is idempotent (restoring a live deal is a no-op NULL write) and
 # member-accessible: ownership is not access control here, and this is ordinary record
