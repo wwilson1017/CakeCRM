@@ -99,8 +99,8 @@ export function PipelinePage() {
   // refresh against a racing WRITE; this one guards a load against a newer LOAD, which the
   // Archived facet made reachable by changing the request itself.
   const loadGen = useRef(0);
-  // In-flight NON-SILENT loads. Owns the spinner; see `load`.
-  const spinnerLoads = useRef(0);
+  // A generation for NON-SILENT loads only. Owns the spinner; see `load`.
+  const spinnerGen = useRef(0);
 
   // Archived deals are swept out of the board payload server-side, so the Archived facet
   // is the one facet that must widen the FETCH as well as filter. Derived as a boolean on
@@ -132,9 +132,13 @@ export function PipelinePage() {
     // `=== true` guards against a truthy non-boolean arg (e.g. a bare `onClick={load}`
     // handing in a MouseEvent) accidentally forcing silent mode.
     const isSilent = silent === true;
-    // A silent refresh must not clobber an optimistic drag. If a stage write is already in
-    // flight, don't even fire the GET — defer it (moveDealStage re-fires when writes settle).
-    if (isSilent && pendingWrites.current > 0) { pendingRefresh.current = true; return false; }
+    // NO load may clobber an optimistic drag — not just a silent one. If a stage write is
+    // already in flight, don't even fire the GET; defer it (moveDealStage re-fires it once
+    // writes settle, and it reads the CURRENT facet from the ref, so a deferred refresh
+    // still widens). This used to be silent-only, which was safe while every load was a
+    // refresh of the same content set; the Archived facet made a load a user-initiated
+    // action that could land a pre-write board on top of a drag the user had just made.
+    if (pendingWrites.current > 0) { pendingRefresh.current = true; return false; }
     const startGen = writeGen.current;
     // A SECOND generation, for loads rather than writes (issue #83). `writeGen` answers
     // "did a write invalidate this payload?"; this answers "is a newer LOAD already in
@@ -142,13 +146,15 @@ export function PipelinePage() {
     // request itself, since two quick facet flips can otherwise resolve out of order and
     // leave the board showing the wrong content set.
     const myLoad = ++loadGen.current;
-    // The SPINNER is owned separately from that generation, and it has to be: `loadGen` is
-    // bumped by silent refreshes too, so gating `setLoading(false)` on it would strand the
-    // spinner forever whenever a silent refresh (a settling drag, a closing sheet) started
-    // after a non-silent one — the loser would skip the reset and the winner, being silent,
-    // never touches `loading` at all. A count of in-flight non-silent loads clears the
-    // spinner when the LAST of them settles, whoever won.
-    if (!isSilent) { spinnerLoads.current++; setLoading(true); }
+    // The SPINNER gets its OWN generation, bumped only by non-silent loads. It cannot ride
+    // `loadGen`, which silent refreshes bump too: gating the reset on that would strand the
+    // spinner forever once a silent refresh started after a non-silent one — the loser
+    // skips the reset and the winner, being silent, never touches `loading`. Nor can it be
+    // a simple in-flight COUNT, which would let one hung request pin the spinner even after
+    // a newer load had already painted the board. Newest-non-silent-wins is the only rule
+    // that is correct in both.
+    const mySpinner = isSilent ? 0 : ++spinnerGen.current;
+    if (!isSilent) setLoading(true);
     try {
       // Read the facet from the ref, never from a closure: `load` is stable, and the
       // deferred refreshes that `moveDealStage`/`applyBulkMove` fire when their writes
@@ -161,12 +167,26 @@ export function PipelinePage() {
       if (loadGen.current !== myLoad) return false;
       // A write that STARTED during this GET's flight (generation changed) may have made the
       // payload stale — defer+retry rather than clobber a succeeded move OR lose the refresh.
-      if (isSilent && (pendingWrites.current > 0 || writeGen.current !== startGen)) {
+      // Applies to every load, for the same reason as the pre-flight check above.
+      if (pendingWrites.current > 0 || writeGen.current !== startGen) {
         pendingRefresh.current = true;
         return false;
       }
       setData(d);
       dealConfirmedStage.current = new Map(d.deals.map(deal => [deal.id, deal.stage]));
+      // Drop any selected deal this payload reports as ARCHIVED. Masking it in `bulkIds`
+      // and on the card is not enough: the id stays in the Set, so if the deal is later
+      // restored somewhere else (the assistant, another tab) the next payload brings it
+      // back already selected — joining a bulk move nobody selected it for. Only ids the
+      // payload actually carries are pruned; an id merely absent may just be filtered out.
+      setBulkSelected(prev => {
+        if (prev.size === 0) return prev;
+        const nowArchived = d.deals.filter(deal => prev.has(deal.id) && isArchivedDeal(deal));
+        if (nowArchived.length === 0) return prev;
+        const next = new Set(prev);
+        for (const deal of nowArchived) next.delete(deal.id);
+        return next;
+      });
       return true;
     } catch {
       // data stays null → LoadError below. But once data EXISTS a failure is invisible:
@@ -175,7 +195,7 @@ export function PipelinePage() {
       // (Silent refreshes stay quiet; being unobtrusive is their whole contract.)
       if (!isSilent && loadGen.current === myLoad) toast.error('Failed to load deals.');
     }
-    finally { if (!isSilent && --spinnerLoads.current === 0) setLoading(false); }
+    finally { if (!isSilent && spinnerGen.current === mySpinner) setLoading(false); }
     return false;
   }, []);
 
@@ -257,9 +277,11 @@ export function PipelinePage() {
         } : prev);
       } finally {
         pendingWrites.current--; // write settled (reconciled or reverted)
-        // Once ALL writes have settled, fire any silent refresh that was deferred while a
-        // write was racing it — so a sheet dismissal (Close OR Mark Won/Lost) still lands the
-        // fresh last_activity_at even though the stage PUT was in flight at dismissal time.
+        // Once ALL writes have settled, fire any refresh that was deferred while a write was
+        // racing it — so a sheet dismissal (Close OR Mark Won/Lost) still lands the fresh
+        // last_activity_at even though the stage PUT was in flight at dismissal time. Since
+        // #83 an Archived-facet change can be the deferred load too; it re-fires silently
+        // but reads the CURRENT facet from the ref, so it still widens the board.
         if (pendingWrites.current === 0 && pendingRefresh.current) {
           pendingRefresh.current = false;
           load(true);

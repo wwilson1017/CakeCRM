@@ -49,6 +49,13 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
   // list-row prop: the assistant can archive a deal between the board's load and this sheet
   // opening, and `get_deal` resolves an archived deal by design. Seeded from the prop so
   // the banner is right on first paint.
+  //
+  // Accepted limitation: between first paint and `loadDetail` resolving, the archive-gated
+  // actions still reflect the prop, so a deal archived externally shows Mark Won/Lost for
+  // that window. NOT gated on the fetch — every other field in this sheet renders from the
+  // frozen prop until the detail lands (`stage` gates those same buttons the same way), so
+  // gating only these would buy a sub-second race at the cost of buttons that pop in after
+  // the sheet opens. The worst outcome in that window is a refused write, not a bad one.
   const [archivedAt, setArchivedAt] = useState<string | null | undefined>(deal.archived_at);
   const [restoring, setRestoring] = useState(false);
   const { byField, confirm, confirming } = useProvenance('deal', deal.id);

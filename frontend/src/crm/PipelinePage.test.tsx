@@ -26,12 +26,28 @@
 //                  deal was archived.
 //   • failure    — a failed non-silent load toasts, because under "Archived only" a
 //                  swallowed failure renders an empty board that reads as "none archived".
+//   • deferral   — the facet made a load a USER ACTION, so the "don't clobber an optimistic
+//                  drag" rule stopped being a silent-load rule; a deferred load re-fires
+//                  WIDENED rather than reverting to the facet it was created under.
+//   • selection  — the prune is driven by the PAYLOAD's rows, in both directions: an id the
+//                  payload calls archived is dropped, an id the payload merely omits is kept.
 //
 // NOT tested here, and deliberately not faked: that an archived card cannot be DRAGGED.
 // `KanbanCard` withholds dnd-kit's `listeners` (React props, not DOM attributes) when the
 // card is disabled, so there is nothing to assert in the DOM, and a real pointer-drag
 // gesture needs layout rects and pointer capture that jsdom does not provide. The policy
 // itself is unit-tested in `shared/dnd/dragDisabled.test.ts`.
+//
+// Also NOT tested, for a sharper reason: `load`'s spinner generation. Its whole subject is
+// two overlapping NON-SILENT loads, and no such pair is reachable — `if (loading)` returns
+// the spinner INSTEAD OF the board, so from the moment a non-silent load starts there is no
+// filter bar, no card, no sheet and no form left in the DOM to start a second load of any
+// kind from. (Verified, not assumed: with a non-silent load held in flight,
+// `container.querySelectorAll('button')` is empty and the DOM is the spinner div alone.) So
+// a test would have to reach past the component's surface to fire the second load itself,
+// which would pin the harness rather than the component. The generation is kept because it
+// is the rule that stays correct if that surface ever changes — a board rendered ALONGSIDE
+// the spinner, or any second non-silent trigger, makes it load-bearing immediately.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -83,8 +99,10 @@ interface RouteOptions {
   live?: CrmDeal[];
   /** Board payload for `?include_archived=true`. */
   withArchived?: CrmDeal[];
-  /** Per-path override; return `undefined` to fall through to the defaults. */
-  over?: (path: string) => unknown;
+  /** Per-request override; return `undefined` to fall through to the defaults. The request
+   *  init comes through because one path serves two verbs — the detail sheet GETs
+   *  `/api/crm/deals/:id` and a stage move PUTs it — and only the PUT is ever held. */
+  over?: (path: string, init?: RequestInit) => unknown;
 }
 
 /** Route the whole component tree's fetches. The two board paths answer DIFFERENT payloads
@@ -93,8 +111,8 @@ interface RouteOptions {
 function routeApi(opts: RouteOptions = {}) {
   const live = opts.live ?? [LIVE];
   const withArchived = opts.withArchived ?? [LIVE, ARCHIVED];
-  api.mockImplementation(async (path: string) => {
-    const custom = opts.over?.(path);
+  api.mockImplementation(async (path: string, init?: RequestInit) => {
+    const custom = opts.over?.(path, init);
     if (custom !== undefined) return custom;
     if (path === LIVE_PATH) return { deals: live };
     if (path === ARCHIVED_PATH) return { deals: withArchived };
@@ -173,6 +191,22 @@ function button(label: string): HTMLButtonElement | undefined {
 async function pickArchivedFacet(option: 'Include archived' | 'Archived only') {
   await click(button('Archived'), 'Archived facet');
   await click(button(option), option);
+}
+
+/** Take an active facet back off through its pill — the way back to the live-only board,
+ *  and the only one that stays clickable once the facet button carries the chosen label. */
+async function removePill(label: string) {
+  await click(
+    container.querySelector(`button[aria-label="Remove ${label} filter"]`),
+    `remove ${label} pill`,
+  );
+}
+
+/** Open a card's detail sheet and close it again — the reachable way to fire a SILENT board
+ *  refresh, which is how a fresh payload lands without a facet change. */
+async function reopenAndClose(title: string) {
+  await click(card(title), `${title} card`);
+  await click(button('Close'), 'Close');
 }
 
 /** Open the Deal-activity facet popover and pick one of its buckets. The facet button is
@@ -437,5 +471,107 @@ describe('PipelinePage — archived deals', () => {
 
     await pickArchivedFacet('Archived only');
     expect(toast.error).toHaveBeenCalledWith('Failed to load deals.');
+  });
+
+  it('defers a facet load while a stage write is in flight, then re-fires it WIDENED', async () => {
+    // Deferring around an in-flight write used to be a SILENT-load rule, which was safe
+    // while every load was a refresh of the same content set. The Archived facet made a load
+    // a user-initiated action, and this is the sequence that breaks: Mark Won moves the card
+    // optimistically, its PUT is still in the air, and the user reaches for the facet. That
+    // GET was requested against the PRE-write server state, so applying it slides the card
+    // back out of the column the user just watched it land in — while the write is still on
+    // its way to succeeding, so nothing on screen ever explains the jump.
+    //
+    // Deferring is not dropping, and the second half of the test is the half that says so:
+    // the load re-fires once writes settle, and reads the CURRENT facet from the ref, so the
+    // user's widening survives the wait.
+    const put = deferred<CrmDeal>();
+    routeApi({
+      // The widened payload stays the PRE-write board (the deal still in `lead`) for every
+      // call — so the card sitting in `won` below can only be the optimistic write, never a
+      // payload that happened to agree with it.
+      withArchived: [LIVE, ARCHIVED],
+      over: (path, init) => (
+        path === `/api/crm/deals/${LIVE.id}` && init?.method === 'PUT' ? put.promise : undefined
+      ),
+    });
+    await render();
+
+    await click(card('Acme renewal'), 'live card');
+    await click(button('Mark Won'), 'Mark Won');
+    expect(stageColumn('won').textContent).toContain('Acme renewal');
+
+    await pickArchivedFacet('Include archived');
+    // The harm first: the card has not slid back to the column the server last knew about.
+    expect(stageColumn('won').textContent).toContain('Acme renewal');
+    expect(stageColumn('lead').textContent).not.toContain('Acme renewal');
+    // ...then the mechanism: not fetched at all. Deferred BEFORE the GET, not filtered
+    // after it — a payload that never arrives cannot be applied by a later refactor either.
+    expect(boardRequests()).toEqual([LIVE_PATH]);
+
+    // The PUT lands. The deferred load now runs — and asks for the archived rows the user
+    // requested while it was waiting, not the live-only board it was created under.
+    await act(async () => { put.resolve({ ...LIVE, stage: 'won' }); });
+    await flush();
+    await flush();
+    expect(boardRequests()).toEqual([LIVE_PATH, ARCHIVED_PATH]);
+  });
+
+  it('drops a selected id the moment a payload reports it archived, not just from the view', async () => {
+    // Masking is not dropping, and the difference only becomes visible later. While the deal
+    // stays archived the id is filtered out of the bar and the payload, so the two behave
+    // identically; the moment the deal comes BACK — restored by the assistant, another tab,
+    // a merge undone — a surviving id rejoins the next bulk move on a deal the operator
+    // selected before any of that happened. The board is the only place that can notice:
+    // nothing else sees both the selection and the fresh row.
+    const zebraLive = deal({ id: 2, title: 'Zebra rebuild', stage: 'lead', value: 99_999 });
+    const zebraArchived = { ...zebraLive, archived_at: '2026-08-24T00:00:00+00:00' };
+    routeApi({ live: [LIVE, zebraLive], withArchived: [LIVE, zebraArchived] });
+    await render();
+    await click(cardCheckbox('Zebra rebuild'), 'Zebra rebuild checkbox');
+    expect(container.textContent).toContain('1 deal selected');
+
+    // Archived elsewhere. This payload — not the click, not the sheet — is what prunes.
+    await pickArchivedFacet('Include archived');
+    expect(card('Zebra rebuild')?.textContent).toContain('ARCHIVED');
+
+    // ...and restored elsewhere. Narrowing back to the live board brings the row back, and
+    // it must not bring the selection back with it.
+    await removePill('Include archived');
+    expect(card('Zebra rebuild')?.textContent).not.toContain('ARCHIVED');
+    expect(cardCheckbox('Zebra rebuild')?.checked).toBe(false);
+    expect(container.textContent).not.toContain('deal selected');
+  });
+
+  it('keeps a selection when the deal is merely ABSENT from a payload', async () => {
+    // The other half of the same rule, and the reason the prune reads the payload's ROWS
+    // rather than trusting the Set: absence is not evidence. The live-only board is exactly
+    // where an archived deal is absent — the server's sweep drops it — so pruning on
+    // absence would make an archive-then-restore elsewhere silently discard the operator's
+    // selection, with the card back on screen and nothing to say why it came back unticked.
+    const zebraLive = deal({ id: 2, title: 'Zebra rebuild', stage: 'lead', value: 99_999 });
+    let liveCalls = 0;
+    routeApi({
+      over: path => {
+        if (path !== LIVE_PATH) return undefined;
+        // 1: both deals. 2: zebra archived elsewhere, so the sweep drops it from the narrow
+        // board. 3: restored elsewhere, so it is back — still live, still not re-selected
+        // by anything the user did.
+        liveCalls++;
+        return { deals: liveCalls === 2 ? [LIVE] : [LIVE, zebraLive] };
+      },
+    });
+    await render();
+    await click(cardCheckbox('Zebra rebuild'), 'Zebra rebuild checkbox');
+    expect(container.textContent).toContain('1 deal selected');
+
+    // Two silent refreshes, fired the way a closing detail sheet fires them.
+    await reopenAndClose('Acme renewal');
+    expect(card('Zebra rebuild')).toBeUndefined();
+    expect(container.textContent).not.toContain('deal selected');
+
+    await reopenAndClose('Acme renewal');
+    expect(cardCheckbox('Zebra rebuild')?.checked).toBe(true);
+    expect(container.textContent).toContain('1 deal selected');
   });
 });
