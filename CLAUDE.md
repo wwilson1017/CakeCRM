@@ -334,6 +334,18 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   without `DATABASE_URL` (decided 2026-07-18; single engine, ready for multi-user
   growth). Locally `docker compose up -d`; on Railway the template provisions
   Postgres and injects `DATABASE_URL`. No Redis or other external services.
+  **Where a FILE can live, stated once because two places in this repo used to imply
+  different answers:** the Railway container filesystem is ephemeral and is replaced on
+  every redeploy — EXCEPT `/app/backend/data`, which `railway.json` requires as a mounted
+  volume (`requiredMountPath`), so a deploy without one does not start. That is the
+  directory `backend/data/` resolves to (Dockerfile `WORKDIR /app` + `COPY backend/
+  ./backend/`), and it is why the branding logo and the `.encryption-key` fallback persist
+  today. So "Railway filesystems are ephemeral" (the `assistant_context_files` migration
+  header) and "the volume is real" (#57's) are both true and are not in conflict. Anything
+  written OUTSIDE `backend/data/` is gone on the next deploy. New durable state should
+  still default to a Postgres row — one store, one transaction, one `pg_dump` — and #57
+  put attachment bytes there for exactly that reason even though the volume would have
+  held them.
   Required env vars: `AUTH_PASSWORD` + `DATABASE_URL`; `ADMIN_EMAIL`/`ADMIN_NAME`
   seed the first admin's identity; `JWT_SECRET` and `ENCRYPTION_KEY` auto-generate. **The login credential is DB-backed** (#78): the
   `auth_credential` singleton holds a bcrypt hash the logged-in user changes from
@@ -570,7 +582,57 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   honesty, not a data-integrity boundary; closes route to `crm_mark_deal_won`/`_lost`,
   which *can* record a lost reason. Chatter now also attaches to
   **companies** (zero-migration: `entity_type` is
-  free TEXT), cleaned in `delete_company`. **Phase 2** adds the two composing reads:
+  free TEXT), cleaned in `delete_company`.
+  **Chatter notes take attachments** (#57, `backend/crm/attachment_service.py` +
+  `backend/core/thumbnails.py` + `frontend/src/crm/{chatterAttachments,chatterComposer,postNote,useChatterPost,useAuthedBlobUrl}.ts`
+  + `components/{NoteComposer,NoteAttachments,AttachmentLightbox}.tsx`), keyless — nothing
+  here keys off `ai_ready`. **The bytes live in Postgres (`bytea`), and that answers the
+  issue's gate question rather than dodging it:** the Railway container filesystem IS
+  ephemeral EXCEPT the volume `railway.json` requires at `/app/backend/data`
+  (`requiredMountPath`; a deploy without it does not start — it is why the branding logo
+  and the encryption-key fallback survive), so files-on-disk WOULD have worked on both
+  targets. Postgres wins anyway on one store / one transaction / one `pg_dump`: the
+  README's documented rollback is restoring a dump, which contains no files, and with the
+  bytes in the row every `TRUNCATE` and cascade takes them atomically instead of leaking
+  bytes at each site. The honest cost is stated in the migration header — attachments grow
+  the database and the dump, `core/postgres.py` has no streaming primitive, and a hard
+  delete does not immediately shrink TOAST files. Bounded by a **10 MB per attachment**
+  (the `assistant/uploads` precedent, deliberately tighter than the blueprint's 20 MB
+  because there is no streaming read) and **10 per note**; NOT bounded at install level,
+  which is accepted for a self-hosted CRM whose members can already delete every record —
+  a quota is the named upgrade path. `crm_chatter_attachments` is the second CRM table
+  with a **real FK** (`crm_chatter ON DELETE CASCADE`), which is the whole lifecycle
+  design: `delete_contact`/`delete_company` need NO new code, and the FK means the table
+  MUST ride BOTH `_truncate_all` statements (Postgres refuses to truncate a referenced
+  table alone — the `deal_stage_events` rule). It is deliberately **excluded** from
+  `is_crm_empty`/`_crm_empty_in_txn`: the cascade makes "attachments while `crm_chatter` is
+  empty" unrepresentable. Three rules are non-negotiable and each has a test: (1) the
+  stored MIME comes from **magic bytes** and the client's declared type is *not even a
+  parameter* — four image types plus PDF keep a real type, everything else (SVG included)
+  is stored and served as inert `application/octet-stream`, because these bytes come back
+  from the app's own origin where a stored XSS reaches the session token (the branding-logo
+  lesson, twice); (2) serving is **authenticated** (`GET …/thumb` and `…/file` behind
+  `get_current_user`) and the frontend fetches through `apiBlob()` into object URLs — a
+  bare `<img src>` cannot work at all here, since auth is a Bearer token with no cookie
+  fallback — with `nosniff`, an attachment `Content-Disposition` (RFC 5987), `ETag`,
+  `Vary: Authorization` and `Cache-Control: private, no-cache`, never `immutable`, because
+  `RESTART IDENTITY` reuses attachment ids and a fresh immutable response is never
+  revalidated; (3) list views fetch **only** the ≤28 KB server thumbnail — the original
+  loads on an explicit open. `filename` is normalized once in the service and stored NOT
+  NULL (a nameless upload used to crash the header encoder; a path-bearing one is a header
+  problem). `create_attachment` runs cheap-preflight → thumbnail (OUTSIDE any transaction —
+  Pillow never runs holding a row lock) → ONE transaction that re-checks everything under
+  `SELECT … FOR UPDATE` on the parent note, with **idempotency checked before the cap** so a
+  lost response on the tenth attachment stays retryable; `delete_attachment` takes the same
+  parent-then-child lock. A NULL thumbnail is a legal terminal state (a non-image, or an
+  image the decompression-bomb ceilings refused) and renders as a **download-only** chip —
+  never the lightbox, or the browser would perform exactly the decode the server declined.
+  `core/thumbnails.py` is ported from the blueprint's *gallery* lineage, not its chatter:
+  cake_os chatter has no server-side thumbnails at all, so #57 is a composite of three
+  upstream features rather than a port of one. Attachment metadata rides
+  `get_chatter`, so `crm_get_chatter` inherits it with no new endpoint — one more
+  user-typed-text field in front of a background turn, on #22's terms (the ceiling is still
+  one `notify_user`). No agent upload tool: the model has no bytes. **Phase 2** adds the two composing reads:
   `crm_get_deal_health` (one deal — #18's `score_deal()` plus days-in-stage,
   days-since-touch, open/overdue tasks and missing links, reduced to a `flags` list;
   it composes and never recomputes the scoring model) and
@@ -1128,6 +1190,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Companies (first-class entity: `companies` table, `company_id` FKs, rollup detail page, text→FK backfill migration) — **landed #13** | `cake_os/backend/apps/crm/company_service.py` |
 | Company link coherence (shared batched `resolve_or_create_company_ids()` resolve-or-auto-create on every ingestion path; contact list/search LEFT JOIN + `company_name`; second one-shot backfill) — **landed #35** | New capability (gate decision on issue #35; shared with the #61 importer) |
 | Chatter/notes (`crm_chatter`) — **landed #15** as `backend/crm/chatter_service.py` + `frontend/src/crm/components/NotesThread.tsx` | `cake_os/backend/apps/crm/chatter_service.py` |
+| Chatter note attachments + readable composer (`crm_chatter_attachments` bytea + FK CASCADE; `crm/attachment_service.py`; `core/thumbnails.py`; 4 auth-guarded routes; `apiBlob` + `useAuthedBlobUrl`; `NoteComposer`/`NoteAttachments`/`AttachmentLightbox`) — **landed #57**. **Corrects two premises in the issue.** (1) "Reuse the existing assistant uploads storage (`backend/assistant/uploads.py`)" cannot be complied with literally — that module is a TEXT EXTRACTOR that discards the bytes ("there is no attachments table and no file cache", its own docstring), so there was no first store to reuse and #57 creates CakeCRM's first one; the instruction's intent (exactly ONE place uploaded bytes live) is honored, and what IS reused from it is the constant/`UploadError` idiom, the lazy-import discipline for heavy libs, and the repo-wide `read(cap + 1)` bounded read. (2) The three cited upstream issues are **three lineages, not one**: cake_os **#1526** (`53b0f3627`) is the attachments + composer work, and it landed as a NEW platform app `backend/apps/chatter/`, not in `apps/crm/chatter_service.py`; **#1215** and **#1331** are the CRM image **gallery** (auth-guarded fetch, server-side thumbnails), so **cake_os chatter has no server-side thumbnails at all** — its `width_px`/`height_px` are client-supplied and `docs/MEDIA_STORAGE.md` lists thumbnails as deferred. Since Will's gate made thumbnails non-negotiable, the pipeline is ported from the gallery lineage instead, adapted base64→bytes and with the unused `crop_square` mode dropped (CSS `object-fit` crops). Auth-guarded serving is an **adaptation, not a port**: cake_os mints GCS V4 signed URLs, CakeCRM has no object store, so it serves from an authenticated endpoint and the client builds object URLs — which is the pre-#1215 pattern cake_os replaced, and the only one Bearer-token-only auth permits. NOT ported: GCS/object storage, the `Surface`/`SURFACES` four-app registry and the `chatter_messages` rail, `core/chatter.can_view` (CakeCRM has one surface and no per-object ACLs), `core/upload_admission.py`, `core/audit.py` void-with-reason (this repo hard-deletes and has no audit chain), uploader-only write gates (they would contradict #60's any-member model), client-side downscale, the batch `?note_ids=` endpoint + `useNoteAttachments` (metadata embeds into `get_chatter` instead), and width/height/duration columns | `cake_os/backend/apps/chatter/{service,router}.py` + `frontend/src/shared/chatter/*` (flow); `cake_os/backend/core/thumbnails.py` + `apps/crm/image_service.py` (thumbnails) |
 | Custom fields (EAV `crm_field_definitions`/`crm_field_values`, Settings editor, entity-form + detail-page value inputs, 6 `crm_*_fields` tools) — **landed #19** as `backend/crm/field_service.py` + `frontend/src/crm/components/{CustomFieldSettings,CustomFieldsSection,CustomFieldInputs}.tsx` | `cake_os/backend/apps/crm/field_service.py` |
 | Touch counts + field provenance (`deals.ai_touch_*` cols + in-process recompute worker; `crm_field_provenance` + `AiBadge`/`ProvenanceBadge`/`TouchCountPill`) — **landed #16** as `backend/crm/touch_count_service.py` + `provenance_service.py`. **Per-event verdict detail view landed #56**: the `deal_ai_touch_evidence` JSONB snapshot (FK-less, one row per deal, written in the count's own transaction and rowcount-gated), `touch_count_service.get_touch_evidence` + `GET /api/crm/deals/:id/touch-count/evidence`, and `frontend/src/crm/{touchEvidence.ts,components/AiTouchDetail.tsx}` — at which point `ai_touch_count` became the **derived sum of per-line verdicts** so the pill and its explanation cannot disagree (see the CRM bullet for the window shrink and the `verdict_state` reconciliation) | `cake_os/backend/apps/crm/touch_count_service.py`, `provenance_service.py` (the detail view + its evidence table are ported from the blueprint CRM's touch-count evidence feature) |
 | Lead scoring (pure-algorithmic `lead_score` 0-100 on deals+contacts; event-triggered inline recompute serialized by a per-entity advisory lock + a bounded daily heartbeat refresh + backfill endpoint/tools `crm_get_lead_score`/`crm_recompute_lead_scores`; sortable contact list + `ScorePill`) — **landed #18** as `backend/crm/scoring_service.py`. Since the #22 merge the write-event chokepoint for deal-column writes is `service._write_deal_update` (one hook covers the #22 lifecycle verbs too), with `archive_deal`/`merge_deals` hooked separately; archived deals are excluded from the contact deal-linkage aggregate | `cake_os/backend/apps/crm/scoring_service.py` |

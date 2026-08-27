@@ -488,6 +488,10 @@ def delete_contact(contact_id: int) -> bool:
         # capture the deal's contact_id before delete and score_on_event(contact_ids=(...))
         # after commit — a removed deal changes its former contact's deal-linkage factor.
         # It must also DELETE the deal's deal_ai_touch_evidence row (#56, FK-less too).
+        # Note attachments (#57) need NO line here: crm_chatter_attachments holds a real
+        # FK to crm_chatter ON DELETE CASCADE, so the DELETE below takes them with it.
+        # That is the whole reason it was given an FK where the polymorphic tables
+        # around it could not have one. Pinned by an integration test.
         cur.execute(
             "DELETE FROM crm_chatter WHERE entity_type = 'contact' AND entity_id = %s",
             (contact_id,),
@@ -768,7 +772,8 @@ def delete_company(company_id: int) -> bool:
         if cur.fetchone() is None:
             return False
         # Company chatter arrived with issue #22; without this a deleted company's
-        # notes would resurface on whatever company later reuses its SERIAL id.
+        # notes would resurface on whatever company later reuses its SERIAL id. Their
+        # #57 attachments ride along on the FK cascade — see delete_contact.
         cur.execute(
             "DELETE FROM crm_chatter WHERE entity_type = 'company' AND entity_id = %s",
             (company_id,),
@@ -1637,6 +1642,10 @@ def merge_deals(target_deal_id: int, source_deal_id: int) -> dict:
             (target_deal_id, f"[Merged from deal #{source_deal_id}] ",
              chatter_service.MAX_MESSAGE_LEN, source_deal_id),
         )
+        # The copies carry the message text only — #57 attachments are NOT duplicated onto
+        # them. Deliberate: the source deal is archived rather than deleted, so its notes
+        # keep their attachments and stay readable, and copying multi-MB blobs to gap-fill
+        # a merge would double the storage for a second view of the same files.
         # DO UPDATE ... WHERE, not DO NOTHING: clearing a custom field UPSERTs
         # value='' rather than deleting the row (field_service.set_field_values), so
         # "the target left it blank" usually means an EXISTING row holding ''. DO
@@ -2761,9 +2770,13 @@ def summarize_analytics(analytics: dict) -> dict:
 # here alongside crm_chatter. The GLOBAL schema table crm_field_definitions is user
 # *configuration* — it is NOT entity data, survives demo-clear, and is truncated only
 # by clear_all (see _truncate_all).
+# crm_chatter_attachments (#57) is entity data too — it is the user's own uploaded bytes,
+# not a derivation — but it is deliberately absent from is_crm_empty/_crm_empty_in_txn:
+# its FK to crm_chatter is ON DELETE CASCADE, so "attachments exist while crm_chatter is
+# empty" is unrepresentable and counting it could never change an answer.
 _CRM_TABLES = (
     "companies", "contacts", "deals", "tasks", "task_projects", "activity_log",
-    "crm_chatter", "crm_field_values", "crm_field_provenance",
+    "crm_chatter", "crm_chatter_attachments", "crm_field_values", "crm_field_provenance",
 )
 
 
@@ -3019,17 +3032,24 @@ def _truncate_all(cur, include_definitions: bool = False) -> None:
     # (touch_count_service._store_touch_count) locks the deals row first and then writes
     # this table — the same deals-before-it order TRUNCATE takes, so no inversion. RESTART
     # IDENTITY is a no-op for it: the PK is deal_id, so it owns no sequence.
+    # crm_chatter_attachments (#57) sits immediately AFTER crm_chatter in both variants,
+    # and is not optional: it holds a real FK to crm_chatter, so Postgres refuses to
+    # truncate crm_chatter without it in the same statement (the deal_stage_events and
+    # task_projects rule). Position matches its writers — create_attachment and
+    # delete_attachment both lock the crm_chatter row FIRST and then touch this table, so
+    # a chatter-before-attachments TRUNCATE order can't invert against either.
     if include_definitions:
         cur.execute(
             "TRUNCATE companies, contacts, deals, activity_log, tasks, task_projects, "
-            "crm_chatter, crm_field_definitions, crm_field_values, crm_field_provenance, "
-            "deal_stage_events, proactive_nudges, deal_ai_touch_evidence RESTART IDENTITY"
+            "crm_chatter, crm_chatter_attachments, crm_field_definitions, crm_field_values, "
+            "crm_field_provenance, deal_stage_events, proactive_nudges, "
+            "deal_ai_touch_evidence RESTART IDENTITY"
         )
     else:
         cur.execute(
             "TRUNCATE companies, contacts, deals, activity_log, tasks, task_projects, "
-            "crm_chatter, crm_field_values, crm_field_provenance, deal_stage_events, "
-            "proactive_nudges, deal_ai_touch_evidence RESTART IDENTITY"
+            "crm_chatter, crm_chatter_attachments, crm_field_values, crm_field_provenance, "
+            "deal_stage_events, proactive_nudges, deal_ai_touch_evidence RESTART IDENTITY"
         )
 
 

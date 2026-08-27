@@ -5,6 +5,9 @@ import type { CrmNote } from '../../core/types';
 import { mono, INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, ACCENT, ACCENT_INK, inputStyle } from '../../shared/styles';
 import { toast } from '../../shared/toast';
 import { formatDate } from '../../shared/formatDate';
+import { useChatterPost } from '../useChatterPost';
+import { NoteComposer } from './NoteComposer';
+import { NoteAttachments } from './NoteAttachments';
 
 interface Props {
   entityType: 'deal' | 'contact' | 'company';
@@ -36,8 +39,6 @@ export function NotesThread({ entityType, entityId, onChanged }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
-  const [draft, setDraft] = useState('');
-  const [submitting, setSubmitting] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editText, setEditText] = useState('');
 
@@ -63,27 +64,22 @@ export function NotesThread({ entityType, entityId, onChanged }: Props) {
   // (matches ContactDetailPage; satisfies react-hooks/set-state-in-effect).
   useEffect(() => { queueMicrotask(load); }, [load]);
 
-  async function addNote() {
-    if (!draft.trim() || submitting) return;
-    setSubmitting(true);
-    try {
-      await api(`/api/crm/chatter/${entityType}/${entityId}/note`, {
-        method: 'POST',
-        body: JSON.stringify({ message: draft.trim() }),
-      });
-      setDraft('');
-      load();
-      onChanged?.();
-    } catch (err) {
-      toast.error('Failed to add note.');
-      // The write may still have committed and moved this contact's last_contact_at, so
-      // reload rather than leave the thread — and the host's column — showing the old
-      // state. A definite 4xx wrote nothing (#77).
-      if (writeMayHaveLanded(err)) { load(); onChanged?.(); }
-    } finally {
-      setSubmitting(false);
-    }
-  }
+  // Creating the note is unchanged — the route already returns the created row, which is
+  // what gives the attachment uploads a note id to aim at (#57).
+  const createNote = useCallback(
+    (message: string) => api<{ id: number }>(`/api/crm/chatter/${entityType}/${entityId}/note`, {
+      method: 'POST',
+      body: JSON.stringify({ message }),
+    }),
+    [entityType, entityId],
+  );
+
+  // Retry state names a note id on a SPECIFIC record, so the hook is keyed to the entity:
+  // the deal sheet does not remount between deals, and a stale Retry button would file a
+  // photo onto the previous deal's note.
+  const { post, retryFiles, retry, discardRetry, notice } = useChatterPost(
+    `${entityType}:${entityId}`, createNote, load,
+  );
 
   async function saveEdit(id: number) {
     if (!editText.trim()) return;
@@ -119,24 +115,16 @@ export function NotesThread({ entityType, entityId, onChanged }: Props) {
 
   return (
     <div>
-      {/* Composer */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'flex-start' }}>
-        <textarea
-          placeholder="Add a note…"
-          value={draft}
-          onChange={e => setDraft(e.target.value)}
-          onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') addNote(); }}
-          rows={2}
-          maxLength={MAX_NOTE_LEN}
-          style={{ ...inputStyle, flex: 1, width: undefined, fontSize: 13, resize: 'vertical', minHeight: 38 }}
-        />
-        <button onClick={addNote} disabled={submitting || !draft.trim()} style={{
-          background: ACCENT, color: ACCENT_INK, border: 'none',
-          padding: '8px 16px', borderRadius: 4, fontSize: 13, fontWeight: 500,
-          cursor: submitting || !draft.trim() ? 'default' : 'pointer',
-          opacity: submitting || !draft.trim() ? 0.5 : 1, flexShrink: 0,
-        }}>{submitting ? 'Saving…' : 'Add'}</button>
-      </div>
+      {/* Composer (#57) — a ~6-line auto-growing box that also takes attachments by
+          paste, drop or the Attach button. The post-then-upload sequence and its
+          partial-failure retry live in useChatterPost. */}
+      <NoteComposer
+        onSubmit={post}
+        retryFiles={retryFiles}
+        onRetry={retry}
+        onDiscardRetry={discardRetry}
+        notice={notice}
+      />
 
       {/* Show-archived toggle — always rendered so archived notes stay reachable
           even when every active note has been archived (which would otherwise
@@ -179,6 +167,9 @@ export function NotesThread({ entityType, entityId, onChanged }: Props) {
                   <p style={{ fontSize: 13, color: INK, margin: 0, whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
                     {n.message}
                   </p>
+                  {n.attachments && n.attachments.length > 0 && (
+                    <NoteAttachments items={n.attachments} onChanged={load} />
+                  )}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 4, flexWrap: 'wrap' }}>
                     <span style={{ ...mono(10), color: INK_DIM }}>{formatDate(n.created_at)}</span>
                     {n.updated_at && <span style={{ ...mono(10), color: INK_DIM }}>· edited</span>}
