@@ -95,6 +95,16 @@ export function PipelinePage() {
   // dropped: moveDealStage re-fires it once the last write settles, so activity/derived fields
   // still update after a sheet dismissal even when a drag PUT overlapped the refresh.
   const pendingRefresh = useRef(false);
+  // ...and whether the deferred load should replay SILENTLY. A user-initiated load (an
+  // Archived-facet change) that gets deferred behind a write must come back as the loud
+  // load it was: replaying it silently would drop both its spinner and — the part that
+  // matters — its failure toast, which is the only thing separating "the fetch failed"
+  // from "you have no archived deals". A loud request wins over a silent one.
+  const pendingRefreshSilent = useRef(true);
+  // `load` referenced by the deferral path below, which has to re-fire it. A ref because
+  // the callback cannot name itself, and assigned in an effect because a ref write during
+  // render is a build-blocking lint error under this repo's react-hooks ruleset.
+  const loadRef = useRef<(silent?: boolean) => Promise<boolean>>(() => Promise.resolve(false));
   // Load generation (issue #83) — see `load`. Distinct from `writeGen`: that one guards a
   // refresh against a racing WRITE; this one guards a load against a newer LOAD, which the
   // Archived facet made reachable by changing the request itself.
@@ -138,7 +148,11 @@ export function PipelinePage() {
     // still widens). This used to be silent-only, which was safe while every load was a
     // refresh of the same content set; the Archived facet made a load a user-initiated
     // action that could land a pre-write board on top of a drag the user had just made.
-    if (pendingWrites.current > 0) { pendingRefresh.current = true; return false; }
+    if (pendingWrites.current > 0) {
+      pendingRefresh.current = true;
+      if (!isSilent) pendingRefreshSilent.current = false;
+      return false;
+    }
     const startGen = writeGen.current;
     // A SECOND generation, for loads rather than writes (issue #83). `writeGen` answers
     // "did a write invalidate this payload?"; this answers "is a newer LOAD already in
@@ -170,22 +184,38 @@ export function PipelinePage() {
       // Applies to every load, for the same reason as the pre-flight check above.
       if (pendingWrites.current > 0 || writeGen.current !== startGen) {
         pendingRefresh.current = true;
+        if (!isSilent) pendingRefreshSilent.current = false;
+        // A deferred load is normally replayed by the settling write's `finally`. But the
+        // write that invalidated this payload may have STARTED AND FINISHED entirely
+        // inside this GET's flight, in which case its finally already ran and saw nothing
+        // pending — so no one is left to replay us and the load is simply dropped. Re-fire
+        // it here. That was a silent staleness bug before #83; now that a facet change can
+        // be the deferred load, it would read as the board ignoring the click outright.
+        if (pendingWrites.current === 0) {
+          pendingRefresh.current = false;
+          const replaySilent = pendingRefreshSilent.current;
+          pendingRefreshSilent.current = true;
+          queueMicrotask(() => { void loadRef.current(replaySilent); });
+        }
         return false;
       }
       setData(d);
       dealConfirmedStage.current = new Map(d.deals.map(deal => [deal.id, deal.stage]));
-      // Drop any selected deal this payload reports as ARCHIVED. Masking it in `bulkIds`
-      // and on the card is not enough: the id stays in the Set, so if the deal is later
-      // restored somewhere else (the assistant, another tab) the next payload brings it
-      // back already selected — joining a bulk move nobody selected it for. Only ids the
-      // payload actually carries are pruned; an id merely absent may just be filtered out.
+      // Intersect the selection with the deals this payload says are LIVE. Masking an
+      // archived deal in `bulkIds` and on its card is not enough: the id stays in the Set,
+      // so once the deal is restored somewhere else (the assistant, another tab) the next
+      // payload brings it back ALREADY SELECTED, joining a bulk move nobody picked it for.
+      //
+      // Intersecting on presence — rather than only pruning rows explicitly flagged
+      // archived — is safe precisely because this payload is `get_pipeline`, which is
+      // unpaginated and carries no server-side filter the board ever sets. So on a
+      // live-only fetch, "absent" cannot mean "filtered out"; it means archived or gone.
+      // A deal you cannot see is a deal you cannot act on, so it must not stay selected.
       setBulkSelected(prev => {
         if (prev.size === 0) return prev;
-        const nowArchived = d.deals.filter(deal => prev.has(deal.id) && isArchivedDeal(deal));
-        if (nowArchived.length === 0) return prev;
-        const next = new Set(prev);
-        for (const deal of nowArchived) next.delete(deal.id);
-        return next;
+        const live = new Set(d.deals.filter(deal => !isArchivedDeal(deal)).map(deal => deal.id));
+        const next = new Set([...prev].filter(id => live.has(id)));
+        return next.size === prev.size ? prev : next;
       });
       return true;
     } catch {
@@ -198,6 +228,8 @@ export function PipelinePage() {
     finally { if (!isSilent && spinnerGen.current === mySpinner) setLoading(false); }
     return false;
   }, []);
+
+  useEffect(() => { loadRef.current = load; }, [load]);
 
   // Mount, and again whenever the Archived facet changes WHICH deals the server should
   // send. The ref is synced here rather than during render (a render-phase ref write is a
@@ -284,7 +316,9 @@ export function PipelinePage() {
         // but reads the CURRENT facet from the ref, so it still widens the board.
         if (pendingWrites.current === 0 && pendingRefresh.current) {
           pendingRefresh.current = false;
-          load(true);
+          const replaySilent = pendingRefreshSilent.current;
+          pendingRefreshSilent.current = true;
+          load(replaySilent);
         }
       }
     });
@@ -527,7 +561,9 @@ export function PipelinePage() {
       // does), so a sheet dismissal during the bulk still lands its fresh derived fields.
       if (pendingWrites.current === 0 && pendingRefresh.current) {
         pendingRefresh.current = false;
-        load(true);
+        const replaySilent = pendingRefreshSilent.current;
+        pendingRefreshSilent.current = true;
+        load(replaySilent);
       }
     } finally {
       if (!writeSettled) pendingWrites.current--;

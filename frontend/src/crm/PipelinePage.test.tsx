@@ -27,16 +27,21 @@
 //   • failure    — a failed non-silent load toasts, because under "Archived only" a
 //                  swallowed failure renders an empty board that reads as "none archived".
 //   • deferral   — the facet made a load a USER ACTION, so the "don't clobber an optimistic
-//                  drag" rule stopped being a silent-load rule; a deferred load re-fires
-//                  WIDENED rather than reverting to the facet it was created under.
-//   • selection  — the prune is driven by the PAYLOAD's rows, in both directions: an id the
-//                  payload calls archived is dropped, an id the payload merely omits is kept.
+//                  drag" rule stopped being a silent-load rule. A deferred load re-fires
+//                  WIDENED rather than reverting to the facet it was created under; it
+//                  re-fires LOUD, so a failure still toasts instead of being laundered into
+//                  a background refresh; and it re-fires ITSELF when the write that
+//                  invalidated it had already settled, leaving nobody else to.
+//   • selection  — the prune intersects with the payload's LIVE ids, so a deal that is
+//                  archived OR gone loses its selection and a later restore cannot re-arm it.
 //
 // NOT tested here, and deliberately not faked: that an archived card cannot be DRAGGED.
 // `KanbanCard` withholds dnd-kit's `listeners` (React props, not DOM attributes) when the
 // card is disabled, so there is nothing to assert in the DOM, and a real pointer-drag
 // gesture needs layout rects and pointer capture that jsdom does not provide. The policy
-// itself is unit-tested in `shared/dnd/dragDisabled.test.ts`.
+// itself is unit-tested in `shared/dnd/dragDisabled.test.ts`. Note this is about the
+// PROHIBITION: the `shared/dnd` mock below can complete a PERMITTED move by calling the
+// board's `onMove`, which proves nothing about what dnd-kit would have refused to start.
 //
 // Also NOT tested, for a sharper reason: `load`'s spinner generation. Its whole subject is
 // two overlapping NON-SILENT loads, and no such pair is reachable — `if (loading)` returns
@@ -64,6 +69,46 @@ vi.mock('../core/api/client', async (importOriginal) => ({
 }));
 const toast = vi.hoisted(() => ({ error: vi.fn(), info: vi.fn(), success: vi.fn() }));
 vi.mock('../shared/toast', () => ({ toast }));
+
+// The one gesture jsdom cannot produce. `KanbanBoard` recognises a drag through dnd-kit —
+// pointer capture, ResizeObserver, live layout rects — none of which exist here, and there
+// is no keyboard sensor to fall back on (`shared/dnd/sensors.ts` registers Pointer + Touch
+// only). It matters because DRAG IS THE ONLY WRITE ON THIS PAGE THAT DOES NOT ALSO SCHEDULE
+// A REFRESH: `updateDealStage` and `applyBulkMove` both call `load` themselves, so the
+// write-completes-inside-a-GET race below is unreachable through any other control.
+//
+// So the real board renders UNCHANGED and one extra button is added beside it, calling the
+// very prop dnd-kit calls — `onMove`, with a real `MoveEvent`. Nothing of PipelinePage is
+// stubbed; only the gesture recogniser is bypassed. It deliberately does NOT consult
+// `dragDisabled`, so it can never be used to claim a card IS draggable — the drag POLICY is
+// pinned in `shared/dnd/dragDisabled.test.ts`, and the one test that presses this button
+// drags a live deal that is allowed to move.
+const dragIntent = vi.hoisted(() => ({ current: null as { id: number; to: string } | null }));
+vi.mock('../shared/dnd', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../shared/dnd')>();
+  const RealBoard = actual.KanbanBoard;
+  function DraggableBoard(props: Parameters<typeof RealBoard>[0]) {
+    const fire = () => {
+      const intent = dragIntent.current;
+      if (!intent) throw new Error('drag fired with no dragIntent set');
+      for (const [columnId, items] of Object.entries(props.items)) {
+        const item = items.find(i => i.id === intent.id);
+        if (item) {
+          void props.onMove({ item, fromColumnId: columnId, toColumnId: intent.to, newIndex: 0 });
+          return;
+        }
+      }
+      throw new Error(`drag fired for deal ${intent.id}, which is not on the board`);
+    };
+    return (
+      <>
+        <button aria-label="fire drag" onClick={fire}>fire drag</button>
+        <RealBoard {...props} />
+      </>
+    );
+  }
+  return { ...actual, KanbanBoard: DraggableBoard };
+});
 
 const { PipelinePage } = await import('./PipelinePage');
 const { ActiveRecordProvider } = await import('./RecordContext');
@@ -207,6 +252,13 @@ async function removePill(label: string) {
 async function reopenAndClose(title: string) {
   await click(card(title), `${title} card`);
   await click(button('Close'), 'Close');
+}
+
+/** Complete a stage drag the way dnd-kit does — by calling the board's `onMove`. See the
+ *  `shared/dnd` mock at the top for why this is a button press and not a gesture. */
+async function fireDrag(dealId: number, toStage: string) {
+  dragIntent.current = { id: dealId, to: toStage };
+  await click(container.querySelector('button[aria-label="fire drag"]'), 'drag');
 }
 
 /** Open the Deal-activity facet popover and pick one of its buckets. The facet button is
@@ -543,12 +595,14 @@ describe('PipelinePage — archived deals', () => {
     expect(container.textContent).not.toContain('deal selected');
   });
 
-  it('keeps a selection when the deal is merely ABSENT from a payload', async () => {
-    // The other half of the same rule, and the reason the prune reads the payload's ROWS
-    // rather than trusting the Set: absence is not evidence. The live-only board is exactly
-    // where an archived deal is absent — the server's sweep drops it — so pruning on
-    // absence would make an archive-then-restore elsewhere silently discard the operator's
-    // selection, with the card back on screen and nothing to say why it came back unticked.
+  it('drops a selection when the deal goes ABSENT from a payload, and does not resurrect it', async () => {
+    // The other half of the same rule. An earlier revision kept the selection here, on the
+    // theory that "absent" might only mean "filtered out" — it cannot. This payload is
+    // `get_pipeline`: unpaginated, and carrying no server-side filter the board ever sets.
+    // So on a live-only fetch, absent means archived or deleted, and the archive-then-
+    // restore-elsewhere sequence below is precisely the resurrection to prevent: the deal
+    // comes back on screen, and it must come back UNSELECTED, because the operator never
+    // selected the thing that returned.
     const zebraLive = deal({ id: 2, title: 'Zebra rebuild', stage: 'lead', value: 99_999 });
     let liveCalls = 0;
     routeApi({
@@ -571,7 +625,91 @@ describe('PipelinePage — archived deals', () => {
     expect(container.textContent).not.toContain('deal selected');
 
     await reopenAndClose('Acme renewal');
-    expect(cardCheckbox('Zebra rebuild')?.checked).toBe(true);
-    expect(container.textContent).toContain('1 deal selected');
+    expect(cardCheckbox('Zebra rebuild')?.checked).toBe(false);
+    expect(container.textContent).not.toContain('deal selected');
+  });
+
+  it('replays a deferred facet load LOUDLY, so its failure is still reported', async () => {
+    // Deferral must not launder a user-initiated load into a background one. The replay
+    // inherits the loudness of whatever was deferred, and the failure toast is the reason
+    // that matters: a silent replay swallows the error, leaving the previous payload on
+    // screen — which under "Archived only" is an empty board, i.e. the exact false answer
+    // "you have no archived deals" to a question the server never actually answered. The
+    // spinner is the cosmetic half of the same rule; this is the half that lies.
+    const put = deferred<CrmDeal>();
+    routeApi({
+      over: (path, init) => {
+        if (path === `/api/crm/deals/${LIVE.id}` && init?.method === 'PUT') return put.promise;
+        // The widened GET fails — and the ONLY widened GET this test ever issues is the
+        // replayed one, because the facet flip below is deferred before it can fetch.
+        if (path === ARCHIVED_PATH) throw new Error('network down');
+        return undefined;
+      },
+    });
+    await render();
+
+    await click(card('Acme renewal'), 'live card');
+    await click(button('Mark Won'), 'Mark Won');
+    await pickArchivedFacet('Archived only');
+    // Nothing has been fetched yet, so nothing has failed yet — this pins that the toast
+    // below comes from the REPLAY and not from the original load.
+    expect(toast.error).not.toHaveBeenCalled();
+
+    await act(async () => { put.resolve({ ...LIVE, stage: 'won' }); });
+    await flush();
+    await flush();
+    expect(toast.error).toHaveBeenCalledWith('Failed to load deals.');
+  });
+
+  it('re-fires a load that the settling write left nobody to replay', async () => {
+    // Deferral has two halves: refuse the stale payload, and make sure someone asks again.
+    // Normally the settling write's `finally` is that someone — but the write can START AND
+    // FINISH entirely inside the GET's flight, in which case its finally already ran and
+    // saw nothing pending. The load is then dropped outright and NOBODY asks again, so the
+    // board keeps rendering a payload from before the write until the user happens to do
+    // something else. A drag during the sheet's closing refresh is exactly that timing, and
+    // it is reachable only through a drag — every other write on this page calls `load`
+    // itself and so leaves a deferral behind for its finally to replay.
+    const held = deferred<{ deals: CrmDeal[] }>();
+    // On the board only after the re-fire: nothing else can put this card on screen, so it
+    // is proof a THIRD request was made and applied, not merely issued.
+    const GLOBEX = deal({ id: 3, title: 'Globex expansion', stage: 'qualified', value: 500 });
+    const WON = { ...LIVE, stage: 'won' };
+    let liveCalls = 0;
+    routeApi({
+      over: (path, init) => {
+        if (path === `/api/crm/deals/${LIVE.id}` && init?.method === 'PUT') return WON;
+        if (path !== LIVE_PATH) return undefined;
+        liveCalls++;
+        // 1: mount. 2: the sheet's closing refresh, held open across the drag below.
+        // 3: the request the dropped load has to make for itself.
+        if (liveCalls === 2) return held.promise;
+        return { deals: liveCalls === 1 ? [LIVE] : [WON, GLOBEX] };
+      },
+    });
+    await render();
+
+    // A silent refresh is now in the air. It leaves the board interactive, which is what
+    // makes the next line reachable at all — a non-silent load would have replaced the
+    // whole board with the spinner.
+    await reopenAndClose('Acme renewal');
+    expect(boardRequests()).toHaveLength(2);
+
+    // The drag starts and finishes inside that GET's flight. It never called `load`, so its
+    // `finally` finds nothing deferred and replays nothing.
+    await fireDrag(LIVE.id, 'won');
+    await flush();
+    expect(stageColumn('won').textContent).toContain('Acme renewal');
+
+    // Now the held payload lands, describing the board as it was before the drag. Dropping
+    // it is right; stopping there is not.
+    await act(async () => { held.resolve({ deals: [LIVE] }); });
+    await flush();
+    await flush();
+
+    // The board caught up with the server on its own...
+    expect(card('Globex expansion')).toBeTruthy();
+    // ...by making exactly one more request, not by being lucky.
+    expect(boardRequests()).toHaveLength(3);
   });
 });
