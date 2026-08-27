@@ -271,8 +271,8 @@ describe.each([
   });
 
   it('keeps the four ramp steps ordered and visually distinct', () => {
-    // Monotone in luminance away from the page background, and no two steps closer than
-    // 4 CIE L* — the ramp is compressed (#68) but it still has to READ as four steps.
+    // Monotone in luminance, and no two steps closer than 4 CIE L* — the ramp is compressed
+    // (#68) but it still has to READ as four steps rather than one smudge.
     const lstar = (hex: string) => {
       const y = luminance(hexToRgb(hex));
       return y > 216 / 24389 ? 116 * Math.cbrt(y) - 16 : (y * 24389) / 27;
