@@ -75,9 +75,8 @@ def pg_db():
 
 @pytest.fixture(autouse=True)
 def _clean(pg_db):
-    from crm import service
-
     from core.postgres import get_connection
+    from crm import service
 
     with get_connection() as conn:
         service._truncate_all(conn.cursor(), include_definitions=True)
@@ -361,3 +360,41 @@ def test_a_note_reusing_a_truncated_id_inherits_no_attachments(pg_db):
     assert new_note == old_note                                  # the id really was reused
     notes = chatter_service.get_chatter("contact", new_contact)
     assert notes[0]["attachments"] == []
+
+
+# ── merge_deals (#57 added a claim about it; this is the claim) ───────────────
+
+def test_merging_a_deal_copies_note_text_without_duplicating_attachments(pg_db):
+    """The copies carry message text only, and the source keeps its own files.
+
+    merge_deals copies notes onto the target and ARCHIVES the source rather than deleting
+    it, so duplicating multi-MB blobs would double the storage for a second view of the
+    same files. Both halves are asserted: nothing new on the target, everything still
+    reachable on the source.
+    """
+    from core.postgres import pg_fetchone
+    from crm import attachment_service as svc, chatter_service, service
+
+    source = service.create_deal(title="Bulk order — spring", stage="lead")["id"]
+    target = service.create_deal(title="Bulk order — consolidated", stage="lead")["id"]
+    note_id = _note("deal", source, "Photo of the damaged pallet.")
+    attachment = svc.create_attachment(note_id, data=_png(), filename="pallet.png")
+
+    service.merge_deals(target, source)
+
+    # The copied note landed and has NO attachments. (merge_deals also writes its own
+    # "Merged deal #N into this deal" housekeeping note, so pick the copy by its marker
+    # rather than assuming the target has exactly one note.)
+    copied = [n for n in chatter_service.get_chatter("deal", target)
+              if n["message"].startswith(f"[Merged from deal #{source}]")]
+    assert len(copied) == 1
+    assert copied[0]["message"].endswith("Photo of the damaged pallet.")
+    assert copied[0]["attachments"] == []
+
+    # Exactly one attachment row exists in the whole install — nothing was duplicated.
+    assert pg_fetchone("SELECT COUNT(*) AS n FROM crm_chatter_attachments")["n"] == 1
+
+    # And it is still reachable through the archived source deal's original note.
+    original = chatter_service.get_chatter("deal", source)
+    assert [a["id"] for a in original[0]["attachments"]] == [attachment["id"]]
+    assert svc.get_file(attachment["id"])["data"]

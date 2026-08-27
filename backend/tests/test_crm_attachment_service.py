@@ -480,13 +480,35 @@ def test_delete_reports_false_when_the_row_vanished_under_the_lock(monkeypatch, 
 
 # ── Cross-cutting invariants ──────────────────────────────────────────────────
 
-def test_every_error_code_is_one_the_router_maps(monkeypatch):
-    """Codes and statuses are two halves of one contract; a new code with no status
-    would surface as a 500."""
+def test_every_error_code_is_one_the_router_maps():
+    """Codes and statuses are two halves of one contract: `_ATTACHMENT_STATUS[e.code]`
+    raises KeyError for an unmapped code, which escapes the router's except block as a 500.
+
+    The code set is read from the SOURCE — every `AttachmentError("...")` literal in the
+    service — not hand-typed here. A hand-typed set is exactly as stale as the router's
+    table, so it would agree with it forever and never catch the drift it names.
+    """
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(svc))
+    raised = {
+        node.args[0].value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "AttachmentError"
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and isinstance(node.args[0].value, str)
+    }
+    assert raised, "found no AttachmentError raise sites — the scan is broken, not the code"
+
     from crm.router import _ATTACHMENT_STATUS
 
-    codes = {"note_not_found", "note_archived", "limit_exceeded", "file_too_large", "file_empty"}
-    assert set(_ATTACHMENT_STATUS) == codes
+    assert raised <= set(_ATTACHMENT_STATUS), (
+        f"unmapped error code(s) would 500: {sorted(raised - set(_ATTACHMENT_STATUS))}"
+    )
 
 
 def test_the_upload_cap_matches_the_assistant_upload_precedent():

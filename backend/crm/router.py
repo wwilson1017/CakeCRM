@@ -1164,7 +1164,11 @@ def _content_disposition(filename: str) -> str:
     # A name that is entirely non-ASCII strips down to nothing, or to a bare extension
     # ("写真.png" -> ".png") — which a legacy client would save as a hidden dotfile. Give
     # the fallback a real basename; clients that understand filename* never see it.
-    if not ascii_name or ascii_name.startswith("."):
+    #
+    # Gated on the name having actually LOST characters, not merely on the fallback
+    # starting with a dot: a file genuinely named ".htaccess" survives normalization intact
+    # and must keep its name, where an earlier version rewrote it to "attachment.htaccess".
+    if ascii_name != filename and (not ascii_name or ascii_name.startswith(".")):
         ascii_name = f"attachment{ascii_name}"
     return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename, safe='')}"
 

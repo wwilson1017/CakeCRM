@@ -81,7 +81,18 @@ CREATE TABLE IF NOT EXISTS crm_chatter_attachments (
     id          SERIAL PRIMARY KEY,
     note_id     INTEGER NOT NULL REFERENCES crm_chatter(id) ON DELETE CASCADE,
     filename    TEXT NOT NULL CHECK (btrim(filename) <> ''),
-    mime_type   TEXT NOT NULL CHECK (btrim(mime_type) <> ''),
+    -- An ALLOW-LIST in the schema, not just in the service. `mime_type` becomes the
+    -- Content-Type of a response served from the app's own origin, so "only these six
+    -- values are storable" is a security invariant, and this repo's own rule for security
+    -- invariants is that a code-only convention drifts while a database constraint cannot
+    -- (the same reasoning behind assistant_context_files' GENERATED columns). Today
+    -- `attachment_service.create_attachment` is the only writer; this is the backstop for
+    -- the next one — an import script, a manual repair, a later refactor that trusts a
+    -- different caller. Adding a supported type is deliberately a migration.
+    mime_type   TEXT NOT NULL CHECK (mime_type IN (
+                    'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+                    'application/pdf', 'application/octet-stream'
+                )),
     byte_size   INTEGER NOT NULL CHECK (byte_size > 0),
     sha256      TEXT NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
     data        BYTEA NOT NULL,

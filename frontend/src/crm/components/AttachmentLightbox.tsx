@@ -21,7 +21,7 @@ interface Props {
  * NULL thumbnail on an image means the server's decompression-bomb ceilings refused to
  * decode it, and opening it here would hand the browser exactly the decode the server
  * declined. Such attachments download instead. `NoteAttachments` enforces it at the call
- * site and a test pins it.
+ * site, and `NoteAttachments.test.tsx` pins it.
  */
 export function AttachmentLightbox({ attachment, onClose }: Props) {
   const { url, error } = useAuthedBlobUrl(filePath(attachment.id));

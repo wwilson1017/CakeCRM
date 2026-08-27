@@ -2770,10 +2770,12 @@ def summarize_analytics(analytics: dict) -> dict:
 # here alongside crm_chatter. The GLOBAL schema table crm_field_definitions is user
 # *configuration* — it is NOT entity data, survives demo-clear, and is truncated only
 # by clear_all (see _truncate_all).
-# crm_chatter_attachments (#57) is entity data too — it is the user's own uploaded bytes,
-# not a derivation — but it is deliberately absent from is_crm_empty/_crm_empty_in_txn:
-# its FK to crm_chatter is ON DELETE CASCADE, so "attachments exist while crm_chatter is
-# empty" is unrepresentable and counting it could never change an answer.
+# crm_chatter_attachments (#57) belongs here on this tuple's own terms — it is the user's
+# own uploaded bytes, and every reset path does clear it. It is deliberately absent from
+# is_crm_empty/_crm_empty_in_txn, which is a DIFFERENT question and not a contradiction:
+# those ask "is the CRM empty", and the FK to crm_chatter being ON DELETE CASCADE makes
+# "attachments exist while crm_chatter is empty" unrepresentable, so counting it there
+# could never change an answer.
 _CRM_TABLES = (
     "companies", "contacts", "deals", "tasks", "task_projects", "activity_log",
     "crm_chatter", "crm_chatter_attachments", "crm_field_values", "crm_field_provenance",

@@ -7,15 +7,13 @@ import {
   shouldConsumePaste,
   validateAttachmentFiles,
 } from '../chatterAttachments';
-import { COMPOSER_MIN_HEIGHT_PX, composerKeyAction, nextComposerHeight } from '../chatterComposer';
+import {
+  COMPOSER_MIN_HEIGHT_PX, composerKeyAction, MAX_NOTE_LEN, nextComposerHeight,
+} from '../chatterComposer';
 import {
   ACCENT, ACCENT_INK, ACCENT_TEXT, CORAL, INK, INK_DIM, INK_MUTE, LINE, LINE_STRONG,
   inputStyle, mono, tint,
 } from '../../shared/styles';
-
-// Mirrors chatter_service.MAX_MESSAGE_LEN — caps input client-side so an oversized paste
-// is prevented rather than round-tripping to a 400.
-const MAX_NOTE_LEN = 10000;
 
 export interface NoteComposerProps {
   /** Rejects to keep the text and files staged; resolves to clear them. */

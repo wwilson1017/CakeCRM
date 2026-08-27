@@ -97,6 +97,13 @@ MAX_UNDRAFTABLE_EDGE = 6_000
 # elsewhere would silently double peak memory. The bound is PER PROCESS, which is the
 # whole service today because the deploy runs `gunicorn --workers 1`. Re-do this
 # arithmetic if the worker count ever rises.
+#
+# `DECODE_TIMEOUT_SECONDS` bounds how long a caller WAITS for a slot, not how long a decode
+# may run — a Python thread inside a C extension cannot be cancelled, so a slot is held for
+# however long Pillow takes. That is acceptable because the ceilings above bound the work
+# itself (decode time is ~linear in pixels, and 8 MP is well under a second), NOT because
+# the timeout guarantees it. If the ceilings are ever raised, this stops being true and the
+# decode needs a real deadline — a subprocess that can be killed.
 MAX_CONCURRENT_DECODES = 2
 DECODE_TIMEOUT_SECONDS = 5
 decode_slots = threading.BoundedSemaphore(MAX_CONCURRENT_DECODES)

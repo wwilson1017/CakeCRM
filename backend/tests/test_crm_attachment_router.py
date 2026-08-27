@@ -87,6 +87,21 @@ def test_every_error_code_maps_to_its_status(client, monkeypatch, code, status):
     assert r.status_code == status
 
 
+def test_an_unmapped_error_code_would_escape_as_a_500(client, monkeypatch):
+    """Proves the failure mode the service-side code-coverage test guards against is real.
+
+    Without this, "every raised code is mapped" is an assertion about a consequence nobody
+    has demonstrated — and a guard whose failure mode is hypothetical tends to get relaxed.
+    """
+    def boom(*a, **k):
+        raise svc.AttachmentError("a_code_nobody_mapped", "nope")
+
+    monkeypatch.setattr(svc, "create_attachment", boom)
+    with pytest.raises(KeyError):
+        client.post("/api/crm/chatter/note/7/attachments",
+                    files={"file": ("f.png", PNG, "image/png")})
+
+
 # ── Serving headers ───────────────────────────────────────────────────────────
 
 def _serve(monkeypatch, *, meta=META):

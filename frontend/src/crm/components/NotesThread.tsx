@@ -5,6 +5,7 @@ import type { CrmNote } from '../../core/types';
 import { mono, INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, ACCENT, ACCENT_INK, inputStyle } from '../../shared/styles';
 import { toast } from '../../shared/toast';
 import { formatDate } from '../../shared/formatDate';
+import { MAX_NOTE_LEN } from '../chatterComposer';
 import { useChatterPost } from '../useChatterPost';
 import { NoteComposer } from './NoteComposer';
 import { NoteAttachments } from './NoteAttachments';
@@ -22,10 +23,6 @@ interface Props {
    */
   onChanged?: () => void;
 }
-
-// Mirrors chatter_service.MAX_MESSAGE_LEN — caps input client-side so an oversized
-// paste is prevented rather than round-tripping to a 400.
-const MAX_NOTE_LEN = 10000;
 
 /**
  * Chatter — the editable, archivable notes thread for a deal, contact, or company

@@ -61,6 +61,32 @@ def _png_header_claiming(width: int, height: int) -> bytes:
     return bytes(data)
 
 
+def _jpeg_header_claiming(width: int, height: int) -> bytes:
+    """A real, tiny JPEG whose SOF0 frame header DECLARES a huge size.
+
+    The PNG twin above only ever exercises the UNDRAFTABLE branch, which left the
+    module's main real-world path — a 12-48 MP photo straight off a phone — with no test
+    distinguishing "classified draftable, higher ceiling applied" from "misclassified,
+    wrong ceiling applied". Since `draft()` is what makes the higher ceiling safe, getting
+    that classification backwards is precisely the bug worth catching.
+    """
+    data = bytearray(_jpeg(8, 8))
+    # Walk the marker segments to SOF0 (0xFFC0): its payload is
+    # [precision:1][height:2][width:2], so height sits 1 byte past the segment length.
+    i = 2
+    while i < len(data) - 1:
+        if data[i] != 0xFF:
+            i += 1
+            continue
+        marker = data[i + 1]
+        if marker == 0xC0:
+            struct.pack_into(">HH", data, i + 5, height, width)
+            return bytes(data)
+        seg_len = struct.unpack_from(">H", data, i + 2)[0]
+        i += 2 + seg_len
+    raise AssertionError("no SOF0 marker in the generated JPEG")
+
+
 # ── Happy path ────────────────────────────────────────────────────────────────
 
 def test_generate_returns_bytes_and_an_allowed_mime():
@@ -209,3 +235,64 @@ def test_generate_raises_on_undecodable_bytes():
 
 def test_one_process_wide_decode_budget():
     assert thumbnails.decode_slots._initial_value == thumbnails.MAX_CONCURRENT_DECODES
+
+
+# ── The draftable (JPEG) branch — the main real-world path ────────────────────
+
+def test_a_jpeg_over_the_undraftable_ceiling_is_still_accepted():
+    """The two-tier ceiling has to actually be two tiers.
+
+    9 MP is OVER MAX_UNDRAFTABLE_PIXELS (8 MP) and well under MAX_SOURCE_PIXELS (50 MP).
+    A JPEG that size is a perfectly ordinary phone photo and must NOT be refused — if
+    JPEG ever stopped being classified draftable, this is what would catch it, where every
+    other test in this file would stay green.
+    """
+    assert 3000 * 3000 > thumbnails.MAX_UNDRAFTABLE_PIXELS
+    assert 3000 * 3000 < thumbnails.MAX_SOURCE_PIXELS
+    out = thumbnails.generate(_jpeg_header_claiming(3000, 3000),
+                              thumb_size=320, thumb_max_bytes=28_000)
+    assert out is not None
+    assert out[1] in thumbnails.THUMB_MIMES
+
+
+def test_a_jpeg_over_the_draftable_ceiling_is_refused():
+    # 60 MP is over MAX_SOURCE_PIXELS even for a draftable format.
+    assert thumbnails.generate(
+        _jpeg_header_claiming(10_000, 6_000), thumb_size=320, thumb_max_bytes=28_000
+    ) is None
+
+
+def test_a_jpeg_over_the_draftable_edge_ceiling_is_refused():
+    # 13 MP: under the pixel ceiling, over MAX_SOURCE_EDGE (12 000).
+    assert thumbnails.generate(
+        _jpeg_header_claiming(13_000, 1_000), thumb_size=320, thumb_max_bytes=28_000
+    ) is None
+
+
+def test_the_same_declared_size_is_refused_as_a_png_and_accepted_as_a_jpeg():
+    """The clearest statement of the invariant: identical dimensions, opposite verdicts,
+    decided ONLY by whether Pillow can draft-decode the format."""
+    png = thumbnails.generate(_png_header_claiming(3000, 3000),
+                              thumb_size=320, thumb_max_bytes=28_000)
+    jpeg = thumbnails.generate(_jpeg_header_claiming(3000, 3000),
+                               thumb_size=320, thumb_max_bytes=28_000)
+    assert png is None            # undraftable: refused by the lower ceiling
+    assert jpeg is not None       # draftable: cleared the higher one and thumbnailed
+
+
+# ── Every allow-listed image type actually round-trips ───────────────────────
+
+@pytest.mark.parametrize("fmt", ["PNG", "JPEG", "GIF", "WEBP"])
+def test_each_supported_source_format_produces_a_thumbnail(fmt):
+    """attachment_service thumbnails four types; only two were exercised end to end.
+
+    A Pillow quirk specific to GIF (palette/multi-frame) or WebP (lossy vs lossless,
+    alpha) would otherwise surface first in production.
+    """
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (400, 300), (30, 90, 160)).save(buf, fmt)
+    out = thumbnails.generate(buf.getvalue(), thumb_size=320, thumb_max_bytes=28_000)
+    assert out is not None, fmt
+    assert out[1] in thumbnails.THUMB_MIMES

@@ -22,6 +22,15 @@ export const COMPOSER_MIN_HEIGHT_PX = 140;
  */
 export const COMPOSER_MAX_HEIGHT_PX = 300;
 
+/**
+ * Mirrors `chatter_service.MAX_MESSAGE_LEN` — caps input client-side so an oversized paste
+ * is prevented rather than round-tripping to a 400.
+ *
+ * Lives here, next to the composer's other shared constants, because BOTH the composer and
+ * NotesThread's edit box need it. Two copies would drift the moment the server cap moved.
+ */
+export const MAX_NOTE_LEN = 10000;
+
 /** Height the textarea should take for a given `scrollHeight`, clamped to the band above. */
 export function nextComposerHeight(scrollHeight: number): number {
   if (!Number.isFinite(scrollHeight)) return COMPOSER_MIN_HEIGHT_PX;
