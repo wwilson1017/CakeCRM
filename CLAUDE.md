@@ -528,10 +528,14 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   they were (~6-7 L*; the old LIGHT ramp's own mute→soft step was already only 6) — what
   shrank is the primary→secondary gap, 27 L* → 9 light and 31 → 10 dark. The binding surface
   is **never a raw token**: `tint()` chips and row hovers composite an ink wash over
-  bg/card/raised, and a chip inside a hovered row stacks two, so the floor is set by
-  a 6% ink chip on a 12% lost-stage deal card over the page bg (light, 4.72:1) and a 6% ink
-  chip inside a hovered row over `card` (dark, 4.56:1); the hover wash beneath is 5% in light
-  and 6% in dark, which the guard reads out of `--color-ck-hover` rather than assuming.
+  bg/card/raised, and a chip inside a hovered row stacks two, so the floor is a stacked wash —
+  4.72:1 light, 4.56:1 dark; the hover wash beneath is 5% in light and 6% in dark, which the
+  guard reads out of `--color-ck-hover` rather than assuming. **That floor is deliberately
+  tighter than what renders, and the test distinguishes the two** — dark's floor sits on a
+  chip-inside-an-ink-hovered-row over `card` that has *no producer today* (the shared
+  collection layer hovers by swapping to the opaque `bg` token, not an ink tint) and is kept as
+  headroom, so dark's worst RENDERED pairing is 5.09:1. Keep that distinction if you touch
+  these numbers: two review rounds went to prose that called a modelled bound a real pixel.
   That compression is also why `.dark .hljs-comment` moved to `ink-dim`: the new `ink-mute`
   sits 10 L* from `ink` and would have rendered code comments at nearly the weight of the
   code around them. `core/theme/inkContrast.test.ts` parses the **shipped** `index.css`

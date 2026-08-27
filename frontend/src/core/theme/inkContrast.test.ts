@@ -24,9 +24,18 @@ const CSS: string = typeof __INDEX_CSS__ === 'string' ? __INDEX_CSS__ : '';
  * "Surface" is deliberately more than the three raw background tokens: chips, row hovers and
  * stage washes composite a translucent layer over them, and such a layer — never a raw token —
  * is what binds the ramp in both themes. 43 surfaces are checked; `surfaces()` documents the
- * rule for which combinations are built and why. The two binding pairs are a 6% ink chip on a
- * 12% lost-stage deal card over the page bg (light, 4.72:1) and a 6% ink chip inside a hovered
- * row over `card` (dark, 4.56:1), the hover alpha being read from the stylesheet, not assumed.
+ * rule for which combinations are built and why, including the two it keeps as deliberate
+ * headroom with no producer today.
+ *
+ * The guard's FLOOR and the worst pairing the app actually RENDERS are different numbers, and
+ * this file says which is which rather than flattering itself:
+ *   - light  — floor 4.72:1, a 6% ink chip on a 12% lost-stage deal card over the page bg.
+ *              That surface is real (it is a `DealBoardCard`); the cross-product is what puts
+ *              `ink-dim` on it, where the token that actually renders there is `ink-soft`.
+ *   - dark   — floor 4.56:1, a 6% ink chip inside an ink-hovered row over `card`. That stack
+ *              has NO producer today (see `surfaces()`); the worst pairing dark really renders
+ *              is 5.09:1, `ink-dim` on a 50% line wash over `card`.
+ * The hover alpha under both is read from the stylesheet, not assumed.
  *
  * Out of scope, deliberately: ink text on an ACCENT wash — `MemoryPage`'s selected row puts
  * INK/INK_MUTE/INK_DIM on `tint(ACCENT_TEXT,8)`, and `filterTab` active / the tag button use
@@ -175,8 +184,9 @@ const STAGES = Object.keys(LIGHT_TOKENS)
  * Deliberately NOT covered, because it is a different question: a brand-hue chip that carries
  * its OWN hue as text (`tint(CORAL,15)` + CORAL in `PriorityBadge urgent`, `tint(SAGE,12)` +
  * SAGE, …). Those pairs are about the status/stage hues, which #54 already tuned per theme;
- * this guard is about the neutral ramp. The one place an ink token DOES land on a brand wash
- * (`AiTouchDetail`'s banner: `INK` on `tint(GOLD,10)`) is included below.
+ * this guard is about the neutral ramp. Ink text DOES land on two kinds of non-neutral wash:
+ * `AiTouchDetail`'s banner (`INK` on `tint(GOLD,10)`), which is included below as `gold10`, and
+ * the ACCENT washes listed in the file header, which are deliberately out of scope there.
  */
 function surfaces(t: Record<string, string>): Record<string, Rgb> {
   const ink = hexToRgb(t.ink);
@@ -211,11 +221,29 @@ function surfaces(t: Record<string, string>): Record<string, Rgb> {
 
   // ── Stacked washes, at the containers that produce them ───────────────────
 
-  // A chip inside a HOVERED list row. Those rows are the Contacts / Companies / Tasks desktop
-  // lists (on the page `bg`) and the shared collection layer's rows (on `card`); no `raised`
-  // panel has hovering rows that carry chips. The hover percentage is READ FROM THE STYLESHEET
-  // (`--color-ck-hover`'s alpha) because it differs per theme — 5% light, 6% dark — so
-  // hard-coding one would invent a light 6-over-6 stack no component produces.
+  // A chip inside a HOVERED list row.
+  //
+  // `bg` is REAL: the Contacts / Companies / Tasks desktop lists render rows in a bare
+  // `borderTop` div on the page background and set `background = HOVER` on mouseenter, with
+  // StatusBadge / ScorePill / PriorityBadge chips inside them.
+  //
+  // `card` is deliberate HEADROOM with no producer today, and is kept knowingly rather than by
+  // omission. The shared collection layer's rows hover by swapping to the OPAQUE `bg` token
+  // (`hover:bg-sand`), never an ink tint — and #73 landed that layer unwired anyway. It stays
+  // because a list refactor is one step from putting hovered chip rows on a card surface, and
+  // because it is what holds the dark ramp at its current edge: against only-real surfaces even
+  // `#aaa8a2` would pass, three steps lighter than what ships. It is also why the dark FLOOR
+  // (4.56:1) is tighter than anything dark actually renders (5.09:1).
+  //
+  // `raised` is excluded: the one ink-hover-over-raised producer is ContactsPage's tag dropdown,
+  // a bare wash with no chips in it — and a bare hover wash at 5%/6% is numerically the same
+  // surface as the `ink5`/`ink6` singles above, which are cross-producted over `raised` already.
+  // That coincidence is alpha-dependent: if `--color-ck-hover` ever leaves {5,6}, the bare
+  // hover-over-raised wash silently stops being covered and belongs back in this list.
+  //
+  // The hover percentage is READ FROM THE STYLESHEET (`--color-ck-hover`'s alpha) because it
+  // differs per theme — 5% light, 6% dark — so hard-coding one would invent a light 6-over-6
+  // stack no component produces.
   for (const base of ['bg', 'card'] as const) {
     const hover = over(ink, hoverPct, rgb(base));
     for (const chip of CHIP_PCTS) {
