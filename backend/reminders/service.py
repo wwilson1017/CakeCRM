@@ -110,19 +110,26 @@ def list_reminders(status: str | None = "pending", limit: int = 50) -> list[dict
     """List reminders. ``status=None``/``'all'`` returns every status.
 
     Pending sorts by soonest-due; other views sort newest-first.
+
+    Every sort key here is non-unique — a recurring series fires on the same due_at
+    minute, and `created_at` is `now()` (transaction start), so occurrences spawned
+    together are byte-identical. `id` closes the order so the capped window doesn't
+    repeat or drop reminders between reads (issue #58).
     """
     limit = max(1, min(int(limit or 50), 200))
     if status and status != "all":
         rows = pg_fetchall(
             "SELECT * FROM reminders WHERE status = %s ORDER BY "
-            "CASE WHEN status = 'pending' THEN due_at END ASC, created_at DESC LIMIT %s",
+            "CASE WHEN status = 'pending' THEN due_at END ASC, created_at DESC, id DESC "
+            "LIMIT %s",
             (status, limit),
         )
     else:
         rows = pg_fetchall(
             "SELECT * FROM reminders ORDER BY "
             "CASE WHEN status = 'pending' THEN 0 ELSE 1 END, "
-            "CASE WHEN status = 'pending' THEN due_at END ASC, created_at DESC LIMIT %s",
+            "CASE WHEN status = 'pending' THEN due_at END ASC, created_at DESC, id DESC "
+            "LIMIT %s",
             (limit,),
         )
     return [_transform(r) for r in rows]
@@ -221,10 +228,16 @@ def delete_reminder(reminder_id: str) -> dict:
 # ── firing (heartbeat-facing) ──────────────────────────────────────────────
 
 def get_due_reminders(limit: int = 50) -> list[dict]:
-    """Pending reminders whose due_at has passed, soonest first."""
+    """Pending reminders whose due_at has passed, soonest first.
+
+    `id` breaks due_at ties (issue #58). More than cosmetic here: a backlog larger than
+    ``limit`` that shares one due_at would otherwise expose an arbitrary slice per tick,
+    so a given reminder could be passed over repeatedly instead of the tick draining a
+    stable prefix.
+    """
     return [_transform(r) for r in pg_fetchall(
         "SELECT * FROM reminders WHERE status = 'pending' AND due_at <= now() "
-        "ORDER BY due_at ASC LIMIT %s", (max(1, int(limit)),),
+        "ORDER BY due_at ASC, id ASC LIMIT %s", (max(1, int(limit)),),
     )]
 
 

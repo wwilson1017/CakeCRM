@@ -40,14 +40,18 @@ def update_channels(notification_id: str, channels_sent: list) -> None:
 
 
 def list_notifications(status: str = "active", limit: int = 10) -> list[dict]:
+    """Notifications newest-first, capped. `id` closes the order so the capped window is
+    stable when several notifications share a `created_at` — see `alerts.service`'s
+    list_alerts for why `now()` makes that a routine tie rather than a rare one (#58)."""
     limit = max(1, min(int(limit or 10), 50))
     if status and status != "all":
         return pg_fetchall(
-            "SELECT * FROM notifications WHERE status = %s ORDER BY created_at DESC LIMIT %s",
+            "SELECT * FROM notifications WHERE status = %s "
+            "ORDER BY created_at DESC, id DESC LIMIT %s",
             (status, limit),
         )
     return pg_fetchall(
-        "SELECT * FROM notifications ORDER BY created_at DESC LIMIT %s", (limit,))
+        "SELECT * FROM notifications ORDER BY created_at DESC, id DESC LIMIT %s", (limit,))
 
 
 def get_active_count() -> int:

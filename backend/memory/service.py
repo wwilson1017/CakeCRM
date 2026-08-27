@@ -217,7 +217,12 @@ def query_facts(
     elif not include_expired:
         sql += " AND valid_to IS NULL"
 
-    sql += " ORDER BY confidence DESC, created_at DESC LIMIT %s"
+    # `id` closes the order (issue #58): confidence is a coarse score shared by most
+    # facts, and `created_at` is `now()` — transaction start — so a batch of facts
+    # written in one turn ties on BOTH keys. Without a unique final term the capped
+    # window is free to differ per execution, which for the prompt injector means the
+    # facts Baker sees can change with no fact having changed.
+    sql += " ORDER BY confidence DESC, created_at DESC, id DESC LIMIT %s"
     params.append(limit)
 
     results = pg_fetchall(sql, tuple(params))
@@ -270,7 +275,9 @@ def search_facts(
     if date_to:
         sql += " AND valid_from <= %s::date"
         params.append(date_to)
-    sql += " ORDER BY rank DESC, created_at DESC LIMIT %s"
+    # See query_facts: ts_rank buckets heavily and `created_at` ties inside a
+    # transaction, so `id` is what makes the capped result set reproducible (#58).
+    sql += " ORDER BY rank DESC, created_at DESC, id DESC LIMIT %s"
     params.append(limit)
 
     results = pg_fetchall(sql, tuple(params))
