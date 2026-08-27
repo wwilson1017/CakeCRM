@@ -10,7 +10,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CrmAttachment } from '../../core/types';
 
 const apiBlob = vi.fn();
-vi.mock('../../core/api/client', () => ({ apiBlob: (p: string) => apiBlob(p) }));
+vi.mock('../../core/api/client', () => ({
+  apiBlob: (p: string, signal?: AbortSignal) => apiBlob(p, signal),
+}));
 
 const { AttachmentLightbox } = await import('./AttachmentLightbox');
 
@@ -51,7 +53,7 @@ describe('AttachmentLightbox', () => {
   it('fetches the ORIGINAL — this is the only place that does', async () => {
     render();
     await settle();
-    expect(apiBlob).toHaveBeenCalledWith('/api/crm/chatter/attachments/4/file');
+    expect(apiBlob.mock.calls[0][0]).toBe('/api/crm/chatter/attachments/4/file');
   });
 
   it('renders the image once the bytes arrive, labelled by filename', async () => {

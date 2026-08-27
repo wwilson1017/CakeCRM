@@ -135,6 +135,20 @@ export function isImage(mimeType: string): boolean {
   return (mimeType || '').toLowerCase().startsWith('image/');
 }
 
+/**
+ * Mirrors `attachment_service.INLINE_IMAGE_MIMES` — the ONLY types the server keeps under
+ * a real image type and thumbnails.
+ *
+ * Distinct from `isImage()` on purpose. `isImage` answers "did the server decide this is an
+ * image", asked of a STORED attachment's server-derived type. This answers "will the server
+ * keep this as an image", asked of a staged file's browser-guessed `File.type` — so
+ * previewing an SVG, which the server stores as an inert octet-stream, would promise a
+ * picture the posted note cannot show.
+ */
+export const PREVIEWABLE_IMAGE_MIMES = new Set([
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+]);
+
 /** The authenticated byte endpoints for one attachment. Never used as a bare `<img src>`. */
 export const thumbPath = (id: number): string => `/api/crm/chatter/attachments/${id}/thumb`;
 export const filePath = (id: number): string => `/api/crm/chatter/attachments/${id}/file`;

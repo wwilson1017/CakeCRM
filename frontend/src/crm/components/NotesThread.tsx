@@ -114,8 +114,17 @@ export function NotesThread({ entityType, entityId, onChanged }: Props) {
     <div>
       {/* Composer (#57) — a ~6-line auto-growing box that also takes attachments by
           paste, drop or the Attach button. The post-then-upload sequence and its
-          partial-failure retry live in useChatterPost. */}
+          partial-failure retry live in useChatterPost.
+
+          The `key` is load-bearing, not tidiness. The composer owns the draft text and the
+          staged files, and the deal sheet does NOT remount between deals — so without it,
+          typing a note on deal A, switching to deal B and pressing Post would file A's
+          words and A's screenshot onto B. Keying on the entity discards the draft with the
+          record it belongs to (and unmounts the staged previews, freeing their object
+          URLs). useChatterPost's own guard covers the retry batch; this covers the draft,
+          which that guard cannot see. */}
       <NoteComposer
+        key={`${entityType}:${entityId}`}
         onSubmit={post}
         retryFiles={retryFiles}
         onRetry={retry}

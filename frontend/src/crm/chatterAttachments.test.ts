@@ -13,6 +13,7 @@ import {
   isImage,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS,
+  PREVIEWABLE_IMAGE_MIMES,
   shouldConsumePaste,
   validateAttachmentFiles,
 } from './chatterAttachments';
@@ -169,5 +170,15 @@ describe('client caps mirror the server', () => {
     // stage files that come back 413 after the note has already been created.
     expect(MAX_ATTACHMENT_BYTES).toBe(10 * 1024 * 1024);
     expect(MAX_ATTACHMENTS).toBe(10);
+  });
+
+  it('previews only the types attachment_service.INLINE_IMAGE_MIMES keeps as images', () => {
+    // SVG is the case worth naming: the browser calls it an image, the server stores it as
+    // an inert octet-stream, so a preview would promise a picture the note cannot show.
+    expect([...PREVIEWABLE_IMAGE_MIMES].sort())
+      .toEqual(['image/gif', 'image/jpeg', 'image/png', 'image/webp']);
+    expect(PREVIEWABLE_IMAGE_MIMES.has('image/svg+xml')).toBe(false);
+    // ...and it is deliberately NARROWER than isImage(), which answers a different question.
+    expect(isImage('image/svg+xml')).toBe(true);
   });
 });

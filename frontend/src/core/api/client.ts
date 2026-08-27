@@ -86,13 +86,17 @@ export async function api<T = unknown>(
  * request carries no credential at all. Callers turn the returned Blob into an object URL
  * and are responsible for revoking it — see `crm/useAuthedBlobUrl.ts`, which is the only
  * place in the app that should be doing that by hand.
+ *
+ * `signal` is not optional decoration: these responses can be multi-megabyte, so a caller
+ * that navigates away without aborting keeps downloading and materializing a Blob nobody
+ * will ever read. Abandoning the promise is not enough — only the signal stops the bytes.
  */
-export async function apiBlob(path: string): Promise<Blob> {
+export async function apiBlob(path: string, signal?: AbortSignal): Promise<Blob> {
   const token = getToken();
   const headers: Record<string, string> = {};
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
-  const res = await fetch(path, { headers });
+  const res = await fetch(path, { headers, signal });
 
   if (res.status === 401) {
     sessionStorage.removeItem(TOKEN_KEY);

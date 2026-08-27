@@ -67,6 +67,16 @@ DRAFT_CAPABLE_FORMATS = ("JPEG", "MPO")
 MAX_UNDRAFTABLE_PIXELS = 8_000_000
 MAX_UNDRAFTABLE_EDGE = 6_000
 
+# ...and the ceilings above bound ONE frame. An animated GIF / WebP / APNG can carry
+# thousands of frames whose dimensions each pass every check while their cumulative decode
+# does not: this module only ever looks at frame 1, so such a file would earn a thumbnail
+# and be certified as viewable. That matters downstream, not here — the CRM uses "has a
+# thumbnail" to decide whether to hand the ORIGINAL to a browser, so a frame-1-only verdict
+# would put the whole animation in front of someone else's browser. Refusing to thumbnail
+# them makes them download-only, which is the right answer for a file nothing can bound.
+# 1 is not the cap: a 2-frame image is a still with a stray extra frame, not an animation.
+MAX_FRAMES = 8
+
 
 # --- The ONE process-wide decode budget -------------------------------------
 
@@ -207,6 +217,10 @@ def generate(
     if (width <= 0 or height <= 0
             or width * height > max_pixels
             or max(width, height) > max_edge):
+        return None
+
+    # Read from the already-parsed header; a still image has no `n_frames` at all.
+    if getattr(im, "n_frames", 1) > MAX_FRAMES:
         return None
 
     # JPEG-only DCT-scaled decode: a 48 MP JPEG decodes at ~1/8 scale and never allocates

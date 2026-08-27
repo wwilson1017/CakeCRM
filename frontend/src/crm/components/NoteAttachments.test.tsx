@@ -78,7 +78,7 @@ describe('NoteAttachments — the has_thumb gate', () => {
     click(primaryButtons()[0]);
     await settle();
     expect(container.querySelector('[role="dialog"]')).toBeNull();
-    expect(apiBlob).toHaveBeenCalledWith('/api/crm/chatter/attachments/1/file');
+    expect(apiBlob.mock.calls.map(c => c[0])).toContain('/api/crm/chatter/attachments/1/file');
   });
 
   it('a non-image downloads even when a thumbnail somehow exists', async () => {
@@ -94,8 +94,9 @@ describe('NoteAttachments — the has_thumb gate', () => {
     // The "bounded image memory" rule: a list view must not pull full-size bytes.
     render([attachment()]);
     await settle();
-    expect(apiBlob).toHaveBeenCalledWith('/api/crm/chatter/attachments/1/thumb');
-    expect(apiBlob).not.toHaveBeenCalledWith('/api/crm/chatter/attachments/1/file');
+    const paths = apiBlob.mock.calls.map(c => c[0]);
+    expect(paths).toContain('/api/crm/chatter/attachments/1/thumb');
+    expect(paths).not.toContain('/api/crm/chatter/attachments/1/file');
   });
 });
 

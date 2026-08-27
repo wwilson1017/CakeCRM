@@ -600,7 +600,16 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   (the `assistant/uploads` precedent, deliberately tighter than the blueprint's 20 MB
   because there is no streaming read) and **10 per note**; NOT bounded at install level,
   which is accepted for a self-hosted CRM whose members can already delete every record —
-  a quota is the named upgrade path. `crm_chatter_attachments` is the second CRM table
+  a quota is the named upgrade path. Two honest limits on those caps: peak memory is
+  per-request × threadpool concurrency (~40 threads on the one worker), not 10 MB — held
+  down in practice by thumbnails-only lists, explicit-open originals, the 304 path and a
+  client that aborts abandoned downloads, with a weighted admission gate as the upgrade
+  path; and an oversized **multipart** body is spooled by Starlette BEFORE any route code
+  runs, so no per-route cap can stop it. That is why `main.MAX_REQUEST_BYTES` exists — a
+  64 MB middleware backstop (Content-Length only) that runs before the body is consumed.
+  It is a disk backstop, not a feature limit, so it must stay above the largest legitimate
+  request (an assistant upload: 5 × 10 MB); a test pins that ordering, and another pins the
+  spool-before-dependencies behaviour that makes middleware the only workable layer. `crm_chatter_attachments` is the second CRM table
   with a **real FK** (`crm_chatter ON DELETE CASCADE`), which is the whole lifecycle
   design: `delete_contact`/`delete_company` need NO new code, and the FK means the table
   MUST ride BOTH `_truncate_all` statements (Postgres refuses to truncate a referenced

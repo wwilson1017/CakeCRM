@@ -41,6 +41,25 @@
 -- delete every record in it; an install-level quota is the upgrade path if a real deploy
 -- ever needs one.
 --
+-- Two more limits, stated because the per-request caps above can read as stronger than
+-- they are. (1) PEAK MEMORY is per-request x concurrency, not 10 MB: FastAPI serves sync
+-- handlers from a threadpool (~40 threads by default) on one gunicorn worker, and each
+-- in-flight download holds the row's bytes plus the `bytes()` copy psycopg2's memoryview
+-- requires, so the worst case is a few hundred MB, not 10. What keeps it far below that in
+-- practice is that list views fetch only thumbnails, originals load on an explicit open,
+-- the ETag/304 path re-reads nothing, and the client aborts a download it navigated away
+-- from. A weighted admission gate held until the response is transmitted is the upgrade
+-- path; it is not built, because nothing has measured a need for it. (2) An oversized
+-- multipart body is spooled by Starlette BEFORE any route code runs, so the per-route cap
+-- cannot prevent it — `main.MAX_REQUEST_BYTES` is the middleware backstop that can.
+--
+-- Idempotency is keyed on CONTENT, `(note_id, sha256)`, which also means the same bytes
+-- cannot be attached twice to one note under two different names: the second upload
+-- returns the first row. That is the deliberate trade — a retry after a lost response is
+-- common and must not duplicate, while attaching one identical file twice to one note
+-- under two names is not a thing users ask for. A client-generated request key would
+-- separate the two if it ever became one.
+--
 -- A REAL FK to crm_chatter, unlike the polymorphic CRM tables around it. The parent here
 -- is a single table with a single id, so there is nothing polymorphic to model, and the
 -- FK buys the whole lifecycle: ON DELETE CASCADE means `delete_contact`/`delete_company`

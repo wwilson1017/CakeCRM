@@ -296,3 +296,43 @@ def test_each_supported_source_format_produces_a_thumbnail(fmt):
     out = thumbnails.generate(buf.getvalue(), thumb_size=320, thumb_max_bytes=28_000)
     assert out is not None, fmt
     assert out[1] in thumbnails.THUMB_MIMES
+
+
+# ── Animated sources (a frame-1 verdict cannot certify the whole file) ────────
+
+def _animated_gif(frames: int, size=(64, 48)) -> bytes:
+    from PIL import Image
+
+    buf = io.BytesIO()
+    images = [Image.new("RGB", size, (i * 7 % 256, 40, 90)) for i in range(frames)]
+    images[0].save(buf, "GIF", save_all=True, append_images=images[1:], duration=40, loop=0)
+    return buf.getvalue()
+
+
+def test_a_still_image_has_no_frame_problem():
+    assert thumbnails.generate(_png(64, 48), thumb_size=320, thumb_max_bytes=28_000) is not None
+
+
+def test_a_short_animation_is_still_thumbnailed():
+    out = thumbnails.generate(_animated_gif(3), thumb_size=320, thumb_max_bytes=28_000)
+    assert out is not None
+
+
+def test_a_long_animation_is_refused_so_it_becomes_download_only():
+    """Every frame passes the pixel ceiling individually; their SUM does not.
+
+    This module only ever inspects frame 1, and the CRM reads "has a thumbnail" as "safe to
+    hand the original to a browser" — so without this, a thousand-frame GIF would be
+    certified viewable on the strength of its first frame and then decoded in full by
+    whoever opens the note.
+    """
+    assert thumbnails.generate(
+        _animated_gif(thumbnails.MAX_FRAMES + 1), thumb_size=320, thumb_max_bytes=28_000
+    ) is None
+
+
+def test_the_frame_cap_is_not_one():
+    """A 2-frame file is a still with a stray extra frame, not an animation — refusing it
+    would make the cap a de-facto ban on GIF."""
+    assert thumbnails.MAX_FRAMES > 1
+    assert thumbnails.generate(_animated_gif(2), thumb_size=320, thumb_max_bytes=28_000) is not None

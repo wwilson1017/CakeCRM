@@ -2,8 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import {
   collectPastedFiles,
   formatBytes,
-  isImage,
   MAX_ATTACHMENTS,
+  PREVIEWABLE_IMAGE_MIMES,
   shouldConsumePaste,
   validateAttachmentFiles,
 } from '../chatterAttachments';
@@ -33,9 +33,12 @@ interface Staged {
   previewUrl: string | null;
 }
 
+// Preview only what the SERVER will keep as an image — see PREVIEWABLE_IMAGE_MIMES.
 const stage = (file: File): Staged => ({
   file,
-  previewUrl: isImage(file.type) ? URL.createObjectURL(file) : null,
+  previewUrl: PREVIEWABLE_IMAGE_MIMES.has((file.type || '').toLowerCase())
+    ? URL.createObjectURL(file)
+    : null,
 });
 
 /**

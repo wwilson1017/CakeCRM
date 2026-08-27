@@ -10,7 +10,9 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const apiBlob = vi.fn();
-vi.mock('../core/api/client', () => ({ apiBlob: (p: string) => apiBlob(p) }));
+vi.mock('../core/api/client', () => ({
+  apiBlob: (p: string, signal?: AbortSignal) => apiBlob(p, signal),
+}));
 
 const { useAuthedBlobUrl } = await import('./useAuthedBlobUrl');
 
@@ -79,7 +81,7 @@ describe('useAuthedBlobUrl', () => {
     apiBlob.mockResolvedValue(new Blob(['a']));
     const h = render('/api/crm/chatter/attachments/1/thumb');
     await settle();
-    expect(apiBlob).toHaveBeenCalledWith('/api/crm/chatter/attachments/1/thumb');
+    expect(apiBlob.mock.calls[0][0]).toBe('/api/crm/chatter/attachments/1/thumb');
     expect(h.latest().url).toBe('blob:mock/1');
     expect(h.latest().error).toBe(false);
   });
@@ -184,5 +186,41 @@ describe('useAuthedBlobUrl', () => {
     expect(created).toHaveLength(2);
     expect([...revoked].sort()).toEqual([...created].sort());
     expect(new Set(revoked).size).toBe(revoked.length);
+  });
+
+  it('aborts the in-flight request when the path changes', async () => {
+    // Abandoning the promise stops us USING the bytes; only the signal stops them
+    // arriving. A closed lightbox otherwise keeps pulling a multi-megabyte original.
+    apiBlob.mockReturnValue(new Promise<Blob>(() => {}));
+    const h = render('/a');
+    await settle();
+    const firstSignal = apiBlob.mock.calls[0][1] as AbortSignal;
+    expect(firstSignal.aborted).toBe(false);
+
+    h.change('/b');
+    expect(firstSignal.aborted).toBe(true);
+  });
+
+  it('aborts on unmount', async () => {
+    apiBlob.mockReturnValue(new Promise<Blob>(() => {}));
+    render('/a');
+    await settle();
+    const signal = apiBlob.mock.calls[0][1] as AbortSignal;
+    act(() => root.unmount());
+    root = createRoot(container);
+    expect(signal.aborted).toBe(true);
+  });
+
+  it('an aborted request leaves no error state behind', async () => {
+    // An abort is our own doing, not a failure the user should see.
+    apiBlob.mockImplementation((_p: string, signal?: AbortSignal) =>
+      new Promise<Blob>((_, rej) => {
+        signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError')));
+      }));
+    const h = render('/a');
+    await settle();
+    h.change(null);
+    await settle();
+    expect(h.latest()).toEqual({ url: null, error: false });
   });
 });

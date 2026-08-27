@@ -45,8 +45,13 @@ export function useAuthedBlobUrl(path: string | null): { url: string | null; err
 
     let created: string | null = null;
     let cancelled = false;
+    // Abandoning the promise stops us USING the bytes; it does not stop them arriving. A
+    // closed lightbox would otherwise keep pulling a multi-megabyte original into a Blob
+    // that is immediately garbage — and several open/close cycles would run several such
+    // downloads at once.
+    const controller = new AbortController();
 
-    apiBlob(path)
+    apiBlob(path, controller.signal)
       .then(blob => {
         if (cancelled || reqId !== reqRef.current) return;
         created = URL.createObjectURL(blob);
@@ -59,6 +64,7 @@ export function useAuthedBlobUrl(path: string | null): { url: string | null; err
 
     return () => {
       cancelled = true;
+      controller.abort();
       // Revoke whatever THIS effect created — on unmount, and on every path change. The
       // consumer can no longer be rendering it: the state below is path-keyed, so the new
       // path already reads as `null`.
