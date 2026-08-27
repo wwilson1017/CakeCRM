@@ -12,21 +12,29 @@ transaction carries a byte-identical timestamp — a CSV import batch, ``seed_da
 a merge that copies notes, any multi-row CRM write. Other sort keys are worse:
 ``tasks.completed`` is a 0/1 flag, ``tasks.due_date`` is TEXT defaulting to ``''``.
 
-Three layers, each covering the previous one's blind spot:
+Four layers, each covering the previous one's blind spot:
 
 1. ``test_capped_readers_have_a_total_order`` statically scans every non-test module
    under ``backend/`` for the failure shape. It catches a reader added tomorrow, which
    no behavioral test can.
-2. The scan cannot resolve an ``ORDER BY`` assembled from a variable, so
-   ``test_dynamic_order_by_*`` drives those readers and asserts on the SQL they
-   actually emit.
-3. ``test_tied_timestamps_paginate_without_dupes_or_gaps`` (integration) proves
-   against real Postgres that the shape delivers the behavior — rows sharing one
-   ``now()`` page cleanly.
+2. The scan cannot resolve an ``ORDER BY`` assembled at runtime, so it reports those as
+   ``unknown`` rather than passing them. ``test_undecidable_sites_are_registered`` pins
+   that set exactly, and ``test_dynamic_order_by_*`` / ``test_order_by_fragment_*``
+   drive those readers and assert on the SQL they really emit. Without the third state a
+   reader could opt out of the whole guard by moving its ORDER BY into a variable.
+3. ``test_hardened_uncapped_readers_keep_their_tiebreaker`` covers the readers that were
+   given a tiebreaker *before* they have a cap — invisible to the scan by definition,
+   and the reason issue #59 can paginate the pipeline board safely.
+4. ``test_tied_timestamps_paginate_without_dupes_or_gaps`` (integration) proves against
+   real Postgres that the shape delivers the behavior — rows sharing one ``now()`` page
+   cleanly. This is the layer that actually reproduces the bug: with the tiebreaker
+   removed it reports a duplicated row and a skipped one.
 
-The scanner's own correctness is pinned by ``test_scanner_rejects_...``/
-``_accepts_...`` and by ``test_scan_actually_examined_the_backend``: a scanner that
-silently matches nothing would be a permanent green, which is worse than no scanner.
+The scanner's own correctness is pinned in all three directions
+(``test_scanner_rejects_...`` / ``_accepts_...`` / ``_reports_runtime_assembled_...``)
+and its reach by ``test_scan_actually_examined_the_backend``, per module rather than as
+one total — ``crm`` alone would satisfy a repo-wide count. A sweep that silently stops
+matching is a permanent green, which is worse than no sweep because it reads as coverage.
 """
 
 import ast
@@ -112,57 +120,121 @@ def _normalize(term: str) -> str:
     return " ".join(_DIRECTION.sub("", term).split()).lower()
 
 
-def order_by_verdict(sql: str) -> str | None:
-    """``None`` if this statement's capped ORDER BY is totally ordered (or the question
-    is not decidable from source), else a human-readable reason it is not.
+def _strip_sql_comments(sql: str) -> str:
+    """Remove ``--`` line comments and ``/* */`` blocks.
 
-    Deliberately silent on what it cannot resolve — a term that is entirely an
-    interpolation, or an ORDER BY whose LIMIT lives in a different string. Those are
-    covered by the behavioral tests below. The result is a check with false negatives
-    and no false positives, which needs no allowlist and therefore cannot rot.
+    Load-bearing, not tidiness: this file's own SQL edits put ``--`` notes directly
+    above the ORDER BY they explain. Flattening whitespace first would splice a comment
+    into the statement, so a note that merely mentioned an ordering could be read AS the
+    ordering and turn a broken reader green.
     """
-    flat = " ".join(sql.split())
-    limits = [m.start() for m in re.finditer(r"\bLIMIT\b", flat, re.I)]
-    if not limits:
-        return None  # uncapped: the whole set comes back, so nothing can dupe or vanish
-    last_limit = limits[-1]
-    order_bys = [m for m in re.finditer(r"\bORDER\s+BY\b", flat, re.I) if m.start() < last_limit]
-    if not order_bys:
-        return None
-    # The LAST ORDER BY before the LIMIT is the statement's own; earlier ones belong to
-    # an aggregate (ARRAY_AGG(id ORDER BY id)) or a window frame.
-    clause = flat[order_bys[-1].end():last_limit]
-    trailing = _TRAILING.search(clause)
-    if trailing:
-        clause = clause[:trailing.start()]
-    terms = _split_terms(clause)
-    if not terms:
-        return None
-
-    # A grouped query is already total once the ORDER BY covers the whole GROUP BY key:
-    # each group is exactly one output row and the key identifies it.
-    group_by = re.search(
-        r"\bGROUP\s+BY\b(.*?)(?=\bHAVING\b|\bORDER\s+BY\b|\bLIMIT\b|$)", flat, re.I)
-    if group_by:
-        ordered = {_normalize(t) for t in terms}
-        if all(_normalize(k) in ordered for k in _split_terms(group_by.group(1))):
-            return None
-
-    last = terms[-1]
-    bare = _normalize(_PLACEHOLDER.sub("", last))
-    if not bare:
-        return None  # the whole term is interpolated — undecidable from source
-    match = re.fullmatch(r"(?:\w+\.)?(\w+)", bare)
-    if match and match.group(1) in UNIQUE_TIEBREAKERS:
-        return None
-    return (f"ORDER BY ends on {last!r}, which is not unique — a tie under the LIMIT "
-            f"makes the page non-reproducible. Append an id term (issue #58).")
+    sql = re.sub(r"/\*.*?\*/", " ", sql, flags=re.S)
+    return "\n".join(re.sub(r"--.*$", "", line) for line in sql.splitlines())
 
 
-def _scan_backend() -> tuple[list[str], dict[str, int]]:
-    """Return ``(failures, {module: statements_examined})`` over every non-test module."""
+def _statement_orderings(flat: str):
+    """Yield ``(order_by_clause | None, limit_text)`` for each cap in the statement.
+
+    Each ``LIMIT`` is paired with the ORDER BY *nearest before it*, so a subquery's own
+    cap is judged against its own ordering rather than the outer query's. That is what
+    makes a correlated ``LATERAL (… ORDER BY seq DESC LIMIT 1)`` beside an outer
+    ``ORDER BY … LIMIT %s`` come out as two independent verdicts instead of one, and it
+    is also why an aggregate's ``ARRAY_AGG(x ORDER BY x)`` never stands in for the
+    statement's own ordering — the statement's is textually nearer to its LIMIT.
+    """
+    order_bys = [m for m in re.finditer(r"\bORDER\s+BY\b", flat, re.I)]
+    for limit in re.finditer(r"\bLIMIT\b", flat, re.I):
+        preceding = [m for m in order_bys if m.end() <= limit.start()]
+        if not preceding:
+            yield None, flat[limit.start():limit.start() + 40]
+            continue
+        clause = flat[preceding[-1].end():limit.start()]
+        trailing = _TRAILING.search(clause)
+        if trailing:
+            clause = clause[:trailing.start()]
+        yield clause, flat[limit.start():limit.start() + 40]
+
+
+def judge(sql: str) -> tuple[str, str]:
+    """Classify one SQL string as ``("ok"|"fail"|"unknown", detail)``.
+
+    Three states, not two, and the third is the point. ``unknown`` means the ordering is
+    assembled at runtime (an interpolated term, or a ``LIMIT`` whose ORDER BY lives in a
+    different string), so source alone cannot settle it. Those sites are NOT waved
+    through: ``test_undecidable_sites_are_registered`` pins the exact set, so a new one
+    fails until someone adds a behavioral test for it. Collapsing ``unknown`` into
+    ``ok`` — the earlier design — let a reader opt out of the guard just by moving its
+    ORDER BY into a variable.
+
+    Known limits, stated so nobody mistakes this for a SQL parser: uniqueness is
+    inferred from the final term's NAME, so an alias like ``status AS id``, or a join
+    that multiplies rows and makes a parent ``id`` non-unique, would pass. ``seq`` is
+    unique only within one conversation and is accepted on the strength of both current
+    readers being conversation-scoped. Exotic SQL (a quoted paren inside an ORDER BY,
+    an array constructor) can also mis-split into a false ``fail`` — which surfaces as a
+    loud failure someone investigates, never as a silent pass.
+    """
+    flat = " ".join(_strip_sql_comments(sql).split())
+    if not re.search(r"\bLIMIT\b", flat, re.I):
+        return "ok", "uncapped"  # the whole set comes back: nothing can dupe or vanish
+    has_placeholder = bool(_PLACEHOLDER.search(flat))
+
+    for clause, limit_text in _statement_orderings(flat):
+        if clause is None:
+            # A cap with no ordering at all is the most non-reproducible shape there is.
+            # Only judged for something that actually looks like a query — plenty of
+            # prose ("exceeds the 10 MB limit") contains the word.
+            if not re.search(r"\bSELECT\b", flat, re.I):
+                continue
+            if has_placeholder:
+                return "unknown", f"capped, and the ordering may be interpolated: {limit_text!r}"
+            return "fail", (f"{limit_text!r} caps a SELECT that has no ORDER BY at all — "
+                            "the rows it returns are whatever the plan happens to emit.")
+
+        terms = _split_terms(clause)
+        if not terms:
+            return "unknown", f"empty ORDER BY before {limit_text!r}"
+
+        # A grouped query is already total once the ORDER BY covers the whole GROUP BY
+        # key: each group is exactly one output row and the key identifies it. Applied
+        # only to a single-SELECT statement — in a CTE or subquery the GROUP BY found
+        # textually may belong to an inner scope and prove nothing about the outer rows.
+        if len(re.findall(r"\bSELECT\b", flat, re.I)) == 1:
+            group_by = re.search(
+                r"\bGROUP\s+BY\b(.*?)(?=\bHAVING\b|\bORDER\s+BY\b|\bLIMIT\b|$)", flat, re.I)
+            if group_by:
+                ordered = {_normalize(t) for t in terms}
+                if all(_normalize(k) in ordered for k in _split_terms(group_by.group(1))):
+                    continue
+
+        last = terms[-1]
+        bare = _normalize(_PLACEHOLDER.sub("", last))
+        if not bare:
+            return "unknown", f"final ORDER BY term is interpolated: {last!r}"
+        match = re.fullmatch(r"(?:\w+\.)?(\w+)", bare)
+        if match and match.group(1) in UNIQUE_TIEBREAKERS:
+            continue
+        return "fail", (f"ORDER BY ends on {last!r}, which is not unique — a tie under "
+                        f"{limit_text!r} makes the page non-reproducible. Append an id "
+                        "term (issue #58).")
+    return "ok", "every cap is totally ordered"
+
+
+def order_by_verdict(sql: str) -> str | None:
+    """``None`` when ``sql`` is not a proven-broken capped reader, else why it is.
+
+    Thin wrapper over :func:`judge` for the behavioral tests, which see fully-resolved
+    runtime SQL where ``unknown`` cannot arise.
+    """
+    state, detail = judge(sql)
+    return detail if state == "fail" else None
+
+
+def _scan_backend() -> tuple[list[str], dict[str, int], dict[str, str]]:
+    """Return ``(failures, {module: examined}, {site: why_undecidable})``."""
     failures: list[str] = []
     examined: dict[str, int] = {}
+    undecidable: dict[str, str] = {}
     for path in sorted(BACKEND.rglob("*.py")):
         rel = path.relative_to(BACKEND)
         if rel.parts[0] in ("tests", ".venv", "venv"):
@@ -176,15 +248,21 @@ def _scan_backend() -> tuple[list[str], dict[str, int]]:
             failures.append(f"{rel}: could not be scanned ({exc.__class__.__name__}: {exc})")
             continue
         for lineno, sql in _sql_literals(tree):
-            flat = " ".join(sql.split())
-            if not (re.search(r"\bORDER\s+BY\b", flat, re.I)
-                    and re.search(r"\bLIMIT\b", flat, re.I)):
+            flat = " ".join(_strip_sql_comments(sql).split())
+            if not re.search(r"\bLIMIT\b", flat, re.I):
                 continue
+            # A capped literal is in scope if it orders rows or looks like a query;
+            # `LIMIT` alone matches English prose ("exceeds the 10 MB limit").
+            if not (re.search(r"\bORDER\s+BY\b", flat, re.I)
+                    or re.search(r"\bSELECT\b", flat, re.I)):
+                continue
+            state, detail = judge(sql)
+            if state == "fail":
+                failures.append(f"{rel}:{lineno}: {detail}")
+            elif state == "unknown":
+                undecidable[f"{rel.parts[0]}/{rel.name}"] = detail
             examined[rel.parts[0]] = examined.get(rel.parts[0], 0) + 1
-            verdict = order_by_verdict(sql)
-            if verdict:
-                failures.append(f"{rel}:{lineno}: {verdict}")
-    return failures, examined
+    return failures, examined, undecidable
 
 
 # ── the scanner's own guard rails ────────────────────────────────────────────────
@@ -201,9 +279,23 @@ def _scan_backend() -> tuple[list[str], dict[str, int]]:
     # Grouped, but the ORDER BY covers only half the group key.
     "SELECT lower(title), contact_id, COUNT(*) FROM deals GROUP BY lower(title), contact_id "
     "ORDER BY COUNT(*) DESC, lower(title) ASC LIMIT %s",
+    # No ordering at all — the most non-reproducible shape of the lot.
+    "SELECT * FROM contacts LIMIT 20",
+    "SELECT * FROM contacts WHERE status = %s LIMIT %s OFFSET %s",
+    # A commented-out ordering must not be read as the ordering.
+    "SELECT * FROM t\nORDER BY created_at DESC -- ORDER BY id\nLIMIT 10",
+    "SELECT * FROM t /* ORDER BY id */ ORDER BY created_at DESC LIMIT 10",
+    # An inner cap is judged on its own ordering, not the outer query's.
+    "SELECT * FROM (SELECT * FROM a ORDER BY created_at LIMIT 5) s "
+    "ORDER BY s.created_at DESC, s.id DESC LIMIT 10",
+    # A GROUP BY inside a CTE proves nothing about the outer rows.
+    "WITH g AS (SELECT tenant_id, COUNT(*) FROM events GROUP BY tenant_id) "
+    "SELECT g.tenant_id, c.name FROM g JOIN contacts c ON TRUE "
+    "ORDER BY g.tenant_id LIMIT 10",
 ])
 def test_scanner_rejects_a_non_total_capped_order(sql):
-    assert order_by_verdict(sql) is not None, f"scanner failed to flag: {sql}"
+    state, detail = judge(sql)
+    assert state == "fail", f"scanner returned {state!r} ({detail}) for: {sql}"
 
 
 @pytest.mark.parametrize("sql", [
@@ -221,15 +313,34 @@ def test_scanner_rejects_a_non_total_capped_order(sql):
     "ORDER BY COUNT(*) DESC, lower(title) ASC, contact_id ASC LIMIT %s",
     # The earlier ORDER BY belongs to an aggregate, not to the statement.
     "SELECT k, ARRAY_AGG(id ORDER BY id) FROM t GROUP BY k ORDER BY k ASC LIMIT %s",
-    # Undecidable: the final term is entirely interpolated.
-    "SELECT * FROM contacts ORDER BY {order_by} LIMIT %s OFFSET %s",
     # Decidable through an interpolated direction.
     "SELECT * FROM companies ORDER BY {sort_col} {direction}, id {direction} LIMIT %s",
     # A trailing lock clause is not part of the ordering.
     "SELECT id FROM users ORDER BY is_active DESC, id ASC LIMIT 1 FOR UPDATE",
+    # A subquery cap and the outer cap are each totally ordered on their own terms.
+    "SELECT c.* FROM conversations c LEFT JOIN LATERAL ("
+    "  SELECT content FROM messages WHERE conversation_id = c.id ORDER BY seq DESC LIMIT 1"
+    ") u ON TRUE ORDER BY c.updated_at DESC, c.id DESC LIMIT %s OFFSET %s",
+    # Prose that merely contains the word "limit" is not a query.
+    "'{f.filename}' exceeds the 10 MB limit.",
 ])
 def test_scanner_accepts_a_total_capped_order(sql):
-    assert order_by_verdict(sql) is None, f"scanner wrongly flagged: {sql}"
+    state, detail = judge(sql)
+    assert state == "ok", f"scanner returned {state!r} ({detail}) for: {sql}"
+
+
+@pytest.mark.parametrize("sql", [
+    # The whole ordering is interpolated — source cannot settle it.
+    "SELECT * FROM contacts ORDER BY {order_by} LIMIT %s OFFSET %s",
+    "SELECT * FROM contacts ORDER BY {_contact_order_by(sort)} LIMIT %s",
+    # The ORDER BY lives in a different string; this one only carries the cap.
+    "SELECT id FROM deals {where} {order} LIMIT %s",
+])
+def test_scanner_reports_runtime_assembled_orders_as_unknown(sql):
+    """`unknown` must stay distinct from `ok` — collapsing them is exactly how a reader
+    could opt out of the guard by moving its ORDER BY into a variable."""
+    state, detail = judge(sql)
+    assert state == "unknown", f"scanner returned {state!r} ({detail}) for: {sql}"
 
 
 def test_scanner_reads_split_and_interpolated_literals():
@@ -263,7 +374,7 @@ def test_scan_actually_examined_the_backend():
     """Fail if the sweep stopped reaching part of the backend. Guards against a path or
     parse change turning the check below into a vacuous pass — the scanner reporting
     zero failures because it looked at nothing is indistinguishable from a clean run."""
-    failures, examined = _scan_backend()
+    failures, examined, _ = _scan_backend()
     assert not [f for f in failures if "could not be scanned" in f], failures
     missed = MODULES_WITH_CAPPED_READERS - set(examined)
     assert not missed, (
@@ -272,10 +383,57 @@ def test_scan_actually_examined_the_backend():
         "updating. Do not delete an entry to make this pass without checking which.")
 
 
+# Files holding a capped reader whose ordering is assembled at runtime, so source alone
+# cannot settle it. Each MUST be covered by a behavioral test asserting the SQL it really
+# emits — named here so the pairing is checkable by eye:
+#
+#   crm/service.py         list_contacts / search_contacts
+#                            -> test_dynamic_order_by_contact_lists
+#                          list_companies  -> test_dynamic_order_by_company_list
+#                          search_deals    -> test_dynamic_order_by_deal_search
+#                          list_tasks (a fragment lookup once #77 lands)
+#                            -> test_order_by_fragment_constants_are_total
+#   crm/scoring_service.py backfill_scores / _stale_ids, which build the ORDER BY and the
+#                          LIMIT in separate literals
+#                            -> test_scoring_backfill_orders_are_total
+#
+# A to-do list, not an exemption list — and pinned EXACTLY, both directions. Growth means
+# a reader started hiding its ordering from the scan and owes a behavioral test first.
+# Shrinkage means one stopped, and leaving a stale name here would quietly re-admit it
+# later. (`crm/gtd_service.py` sat here until the scan proved its ORDER BYs are literal
+# and already end on `t.id` — which is why this side is asserted too.)
+UNDECIDABLE_SITES = frozenset({
+    "crm/service.py",
+    "crm/scoring_service.py",
+})
+
+
+def test_undecidable_sites_are_registered():
+    """A reader must not escape the guard by moving its ORDER BY into a variable.
+
+    Before this check, `judge` returning "unknown" was indistinguishable from "ok", so
+    `sql = f"... ORDER BY {order} LIMIT %s"` silently opted out of the sweep entirely.
+    """
+    _, _, undecidable = _scan_backend()
+    found = set(undecidable)
+    new = found - UNDECIDABLE_SITES
+    gone = UNDECIDABLE_SITES - found
+    assert not new, (
+        "these capped readers have a runtime-assembled ORDER BY the source scan cannot "
+        "judge, and are not registered:\n  "
+        + "\n  ".join(f"{s}: {undecidable[s]}" for s in sorted(new))
+        + "\n\nAdd a behavioral test asserting the SQL each one emits (see "
+          "test_dynamic_order_by_contact_lists), then list it in UNDECIDABLE_SITES.")
+    assert not gone, (
+        f"{sorted(gone)} no longer has a runtime-assembled ORDER BY — the scan can judge "
+        "it directly now. Drop it from UNDECIDABLE_SITES so a future reader in that file "
+        "cannot inherit the registration and slip past the sweep.")
+
+
 # ── the sweep ────────────────────────────────────────────────────────────────────
 
 def test_capped_readers_have_a_total_order():
-    failures, _ = _scan_backend()
+    failures, _, _ = _scan_backend()
     assert not failures, (
         "capped readers with a non-reproducible page order (issue #58):\n  "
         + "\n  ".join(failures))
