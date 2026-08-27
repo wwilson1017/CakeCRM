@@ -290,6 +290,27 @@ def _assert_recorded_orders_are_total(recorder: _Recorder):
         assert verdict is None, f"{verdict}\n  emitted SQL: {sql}"
 
 
+def test_order_by_fragment_constants_are_total():
+    """Readers that interpolate an allow-listed ORDER BY fragment show the scanner only
+    a placeholder, so the fragments themselves are checked directly. Reading the live
+    constants means a sort option added later is covered without editing this test —
+    which is how ``_TASK_SORTS`` (arriving with #77, where ``list_tasks``' literal
+    ORDER BY becomes a fragment lookup) is already accounted for here.
+    """
+    from crm import service
+
+    checked = 0
+    for name in ("_CONTACT_SORTS", "_TASK_SORTS"):
+        fragments = getattr(service, name, None)
+        if fragments is None:
+            continue
+        for key, fragment in fragments.items():
+            verdict = order_by_verdict(f"SELECT 1 FROM t ORDER BY {fragment} LIMIT %s")
+            assert verdict is None, f"{name}[{key!r}] -> {fragment!r}: {verdict}"
+            checked += 1
+    assert checked, "no ORDER BY fragment constants found — was one renamed or removed?"
+
+
 @pytest.fixture
 def crm_recorder(monkeypatch):
     from crm import service
