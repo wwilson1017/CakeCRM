@@ -159,21 +159,28 @@ def order_by_verdict(sql: str) -> str | None:
             f"makes the page non-reproducible. Append an id term (issue #58).")
 
 
-def _scan_backend() -> tuple[list[str], int]:
-    """Return ``(failures, statements_examined)`` over every non-test backend module."""
+def _scan_backend() -> tuple[list[str], dict[str, int]]:
+    """Return ``(failures, {module: statements_examined})`` over every non-test module."""
     failures: list[str] = []
-    examined = 0
+    examined: dict[str, int] = {}
     for path in sorted(BACKEND.rglob("*.py")):
         rel = path.relative_to(BACKEND)
         if rel.parts[0] in ("tests", ".venv", "venv"):
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (SyntaxError, UnicodeDecodeError) as exc:
+            # Fail, never skip: a file this sweep could not read is a file whose readers
+            # are unchecked, and silently passing over it is the exact failure mode the
+            # sweep exists to prevent.
+            failures.append(f"{rel}: could not be scanned ({exc.__class__.__name__}: {exc})")
+            continue
         for lineno, sql in _sql_literals(tree):
             flat = " ".join(sql.split())
             if not (re.search(r"\bORDER\s+BY\b", flat, re.I)
                     and re.search(r"\bLIMIT\b", flat, re.I)):
                 continue
-            examined += 1
+            examined[rel.parts[0]] = examined.get(rel.parts[0], 0) + 1
             verdict = order_by_verdict(sql)
             if verdict:
                 failures.append(f"{rel}:{lineno}: {verdict}")
@@ -243,13 +250,26 @@ def test_scanner_reads_split_and_interpolated_literals():
         "docstrings must be skipped or prose would be scanned as SQL"
 
 
+# Every package that holds at least one capped reader. Asserted PER MODULE, not as one
+# total: `crm` alone contributes well over half the statements, so a single total would
+# stay satisfied while a narrowed walk quietly stopped scanning all the others.
+MODULES_WITH_CAPPED_READERS = frozenset({
+    "alerts", "assistant", "context_files", "core", "crm",
+    "gmail_scan", "memory", "notifications", "proactive", "reminders",
+})
+
+
 def test_scan_actually_examined_the_backend():
-    """Fail if the sweep stopped finding capped readers. Guards against a path or parse
-    change turning the check below into a vacuous pass."""
-    _, examined = _scan_backend()
-    assert examined >= 25, (
-        f"only {examined} capped ORDER BY statements were found in backend/ — the "
-        "scanner is probably broken, not the codebase suddenly clean")
+    """Fail if the sweep stopped reaching part of the backend. Guards against a path or
+    parse change turning the check below into a vacuous pass — the scanner reporting
+    zero failures because it looked at nothing is indistinguishable from a clean run."""
+    failures, examined = _scan_backend()
+    assert not [f for f in failures if "could not be scanned" in f], failures
+    missed = MODULES_WITH_CAPPED_READERS - set(examined)
+    assert not missed, (
+        f"the sweep found no capped ORDER BY in {sorted(missed)} — either the scanner "
+        "stopped reaching those packages, or their readers moved and this set needs "
+        "updating. Do not delete an entry to make this pass without checking which.")
 
 
 # ── the sweep ────────────────────────────────────────────────────────────────────
@@ -367,6 +387,53 @@ def test_dynamic_order_by_todo_list(monkeypatch, mode):
     _assert_recorded_orders_are_total(r)
 
 
+def test_hardened_uncapped_readers_keep_their_tiebreaker(monkeypatch):
+    """The readers this change hardened *ahead* of a cap still carry their id term.
+
+    These sort by a non-unique column with no LIMIT, so nothing can dupe or vanish today
+    and the source scan skips them by design. They were given a tiebreaker anyway so that
+    adding a cap later cannot quietly reintroduce the bug — ``get_pipeline`` being the
+    reader #59 will paginate. That promise is worth nothing unless something fails when
+    the term is dropped, which is what this test is for: it appends a LIMIT to the
+    emitted SQL and applies exactly the rule that will govern these readers the moment
+    one is really added.
+
+    The list is explicit rather than derived: it names the sites this change claims to
+    have future-proofed, so removing one is a decision someone has to make here, in view
+    of that promise, rather than a silent loss of coverage.
+    """
+    from crm import provenance_service, service
+    from notifications import subscriptions
+
+    readers = [
+        ("crm.service.get_pipeline", service, lambda: service.get_pipeline()),
+        ("crm.service.get_contact_detail", service, lambda: service.get_contact_detail(1)),
+        ("crm.service.get_company_detail", service, lambda: service.get_company_detail(1)),
+        ("crm.provenance_service.get_provenance", provenance_service,
+         lambda: provenance_service.get_provenance("contact", 1)),
+        ("notifications.subscriptions.list_subscriptions", subscriptions,
+         lambda: subscriptions.list_subscriptions()),
+    ]
+
+    checked = 0
+    for name, module, call in readers:
+        r = _Recorder()
+        monkeypatch.setattr(module, "pg_fetchall", r.fetchall)
+        if hasattr(module, "pg_fetchone"):
+            monkeypatch.setattr(module, "pg_fetchone", r.fetchone)
+        call()
+        ordered = [s for s in r.sql if re.search(r"\bORDER\s+BY\b", s, re.I)]
+        assert ordered, f"{name} emitted no ORDER BY at all"
+        for sql in ordered:
+            # Uncapped statements are judged under the capped rule on purpose — see the
+            # docstring. A statement that already has a LIMIT is unaffected by the
+            # appended one, since order_by_verdict reads the LAST LIMIT.
+            verdict = order_by_verdict(sql + " LIMIT 1")
+            assert verdict is None, f"{name}: {verdict}\n  emitted SQL: {sql}"
+            checked += 1
+    assert checked >= len(readers), "at least one ORDER BY per reader should be checked"
+
+
 def test_scoring_backfill_orders_are_total(monkeypatch):
     """``backfill_scores``/``_stale_ids`` build ORDER BY and LIMIT in separate literals,
     so the source scan skips them by design — checked here on the emitted SQL instead."""
@@ -444,10 +511,26 @@ def test_tied_timestamps_paginate_without_dupes_or_gaps():
         # Same query, run again: a total order is reproducible, an arbitrary one is not.
         assert sweep() == first, "paging the same tied rows twice produced a different order"
 
-        # The detail rollups are capped, not paged — assert their order is at least stable.
+        # The company rollup is capped, not paged, so it cannot drop a row — what the
+        # tiebreaker buys there is that the list renders the same way every time. Give
+        # it a genuine tie to resolve (identical names, one shared created_at) and assert
+        # the exact contract `ORDER BY name ASC, id ASC` promises. Note this states the
+        # contract rather than falsifying it: with a handful of rows Postgres may return
+        # insertion order by luck even with no tiebreaker, so the guarantee that a
+        # dropped term FAILS comes from test_hardened_uncapped_readers_keep_their_
+        # tiebreaker, not from here.
         cid = first[0]
-        assert (service.get_company_detail(cid)["contacts"]
-                == service.get_company_detail(cid)["contacts"])
+        with postgres.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.executemany(
+                    "INSERT INTO contacts (name, company_id) VALUES (%s, %s)",
+                    [("Same Name", cid)] * 8,
+                )
+            conn.commit()
+        rollup = [c["id"] for c in service.get_company_detail(cid)["contacts"]]
+        assert len(rollup) == 8, f"fixture did not link 8 contacts to company {cid}"
+        assert rollup == sorted(rollup), (
+            f"contacts tied on name must come back in ascending id order, got {rollup}")
     finally:
         postgres.close_pool()
         if prev is not None:

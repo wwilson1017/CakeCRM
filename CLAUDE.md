@@ -1001,11 +1001,18 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `@pytest.mark.integration` and deselected by default (`addopts = -m "not
   integration"`); run them with `pytest -m integration` and a reachable
   `TEST_ADMIN_DSN`. No `skip`/`xfail`/`# noqa`/`eslint-disable` — fix root causes.
-  A repo-wide **guard** test (`test_route_authz`, `test_gmail_guard`,
-  `test_prompt_genericization`, `test_query_determinism`) must itself be falsifiable:
-  each one pins the scanner in BOTH directions on synthetic input and asserts it still
-  matched a plausible number of real sites, because a sweep that quietly stops matching
-  is a permanent green — worse than no guard, since it reads as coverage.
+  A repo-wide **guard** test — one that sweeps the tree and asserts a property
+  (`test_route_authz`, `test_gmail_guard`, `test_prompt_genericization`,
+  `test_query_determinism`) — must itself be falsifiable, because a sweep that quietly
+  stops matching is a permanent green, and a permanent green is worse than no guard
+  since it reads as coverage. So a new one owes two things beyond the property itself:
+  a self-test pinning its detector on synthetic input (both a case it must flag and a
+  case it must not), and an assertion that it still reached the real code — per module
+  or per registered item, never one repo-wide total, which the largest package satisfies
+  on its own. `test_query_determinism` and `test_prompt_genericization` carry both
+  (`test_the_guard_actually_catches_a_leak` is the latter's detector self-test);
+  `test_gmail_guard`'s source sweep currently has neither and is worth hardening the
+  next time it is touched.
 - **Frontend tests** are **vitest** (`npm test` → `vitest run`), landed with #73. Config
   is a STANDALONE `frontend/vitest.config.ts` — vitest reads it *instead of*
   `vite.config.ts`, so the production build config stays untouched and tests skip the
