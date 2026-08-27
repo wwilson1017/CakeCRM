@@ -96,23 +96,29 @@ def _sql_literals(tree: ast.AST):
             yield node.lineno, "".join(parts)
 
 
-def _split_terms(clause: str) -> list[str]:
-    """Split a comma-separated SQL clause at top level (commas inside parens belong to
-    a function call like ``COALESCE(a, b)``, not to the clause)."""
-    terms: list[str] = []
+def _split_terms(clause: str, masked: str | None = None) -> list[str]:
+    """Split a comma-separated SQL clause at top level.
+
+    A comma inside parens belongs to a call like ``COALESCE(a, b)``, not to the clause.
+    Delimiters are located in ``masked`` — the same string with quoted contents blanked —
+    so a bracket or comma inside a literal (``btrim(n, E') ')``) cannot unbalance the
+    depth count; the returned text is always sliced from ``clause`` itself.
+    """
+    scan = masked if masked is not None and len(masked) == len(clause) else clause
+    bounds: list[int] = []
     depth = 0
-    current: list[str] = []
-    for ch in clause:
-        if ch == "(":
+    for i, ch in enumerate(scan):
+        if ch in "([":
             depth += 1
-        elif ch == ")":
+        elif ch in ")]":
             depth -= 1
-        if ch == "," and depth == 0:
-            terms.append("".join(current))
-            current = []
-        else:
-            current.append(ch)
-    terms.append("".join(current))
+        elif ch == "," and depth == 0:
+            bounds.append(i)
+    terms, start = [], 0
+    for i in bounds:
+        terms.append(clause[start:i])
+        start = i + 1
+    terms.append(clause[start:])
     return [t.strip() for t in terms if t.strip()]
 
 
@@ -128,6 +134,51 @@ def _mask_placeholders(text: str) -> str:
     of which has no ordering in its span and fails a perfectly good query.
     """
     return _PLACEHOLDER.sub(lambda m: "\x00" * len(m.group()), text)
+
+
+def _mask_quoted(text: str) -> str:
+    """Blank out the CONTENTS of quoted literals, preserving length.
+
+    Keywords and punctuation inside a value are data: ``WHERE operation = 'LIMIT'``
+    must not read as a cap, and the ``)`` in ``btrim(n, E' \\t')`` must not unbalance
+    term splitting. The quote characters themselves are kept so offsets and the
+    surrounding syntax are unchanged.
+    """
+    out: list[str] = []
+    quote: str | None = None
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if quote:
+            if ch == quote:
+                out.append(ch)
+                quote = None
+            else:
+                out.append("\x00")
+        elif ch in ("'", '"'):
+            quote = ch
+            out.append(ch)
+        else:
+            out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _prepare(sql: str) -> tuple[str, str]:
+    """Return ``(flat, masked)`` for one SQL string.
+
+    ``flat`` is the statement with comments removed and whitespace collapsed — the text
+    verdict messages quote and terms are sliced from. ``masked`` is the same string with
+    placeholder and quoted-literal contents blanked out, so keyword searches see only
+    real syntax. The two are the same length, so an offset found in one indexes the other.
+
+    Order matters: comments must be stripped BEFORE whitespace is collapsed. A ``--``
+    comment ends at a newline, so flattening first lets it swallow the remainder of the
+    statement — which silently erased the ORDER BY and LIMIT of every reader whose SQL
+    carries an explanatory comment above its ordering, this diff's own included.
+    """
+    flat = " ".join(_strip_sql_comments(sql).split())
+    return flat, _mask_placeholders(_mask_quoted(flat))
 
 
 def _strip_sql_comments(sql: str) -> str:
@@ -173,7 +224,28 @@ def _strip_sql_comments(sql: str) -> str:
     return "".join(out)
 
 
-def _statement_orderings(flat: str):
+_CAP = re.compile(r"\b(?:LIMIT|FETCH\s+(?:FIRST|NEXT))\b", re.I)
+_OFFSET = re.compile(r"\bOFFSET\b", re.I)
+
+
+def _caps(masked: str) -> list[re.Match]:
+    """Where this statement bounds its result set.
+
+    ``LIMIT`` and ``FETCH FIRST/NEXT`` are caps. A bare ``OFFSET`` is one too — it is a
+    valid paginator on its own and skipping it would let an unordered
+    ``SELECT … OFFSET %s`` bypass the guard entirely — but ONLY when no LIMIT/FETCH is
+    present, because in the ordinary ``LIMIT %s OFFSET %s`` the OFFSET is part of the
+    same cap, and counting it separately would invent a second, orderless one.
+    """
+    caps = list(_CAP.finditer(masked))
+    return caps or list(_OFFSET.finditer(masked))
+
+
+def _is_capped(masked: str) -> bool:
+    return bool(_CAP.search(masked) or _OFFSET.search(masked))
+
+
+def _statement_orderings(flat: str, masked: str):
     """Yield ``(order_by_clause | None, limit_text)`` for each cap in the statement.
 
     Each ``LIMIT`` is paired with an ORDER BY lying between it and the PREVIOUS ``LIMIT``
@@ -189,22 +261,23 @@ def _statement_orderings(flat: str):
     aggregate's ``ARRAY_AGG(x ORDER BY x)`` never stands in for the statement's own
     ordering, since the last ORDER BY in the span wins.
     """
-    masked = _mask_placeholders(flat)
     order_bys = [m for m in re.finditer(r"\bORDER\s+BY\b", masked, re.I)]
-    prev_limit_end = 0
-    for limit in re.finditer(r"\bLIMIT\b", masked, re.I):
+    prev_cap_end = 0
+    for cap in _caps(masked):
         in_span = [m for m in order_bys
-                   if m.start() >= prev_limit_end and m.end() <= limit.start()]
-        limit_text = flat[limit.start():limit.start() + 40]
-        prev_limit_end = limit.end()
+                   if m.start() >= prev_cap_end and m.end() <= cap.start()]
+        cap_text = flat[cap.start():cap.start() + 40]
+        prev_cap_end = cap.end()
         if not in_span:
-            yield None, limit_text, limit.start()
+            yield None, None, cap_text, cap.start()
             continue
-        clause = flat[in_span[-1].end():limit.start()]
-        trailing = _TRAILING.search(_mask_placeholders(clause))
+        clause = flat[in_span[-1].end():cap.start()]
+        mclause = masked[in_span[-1].end():cap.start()]
+        trailing = _TRAILING.search(mclause)
         if trailing:
             clause = clause[:trailing.start()]
-        yield clause, limit_text, limit.start()
+            mclause = mclause[:trailing.start()]
+        yield clause, mclause, cap_text, cap.start()
 
 
 def judge(sql: str) -> tuple[str, str]:
@@ -226,16 +299,15 @@ def judge(sql: str) -> tuple[str, str]:
     an array constructor) can also mis-split into a false ``fail`` — which surfaces as a
     loud failure someone investigates, never as a silent pass.
     """
-    flat = " ".join(_strip_sql_comments(sql).split())
-    masked = _mask_placeholders(flat)
-    if not re.search(r"\bLIMIT\b", masked, re.I):
+    flat, masked = _prepare(sql)
+    if not _is_capped(masked):
         return "ok", "uncapped"  # the whole set comes back: nothing can dupe or vanish
     is_query = bool(re.search(r"\bSELECT\b", masked, re.I))
 
     # Every cap is judged, and a definite failure outranks an undecidable one — an early
     # `unknown` must not stop a later, provably broken cap from being reported.
     unknown: str | None = None
-    for clause, limit_text, limit_at in _statement_orderings(flat):
+    for clause, mclause, limit_text, limit_at in _statement_orderings(flat, masked):
         # A placeholder can only be hiding an ordering if it sits BEFORE the cap;
         # `LIMIT {n}` plainly cannot supply one.
         hidden_order = bool(_PLACEHOLDER.search(flat[:limit_at]))
@@ -252,7 +324,7 @@ def judge(sql: str) -> tuple[str, str]:
             return "fail", (f"{limit_text!r} caps a SELECT that has no ORDER BY at all — "
                             "the rows it returns are whatever the plan happens to emit.")
 
-        terms = _split_terms(clause)
+        terms = _split_terms(clause, mclause)
         if not terms:
             unknown = unknown or f"empty ORDER BY before {limit_text!r}"
             continue
@@ -295,8 +367,20 @@ def order_by_verdict(sql: str) -> str | None:
     return detail if state == "fail" else None
 
 
+def _function_at_line(tree: ast.AST) -> dict[int, str]:
+    """``{line: enclosing function name}`` for every line inside a def in this module."""
+    owner: dict[int, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for line in range(node.lineno, (node.end_lineno or node.lineno) + 1):
+                # Walk order is outer-to-inner per branch, so a nested def wins its own
+                # lines — which is what we want for a helper defined inside a reader.
+                owner[line] = node.name
+    return owner
+
+
 def _scan_backend() -> tuple[list[str], dict[str, int], dict[str, int]]:
-    """Return ``(failures, {package: examined}, {file: undecidable_count})``."""
+    """Return ``(failures, {package: examined}, {file::function: undecidable_count})``."""
     failures: list[str] = []
     examined: dict[str, int] = {}
     undecidable: dict[str, int] = {}
@@ -312,23 +396,27 @@ def _scan_backend() -> tuple[list[str], dict[str, int], dict[str, int]]:
             # sweep exists to prevent.
             failures.append(f"{rel}: could not be scanned ({exc.__class__.__name__}: {exc})")
             continue
+        owner = _function_at_line(tree)
         for lineno, sql in _sql_literals(tree):
-            flat = _mask_placeholders(" ".join(_strip_sql_comments(sql).split()))
-            if not re.search(r"\bLIMIT\b", flat, re.I):
+            _, masked = _prepare(sql)
+            if not _is_capped(masked):
                 continue
             # A capped literal is in scope if it orders rows or looks like a query;
             # `LIMIT` alone matches English prose ("exceeds the 10 MB limit").
-            if not (re.search(r"\bORDER\s+BY\b", flat, re.I)
-                    or re.search(r"\bSELECT\b", flat, re.I)):
+            if not (re.search(r"\bORDER\s+BY\b", masked, re.I)
+                    or re.search(r"\bSELECT\b", masked, re.I)):
                 continue
             state, detail = judge(sql)
             if state == "fail":
                 failures.append(f"{rel}:{lineno}: {detail}")
             elif state == "unknown":
-                # Counted, not just named: two undecidable readers in one file must not
-                # collapse into one entry, or adding a third would be silent. A count
-                # survives the line churn that an exact line-number key would suffer.
-                undecidable[str(rel)] = undecidable.get(str(rel), 0) + 1
+                # Keyed by the ENCLOSING FUNCTION, not the file: two undecidable readers
+                # in one file must stay distinguishable, or one becoming decidable while
+                # another appeared would net out to no change and let the new one inherit
+                # the old registration. A function name is also stable under the line
+                # churn an exact line-number key would suffer.
+                site = f"{rel}::{owner.get(lineno, '<module>')}"
+                undecidable[site] = undecidable.get(site, 0) + 1
             examined[rel.parts[0]] = examined.get(rel.parts[0], 0) + 1
     return failures, examined, undecidable
 
@@ -480,9 +568,15 @@ def test_scan_actually_examined_the_backend():
 # Shrinkage means one stopped, and leaving a stale name here would quietly re-admit it
 # later. (`crm/gtd_service.py` sat here until the scan proved its ORDER BYs are literal
 # and already end on `t.id` — which is why this side is asserted too.)
+#
+# Keyed by enclosing FUNCTION, not by file: `crm/service.py` holds two undecidable
+# readers, and a file-level count would net out to no change if one became decidable
+# while a different one appeared — letting the newcomer inherit a registration that was
+# never about it.
 UNDECIDABLE_SITES = {
-    "crm/service.py": 2,          # list_contacts + search_contacts share {order_by}
-    "crm/scoring_service.py": 2,  # backfill_scores' two `{where} {order} LIMIT %s` reads
+    "crm/service.py::list_contacts": 1,
+    "crm/service.py::search_contacts": 1,
+    "crm/scoring_service.py::backfill_scores": 2,  # the deals read and the contacts read
 }
 
 
@@ -522,17 +616,24 @@ def test_capped_readers_have_a_total_order():
 # ── readers whose ORDER BY the scan cannot resolve ───────────────────────────────
 
 class _Recorder:
-    """Records the SQL passed to the pg helpers; returns nothing useful."""
+    """Records the SQL passed to the pg helpers; returns nothing useful.
+
+    Stores it RAW. Collapsing whitespace here would destroy the newline that ends a
+    ``--`` comment, so the later comment strip would eat the rest of the statement —
+    silently turning every reader whose SQL carries an explanatory comment above its
+    ORDER BY (``get_pipeline`` among them) into a vacuous check that passes with the
+    tiebreaker removed. ``_prepare`` does the normalization, in the right order.
+    """
 
     def __init__(self):
         self.sql: list[str] = []
 
     def fetchall(self, sql, params=()):
-        self.sql.append(" ".join(sql.split()))
+        self.sql.append(sql)
         return []
 
     def fetchone(self, sql, params=()):
-        self.sql.append(" ".join(sql.split()))
+        self.sql.append(sql)
         return {"cnt": 0}
 
     def capped(self) -> list[str]:
@@ -540,8 +641,12 @@ class _Recorder:
         have an ORDER BY. Filtering on ORDER BY would make a reader that LOST its
         ordering disappear from the check instead of failing it, and a sibling call in
         the same test would still satisfy the non-empty assertion below."""
-        return [s for s in self.sql
-                if re.search(r"\bLIMIT\b", s, re.I) and re.search(r"\bSELECT\b", s, re.I)]
+        out = []
+        for sql in self.sql:
+            _, masked = _prepare(sql)
+            if _is_capped(masked) and re.search(r"\bSELECT\b", masked, re.I):
+                out.append(sql)
+        return out
 
 
 def _assert_recorded_orders_are_total(recorder: _Recorder):
@@ -667,14 +772,19 @@ def test_hardened_uncapped_readers_keep_their_tiebreaker(monkeypatch):
         if hasattr(module, "pg_fetchone"):
             monkeypatch.setattr(module, "pg_fetchone", r.fetchone)
         call()
-        ordered = [s for s in r.sql if re.search(r"\bORDER\s+BY\b", s, re.I)]
+        ordered = []
+        for sql in r.sql:
+            _, masked = _prepare(sql)
+            if re.search(r"\bORDER\s+BY\b", masked, re.I):
+                ordered.append((sql, _is_capped(masked)))
         assert ordered, f"{name} emitted no ORDER BY at all"
-        for sql in ordered:
+        for sql, already_capped in ordered:
             # Uncapped statements are judged under the capped rule on purpose — see the
             # docstring — by giving them the cap they do not yet have. Only statements
             # that lack one: appending to a query that is ALREADY capped would invent a
-            # second, orderless cap, which `judge` rightly refuses.
-            probe = sql if re.search(r"\bLIMIT\b", sql, re.I) else sql + " LIMIT 1"
+            # second, orderless cap, which `judge` rightly refuses. The probe is appended
+            # on a NEWLINE so it survives a trailing `--` comment in the source SQL.
+            probe = sql if already_capped else sql + "\nLIMIT 1"
             state, detail = judge(probe)
             assert state == "ok", f"{name}: {state}: {detail}\n  emitted SQL: {sql}"
             checked += 1
