@@ -17,21 +17,23 @@
 //   • inert      — no per-card checkbox, and an all-archived column offers no select-all.
 //   • the fetch  — the Archived facet is the ONE facet that widens the request, because a
 //                  client predicate cannot filter rows the server never sent.
-//   • restore    — the sheet's row is patched into the board IN PLACE (no refetch), which
-//                  is why POST /restore returns the deal instead of {"ok": true}; the patch
-//                  MERGES (the detail projection is narrower than the board's), it
-//                  invalidates any board GET already in flight (which would otherwise land
-//                  afterwards and undo a committed server write), and it drops the id from
-//                  the bulk selection, where it can have been sitting since before the
-//                  deal was archived.
+//   • restore    — the sheet's row is patched into the board IN PLACE, which is why POST
+//                  /restore returns the deal instead of {"ok": true}: the patch is what
+//                  makes the board correct, and it does not wait on the refresh that
+//                  follows it (that GET is silent and can fail invisibly). The patch
+//                  MERGES (the detail projection is narrower than the board's), no board
+//                  GET already in flight may land after it and undo a committed server
+//                  write, and it drops the id from the bulk selection, where it can have
+//                  been sitting since before the deal was archived.
 //   • failure    — a failed non-silent load toasts, because under "Archived only" a
 //                  swallowed failure renders an empty board that reads as "none archived".
 //   • deferral   — the facet made a load a USER ACTION, so the "don't clobber an optimistic
 //                  drag" rule stopped being a silent-load rule. A deferred load re-fires
 //                  WIDENED rather than reverting to the facet it was created under; it
-//                  re-fires LOUD, so a failure still toasts instead of being laundered into
-//                  a background refresh; and it re-fires ITSELF when the write that
-//                  invalidated it had already settled, leaving nobody else to.
+//                  still REPORTS its failure rather than laundering it into a silent
+//                  refresh, while deliberately not taking the page back to do so; and it
+//                  re-fires ITSELF when the write that invalidated it had already settled,
+//                  leaving nobody else to.
 //   • selection  — the prune intersects with the payload's LIVE ids, so a deal that is
 //                  archived OR gone loses its selection and a later restore cannot re-arm it.
 //
@@ -540,28 +542,32 @@ describe('PipelinePage — archived deals', () => {
   });
 
   it('drops a restored deal from the bulk selection instead of silently re-arming it', async () => {
-    // The mirror of the archived-while-selected test above. That one proves the id is
-    // MASKED while the deal stays archived; this one proves it is actually GONE, because
-    // masking alone is a trap: the selection Set still holds the id, and restoring — a
-    // recovery gesture, not a selection one — would hand it straight back to the next bulk
-    // move, on a deal the operator selected before it was ever archived.
+    // The mirror of the archived-while-selected test above — and deliberately the case that
+    // one does NOT cover. There, a board payload reports the deal archived, and `load`'s own
+    // intersection drops the id before any restore happens. Here NO payload ever does: the
+    // deal is archived elsewhere AFTER the board loaded, so the board's row still says live
+    // and the only thing that knows better is the sheet's re-fetched `archived_at` — which
+    // is exactly why the sheet re-fetches it. So the id is still in the Set at the moment
+    // the user restores, and restoring is a recovery gesture, not a selection one: it must
+    // not hand the deal to the next bulk move. The follow-up refresh cannot clean up after
+    // it either — that payload reports the deal LIVE, so an id that survives the restore
+    // survives the refresh too.
     const zebraLive = deal({ id: 2, title: 'Zebra rebuild', stage: 'lead', value: 99_999 });
-    routeApi({ live: [LIVE, zebraLive] });
+    const zebraArchived = { ...zebraLive, archived_at: '2026-08-24T00:00:00+00:00' };
+    routeApi({
+      live: [LIVE, zebraLive],
+      over: path => (path === '/api/crm/deals/2' ? zebraArchived : undefined),
+    });
     await render();
     await click(cardCheckbox('Zebra rebuild'), 'Zebra rebuild checkbox');
     expect(container.textContent).toContain('1 deal selected');
 
-    // Archived elsewhere (the assistant, a merge) — the id is masked, not dropped.
-    await pickArchivedFacet('Include archived');
-    expect(container.textContent).not.toContain('deal selected');
-
-    await click(card('Zebra rebuild'), 'archived card');
+    // The board still shows it as an ordinary live card; the sheet is where it turns out to
+    // be archived, and where the way back is offered.
+    await click(card('Zebra rebuild'), 'Zebra rebuild card');
     await click(button('Restore'), 'Restore');
     await flush();
 
-    // The deal is back and selectable — and the follow-up refresh, which reports it LIVE,
-    // is exactly what would hand a surviving id back to the bulk bar. The selection has to
-    // have been dropped at the restore for it to still be clear here.
     expect(cardCheckbox('Zebra rebuild')?.checked).toBe(false);
     expect(container.textContent).not.toContain('deal selected');
   });
