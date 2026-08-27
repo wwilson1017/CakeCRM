@@ -411,10 +411,16 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   board's load and the sheet opening. Restore hands the returned row UP (`onRestored`) for
   the board to patch in place, which is why the route returns the deal rather than
   `{"ok": true}`: a silent refetch can fail invisibly and leave the board still showing a
-  deal as archived after a restore that happened. Mark Won/Lost hide on an archived deal and
-  `DealForm`'s stage `<select>` is disabled there — the server refuses the stage change and
-  rejects the **whole** update, so an editable control would discard every other field the
-  user just typed. `include_archived` is **refused (400), not ignored**, alongside
+  deal as archived after a restore that happened. The board is also refreshed after the patch
+  (a restore closes the sheet the way `onClose` does, which refreshes so an in-sheet note
+  reaches `last_activity_at`) — the patch is what makes the board *correct*, the refresh only
+  makes it *fresher*. `CrmDashboardPage` wires `onRestored` too: the banner renders on any
+  host, since it reads the sheet's own re-fetched `archived_at`. Mark Won/Lost hide on an
+  archived deal, and `DealForm` both disables its stage `<select>` **and omits `stage` from
+  the PUT** — the server refuses the stage change and rejects the **whole** update, so an
+  editable control would discard every other field the user just typed, and a *disabled* one
+  still would if the deal had moved stage elsewhere since the board loaded: a disabled
+  control's value is not user intent, so the field is not sent at all. `include_archived` is **refused (400), not ignored**, alongside
   `stage`/`contact_id`: that branch is `list_deals`, which keeps the sweep, and honoring it
   there would be a second hole. Scope ceiling: view + restore only — no archive route, no
   merge UI, no archived-deals page. Note restoring a **merge source** is not an undo: the
