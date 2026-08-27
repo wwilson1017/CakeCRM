@@ -304,8 +304,13 @@ async function pickActivityFacet(option: 'No activity logged') {
  *  in-flight-load test below, and `await`ing the mock cannot express it. */
 function deferred<T>() {
   let settle!: (value: T) => void;
-  const promise = new Promise<T>(resolve => { settle = resolve; });
-  return { promise, resolve: settle };
+  let fail!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolve, reject) => { settle = resolve; fail = reject; });
+  // The rejection path matters as much as the resolution one: a request that FAILS
+  // instantly is over before any assertion can look at what the page did while it was in
+  // flight, which is exactly how a mid-flight guard goes quietly vacuous.
+  promise.catch(() => {}); // pre-attach, so holding an unrejected promise is never "unhandled"
+  return { promise, resolve: settle, reject: fail };
 }
 
 function stageColumn(stage: string): HTMLElement {
@@ -703,12 +708,18 @@ describe('PipelinePage — archived deals', () => {
     // settle: taking the page at that moment blanks an open form mid-edit and loses what
     // the user typed. So: the toast fires, and the board stays put.
     const put = deferred<CrmDeal>();
+    // The replayed GET is HELD, not failed outright. That is the whole point: a replay that
+    // takes the page does so only WHILE its request is in flight, so a mock that rejects
+    // immediately puts the page back before any assertion can see it — and the spinner half
+    // of this test passes against the bug it exists to catch. Verified: with an
+    // instantly-failing mock, reverting a replay site to loud left all 16 tests green.
+    const replayed = deferred<{ deals: CrmDeal[] }>();
     routeApi({
       over: (path, init) => {
         if (path === `/api/crm/deals/${LIVE.id}` && init?.method === 'PUT') return put.promise;
-        // The widened GET fails — and the ONLY widened GET this test ever issues is the
-        // replayed one, because the facet flip below is deferred before it can fetch.
-        if (path === ARCHIVED_PATH) throw new Error('network down');
+        // The ONLY widened GET this test ever issues is the replayed one, because the facet
+        // flip below is deferred before it can fetch.
+        if (path === ARCHIVED_PATH) return replayed.promise;
         return undefined;
       },
     });
@@ -721,15 +732,22 @@ describe('PipelinePage — archived deals', () => {
     // below comes from the REPLAY and not from the original load.
     expect(toast.error).not.toHaveBeenCalled();
 
+    // The write settles, so the deferred load replays — and its GET is now in flight.
     await act(async () => { put.resolve({ ...LIVE, stage: 'won' }); });
     await flush();
-    await flush();
-    expect(toast.error).toHaveBeenCalledWith('Failed to load deals.');
-    // ...and the page is still the page. When `loading` is true this container holds the
-    // spinner and NOTHING else — no heading, no filter bar, no open form — so the heading
-    // still being here is the assertion that the replay did not take the screen.
+
+    // THE HALF THAT MATTERS, asserted while the replay is still running. When `loading` is
+    // true this container holds the spinner and NOTHING else — no heading, no filter bar,
+    // no open form. So the heading still being here says the replay did not take the
+    // screen out from under whatever the user was doing when the write happened to settle.
     expect(container.textContent).toContain('Pipeline');
     expect(container.querySelector('.animate-spin')).toBeNull();
+
+    // ...and now it fails, and the failure is still REPORTED despite having been demoted
+    // to a background request — the other half of the split.
+    await act(async () => { replayed.reject(new Error('network down')); });
+    await flush();
+    expect(toast.error).toHaveBeenCalledWith('Failed to load deals.');
   });
 
   it('re-fires a load that the settling write left nobody to replay', async () => {

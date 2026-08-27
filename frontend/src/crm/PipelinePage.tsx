@@ -131,6 +131,23 @@ export function PipelinePage() {
   const includeArchived = advanced.archived !== null;
   const includeArchivedRef = useRef(includeArchived);
 
+  // THE one definition of "wake the deferred load", consumed by all three places that can
+  // wake one: a settling single-deal write, a settling bulk move, and `load`'s own
+  // self-replay. It was three copies, and the rule they encode is subtle enough that a
+  // future edit to one of them would very likely not be made to the other two: replay
+  // SILENTLY (a replay fires whenever a write happens to settle, and `loading` returns the
+  // spinner INSTEAD of the page — taking the screen at that moment blanks an open form
+  // mid-edit) while still carrying the original request's error REPORTING across, so a
+  // user-initiated load that got deferred does not have its failure swallowed.
+  // No-ops when nothing is pending, so callers only have to know that writes have settled.
+  const replayDeferredLoad = useCallback(() => {
+    if (!pendingRefresh.current) return;
+    pendingRefresh.current = false;
+    const reportErrors = pendingRefreshReportErrors.current;
+    pendingRefreshReportErrors.current = false;
+    void loadRef.current(true, { reportErrors });
+  }, []);
+
   // Bulk stage moves (issue #55). Selection is a plain Set of deal ids; `bulkPending` has a
   // ref twin because the mutators read it SYNCHRONOUSLY to bail out, and state wouldn't have
   // updated yet. The lock is held from the click until the reconcile refetch settles — that
@@ -210,10 +227,7 @@ export function PipelinePage() {
         // it here. That was a silent staleness bug before #83; now that a facet change can
         // be the deferred load, it would read as the board ignoring the click outright.
         if (pendingWrites.current === 0) {
-          pendingRefresh.current = false;
-          const report = pendingRefreshReportErrors.current;
-          pendingRefreshReportErrors.current = false;
-          queueMicrotask(() => { void loadRef.current(true, { reportErrors: report }); });
+          queueMicrotask(replayDeferredLoad);
         }
         return false;
       }
@@ -248,7 +262,9 @@ export function PipelinePage() {
     }
     finally { if (!isSilent && spinnerGen.current === mySpinner) setLoading(false); }
     return false;
-  }, []);
+    // `replayDeferredLoad` is a stable useCallback, so naming it here costs nothing
+    // and keeps `load`'s identity stable — which the mount effect below depends on.
+  }, [replayDeferredLoad]);
 
   useEffect(() => { loadRef.current = load; }, [load]);
 
@@ -335,16 +351,11 @@ export function PipelinePage() {
         // last_activity_at even though the stage PUT was in flight at dismissal time. Since
         // #83 an Archived-facet change can be the deferred load too; it re-fires silently
         // but reads the CURRENT facet from the ref, so it still widens the board.
-        if (pendingWrites.current === 0 && pendingRefresh.current) {
-          pendingRefresh.current = false;
-          const report = pendingRefreshReportErrors.current;
-          pendingRefreshReportErrors.current = false;
-          load(true, { reportErrors: report });
-        }
+        if (pendingWrites.current === 0) replayDeferredLoad();
       }
     });
     dealWriteChain.current.set(dealId, run);
-  }, [load]);
+  }, [replayDeferredLoad]);
 
   // Drag handler. Resolves immediately so the Kanban hook ends its gesture and
   // re-syncs from `data` right away; persistence + rollback are data-driven (via
@@ -587,18 +598,13 @@ export function PipelinePage() {
       }
       // Fire a refresh that deferred while this write was in flight (same check moveDealStage
       // does), so a sheet dismissal during the bulk still lands its fresh derived fields.
-      if (pendingWrites.current === 0 && pendingRefresh.current) {
-        pendingRefresh.current = false;
-        const report = pendingRefreshReportErrors.current;
-        pendingRefreshReportErrors.current = false;
-        load(true, { reportErrors: report });
-      }
+      if (pendingWrites.current === 0) replayDeferredLoad();
     } finally {
       if (!writeSettled) pendingWrites.current--;
       bulkPendingRef.current = false;
       setBulkPending(false);
     }
-  }, [bulkSelected, liveFilteredDeals, deals, clearSelection, load]);
+  }, [bulkSelected, liveFilteredDeals, deals, clearSelection, load, replayDeferredLoad]);
 
   // #18: within each stage column, order by lead_score (hottest first); unscored rows
   // (null) sink below scored ones. Array.sort is stable, so the server's updated_at DESC
