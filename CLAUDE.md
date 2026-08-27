@@ -523,8 +523,8 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   clear 4.5:1, and a 4-step neutral ramp cannot do that and keep its old spread. Will's gate
   chose to **re-space the token values, not migrate the ~117 call sites**, so `ink-dim` sits
   just inside the lightest passing value (`#595959`, edge `#5c5c5c` / `#adaba5`, edge
-  `#acaaa4`) with `ink-soft`/`ink-mute`
-  above it at even CIE L* steps. The three secondaries stay as distinct from each other as
+  `#acaaa4`) with `ink-soft`/`ink-mute` above it at even CIE L* steps. The three
+  secondaries stay as distinct from each other as
   they were (~6-7 L*; the old LIGHT ramp's own mute→soft step was already only 6) — what
   shrank is the primary→secondary gap, 27 L* → 9 light and 31 → 10 dark. The binding surface
   is **never a raw token**: `tint()` chips and row hovers composite an ink wash over
