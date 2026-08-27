@@ -104,10 +104,10 @@ def auto_title(conversation_id: str, first_message: str) -> str:
 def list_conversations(limit: int = 50, offset: int = 0) -> list[dict]:
     """Conversations newest-first, each with a message count and a short preview.
 
-    This is the app's only true OFFSET paginator over a timestamp, so the `c.id`
-    tiebreaker is what stops a conversation appearing on two pages or on none when
-    `updated_at` ties (issue #58). The LATERAL's own `ORDER BY seq DESC` needs no
-    tiebreaker: (conversation_id, seq) is unique.
+    This was the last OFFSET paginator still missing a tiebreaker — the CRM's contact
+    and company lists already ended on `id` — so the `c.id` term is what stops a
+    conversation appearing on two pages or on none when `updated_at` ties (issue #58).
+    The LATERAL's own `ORDER BY seq DESC` needs none: (conversation_id, seq) is unique.
     """
     limit = max(1, min(int(limit), 200))
     offset = max(0, int(offset))

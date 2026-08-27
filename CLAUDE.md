@@ -1061,9 +1061,13 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   reintroduce the bug — which is why #59, server-side pipeline pagination, is
   `Blocked by: #58`.
   Enforced by `backend/tests/test_query_determinism.py`, which AST-scans every non-test
-  backend module — it reads f-strings and split literals, stays silent on ORDER BYs it
-  cannot resolve from source (those are covered by behavioral tests on the emitted
-  SQL), and so needs no allowlist.
+  backend module (it reads f-strings and implicitly-concatenated literals). An ORDER BY
+  assembled at RUNTIME is reported as `unknown`, never waved through: the exact set is
+  pinned in `UNDECIDABLE_SITES`, keyed by enclosing function, and each entry owes a
+  behavioral test on the SQL that reader really emits — so a reader cannot opt out of
+  the guard by moving its ordering into a variable. Expect to edit that registry when a
+  reader starts or stops interpolating its ORDER BY (#59 and #77 both touch such
+  readers); the failure message says which way it moved and what to do.
 - Never add a route to `crm/gtd_router.build_router` that should stay private: that
   factory is mounted TWICE, and its second mount is the no-login public web app.
   Authenticated-only routes belong on the module-level `router` instead.

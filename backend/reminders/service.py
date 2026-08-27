@@ -230,10 +230,10 @@ def delete_reminder(reminder_id: str) -> dict:
 def get_due_reminders(limit: int = 50) -> list[dict]:
     """Pending reminders whose due_at has passed, soonest first.
 
-    `id` breaks due_at ties (issue #58). More than cosmetic here: a backlog larger than
-    ``limit`` that shares one due_at would otherwise expose an arbitrary slice per tick,
-    so a given reminder could be passed over repeatedly instead of the tick draining a
-    stable prefix.
+    `id` breaks due_at ties (issue #58), which a recurring series produces on every
+    occurrence. It fixes WHICH tied reminders a tick fires first, not whether they all
+    fire: ``claim_reminder`` moves each row out of ``pending``, so a backlog larger than
+    ``limit`` drains either way and no reminder can be starved.
     """
     return [_transform(r) for r in pg_fetchall(
         "SELECT * FROM reminders WHERE status = 'pending' AND due_at <= now() "

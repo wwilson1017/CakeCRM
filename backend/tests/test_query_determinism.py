@@ -228,17 +228,28 @@ _CAP = re.compile(r"\b(?:LIMIT|FETCH\s+(?:FIRST|NEXT))\b", re.I)
 _OFFSET = re.compile(r"\bOFFSET\b", re.I)
 
 
+# How far after a LIMIT/FETCH an OFFSET may sit and still belong to that same cap.
+# `LIMIT %s OFFSET %s` puts about nine characters between them; thirty is slack.
+_OFFSET_ADJACENT = 30
+
+
 def _caps(masked: str) -> list[re.Match]:
-    """Where this statement bounds its result set.
+    """Where this statement bounds its result set, in textual order.
 
     ``LIMIT`` and ``FETCH FIRST/NEXT`` are caps. A bare ``OFFSET`` is one too — it is a
-    valid paginator on its own and skipping it would let an unordered
-    ``SELECT … OFFSET %s`` bypass the guard entirely — but ONLY when no LIMIT/FETCH is
-    present, because in the ordinary ``LIMIT %s OFFSET %s`` the OFFSET is part of the
-    same cap, and counting it separately would invent a second, orderless one.
+    valid paginator on its own, and ignoring it would let an unordered
+    ``SELECT … OFFSET %s`` bypass the guard entirely.
+
+    An OFFSET is skipped only when it TRAILS a LIMIT/FETCH closely enough to be part of
+    that same cap (the ordinary ``LIMIT %s OFFSET %s``), where counting it again would
+    invent a second, orderless cap. Suppressing every OFFSET whenever the statement
+    happened to contain a LIMIT anywhere was the earlier rule, and it hid a subquery's
+    own bare-OFFSET cap behind an unrelated outer LIMIT.
     """
     caps = list(_CAP.finditer(masked))
-    return caps or list(_OFFSET.finditer(masked))
+    offsets = [m for m in _OFFSET.finditer(masked)
+               if not any(0 <= m.start() - c.end() <= _OFFSET_ADJACENT for c in caps)]
+    return sorted(caps + offsets, key=lambda m: m.start())
 
 
 def _is_capped(masked: str) -> bool:
@@ -334,11 +345,17 @@ def judge(sql: str) -> tuple[str, str]:
         # only to a single-SELECT statement — in a CTE or subquery the GROUP BY found
         # textually may belong to an inner scope and prove nothing about the outer rows.
         if len(re.findall(r"\bSELECT\b", masked, re.I)) == 1:
+            # Located on `masked` so keyword text sitting inside a quoted VALUE cannot
+            # pose as a GROUP BY clause and hand this query a group key it does not have
+            # — the one place the scanner could still fail silently. Sliced from `flat`,
+            # because the comparison against the ORDER BY needs the real column text.
             group_by = re.search(
-                r"\bGROUP\s+BY\b(.*?)(?=\bHAVING\b|\bORDER\s+BY\b|\bLIMIT\b|$)", flat, re.I)
+                r"\bGROUP\s+BY\b(.*?)(?=\bHAVING\b|\bORDER\s+BY\b|\bLIMIT\b|$)", masked, re.I)
             if group_by:
+                lo, hi = group_by.span(1)
+                keys = _split_terms(flat[lo:hi], masked[lo:hi])
                 ordered = {_normalize(t) for t in terms}
-                if all(_normalize(k) in ordered for k in _split_terms(group_by.group(1))):
+                if keys and all(_normalize(k) in ordered for k in keys):
                     continue
 
         last = terms[-1]
@@ -455,6 +472,10 @@ def _scan_backend() -> tuple[list[str], dict[str, int], dict[str, int]]:
     "SELECT * FROM t WHERE marker = '--' LIMIT 10",
     # An undecidable inner cap must not mask a provably broken outer one.
     "SELECT * FROM (SELECT * FROM a ORDER BY {s} LIMIT 5) x ORDER BY created_at LIMIT 10",
+    # GROUP BY text inside a quoted VALUE must not hand the query a group key.
+    "SELECT * FROM t WHERE note = 'GROUP BY status ORDER BY x' ORDER BY status LIMIT 5",
+    # A bare OFFSET is a cap of its own; an unrelated outer LIMIT must not hide it.
+    "SELECT * FROM (SELECT * FROM a ORDER BY created_at OFFSET 10) s ORDER BY id LIMIT 5",
 ])
 def test_scanner_rejects_a_non_total_capped_order(sql):
     state, detail = judge(sql)
@@ -549,19 +570,25 @@ def test_scan_actually_examined_the_backend():
         "updating. Do not delete an entry to make this pass without checking which.")
 
 
-# Files holding a capped reader whose ordering is assembled at runtime, so source alone
-# cannot settle it. Each MUST be covered by a behavioral test asserting the SQL it really
-# emits — named here so the pairing is checkable by eye:
+# Capped readers whose ordering is assembled at runtime, so source alone cannot settle
+# them. ONLY these are registered, and each owes a behavioral test on the SQL it really
+# emits — that pairing is the whole reason `unknown` is not simply waved through:
 #
-#   crm/service.py         list_contacts / search_contacts
-#                            -> test_dynamic_order_by_contact_lists
-#                          list_companies  -> test_dynamic_order_by_company_list
-#                          search_deals    -> test_dynamic_order_by_deal_search
-#                          list_tasks (a fragment lookup once #77 lands)
-#                            -> test_order_by_fragment_constants_are_total
-#   crm/scoring_service.py backfill_scores / _stale_ids, which build the ORDER BY and the
-#                          LIMIT in separate literals
-#                            -> test_scoring_backfill_orders_are_total
+#   crm/service.py::list_contacts    ORDER BY {order_by}, from _CONTACT_SORTS
+#   crm/service.py::search_contacts  same fragment
+#                                      -> test_dynamic_order_by_contact_lists
+#   crm/scoring_service.py::backfill_scores
+#                                    two reads shaped `{where} {order} LIMIT %s`, whose
+#                                    ORDER BY lives in a separate local
+#                                      -> test_scoring_backfill_orders_are_total
+#
+# Other readers interpolate too but stay DECIDABLE, so they are deliberately absent:
+# `list_companies` and `search_deals` end on a literal `id` term after the interpolated
+# column, and `_stale_ids` is one implicitly-concatenated literal ending on `id` — the
+# scan judges all three directly. They keep behavioral tests anyway, as belt and braces
+# against the fragment changing shape. (`list_tasks` joins the decidable group when #77
+# turns its ORDER BY into a `_TASK_SORTS` lookup; that constant is checked by
+# test_order_by_fragment_constants_are_total.)
 #
 # A to-do list, not an exemption list — and pinned EXACTLY, both directions. Growth means
 # a reader started hiding its ordering from the scan and owes a behavioral test first.
