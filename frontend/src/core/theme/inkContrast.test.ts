@@ -88,11 +88,27 @@ const LIGHT_TOKENS = declarations(CSS.slice(0, CSS.indexOf('\n.dark {')));
 const DARK_TOKENS = { ...LIGHT_TOKENS, ...declarations(DARK_BLOCK) };
 
 const INK_TOKENS = ['ink', 'ink-mute', 'ink-soft', 'ink-dim'] as const;
-const STAGES = ['lead', 'qualified', 'proposal', 'negotiation', 'won', 'lost'] as const;
 
 /**
- * Every background a neutral ink token is painted on, per the components that render them.
+ * The pipeline stages, DERIVED from the stylesheet rather than copied from
+ * `crm/constants.ts`'s `STAGE_ORDER`. Two reasons: nothing under `core/` imports from `crm/`
+ * (a layering boundary this test has no business breaking), and a hand-copied list is the same
+ * silent-drift bug the palette parsing above exists to avoid — add a stage token and its 12%
+ * wash would otherwise ship unmeasured with CI green.
+ */
+const STAGES = Object.keys(LIGHT_TOKENS)
+  .filter(k => k.startsWith('stage-'))
+  .map(k => k.slice('stage-'.length));
+
+/**
+ * Every background an ink-family token is painted on, per the components that render them.
  * Keys are `<wash>/<base>` so a failure names the exact composite.
+ *
+ * Deliberately NOT covered, because it is a different question: a brand-hue chip that carries
+ * its OWN hue as text (`tint(CORAL,15)` + CORAL in `PriorityBadge urgent`, `tint(SAGE,12)` +
+ * SAGE, …). Those pairs are about the status/stage hues, which #54 already tuned per theme;
+ * this guard is about the neutral ramp. The one place an ink token DOES land on a brand wash
+ * (`AiTouchDetail`'s banner: `INK` on `tint(GOLD,10)`) is included below.
  */
 function surfaces(t: Record<string, string>): Record<string, Rgb> {
   const ink = hexToRgb(t.ink);
@@ -101,12 +117,12 @@ function surfaces(t: Record<string, string>): Record<string, Rgb> {
     const b = hexToRgb(t[base]);
     out[base] = b;
 
-    // A single ink wash covers two different things that happen to composite identically:
-    //   - a row/tab hover overlay — `shared/styles.HOVER` (5% light / 6% dark) and the
-    //     `tint(INK,6)` hovers the collection-layer list rows use;
+    // A single ink wash covers two things that happen to composite identically:
+    //   - the row/tab hover overlay `shared/styles.HOVER`, which is itself an ink tint —
+    //     5% in light (`rgba(41,41,41,.05)`) and 6% in dark (`rgba(240,239,232,.06)`);
     //   - an ink-washed chip — `tint(INK,5)` StatusBadge inactive (ink-dim text) and
     //     `tint(INK,6)` PriorityBadge low / ScorePill cool / AiTouchDetail (ink-soft text).
-    // Both percentages are live in the app, so both are checked.
+    // Both percentages are live in both themes, so both are checked against both.
     for (const pct of [5, 6]) {
       const wash = over(ink, pct, b);
       out[`ink${pct}/${base}`] = wash;
@@ -114,6 +130,11 @@ function surfaces(t: Record<string, string>): Record<string, Rgb> {
       // actually binds the ramp in both themes.
       out[`ink${pct}/ink${pct}/${base}`] = over(ink, pct, wash);
     }
+
+    // `AiTouchDetail`'s stale/superseded banner: `tint(GOLD,10)` carrying INK.
+    out[`gold10/${base}`] = over(hexToRgb(t.amber), 10, b);
+    // `shared/collection`'s `hover:bg-line/50` rows, which carry `text-muted` (= ink-mute).
+    out[`line50/${base}`] = over(hexToRgb(t.line), 50, b);
 
     // Pipeline deal cards and deal chips: `tint(STAGE_COLORS[s].color, 12)` carrying
     // ink-dim / ink-mute text (crm/constants.ts `stage()`).
@@ -130,15 +151,20 @@ describe.each([
 ])('%s theme neutral ink ramp', (themeName, tokens) => {
   it('parsed a complete palette out of index.css', () => {
     // Fail closed: a rename or a regex miss must break the suite, not silently check nothing.
-    for (const k of [...INK_TOKENS, 'card', 'bg', 'raised', ...STAGES.map(s => `stage-${s}`)]) {
+    // STAGES is derived, so assert it is non-empty — an empty derivation would quietly drop
+    // every stage wash from the surface list while the ratio test still went green.
+    expect(STAGES.length, 'no --color-ck-stage-* tokens parsed from index.css').toBeGreaterThan(0);
+    for (const k of [...INK_TOKENS, 'card', 'bg', 'raised', 'line', 'amber', ...STAGES.map(s => `stage-${s}`)]) {
       expect(tokens[k], `${themeName}: --color-ck-${k} missing from index.css`).toMatch(/^#[0-9a-fA-F]{6}$/);
     }
   });
 
   it('clears WCAG AA 4.5:1 on every surface it is painted on', () => {
     const surf = surfaces(tokens);
-    // 3 raw + per base (2 ink washes + 2 stacked + 6 stage washes) × 3 bases = 33.
-    expect(Object.keys(surf).length).toBe(3 + 3 * (2 + 2 + STAGES.length));
+    // 3 raw + per base (2 ink washes + 2 stacked + gold + line + one per stage) × 3 bases.
+    // Derived rather than hard-coded, so it still catches a key COLLISION (two compositions
+    // overwriting each other) without failing every time a stage is added.
+    expect(Object.keys(surf).length).toBe(3 + 3 * (2 + 2 + 2 + STAGES.length));
 
     const failures: string[] = [];
     for (const token of INK_TOKENS) {

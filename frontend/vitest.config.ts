@@ -16,8 +16,12 @@ import { defineConfig } from 'vitest/config'
  * `mergeConfig(viteConfig, defineConfig({ test: { … } }))` from 'vitest/config' rather than
  * hand-copying them.
  *
- * Every option below MUST stay nested under `test` — vitest silently ignores these keys at the
- * top level, which would turn each guard into a no-op that still looks configured.
+ * Every TEST-RUNNER option below MUST stay nested under `test` — vitest silently ignores those
+ * keys at the top level, which would turn each guard into a no-op that still looks configured.
+ * The rule is about `test.*` keys specifically, NOT about the file: Vite-level keys such as
+ * `define` (added below for the WCAG guard) are legitimately top-level siblings of `test`, and
+ * moving one INTO `test` is the same silent no-op in the other direction — `test.define` is not
+ * a vitest field, so the substitution would simply never happen.
  */
 export default defineConfig({
   // The literal text of the shipped stylesheet, for `core/theme/inkContrast.test.ts` — the WCAG
