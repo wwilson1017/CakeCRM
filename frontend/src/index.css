@@ -52,14 +52,17 @@
      `ScorePill cool` / `AiTouchDetail` = ink 6%, and a chip inside a hovered row stacks two),
      and pipeline deal cards sit on a 12% stage-hue wash. The binding surface is therefore
      never a raw token — it is a chip on a hovered row, `ink 6% over ink 6% over raised` in
-     light (4.60:1) and the same over `card` in dark (4.57:1); the raw tokens sit 1-2 points
-     clear. `core/theme/inkContrast.test.ts` enumerates all 33 surfaces and fails CI on any
+     light (4.59:1) and the same over `card` in dark (4.56:1); the raw tokens sit 1-2 points
+     clear. `core/theme/inkContrast.test.ts` enumerates all 39 surfaces and fails CI on any
      pair under 4.5:1, so this ramp cannot silently drift.
 
      The consequence, accepted deliberately on issue #68: the ramp is COMPRESSED. A 4-step
-     neutral ramp cannot clear 4.5:1 everywhere and keep its old spread — the lightest
-     passing light value (#595959) is darker than the old `ink-mute` (#666666), which is why
-     Will's gate chose to re-space the ramp rather than migrate call sites. The three
+     neutral ramp cannot clear 4.5:1 everywhere and keep its old spread — the lightest light
+     value that clears it is #5a5a5a (4.52:1), already darker than the old `ink-mute`
+     (#666666), which is why Will's gate chose to re-space the ramp rather than migrate call
+     sites. `ink-dim` takes the next step down (#595959, 4.59:1) to keep a working margin
+     rather than sitting 0.02 off the threshold; dark's #adaba5 (4.56:1) IS the edge value —
+     one step darker fails at 4.49:1. The three
      secondary steps sit ABOVE the new `ink-dim` at even CIE L* increments (~6 L* light,
      ~7 L* dark — the old LIGHT ramp's own mute→soft step was only 6 L*, so the three stay as
      distinct from each other as they ever were). What actually shrank is the gap between

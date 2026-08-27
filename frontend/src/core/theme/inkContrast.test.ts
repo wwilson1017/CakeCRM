@@ -22,10 +22,10 @@ const CSS: string = typeof __INDEX_CSS__ === 'string' ? __INDEX_CSS__ : '';
  * would drift silently, which is the exact failure mode this is here to stop.
  *
  * "Surface" is deliberately more than the three raw background tokens. Chips and row hovers
- * composite a translucent wash over them, and that wash is what actually binds the ramp — in
- * light the worst surface is a 6% ink chip on a hovered page-bg row, in dark it is a 12%
- * amber stage wash over `card`. Every composite below is a pairing that exists in the app; see
- * SURFACES for the call site each one comes from.
+ * composite a translucent wash over them, and that wash is what actually binds the ramp: in
+ * BOTH themes the worst surface is a 6% ink chip inside a 6%-ink-hovered row — over `raised`
+ * in light (4.59:1) and over `card` in dark (4.56:1). Every composite below is a pairing that
+ * exists in the app; see `surfaces()` for the call site each one comes from.
  */
 
 const AA_NORMAL_TEXT = 4.5;
@@ -58,33 +58,52 @@ function contrast(fg: Rgb, bg: Rgb): number {
  * `color-mix(in srgb, C pct%, transparent)` painted over an opaque backdrop — what
  * `shared/styles.tint()` produces. Mixing with `transparent` in sRGB yields colour C at
  * alpha pct/100; source-over compositing onto an opaque backdrop is then a plain lerp.
+ *
+ * Channels stay FLOAT — deliberately not rounded to 8-bit per layer. A browser composites a
+ * whole stack in one high-precision pass, so rounding between layers models something that
+ * does not happen, and it rounds in the optimistic direction: on the stacked chip-in-hovered-row
+ * surface it reported 4.601:1 where exact composition gives 4.591:1. Harmless at today's values,
+ * but it is exactly the wrong error to carry in a threshold guard.
  */
 function over(color: Rgb, pct: number, under: Rgb): Rgb {
   const a = pct / 100;
-  return [0, 1, 2].map(i => Math.round(color[i] * a + under[i] * (1 - a))) as Rgb;
+  return [0, 1, 2].map(i => color[i] * a + under[i] * (1 - a)) as Rgb;
 }
 
 // ── Read the palette out of the real stylesheet ──────────────────────────────
 
-/** Every `--color-ck-*: #hex` declaration in a slice of the stylesheet. */
+/**
+ * Comments stripped BEFORE any parsing. `index.css` quotes hex values and token names freely in
+ * prose, and a declaration someone comments out is dead to the browser — parsing it would report
+ * a colour the app never paints, and would do so in the reassuring direction.
+ */
+const LIVE_CSS = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+
+/**
+ * Every `--color-ck-*` declaration in a slice, keyed by name with its RAW value text. The value
+ * is captured as "everything up to the semicolon" rather than matched as a hex on purpose: a
+ * token whose value stops being a plain hex (an `rgb()`, a `var()`, a `color-mix()`) must show
+ * up here and be REJECTED loudly, not silently vanish from the palette and take its surfaces
+ * with it.
+ */
 function declarations(slice: string): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const m of slice.matchAll(/--color-ck-([a-z0-9-]+):\s*(#[0-9a-fA-F]{3,6})\s*;/g)) {
-    out[m[1]] = m[2];
+  for (const m of slice.matchAll(/--color-ck-([a-z0-9-]+):\s*([^;]+);/g)) {
+    out[m[1]] = m[2].trim();
   }
   return out;
 }
 
 /** The `.dark { … }` override block — matched on its own line so `.dark .hljs {` can't win. */
 const DARK_BLOCK = (() => {
-  const start = CSS.indexOf('\n.dark {');
+  const start = LIVE_CSS.indexOf('\n.dark {');
   if (start < 0) throw new Error('index.css: no `.dark {` block found');
-  const end = CSS.indexOf('\n}', start);
+  const end = LIVE_CSS.indexOf('\n}', start);
   if (end < 0) throw new Error('index.css: unterminated `.dark {` block');
-  return CSS.slice(start, end);
+  return LIVE_CSS.slice(start, end);
 })();
 
-const LIGHT_TOKENS = declarations(CSS.slice(0, CSS.indexOf('\n.dark {')));
+const LIGHT_TOKENS = declarations(LIVE_CSS.slice(0, LIVE_CSS.indexOf('\n.dark {')));
 const DARK_TOKENS = { ...LIGHT_TOKENS, ...declarations(DARK_BLOCK) };
 
 const INK_TOKENS = ['ink', 'ink-mute', 'ink-soft', 'ink-dim'] as const;
@@ -95,6 +114,11 @@ const INK_TOKENS = ['ink', 'ink-mute', 'ink-soft', 'ink-dim'] as const;
  * (a layering boundary this test has no business breaking), and a hand-copied list is the same
  * silent-drift bug the palette parsing above exists to avoid — add a stage token and its 12%
  * wash would otherwise ship unmeasured with CI green.
+ *
+ * Derived from NAMES, never from which values happened to look like a hex: a stage rewritten as
+ * `rgb(…)` stays in this list and is then rejected by the palette assertion below. Filtering on
+ * the value instead would let that stage drop out of the surface list silently, and the
+ * self-adjusting surface count would shrink to match it.
  */
 const STAGES = Object.keys(LIGHT_TOKENS)
   .filter(k => k.startsWith('stage-'))
@@ -155,7 +179,11 @@ describe.each([
     // every stage wash from the surface list while the ratio test still went green.
     expect(STAGES.length, 'no --color-ck-stage-* tokens parsed from index.css').toBeGreaterThan(0);
     for (const k of [...INK_TOKENS, 'card', 'bg', 'raised', 'line', 'amber', ...STAGES.map(s => `stage-${s}`)]) {
-      expect(tokens[k], `${themeName}: --color-ck-${k} missing from index.css`).toMatch(/^#[0-9a-fA-F]{6}$/);
+      // Must be a literal hex: every one of these is composited numerically below, and this
+      // guard cannot resolve `var()` / `rgb()` / `color-mix()`. Rewriting one of them in another
+      // syntax is legitimate — it just has to fail HERE and be handled, not slip through.
+      expect(tokens[k], `${themeName}: --color-ck-${k} missing from index.css, or not a literal hex`)
+        .toMatch(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/);
     }
   });
 

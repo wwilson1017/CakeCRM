@@ -528,12 +528,12 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   shrank is the primary→secondary gap, 26 L* → 9 light and 31 → 10 dark. The binding surface
   is **never a raw token**: `tint()` chips and row hovers composite an ink wash over
   bg/card/raised, and a chip inside a hovered row stacks two, so the floor is set by
-  `ink 6% over ink 6% over raised` (light, 4.60:1) and the same over `card` (dark, 4.57:1).
+  `ink 6% over ink 6% over raised` (light, 4.59:1) and the same over `card` (dark, 4.56:1).
   That compression is also why `.dark .hljs-comment` moved to `ink-dim`: the new `ink-mute`
   sits 10 L* from `ink` and would have rendered code comments at nearly the weight of the
   code around them. `core/theme/inkContrast.test.ts` parses the **shipped** `index.css`
   (never a copy of the palette — a duplicated table drifts silently, which is the failure it
-  exists to stop) and fails CI on any of the 33 surfaces × 4 tokens × 2 themes falling under
+  exists to stop) and fails CI on any of the 39 surfaces × 4 tokens × 2 themes falling under
   4.5:1 — so **adding a new `tint()` background under ink text means adding it to that
   surface list.** Fonts are **self-hosted**
   via `@fontsource` (Montserrat for
