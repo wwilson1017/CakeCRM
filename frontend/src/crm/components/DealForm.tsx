@@ -20,6 +20,8 @@ interface Props {
 export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
   const { currentUser } = useAuth();
   const isEdit = !!deal;
+  // A soft-archived deal (issue #83) can be edited, but not re-staged — see the Stage field.
+  const isArchived = deal?.archived_at != null;
   const [title, setTitle] = useState(deal?.title || '');
   const [stage, setStage] = useState(deal?.stage || 'lead');
   const [value, setValue] = useState(deal?.value?.toString() || '');
@@ -147,9 +149,23 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div>
               <label style={labelStyle}>Stage</label>
-              <select value={stage} onChange={e => setStage(e.target.value)} style={{ ...inputStyle, textTransform: 'capitalize' }}>
+              {/* Locked on an archived deal (issue #83). The server refuses a stage change
+                  on one and rejects the WHOLE update, so leaving this editable would throw
+                  away every other field the user had just typed. Every other field stays
+                  editable — only the stage is refused. */}
+              <select
+                value={stage}
+                onChange={e => setStage(e.target.value)}
+                disabled={isArchived}
+                style={{ ...inputStyle, textTransform: 'capitalize', opacity: isArchived ? 0.6 : 1 }}
+              >
                 {STAGE_ORDER.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
+              {isArchived && (
+                <p style={{ fontSize: 11, color: INK_DIM, margin: '4px 0 0' }}>
+                  Restore the deal to change its stage.
+                </p>
+              )}
             </div>
             <div><label style={labelStyle}>Value ($)</label><input type="number" step="any" min="0" value={value} onChange={e => setValue(e.target.value)} style={inputStyle} /></div>
           </div>

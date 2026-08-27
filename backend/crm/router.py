@@ -20,10 +20,11 @@ Companies:
   DELETE /api/crm/companies/:id         — delete (contacts/deals unlink, not deleted)
 
 Deals:
-  GET    /api/crm/deals                 — pipeline list / filtered
+  GET    /api/crm/deals                 — pipeline list / filtered (?include_archived= on the board)
   GET    /api/crm/deals/:id             — detail
   POST   /api/crm/deals                 — create
   PUT    /api/crm/deals/:id             — update
+  POST   /api/crm/deals/:id/restore     — un-archive a soft-archived deal
   POST   /api/crm/deals/bulk-move       — move many deals to one stage (one transaction)
   POST   /api/crm/deals/touch-count/backfill        — recompute AI touch counts (?scope=null|all&force=)
   GET    /api/crm/deals/touch-count/backfill/status — backfill progress
@@ -411,12 +412,26 @@ async def delete_contact(contact_id: int, user=Depends(get_current_user)):
 @router.get("/deals")
 async def list_deals(
     stage: str = "", contact_id: int | None = None,
+    include_archived: bool = False,
     user=Depends(get_current_user),
 ):
+    """Pipeline board payload, or a filtered deal list when stage/contact_id is given.
+
+    `include_archived` (issue #83) applies to the BOARD payload only — it is the one
+    opt-in hole in the archived-deal sweep that lets the UI find and restore an
+    accidentally archived deal. It is refused rather than ignored alongside
+    stage/contact_id: that branch is a different service function which keeps the sweep,
+    and silently dropping an advertised flag is worse than saying no.
+    """
     if stage or contact_id:
+        if include_archived:
+            raise HTTPException(
+                status_code=400,
+                detail="include_archived is not supported with stage or contact_id",
+            )
         deals = crm.list_deals(stage=stage or None, contact_id=contact_id)
         return {"deals": deals, "count": len(deals)}
-    return crm.get_pipeline()
+    return crm.get_pipeline(include_archived=include_archived)
 
 
 @router.get("/deals/{deal_id}")
@@ -478,6 +493,29 @@ async def bulk_move_deals(body: BulkDealMove, user=Depends(get_current_user)):
     updated deal and linked contact, bounded by BULK_MOVE_MAX.
     """
     return await run_in_threadpool(crm.bulk_move_deals, body.deal_ids, body.stage)
+
+
+# Restore is the recoverability half of issue #83: archiving a deal was reachable only
+# through the assistant, so on a keyless install an accidental archive (or `merge_deals`'
+# source-archival) was permanent. ARCHIVE deliberately gets no route here — the gate scope
+# is view + restore only; a UI archive affordance lands with the deal-detail parity port.
+#
+# Sync `def` on purpose (the convention core/auth.py's handlers follow): it does blocking
+# psycopg2 work plus a lead-score recompute, and FastAPI runs a sync endpoint in a
+# threadpool rather than on the event loop. No path collision — /deals/touch-count/backfill
+# shares the segment count but differs in its terminal segment.
+#
+# Restoring is idempotent (restoring a live deal is a no-op NULL write) and
+# member-accessible: ownership is not access control here, and this is ordinary record
+# CRUD, the same tier as PUT /deals/{id}. Note that restoring a deal that was archived by
+# a MERGE is not an undo — the merge already repointed activity/tasks, copied notes and
+# gap-filled custom fields onto the target; restore only makes the source visible again.
+@router.post("/deals/{deal_id}/restore")
+def restore_deal(deal_id: int, user=Depends(get_current_user)):
+    result = crm.archive_deal(deal_id, archived=False)
+    if not result:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    return result
 
 
 # ── AI touch counts (issue #16) ───────────────────────────────────────────────

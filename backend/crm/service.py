@@ -45,9 +45,13 @@ COMPANY_STATUSES = ["active", "archived"]
 # aggregate together — a deal that vanishes from the Kanban but still inflates the
 # dashboard's pipeline value is worse than no archive at all. Named so the sweep is
 # greppable: every deal-reading query below carries one of these two forms, and the
-# only deliberate exceptions are get_deal (fetch-by-id must still resolve an archived
-# deal, so it can be shown/restored/merged) and the is-the-CRM-empty counts (an
-# archived deal is still data).
+# deliberate exceptions are get_deal (fetch-by-id must still resolve an archived deal,
+# so it can be shown/restored/merged), the is-the-CRM-empty counts (an archived deal is
+# still data), and the two OPT-IN holes that make an archive recoverable —
+# search_deals(include_archived=True) and, since issue #83, get_pipeline(
+# include_archived=True). Both default to False, and get_pipeline's flag opens its deals
+# query only: stage_summary keeps the sweep unconditionally, because an archived deal may
+# be findable but must never be money.
 # Public so crm/analytics_service.py imports them rather than re-typing the literal —
 # a second copy is exactly how a sweep site gets missed when the definition changes.
 LIVE_PREDICATE = "archived_at IS NULL"
@@ -769,7 +773,7 @@ def get_deal_detail(deal_id: int) -> dict | None:
     return _embed_custom_fields([{**deal, "activity": activity}])[0]
 
 
-def get_pipeline(stage: str | None = None) -> dict:
+def get_pipeline(stage: str | None = None, include_archived: bool = False) -> dict:
     # Single query (optional stage WHERE) so the two branches can't drift. Beyond the
     # contact-name join, the board payload carries `company_name` (mirrors get_deal) for
     # keyword search, and a derived `last_activity_at` (issue #21) = the most recent of the
@@ -793,7 +797,23 @@ def get_pipeline(stage: str | None = None) -> dict:
     # function returns `deals` AND a separately-computed `stage_summary`, so a filter
     # applied to one and not the other would show filtered cards under unfiltered
     # totals.
-    where = f"WHERE {LIVE_PREDICATE_D}" + (" AND d.stage = %s" if stage else "")
+    # `include_archived` (issue #83) is the second sanctioned hole in the archived-deal
+    # sweep, after crm_search_deals(include_archived=true) — and it is what makes an
+    # accidental archive recoverable without an AI provider: the board's Archived facet
+    # sets it, the card renders inert, and the deal sheet offers Restore.
+    #
+    # It opens the DEALS QUERY ONLY. stage_summary below keeps LIVE_PREDICATE
+    # unconditionally, which looks like exactly the one-sided filter the owner_id note
+    # above forbids — but the asymmetry is the rule here, not a bug in it. Owner is a
+    # symmetric facet: cards and totals must describe the same set or the page lies.
+    # Archived is not: an archived deal must be FINDABLE (or it is unrecoverable) and must
+    # never be MONEY (won + archived would book revenue no report can see). The client
+    # mirrors that same split — every $ aggregate on the board derives from the live
+    # subset — so cards and totals still agree about value.
+    conditions = [] if include_archived else [LIVE_PREDICATE_D]
+    if stage:
+        conditions.append("d.stage = %s")
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     deals = pg_fetchall(
         f"""SELECT d.*, c.name AS contact_name, co.name AS company_name,
                    la.last_at AS last_activity_at
@@ -813,7 +833,8 @@ def get_pipeline(stage: str | None = None) -> dict:
         (stage,) if stage else (),
     )
 
-    # Value summaries per stage (open stages only).
+    # Value summaries per stage (open stages only). NEVER opened by include_archived —
+    # see the note above the deals query.
     stage_summary = pg_fetchall(
         f"""SELECT stage, COUNT(*) AS count, COALESCE(SUM(value), 0) AS total_value
             FROM deals WHERE stage NOT IN ('won', 'lost') AND {LIVE_PREDICATE}
@@ -1010,10 +1031,12 @@ def search_deals(
     sort_expr = (f"NULLIF(d.{sort_col}, '') {direction} NULLS LAST"
                  if sort_col == "expected_close_date" else f"d.{sort_col} {direction}")
 
-    # This is the ONLY read that can surface an archived deal, which makes it the way
-    # back from an accidental archive or a wrong merge: without it a soft archive is a
-    # one-way door, since every other list/board/rollup filters them out and get_deal
-    # needs an id nothing would tell you.
+    # One of the two reads that can surface an archived deal (the other is
+    # get_pipeline(include_archived=True), issue #83's board facet), which makes this the
+    # way back from an accidental archive or a wrong merge: without one of them a soft
+    # archive is a one-way door, since every other list/board/rollup filters them out and
+    # get_deal needs an id nothing would tell you. This one is the assistant's route back
+    # and needs a provider; #83's is the keyless one.
     conditions = [] if include_archived else [LIVE_PREDICATE_D]
     params: list = []
     if search:

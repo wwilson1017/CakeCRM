@@ -291,6 +291,35 @@ def test_pipeline_excludes_archived_deals(rec):
     assert "archived_at IS NULL" in rec.sql_containing("GROUP BY stage")
 
 
+def test_pipeline_include_archived_opens_only_the_deals_query(rec):
+    """Issue #83's opt-in hole is exactly one query wide. The board may SHOW an archived
+    deal (or an accidental archive is unrecoverable without an AI provider), but
+    stage_summary must never COUNT one — won + archived would book revenue no report can
+    see. A regression here is silent: the board looks right and the totals lie."""
+    rec.fetchall_queue = [[], []]
+    service.get_pipeline(include_archived=True)
+    assert "archived_at IS NULL" not in rec.sql_containing("last_activity_at")
+    assert "archived_at IS NULL" in rec.sql_containing("GROUP BY stage")
+
+
+def test_pipeline_include_archived_still_binds_the_stage_filter(rec):
+    """Dropping the predicate rebuilt the WHERE clause — the stage param must survive it."""
+    rec.fetchall_queue = [[], []]
+    service.get_pipeline(stage="lead", include_archived=True)
+    sql = rec.sql_containing("last_activity_at")
+    assert "d.stage = %s" in sql
+    assert "archived_at IS NULL" not in sql
+    assert list(rec.calls[0][1]) == ["lead"]
+
+
+def test_pipeline_stage_filter_alone_keeps_the_sweep(rec):
+    """The rebuilt WHERE must AND both conditions when only `stage` is given."""
+    rec.fetchall_queue = [[], []]
+    service.get_pipeline(stage="lead")
+    sql = rec.sql_containing("last_activity_at")
+    assert "d.archived_at IS NULL" in sql and "d.stage = %s" in sql
+
+
 def test_list_deals_excludes_archived(rec):
     rec.fetchall_queue = [[]]
     service.list_deals()
@@ -462,8 +491,9 @@ def test_close_date_sort_puts_undated_deals_last(rec, no_field_embed):
 
 
 def test_search_can_surface_archived_deals_on_request(rec, no_field_embed):
-    """The only read that can find an archived deal — without it, restore is
-    unreachable through the product."""
+    """The assistant's read that can find an archived deal. Since issue #83 it is no
+    longer the ONLY one — get_pipeline(include_archived=True) is the keyless route back —
+    but it is still the only way to find one by keyword."""
     rec.fetchall_queue = [[], []]
     service.search_deals(search="junk")
     assert "d.archived_at IS NULL" in rec.calls[-1][0]
