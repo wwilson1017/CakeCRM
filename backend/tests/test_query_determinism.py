@@ -257,10 +257,11 @@ def _is_capped(masked: str) -> bool:
 
 
 def _statement_orderings(flat: str, masked: str):
-    """Yield ``(order_by_clause | None, limit_text)`` for each cap in the statement.
+    """Yield ``(clause, masked_clause, cap_text, cap_offset)`` for each cap, where the
+    first two are ``None`` if that cap has no ordering of its own.
 
-    Each ``LIMIT`` is paired with an ORDER BY lying between it and the PREVIOUS ``LIMIT``
-    — not merely the nearest one before it. The distinction is what stops a cap from
+    Each cap is paired with an ORDER BY lying between it and the PREVIOUS cap — not
+    merely the nearest one before it. The distinction is what stops a cap from
     borrowing an inner query's ordering: in
     ``SELECT * FROM (SELECT * FROM a ORDER BY id LIMIT 5) s LIMIT 10`` the outer cap has
     no ordering of its own, and nearest-preceding would hand it the subquery's ``id`` and
@@ -302,13 +303,22 @@ def judge(sql: str) -> tuple[str, str]:
     ``ok`` — the earlier design — let a reader opt out of the guard just by moving its
     ORDER BY into a variable.
 
-    Known limits, stated so nobody mistakes this for a SQL parser: uniqueness is
-    inferred from the final term's NAME, so an alias like ``status AS id``, or a join
-    that multiplies rows and makes a parent ``id`` non-unique, would pass. ``seq`` is
-    unique only within one conversation and is accepted on the strength of both current
-    readers being conversation-scoped. Exotic SQL (a quoted paren inside an ORDER BY,
-    an array constructor) can also mis-split into a false ``fail`` — which surfaces as a
-    loud failure someone investigates, never as a silent pass.
+    Known limits, stated so nobody mistakes this for a SQL parser:
+
+    * Uniqueness is inferred from the final term's NAME, so an alias like
+      ``status AS id``, or a join that multiplies rows and leaves a parent ``id``
+      non-unique, would pass.
+    * ``seq`` is accepted on the strength of both current readers being scoped to one
+      conversation; it is unique only within one.
+    * Caps are paired with orderings by TEXT SPAN, not by SELECT scope, so an ORDER BY
+      that itself contains a capped scalar subquery can be reported as a false ``fail``.
+    * A statement assembled across several separate literals carries neither keyword in
+      any one of them and is not seen here at all — those readers are covered by the
+      behavioral tests instead (see ``UNDECIDABLE_SITES``).
+
+    The first two would pass a broken reader; the third is loud and the fourth is
+    covered elsewhere. Closing the first two properly means cardinality analysis over a
+    real parse tree, which is more machinery than this invariant is worth.
     """
     flat, masked = _prepare(sql)
     if not _is_capped(masked):
