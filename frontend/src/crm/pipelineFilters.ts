@@ -24,6 +24,7 @@
  * the predicate so the logic stays pure and time-deterministic for testing.
  */
 import type { CrmDeal } from '../core/types';
+import { parseUTC } from './gtd/util';
 import { STAGE_ORDER, OPEN_STAGES } from './constants';
 
 // ── Filter model ────────────────────────────────────────────────────────────
@@ -120,7 +121,12 @@ function closeDatePart(ts: string | null | undefined): string {
  *  (a slice(0,10) would use the UTC date and misbucket an evening touch near midnight). */
 function activityLocalDate(ts: string | null | undefined): string {
   if (!ts) return '';
-  const d = new Date(ts);
+  // parseUTC, not `new Date(ts)`: the backend emits datetime.isoformat(), i.e. SIX
+  // fractional digits, and ECMAScript only guarantees parsing of three — which is why
+  // this repo has parseUTC at all. The sort getter and formatAge beside this facet
+  // already use it, so a bare Date here could bucket a contact as "Never" while the
+  // column next to it reads "3d".
+  const d = parseUTC(ts);
   return Number.isNaN(d.getTime()) ? '' : ymdOf(d);
 }
 
@@ -149,8 +155,16 @@ function matchesCloseDate(deal: CrmDeal, preset: ClosePreset, now: Date): boolea
   }
 }
 
-function matchesLastActivity(deal: CrmDeal, preset: ActivityPreset, now: Date): boolean {
-  const act = activityLocalDate(deal.last_activity_at);
+/**
+ * Recency bucket for ANY last-touch timestamp — the deal-shaped wrapper below is one
+ * caller, the Contacts list's Last-contact facet (#77) is the other. Extracted rather than
+ * copied so both surfaces agree on where "stale" begins; the pipeline's behaviour is
+ * unchanged.
+ */
+export function matchesActivityPreset(
+  ts: string | null | undefined, preset: ActivityPreset, now: Date,
+): boolean {
+  const act = activityLocalDate(ts);
   switch (preset) {
     case 'none':
       return !act;
@@ -159,9 +173,13 @@ function matchesLastActivity(deal: CrmDeal, preset: ActivityPreset, now: Date): 
     case 'le30':
       return !!act && act >= ymd(now, -30);
     case 'stale30':
-      // No logged deal activity in the last 30 days — includes deals with none at all.
+      // No logged activity in the last 30 days — includes records with none at all.
       return !act || act < ymd(now, -30);
   }
+}
+
+function matchesLastActivity(deal: CrmDeal, preset: ActivityPreset, now: Date): boolean {
+  return matchesActivityPreset(deal.last_activity_at, preset, now);
 }
 
 function matchesOwner(deal: CrmDeal, owners: OwnerFilterValue[]): boolean {

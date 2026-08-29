@@ -310,7 +310,7 @@ class FieldValuesUpdate(BaseModel):
 async def list_contacts(
     q: str = "", status: str = "", tags: str = "", sort: str = "",
     limit: int = Query(50, ge=1, le=1000), offset: int = Query(0, ge=0),
-    owner_id: int | None = None,
+    owner_id: int | None = None, after_id: int | None = Query(None, ge=0, le=2_147_483_647),
     user=Depends(get_current_user),
 ):
     # owner_id absent = everyone, so an install that never assigns owners behaves
@@ -318,8 +318,15 @@ async def list_contacts(
     # separate flag, no magic value.
     # #18: sort is allowlisted in the service layer (unknown -> updated_at); applied to
     # BOTH the search (?q=) and browse branches so the UI's active sort is never ignored.
+    # #77: after_id is the list page's keyset cursor and is only valid with sort=id (the
+    # service refuses any other pairing rather than paginating wrong).
     sort = sort or "updated_at"
     if q:
+        # search_contacts has no cursor, so honouring `after_id` here is impossible —
+        # and silently dropping it looks exactly like a client stuck re-reading page one,
+        # which is the failure _check_assembly_cursor exists to prevent. Refuse instead.
+        if after_id is not None:
+            raise HTTPException(status_code=400, detail="after_id cannot be combined with q")
         contacts = crm.search_contacts(
             q, status=status or None, tags=tags or None, limit=limit, offset=offset, sort=sort,
             owner_id=owner_id,
@@ -328,10 +335,13 @@ async def list_contacts(
             q, status=status or None, tags=tags or None, owner_id=owner_id
         )
         return {"contacts": contacts, "total": total}
-    return crm.list_contacts(
-        offset=offset, limit=limit,
-        status=status or None, tags=tags or None, sort=sort, owner_id=owner_id,
-    )
+    try:
+        return crm.list_contacts(
+            offset=offset, limit=limit, status=status or None, tags=tags or None,
+            sort=sort, owner_id=owner_id, after_id=after_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
 
 
 @router.get("/tags")
@@ -595,14 +605,22 @@ async def list_tasks(
     contact_id: int | None = None, deal_id: int | None = None,
     completed: bool | None = None, due_before: str = "",
     priority: str = "", limit: int = Query(50, ge=1, le=1000),
-    owner_id: int | None = None,
+    owner_id: int | None = None, after_id: int | None = Query(None, ge=0, le=2_147_483_647),
+    sort: str = "",
     user=Depends(get_current_user),
 ):
-    tasks = crm.list_tasks(
-        contact_id=contact_id, deal_id=deal_id,
-        completed=completed, due_before=due_before or None,
-        priority=priority or None, limit=limit, owner_id=owner_id,
-    )
+    # #77: `sort=id` + `after_id` is the list page's keyset sweep. Every existing caller
+    # omits both and keeps the historical due order (now with an id tie-breaker, so a
+    # LIMIT window is deterministic among tasks sharing a due date).
+    try:
+        tasks = crm.list_tasks(
+            contact_id=contact_id, deal_id=deal_id,
+            completed=completed, due_before=due_before or None,
+            priority=priority or None, limit=limit, owner_id=owner_id,
+            after_id=after_id, sort=sort or "due",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
     return {"tasks": tasks, "count": len(tasks)}
 
 
@@ -1161,18 +1179,25 @@ async def confirm_provenance(
 async def list_companies(
     q: str = "", status: str = "", sort: str = "name",
     limit: int = Query(50, ge=1, le=1000), offset: int = Query(0, ge=0),
-    owner_id: int | None = None,
+    owner_id: int | None = None, after_id: int | None = Query(None, ge=0, le=2_147_483_647),
     user=Depends(get_current_user),
 ):
     if q:
+        # See list_contacts: the search branch cannot honour a cursor, so it says so.
+        if after_id is not None:
+            raise HTTPException(status_code=400, detail="after_id cannot be combined with q")
         companies = crm.search_companies(
             q, status=status or None, limit=limit, offset=offset, owner_id=owner_id
         )
         total = crm.count_search_companies(q, status=status or None, owner_id=owner_id)
         return {"companies": companies, "total": total}
-    return crm.list_companies(
-        offset=offset, limit=limit, status=status or None, sort=sort, owner_id=owner_id
-    )
+    try:
+        return crm.list_companies(
+            offset=offset, limit=limit, status=status or None, sort=sort,
+            owner_id=owner_id, after_id=after_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
 
 
 @router.get("/companies/{company_id}")

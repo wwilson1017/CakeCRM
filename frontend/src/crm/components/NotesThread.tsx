@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '../../core/api/client';
+import { writeMayHaveLanded } from '../usePatchableAssembly';
 import type { CrmNote } from '../../core/types';
 import { mono, INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, ACCENT, ACCENT_INK, inputStyle } from '../../shared/styles';
 import { toast } from '../../shared/toast';
@@ -8,6 +9,15 @@ import { formatDate } from '../../shared/formatDate';
 interface Props {
   entityType: 'deal' | 'contact' | 'company';
   entityId: number;
+  /**
+   * Fired after a note is added, edited, archived or restored (#77).
+   *
+   * A contact's notes are one of the two signals behind its derived `last_contact_at`,
+   * so a host that renders that value has to be told: adding a note should update it,
+   * archiving the newest one should reveal the previous timestamp, and restoring it
+   * should put the newer one back. Optional — the deal and company call sites ignore it.
+   */
+  onChanged?: () => void;
 }
 
 // Mirrors chatter_service.MAX_MESSAGE_LEN — caps input client-side so an oversized
@@ -21,7 +31,7 @@ const MAX_NOTE_LEN = 10000;
  * so it drops into the contact page, the company page, or the pipeline deal sheet
  * unchanged.
  */
-export function NotesThread({ entityType, entityId }: Props) {
+export function NotesThread({ entityType, entityId, onChanged }: Props) {
   const [notes, setNotes] = useState<CrmNote[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -63,8 +73,13 @@ export function NotesThread({ entityType, entityId }: Props) {
       });
       setDraft('');
       load();
-    } catch {
+      onChanged?.();
+    } catch (err) {
       toast.error('Failed to add note.');
+      // The write may still have committed and moved this contact's last_contact_at, so
+      // reload rather than leave the thread — and the host's column — showing the old
+      // state. A definite 4xx wrote nothing (#77).
+      if (writeMayHaveLanded(err)) { load(); onChanged?.(); }
     } finally {
       setSubmitting(false);
     }
@@ -80,8 +95,13 @@ export function NotesThread({ entityType, entityId }: Props) {
       setEditingId(null);
       setEditText('');
       load();
-    } catch {
+      onChanged?.();
+    } catch (err) {
       toast.error('Failed to save note.');
+      // The write may still have committed and moved this contact's last_contact_at, so
+      // reload rather than leave the thread — and the host's column — showing the old
+      // state. A definite 4xx wrote nothing (#77).
+      if (writeMayHaveLanded(err)) { load(); onChanged?.(); }
     }
   }
 
@@ -89,8 +109,11 @@ export function NotesThread({ entityType, entityId }: Props) {
     try {
       await api(`/api/crm/chatter/note/${id}/${archived ? 'archive' : 'unarchive'}`, { method: 'POST' });
       load();
-    } catch {
+      onChanged?.();
+    } catch (err) {
       toast.error(`Failed to ${archived ? 'archive' : 'restore'} note.`);
+      // See addNote: archiving the newest note changes last_contact_at too.
+      if (writeMayHaveLanded(err)) { load(); onChanged?.(); }
     }
   }
 

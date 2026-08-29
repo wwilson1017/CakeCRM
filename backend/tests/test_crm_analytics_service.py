@@ -12,7 +12,7 @@ bounds on every model-supplied number, and never counting an archived or closed 
 
 import pytest
 
-from crm import analytics_service as az
+from crm import analytics_service as az, scoring_service
 from tests.test_crm_service import Recorder
 
 
@@ -104,6 +104,23 @@ def test_contact_staleness_only_considers_active_contacts(rec):
     rec.fetchall_queue = [[]]
     az.get_contact_staleness()
     assert "ct.status = 'active'" in rec.sql_containing("FROM contacts ct")
+
+
+def test_contact_staleness_ignores_provenance_housekeeping_notes(rec):
+    """A confirmed AI field is CRM bookkeeping, not a conversation.
+
+    provenance_service.confirm writes a crm_chatter row, so before #77 the assistant
+    confirming a field silently reset this contact's staleness clock — the record stopped
+    being reported as neglected without anyone having talked to the person. scoring_service
+    already excluded these rows from engagement; the Contacts list's derived
+    last_contact_at uses the same predicate, so all three now agree.
+    """
+    rec.fetchall_queue = [[]]
+    az.get_contact_staleness()
+    sql = rec.sql_containing("FROM contacts ct")
+    assert "ch.message NOT LIKE %s" in sql
+    # Bound inside the CTE, so it precedes stale_days and limit.
+    assert rec.params_for("FROM contacts ct")[0] == scoring_service.HOUSEKEEPING_NOTE_LIKE
 
 
 def test_contact_staleness_open_deal_count_ignores_archived(rec):

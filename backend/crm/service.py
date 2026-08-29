@@ -96,14 +96,63 @@ NOT_DROPPED_TASK_T = "t.status != 'dropped'"
 _CONTACT_SORTS = {
     "updated_at": "ct.updated_at DESC, ct.id DESC",
     "created_at": "ct.created_at DESC, ct.id DESC",
-    "name": "ct.name DESC, ct.id DESC",
-    "company": "COALESCE(co.name, ct.company) DESC, ct.id DESC",
+    # A name sort means A→Z — list_companies says so in its own comment, and it is what
+    # the `?sort=name` REST parameter promises. These two were DESC and answered Z→A;
+    # unreachable from the UI and from the assistant (crm_list_contacts exposes no sort),
+    # but wrong for anyone reading the documented parameter. Fixed with #77.
+    "name": "ct.name ASC, ct.id ASC",
+    "company": "COALESCE(co.name, ct.company) ASC, ct.id ASC",
     "lead_score": "ct.lead_score DESC NULLS LAST, ct.updated_at DESC, ct.id DESC",
+    # The frontend's full-corpus assembly key (#77). It is the only TOTAL, IMMUTABLE,
+    # APPEND-ONLY order here, which is what a keyset sweep needs: a row inserted while the
+    # sweep is walking sorts PAST the cursor instead of displacing rows behind it, and an
+    # updated row cannot move at all. Presentation order is chosen client-side once the
+    # whole set has landed.
+    "id": "ct.id ASC",
 }
 
 
 def _contact_order_by(sort: str) -> str:
     return _CONTACT_SORTS.get(sort, _CONTACT_SORTS["updated_at"])
+
+
+# Task ORDER BY fragments — allow-listed, never interpolated from caller input.
+# "due" is the historical order plus an id tie-breaker, so a LIMIT window is deterministic
+# where before it was arbitrary among ties. "id" is the immutable assembly key (#77 — see
+# _CONTACT_SORTS["id"]); it is its own tie-breaker.
+_TASK_SORTS = {
+    "due": "t.completed ASC, t.due_date ASC, t.id ASC",
+    "id": "t.id ASC",
+}
+
+
+def _count_or_none(after_id: int | None, sql: str, params: list) -> int | None:
+    """Total matching rows, or None on a CURSOR page (see list_contacts for why)."""
+    if after_id is not None:
+        return None
+    row = pg_fetchone(sql, params)
+    return row["cnt"] if row else 0
+
+
+def _check_assembly_cursor(after_id: int | None, sort: str, offset: int = 0) -> None:
+    """Refuse a keyset cursor against any order but the immutable id one (#77).
+
+    ``after_id`` means "the rows after this one IN THE CURRENT ORDER". Under `updated_at`
+    or `name` that sentence is not even well defined — the column is not unique and not
+    stable — so the window would silently skip and repeat rows. Failing loudly beats
+    paginating wrong, and beats silently ignoring the parameter (which looks identical to
+    a client bug that re-reads page one forever).
+
+    A cursor combined with a non-zero OFFSET is refused for the same reason: the two are
+    competing ways to say where the window starts, and applying both skips exactly
+    `offset` eligible rows with no error.
+    """
+    if after_id is None:
+        return
+    if sort != "id":
+        raise ValueError("after_id is only valid with sort='id'")
+    if offset:
+        raise ValueError("after_id cannot be combined with a non-zero offset")
 
 # The six ASCII whitespace bytes (space, tab, LF, CR, FF, VT). Company names are
 # trimmed with THIS set (not Python's Unicode-aware str.strip()) so the value the
@@ -116,6 +165,39 @@ _WS = " \t\n\r\f\v"
 # tags column. Strips whitespace adjacent to commas so the filter survives free-form
 # input like "PT, ET, MT". Valid Postgres (|| concat + REPLACE).
 _TAGS_NORMALIZED_SQL = "(',' || REPLACE(REPLACE(tags, ', ', ','), ' ,', ',') || ',')"
+
+# Per-contact last touch (#77), for the Contacts list's "Last contact" column and facet.
+#
+# Contacts have no last_contacted_at column, so recency is DERIVED from the same two signals
+# analytics_service.get_contact_staleness reads — the contact's own activity_log rows and its
+# un-archived chatter, minus provenance housekeeping notes — and exposed under the same alias.
+# One definition, so the list and the assistant's staleness tool cannot disagree about what
+# counts as talking to someone. GREATEST ignores NULLs and returns NULL only when every
+# argument is NULL, so a contact with notes but no logged activity still gets a real date and
+# one with neither correctly comes out NULL = never contacted.
+#
+# A LATERAL, deliberately, and NOT get_pipeline's grouped subquery: that one aggregates the
+# whole activity/chatter tables once per query, which it can afford because it runs once for
+# an unpaginated board. This runs per page of a corpus sweep, so it must touch only the rows
+# the page returns — which it does, index-driven, via idx_activity_contact and
+# idx_crm_chatter_entity.
+#
+# Carries ONE %s (the housekeeping pattern). Every caller must pass it in the right position.
+_CONTACT_LAST_TOUCH_JOIN = """
+    LEFT JOIN LATERAL (
+        SELECT GREATEST(
+            (SELECT MAX(a.created_at) FROM activity_log a WHERE a.contact_id = ct.id),
+            (SELECT MAX(ch.created_at) FROM crm_chatter ch
+              WHERE ch.entity_type = 'contact' AND ch.entity_id = ct.id
+                AND ch.archived = 0 AND ch.message NOT LIKE %s)
+        ) AS last_at
+    ) lt ON TRUE
+"""
+
+# The SELECT list every contact read that carries the derived touch shares.
+_CONTACT_LIST_SELECT = "ct.*, co.name AS company_name, lt.last_at AS last_contact_at"
+
+_CONTACT_JOINS = f"LEFT JOIN companies co ON ct.company_id = co.id {_CONTACT_LAST_TOUCH_JOIN}"
 
 
 def _now() -> str:
@@ -244,10 +326,12 @@ def search_contacts(
 ) -> list[dict]:
     where, params = _contact_search_where(query, status, tags, owner_id)
     return pg_fetchall(
-        f"""SELECT ct.*, co.name AS company_name
-            FROM contacts ct LEFT JOIN companies co ON ct.company_id = co.id
+        f"""SELECT {_CONTACT_LIST_SELECT}
+            FROM contacts ct {_CONTACT_JOINS}
             WHERE {where} ORDER BY {_contact_order_by(sort)} LIMIT %s OFFSET %s""",
-        params + [limit, offset],
+        # The LATERAL's placeholder sits in the FROM clause, so it binds BEFORE every
+        # WHERE parameter.
+        [scoring_service.HOUSEKEEPING_NOTE_LIKE] + params + [limit, offset],
     )
 
 
@@ -274,8 +358,9 @@ def count_search_contacts(
 def list_contacts(
     offset: int = 0, limit: int = 50, status: str | None = None,
     tags: str | None = None, sort: str = "updated_at",
-    owner_id: int | None = None,
+    owner_id: int | None = None, after_id: int | None = None,
 ) -> dict:
+    _check_assembly_cursor(after_id, sort, offset)
     order_by = _contact_order_by(sort)
 
     conditions = []
@@ -300,15 +385,29 @@ def list_contacts(
 
     # The count needs no join — its WHERE only touches ct columns (the alias is
     # here so the shared qualified conditions parse).
-    total_row = pg_fetchone(f"SELECT COUNT(*) AS cnt FROM contacts ct {where}", params)
-    total = total_row["cnt"] if total_row else 0
+    # Keyed on the CURSOR, not on `sort=id`. A corpus sweep is up to MAX_PAGES requests and
+    # never reads `total`, so counting on each would add a scan of the whole filtered set to
+    # the heaviest read path in the app — but only its continuation pages can be identified
+    # as a sweep. Its first page looks exactly like an ordinary `?sort=id&offset=N`, which
+    # is legitimate offset pagination whose caller does need the total. So the sweep pays
+    # exactly one COUNT and no envelope loses a field it used to carry.
+    total = _count_or_none(after_id, f"SELECT COUNT(*) AS cnt FROM contacts ct {where}", params)
 
-    params.extend([limit, offset])
+    # The cursor is deliberately NOT in the shared conditions above. That rule exists for
+    # FILTERS — a status or owner narrowing the rows but not the COUNT reports a total that
+    # disagrees with the page. `after_id` is not a filter, it is the window, exactly like
+    # OFFSET (which the COUNT has always ignored): `total` stays the size of the whole
+    # matching set, which is what a caller paging through it needs.
+    row_conditions = conditions + (["ct.id > %s"] if after_id is not None else [])
+    row_where = f"WHERE {' AND '.join(row_conditions)}" if row_conditions else ""
     rows = pg_fetchall(
-        f"""SELECT ct.*, co.name AS company_name
-            FROM contacts ct LEFT JOIN companies co ON ct.company_id = co.id
-            {where} ORDER BY {order_by} LIMIT %s OFFSET %s""",
-        params,
+        f"""SELECT {_CONTACT_LIST_SELECT}
+            FROM contacts ct {_CONTACT_JOINS}
+            {row_where} ORDER BY {order_by} LIMIT %s OFFSET %s""",
+        # The joins' placeholder sits in the FROM clause, so it binds before every WHERE
+        # parameter; the cursor's binds last because its condition was appended last.
+        [scoring_service.HOUSEKEEPING_NOTE_LIKE] + params
+        + ([after_id] if after_id is not None else []) + [limit, offset],
     )
     return {"contacts": rows, "total": total, "limit": limit, "offset": offset}
 
@@ -414,10 +513,13 @@ def get_contact_detail(contact_id: int) -> dict | None:
     exact SQL.
     """
     contact = pg_fetchone(
-        """SELECT ct.*, co.name AS company_name
-           FROM contacts ct LEFT JOIN companies co ON ct.company_id = co.id
+        f"""SELECT {_CONTACT_LIST_SELECT}
+           FROM contacts ct {_CONTACT_JOINS}
            WHERE ct.id = %s""",
-        (contact_id,),
+        # last_contact_at is carried here too, so that after the detail page logs an
+        # activity or adds a note its reload hands the list an updated value (#77) — the
+        # list patches its row from exactly this body.
+        (scoring_service.HOUSEKEEPING_NOTE_LIKE, contact_id),
     )
     if not contact:
         return None
@@ -581,13 +683,17 @@ def count_search_companies(
 
 def list_companies(
     offset: int = 0, limit: int = 50, status: str | None = None, sort: str = "name",
-    owner_id: int | None = None,
+    owner_id: int | None = None, after_id: int | None = None,
 ) -> dict:
-    allowed_sorts = {"name", "industry", "created_at", "updated_at"}
+    _check_assembly_cursor(after_id, sort, offset)
+    allowed_sorts = {"name", "industry", "created_at", "updated_at", "id"}
     sort_col = sort if sort in allowed_sorts else "name"
     # Names/industry read best ascending; timestamps newest-first. Append an id
     # tie-breaker so offset/infinite-scroll pagination is stable.
     direction = "ASC" if sort_col in ("name", "industry") else "DESC"
+    # "id" is the frontend's immutable assembly key (#77 — see _CONTACT_SORTS["id"]). It is
+    # its own tie-breaker, so it is special-cased rather than emitting "id ASC, id ASC".
+    order_by = "id ASC" if sort_col == "id" else f"{sort_col} {direction}, id {direction}"
 
     conditions = []
     params: list = []
@@ -600,13 +706,15 @@ def list_companies(
         params.append(owner_id)
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
-    total_row = pg_fetchone(f"SELECT COUNT(*) AS cnt FROM companies {where}", params)
-    total = total_row["cnt"] if total_row else 0
+    # Skipped on a cursor page — see list_contacts.
+    total = _count_or_none(after_id, f"SELECT COUNT(*) AS cnt FROM companies {where}", params)
 
-    params.extend([limit, offset])
+    # Window, not filter — see the same note in list_contacts.
+    row_conditions = conditions + (["id > %s"] if after_id is not None else [])
+    row_where = f"WHERE {' AND '.join(row_conditions)}" if row_conditions else ""
     rows = pg_fetchall(
-        f"SELECT * FROM companies {where} ORDER BY {sort_col} {direction}, id {direction} LIMIT %s OFFSET %s",
-        params,
+        f"SELECT * FROM companies {row_where} ORDER BY {order_by} LIMIT %s OFFSET %s",
+        params + ([after_id] if after_id is not None else []) + [limit, offset],
     )
     return {"companies": rows, "total": total, "limit": limit, "offset": offset}
 
@@ -1637,15 +1745,28 @@ def create_task(
 
 
 def get_task(task_id: int) -> dict | None:
-    return pg_fetchone("SELECT * FROM tasks WHERE id = %s", (task_id,))
+    # Joined exactly like list_tasks, because create_task / update_task / complete_task all
+    # return this row and the Tasks list patches itself from those bodies (#77). Without the
+    # joins a saved task would lose its contact/deal label in the list; worse, re-linking a
+    # task to a different contact would leave the OLD name showing.
+    return pg_fetchone(
+        """SELECT t.*, c.name AS contact_name, d.title AS deal_title
+           FROM tasks t
+           LEFT JOIN contacts c ON t.contact_id = c.id
+           LEFT JOIN deals d ON t.deal_id = d.id
+           WHERE t.id = %s""",
+        (task_id,),
+    )
 
 
 def list_tasks(
     contact_id: int | None = None, deal_id: int | None = None,
     completed: bool | None = None, due_before: str | None = None,
     priority: str | None = None, limit: int = 50,
-    owner_id: int | None = None,
+    owner_id: int | None = None, after_id: int | None = None,
+    sort: str = "due",
 ) -> list[dict]:
+    _check_assembly_cursor(after_id, sort)
     conditions = []
     params: list = []
     if owner_id is not None:
@@ -1673,6 +1794,10 @@ def list_tasks(
     # swept the same way — see get_activity_log.
     conditions.append(f"(t.deal_id IS NULL OR {LIVE_PREDICATE_D})")  # see LIVE_TASK_PREDICATE
     conditions.append(NOT_DROPPED_TASK_T)  # see NOT_DROPPED_TASK
+    # Window, not filter — see list_contacts. This list has no COUNT to disagree with.
+    if after_id is not None:
+        conditions.append("t.id > %s")
+        params.append(after_id)
     where = f"WHERE {' AND '.join(conditions)}"
     params.append(limit)
     return pg_fetchall(
@@ -1680,7 +1805,7 @@ def list_tasks(
             FROM tasks t
             LEFT JOIN contacts c ON t.contact_id = c.id
             LEFT JOIN deals d ON t.deal_id = d.id
-            {where} ORDER BY t.completed ASC, t.due_date ASC LIMIT %s""",
+            {where} ORDER BY {_TASK_SORTS.get(sort, _TASK_SORTS["due"])} LIMIT %s""",
         params,
     )
 
@@ -2378,7 +2503,11 @@ def _shape_activity_types(rows: list[dict]) -> list[dict]:
 _ACTIVITY_CHATTER_EXCLUSIONS = (
     " AND ch.message NOT LIKE %s AND ch.message NOT LIKE %s"
 )
-_PROVENANCE_NOTE_PATTERN = "Confirmed AI-populated value for %"
+# The SAME literal scoring_service excludes from engagement and the #77 last-contact
+# join excludes from recency — imported rather than retyped, because a fourth copy of
+# a pattern that must mirror provenance_service.confirm's writer is exactly the drift
+# making it public was meant to end.
+_PROVENANCE_NOTE_PATTERN = scoring_service.HOUSEKEEPING_NOTE_LIKE
 _MERGE_COPY_PATTERN = "[Merged from deal #%"
 
 

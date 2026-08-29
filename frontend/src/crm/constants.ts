@@ -40,3 +40,12 @@ export function touchBand(count: number): keyof typeof TOUCH_COLORS {
 export function touchCountColor(count: number | null | undefined): string {
   return count == null ? INK_DIM : TOUCH_COLORS[touchBand(count)].color;
 }
+
+// Lead-score bands (#18): hot >=70, warm 40-69, cool <40. Lifted out of ScorePill with #77
+// so the pill and the Contacts list's Score facet cut the range at the same two numbers —
+// a second inline ternary is how a badge and the filter that claims to select it drift.
+export type ScoreBand = 'hot' | 'warm' | 'cool';
+
+export function scoreBand(score: number): ScoreBand {
+  return score >= 70 ? 'hot' : score >= 40 ? 'warm' : 'cool';
+}
