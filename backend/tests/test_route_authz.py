@@ -93,6 +93,14 @@ ADMIN_ONLY = {
     ("/api/crm/clear-all", "POST"),
     ("/api/crm/deals/touch-count/backfill", "POST"),
     ("/api/crm/scores/backfill", "POST"),
+    # Task mode is install-wide (it lives on the crm_meta singleton, so one member
+    # flipping it changes everyone's task experience) — same rule as assistant identity.
+    # The no-login surfaces are stronger still: GET returns the tokens themselves, and
+    # POST can mint an unauthenticated read+write link to the whole todo store whose
+    # lifetime is NOT tied to the account that created it. Both admin-only since #102.
+    ("/api/crm/task-mode", "POST"),
+    ("/api/crm/todo-surfaces", "GET"),
+    ("/api/crm/todo-surfaces", "POST"),
     # Custom-field SCHEMA (the install's data model). Field VALUES stay member-writable
     # at /api/crm/{entity_type}/{entity_id}/fields — deliberately NOT in this set.
     ("/api/crm/fields", "POST"),
