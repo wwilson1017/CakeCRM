@@ -291,17 +291,22 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   NAT address. `login`, `/api/me`, change-password and the `/api/users` handlers are
   sync `def`s for the same reason `get_current_user` is — they do blocking psycopg2
   and bcrypt work and would otherwise run it on the event loop.
-  In the UI, `SettingsPage` hides the install-configuration cards (branding,
-  Telegram, custom fields, Gmail, and since #102 the Tasks card) from members, the way
-  the Team card hides itself; Notifications and Change password stay, because they
-  configure the person, not the install. The Tasks card joined that list when #102 made
-  GTD the default: `task_mode` is a `crm_meta` singleton, so one member flipping it
-  changes everyone's task surface, and the card's no-login section can mint an
-  unauthenticated read+write link to the whole todo store whose lifetime is **not** tied
-  to the account that created it (deactivating that user revokes their JWT via
-  `token_epoch`/`is_active`, not the URL). `/api/crm/task-mode` and both
-  `/api/crm/todo-surfaces` methods are `require_admin` and pinned in
-  `test_route_authz.ADMIN_ONLY`. The **assistant drawer's identity panel** obeys the
+  In the UI, which Settings cards a member sees is decided in ONE place,
+  `crm/settingsSections.ts` (#103): each card declares `adminOnly`, and a section is
+  visible iff one of its cards is — so an all-admin group (Workspace, Integrations)
+  can never render as an empty section or a dead tab for a member. Team also keeps
+  its internal `return null` as defence in depth. Members see exactly Notifications,
+  Change password and Assistant memory. **Task mode is admin-only since #102**:
+  `task_mode` is a `crm_meta` singleton, so one member flipping it changes everyone's
+  task surface, and the card's no-login section can mint an unauthenticated read+write
+  link to the whole todo store whose lifetime is **not** tied to the account that
+  created it (deactivating that user revokes their JWT via `token_epoch`/`is_active`,
+  not the URL). `/api/crm/task-mode` and both `/api/crm/todo-surfaces` methods are
+  `require_admin`, pinned in `test_route_authz.ADMIN_ONLY`. #102 gated that at its
+  call site; this page **replaced** that call site, so the gate is now the registry's
+  `adminOnly` flag — same semantics, one place. The UI partition mirrors the server's
+  rather than inventing one, and `settingsSections.test.ts` pins it in both directions.
+  The **assistant drawer's identity panel** obeys the
   same rule (#106, `frontend/src/assistant/IdentitySettings.tsx`): `PUT
   /api/assistant/identity` is `require_admin` while the GET is member-legal, so members
   see the personality **read-only** with no Save rather than a control that can only
@@ -310,6 +315,13 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   That file is the whole exposure: the rest of `frontend/src/assistant/` calls only
   `/chat`, `/confirm` and `/conversations*`, none of which appear in
   `test_route_authz.ADMIN_ONLY`.
+  The registry is **card-granular**, and one card straddles that line: Notifications'
+  Web Push half configures this browser (everyone's), while its "Daily digest and
+  nudges" half writes install state through the `require_admin`
+  `POST /api/heartbeat/proactive` — so that block carries its own `isAdmin` gate
+  *inside* a member-visible card (pinned in `SettingsPage.test.tsx`). Any future card
+  mixing personal and install controls needs the same second gate: the registry cannot
+  express it, and "don't offer what can only 403" is a rule about controls, not cards.
   **Still install-wide, deliberately (Phase B):** assistant chat history and memory,
   the Gmail connection, the Telegram binding, reminders, notifications and alerts.
   Every active seat gets the assistant (Will's §15 ruling — no temporary admin gate
@@ -652,7 +664,38 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   launcher (never the home page), and shows a **dismissible** "add an AI key" nudge —
   never a gate, gated on `!credentials_present`, dismissal tracked on
   `crm_meta.ai_key_prompt_dismissed`. Branding (company name / logo) is edited at
-  `/crm/settings`, consuming the existing `/api/branding`. The **theme itself is fixed**
+  `/crm/settings`, consuming the existing `/api/branding`.
+  **The Settings page is a shell, not a list** (#103): four sections — Personal →
+  Assistant → Workspace → Integrations, member-visible first so a member's nav is a
+  *prefix* of an admin's and the post-login `isAdmin` flip only appends tabs, never
+  inserts one before the section on screen — rendered by `SettingsPage.tsx` as an
+  underline tab strip of `<Link>`s in `<nav aria-label="Settings sections">`
+  (navigation ⇒ underline tabs, the `ViewSwitcher` rule; deliberately **not** an ARIA
+  tablist, because these tabs navigate and a `role="tab"` would promise arrow-key
+  roving this does not implement) over the active section's cards **only**. Every card
+  wraps itself in `components/SettingsCard.tsx` (`<section aria-labelledby>` + a real
+  `<h2>` + optional description/badge), which owns padding; the page owns column width
+  and inter-card spacing, so a card carries no `marginTop`/`maxWidth`/padding of its
+  own — cards **replace** their old outer `<div>` rather than nesting inside the shell,
+  and `settingsSections.test.ts` fails the build if a settings card still imports
+  `cardStyle`. The section is deep-linkable as `?section=<id>` and is a pure function of
+  URL + role recomputed every render (nothing memoises `isAdmin`, in either direction).
+  That is load-bearing for the **Gmail OAuth callback**, which lands on `?gmail=…` with
+  no `section`: `wantedSection()` maps a **non-empty** `gmail` to Integrations so
+  `GmailCard` mounts and its effect can toast and strip the params, and that same effect
+  writes `section=integrations` back as it strips — without which removing `gmail` would
+  drop the view to the default section. Two details keep that from becoming a trap, since
+  `gmail` outranks `section`: the non-empty test is exactly `GmailCard`'s own
+  `if (!result) return`, so the page cannot select a section the card then declines to
+  clean up; and the nav **deletes** `CALLBACK_PARAMS` from its links (it preserves every
+  other param), because a one-shot callback param riding along would pin the view to
+  Integrations and make every tab inert — permanently for a MEMBER, who never mounts
+  `GmailCard` and so never strips it. All of it is pinned by `SettingsPage.test.tsx`.
+  Only the active section mounts, so Telegram's 4 s link-poll runs only while
+  Integrations is on screen; the cost is that switching sections remounts (unsaved
+  in-card drafts are lost — acceptable, since the tabs are links and switching is a
+  navigation). Branding's form lives in `components/BrandingCard.tsx`.
+  The **theme itself is fixed**
   (#54) — one polished CakeCRM look in light and dark, defined as `--color-ck-*` tokens
   in `index.css` with a `.dark` override block; there is **no user-configurable accent**
   (`accent_color` was removed from `/api/branding`, and a stale key on disk is stripped
@@ -1009,4 +1052,5 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Bulk deal operations (per-stage Select All + card multi-select, inline bulk bar, atomic set-based backend, `crm_bulk_move_deals` tool) — **landed #55** as `service.bulk_move_deals` + `_classify_deal_update` + `POST /api/crm/deals/bulk-move` + `PipelinePage` selection UI + pure `crm/bulk{Selection,Outcome}.ts` (+ `ApiError` in `core/api/client.ts`). NOT ported, each because the column does not exist here: the `status` dual-write and its multiple-assignment fix (won/lost ARE stages in CakeCRM), the ~60-line `display_order` request-order replay (deals carry no rank column — columns sort by `lead_score`), and the `owner_email` branch (single-user; #60 owns ownership). Also cut: the chatter translation layer (`log_events_bulk`, `lost_reason_note`/`lost_reason_cleared` kinds) because CakeCRM's stage audit IS `deal_stage_events` and a single-deal move writes no chatter either — so bulk writing none is parity, not a gap; client-side chunking (`BULK_CHUNK_SIZE` + the multi-chunk fold) since one request under a 200-cap covers an unpaginated single-user board, though the rejected-vs-unconfirmed distinction it protects survives in the collapsed `bulkOutcome.ts`; `reconcileBulkResult` (the blueprint's own PipelineTab never uses it — it serves the list surfaces, which patch rows in place, where the board always reconciles by refetching); the `BulkUpdateModal` (an inline bar is enough for one action); and bulk mark-won/mark-lost (the issue scopes bulk to stage-move; `crm_mark_deal_lost` stays the reason-capturing close). Two deliberate divergences FROM the blueprint: its bulk fetch takes no row locks, ours takes `ORDER BY id FOR UPDATE`; and its rejected path cannot revert, ours reverts to each deal's server-confirmed stage. | `cake_os/backend/apps/crm/deal_service.bulk_update_deals` + `frontend/src/apps/crm/{bulkSelection,bulkUpdateOutcome}.ts` + the PipelineTab selection/BulkBar |
 | Pipeline facet filtering (client-side: `frontend/src/crm/pipelineFilters.ts` pure predicate + `components/PipelineFilterBar.tsx`, spliced into `PipelinePage`'s useMemo seam as `deals`→`filteredDeals`→`grouped`; facets = keyword/stage/value/close-date/last-activity; sessionStorage `crm_pipeline_filters`) — **landed #21**. Every facet is client-side except #83's `archived`, which also carries `?include_archived=true` (see the CRM bullet). Owner facet dropped (single-tenant); `get_pipeline()` gains a derived `last_activity_at` = MAX(deal `activity_log` rows + un-archived deal `crm_chatter` notes) via one UNION-ALL/GROUP BY join (NULL = no activity), plus `company_name`. Drag stays enabled while filtering (board is stage-only, index-safe). | `cake_os/docs/CRM_FILTER_DESIGN.md` + `cake_os/docs/solutions/architecture-patterns/client-side-facet-filtering.md` |
 | Archived deals reachable from the UI (Archived facet + inert board cards + `POST /api/crm/deals/:id/restore` + the deal sheet's archived banner/Restore; `get_pipeline(include_archived=)`; per-item `shared/dnd` `dragDisabled`) — **landed #83** across `backend/crm/{service,router}.py` + `frontend/src/crm/{pipelineFilters.ts,PipelinePage.tsx,components/{PipelineFilterBar,DealDetailSheet,DealForm}.tsx}` + `frontend/src/shared/dnd/dragDisabled.ts`. **Not a port — this is the first deal-restore capability in either tree**, which corrects the gate decision's "extends the family pattern" framing: cake_os's Status/`archived` facet exists only for Contacts/Companies over a plain `status` enum (Companies restore by editing that select; Contacts have no restore path at all), and its *deals* have neither a facet nor any restore, front or back — `deal_service.archive_deal` there even hard-drops open todos with the comment "un-archiving never resurrects them". Its list endpoints also default to returning archived rows, where CakeCRM's `LIVE_PREDICATE` + explicit `include_archived: bool = False` is the stronger contract. So the in-repo precedents govern: the chatter-note `/archive`+`/unarchive` POST pair for the route shape, `crm_search_deals(include_archived)` for the flag. **Carry-forward for #109 (#74) / #110 (#75)**, which rewrite these exact surfaces and are *siblings*, not a stack (both branch off `main`; they conflict with each other on `PipelinePage.tsx`): the logic is deliberately three small exported units — (1) `pipelineFilters.isArchivedDeal` becomes `getVoided` on #74's `pipelineCollection.ts`, whose header calls the omission load-bearing *because* "the server's LIVE_PREDICATE excludes them", which this PR retires; (2) the wire contract `GET /api/crm/deals?include_archived=true` — deals array only, `stage_summary` always live-only; (3) the sheet's banner + Restore + the archived gate on Mark Won/Lost move into #75's `DealDetailBody`, whose `onBoard`/`stageWritable` split already anticipates archived deals. That port is **not** a free pass-through and needs three pieces of collection-layer work: `KanbanViewConfig.voidedPolicy: 'facet'` (already in #73's layer) so voided items stay on the board, a config-level default of `'hide'` (the layer's `VoidedFilter` `null` means *show all*), and the same `boolean \| (item) => boolean` widening on the layer's own kanban `dragDisabled`, which is still a scalar and so cannot pass a per-card predicate through | New capability (no blueprint — cake_os has no deals archived facet or restore; back-port candidate to CAKE OS) |
+| Settings page shell (four-section IA in `crm/settingsSections.ts`; underline-tab `<nav>` of `<Link>`s with `?section=` deep links; `components/SettingsCard.tsx` heading/description/padding shell adopted by all nine cards; `components/BrandingCard.tsx` extracted out of the page; member/admin partition, nav and Gmail-callback tests) — **landed #103** as `frontend/src/crm/{SettingsPage.tsx,settingsSections.ts,styles.ts}` + `frontend/src/crm/components/{SettingsCard,BrandingCard}.tsx` + shell adoption in the eight existing cards. Behaviour-preserving apart from three deliberate repairs the chain had accumulated: Team / Assistant memory / Task mode rendered bare `cardStyle` and so had **no padding at all**, Telegram hard-coded `padding: 28` (it took no `isMobile` prop), and Task mode's description spread `labelStyle` and rendered its sentence as 10 px tracked uppercase. Normalising onto `settingsDescription` also moves Assistant memory's description `maxWidth` 560 → 460 and Branding's + Change password's description margin 24 → 20, and Task mode's "No-login links" `<h3>` moves from mono-uppercase `sectionHeading()` to sans-semibold `settingsSubheading`. The Task-mode card's TITLE was renamed **"Tasks" → "Task mode"** (beside "Assistant memory" the bare noun read as the tasks page) — `README.md` and `SECURITY.md` navigation paths were updated for that and for the new section level. `CustomFieldSettings`' entity strip stays `filterTab` but gains `role="group"` + `aria-pressed`, so AT hears a filter there and navigation in the strip above it. Review also gated Notifications' install-wide digest toggle behind `isAdmin` (see the multi-user bullet) — a pre-existing leak this PR's own gating claim made untenable | New capability (no blueprint) |
 | **Sync bot — receiving half** (`.github/workflows/sync-intake.yml` + `scripts/sync_intake.py` + `SYNC_LEDGER.md` + `docs/SYNC.md`) — **landed #23**. cake_os fires a keyless `workflow_dispatch` carrying merge **metadata only**; CakeCRM validates, classifies the paths, dedupes on a full-SHA marker, and files an **un-`greenlit`** `sync-intake` issue. Translation is NOT done here — an intake issue enters the ordinary `/auto-issues` pipeline, whose worker reads cake_os from the local clone. **Two structural guarantees:** (1) *never a push* — the sender's token holds **Actions: write** only, which cannot push/PR/create-issue (`repository_dispatch` was rejected because its token needs **Contents: write**, i.e. push-capable against an unprotected `main`); (2) *no upstream text* — the payload has no free-text field, and **no cake_os path is rendered either**, because a path is only *prefix*-constrained and the filename after it is free text that could carry a customer name or forge the dedupe marker. The issue instead names **CakeCRM's own counterpart path**, and only when that file already exists here (already-public name); everything else becomes a count. Asserted, not argued: `test_sync_intake.py` feeds sentinel paths and fails CI if one survives rendering. Verdicts (`crm-code`/`shared-dnd-only`/`internal-paths-only`/`docs-only`/`no-watched-files`) are deliberately **factual, not portability judgments** — portability isn't decidable from a path. `shared-dnd-only` is its own verdict because cake_os's `shared/dnd/` has **13 non-CRM consumers** (CRM is 1 of 14), so a dnd touch is weak CRM evidence. Dedupe is the full-SHA marker check **plus a per-SHA `concurrency` group** (`sync-intake-<sha>`) closing the check-then-create race. The distinction is the whole point: a *global* group would drop distinct intakes (only one run may sit pending), while keying on the SHA serializes exactly the duplicate deliveries and drops nothing. The workflow self-provisions its label and declares `permissions: issues: write` explicitly (the repo default is `read`). **The sender half lives in cake_os and is not built yet** — `docs/SYNC.md` §6 is its spec. | New capability (no blueprint — the cake_os half is its own issue there) |

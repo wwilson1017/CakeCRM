@@ -7,21 +7,20 @@
  */
 
 import { Link } from 'react-router-dom';
-import { INK_MUTE } from '../../shared/styles';
-import { cardStyle, sectionHeading, btnSecondary } from '../styles';
+import { btnSecondary } from '../styles';
+import { SettingsCard } from './SettingsCard';
 
-export function MemoryCard() {
+export function MemoryCard({ isMobile }: { isMobile: boolean }) {
   return (
-    <div style={cardStyle}>
-      <div style={sectionHeading()}>Assistant memory</div>
-      <p style={{ color: INK_MUTE, marginTop: 0, maxWidth: 560 }}>
-        Read and edit what your assistant knows: its own description of itself, its
-        running snapshot, topic notes, daily logs, and the individual facts it has
-        recorded. Works with or without an AI provider configured.
-      </p>
+    <SettingsCard
+      id="memory"
+      title="Assistant memory"
+      description="Read and edit what your assistant knows: its own description of itself, its running snapshot, topic notes, daily logs, and the individual facts it has recorded. Works with or without an AI provider configured."
+      isMobile={isMobile}
+    >
       <Link to="/crm/memory" style={{ ...btnSecondary, display: 'inline-block', textDecoration: 'none' }}>
         Open memory
       </Link>
-    </div>
+    </SettingsCard>
   );
 }
