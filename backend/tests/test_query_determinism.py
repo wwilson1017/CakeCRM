@@ -587,18 +587,31 @@ def test_scan_actually_examined_the_backend():
 #   crm/service.py::list_contacts    ORDER BY {order_by}, from _CONTACT_SORTS
 #   crm/service.py::search_contacts  same fragment
 #                                      -> test_dynamic_order_by_contact_lists
+#   crm/service.py::list_companies   ORDER BY {order_by}, built in a local
+#                                      -> test_dynamic_order_by_company_list
+#   crm/service.py::list_tasks       ORDER BY {…}, from _TASK_SORTS
+#                                      -> test_dynamic_order_by_task_list
 #   crm/scoring_service.py::backfill_scores
 #                                    two reads shaped `{where} {order} LIMIT %s`, whose
 #                                    ORDER BY lives in a separate local
 #                                      -> test_scoring_backfill_orders_are_total
 #
+# `list_companies` and `list_tasks` joined this list in #77, and the way they did is the
+# point of the registry: BOTH still end every branch on `id`, so neither ordering changed
+# and neither was ever broken — they simply stopped being PROVABLE from source. Before
+# #77 each carried its tie-breaker as a literal in the f-string
+# (`ORDER BY {sort_col} {direction}, id {direction} LIMIT %s`;
+# `ORDER BY t.completed ASC, t.due_date ASC, t.id ASC LIMIT %s`), which the scan reads
+# directly. #77 lifted the whole clause into a local or a fragment lookup, leaving the
+# scanner nothing but a placeholder. Correct code, invisible to a static reader — exactly
+# the case behavioral tests exist to cover, which is why registering them is the fix and
+# not a weakening.
+#
 # Other readers interpolate too but stay DECIDABLE, so they are deliberately absent:
-# `list_companies` and `search_deals` end on a literal `id` term after the interpolated
-# column, and `_stale_ids` is one implicitly-concatenated literal ending on `id` — the
-# scan judges all three directly. They keep behavioral tests anyway, as belt and braces
-# against the fragment changing shape. (`list_tasks` joins the decidable group when #77
-# turns its ORDER BY into a `_TASK_SORTS` lookup; that constant is checked by
-# test_order_by_fragment_constants_are_total.)
+# `search_deals` ends on a literal `id` term after the interpolated column, and
+# `_stale_ids` is one implicitly-concatenated literal ending on `id` — the scan judges
+# both directly. They keep behavioral tests anyway, as belt and braces against the
+# fragment changing shape.
 #
 # A to-do list, not an exemption list — and pinned EXACTLY, both directions. Growth means
 # a reader started hiding its ordering from the scan and owes a behavioral test first.
@@ -606,13 +619,15 @@ def test_scan_actually_examined_the_backend():
 # later. (`crm/gtd_service.py` sat here until the scan proved its ORDER BYs are literal
 # and already end on `t.id` — which is why this side is asserted too.)
 #
-# Keyed by enclosing FUNCTION, not by file: `crm/service.py` holds two undecidable
+# Keyed by enclosing FUNCTION, not by file: `crm/service.py` holds four undecidable
 # readers, and a file-level count would net out to no change if one became decidable
 # while a different one appeared — letting the newcomer inherit a registration that was
 # never about it.
 UNDECIDABLE_SITES = {
     "crm/service.py::list_contacts": 1,
     "crm/service.py::search_contacts": 1,
+    "crm/service.py::list_companies": 1,
+    "crm/service.py::list_tasks": 1,
     "crm/scoring_service.py::backfill_scores": 2,  # the deals read and the contacts read
 }
 
@@ -745,11 +760,40 @@ def test_dynamic_order_by_contact_lists(crm_recorder, sort):
     _assert_recorded_orders_are_total(crm_recorder)
 
 
-@pytest.mark.parametrize("sort", ["name", "industry", "created_at", "updated_at", "bogus"])
+# "id" is listed explicitly because it is the one key that takes a DIFFERENT branch —
+# `order_by = "id ASC"` rather than `f"{sort_col} {direction}, id {direction}"` — so
+# omitting it left the only single-term ordering this reader can emit unexercised.
+@pytest.mark.parametrize(
+    "sort", ["name", "industry", "created_at", "updated_at", "id", "bogus"])
 def test_dynamic_order_by_company_list(crm_recorder, sort):
     from crm import service
 
     service.list_companies(sort=sort)
+    _assert_recorded_orders_are_total(crm_recorder)
+
+
+def _task_sort_keys():
+    from crm.service import _TASK_SORTS
+
+    # Read from the live dict for the same reason as _contact_sort_keys: a sort option
+    # added later is covered here without anyone remembering to edit this list.
+    return sorted(_TASK_SORTS) + ["not-a-real-sort"]  # the last exercises the fallback
+
+
+@pytest.mark.parametrize("sort", _task_sort_keys())
+def test_dynamic_order_by_task_list(crm_recorder, sort):
+    """`list_tasks` interpolates a whole `_TASK_SORTS` fragment, so the scan sees only a
+    placeholder and cannot judge the cap — this is the behavioral half of its
+    registration in ``UNDECIDABLE_SITES``.
+
+    Worth stating what the tie-breaker is load-bearing FOR, since the reader no longer
+    carries the explanation inline: `completed` is a 0/1 flag and `due_date` is very
+    often '' (TEXT NOT NULL DEFAULT ''), so the historical pair leaves most of the list
+    tied. `t.id` is what makes the capped window reproducible (issue #58).
+    """
+    from crm import service
+
+    service.list_tasks(sort=sort)
     _assert_recorded_orders_are_total(crm_recorder)
 
 
