@@ -30,6 +30,7 @@ from crm.service import (
     NOT_DROPPED_TASK_T,
     OPEN_PREDICATE,
     OPEN_PREDICATE_D,
+    OPEN_STAGES,
 )
 
 logger = logging.getLogger(__name__)
@@ -506,7 +507,6 @@ def get_deal_health(deal_id: int, stale_days: int = DEFAULT_DEAL_STALE_DAYS) -> 
 #    assistant explains them instead of reporting a misleading zero.
 
 DEFAULT_ANALYTICS_WINDOW_DAYS = 90
-_OPEN_STAGES = ("lead", "qualified", "proposal", "negotiation")
 
 
 def _median(values: list[float]) -> float | None:
@@ -528,7 +528,7 @@ def _shape_stage_durations(rows: list[dict]) -> list[dict]:
             continue
         by_stage.setdefault(r.get("stage") or "", []).append(float(days))
     out = []
-    for stage in _OPEN_STAGES:
+    for stage in OPEN_STAGES:
         vals = by_stage.get(stage, [])
         out.append({
             "stage": stage,
@@ -547,7 +547,7 @@ def _shape_conversion(rows: list[dict]) -> list[dict]:
     """
     buckets: dict[str, dict] = {
         s: {"stage": s, "entered": 0, "still_here": 0, "advanced": 0, "won": 0, "lost": 0}
-        for s in _OPEN_STAGES
+        for s in OPEN_STAGES
     }
     for r in rows:
         stage = r.get("stage") or ""
@@ -565,7 +565,7 @@ def _shape_conversion(rows: list[dict]) -> list[dict]:
         else:
             b["advanced"] += 1
     out = []
-    for stage in _OPEN_STAGES:
+    for stage in OPEN_STAGES:
         b = buckets[stage]
         entered = b["entered"]
         # Progression = got out of this stage in the right direction (moved on OR won).

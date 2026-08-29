@@ -35,6 +35,13 @@ from crm import (
 logger = logging.getLogger(__name__)
 
 DEAL_STAGES = ["lead", "qualified", "proposal", "negotiation", "won", "lost"]
+# The two terminal stages, as a Python tuple the tool layer can test membership against
+# (#99) — OPEN_PREDICATE below is the SQL statement of the same fact, and a test pins the
+# two in agreement. OPEN_STAGES is the complement on purpose: a stage added to
+# DEAL_STAGES later is open unless it is declared terminal here. scoring_service keeps its
+# own _TERMINAL_* copies deliberately (importing service there is a circular import).
+CLOSED_STAGES = ("won", "lost")
+OPEN_STAGES = tuple(s for s in DEAL_STAGES if s not in CLOSED_STAGES)
 CONTACT_STATUSES = ["active", "inactive", "archived"]
 TASK_PRIORITIES = ["low", "medium", "high"]
 COMPANY_STATUSES = ["active", "archived"]
@@ -2074,6 +2081,9 @@ AGE_BUCKETS = ((0, 7, "0-7"), (8, 30, "8-30"), (31, 90, "31-90"), (91, None, "91
 
 # Open-deal predicate (DEAL_STAGES sentinels; no status column / CHECK exists).
 # Public for the same single-source-of-truth reason as LIVE_PREDICATE above.
+# This is the SQL statement of CLOSED_STAGES (defined beside DEAL_STAGES); the literal
+# stays hand-written rather than interpolated — every deal-reading query embeds this
+# string, and a test pins the two spellings in agreement instead.
 OPEN_PREDICATE = "stage NOT IN ('won', 'lost')"
 OPEN_PREDICATE_D = "d.stage NOT IN ('won', 'lost')"
 

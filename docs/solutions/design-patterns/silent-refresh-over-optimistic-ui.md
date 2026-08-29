@@ -3,7 +3,7 @@ title: Safely coexisting a background "silent refresh" with an optimistic-update
 date: 2026-07-27
 category: design-patterns
 module: frontend/src/crm/PipelinePage.tsx
-tags: [react, optimistic-ui, race-condition, aba, kanban, drag-and-drop]
+tags: [react, optimistic-ui, race-condition, aba, kanban, drag-and-drop, bulk]
 problem_type: pattern
 ---
 
@@ -82,3 +82,48 @@ The default remains "no follow-up GET after an optimistic mutation" — reach fo
 when a background refresh is genuinely required (a derived server field the optimistic path can't
 compute). Prefer a targeted single-record patch when feasible; use the full-board guarded refresh
 when the derivation spans the whole payload.
+
+## Addendum — a SET write racing the same board's single-record writes (#55, audited #99)
+
+The bulk stage-move (#55) added a second writer to the same board, and reviewers have twice read
+`moveDealStage`'s guard — `if (bulkPendingRef.current) return;` — as the *only* protection and
+concluded that a selected, optimistically-dragged card can race the bulk request. **It cannot, and
+the reason is a different mechanism one function over.** `applyBulkMove` orders four steps, and the
+order is the whole guarantee:
+
+1. **Take the lock BEFORE the first `await`.** `bulkPendingRef.current = true` runs in the same
+   synchronous block as the click, so from that instant `moveDealStage` refuses to start any *new*
+   single-deal write.
+2. **Drain the chains for exactly the ids being moved**, which handles the writes already in flight
+   — the ones the lock is too late for:
+   ```ts
+   await Promise.allSettled(
+     ids.map(id => dealWriteChain.current.get(id)).filter(Boolean) as Promise<void>[],
+   );
+   ```
+   This is the per-deal write-chain from the drag path (see guard 1 above), extended across a set.
+3. **Only then** snapshot `prevStages`, paint optimistically, and POST.
+4. **Reconcile while still holding the lock**, releasing it in `finally`.
+
+Steps 1 and 2 are complementary, not redundant: the lock alone cannot stop a PUT already on the
+wire, and the drain alone cannot stop a drag that starts mid-`await`. Removing either reopens the
+race.
+
+**Why it is load-bearing.** The server has no CAS on `deals.stage` — `bulk_move_deals` and
+`_write_deal_update` both take a plain `FOR UPDATE` and last writer wins — so this client-side
+ordering is the *only* thing sequencing two writes to one deal. It is also, as of this audit,
+untested; a rewrite that "simplifies away" the `allSettled` would pass CI. Pin it with a test when
+a co-located `PipelinePage.test.tsx` next lands.
+
+**The boundary — state it whenever you cite this.** All of the above is *per mounted component*:
+the refs are component-local. Two browser tabs, two users, or any other client still race each
+other, and the server will silently take whichever write commits last. That is unchanged by #55
+and #99, and it is a different problem (it needs a version column, not a client-side chain).
+
+**Verification recipe** — checked at main `486fe7d` and at PR #109's rewrite of the same file
+(`feature/issue-74-pipeline-parity-board-list-views`, tip `bd44a2f`), where the drain survived
+byte-identical:
+```bash
+git show <ref>:frontend/src/crm/PipelinePage.tsx | grep -n 'bulkPendingRef.current = true\|allSettled\|dealWriteChain'
+```
+The lock line must appear *before* the `allSettled` line, and that must appear before the POST.
