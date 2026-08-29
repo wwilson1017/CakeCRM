@@ -269,7 +269,8 @@ def test_mark_deal_lost_without_a_reason_writes_no_note(monkeypatch, rec, fake_c
     fake_conn(monkeypatch, service, fetchone_results=[("proposal", None, None)])
     rec.fetchone_queue = [{"id": 1}]
     called = []
-    monkeypatch.setattr(chatter_service, "add_note", lambda *a: called.append(a))
+    monkeypatch.setattr(chatter_service, "add_note",
+                        lambda *a, **kw: called.append(a))
     service.mark_deal_lost(1)
     assert called == []
 
@@ -280,7 +281,10 @@ def test_mark_deal_lost_survives_a_note_failure(monkeypatch, rec, fake_conn):
     fake_conn(monkeypatch, service, fetchone_results=[("proposal", None, None)])
     rec.fetchone_queue = [{"id": 1, "stage": "lost"}]
 
-    def boom(*a):
+    # **kw, not just *a: mark_deal_lost passes author_id as a KEYWORD, and its blanket
+    # `except Exception` would swallow the resulting TypeError — the RuntimeError below
+    # would never be reached and this test would keep passing while proving nothing.
+    def boom(*a, **kw):
         raise RuntimeError("chatter down")
     monkeypatch.setattr(chatter_service, "add_note", boom)
     assert service.mark_deal_lost(1, lost_reason="price")["stage"] == "lost"
@@ -289,7 +293,7 @@ def test_mark_deal_lost_survives_a_note_failure(monkeypatch, rec, fake_conn):
 def test_lost_reason_is_length_bounded(monkeypatch, rec, fake_conn):
     conn = fake_conn(monkeypatch, service, fetchone_results=[("proposal", None, None)])
     rec.fetchone_queue = [{"id": 1}]
-    monkeypatch.setattr(chatter_service, "add_note", lambda *a: None)
+    monkeypatch.setattr(chatter_service, "add_note", lambda *a, **kw: None)
     service.mark_deal_lost(1, lost_reason="x" * 5000)
     _, params = next((s, p) for s, p in conn.executed if "UPDATE deals SET" in s)
     assert any(isinstance(v, str) and len(v) == service.MAX_LOST_REASON for v in params)

@@ -248,6 +248,37 @@ describe('DealDetailSheet — Mark Lost captures a reason (issue #128)', () => {
     expect(document.body.querySelector('[role="dialog"]')).toBeNull();
   });
 
+  it('disables the close-out buttons while a slow write is in flight', async () => {
+    // CrmDashboardPage awaits the write and keeps the sheet open on failure, so without
+    // this guard a second Mark Lost lands before the first settles — and mark_deal_lost
+    // appends its "Deal lost —" note on EVERY call that finds the deal, no-op included.
+    // The modal's own latch cannot cover it: that modal unmounts on the first confirm.
+    const d = deal();
+    routeApi(d);
+    let release!: () => void;
+    const inFlight = new Promise<void>(res => { release = res; });
+    const onStageChange = vi.fn(() => inFlight);
+    await render(
+      <DealDetailSheet deal={d} isMobile={false} onClose={noop} onEdit={noop}
+        onStageChange={onStageChange} />,
+    );
+
+    await act(async () => { button('Mark Won')!.click(); });
+    expect(onStageChange).toHaveBeenCalledTimes(1);
+    expect(button('Mark Won')!.disabled).toBe(true);
+    expect(button('Mark Lost')!.disabled).toBe(true);
+
+    // A second click during the request must not reach the host. `disabled` is what
+    // enforces that, which is also why it is asserted above rather than trusted.
+    await act(async () => { button('Mark Won')!.click(); });
+    expect(onStageChange).toHaveBeenCalledTimes(1);
+
+    // …and the buttons come back once it settles, so a host that keeps the sheet open
+    // after a FAILED write still lets the user retry.
+    await act(async () => { release(); await inFlight; });
+    expect(button('Mark Won')!.disabled).toBe(false);
+  });
+
   it('leaves Mark Won a direct, dialog-free stage change', async () => {
     const d = deal();
     routeApi(d);
@@ -258,8 +289,9 @@ describe('DealDetailSheet — Mark Lost captures a reason (issue #128)', () => {
     );
     await act(async () => { button('Mark Won')!.click(); });
 
-    // No third argument — a won deal has no reason to record.
-    expect(onStageChange).toHaveBeenCalledWith(d, 'won');
+    // An UNDEFINED reason, which is precisely what routes the write to the plain stage
+    // PUT rather than the mark-lost verb — a won deal has no reason to record.
+    expect(onStageChange).toHaveBeenCalledWith(d, 'won', undefined);
   });
 });
 
