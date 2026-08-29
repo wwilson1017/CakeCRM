@@ -170,7 +170,6 @@ def test_force_turn_blocked_only_while_running(pg_db, monkeypatch):
                                          BackgroundResult(text="ok", error=False))[1])
     monkeypatch.setattr(service, "ToolRegistry", lambda **k: object())
     monkeypatch.setattr(service.background, "background_allowlist", lambda reg: set())
-    monkeypatch.setattr(service.identity, "get_identity", lambda: {"name": "Baker"})
 
     # A turn that COMPLETED 1 second ago (status 'ok', last_turn_at now) → force runs.
     pg_execute("UPDATE heartbeat_state SET last_turn_at = now(), last_turn_status = 'ok' WHERE id = 1")

@@ -36,14 +36,6 @@ def sent(monkeypatch):
     return out
 
 
-@pytest.fixture
-def stub_identity(monkeypatch):
-    """_digest_prompt reads the assistant's name from the DB. The hermetic suite has no
-    pool, and the name is not what these tests are about."""
-    import assistant.identity as identity
-    monkeypatch.setattr(identity, "get_identity", lambda: {"name": "Assistant"})
-
-
 SUMMARY = {
     "open_deals": 4, "open_value": 12500.0, "overdue_tasks": 2, "tasks_due_today": 1,
     "stale_deals": 3, "stale_days": 14,
@@ -147,7 +139,7 @@ def test_ai_enhancement_is_gated_off_heartbeat_enabled(monkeypatch):
     assert called == []
 
 
-def test_ai_enhancement_runs_under_the_background_allowlist(monkeypatch, stub_identity):
+def test_ai_enhancement_runs_under_the_background_allowlist(monkeypatch):
     """The unattended turn's ceiling is read tools + notify_user. If this ever widens,
     a prompt injection in a deal title could do more than send one notification."""
     monkeypatch.setattr(ps.settings, "heartbeat_enabled", True)
@@ -172,7 +164,7 @@ def test_ai_enhancement_runs_under_the_background_allowlist(monkeypatch, stub_id
                    for t in captured["allowed"])
 
 
-def test_untrusted_record_text_stays_out_of_the_system_prompt(monkeypatch, stub_identity):
+def test_untrusted_record_text_stays_out_of_the_system_prompt(monkeypatch):
     """Deal titles are user-typed. They ride the USER message; the system prompt is the
     one surface an injected string must never reach."""
     monkeypatch.setattr(ps.settings, "heartbeat_enabled", True)

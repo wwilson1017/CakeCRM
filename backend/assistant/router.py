@@ -14,8 +14,9 @@ Bearer header, which a browser EventSource cannot set).
   GET    /api/assistant/conversations/:id     — one conversation with messages
   DELETE /api/assistant/conversations/:id     — delete
   PATCH  /api/assistant/conversations/:id/title — rename
-  GET    /api/assistant/identity              — name + personality
-  PUT    /api/assistant/identity              — edit name/personality
+  GET    /api/assistant/identity              — fixed name + personality
+  PUT    /api/assistant/identity              — edit the personality (admin only; the
+                                                 name is a fixed brand, #71)
 """
 
 import asyncio
@@ -36,7 +37,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _UI_RESULT_PREVIEW_CAP = 2000
-_NAME_MAX = 80
 _PERSONALITY_MAX = 20_000
 
 _SSE_HEADERS = {
@@ -83,7 +83,12 @@ class TitleRequest(BaseModel):
 
 
 class IdentityUpdateRequest(BaseModel):
-    name: str | None = None
+    """Only the personality is editable — the assistant's name is a fixed brand (#71).
+
+    A stale client that still sends ``name`` gets it ignored, not a 422: Pydantic drops
+    unknown fields by default, and that is the behavior we want. Rejecting the request
+    would break the old UI for no gain, while accepting the field would be the bug.
+    """
     personality: str | None = None
 
 
@@ -244,13 +249,9 @@ def get_identity(user=Depends(get_current_user)):
 
 @router.put("/identity")
 def update_identity(req: IdentityUpdateRequest, user=Depends(require_admin)):
-    if req.name is not None and not req.name.strip():
-        raise HTTPException(status_code=400, detail="Name cannot be blank.")
-    if req.name is not None and len(req.name) > _NAME_MAX:
-        raise HTTPException(status_code=400, detail=f"Name must be ≤ {_NAME_MAX} characters.")
     if req.personality is not None and len(req.personality) > _PERSONALITY_MAX:
         raise HTTPException(status_code=400, detail=f"Personality must be ≤ {_PERSONALITY_MAX} characters.")
-    return identity.update_identity(name=req.name, personality=req.personality)
+    return identity.update_identity(personality=req.personality)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
