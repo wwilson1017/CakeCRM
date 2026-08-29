@@ -56,6 +56,9 @@ export function TodayPanel({ wrapperStyle, refreshKey, onMutated }: Props) {
   // midnight rollover, where the deps are all identical to the previous run.
   const [reloadTick, setReloadTick] = useState(0);
   const reqId = useRef(0);
+  // The scope the rows on screen actually describe. A failed scope switch reverts to it,
+  // so the control and the rows can never end up permanently disagreeing.
+  const appliedScope = useRef<TodayScope>(scope);
   const navigate = useNavigate();
   const { users } = useUsers();
   const { currentUser } = useAuth();
@@ -70,15 +73,29 @@ export function TodayPanel({ wrapperStyle, refreshKey, onMutated }: Props) {
     api<CrmToday>(`/api/crm/dashboard/today${qs}`)
       .then(res => {
         if (id !== reqId.current) return;
+        appliedScope.current = scope;
         setData(res);
         setLoading(false);
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         if (id !== reqId.current) return;
         // A refetch failure keeps the last good payload on screen; a first-load failure
         // leaves the panel hidden rather than putting an error box at the top of the
-        // dashboard, which is the WeeklyTouchesCard triage.
+        // dashboard, which is the WeeklyTouchesCard triage. Logged for the same reason
+        // that card logs: a panel that silently never renders leaves a self-hoster
+        // debugging "my dashboard has no Today panel" with nothing to go on.
+        console.error('Failed to load the Today panel:', err);
         setLoading(false);
+        if (scope !== appliedScope.current) {
+          // A failed SCOPE SWITCH is the one failure that would otherwise strand the UI
+          // in a lie — the control says one scope while the rows describe another, with
+          // nothing left in the deps to retry. Put the control back where the data is.
+          // This terminates: the revert refetches the applied scope, and if that fails
+          // too the scopes now match, so `setScope` is a no-op React bails out of.
+          toast.error('Could not switch scope.');
+          setScope(appliedScope.current);
+          savePersistedState(TODAY_SCOPE_KEY, appliedScope.current);
+        }
       });
   }, [scope, meId, refreshKey, reloadTick]);
 

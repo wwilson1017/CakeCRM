@@ -11,7 +11,10 @@ const api = vi.hoisted(() => vi.fn());
 const navigate = vi.hoisted(() => vi.fn());
 const users = vi.hoisted(() => ({ list: [{ id: 3 }, { id: 4 }] as { id: number }[] }));
 
+const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
+
 vi.mock('../../core/api/client', () => ({ api }));
+vi.mock('../../shared/toast', () => ({ toast }));
 vi.mock('react-router-dom', () => ({ useNavigate: () => navigate }));
 vi.mock('../../core/auth/AuthContext', () => ({ useAuth: () => ({ currentUser: { id: 3 } }) }));
 vi.mock('../useUsers', () => ({
@@ -51,6 +54,8 @@ let root: Root;
 beforeEach(() => {
   api.mockReset();
   navigate.mockReset();
+  toast.error.mockReset();
+  vi.spyOn(console, 'error').mockImplementation(() => {});
   users.list = [{ id: 3 }, { id: 4 }];
   sessionStorage.clear();
   api.mockResolvedValue(PAYLOAD);
@@ -170,6 +175,45 @@ describe('TodayPanel', () => {
     api.mockResolvedValue(PAYLOAD);
     await act(async () => { buttonByText('EVERYONE').click(); });
     expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
+  });
+
+  it('tells the user when completing a task fails, and still reconciles', async () => {
+    const onMutated = vi.fn();
+    await render(<TodayPanel onMutated={onMutated} />);
+    api.mockClear();
+    api.mockRejectedValueOnce(new Error('gone'));   // the PUT
+    api.mockResolvedValue(PAYLOAD);                 // the reconciling refetch
+
+    const checkbox = container.querySelector('button[aria-label="Complete Starred one"]');
+    await act(async () => { (checkbox as HTMLButtonElement).click(); });
+
+    expect(toast.error).toHaveBeenCalled();
+    // The write may still have landed, so the panel refetches rather than guessing.
+    expect(api).toHaveBeenCalledWith('/api/crm/dashboard/today?owner_id=3');
+    expect(onMutated).toHaveBeenCalled();
+  });
+
+  it('refetches when the page bumps refreshKey after a mutation elsewhere', async () => {
+    await render(<TodayPanel refreshKey={1} />);
+    api.mockClear();
+    api.mockResolvedValue(PAYLOAD);
+
+    await render(<TodayPanel refreshKey={2} />);
+    expect(api).toHaveBeenCalledWith('/api/crm/dashboard/today?owner_id=3');
+  });
+
+  it('puts the scope control back when a scope switch fails, rather than lying', async () => {
+    await render(<TodayPanel />);
+    expect(buttonByText('EVERYONE').getAttribute('aria-pressed')).toBe('false');
+
+    // The switch fails; the rows on screen still describe "mine".
+    api.mockRejectedValueOnce(new Error('offline'));
+    api.mockResolvedValue(PAYLOAD);
+    await act(async () => { buttonByText('EVERYONE').click(); });
+
+    expect(toast.error).toHaveBeenCalled();
+    expect(buttonByText('MINE').getAttribute('aria-pressed')).toBe('true');
+    expect(container.querySelector('[aria-busy="true"]')).toBeNull();
   });
 
   it('reloads at the SERVER boundary, not at the browser midnight before it', async () => {

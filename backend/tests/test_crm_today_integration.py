@@ -102,10 +102,13 @@ def _user(name) -> int:
 def _task(title, *, due="", star=False, owner=None, status="next_action", deal_id=None) -> int:
     from core.postgres import pg_fetchone
 
+    # `completed` is DERIVED from `status`, never hand-written: a DB CHECK binds the two
+    # (#70), so any other pairing is a constraint violation — the same reason
+    # `seed_data.py` derives it rather than setting both.
     return pg_fetchone(
         "INSERT INTO tasks (title, due_date, star, owner_id, status, completed, deal_id) "
-        "VALUES (%s, %s, %s, %s, %s, 0, %s) RETURNING id",
-        (title, due, star, owner, status, deal_id),
+        "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+        (title, due, star, owner, status, 1 if status == "done" else 0, deal_id),
     )["id"]
 
 
@@ -212,6 +215,40 @@ def test_reminder_window_is_the_local_day_not_a_utc_one(today, monkeypatch):
     _reminder("Just after midnight", end + timedelta(minutes=1))
 
     assert _titles(today_service.get_today()) == ["Late tonight"]
+
+
+def test_task_membership_matches_the_gtd_today_view_exactly(today):
+    """The issue's acceptance criterion, asserted as SET EQUALITY rather than as two
+    predicate lists that merely look alike.
+
+    `today_view()` and `_fetch_today_tasks()` are written independently — one says
+    `status NOT IN ('done','dropped')`, the other `completed = 0 AND NOT_DROPPED_TASK`
+    — so nothing but a test like this stops them drifting apart. The fixtures deliberately
+    include a row on each side of every clause the two spell differently.
+    """
+    from crm import gtd_service, service, today_service
+
+    deal = service.create_deal(title="Archived", value=1)["id"]
+    service.archive_deal(deal, archived=True)
+
+    for title, kwargs in [
+        ("Starred undated", {"star": True}),
+        ("Starred overdue", {"star": True, "due": _shift(today, -2)}),
+        ("Overdue", {"due": _shift(today, -1)}),
+        ("Due today", {"due": today}),
+        ("Due tomorrow", {"due": _shift(today, 1)}),
+        ("Undated", {}),
+        ("Dropped", {"due": today, "status": "dropped"}),
+        ("Done", {"due": today, "status": "done"}),
+        ("On an archived deal", {"due": today, "deal_id": deal}),
+    ]:
+        _task(title, **kwargs)
+
+    gtd_ids = {t["id"] for t in gtd_service.today_view()}
+    panel_ids = {i["id"] for i in today_service.get_today()["items"] if i["kind"] == "task"}
+    assert panel_ids == gtd_ids
+    # Guard against the assertion passing because BOTH are empty or trivially small.
+    assert len(panel_ids) == 4
 
 
 def test_payload_reports_the_day_and_the_next_boundary(today):
