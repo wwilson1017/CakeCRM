@@ -295,6 +295,60 @@ describe('DealDetailSheet — Mark Lost captures a reason (issue #128)', () => {
   });
 });
 
+describe('DealDetailSheet — an ambiguous close reconciles before a retry', () => {
+  it('re-reads the deal when the host leaves the sheet open, and drops the close-out buttons if the close actually landed', async () => {
+    // The dangerous case: the POST commits, then the response is lost (a dropped
+    // connection, or a 5xx after commit). CrmDashboardPage swallows the error and keeps
+    // the sheet open so the user can retry — but the deal is ALREADY lost, and
+    // mark_deal_lost appends its "Deal lost —" note on every call that finds the deal.
+    // Retrying would file a duplicate. Reconciling first is what prevents it.
+    const open = deal({ stage: 'lead' });
+    let detail = open;
+    api.mockImplementation(async (path: string) => {
+      if (path.includes('/provenance')) return { provenance: [] };
+      if (path.includes('/chatter/')) return { notes: [] };
+      if (path.includes('/fields')) return [];
+      if (path.includes('/touch-count/')) return null;
+      if (path === '/api/crm/deals/7') return detail;
+      return null;
+    });
+    // The host resolves WITHOUT dismissing the sheet — its failure path.
+    const onStageChange = vi.fn(async () => {
+      // …while the server did in fact commit the close.
+      detail = deal({ stage: 'lost', lost_reason: 'price' });
+    });
+    await render(
+      <DealDetailSheet deal={open} isMobile={false} onClose={noop} onEdit={noop}
+        onStageChange={onStageChange} />,
+    );
+    expect(button('Mark Lost')).toBeTruthy();
+
+    await act(async () => { button('Mark Won')!.click(); });
+    await act(async () => {});
+
+    // Reconciled against the server: the deal is closed, so neither button is offered
+    // and there is no way to fire a second mark_deal_lost.
+    expect(button('Mark Lost')).toBeUndefined();
+    expect(button('Mark Won')).toBeUndefined();
+  });
+
+  it('keeps the buttons live when the close genuinely did not land', async () => {
+    // The other half — a real failure must stay retryable, or the guard traps the user.
+    const open = deal({ stage: 'lead' });
+    routeApi(open);
+    const onStageChange = vi.fn(async () => {});
+    await render(
+      <DealDetailSheet deal={open} isMobile={false} onClose={noop} onEdit={noop}
+        onStageChange={onStageChange} />,
+    );
+    await act(async () => { button('Mark Won')!.click(); });
+    await act(async () => {});
+
+    expect(button('Mark Won')!.disabled).toBe(false);
+    expect(button('Mark Lost')).toBeTruthy();
+  });
+});
+
 describe('DealDetailSheet — the owner is visible (issue #128)', () => {
   it('shows an Owner row reading "Unassigned" on an unowned deal', async () => {
     // Unconditional, unlike its neighbouring rows: hiding it is what made "unassigned"

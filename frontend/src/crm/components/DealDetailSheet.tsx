@@ -66,6 +66,12 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
   // gating only these would buy a sub-second race at the cost of buttons that pop in after
   // the sheet opens. The worst outcome in that window is a refused write, not a bad one.
   const [archivedAt, setArchivedAt] = useState<string | null | undefined>(deal.archived_at);
+  // Stage rides the same re-fetchable state as archivedAt above, and for a sharper reason
+  // than staleness: a close whose response was lost may ALREADY have committed. The catch
+  // path re-enables the close-out buttons, so reading the frozen prop would keep offering
+  // Mark Lost on a deal the server has already marked lost — and a retry appends a second
+  // "Deal lost —" note, since mark_deal_lost writes one on every call that finds the deal.
+  const [stage, setStage] = useState(deal.stage);
   const [restoring, setRestoring] = useState(false);
   // Mark Lost opens the reason dialog instead of closing the deal immediately (issue #128).
   const [askingLostReason, setAskingLostReason] = useState(false);
@@ -85,6 +91,9 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
   const badge = (f: string) => (
     <ProvenanceBadge prov={byField[f]} onConfirm={() => confirm(f)} confirming={confirming === f} />
   );
+  // Whether this sheet is still on screen when an awaited write settles — see closeOut.
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
   const reqRef = useRef(0);
   const loadDetail = useCallback(async () => {
     const reqId = ++reqRef.current;
@@ -95,6 +104,7 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
       setTouchCount(detail.ai_touch_count);
       setLeadScore(detail.lead_score);
       setArchivedAt(detail.archived_at);
+      setStage(detail.stage);
     } catch {
       // Non-fatal: the sheet still shows deal fields + chatter; leave activity as-is.
     }
@@ -130,12 +140,19 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
   // Resets on BOTH paths for the same reason `restoreDeal` does: the dashboard keeps this
   // sheet open when the write fails, so a latched-true flag would leave the user unable to
   // retry the close they just watched fail.
-  async function closeOut(stage: string, lostReason?: string) {
+  async function closeOut(toStage: string, lostReason?: string) {
     setClosing(true);
     try {
-      await onStageChange(deal, stage, lostReason);
+      await onStageChange(deal, toStage, lostReason);
     } finally {
       setClosing(false);
+      // Still mounted means the host did NOT dismiss us — which for the dashboard host is
+      // its failure path (it swallows the error itself, so nothing rejects here). The
+      // outcome of that write is genuinely UNKNOWN: a dropped connection or a 5xx can
+      // arrive after the server already committed. So reconcile against the server before
+      // offering a retry — a close that did land re-reads as stage 'lost' and these
+      // buttons disappear, instead of inviting a second mark_deal_lost.
+      if (mountedRef.current) void loadDetail();
     }
   }
 
@@ -325,7 +342,7 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
               one (`_classify_deal_update` raises → 400) and the caller's catch reports a
               generic failure, so these would be a dead end. Restore first. Edit stays —
               editing an archived deal's other fields is legal. */}
-          {!archivedAt && deal.stage !== 'won' && deal.stage !== 'lost' && (
+          {!archivedAt && stage !== 'won' && stage !== 'lost' && (
             <>
               <button onClick={() => void closeOut('won')} disabled={closeOutDisabled} style={{
                 padding: '10px 16px', borderRadius: 6,
