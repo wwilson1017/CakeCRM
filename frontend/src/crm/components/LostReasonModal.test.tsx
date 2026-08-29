@@ -198,6 +198,58 @@ describe('LostReasonModal', () => {
     outside.remove();
   });
 
+  it('does not yank focus when the parent re-renders with a fresh onCancel', () => {
+    // The host passes `onCancel` as an inline arrow, so its identity changes on every
+    // parent render — and the deal sheet re-renders on its own detail/activity/touch-count
+    // fetches. With `onCancel` as an effect dependency, each of those tore the effect down
+    // (restoring focus to whatever held it BEFORE the dialog) and re-armed it (pulling
+    // focus back to the textarea), so a background request landing would move a rep off
+    // the Cancel button mid-dialog.
+    const onConfirm = vi.fn();
+    act(() => {
+      root.render(
+        <LostReasonModal dealTitle="Wholesale order" onConfirm={onConfirm}
+          onCancel={() => {}} />,
+      );
+    });
+    const cancel = button('Cancel');
+    cancel.focus();
+    expect(document.activeElement).toBe(cancel);
+
+    // Re-render with a BRAND NEW onCancel identity, exactly as the host does.
+    act(() => {
+      root.render(
+        <LostReasonModal dealTitle="Wholesale order" onConfirm={onConfirm}
+          onCancel={() => {}} />,
+      );
+    });
+    expect(document.activeElement).toBe(button('Cancel'));
+  });
+
+  it('still cancels through the LATEST onCancel after a re-render', () => {
+    // The other half of reading the callback through a ref: a stale one would call the
+    // handler the dialog mounted with, not the one currently passed.
+    const stale = vi.fn();
+    const fresh = vi.fn();
+    act(() => {
+      root.render(
+        <LostReasonModal dealTitle="Wholesale order" onConfirm={vi.fn()} onCancel={stale} />,
+      );
+    });
+    act(() => {
+      root.render(
+        <LostReasonModal dealTitle="Wholesale order" onConfirm={vi.fn()} onCancel={fresh} />,
+      );
+    });
+    act(() => {
+      document.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+      );
+    });
+    expect(fresh).toHaveBeenCalledTimes(1);
+    expect(stale).not.toHaveBeenCalled();
+  });
+
   it('caps the reason at the length the server accepts', () => {
     render();
     // Mirrors service.MAX_LOST_REASON — past it the route 422s rather than truncating.

@@ -51,6 +51,15 @@ export function LostReasonModal({ dealTitle, onConfirm, onCancel }: LostReasonMo
   // including a repeat that changes no column, since `_write_deal_update` returns True for
   // a no-op. So a second submit writes a second note.
   const submitted = useRef(false);
+  // The focus/key effect below must run ONCE, on mount. Its host passes `onCancel` as an
+  // inline arrow, so a plain dependency on it re-runs the effect on every parent re-render
+  // — and the sheet re-renders on its own detail/activity/touch-count fetches. Each re-run
+  // tears down and re-arms: the cleanup restores focus to whatever held it before the
+  // dialog opened, then setup pulls focus back to the textarea, so a rep who had tabbed to
+  // Cancel gets yanked mid-dialog by a background request landing. Read the latest callback
+  // through a ref instead, so the effect never needs it as a dependency.
+  const onCancelRef = useRef(onCancel);
+  useEffect(() => { onCancelRef.current = onCancel; });
 
   const confirm = useCallback(() => {
     if (submitted.current) return;
@@ -76,7 +85,7 @@ export function LostReasonModal({ dealTitle, onConfirm, onCancel }: LostReasonMo
       if (e.key === 'Escape') {
         e.preventDefault();
         e.stopPropagation();
-        onCancel();
+        onCancelRef.current();
         return;
       }
       if (e.key !== 'Tab') return;
@@ -111,7 +120,7 @@ export function LostReasonModal({ dealTitle, onConfirm, onCancel }: LostReasonMo
         previouslyFocused.focus();
       }
     };
-  }, [onCancel]);
+  }, []);
 
   return createPortal(
     <div
