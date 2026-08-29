@@ -89,9 +89,14 @@ export function LostReasonModal({ dealTitle, onConfirm, onCancel }: LostReasonMo
         return;
       }
       if (e.key !== 'Tab') return;
+      // Read the `disabled` PROPERTY, not the attribute: they diverge the moment anything
+      // sets it imperatively, and the property is the one the browser actually skips on.
+      // Deliberately no visibility test — nothing in this dialog is conditionally hidden,
+      // and an offsetWidth/offsetHeight check reports 0 for every element under jsdom,
+      // which would silently turn the whole trap off in the tests that prove it works.
       const focusable = [...(dialogRef.current?.querySelectorAll<HTMLElement>(
         'textarea, button, [href], input, select, [tabindex]:not([tabindex="-1"])',
-      ) ?? [])].filter(el => !el.hasAttribute('disabled'));
+      ) ?? [])].filter(el => !(el as HTMLButtonElement).disabled);
       if (focusable.length === 0) return;
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
