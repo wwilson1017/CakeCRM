@@ -8,6 +8,7 @@ import { DealDetailSheet } from './components/DealDetailSheet';
 import { StatCard } from './components/StatCard';
 import { WeeklyTouchesCard } from './components/WeeklyTouchesCard';
 import { STAGE_COLORS, STAGE_ORDER } from './constants';
+import { stageWriteRequest } from './dealStageWrite';
 import { WarmHalo } from '../shared/WarmHalo';
 import { useIsMobile } from '../shared/useIsMobile';
 import { LoadError } from '../shared/LoadError';
@@ -81,11 +82,12 @@ export function CrmDashboardPage() {
       .catch(() => { toast.error('Could not open that deal — it may have been deleted.'); loadAnalytics(); });
   }
 
-  async function updateDealStage(deal: CrmDeal, stage: string) {
+  async function updateDealStage(deal: CrmDeal, stage: string, lostReason?: string) {
     try {
-      await api(`/api/crm/deals/${deal.id}`, {
-        method: 'PUT', body: JSON.stringify({ stage }),
-      });
+      // `lostReason` is present only for a Mark Lost taken through the reason dialog,
+      // which routes to the mark-lost verb instead of the plain stage PUT (issue #128).
+      const { path, init } = stageWriteRequest(deal.id, stage, lostReason);
+      await api(path, init);
       setSelectedDeal(null);
       reload();
     } catch (err) {

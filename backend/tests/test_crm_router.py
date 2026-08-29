@@ -851,3 +851,92 @@ def test_an_out_of_range_cursor_is_a_422_not_a_500(client):
     too_big = 2_147_483_648
     for path in ("/api/crm/tasks", "/api/crm/contacts", "/api/crm/companies"):
         assert client.get(f"{path}?after_id={too_big}&sort=id").status_code == 422, path
+
+
+# ── POST /deals/:id/mark-lost (issue #128) ────────────────────────────────────
+# The only human writer of `lost_reason`. `_DEAL_USER_WRITABLE` excludes the column
+# on purpose, so these pin that the route reaches the lifecycle verb (and carries the
+# author) rather than the general update path.
+
+def test_mark_lost_passes_reason_and_author(client, monkeypatch):
+    seen = {}
+
+    def fake(deal_id, lost_reason="", author_id=None):
+        seen.update(deal_id=deal_id, lost_reason=lost_reason, author_id=author_id)
+        return {"id": deal_id, "stage": "lost", "lost_reason": lost_reason}
+
+    monkeypatch.setattr(service, "mark_deal_lost", fake)
+    res = client.post(
+        "/api/crm/deals/7/mark-lost",
+        json={"lost_reason": "Chose a competitor.\nPrice was the deciding factor."},
+    )
+
+    assert res.status_code == 200
+    assert seen["deal_id"] == 7
+    # Newlines survive the round trip — the whole point of a multi-line reason.
+    assert "\n" in seen["lost_reason"]
+    # Authorship, not ownership (#60): a reason a rep typed must credit that rep, or
+    # per-rep activity undercounts them. FAKE_ADMIN's id.
+    assert seen["author_id"] == 1
+
+
+def test_mark_lost_with_a_blank_reason_still_uses_the_lifecycle_verb(client, monkeypatch):
+    """An explicit Mark Lost with no prose is still a close, not a plain stage edit.
+
+    PUT /deals/:id with {stage: 'lost'} would leave `probability` untouched; only this
+    verb zeroes it. So the endpoint is chosen by the ACTION, never by whether the user
+    happened to type something.
+    """
+    calls = []
+    monkeypatch.setattr(
+        service, "mark_deal_lost",
+        lambda deal_id, lost_reason="", author_id=None: (
+            calls.append(lost_reason) or {"id": deal_id, "stage": "lost"}
+        ),
+    )
+    assert client.post("/api/crm/deals/7/mark-lost", json={}).status_code == 200
+    assert calls == [""]
+
+
+def test_mark_lost_archived_deal_is_400_not_500(client, monkeypatch):
+    """_write_deal_update raises on a stage change to an archived deal — a refusal the
+    caller can act on, mapped like PUT /deals/:id does."""
+    def boom(deal_id, lost_reason="", author_id=None):
+        raise ValueError("Cannot change the stage of an archived deal")
+
+    monkeypatch.setattr(service, "mark_deal_lost", boom)
+    res = client.post("/api/crm/deals/7/mark-lost", json={"lost_reason": "x"})
+    assert res.status_code == 400
+    assert "archived" in res.json()["detail"]
+
+
+def test_mark_lost_missing_deal_404(client, monkeypatch):
+    monkeypatch.setattr(
+        service, "mark_deal_lost", lambda deal_id, lost_reason="", author_id=None: None
+    )
+    assert client.post("/api/crm/deals/999/mark-lost", json={}).status_code == 404
+
+
+def test_mark_lost_rejects_an_oversized_reason_instead_of_truncating(client, monkeypatch):
+    """The service TRUNCATES at MAX_LOST_REASON. Silently dropping the tail of a rep's
+    typed prose is data loss, so the REST boundary refuses and the service is never
+    reached — the browser caps at the same length, so only a raw client can hit this."""
+    called = []
+    monkeypatch.setattr(
+        service, "mark_deal_lost",
+        lambda deal_id, lost_reason="", author_id=None: called.append(1),
+    )
+    over = "x" * (service.MAX_LOST_REASON + 1)
+    assert client.post(
+        "/api/crm/deals/7/mark-lost", json={"lost_reason": over}
+    ).status_code == 422
+    assert called == []
+    # …and exactly at the cap is still accepted.
+    monkeypatch.setattr(
+        service, "mark_deal_lost",
+        lambda deal_id, lost_reason="", author_id=None: {"id": deal_id, "stage": "lost"},
+    )
+    at_cap = "x" * service.MAX_LOST_REASON
+    assert client.post(
+        "/api/crm/deals/7/mark-lost", json={"lost_reason": at_cap}
+    ).status_code == 200

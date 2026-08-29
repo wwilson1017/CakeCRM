@@ -187,3 +187,92 @@ describe('DealDetailSheet — archived deals', () => {
     expect(button('Restore')?.disabled).toBe(false);
   });
 });
+
+describe('DealDetailSheet — Mark Lost captures a reason (issue #128)', () => {
+  it('opens the reason dialog instead of closing the deal immediately', async () => {
+    const d = deal();
+    routeApi(d);
+    const onStageChange = vi.fn();
+    await render(
+      <DealDetailSheet deal={d} isMobile={false} onClose={noop} onEdit={noop}
+        onStageChange={onStageChange} />,
+    );
+
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+    await act(async () => { button('Mark Lost')!.click(); });
+
+    expect(document.body.querySelector('[role="dialog"]')).toBeTruthy();
+    // The whole point: nothing is written until a reason has been asked for.
+    expect(onStageChange).not.toHaveBeenCalled();
+  });
+
+  it('hands the typed reason up as a THIRD argument, which is what selects the endpoint', async () => {
+    const d = deal();
+    routeApi(d);
+    const onStageChange = vi.fn();
+    await render(
+      <DealDetailSheet deal={d} isMobile={false} onClose={noop} onEdit={noop}
+        onStageChange={onStageChange} />,
+    );
+    await act(async () => { button('Mark Lost')!.click(); });
+
+    // Scoped to the dialog on purpose: the sheet's own NotesThread composer is also a
+    // textarea and comes first in document order.
+    const field = document.body.querySelector<HTMLTextAreaElement>('[role="dialog"] textarea')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!
+        .set!.call(field, 'Lost on price');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const confirm = [...document.body.querySelectorAll('button')]
+      .find(b => b.textContent?.trim() === 'Mark Lost' && !container.contains(b))!;
+    await act(async () => { confirm.click(); });
+
+    expect(onStageChange).toHaveBeenCalledWith(d, 'lost', 'Lost on price');
+  });
+
+  it('writes nothing when the dialog is cancelled', async () => {
+    const d = deal();
+    routeApi(d);
+    const onStageChange = vi.fn();
+    await render(
+      <DealDetailSheet deal={d} isMobile={false} onClose={noop} onEdit={noop}
+        onStageChange={onStageChange} />,
+    );
+    await act(async () => { button('Mark Lost')!.click(); });
+    const cancel = [...document.body.querySelectorAll('button')]
+      .find(b => b.textContent?.trim() === 'Cancel' && !container.contains(b))!;
+    await act(async () => { cancel.click(); });
+
+    expect(onStageChange).not.toHaveBeenCalled();
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it('leaves Mark Won a direct, dialog-free stage change', async () => {
+    const d = deal();
+    routeApi(d);
+    const onStageChange = vi.fn();
+    await render(
+      <DealDetailSheet deal={d} isMobile={false} onClose={noop} onEdit={noop}
+        onStageChange={onStageChange} />,
+    );
+    await act(async () => { button('Mark Won')!.click(); });
+
+    // No third argument — a won deal has no reason to record.
+    expect(onStageChange).toHaveBeenCalledWith(d, 'won');
+  });
+});
+
+describe('DealDetailSheet — the owner is visible (issue #128)', () => {
+  it('shows an Owner row reading "Unassigned" on an unowned deal', async () => {
+    // Unconditional, unlike its neighbouring rows: hiding it is what made "unassigned"
+    // indistinguishable from "not displayed".
+    const d = deal({ owner_id: null });
+    routeApi(d);
+    await render(
+      <DealDetailSheet deal={d} isMobile={false} onClose={noop} onEdit={noop} onStageChange={noop} />,
+    );
+    expect(container.textContent).toContain('Owner');
+    expect(container.textContent).toContain('Unassigned');
+  });
+});

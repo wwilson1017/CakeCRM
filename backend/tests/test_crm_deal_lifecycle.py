@@ -240,11 +240,29 @@ def test_mark_deal_lost_records_reason_and_a_timeline_note(monkeypatch, rec, fak
     rec.fetchone_queue = [{"id": 1, "stage": "lost"}]
     notes = []
     monkeypatch.setattr(chatter_service, "add_note",
-                        lambda t, i, m: notes.append((t, i, m)))
+                        lambda t, i, m, author_id=None: notes.append((t, i, m, author_id)))
     service.mark_deal_lost(1, lost_reason="chose a competitor")
     _, params = next((s, p) for s, p in conn.executed if "UPDATE deals SET" in s)
     assert "lost" in params and 0 in params and "chose a competitor" in params
-    assert notes == [("deal", 1, "Deal lost — chose a competitor")]
+    # NULL author: the assistant tool is this default's caller, and Phase A does not thread
+    # identity into tool executors, so "unattributed" is the honest record there.
+    assert notes == [("deal", 1, "Deal lost — chose a competitor", None)]
+
+
+def test_mark_deal_lost_credits_the_author_when_one_is_given(monkeypatch, rec, fake_conn):
+    """A reason a REP typed must credit that rep (issue #128).
+
+    `mark_deal_lost` swallows chatter failures by design, so a signature mismatch here
+    degrades to a silently missing note rather than an error — which is exactly how this
+    would rot unnoticed if nothing asserted the author reaches `add_note`.
+    """
+    fake_conn(monkeypatch, service, fetchone_results=[("proposal", None, None)])
+    rec.fetchone_queue = [{"id": 1, "stage": "lost"}]
+    notes = []
+    monkeypatch.setattr(chatter_service, "add_note",
+                        lambda t, i, m, author_id=None: notes.append((t, i, m, author_id)))
+    service.mark_deal_lost(1, lost_reason="price", author_id=42)
+    assert notes == [("deal", 1, "Deal lost — price", 42)]
 
 
 def test_mark_deal_lost_without_a_reason_writes_no_note(monkeypatch, rec, fake_conn):

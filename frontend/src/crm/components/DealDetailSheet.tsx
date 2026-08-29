@@ -12,6 +12,8 @@ import { AiTouchDetail } from './AiTouchDetail';
 import { ProvenanceBadge } from './ProvenanceBadge';
 import { useProvenance } from '../useProvenance';
 import { CustomFieldsSection } from './CustomFieldsSection';
+import { LostReasonModal } from './LostReasonModal';
+import { OwnerName } from './OwnerName';
 import { usePublishActiveRecord } from '../RecordContext';
 
 interface DealDetailSheetProps {
@@ -19,7 +21,10 @@ interface DealDetailSheetProps {
   isMobile: boolean;
   onClose: () => void;
   onEdit: (deal: CrmDeal) => void;
-  onStageChange: (deal: CrmDeal, stage: string) => void;
+  /** `lostReason` is present ONLY for a Mark Lost taken through the reason dialog — a
+   *  string, possibly empty. Every other move leaves it undefined, which is what tells the
+   *  host to use the plain stage PUT rather than the mark-lost verb (see dealStageWrite). */
+  onStageChange: (deal: CrmDeal, stage: string, lostReason?: string) => void;
   /** A deal was un-archived here (issue #83). Receives the row the server returned so the
    *  host can patch it in place — a silent refetch can fail invisibly, which would leave
    *  the board showing a deal as archived after a restore that actually happened. */
@@ -58,6 +63,8 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
   // the sheet opens. The worst outcome in that window is a refused write, not a bad one.
   const [archivedAt, setArchivedAt] = useState<string | null | undefined>(deal.archived_at);
   const [restoring, setRestoring] = useState(false);
+  // Mark Lost opens the reason dialog instead of closing the deal immediately (issue #128).
+  const [askingLostReason, setAskingLostReason] = useState(false);
   const { byField, confirm, confirming } = useProvenance('deal', deal.id);
   const badge = (f: string) => (
     <ProvenanceBadge prov={byField[f]} onConfirm={() => confirm(f)} confirming={confirming === f} />
@@ -153,15 +160,25 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
         <AiTouchDetail dealId={deal.id} count={touchCount} />
 
         {deal.notes && (
-          <p style={{ fontSize: 14, color: INK_MUTE, marginBottom: 16, lineHeight: 1.5 }}>
+          <p style={{
+            fontSize: 14, color: INK_MUTE, marginBottom: 16, lineHeight: 1.5,
+            whiteSpace: 'pre-wrap',
+          }}>
             {deal.notes} {badge('notes')}
           </p>
         )}
 
         {/* Why the deal was lost (issue #22). Cleared automatically if the deal is
-            reopened, so this only ever shows on a currently-lost deal. */}
+            reopened, so this only ever shows on a currently-lost deal.
+            `pre-wrap` because #128 made the reason multi-line: this is the one surface
+            that shows it, so collapsing the newlines here would deliver half the feature
+            (the same defect the blueprint hit on note bodies). `deal.notes` above is a
+            multi-line textarea too and had the identical bug. */}
         {deal.lost_reason && (
-          <p style={{ fontSize: 13, color: INK_MUTE, marginBottom: 16, lineHeight: 1.5 }}>
+          <p style={{
+            fontSize: 13, color: INK_MUTE, marginBottom: 16, lineHeight: 1.5,
+            whiteSpace: 'pre-wrap',
+          }}>
             <span style={{ ...mono(10), color: INK_DIM, marginRight: 6 }}>LOST REASON</span>
             {deal.lost_reason} {badge('lost_reason')}
           </p>
@@ -198,6 +215,13 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
         )}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
+          {/* Rendered unconditionally, unlike every other row here (issue #128): an
+              unassigned owner is a real state, and hiding the row is what makes
+              "unassigned" indistinguishable from "not displayed". */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ ...mono(10), color: INK_DIM }}>Owner</span>
+            <OwnerName ownerId={deal.owner_id} />
+          </div>
           {deal.contact_name && (
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <span style={{ ...mono(10), color: INK_DIM }}>Contact</span>
@@ -277,13 +301,30 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
                 border: 'none', fontWeight: 500, fontSize: 13, cursor: 'pointer',
                 flex: 1,
               }}>Mark Won</button>
-              <button onClick={() => onStageChange(deal, 'lost')} style={{
+              {/* Ask for the reason first (issue #128). `lost_reason` has no other human
+                  writer — it is excluded from _DEAL_USER_WRITABLE, so before this the
+                  field could be read on this very sheet but only ever written by the
+                  assistant. */}
+              <button onClick={() => setAskingLostReason(true)} style={{
                 ...btnDanger,
                 padding: '10px 16px', borderRadius: 6, fontSize: 13,
               }}>Mark Lost</button>
             </>
           )}
         </div>
+
+        {askingLostReason && (
+          <LostReasonModal
+            dealTitle={deal.title}
+            onCancel={() => setAskingLostReason(false)}
+            onConfirm={reason => {
+              setAskingLostReason(false);
+              // Always a string, never undefined — that is what routes this to the
+              // mark-lost verb even when the rep left the box empty.
+              onStageChange(deal, 'lost', reason);
+            }}
+          />
+        )}
       </div>
     </div>
   );
