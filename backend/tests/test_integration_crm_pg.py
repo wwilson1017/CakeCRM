@@ -47,8 +47,7 @@ def pg_db():
     # run ensure_bootstrap_admin() never fires and `users` stays empty — while #60 gave
     # crm_chatter.author_id / activity_log.actor_id real FKs to it. Without this row,
     # every authored write in this module dies on a ForeignKeyViolation.
-    # (Pre-existing gap, unrelated to #102; fixed here because #102 leans on this
-    # module as its end-to-end proof that the migration works.)
+    # (Pre-existing gap; #102 and #77 hit it independently and fixed it the same way.)
     postgres.pg_execute(
         "INSERT INTO users (id, email, name, password_hash, role) "
         "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
@@ -61,12 +60,6 @@ def pg_db():
     # throwaway database: after the insert above the sequence is still (1, False),
     # the next default-id insert raises UniqueViolation on users_pkey, and this
     # setval makes it yield 2.
-    postgres.pg_execute(
-        "SELECT setval(pg_get_serial_sequence('users', 'id'), "
-        "(SELECT MAX(id) FROM users), true)"
-    )
-    # An explicit id does NOT advance the SERIAL, so the next default-id insert would also
-    # get 1 and fail on the primary key. Push the sequence past what we just seeded.
     postgres.pg_execute(
         "SELECT setval(pg_get_serial_sequence('users', 'id'), "
         "(SELECT MAX(id) FROM users), true)"
