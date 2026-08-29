@@ -1001,6 +1001,18 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `@pytest.mark.integration` and deselected by default (`addopts = -m "not
   integration"`); run them with `pytest -m integration` and a reachable
   `TEST_ADMIN_DSN`. No `skip`/`xfail`/`# noqa`/`eslint-disable` — fix root causes.
+  A repo-wide **guard** test — one that sweeps the tree and asserts a property
+  (`test_route_authz`, `test_gmail_guard`, `test_prompt_genericization`,
+  `test_query_determinism`) — must itself be falsifiable, because a sweep that quietly
+  stops matching is a permanent green, and a permanent green is worse than no guard
+  since it reads as coverage. So a new one owes two things beyond the property itself:
+  a self-test pinning its detector on synthetic input (both a case it must flag and a
+  case it must not), and an assertion that it still reached the real code — per module
+  or per registered item, never one repo-wide total, which the largest package satisfies
+  on its own. `test_query_determinism` and `test_prompt_genericization` carry both
+  (`test_the_guard_actually_catches_a_leak` is the latter's detector self-test);
+  `test_gmail_guard`'s source sweep currently has neither and is worth hardening the
+  next time it is touched.
 - **Frontend tests** are **vitest** (`npm test` → `vitest run`), landed with #73. Config
   is a STANDALONE `frontend/vitest.config.ts` — vitest reads it *instead of*
   `vite.config.ts`, so the production build config stays untouched and tests skip the
@@ -1034,6 +1046,28 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `service._apply_task_update_cur` — a DB CHECK binds them, so any other writer is a
   constraint violation waiting to happen (#70). Adding a task READER means adding
   `NOT_DROPPED_TASK` to it too, unless it is deliberately counting every row.
+- **Never cap a reader whose `ORDER BY` isn't a TOTAL order** (#58). A `LIMIT`/`OFFSET`
+  over a non-unique sort key has no defined result — Postgres may break the tie
+  differently on each execution, so a row shows up on two pages or on none. End every
+  such `ORDER BY` on a unique term: `id` (matching the preceding key's direction, so
+  the tiebreak reads the way the sort does), or a column that is already UNIQUE
+  (`assistant_context_files.filename`, `assistant_messages.seq` within one
+  conversation), or — for a grouped reader — the rest of the GROUP BY key
+  (`find_duplicate_deals` orders by `title` **and** `contact_id`, because the group is
+  the pair). Ties are the normal case, not an edge: `created_at`/`updated_at` default
+  to `now()`, which is **transaction-start** time, so every row written in one
+  transaction is byte-identical — a CSV import, `seed_data`, `merge_deals`' note
+  copies. Uncapped readers carry the term too, so adding a `LIMIT` later can't quietly
+  reintroduce the bug — which is why #59, server-side pipeline pagination, is
+  `Blocked by: #58`.
+  Enforced by `backend/tests/test_query_determinism.py`, which AST-scans every non-test
+  backend module (it reads f-strings and implicitly-concatenated literals). An ORDER BY
+  assembled at RUNTIME is reported as `unknown`, never waved through: the exact set is
+  pinned in `UNDECIDABLE_SITES`, keyed by enclosing function, and each entry owes a
+  behavioral test on the SQL that reader really emits — so a reader cannot opt out of
+  the guard by moving its ordering into a variable. Expect to edit that registry when a
+  reader starts or stops interpolating its ORDER BY (#59 and #77 both touch such
+  readers); the failure message says which way it moved and what to do.
 - Never add a route to `crm/gtd_router.build_router` that should stay private: that
   factory is mounted TWICE, and its second mount is the no-login public web app.
   Authenticated-only routes belong on the module-level `router` instead.

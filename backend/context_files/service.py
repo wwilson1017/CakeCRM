@@ -212,9 +212,14 @@ def list_files(kind: str | None = None, include_archived: bool = False, limit: i
         params.append(kind)
     clause = f"WHERE {' AND '.join(where)}" if where else ""
     params.append(max(1, min(int(limit or 200), LIST_LIMIT_CAP)))
+    # `id` closes the order (issue #58). `is_protected` is a two-value flag and the
+    # migration seeds soul.md + MEMORY.md in ONE transaction, so both protected rows
+    # share a `now()` `updated_at` exactly — the head of this list is a guaranteed tie,
+    # not a rare one. (The topic/daily manifests below need no such term: they already
+    # end on `filename`, which is UNIQUE.)
     return pg_fetchall(
         f"SELECT {_META_COLUMNS} FROM assistant_context_files {clause} "
-        f"ORDER BY is_protected DESC, updated_at DESC LIMIT %s",
+        f"ORDER BY is_protected DESC, updated_at DESC, id DESC LIMIT %s",
         tuple(params),
     )
 
@@ -269,7 +274,7 @@ def search_files(query: str, limit: int = 20) -> list[dict]:
         f"SELECT {_META_COLUMNS}, ts_rank(search_tsv, to_tsquery('simple', %s)) AS rank "
         f"FROM assistant_context_files "
         f"WHERE {_LIVE} AND search_tsv @@ to_tsquery('simple', %s) "
-        f"ORDER BY rank DESC, updated_at DESC LIMIT %s",
+        f"ORDER BY rank DESC, updated_at DESC, id DESC LIMIT %s",
         (tsquery, tsquery, capped),
     )
 

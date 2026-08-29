@@ -266,7 +266,11 @@ def find_duplicate_deals(limit: int = DEFAULT_LIMIT) -> list[dict]:
          WHERE btrim(title) <> '' AND contact_id IS NOT NULL AND {LIVE_PREDICATE}
          GROUP BY lower(btrim(title)), contact_id
         HAVING COUNT(*) > 1
-         ORDER BY COUNT(*) DESC, lower(btrim(title)) ASC
+         -- The group key is the PAIR, so ordering by title alone leaves groups tied
+         -- whenever two contacts each double-entered the same deal title — and under
+         -- the LIMIT that decides arbitrarily which of them the user is shown.
+         -- contact_id completes the key, making the order total (issue #58).
+         ORDER BY COUNT(*) DESC, lower(btrim(title)) ASC, contact_id ASC
          LIMIT %s
         """,
         (limit,),
@@ -393,7 +397,10 @@ def scan_gaps(entity_type: str = "all", limit: int = DEFAULT_LIMIT) -> dict:
                AND (p.entity_type <> 'deal' OR EXISTS (
                      SELECT 1 FROM deals d
                       WHERE d.id = p.entity_id AND {LIVE_PREDICATE_D}))
-             ORDER BY p.populated_at DESC
+             -- One assistant tool call stamps every field it wrote with the same
+             -- transaction `now()`, so p.id is what keeps this over-fetched window
+             -- (and therefore the [:limit] slice below) stable across reads (#58).
+             ORDER BY p.populated_at DESC, p.id DESC
              LIMIT %s""",
         (provenance_types, limit * 3),
     )

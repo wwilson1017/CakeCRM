@@ -527,18 +527,25 @@ def get_contact_detail(contact_id: int) -> dict | None:
     )
     if not contact:
         return None
+    # Every rollup below ends on `id` so its order is TOTAL (issue #58). Ties are the
+    # norm, not the exception, in all three: timestamps default to `now()` — which is
+    # TRANSACTION start, so rows written together are byte-identical, and an import or
+    # `seed_data` writes a whole batch that way — while the task sort's leading keys are
+    # a 0/1 flag and a `due_date` that is very often the empty string. Under the LIMITs,
+    # an untotalled order lets a row show up twice or not at all between two reads.
     deals = pg_fetchall(
         f"SELECT * FROM deals WHERE contact_id = %s AND {LIVE_PREDICATE} "
-        "ORDER BY updated_at DESC",
+        "ORDER BY updated_at DESC, id DESC",
         (contact_id,),
     )
     tasks = pg_fetchall(
         f"SELECT * FROM tasks WHERE contact_id = %s AND {LIVE_TASK_PREDICATE} "
-        f"AND {NOT_DROPPED_TASK} ORDER BY completed ASC, due_date ASC LIMIT 20",
+        f"AND {NOT_DROPPED_TASK} ORDER BY completed ASC, due_date ASC, id ASC LIMIT 20",
         (contact_id,),
     )
     activity = pg_fetchall(
-        "SELECT * FROM activity_log WHERE contact_id = %s ORDER BY created_at DESC LIMIT 20",
+        "SELECT * FROM activity_log WHERE contact_id = %s "
+        "ORDER BY created_at DESC, id DESC LIMIT 20",
         (contact_id,),
     )
     return {**contact, "deals": deals, "tasks": tasks, "activity": activity}
@@ -808,13 +815,18 @@ def get_company_detail(company_id: int) -> dict | None:
     company = get_company(company_id)
     if not company:
         return None
+    # Same rule as get_contact_detail: every rollup ends on `id` (issue #58). Names are
+    # not unique either — two people at one company can share a name, and the importer
+    # produces exactly that.
     contacts = pg_fetchall(
-        "SELECT * FROM contacts WHERE company_id = %s ORDER BY name ASC", (company_id,)
+        "SELECT * FROM contacts WHERE company_id = %s ORDER BY name ASC, id ASC",
+        (company_id,),
     )
     deals = pg_fetchall(
         f"""SELECT d.*, c.name AS contact_name
             FROM deals d LEFT JOIN contacts c ON d.contact_id = c.id
-            WHERE d.company_id = %s AND {LIVE_PREDICATE_D} ORDER BY d.updated_at DESC""",
+            WHERE d.company_id = %s AND {LIVE_PREDICATE_D}
+            ORDER BY d.updated_at DESC, d.id DESC""",
         (company_id,),
     )
     activity = pg_fetchall(
@@ -830,7 +842,7 @@ def get_company_detail(company_id: int) -> dict | None:
             WHERE a.contact_id IN (SELECT id FROM contacts WHERE company_id = %s)
                OR a.deal_id IN (SELECT id FROM deals WHERE company_id = %s
                                  AND {LIVE_PREDICATE})
-            ORDER BY a.created_at DESC LIMIT 20""",
+            ORDER BY a.created_at DESC, a.id DESC LIMIT 20""",
         (company_id, company_id),
     )
     # Single-currency (USD) sum, matching the rest of the app's hardcoded '$'.
@@ -886,7 +898,9 @@ def get_deal_detail(deal_id: int) -> dict | None:
     if not deal:
         return None
     activity = pg_fetchall(
-        "SELECT * FROM activity_log WHERE deal_id = %s ORDER BY created_at DESC LIMIT 20", (deal_id,)
+        "SELECT * FROM activity_log WHERE deal_id = %s "
+        "ORDER BY created_at DESC, id DESC LIMIT 20",
+        (deal_id,),
     )
     # custom_fields is embedded (issue #22 Q12a) so one read answers "tell me about
     # this deal" — previously the assistant needed a second crm_get_deal_fields call.
@@ -956,7 +970,11 @@ def get_pipeline(stage: str | None = None, include_archived: bool = False) -> di
                 ) events GROUP BY deal_id
             ) la ON la.deal_id = d.id
             {where}
-            ORDER BY d.updated_at DESC""",
+            -- The board is unpaginated today, so this tiebreaker only steadies the
+            -- within-stage card order across refreshes. It is load-bearing for issue
+            -- #59, which puts a LIMIT/OFFSET on this exact reader: at that point an
+            -- untotalled order becomes duplicated and missing cards, not just churn.
+            ORDER BY d.updated_at DESC, d.id DESC""",
         (stage,) if stage else (),
     )
 
@@ -986,7 +1004,7 @@ def list_deals(stage: str | None = None, contact_id: int | None = None, limit: i
     return pg_fetchall(
         f"""SELECT d.*, c.name AS contact_name
             FROM deals d LEFT JOIN contacts c ON d.contact_id = c.id
-            {where} ORDER BY d.updated_at DESC LIMIT %s""",
+            {where} ORDER BY d.updated_at DESC, d.id DESC LIMIT %s""",
         params,
     )
 
@@ -2088,7 +2106,7 @@ def get_activity_log(contact_id: int | None = None, deal_id: int | None = None, 
             FROM activity_log a
             LEFT JOIN contacts c ON a.contact_id = c.id
             LEFT JOIN deals d ON a.deal_id = d.id
-            {where} ORDER BY a.created_at DESC LIMIT %s""",
+            {where} ORDER BY a.created_at DESC, a.id DESC LIMIT %s""",
         params,
     )
 
@@ -2169,7 +2187,10 @@ def get_dashboard_stats() -> dict:
         f"""SELECT d.*, c.name AS contact_name
             FROM deals d LEFT JOIN contacts c ON d.contact_id = c.id
             WHERE d.stage NOT IN ('won', 'lost') AND {LIVE_PREDICATE_D}
-            ORDER BY d.value DESC LIMIT 5"""
+            -- `value` is a round number that repeats constantly across a pipeline, so
+            -- without d.id the five deals on the dashboard can differ between two
+            -- loads with nothing having changed (issue #58).
+            ORDER BY d.value DESC, d.id DESC LIMIT 5"""
     )
 
     return {
