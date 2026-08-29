@@ -7,7 +7,7 @@
 -- CHECK constraints on entity_type/field_type/is_required are a CakeCRM hardening convention
 -- (cf. the 0/1 flag + enum CHECKs elsewhere in the schema); the blueprint relied on the DB
 -- CHECK for field_type only. Both tables ship EMPTY — cake_os's pre-seeded field definitions are
--- TN Cheesecake business data and are deliberately NOT ported.
+-- one operator's real business data and are deliberately NOT ported.
 --
 -- ⚠ crm_field_values is POLYMORPHIC: entity_type + entity_id reference contacts/companies/deals
 -- but carry NO foreign key to those tables (only to crm_field_definitions). Exactly like

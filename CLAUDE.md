@@ -708,11 +708,64 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 - Never commit TN Cheesecake internals: no real prospect/customer data, no TNC
   staff/product names, no internal hostnames or secrets. Ported prompts (Casey's)
   must be genericized. This repo goes public at launch and history is forever.
-  Enforced by `backend/tests/test_prompt_genericization.py` (#22), which scans the
-  **model-facing payload** — the assembled system prompt, every tool
-  name/description/schema, the heartbeat prompt, and the UI starter chips — and fails
-  CI on any company/product/vertical token. Source *comments* may still cite the
-  blueprint by name; shipped prompt text may not.
+  Enforced by `backend/tests/test_prompt_genericization.py` (#22, widened repo-wide in
+  #90), which scans **two** surfaces against **two** denylists, split by what a token
+  IS rather than by which file holds it. `_FORBIDDEN` (= `_COMPANY + _VERTICAL +
+  _BLUEPRINT`) covers the **model-facing payload** — the assembled system prompt,
+  every tool name/description/schema, the heartbeat prompt, the UI starter chips. The
+  narrower `_REPO_FORBIDDEN` (= `_COMPANY + _VERTICAL`) covers **every committed text
+  file**, enumerated by `git ls-files`, so the scope is a file CLASS: a new `docs/`,
+  `scripts/` or `.github/` file is guarded the moment it is *staged* — there is no
+  directory list to remember to update, which is the whole point (the gap #90 closed
+  let a hardcoded upstream org URL and six real upstream directory names reach CI
+  green). `_BLUEPRINT` (`cake_os`, `casey`, `cake_crm_`) is the deliberate asymmetry: banned from
+  the payload — a shipped product must not name what it was ported from — but
+  legitimate in committed prose, since the Source Map and every port comment cite the
+  blueprint by name. Deliberate exemptions live in `_REPO_ALLOW` as path → **{pattern:
+  exact expected count}** + a written reason, and the count is the whole point: a
+  file-keyed exemption would repeat the mistake the gitleaks bullet under "CI &
+  Contributing" already records — it "exempts every finding in that file, including a
+  real one" — and CLAUDE.md is the most-edited file in the repo, so an unbounded
+  exemption *here* would be the widest hole of all. Entries exist ONLY for text that
+  must talk *about* the denylist: this rule, a coach lesson quoting a token the guard
+  was missing, a sibling guard's own literals. A count that stops matching reality
+  fails CI **in both directions** — a stale or inflated allowance is caught as surely
+  as a new occurrence — so turning the guard down takes a visible edit to that list
+  rather than a bumped number. Scrub the file instead whenever scrubbing is possible.
+  **No file is exempt, the guard included** — it holds a counted allowance for its own
+  denylist literals like everything else, so the one file with the most licence to
+  carry these strings is not also the one place nobody is watching. Surfaces beyond
+  plain file *content* are covered because they leak just as permanently: every
+  committed **filename** (for a compressed container like a .xlsx, whose bytes no
+  decoder can read, that is the only surface there is), **invisible characters** (a
+  name pasted out of Word or a PDF can carry a soft hyphen or zero-width space inside
+  it and match nothing while reading perfectly — stripped from paths as well as
+  bodies), and text in encodings a naive reader drops. On that last: a NUL-byte "is
+  this binary?" probe silently skips **UTF-16**, exactly the shape a spreadsheet or
+  CSV export of real customer names arrives in, while BOM-less UTF-16 of ASCII content
+  is byte-wise *valid UTF-8* and so decodes "successfully" into NUL-interleaved mush
+  that matches nothing. The decoder therefore never gives up, and covers the whole
+  family in **one** move instead of guessing an encoding: it takes the BOM'd reading
+  (UTF-32 tested before UTF-16, which share a two-byte prefix) or falls back UTF-8 →
+  latin-1, and for anything NUL-bearing it *additionally* scans the bytes with the
+  NULs removed. That one extra reading catches every fixed-width encoding of ASCII at
+  once — UTF-16 and UTF-32, either byte order, BOM or none — plus a plain ASCII name
+  sitting inside an otherwise-binary blob. Guessing instead meant a NUL-density
+  heuristic, and that had a hole: most real binaries are NUL-dense too. Boundaries are
+  `(?<![0-9a-z])`, **not
+  `\b`** — `\b` counts `_` as a word character, so a token went invisible the moment an
+  underscore followed it (`cake_os\b` misses `cake_os_prompt`; the company abbreviation
+  vanished the same way inside `<abbrev>_internal`), which are precisely the shapes
+  these names take in identifiers, filenames and env vars (six such bypasses were
+  measured, and this very bullet tripped the guard by naming one). The scan
+  reads the working tree, **not history**: tokens committed before a scrub stay in the
+  log. `test_sync_intake.py` consumes `_REPO_FORBIDDEN` **by name** for the same
+  reason: it used to hand-copy the blueprint regex in a `pattern != …` exclusion, so
+  widening that pattern turned the exclusion into a no-op and failed that test — loudly
+  and fail-closed, but on a file nothing was wrong with. Naming the class instead means
+  both of #88's scans inherit every future widening automatically. It deliberately
+  narrows what they scan (blueprint tokens are legitimate outside the payload) and
+  keeps the rendered-issue-body scan, which is coverage no file scan can provide.
 - Never import git history from cake_os or chatty — code arrives as clean snapshots
   in ordinary commits.
 - Never merge a pull request — with exactly ONE exception, the **operator ship lane**:
