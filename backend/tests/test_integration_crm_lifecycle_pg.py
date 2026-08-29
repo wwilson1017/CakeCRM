@@ -174,6 +174,24 @@ def test_archiving_removes_a_deal_from_every_read_at_once(pg_db):
     assert service.get_deal(junk["id"])["archived_at"] is not None
     assert not service.is_crm_empty()
 
+    # Issue #83: the board's opt-in recovery view. Real SQL proof that the hole is
+    # exactly one query wide — the archived deal comes back as a CARD, while every
+    # value the board reports is byte-identical to the live-only board's. Keyed by
+    # stage because the stage_summary query carries no ORDER BY.
+    live = service.get_pipeline()
+    widened = service.get_pipeline(include_archived=True)
+    assert sorted(d["id"] for d in widened["deals"]) == sorted([keep["id"], junk["id"]])
+    assert next(d for d in widened["deals"] if d["id"] == junk["id"])["archived_at"] is not None
+    assert widened["total_pipeline_value"] == live["total_pipeline_value"] == 100
+    by_stage = {s["stage"]: (s["count"], s["total_value"]) for s in widened["stage_summary"]}
+    assert by_stage == {s["stage"]: (s["count"], s["total_value"]) for s in live["stage_summary"]}
+    assert by_stage["lead"] == (1, 100)  # the 99999 archived deal is invisible to money
+
+    # The stage filter still binds once the predicate is dropped from the WHERE.
+    assert sorted(d["id"] for d in
+                  service.get_pipeline(stage="lead", include_archived=True)["deals"]) \
+        == sorted([keep["id"], junk["id"]])
+
     restored = service.archive_deal(junk["id"], archived=False)
     assert restored["archived_at"] is None
     assert len(service.get_pipeline()["deals"]) == 2

@@ -8,6 +8,7 @@ import {
   type DragEndEvent,
 } from '@dnd-kit/core';
 import type { KanbanItem, KanbanBoardProps } from './types';
+import { boardDragDisabled } from './dragDisabled';
 import KanbanColumn from './KanbanColumn';
 import useKanbanState from './useKanbanState';
 import { useDndSensors } from './sensors';
@@ -156,7 +157,11 @@ export default function KanbanBoard<TItem extends KanbanItem, TColumn>({
         })}
       </div>
 
-      {!dragDisabled && (
+      {/* `boardDragDisabled`, not `!dragDisabled`: since issue #83 this prop may be a
+          per-card predicate, and a function is truthy — a bare truthiness test would
+          unmount the overlay for EVERY card (live ones included) the moment any per-item
+          policy was supplied, so a live drag would carry no lifted card. */}
+      {!boardDragDisabled(dragDisabled) && (
         <DragOverlay dropAnimation={{ duration: 200, easing: 'ease' }}>
           {activeItem ? (
             <div className="shadow-lg rotate-[2deg] scale-105">

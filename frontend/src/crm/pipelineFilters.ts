@@ -1,11 +1,17 @@
 /**
  * Pure, framework-free filtering logic for the CRM pipeline board (issue #21).
  *
- * The pipeline loads every deal client-side (`GET /api/crm/deals` with no params →
- * `get_pipeline()` returns all deals), so all filtering happens in the browser over
- * already-loaded data — no server round-trips, no new query params, instant results.
- * This module holds the data model + predicate so it can be reasoned about (and unit-
- * tested, should a runner ever be added) independently of the React component.
+ * The pipeline loads every LIVE deal client-side (`GET /api/crm/deals` with no params →
+ * `get_pipeline()`), so filtering happens in the browser over already-loaded data —
+ * instant results, no round-trip per keystroke. This module holds the data model +
+ * predicate so it can be reasoned about and unit-tested independently of the React
+ * component.
+ *
+ * One deliberate exception since issue #83: the `archived` facet also widens the fetch
+ * (`?include_archived=true`), because archived deals are swept out of the payload
+ * server-side and a client predicate cannot filter rows it never received. The predicate
+ * here still covers all three states, so the state and the payload converge rather than
+ * one waiting on the other.
  *
  * Adapted from the CAKE OS blueprint (`apps/crm/pipelineFilters.ts`) to CakeCRM's flat
  * deal model: stages are strings (not numeric ids) and "open" is computed from the
@@ -34,6 +40,17 @@ export type OwnerFilterValue = number | 'unassigned';
  *  activity is not counted — hence "no activity logged", not "never contacted". */
 export type ActivityPreset = 'le7' | 'le30' | 'stale30' | 'none';
 
+/** Archived-deal visibility (issue #83). `null` = live deals only, the default and what
+ *  the server returns unasked. `'include'` shows archived deals alongside live ones;
+ *  `'only'` is the recovery view — "where did that deal go?".
+ *
+ *  This is the ONE facet that also widens the FETCH: archived deals are swept out of
+ *  `get_pipeline()` server-side, so a purely client-side predicate would have nothing to
+ *  filter. `PipelinePage` keys `?include_archived=true` off this being non-null. The
+ *  predicate below still enforces all three states client-side, which is what makes the
+ *  window between flipping the facet and the new payload landing render correctly. */
+export type ArchivedPreset = 'include' | 'only';
+
 export interface AdvancedFilters {
   /** Stage keys to include. Empty = all stages. */
   stages: string[];
@@ -45,6 +62,8 @@ export interface AdvancedFilters {
   valueMax: number | null;
   closeDate: ClosePreset | null;
   lastActivity: ActivityPreset | null;
+  /** Archived-deal visibility. null = live only. See `ArchivedPreset`. */
+  archived: ArchivedPreset | null;
 }
 
 export const EMPTY_ADVANCED: AdvancedFilters = {
@@ -54,6 +73,7 @@ export const EMPTY_ADVANCED: AdvancedFilters = {
   valueMax: null,
   closeDate: null,
   lastActivity: null,
+  archived: null,
 };
 
 /** Full persisted filter state: free-text search plus the advanced facets, kept in
@@ -151,8 +171,24 @@ function matchesOwner(deal: CrmDeal, owners: OwnerFilterValue[]): boolean {
   return owner === null ? owners.includes('unassigned') : owners.includes(owner);
 }
 
+/** True when a deal has been soft-archived (issue #22's `deals.archived_at`; NULL = live).
+ *  The single archived predicate for the whole board — the facet, the money aggregates,
+ *  the bulk selection and the drag gate all ask this one function, so they cannot drift
+ *  about what "archived" means. */
+export function isArchivedDeal(deal: CrmDeal): boolean {
+  return deal.archived_at != null;
+}
+
 /** True if `deal` passes every active advanced facet (AND across facets). */
 export function dealMatchesAdvanced(deal: CrmDeal, f: AdvancedFilters, now: Date): boolean {
+  // Archived first: it is the cheapest check, and unlike every other facet it is
+  // enforced on BOTH sides. The server has already excluded archived deals unless the
+  // facet is on, so this is belt-and-braces there — but it is load-bearing in the window
+  // after the facet is cleared, when archived rows are still in state and the narrowing
+  // refetch has not landed yet.
+  const archived = isArchivedDeal(deal);
+  if (f.archived === null && archived) return false;
+  if (f.archived === 'only' && !archived) return false;
   if (f.stages.length > 0 && !f.stages.includes(deal.stage)) return false;
   if (f.owners.length > 0 && !matchesOwner(deal, f.owners)) return false;
   if (!matchesValue(deal, f)) return false;
@@ -171,6 +207,7 @@ export function advancedActiveCount(f: AdvancedFilters): number {
   if (f.valueMin !== null || f.valueMax !== null) n++;
   if (f.closeDate) n++;
   if (f.lastActivity) n++;
+  if (f.archived) n++;
   return n;
 }
 
@@ -184,6 +221,7 @@ const STORAGE_KEY = 'crm_pipeline_filters';
 
 const CLOSE_PRESETS: ClosePreset[] = ['overdue', 'next7', 'thisMonth', 'noDate'];
 const ACTIVITY_PRESETS: ActivityPreset[] = ['le7', 'le30', 'stale30', 'none'];
+const ARCHIVED_PRESETS: ArchivedPreset[] = ['include', 'only'];
 
 function coerceNumOrNull(v: unknown): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
@@ -218,6 +256,10 @@ export function loadFilterState(): PipelineFilterState {
         valueMax: coerceNumOrNull(adv.valueMax),
         closeDate: CLOSE_PRESETS.includes(adv.closeDate as ClosePreset) ? (adv.closeDate as ClosePreset) : null,
         lastActivity: ACTIVITY_PRESETS.includes(adv.lastActivity as ActivityPreset) ? (adv.lastActivity as ActivityPreset) : null,
+        // A pre-#83 blob has no `archived` key and restores as null — live-only, the
+        // default — so an old session can never resume into a widened fetch it never
+        // asked for. Same tolerant-per-key rule as every other facet above.
+        archived: ARCHIVED_PRESETS.includes(adv.archived as ArchivedPreset) ? (adv.archived as ArchivedPreset) : null,
       },
     };
   } catch {

@@ -12,7 +12,7 @@ import { useIsMobile } from '../shared/useIsMobile';
 import { LoadError } from '../shared/LoadError';
 import { toast } from '../shared/toast';
 import {
-  INK, INK_MUTE, INK_DIM, LINE, BG_CARD, ACCENT,
+  INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, BG_CARD, ACCENT,
   FONT_DISPLAY, mono, formatNumber, inputStyle, tint,
 } from '../shared/styles';
 import { pageHeading, btnPrimary, btnSecondary, btnSmall, stageCard } from './styles';
@@ -20,7 +20,8 @@ import { KanbanBoard, type MoveEvent } from '../shared/dnd';
 import PipelineFilterBar from './components/PipelineFilterBar';
 import {
   type PipelineFilterState, type AdvancedFilters,
-  EMPTY_FILTER_STATE, dealMatchesAdvanced, hasAdvanced, loadFilterState, saveFilterState,
+  EMPTY_FILTER_STATE, dealMatchesAdvanced, hasAdvanced, isArchivedDeal,
+  loadFilterState, saveFilterState,
 } from './pipelineFilters';
 import { applicableBulkIds } from './bulkSelection';
 import { classifyBulkMove, describeBulkMove, type BulkMoveResponse, type BulkNotice } from './bulkOutcome';
@@ -94,6 +95,58 @@ export function PipelinePage() {
   // dropped: moveDealStage re-fires it once the last write settles, so activity/derived fields
   // still update after a sheet dismissal even when a drag PUT overlapped the refresh.
   const pendingRefresh = useRef(false);
+  // ...and whether a deferred load must still REPORT a failure when it replays. Set when
+  // the deferred load was user-initiated (an Archived-facet change): replaying it as a
+  // plain background refresh would swallow its error, and under "Archived only" a swallowed
+  // error renders an empty board that reads as "you have no archived deals".
+  //
+  // Only the error reporting is carried over, NOT the spinner: `loading` early-returns the
+  // spinner INSTEAD OF the page, and a replay fires whenever the last write happens to
+  // settle — so replaying loudly would blank an open DealForm or detail sheet mid-edit and
+  // lose everything the user had typed. Reporting is what the user needs; the spinner
+  // belongs to the interaction that asked for it, and that interaction is over.
+  const pendingRefreshReportErrors = useRef(false);
+  // Whether a payload has ever rendered. A failed load with no data yet already reports
+  // itself through `LoadError`; toasting as well just stacks a second message on top of
+  // the error screen, once per retry click.
+  const hasLoadedOnce = useRef(false);
+  // `load` referenced by the deferral path below, which has to re-fire it. A ref because
+  // the callback cannot name itself, and assigned in an effect because a ref write during
+  // render is a build-blocking lint error under this repo's react-hooks ruleset.
+  const loadRef = useRef<(silent?: boolean, opts?: { reportErrors?: boolean }) => Promise<boolean>>(
+    () => Promise.resolve(false),
+  );
+  // Load generation (issue #83) — see `load`. Distinct from `writeGen`: that one guards a
+  // refresh against a racing WRITE; this one guards a load against a newer LOAD, which the
+  // Archived facet made reachable by changing the request itself.
+  const loadGen = useRef(0);
+  // A generation for NON-SILENT loads only. Owns the spinner; see `load`.
+  const spinnerGen = useRef(0);
+
+  // Archived deals are swept out of the board payload server-side, so the Archived facet
+  // is the one facet that must widen the FETCH as well as filter. Derived as a boolean on
+  // purpose: the refetch keys off this rather than on `advanced`, or every keystroke and
+  // every unrelated facet change would refetch the whole board. 'include' and 'only' need
+  // the same payload — the difference between them is purely the client predicate.
+  const includeArchived = advanced.archived !== null;
+  const includeArchivedRef = useRef(includeArchived);
+
+  // THE one definition of "wake the deferred load", consumed by all three places that can
+  // wake one: a settling single-deal write, a settling bulk move, and `load`'s own
+  // self-replay. It was three copies, and the rule they encode is subtle enough that a
+  // future edit to one of them would very likely not be made to the other two: replay
+  // SILENTLY (a replay fires whenever a write happens to settle, and `loading` returns the
+  // spinner INSTEAD of the page — taking the screen at that moment blanks an open form
+  // mid-edit) while still carrying the original request's error REPORTING across, so a
+  // user-initiated load that got deferred does not have its failure swallowed.
+  // No-ops when nothing is pending, so callers only have to know that writes have settled.
+  const replayDeferredLoad = useCallback(() => {
+    if (!pendingRefresh.current) return;
+    pendingRefresh.current = false;
+    const reportErrors = pendingRefreshReportErrors.current;
+    pendingRefreshReportErrors.current = false;
+    void loadRef.current(true, { reportErrors });
+  }, []);
 
   // Bulk stage moves (issue #55). Selection is a plain Set of deal ids; `bulkPending` has a
   // ref twin because the mutators read it SYNCHRONOUSLY to bail out, and state wouldn't have
@@ -113,32 +166,118 @@ export function PipelinePage() {
   // Returns whether fresh server data was actually APPLIED — the bulk flow needs that fact
   // to word an "outcome unknown" notice honestly (a board that couldn't refresh may still be
   // showing the optimistic result). Existing callers ignore the value.
-  const load = useCallback(async (silent = false): Promise<boolean> => {
+  const load = useCallback(async (
+    silent = false,
+    opts?: { reportErrors?: boolean },
+  ): Promise<boolean> => {
     // `=== true` guards against a truthy non-boolean arg (e.g. a bare `onClick={load}`
     // handing in a MouseEvent) accidentally forcing silent mode.
     const isSilent = silent === true;
-    // A silent refresh must not clobber an optimistic drag. If a stage write is already in
-    // flight, don't even fire the GET — defer it (moveDealStage re-fires when writes settle).
-    if (isSilent && pendingWrites.current > 0) { pendingRefresh.current = true; return false; }
+    // A background refresh normally stays quiet, but a REPLAYED user action must still
+    // report its failure even though it no longer takes the spinner — see
+    // `pendingRefreshReportErrors`.
+    const reportErrors = !isSilent || opts?.reportErrors === true;
+    // NO load may clobber an optimistic drag — not just a silent one. If a stage write is
+    // already in flight, don't even fire the GET; defer it (moveDealStage re-fires it once
+    // writes settle, and it reads the CURRENT facet from the ref, so a deferred refresh
+    // still widens). This used to be silent-only, which was safe while every load was a
+    // refresh of the same content set; the Archived facet made a load a user-initiated
+    // action that could land a pre-write board on top of a drag the user had just made.
+    if (pendingWrites.current > 0) {
+      pendingRefresh.current = true;
+      if (reportErrors) pendingRefreshReportErrors.current = true;
+      return false;
+    }
     const startGen = writeGen.current;
+    // A SECOND generation, for loads rather than writes (issue #83). `writeGen` answers
+    // "did a write invalidate this payload?"; this answers "is a newer LOAD already in
+    // flight?" — which only became reachable when the Archived facet started changing the
+    // request itself, since two quick facet flips can otherwise resolve out of order and
+    // leave the board showing the wrong content set.
+    const myLoad = ++loadGen.current;
+    // The SPINNER gets its OWN generation, bumped only by non-silent loads. It cannot ride
+    // `loadGen`, which silent refreshes bump too: gating the reset on that would strand the
+    // spinner forever once a silent refresh started after a non-silent one — the loser
+    // skips the reset and the winner, being silent, never touches `loading`. Nor can it be
+    // a simple in-flight COUNT, which would let one hung request pin the spinner even after
+    // a newer load had already painted the board. Newest-non-silent-wins is the only rule
+    // that is correct in both.
+    const mySpinner = isSilent ? 0 : ++spinnerGen.current;
     if (!isSilent) setLoading(true);
     try {
-      const d = await api<PipelineData>('/api/crm/deals');
+      // Read the facet from the ref, never from a closure: `load` is stable, and the
+      // deferred refreshes that `moveDealStage`/`applyBulkMove` fire when their writes
+      // settle can outlive the facet they were created under. A captured value would let
+      // one of them re-fetch the live-only board over the archived rows the user just
+      // asked to see — and, because the newest load wins, do it deterministically.
+      const d = await api<PipelineData>(
+        `/api/crm/deals${includeArchivedRef.current ? '?include_archived=true' : ''}`,
+      );
+      if (loadGen.current !== myLoad) return false;
       // A write that STARTED during this GET's flight (generation changed) may have made the
       // payload stale — defer+retry rather than clobber a succeeded move OR lose the refresh.
-      if (isSilent && (pendingWrites.current > 0 || writeGen.current !== startGen)) {
+      // Applies to every load, for the same reason as the pre-flight check above.
+      if (pendingWrites.current > 0 || writeGen.current !== startGen) {
         pendingRefresh.current = true;
+        if (reportErrors) pendingRefreshReportErrors.current = true;
+        // A deferred load is normally replayed by the settling write's `finally`. But the
+        // write that invalidated this payload may have STARTED AND FINISHED entirely
+        // inside this GET's flight, in which case its finally already ran and saw nothing
+        // pending — so no one is left to replay us and the load is simply dropped. Re-fire
+        // it here. That was a silent staleness bug before #83; now that a facet change can
+        // be the deferred load, it would read as the board ignoring the click outright.
+        if (pendingWrites.current === 0) {
+          queueMicrotask(replayDeferredLoad);
+        }
         return false;
       }
       setData(d);
+      hasLoadedOnce.current = true;
       dealConfirmedStage.current = new Map(d.deals.map(deal => [deal.id, deal.stage]));
+      // Intersect the selection with the deals this payload says are LIVE. Masking an
+      // archived deal in `bulkIds` and on its card is not enough: the id stays in the Set,
+      // so once the deal is restored somewhere else (the assistant, another tab) the next
+      // payload brings it back ALREADY SELECTED, joining a bulk move nobody picked it for.
+      //
+      // Intersecting on presence — rather than only pruning rows explicitly flagged
+      // archived — is safe precisely because this payload is `get_pipeline`, which is
+      // unpaginated and carries no server-side filter the board ever sets. So on a
+      // live-only fetch, "absent" cannot mean "filtered out"; it means archived or gone.
+      // A deal you cannot see is a deal you cannot act on, so it must not stay selected.
+      setBulkSelected(prev => {
+        if (prev.size === 0) return prev;
+        const live = new Set(d.deals.filter(deal => !isArchivedDeal(deal)).map(deal => deal.id));
+        const next = new Set([...prev].filter(id => live.has(id)));
+        return next.size === prev.size ? prev : next;
+      });
       return true;
-    } catch { /* data stays null → LoadError below (silent: keep the current board) */ }
-    finally { if (!isSilent) setLoading(false); }
+    } catch {
+      // data stays null → LoadError below. But once data EXISTS a failure is invisible:
+      // the previous payload keeps rendering, and under "Archived only" that means an
+      // empty board — indistinguishable from "you have no archived deals". Say so.
+      // (Silent refreshes stay quiet; being unobtrusive is their whole contract.)
+      if (reportErrors && loadGen.current === myLoad && hasLoadedOnce.current) {
+        toast.error('Failed to load deals.');
+      }
+    }
+    finally { if (!isSilent && spinnerGen.current === mySpinner) setLoading(false); }
     return false;
-  }, []);
+    // `replayDeferredLoad` is a stable useCallback, so naming it here costs nothing
+    // and keeps `load`'s identity stable — which the mount effect below depends on.
+  }, [replayDeferredLoad]);
 
-  useEffect(() => { queueMicrotask(load); }, [load]);
+  useEffect(() => { loadRef.current = load; }, [load]);
+
+  // Mount, and again whenever the Archived facet changes WHICH deals the server should
+  // send. The ref is synced here rather than during render (a render-phase ref write is a
+  // lint error under this repo's react-hooks ruleset) and, being in the same effect,
+  // always lands before the load it triggers. A full non-silent load on purpose: the
+  // board's content set is being replaced wholesale, and the spinner is the honest signal
+  // for that — a silent swap would leave the old set on screen looking authoritative.
+  useEffect(() => {
+    includeArchivedRef.current = includeArchived;
+    queueMicrotask(load);
+  }, [includeArchived, load]);
 
   // `data` is the single source of truth for the board. A stage change is applied
   // to it optimistically — the deal is re-staged IN PLACE (its list position is
@@ -207,17 +346,16 @@ export function PipelinePage() {
         } : prev);
       } finally {
         pendingWrites.current--; // write settled (reconciled or reverted)
-        // Once ALL writes have settled, fire any silent refresh that was deferred while a
-        // write was racing it — so a sheet dismissal (Close OR Mark Won/Lost) still lands the
-        // fresh last_activity_at even though the stage PUT was in flight at dismissal time.
-        if (pendingWrites.current === 0 && pendingRefresh.current) {
-          pendingRefresh.current = false;
-          load(true);
-        }
+        // Once ALL writes have settled, fire any refresh that was deferred while a write was
+        // racing it — so a sheet dismissal (Close OR Mark Won/Lost) still lands the fresh
+        // last_activity_at even though the stage PUT was in flight at dismissal time. Since
+        // #83 an Archived-facet change can be the deferred load too; it re-fires silently
+        // but reads the CURRENT facet from the ref, so it still widens the board.
+        if (pendingWrites.current === 0) replayDeferredLoad();
       }
     });
     dealWriteChain.current.set(dealId, run);
-  }, [load]);
+  }, [replayDeferredLoad]);
 
   // Drag handler. Resolves immediately so the Kanban hook ends its gesture and
   // re-syncs from `data` right away; persistence + rollback are data-driven (via
@@ -244,6 +382,48 @@ export function PipelinePage() {
     setSelectedDeal(null);
     load(true);
   }, [moveDealStage, load]);
+
+  // A deal was restored from the detail sheet (issue #83). The sheet hands up the row the
+  // server RETURNED, which is patched into `data` in place — deliberately not a refetch:
+  // `load(true)` is silent and can fail invisibly, which would leave the board still
+  // showing the deal as archived after a restore the server actually performed. Patching
+  // the authoritative row is why POST /restore returns the deal instead of {"ok": true}.
+  // The board then re-derives everything: under 'only' the predicate drops it, under
+  // 'include' it becomes live, draggable and selectable.
+  const restoreDeal = useCallback((restored: CrmDeal) => {
+    // Invalidate any load already in flight. Without this, a silent refresh that STARTED
+    // before the restore resolves afterwards, passes the generation check, and writes the
+    // deal back to archived — undoing a write the server has already committed.
+    loadGen.current++;
+    setData(prev => (prev
+      ? {
+        ...prev,
+        // MERGE, never replace. `POST /restore` returns `get_deal`'s projection, which is
+        // narrower than the board's: `get_pipeline` also derives `last_activity_at`, and a
+        // wholesale swap would drop it and drop the restored deal into the "no activity
+        // logged" bucket of the Deal-activity facet.
+        deals: prev.deals.map(d => (d.id === restored.id ? { ...d, ...restored } : d)),
+      }
+      : prev));
+    dealConfirmedStage.current.set(restored.id, restored.stage);
+    // Restoring is not a selection gesture. An id can still be sitting in `bulkSelected`
+    // from before the deal was archived — masked everywhere while it stays archived — and
+    // would otherwise silently rejoin the next bulk move the moment it came back.
+    setBulkSelected(prev => {
+      if (!prev.has(restored.id)) return prev;
+      const next = new Set(prev);
+      next.delete(restored.id);
+      return next;
+    });
+    setSelectedDeal(null);
+    // Then refresh in the background. The patch above is what makes the board CORRECT — it
+    // deliberately does not depend on this landing — but a restore closes the sheet the same
+    // way `onClose` does, and that path refreshes so an in-sheet note reaches the board's
+    // derived `last_activity_at`. Without it, restoring a deal you just logged a note on
+    // leaves it in the "No activity logged" bucket. It also replaces the in-flight load the
+    // generation bump above just discarded.
+    queueMicrotask(() => { void loadRef.current(true); });
+  }, []);
 
   const deals = useMemo(() => data?.deals ?? [], [data]);
 
@@ -280,7 +460,11 @@ export function PipelinePage() {
   // interaction — accepted (self-heals on any filter/drag/refresh; same class as the
   // documented UTC-vs-local date-part skew in pipelineFilters.ts).
   const filteredDeals = useMemo(() => {
-    if (!isFiltering) return deals;
+    // `!isFiltering` alone is no longer sufficient to skip the predicate (issue #83): after
+    // the Archived facet is CLEARED, archived rows are still in `data` until the narrowing
+    // refetch lands, and the predicate's null branch is what hides them in the meantime.
+    // The `.some` keeps the by-reference fast path for the overwhelmingly common case.
+    if (!isFiltering && !deals.some(isArchivedDeal)) return deals;
     const q = search.trim().toLowerCase();
     const now = new Date();
     return deals.filter(d => {
@@ -292,19 +476,35 @@ export function PipelinePage() {
     });
   }, [deals, search, advanced, isFiltering]);
 
+  // The live half of the visible set. Archived deals are shown as CARDS (that is the whole
+  // point of the facet) but are excluded from everything that means money or action:
+  // the open-pipeline header, the per-column $ totals, and the bulk payload. The server
+  // draws the same line — `stage_summary` keeps the sweep even when the deals query
+  // doesn't — so the two cannot disagree about what counts. Reference-stable when nothing
+  // is archived, so the unfiltered board still doesn't churn.
+  const liveFilteredDeals = useMemo(
+    () => (filteredDeals.some(isArchivedDeal)
+      ? filteredDeals.filter(d => !isArchivedDeal(d))
+      : filteredDeals),
+    [filteredDeals],
+  );
+
   // The issue's "bulk actions operate on the currently filtered set" invariant, enforced
   // ONCE: `filteredDeals` already embeds #21's facet predicate (including the stage facet
   // that hides whole columns), and this single intersection feeds BOTH the bar's count and
   // the apply payload — so what the operator is told and what the server is sent cannot
   // disagree, even if the selection changed since the last render.
+  // ...intersected with the LIVE subset (issue #83): the server refuses a stage change on
+  // an archived deal (`_classify_deal_update` raises), so including one could only ever
+  // produce a per-deal error in the bulk response. Better never to offer it.
   const bulkIds = useMemo(
-    () => applicableBulkIds(bulkSelected, filteredDeals),
-    [bulkSelected, filteredDeals],
+    () => applicableBulkIds(bulkSelected, liveFilteredDeals),
+    [bulkSelected, liveFilteredDeals],
   );
 
   const applyBulkMove = useCallback(async (toStage: string) => {
     if (bulkPendingRef.current || !toStage) return;
-    const ids = applicableBulkIds(bulkSelected, filteredDeals);
+    const ids = applicableBulkIds(bulkSelected, liveFilteredDeals);
     if (ids.length === 0) return;
 
     setBulkNotice(null);
@@ -398,16 +598,13 @@ export function PipelinePage() {
       }
       // Fire a refresh that deferred while this write was in flight (same check moveDealStage
       // does), so a sheet dismissal during the bulk still lands its fresh derived fields.
-      if (pendingWrites.current === 0 && pendingRefresh.current) {
-        pendingRefresh.current = false;
-        load(true);
-      }
+      if (pendingWrites.current === 0) replayDeferredLoad();
     } finally {
       if (!writeSettled) pendingWrites.current--;
       bulkPendingRef.current = false;
       setBulkPending(false);
     }
-  }, [bulkSelected, filteredDeals, deals, clearSelection, load]);
+  }, [bulkSelected, liveFilteredDeals, deals, clearSelection, load, replayDeferredLoad]);
 
   // #18: within each stage column, order by lead_score (hottest first); unscored rows
   // (null) sink below scored ones. Array.sort is stable, so the server's updated_at DESC
@@ -436,21 +633,25 @@ export function PipelinePage() {
 
   // Per-stage value totals for the column headers — precomputed once per data
   // change so drag re-renders (which fire at pointer-move frequency) don't re-reduce
-  // every column on every frame.
+  // every column on every frame. Archived deals contribute NO value (issue #83) even
+  // though their cards are in the column: the column *count* describes what you can see,
+  // the $ describes pipeline, and only the latter has to match the server's aggregates.
   const columnTotals = useMemo(() => {
     const totals: Record<string, number> = {};
     for (const stage of STAGE_ORDER) {
-      totals[stage] = (grouped[stage] || []).reduce((s, d) => s + (d.value || 0), 0);
+      totals[stage] = (grouped[stage] || [])
+        .reduce((s, d) => (isArchivedDeal(d) ? s : s + (d.value || 0)), 0);
     }
     return totals;
   }, [grouped]);
 
   // Open-pipeline $/count reflect the FILTERED set so the header describes what's shown
-  // (a "showing X of Y" annotation below signals when a filter is narrowing the board).
+  // (a "showing X of Y" annotation below signals when a filter is narrowing the board) —
+  // minus archived deals, which are visible but are not open pipeline (issue #83).
   const { openTotal, openCount } = useMemo(() => {
-    const open = filteredDeals.filter(d => OPEN_STAGES.includes(d.stage));
+    const open = liveFilteredDeals.filter(d => OPEN_STAGES.includes(d.stage));
     return { openTotal: open.reduce((s, d) => s + (d.value || 0), 0), openCount: open.length };
-  }, [filteredDeals]);
+  }, [liveFilteredDeals]);
 
   // Dashboard deep-link (/crm/pipeline?stage=X): once `data` has rendered the columns (refs
   // populated), scroll the requested column into view, then clear the `stage` param
@@ -547,7 +748,11 @@ export function PipelinePage() {
         // filtered view — correct filter semantics.
         // Also disabled while a bulk move is in flight: `moveDealStage` would bail out
         // anyway, so a drag would animate and then silently snap back.
-        dragDisabled={isMobile || bulkPending}
+        // Otherwise PER-CARD (issue #83): an archived deal is on the board to be found and
+        // restored, not to be worked — the server refuses a stage change on one, so a drag
+        // could only ever animate and revert. `isArchivedDeal` is module-level, so this is
+        // a stable identity rather than a per-render closure.
+        dragDisabled={isMobile || bulkPending ? true : isArchivedDeal}
         // The ported KanbanBoard/KanbanColumn expose only className hooks (no style
         // prop), so board-scroller and column-body layout use Tailwind here; the
         // card and header visuals below use the CRM's inline design tokens.
@@ -572,7 +777,11 @@ export function PipelinePage() {
                 stage={stage} count={colDeals.length} total={total}
                 // Select-all operates on this column's FILTERED ids, so it can never pick
                 // up a deal the current facets are hiding.
-                columnDealIds={isMobile ? [] : colDeals.map(d => d.id)}
+                // Select-all collects LIVE ids only (issue #83) — an archived card has no
+                // checkbox, so including it would select something the operator cannot see
+                // selected. An all-archived column therefore shows no header checkbox,
+                // which is right: nothing there is bulk-actionable.
+                columnDealIds={isMobile ? [] : colDeals.filter(d => !isArchivedDeal(d)).map(d => d.id)}
                 selectedIds={bulkSelected}
                 onToggleColumn={toggleColumn}
               />
@@ -580,14 +789,22 @@ export function PipelinePage() {
             </div>
           );
         }}
-        renderCard={(deal, columnId) => (
-          <DealBoardCard
-            deal={deal} columnStage={String(columnId)} onOpen={() => setSelectedDeal(deal)}
-            selectable={!isMobile}
-            isSelected={bulkSelected.has(deal.id)}
-            onToggleSelect={() => toggleSelect(deal.id)}
-          />
-        )}
+        renderCard={(deal, columnId) => {
+          // An archived card is inert: no checkbox, and never rendered as selected —
+          // a deal archived elsewhere (the assistant, a merge) could otherwise still be
+          // in `bulkSelected` from before, showing selected styling with no way to clear
+          // it. It stays clickable, because opening it is how you reach Restore.
+          const archived = isArchivedDeal(deal);
+          return (
+            <DealBoardCard
+              deal={deal} columnStage={String(columnId)} onOpen={() => setSelectedDeal(deal)}
+              selectable={!isMobile && !archived}
+              isSelected={!archived && bulkSelected.has(deal.id)}
+              onToggleSelect={() => toggleSelect(deal.id)}
+              archived={archived}
+            />
+          );
+        }}
         renderEmptyColumn={() => (
           <div style={{
             fontSize: 12, color: INK_DIM, textAlign: 'center',
@@ -611,6 +828,7 @@ export function PipelinePage() {
           onClose={() => { setSelectedDeal(null); load(true); }}
           onEdit={(d) => { setSelectedDeal(null); setEditDeal(d); }}
           onStageChange={updateDealStage}
+          onRestored={restoreDeal}
         />
       )}
     </div>
@@ -714,9 +932,11 @@ function StageHeader({ stage, count, total, columnDealIds = [], selectedIds, onT
   );
 }
 
-function DealBoardCard({ deal, columnStage, onOpen, selectable = false, isSelected = false, onToggleSelect }: {
+function DealBoardCard({ deal, columnStage, onOpen, selectable = false, isSelected = false, onToggleSelect, archived = false }: {
   deal: CrmDeal; columnStage: string; onOpen: () => void;
   selectable?: boolean; isSelected?: boolean; onToggleSelect?: () => void;
+  /** Soft-archived (issue #83): dimmed + labelled, un-draggable, not selectable. */
+  archived?: boolean;
 }) {
   // Colour from the column the card currently sits in (its bucket) rather than
   // deal.stage — during an optimistic drop the bucket updates before the deal's
@@ -732,9 +952,18 @@ function DealBoardCard({ deal, columnStage, onOpen, selectable = false, isSelect
       style={{
         ...stageCard(bg, color), padding: '10px 12px', cursor: 'pointer',
         ...(isSelected ? { borderColor: ACCENT, boxShadow: `0 0 0 1px ${tint(ACCENT, 40)}` } : {}),
+        // Dimmed rather than struck through: a card is mostly whitespace, so opacity plus
+        // the explicit chip below reads faster than a line through the title would.
+        ...(archived ? { opacity: 0.55 } : {}),
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
+        {archived && (
+          <span style={{
+            ...mono(9, INK_DIM), border: `1px solid ${LINE_STRONG}`, borderRadius: 3,
+            padding: '1px 4px', flexShrink: 0, alignSelf: 'center',
+          }}>ARCHIVED</span>
+        )}
         {selectable && onToggleSelect && (
           <input
             type="checkbox"

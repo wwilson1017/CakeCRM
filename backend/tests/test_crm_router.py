@@ -690,3 +690,79 @@ def test_bulk_move_path_is_not_shadowed_by_the_deal_detail_route(client, monkeyp
                         lambda ids, stage: {"ok": True, "updated": 1, "updated_ids": [3], "errors": []})
     r = client.post("/api/crm/deals/bulk-move", json={"deal_ids": [3], "stage": "lead"})
     assert r.status_code == 200 and r.json()["updated_ids"] == [3]
+
+
+# ── archived-deal reachability (issue #83) ────────────────────────────────────
+
+def test_deals_board_defaults_to_live_only(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(service, "get_pipeline", lambda **kw: seen.update(kw) or {"deals": []})
+    assert client.get("/api/crm/deals").status_code == 200
+    assert seen == {"include_archived": False}
+
+
+def test_deals_board_passes_include_archived_through(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(service, "get_pipeline", lambda **kw: seen.update(kw) or {"deals": []})
+    assert client.get("/api/crm/deals?include_archived=true").status_code == 200
+    assert seen == {"include_archived": True}
+
+
+def test_include_archived_is_refused_not_ignored_with_other_filters(client, monkeypatch):
+    """`list_deals` is a different service function and keeps the sweep, so honoring the
+    flag there would be a second hole. Silently dropping an advertised flag is worse than
+    a 400 — the caller would believe it had asked for archived deals and got none."""
+    def explode(*a, **k):
+        raise AssertionError("the filtered branch ran with include_archived set")
+    monkeypatch.setattr(service, "list_deals", explode)
+    assert client.get("/api/crm/deals?stage=lead&include_archived=true").status_code == 400
+    assert client.get("/api/crm/deals?contact_id=4&include_archived=true").status_code == 400
+
+
+def test_filtered_deal_list_still_works_without_the_flag(client, monkeypatch):
+    monkeypatch.setattr(service, "list_deals", lambda **kw: [{"id": 1}])
+    r = client.get("/api/crm/deals?stage=lead")
+    assert r.status_code == 200 and r.json()["count"] == 1
+
+
+def test_restore_deal_unarchives_and_returns_the_fresh_row(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(
+        service, "archive_deal",
+        lambda did, **kw: seen.update(deal_id=did, **kw) or {"id": did, "archived_at": None},
+    )
+    r = client.post("/api/crm/deals/7/restore")
+    assert r.status_code == 200
+    # The route must un-archive, never archive — the flag is the whole contract.
+    assert seen == {"deal_id": 7, "archived": False}
+    # The board patches this row in place instead of trusting a refetch that can fail.
+    assert r.json() == {"id": 7, "archived_at": None}
+
+
+def test_restore_missing_deal_404(client, monkeypatch):
+    monkeypatch.setattr(service, "archive_deal", lambda did, **kw: None)
+    assert client.post("/api/crm/deals/999/restore").status_code == 404
+
+
+def test_restore_path_is_not_shadowed_by_the_touch_count_routes(client, monkeypatch):
+    """/deals/{id}/restore and /deals/touch-count/backfill have the same segment count."""
+    monkeypatch.setattr(service, "archive_deal", lambda did, **kw: {"id": did})
+    assert client.post("/api/crm/deals/3/restore").json()["id"] == 3
+
+
+def test_there_is_no_archive_route(client):
+    """Scope ceiling: view + restore only. Archiving stays an assistant verb until a UI
+    affordance for it is designed — an unreachable write route is risk for nothing."""
+    assert client.post("/api/crm/deals/3/archive").status_code == 404
+
+
+def test_contact_id_zero_is_a_filter_not_a_fallthrough(client, monkeypatch):
+    """`?contact_id=0` is falsy, so a truthiness test would route it to the BOARD branch —
+    returning the whole pipeline for a request that asked to filter, and slipping the
+    include_archived refusal at the same time."""
+    def explode(**kw):
+        raise AssertionError("contact_id=0 reached the board branch")
+    monkeypatch.setattr(service, "get_pipeline", explode)
+    monkeypatch.setattr(service, "list_deals", lambda **kw: [])
+    assert client.get("/api/crm/deals?contact_id=0").status_code == 200
+    assert client.get("/api/crm/deals?contact_id=0&include_archived=true").status_code == 400

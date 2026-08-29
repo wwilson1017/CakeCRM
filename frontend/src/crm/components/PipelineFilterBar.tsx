@@ -3,6 +3,7 @@ import {
   type AdvancedFilters,
   type ClosePreset,
   type ActivityPreset,
+  type ArchivedPreset,
   EMPTY_ADVANCED,
   advancedActiveCount,
 } from '../pipelineFilters';
@@ -32,6 +33,16 @@ const ACTIVITY_OPTIONS: { value: ActivityPreset; label: string }[] = [
   { value: 'none', label: 'No activity logged' },
 ];
 
+// Archived visibility (issue #83). Unlike every other facet this one also widens the
+// server fetch — PipelinePage keys `?include_archived=true` off it — because archived
+// deals are swept out of the board payload and a client predicate cannot filter rows it
+// never received. "Archived only" is the recovery view: the way back from an accidental
+// archive on an install with no AI provider.
+const ARCHIVED_OPTIONS: { value: ArchivedPreset; label: string }[] = [
+  { value: 'include', label: 'Include archived' },
+  { value: 'only', label: 'Archived only' },
+];
+
 interface Props {
   search: string;
   advanced: AdvancedFilters;
@@ -47,6 +58,7 @@ interface Props {
 export default function PipelineFilterBar({ search, advanced, onSearchChange, onAdvancedChange, isMobile }: Props) {
   const closeLabel = CLOSE_OPTIONS.find(o => o.value === advanced.closeDate)?.label;
   const activityLabel = ACTIVITY_OPTIONS.find(o => o.value === advanced.lastActivity)?.label;
+  const archivedLabel = ARCHIVED_OPTIONS.find(o => o.value === advanced.archived)?.label;
   const hasValue = advanced.valueMin !== null || advanced.valueMax !== null;
 
   const { users, nameFor } = useUsers();
@@ -181,6 +193,11 @@ export default function PipelineFilterBar({ search, advanced, onSearchChange, on
         <RadioList options={ACTIVITY_OPTIONS} value={advanced.lastActivity} onSelect={v => onAdvancedChange({ ...advanced, lastActivity: v })} />
       </FacetButton>
 
+      {/* Archived facet (issue #83) — also widens the fetch; see ARCHIVED_OPTIONS. */}
+      <FacetButton label={archivedLabel ?? 'Archived'} active={!!advanced.archived}>
+        <RadioList options={ARCHIVED_OPTIONS} value={advanced.archived} onSelect={v => onAdvancedChange({ ...advanced, archived: v })} />
+      </FacetButton>
+
       {/* Active facet pills */}
       {advanced.owners.map(owner => (
         <Pill
@@ -195,6 +212,7 @@ export default function PipelineFilterBar({ search, advanced, onSearchChange, on
       {hasValue && <Pill label={valueSummary()} onRemove={() => onAdvancedChange({ ...advanced, valueMin: null, valueMax: null })} />}
       {closeLabel && <Pill label={`Close: ${closeLabel}`} onRemove={() => onAdvancedChange({ ...advanced, closeDate: null })} />}
       {activityLabel && <Pill label={activityLabel} onRemove={() => onAdvancedChange({ ...advanced, lastActivity: null })} />}
+      {archivedLabel && <Pill label={archivedLabel} onRemove={() => onAdvancedChange({ ...advanced, archived: null })} />}
 
       {(activeCount > 0 || search.trim() !== '') && (
         <button onClick={clearAll} style={{ ...clearLinkStyle, textDecoration: 'underline', padding: '4px 6px' }}>Clear filters</button>
