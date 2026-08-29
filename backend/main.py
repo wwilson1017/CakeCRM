@@ -19,6 +19,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from alerts.router import router as alerts_router
@@ -181,6 +182,41 @@ app = FastAPI(
     version=VERSION,
     lifespan=lifespan,
 )
+
+
+# ── Request-size ceiling ─────────────────────────────────────────────────────
+#
+# A backstop, NOT the per-route cap. Every upload route enforces its own limit with the
+# repo's `read(cap + 1)` idiom — but for a MULTIPART request that check is too late to
+# stop the damage: FastAPI parses the form (spooling the whole body, to /tmp past 1 MB)
+# BEFORE it solves the route's dependencies, so neither the handler nor a `Depends` guard
+# can prevent an oversized body from being written to disk first. Verified empirically,
+# not assumed. Middleware is the only layer that runs before the body is consumed.
+#
+# The ceiling is therefore generous — it exists to stop "an authenticated user fills the
+# container's disk", not to enforce any feature's limit. It must clear the largest
+# legitimate request in the app, which is an assistant upload: MAX_FILES (5) x
+# MAX_FILE_SIZE (10 MB) plus multipart overhead.
+#
+# Content-Length only: a chunked request that declares no length slips past this, and its
+# per-route bounded read remains the authority. Rejecting those would mean counting bytes
+# as they stream, which is real machinery for a case no browser produces.
+MAX_REQUEST_BYTES = 64 * 1024 * 1024
+
+
+@app.middleware("http")
+async def request_size_limit_middleware(request: Request, call_next):
+    declared = request.headers.get("content-length")
+    if declared:
+        try:
+            if int(declared) > MAX_REQUEST_BYTES:
+                return JSONResponse(
+                    status_code=413,
+                    content={"detail": "Request too large."},
+                )
+        except ValueError:
+            pass  # unparseable header — let the ASGI server deal with it
+    return await call_next(request)
 
 
 # ── Request-ID middleware ────────────────────────────────────────────────────

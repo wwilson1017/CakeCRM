@@ -6,7 +6,7 @@ so we monkeypatch them with a small recorder that queues return rows.
 
 import pytest
 
-from crm import chatter_service
+from crm import attachment_service, chatter_service
 
 
 class Recorder:
@@ -41,6 +41,10 @@ def rec(monkeypatch):
     r = Recorder()
     monkeypatch.setattr(chatter_service, "pg_fetchone", r.fetchone)
     monkeypatch.setattr(chatter_service, "pg_fetchall", r.fetchall)
+    # get_chatter embeds each note's attachments (#57) through attachment_service, which
+    # imports its own pg_fetchall by name — so the recorder has to cover that module too
+    # or the batched lookup reaches the real (uninitialized) pool.
+    monkeypatch.setattr(attachment_service, "pg_fetchall", r.fetchall)
     return r
 
 
@@ -112,12 +116,39 @@ def test_add_note_nonpositive_id_raises():
 # ── get_chatter ───────────────────────────────────────────────────────────────
 
 def test_get_chatter_filters_archived_and_orders_deterministically(rec):
-    rec.fetchall_queue = [[{"id": 1}]]
+    rec.fetchall_queue = [[{"id": 1}], []]
     chatter_service.get_chatter("deal", 3)
-    sql = rec.sql_containing("FROM crm_chatter")
+    sql = rec.sql_containing("FROM crm_chatter WHERE")
     assert "archived = 0" in sql
     assert "ORDER BY created_at DESC, id DESC" in sql
-    assert rec.params_for("FROM crm_chatter")[:2] == ["deal", 3]
+    assert rec.params_for("FROM crm_chatter WHERE")[:2] == ["deal", 3]
+
+
+def test_get_chatter_embeds_attachments_for_its_page(rec):
+    """#57: one batched lookup for the whole page, attached to the right notes.
+
+    The REST route and the crm_get_chatter tool both read this, so embedding here is what
+    stops the two surfaces drifting about whether a note has attachments.
+    """
+    rec.fetchall_queue = [
+        [{"id": 1}, {"id": 2}],
+        [{"id": 9, "note_id": 2, "filename": "photo.png"}],
+    ]
+    notes = chatter_service.get_chatter("deal", 3)
+    assert notes[0]["attachments"] == []
+    assert notes[1]["attachments"] == [{"id": 9, "note_id": 2, "filename": "photo.png"}]
+    # Batched: ONE attachment query for the page, not one per note.
+    lookups = [s for s, _ in rec.calls if "FROM crm_chatter_attachments" in s]
+    assert len(lookups) == 1
+    assert rec.params_for("FROM crm_chatter_attachments") == [[1, 2]]
+
+
+def test_get_chatter_with_no_notes_skips_the_attachment_query(rec):
+    """An empty thread must not issue a lookup at all — `IN ()` is a syntax error, and
+    an empty thread is the common case on a fresh record."""
+    rec.fetchall_queue = [[]]
+    assert chatter_service.get_chatter("deal", 3) == []
+    assert not [s for s, _ in rec.calls if "crm_chatter_attachments" in s]
 
 
 def test_get_chatter_include_archived_drops_filter(rec):

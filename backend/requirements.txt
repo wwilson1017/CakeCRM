@@ -43,3 +43,10 @@ py-vapid==1.9.4
 # exchange is a direct httpx POST and refresh is google-auth's Credentials.
 google-auth==2.56.2
 google-api-python-client==2.198.0
+
+# Chatter note attachment thumbnails (issue #57) — core/thumbnails.py. Pillow is already
+# present transitively via qrcode[pil], but a transitive extra is not a dependency
+# contract: qrcode could drop it and this feature would break with no requirements change.
+# Imported LAZILY inside core/thumbnails.py functions, so the CI import check (which runs
+# with no DATABASE_URL) and a minimal install never pay for PIL.
+pillow==12.3.0

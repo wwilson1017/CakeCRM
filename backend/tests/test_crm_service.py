@@ -317,10 +317,14 @@ def test_clear_demo_data_truncates_when_sample_loaded(monkeypatch, fake_conn):
     # cascades it, and a stale cooldown would silence nudges on the reseeded data.
     # deal_ai_touch_evidence (#56) trails it for the same FK-less reason — a reused deal
     # id would otherwise inherit a deleted deal's per-event explanation.
+    # crm_chatter_attachments (#57) sits right after crm_chatter and is MANDATORY, not
+    # tidy: it holds a real FK to crm_chatter, and Postgres refuses to truncate a
+    # referenced table without its child in the same statement — dropping it here makes
+    # every CRM reset raise.
     assert any(
         "TRUNCATE companies, contacts, deals, activity_log, tasks, task_projects, "
-        "crm_chatter, crm_field_values, crm_field_provenance, deal_stage_events, "
-        "proactive_nudges, deal_ai_touch_evidence RESTART IDENTITY"
+        "crm_chatter, crm_chatter_attachments, crm_field_values, crm_field_provenance, "
+        "deal_stage_events, proactive_nudges, deal_ai_touch_evidence RESTART IDENTITY"
         in s for s in stmts
     )
     assert not any("crm_field_definitions" in s for s in stmts)
@@ -356,8 +360,9 @@ def test_clear_all_truncates_and_resets_flag(monkeypatch, fake_conn):
     # defs→values); crm_field_provenance trails both.
     assert any(
         "TRUNCATE companies, contacts, deals, activity_log, tasks, task_projects, "
-        "crm_chatter, crm_field_definitions, crm_field_values, crm_field_provenance, "
-        "deal_stage_events, proactive_nudges, deal_ai_touch_evidence RESTART IDENTITY"
+        "crm_chatter, crm_chatter_attachments, crm_field_definitions, crm_field_values, "
+        "crm_field_provenance, deal_stage_events, proactive_nudges, "
+        "deal_ai_touch_evidence RESTART IDENTITY"
         in s for s in stmts
     )
     assert any("sample_data_loaded = FALSE" in s for s in stmts)

@@ -135,6 +135,23 @@ export interface CrmActivity {
   created_at: string;
 }
 
+/**
+ * One file attached to a chatter note (issue #57) — METADATA only.
+ *
+ * The bytes never travel in a list response: `has_thumb` says whether a server-generated
+ * thumbnail exists, and the two byte endpoints are fetched separately, with auth.
+ */
+export interface CrmAttachment {
+  id: number;
+  note_id: number;
+  filename: string;
+  mime_type: string;
+  byte_size: number;
+  has_thumb: boolean;
+  created_at: string;
+  uploaded_by: number | null;
+}
+
 export interface CrmNote {
   id: number;
   entity_type: string;
@@ -143,6 +160,9 @@ export interface CrmNote {
   created_at: string;
   updated_at: string | null;
   archived: number;
+  // Optional because a note returned by the create/edit endpoints carries no attachments
+  // yet — only the list read (`get_chatter`) embeds them.
+  attachments?: CrmAttachment[];
 }
 
 // Custom fields (issue #19). A definition is the user-authored schema; a value row
