@@ -39,10 +39,41 @@
   --color-ck-raised: #e8e8dd;
   --color-ck-line: #e5e7eb;
   --color-ck-line-strong: #d1d5db;
+
+  /* The neutral INK RAMP is contrast-bound, not taste-bound (issue #68).
+     All four steps are body-text colours — `ink-dim` alone paints every form label
+     (`shared/styles.labelStyle`), every uppercase section heading (`crm/styles.sectionHeading`)
+     and most empty states — so every step must clear WCAG AA 4.5:1 on every surface it can
+     land on, in BOTH themes. That is the same rule `--color-ck-accent-text` follows below,
+     applied to the neutral half of the palette.
+
+     "Every surface" is more than bg/card/raised: `tint()` chips and row hovers composite an
+     ink wash over those three (`StatusBadge inactive` = ink 5%, `PriorityBadge low` /
+     `ScorePill cool` / `AiTouchDetail` = ink 6%, and a chip inside a hovered row stacks two),
+     and pipeline deal cards sit on a 12% stage-hue wash. The binding surface is therefore
+     never a raw token. `core/theme/inkContrast.test.ts` checks 43 such surfaces — reading that
+     hover alpha out of `--color-ck-hover` rather than assuming it — and fails CI on any pair
+     under 4.5:1, so this ramp cannot silently drift. Its FLOOR is deliberately tighter than
+     what renders, and the test says which is which: light bottoms out at 4.72:1 on a real
+     surface (a 6% ink chip on a 12% lost-stage deal card over the page bg), while dark's
+     4.56:1 sits on a chip-inside-an-ink-hovered-row over `card` that has no producer today and
+     is kept as headroom — dark's worst RENDERED pairing is 5.09:1.
+
+     The consequence, accepted deliberately on issue #68: the ramp is COMPRESSED. A 4-step
+     neutral ramp cannot clear 4.5:1 everywhere and keep its old spread — the lightest light
+     value that clears it is #5c5c5c (4.50:1), already darker than the old `ink-mute`
+     (#666666), which is why Will's gate chose to re-space the ramp rather than migrate call
+     sites. Both `ink-dim` values sit just inside their edge rather than on it: light
+     #595959 is 4.72:1 (edge #5c5c5c), dark #adaba5 is 4.56:1 (edge #acaaa4, 4.51:1). The three
+     secondary steps sit ABOVE the new `ink-dim` at even CIE L* increments (~6 L* light,
+     ~7 L* dark — the old LIGHT ramp's own mute→soft step was only 6 L*, so the three stay as
+     distinct from each other as they ever were). What actually shrank is the gap between
+     primary `ink` and the secondary tier: 27 L* → 9 in light, 31 → 10 in dark. Call sites
+     were NOT migrated off `ink-dim`. */
   --color-ck-ink: #292929;
-  --color-ck-ink-mute: #666666;
-  --color-ck-ink-soft: #757575;
-  --color-ck-ink-dim: #8f8f8f;
+  --color-ck-ink-mute: #3c3c3c;
+  --color-ck-ink-soft: #4a4a4a;
+  --color-ck-ink-dim: #595959;
 
   /* Brand ramp — identical in both themes. Issue #54 names these four ramp steps
      explicitly as fixed design tokens; only `accent` has a consumer today, so they
@@ -92,10 +123,13 @@
      Those modules are a port and style themselves with utility classes built on the blueprint's
      token names. Rather than hand-rewriting every className — which would fork them from the
      blueprint and silently drift on the next port — the names are aliased onto the `ck-*` tokens
-     above. The two palettes were compared value-by-value and agree exactly (cream #fffffa =
-     ck-card, sand #f1f1e8 = ck-bg, charcoal #292929 = ck-ink, muted #666666 = ck-ink-mute,
-     line #d1d5db = ck-line-strong, line-faint #e5e7eb = ck-line, brand #e31d3b = ck-accent), so
-     these are renames, not new colours.
+     above. The two palettes were compared value-by-value and agreed exactly at port time
+     (cream #fffffa = ck-card, sand #f1f1e8 = ck-bg, charcoal #292929 = ck-ink, muted #666666 =
+     ck-ink-mute, line #d1d5db = ck-line-strong, line-faint #e5e7eb = ck-line, brand #e31d3b =
+     ck-accent), so these are renames, not new colours. One has since diverged on purpose:
+     issue #68 darkened `ck-ink-mute` to #3c3c3c for WCAG AA, so `muted` no longer equals the
+     blueprint's #666666. The alias is still the right wiring — it is what makes the ported
+     layer inherit our accessible ramp instead of freezing the blueprint's failing one.
 
      They are declared as `var(...)` rather than copied hex ON PURPOSE: the `.dark` block
      overrides the `ck-*` properties on the same element `:root` matches, so an alias re-resolves
@@ -134,9 +168,15 @@
   --color-ck-line: #3d3b38;
   --color-ck-line-strong: #4a4845;
   --color-ck-ink: #f0efe8;
-  --color-ck-ink-mute: #9c9a93;
-  --color-ck-ink-soft: #7e7c76;
-  --color-ck-ink-dim: #6b6963;
+  /* Same contrast-bound ramp as the light block above (issue #68), mirrored: each step
+     LIGHTENS until it clears 4.5:1 on the lightest surface the guard checks — a chip inside an
+     ink-hovered row over `card`, not `card` itself. That stack is headroom rather than a
+     rendered pixel (see the test), which is why these values have more real margin than the
+     4.56:1 floor suggests. Warm-gray character is kept (g two and b eight or nine points under
+     r, as the pre-#68 values had). */
+  --color-ck-ink-mute: #d4d2cc;
+  --color-ck-ink-soft: #c0beb8;
+  --color-ck-ink-dim: #adaba5;
 
   --color-ck-accent-soft: color-mix(in srgb, var(--color-ck-accent) 20%, transparent);
   /* Same rule the status hues below follow: lighten so it stays legible on a dark
@@ -216,8 +256,12 @@ input:focus, textarea:focus, select:focus {
 .dark .hljs-regexp, .dark .hljs-string,
 .dark .hljs-meta .hljs-string { color: #a5d6ff; }
 .dark .hljs-built_in, .dark .hljs-symbol { color: #ffa657; }
+/* `ink-dim`, not `ink-mute`: #68's ramp lightened `ink-mute` to within 10 L* of `ink`, which
+   would have rendered comments at almost the weight of the code around them. `ink-dim` keeps
+   roughly the de-emphasis the pre-#68 `ink-mute` gave here (24 L* below `ink`, was 30) and
+   still clears 4.5:1 on --color-ck-raised, like every other hue in this block. */
 .dark .hljs-comment, .dark .hljs-code,
-.dark .hljs-formula { color: var(--color-ck-ink-mute); }
+.dark .hljs-formula { color: var(--color-ck-ink-dim); }
 .dark .hljs-name, .dark .hljs-quote, .dark .hljs-selector-tag,
 .dark .hljs-selector-pseudo { color: #7ee787; }
 .dark .hljs-subst { color: var(--color-ck-ink); }
