@@ -6,6 +6,7 @@ import { ActivityTimeline } from './components/ActivityTimeline';
 import { DealForm } from './components/DealForm';
 import { DealDetailSheet } from './components/DealDetailSheet';
 import { StatCard } from './components/StatCard';
+import { TodayPanel } from './components/TodayPanel';
 import { WeeklyTouchesCard } from './components/WeeklyTouchesCard';
 import { STAGE_COLORS, STAGE_ORDER } from './constants';
 import { WarmHalo } from '../shared/WarmHalo';
@@ -158,6 +159,14 @@ export function CrmDashboardPage() {
           <br /><span style={{ color: INK_MUTE, fontSize: isMobile ? 16 : 26 }}>across {totalDeals} open deals.</span>
         </h1>
       </div>
+
+      {/* What needs you today (issue #130), above the stat row: the page's one
+          "do this now" surface. Keyless, and self-hiding while it has nothing to say. */}
+      <TodayPanel
+        refreshKey={touchesKey}
+        wrapperStyle={{ padding: `0 ${px} 18px`, position: 'relative', zIndex: 2 }}
+        onMutated={reload}
+      />
 
       {/* Parity stat row (issue #76 — cake_os DashboardTab's four cards). Built from
           the dashboard payload ALONE, so it survives an analytics fetch failure; the

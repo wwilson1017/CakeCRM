@@ -19,10 +19,9 @@ archived deal is not "going stale", it is put away.
 """
 
 import logging
-from datetime import datetime, timezone
 
 from core.postgres import pg_fetchall, pg_fetchone
-from crm import provenance_service, scoring_service
+from crm import gtd_common, provenance_service, scoring_service
 from crm.service import (
     LAST_TOUCH_SQL,
     LIVE_PREDICATE,
@@ -457,7 +456,9 @@ def get_deal_health(deal_id: int, stale_days: int = DEFAULT_DEAL_STALE_DAYS) -> 
     stale_days = _bounded(stale_days, DEFAULT_DEAL_STALE_DAYS, 1, 365)
     # Date-only TEXT comparison for overdue, matching get_dashboard_stats: a task due
     # today is not overdue, and a malformed row can never cast-error the way ::date can.
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    # That day is the CONFIGURED-TIMEZONE one since #130 — it moved here in the same
+    # sweep, because "is this task overdue" must not depend on which report asked.
+    today = gtd_common.today_local_str()
     row = pg_fetchone(
         f"""
         SELECT d.id, d.title, d.stage, d.value, d.currency, d.probability,

@@ -2166,7 +2166,12 @@ def get_dashboard_stats() -> dict:
     # Overdue = incomplete tasks whose due date is strictly before TODAY. Date-only
     # TEXT comparison: matches the Tasks page's client-side rule (a task due today is
     # NOT overdue) and can never cast-error on a malformed row (unlike ::date).
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    #
+    # TODAY is the CONFIGURED-TIMEZONE day (#130), not the UTC one it used to be. A due
+    # date carries the user's local calendar intent, so a UTC day marked work overdue
+    # hours early every evening west of Greenwich — and this number renders inches from
+    # the Today panel, which reads the local day. One screen cannot hold two todays.
+    today = gtd_common.today_local_str()
     overdue_row = pg_fetchone(
         "SELECT COUNT(*) AS cnt FROM tasks WHERE completed = 0 AND due_date != '' "
         f"AND due_date < %s AND {LIVE_TASK_PREDICATE} AND {NOT_DROPPED_TASK}",
@@ -2209,10 +2214,13 @@ def get_dashboard_stats() -> dict:
 # ── Weekly Touches (issue #76) ────────────────────────────────────────────────
 #
 # Window resolution mirrors cake_os dashboard_service._resolve_touch_window so a
-# later port diffs cleanly, but resolves UTC calendar days rather than Central: the
-# rest of this module is UTC (see get_dashboard_stats' `today`, which decides overdue
-# against a UTC day), and in UTC there is no DST boundary, so the inclusive end-day
-# bound is a plain +1 day instead of the blueprint's add-in-CT-then-convert dance.
+# later port diffs cleanly, but resolves UTC calendar days rather than Central, and
+# stays UTC even though #130 moved the "today" decisions in this module onto the
+# configured timezone. Those answer "is this task overdue RIGHT NOW", which is a
+# question about the user's calendar intent; this resolves a LABELLED absolute window
+# the caller can name explicitly, where a fixed reference is the honest one. In UTC
+# there is also no DST boundary, so the inclusive end-day bound is a plain +1 day
+# instead of the blueprint's add-in-CT-then-convert dance.
 #
 # simplification: a UTC calendar day is not the viewer's calendar day, so a user
 # several hours off UTC sees a window shifted by their offset. The UI labels the
