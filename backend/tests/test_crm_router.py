@@ -940,3 +940,21 @@ def test_mark_lost_rejects_an_oversized_reason_instead_of_truncating(client, mon
     assert client.post(
         "/api/crm/deals/7/mark-lost", json={"lost_reason": at_cap}
     ).status_code == 200
+
+
+def test_the_frontend_lost_reason_cap_matches_the_server():
+    """The composer's cap is a hand-copied mirror of MAX_LOST_REASON, so it can drift.
+
+    Drift is not symmetric: a frontend cap ABOVE the server's turns a 422 into the user's
+    problem after they have written the reason, which is exactly what the Pydantic bound
+    exists to prevent them from hitting. Read the shipped constant rather than restating
+    the number, the way inkContrast.test.ts parses the shipped CSS.
+    """
+    import re
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[2]
+           / "frontend" / "src" / "crm" / "constants.ts").read_text(encoding="utf-8")
+    match = re.search(r"export const MAX_LOST_REASON\s*=\s*(\d+)", src)
+    assert match, "MAX_LOST_REASON is gone from frontend/src/crm/constants.ts"
+    assert int(match.group(1)) == service.MAX_LOST_REASON

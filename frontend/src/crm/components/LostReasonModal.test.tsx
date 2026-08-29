@@ -156,6 +156,48 @@ describe('LostReasonModal', () => {
     expect(onConfirm).not.toHaveBeenCalled();
   });
 
+  it('traps Tab inside the dialog so focus cannot reach the sheet behind it', () => {
+    // `aria-modal` promises an inert background, but the deal sheet underneath is a live
+    // DOM subtree — a Shift+Tab out of here lands on its Mark Won button, one keystroke
+    // from closing the deal the OPPOSITE way while this dialog is still open.
+    render();
+    const focusables = [...document.body.querySelectorAll<HTMLElement>(
+      '[role="dialog"] textarea, [role="dialog"] button')];
+    expect(focusables.length).toBeGreaterThan(1);
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+
+    // Shift+Tab off the first element wraps to the last, rather than leaving the dialog.
+    first.focus();
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent(
+        'keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true }));
+    });
+    expect(document.activeElement).toBe(last);
+
+    // …and Tab off the last wraps back to the first.
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent(
+        'keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+    });
+    expect(document.activeElement).toBe(first);
+  });
+
+  it('pulls focus back in when it is already outside the dialog', () => {
+    // The recovery case: something in the sheet behind held focus when the dialog opened.
+    const outside = document.createElement('button');
+    document.body.appendChild(outside);
+    render();
+    outside.focus();
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent(
+        'keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+    });
+    expect(document.body.querySelector('[role="dialog"]')!
+      .contains(document.activeElement)).toBe(true);
+    outside.remove();
+  });
+
   it('caps the reason at the length the server accepts', () => {
     render();
     // Mirrors service.MAX_LOST_REASON — past it the route 422s rather than truncating.

@@ -44,6 +44,7 @@ export interface LostReasonModalProps {
 export function LostReasonModal({ dealTitle, onConfirm, onCancel }: LostReasonModalProps) {
   const [reason, setReason] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   // Synchronous latch, deliberately a ref and not the `submitting` state: a held
   // Cmd/Ctrl+Enter (or a double-click) fires again before React re-renders, and
   // `mark_deal_lost` appends its "Deal lost —" note on every call that finds the deal —
@@ -64,11 +65,44 @@ export function LostReasonModal({ dealTitle, onConfirm, onCancel }: LostReasonMo
     // Capture phase, like ConfirmHost: Escape closes THIS dialog and nothing underneath.
     // (DealDetailSheet has no Escape handling of its own today, so this is purely
     // additive — but stopping propagation is what keeps it that way if one is added.)
+    //
+    // Tab is trapped for the same reason ConfirmHost traps it, and here it is more than an
+    // a11y nicety: `aria-modal` promises the background is inert, but the sheet underneath
+    // is a live DOM subtree, so a Shift+Tab out of this dialog lands on its Mark Won button
+    // — one keystroke from closing the deal the OPPOSITE way while the Lost dialog is still
+    // open. ConfirmHost can toggle between two known buttons; this dialog has a textarea
+    // too, so cycle the real focusable list instead.
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key !== 'Escape') return;
-      e.preventDefault();
-      e.stopPropagation();
-      onCancel();
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onCancel();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const focusable = [...(dialogRef.current?.querySelectorAll<HTMLElement>(
+        'textarea, button, [href], input, select, [tabindex]:not([tabindex="-1"])',
+      ) ?? [])].filter(el => !el.hasAttribute('disabled'));
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      // Also catches focus already sitting OUTSIDE the dialog, which is how it would
+      // otherwise stay stuck on the sheet behind once it escaped.
+      const inside = active instanceof Node && dialogRef.current?.contains(active);
+      if (!inside) {
+        e.preventDefault();
+        e.stopPropagation();
+        (e.shiftKey ? last : first).focus();
+      } else if (e.shiftKey && active === first) {
+        e.preventDefault();
+        e.stopPropagation();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        e.stopPropagation();
+        first.focus();
+      }
     }
     document.addEventListener('keydown', onKeyDown, { capture: true });
     return () => {
@@ -89,6 +123,7 @@ export function LostReasonModal({ dealTitle, onConfirm, onCancel }: LostReasonMo
       }}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="crm-lost-reason-title"

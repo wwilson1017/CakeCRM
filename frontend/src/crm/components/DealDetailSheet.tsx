@@ -76,6 +76,11 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
   // (mark_deal_lost appends one on every call that finds the deal, no-op write included).
   // The modal's own latch cannot cover this: it unmounts as soon as the first one confirms.
   const [closing, setClosing] = useState(false);
+  // Disable the close-out pair while EITHER a write is in flight or the reason dialog
+  // is open. The dialog half is defence in depth behind the modal's focus trap: the
+  // sheet stays a live DOM subtree underneath, and Mark Won sitting one stray Tab away
+  // from an open Mark Lost dialog is a wrong write, not just an a11y lapse.
+  const closeOutDisabled = closing || askingLostReason;
   const { byField, confirm, confirming } = useProvenance('deal', deal.id);
   const badge = (f: string) => (
     <ProvenanceBadge prov={byField[f]} onConfirm={() => confirm(f)} confirming={confirming === f} />
@@ -322,21 +327,23 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
               editing an archived deal's other fields is legal. */}
           {!archivedAt && deal.stage !== 'won' && deal.stage !== 'lost' && (
             <>
-              <button onClick={() => void closeOut('won')} disabled={closing} style={{
+              <button onClick={() => void closeOut('won')} disabled={closeOutDisabled} style={{
                 padding: '10px 16px', borderRadius: 6,
                 background: SAGE, color: ACCENT_INK,
                 border: 'none', fontWeight: 500, fontSize: 13,
-                cursor: closing ? 'default' : 'pointer', opacity: closing ? 0.5 : 1,
+                cursor: closeOutDisabled ? 'default' : 'pointer',
+                opacity: closeOutDisabled ? 0.5 : 1,
                 flex: 1,
               }}>Mark Won</button>
               {/* Ask for the reason first (issue #128). `lost_reason` has no other human
                   writer — it is excluded from _DEAL_USER_WRITABLE, so before this the
                   field could be read on this very sheet but only ever written by the
                   assistant. */}
-              <button onClick={() => setAskingLostReason(true)} disabled={closing} style={{
+              <button onClick={() => setAskingLostReason(true)} disabled={closeOutDisabled} style={{
                 ...btnDanger,
                 padding: '10px 16px', borderRadius: 6, fontSize: 13,
-                cursor: closing ? 'default' : 'pointer', opacity: closing ? 0.5 : 1,
+                cursor: closeOutDisabled ? 'default' : 'pointer',
+                opacity: closeOutDisabled ? 0.5 : 1,
               }}>Mark Lost</button>
             </>
           )}
