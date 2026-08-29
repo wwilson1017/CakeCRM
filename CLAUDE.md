@@ -429,15 +429,71 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `_classify_deal_update`, a pure helper shared with `_write_deal_update` — so the
   single-deal and set-based paths cannot drift about WHAT to write (an integration test
   pins twin deals moved through each path to identical rows *and* identical stage
-  events). The classifier deliberately does not decide WHETHER to write, which is the one
-  place the paths still differ: bulk skips a same-stage no-op, `update_deal_stage` writes
-  and bumps `updated_at`. Left as-is because aligning it would change pre-#55 behavior,
-  and no UI path sends a same-stage move. The one
-  deliberate contract difference: `_write_deal_update` raises, bulk isolates per deal
-  (missing/archived deals report in `errors` while the rest still commit), because one
-  archived deal must not sink a 50-deal selection. A deal already in the target stage is
-  skipped entirely — no write, so no `updated_at` bump, which `LAST_TOUCH_SQL` would
-  otherwise read as a touch and reset the staleness clock on a deal nothing changed.
+  events). The classifier deliberately does not decide WHETHER to write; each path decides
+  that for itself, and **since #96 they agree**. Bulk skips a same-stage deal in Python on
+  its locked pre-image; `_write_deal_update` instead carries an `IS DISTINCT FROM` test
+  over exactly the columns it is about to SET, so a write that changes nothing matches no
+  row and `updated_at` never moves. **The decision is made in SQL, not Python, and that is
+  load-bearing**: the assistant's tool arguments are not runtime schema-validated, and
+  `1.0 == True` is True in Python where Postgres correctly refuses a boolean into a
+  `DOUBLE PRECISION` column — so a Python pre-image comparison would turn invalid writes
+  into silent no-ops, and would mishandle NULL (an unlinked `contact_id`) besides. Bulk can
+  stay in Python because it writes exactly one caller-controlled column, a `DEAL_STAGES`
+  string validated before the connection opens. Postgres coerces on **assignment** but
+  promotes on **comparison**, so the distinctness test casts the parameter to the column's
+  destination type, declared once in `_DEAL_COLUMN_TYPES`. The two contexts disagree in
+  OPPOSITE directions, so the cast is not optional: INTEGER promotes on comparison
+  (`probability=40.1` stores 40 unchanged, but an uncast `IS DISTINCT FROM 40.1` calls it
+  distinct and bumps `updated_at` anyway), while TEXT accepts an I/O conversion on
+  assignment and has NO comparison operator (`title = 12345` has always stored `'12345'`,
+  but an uncast comparison raises `operator does not exist: text = integer` — live, since
+  `crm_update_deal` forwards raw unvalidated LLM arguments). Only the comparison is cast,
+  so assignment behavior and its type errors are untouched. **`_DEAL_COLUMN_TYPES` is
+  deliberately NOT the allowlist**: it covers internal-only columns (`lost_reason`) and grows
+  whenever a new internal write path routes through the chokepoint, so deriving
+  `update_deal`'s allowlist from it would be default-OPEN — declaring a type for an internal
+  column would silently make it writable by `crm_update_deal`'s raw model kwargs and
+  `PUT /api/crm/deals/{id}` in the same commit. The boundary is the hand-maintained,
+  default-CLOSED `_DEAL_USER_WRITABLE` (no `lead_score`, no `archived_at`), and a **hermetic**
+  test asserts only the safe direction, `_DEAL_USER_WRITABLE ⊆ _DEAL_COLUMN_TYPES` — so
+  "no writable column without a declared type" still holds, in the suite CI actually runs.
+  An integration test pins each declared type against `information_schema`. The `deal_stage_events` INSERT is
+  gated on the UPDATE's rowcount as well (a real stage change always differs, so this is
+  structural rather than reachable). Two consequences are accepted rather than incidental: a
+  **custom-field-only save no longer bumps `deals.updated_at`** (`DealForm` always PUTs the
+  standard fields and then writes changed custom fields separately, and `set_field_values`
+  never touches the parent row — so that bump was a side effect of an unchanged-form PUT,
+  and the detail page's `CustomFieldsSection` never produced one at all), and a no-op save
+  no longer floats a deal up an `updated_at DESC` ordering — including `crm_get_pipeline`'s
+  first-25-per-stage window.
+  The custom-field one **resolves an inconsistency by picking uniformity, not by picking
+  the more accurate answer**, and that is worth stating plainly: a user who edits only a
+  custom field has done real work on that deal, and nothing in `LAST_TOUCH_SQL` now records
+  it, so the deal keeps getting nudged until someone logs a note. It was arbitrary before
+  (bumped from the edit modal, not from the detail page) and is consistently
+  **not-a-touch** now. Taking the other branch belongs in `set_field_values`, which already
+  holds the entity row `FOR UPDATE` — but it is a product call about what a "touch" means
+  across contacts and companies too, and it needs its own change detection first: both UIs
+  send only changed values, while the `crm_set_*_fields` tools can send unchanged ones, so
+  a naive bump there would reopen exactly this bug against `crm_field_values`.
+  **Deliberate divergences between the two paths**, each with its own reason: *where* the
+  no-op is decided (SQL vs Python, above); the **error contract** — `_write_deal_update`
+  raises, bulk isolates per deal (missing/archived deals report in `errors` while the rest
+  still commit), because one archived deal must not sink a 50-deal selection; the
+  post-commit **rescore**, which the single-deal path runs unconditionally while bulk
+  rescores only `updated_ids` (correct rather than an oversight — `score_on_event` is
+  swallowed on failure and `_maybe_refresh_scores` excludes terminal deals that already
+  carry a score, so re-calling `mark_deal_won` is the only repair route for a won deal
+  whose rescore failed); and **provenance**, where `crm_update_deal_stage` badges a skipped
+  write while `crm_bulk_move_deals` badges only `updated_ids` — left alone because
+  `provenance_service.record` documents re-badging an identical rewrite as intended
+  ("EVERY AI (re)write resets confirmation"), which makes bulk the outlier there, not the
+  single-deal path.
+  In **bulk specifically**, a deal already in the target stage is dropped from the write
+  plan after the locking `SELECT … FOR UPDATE` and before any write SQL is issued — so no
+  `updated_at` bump, which `LAST_TOUCH_SQL` would otherwise read as a touch and reset the
+  staleness clock on a deal nothing changed. (The single-deal path reaches the same end
+  state differently: it *issues* the UPDATE, which then matches no row.)
   Whole-request refusals come back as `ok:false` with HTTP 200, never a 4xx, because the
   board's honesty depends on only transport/5xx failures throwing: a refusal means
   nothing was written (revert), a thrown 5xx means the outcome is genuinely unknown

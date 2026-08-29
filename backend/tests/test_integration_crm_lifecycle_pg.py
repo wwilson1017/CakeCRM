@@ -878,6 +878,11 @@ def test_bulk_and_single_deal_paths_cannot_drift(pg_db):
         ("lead", "won", None),            # closing transition settles probability
         ("lead", "lost", None),           # the other closing transition
         ("lost", "negotiation", "budget"),  # reopening clears the stale reason
+        # A no-op move: both paths must agree it changes no column and logs no event.
+        # NOT the #96 guard — snapshot() never reads updated_at, so this row passes with
+        # or without the fix. test_same_stage_move_touches_nothing_on_either_path is the
+        # guard; this row only pins that the two paths still classify a no-op alike.
+        ("qualified", "qualified", None),
     ):
         def make(name):
             deal = service.create_deal(name, stage="negotiation", probability=45)
@@ -895,6 +900,194 @@ def test_bulk_and_single_deal_paths_cannot_drift(pg_db):
         bulk_row, bulk_events = snapshot(bulk_id)
         assert single_row == bulk_row, f"{stage_from}->{target} columns drifted"
         assert single_events == bulk_events, f"{stage_from}->{target} stage log drifted"
+
+
+def test_same_stage_move_touches_nothing_on_either_path(pg_db):
+    """The parity test issue #96 asks for, and the one nothing covered before it.
+
+    `LAST_TOUCH_SQL` reads `deals.updated_at` as a touch, so a redundant stage write must
+    not move it — otherwise the deal silently drops out of `get_stale_deals` and the
+    heartbeat's nudges for a full window with nothing changed. `bulk_move_deals` skipped
+    the no-op from the start; `update_deal_stage` bumped it until #96. Both paths are
+    asserted here so the fix cannot regress on one of them alone.
+    """
+    from core.postgres import pg_fetchone
+    from crm import service
+
+    def snapshot(deal_id):
+        return (
+            pg_fetchone("SELECT updated_at FROM deals WHERE id = %s", (deal_id,))["updated_at"],
+            pg_fetchone("SELECT count(*) AS n FROM deal_stage_events WHERE deal_id = %s",
+                        (deal_id,))["n"],
+        )
+
+    single = service.create_deal("Single parked", stage="qualified")["id"]
+    bulk = service.create_deal("Bulk parked", stage="qualified")["id"]
+    before_single, before_bulk = snapshot(single), snapshot(bulk)
+
+    assert service.update_deal_stage(single, "qualified")["stage"] == "qualified"
+    assert service.bulk_move_deals([bulk], "qualified")["ok"] is True
+
+    assert snapshot(single) == before_single, "single-deal path reset the staleness clock"
+    assert snapshot(bulk) == before_bulk, "bulk path reset the staleness clock"
+
+    # And the guard is not a blanket refusal to write: a real move still moves.
+    service.update_deal_stage(single, "proposal")
+    assert snapshot(single) != before_single
+
+
+def test_an_unchanged_full_form_save_is_not_a_touch(pg_db):
+    """`PUT /api/crm/deals/{id}` resaving an untouched form — the second caller #96 names.
+
+    Deliberately exercises every writable type together, because the no-op test lives in
+    Postgres: TEXT (title/notes/currency), DOUBLE PRECISION (value), INTEGER
+    (probability), a date carried as TEXT (expected_close_date), and nullable FKs
+    (contact_id/company_id/owner_id, where `=` would swallow NULL and `IS DISTINCT FROM`
+    does not). Comparing these in Python instead of SQL is what would go wrong quietly.
+
+    This also pins the accepted consequence: `DealForm` always PUTs the standard fields
+    and then writes changed custom fields separately, and `set_field_values` never touches
+    the parent row — so a custom-field-only save no longer bumps `deals.updated_at`.
+    Custom-field edits are not deal touches, uniformly (the detail page's
+    `CustomFieldsSection` never made them one either).
+    """
+    from core.postgres import pg_fetchone
+    from crm import service
+
+    contact = service.create_contact("Form Tester", email="form@example.test")
+    deal = service.create_deal(
+        "Form deal", stage="proposal", value=1234.56, probability=40,
+        expected_close_date="2026-09-01", notes="as discussed", contact_id=contact["id"],
+    )
+    form = {
+        "title": "Form deal", "stage": "proposal", "value": 1234.56, "probability": 40,
+        "expected_close_date": "2026-09-01", "notes": "as discussed", "currency": "USD",
+        "contact_id": contact["id"], "company_id": None, "owner_id": None,
+    }
+
+    def updated_at():
+        return pg_fetchone("SELECT updated_at FROM deals WHERE id = %s", (deal["id"],))["updated_at"]
+
+    before = updated_at()
+    assert service.update_deal(deal["id"], **form)["id"] == deal["id"]
+    assert updated_at() == before, "an unchanged form save reset the staleness clock"
+
+    # One changed field in the same shape still writes — the guard skips no-ops, not edits.
+    service.update_deal(deal["id"], **{**form, "value": 2000.0})
+    assert updated_at() != before
+
+
+def test_a_fractional_value_that_rounds_to_the_stored_one_is_not_a_touch(pg_db):
+    """Postgres coerces on ASSIGNMENT but promotes on COMPARISON, so `probability=40.1`
+    into an INTEGER column stores 40 (no change) while a bare `IS DISTINCT FROM 40.1`
+    would call it distinct and bump `updated_at` anyway. `_DEAL_COLUMN_TYPES` casts the
+    comparison to the destination type to close that. Reachable because the assistant's
+    tool arguments are not runtime schema-validated — `update_deal` clamps probability
+    into range but does not make it an int.
+    """
+    from core.postgres import pg_fetchone
+    from crm import service
+
+    deal = service.create_deal("Fractional", stage="proposal", probability=40)
+
+    def row():
+        return pg_fetchone("SELECT updated_at, probability FROM deals WHERE id = %s",
+                           (deal["id"],))
+
+    before = row()
+    service.update_deal(deal["id"], probability=40.1)   # stores 40 — nothing changed
+    assert row() == before, "a fractional no-op reset the staleness clock"
+
+    # Rounding that lands on a DIFFERENT value is a real edit and must still write.
+    service.update_deal(deal["id"], probability=40.6)   # stores 41
+    after = row()
+    assert after["probability"] == 41 and after["updated_at"] != before["updated_at"]
+
+
+def test_the_declared_column_types_match_the_real_deals_schema(pg_db):
+    """`_DEAL_COLUMN_TYPES` is hand-written, so it can drift off the schema — a column
+    silently retyped would get the wrong cast and either reopen the no-op hole or start
+    raising. Coverage drift is already structural (`update_deal`'s allowlist is derived
+    from the map), so what is left to check is that each declared type is the REAL one.
+    Read from `information_schema` rather than from the constant under test.
+    """
+    from core.postgres import pg_fetchall
+    from crm import service
+
+    # Scoped to the active schema: another visible schema owning a `deals` table would
+    # otherwise merge into this dict and validate the wrong columns.
+    actual = {r["column_name"]: r["data_type"] for r in pg_fetchall(
+        "SELECT column_name, data_type FROM information_schema.columns "
+        "WHERE table_name = 'deals' AND table_schema = current_schema()")}
+    expected = {"text": "text", "float8": "double precision", "int": "integer"}
+
+    missing = service._DEAL_COLUMN_TYPES.keys() - actual.keys()
+    assert not missing, f"declared columns absent from the deals table: {sorted(missing)}"
+    wrong = {c: (declared, actual[c])
+             for c, declared in service._DEAL_COLUMN_TYPES.items()
+             if actual[c] != expected[declared]}
+    assert not wrong, f"declared type does not match the schema: {wrong}"
+
+
+def test_an_untyped_value_for_a_text_column_still_writes(pg_db):
+    """Regression guard. Postgres accepts an I/O conversion into TEXT on ASSIGNMENT but has
+    no operator for it in COMPARISON, so an uncast `title IS DISTINCT FROM 12345` raises
+    `operator does not exist: text = integer` on a write that worked before this change.
+    `crm_update_deal` forwards raw, unvalidated LLM arguments, so a bare number for a text
+    field is reachable — and the resulting psycopg2 error escapes as the registry's generic
+    "please try again", looping the model on a permanent condition.
+    """
+    from core.postgres import pg_fetchone
+    from crm import service
+
+    deal = service.create_deal("12345", stage="proposal", expected_close_date="2026-09-01")
+
+    def row():
+        return pg_fetchone("SELECT updated_at, title FROM deals WHERE id = %s", (deal["id"],))
+
+    before = row()
+    # Numerically equal to the stored text: must be recognised as a no-op, not raise.
+    service.update_deal(deal["id"], title=12345)
+    assert row() == before, "an untyped no-op for a TEXT column reset the staleness clock"
+
+    # A different number is a real edit and must still land as text.
+    service.update_deal(deal["id"], title=999)
+    after = row()
+    assert after["title"] == "999" and after["updated_at"] != before["updated_at"]
+
+
+def test_re_marking_a_deal_lost_with_the_same_reason_is_not_a_touch(pg_db):
+    """The third column-map shape reaching `_write_deal_update`, after `{stage}` and the
+    full form: `{stage, probability, lost_reason}`. Worth its own case because
+    `lost_reason` is the one column `_classify_deal_update` injects on its own, so a bug
+    specific to that combination would miss both other tests.
+
+    The chatter note is deliberately still appended on the second call — a note is a real
+    event that `LAST_TOUCH_SQL` reads in its own right, so this asserts the DEAL row is
+    untouched, not that the whole call became a no-op.
+    """
+    from core.postgres import pg_fetchone
+    from crm import service
+
+    deal = service.create_deal("Doomed", stage="negotiation")
+    service.mark_deal_lost(deal["id"], lost_reason="chose a competitor")
+
+    def row():
+        return pg_fetchone(
+            "SELECT updated_at, stage, probability, lost_reason FROM deals WHERE id = %s",
+            (deal["id"],),
+        )
+
+    before = row()
+    assert before["stage"] == "lost" and before["probability"] == 0
+
+    service.mark_deal_lost(deal["id"], lost_reason="chose a competitor")
+    assert row() == before, "re-marking lost with the same reason reset the staleness clock"
+
+    # A DIFFERENT reason is a real edit and must still land.
+    service.mark_deal_lost(deal["id"], lost_reason="budget cut")
+    after = row()
+    assert after["lost_reason"] == "budget cut" and after["updated_at"] != before["updated_at"]
 
 
 def test_concurrent_bulk_moves_over_overlapping_ids_do_not_deadlock(pg_db):

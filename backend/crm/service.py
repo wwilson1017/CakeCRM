@@ -850,6 +850,57 @@ def list_deals(stage: str | None = None, contact_id: int | None = None, limit: i
     )
 
 
+# Every `deals` column `_write_deal_update` can be asked to write, mapped to its
+# destination type for the cast in the distinctness test.
+#
+# NOTE: these VALUES are interpolated into SQL (`%s::{type}`), so they are type names, not
+# data — keep them fixed literals here and never let a caller reach this map.
+#
+# This is deliberately NOT the same set as what a user or the assistant may write: it
+# covers internal-only columns too (`lost_reason`, whose sole writer is `mark_deal_lost`),
+# and it grows whenever a new internal write path routes through the chokepoint. The
+# user-facing allowlist is `_DEAL_USER_WRITABLE`, hand-maintained and default-closed;
+# deriving one from the other would mean declaring a type for an internal column silently
+# made it writable by `crm_update_deal` and `PUT /api/crm/deals/{id}` in the same commit.
+# A hermetic test asserts `_DEAL_USER_WRITABLE <= _DEAL_COLUMN_TYPES.keys()`, which keeps
+# "no writable column without a declared type" without inverting the safe direction.
+#
+# The cast is not optional, because assignment context and comparison context do NOT agree
+# and they disagree in opposite directions:
+#   * INTEGER promotes on comparison. `probability = 40.1` STORES 40 (unchanged), but a
+#     bare `probability IS DISTINCT FROM 40.1` promotes the stored 40 to float, calls it
+#     distinct and fires the UPDATE — bumping `updated_at` for a write that changed
+#     nothing, the exact harm #96 exists to stop.
+#   * TEXT accepts an I/O conversion on assignment and has NO operator for comparison.
+#     `title = 12345` stores '12345' and always has, but a bare
+#     `title IS DISTINCT FROM 12345` raises `operator does not exist: text = integer`.
+#     That path is live: `crm_update_deal` forwards raw, unvalidated LLM arguments, and a
+#     psycopg2 error there escapes as the registry's generic "please try again", looping
+#     the model on a permanent condition.
+# Casting ONLY the comparison operand leaves assignment behavior — including its type
+# errors, e.g. a boolean into an INTEGER column — as it was. (One SQLSTATE moves: a boolean
+# into `value` now raises CannotCoerce 42846 from the cast rather than DatatypeMismatch
+# 42804 from the SET. Both still raise, and nothing anywhere catches either code — they
+# land in the same generic handler — so there is no behavioral difference.)
+_DEAL_COLUMN_TYPES = {
+    "title": "text", "stage": "text", "notes": "text", "currency": "text",
+    "expected_close_date": "text", "lost_reason": "text",
+    "value": "float8",
+    "probability": "int", "contact_id": "int", "company_id": "int", "owner_id": "int",
+}
+
+# The security boundary: what unvalidated input — `crm_update_deal` forwards the model's
+# raw kwargs, and `PUT /api/crm/deals/{id}` its body — may write through `update_deal`.
+# Hand-maintained and default-CLOSED on purpose: a column becomes writable here only by
+# being typed out, never as a side effect of some other list growing. `lead_score` (never
+# user/tool/assistant-writable) and `archived_at` (owned by `archive_deal`) are absent and
+# must stay absent.
+_DEAL_USER_WRITABLE = frozenset({
+    "title", "stage", "value", "notes", "expected_close_date", "probability", "currency",
+    "contact_id", "company_id", "owner_id",
+})
+
+
 def _classify_deal_update(
     deal_id: int, old_stage: str, archived_at, filtered: dict,
 ) -> tuple[dict, tuple[str, str] | None]:
@@ -916,16 +967,32 @@ def _write_deal_update(deal_id: int, filtered: dict) -> bool:
        originally put it) so every funneled write rescores — including the #22
        lifecycle verbs (mark won/lost) #18 never knew about. On a re-link both the
        old and the new contact changed inputs. score_on_event never raises.
+    5. **No-op writes touch nothing** (#96) — the UPDATE carries an
+       ``IS DISTINCT FROM`` test over exactly the columns it is about to set, so a
+       call that would write every column the value it already holds matches no row
+       and ``updated_at`` does not move. ``LAST_TOUCH_SQL`` reads ``updated_at`` as a
+       touch, so without this a redundant call — the assistant re-asserting a deal's
+       current stage via ``crm_update_deal_stage``, or ``PUT /api/crm/deals/{id}``
+       resaving an unchanged form — reset the deal's staleness clock and silently
+       dropped it out of ``get_stale_deals`` and the heartbeat's nudges for a whole
+       window with nothing changed. ``bulk_move_deals`` and ``archive_deal`` already
+       guarded against exactly this; this path was the outlier.
 
     Rules 1 and 2 — and the archived-deal refusal and probability settling — are
     resolved by ``_classify_deal_update``, shared with ``bulk_move_deals`` (#55) so the
     single-deal and set-based paths cannot drift. This function owns the I/O: the lock,
     the write, the audit row, and the post-commit rescore.
 
-    Returns False when the deal does not exist. ``filtered`` must already be
-    validated/clamped by the caller — this function writes what it is given, and must
-    be non-empty (an empty map would build ``SET , updated_at = …``). No caller can
-    reach that today; the guard is here so a future one can't either.
+    Returns False when the deal does not exist — and True for a no-op, which is why
+    rule 5 needs no caller changes: False means "no such deal" and all four callers
+    turn it into None (a 404 / a tool error), where a deal that already holds the
+    requested state must still be returned.
+
+    ``filtered`` must already be validated/clamped by the caller — this function writes
+    what it is given, and must be non-empty (an empty map would build
+    ``SET , updated_at = …``, and would also make the distinctness test below vacuously
+    false). No caller can reach that today; the guard is here so a future one can't
+    either.
     """
     if not filtered:
         raise ValueError("_write_deal_update requires at least one column to set")
@@ -942,12 +1009,43 @@ def _write_deal_update(deal_id: int, filtered: dict) -> bool:
         filtered, stage_event = _classify_deal_update(
             deal_id, old_stage, archived_at, filtered
         )
+        # Rule 5. Postgres decides whether anything would actually change, not Python:
+        # the row is already locked, so `IS DISTINCT FROM` over the very columns being SET
+        # is an exact statement of "this write is a no-op", evaluated with each column's
+        # own type semantics (see _DEAL_COLUMN_TYPES for why the cast is mandatory) and
+        # handling NULL — an unlinked contact_id — the way `=` would not. Comparing a
+        # pre-image in Python instead would be subtly wrong on types the tool layer can
+        # reach: the assistant's arguments are not runtime schema-validated, and
+        # `1.0 == True` is True in Python where Postgres REFUSES to assign a boolean to a
+        # DOUBLE PRECISION column, which would turn an invalid write into a silent no-op.
+        # `updated_at` is set but deliberately NOT part of the test: the question is
+        # whether anything ELSE changed. Values bind twice — once to SET, once to compare.
+        #
+        # Checked HERE, not on the way in: _classify_deal_update can ADD columns
+        # (lost_reason, probability), so this is the first point the final written map
+        # exists. Named explicitly rather than left to a bare KeyError on the cast lookup.
+        undeclared = set(filtered) - _DEAL_COLUMN_TYPES.keys()
+        if undeclared:
+            raise ValueError(
+                f"_write_deal_update: no declared type for {sorted(undeclared)} — "
+                "add it to _DEAL_COLUMN_TYPES"
+            )
         set_clause = ", ".join(f"{k} = %s" for k in filtered)
-        cur.execute(
-            f"UPDATE deals SET {set_clause}, updated_at = %s WHERE id = %s",
-            list(filtered.values()) + [_now(), deal_id],
+        distinct_clause = " OR ".join(
+            f"{k} IS DISTINCT FROM %s::{_DEAL_COLUMN_TYPES[k]}" for k in filtered
         )
-        if stage_event:
+        values = list(filtered.values())
+        cur.execute(
+            f"UPDATE deals SET {set_clause}, updated_at = %s "
+            f"WHERE id = %s AND ({distinct_clause})",
+            values + [_now(), deal_id] + values,
+        )
+        # 0 means "the row exists (we hold its lock) and no column would change".
+        changed = cur.rowcount > 0
+        # A stage event exists only when _classify_deal_update saw new_stage != old_stage,
+        # so `stage` differs, so the row IS distinct and the UPDATE fired — gating on
+        # `changed` too makes "no write, no history" structural instead of inferred.
+        if stage_event and changed:
             cur.execute(
                 "INSERT INTO deal_stage_events (deal_id, old_stage, new_stage) "
                 "VALUES (%s, %s, %s)",
@@ -955,6 +1053,14 @@ def _write_deal_update(deal_id: int, filtered: dict) -> bool:
             )
     # After commit, on purpose: a scoring read inside the transaction would see (and
     # lengthen) the FOR UPDATE window. Dedup/None-filtering is score_on_event's job.
+    # Deliberately NOT gated on `changed`, unlike the stage event above — that is the one
+    # place this path does not mirror bulk's skip, and it is the correct asymmetry.
+    # score_on_event is swallowed on failure, and the daily refresh EXCLUDES terminal
+    # deals that already carry a score (scoring_service: `AND NOT (stage IN ('won','lost')
+    # AND lead_score IS NOT NULL)`), so a mark_deal_won whose rescore failed would keep a
+    # stale score forever — re-calling mark_deal_won is its only repair route, and gating
+    # would close it. It cannot reintroduce #96: recompute_deal writes lead_score /
+    # lead_score_at and never updated_at.
     scoring_service.score_on_event(
         deal_ids=(deal_id,),
         contact_ids=(filtered.get("contact_id"), old_contact_id),
@@ -1065,11 +1171,10 @@ def search_deals(
 
 
 def update_deal(deal_id: int, **fields) -> dict | None:
-    # lost_reason is deliberately NOT in `allowed`: mark_deal_lost is its single
-    # writer, so a reason always arrives with the close (and its timeline note) and
+    # lost_reason is deliberately absent from _DEAL_USER_WRITABLE: mark_deal_lost is its
+    # single writer, so a reason always arrives with the close (and its timeline note) and
     # can never be set on a deal that isn't lost.
-    allowed = {"title", "stage", "value", "notes", "expected_close_date", "probability", "currency",
-               "contact_id", "company_id", "owner_id"}
+    allowed = _DEAL_USER_WRITABLE
     filtered = {k: v for k, v in fields.items() if k in allowed}
     if "stage" in filtered and filtered["stage"] not in DEAL_STAGES:
         return None
@@ -1108,9 +1213,9 @@ def bulk_move_deals(deal_ids: list[int], stage: str) -> dict:
     Returns ``{ok, updated, updated_ids, errors}``. Whole-request problems (bad stage,
     empty list, over the cap) come back as ``ok: False`` having touched no connection;
     per-deal problems ride ``errors`` while everything else still commits. That
-    per-deal isolation is the one deliberate contract difference from
-    ``_write_deal_update``, which raises: one archived deal in a 50-deal selection
-    must not sink the batch.
+    per-deal isolation is a deliberate contract difference from ``_write_deal_update``,
+    which raises: one archived deal in a 50-deal selection must not sink the batch. (It is
+    not the only difference — the closing paragraph covers the others.)
 
     Correctness comes from calling the SAME ``_classify_deal_update`` the single-deal
     path calls, once per locked row — pure in-memory work, no I/O — so the archived
@@ -1128,21 +1233,28 @@ def bulk_move_deals(deal_ids: list[int], stage: str) -> dict:
     A deal already in the target stage is skipped ENTIRELY — no write, so no
     ``updated_at`` bump. That is deliberate: ``LAST_TOUCH_SQL`` reads ``updated_at`` as
     a touch, so bumping it would reset the staleness clock on deals this call did not
-    actually change. Note this IS a difference from ``update_deal_stage``, which writes
-    (and bumps ``updated_at``) even when the stage is unchanged. The shared classifier
-    guarantees the two paths agree on WHAT to write; it does not decide WHETHER to write,
-    and only bulk skips the no-op. Aligning the single-deal path would change behavior
-    predating this issue, so it is deliberately left alone.
+    actually change. Since #96 the single-deal path holds the same invariant, reached a
+    different way: ``_write_deal_update``'s UPDATE carries an ``IS DISTINCT FROM`` test,
+    so a same-stage move there matches no row. The shared classifier guarantees the two
+    paths agree on WHAT to write; each decides WHETHER to write for itself, and they now
+    agree there too — an integration test pins a same-stage move through both paths to
+    an unmoved ``updated_at`` and no stage event.
 
-    Don't read that as "unreachable" — it isn't. The *UI* never sends a same-stage move
-    (``handleKanbanMove`` returns early on a same-column drop and the detail sheet checks
-    ``deal.stage !== stage``), but two non-UI callers do reach it: ``crm_update_deal_stage``
+    The skip is load-bearing rather than theoretical. The *UI* never sends a same-stage
+    move (``handleKanbanMove`` returns early on a same-column drop and the detail sheet
+    checks ``deal.stage !== stage``), but two non-UI callers do: ``crm_update_deal_stage``
     re-asserting a deal's current stage (an easy assistant redundancy) and
-    ``PUT /api/crm/deals/{id}`` with an unchanged stage. Both bump ``updated_at`` and so
-    reset that deal's staleness clock for the whole window, dropping it out of
-    ``get_stale_deals`` and the heartbeat nudges with nothing actually changed. Fixing it
-    belongs with the single-deal path; note the parity integration test has no same-stage
-    case, so nothing currently catches it.
+    ``PUT /api/crm/deals/{id}`` with an unchanged form.
+
+    Differences from the single-deal path that survive on purpose: this one raises vs
+    collects ``errors`` (above); it rescores only ``updated_ids`` where the single-deal
+    path rescores unconditionally (see ``_write_deal_update``'s note on why); and its
+    no-op skip is decided in Python on the locked pre-image (``old_stage == stage``)
+    rather than in SQL. That last one is sound HERE and only here: bulk writes exactly one
+    caller-controlled column, ``stage``, always a ``DEAL_STAGES`` string validated before
+    the connection opens, so there is no cross-type comparison to get wrong. The
+    single-deal path writes an arbitrary column map from unvalidated tool arguments and
+    must let Postgres judge.
     """
     if stage not in DEAL_STAGES:
         return {"ok": False, "updated": 0, "updated_ids": [], "errors": [f"Invalid stage: {stage}"]}
