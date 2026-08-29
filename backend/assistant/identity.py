@@ -338,12 +338,16 @@ def update_identity(personality: str | None = None) -> dict:
 
 def _task_mode() -> str:
     """The current task mode, imported lazily so identity stays importable without a
-    database (the hermetic suite builds prompts with no pool)."""
+    database (the hermetic suite builds prompts with no pool).
+
+    Fail-safe 'gtd' since #102 — the same product default `crm.service.get_task_mode`
+    degrades to, stated identically in all four readers so there is one default.
+    """
     try:
         from crm.service import get_task_mode
         return get_task_mode()
     except Exception:
-        return "normal"
+        return "gtd"
 
 
 def build_system_prompt(
@@ -389,7 +393,9 @@ def build_system_prompt(
     blocks = [personality, soul, NAME_NOTE, SALES_GUIDE]
     # GTD mode swaps the task tool surface, so the working practices have to swap with
     # it — coaching the model to use crm_create_task while only todo_* is advertised
-    # is how a turn stalls. Read fail-safe: an unreadable mode is 'normal'.
+    # is how a turn stalls. Read fail-safe: an unreadable mode is 'gtd' (#102).
+    # Appending GTD_GUIDE invalidates the cached static prefix, but since #102 made GTD
+    # the default this is the steady state for almost every install, not a flip-flop.
     if _task_mode() == "gtd":
         blocks.append(GTD_GUIDE)
     static = "\n\n".join([

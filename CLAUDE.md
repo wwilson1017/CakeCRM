@@ -292,16 +292,24 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   sync `def`s for the same reason `get_current_user` is — they do blocking psycopg2
   and bcrypt work and would otherwise run it on the event loop.
   In the UI, `SettingsPage` hides the install-configuration cards (branding,
-  Telegram, custom fields, Gmail) from members, the way the Team card hides itself;
-  Notifications and Change password stay, because they configure the person, not the
-  install. The **assistant drawer's identity panel** obeys the same rule (#106,
-  `frontend/src/assistant/IdentitySettings.tsx`): `PUT /api/assistant/identity` is
-  `require_admin` while the GET is member-legal, so members see the personality
-  **read-only** with no Save rather than a control that can only 403 — "don't offer what
-  can only 403" is about controls, not cards, and hiding the panel outright would deny a
-  member the text governing an assistant every seat gets. That file is the whole exposure:
-  the rest of `frontend/src/assistant/` calls only `/chat`, `/confirm` and
-  `/conversations*`, none of which appear in `test_route_authz.ADMIN_ONLY`.
+  Telegram, custom fields, Gmail, and since #102 the Tasks card) from members, the way
+  the Team card hides itself; Notifications and Change password stay, because they
+  configure the person, not the install. The Tasks card joined that list when #102 made
+  GTD the default: `task_mode` is a `crm_meta` singleton, so one member flipping it
+  changes everyone's task surface, and the card's no-login section can mint an
+  unauthenticated read+write link to the whole todo store whose lifetime is **not** tied
+  to the account that created it (deactivating that user revokes their JWT via
+  `token_epoch`/`is_active`, not the URL). `/api/crm/task-mode` and both
+  `/api/crm/todo-surfaces` methods are `require_admin` and pinned in
+  `test_route_authz.ADMIN_ONLY`. The **assistant drawer's identity panel** obeys the
+  same rule (#106, `frontend/src/assistant/IdentitySettings.tsx`): `PUT
+  /api/assistant/identity` is `require_admin` while the GET is member-legal, so members
+  see the personality **read-only** with no Save rather than a control that can only
+  403 — "don't offer what can only 403" is about controls, not cards, and hiding the
+  panel outright would deny a member the text governing an assistant every seat gets.
+  That file is the whole exposure: the rest of `frontend/src/assistant/` calls only
+  `/chat`, `/confirm` and `/conversations*`, none of which appear in
+  `test_route_authz.ADMIN_ONLY`.
   **Still install-wide, deliberately (Phase B):** assistant chat history and memory,
   the Gmail connection, the Telegram binding, reminders, notifications and alerts.
   Every active seat gets the assistant (Will's §15 ruling — no temporary admin gate
@@ -571,8 +579,8 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   (a live user/assistant-editable, provenance-tracked field) — and `lead_score` is never
   user/tool/assistant-writable. Deals sort by score client-side (within kanban column);
   contacts have a server-sorted `lead_score` column (`DESC NULLS LAST`).
-- **Tasks have two modes over ONE store** (#70). `crm_meta.task_mode` is `normal` or
-  `gtd`; GTD is a presentation + tool surface over the *same* `tasks` rows, never a
+- **Tasks have two modes over ONE store** (#70), and **GTD is the default** (#102).
+  `crm_meta.task_mode` is `normal` or `gtd`; GTD is a presentation + tool surface over the *same* `tasks` rows, never a
   second table — which is what keeps the dashboard counts, contact/deal rollups,
   `crm_get_stale_deals`' open-follow-up check, the heartbeat nudge and the CRM reset
   aware of GTD todos, and makes switching modes a **no-op** (nothing migrates,
@@ -600,12 +608,40 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   executors stay reachable in both so a call proposed just before a flip still
   resolves. `crm_update_task`/`crm_delete_task` close the long-standing parity gap in
   BOTH modes. `identity.GTD_GUIDE` appends to the static prompt only in GTD mode (a
-  rare, deliberate cache invalidation, same class as editing the personality), and the
+  rare, deliberate cache invalidation, same class as editing the personality — and since
+  #102 that is the steady state for nearly every install rather than a flip-flop), and the
   heartbeat prompt names `todo_list` instead of `crm_list_tasks`. Telegram gains a
   deterministic `capture …` intercept that runs BEFORE the model — zero AI cost, works
   with no provider configured.
-- **The two no-login todo surfaces are opt-in and asymmetric** (#70, ported from
-  chatty). `/capture[/{token}]` is **write-only** (creates one inbox row, returns only
+  **#102 made GTD the default and the fail-safe.** Four readers resolve the mode —
+  `service.get_task_mode()` plus thin `_task_mode()` wrappers in `assistant.identity`,
+  `heartbeat.service` and `telegram.service` — and all four degrade to `gtd`, because a
+  row we cannot read says nothing about what the user chose, so the honest guess is the
+  experience a new install gets. A test asserts the four agree, so they cannot drift.
+  **The migration's UPDATE is the whole mechanism, not a policy add-on layered on a
+  default change — do not "simplify" it away.** `crm_meta`'s singleton row is inserted by
+  the `crm_core` migration long before `task_mode` exists, so `ADD COLUMN … DEFAULT` was
+  consumed once at ADD COLUMN time and nothing ever inserts `crm_meta` again (every writer
+  UPDATEs it; both TRUNCATE sweeps exclude it). Flipping only the column default would
+  therefore change nothing on any install, fresh ones included — which is also why the
+  issue's "fresh-installs-only, no backfill" option was unreachable without mutating an
+  already-applied migration. `SET DEFAULT 'gtd'` is kept anyway so the schema does not
+  contradict the product default for whoever next adds an inserter, and the integration
+  test pins BOTH halves separately. Rows already at `gtd` are untouched; a user who
+  deliberately chose `normal` in the four days since #70 is flipped once and re-toggles
+  (Will's accepted trade on #102) — one click, since switching migrates nothing.
+  The mode now has ONE owner in the UI: `CrmLayout` holds it and publishes both
+  `TaskModeContext` and `TaskModeSetterContext`, so `TaskModeCard` writes through the
+  setter instead of keeping a second copy. Before #102 the card's local state left the
+  layout's context stale, so switching mode in Settings did not take effect on
+  `/crm/tasks` until a full page reload — which would have broken the very opt-out that
+  makes flipping every existing install acceptable.
+  Neither no-login surface consults `task_mode` (they gate on `todo_capture_token` /
+  `todo_web_enabled`), so this flip does not widen them.
+- **The two no-login todo surfaces are asymmetric, and only ONE of them is opt-in** (#70,
+  ported from chatty — the heading used to say both were, which the body below has always
+  contradicted). Neither consults `task_mode`, so #102's default flip leaves both exactly
+  as they were. `/capture[/{token}]` is **write-only** (creates one inbox row, returns only
   its id — no read endpoint exists on it) and is reachable while no token is set;
   `/todo[/{token}]` serves the **whole todo app read+write** and is **off** until
   `todo_web_enabled`, which mints a token in the same action rather than publishing

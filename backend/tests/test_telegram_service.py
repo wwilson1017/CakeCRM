@@ -397,3 +397,55 @@ def test_parse_sse():
     assert service._parse_sse('data: {"type": "done"}\n\n') == {"type": "done"}
     assert service._parse_sse("data: not json\n\n") is None
     assert service._parse_sse("event: ping\n\n") is None
+
+
+# ── The `capture …` intercept and the task mode that gates it (#70, #102) ─────
+
+async def test_capture_intercept_files_a_todo_and_never_reaches_the_model(monkeypatch):
+    """GTD mode's deterministic intercept runs BEFORE the model — zero AI cost, and it
+    works with no provider configured at all."""
+    h = Harness()
+    _install(monkeypatch, h)
+    monkeypatch.setattr(service, "_task_mode", lambda: "gtd")
+    monkeypatch.setattr(service.gtd_service, "capture",
+                        lambda text, source: {"id": 7, "title": text})
+
+    await service.handle_update(_msg("capture buy more candles"))
+
+    assert h.chat_calls == [], "the intercept must short-circuit before engine.chat"
+    assert any("Captured: buy more candles" in t for t in _texts(h))
+
+
+async def test_capture_is_ordinary_conversation_in_normal_task_mode(monkeypatch):
+    """In normal mode `capture …` is just words — it has to reach the assistant."""
+    h = Harness()
+    _install(monkeypatch, h, chat_scripts=[[{"type": "text", "text": "sure"}]])
+    monkeypatch.setattr(service, "_task_mode", lambda: "normal")
+
+    def _never(*a, **k):
+        raise AssertionError("capture must not run in normal mode")
+
+    monkeypatch.setattr(service.gtd_service, "capture", _never)
+
+    await service.handle_update(_msg("capture buy more candles"))
+
+    assert len(h.chat_calls) == 1
+
+
+async def test_capture_failure_answers_the_user_instead_of_crashing(monkeypatch):
+    """#102 flipped the mode fail-safe to 'gtd', so an install whose database is
+    unreadable now reaches this path where it previously fell through to the model.
+    An honest error beats a silently swallowed message — and beats a traceback."""
+    h = Harness()
+    _install(monkeypatch, h)
+    monkeypatch.setattr(service, "_task_mode", lambda: "gtd")
+
+    def _boom(text, source):
+        raise RuntimeError("Postgres pool not initialized")
+
+    monkeypatch.setattr(service.gtd_service, "capture", _boom)
+
+    await service.handle_update(_msg("capture buy more candles"))
+
+    assert h.chat_calls == []
+    assert any("Couldn't capture that" in t for t in _texts(h))
