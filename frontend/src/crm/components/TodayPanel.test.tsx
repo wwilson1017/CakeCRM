@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CrmToday, CrmTodayItem } from '../../core/types';
+import { TODAY_MAX_RETRIES } from '../todayPanel';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -216,22 +217,79 @@ describe('TodayPanel', () => {
     expect(container.querySelector('[aria-busy="true"]')).toBeNull();
   });
 
-  it('reloads at the SERVER boundary, not at the browser midnight before it', async () => {
+  it('reloads at the SERVER boundary, which is NOT the browser midnight', async () => {
     vi.useFakeTimers();
     try {
-      // Browser is America/Chicago (pinned by vitest.config), so browser midnight falls
-      // at 05:00Z — but next_refresh_at is 2026-06-06T05:00:00Z, 11h from now. A panel
-      // keyed on the browser's day would fire early; this one must wait for the server.
+      // The two boundaries must be genuinely different or this test proves nothing.
+      // The browser is America/Chicago (pinned by vitest.config); the server is on UTC,
+      // the DEFAULT install (TIMEZONE unset). From 18:00Z on 06-05:
+      //   server boundary  2026-06-06T00:00:00Z  =  6h away
+      //   browser midnight 2026-06-06T05:00:00Z  = 11h away
+      // A panel keyed on the browser's day fires at 11h and so fails the 7h assertion.
+      const utcServer = { ...PAYLOAD, next_refresh_at: '2026-06-06T00:00:00Z' };
+      api.mockResolvedValue(utcServer);
       vi.setSystemTime(Date.parse('2026-06-05T18:00:00Z'));
       await render(<TodayPanel />);
       api.mockClear();
-      api.mockResolvedValue(PAYLOAD);
+      api.mockResolvedValue(utcServer);
 
-      await act(async () => { await vi.advanceTimersByTimeAsync(10 * 60 * 60 * 1000); });
-      expect(api).not.toHaveBeenCalled();
+      await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60 * 60 * 1000); });
+      expect(api).not.toHaveBeenCalled();   // still before the server boundary
 
-      await act(async () => { await vi.advanceTimersByTimeAsync(90 * 60 * 1000); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000); });
       expect(api).toHaveBeenCalledWith('/api/crm/dashboard/today?owner_id=3');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not storm the server when the refetch at the boundary is slow', async () => {
+    vi.useFakeTimers();
+    try {
+      const utcServer = { ...PAYLOAD, next_refresh_at: '2026-06-06T00:00:00Z' };
+      api.mockResolvedValue(utcServer);
+      vi.setSystemTime(Date.parse('2026-06-05T18:00:00Z'));
+      await render(<TodayPanel />);
+
+      // The boundary refetch never settles. Re-arming off the (still stale) payload
+      // would clamp to the 30s floor and fire repeatedly, each tick invalidating the
+      // in-flight response — a request storm that never updates the panel.
+      api.mockClear();
+      api.mockReturnValue(new Promise(() => {}));
+      await act(async () => { await vi.advanceTimersByTimeAsync(6 * 60 * 60 * 1000); });
+      expect(api).toHaveBeenCalledTimes(1);
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(10 * 60 * 1000); });
+      expect(api).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retries a failed first load instead of staying hidden forever', async () => {
+    vi.useFakeTimers();
+    try {
+      api.mockRejectedValue(new Error('blip'));
+      await render(<TodayPanel />);
+      expect(container.textContent).toBe('');
+
+      api.mockResolvedValue(PAYLOAD);
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      expect(container.textContent).toContain('Starred one');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('gives up after a bounded number of retries rather than polling forever', async () => {
+    vi.useFakeTimers();
+    try {
+      api.mockRejectedValue(new Error('down'));
+      await render(<TodayPanel />);
+      api.mockClear();
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000); });
+      expect(api.mock.calls.length).toBeLessThanOrEqual(TODAY_MAX_RETRIES);
     } finally {
       vi.useRealTimers();
     }

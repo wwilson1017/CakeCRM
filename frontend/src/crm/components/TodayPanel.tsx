@@ -22,8 +22,8 @@ import { toast } from '../../shared/toast';
 import { dueLabel, parseUTC } from '../gtd/util';
 import { cardStyle, sectionHeading } from '../styles';
 import {
-  TODAY_SCOPE_KEY, coerceTodayScope, collapseToday, msUntilRefresh, whyBadge,
-  type TodayScope,
+  TODAY_MAX_RETRIES, TODAY_SCOPE_KEY, coerceTodayScope, collapseToday, msUntilRefresh,
+  retryDelayMs, whyBadge, type TodayScope,
 } from '../todayPanel';
 import { UNASSIGNED_LABEL, useUsers } from '../useUsers';
 
@@ -53,8 +53,9 @@ export function TodayPanel({ wrapperStyle, refreshKey, onMutated }: Props) {
     () => loadPersistedState(TODAY_SCOPE_KEY, coerceTodayScope),
   );
   // Bumped to force a refetch that no input change would otherwise express: the
-  // midnight rollover, where the deps are all identical to the previous run.
+  // midnight rollover and the retry, where the deps are all identical to the previous run.
   const [reloadTick, setReloadTick] = useState(0);
+  const [failures, setFailures] = useState(0);
   const reqId = useRef(0);
   // The scope the rows on screen actually describe. A failed scope switch reverts to it,
   // so the control and the rows can never end up permanently disagreeing.
@@ -75,6 +76,7 @@ export function TodayPanel({ wrapperStyle, refreshKey, onMutated }: Props) {
         if (id !== reqId.current) return;
         appliedScope.current = scope;
         setData(res);
+        setFailures(0);
         setLoading(false);
       })
       .catch((err: unknown) => {
@@ -86,6 +88,7 @@ export function TodayPanel({ wrapperStyle, refreshKey, onMutated }: Props) {
         // debugging "my dashboard has no Today panel" with nothing to go on.
         console.error('Failed to load the Today panel:', err);
         setLoading(false);
+        setFailures(f => f + 1);
         if (scope !== appliedScope.current) {
           // A failed SCOPE SWITCH is the one failure that would otherwise strand the UI
           // in a lie — the control says one scope while the rows describe another, with
@@ -110,11 +113,25 @@ export function TodayPanel({ wrapperStyle, refreshKey, onMutated }: Props) {
       msUntilRefresh(data.next_refresh_at, Date.now()),
     );
     return () => clearTimeout(timer);
-    // `reloadTick` re-arms the timer even when the new payload is byte-identical to the
-    // old one: `setState` with an equal value is a React bail-out, so keying only on
-    // `data` would strand the panel permanently if a fire ever landed before the server
-    // rolled over (clock skew, an early wake).
-  }, [data, reloadTick]);
+    // Keyed on `data` ALONE, deliberately. Adding `reloadTick` here would re-arm off the
+    // still-stale payload the instant the timer fired: past the boundary the delay
+    // clamps to its floor, so a slow or failing refetch would re-arm every 30s and each
+    // new tick would invalidate the in-flight response — a request storm that never
+    // updates. `useLocalDay` needs its monotonic tick because `setState` with an EQUAL
+    // value is a React bail-out; that cannot happen here, since every successful fetch
+    // hands `setData` a freshly parsed object with a new identity. A FAILED fetch leaves
+    // `data` untouched and so does not re-arm — which is what the retry below is for.
+  }, [data]);
+
+  // Bounded retry, because every other path out of a failed load is incidental: a first
+  // load that fails leaves `data` null, which hides the panel AND blocks the timer above,
+  // so without this the dashboard's headline feature stays silently absent for the life
+  // of the mount. Capped rather than indefinite — this is a dashboard card, not a poller.
+  useEffect(() => {
+    if (failures === 0 || failures > TODAY_MAX_RETRIES) return;
+    const timer = setTimeout(() => setReloadTick(t => t + 1), retryDelayMs(failures));
+    return () => clearTimeout(timer);
+  }, [failures]);
 
   const chooseScope = useCallback((next: TodayScope) => {
     setScope(next);
@@ -165,16 +182,19 @@ export function TodayPanel({ wrapperStyle, refreshKey, onMutated }: Props) {
           )}
         </div>
 
-        {data.items.length === 0 ? (
-          <p style={{ margin: 0, fontSize: 13, color: INK_DIM }}>Nothing needs you today.</p>
-        ) : (
-          <div aria-busy={settling || undefined} style={{ opacity: settling ? 0.55 : 1 }}>
-            {visible.map(item => (
+        {/* The settling wrapper covers the EMPTY state too: switching from a scope with
+            no rows would otherwise keep asserting "Nothing needs you today" — a claim
+            about the scope you just left — with no sign a request was in flight. */}
+        <div aria-busy={settling || undefined} style={{ opacity: settling ? 0.55 : 1 }}>
+          {data.items.length === 0 ? (
+            <p style={{ margin: 0, fontSize: 13, color: INK_DIM }}>Nothing needs you today.</p>
+          ) : (
+            visible.map(item => (
               <TodayRow key={`${item.kind}-${item.id}`} item={item} today={data.date}
                         showUnassigned={multiSeat} onOpen={open} onComplete={complete} />
-            ))}
-          </div>
-        )}
+            ))
+          )}
+        </div>
 
         {hiddenCount > 0 && (
           <button type="button" onClick={() => setExpanded(true)}
@@ -239,9 +259,20 @@ function TodayRow({ item, today, showUnassigned, onOpen, onComplete }: RowProps)
   );
 }
 
-/** An instant renders correctly in any browser timezone. Parsed via `gtd/util.parseUTC`
- *  rather than `new Date()`: Postgres emits six fractional digits and Safari need not
- *  parse that form, which would render "Invalid Date". */
+/**
+ * A reminder's time, rendered in the VIEWER's timezone.
+ *
+ * Deliberately the browser's zone even though membership was decided in the server's:
+ * `due_at` is an instant, and the useful answer to "when is this?" is the wall clock the
+ * reader is looking at. The residual, stated rather than hidden: when the browser and
+ * `TIMEZONE` differ — the default install, where the server is on UTC — a reminder near
+ * the server's midnight can show a time that reads as another calendar day while sitting
+ * under a heading that says "Today". Showing it in the server's zone instead would put a
+ * time in front of the user that is not their own, which is worse for the common case.
+ *
+ * Parsed via `gtd/util.parseUTC` rather than `new Date()`: Postgres emits six fractional
+ * digits and Safari need not parse that form, which would render "Invalid Date".
+ */
 function reminderTime(dueAt: string): string {
   const parsed = parseUTC(dueAt);
   return Number.isNaN(parsed.getTime())

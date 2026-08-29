@@ -31,13 +31,17 @@ rule that unowned work shows up in "my" view — someone has to catch it, and hi
 from the one person looking is how it gets missed. They carry no "Unassigned" badge: that
 label invites an action ("assign it") which cannot exist for a reminder.
 
-**Uncapped, deliberately.** The endpoint returns the full ranked list and the client
-shows five with a "+N more" expander, on ``today_view()``'s precedent — one local day of
-open work is already a bounded set. It also makes the count honest by construction: the
-visible rows and the "+N" number are two views of ONE array, so they cannot disagree the
-way a rows-query and a separate COUNT can. An install with thousands of tasks due today
-pays for them here exactly as the GTD Today page already does; the upgrade path is a
-probe-row ``truncated`` flag (#56's idiom), not pagination.
+**Uncapped, deliberately — and the honest bound is NOT "one day".** The endpoint returns
+the full ranked list and the client shows five behind a "+N more" expander, because the
+issue specifies that expander over the full list and because ``today_view()`` already
+serves exactly these rows uncapped to the GTD home screen. Reminders really are bounded
+by one local day, but starred and overdue tasks are a BACKLOG: they accumulate without
+limit, so a CRM with a thousand neglected overdue tasks sends all thousand on every
+dashboard load. That is parity with the GTD Today page rather than a new exposure, and it
+buys a count that is honest by construction — the visible rows and the "+N" are two views
+of ONE array, so they cannot disagree the way a rows-query and a separate COUNT can. The
+upgrade path, when that stops paying, is a probe-row ``truncated`` flag (#56's idiom)
+rather than pagination: the panel's whole job is to be the short list.
 """
 
 from datetime import date, datetime, timezone

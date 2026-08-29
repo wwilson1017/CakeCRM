@@ -71,6 +71,20 @@ export function whyBadge(item: CrmTodayItem): { label: string; color: string } {
  * arming a negative timer that fires immediately and spins, and an absurd one must not
  * overflow `setTimeout`'s 32-bit delay — which silently fires it at once, forever.
  */
+/** How many times a failed load is retried before the panel gives up and stays hidden. */
+export const TODAY_MAX_RETRIES = 3;
+
+/**
+ * Backoff for retry number `n` (1-based): 2s, 8s, 32s.
+ *
+ * Bounded and short — a dashboard card that failed to load should recover from a blip
+ * without the user reloading, but it must not become a poller against a backend that is
+ * genuinely down.
+ */
+export function retryDelayMs(failures: number): number {
+  return 2000 * 4 ** (Math.max(1, failures) - 1);
+}
+
 export function msUntilRefresh(nextRefreshAt: string, now: number): number {
   const target = Date.parse(nextRefreshAt);
   if (!Number.isFinite(target)) return 60 * 60 * 1000;
