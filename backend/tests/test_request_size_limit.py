@@ -15,6 +15,7 @@ import starlette.formparsers as formparsers
 from conftest import fake_admin
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.testclient import TestClient
+from starlette._utils import get_route_path
 
 import main
 from core.auth import get_current_user
@@ -209,6 +210,23 @@ def test_any_id_the_router_accepts_is_bounded(note_id):
     assert limit < main.MAX_REQUEST_BYTES
 
 
+def test_a_root_path_prefix_does_not_lift_the_ceiling():
+    """Behind a path-prefixing proxy the raw ASGI path carries a prefix the compiled
+    patterns don't have, while the ROUTER matches the stripped path — so reading
+    `request.url.path` would reach the endpoint with the ceiling silently back at 64 MB."""
+    scope = {
+        "type": "http",
+        "path": "/cakecrm/api/crm/chatter/note/7/attachments",
+        "root_path": "/cakecrm",
+    }
+    limit = main._request_limit_for(get_route_path(scope))
+    assert limit < main.MAX_REQUEST_BYTES
+
+    # ...and the un-stripped path is exactly what would have gone wrong, which is why the
+    # middleware must not use it.
+    assert main._request_limit_for(scope["path"]) == main.MAX_REQUEST_BYTES
+
+
 def test_a_non_numeric_id_does_not_reach_the_parser(attachment_client, monkeypatch):
     """The same regression, proven end-to-end rather than by pattern inspection."""
     parsed = []
@@ -281,8 +299,12 @@ def test_each_ceiling_is_exactly_its_feature_cap_plus_the_envelope():
         "/api/crm/smart-import/parse": MAX_UPLOAD_BYTES,
         "/api/branding/logo": MAX_LOGO_BYTES,
     }
-    actual = dict(main._ROUTE_REQUEST_LIMIT_SPECS)
+    templates = [template for template, _ in main._ROUTE_REQUEST_LIMIT_SPECS]
+    # Uniqueness first: matching is first-match-wins, so a duplicate row with a WRONG value
+    # placed first would win at runtime while `dict()` below silently kept the correct one.
+    assert len(templates) == len(set(templates)), f"duplicate template rows: {templates}"
 
+    actual = dict(main._ROUTE_REQUEST_LIMIT_SPECS)
     assert actual.keys() == expected.keys(), "a row was added or removed without a value pinned"
     for template, feature_cap in expected.items():
         assert actual[template] == feature_cap + main.MULTIPART_ENVELOPE_BYTES, (

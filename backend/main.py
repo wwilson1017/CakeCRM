@@ -22,6 +22,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette._utils import get_route_path
 from starlette.routing import compile_path
 
 from alerts.router import router as alerts_router
@@ -262,7 +263,15 @@ async def request_size_limit_middleware(request: Request, call_next):
     declared = request.headers.get("content-length")
     if declared:
         try:
-            if int(declared) > _request_limit_for(request.url.path):
+            # `get_route_path`, not `request.url.path`: the router matches on the path with
+            # `root_path` stripped, so behind a path-prefixing proxy (or under an ASGI mount)
+            # the raw path carries a prefix the compiled patterns do not have — the route
+            # would still be reached while its ceiling silently reverted to the 64 MB
+            # backstop. Same principle as compiling the patterns with `compile_path`: match
+            # what the router matches. It is Starlette-private, which is deliberate — if it
+            # moves, the import fails loudly at startup (and in CI's import check) rather
+            # than drifting quietly, which is the failure mode that actually costs us here.
+            if int(declared) > _request_limit_for(get_route_path(request.scope)):
                 return JSONResponse(
                     status_code=413,
                     content={"detail": "Request too large."},
