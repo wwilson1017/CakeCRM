@@ -182,9 +182,10 @@ def test_the_attachment_ceiling_clears_the_feature_limit():
 @pytest.mark.parametrize(
     "path",
     [
-        "/api/crm/chatter/note/abc/attachments",  # non-numeric id: not this route
-        "/api/crm/chatter/note/7/attachments/extra",  # deeper path
+        "/api/crm/chatter/note/7/attachments/extra",  # deeper path: a different route
+        "/api/crm/chatter/note/attachments",  # missing the id segment
         "/api/assistant/chat",  # a route with a legitimately larger body
+        "/api/crm/importer",  # a longer name that must not be swallowed by /import
         "/",
     ],
 )
@@ -194,43 +195,99 @@ def test_other_paths_keep_the_global_ceiling(path):
     assert main._request_limit_for(path) == main.MAX_REQUEST_BYTES
 
 
-def _mounted_post_paths() -> list[str]:
-    """Every mounted POST path, with a concrete value substituted for each `{param}`.
+@pytest.mark.parametrize("note_id", ["abc", "7", "0", "-1", "1e5", "%20"])
+def test_any_id_the_router_accepts_is_bounded(note_id):
+    """The regression Codex caught: a hand-written `\\d+` gate is a bypass.
+
+    `note_id: int` is FastAPI VALIDATION, not routing — Starlette compiles `{note_id}` to
+    `[^/]+`, so `/note/abc/attachments` reaches the multipart parser and only afterwards
+    returns 422. Under a `\\d+` pattern that path drew the 64 MB backstop and spooled an
+    oversized body: the exact hole this table exists to close. Every id the ROUTER accepts
+    must therefore be bounded, not just the ones the handler will go on to accept.
+    """
+    limit = main._request_limit_for(f"/api/crm/chatter/note/{note_id}/attachments")
+    assert limit < main.MAX_REQUEST_BYTES
+
+
+def test_a_non_numeric_id_does_not_reach_the_parser(attachment_client, monkeypatch):
+    """The same regression, proven end-to-end rather than by pattern inspection."""
+    parsed = []
+    real_parse = formparsers.MultiPartParser.parse
+
+    async def counting_parse(self, *a, **k):
+        parsed.append(1)
+        return await real_parse(self, *a, **k)
+
+    monkeypatch.setattr(formparsers.MultiPartParser, "parse", counting_parse)
+
+    oversized = attachment_service.MAX_ATTACHMENT_BYTES + main.MULTIPART_ENVELOPE_BYTES + 1
+    r = attachment_client.post(
+        "/api/crm/chatter/note/abc/attachments", files={"file": ("f.bin", b"x" * oversized)}
+    )
+
+    assert r.status_code == 413
+    assert parsed == []
+
+
+def _concrete(path: str) -> str:
+    """A route template with a real value substituted for each `{param}`.
 
     A `{name:path}` converter matches multiple segments, so it is given a two-segment
-    value — a single-segment substitution would under-represent what that route accepts
-    and could report a genuinely-matching pattern as dead.
+    value — a single-segment substitution would under-represent what that route accepts.
     """
-    paths = [
+    path = re.sub(r"\{[^}:]+:path\}", "a/b", path)
+    return re.sub(r"\{[^}]+\}", "1", path)
+
+
+def test_every_route_limit_names_a_real_mounted_route():
+    """The one failure this table can suffer silently: an entry that matches nothing.
+
+    Every request test here drives a stand-in app at a hand-written path, so renaming or
+    re-prefixing a real route would turn its ceiling off while leaving them all green — a
+    permanent pass that reads as coverage. Because the table is keyed by path TEMPLATE this
+    is an exact string identity against the app's own mounted routes, which is strictly
+    stronger than asking whether some concrete path happens to match.
+
+    The emptiness assertion is not ceremony: a `for` loop over an empty table passes while
+    checking nothing, so without it deleting the table would satisfy this guard.
+    """
+    assert main._ROUTE_REQUEST_LIMIT_SPECS, "the route-limit table is empty — nothing is bounded"
+
+    mounted = {
         getattr(route, "path", "")
         for route in main.app.routes
         if "POST" in getattr(route, "methods", set())
-    ]
-    concrete = []
-    for path in paths:
-        path = re.sub(r"\{[^}:]+:path\}", "a/b", path)
-        concrete.append(re.sub(r"\{[^}]+\}", "1", path))
-    return concrete
+    }
+    for template, _limit in main._ROUTE_REQUEST_LIMIT_SPECS:
+        assert template in mounted, (
+            f"{template!r} is not a mounted POST route — the per-route ceiling it declares "
+            f"is silently inactive. Update it to the route's current path."
+        )
 
 
-def test_every_route_limit_matches_a_real_mounted_route():
-    """The one failure this table can suffer silently: a pattern that matches nothing.
+def test_each_ceiling_is_exactly_its_feature_cap_plus_the_envelope():
+    """A wrong VALUE passes every structural guard above.
 
-    Every other test here drives a stand-in app at a hand-written path, so renaming or
-    re-prefixing a real route would turn its ceiling off while leaving them all green —
-    a permanent pass that reads as coverage. This asserts the patterns against the app's
-    OWN mounted paths, so the table cannot quietly stop applying to anything.
-
-    The emptiness assertion is not ceremony: a `for` loop over an empty table passes
-    while checking nothing, so without it deleting the table would satisfy this guard.
+    A row set to 63 MB still names a real route and still sits under the backstop, while
+    reopening almost all of the admission window; a row set below its feature cap would
+    413 correct uploads. Both are caught only by pinning the arithmetic per row.
     """
-    assert main._ROUTE_REQUEST_LIMITS, "the route-limit table is empty — nothing is bounded"
+    from branding.router import MAX_LOGO_BYTES
+    from crm.router import MAX_UPLOAD_BYTES
 
-    concrete = _mounted_post_paths()
-    for pattern, _limit in main._ROUTE_REQUEST_LIMITS:
-        assert any(pattern.match(path) for path in concrete), (
-            f"{pattern.pattern} matches no mounted POST route — the per-route ceiling it "
-            f"declares is silently inactive. Update it to the route's current path."
+    expected = {
+        "/api/crm/chatter/note/{note_id}/attachments": attachment_service.MAX_ATTACHMENT_BYTES,
+        "/api/crm/import": MAX_UPLOAD_BYTES,
+        "/api/crm/smart-import/parse": MAX_UPLOAD_BYTES,
+        "/api/branding/logo": MAX_LOGO_BYTES,
+    }
+    actual = dict(main._ROUTE_REQUEST_LIMIT_SPECS)
+
+    assert actual.keys() == expected.keys(), "a row was added or removed without a value pinned"
+    for template, feature_cap in expected.items():
+        assert actual[template] == feature_cap + main.MULTIPART_ENVELOPE_BYTES, (
+            f"{template} admits {actual[template]}, expected its feature cap "
+            f"({feature_cap}) plus the envelope"
         )
 
 
@@ -257,8 +314,7 @@ def test_every_upload_route_is_bounded_below_the_backstop():
         )
         if not takes_upload:
             continue
-        concrete = re.sub(r"\{[^}]+\}", "1", path)
-        if main._request_limit_for(concrete) >= main.MAX_REQUEST_BYTES:
+        if main._request_limit_for(_concrete(path)) >= main.MAX_REQUEST_BYTES:
             unbounded.append(path)
 
     assert not unbounded, (

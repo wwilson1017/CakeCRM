@@ -22,6 +22,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.routing import compile_path
 
 from alerts.router import router as alerts_router
 from assistant.router import router as assistant_router
@@ -219,30 +220,32 @@ MULTIPART_ENVELOPE_BYTES = 64 * 1024
 # plus the envelope, rather than leaving each one on a 64 MB disk backstop it can overrun
 # by 32-64x.
 #
+# Keyed by the route's own path TEMPLATE, compiled with Starlette's `compile_path` — the
+# same function the router uses — so an entry matches exactly the set of paths that reach
+# that endpoint. Writing these patterns by hand is what makes them wrong: a hand-written
+# `\d+` for `{note_id}` looks right and is a bypass, because the router compiles that
+# parameter to `[^/]+` (`note_id: int` is FastAPI VALIDATION, applied after the body is
+# already parsed). `/note/abc/attachments` therefore reaches the parser while missing a
+# `\d+` gate, spooling an oversized body under the 64 MB backstop — the exact hole this
+# table exists to close. Deriving the pattern from the template makes that class of drift
+# unrepresentable rather than merely fixed.
+#
 # The assistant upload route is deliberately ABSENT: its legitimate maximum is MAX_FILES x
 # MAX_FILE_SIZE = 50 MB against the same 64 MB backstop, so the global ceiling is already
 # the tight one there and a row would only duplicate it.
-#
-# First match wins, falling back to MAX_REQUEST_BYTES. The note id is matched as `\d+` so
-# only the real route is covered — a near-miss path is left to the global ceiling rather
-# than silently given a limit meant for something else.
-_ROUTE_REQUEST_LIMITS: tuple[tuple[re.Pattern[str], int], ...] = (
+_ROUTE_REQUEST_LIMIT_SPECS: tuple[tuple[str, int], ...] = (
     (
-        re.compile(r"^/api/crm/chatter/note/\d+/attachments/?$"),
+        "/api/crm/chatter/note/{note_id}/attachments",
         attachment_service.MAX_ATTACHMENT_BYTES + MULTIPART_ENVELOPE_BYTES,
     ),
-    (
-        re.compile(r"^/api/crm/import/?$"),
-        crm_upload_max_bytes + MULTIPART_ENVELOPE_BYTES,
-    ),
-    (
-        re.compile(r"^/api/crm/smart-import/parse/?$"),
-        crm_upload_max_bytes + MULTIPART_ENVELOPE_BYTES,
-    ),
-    (
-        re.compile(r"^/api/branding/logo/?$"),
-        MAX_LOGO_BYTES + MULTIPART_ENVELOPE_BYTES,
-    ),
+    ("/api/crm/import", crm_upload_max_bytes + MULTIPART_ENVELOPE_BYTES),
+    ("/api/crm/smart-import/parse", crm_upload_max_bytes + MULTIPART_ENVELOPE_BYTES),
+    ("/api/branding/logo", MAX_LOGO_BYTES + MULTIPART_ENVELOPE_BYTES),
+)
+
+# First match wins, falling back to MAX_REQUEST_BYTES.
+_ROUTE_REQUEST_LIMITS: tuple[tuple[re.Pattern[str], int], ...] = tuple(
+    (compile_path(template)[0], limit) for template, limit in _ROUTE_REQUEST_LIMIT_SPECS
 )
 
 

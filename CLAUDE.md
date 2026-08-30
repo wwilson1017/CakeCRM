@@ -620,8 +620,17 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `MULTIPART_ENVELOPE_BYTES` and leaving every other path on the global ceiling. It lives
   in the existing middleware rather than a `Depends` guard or a second middleware for the
   reason the paragraph above already establishes — middleware is the only layer that runs
-  before the body is consumed — and the note id is matched as `\d+` so a near-miss path
-  falls back to the backstop instead of inheriting a limit meant for something else. The
+  before the body is consumed.
+  **The table is keyed by the route's path TEMPLATE and compiled with Starlette's own
+  `compile_path`, and hand-writing those patterns instead is a bypass, not a style choice.**
+  A hand-written `\d+` for `{note_id}` reads as obviously correct and is wrong: `note_id:
+  int` is FastAPI **validation**, not routing, so the router compiles that parameter to
+  `[^/]+` and `/api/crm/chatter/note/abc/attachments` reaches the multipart parser, spools,
+  and only then returns 422 — under a `\d+` gate it drew the 64 MB backstop the whole table
+  exists to avoid. An admission pattern must cover everything the ROUTER accepts, not
+  everything the handler will go on to accept; deriving it from the template is what makes
+  that unrepresentable rather than merely fixed once. (An earlier revision of this work
+  shipped the `\d+` version and a test that asserted the bypass was correct behavior.) The
   **assistant** upload route is deliberately absent: its legitimate 5 × 10 MB already sits
   close to the 64 MB backstop, so a row would only restate it. #127 also gave
   `branding/router.upload_logo` the repo-wide `read(cap + 1)` idiom — it was the one upload
@@ -636,7 +645,9 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   a `for` over an empty table passes while checking nothing; and
   `test_every_upload_route_is_bounded_below_the_backstop` enumerates every `UploadFile`
   route from the app itself, so **a new upload route that forgets its row fails CI** rather
-  than silently admitting 64 MB. Unchanged and deliberate: a **chunked** body declaring no
+  than silently admitting 64 MB. A fourth pins each row's exact `feature cap + envelope`
+  arithmetic, because a wrong VALUE (a row at 63 MB) satisfies every structural guard while
+  reopening nearly the whole window. Unchanged and deliberate: a **chunked** body declaring no
   Content-Length still slips both ceilings and is caught only by the route's
   `read(cap + 1)` — bounded in memory, still spooled — because counting bytes as they
   stream stays "real machinery for a case no browser produces". A *lying* Content-Length is
