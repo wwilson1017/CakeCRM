@@ -417,6 +417,72 @@ def test_company_create_duplicate_name_400(client, monkeypatch):
     assert "already exists" in resp.json()["detail"]
 
 
+# ── POST /companies/resolve — get-or-create for the inline picker (issue #123) ─
+
+def test_company_resolve_delegates_to_the_shared_resolver(client, monkeypatch):
+    """The whole point of the route: it must not match the name itself.
+
+    The normalization is the uq_companies_name_ci index expression, and the primitive's
+    own docstring warns that Python's case-folding can disagree with the database's
+    LOWER() — so a second spelling of the rule in the router is how a company we just
+    created gets stranded and a duplicate appears anyway.
+    """
+    seen = {}
+    monkeypatch.setattr(service, "resolve_or_create_company_ids",
+                        lambda names: seen.update(names=names) or {names[0]: 7})
+    monkeypatch.setattr(service, "get_company", lambda cid: {"id": cid, "name": "Acme"})
+
+    resp = client.post("/api/crm/companies/resolve", json={"name": "acme"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {"id": 7, "name": "Acme"}
+    assert seen["names"] == ["acme"]
+
+
+def test_company_resolve_passes_the_name_through_untrimmed(client, monkeypatch):
+    """The primitive's contract is {raw spelling exactly as passed: id}, so the route
+    looks the result up by the same string it sent. Trimming here would be a second
+    owner of a rule that belongs to SQL — and would break the lookup if the two
+    disagreed about what counts as whitespace."""
+    seen = {}
+    monkeypatch.setattr(service, "resolve_or_create_company_ids",
+                        lambda names: seen.update(names=names) or {names[0]: 3})
+    monkeypatch.setattr(service, "get_company", lambda cid: {"id": cid, "name": "Acme"})
+
+    assert client.post("/api/crm/companies/resolve", json={"name": "  Acme  "}).status_code == 200
+    assert seen["names"] == ["  Acme  "]
+
+
+def test_company_resolve_blank_name_400(client, monkeypatch):
+    """Mirrors POST /companies' guard rather than inventing its own."""
+    def unreached(names):
+        raise AssertionError("the resolver must not be called for a blank name")
+    monkeypatch.setattr(service, "resolve_or_create_company_ids", unreached)
+
+    for name in ("", "   ", "\t\n"):
+        resp = client.post("/api/crm/companies/resolve", json={"name": name})
+        assert resp.status_code == 400, name
+        assert "required" in resp.json()["detail"].lower()
+
+
+def test_company_resolve_unresolvable_is_409_not_a_half_answer(client, monkeypatch):
+    """The primitive yields no id only in its documented race (the row was deleted
+    between its two statements). Nothing was linked, so the route must refuse rather
+    than return something the form would store as a company_id."""
+    monkeypatch.setattr(service, "resolve_or_create_company_ids", lambda names: {})
+    monkeypatch.setattr(service, "get_company", lambda cid: None)
+
+    assert client.post("/api/crm/companies/resolve", json={"name": "Acme"}).status_code == 409
+
+
+def test_company_resolve_missing_row_is_409(client, monkeypatch):
+    """Same refusal when the id resolves but the read-back finds nothing."""
+    monkeypatch.setattr(service, "resolve_or_create_company_ids", lambda names: {names[0]: 9})
+    monkeypatch.setattr(service, "get_company", lambda cid: None)
+
+    assert client.post("/api/crm/companies/resolve", json={"name": "Acme"}).status_code == 409
+
+
 def test_company_update_duplicate_name_400(client, monkeypatch):
     def raise_unique(cid, **kw):
         raise psycopg2.errors.UniqueViolation()

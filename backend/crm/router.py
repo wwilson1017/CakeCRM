@@ -15,7 +15,8 @@ Contacts:
 Companies:
   GET    /api/crm/companies             — paginated list / search (?q=)
   GET    /api/crm/companies/:id         — full detail (rolled-up contacts/deals/activity)
-  POST   /api/crm/companies             — create
+  POST   /api/crm/companies             — create (400s on a case/whitespace duplicate)
+  POST   /api/crm/companies/resolve     — get-or-create by name (the #35 resolver over REST)
   PUT    /api/crm/companies/:id         — update
   DELETE /api/crm/companies/:id         — delete (contacts/deals unlink, not deleted)
 
@@ -221,6 +222,10 @@ class CompanyCreate(BaseModel):
     source: str = ""
     status: str = "active"
     owner_id: int | None = None
+
+
+class CompanyResolve(BaseModel):
+    name: str
 
 
 class CompanyUpdate(BaseModel):
@@ -1399,6 +1404,46 @@ async def create_company(body: CompanyCreate, user=Depends(get_current_user)):
         return crm.create_company(**_create_payload(body, user))
     except psycopg2.errors.UniqueViolation:
         raise HTTPException(status_code=400, detail="A company with that name already exists") from None
+
+
+@router.post("/companies/resolve")
+async def resolve_company(body: CompanyResolve, user=Depends(get_current_user)):
+    """Get-or-create a company by name — the #35 resolver exposed over REST (issue #123).
+
+    The deal form's inline quick-create needs get-or-create keyed on the
+    ``uq_companies_name_ci`` normalization, which ``POST /companies`` deliberately does
+    NOT provide: that route INSERTs unconditionally and surfaces a case/whitespace
+    duplicate as a 400. That is the right answer for the full "New Company" form, where
+    you asked to create a company that already exists, and the wrong one for a picker
+    whose entire job is to land you on the existing record.
+
+    Delegates to ``resolve_or_create_company_ids`` verbatim rather than matching the name
+    here. The normalization is an index expression, and the primitive's docstring warns
+    that Python's case-folding can disagree with the database's ``LOWER()`` — a second
+    spelling of that rule in this file (or a third in the frontend) is exactly how a
+    company we just created gets stranded and a duplicate appears anyway. It is also
+    race-safe by construction, which a SELECT-then-INSERT here would not be.
+
+    The raw name is passed through untrimmed: the primitive's contract is
+    ``{raw spelling exactly as passed: id}``, so looking the result up by the same string
+    keeps trimming a single rule owned by SQL. The blank guard mirrors ``create_company``
+    above rather than inventing its own.
+
+    A company created here is left UNASSIGNED, which is the primitive's deliberate rule
+    (pinned by ``test_auto_created_companies_are_left_unassigned``), not an oversight in
+    this route. The quick-created CONTACT does get the caller as owner, because it goes
+    through ``POST /contacts``, where ``_create_payload`` applies the usual default.
+    """
+    if not body.name.strip():
+        raise HTTPException(status_code=400, detail="Name is required")
+    company_id = crm.resolve_or_create_company_ids([body.name]).get(body.name)
+    company = crm.get_company(company_id) if company_id is not None else None
+    if not company:
+        # The primitive yields no id only in its documented single-user race: the row was
+        # deleted between its INSERT and its read-back. Nothing was linked, so refuse
+        # rather than hand back a half-answer the form would store as a company_id.
+        raise HTTPException(status_code=409, detail="Could not resolve that company — please try again")
+    return company
 
 
 @router.put("/companies/{company_id}")
