@@ -13,7 +13,7 @@ import { api } from '../core/api/client';
 import { useIsMobile } from '../shared/useIsMobile';
 import { toast } from '../shared/toast';
 import { confirmDialog } from '../shared/confirm';
-import { INK, INK_MUTE, INK_SOFT, LINE, GOLD, FONT_SANS, labelStyle, inputStyle } from '../shared/styles';
+import { INK, INK_MUTE, INK_SOFT, LINE, GOLD_TEXT, FONT_SANS, labelStyle, inputStyle } from '../shared/styles';
 import {
   pagePadding, pageHeading, cardStyle, modalOverlay, modalContent, formTitle,
   btnPrimary, btnSecondary, btnDanger, btnSmall, filterBar, filterTab,
@@ -207,7 +207,7 @@ export function RemindersPage() {
     finally { setProcessing(false); }
   }
 
-  const statusColor = (s: string) => s === 'pending' ? GOLD : s === 'fired' ? INK_SOFT : INK_MUTE;
+  const statusColor = (s: string) => s === 'pending' ? GOLD_TEXT : s === 'fired' ? INK_SOFT : INK_MUTE;
 
   return (
     <div style={pagePadding(isMobile)}>

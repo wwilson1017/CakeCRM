@@ -780,11 +780,45 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   surface. Tints are derived with `color-mix()` off a token (`shared/styles.tint()`),
   never hand-written rgba — the one exception being the three per-theme chrome tokens
   (`hover`/`scrim`/`shadow`), declared literally in *each* block because they tint
-  **ink**, not the accent: a single dark tint would vanish on a dark surface. The brand
-  red is identical in both themes as a **fill**, but accent used as *text or an icon*
-  routes through `--color-ck-accent-text` (`ACCENT_TEXT`), which the `.dark` block
-  lightens — the fixed red is only 3.15:1 on the dark card and fails WCAG AA as body
-  text, the same reason the status and stage hues lighten. **The neutral ink ramp is bound
+  **ink**, not the accent: a single dark tint would vanish on a dark surface.
+  **Every hue is TWO tokens, split by ROLE — `--color-ck-<hue>` is the FILL (background,
+  border, dot, bar) and `--color-ck-<hue>-text` is the GLYPH (text or icon)** — and since
+  #119 that rule covers the whole family (`green`/`amber`/`red`/`ai`, the six `stage-*`,
+  and `accent`), not just the brand red. #54 lightened the hues under `.dark` and never
+  wrote the mirror rule for light, so in light mode all eleven failed AA 4.5:1 as text,
+  worst `ScorePill` warm at **2.45:1** on a stage-washed deal card.
+  **The split is arithmetic, not taste, and that is why #68's "retune the token, don't
+  migrate call sites" answer was unavailable here:** a chip's background IS
+  `tint(<the same token>, 12)`, so darkening one token to fix its text darkens the wash
+  under it — clawing back most of the gain *and* pushing the neutral ramp under the floor
+  #68 tuned it to (`ink-dim` on a stage-washed deal card has 0.22 to spare). The wash must
+  hold still while the glyph moves. Consequently the constants are explicit —
+  `SAGE_FILL`/`SAGE_TEXT`, `GOLD_*`, `CORAL_*`, `AI_*`, and `STAGE_COLORS[x]` carries
+  `{ text, fill, bg }` — with the old ambiguous bare names **removed** so the compiler,
+  not a grep, finds every consumer; that ambiguity is exactly what shipped the eleven
+  failures. `ACCENT` keeps its unsuffixed fill name (it predates the rule, is
+  overwhelmingly a fill, and ~50 sites already route text through `ACCENT_TEXT` — which
+  is why fixing light-mode accent cost zero call-site edits).
+  Values are **derived**: the smallest OKLCH lightness step from the fill (hue and chroma
+  held) that clears 4.5:1 on every surface the app really paints, targeted ~4.55.
+  `--color-ck-on-status` (white light / near-black dark) is the foreground for a hue used
+  as a **solid action fill** — `accent-ink` is white in both themes, right on the brand red
+  (4.66:1) but 2.49:1 on the green `.dark` lightens for text.
+  **`opacity` on a container that holds a chip is now a bug, not a style choice**: it fades
+  text and backdrop together, and a hue tuned to just over 4.5:1 cannot survive any fade —
+  #83's archived deal card at `opacity: 0.55` measured **2.08:1** on its `ScorePill`, and no
+  value below 1.0 fixes it. De-emphasise with `ink-dim` and an explicit chip instead.
+  `core/theme/hueContrast.test.ts` is the guard (sibling to #68's `inkContrast.test.ts`,
+  separate because they measure different families against different surface models): it
+  resolves `var()` chains — most dark `-text` tokens are passthroughs to their fill — reads
+  `accent-soft`'s per-theme mix percentage rather than assuming it, pins the base↔text
+  pairing **one-to-one in both directions**, and carries a detector self-test that injects
+  the real pre-#119 regression. Two things it needs from you: it composites the wash from
+  the **fill** while measuring the **text** token (mixing from the text token models a chip
+  that darkens with its own label — the coupling the split removed, and the actual bug #119
+  found in `MemoryPage`), and unlike its sibling it deliberately does **not** model a chip
+  inside an ink-hovered row, because that headroom is free for the ink ramp and here would
+  force a visibly larger colour change to clear a pairing nothing renders. **The neutral ink ramp is bound
   by the same rule and is COMPRESSED because of it** (#68): all four of
   `ink`/`ink-mute`/`ink-soft`/`ink-dim` are body text — `ink-dim` alone paints every
   `labelStyle` label, every `sectionHeading()` and most empty states — so every step must
@@ -1230,6 +1264,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Kanban drag-and-drop | `cake_os/frontend/src/shared/dnd/` |
 | **Shared collection layer** (the CRM UI's interaction substrate) — **landed #73** as `frontend/src/shared/{search,listview,collection,overlay,hooks}/` with their co-located tests, plus the vitest harness. `search` (SearchInput/SearchFilterBar/SortControl + `match`/`persist`/`sort`), `listview` (ListView/ViewSwitcher + `headerSort`/`sortRows`), `collection` (CollectionView, `facets`, `useCollectionState`, `usePageAssembly`, `visibleOrder`, `views/{Cards,CollectionList,Kanban}`, `detail/CollectionDetail`, `closePolicy`), and `overlay/DetailModal` (pulled in because `CollectionDetail` wraps it). **#73 landed the layer ONLY — no CRM surface was rewired**; Pipeline/Contacts/detail adopt it in their own issues. **Adopted by #77** on Contacts/Companies/Tasks (the pipeline board keeps #21's own filter bar). Adaptations from the blueprint: `lucide-react` swapped for the in-repo `shared/icons.tsx` (no new dependency; `IconChevronLeft` added); the blueprint's `corrections` dependency reduced to a local 3-line `collection/voidedRowClass.ts` (the `voided` tri-state itself is generic and inert unless a config supplies `getVoided`); `shared/pagination` is NOT reachable from the layer and was not ported; the app-local `detailClosePolicy.ts` became `collection/closePolicy.ts` since CakeCRM has one CRM app; and the ported code was modernized for CakeCRM's stricter `eslint-plugin-react-hooks` v7 ruleset (`configs.recommended`, which the blueprint does not enable) — ref-writes-during-render and setState-in-effect were removed rather than suppressed. Styling: the layer keeps the blueprint's Tailwind utility classes, wired to CakeCRM's theme by **semantic aliases** in `index.css`'s `@theme static` (`cream`→`ck-card`, `sand`→`ck-bg`, `charcoal`→`ck-ink`, `muted`→`ck-ink-mute`, `line`→`ck-line-strong`, `brand`→`ck-accent`, `font-heading`→`font-display`) — declared as `var(...)` so `.dark` re-resolves them and the layer inherits dark mode with no `dark:` variants. Accent-as-TEXT deliberately routes through `text-ck-accent-text` per #54's WCAG rule, never `text-brand`. The `dock:` custom variant is defined in `index.css` for `DetailModal`'s takeover-vs-centred switch. | `cake_os/frontend/src/shared/{search,listview,collection,overlay}/` |
 | Theme + dark mode (fixed `--color-ck-*` palette, `.dark` semantic-token override, self-hosted Montserrat/Open Sans, `useTheme` + `ThemeToggle`, accent-picker removal) — **landed #54** as `frontend/src/index.css` + `core/theme/useTheme.ts` + `crm/components/ThemeToggle.tsx` | `cake_os/frontend/src/index.css` + `core/theme/useTheme.ts` (read from `origin/master`) |
+| Hue FILL/TEXT split for WCAG AA (11 `--color-ck-*-text` tokens + `--color-ck-on-status`; `SAGE_FILL`/`SAGE_TEXT` &c. replacing the ambiguous bare names; `STAGE_COLORS` → `{text, fill, bg}`; `core/theme/hueContrast.test.ts`) — **landed #119** across `frontend/src/index.css` + `shared/styles.ts` + `crm/{constants.ts,components/badges.tsx}` + ~25 call sites. **Corrects two premises in the issue**: the migration is ~40 text sites, not ~10 (the issue lists only the badge/stage sites it measured — `color: CORAL`/`GOLD`/`SAGE` also paint form errors, toasts, the Gmail connected flag and the dashboard idle-days label, plus the Tailwind `text-ck-*` classes in `login/` and `setup/`); and **dark was not clean** — the issue's sweep covered same-hue pairings only, so it missed `red` at 3.97:1 on a foreign stage row and `stage-lost` at 4.17:1 on its own wash. Three adjacent defects of the same class were found by measurement and fixed here rather than filed: `MemoryPage` mixed its washes from `ACCENT_TEXT` (a foreground token, so retuning text moved a background), `TriageCard`'s `hover:text-brand-dark` is 2.18:1 on the dark card, and the three solid status buttons put white on a dark-mode fill at 2.49:1. NOT changed: fills, in either theme — the brand red and every stage/status hue are byte-identical as backgrounds, borders, dots and bars | New capability (no blueprint — follows #54's own `accent-text` precedent; back-port candidate to CAKE OS) |
 | Companies (first-class entity: `companies` table, `company_id` FKs, rollup detail page, text→FK backfill migration) — **landed #13** | `cake_os/backend/apps/crm/company_service.py` |
 | Company link coherence (shared batched `resolve_or_create_company_ids()` resolve-or-auto-create on every ingestion path; contact list/search LEFT JOIN + `company_name`; second one-shot backfill) — **landed #35** | New capability (gate decision on issue #35; shared with the #61 importer) |
 | Chatter/notes (`crm_chatter`) — **landed #15** as `backend/crm/chatter_service.py` + `frontend/src/crm/components/NotesThread.tsx` | `cake_os/backend/apps/crm/chatter_service.py` |

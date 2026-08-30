@@ -37,11 +37,18 @@ const CSS: string = typeof __INDEX_CSS__ === 'string' ? __INDEX_CSS__ : '';
  *              is 5.09:1, `ink-dim` on a 50% line wash over `card`.
  * The hover alpha under both is read from the stylesheet, not assumed.
  *
- * Out of scope, deliberately: ink text on an ACCENT wash — `MemoryPage`'s selected row puts
- * INK/INK_MUTE/INK_DIM on `tint(ACCENT_TEXT,8)`, and `filterTab` active / the tag button use
- * ACCENT_SOFT. Those clear AA today (worst measured 5.38:1) but they are governed by the accent
- * tokens, which #54 tunes per theme on its own rule; folding them in here would need this guard
- * to resolve `var()` and `color-mix()` values. Retuning `accent-text` should re-check them.
+ * Out of scope, deliberately: ink text on an ACCENT wash — `MemoryPage`'s selected row and its
+ * active tab, `filterTab` active, and the tag button all put INK/INK_MUTE/INK_DIM on a wash of
+ * ACCENT (or ACCENT_SOFT, which is mixed from it). Those clear AA today (worst measured 5.38:1)
+ * and folding them in here would need this guard to resolve `var()` and `color-mix()` values.
+ *
+ * The old note here said retuning `accent-text` should re-check them. That is no longer the
+ * trigger, and the reason is worth keeping: issue #119 found `MemoryPage` mixing those washes
+ * from ACCENT_**TEXT**, which is a foreground token — so retuning the text colour moved a
+ * background, exactly the coupling the fill/text split exists to prevent. Those four sites now
+ * mix from ACCENT like every other wash, so the surfaces here are pinned to the brand red, which
+ * is fixed in both themes. Re-check them if **`accent`** is ever retuned; `accent-text` no
+ * longer reaches any background.
  */
 
 const AA_NORMAL_TEXT = 4.5;
@@ -162,9 +169,16 @@ function hoverPercent(t: Record<string, string>): number {
  * `rgb(…)` stays in this list and is then rejected by the palette assertion below. Filtering on
  * the value instead would let that stage drop out of the surface list silently, and the
  * self-adjusting surface count would shrink to match it.
+ *
+ * `-text` is excluded because issue #119 gave every stage a SECOND token — `stage-lost` is the
+ * 12% wash, `stage-lost-text` is the label on it. Without the exclusion `stage-lost-text` would
+ * be read as a stage literally named "lost-text" and then composited as a wash producer that no
+ * component paints; the derived surface count would grow to match, so the suite would stay green
+ * while measuring fiction. `hueContrast.test.ts` asserts the base↔text pairing is one-to-one in
+ * both directions, which is what stops this filter from silently dropping a real stage.
  */
 const STAGES = Object.keys(LIGHT_TOKENS)
-  .filter(k => k.startsWith('stage-'))
+  .filter(k => k.startsWith('stage-') && !k.endsWith('-text'))
   .map(k => k.slice('stage-'.length));
 
 /**
@@ -223,17 +237,22 @@ function surfaces(t: Record<string, string>): Record<string, Rgb> {
 
   // A chip inside a HOVERED list row.
   //
-  // `bg` is REAL: the Contacts / Companies / Tasks desktop lists render rows in a bare
-  // `borderTop` div on the page background and set `background = HOVER` on mouseenter, with
-  // StatusBadge / ScorePill / PriorityBadge chips inside them.
+  // BOTH bases are HEADROOM now, with no producer today — and that changed under this comment
+  // rather than being wrong when written. #68 called `bg` REAL because Contacts / Companies /
+  // Tasks rendered rows in a bare `borderTop` div on the page background and set
+  // `background = HOVER` on mouseenter. #77 then moved all three onto the shared collection
+  // layer, whose rows hover by swapping to the OPAQUE `bg` token (`hover:bg-sand`), never an
+  // ink tint; grep for a row-hover producer now returns nothing.
   //
-  // `card` is deliberate HEADROOM with no producer today, and is kept knowingly rather than by
-  // omission. The shared collection layer's rows hover by swapping to the OPAQUE `bg` token
-  // (`hover:bg-sand`), never an ink tint — and #73 landed that layer unwired anyway. It stays
-  // because a list refactor is one step from putting hovered chip rows on a card surface, and
-  // because it is what holds the dark ramp at its current edge: against only-real surfaces even
-  // `#aaa8a2` would pass, three steps lighter than what ships. It is also why the dark FLOOR
-  // (4.56:1) is tighter than anything dark actually renders (5.09:1).
+  // Both stay, knowingly rather than by omission: a list refactor is one step from putting
+  // hovered chip rows back on either surface, and this stack is what holds the dark ramp at its
+  // current edge — against only-real surfaces even `#aaa8a2` would pass, three steps lighter
+  // than what ships. It is also why the dark FLOOR (4.56:1) is tighter than anything dark
+  // actually renders (5.09:1).
+  //
+  // `hueContrast.test.ts` deliberately does NOT extend the same headroom to the status and stage
+  // hues, and says why: there the extra margin is not free — it would force a visibly larger
+  // colour change to clear a pairing nothing paints.
   //
   // `raised` is excluded: the one ink-hover-over-raised producer is ContactsPage's tag dropdown,
   // a bare wash with no chips in it — and a bare hover wash at 5%/6% is numerically the same

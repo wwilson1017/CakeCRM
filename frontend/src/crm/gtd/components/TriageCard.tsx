@@ -326,7 +326,9 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
             type="button"
             disabled={busy}
             onClick={() => void remove()}
-            className={`${linkCls} text-ck-accent-text hover:text-brand-dark`}
+            // hover:opacity-80, not hover:text-brand-dark: `brand-dark` is a fill-ramp
+            // step and is only 2.18:1 as text on the dark card (issue #119).
+            className={`${linkCls} text-ck-accent-text hover:opacity-80`}
           >
             Delete
           </button>

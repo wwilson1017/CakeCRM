@@ -184,7 +184,7 @@ export function CompanyDetailPage({ onChanged, onDeleted, onWriteUncertain }: Co
                 <div key={d.id} style={{
                   ...stageCard(
                     STAGE_COLORS[d.stage]?.bg || BG_RAISED,
-                    STAGE_COLORS[d.stage]?.color || LINE,
+                    STAGE_COLORS[d.stage]?.fill || LINE,
                   ),
                   padding: '12px 14px', marginBottom: 6,
                   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -193,7 +193,7 @@ export function CompanyDetailPage({ onChanged, onDeleted, onWriteUncertain }: Co
                     <p style={{ fontSize: 14, color: INK, margin: 0 }}>{d.title}</p>
                     <span style={{
                       ...mono(10), textTransform: 'capitalize', marginTop: 2, display: 'inline-block',
-                      color: STAGE_COLORS[d.stage]?.color || INK_DIM,
+                      color: STAGE_COLORS[d.stage]?.text || INK_DIM,
                     }}>{d.stage}{d.contact_name ? ` · ${d.contact_name}` : ''}</span>
                   </div>
                   <span style={{

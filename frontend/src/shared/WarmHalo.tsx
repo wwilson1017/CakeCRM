@@ -1,4 +1,4 @@
-import { ACCENT, GOLD, tint } from './styles';
+import { ACCENT, GOLD_FILL, tint } from './styles';
 
 interface WarmHaloProps {
   opacity?: number;
@@ -10,7 +10,7 @@ export function WarmHalo({ opacity = 0.5, className }: WarmHaloProps) {
     <div className={className} style={{
       position: 'absolute', top: -260, left: '50%', transform: 'translateX(-50%)',
       width: 1100, height: 560, pointerEvents: 'none', opacity,
-      background: `radial-gradient(ellipse at center, ${tint(ACCENT, 10)} 0%, ${tint(GOLD, 5)} 40%, transparent 70%)`,
+      background: `radial-gradient(ellipse at center, ${tint(ACCENT, 10)} 0%, ${tint(GOLD_FILL, 5)} 40%, transparent 70%)`,
       filter: 'blur(80px)',
     }} />
   );

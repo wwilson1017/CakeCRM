@@ -9,12 +9,12 @@ import {
   ACCENT_SOFT,
   BG_CARD,
   BG_RAISED,
-  CORAL,
+  CORAL_TEXT,
   INK,
   INK_MUTE,
   INK_SOFT,
   LINE,
-  SAGE,
+  SAGE_TEXT,
 } from '../shared/styles';
 import { MarkdownContent } from './MarkdownContent';
 import type { ChatMessage, PendingConfirmation, ToolCallInfo } from './types';
@@ -32,7 +32,7 @@ function summarize(value: unknown): string {
 function ToolCallCard({ call }: { call: ToolCallInfo }) {
   const [open, setOpen] = useState(false);
   const isError = !!(call.result && typeof call.result === 'object' && 'error' in (call.result as object));
-  const color = call.status === 'running' ? INK_SOFT : isError ? CORAL : SAGE;
+  const color = call.status === 'running' ? INK_SOFT : isError ? CORAL_TEXT : SAGE_TEXT;
   return (
     <div style={{ border: `1px solid ${LINE}`, borderRadius: 8, background: BG_RAISED, margin: '6px 0', fontSize: 13 }}>
       <button
@@ -61,7 +61,7 @@ function ToolCallCard({ call }: { call: ToolCallInfo }) {
           {call.result != null && (
             <div>
               <span style={{ color: INK_SOFT }}>result: </span>
-              <code style={{ color: isError ? CORAL : INK_MUTE }}>{summarize(call.result).slice(0, 800)}</code>
+              <code style={{ color: isError ? CORAL_TEXT : INK_MUTE }}>{summarize(call.result).slice(0, 800)}</code>
             </div>
           )}
         </div>
@@ -95,7 +95,7 @@ function ConfirmationCard({
           border: `1px solid ${LINE}`, borderRadius: 8, background: BG_RAISED, fontSize: 13,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: approved ? SAGE : failed ? CORAL : INK_SOFT }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: approved ? SAGE_TEXT : failed ? CORAL_TEXT : INK_SOFT }}>
           {approved ? <IconCheck size={14} /> : <IconX size={14} />}
           <span>{label}: <code>{confirm.tool}</code></span>
         </div>

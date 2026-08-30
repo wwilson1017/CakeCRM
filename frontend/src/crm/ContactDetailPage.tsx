@@ -19,7 +19,7 @@ import { useIsMobile } from '../shared/useIsMobile';
 import { confirmDialog } from '../shared/confirm';
 import { toast } from '../shared/toast';
 import {
-  INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, CORAL, SAGE,
+  INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, CORAL_FILL, CORAL_TEXT, SAGE_FILL,
   ACCENT, ACCENT_TEXT, ACCENT_INK,
   FONT_DISPLAY, FONT_MONO,
   mono, inputStyle,
@@ -251,7 +251,7 @@ export function ContactDetailPage({ onChanged, onDeleted, onWriteUncertain }: Co
                 <div key={d.id} style={{
                   ...stageCard(
                     STAGE_COLORS[d.stage]?.bg || BG_RAISED,
-                    STAGE_COLORS[d.stage]?.color || LINE,
+                    STAGE_COLORS[d.stage]?.fill || LINE,
                   ),
                   padding: '12px 14px', marginBottom: 6,
                   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -260,7 +260,7 @@ export function ContactDetailPage({ onChanged, onDeleted, onWriteUncertain }: Co
                     <p style={{ fontSize: 14, color: INK, margin: 0 }}>{d.title}</p>
                     <span style={{
                       ...mono(10), textTransform: 'capitalize', marginTop: 2, display: 'inline-block',
-                      color: STAGE_COLORS[d.stage]?.color || INK_DIM,
+                      color: STAGE_COLORS[d.stage]?.text || INK_DIM,
                     }}>{d.stage}</span>
                   </div>
                   <span style={{
@@ -290,11 +290,14 @@ export function ContactDetailPage({ onChanged, onDeleted, onWriteUncertain }: Co
                 <div key={t.id} style={{
                   padding: '10px 0', borderBottom: `1px solid ${LINE}`,
                   display: 'flex', alignItems: 'center', gap: 10,
-                  opacity: t.completed ? 0.5 : 1,
+                  // No `opacity` here (issue #119): it faded the PriorityBadge inside this
+                  // row along with everything else, and a badge tuned to just over 4.5:1
+                  // cannot survive any fade. The row already reads as done — `ink-dim`
+                  // title, line-through, a filled dot — so the opacity was redundant.
                 }}>
                   <span style={{
                     width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
-                    background: t.completed ? SAGE : isOverdue(t.due_date) ? CORAL : INK_DIM,
+                    background: t.completed ? SAGE_FILL : isOverdue(t.due_date) ? CORAL_FILL : INK_DIM,
                   }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <p style={{
@@ -305,7 +308,7 @@ export function ContactDetailPage({ onChanged, onDeleted, onWriteUncertain }: Co
                     {t.due_date && (
                       <p style={{
                         fontSize: 11, marginTop: 2,
-                        color: isOverdue(t.due_date) && !t.completed ? CORAL : INK_DIM,
+                        color: isOverdue(t.due_date) && !t.completed ? CORAL_TEXT : INK_DIM,
                       }}>{t.due_date}</p>
                     )}
                   </div>

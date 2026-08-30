@@ -83,7 +83,7 @@ export function ProviderSetup() {
                     <span className="text-xs text-ck-ink-soft font-mono">{profile.key_preview}</span>
                   )}
                   <span className="w-1.5 h-1.5 rounded-full bg-ck-green" />
-                  <span className="text-xs uppercase tracking-wider text-ck-green">Connected</span>
+                  <span className="text-xs uppercase tracking-wider text-ck-green-text">Connected</span>
                 </div>
               )}
             </div>
@@ -113,7 +113,7 @@ export function ProviderSetup() {
                     await api(`/api/providers/${p.id}/disconnect`, { method: 'POST' });
                     reload();
                   }}
-                  className="w-full bg-transparent border border-ck-line-strong rounded-md text-sm text-ck-red px-4 py-2 cursor-pointer hover:opacity-80"
+                  className="w-full bg-transparent border border-ck-line-strong rounded-md text-sm text-ck-red-text px-4 py-2 cursor-pointer hover:opacity-80"
                 >
                   Disconnect
                 </button>
