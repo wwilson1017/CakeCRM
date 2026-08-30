@@ -38,6 +38,16 @@ Because scopes can't guarantee it, the guarantee lives in code:
 - `gmail_create_draft` is a **write** tool, so in the assistant's default (normal)
   mode it passes through the human-confirmation gate: the draft is not created until
   you approve it, and you see the full recipient/subject/body first.
+- **Only you can make the assistant open your mail.** The two read tools are available
+  in conversations you are having; they are withheld from the assistant's *unattended*
+  runs (the background heartbeat, a firing reminder, the proactive digest), where
+  nobody is watching the screen. Those runs may send you at most one notification, and
+  without mailbox access that notification cannot be filled with the contents of your
+  email — so text planted in a reminder or a CRM record has no route to your inbox.
+  Precisely: an unattended run cannot start a Gmail search or open a thread. If you
+  have the optional email touch-scan enabled, the sender and subject it already
+  recorded against a contact stay visible to it as ordinary CRM history, the same as
+  any other logged activity.
 
 ### The automated guard
 

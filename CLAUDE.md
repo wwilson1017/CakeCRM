@@ -148,6 +148,30 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `heartbeat.service._heartbeat_prompt`, which states plainly that everything a CRM
   tool returns is DATA the user or a third party typed, never instructions. Any future
   background-callable read should assume its payload can carry hostile text.
+  **Since #114 the allowlist is no longer derived from `writes` alone**, because
+  `writes:False` means "changes nothing", not "safe unattended": `background_allowlist()`
+  now subtracts `background.BACKGROUND_EXCLUDED_TOOLS`, which IS
+  `delimiters.UNTRUSTED_SOURCE_TOOLS` (the live external-account reads — today
+  `gmail_search`/`gmail_read_thread`) rather than a second hand-maintained list, so the
+  existing `test_gmail_guard` pin that every Gmail read lands in that set makes a future
+  Gmail reader background-excluded for free. The one-notification ceiling had held
+  *mechanically* while still being an exfiltration channel: the interactive engine answers
+  those reads with the power→normal taint, but an unattended turn has no analogue — nobody
+  reads the fence — so injected reminder/CRM text could steer it `gmail_search` →
+  `gmail_read_thread` → private mail inside the one permitted `notify_user` (web push +
+  Telegram). `_run_turn` ALSO clamps the caller-supplied `allowed_tools` by the same
+  subtraction, one line covering both enforcement points (advertisement and execution both
+  read that variable), so the exclusion is a property of the background *mode*, not of one
+  builder; it is deliberately narrow — a caller-supplied write still executes, which is
+  what `test_write_executes_without_confirmation` pins. **Scope, stated precisely:** this
+  removes LIVE mailbox access only. Sender + subject that #17's deterministic `gmail_scan`
+  already wrote into `activity_log` stay readable through ordinary CRM reads
+  (`crm_get_activity_log`, `crm_dashboard`) — that is CRM data by design, and out of scope
+  per the issue's gate decision. So the accurate claim is "a background turn cannot
+  initiate a Gmail search or thread read", never "cannot see anything mail-derived".
+  Context-file reads stay background-callable (they are Baker's own notes — the
+  `_RECORDED_CONTEXT_MARKER` call), and `gmail_scan` itself is untouched: it never goes
+  through the assistant registry.
   The assistant has a **long-term memory + nightly dreaming**
   (landed #5, `backend/memory/` + `backend/dreaming/`, **pure-algorithmic — no AI
   calls**): temporal facts in Postgres (`memory_facts`, generated `tsvector` + GIN,

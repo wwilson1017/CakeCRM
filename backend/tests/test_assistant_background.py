@@ -19,8 +19,11 @@ class FakeProvider:
         self._i = 0
         self.raise_on_stream = raise_on_stream
         self.build_tool_turn_calls = []
+        self.advertised_tools = []          # tool names offered per stream_turn call
+        self.tool_results = []              # results handed back via build_tool_turn
 
     async def stream_turn(self, messages, tools, system_prompt):
+        self.advertised_tools.append([t["name"] for t in tools])
         if self.raise_on_stream:
             raise RuntimeError("provider boom")
         script = self._scripts[self._i] if self._i < len(self._scripts) else self._scripts[-1]
@@ -30,14 +33,18 @@ class FakeProvider:
 
     def build_tool_turn(self, text, tool_calls, results):
         self.build_tool_turn_calls.append(text)
+        self.tool_results.append(results)
         return [{"role": "assistant", "content": text}, {"role": "tool", "results": results}]
 
 
 class FakeRegistry:
     def __init__(self, writes=frozenset()):
         self._writes = set(writes)
+        # The Gmail reads are advertised here on purpose: they are writes:False, so a
+        # registry WITHOUT them would let the #114 exclusion tests pass vacuously.
         self.writes_map = {"crm_dashboard": False, "crm_create_task": True, "crm_delete_contact": True,
-                           "notify_user": True}
+                           "notify_user": True,
+                           "gmail_search": False, "gmail_read_thread": False}
         self.calls = []
 
     def is_write(self, name):
@@ -155,6 +162,57 @@ def test_allowlist_is_reads_plus_notify_only():
     # heartbeat_allowlist / reminder_allowlist are aliases of the same boundary.
     assert background.heartbeat_allowlist(reg) == allowed
     assert background.reminder_allowlist(reg) == allowed
+
+
+# ── #114: live external-source reads never reach an unattended turn ──────────────
+
+def test_untrusted_source_reads_are_excluded_from_the_allowlist():
+    """The Gmail reads are writes:False, so the pre-#114 derivation admitted them and a
+    prompt injection could exfiltrate mail through the one permitted notify_user."""
+    reg = FakeRegistry()
+    excluded = set(background.BACKGROUND_EXCLUDED_TOOLS)
+    # Guard against a vacuous pass: the registry must actually advertise them.
+    assert excluded <= reg.writes_map.keys()
+    assert excluded and not (excluded & set(reg._writes))   # they are READS, not writes
+
+    allowed = background.background_allowlist(reg)
+    assert excluded.isdisjoint(allowed), f"untrusted-source reads leaked: {excluded & allowed}"
+    assert "crm_dashboard" in allowed        # ordinary reads are untouched
+
+
+def test_every_untrusted_source_tool_is_excluded_not_just_todays_two():
+    """Behavioral coupling to delimiters.UNTRUSTED_SOURCE_TOOLS rather than a shape
+    assertion: a tool added to that set later is excluded here with no further edit."""
+    from assistant import delimiters
+
+    reg = FakeRegistry()
+    reg.writes_map.update({name: False for name in delimiters.UNTRUSTED_SOURCE_TOOLS})
+    allowed = background.background_allowlist(reg)
+    assert set(delimiters.UNTRUSTED_SOURCE_TOOLS).isdisjoint(allowed)
+
+
+def test_untrusted_source_read_is_refused_even_when_a_caller_allows_it(monkeypatch):
+    """The exclusion is a property of the background MODE, not just of the builder:
+    a caller that hands in its own allowlist still cannot run a live Gmail read."""
+    prov = FakeProvider([
+        [_complete([_tc("gmail_search")], stop="tool_use")],
+        [{"type": "text", "text": "done"}, _complete(stop="stop")],
+    ])
+    _use(prov, monkeypatch)
+    reg = FakeRegistry()
+    r = run_background_turn(("sys", "vol"), "go",
+                            allowed_tools={"gmail_search", "crm_dashboard"}, registry=reg)
+
+    # (a) never advertised to the provider …
+    assert prov.advertised_tools, "provider was never called"
+    assert all("gmail_search" not in names for names in prov.advertised_tools)
+    assert "crm_dashboard" in prov.advertised_tools[0]     # the rest of the set survived
+    # (b) … never executed …
+    assert reg.calls == []
+    # (c) … and the fail-closed refusal reached the model in the tool results.
+    assert any("not permitted" in res["content"]
+               for results in prov.tool_results for res in results)
+    assert any("not permitted" in log["result"] for log in r.tool_log)
 
 
 def test_timeout_returns_error(monkeypatch):
