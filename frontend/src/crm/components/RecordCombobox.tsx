@@ -81,6 +81,10 @@ export function RecordCombobox<T>({
   // the user is still waiting for it.
   const intentRef = useRef(0);
   const listId = useId();
+  // Falls back to a generated id rather than rendering `undefined`: the `id` prop is
+  // optional, and without this a caller that omits it (#126's ContactForm is the next one)
+  // silently loses both click-to-focus on the label and the input's accessible name.
+  const inputId = id ?? `${listId}-input`;
   const debounced = useDebounce(query, 250);
 
   // The trimmed query is the single form used for BOTH searching and creating. Trimming
@@ -248,15 +252,25 @@ export function RecordCombobox<T>({
     fontFamily: FONT_SANS, background: 'transparent', color: INK,
   };
 
+  // Hover follows the POINTER, not the list moving underneath it. Keyboard navigation
+  // scrolls the popover, which drags rows past a stationary cursor and fires plain
+  // mouseenter on each — hijacking the active row mid-keystroke. A mousemove carrying no
+  // movement is the list scrolling, not the user.
+  const onRowHover = (i: number) => (e: React.MouseEvent) => {
+    if (e.movementX !== 0 || e.movementY !== 0) setActiveIndex(i);
+  };
+
   return (
     <div ref={wrapRef} style={{ position: 'relative' }}>
-      <label style={labelStyle} htmlFor={id}>{label}</label>
+      <label style={labelStyle} htmlFor={inputId}>{label}</label>
       <div style={{ position: 'relative' }}>
         <input
-          id={id}
+          id={inputId}
           role="combobox"
           aria-expanded={open}
-          aria-controls={listId}
+          // Only while the list is mounted: pointing at an absent id is a dangling
+          // reference, which assistive tech and every a11y linter treat as an error.
+          aria-controls={open ? listId : undefined}
           aria-haspopup="listbox"
           aria-autocomplete="list"
           aria-activedescendant={open && rowCount > 0 ? `${listId}-${active}` : undefined}
@@ -306,37 +320,37 @@ export function RecordCombobox<T>({
               const isActive = i === active;
               const sub = getSublabel?.(r);
               return (
-                <li key={getId(r)} role="option" id={`${listId}-${i}`} aria-selected={isActive}>
-                  <button
-                    type="button"
-                    tabIndex={-1}
-                    onMouseEnter={() => setActiveIndex(i)}
-                    onClick={() => choose(r)}
-                    style={{ ...rowBase, background: isActive ? HOVER : 'transparent' }}
-                  >
-                    <span style={{ display: 'block' }}>{getLabel(r)}</span>
-                    {sub && <span style={{ display: 'block', fontSize: 11, color: INK_MUTE }}>{sub}</span>}
-                  </button>
+                <li
+                  key={getId(r)}
+                  role="option"
+                  id={`${listId}-${i}`}
+                  aria-selected={isActive}
+                  onMouseMove={onRowHover(i)}
+                  onClick={() => choose(r)}
+                  style={{ ...rowBase, background: isActive ? HOVER : 'transparent' }}
+                >
+                  <span style={{ display: 'block' }}>{getLabel(r)}</span>
+                  {sub && <span style={{ display: 'block', fontSize: 11, color: INK_MUTE }}>{sub}</span>}
                 </li>
               );
             })}
             {canCreate && (
-              <li role="option" id={`${listId}-${createIndex}`} aria-selected={active === createIndex}>
-                <button
-                  type="button"
-                  tabIndex={-1}
-                  disabled={creating}
-                  onMouseEnter={() => setActiveIndex(createIndex)}
-                  onClick={() => { void quickCreate(); }}
-                  style={{
-                    ...rowBase, color: ACCENT_TEXT, fontWeight: 500,
-                    background: active === createIndex ? HOVER : 'transparent',
-                    borderTop: results.length > 0 ? `1px solid ${LINE_STRONG}` : undefined,
-                    borderRadius: results.length > 0 ? 0 : 4,
-                  }}
-                >
-                  {creating ? `Creating "${trimmed}"…` : `Create "${trimmed}"…`}
-                </button>
+              <li
+                role="option"
+                id={`${listId}-${createIndex}`}
+                aria-selected={active === createIndex}
+                aria-disabled={creating}
+                onMouseMove={onRowHover(createIndex)}
+                onClick={() => { if (!creating) void quickCreate(); }}
+                style={{
+                  ...rowBase, color: ACCENT_TEXT, fontWeight: 500,
+                  background: active === createIndex ? HOVER : 'transparent',
+                  borderTop: results.length > 0 ? `1px solid ${LINE_STRONG}` : undefined,
+                  borderRadius: results.length > 0 ? 0 : 4,
+                  cursor: creating ? 'default' : 'pointer',
+                }}
+              >
+                {creating ? `Creating "${trimmed}"…` : `Create "${trimmed}"…`}
               </li>
             )}
           </ul>

@@ -79,9 +79,11 @@ function rowLabels(): string[] {
   return [...container.querySelectorAll('[role="option"]')].map(o => o.textContent || '');
 }
 
-function createRow(): HTMLButtonElement | undefined {
-  return [...container.querySelectorAll('[role="option"] button')]
-    .find(b => b.textContent?.startsWith('Create ')) as HTMLButtonElement | undefined;
+/** The Create row. `role="option"` is a leaf in the accessibility tree, so the row IS the
+ *  option element — there is deliberately no nested <button> to click. */
+function createRow(): HTMLElement | undefined {
+  return [...container.querySelectorAll('[role="option"]')]
+    .find(o => o.textContent?.startsWith('Create ')) as HTMLElement | undefined;
 }
 
 /** Dispatch a cancelable keydown and report whether the handler called preventDefault. */
@@ -420,7 +422,7 @@ describe('RecordCombobox — recovering from an interrupted create', () => {
     await open();
     await type('Newco');
     await settle();
-    expect(createRow()!.disabled).toBe(false);
+    expect(createRow()!.getAttribute('aria-disabled')).toBe('false');
   });
 
   it('does not let a create land on a query the user has since retyped', async () => {
@@ -455,5 +457,42 @@ describe('RecordCombobox — a superseded create that fails', () => {
     await act(async () => { reject(new Error('API error 500: Alpha blew up')); });
 
     expect(container.textContent).not.toContain('Alpha blew up');
+  });
+});
+
+describe('RecordCombobox — the listbox contract', () => {
+  it('keeps every option a leaf, with no interactive descendants', async () => {
+    // `role="option"` is a leaf in the accessibility tree: a nested <button> makes screen
+    // readers announce and activate the row unreliably, and axe flags it. Pinned because the
+    // obvious way to write a clickable row is exactly the wrong one.
+    mount({ search: vi.fn(async () => [ACME]) });
+    await open();
+    await type('Newco');
+    await settle();
+
+    const options = [...container.querySelectorAll('[role="option"]')];
+    expect(options.length).toBeGreaterThan(0);
+    for (const option of options) {
+      expect(option.querySelector('button, a, input, select, textarea')).toBeNull();
+    }
+  });
+
+  it('does not point aria-controls at a list that is not mounted', async () => {
+    // A dangling idref is an error to assistive tech, and the list only exists while open.
+    mount();
+
+    expect(input().getAttribute('aria-controls')).toBeNull();
+    await open();
+    expect(input().getAttribute('aria-controls')).toBeTruthy();
+  });
+
+  it('links its label to its input even when no id prop is given', async () => {
+    // The `id` prop is optional, and #126 reuses this component — rendering `undefined`
+    // would silently drop click-to-focus and the input's accessible name.
+    mount();
+
+    const label = container.querySelector('label')!;
+    expect(label.getAttribute('for')).toBeTruthy();
+    expect(label.getAttribute('for')).toBe(input().id);
   });
 });

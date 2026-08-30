@@ -211,10 +211,10 @@ async function typeInPicker(which: 'contact' | 'company', value: string) {
 }
 
 async function clickOption(match: (text: string) => boolean) {
-  const button = [...container.querySelectorAll('[role="option"] button')]
-    .find(b => match(b.textContent || ''));
-  if (!button) throw new Error('no matching option rendered');
-  await act(async () => { button.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+  const option = [...container.querySelectorAll('[role="option"]')]
+    .find(o => match(o.textContent || ''));
+  if (!option) throw new Error('no matching option rendered');
+  await act(async () => { option.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
 }
 
 /** Route the picker traffic; `contacts` is what a contact search returns. */
@@ -534,8 +534,8 @@ describe('DealForm — whose choice wins', () => {
     await openPicker('company');
     await typeInPicker('company', 'Wound Down Ltd');
 
-    const create = [...container.querySelectorAll('[role="option"] button')]
-      .find(b => b.textContent?.startsWith('Create '));
+    const create = [...container.querySelectorAll('[role="option"]')]
+      .find(o => o.textContent?.startsWith('Create '));
     expect(create).toBeUndefined();
   });
 
