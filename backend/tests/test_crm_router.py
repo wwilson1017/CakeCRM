@@ -783,6 +783,13 @@ def test_board_keyset_params_reach_the_service(client, monkeypatch):
     assert client.get("/api/crm/deals?sort=id&limit=501").status_code == 200
     assert seen["limit"] == 501 and seen["after_id"] is None
 
+    # The archived facet widens the CORPUS, so it must ride every page of the sweep —
+    # all three params reaching the service together is what makes that possible.
+    seen.clear()
+    assert client.get(
+        "/api/crm/deals?sort=id&limit=5&after_id=3&include_archived=true").status_code == 200
+    assert seen == {"include_archived": True, "limit": 5, "after_id": 3}
+
 
 def test_board_pagination_refused_with_stage_or_contact_filter(client, monkeypatch):
     """`list_deals` has no cursor, so honouring a page there is impossible — and dropping
@@ -825,6 +832,9 @@ def test_board_limit_and_cursor_bounds_are_enforced_by_the_route(client, monkeyp
     assert client.get("/api/crm/deals?limit=0").status_code == 422
     assert client.get("/api/crm/deals?limit=1001").status_code == 422
     assert client.get("/api/crm/deals?limit=5&after_id=-1").status_code == 422
+    # The upper bound matters as much as the lower one: `deals.id` is a 32-bit SERIAL, so
+    # a cursor past its range can only be a malformed or hostile client.
+    assert client.get("/api/crm/deals?limit=5&after_id=2147483648").status_code == 422
 
 
 def test_after_id_zero_is_a_cursor_page(client, monkeypatch):

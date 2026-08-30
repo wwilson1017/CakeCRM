@@ -1182,8 +1182,10 @@ def crm_get_pipeline(stage: str | None = None, limit_per_stage: int = 25) -> dic
     """Pipeline board, with the per-stage deal LIST capped for the model's context.
 
     Since issue #59 the cap is a SQL window in the service, not a Python trim over a
-    fully-fetched board: answering "25 per stage" no longer reads every deal in the
-    database. The board's own read is untouched — it asks for no cap. stage_summary is
+    fully-fetched board: answering "25 per stage" no longer BUILDS every deal row into
+    this process (Postgres still ranks the whole partition — the win is rows transferred
+    and held, not a smaller scan). The board's own read is untouched — it asks for no
+    cap, because it needs every card. stage_summary is
     still computed over all deals, so the counts and values stay true even when the list
     is trimmed, and `deals_truncated` tells the model when it is looking at a partial
     list (the service derives it from a one-rank-per-stage over-fetch, so it is exact).

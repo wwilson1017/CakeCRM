@@ -984,8 +984,13 @@ def get_pipeline(
     #     the immutable PK because that is what makes a cursor meaningful; the frontend
     #     sweeps every page and reassembles the complete corpus before rendering, so this
     #     is invisible to the user and the facet model (#21/#77) is untouched;
-    #   * PER-STAGE WINDOW (`limit_per_stage`) — the assistant tool's cap, in SQL, so a
-    #     25-per-stage answer stops reading every deal in the database.
+    #   * PER-STAGE WINDOW (`limit_per_stage`) — the assistant tool's cap, in SQL rather
+    #     than a Python trim over the whole board. Be precise about what that buys: the
+    #     rows BUILT, transferred and held in memory now scale with the cap, while
+    #     Postgres still scans and ranks the whole partition before the outer `rn` filter
+    #     can apply. So this is equal-or-better than the trim it replaced, never worse —
+    #     but it is not a smaller SCAN. Making the scan scale with the cap needs a
+    #     lateral-per-stage rewrite, which is a real perf project, not this issue.
     #
     # There is deliberately NO owner_id parameter here, unlike list_contacts/
     # list_companies/list_tasks (issue #60). The board is fetched in keyset pages since

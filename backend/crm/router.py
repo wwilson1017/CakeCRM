@@ -20,7 +20,8 @@ Companies:
   DELETE /api/crm/companies/:id         — delete (contacts/deals unlink, not deleted)
 
 Deals:
-  GET    /api/crm/deals                 — pipeline list / filtered (?include_archived= on the board)
+  GET    /api/crm/deals                 — pipeline list / filtered (?include_archived= on the
+                                          board; ?sort=id&limit=&after_id= for its keyset page)
   GET    /api/crm/deals/:id             — detail
   POST   /api/crm/deals                 — create
   PUT    /api/crm/deals/:id             — update

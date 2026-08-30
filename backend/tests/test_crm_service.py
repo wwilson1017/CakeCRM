@@ -784,6 +784,9 @@ def test_get_pipeline_keyset_first_page(rec):
     assert rec.params_for("ORDER BY d.id ASC") == [501]
     # A FIRST page still pays for — and returns — the envelope.
     assert out["stage_summary"] == [] and out["total_pipeline_value"] == 0
+    # ...and never advertises a truncation flag: that answers a per-stage-cap question
+    # this mode was not asked. The sweep derives hasMore from an over-fetched ROW.
+    assert "deals_truncated" not in out
 
 
 def test_get_pipeline_cursor_page_skips_the_aggregate(rec):
