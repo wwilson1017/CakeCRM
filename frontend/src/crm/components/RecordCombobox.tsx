@@ -192,6 +192,9 @@ export function RecordCombobox<T>({
     } catch (err: unknown) {
       // Kept inline rather than thrown: the user is mid-form, and the name they typed is
       // still in the box to correct. A toast would scroll away from the field it is about.
+      // Intent-checked like the success path, or a failed create for "Alpha" reports itself
+      // under the "Beta" the user has since typed.
+      if (intentRef.current !== intent) return;
       setError(err instanceof Error ? err.message.replace(/^API error \d+: /, '') : 'Could not create');
     } finally {
       // `finally`, because the superseded branch above RETURNS: releasing the flag only on

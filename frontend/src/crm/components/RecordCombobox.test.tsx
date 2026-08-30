@@ -439,3 +439,21 @@ describe('RecordCombobox — recovering from an interrupted create', () => {
     expect(props.onSelect).not.toHaveBeenCalled();
   });
 });
+
+describe('RecordCombobox — a superseded create that fails', () => {
+  it('does not report a stale create error against the query the user has moved to', async () => {
+    let reject: (e: Error) => void = () => {};
+    mount({
+      search: vi.fn(async () => []),
+      create: vi.fn(() => new Promise<Rec>((_res, rej) => { reject = rej; })),
+    });
+    await open();
+    await type('Alpha');
+    await settle();
+    await act(async () => { createRow()!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    await type('Beta');
+    await act(async () => { reject(new Error('API error 500: Alpha blew up')); });
+
+    expect(container.textContent).not.toContain('Alpha blew up');
+  });
+});
