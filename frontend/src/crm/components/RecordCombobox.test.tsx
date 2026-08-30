@@ -236,3 +236,85 @@ describe('RecordCombobox — the linked record', () => {
     expect(props.onSelect).toHaveBeenCalledWith(null);
   });
 });
+
+describe('RecordCombobox — a failed search', () => {
+  it('says the search failed instead of claiming there were no matches', async () => {
+    // "No matches" for a request that ERRORED states as fact the one thing we do not know,
+    // and for the contact picker — whose create path has no uniqueness constraint behind
+    // it — that is how a duplicate gets made.
+    mount({ search: vi.fn(async () => { throw new Error('network'); }) });
+    await open();
+
+    expect(container.textContent).toContain('Search failed');
+    expect(container.textContent).not.toContain('No matches');
+  });
+
+  it('still offers Create after a failed search, rather than stranding the user', async () => {
+    mount({ search: vi.fn(async () => { throw new Error('network'); }) });
+    await open();
+    await type('Newco');
+    await settle();
+
+    expect(createRow()?.textContent).toBe('Create "Newco"…');
+  });
+
+  it('settles out of the loading state on failure', async () => {
+    // A rejected search must not leave the list stuck on "Searching…" forever.
+    mount({ search: vi.fn(async () => { throw new Error('network'); }) });
+    await open();
+
+    expect(container.textContent).not.toContain('Searching');
+  });
+
+  it('clears the failed state once a later search succeeds', async () => {
+    const search = vi.fn()
+      .mockImplementationOnce(async () => { throw new Error('network'); })
+      .mockImplementation(async () => [ACME]);
+    mount({ search });
+    await open();
+    await type('Acme');
+    await settle();
+
+    expect(container.textContent).not.toContain('Search failed');
+  });
+});
+
+describe('RecordCombobox — accessibility wiring', () => {
+  it('points aria-activedescendant at the active row and moves it with the keyboard', async () => {
+    // A screen-reader user has nothing but this attribute to know which row is active, so
+    // it has to track `active` — a behavioural test on which record gets picked would not
+    // notice it drifting.
+    mount({ search: vi.fn(async () => [ACME, { id: 2, name: 'Beta Ltd' }]) });
+    await open();
+
+    const first = input().getAttribute('aria-activedescendant');
+    expect(first).toBeTruthy();
+    await press('ArrowDown');
+    const second = input().getAttribute('aria-activedescendant');
+    expect(second).not.toBe(first);
+    // ...and it names the row the list actually marks as selected.
+    expect(document.getElementById(second!)?.getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('reports its expanded state on the combobox itself', async () => {
+    mount({ search: vi.fn(async () => [ACME]) });
+
+    expect(input().getAttribute('aria-expanded')).toBe('false');
+    await open();
+    expect(input().getAttribute('aria-expanded')).toBe('true');
+  });
+});
+
+describe('RecordCombobox — dismissal', () => {
+  it('closes on a click outside without selecting anything', async () => {
+    // Otherwise the popover sits open over the rest of the form.
+    const props = mount({ search: vi.fn(async () => [ACME]) });
+    await open();
+    await act(async () => {
+      document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    });
+
+    expect(container.querySelector('[role="listbox"]')).toBeNull();
+    expect(props.onSelect).not.toHaveBeenCalled();
+  });
+});

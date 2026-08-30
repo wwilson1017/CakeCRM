@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { api } from '../../core/api/client';
 import { useAuth } from '../../core/auth/AuthContext';
 import { OwnerSelect } from './OwnerSelect';
@@ -90,6 +90,12 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
   const [error, setError] = useState('');
   const cf = useCustomFieldsForm('deal', deal?.id);
 
+  // Set the moment the user touches either picker. The prefill below lands
+  // asynchronously, and a `prev ?? …` guard cannot tell "never set" from "just cleared" —
+  // so without this, clearing a link while that fetch is in flight silently re-fills it,
+  // and the deal saves against a company the user had just unlinked.
+  const linksTouched = useRef(false);
+
   useEffect(() => {
     // Deal opened from a contact (create mode): default the company to THAT
     // contact's company so the deal lands in its rollups, and label the picker with
@@ -98,10 +104,11 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
     if (!deal && contactId != null) {
       api<CrmContact>(`/api/crm/contacts/${contactId}`)
         .then(c => {
+          if (linksTouched.current) return;  // the user got there first; their choice wins
           setContactLabel(c.name);
           if (c.company_id != null) {
-            setSelectedCompany(prev => prev ?? c.company_id);
-            setCompanyLabel(prev => prev || c.company_name || c.company || '');
+            setSelectedCompany(c.company_id);
+            setCompanyLabel(c.company_name || c.company || '');
           }
         })
         .catch(() => {});
@@ -118,6 +125,7 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
   // Reading `selectedCompany` from the render closure is correct here: this only runs
   // from a user gesture, so the value is the one that gesture was aimed at.
   function pickContact(c: CrmContact | null) {
+    linksTouched.current = true;
     setSelectedContact(c?.id ?? null);
     setContactLabel(c?.name || '');
     if (c && c.company_id != null && selectedCompany == null) {
@@ -197,7 +205,11 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
             getId={recordId}
             getLabel={companyLabelOf}
             getSublabel={companySublabelOf}
-            onSelect={co => { setSelectedCompany(co?.id ?? null); setCompanyLabel(co?.name || ''); }}
+            onSelect={co => {
+              linksTouched.current = true;
+              setSelectedCompany(co?.id ?? null);
+              setCompanyLabel(co?.name || '');
+            }}
           />
           <div>
             <OwnerSelect

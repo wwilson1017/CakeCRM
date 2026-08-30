@@ -423,9 +423,9 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   contact. The selected record's LABEL is now a prop seeded from `deal.contact_name` /
   `deal.company_name` (both joined by `get_deal` AND `get_pipeline`), so the display is
   correct by construction and both guards are gone. The picker is deliberately NOT built on
-  `shared/search`: `SearchInput` has no listbox, and `match.ts` documents itself as
-  client-side-only over an already-loaded array, explicitly disclaiming server-paginated
-  contacts and companies. **Three corrections to that issue's own pointers, each verified:**
+  `shared/search`: `SearchInput` has no listbox, and that module documents itself (in
+  `shared/search/index.ts`) as client-side-only over an already-loaded dataset, explicitly
+  disclaiming server-paginated contacts and companies. **Three corrections to that issue's own pointers, each verified:**
   the search param is **`q`**, not the `?search=` it names (which `list_contacts` ignores, so
   building against it ships a picker that always shows the unfiltered first page); `DealCreate`
   has no free-text `company` field the way `ContactCreate` does, so a typed company must be

@@ -14,8 +14,9 @@ import { useDebounce } from '../../shared/hooks/useDebounce';
  * guards disappear.
  *
  * Deliberately not built on `shared/search`: `SearchInput` is a plain debounced text input
- * with no listbox, and `match.ts` documents itself as client-side-only over an
- * already-loaded array, explicitly disclaiming server-paginated contacts and companies.
+ * with no listbox, and that module documents itself (in `shared/search/index.ts`) as
+ * client-side-only over an already-loaded dataset, explicitly disclaiming server-paginated
+ * CRM contacts and companies.
  * The popover mechanics (click-outside + Escape) follow `PipelineFilterBar`'s FacetButton,
  * in the inline-style idiom the entity forms already use.
  *
@@ -59,7 +60,7 @@ export function RecordCombobox<T>({
   // synchronous setState (which this repo's react-hooks v7 ruleset rejects, and which is
   // fixed by restructuring rather than suppressed), and it makes "these rows are for the
   // query on screen" checkable instead of assumed.
-  const [settled, setSettled] = useState<{ query: string; rows: T[] } | null>(null);
+  const [settled, setSettled] = useState<{ query: string; rows: T[]; failed: boolean } | null>(null);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
@@ -84,6 +85,14 @@ export function RecordCombobox<T>({
   const fresh = settled !== null && settled.query === pending && pending === trimmed;
   const results = fresh ? settled.rows : [];
   const loading = open && !fresh;
+  // A failed search is NOT the same as an empty one, and the difference is user-visible:
+  // rendering "No matches" for a request that errored would state as fact the one thing we
+  // do not know. It matters most for the CONTACT picker, whose create path has no
+  // uniqueness constraint behind it (the company path resolves through
+  // uq_companies_name_ci and dedupes regardless of what the client believed) — so a
+  // transient failure silently inviting `Create "…"` is how a duplicate contact gets made.
+  // Create stays available: refusing it would strand a user whose search backend is down.
+  const searchFailed = fresh && settled.failed;
   const exactMatch = results.some(r => getLabel(r).trim().toLowerCase() === trimmed.toLowerCase());
   const canCreate = trimmed !== '' && !loading && !exactMatch;
   const createIndex = results.length;
@@ -97,15 +106,17 @@ export function RecordCombobox<T>({
     const seq = ++reqRef.current;
     let cancelled = false;
     const q = debounced.trim();
-    const land = (rows: T[]) => {
+    const land = (rows: T[], failed: boolean) => {
       if (cancelled || seq !== reqRef.current) return;
-      setSettled({ query: q, rows });
+      setSettled({ query: q, rows, failed });
       setActiveIndex(0);
     };
     // A failed search lands as zero rows rather than an error: the user is mid-form and
     // can still type a name and create it, which is the more useful outcome than a dead
-    // list. A failed CREATE does surface, because there the record silently would not exist.
-    search(q).then(land, () => land([]));
+    // list. It is FLAGGED as failed, though, so the list says so instead of claiming there
+    // was nothing to find. A failed CREATE surfaces its own message, because there the
+    // record the user asked for silently would not exist.
+    search(q).then(rows => land(rows, false), () => land([], true));
     return () => { cancelled = true; };
   }, [open, debounced, search]);
 
@@ -265,7 +276,12 @@ export function RecordCombobox<T>({
               </li>
             )}
           </ul>
-          {rowCount === 0 && (
+          {searchFailed && (
+            <p style={{ margin: 0, padding: '7px 10px', fontSize: 12, color: CORAL }}>
+              Search failed — results may be incomplete.
+            </p>
+          )}
+          {rowCount === 0 && !searchFailed && (
             <p style={{ margin: 0, padding: '7px 10px', fontSize: 12, color: INK_DIM, background: BG_RAISED, borderRadius: 4 }}>
               {loading ? 'Searching…' : 'No matches'}
             </p>

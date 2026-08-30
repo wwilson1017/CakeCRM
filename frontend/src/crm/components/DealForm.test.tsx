@@ -66,9 +66,11 @@ afterEach(() => {
   container.remove();
 });
 
-async function render(d: CrmDeal) {
+async function render(d?: CrmDeal, contactId?: number) {
   await act(async () => {
-    root.render(<AuthProvider><DealForm deal={d} onClose={() => {}} onSaved={() => {}} /></AuthProvider>);
+    root.render(
+      <AuthProvider><DealForm deal={d} contactId={contactId} onClose={() => {}} onSaved={() => {}} /></AuthProvider>,
+    );
   });
   await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 }
@@ -177,9 +179,12 @@ function contact(over: Partial<CrmContact> = {}): CrmContact {
 }
 
 /** Let the picker's 250ms debounce and its fetch settle. Real timers: this file does not
- *  use fake ones, and mixing the two around React's act() is more fragile than waiting. */
+ *  use fake ones, and mixing the two around React's act() is more fragile than waiting.
+ *  The cushion over the debounce is generous on purpose — a 50ms margin between two real
+ *  timers is exactly the shape that goes intermittently red on a loaded CI runner, and an
+ *  intermittent failure here would not reproduce on the machine that has to fix it. */
 async function settleSearch() {
-  await act(async () => { await new Promise(r => setTimeout(r, 300)); });
+  await act(async () => { await new Promise(r => setTimeout(r, 600)); });
 }
 
 function combobox(which: 'contact' | 'company'): HTMLInputElement {
@@ -210,13 +215,6 @@ async function clickOption(match: (text: string) => boolean) {
     .find(b => match(b.textContent || ''));
   if (!button) throw new Error('no matching option rendered');
   await act(async () => { button.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
-}
-
-async function renderNew() {
-  await act(async () => {
-    root.render(<AuthProvider><DealForm onClose={() => {}} onSaved={() => {}} /></AuthProvider>);
-  });
-  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 }
 
 /** Route the picker traffic; `contacts` is what a contact search returns. */
@@ -255,7 +253,7 @@ describe('DealForm — inline quick-create', () => {
     // The acceptance criterion: from New Deal, with nothing matching, land a saved deal
     // linked to a brand-new contact and company without ever leaving the form.
     mockApi();
-    await renderNew();
+    await render();
     await act(async () => { typeInto(titleInput(), 'Brand new prospect'); });
 
     await openPicker('contact');
@@ -276,7 +274,7 @@ describe('DealForm — inline quick-create', () => {
     // explicit null, and absent is what makes the record yours. Sending currentUser.id
     // would also race a login that has not resolved yet.
     mockApi();
-    await renderNew();
+    await render();
     await openPicker('contact');
     await typeInPicker('contact', 'Jane Doe');
     await clickOption(t => t.startsWith('Create '));
@@ -289,7 +287,7 @@ describe('DealForm — inline quick-create', () => {
     // POST /companies INSERTs unconditionally and 400s on a name that already exists
     // case/whitespace-insensitively, which is exactly the wrong answer for a picker.
     mockApi();
-    await renderNew();
+    await render();
     await openPicker('company');
     await typeInPicker('company', 'Newco');
     await clickOption(t => t.startsWith('Create '));
@@ -303,7 +301,7 @@ describe('DealForm — inline quick-create', () => {
     // The issue's own pointer said `?search=`, which list_contacts ignores — it would have
     // shipped a picker that always showed the unfiltered first page.
     mockApi([contact({ id: 3, name: 'Acme Person' })]);
-    await renderNew();
+    await render();
     await openPicker('contact');
     await typeInPicker('contact', 'Acme');
 
@@ -314,7 +312,7 @@ describe('DealForm — inline quick-create', () => {
 describe('DealForm — contact→company auto-fill', () => {
   it('fills the company from a picked contact when no company is set', async () => {
     mockApi([contact({ id: 3, name: 'Acme Person', company_id: 9, company_name: 'Acme Corp' })]);
-    await renderNew();
+    await render();
     await act(async () => { typeInto(titleInput(), 'Auto-filled deal'); });
     await openPicker('contact');
     await clickOption(t => t.includes('Acme Person'));
@@ -327,7 +325,7 @@ describe('DealForm — contact→company auto-fill', () => {
     // deal↔company links are independent of the contact's, so changing the contact must
     // not silently re-point a company the user picked on purpose.
     mockApi([contact({ id: 3, name: 'Acme Person', company_id: 9, company_name: 'Acme Corp' })]);
-    await renderNew();
+    await render();
     await act(async () => { typeInto(titleInput(), 'Deliberate company'); });
     await openPicker('company');
     await typeInPicker('company', 'Chosen Co');
@@ -354,5 +352,110 @@ describe('DealForm — the linked record on an edit', () => {
 
     expect(combobox('contact').value).toBe('Very Old Contact');
     expect(combobox('company').value).toBe('Very Old Company Ltd');
+  });
+});
+
+describe('DealForm — unlinking', () => {
+  it('sends null for both links when they are cleared', async () => {
+    // The old <select>'s "No contact" / "No company" option is now the picker's × button.
+    // Unlinking is long-standing behaviour that changed its mechanism in this diff, so it
+    // needs a test at THIS level: RecordCombobox's own test only proves the widget calls
+    // onSelect(null), not that DealForm turns that into a null in the request body.
+    mockApi();
+    await render(deal({
+      contact_id: 4, contact_name: 'Linked Person',
+      company_id: 8, company_name: 'Linked Co',
+    }));
+
+    for (const label of ['Clear contact', 'Clear company']) {
+      const button = container.querySelector(`button[aria-label="${label}"]`) as HTMLButtonElement;
+      await act(async () => { button.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    }
+    await submit();
+
+    const put = api.mock.calls.find(([p, i]) => p === '/api/crm/deals/7' && i?.method === 'PUT');
+    const body = JSON.parse(put![1].body as string) as Record<string, unknown>;
+    expect(body.contact_id).toBeNull();
+    expect(body.company_id).toBeNull();
+  });
+});
+
+describe('DealForm — New Deal opened from a contact', () => {
+  it('labels both pickers from the contact fetched by id', async () => {
+    // This entry point cannot use the search: the point of fetching by id is that the
+    // contact may sit outside any page of results.
+    api.mockImplementation(async (path: string) => {
+      if (path === '/api/crm/contacts/77') {
+        return contact({ id: 77, name: 'Sourced Person', company_id: 5, company_name: 'Sourced Co' });
+      }
+      if (path.startsWith('/api/crm/contacts')) return { contacts: [] };
+      if (path.startsWith('/api/crm/companies')) return { companies: [] };
+      if (path === '/api/users') return { users: [] };
+      if (path.includes('/fields')) return [];
+      return null;
+    });
+    await render(undefined, 77);
+
+    expect(combobox('contact').value).toBe('Sourced Person');
+    expect(combobox('company').value).toBe('Sourced Co');
+  });
+
+  it('does NOT re-fill a link the user cleared while the prefill was in flight', async () => {
+    // `prev ?? …` cannot tell "never set" from "just cleared", so without an explicit
+    // touched flag this fetch silently reinstates a company the user had just unlinked —
+    // and the deal saves against it with no visual cue that anything was overridden.
+    let release: (c: CrmContact) => void = () => {};
+    api.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === '/api/crm/contacts/77') return new Promise<CrmContact>(res => { release = res; });
+      if (init?.method === 'POST' && path === '/api/crm/deals') return { id: 5 };
+      if (path.startsWith('/api/crm/contacts')) return { contacts: [] };
+      if (path.startsWith('/api/crm/companies')) return { companies: [] };
+      if (path === '/api/users') return { users: [] };
+      if (path.includes('/fields')) return [];
+      return null;
+    });
+    await render(undefined, 77);
+    await act(async () => { typeInto(titleInput(), 'Cleared on purpose'); });
+
+    // The contact id is seeded synchronously from the prop, so its × is live immediately.
+    const clear = container.querySelector('button[aria-label="Clear contact"]') as HTMLButtonElement;
+    await act(async () => { clear.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    await act(async () => {
+      release(contact({ id: 77, name: 'Sourced Person', company_id: 5, company_name: 'Sourced Co' }));
+    });
+    await submit();
+
+    expect(dealPost()).toMatchObject({ contact_id: null, company_id: null });
+  });
+});
+
+describe('DealForm — company labelling', () => {
+  it('marks an archived company in the picker', async () => {
+    // Carried forward from the <select>, which flagged archived companies per option:
+    // linking a deal to an archived company should never look like linking to a live one.
+    api.mockImplementation(async (path: string) => {
+      if (path.startsWith('/api/crm/companies')) {
+        return { companies: [{ id: 6, name: 'Wound Down Ltd', status: 'archived' }] };
+      }
+      if (path.startsWith('/api/crm/contacts')) return { contacts: [] };
+      if (path === '/api/users') return { users: [] };
+      if (path.includes('/fields')) return [];
+      return null;
+    });
+    await render();
+    await openPicker('company');
+
+    expect(container.querySelector('[role="option"]')?.textContent).toContain('(archived)');
+  });
+
+  it('shows a contact\'s company as the row sublabel', async () => {
+    // The only way to tell two same-named contacts apart in the list.
+    mockApi([contact({ id: 3, name: 'Acme Person', company_id: 9, company_name: 'Acme Corp' })]);
+    await render();
+    await openPicker('contact');
+
+    const row = container.querySelector('[role="option"]');
+    expect(row?.textContent).toContain('Acme Person');
+    expect(row?.textContent).toContain('Acme Corp');
   });
 });
