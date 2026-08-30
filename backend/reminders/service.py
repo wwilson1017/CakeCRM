@@ -241,6 +241,28 @@ def get_due_reminders(limit: int = 50) -> list[dict]:
     )]
 
 
+def list_pending_between(start, end) -> list[dict]:
+    """Pending reminders due inside ``[start, end)`` — the #130 Today panel's window.
+
+    Distinct from ``get_due_reminders`` on both bounds: that one asks "what has come
+    due" (everything up to now, for firing), this one asks "what falls on this
+    calendar day" — including the hours still ahead, which is the whole point of a
+    panel that tells you what today holds.
+
+    Pending only, deliberately: a fired reminder was already delivered (the
+    notifications bell holds it) and a cancelled one was revoked, so neither still
+    needs you. Uncapped because one local day of pending reminders is already a
+    bounded set. ``id`` breaks due_at ties (issue #58) as everywhere else here.
+
+    Callers pass aware instants — ``core.localtime.local_day_bounds`` builds the pair
+    for a local calendar day.
+    """
+    return [_transform(r) for r in pg_fetchall(
+        "SELECT * FROM reminders WHERE status = 'pending' AND due_at >= %s AND due_at < %s "
+        "ORDER BY due_at ASC, id ASC", (start, end),
+    )]
+
+
 def claim_reminder(reminder: dict) -> dict | None:
     """Atomically claim a due reminder for firing, creating its next recurring
     occurrence in the SAME transaction.

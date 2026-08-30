@@ -6,6 +6,12 @@ export const STAGE_ORDER = ['lead', 'qualified', 'proposal', 'negotiation', 'won
 // the pipeline header's open-pipeline total and the Overdue close-date facet.
 export const OPEN_STAGES = STAGE_ORDER.filter(s => s !== 'won' && s !== 'lost');
 
+// Mirrors `crm.service.MAX_LOST_REASON` (issue #128), the same way
+// `chatterComposer.MAX_NOTE_LEN` mirrors `chatter_service.MAX_MESSAGE_LEN`. The composer
+// caps input so a long reason is stopped while it is being typed, rather than round-
+// tripping to a 422 after the user has written it.
+export const MAX_LOST_REASON = 500;
+
 // Stage hues live in index.css as `--color-ck-stage-*` tokens so the `.dark` block can
 // lighten them for dark surfaces — the previous hand-tuned hex/rgba table was correct
 // on light backgrounds only. The tint is derived with color-mix() rather than a second

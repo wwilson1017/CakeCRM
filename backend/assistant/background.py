@@ -12,8 +12,17 @@ the ``notifications`` log).
 Two safety rules make the autonomous turn acceptable (the confirmation gate is
 never involved here):
   * a SERVER-ENFORCED ALLOWLIST (``allowed_tools``) checked at BOTH advertisement
-    and execution — background turns get READ tools + ``notify_user`` ONLY, no CRM
-    write tools at all (so a prompt injection can at most send one notification); and
+    and execution. Two different strengths live here, and the difference matters:
+      - ``BACKGROUND_EXCLUDED_TOOLS`` is enforced by the MODE — ``_run_turn``
+        subtracts it from whatever the caller passed, so a live external-source read
+        cannot run in a background turn under any caller (issue #114); while
+      - the "READ tools + ``notify_user`` ONLY, no CRM writes" ceiling is enforced by
+        the CALLER'S declaration. Every caller builds it with ``background_allowlist``
+        (heartbeat ×2, proactive — each pinned by a test), which is what makes the
+        "a prompt injection can at most send one notification" claim true today. It is
+        deliberately not intersected in ``_run_turn``: this mode is designed to let a
+        caller permit a write, which is what the write budget below exists to bound
+        and what ``test_write_executes_without_confirmation`` pins.
   * a dedicated ``WRITE_BUDGET_BACKGROUND`` (bounds ``notify_user``) + a
     ``max_iterations`` cap.
 
@@ -74,21 +83,53 @@ NO_PROVIDER_TEXT = "No AI provider configured"
 
 # ── Allowlist builders (R1) ─────────────────────────────────────────────────
 
+# Reads that fetch third-party content LIVE from a connected external account (today
+# the two Gmail reads). The interactive engine answers these with the power→normal
+# taint downgrade: a human is watching, sees the nonce fence, and an unconfirmed write
+# is taken off the table. An unattended turn has no analogue — nobody reads the fence,
+# and its one permitted external action (notify_user → web push + Telegram) would carry
+# whatever the read returned. So the documented "worst case is one notification" ceiling
+# held mechanically while still being an email-exfiltration channel: hostile text in a
+# reminder or CRM record could steer the turn gmail_search → gmail_read_thread → private
+# mail in the notification body (issue #114).
+#
+# Sourced from delimiters.UNTRUSTED_SOURCE_TOOLS rather than re-listed, so the rule is
+# written down ONCE and cannot drift: test_gmail_guard already pins every Gmail read
+# into that set, which means a future Gmail reader is excluded here the moment it
+# satisfies that existing guard.
+#
+# Scope: this removes LIVE mailbox access only. Sender and subject that #17's
+# deterministic gmail_scan already logged into activity_log remain visible through the
+# ordinary CRM reads — that is CRM data by design, and _heartbeat_prompt already tells
+# the model everything a CRM tool returns is third-party text, never instructions.
+BACKGROUND_EXCLUDED_TOOLS = delimiters.UNTRUSTED_SOURCE_TOOLS
+
+
 def read_tool_names(registry) -> set[str]:
-    """Names of all non-write tools on ``registry`` (safe in any background turn)."""
+    """Names of all non-write tools on ``registry``.
+
+    Not a safety verdict on its own — ``writes: False`` means "changes nothing", not
+    "safe unattended". ``background_allowlist`` subtracts BACKGROUND_EXCLUDED_TOOLS
+    from this before any background turn sees it.
+    """
     return {name for name, is_write in registry.writes_map.items() if not is_write}
 
 
 def background_allowlist(registry) -> set[str]:
-    """Tools a background (autonomous) turn may use: READ tools + notify_user ONLY.
+    """Tools a background (autonomous) turn may use: READ tools + notify_user ONLY,
+    minus the live external-source reads in ``BACKGROUND_EXCLUDED_TOOLS``.
 
     No CRM write tools at all. The turn observes the user's data and, if warranted,
     calls notify_user once (its only externally-visible action, budgeted). This is
     a hard boundary against prompt injection via reminder/CRM text: even if the
     model were steered by injected content, the worst it can do is send one
-    notification — it can never create/log/update/delete CRM records.
+    notification — it can never create/log/update/delete CRM records, and (since
+    #114) it cannot fetch live mailbox content to put in that notification. Stated
+    that precisely on purpose: mail-DERIVED text can still reach the turn, because
+    #17's gmail_scan logs a sender and subject into activity_log and the CRM reads
+    return it like any other record.
     """
-    return read_tool_names(registry) | {"notify_user"}
+    return (read_tool_names(registry) - BACKGROUND_EXCLUDED_TOOLS) | {"notify_user"}
 
 
 # Heartbeat and reminder turns share the same (read + notify_user) boundary.
@@ -104,6 +145,14 @@ def _short(value, limit: int) -> str:
 async def _run_turn(provider, registry, system_prompt, user_message: str,
                    allowed_tools: set[str], max_iterations: int,
                    write_budget_limit: int) -> BackgroundResult:
+    # Clamp the CALLER-SUPPLIED set: an untrusted-source read must not run in this mode
+    # even if a caller assembles its own allowlist instead of using the builder above.
+    # One subtraction here covers BOTH enforcement points below, because each reads
+    # `allowed_tools` — advertisement (registry.provider_tools(allow=...)) and execution
+    # (the `name not in allowed_tools` check). Narrow on purpose: this pins the
+    # untrusted-source exclusion only. The wider "reads + notify_user" ceiling is still
+    # the caller's allowlist to declare, which is why a caller-supplied write still runs.
+    allowed_tools = set(allowed_tools) - BACKGROUND_EXCLUDED_TOOLS
     messages = [{"role": "user", "content": user_message}]
     provider_tools = registry.provider_tools("power", allow=allowed_tools)
     budget = BudgetState(limit=write_budget_limit)
@@ -169,9 +218,10 @@ async def _run_turn(provider, registry, system_prompt, user_message: str,
                 result = await registry.execute_tool(name, args)
 
             # Fence exactly as the interactive loop does. An unattended turn has no human
-            # to notice a planted instruction, and its read allowlist reaches both Gmail
-            # and Baker's context files — a stored `Headline:` line is attacker-authored
-            # text that must arrive as DATA, not as raw JSON (issue #72).
+            # to notice a planted instruction, and its read allowlist reaches Baker's
+            # context files (Gmail is excluded outright — BACKGROUND_EXCLUDED_TOOLS) —
+            # a stored `Headline:` line is attacker-authored text that must arrive as
+            # DATA, not as raw JSON (issue #72).
             content = delimiters.fence_tool_result(name, json.dumps(result, default=str))
             results.append({"tool_use_id": tool_use_id, "tool_name": name, "content": content})
             tool_log.append({"tool": name, "args": _short(args, 200), "result": _short(result, 500)})
@@ -195,9 +245,11 @@ def _with_fence_safety(system_prompt):
     Fencing the results (see ``_run_turn``) only helps if the model has been told what a
     fence means. Each caller's prompt frames its own input — the reminder prompt covers
     reminder text, the heartbeat prompt covers CRM record text — but the background
-    allowlist also reaches Gmail and Baker's context files, and nothing explained those
-    tags. Applied HERE rather than in each caller so a future background job cannot ship
-    without it.
+    allowlist also reaches Baker's context files, and nothing explained those tags.
+    Applied HERE rather than in each caller so a future background job cannot ship
+    without it. (It still describes the external-content fence too: Gmail tools are
+    excluded from background turns since #114, but CRM records can quote email, and the
+    instruction is cheap insurance against a future external read being admitted.)
 
     Accepts either a ``(static, volatile)`` pair or a plain string, matching what
     providers take.

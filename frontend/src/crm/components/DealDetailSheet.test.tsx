@@ -187,3 +187,178 @@ describe('DealDetailSheet — archived deals', () => {
     expect(button('Restore')?.disabled).toBe(false);
   });
 });
+
+describe('DealDetailSheet — Mark Lost captures a reason (issue #128)', () => {
+  it('opens the reason dialog instead of closing the deal immediately', async () => {
+    const d = deal();
+    routeApi(d);
+    const onStageChange = vi.fn();
+    await render(
+      <DealDetailSheet deal={d} isMobile={false} onClose={noop} onEdit={noop}
+        onStageChange={onStageChange} />,
+    );
+
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+    await act(async () => { button('Mark Lost')!.click(); });
+
+    expect(document.body.querySelector('[role="dialog"]')).toBeTruthy();
+    // The whole point: nothing is written until a reason has been asked for.
+    expect(onStageChange).not.toHaveBeenCalled();
+  });
+
+  it('hands the typed reason up as a THIRD argument, which is what selects the endpoint', async () => {
+    const d = deal();
+    routeApi(d);
+    const onStageChange = vi.fn();
+    await render(
+      <DealDetailSheet deal={d} isMobile={false} onClose={noop} onEdit={noop}
+        onStageChange={onStageChange} />,
+    );
+    await act(async () => { button('Mark Lost')!.click(); });
+
+    // Scoped to the dialog on purpose: the sheet's own NotesThread composer is also a
+    // textarea and comes first in document order.
+    const field = document.body.querySelector<HTMLTextAreaElement>('[role="dialog"] textarea')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!
+        .set!.call(field, 'Lost on price');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const confirm = [...document.body.querySelectorAll('button')]
+      .find(b => b.textContent?.trim() === 'Mark Lost' && !container.contains(b))!;
+    await act(async () => { confirm.click(); });
+
+    expect(onStageChange).toHaveBeenCalledWith(d, 'lost', 'Lost on price');
+  });
+
+  it('writes nothing when the dialog is cancelled', async () => {
+    const d = deal();
+    routeApi(d);
+    const onStageChange = vi.fn();
+    await render(
+      <DealDetailSheet deal={d} isMobile={false} onClose={noop} onEdit={noop}
+        onStageChange={onStageChange} />,
+    );
+    await act(async () => { button('Mark Lost')!.click(); });
+    const cancel = [...document.body.querySelectorAll('button')]
+      .find(b => b.textContent?.trim() === 'Cancel' && !container.contains(b))!;
+    await act(async () => { cancel.click(); });
+
+    expect(onStageChange).not.toHaveBeenCalled();
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it('disables the close-out buttons while a slow write is in flight', async () => {
+    // CrmDashboardPage awaits the write and keeps the sheet open on failure, so without
+    // this guard a second Mark Lost lands before the first settles — and mark_deal_lost
+    // appends its "Deal lost —" note on EVERY call that finds the deal, no-op included.
+    // The modal's own latch cannot cover it: that modal unmounts on the first confirm.
+    const d = deal();
+    routeApi(d);
+    let release!: () => void;
+    const inFlight = new Promise<void>(res => { release = res; });
+    const onStageChange = vi.fn(() => inFlight);
+    await render(
+      <DealDetailSheet deal={d} isMobile={false} onClose={noop} onEdit={noop}
+        onStageChange={onStageChange} />,
+    );
+
+    await act(async () => { button('Mark Won')!.click(); });
+    expect(onStageChange).toHaveBeenCalledTimes(1);
+    expect(button('Mark Won')!.disabled).toBe(true);
+    expect(button('Mark Lost')!.disabled).toBe(true);
+
+    // A second click during the request must not reach the host. `disabled` is what
+    // enforces that, which is also why it is asserted above rather than trusted.
+    await act(async () => { button('Mark Won')!.click(); });
+    expect(onStageChange).toHaveBeenCalledTimes(1);
+
+    // …and the buttons come back once it settles, so a host that keeps the sheet open
+    // after a FAILED write still lets the user retry.
+    await act(async () => { release(); await inFlight; });
+    expect(button('Mark Won')!.disabled).toBe(false);
+  });
+
+  it('leaves Mark Won a direct, dialog-free stage change', async () => {
+    const d = deal();
+    routeApi(d);
+    const onStageChange = vi.fn();
+    await render(
+      <DealDetailSheet deal={d} isMobile={false} onClose={noop} onEdit={noop}
+        onStageChange={onStageChange} />,
+    );
+    await act(async () => { button('Mark Won')!.click(); });
+
+    // An UNDEFINED reason, which is precisely what routes the write to the plain stage
+    // PUT rather than the mark-lost verb — a won deal has no reason to record.
+    expect(onStageChange).toHaveBeenCalledWith(d, 'won', undefined);
+  });
+});
+
+describe('DealDetailSheet — an ambiguous close reconciles before a retry', () => {
+  it('re-reads the deal when the host leaves the sheet open, and drops the close-out buttons if the close actually landed', async () => {
+    // The dangerous case: the POST commits, then the response is lost (a dropped
+    // connection, or a 5xx after commit). CrmDashboardPage swallows the error and keeps
+    // the sheet open so the user can retry — but the deal is ALREADY lost, and
+    // mark_deal_lost appends its "Deal lost —" note on every call that finds the deal.
+    // Retrying would file a duplicate. Reconciling first is what prevents it.
+    const open = deal({ stage: 'lead' });
+    let detail = open;
+    api.mockImplementation(async (path: string) => {
+      if (path.includes('/provenance')) return { provenance: [] };
+      if (path.includes('/chatter/')) return { notes: [] };
+      if (path.includes('/fields')) return [];
+      if (path.includes('/touch-count/')) return null;
+      if (path === '/api/crm/deals/7') return detail;
+      return null;
+    });
+    // The host resolves WITHOUT dismissing the sheet — its failure path.
+    const onStageChange = vi.fn(async () => {
+      // …while the server did in fact commit the close.
+      detail = deal({ stage: 'lost', lost_reason: 'price' });
+    });
+    await render(
+      <DealDetailSheet deal={open} isMobile={false} onClose={noop} onEdit={noop}
+        onStageChange={onStageChange} />,
+    );
+    expect(button('Mark Lost')).toBeTruthy();
+
+    await act(async () => { button('Mark Won')!.click(); });
+    await act(async () => {});
+
+    // Reconciled against the server: the deal is closed, so neither button is offered
+    // and there is no way to fire a second mark_deal_lost.
+    expect(button('Mark Lost')).toBeUndefined();
+    expect(button('Mark Won')).toBeUndefined();
+  });
+
+  it('keeps the buttons live when the close genuinely did not land', async () => {
+    // The other half — a real failure must stay retryable, or the guard traps the user.
+    const open = deal({ stage: 'lead' });
+    routeApi(open);
+    const onStageChange = vi.fn(async () => {});
+    await render(
+      <DealDetailSheet deal={open} isMobile={false} onClose={noop} onEdit={noop}
+        onStageChange={onStageChange} />,
+    );
+    await act(async () => { button('Mark Won')!.click(); });
+    await act(async () => {});
+
+    expect(button('Mark Won')!.disabled).toBe(false);
+    expect(button('Mark Lost')).toBeTruthy();
+  });
+});
+
+describe('DealDetailSheet — the owner is visible (issue #128)', () => {
+  it('shows an Owner row reading "Unassigned" on an unowned deal', async () => {
+    // Unconditional, unlike its neighbouring rows: hiding it is what made "unassigned"
+    // indistinguishable from "not displayed".
+    const d = deal({ owner_id: null });
+    routeApi(d);
+    await render(
+      <DealDetailSheet deal={d} isMobile={false} onClose={noop} onEdit={noop} onStageChange={noop} />,
+    );
+    expect(container.textContent).toContain('Owner');
+    expect(container.textContent).toContain('Unassigned');
+  });
+});

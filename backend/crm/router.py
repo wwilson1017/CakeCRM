@@ -15,16 +15,19 @@ Contacts:
 Companies:
   GET    /api/crm/companies             — paginated list / search (?q=)
   GET    /api/crm/companies/:id         — full detail (rolled-up contacts/deals/activity)
-  POST   /api/crm/companies             — create
+  POST   /api/crm/companies             — create (400s on a case/whitespace duplicate)
+  POST   /api/crm/companies/resolve     — get-or-create by name (the #35 resolver over REST)
   PUT    /api/crm/companies/:id         — update
   DELETE /api/crm/companies/:id         — delete (contacts/deals unlink, not deleted)
 
 Deals:
-  GET    /api/crm/deals                 — pipeline list / filtered (?include_archived= on the board)
+  GET    /api/crm/deals                 — pipeline list / filtered (?include_archived= on the
+                                          board; ?sort=id&limit=&after_id= for its keyset page)
   GET    /api/crm/deals/:id             — detail
   POST   /api/crm/deals                 — create
   PUT    /api/crm/deals/:id             — update
   POST   /api/crm/deals/:id/restore     — un-archive a soft-archived deal
+  POST   /api/crm/deals/:id/mark-lost   — close as lost, recording a written reason
   POST   /api/crm/deals/bulk-move       — move many deals to one stage (one transaction)
   POST   /api/crm/deals/touch-count/backfill        — recompute AI touch counts (?scope=null|all&force=)
   GET    /api/crm/deals/touch-count/backfill/status — backfill progress
@@ -71,6 +74,7 @@ Lead scores (issue #18):
 
 Other:
   GET    /api/crm/dashboard             — summary stats
+  GET    /api/crm/dashboard/today       — ranked "what needs me today" list (?owner_id)
   GET    /api/crm/dashboard/weekly-touches — open deals touched in a window (?start, ?end)
   GET    /api/crm/analytics             — win/loss, activity volume, deal aging (?days, ?stale_days)
   GET    /api/crm/demo-status           — first-run onboarding / sample-data state
@@ -112,6 +116,7 @@ from crm import (
     provenance_service,
     scoring_service,
     service as crm,
+    today_service,
     todo_tokens,
     touch_count_service,
 )
@@ -199,6 +204,15 @@ class DealUpdate(BaseModel):
     owner_id: int | None = None
 
 
+class DealMarkLost(BaseModel):
+    # A Pydantic cap HERE, unlike BulkDealMove below, and the difference is what the
+    # service does when the limit is exceeded: bulk_move_deals REFUSES with a sentence
+    # worth surfacing, while mark_deal_lost silently TRUNCATES at MAX_LOST_REASON. A
+    # rep's typed prose losing its tail with no feedback is data loss, so the REST
+    # boundary rejects instead. The service cap stays for the agent-tool path.
+    lost_reason: str = Field("", max_length=crm.MAX_LOST_REASON)
+
+
 class BulkDealMove(BaseModel):
     # StrictInt, not int: Pydantic's lax mode coerces JSON `true` to 1, `1.0` to 1 and
     # "3" to 3, so a malformed body would silently move deal #1. Only the model can catch
@@ -221,6 +235,10 @@ class CompanyCreate(BaseModel):
     source: str = ""
     status: str = "active"
     owner_id: int | None = None
+
+
+class CompanyResolve(BaseModel):
+    name: str
 
 
 class CompanyUpdate(BaseModel):
@@ -438,6 +456,9 @@ async def delete_contact(contact_id: int, user=Depends(get_current_user)):
 async def list_deals(
     stage: str = "", contact_id: int | None = None,
     include_archived: bool = False,
+    sort: str = "",
+    limit: int | None = Query(None, ge=1, le=1000),
+    after_id: int | None = Query(None, ge=0, le=2_147_483_647),
     user=Depends(get_current_user),
 ):
     """Pipeline board payload, or a filtered deal list when stage/contact_id is given.
@@ -447,6 +468,15 @@ async def list_deals(
     accidentally archived deal. It is refused rather than ignored alongside
     stage/contact_id: that branch is a different service function which keeps the sweep,
     and silently dropping an advertised flag is worse than saying no.
+
+    `limit`/`after_id` (issue #59) are the board's OPT-IN keyset page. Omitting them
+    returns the whole board exactly as before. The frontend sweeps every page and
+    reassembles the complete corpus before rendering, so paging is transport only and
+    the client-side facet model is unchanged.
+
+    On a CONTINUATION page (`after_id` set) `stage_summary` and `total_pipeline_value`
+    come back as `null`: the sweep pays for that whole-table aggregate once, on its first
+    page, instead of on every one of up to 200 pages.
     """
     # `contact_id is not None`, not a truthiness test: `?contact_id=0` is falsy, so a
     # truthiness test would drop it through to the board branch — returning the whole
@@ -457,9 +487,31 @@ async def list_deals(
                 status_code=400,
                 detail="include_archived is not supported with stage or contact_id",
             )
+        # Same reasoning as include_archived: `list_deals` has no cursor, and silently
+        # dropping an advertised paginator looks exactly like a client stuck re-reading
+        # page one — the failure the #77 cursor rules exist to prevent. Refuse instead.
+        if limit is not None or after_id is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="limit and after_id are not supported with stage or contact_id",
+            )
         deals = crm.list_deals(stage=stage or None, contact_id=contact_id)
         return {"deals": deals, "count": len(deals)}
-    return crm.get_pipeline(include_archived=include_archived)
+    # The shared assembly wire format (assemblyPage.ts) always sends `sort=id`, and that
+    # parameter is what makes the cursor meaningful. Accepting `sort=updated_at` here
+    # while still returning id order would be a silently-ignored pagination input, so a
+    # paginated request must say `id` or say nothing. Unpaginated callers are unaffected.
+    if (limit is not None or after_id is not None) and sort not in ("", "id"):
+        raise HTTPException(
+            status_code=400,
+            detail="pipeline pages are ordered by id; pass sort=id or omit it",
+        )
+    try:
+        return crm.get_pipeline(
+            include_archived=include_archived, limit=limit, after_id=after_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
 
 
 @router.get("/deals/{deal_id}")
@@ -544,6 +596,40 @@ async def bulk_move_deals(body: BulkDealMove, user=Depends(get_current_user)):
 @router.post("/deals/{deal_id}/restore")
 def restore_deal(deal_id: int, user=Depends(get_current_user)):
     result = crm.archive_deal(deal_id, archived=False)
+    if not result:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    return result
+
+
+# Closing a deal WITH a reason (issue #128). Before this, `lost_reason` had no human
+# writer at all: the field renders on the deal sheet but `_DEAL_USER_WRITABLE` excludes
+# it (mark_deal_lost is its single writer), so on a keyless install a rep could read a
+# lost reason and never type one.
+#
+# This delegates to that same lifecycle verb rather than widening _DEAL_USER_WRITABLE,
+# which is what preserves the invariant it was excluded for — a reason can still only
+# arrive WITH the close, never be pasted onto a deal that isn't lost. It also zeroes
+# probability and appends the timeline note, which `PUT /deals/{id}` with {stage: lost}
+# does not, so the explicit Mark Lost action takes this route even when the reason is
+# blank; drag and bulk-move keep using PUT.
+#
+# Sync `def` like restore_deal above: blocking psycopg2 plus a chatter write and a
+# lead-score recompute, which FastAPI runs in a threadpool for a sync endpoint.
+#
+# No path collision — /deals/touch-count/backfill shares the segment count but differs
+# in its terminal segment, the same reasoning restore_deal already documents.
+@router.post("/deals/{deal_id}/mark-lost")
+def mark_deal_lost(deal_id: int, body: DealMarkLost, user=Depends(get_current_user)):
+    try:
+        # author_id credits the note to whoever typed the reason (#60: authorship is not
+        # ownership). The assistant tool leaves it NULL; a human route must not.
+        result = crm.mark_deal_lost(
+            deal_id, lost_reason=body.lost_reason, author_id=user["id"]
+        )
+    except ValueError as e:
+        # _write_deal_update refuses a stage change on an archived deal — a refusal the
+        # caller can act on, not a server fault. Same mapping as PUT /deals/{id}.
+        raise HTTPException(status_code=400, detail=str(e)) from None
     if not result:
         raise HTTPException(status_code=404, detail="Deal not found")
     return result
@@ -735,6 +821,24 @@ async def delete_activity(activity_id: int, user=Depends(get_current_user)):
 @router.get("/dashboard")
 async def dashboard(user=Depends(get_current_user)):
     return crm.get_dashboard_stats()
+
+
+@router.get("/dashboard/today")
+async def dashboard_today(
+    owner_id: int | None = Query(None),
+    user=Depends(get_current_user),
+):
+    """The Today panel (issue #130): one ranked list of what needs attention today.
+
+    `owner_id` absent means everyone (the `list_tasks` idiom — no separate flag or
+    magic value); present means that person's view, which deliberately INCLUDES
+    unassigned tasks, because someone has to catch them. Reminders carry no owner
+    column at all and appear in every scope.
+
+    Pure SQL, so the ranking is identical with zero AI providers configured. Rank 2 of
+    the ladder is reserved for the hot-deals follow-up (#125) and is never emitted yet.
+    """
+    return today_service.get_today(owner_id=owner_id)
 
 
 @router.get("/dashboard/weekly-touches")
@@ -1399,6 +1503,46 @@ async def create_company(body: CompanyCreate, user=Depends(get_current_user)):
         return crm.create_company(**_create_payload(body, user))
     except psycopg2.errors.UniqueViolation:
         raise HTTPException(status_code=400, detail="A company with that name already exists") from None
+
+
+@router.post("/companies/resolve")
+async def resolve_company(body: CompanyResolve, user=Depends(get_current_user)):
+    """Get-or-create a company by name — the #35 resolver exposed over REST (issue #123).
+
+    The deal form's inline quick-create needs get-or-create keyed on the
+    ``uq_companies_name_ci`` normalization, which ``POST /companies`` deliberately does
+    NOT provide: that route INSERTs unconditionally and surfaces a case/whitespace
+    duplicate as a 400. That is the right answer for the full "New Company" form, where
+    you asked to create a company that already exists, and the wrong one for a picker
+    whose entire job is to land you on the existing record.
+
+    Delegates to ``resolve_or_create_company_ids`` verbatim rather than matching the name
+    here. The normalization is an index expression, and the primitive's docstring warns
+    that Python's case-folding can disagree with the database's ``LOWER()`` — a second
+    spelling of that rule in this file (or a third in the frontend) is exactly how a
+    company we just created gets stranded and a duplicate appears anyway. It is also
+    race-safe by construction, which a SELECT-then-INSERT here would not be.
+
+    The raw name is passed through untrimmed: the primitive's contract is
+    ``{raw spelling exactly as passed: id}``, so looking the result up by the same string
+    keeps trimming a single rule owned by SQL. The blank guard mirrors ``create_company``
+    above rather than inventing its own.
+
+    A company created here is left UNASSIGNED, which is the primitive's deliberate rule
+    (pinned by ``test_auto_created_companies_are_left_unassigned``), not an oversight in
+    this route. The quick-created CONTACT does get the caller as owner, because it goes
+    through ``POST /contacts``, where ``_create_payload`` applies the usual default.
+    """
+    if not body.name.strip():
+        raise HTTPException(status_code=400, detail="Name is required")
+    company_id = crm.resolve_or_create_company_ids([body.name]).get(body.name)
+    company = crm.get_company(company_id) if company_id is not None else None
+    if not company:
+        # The primitive yields no id only in its documented single-user race: the row was
+        # deleted between its INSERT and its read-back. Nothing was linked, so refuse
+        # rather than hand back a half-answer the form would store as a company_id.
+        raise HTTPException(status_code=409, detail="Could not resolve that company — please try again")
+    return company
 
 
 @router.put("/companies/{company_id}")

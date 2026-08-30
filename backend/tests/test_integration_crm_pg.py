@@ -87,10 +87,15 @@ def pg_db():
 def _clean_crm(pg_db):
     """Reset all CRM state between tests so scenarios stay isolated."""
     from core.postgres import pg_execute
+    # crm_chatter_attachments has a real FK to crm_chatter (#57), and Postgres refuses to
+    # truncate a referenced table on its own — so it must ride this list exactly as it
+    # rides both production `_truncate_all` statements. Without it EVERY test in this
+    # module errors in setup, this fixture being autouse.
     pg_execute(
         "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
-        "crm_field_definitions, crm_field_values, crm_field_provenance, "
-        "deal_stage_events, proactive_nudges, deal_ai_touch_evidence RESTART IDENTITY"
+        "crm_chatter_attachments, crm_field_definitions, crm_field_values, "
+        "crm_field_provenance, deal_stage_events, proactive_nudges, "
+        "deal_ai_touch_evidence RESTART IDENTITY"
     )
     pg_execute(
         "UPDATE crm_meta SET sample_data_loaded = FALSE, onboarding_dismissed = FALSE, "
@@ -1519,3 +1524,112 @@ def test_a_cursor_against_a_mutable_order_raises(pg_db):
     ):
         with pytest.raises(ValueError):
             call()
+
+
+def test_pipeline_pages_and_window_match_the_unbounded_board(pg_db):
+    """#59's three bounding modes must agree with each other on real Postgres.
+
+    The hermetic tests pin SQL SHAPE; only a real database can prove the keyset walk
+    returns every deal exactly once under byte-identical timestamps, that the LATERAL
+    last-activity twin computes what the grouped one does, and that the SQL window
+    reproduces the Python trim it replaced — order included.
+    """
+    from core.postgres import pg_execute
+    from crm import chatter_service, service
+
+    co = service.create_company("Paging Corp")
+    ids = []
+    for i in range(7):
+        stage = "lead" if i % 2 == 0 else "proposal"
+        ids.append(service.create_deal(f"Deal {i}", stage=stage, value=100 + i,
+                                       company_id=co["id"])["id"])
+    # Every row above was written by its own transaction; force the tie the id
+    # tiebreakers exist for, so an untotalled order would dupe or drop rows.
+    pg_execute("UPDATE deals SET updated_at = now() WHERE id = ANY(%s)", (ids,))
+
+    # Last-activity fixtures: one activity row, a newer live note, an archived note that
+    # must NOT win, and a CONTACT-entity note that must not be attributed to a deal.
+    pg_execute(
+        "INSERT INTO activity_log (deal_id, activity, note, created_at) "
+        "VALUES (%s, 'call', 'rang', now() - interval '3 days')", (ids[0],))
+    chatter_service.add_note("deal", ids[0], "newer note")
+    archived = chatter_service.add_note("deal", ids[1], "archived note")
+    chatter_service.archive_note(archived["id"])
+    # A CONTACT-entity note sharing an id with a deal must never be attributed to it —
+    # the blend filters on entity_type, and both lanes live in one table.
+    other = service.create_contact("Someone Else")
+    chatter_service.add_note("contact", other["id"], "not a deal note")
+
+    full = service.get_pipeline()
+    full_ids = [d["id"] for d in full["deals"]]
+
+    # 1. A keyset sweep reassembles exactly the unbounded board.
+    swept, cursor, pages = [], None, 0
+    while True:
+        pages += 1
+        page = service.get_pipeline(limit=3, after_id=cursor)
+        swept.extend(page["deals"])
+        if cursor is None:
+            assert page["stage_summary"] is not None, "the FIRST page carries the envelope"
+        else:
+            assert page["stage_summary"] is None and page["total_pipeline_value"] is None
+        if len(page["deals"]) < 3:
+            break
+        cursor = page["deals"][-1]["id"]
+    assert pages > 1, "the fixture must span more than one page or this proves nothing"
+
+    swept_ids = [d["id"] for d in swept]
+    assert len(swept_ids) == len(set(swept_ids)), "a deal was returned on two pages"
+    assert set(swept_ids) == set(full_ids), "the sweep and the board disagree on membership"
+
+    # 2. LATERAL (pages) === grouped (board), which is what lets the twins coexist.
+    assert ({d["id"]: d["last_activity_at"] for d in swept}
+            == {d["id"]: d["last_activity_at"] for d in full["deals"]})
+
+    first = service.get_pipeline(limit=3)
+    assert ({s["stage"]: (s["count"], s["total_value"]) for s in first["stage_summary"]}
+            == {s["stage"]: (s["count"], s["total_value"]) for s in full["stage_summary"]})
+
+    # 3. The SQL window reproduces the Python trim it replaced, in order.
+    def python_trim(deals, cap):
+        seen: dict = {}
+        out = []
+        for deal in deals:
+            key = deal.get("stage") or ""
+            if seen.get(key, 0) >= cap:
+                continue
+            seen[key] = seen.get(key, 0) + 1
+            out.append(deal["id"])
+        return out
+
+    capped = service.get_pipeline(limit_per_stage=2)
+    assert [d["id"] for d in capped["deals"]] == python_trim(full["deals"], 2)
+    assert capped["deals_truncated"] is True
+    assert all("rn" not in d for d in capped["deals"])
+    # Counts stay true over EVERY deal even though the list is trimmed.
+    assert ({s["stage"]: s["count"] for s in capped["stage_summary"]}
+            == {s["stage"]: s["count"] for s in full["stage_summary"]})
+
+    roomy = service.get_pipeline(limit_per_stage=100)
+    assert [d["id"] for d in roomy["deals"]] == full_ids
+    assert roomy["deals_truncated"] is False
+
+    # 4. The archived sweep is a different corpus, and pages carry the flag.
+    service.archive_deal(ids[0])
+    live_swept, cursor = [], None
+    while True:
+        page = service.get_pipeline(limit=3, after_id=cursor)
+        live_swept.extend(d["id"] for d in page["deals"])
+        if len(page["deals"]) < 3:
+            break
+        cursor = page["deals"][-1]["id"]
+    assert ids[0] not in live_swept
+
+    wide_swept, cursor = [], None
+    while True:
+        page = service.get_pipeline(limit=3, after_id=cursor, include_archived=True)
+        wide_swept.extend(d["id"] for d in page["deals"])
+        if len(page["deals"]) < 3:
+            break
+        cursor = page["deals"][-1]["id"]
+    assert ids[0] in wide_swept

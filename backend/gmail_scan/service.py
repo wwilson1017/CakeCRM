@@ -37,12 +37,23 @@ list call itself runs under a wall-clock deadline (``_SCAN_HTTP_DEADLINE``) on a
 thread: a hung request abandons the pass and frees the ``gmail_scan`` slot for the next
 tick instead of parking it forever. ``t.join(timeout)`` cannot TERMINATE a hung request
 (only stop waiting on it), so a SINGLE in-flight worker is reused across passes: while one
-is still alive the guard declines to spawn another, bounding a persistent hang to at most
-ONE leaked thread/socket total — never one per interval. The deeper root cause — the shared ``gmail/client.py`` builds its
-service with no transport timeout, which also affects the assistant's user-invoked Gmail
-tools — is a pre-existing #8 gap left for follow-up; until it lands, that one bounded
-worker persists until its socket finally errors. Gated ONLY on Gmail being connected:
-no AI keys are needed (deal touches merely enqueue ``touch_count_service.schedule_recompute``).
+is still alive the guard declines to spawn another, bounding leaked workers to at most ONE
+at a time — never one per interval.
+
+Since #64 the shared ``gmail/client.py`` transport is BOUNDED (an owned per-socket-op
+stall timeout plus a per-call request budget), and this pass passes its own
+``_SCAN_CALL_BUDGET``. So the ordinary silent-socket hang — the failure this machinery was
+built for — now usually surfaces as a real ``GmailTimeoutError`` from inside the worker
+BEFORE the join deadline fires, and the pass records that error instead of a generic join
+timeout. The deadline and the single-in-flight guard are kept, not retired, because that
+"usually" is load-bearing: the transport bounds one socket OPERATION, so a request stalling
+separately on connect, TLS and read can still outlast the join deadline, and nothing there
+bounds a DNS resolution stall, CPU starvation or an unforeseen SDK path. Stated honestly,
+because it is the residual risk: a worker abandoned for one of those reasons is still
+potentially unbounded, and ``_inflight`` limits concurrency rather than guaranteeing
+recovery — while it is alive every later pass declines to scan at all. Gated ONLY on Gmail
+being connected: no AI keys are needed (deal touches merely enqueue
+``touch_count_service.schedule_recompute``).
 """
 
 import logging
@@ -66,7 +77,27 @@ _UNMATCHED_ALERT_THRESHOLD = 3
 _MAX_NOTE_CHARS = 300          # bound untrusted subject/sender text persisted per touch
 _MAX_ERROR_CHARS = 500
 _DATE_SLACK = timedelta(days=1)   # tolerance around the window for the Date-header clamp
-_SCAN_HTTP_DEADLINE = 90       # seconds; abandon a pass whose Gmail HTTP overruns (see below)
+_SCAN_HTTP_DEADLINE = 90       # seconds; job-layer backstop behind the owned transport
+                               # (see _SCAN_CALL_BUDGET) — abandons a pass that overruns
+_SCAN_CALL_BUDGET = 60         # per-pass transport budget handed to call_gmail (#64).
+                               # MUST satisfy
+                               #   _SCAN_CALL_BUDGET + client._HTTP_TIMEOUT_SECONDS
+                               #       < _SCAN_HTTP_DEADLINE
+                               # so that in the COMMON case — a single stalled read on the
+                               # request that was already in flight when the budget ran
+                               # out — the worker gives up on its own before t.join()
+                               # stops waiting, and nothing is leaked. call_gmail resolves
+                               # the deadline before its own setup, so both clocks start
+                               # at essentially the same instant and that margin is real.
+                               # NECESSARY, NOT SUFFICIENT: _HTTP_TIMEOUT_SECONDS bounds
+                               # one socket OPERATION, so a request that stalls separately
+                               # on connect, on TLS and on read can still outlast the join
+                               # deadline. That is precisely why the deadline and the
+                               # single-in-flight guard below are kept rather than retired.
+                               # Pinned by test_scan_budget_stays_inside_join_deadline.
+                               # Smaller than the interactive default despite more requests:
+                               # 51 cheap metadata reads, and failing fast on a background
+                               # job that retries next tick costs nothing.
 _ALERT_SOURCE = "gmail_touch_scan"
 
 
@@ -131,18 +162,26 @@ _inflight: threading.Thread | None = None
 
 
 def _list_recent_inbox() -> list[dict]:
-    """Fetch recent inbox mail via the existing approved list op, bounded by a wall-clock
-    deadline on a DAEMON worker thread, with AT MOST ONE worker in flight across passes.
+    """Fetch recent inbox mail via the existing approved list op under ``_SCAN_CALL_BUDGET``,
+    with a wall-clock join deadline on a DAEMON worker thread as a backstop and AT MOST ONE
+    worker in flight across passes.
 
-    On overrun we RAISE (abandoning the pass) rather than let a hung, transport-timeout-less
-    request park the gmail_scan slot forever — the caller records an error and the next tick
-    retries. But ``t.join(timeout)`` only stops THIS caller waiting; it cannot terminate the
-    worker, which keeps holding its Gmail socket (gmail/client.py builds the service with no
-    transport timeout — a pre-existing #8 gap). So a handle to the outstanding worker is kept
-    in the module-global ``_inflight``: while it is still alive a later pass REUSES it and
-    declines to spawn a second, bounding a persistent hang to exactly one leaked thread/socket
-    total — never one per scan interval. That single thread persists until its socket finally
-    errors; a real transport timeout in gmail/client.py is the deferred root fix.
+    Two bounds, and the inner one does most of the work. The transport budget (#64) makes the
+    worker itself give up and RETURN — the arithmetic in ``_SCAN_CALL_BUDGET`` keeps that
+    inside ``_SCAN_HTTP_DEADLINE`` for the common single-stall case — so the ordinary
+    transport hang no longer reaches the join at all, and the pass records the real
+    ``GmailTimeoutError`` rather than a generic deadline message.
+
+    The join deadline remains for the cases that budget does not cover: a request stalling
+    across several socket operations (connect, TLS, read — each bounded separately), a DNS
+    resolution stall, CPU starvation, an unforeseen SDK path. On overrun we RAISE (abandoning the pass) rather
+    than park the gmail_scan slot — the caller records an error and the next tick retries.
+    ``t.join(timeout)`` only stops THIS caller waiting; it cannot terminate the worker. So a
+    handle stays in the module-global ``_inflight`` and a later pass REUSES it rather than
+    spawning a second, bounding leaked workers to one at a time. Be clear about what that
+    does and does not promise: a worker abandoned here hit a cause the transport does not
+    bound, so it may run indefinitely, and while it does every later pass declines to scan.
+    ``_inflight`` caps concurrency; it does not guarantee recovery.
 
     A daemon thread (NOT a ThreadPoolExecutor) is deliberate: the executor registers an
     atexit hook that joins every worker it ever spawned, so a permanently-hung request
@@ -166,6 +205,7 @@ def _list_recent_inbox() -> list[dict]:
         try:
             box["messages"] = call_gmail(
                 ops.list_messages_op,
+                budget_seconds=_SCAN_CALL_BUDGET,
                 query=f"in:inbox newer_than:{_window_days()}d", max_results=_MAX_RESULTS,
             )
         except Exception as e:   # carry the real error back for the caller to record

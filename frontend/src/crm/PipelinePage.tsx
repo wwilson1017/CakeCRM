@@ -7,6 +7,7 @@ import { DealForm } from './components/DealForm';
 import { DealDetailSheet } from './components/DealDetailSheet';
 import { ScorePill, TouchCountPill } from './components/badges';
 import { STAGE_COLORS, STAGE_ORDER, OPEN_STAGES } from './constants';
+import { stageWriteRequest } from './dealStageWrite';
 import { IconPlus } from '../shared/icons';
 import { useIsMobile } from '../shared/useIsMobile';
 import { LoadError } from '../shared/LoadError';
@@ -24,12 +25,16 @@ import {
   loadFilterState, saveFilterState,
 } from './pipelineFilters';
 import { applicableBulkIds } from './bulkSelection';
+import { sweepPipelineDeals } from './pipelineAssembly';
 import { classifyBulkMove, describeBulkMove, type BulkMoveResponse, type BulkNotice } from './bulkOutcome';
 
 // The /api/crm/deals payload also carries server-computed `stage_summary` and
 // `total_pipeline_value`, but the board derives every total client-side from
 // `deals` so they stay correct under optimistic moves — we intentionally read
 // only `deals` here rather than trust aggregates the optimistic path can't update.
+// (Since #59 those two are `null` on a continuation page anyway: the sweep pays for that
+// whole-table aggregate once rather than on every page. Nothing here notices, which is
+// exactly why it was safe to stop computing them.)
 interface PipelineData {
   deals: CrmDeal[];
 }
@@ -210,9 +215,15 @@ export function PipelinePage() {
       // settle can outlive the facet they were created under. A captured value would let
       // one of them re-fetch the live-only board over the archived rows the user just
       // asked to see — and, because the newest load wins, do it deterministically.
-      const d = await api<PipelineData>(
-        `/api/crm/deals${includeArchivedRef.current ? '?include_archived=true' : ''}`,
-      );
+      // #59: one GET became a keyset sweep. It resolves only with the COMPLETE corpus, in
+      // the server's own recency order, so everything below this line is unchanged — the
+      // board still holds every deal and every facet still filters an in-memory array.
+      const d: PipelineData = {
+        deals: await sweepPipelineDeals(
+          includeArchivedRef.current,
+          () => loadGen.current === myLoad,
+        ),
+      };
       if (loadGen.current !== myLoad) return false;
       // A write that STARTED during this GET's flight (generation changed) may have made the
       // payload stale — defer+retry rather than clobber a succeeded move OR lose the refresh.
@@ -240,10 +251,17 @@ export function PipelinePage() {
       // payload brings it back ALREADY SELECTED, joining a bulk move nobody picked it for.
       //
       // Intersecting on presence — rather than only pruning rows explicitly flagged
-      // archived — is safe precisely because this payload is `get_pipeline`, which is
-      // unpaginated and carries no server-side filter the board ever sets. So on a
-      // live-only fetch, "absent" cannot mean "filtered out"; it means archived or gone.
-      // A deal you cannot see is a deal you cannot act on, so it must not stay selected.
+      // archived — is safe because this payload is the COMPLETE corpus: `get_pipeline`
+      // carries no server-side filter the board ever sets, so on a live-only fetch
+      // "absent" cannot mean "filtered out". A deal you cannot see is a deal you cannot
+      // act on, so it must not stay selected.
+      //
+      // #59 made the fetch a keyset sweep, which is snapshotless: a deal can also be
+      // absent because it committed (or was restored) behind the cursor mid-sweep. That
+      // widens "absent" but does not weaken this, because the miss can only ever DROP an
+      // id — a transient loss the user fixes by re-selecting. The failure this prune
+      // exists to prevent needs a deal to APPEAR already selected, which requires the
+      // opposite error. Refresh is the answer to a missed row, as it is for the #77 lists.
       setBulkSelected(prev => {
         if (prev.size === 0) return prev;
         const live = new Set(d.deals.filter(deal => !isArchivedDeal(deal)).map(deal => deal.id));
@@ -298,7 +316,15 @@ export function PipelinePage() {
   // its optimistic fromStage — so even if two chained writes for one deal BOTH fail,
   // the board rolls back to the true server stage instead of an intermediate stage
   // that never persisted.
-  const moveDealStage = useCallback((deal: CrmDeal, toStage: string, fromStage: string) => {
+  //
+  // `lostReason` (issue #128) only changes WHICH request this op issues — it is captured
+  // per operation alongside `seq`, inside the same per-deal promise chain, so every
+  // invariant above is untouched: the chain still serializes, the sequence check still
+  // discards a superseded response, and rollback still reads the confirmed stage. Both
+  // endpoints return the same `get_deal` projection, so the reconcile merge is unchanged.
+  const moveDealStage = useCallback((
+    deal: CrmDeal, toStage: string, fromStage: string, lostReason?: string,
+  ) => {
     // A bulk move in flight owns the board until its reconcile refetch lands. A single-deal
     // write started now could reconcile (or roll back) against the stage the bulk request is
     // in the middle of changing, clobbering server truth we're about to fetch.
@@ -317,9 +343,8 @@ export function PipelinePage() {
     const prior = dealWriteChain.current.get(dealId) ?? Promise.resolve();
     const run = prior.then(async () => {
       try {
-        const updated = await api<CrmDeal>(`/api/crm/deals/${dealId}`, {
-          method: 'PUT', body: JSON.stringify({ stage: toStage }),
-        });
+        const { path, init } = stageWriteRequest(dealId, toStage, lostReason);
+        const updated = await api<CrmDeal>(path, init);
         // Record server truth for THIS write regardless of supersession — a later
         // failed move in the same chain reverts to a real confirmed stage, not an
         // optimistic intermediate. Use the response's stage, not toStage, so the
@@ -377,8 +402,8 @@ export function PipelinePage() {
   // Detail-sheet handler (Mark Won / Lost) — optimistic move + close the sheet. Also refresh
   // the board (like onClose) so an in-sheet note/activity logged before this dismissal lands
   // its last_activity_at; if a stage move fired, the refresh defers until that PUT settles.
-  const updateDealStage = useCallback((deal: CrmDeal, stage: string) => {
-    if (deal.stage !== stage) moveDealStage(deal, stage, deal.stage);
+  const updateDealStage = useCallback((deal: CrmDeal, stage: string, lostReason?: string) => {
+    if (deal.stage !== stage) moveDealStage(deal, stage, deal.stage, lostReason);
     setSelectedDeal(null);
     load(true);
   }, [moveDealStage, load]);

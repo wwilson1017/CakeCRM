@@ -120,6 +120,33 @@ def test_gmail_read_tools_are_in_the_engine_taint_set():
     )
 
 
+def test_gmail_reads_are_not_background_callable(monkeypatch):
+    """End-to-end pin for #114, on a REAL registry with Gmail connected.
+
+    The Gmail reads carry writes:False, so the background allowlist — derived from that
+    flag alone — used to admit them into every unattended turn (heartbeat, reminder
+    firing, the proactive digest). The one notification such a turn may send then became
+    an exfiltration channel: injected text in a reminder or CRM record could steer it
+    gmail_search → gmail_read_thread → private mail in the notification body.
+
+    Only the READ tools are asserted: gmail_create_draft is already excluded as a write,
+    so including it would let this pass while the reads leaked."""
+    from assistant.background import background_allowlist
+    from assistant.registry import ToolRegistry
+    from gmail import tools as gmail_tools
+
+    monkeypatch.setattr(gmail_tools.store, "is_connected", lambda: True)
+    reg = ToolRegistry(background=True)
+
+    reads = {d["name"] for d in gmail_tools.GMAIL_TOOL_DEFS if not d["writes"]}
+    # Prove the registry really carries them, or the disjointness below is vacuous.
+    assert reads and reads <= reg.writes_map.keys(), (
+        "Gmail tools were not registered — this guard would pass without testing anything"
+    )
+    leaked = reads & set(background_allowlist(reg))
+    assert not leaked, f"Gmail read tools reachable from an unattended turn: {leaked}"
+
+
 def test_gmail_write_tools_are_in_the_engine_connection_binding_set():
     """Coupling guard, mirroring the taint-set guard above: every Gmail WRITE tool
     must be in the engine's _CONNECTION_BOUND_WRITE_TOOLS. That set is a

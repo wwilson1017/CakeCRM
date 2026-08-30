@@ -68,7 +68,7 @@ def test_call_gmail_runs_op_closes_service_no_persist(monkeypatch):
         return {"result": "ok"}
 
     monkeypatch.setattr(client, "_APPROVED_OPS", frozenset({op}))
-    monkeypatch.setattr(client, "_build_credentials_and_service", lambda: (creds, svc, "enc-prev", "rt"))
+    monkeypatch.setattr(client, "_build_credentials_and_service", lambda *a, **k: (creds, svc, "enc-prev", "rt"))
     monkeypatch.setattr(client.store, "update_access_token", lambda *a, **k: persisted.append((a, k)))
 
     result = client.call_gmail(op)
@@ -89,7 +89,7 @@ def test_call_gmail_persists_refreshed_token(monkeypatch):
         return "done"
 
     monkeypatch.setattr(client, "_APPROVED_OPS", frozenset({op}))
-    monkeypatch.setattr(client, "_build_credentials_and_service", lambda: (creds, svc, "enc-prev", "rt"))
+    monkeypatch.setattr(client, "_build_credentials_and_service", lambda *a, **k: (creds, svc, "enc-prev", "rt"))
     monkeypatch.setattr(client.store, "update_access_token", lambda *a, **k: persisted.append((a, k)))
 
     client.call_gmail(op)
@@ -110,7 +110,7 @@ def test_call_gmail_persists_rotated_refresh_token(monkeypatch):
 
     monkeypatch.setattr(client, "_APPROVED_OPS", frozenset({op}))
     # refresh_before = "rt-old"; creds.refresh_token = "rt-new" -> rotation persisted.
-    monkeypatch.setattr(client, "_build_credentials_and_service", lambda: (creds, svc, "enc-prev", "rt-old"))
+    monkeypatch.setattr(client, "_build_credentials_and_service", lambda *a, **k: (creds, svc, "enc-prev", "rt-old"))
     monkeypatch.setattr(client.store, "update_access_token", lambda *a, **k: persisted.append((a, k)))
 
     client.call_gmail(op)
@@ -131,7 +131,7 @@ def test_call_gmail_refresh_error_marks_broken(monkeypatch):
         raise RefreshError("invalid_grant")
 
     monkeypatch.setattr(client, "_APPROVED_OPS", frozenset({op}))
-    monkeypatch.setattr(client, "_build_credentials_and_service", lambda: (creds, svc, "enc-prev", "rt"))
+    monkeypatch.setattr(client, "_build_credentials_and_service", lambda *a, **k: (creds, svc, "enc-prev", "rt"))
     monkeypatch.setattr(client.store, "mark_broken", lambda enc: marked.append(enc))
     monkeypatch.setattr(client.store, "update_access_token", lambda *a, **k: persisted.append((a, k)))
 
@@ -203,7 +203,7 @@ def test_call_with_token_rejects_non_allowlisted_op():
 
 def test_call_with_token_runs_approved_op_and_closes(monkeypatch):
     svc = _FakeService()
-    monkeypatch.setattr(client, "build_service_from_token", lambda t: svc)
+    monkeypatch.setattr(client, "build_service_from_token", lambda t, deadline=None: svc)
 
     def op(service):
         return {"email": "me@example.com"}

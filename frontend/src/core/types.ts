@@ -234,6 +234,43 @@ export interface CrmWeeklyTouches {
   computed_deals: number;
 }
 
+// GET /api/crm/dashboard/today (issue #130). One ranked list of what needs the viewer
+// today, already ordered by the server's priority ladder — the client renders `items`
+// in the order given and never re-sorts. Rank 2 is reserved for hot+stale deals (#125),
+// which is why the task ranks skip it. Its own response types rather than a widened
+// `CrmTask`: a panel row is not a task row, and `CrmTask` declares no `star`.
+export interface CrmTodayTaskItem {
+  kind: 'task';
+  id: number;
+  rank: 1 | 3 | 5;
+  why: 'starred' | 'overdue' | 'due_today';
+  title: string;
+  due_date: string;
+  owner_id: number | null;
+}
+
+export interface CrmTodayReminderItem {
+  kind: 'reminder';
+  id: string;
+  rank: 4;
+  why: 'reminder';
+  title: string;
+  due_at: string;
+}
+
+export type CrmTodayItem = CrmTodayTaskItem | CrmTodayReminderItem;
+
+export interface CrmToday {
+  /** The SERVER's local day (YYYY-MM-DD). Due labels render against this, not the
+   *  browser clock, so a browser in another timezone agrees with the bucketing. */
+  date: string;
+  /** The next server-local midnight, as an absolute instant. The panel arms its reload
+   *  on this rather than on browser midnight — the two can be hours apart. */
+  next_refresh_at: string;
+  scope: { owner_id: number | null };
+  items: CrmTodayItem[];
+}
+
 // GET /api/crm/analytics (issue #20). Keyless SQL analytics; win_rate_pct,
 // avg_days_to_close, and the avg deal sizes are null when there's no qualifying
 // deal (no closed / no won / no open with value) — render as "—", not "$0".

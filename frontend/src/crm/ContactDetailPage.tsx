@@ -12,6 +12,7 @@ import { CustomFieldsSection } from './components/CustomFieldsSection';
 import { usePublishActiveRecord } from './RecordContext';
 import { PriorityBadge, ScorePill } from './components/badges';
 import { ProvenanceBadge } from './components/ProvenanceBadge';
+import { OwnerName } from './components/OwnerName';
 import { useProvenance } from './useProvenance';
 import { STAGE_COLORS } from './constants';
 import { IconArrowLeft } from '../shared/icons';
@@ -203,6 +204,12 @@ export function ContactDetailPage({ onChanged, onDeleted, onWriteUncertain }: Co
         <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? 4 : 16, marginTop: 8, fontSize: 13, color: INK_MUTE }}>
           {contact.email && <span>{contact.email} {badge('email')}</span>}
           {contact.phone && <span>{contact.phone} {badge('phone')}</span>}
+          {/* Unconditional, unlike its neighbours (issue #128): an unassigned contact is a
+              real state, and a hidden row is what makes it unreadable as one. */}
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ ...mono(10), color: INK_DIM }}>Owner</span>
+            <OwnerName ownerId={contact.owner_id} />
+          </span>
         </div>
         {contact.tags && (
           <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
