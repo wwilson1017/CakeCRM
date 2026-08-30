@@ -1541,13 +1541,21 @@ def mark_deal_won(deal_id: int) -> dict | None:
     return get_deal(deal_id)
 
 
-def mark_deal_lost(deal_id: int, lost_reason: str = "") -> dict | None:
+def mark_deal_lost(
+    deal_id: int, lost_reason: str = "", author_id: int | None = None
+) -> dict | None:
     """Close a deal as lost: stage='lost', probability=0, reason recorded.
 
     The reason is stored on the deal (queryable, shown on the deal sheet) AND
     appended to the notes thread (visible where the user reads the deal's story).
     The note is best-effort and lands after the close commits — a chatter failure
     must never leave the deal un-closed.
+
+    ``author_id`` is who TYPED the reason, threaded into the generated note (issue
+    #128). The REST route passes the logged-in user; the assistant tool leaves it
+    NULL, which is the honest answer there — Phase A does not thread identity into
+    tool executors (see chatter_service.add_note). Without it a reason a rep typed
+    themselves would post as unattributed and undercount that rep's own activity.
     """
     reason = (lost_reason or "").strip()[:MAX_LOST_REASON]
     if not _write_deal_update(
@@ -1556,7 +1564,9 @@ def mark_deal_lost(deal_id: int, lost_reason: str = "") -> dict | None:
         return None
     if reason:
         try:
-            chatter_service.add_note("deal", deal_id, f"Deal lost — {reason}")
+            chatter_service.add_note(
+                "deal", deal_id, f"Deal lost — {reason}", author_id=author_id
+            )
         except Exception:
             logger.warning("lost-reason note failed for deal %s", deal_id, exc_info=True)
     return get_deal(deal_id)

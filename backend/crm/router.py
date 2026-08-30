@@ -25,6 +25,7 @@ Deals:
   POST   /api/crm/deals                 — create
   PUT    /api/crm/deals/:id             — update
   POST   /api/crm/deals/:id/restore     — un-archive a soft-archived deal
+  POST   /api/crm/deals/:id/mark-lost   — close as lost, recording a written reason
   POST   /api/crm/deals/bulk-move       — move many deals to one stage (one transaction)
   POST   /api/crm/deals/touch-count/backfill        — recompute AI touch counts (?scope=null|all&force=)
   GET    /api/crm/deals/touch-count/backfill/status — backfill progress
@@ -197,6 +198,15 @@ class DealUpdate(BaseModel):
     currency: str | None = None
     company_id: int | None = None
     owner_id: int | None = None
+
+
+class DealMarkLost(BaseModel):
+    # A Pydantic cap HERE, unlike BulkDealMove below, and the difference is what the
+    # service does when the limit is exceeded: bulk_move_deals REFUSES with a sentence
+    # worth surfacing, while mark_deal_lost silently TRUNCATES at MAX_LOST_REASON. A
+    # rep's typed prose losing its tail with no feedback is data loss, so the REST
+    # boundary rejects instead. The service cap stays for the agent-tool path.
+    lost_reason: str = Field("", max_length=crm.MAX_LOST_REASON)
 
 
 class BulkDealMove(BaseModel):
@@ -544,6 +554,40 @@ async def bulk_move_deals(body: BulkDealMove, user=Depends(get_current_user)):
 @router.post("/deals/{deal_id}/restore")
 def restore_deal(deal_id: int, user=Depends(get_current_user)):
     result = crm.archive_deal(deal_id, archived=False)
+    if not result:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    return result
+
+
+# Closing a deal WITH a reason (issue #128). Before this, `lost_reason` had no human
+# writer at all: the field renders on the deal sheet but `_DEAL_USER_WRITABLE` excludes
+# it (mark_deal_lost is its single writer), so on a keyless install a rep could read a
+# lost reason and never type one.
+#
+# This delegates to that same lifecycle verb rather than widening _DEAL_USER_WRITABLE,
+# which is what preserves the invariant it was excluded for — a reason can still only
+# arrive WITH the close, never be pasted onto a deal that isn't lost. It also zeroes
+# probability and appends the timeline note, which `PUT /deals/{id}` with {stage: lost}
+# does not, so the explicit Mark Lost action takes this route even when the reason is
+# blank; drag and bulk-move keep using PUT.
+#
+# Sync `def` like restore_deal above: blocking psycopg2 plus a chatter write and a
+# lead-score recompute, which FastAPI runs in a threadpool for a sync endpoint.
+#
+# No path collision — /deals/touch-count/backfill shares the segment count but differs
+# in its terminal segment, the same reasoning restore_deal already documents.
+@router.post("/deals/{deal_id}/mark-lost")
+def mark_deal_lost(deal_id: int, body: DealMarkLost, user=Depends(get_current_user)):
+    try:
+        # author_id credits the note to whoever typed the reason (#60: authorship is not
+        # ownership). The assistant tool leaves it NULL; a human route must not.
+        result = crm.mark_deal_lost(
+            deal_id, lost_reason=body.lost_reason, author_id=user["id"]
+        )
+    except ValueError as e:
+        # _write_deal_update refuses a stage change on an archived deal — a refusal the
+        # caller can act on, not a server fault. Same mapping as PUT /deals/{id}.
+        raise HTTPException(status_code=400, detail=str(e)) from None
     if not result:
         raise HTTPException(status_code=404, detail="Deal not found")
     return result
