@@ -155,6 +155,10 @@ def _build_transport(creds, deadline: float):
                 # frame is visible to googleapiclient's _retry_request, which special-
                 # cases socket errors and would retry it under any num_retries > 0 —
                 # multiplying the wall clock this budget exists to bound.
+                # Deliberately NARROW. Widening to ssl.SSLError/OSError was proposed and
+                # declined: SSLCertVerificationError is an SSLError, and reporting a
+                # failed certificate check as "Gmail took too long" would hide a TLS
+                # problem behind a retry suggestion. Only a real timeout says "timeout".
                 raise GmailTimeoutError(_TIMEOUT_MESSAGE, started=True) from e
 
     http = _BudgetHttp(timeout=_HTTP_TIMEOUT_SECONDS)

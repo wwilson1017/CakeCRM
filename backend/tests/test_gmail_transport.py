@@ -424,8 +424,6 @@ def test_executors_report_a_timeout_as_retryable_not_reconnect(monkeypatch, exec
     assert "too long" in out["error"]
 
 
-# ── the SDK refresh is still observed through our transport ───────────────────
-
 # ── the OAuth-callback path gets the same transport ───────────────────────────
 
 def test_oauth_callback_path_is_bounded_too(monkeypatch):
@@ -519,6 +517,8 @@ def test_scan_worker_gives_up_before_its_join_deadline(monkeypatch):
     # The recorded cause is the transport's, not a generic join-deadline message.
     assert "too long" in recorded.get("error", "")
 
+
+# ── the SDK refresh is still observed through our transport ───────────────────
 
 def test_sdk_refresh_through_our_transport_is_still_persisted(monkeypatch):
     """The issue's explicit worry: refreshing now happens through AuthorizedHttp, so
