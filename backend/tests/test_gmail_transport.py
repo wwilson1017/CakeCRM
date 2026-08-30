@@ -518,6 +518,61 @@ def test_scan_worker_gives_up_before_its_join_deadline(monkeypatch):
     assert "too long" in recorded.get("error", "")
 
 
+# ── a cut-short call is never reported as a complete one ──────────────────────
+
+def test_body_fetch_timeout_surfaces_instead_of_blanking_the_body(monkeypatch):
+    """ops._make_body_fetcher degrades every attachment failure to "" — correct for an
+    attachment that is genuinely unavailable, wrong for a timeout, which means the whole
+    CALL was cut short. Swallowing it would hand back a thread that looks complete while
+    silently missing content."""
+    _connected_row(monkeypatch)
+    _creds, service, _p, _r = client._build_credentials_and_service()
+    try:
+        fetch = ops._make_body_fetcher(service)
+        service._http.http._conn_request = lambda *a, **k: (_ for _ in ()).throw(
+            TimeoutError("timed out")
+        )
+        with pytest.raises(GmailTimeoutError):
+            fetch("msg-1", "att-1")
+    finally:
+        service.close()
+
+
+def test_body_fetch_still_blanks_an_ordinary_attachment_failure(monkeypatch):
+    """The other half of the contract: a non-timeout failure must STILL degrade to "",
+    or one unavailable attachment would sink an otherwise readable thread."""
+    _connected_row(monkeypatch)
+    _creds, service, _p, _r = client._build_credentials_and_service()
+    try:
+        fetch = ops._make_body_fetcher(service)
+        service._http.http._conn_request = lambda *a, **k: (_ for _ in ()).throw(
+            ValueError("attachment is gone")
+        )
+        assert fetch("msg-1", "att-1") == ""
+    finally:
+        service.close()
+
+
+# ── auth traffic is not a started API request ─────────────────────────────────
+
+def test_refresh_stall_does_not_claim_the_write_may_have_happened(monkeypatch):
+    """The refresh rides the same budgeted transport, so a stall there produces a
+    timeout BEFORE the API request goes out. Reporting that as started would tell a user
+    their draft might exist when Gmail never received a draft request."""
+    transport = client._build_transport(Credentials(token="t"), time.monotonic() + 60)
+    transport.http._conn_request = lambda *a, **k: (_ for _ in ()).throw(TimeoutError("timed out"))
+    try:
+        with pytest.raises(GmailTimeoutError) as auth_stall:
+            transport.request(client.oauth.TOKEN_ENDPOINT, "POST")
+        assert auth_stall.value.started is False
+
+        with pytest.raises(GmailTimeoutError) as api_stall:
+            transport.request("https://gmail.googleapis.com/gmail/v1/users/me/drafts", "POST")
+        assert api_stall.value.started is True
+    finally:
+        transport.close()
+
+
 # ── the SDK refresh is still observed through our transport ───────────────────
 
 def test_sdk_refresh_through_our_transport_is_still_persisted(monkeypatch):

@@ -245,6 +245,16 @@ def _format_message(msg: dict, fetch=None) -> dict:
     }
 
 
+def _timeout_error():
+    """gmail.client.GmailTimeoutError, resolved lazily.
+
+    gmail.client imports THIS module at import time, so a module-level import back into
+    it would be circular. The exception lives with the transport that raises it."""
+    from gmail.client import GmailTimeoutError
+
+    return GmailTimeoutError
+
+
 def _make_body_fetcher(service):
     """Thread-scoped fetcher for text bodies Gmail stored outside `body.data` (#43).
 
@@ -254,8 +264,11 @@ def _make_body_fetcher(service):
     read+draft-only surface is unchanged.
 
     ONE budget is shared across every message in the thread — see
-    _MAX_BODY_FETCHES_PER_THREAD. Never raises: every failure returns "", which is
-    exactly the blank body callers saw before #43.
+    _MAX_BODY_FETCHES_PER_THREAD. Every ATTACHMENT failure returns "", which is exactly
+    the blank body callers saw before #43. The one exception is a transport timeout
+    (#64), which is re-raised: it means the whole CALL was cut short, not that this one
+    body was unavailable, and swallowing it would return a thread that looks complete
+    while silently missing content the caller was told nothing about.
 
     Returns a two-arg callable; get_thread_op partially applies the message id so
     the MIME walk only ever sees `fetch(attachment_id)`.
@@ -278,6 +291,11 @@ def _make_body_fetcher(service):
             if len(data) > _MAX_BODY_FETCH_BYTES * 2:
                 return ""
             return base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
+        except _timeout_error():
+            # The CALL ran out of time, not this attachment. Degrading to "" here would
+            # report a complete-looking thread with content silently missing. Imported
+            # lazily: gmail.client imports this module, so a top-level import cycles.
+            raise
         except Exception as e:
             # warning, not debug: a systemic failure here degrades every thread read
             # to blank bodies, which is indistinguishable from genuinely empty mail.

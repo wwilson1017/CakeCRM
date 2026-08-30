@@ -62,11 +62,16 @@ class GmailTimeoutError(Exception):
     TimeoutError/OSError — googleapiclient's _retry_request treats socket errors
     specially, and this must stay invisible to it. The message is user-facing.
 
-    `started` says whether the request had already gone out, which is what decides
-    whether a RETRY IS SAFE. False = the budget refused to start it, so the server never
-    saw it and nothing was written. True = a socket stalled mid-flight, so the outcome is
-    genuinely unknown: Gmail may have processed the request and lost only the response.
-    A write tool must not tell the user "nothing happened" in that case."""
+    `started` says whether a request to the Gmail API had already gone out, which is what
+    decides whether a RETRY IS SAFE. False = nothing reached the API: the budget refused
+    before the socket was touched, OR the stall was on the OAuth token endpoint, which
+    happens before the API request is sent. True = an API request stalled mid-flight, so
+    the outcome is genuinely unknown — Gmail may have processed it and lost only the
+    response. A write tool must not tell the user "nothing happened" in that case.
+
+    Auth traffic deliberately does NOT count as started: the refresh rides the same
+    budgeted transport, so treating it as started would tell a user their draft might
+    exist when the draft request was never sent."""
 
     def __init__(self, message: str, *, started: bool):
         super().__init__(message)
@@ -144,12 +149,17 @@ def _build_transport(creds, deadline: float):
     # which the scan thread and an SSE turn could race on. Class creation is microseconds
     # against a network call, and nothing depends on the class identity.
     class _BudgetHttp(httplib2.Http):
-        def request(self, *args, **kwargs):
+        def request(self, uri, *args, **kwargs):
+            # A stall on the OAuth token endpoint is NOT a started API request: the
+            # refresh runs before the API call goes out (and again on a 401 retry, where
+            # the rejected first attempt wrote nothing either). Counting it would tell a
+            # user their draft might exist when Gmail never received a draft request.
+            reaches_api = not uri.startswith(oauth.TOKEN_ENDPOINT)
             if time.monotonic() >= deadline:
                 # Refused before the socket was touched, so nothing reached Gmail.
                 raise GmailTimeoutError(_TIMEOUT_MESSAGE, started=False)
             try:
-                return super().request(*args, **kwargs)
+                return super().request(uri, *args, **kwargs)
             except TimeoutError as e:
                 # Translate HERE, not in call_gmail: a raw socket timeout escaping this
                 # frame is visible to googleapiclient's _retry_request, which special-
@@ -159,7 +169,7 @@ def _build_transport(creds, deadline: float):
                 # declined: SSLCertVerificationError is an SSLError, and reporting a
                 # failed certificate check as "Gmail took too long" would hide a TLS
                 # problem behind a retry suggestion. Only a real timeout says "timeout".
-                raise GmailTimeoutError(_TIMEOUT_MESSAGE, started=True) from e
+                raise GmailTimeoutError(_TIMEOUT_MESSAGE, started=reaches_api) from e
 
     http = _BudgetHttp(timeout=_HTTP_TIMEOUT_SECONDS)
     # Parity with the SDK's build_http(): Google uses 308 for resumable uploads, not
