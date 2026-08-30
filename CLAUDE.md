@@ -640,7 +640,61 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   64 MB middleware backstop (Content-Length only) that runs before the body is consumed.
   It is a disk backstop, not a feature limit, so it must stay above the largest legitimate
   request (an assistant upload: 5 × 10 MB); a test pins that ordering, and another pins the
-  spool-before-dependencies behaviour that makes middleware the only workable layer. `crm_chatter_attachments` is the second CRM table
+  spool-before-dependencies behaviour that makes middleware the only workable layer.
+  **That backstop is not an admission limit, and #127 split the two.** A disk backstop
+  sized for the app's largest route is 6.4× what a chatter attachment may be — and 32-64×
+  what the logo and CSV-import routes accept — so everything between each route's real cap
+  and 64 MB was admitted, spooled and parsed before that route's bounded read refused it:
+  the cheap outer gate none of these uploads had. `main._ROUTE_REQUEST_LIMIT_SPECS` (the
+  hand-edited table; `_ROUTE_REQUEST_LIMITS` is its compiled derivative) is therefore
+  a first-match-wins path-template → ceiling table consulted by the SAME middleware
+  (`_request_limit_for`), sizing **each** upload route at its own feature limit plus
+  `MULTIPART_ENVELOPE_BYTES` and leaving every other path on the global ceiling. It lives
+  in the existing middleware rather than a `Depends` guard or a second middleware for the
+  reason the paragraph above already establishes — middleware is the only layer that runs
+  before the body is consumed.
+  **The table is keyed by the route's path TEMPLATE and compiled with Starlette's own
+  `compile_path`, and hand-writing those patterns instead is a bypass, not a style choice.**
+  A hand-written `\d+` for `{note_id}` reads as obviously correct and is wrong: `note_id:
+  int` is FastAPI **validation**, not routing, so the router compiles that parameter to
+  `[^/]+` and `/api/crm/chatter/note/abc/attachments` reaches the multipart parser, spools,
+  and only then returns 422 — under a `\d+` gate it drew the 64 MB backstop the whole table
+  exists to avoid. An admission pattern must cover everything the ROUTER accepts, not
+  everything the handler will go on to accept; deriving it from the template is what makes
+  that unrepresentable rather than merely fixed once. (An earlier revision of this work
+  shipped the `\d+` version and a test that asserted the bypass was correct behavior.) The
+  **assistant** upload route is deliberately absent: its legitimate 5 × 10 MB already sits
+  close to the 64 MB backstop, so a row would only restate it. #127 also gave
+  `branding/router.upload_logo` the repo-wide `read(cap + 1)` idiom — it was the one upload
+  route still doing an unbounded `await file.read()`, buffering the whole part before the
+  size check could refuse it.
+  Three properties are pinned, and the first two are pinned that way because the obvious
+  test does **not** fail against the bug: the headline test asserts the **parser never ran**
+  rather than merely a 413 (the routes have always 413'd) and sizes its body from the
+  FEATURE cap, never from `_request_limit_for` — sizing it off the function under test made
+  it pass with the table emptied, since the request then simply hit the global ceiling
+  instead; the mounted-route guard asserts the table is **non-empty** before looping, since
+  a `for` over an empty table passes while checking nothing; and
+  `test_every_upload_route_is_bounded_below_the_backstop` enumerates every file-taking
+  route from the app itself, so **a new upload route that forgets its row fails CI** rather
+  than silently admitting 64 MB. That last one is only as good as its detector, so the
+  detector reads FastAPI's dependency graph via `get_flat_dependant` +
+  `isinstance(field_info, params.File)` and carries its own synthetic self-test: the
+  obvious version — a string match for `UploadFile` on `route.dependant.body_params` —
+  silently misses `data: bytes = File(...)` (annotated `bytes`) and any file arriving
+  through a `Depends(...)` sub-dependency (`body_params` is not flattened), which are both
+  ordinary FastAPI and would have been waved through green. A fourth test pins each row's
+  exact `feature cap + envelope` arithmetic, because a wrong VALUE (a row at 63 MB)
+  satisfies every structural guard while reopening nearly the whole window. Two of these
+  are pinned at the MIDDLEWARE rather than at the helper, which is not a stylistic
+  preference: a root_path test that calls `_request_limit_for(get_route_path(...))` itself
+  passes no matter what the middleware feeds in — reverting the fix left the file green.
+  Unchanged and deliberate: a **chunked** body declaring no
+  Content-Length still slips both ceilings and is caught only by the route's
+  `read(cap + 1)` — bounded in memory, still spooled — because counting bytes as they
+  stream stays "real machinery for a case no browser produces". A *lying* Content-Length is
+  not a third hole: h11 delivers exactly the declared byte count to the app, so the
+  transport enforces the number the middleware trusted. `crm_chatter_attachments` is the second CRM table
   with a **real FK** (`crm_chatter ON DELETE CASCADE`), which is the whole lifecycle
   design: `delete_contact`/`delete_company` need NO new code, and the FK means the table
   MUST ride BOTH `_truncate_all` statements (Postgres refuses to truncate a referenced
