@@ -183,12 +183,42 @@ describe('RecordCombobox — quick create', () => {
 });
 
 describe('RecordCombobox — keyboard', () => {
-  it('swallows Enter while the list is open, so picking a row cannot submit the form', async () => {
-    // This input sits inside <form>. A bare Enter would submit the deal instead of choosing
-    // the row the user is looking at — asserted on defaultPrevented because jsdom does not
-    // implement implicit form submission, so watching for a submit event would prove nothing.
+  it('swallows Enter while the list is open, so it cannot submit the form', async () => {
+    // This input sits inside <form>. A bare Enter would submit the deal — asserted on
+    // defaultPrevented because jsdom does not implement implicit form submission, so
+    // watching for a submit event would prove nothing.
+    mount({ search: vi.fn(async () => [ACME]) });
+    await open();
+
+    expect(await press('Enter')).toBe(true);
+  });
+
+  it('does NOT select on Enter when the user has typed nothing and arrowed nowhere', async () => {
+    // The list opens on FOCUS and `active` has no "nothing highlighted" state, so selecting
+    // here means merely tabbing into an already-linked field and pressing Enter out of submit
+    // habit silently replaces that link with whatever the unfiltered page sorted first.
     const props = mount({ search: vi.fn(async () => [ACME]) });
     await open();
+    await press('Enter');
+
+    expect(props.onSelect).not.toHaveBeenCalled();
+    expect(container.querySelector('[role="listbox"]')).toBeNull();   // it just closes
+  });
+
+  it('selects on Enter once the user has typed', async () => {
+    const props = mount({ search: vi.fn(async () => [ACME]) });
+    await open();
+    await type('Acme');
+    await settle();
+
+    expect(await press('Enter')).toBe(true);
+    expect(props.onSelect).toHaveBeenCalledWith(ACME);
+  });
+
+  it('selects on Enter once the user has arrowed', async () => {
+    const props = mount({ search: vi.fn(async () => [ACME]) });
+    await open();
+    await press('ArrowDown');
 
     expect(await press('Enter')).toBe(true);
     expect(props.onSelect).toHaveBeenCalledWith(ACME);
@@ -494,5 +524,78 @@ describe('RecordCombobox — the listbox contract', () => {
     const label = container.querySelector('label')!;
     expect(label.getAttribute('for')).toBeTruthy();
     expect(label.getAttribute('for')).toBe(input().id);
+  });
+});
+
+describe('RecordCombobox — closing is not cancelling', () => {
+  it('still attaches a create that lands after the popover was closed by an outside click', async () => {
+    // Clicking the form's Save button is a click "outside" this widget. Treating every
+    // dismissal as abandonment discarded the create the user had just asked for — while the
+    // server wrote the record anyway, leaving it orphaned and the deal unlinked.
+    let release: (r: Rec) => void = () => {};
+    const props = mount({
+      search: vi.fn(async () => []),
+      create: vi.fn(() => new Promise<Rec>(res => { release = res; })),
+    });
+    await open();
+    await type('Newco');
+    await settle();
+    await act(async () => { createRow()!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    await act(async () => {
+      document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    });
+    await act(async () => { release({ id: 99, name: 'Newco' }); });
+
+    expect(props.onSelect).toHaveBeenCalledWith({ id: 99, name: 'Newco' });
+  });
+
+  it('reports its busy state so a form can refuse to submit underneath a create', async () => {
+    const busy: boolean[] = [];
+    let release: (r: Rec) => void = () => {};
+    mount({
+      search: vi.fn(async () => []),
+      create: vi.fn(() => new Promise<Rec>(res => { release = res; })),
+      onBusyChange: (b: boolean) => { busy.push(b); },
+    });
+    await open();
+    await type('Newco');
+    await settle();
+    await act(async () => { createRow()!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+
+    expect(busy.at(-1)).toBe(true);
+    await act(async () => { release({ id: 99, name: 'Newco' }); });
+    expect(busy.at(-1)).toBe(false);
+  });
+
+  it('names the record actually being created, not whatever is in the box now', async () => {
+    mount({
+      search: vi.fn(async () => []),
+      create: vi.fn(() => new Promise<Rec>(() => {})),   // never settles
+    });
+    await open();
+    await type('Alpha');
+    await settle();
+    await act(async () => { createRow()!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    await type('Beta');
+
+    expect(container.textContent).toContain('Creating "Alpha"…');
+    expect(container.textContent).not.toContain('Creating "Beta"…');
+  });
+
+  it('clears a stale create error once a record is selected instead', async () => {
+    const search = vi.fn(async () => [ACME]);
+    mount({ search, create: vi.fn(async () => { throw new Error('API error 500: boom'); }) });
+    await open();
+    await type('Acme C');
+    await settle();
+    await act(async () => { createRow()!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(container.textContent).toContain('boom');
+
+    await open();
+    await act(async () => {
+      container.querySelector('[role="option"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(container.textContent).not.toContain('boom');
   });
 });

@@ -1098,3 +1098,21 @@ def test_get_task_returns_a_list_shaped_row(rec):
     sql = rec.sql_containing("FROM tasks t")
     assert "c.name AS contact_name" in sql
     assert "d.title AS deal_title" in sql
+
+
+# ── Link labels must ride every row that can reach the deal form (issue #123) ─
+
+def test_top_deals_joins_the_company_name(rec):
+    """The dashboard hands `top_deals` rows straight to the deal sheet and on to DealForm,
+    whose link pickers render the NAME the row arrives with. A row carrying a company_id and
+    no company_name renders an EMPTY company box on a deal that has one — reading as "no
+    company", which is the exact hazard those pickers replaced a capped <select> to end.
+    """
+    rec.fetchone_queue = [{"cnt": 0}] * 12
+    service.get_dashboard_stats()
+
+    sql = rec.sql_containing("ORDER BY d.value DESC, d.id DESC LIMIT 5")
+    assert "co.name AS company_name" in sql
+    assert "LEFT JOIN companies co ON d.company_id = co.id" in sql
+    # ...alongside the contact name it already carried, not instead of it.
+    assert "c.name AS contact_name" in sql

@@ -2183,9 +2183,16 @@ def get_dashboard_stats() -> dict:
     recent_activity = get_activity_log(limit=10)
 
     # Top open deals by value.
+    # company_name is joined for the same reason contact_name is: the dashboard hands these
+    # rows straight to the deal sheet and on to DealForm, whose link pickers render the
+    # NAME they arrive with (issue #123). Without the join the row carries a company_id and
+    # no name, and the Company field renders blank — reading as "no company" on a deal that
+    # has one, which is the exact hazard those pickers replaced a capped <select> to end.
     top_deals = pg_fetchall(
-        f"""SELECT d.*, c.name AS contact_name
-            FROM deals d LEFT JOIN contacts c ON d.contact_id = c.id
+        f"""SELECT d.*, c.name AS contact_name, co.name AS company_name
+            FROM deals d
+            LEFT JOIN contacts c ON d.contact_id = c.id
+            LEFT JOIN companies co ON d.company_id = co.id
             WHERE d.stage NOT IN ('won', 'lost') AND {LIVE_PREDICATE_D}
             -- `value` is a round number that repeats constantly across a pipeline, so
             -- without d.id the five deals on the dashboard can differ between two

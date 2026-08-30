@@ -21,6 +21,15 @@ interface Props {
 // How many rows the pickers request per query. Small on purpose: this is a
 // search-as-you-type list a human reads, not a page to browse — the old limit=200 fetch
 // existed only because a <select> had to contain every option it could ever show.
+//
+// Accepted consequence at single-install scale: the combobox suppresses `Create "…"` on an
+// exact name match it can SEE, so a contact whose name matches exactly can in principle be
+// pushed off this page by 20 fresher rows that merely mention the same text in their
+// company or notes (contact search is ILIKE over several columns, ordered updated_at DESC),
+// and the picker would then offer to create a duplicate. Companies are immune by
+// construction — quick-create resolves through uq_companies_name_ci server-side — so this
+// is a contact-only, low-frequency data-quality risk, not a correctness hole. The fix if it
+// ever bites is server-side: rank exact name matches first.
 const PICKER_LIMIT = 20;
 
 // Module-level so their identity is stable across renders: RecordCombobox lists `search`
@@ -74,9 +83,13 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
   const [selectedCompany, setSelectedCompany] = useState<number | null>(deal?.company_id ?? null);
   // The linked records' display names. Held here rather than looked up from a fetched
   // list, which is what ends the capped-page hazard the two <select>s used to carry: an
-  // out-of-page link had no <option> and rendered blank, reading as "none". get_deal and
-  // get_pipeline both join contact_name and company_name, so every path that opens this
-  // form arrives with them.
+  // out-of-page link had no <option> and rendered blank, reading as "none".
+  //
+  // This makes the NAME a wire-format requirement, not a nicety: any query whose rows can
+  // reach this form must join contact_name AND company_name, or the picker renders empty for
+  // a link that exists — reproducing the very bug it replaced. `get_deal`, `get_pipeline` and
+  // (since this issue) `get_dashboard_stats`' top_deals all do; the last one did NOT, and the
+  // dashboard hands its rows straight to the deal sheet and on to this form.
   const [contactLabel, setContactLabel] = useState(deal?.contact_name || '');
   // Known gap, deliberately left: an already-linked ARCHIVED company shows undecorated until
   // the picker is opened, because the deal payload carries `company_name` but not the
@@ -95,6 +108,15 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
   );
   const [ownerTouched, setOwnerTouched] = useState(false);
   const [saving, setSaving] = useState(false);
+  // A quick-create is in flight in one of the pickers. Closing a picker deliberately does
+  // NOT abandon its create (the record is being written either way), so submitting
+  // underneath one would save the deal without a link that is about to exist — and leave the
+  // just-created contact or company orphaned. Clicking Save is itself a click OUTSIDE the
+  // picker, which is exactly how this feature's own acceptance flow ends when performed
+  // quickly, so it is the likely case rather than the exotic one.
+  const [contactBusy, setContactBusy] = useState(false);
+  const [companyBusy, setCompanyBusy] = useState(false);
+  const pickerBusy = contactBusy || companyBusy;
   const [error, setError] = useState('');
   const cf = useCustomFieldsForm('deal', deal?.id);
 
@@ -166,6 +188,7 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!title.trim()) { setError('Title is required'); return; }
+    if (pickerBusy) { setError('Still creating a linked record — one moment.'); return; }
     setSaving(true); setError('');
     try {
       const body: Record<string, unknown> = {
@@ -222,6 +245,7 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
             getLabel={contactLabelOf}
             getSublabel={contactSublabelOf}
             onSelect={pickContact}
+            onBusyChange={setContactBusy}
           />
           <RecordCombobox<CrmCompany>
             label="Company"
@@ -242,6 +266,7 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
               // control would otherwise show a plain name for an archived company.
               setCompanyLabel(co ? companyLabelOf(co) : '');
             }}
+            onBusyChange={setCompanyBusy}
           />
           <div>
             <OwnerSelect
@@ -289,8 +314,8 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
 
         <div style={{ display: 'flex', gap: 8, marginTop: 20 }}>
           <button type="button" onClick={onClose} style={{ ...btnSecondary, flex: 1 }}>Cancel</button>
-          <button type="submit" disabled={saving} style={{
-            ...btnPrimary, flex: 1, opacity: saving ? 0.5 : 1,
+          <button type="submit" disabled={saving || pickerBusy} style={{
+            ...btnPrimary, flex: 1, opacity: saving || pickerBusy ? 0.5 : 1,
           }}>{saving ? 'Saving...' : isEdit ? 'Update' : 'Create'}</button>
         </div>
       </form>

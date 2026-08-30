@@ -53,12 +53,20 @@ interface Props<T> {
   getSublabel?: (record: T) => string;
   /** Receives the whole record so a caller can read its other fields; null = unlinked. */
   onSelect: (record: T | null) => void;
+  /**
+   * Notified while a quick-create is in flight, so the surrounding form can refuse to submit
+   * underneath it. Closing this widget deliberately does NOT abandon the create (see
+   * `dismiss`), which means the link can still arrive a moment later — and a form that
+   * submitted in the meantime would save without it while the record was written anyway.
+   * Must be referentially stable (a `useState` setter is).
+   */
+  onBusyChange?: (busy: boolean) => void;
   id?: string;
 }
 
 export function RecordCombobox<T>({
   label, value, valueLabel, emptyLabel, search, create,
-  getId, getLabel, getMatchText, getSublabel, onSelect, id,
+  getId, getLabel, getMatchText, getSublabel, onSelect, onBusyChange, id,
 }: Props<T>) {
   const matchTextOf = getMatchText ?? getLabel;
   const [open, setOpen] = useState(false);
@@ -69,7 +77,12 @@ export function RecordCombobox<T>({
   // fixed by restructuring rather than suppressed), and it makes "these rows are for the
   // query on screen" checkable instead of assumed.
   const [settled, setSettled] = useState<{ query: string; rows: T[]; failed: boolean } | null>(null);
-  const [creating, setCreating] = useState(false);
+  // The name the IN-FLIGHT create was called with, not whatever is in the box now: the input
+  // stays editable while a create runs, so rendering `trimmed` made the row claim to be
+  // creating a name nothing was creating.
+  const [creatingName, setCreatingName] = useState<string | null>(null);
+  const creating = creatingName !== null;
+  const [navigated, setNavigated] = useState(false);
   const [error, setError] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -110,8 +123,12 @@ export function RecordCombobox<T>({
   const searchFailed = fresh && settled.failed;
   const exactMatch = results.some(r => matchTextOf(r).trim().toLowerCase() === trimmed.toLowerCase());
   const canCreate = trimmed !== '' && !loading && !exactMatch;
+  // The row also stays up while a create is in flight, even when `canCreate` has gone false
+  // because the user kept typing (a new query is `loading`, which suppresses it). Otherwise
+  // the one piece of feedback that a record IS being written vanishes mid-request.
+  const showCreate = canCreate || creating;
   const createIndex = results.length;
-  const rowCount = results.length + (canCreate ? 1 : 0);
+  const rowCount = results.length + (showCreate ? 1 : 0);
   // Clamped at the point of use rather than corrected in an effect: the row count shrinks
   // whenever a narrower search lands, and a stale index would otherwise point past the end.
   const active = rowCount === 0 ? 0 : Math.min(activeIndex, rowCount - 1);
@@ -140,6 +157,8 @@ export function RecordCombobox<T>({
     return () => { cancelled = true; };
   }, [open, debounced, trimmed, search]);
 
+  useEffect(() => { onBusyChange?.(creating); }, [creating, onBusyChange]);
+
   // Keep the active row visible. Focus never leaves the input — only `aria-activedescendant`
   // moves — so the browser will not scroll the list on its own, and arrowing past the tenth
   // of twenty results would highlight a row nobody can see while Enter still picks it.
@@ -164,12 +183,27 @@ export function RecordCombobox<T>({
     setQuery('');
     setSettled(null);
     setError('');
+    setNavigated(false);
     setActiveIndex(0);
     setOpen(true);
   }
 
-  /** Invalidate any in-flight quick-create: the user has moved on. */
+  /**
+   * Close the popover, WITHOUT abandoning an in-flight create.
+   *
+   * The distinction is load-bearing and was originally missed: closing is not the same as
+   * changing your mind. A click on the form's own Save button is a click "outside" this
+   * widget, so treating every dismissal as abandonment meant the create the user had just
+   * asked for was discarded while the record was still being written server-side — the deal
+   * saved unlinked, and an orphan contact or company was left behind. That is the acceptance
+   * flow of this feature, performed quickly.
+   */
   function dismiss() {
+    setOpen(false);
+  }
+
+  /** Close AND abandon an in-flight create — an explicit "never mind". */
+  function cancel() {
     intentRef.current++;
     setOpen(false);
   }
@@ -179,6 +213,7 @@ export function RecordCombobox<T>({
     onSelect(record);
     setOpen(false);
     setQuery('');
+    setError('');   // a prior create's failure is not news about the record just chosen
   }
 
   async function quickCreate() {
@@ -187,7 +222,7 @@ export function RecordCombobox<T>({
     // still calls `choose` after the user has dismissed the list, cleared the field or
     // picked an existing row — silently replacing the choice they actually made.
     const intent = ++intentRef.current;
-    setCreating(true);
+    setCreatingName(trimmed);
     setError('');
     try {
       const record = await create(trimmed);
@@ -204,7 +239,7 @@ export function RecordCombobox<T>({
       // `finally`, because the superseded branch above RETURNS: releasing the flag only on
       // the fall-through path would leave the row disabled and reading "Creating…" for the
       // rest of the form's life, every time a create was interrupted.
-      setCreating(false);
+      setCreatingName(null);
     }
   }
 
@@ -216,7 +251,7 @@ export function RecordCombobox<T>({
     if (e.key === 'Escape') {
       // Closes the list only — the existing selection survives, so Escape is never a
       // destructive keystroke here.
-      if (open) { e.preventDefault(); e.stopPropagation(); dismiss(); }
+      if (open) { e.preventDefault(); e.stopPropagation(); cancel(); }
       return;
     }
     if (e.key === 'Tab') {
@@ -231,15 +266,23 @@ export function RecordCombobox<T>({
       if (!open) { openList(); return; }
       if (rowCount === 0) return;
       const step = e.key === 'ArrowDown' ? 1 : -1;
+      setNavigated(true);
       setActiveIndex((active + step + rowCount) % rowCount);
       return;
     }
     if (e.key === 'Enter') {
       // Always swallowed while the list is open. This input lives inside a <form>, so a
-      // bare Enter would SUBMIT the deal instead of picking the row the user is looking
-      // at — the list being open means Enter is about the list.
+      // bare Enter would SUBMIT the deal instead of acting on the list.
       if (!open) return;
       e.preventDefault();
+      // ...but swallowing it is not the same as SELECTING with it. The list opens on focus
+      // and `active` has no "nothing highlighted" state, so without this an Enter typed out
+      // of submit habit — after merely tabbing into the field of an already-linked deal —
+      // would replace that link with whatever the unfiltered first page happened to sort
+      // first. Enter selects only once the user has expressed intent about the list, by
+      // typing or by arrowing (the ARIA combobox practice, and the reason `aria-activedescendant`
+      // exists rather than a default highlight).
+      if (trimmed === '' && !navigated) { dismiss(); return; }
       if (canCreate && active === createIndex) { void quickCreate(); return; }
       const record = results[active];
       if (record) choose(record);
@@ -294,7 +337,7 @@ export function RecordCombobox<T>({
           <button
             type="button"
             aria-label={`Clear ${label.toLowerCase()}`}
-            onClick={() => onSelect(null)}
+            onClick={() => { setError(''); onSelect(null); }}
             style={{
               position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)',
               border: 'none', background: 'transparent', color: INK_DIM,
@@ -334,7 +377,7 @@ export function RecordCombobox<T>({
                 </li>
               );
             })}
-            {canCreate && (
+            {showCreate && (
               <li
                 role="option"
                 id={`${listId}-${createIndex}`}
@@ -350,7 +393,7 @@ export function RecordCombobox<T>({
                   cursor: creating ? 'default' : 'pointer',
                 }}
               >
-                {creating ? `Creating "${trimmed}"…` : `Create "${trimmed}"…`}
+                {creating ? `Creating "${creatingName}"…` : `Create "${trimmed}"…`}
               </li>
             )}
           </ul>

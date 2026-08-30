@@ -421,8 +421,13 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   out-of-page link had no `<option>`, so the control rendered blank and read as *none* —
   `DealForm` carried an append guard for the deal's own company and never had one for its
   contact. The selected record's LABEL is now a prop seeded from `deal.contact_name` /
-  `deal.company_name` (both joined by `get_deal` AND `get_pipeline`), so the display is
-  correct by construction and both guards are gone. The picker is deliberately NOT built on
+  `deal.company_name`, so the display is correct by construction and both guards are gone.
+  **That makes the joined name a wire-format requirement, not a nicety:** any query whose
+  rows can reach this form must carry BOTH names or the picker renders empty for a link that
+  exists, reproducing the bug it replaced. `get_deal` and `get_pipeline` already did;
+  `get_dashboard_stats`' `top_deals` did **not**, and the dashboard hands its rows straight
+  to the deal sheet and on to `DealForm` — so #123 added the `companies` join there and
+  `test_top_deals_joins_the_company_name` pins it. The picker is deliberately NOT built on
   `shared/search`: `SearchInput` has no listbox, and that module documents itself (in
   `shared/search/index.ts`) as client-side-only over an already-loaded dataset, explicitly
   disclaiming server-paginated contacts and companies. **Three corrections to that issue's own pointers, each verified:**
@@ -442,7 +447,20 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   The trimmed query is the single form used for BOTH searching and creating, which is what
   closes the leading/trailing-whitespace duplicate hole for free. Reusable by design for
   **#126** (ContactForm's company field), which is blocked on this and adopts the component
-  unchanged. User-defined **custom fields** (#19) add a
+  unchanged.
+  Three rules inside the picker are subtle enough to state, because each was a bug first:
+  **closing is not cancelling** — an outside click (the form's own Save button is one)
+  closes the popover but does NOT abandon an in-flight quick-create, since the record is
+  written either way, and `onBusyChange` lets `DealForm` refuse to submit underneath one
+  rather than saving a deal without the link that is about to exist; **Enter is swallowed
+  but does not select** until the user has typed or arrowed, because the list opens on focus
+  and there is no "nothing highlighted" state, so a habitual Enter in an already-linked
+  field would otherwise replace the link with whatever sorted first; and **display text and
+  match text are different things** (`getMatchText`), because the company picker decorates
+  an archived row `"Acme (archived)"` and matching on that would offer to create a duplicate
+  of the row directly above. The contact side's exact-match dedupe only sees the 20-row
+  page — companies are immune, resolving server-side — which is documented at
+  `PICKER_LIMIT` as an accepted single-install trade. User-defined **custom fields** (#19) add a
   two-table EAV (`crm_field_definitions` + `crm_field_values`) on contacts/companies/
   deals, managed in `/crm/settings`, rendered in the entity forms and detail pages, and
   exposed to the assistant via `crm_{get,set}_{contact,company,deal}_fields`;
