@@ -236,11 +236,16 @@ function TodayRow({ item, today, showUnassigned, onOpen, onComplete }: RowProps)
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0', borderBottom: `1px solid ${LINE}` }}>
-      {item.kind === 'task' && (
+      {item.kind === 'task' ? (
         <button type="button" aria-label={`Complete ${item.title}`} onClick={() => onComplete(item.id)}
                 style={{ flexShrink: 0, width: 18, height: 18, padding: 0, borderRadius: 4, cursor: 'pointer',
                          border: `1px solid ${LINE}`, background: 'none', display: 'flex',
                          alignItems: 'center', justifyContent: 'center', color: SAGE }} />
+      ) : (
+        // Only tasks can be completed, but the badges still have to line up: without
+        // this spacer a reminder row starts a checkbox-width to the left of every task
+        // row, and the panel reads as misaligned rather than as two kinds of row.
+        <span aria-hidden="true" style={{ flexShrink: 0, width: 18 }} />
       )}
       <button type="button" onClick={() => onOpen(item)}
               style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, background: 'none',
