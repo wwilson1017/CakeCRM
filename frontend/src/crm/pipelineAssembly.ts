@@ -34,6 +34,17 @@
  *    `PipelinePage` for a request that is already bounded; parity is what "no behavior
  *    change" asks for. (simplification: pass an AbortSignal through `load()` if the extra
  *    request ever matters.)
+ *
+ * simplification: the board inherits `assemblyPage.ts`'s ceiling of
+ * `CRM_LIST_PAGE_SIZE x MAX_PAGES` = 100,000 deals, past which the sweep reports that it
+ * did not terminate and the board shows a load error. That is deliberate and it is the
+ * same ceiling the three list pages have carried since #77 — raising `MAX_PAGES` only
+ * postpones it, and the honest alternative, rendering a partial board, is the exact
+ * failure this whole design exists to prevent: every facet, total and bulk intersection
+ * downstream would silently describe a subset. The upgrade when an install outgrows it is
+ * server-side search plus a virtualized board, not a bigger number. Worth knowing which
+ * corpus gets there first: the live board is bounded by OPEN workload, while the
+ * `include_archived` corpus is bounded by all-time history and only ever grows.
  */
 import { api } from '../core/api/client';
 import type { CrmDeal } from '../core/types';
