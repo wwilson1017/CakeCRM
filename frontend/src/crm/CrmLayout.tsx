@@ -378,7 +378,15 @@ export function CrmLayout() {
         <AiKeyNudge onDismiss={handleDismissAiPrompt} isMobile={isMobile} />
       )}
 
-      <div key={refreshKey} style={{ flex: 1, overflow: 'auto', position: 'relative' }}>
+      {/* LAUNCHER_CLEARANCE: the fixed "Ask Baker" pill (52px tall, 24px off the
+          bottom) floats over this scroll container, so without reserved space it
+          permanently covers whatever ends up in the bottom-left corner — on the
+          Settings page that was the forms' left-aligned submit buttons. Bottom
+          padding on the scroll container lets every page scroll PAST the pill
+          instead (24 + 52 + 12px clearance), keeping the launcher itself always
+          visible and reachable. Applied on desktop too: the pill overlaps the
+          content column there just the same, only with more room around it. */}
+      <div key={refreshKey} style={{ flex: 1, overflow: 'auto', position: 'relative', paddingBottom: 88 }}>
         {/* The task mode rides the demo-status payload this layout already fetches,
             so /crm/tasks costs no extra request to decide which task system to show.
 
