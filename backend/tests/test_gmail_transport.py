@@ -242,6 +242,11 @@ def test_real_socket_hang_is_bounded(monkeypatch):
 
     monkeypatch.setattr(client, "_HTTP_TIMEOUT_SECONDS", 0.25)
     transport = client._build_transport(Credentials(token="t"), time.monotonic() + 60)
+    # httplib2 honours proxy env vars by default -- correct in production (a self-hosted
+    # install may sit behind one) but it would send this loopback request to whatever
+    # http_proxy the machine has set, making the test environment-dependent and not
+    # hermetic. Disable it here only; the production default is untouched.
+    transport.http.proxy_info = None
 
     # Run the request on a worker and join with a hard ceiling. If the timeout ever
     # regresses, the read blocks forever -- calling it inline would WEDGE the suite

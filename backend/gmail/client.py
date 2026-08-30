@@ -10,9 +10,10 @@ compare-and-swap, and always closes the transport.
 THE TRANSPORT IS OURS (issue #64). build() is handed ``http=`` rather than
 ``credentials=`` (the SDK treats the two as mutually exclusive) so both the
 per-socket stall timeout and the per-call request budget are values we chose —
-see _build_transport. A timeout is RETRYABLE by contract: it raises
-GmailTimeoutError, which can never reach mark_broken and never sets
-needs_reconnect.
+see _build_transport. A timeout raises GmailTimeoutError, which never means a
+broken connection: it can never reach mark_broken and never sets needs_reconnect.
+Whether it is safe to RETRY is a separate question, answered by its ``started``
+flag — for a write, a mid-flight stall leaves the outcome unknown.
 
 All google/googleapiclient imports are lazy (inside functions) so the module
 imports with no SDK / no DATABASE_URL.
@@ -183,9 +184,11 @@ def call_with_token(access_token: str, op, **kwargs):
     can't invoke any Gmail method outside the read/draft set — and always closes
     the transport.
 
-    Deliberately does NOT translate a per-request TimeoutError into GmailTimeoutError
-    the way call_gmail does: its only caller is the OAuth callback's broad handler,
-    which treats every failure the same way, so translating would change nothing."""
+    Gets the same bounded transport, so a stalled request surfaces here as
+    GmailTimeoutError too (the translation lives in _BudgetHttp.request, on both
+    service-building paths). What it omits is call_gmail's outer backstop for a
+    TimeoutError raised elsewhere in the stack — unnecessary, since its only caller is
+    the OAuth callback's broad handler, which treats every failure the same way."""
     if op not in _APPROVED_OPS:
         raise GmailAuthError("Unsupported Gmail operation.")
     service = build_service_from_token(access_token, _resolve_deadline(None))
