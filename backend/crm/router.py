@@ -21,7 +21,8 @@ Companies:
   DELETE /api/crm/companies/:id         — delete (contacts/deals unlink, not deleted)
 
 Deals:
-  GET    /api/crm/deals                 — pipeline list / filtered (?include_archived= on the board)
+  GET    /api/crm/deals                 — pipeline list / filtered (?include_archived= on the
+                                          board; ?sort=id&limit=&after_id= for its keyset page)
   GET    /api/crm/deals/:id             — detail
   POST   /api/crm/deals                 — create
   PUT    /api/crm/deals/:id             — update
@@ -455,6 +456,9 @@ async def delete_contact(contact_id: int, user=Depends(get_current_user)):
 async def list_deals(
     stage: str = "", contact_id: int | None = None,
     include_archived: bool = False,
+    sort: str = "",
+    limit: int | None = Query(None, ge=1, le=1000),
+    after_id: int | None = Query(None, ge=0, le=2_147_483_647),
     user=Depends(get_current_user),
 ):
     """Pipeline board payload, or a filtered deal list when stage/contact_id is given.
@@ -464,6 +468,15 @@ async def list_deals(
     accidentally archived deal. It is refused rather than ignored alongside
     stage/contact_id: that branch is a different service function which keeps the sweep,
     and silently dropping an advertised flag is worse than saying no.
+
+    `limit`/`after_id` (issue #59) are the board's OPT-IN keyset page. Omitting them
+    returns the whole board exactly as before. The frontend sweeps every page and
+    reassembles the complete corpus before rendering, so paging is transport only and
+    the client-side facet model is unchanged.
+
+    On a CONTINUATION page (`after_id` set) `stage_summary` and `total_pipeline_value`
+    come back as `null`: the sweep pays for that whole-table aggregate once, on its first
+    page, instead of on every one of up to 200 pages.
     """
     # `contact_id is not None`, not a truthiness test: `?contact_id=0` is falsy, so a
     # truthiness test would drop it through to the board branch — returning the whole
@@ -474,9 +487,31 @@ async def list_deals(
                 status_code=400,
                 detail="include_archived is not supported with stage or contact_id",
             )
+        # Same reasoning as include_archived: `list_deals` has no cursor, and silently
+        # dropping an advertised paginator looks exactly like a client stuck re-reading
+        # page one — the failure the #77 cursor rules exist to prevent. Refuse instead.
+        if limit is not None or after_id is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="limit and after_id are not supported with stage or contact_id",
+            )
         deals = crm.list_deals(stage=stage or None, contact_id=contact_id)
         return {"deals": deals, "count": len(deals)}
-    return crm.get_pipeline(include_archived=include_archived)
+    # The shared assembly wire format (assemblyPage.ts) always sends `sort=id`, and that
+    # parameter is what makes the cursor meaningful. Accepting `sort=updated_at` here
+    # while still returning id order would be a silently-ignored pagination input, so a
+    # paginated request must say `id` or say nothing. Unpaginated callers are unaffected.
+    if (limit is not None or after_id is not None) and sort not in ("", "id"):
+        raise HTTPException(
+            status_code=400,
+            detail="pipeline pages are ordered by id; pass sort=id or omit it",
+        )
+    try:
+        return crm.get_pipeline(
+            include_archived=include_archived, limit=limit, after_id=after_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
 
 
 @router.get("/deals/{deal_id}")

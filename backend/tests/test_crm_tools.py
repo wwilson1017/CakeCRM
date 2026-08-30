@@ -378,26 +378,50 @@ def test_intelligence_reads_are_available_to_the_background_turn():
     assert not ({n for n, w in _LIFECYCLE_TOOLS.items() if w} & allowed)
 
 
-def test_get_pipeline_tool_caps_the_list_but_not_the_totals(monkeypatch):
-    deals = [{"id": i, "stage": "lead"} for i in range(10)]
-    deals += [{"id": 100 + i, "stage": "won"} for i in range(3)]
-    monkeypatch.setattr(service, "get_pipeline", lambda stage=None: {
-        "deals": deals,
-        "stage_summary": [{"stage": "lead", "count": 10, "total_value": 999}],
-        "total_pipeline_value": 999,
-    })
+def test_get_pipeline_tool_pushes_the_cap_into_the_service(monkeypatch):
+    """#59 moved the per-stage cap from a Python trim here into a SQL window in the
+    service, so the tool must PASS the cap down rather than fetch the whole board and
+    slice it. The service's own capping is covered in test_crm_service.py."""
+    seen: dict = {}
+
+    def fake(stage=None, limit_per_stage=None):
+        seen.update(stage=stage, limit_per_stage=limit_per_stage)
+        return {
+            "deals": [{"id": 1, "stage": "lead", "title": "T", "notes": "x" * 5000}],
+            "stage_summary": [{"stage": "lead", "count": 10, "total_value": 999}],
+            "total_pipeline_value": 999,
+            "deals_truncated": True,
+        }
+    monkeypatch.setattr(service, "get_pipeline", fake)
+    monkeypatch.setattr(field_service, "list_field_definitions", lambda et: [])
+
     out = tools.crm_get_pipeline(limit_per_stage=2)
-    assert [d["id"] for d in out["deals"]] == [0, 1, 100, 101]  # 2 per stage
-    assert out["deals_truncated"] is True
-    # Counts and value are computed over EVERY deal — trimming the list must not lie.
+    assert seen == {"stage": None, "limit_per_stage": 2}
+    # Counts and value are computed over EVERY deal — trimming the list must not lie —
+    # and the service's exact truncation flag rides through untouched.
     assert out["stage_summary"][0]["count"] == 10
     assert out["total_pipeline_value"] == 999
+    assert out["deals_truncated"] is True
+    assert out["limit_per_stage"] == 2
+    # The context-cost projection still applies on the way out.
+    assert "notes" not in out["deals"][0] and out["deals"][0]["title"] == "T"
 
 
-def test_get_pipeline_tool_reports_no_truncation_when_it_fits(monkeypatch):
-    monkeypatch.setattr(service, "get_pipeline", lambda stage=None: {
-        "deals": [{"id": 1, "stage": "lead"}], "stage_summary": [], "total_pipeline_value": 0,
-    })
+def test_get_pipeline_tool_clamps_the_model_supplied_cap(monkeypatch):
+    """_bounded_limit was always the guard on a model-chosen number; since #59 that
+    number reaches SQL, so the clamp is load-bearing rather than cosmetic."""
+    seen: dict = {}
+
+    def fake(stage=None, limit_per_stage=None):
+        seen["limit_per_stage"] = limit_per_stage
+        return {"deals": [], "stage_summary": [], "total_pipeline_value": 0,
+                "deals_truncated": False}
+    monkeypatch.setattr(service, "get_pipeline", fake)
+
+    tools.crm_get_pipeline(limit_per_stage=9999)
+    assert seen["limit_per_stage"] == 100
+    tools.crm_get_pipeline(limit_per_stage="junk")
+    assert seen["limit_per_stage"] == 25
     assert tools.crm_get_pipeline()["deals_truncated"] is False
 
 
@@ -590,8 +614,9 @@ def test_pipeline_and_search_tools_project_the_payload(monkeypatch):
         "ai_touch_count": 3, "ai_touch_count_at": "t", "ai_touch_evidence_count": 2,
         "lost_reason": "",
     }
-    monkeypatch.setattr(service, "get_pipeline", lambda stage=None: {
-        "deals": [dict(fat)], "stage_summary": [], "total_pipeline_value": 0})
+    monkeypatch.setattr(service, "get_pipeline", lambda stage=None, limit_per_stage=None: {
+        "deals": [dict(fat)], "stage_summary": [], "total_pipeline_value": 0,
+        "deals_truncated": False})
     monkeypatch.setattr(service, "search_deals", lambda **kw: [dict(fat)])
     monkeypatch.setattr(field_service, "list_field_definitions", lambda et: [])
 

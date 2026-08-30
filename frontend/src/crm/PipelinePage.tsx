@@ -25,12 +25,16 @@ import {
   loadFilterState, saveFilterState,
 } from './pipelineFilters';
 import { applicableBulkIds } from './bulkSelection';
+import { sweepPipelineDeals } from './pipelineAssembly';
 import { classifyBulkMove, describeBulkMove, type BulkMoveResponse, type BulkNotice } from './bulkOutcome';
 
 // The /api/crm/deals payload also carries server-computed `stage_summary` and
 // `total_pipeline_value`, but the board derives every total client-side from
 // `deals` so they stay correct under optimistic moves — we intentionally read
 // only `deals` here rather than trust aggregates the optimistic path can't update.
+// (Since #59 those two are `null` on a continuation page anyway: the sweep pays for that
+// whole-table aggregate once rather than on every page. Nothing here notices, which is
+// exactly why it was safe to stop computing them.)
 interface PipelineData {
   deals: CrmDeal[];
 }
@@ -211,9 +215,15 @@ export function PipelinePage() {
       // settle can outlive the facet they were created under. A captured value would let
       // one of them re-fetch the live-only board over the archived rows the user just
       // asked to see — and, because the newest load wins, do it deterministically.
-      const d = await api<PipelineData>(
-        `/api/crm/deals${includeArchivedRef.current ? '?include_archived=true' : ''}`,
-      );
+      // #59: one GET became a keyset sweep. It resolves only with the COMPLETE corpus, in
+      // the server's own recency order, so everything below this line is unchanged — the
+      // board still holds every deal and every facet still filters an in-memory array.
+      const d: PipelineData = {
+        deals: await sweepPipelineDeals(
+          includeArchivedRef.current,
+          () => loadGen.current === myLoad,
+        ),
+      };
       if (loadGen.current !== myLoad) return false;
       // A write that STARTED during this GET's flight (generation changed) may have made the
       // payload stale — defer+retry rather than clobber a succeeded move OR lose the refresh.
@@ -241,10 +251,17 @@ export function PipelinePage() {
       // payload brings it back ALREADY SELECTED, joining a bulk move nobody picked it for.
       //
       // Intersecting on presence — rather than only pruning rows explicitly flagged
-      // archived — is safe precisely because this payload is `get_pipeline`, which is
-      // unpaginated and carries no server-side filter the board ever sets. So on a
-      // live-only fetch, "absent" cannot mean "filtered out"; it means archived or gone.
-      // A deal you cannot see is a deal you cannot act on, so it must not stay selected.
+      // archived — is safe because this payload is the COMPLETE corpus: `get_pipeline`
+      // carries no server-side filter the board ever sets, so on a live-only fetch
+      // "absent" cannot mean "filtered out". A deal you cannot see is a deal you cannot
+      // act on, so it must not stay selected.
+      //
+      // #59 made the fetch a keyset sweep, which is snapshotless: a deal can also be
+      // absent because it committed (or was restored) behind the cursor mid-sweep. That
+      // widens "absent" but does not weaken this, because the miss can only ever DROP an
+      // id — a transient loss the user fixes by re-selecting. The failure this prune
+      // exists to prevent needs a deal to APPEAR already selected, which requires the
+      // opposite error. Refresh is the answer to a missed row, as it is for the #77 lists.
       setBulkSelected(prev => {
         if (prev.size === 0) return prev;
         const live = new Set(d.deals.filter(deal => !isArchivedDeal(deal)).map(deal => deal.id));
