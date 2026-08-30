@@ -324,30 +324,10 @@ def test_scan_budget_stays_inside_join_deadline():
     assert gs._SCAN_CALL_BUDGET + gmail_client._HTTP_TIMEOUT_SECONDS < gs._SCAN_HTTP_DEADLINE
 
 
-def test_worker_self_terminates_on_a_transport_timeout(monkeypatch, connected):
-    """The runtime consequence, not the arithmetic: when the transport gives up inside
-    its budget, the worker RETURNS rather than being abandoned. So the pass records the
-    real transport error, no worker is left in _inflight, and the next tick can scan —
-    where before #64 that worker held its socket and blocked every later pass."""
-    from gmail.client import GmailTimeoutError
-
-    monkeypatch.setattr(gs, "pg_execute", lambda *a, **k: 1)
-    recorded = {}
-    monkeypatch.setattr(gs, "_record_result",
-                        lambda status, **k: recorded.update({"status": status, **k}))
-    # Deadline generous relative to the budget, mirroring the real constants' ordering.
-    monkeypatch.setattr(gs, "_SCAN_HTTP_DEADLINE", 5)
-
-    def budget_expires(*a, **k):
-        raise GmailTimeoutError("Gmail took too long to respond and the request was stopped.")
-
-    monkeypatch.setattr(gs, "call_gmail", budget_expires)
-    out = gs.run_scan_if_due()
-
-    assert out == {"status": "error"}
-    assert gs._inflight is None                       # worker finished; nothing leaked
-    assert "too long" in recorded.get("error", "")    # the REAL cause, not a join timeout
-    assert "deadline" not in recorded.get("error", "")
+# The runtime counterpart — the scan driving the REAL call_gmail and the REAL budget gate
+# from inside its worker thread — lives in test_gmail_transport.py, where the fake-wire
+# helpers are. It is deliberately not here: a version of it that mocked call_gmail would
+# pass even with budget_seconds dropped from the call site, proving nothing.
 
 
 def test_per_message_error_is_isolated(monkeypatch, connected):

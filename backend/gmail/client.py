@@ -125,6 +125,13 @@ def _build_transport(creds, deadline: float):
     import httplib2
     from google_auth_httplib2 import AuthorizedHttp
 
+    # Defined HERE rather than at module scope on purpose, and it is not an oversight a
+    # later cleanup should hoist: subclassing httplib2.Http needs the class body to run
+    # after the lazy import, and a module-level class would force `import httplib2` at
+    # module top — which this package forbids, so a missing SDK never breaks startup.
+    # Building it per call also avoids memoising it behind an unsynchronised global,
+    # which the scan thread and an SSE turn could race on. Class creation is microseconds
+    # against a network call, and nothing depends on the class identity.
     class _BudgetHttp(httplib2.Http):
         def request(self, *args, **kwargs):
             if time.monotonic() >= deadline:

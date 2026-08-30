@@ -14,6 +14,13 @@ environment" without a live mailbox. That premise is wrong, and this file is the
 
 Hermetic: no Postgres, no Google, no outbound network. The one socket binds 127.0.0.1
 and lives for milliseconds, so these stay in the default (non-integration) suite.
+
+Note on the clock: `client.time` IS the stdlib module (gmail/client.py imports it at
+module scope), so patching `client.time.monotonic` moves the clock process-wide for the
+duration of the test, not just inside gmail/client.py. monkeypatch restores it at
+teardown and this suite runs sequentially, so it is safe today — but anything that runs
+these under xdist, or leaves a background thread reading the clock, needs a narrower
+seam instead.
 """
 
 import json
@@ -344,6 +351,100 @@ def test_executors_report_a_timeout_as_retryable_not_reconnect(monkeypatch, exec
 
 
 # ── the SDK refresh is still observed through our transport ───────────────────
+
+# ── the OAuth-callback path gets the same transport ───────────────────────────
+
+def test_oauth_callback_path_is_bounded_too(monkeypatch):
+    """build_service_from_token is the SECOND build() call site (the callback fetches the
+    profile before a row exists). Drive the REAL builder -- the interactive path's tests
+    say nothing about this one, and reintroducing credentials= here would raise only at
+    runtime, on a user's first connection."""
+    service = client.build_service_from_token("bare-access-token")
+    try:
+        transport = service._http
+        assert transport.__class__.__name__ == "AuthorizedHttp"
+        assert transport.http.timeout == client._HTTP_TIMEOUT_SECONDS
+        assert transport._request.http is transport.http
+    finally:
+        service.close()
+
+
+def test_call_with_token_builds_through_the_real_transport(monkeypatch):
+    """The allow-list seam for the callback path, with build_service_from_token NOT
+    stubbed -- so the deadline-before-build ordering is exercised here too."""
+    seen = {}
+
+    def op(service):
+        seen["timeout"] = service._http.http.timeout
+        return {"email": "me@example.com"}
+
+    monkeypatch.setattr(client, "_APPROVED_OPS", frozenset({op}))
+    assert client.call_with_token("bare-access-token", op) == {"email": "me@example.com"}
+    assert seen["timeout"] == client._HTTP_TIMEOUT_SECONDS
+
+
+# ── the scan's budget really does fire inside its join deadline ───────────────
+
+def test_scan_worker_gives_up_before_its_join_deadline(monkeypatch):
+    """The runtime counterpart to the arithmetic pin in test_gmail_scan_service.py.
+
+    call_gmail is NOT mocked: the scan's own worker thread drives the real transport and
+    the real budget gate against a slow fake wire. So this fails if gmail_scan ever stops
+    passing budget_seconds (the default 90s budget would let the wire finish and the pass
+    would succeed) -- which a version of this test that mocked call_gmail could not
+    detect."""
+    from gmail_scan import service as gs
+
+    monkeypatch.setattr(gs.store, "is_connected", lambda *a, **k: True)
+    monkeypatch.setattr(gs.store, "get_row", lambda *a, **k: {"email": "me@own.com"})
+    monkeypatch.setattr(gs, "pg_execute", lambda *a, **k: 1)
+    # Let a pass that DOESN'T time out complete cleanly, so the regression this test
+    # exists to catch (budget_seconds dropped at the call site) fails on the status
+    # assertion below rather than on an unrelated database error.
+    monkeypatch.setattr(gs, "_process_message", lambda msg, own_email: {"outcome": "duplicate"})
+    recorded = {}
+    monkeypatch.setattr(gs, "_record_result",
+                        lambda status, **k: recorded.update({"status": status, **k}))
+    _connected_row(monkeypatch)
+    monkeypatch.setattr(client.store, "update_access_token", lambda *a, **k: None)
+    monkeypatch.setattr(client.store, "mark_broken", lambda enc: pytest.fail("must not mark broken"))
+
+    # Same ORDERING as the real constants (budget + stall timeout < join deadline),
+    # scaled down so the test is fast: the wire is slow enough that the fan-out
+    # outruns the budget before the join gives up.
+    monkeypatch.setattr(gs, "_SCAN_CALL_BUDGET", 0.15)
+    monkeypatch.setattr(gs, "_SCAN_HTTP_DEADLINE", 5)
+
+    real_build_transport = client._build_transport
+
+    def slow_wire_transport(creds, deadline):
+        transport = real_build_transport(creds, deadline)
+        replies = _list_replies(5)
+
+        def slow(conn, uri, method, body, headers):
+            time.sleep(0.06)
+            status, payload = replies(uri, body)
+            return (
+                httplib2.Response({"status": str(status), "content-type": "application/json"}),
+                json.dumps(payload).encode(),
+            )
+
+        transport.http._conn_request = slow
+        return transport
+
+    monkeypatch.setattr(client, "_build_transport", slow_wire_transport)
+
+    started = time.monotonic()
+    out = gs.run_scan_if_due()
+    elapsed = time.monotonic() - started
+
+    assert out == {"status": "error"}
+    # The worker returned on its own: it is not parked, and nothing was left in flight.
+    assert gs._inflight is None
+    assert elapsed < gs._SCAN_HTTP_DEADLINE
+    # The recorded cause is the transport's, not a generic join-deadline message.
+    assert "too long" in recorded.get("error", "")
+
 
 def test_sdk_refresh_through_our_transport_is_still_persisted(monkeypatch):
     """The issue's explicit worry: refreshing now happens through AuthorizedHttp, so
