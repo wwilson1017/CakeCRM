@@ -42,6 +42,13 @@ interface Props<T> {
   create: (name: string) => Promise<T>;
   getId: (record: T) => number;
   getLabel: (record: T) => string;
+  /**
+   * The record's canonical NAME, when that differs from its display label. Matching must
+   * not see decoration: the company picker labels an archived row "Acme (archived)", and
+   * comparing that against a typed "Acme" reports no exact match — so the list offers
+   * `Create "Acme"…` for a company sitting directly above it. Defaults to `getLabel`.
+   */
+  getMatchText?: (record: T) => string;
   /** Optional second line on a row (a contact's company, a company's domain). */
   getSublabel?: (record: T) => string;
   /** Receives the whole record so a caller can read its other fields; null = unlinked. */
@@ -51,8 +58,9 @@ interface Props<T> {
 
 export function RecordCombobox<T>({
   label, value, valueLabel, emptyLabel, search, create,
-  getId, getLabel, getSublabel, onSelect, id,
+  getId, getLabel, getMatchText, getSublabel, onSelect, id,
 }: Props<T>) {
+  const matchTextOf = getMatchText ?? getLabel;
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   // The last settled search, tagged with the query it answered. One state instead of a
@@ -69,6 +77,9 @@ export function RecordCombobox<T>({
   // Without it, typing "ac" then "acme" can settle in the wrong order and leave the list
   // showing matches for a query the user has already moved past.
   const reqRef = useRef(0);
+  // Bumped by every selection and dismissal, so an in-flight quick-create can tell whether
+  // the user is still waiting for it.
+  const intentRef = useRef(0);
   const listId = useId();
   const debounced = useDebounce(query, 250);
 
@@ -93,7 +104,7 @@ export function RecordCombobox<T>({
   // transient failure silently inviting `Create "…"` is how a duplicate contact gets made.
   // Create stays available: refusing it would strand a user whose search backend is down.
   const searchFailed = fresh && settled.failed;
-  const exactMatch = results.some(r => getLabel(r).trim().toLowerCase() === trimmed.toLowerCase());
+  const exactMatch = results.some(r => matchTextOf(r).trim().toLowerCase() === trimmed.toLowerCase());
   const canCreate = trimmed !== '' && !loading && !exactMatch;
   const createIndex = results.length;
   const rowCount = results.length + (canCreate ? 1 : 0);
@@ -103,6 +114,11 @@ export function RecordCombobox<T>({
 
   useEffect(() => {
     if (!open) return;
+    // Wait for the debounce to catch up with what is on screen. `useDebounce` cannot be
+    // reset, so right after `openList` clears the query the debounced value still holds the
+    // PREVIOUS text for 250ms — without this, reopening the picker fires a search for a
+    // query the user can no longer see, and only then the empty one they asked for.
+    if (debounced.trim() !== trimmed) return;
     const seq = ++reqRef.current;
     let cancelled = false;
     const q = debounced.trim();
@@ -118,12 +134,22 @@ export function RecordCombobox<T>({
     // record the user asked for silently would not exist.
     search(q).then(rows => land(rows, false), () => land([], true));
     return () => { cancelled = true; };
-  }, [open, debounced, search]);
+  }, [open, debounced, trimmed, search]);
+
+  // Keep the active row visible. Focus never leaves the input — only `aria-activedescendant`
+  // moves — so the browser will not scroll the list on its own, and arrowing past the tenth
+  // of twenty results would highlight a row nobody can see while Enter still picks it.
+  useEffect(() => {
+    if (!open) return;
+    // Optional-called: jsdom does not implement scrollIntoView, and a picker must not throw
+    // in a test run just to stay tidy on screen.
+    document.getElementById(`${listId}-${active}`)?.scrollIntoView?.({ block: 'nearest' });
+  }, [open, active, listId]);
 
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) dismiss();
     };
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
@@ -138,7 +164,14 @@ export function RecordCombobox<T>({
     setOpen(true);
   }
 
+  /** Invalidate any in-flight quick-create: the user has moved on. */
+  function dismiss() {
+    intentRef.current++;
+    setOpen(false);
+  }
+
   function choose(record: T) {
+    intentRef.current++;
     onSelect(record);
     setOpen(false);
     setQuery('');
@@ -146,10 +179,16 @@ export function RecordCombobox<T>({
 
   async function quickCreate() {
     if (!trimmed || creating) return;
+    // The search's request-id guard does not cover creates. Without this, a slow create
+    // still calls `choose` after the user has dismissed the list, cleared the field or
+    // picked an existing row — silently replacing the choice they actually made.
+    const intent = ++intentRef.current;
     setCreating(true);
     setError('');
     try {
-      choose(await create(trimmed));
+      const record = await create(trimmed);
+      if (intentRef.current !== intent) return;  // superseded while the request was open
+      choose(record);
     } catch (err: unknown) {
       // Kept inline rather than thrown: the user is mid-form, and the name they typed is
       // still in the box to correct. A toast would scroll away from the field it is about.
@@ -159,10 +198,21 @@ export function RecordCombobox<T>({
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    // An IME is mid-composition: this Enter commits the candidate the user is typing, not a
+    // row in our list. Selecting on it would replace what they were writing — the failure is
+    // routine for CJK input and invisible to anyone testing on a Latin keyboard.
+    if (e.nativeEvent.isComposing) return;
     if (e.key === 'Escape') {
       // Closes the list only — the existing selection survives, so Escape is never a
       // destructive keystroke here.
-      if (open) { e.preventDefault(); e.stopPropagation(); setOpen(false); }
+      if (open) { e.preventDefault(); e.stopPropagation(); dismiss(); }
+      return;
+    }
+    if (e.key === 'Tab') {
+      // Focus is leaving for the next field; the popover must not stay open over it. Handled
+      // here rather than on blur, because a blur handler also fires when a click lands on an
+      // option and would close the list before the click could select anything.
+      if (open) dismiss();
       return;
     }
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {

@@ -49,7 +49,10 @@ const createCompany = (name: string) =>
 
 const contactLabelOf = (c: CrmContact) => c.name;
 const contactSublabelOf = (c: CrmContact) => c.company_name || c.company || '';
+// Display carries the archived marker; MATCHING must not, or typing an archived company's
+// real name reports no exact match and the list offers to create the row above it.
 const companyLabelOf = (co: CrmCompany) => (co.status === 'archived' ? `${co.name} (archived)` : co.name);
+const companyNameOf = (co: CrmCompany) => co.name;
 const companySublabelOf = (co: CrmCompany) => co.domain || '';
 const recordId = (r: { id: number }) => r.id;
 
@@ -90,11 +93,20 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
   const [error, setError] = useState('');
   const cf = useCustomFieldsForm('deal', deal?.id);
 
-  // Set the moment the user touches either picker. The prefill below lands
-  // asynchronously, and a `prev ?? …` guard cannot tell "never set" from "just cleared" —
-  // so without this, clearing a link while that fetch is in flight silently re-fills it,
-  // and the deal saves against a company the user had just unlinked.
-  const linksTouched = useRef(false);
+  // Did the user speak for this link themselves? Tracked per FIELD, and deliberately not as
+  // one flag for both: the two are independent, so a single flag lets touching one field
+  // suppress the other's prefill — leaving a contact linked by id with a blank label, which
+  // submits a link nothing on screen shows.
+  //
+  // This is what a value-based `prev ?? …` check cannot express, in either direction. It
+  // cannot tell "never set" from "deliberately cleared", so a cleared company comes back the
+  // moment an async prefill lands or another contact is picked. And it cannot tell "the user
+  // chose this" from "we auto-filled it", so a company inherited from a previous contact
+  // would outrank the one belonging to the contact now selected. A deal opened on an
+  // existing company starts as spoken-for: that link IS a deliberate choice, just an
+  // earlier one.
+  const contactTouched = useRef(false);
+  const companyTouched = useRef(deal?.company_id != null);
 
   useEffect(() => {
     // Deal opened from a contact (create mode): default the company to THAT
@@ -104,9 +116,16 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
     if (!deal && contactId != null) {
       api<CrmContact>(`/api/crm/contacts/${contactId}`)
         .then(c => {
-          if (linksTouched.current) return;  // the user got there first; their choice wins
+          // The contact half defers to the contact field alone, so touching the COMPANY
+          // picker while this is in flight no longer strands a contact linked by id behind
+          // a blank label.
+          if (contactTouched.current) return;
           setContactLabel(c.name);
-          if (c.company_id != null) {
+          // The company half additionally requires the source contact to still be in play:
+          // it is DERIVED from this contact, so once the user has cleared or replaced them
+          // the derivation is void — filling from it would either resurrect a link they
+          // removed or overwrite the company `pickContact` just took from their new choice.
+          if (!companyTouched.current && c.company_id != null) {
             setSelectedCompany(c.company_id);
             setCompanyLabel(c.company_name || c.company || '');
           }
@@ -115,20 +134,20 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
     }
   }, [deal, contactId]);
 
-  // Picking a contact fills the company from that contact ONLY when no company is
-  // set yet — deal↔company links are independent, so we never overwrite (or null)
-  // a company the user chose deliberately just because they changed the contact.
+  // Picking a contact fills the company from that contact unless the user has spoken for
+  // the company field themselves — deal↔company links are independent, so a deliberate
+  // choice is never overwritten (or nulled) just because the contact changed. The guard is
+  // `companyTouched`, NOT "is the company empty": emptiness cannot tell a cleared company
+  // from an unset one, so a company the user had just removed would silently return.
   //
-  // Takes the RECORD, not an id: the picker already holds the contact it just
-  // resolved, so the old `contacts.find(...)` lookup into the capped list is gone —
-  // and with it the case where an out-of-page contact silently skipped the auto-fill.
-  // Reading `selectedCompany` from the render closure is correct here: this only runs
-  // from a user gesture, so the value is the one that gesture was aimed at.
+  // Takes the RECORD, not an id: the picker already holds the contact it just resolved, so
+  // the old `contacts.find(...)` lookup into the capped list is gone — and with it the case
+  // where an out-of-page contact silently skipped the auto-fill.
   function pickContact(c: CrmContact | null) {
-    linksTouched.current = true;
+    contactTouched.current = true;
     setSelectedContact(c?.id ?? null);
     setContactLabel(c?.name || '');
-    if (c && c.company_id != null && selectedCompany == null) {
+    if (c && c.company_id != null && !companyTouched.current) {
       setSelectedCompany(c.company_id);
       setCompanyLabel(c.company_name || c.company || '');
     }
@@ -204,11 +223,14 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
             create={createCompany}
             getId={recordId}
             getLabel={companyLabelOf}
+            getMatchText={companyNameOf}
             getSublabel={companySublabelOf}
             onSelect={co => {
-              linksTouched.current = true;
+              companyTouched.current = true;
               setSelectedCompany(co?.id ?? null);
-              setCompanyLabel(co?.name || '');
+              // The DECORATED label, so the archived marker survives selection — the closed
+              // control would otherwise show a plain name for an archived company.
+              setCompanyLabel(co ? companyLabelOf(co) : '');
             }}
           />
           <div>

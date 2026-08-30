@@ -318,3 +318,85 @@ describe('RecordCombobox — dismissal', () => {
     expect(props.onSelect).not.toHaveBeenCalled();
   });
 });
+
+describe('RecordCombobox — a create that outlives the user\'s intent', () => {
+  it('does not select a slow create the user has already moved past', async () => {
+    // The search's request-id guard does not cover creates. Without its own token, a create
+    // that resolves after the user dismissed the list still selects its record, silently
+    // replacing whatever they chose instead.
+    let release: (r: Rec) => void = () => {};
+    const props = mount({
+      search: vi.fn(async () => []),
+      create: vi.fn(() => new Promise<Rec>(res => { release = res; })),
+    });
+    await open();
+    await type('Newco');
+    await settle();
+    await act(async () => { createRow()!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    await press('Escape');                                  // the user moves on
+    await act(async () => { release({ id: 99, name: 'Newco' }); });
+
+    expect(props.onSelect).not.toHaveBeenCalled();
+  });
+
+  it('still selects a create nobody interrupted', async () => {
+    // The guard above must not swallow the ordinary case.
+    let release: (r: Rec) => void = () => {};
+    const props = mount({
+      search: vi.fn(async () => []),
+      create: vi.fn(() => new Promise<Rec>(res => { release = res; })),
+    });
+    await open();
+    await type('Newco');
+    await settle();
+    await act(async () => { createRow()!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    await act(async () => { release({ id: 99, name: 'Newco' }); });
+
+    expect(props.onSelect).toHaveBeenCalledWith({ id: 99, name: 'Newco' });
+  });
+});
+
+describe('RecordCombobox — text entry that is not navigation', () => {
+  it('ignores Enter while an IME is composing', async () => {
+    // This Enter commits the candidate being typed, not a row in our list. Selecting on it
+    // replaces what the user was writing — routine for CJK input, invisible on a Latin
+    // keyboard, which is exactly why it needs a test.
+    const props = mount({ search: vi.fn(async () => [ACME]) });
+    await open();
+
+    const ev = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+    Object.defineProperty(ev, 'isComposing', { value: true });
+    await act(async () => { input().dispatchEvent(ev); });
+
+    expect(props.onSelect).not.toHaveBeenCalled();
+  });
+
+  it('closes the list on Tab so it cannot cover the next field', async () => {
+    // Focus is leaving; a popover left open sits over the rest of the form, and Escape from
+    // the newly focused control cannot reach it.
+    const props = mount({ search: vi.fn(async () => [ACME]) });
+    await open();
+    await press('Tab');
+
+    expect(container.querySelector('[role="listbox"]')).toBeNull();
+    expect(props.onSelect).not.toHaveBeenCalled();
+  });
+});
+
+describe('RecordCombobox — reopening', () => {
+  it('does not search the query the user already left behind', async () => {
+    // `useDebounce` cannot be reset, so after openList clears the query the debounced value
+    // still holds the old text for 250ms — reopening would search it, then search "".
+    const search = vi.fn(async (q: string) => (q ? [ACME] : []));
+    mount({ search });
+    await open();
+    await type('Acme');
+    await settle();
+    await press('Escape');
+    search.mockClear();
+
+    await open();
+
+    expect(search.mock.calls.every(([q]) => q === '')).toBe(true);
+  });
+});

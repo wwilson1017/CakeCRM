@@ -459,3 +459,100 @@ describe('DealForm — company labelling', () => {
     expect(row?.textContent).toContain('Acme Corp');
   });
 });
+
+describe('DealForm — whose choice wins', () => {
+  it('hydrates the contact label even when the user touches the COMPANY mid-prefill', async () => {
+    // One shared "touched" flag would suppress BOTH halves here, leaving a contact linked by
+    // id behind an empty box — the form would submit a link nothing on screen shows.
+    let release: (c: CrmContact) => void = () => {};
+    api.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === '/api/crm/contacts/77') return new Promise<CrmContact>(res => { release = res; });
+      if (init?.method === 'POST' && path === '/api/crm/companies/resolve') {
+        return { id: 22, name: JSON.parse(init.body as string).name, status: 'active' };
+      }
+      if (path.startsWith('/api/crm/contacts')) return { contacts: [] };
+      if (path.startsWith('/api/crm/companies')) return { companies: [] };
+      if (path === '/api/users') return { users: [] };
+      if (path.includes('/fields')) return [];
+      return null;
+    });
+    await render(undefined, 77);
+    await openPicker('company');
+    await typeInPicker('company', 'My Own Co');
+    await clickOption(t => t.startsWith('Create '));
+    await act(async () => {
+      release(contact({ id: 77, name: 'Sourced Person', company_id: 5, company_name: 'Sourced Co' }));
+    });
+
+    expect(combobox('contact').value).toBe('Sourced Person');   // hydrated anyway
+    expect(combobox('company').value).toBe('My Own Co');        // their choice survives
+  });
+
+  it('does not resurrect a company the user cleared when the contact changes', async () => {
+    // "Fill only when empty" cannot tell a CLEARED company from an unset one, so the company
+    // would silently come back on the next contact pick.
+    mockApi([contact({ id: 3, name: 'Acme Person', company_id: 9, company_name: 'Acme Corp' })]);
+    await render(deal({ company_id: 8, company_name: 'Linked Co' }));
+
+    const clear = container.querySelector('button[aria-label="Clear company"]') as HTMLButtonElement;
+    await act(async () => { clear.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    await openPicker('contact');
+    await clickOption(t => t.includes('Acme Person'));
+    await submit();
+
+    const put = api.mock.calls.find(([p, i]) => p === '/api/crm/deals/7' && i?.method === 'PUT');
+    const body = JSON.parse(put![1].body as string) as Record<string, unknown>;
+    expect(body.company_id).toBeNull();
+  });
+
+  it('does not overwrite an EDITED deal\'s own company when the contact changes', async () => {
+    // A company already on the deal is a deliberate choice too — just an earlier one.
+    mockApi([contact({ id: 3, name: 'Acme Person', company_id: 9, company_name: 'Acme Corp' })]);
+    await render(deal({ company_id: 8, company_name: 'Linked Co' }));
+    await openPicker('contact');
+    await clickOption(t => t.includes('Acme Person'));
+    await submit();
+
+    const put = api.mock.calls.find(([p, i]) => p === '/api/crm/deals/7' && i?.method === 'PUT');
+    const body = JSON.parse(put![1].body as string) as Record<string, unknown>;
+    expect(body.company_id).toBe(8);
+  });
+
+  it('does not offer Create for an archived company typed by its real name', async () => {
+    // The list decorates it "Wound Down Ltd (archived)"; matching on that decorated string
+    // would report no exact match and invite a duplicate of the row directly above.
+    api.mockImplementation(async (path: string) => {
+      if (path.startsWith('/api/crm/companies')) {
+        return { companies: [{ id: 6, name: 'Wound Down Ltd', status: 'archived' }] };
+      }
+      if (path.startsWith('/api/crm/contacts')) return { contacts: [] };
+      if (path === '/api/users') return { users: [] };
+      if (path.includes('/fields')) return [];
+      return null;
+    });
+    await render();
+    await openPicker('company');
+    await typeInPicker('company', 'Wound Down Ltd');
+
+    const create = [...container.querySelectorAll('[role="option"] button')]
+      .find(b => b.textContent?.startsWith('Create '));
+    expect(create).toBeUndefined();
+  });
+
+  it('keeps the archived marker after the company is selected', async () => {
+    api.mockImplementation(async (path: string) => {
+      if (path.startsWith('/api/crm/companies')) {
+        return { companies: [{ id: 6, name: 'Wound Down Ltd', status: 'archived' }] };
+      }
+      if (path.startsWith('/api/crm/contacts')) return { contacts: [] };
+      if (path === '/api/users') return { users: [] };
+      if (path.includes('/fields')) return [];
+      return null;
+    });
+    await render();
+    await openPicker('company');
+    await clickOption(t => t.includes('Wound Down'));
+
+    expect(combobox('company').value).toBe('Wound Down Ltd (archived)');
+  });
+});
