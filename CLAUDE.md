@@ -85,6 +85,68 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   falsely refuse a valid draft. The two-step thread fetch was evaluated and
   **declined** (it doubles common-case calls/latency/quota to bound memory only for rare
   long threads).
+  **The HTTP transport is ours since #64, and the issue's premise was wrong about why.**
+  It reported that `build("gmail","v1",credentials=creds,…)` left requests able to "block
+  indefinitely". Measured, they could not: passing `credentials=` hands transport
+  construction to the SDK, whose `build_http()` applies `socket.getdefaulttimeout()` if set
+  and otherwise `DEFAULT_HTTP_TIMEOUT_SEC = 60` — so every request was already bounded at
+  60s. The real defect was the **aggregate**, because one `call_gmail` fans out
+  *sequentially* with a fresh ceiling per request: `list_messages_op` is 1 × `messages.list`
+  + 1 × `messages.get` **per message**, so `gmail_search(max_results=25)` was 26 requests ≈
+  **26 minutes** worst case parked on one SSE turn (`engine.py` awaits `execute_tool` with
+  no `wait_for`), and a `gmail_scan` pass 51 requests ≈ 51 min. A per-request timeout alone
+  would not have fixed the reported symptom. Secondary, but the reason a value must be
+  *owned* rather than inherited: `build_http()` reads the process-global
+  `socket.setdefaulttimeout()` first, so any dependency could silently redefine Gmail's
+  timeout in either direction.
+  So `build()` now takes **`http=` and never `credentials=`** — the SDK treats them as
+  mutually exclusive and raises if given both — carrying `AuthorizedHttp` over a
+  `_BudgetHttp(httplib2.Http)` with an explicit `_HTTP_TIMEOUT_SECONDS = 20`. That 20s is a
+  **per-socket-op stall detector, not a total-duration cap**, so a large response that keeps
+  flowing is never cut off. `_BudgetHttp.request` additionally refuses to **start** a request
+  once the call's budget (`_CALL_BUDGET_SECONDS = 90`; `gmail_scan` passes its own
+  `_SCAN_CALL_BUDGET = 60`) is spent. **The gate is the INNER http, not a wrapper around
+  `AuthorizedHttp`, and that placement is load-bearing**: `AuthorizedHttp` builds its refresh
+  transport as `Request(self.http)`, so the token-refresh round-trip is gated too — an outer
+  wrapper would let it past entirely — and `build()` still receives a genuine
+  `AuthorizedHttp`, so the SDK's `get_credentials_from_http` (universe-domain resolution) and
+  every property proxy work with no delegation code. State the guarantee precisely: it covers
+  every top-level SDK request and every OAuth refresh, and because it gates request *starts*
+  the ceiling is the budget plus one request — a peer trickling bytes forever would defeat it,
+  which is out of threat model when the peer is Google's API.
+  `call_gmail` resolves an **absolute deadline before its own setup** (store read, decrypt,
+  `build()`), not after — that shared epoch is the whole reason `_SCAN_CALL_BUDGET +
+  _HTTP_TIMEOUT_SECONDS < _SCAN_HTTP_DEADLINE` means anything, since a budget starting after
+  setup would run from a later, unknown instant. A non-finite or non-positive budget is
+  refused rather than accepted: **NaN would disable the gate silently**, every comparison
+  against it being False.
+  A timeout raises **`GmailTimeoutError`, a plain `Exception`** — deliberately not a
+  `TimeoutError`/`OSError` subclass, so googleapiclient's `_retry_request` socket-error
+  handling can never retry it and multiply the wall clock the budget exists to bound. It is
+  **retryable by contract**: disjoint from `RefreshError`, so it can never reach
+  `store.mark_broken` (verified through the real SDK refresh path, not assumed — google-auth
+  wraps only `HttpLib2Error` into `TransportError`, so a stalled socket surfaces raw), and the
+  three executors return it **without `needs_reconnect`**. The OAuth callback keeps its
+  revoke-on-any-failure behavior — a deliberate, documented exception to that contract, since
+  from its seat a timeout is indistinguishable from a broken grant and reconnecting is one
+  click.
+  `gmail_scan` **keeps** its daemon-worker + `_inflight` + join-deadline machinery, now as a
+  backstop for what a socket timeout cannot bound (DNS stalls, CPU starvation) rather than as
+  a workaround for a missing timeout; its budget being strictly inside the join deadline makes
+  the abandoned-worker leak unreachable *for transport hangs*, and its docstrings now say
+  plainly that a worker abandoned for one of the other causes may still be unbounded and that
+  `_inflight` caps concurrency without guaranteeing recovery.
+  `httplib2` and `google-auth-httplib2` moved from incidental transitives to **pinned direct
+  dependencies** (the `pillow` precedent — a transitive extra is not a dependency contract).
+  All of it is **hermetically tested against the real SDK**, which retires the issue's stated
+  reason for deferral ("cannot be verified in the automation environment"): Gmail uses static
+  discovery so `build()` makes no network call, `backend/tests/test_gmail_transport.py` drives
+  the real `build()` and the real ops with a fake wire installed *below* the gate (never
+  monkeypatching the gate under test), and a loopback black-hole socket proves a genuine
+  read-hang is bounded. A parity test pins that dropping `credentials=` loses nothing for an
+  authorized-user credential (`requires_scopes` is False, so the SDK's scoping step is the
+  identity; the JWT branch is service-account-only) — an invariant rather than an argument,
+  because a service-account credential would *not* be equivalent.
 - **Multi-provider AI** via the `AIProvider` ABC (Anthropic, OpenAI, Gemini, Ollama,
   Together). Never call a provider SDK directly from feature code. Cheap background
   AI work (touch counts, classification) uses the light tier via
@@ -1227,6 +1289,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Gmail (read + draft only: `gmail_connection` singleton, BYO OAuth at `/api/gmail`, tools `gmail_search`/`gmail_read_thread`/`gmail_create_draft`, guard test + SECURITY.md) — **landed #8** as `backend/gmail/` + `frontend/src/crm/components/GmailCard.tsx` | `chatty/backend/integrations/google/` |
 | Gmail connection-race hardening (`connection_generation` optimistic lock + CAS on token persist; pending-draft binding through the shared confirm flow; ciphertext CAS on `mark_broken`; atomic clear-and-capture on disconnect/app-replace; capped recovery of attachment-stored text bodies) — **landed #43** across `backend/gmail/*` + `backend/assistant/{engine,history}.py` | Follow-up to #8 (no blueprint — back-port candidate to CAKE OS) |
 | Gmail touch-scan heartbeat job (read-only inbox scan → sender→contact match → idempotent `email` touch logging feeding #16; `gmail_scan_state`/`gmail_scanned_messages`/`gmail_unmatched_correspondents` tables; own `gmail_scan` scheduler job; "create contact?" alerts) — **landed #17** as `backend/gmail_scan/` | New capability (no blueprint — back-port candidate to CAKE OS) |
+| Owned Gmail HTTP transport (`build(http=…)` over `AuthorizedHttp` wrapping a budget-gating `httplib2.Http` subclass; `_HTTP_TIMEOUT_SECONDS` per-socket-op stall bound + a per-call request budget resolved before setup; `GmailTimeoutError` as a retryable non-reconnect class; `gmail_scan` budget kept strictly inside its join deadline; `httplib2`/`google-auth-httplib2` pinned) — **landed #64** as `backend/gmail/{client,tools}.py` + `backend/gmail_scan/service.py` + `backend/tests/test_gmail_transport.py`. **Corrects the issue's premise**: requests were never unbounded — the SDK's `build_http()` already applied 60s — the defect was the un-bounded *aggregate* of a sequential fan-out, plus the fact that the 60s was an implicit default any `socket.setdefaulttimeout()` caller could redefine. Also retires its stated blocker: static discovery makes `build()` network-free, so the whole stack is hermetically testable against the real SDK | Follow-up to #8/#43 (no blueprint — back-port candidate to CAKE OS) |
 | Kanban drag-and-drop | `cake_os/frontend/src/shared/dnd/` |
 | **Shared collection layer** (the CRM UI's interaction substrate) — **landed #73** as `frontend/src/shared/{search,listview,collection,overlay,hooks}/` with their co-located tests, plus the vitest harness. `search` (SearchInput/SearchFilterBar/SortControl + `match`/`persist`/`sort`), `listview` (ListView/ViewSwitcher + `headerSort`/`sortRows`), `collection` (CollectionView, `facets`, `useCollectionState`, `usePageAssembly`, `visibleOrder`, `views/{Cards,CollectionList,Kanban}`, `detail/CollectionDetail`, `closePolicy`), and `overlay/DetailModal` (pulled in because `CollectionDetail` wraps it). **#73 landed the layer ONLY — no CRM surface was rewired**; Pipeline/Contacts/detail adopt it in their own issues. **Adopted by #77** on Contacts/Companies/Tasks (the pipeline board keeps #21's own filter bar). Adaptations from the blueprint: `lucide-react` swapped for the in-repo `shared/icons.tsx` (no new dependency; `IconChevronLeft` added); the blueprint's `corrections` dependency reduced to a local 3-line `collection/voidedRowClass.ts` (the `voided` tri-state itself is generic and inert unless a config supplies `getVoided`); `shared/pagination` is NOT reachable from the layer and was not ported; the app-local `detailClosePolicy.ts` became `collection/closePolicy.ts` since CakeCRM has one CRM app; and the ported code was modernized for CakeCRM's stricter `eslint-plugin-react-hooks` v7 ruleset (`configs.recommended`, which the blueprint does not enable) — ref-writes-during-render and setState-in-effect were removed rather than suppressed. Styling: the layer keeps the blueprint's Tailwind utility classes, wired to CakeCRM's theme by **semantic aliases** in `index.css`'s `@theme static` (`cream`→`ck-card`, `sand`→`ck-bg`, `charcoal`→`ck-ink`, `muted`→`ck-ink-mute`, `line`→`ck-line-strong`, `brand`→`ck-accent`, `font-heading`→`font-display`) — declared as `var(...)` so `.dark` re-resolves them and the layer inherits dark mode with no `dark:` variants. Accent-as-TEXT deliberately routes through `text-ck-accent-text` per #54's WCAG rule, never `text-brand`. The `dock:` custom variant is defined in `index.css` for `DetailModal`'s takeover-vs-centred switch. | `cake_os/frontend/src/shared/{search,listview,collection,overlay}/` |
 | Theme + dark mode (fixed `--color-ck-*` palette, `.dark` semantic-token override, self-hosted Montserrat/Open Sans, `useTheme` + `ThemeToggle`, accent-picker removal) — **landed #54** as `frontend/src/index.css` + `core/theme/useTheme.ts` + `crm/components/ThemeToggle.tsx` | `cake_os/frontend/src/index.css` + `core/theme/useTheme.ts` (read from `origin/master`) |

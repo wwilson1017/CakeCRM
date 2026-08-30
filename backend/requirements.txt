@@ -43,6 +43,13 @@ py-vapid==1.9.4
 # exchange is a direct httpx POST and refresh is google-auth's Credentials.
 google-auth==2.56.2
 google-api-python-client==2.198.0
+# Since #64 gmail/client.py builds its OWN bounded transport, so it imports these two
+# DIRECTLY rather than letting build(credentials=...) construct one. Both are already
+# guaranteed transitives of google-api-python-client above — but a transitive extra is
+# not a dependency contract (the pillow precedent below), and a future SDK major that
+# dropped the httplib2 transport would break the direct import on upgrade.
+httplib2==0.32.0
+google-auth-httplib2==0.4.0
 
 # Chatter note attachment thumbnails (issue #57) — core/thumbnails.py. Pillow is already
 # present transitively via qrcode[pil], but a transitive extra is not a dependency
