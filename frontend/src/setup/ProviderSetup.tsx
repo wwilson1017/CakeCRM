@@ -113,7 +113,9 @@ export function ProviderSetup() {
                     await api(`/api/providers/${p.id}/disconnect`, { method: 'POST' });
                     reload();
                   }}
-                  className="w-full bg-transparent border border-ck-line-strong rounded-md text-sm text-ck-red-text px-4 py-2 cursor-pointer hover:opacity-80"
+                  // Hover moves the BORDER, not the text's opacity: an 80% fade put this
+                  // label at 4.18:1 on the dark card (issue #119).
+                  className="w-full bg-transparent border border-ck-line-strong rounded-md text-sm text-ck-red-text px-4 py-2 cursor-pointer hover:border-ck-red"
                 >
                   Disconnect
                 </button>

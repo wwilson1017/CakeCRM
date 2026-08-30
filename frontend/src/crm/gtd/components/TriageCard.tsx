@@ -205,7 +205,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
           disabled={busy}
           onClick={() => void patch({ star: !todo.star }, false)}
           className={`shrink-0 text-xl leading-none disabled:opacity-50 ${
-            todo.star ? 'text-amber-500' : 'text-line hover:text-amber-400'
+            todo.star ? 'text-ck-amber' : 'text-line hover:text-ck-amber'
           }`}
           aria-label="Star as today priority"
         >
@@ -326,9 +326,12 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
             type="button"
             disabled={busy}
             onClick={() => void remove()}
-            // hover:opacity-80, not hover:text-brand-dark: `brand-dark` is a fill-ramp
-            // step and is only 2.18:1 as text on the dark card (issue #119).
-            className={`${linkCls} text-ck-accent-text hover:opacity-80`}
+            // Underline, not a colour or opacity change (issue #119). `brand-dark` was
+            // 2.18:1 as text on the dark card; `hover:opacity-80` — the obvious
+            // replacement — is 3.83:1, because fading a token tuned to sit just over
+            // 4.5:1 lands under it. A hover affordance that costs no contrast is the
+            // only kind these tokens can carry.
+            className={`${linkCls} text-ck-accent-text hover:underline`}
           >
             Delete
           </button>

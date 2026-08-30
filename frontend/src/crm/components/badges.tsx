@@ -13,27 +13,27 @@ const badgeBase: React.CSSProperties = {
 // Each row is a wash mixed from the FILL token carrying a glyph in the TEXT token —
 // the pairing issue #119 exists to keep apart. Mixing the wash from the text token
 // instead would darken the chip in step with its own label and undo the fix.
-const PRIORITY_COLORS: Record<string, { bg: string; color: string }> = {
-  urgent: { bg: tint(CORAL_FILL, 15), color: CORAL_TEXT },
-  high: { bg: tint(CORAL_FILL, 12), color: CORAL_TEXT },
-  medium: { bg: tint(GOLD_FILL, 10), color: GOLD_TEXT },
-  low: { bg: tint(INK, 6), color: INK_SOFT },
+const PRIORITY_COLORS: Record<string, { bg: string; text: string }> = {
+  urgent: { bg: tint(CORAL_FILL, 15), text: CORAL_TEXT },
+  high: { bg: tint(CORAL_FILL, 12), text: CORAL_TEXT },
+  medium: { bg: tint(GOLD_FILL, 10), text: GOLD_TEXT },
+  low: { bg: tint(INK, 6), text: INK_SOFT },
 };
 
 export function PriorityBadge({ priority }: { priority: string }) {
   const c = PRIORITY_COLORS[priority] || PRIORITY_COLORS.medium;
-  return <span style={{ ...badgeBase, background: c.bg, color: c.color }}>{priority}</span>;
+  return <span style={{ ...badgeBase, background: c.bg, color: c.text }}>{priority}</span>;
 }
 
-const STATUS_COLORS: Record<string, { bg: string; color: string }> = {
-  active: { bg: tint(SAGE_FILL, 12), color: SAGE_TEXT },
-  inactive: { bg: tint(INK, 5), color: INK_DIM },
-  archived: { bg: tint(CORAL_FILL, 8), color: CORAL_TEXT },
+const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
+  active: { bg: tint(SAGE_FILL, 12), text: SAGE_TEXT },
+  inactive: { bg: tint(INK, 5), text: INK_DIM },
+  archived: { bg: tint(CORAL_FILL, 8), text: CORAL_TEXT },
 };
 
 export function StatusBadge({ status }: { status: string }) {
   const c = STATUS_COLORS[status] || STATUS_COLORS.inactive;
-  return <span style={{ ...badgeBase, background: c.bg, color: c.color }}>{status}</span>;
+  return <span style={{ ...badgeBase, background: c.bg, color: c.text }}>{status}</span>;
 }
 
 // Informational "AI" blue, shared by the touch-count high band and AiBadge (issue #16).
@@ -64,9 +64,9 @@ export function TouchCountPill({ count }: { count?: number | null }) {
 // contacts. Three bands — hot (>=70, green), warm (40-69, amber), cool (<40, muted). A NULL
 // score renders nothing (never-scored rows show no pill). NOT an AI feature — always on.
 const SCORE_COLORS = {
-  cool: { bg: tint(INK, 6), color: INK_SOFT },        // <40
-  warm: { bg: tint(GOLD_FILL, 12), color: GOLD_TEXT }, // 40-69
-  hot: { bg: tint(SAGE_FILL, 12), color: SAGE_TEXT },  // >=70
+  cool: { bg: tint(INK, 6), text: INK_SOFT },        // <40
+  warm: { bg: tint(GOLD_FILL, 12), text: GOLD_TEXT }, // 40-69
+  hot: { bg: tint(SAGE_FILL, 12), text: SAGE_TEXT },  // >=70
 } as const;
 
 export function ScorePill({ score, compact }: { score?: number | null; compact?: boolean }) {
@@ -77,7 +77,7 @@ export function ScorePill({ score, compact }: { score?: number | null; compact?:
   return (
     <span
       title="Computed lead score (0-100) from stage, engagement, value, links & recency. Ask the assistant for the full breakdown."
-      style={{ ...badgeBase, textTransform: 'none', padding: '2px 8px', background: c.bg, color: c.color }}
+      style={{ ...badgeBase, textTransform: 'none', padding: '2px 8px', background: c.bg, color: c.text }}
     >
       {compact ? score : `Score ${score}`}
     </span>

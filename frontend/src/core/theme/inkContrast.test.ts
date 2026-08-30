@@ -196,10 +196,11 @@ const STAGES = Object.keys(LIGHT_TOKENS)
  *    nowhere else, and asserting it over `card` too would fail on a pixel nothing renders.
  *
  * Deliberately NOT covered, because it is a different question: a brand-hue chip that carries
- * its OWN hue as text (`tint(CORAL,15)` + CORAL in `PriorityBadge urgent`, `tint(SAGE,12)` +
- * SAGE, …). Those pairs are about the status/stage hues, which #54 already tuned per theme;
- * this guard is about the neutral ramp. Ink text DOES land on two kinds of non-neutral wash:
- * `AiTouchDetail`'s banner (`INK` on `tint(GOLD,10)`), which is included below as `gold10`, and
+ * its OWN hue as text (`tint(CORAL_FILL,15)` + CORAL_TEXT in `PriorityBadge urgent`,
+ * `tint(SAGE_FILL,12)` + SAGE_TEXT, …). Those pairs belong to the status/stage hues, which
+ * #119 split into FILL and TEXT tokens and guards in `hueContrast.test.ts`; this guard is about
+ * the neutral ramp. Ink text DOES land on two kinds of non-neutral wash:
+ * `AiTouchDetail`'s banner (`INK` on `tint(GOLD_FILL,10)`), which is included below as `gold10`, and
  * the ACCENT washes listed in the file header, which are deliberately out of scope there.
  */
 function surfaces(t: Record<string, string>): Record<string, Rgb> {
@@ -219,7 +220,7 @@ function surfaces(t: Record<string, string>): Record<string, Rgb> {
     // covers the bare row/tab hover overlay, which is itself an ink tint at one of these.
     for (const chip of CHIP_PCTS) out[`ink${chip}/${base}`] = over(ink, chip, b);
 
-    // `AiTouchDetail`'s stale/superseded banner: `tint(GOLD,10)` carrying INK.
+    // `AiTouchDetail`'s stale/superseded banner: `tint(GOLD_FILL,10)` carrying INK.
     out[`gold10/${base}`] = over(rgb('amber'), 10, b);
 
     // `shared/collection` / `shared/search`'s `hover:bg-line/50` controls, which carry
@@ -228,7 +229,7 @@ function surfaces(t: Record<string, string>): Record<string, Rgb> {
     // faint one lands optimistically in BOTH themes, the error direction `over()` refuses.
     out[`lineStrong50/${base}`] = over(rgb('line-strong'), 50, b);
 
-    // Deal chips and pipeline cards: `tint(STAGE_COLORS[s].color, 12)` carrying ink-dim /
+    // Deal chips and pipeline cards: `tint(STAGE_COLORS[s].fill, 12)` carrying ink-dim /
     // ink-mute text (crm/constants.ts `stage()`).
     for (const s of STAGES) out[`stage12-${s}/${base}`] = over(rgb(`stage-${s}`), 12, b);
   }

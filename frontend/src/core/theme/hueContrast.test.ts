@@ -49,6 +49,8 @@ const CSS: string = typeof __INDEX_CSS__ === 'string' ? __INDEX_CSS__ : '';
  */
 
 const AA_NORMAL_TEXT = 4.5;
+/** WCAG 1.4.11: icons and the parts of a control that convey its state. */
+const AA_NON_TEXT = 3;
 
 // ── WCAG 2.x relative luminance / contrast ratio, sRGB ───────────────────────
 // Duplicated from inkContrast.test.ts rather than extracted to a shared module: these are the
@@ -169,6 +171,11 @@ const HUES = [...STATUS_HUES, ...STAGES.map(s => `stage-${s}`)];
  * green 12  `StatusBadge active`, `ScorePill hot`, `TouchCountPill mid`, `AiTouchDetail`
  * ai    12  `AiBadge`, `TouchCountPill high`
  * stage 12  every stage chip (`crm/constants.stage()`)
+ *
+ * Green's OTHER wash — `tint(SAGE_FILL, 20)` on `listColumns`' completed-task checkbox — is
+ * deliberately absent from this table and asserted separately at the NON-TEXT threshold below.
+ * It is listed as an exclusion rather than simply left out, because "a percentage nobody wrote
+ * down" is exactly how a real surface goes unmeasured.
  */
 const OWN_WASH_PCTS: Record<string, number[]> = {
   red: [6, 8, 10, 12, 15],
@@ -311,6 +318,26 @@ describe.each([
       const text = luminance(hexToRgb(resolve(tokens, `${hue}-text`)));
       expect((fill - text) * sign, `${themeName}: --color-ck-${hue}-text moved the wrong way from its fill`)
         .toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it('keeps the completed-task tick legible on its own 20% wash', () => {
+    // `listColumns`' done checkbox: a `tint(SAGE_FILL, 20)` square with a `SAGE_TEXT`
+    // IconCheck in it. Held to WCAG 1.4.11's 3:1 rather than 4.5:1 because the tick is a
+    // graphic conveying a control's state, not text — and the distinction is load-bearing
+    // rather than a let-off: in dark, `green-text` is a `var()` passthrough to `green`, so
+    // the tick and its wash are literally the same hue and land at 4.14:1. Holding an icon
+    // to the text threshold would force a dark-mode literal for every green glyph in the
+    // app to fix one checkbox.
+    //
+    // This surface is asserted HERE rather than folded into OWN_WASH_PCTS because putting a
+    // 20% entry there would sweep it at 4.5:1 against every hue-as-text assertion above.
+    const tick = hexToRgb(resolve(tokens, 'green-text'));
+    for (const base of BASES) {
+      const wash = over(hexToRgb(resolve(tokens, 'green')), 20, hexToRgb(resolve(tokens, base)));
+      const ratio = contrast(tick, wash);
+      expect(ratio, `${themeName}: the done tick on own20/${base} is ${ratio.toFixed(2)}:1`)
+        .toBeGreaterThanOrEqual(AA_NON_TEXT);
     }
   });
 

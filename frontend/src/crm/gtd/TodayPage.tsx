@@ -54,7 +54,7 @@ export function TodayPage() {
           <div className="space-y-6">
             {section('Overdue', overdue, 'text-ck-accent-text')}
             {section('Due today', dueToday)}
-            {section('★ Starred', starred, 'text-amber-600 dark:text-amber-400')}
+            {section('★ Starred', starred, 'text-ck-amber-text')}
           </div>
         )
       )}
