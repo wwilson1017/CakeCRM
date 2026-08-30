@@ -185,6 +185,7 @@ def test_every_untrusted_source_tool_is_excluded_not_just_todays_two():
     assertion: a tool added to that set later is excluded here with no further edit."""
     from assistant import delimiters
 
+    assert delimiters.UNTRUSTED_SOURCE_TOOLS, "empty set would make the check below vacuous"
     reg = FakeRegistry()
     reg.writes_map.update({name: False for name in delimiters.UNTRUSTED_SOURCE_TOOLS})
     allowed = background.background_allowlist(reg)
