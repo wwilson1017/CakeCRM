@@ -12,10 +12,17 @@ the ``notifications`` log).
 Two safety rules make the autonomous turn acceptable (the confirmation gate is
 never involved here):
   * a SERVER-ENFORCED ALLOWLIST (``allowed_tools``) checked at BOTH advertisement
-    and execution — background turns get READ tools + ``notify_user`` ONLY, no CRM
-    write tools at all (so a prompt injection can at most send one notification),
-    and MINUS ``BACKGROUND_EXCLUDED_TOOLS``, the live external-source reads that
-    would turn that one notification into an exfiltration channel (issue #114); and
+    and execution. Two different strengths live here, and the difference matters:
+      - ``BACKGROUND_EXCLUDED_TOOLS`` is enforced by the MODE — ``_run_turn``
+        subtracts it from whatever the caller passed, so a live external-source read
+        cannot run in a background turn under any caller (issue #114); while
+      - the "READ tools + ``notify_user`` ONLY, no CRM writes" ceiling is enforced by
+        the CALLER'S declaration. Every caller builds it with ``background_allowlist``
+        (heartbeat ×2, proactive — each pinned by a test), which is what makes the
+        "a prompt injection can at most send one notification" claim true today. It is
+        deliberately not intersected in ``_run_turn``: this mode is designed to let a
+        caller permit a write, which is what the write budget below exists to bound
+        and what ``test_write_executes_without_confirmation`` pins.
   * a dedicated ``WRITE_BUDGET_BACKGROUND`` (bounds ``notify_user``) + a
     ``max_iterations`` cap.
 

@@ -152,9 +152,14 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `writes:False` means "changes nothing", not "safe unattended": `background_allowlist()`
   now subtracts `background.BACKGROUND_EXCLUDED_TOOLS`, which IS
   `delimiters.UNTRUSTED_SOURCE_TOOLS` (the live external-account reads — today
-  `gmail_search`/`gmail_read_thread`) rather than a second hand-maintained list, so the
-  existing `test_gmail_guard` pin that every Gmail read lands in that set makes a future
-  Gmail reader background-excluded for free. The one-notification ceiling had held
+  `gmail_search`/`gmail_read_thread`) rather than a second hand-maintained list. For a
+  future *Gmail* reader that is automatic: `test_gmail_guard`'s existing pin fails CI
+  until the new tool is added to that set, and adding it excludes it here with no second
+  edit. **It is NOT automatic for a future non-Gmail external read** (some other
+  connector): the set stays a reviewed denylist, so such a tool is background-callable
+  until someone adds it. Deny-by-default would need per-tool background-safety metadata
+  on every def — a real design change, deliberately not built here; the rule for now is
+  that adding a connection-gated read means adding it to `UNTRUSTED_SOURCE_TOOLS`. The one-notification ceiling had held
   *mechanically* while still being an exfiltration channel: the interactive engine answers
   those reads with the power→normal taint, but an unattended turn has no analogue — nobody
   reads the fence — so injected reminder/CRM text could steer it `gmail_search` →
@@ -162,8 +167,15 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   Telegram). `_run_turn` ALSO clamps the caller-supplied `allowed_tools` by the same
   subtraction, one line covering both enforcement points (advertisement and execution both
   read that variable), so the exclusion is a property of the background *mode*, not of one
-  builder; it is deliberately narrow — a caller-supplied write still executes, which is
-  what `test_write_executes_without_confirmation` pins. **Scope, stated precisely:** this
+  builder. It is deliberately narrow: the wider "reads + `notify_user`" ceiling is still
+  the CALLER's declaration, and a caller-supplied write still executes — which is what
+  `test_write_executes_without_confirmation` pins and what the write budget exists to
+  bound. Intersecting `_run_turn` with `background_allowlist()` to make that whole ceiling
+  mode-enforced was raised twice in review and **declined here**: it changes #6's designed
+  contract (the mode exists to let a caller permit a write) and is a decision for its own
+  issue, not a side effect of #114. What holds it today is that all three callers use the
+  builder, each pinned by a test — `test_heartbeat`'s two (added with #114) and
+  `test_proactive_service`'s. **Scope, stated precisely:** this
   removes LIVE mailbox access only. Sender + subject that #17's deterministic `gmail_scan`
   already wrote into `activity_log` stay readable through ordinary CRM reads
   (`crm_get_activity_log`, `crm_dashboard`) — that is CRM data by design, and out of scope
