@@ -138,7 +138,7 @@ def test_stage_durations_return_every_stage_even_with_no_samples():
     """The UI and the model both benefit from a stable frame — a stage with no data
     reports samples=0 and null averages rather than disappearing."""
     out = az._shape_stage_durations([{"stage": "lead", "days": 2.0}])
-    assert [d["stage"] for d in out] == list(az._OPEN_STAGES)
+    assert [d["stage"] for d in out] == list(az.OPEN_STAGES)
     lead = next(d for d in out if d["stage"] == "lead")
     assert lead["samples"] == 1 and lead["avg_days"] == 2.0
     qualified = next(d for d in out if d["stage"] == "qualified")
@@ -189,7 +189,7 @@ def test_conversion_rates_are_none_not_zero_when_nothing_entered():
 def test_conversion_ignores_terminal_stages_as_entry_points():
     """won/lost are outcomes, not stages deals sit in — they never open a funnel row."""
     out = az._shape_conversion([{"stage": "won", "current_stage": "won"}])
-    assert [d["stage"] for d in out] == list(az._OPEN_STAGES)
+    assert [d["stage"] for d in out] == list(az.OPEN_STAGES)
     assert all(d["entered"] == 0 for d in out)
 
 

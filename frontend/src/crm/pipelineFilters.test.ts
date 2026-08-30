@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { CrmDeal } from '../core/types';
-import { EMPTY_ADVANCED, dealMatchesAdvanced, matchesActivityPreset, ymd, type AdvancedFilters } from './pipelineFilters';
+import { EMPTY_ADVANCED, dealMatchesAdvanced, isArchivedDeal, matchesActivityPreset, ymd, type AdvancedFilters } from './pipelineFilters';
 
 function deal(over: Partial<CrmDeal> = {}): CrmDeal {
   return {
@@ -173,5 +173,18 @@ describe('activity timestamps parse through parseUTC, not bare Date', () => {
     expect(matchesActivityPreset('2026-05-13T09:15:30.123456+00:00', 'le7', now)).toBe(true);
     expect(matchesActivityPreset(null, 'none', now)).toBe(true);
     expect(matchesActivityPreset(null, 'stale30', now)).toBe(true);
+  });
+});
+
+// ── Archived deals (issue #83) ───────────────────────────────────────────────
+// The THREE-STATE facet itself moved to `pipelineCollection.ts` with #74 and is pinned in
+// that file's suite; what stays here is the one predicate the board reads directly —
+// the money aggregates, the bulk payload, the select-all ids and the per-card drag gate
+// all call `isArchivedDeal`, none of them through a facet.
+describe('isArchivedDeal', () => {
+  it('reads a timestamp as archived and null/absent as live', () => {
+    expect(isArchivedDeal(deal({ archived_at: '2026-08-20T00:00:00+00:00' }))).toBe(true);
+    expect(isArchivedDeal(deal({ archived_at: null }))).toBe(false);
+    expect(isArchivedDeal(deal())).toBe(false);
   });
 });

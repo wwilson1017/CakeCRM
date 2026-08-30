@@ -1,0 +1,319 @@
+import { describe, expect, it } from 'vitest';
+
+/**
+ * The literal text of `src/index.css`, substituted by `define` in `vitest.config.ts` (see the
+ * comment there for why neither `?raw` nor `node:fs` works from inside a test). Declared rather
+ * than imported so this file needs no Node types. If the define is ever dropped, the parse below
+ * throws instead of quietly measuring nothing — see `DARK_BLOCK`.
+ */
+declare const __INDEX_CSS__: string;
+const CSS: string = typeof __INDEX_CSS__ === 'string' ? __INDEX_CSS__ : '';
+
+/**
+ * WCAG AA guard for the neutral ink ramp (issue #68).
+ *
+ * `--color-ck-ink{,-mute,-soft,-dim}` are ALL body-text colours — `ink-dim` alone paints every
+ * form label (`shared/styles.labelStyle`), every uppercase section heading
+ * (`crm/styles.sectionHeading`) and most empty states — so each has to clear AA's 4.5:1 on
+ * every surface it can land on, in both themes. Before #68 none of `ink-dim`/`ink-soft` did
+ * (1.91:1 at worst), and `ink-mute` failed on the composited surfaces too (3.72:1).
+ *
+ * The test reads the SHIPPED index.css rather than a copy of the palette: a duplicated table
+ * would drift silently, which is the exact failure mode this is here to stop.
+ *
+ * "Surface" is deliberately more than the three raw background tokens: chips, row hovers and
+ * stage washes composite a translucent layer over them, and such a layer — never a raw token —
+ * is what binds the ramp in both themes. 43 surfaces are checked; `surfaces()` documents the
+ * rule for which combinations are built and why, including the two it keeps as deliberate
+ * headroom with no producer today.
+ *
+ * The guard's FLOOR and the worst pairing the app actually RENDERS are different numbers, and
+ * this file says which is which rather than flattering itself:
+ *   - light  — floor 4.72:1, a 6% ink chip on a 12% lost-stage deal card over the page bg.
+ *              That surface is real (it is a `DealBoardCard`); the cross-product is what puts
+ *              `ink-dim` on it, where the token that actually renders there is `ink-soft`.
+ *   - dark   — floor 4.56:1, a 6% ink chip inside an ink-hovered row over `card`. That stack
+ *              has NO producer today (see `surfaces()`); the worst pairing dark really renders
+ *              is 5.09:1, `ink-dim` on a 50% line wash over `card`.
+ * The hover alpha under both is read from the stylesheet, not assumed.
+ *
+ * Out of scope, deliberately: ink text on an ACCENT wash — `MemoryPage`'s selected row puts
+ * INK/INK_MUTE/INK_DIM on `tint(ACCENT_TEXT,8)`, and `filterTab` active / the tag button use
+ * ACCENT_SOFT. Those clear AA today (worst measured 5.38:1) but they are governed by the accent
+ * tokens, which #54 tunes per theme on its own rule; folding them in here would need this guard
+ * to resolve `var()` and `color-mix()` values. Retuning `accent-text` should re-check them.
+ */
+
+const AA_NORMAL_TEXT = 4.5;
+
+// ── WCAG 2.x relative luminance / contrast ratio, sRGB ───────────────────────
+
+type Rgb = [number, number, number];
+
+function hexToRgb(hex: string): Rgb {
+  const h = hex.replace('#', '');
+  const v = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
+  if (!/^[0-9a-fA-F]{6}$/.test(v)) throw new Error(`not a hex colour: ${hex}`);
+  return [0, 2, 4].map(i => parseInt(v.slice(i, i + 2), 16)) as Rgb;
+}
+
+function luminance([r, g, b]: Rgb): number {
+  const [lr, lg, lb] = [r, g, b].map(c => {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * lr + 0.7152 * lg + 0.0722 * lb;
+}
+
+function contrast(fg: Rgb, bg: Rgb): number {
+  const [hi, lo] = [luminance(fg), luminance(bg)].sort((a, b) => b - a);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/**
+ * `color-mix(in srgb, C pct%, transparent)` painted over an opaque backdrop — what
+ * `shared/styles.tint()` produces. Mixing with `transparent` in sRGB yields colour C at
+ * alpha pct/100; source-over compositing onto an opaque backdrop is then a plain lerp.
+ *
+ * Channels stay FLOAT — deliberately not rounded to 8-bit per layer. A browser composites a
+ * whole stack in one high-precision pass, so rounding between layers models something that does
+ * not happen. The error is small but signed unpredictably — on the two binding stacks, per-layer
+ * rounding reports 4.650:1 where exact gives 4.673:1 (light) and 4.565:1 where exact gives
+ * 4.559:1 (dark), i.e. pessimistic in one theme and optimistic in the other. Harmless at today's
+ * values; exactly the wrong error to carry in a threshold guard.
+ */
+function over(color: Rgb, pct: number, under: Rgb): Rgb {
+  const a = pct / 100;
+  return [0, 1, 2].map(i => color[i] * a + under[i] * (1 - a)) as Rgb;
+}
+
+// ── Read the palette out of the real stylesheet ──────────────────────────────
+
+/**
+ * Comments stripped BEFORE any parsing. `index.css` quotes hex values and token names freely in
+ * prose, and a declaration someone comments out is dead to the browser — parsing it would report
+ * a colour the app never paints, and would do so in the reassuring direction.
+ */
+const LIVE_CSS = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+
+/**
+ * Every `--color-ck-*` declaration in a slice, keyed by name with its RAW value text. The value
+ * is captured as "everything up to the semicolon" rather than matched as a hex on purpose: a
+ * token whose value stops being a plain hex (an `rgb()`, a `var()`, a `color-mix()`) must show
+ * up here and be REJECTED loudly, not silently vanish from the palette and take its surfaces
+ * with it.
+ */
+function declarations(slice: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const m of slice.matchAll(/--color-ck-([a-z0-9-]+):\s*([^;]+);/g)) {
+    out[m[1]] = m[2].trim();
+  }
+  return out;
+}
+
+/** The `.dark { … }` override block — matched on its own line so `.dark .hljs {` can't win. */
+const DARK_BLOCK = (() => {
+  const start = LIVE_CSS.indexOf('\n.dark {');
+  if (start < 0) throw new Error('index.css: no `.dark {` block found');
+  const end = LIVE_CSS.indexOf('\n}', start);
+  if (end < 0) throw new Error('index.css: unterminated `.dark {` block');
+  return LIVE_CSS.slice(start, end);
+})();
+
+const LIGHT_TOKENS = declarations(LIVE_CSS.slice(0, LIVE_CSS.indexOf('\n.dark {')));
+const DARK_TOKENS = { ...LIGHT_TOKENS, ...declarations(DARK_BLOCK) };
+
+const INK_TOKENS = ['ink', 'ink-mute', 'ink-soft', 'ink-dim'] as const;
+
+/** The `tint(INK, …)` percentages components actually use for chips. */
+const CHIP_PCTS = [5, 6] as const;
+
+/** The three opaque background tokens every wash is painted over. */
+const BASES = ['card', 'bg', 'raised'] as const;
+
+/**
+ * `--color-ck-hover`'s alpha as a percentage. `HOVER` is an ink tint declared literally per
+ * theme (the one documented exception to deriving tints with `color-mix`), and the two themes
+ * do NOT use the same alpha, so the stacked chip-on-hovered-row surface differs per theme.
+ * Read rather than assumed: changing that alpha in `index.css` must move this guard with it.
+ */
+function hoverPercent(t: Record<string, string>): number {
+  const m = /^rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([\d.]+)\s*\)$/.exec(t.hover ?? '');
+  if (!m) throw new Error(`index.css: could not read --color-ck-hover (got ${t.hover})`);
+  // The model below composites the INK token at this alpha, which is only valid while HOVER's
+  // rgb IS ink. It is today, but that token is hand-written per theme, so assert rather than
+  // assume — a recoloured hover would otherwise be measured as the wrong wash, silently.
+  const rgb = [m[1], m[2], m[3]].map(Number);
+  const ink = hexToRgb(t.ink);
+  if (rgb.some((c, i) => c !== ink[i])) {
+    throw new Error(`index.css: --color-ck-hover is no longer an ink tint (${t.hover} vs ${t.ink})`);
+  }
+  return Number(m[4]) * 100;
+}
+
+/**
+ * The pipeline stages, DERIVED from the stylesheet rather than copied from
+ * `crm/constants.ts`'s `STAGE_ORDER`. Two reasons: nothing under `core/` imports from `crm/`
+ * (a layering boundary this test has no business breaking), and a hand-copied list is the same
+ * silent-drift bug the palette parsing above exists to avoid — add a stage token and its 12%
+ * wash would otherwise ship unmeasured with CI green.
+ *
+ * Derived from NAMES, never from which values happened to look like a hex: a stage rewritten as
+ * `rgb(…)` stays in this list and is then rejected by the palette assertion below. Filtering on
+ * the value instead would let that stage drop out of the surface list silently, and the
+ * self-adjusting surface count would shrink to match it.
+ */
+const STAGES = Object.keys(LIGHT_TOKENS)
+  .filter(k => k.startsWith('stage-'))
+  .map(k => k.slice('stage-'.length));
+
+/**
+ * Every background an ink-family token is painted on, per the components that render them.
+ * Keys are `<wash>/<base>` so a failure names the exact composite.
+ *
+ * TWO RULES, and the split is deliberate:
+ *
+ *  - A SINGLE wash is cross-producted over all three base surfaces. Chips and washed rows move
+ *    between containers freely, enumerating exact placements would be a list to keep extending,
+ *    and the whole cross-product passes — so the superset is free and closes the question.
+ *  - A STACKED wash (two translucent layers) is enumerated at the containers that actually
+ *    produce it. Stacking is where a cross-product stops being free and starts inventing
+ *    surfaces: a 6% chip on a stage-washed card exists on the pipeline board (over `bg`) and
+ *    nowhere else, and asserting it over `card` too would fail on a pixel nothing renders.
+ *
+ * Deliberately NOT covered, because it is a different question: a brand-hue chip that carries
+ * its OWN hue as text (`tint(CORAL,15)` + CORAL in `PriorityBadge urgent`, `tint(SAGE,12)` +
+ * SAGE, …). Those pairs are about the status/stage hues, which #54 already tuned per theme;
+ * this guard is about the neutral ramp. Ink text DOES land on two kinds of non-neutral wash:
+ * `AiTouchDetail`'s banner (`INK` on `tint(GOLD,10)`), which is included below as `gold10`, and
+ * the ACCENT washes listed in the file header, which are deliberately out of scope there.
+ */
+function surfaces(t: Record<string, string>): Record<string, Rgb> {
+  const ink = hexToRgb(t.ink);
+  const hoverPct = hoverPercent(t);
+  const rgb = (k: string) => hexToRgb(t[k]);
+  const out: Record<string, Rgb> = {};
+
+  // ── Single washes, over every base ────────────────────────────────────────
+  for (const base of BASES) {
+    const b = rgb(base);
+    out[base] = b;
+
+    // Ink-washed chips: `tint(INK,5)` StatusBadge inactive (ink-dim text) and `tint(INK,6)`
+    // PriorityBadge low / ScorePill cool / AiTouchDetail (ink-soft text). Both live in both
+    // themes — the percentage is a per-component constant, not a per-theme one. This also
+    // covers the bare row/tab hover overlay, which is itself an ink tint at one of these.
+    for (const chip of CHIP_PCTS) out[`ink${chip}/${base}`] = over(ink, chip, b);
+
+    // `AiTouchDetail`'s stale/superseded banner: `tint(GOLD,10)` carrying INK.
+    out[`gold10/${base}`] = over(rgb('amber'), 10, b);
+
+    // `shared/collection` / `shared/search`'s `hover:bg-line/50` controls, which carry
+    // `text-muted` (= ink-mute). NOTE the Tailwind alias `line` maps to `ck-line-STRONG`
+    // (`ck-line` is aliased as `line-faint`), so this composites the strong token — using the
+    // faint one lands optimistically in BOTH themes, the error direction `over()` refuses.
+    out[`lineStrong50/${base}`] = over(rgb('line-strong'), 50, b);
+
+    // Deal chips and pipeline cards: `tint(STAGE_COLORS[s].color, 12)` carrying ink-dim /
+    // ink-mute text (crm/constants.ts `stage()`).
+    for (const s of STAGES) out[`stage12-${s}/${base}`] = over(rgb(`stage-${s}`), 12, b);
+  }
+
+  // ── Stacked washes, at the containers that produce them ───────────────────
+
+  // A chip inside a HOVERED list row.
+  //
+  // `bg` is REAL: the Contacts / Companies / Tasks desktop lists render rows in a bare
+  // `borderTop` div on the page background and set `background = HOVER` on mouseenter, with
+  // StatusBadge / ScorePill / PriorityBadge chips inside them.
+  //
+  // `card` is deliberate HEADROOM with no producer today, and is kept knowingly rather than by
+  // omission. The shared collection layer's rows hover by swapping to the OPAQUE `bg` token
+  // (`hover:bg-sand`), never an ink tint — and #73 landed that layer unwired anyway. It stays
+  // because a list refactor is one step from putting hovered chip rows on a card surface, and
+  // because it is what holds the dark ramp at its current edge: against only-real surfaces even
+  // `#aaa8a2` would pass, three steps lighter than what ships. It is also why the dark FLOOR
+  // (4.56:1) is tighter than anything dark actually renders (5.09:1).
+  //
+  // `raised` is excluded: the one ink-hover-over-raised producer is ContactsPage's tag dropdown,
+  // a bare wash with no chips in it — and a bare hover wash at 5%/6% is numerically the same
+  // surface as the `ink5`/`ink6` singles above, which are cross-producted over `raised` already.
+  // That coincidence is alpha-dependent: if `--color-ck-hover` ever leaves {5,6}, the bare
+  // hover-over-raised wash silently stops being covered and belongs back in this list.
+  //
+  // The hover percentage is READ FROM THE STYLESHEET (`--color-ck-hover`'s alpha) because it
+  // differs per theme — 5% light, 6% dark — so hard-coding one would invent a light 6-over-6
+  // stack no component produces.
+  for (const base of ['bg', 'card'] as const) {
+    const hover = over(ink, hoverPct, rgb(base));
+    for (const chip of CHIP_PCTS) {
+      out[`ink${chip}/hover${hoverPct}/${base}`] = over(ink, chip, hover);
+    }
+  }
+
+  // A 6% ink chip (ScorePill cool, TouchCountPill) inside a stage-washed `DealBoardCard`,
+  // which only ever sits on a pipeline column over the page `bg`.
+  for (const s of STAGES) {
+    out[`ink6/stage12-${s}/bg`] = over(ink, 6, over(rgb(`stage-${s}`), 12, rgb('bg')));
+  }
+
+  return out;
+}
+
+// ── The guard ────────────────────────────────────────────────────────────────
+
+describe.each([
+  ['light', LIGHT_TOKENS],
+  ['dark', DARK_TOKENS],
+])('%s theme neutral ink ramp', (themeName, tokens) => {
+  it('parsed a complete palette out of index.css', () => {
+    // Fail closed: a rename or a regex miss must break the suite, not silently check nothing.
+    // STAGES is derived, so assert it is non-empty — an empty derivation would quietly drop
+    // every stage wash from the surface list while the ratio test still went green.
+    expect(STAGES.length, 'no --color-ck-stage-* tokens parsed from index.css').toBeGreaterThan(0);
+    for (const k of [...INK_TOKENS, 'card', 'bg', 'raised', 'line-strong', 'amber', ...STAGES.map(s => `stage-${s}`)]) {
+      // Must be a literal hex: every one of these is composited numerically below, and this
+      // guard cannot resolve `var()` / `rgb()` / `color-mix()`. Rewriting one of them in another
+      // syntax is legitimate — it just has to fail HERE and be handled, not slip through.
+      expect(tokens[k], `${themeName}: --color-ck-${k} missing from index.css, or not a literal hex`)
+        .toMatch(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/);
+    }
+  });
+
+  it('clears WCAG AA 4.5:1 on every surface it is painted on', () => {
+    const surf = surfaces(tokens);
+    // 3 raw + 3 bases × (2 chips + gold + lineStrong + one per stage)
+    //   + 2 hover bases × 2 chips + one stage-card chip per stage.
+    // Derived rather than hard-coded, so it still catches a key COLLISION (two compositions
+    // overwriting each other) without failing every time a stage is added.
+    expect(Object.keys(surf).length).toBe(3 + 3 * (2 + 2 + STAGES.length) + 2 * 2 + STAGES.length);
+
+    const failures: string[] = [];
+    for (const token of INK_TOKENS) {
+      for (const [name, bg] of Object.entries(surf)) {
+        const ratio = contrast(hexToRgb(tokens[token]), bg);
+        if (ratio < AA_NORMAL_TEXT) failures.push(`${token} on ${name}: ${ratio.toFixed(2)}:1`);
+      }
+    }
+    expect(failures, `${themeName}: ${failures.length} pairing(s) under ${AA_NORMAL_TEXT}:1`).toEqual([]);
+  });
+
+  it('keeps the four ramp steps ordered and visually distinct', () => {
+    // Monotone in luminance, and no two steps closer than 4 CIE L* — the ramp is compressed
+    // (#68) but it still has to READ as four steps rather than one smudge.
+    const lstar = (hex: string) => {
+      const y = luminance(hexToRgb(hex));
+      return y > 216 / 24389 ? 116 * Math.cbrt(y) - 16 : (y * 24389) / 27;
+    };
+    const steps = INK_TOKENS.map(t => lstar(tokens[t]));
+    const gaps = steps.slice(1).map((v, i) => v - steps[i]);
+    // Stepping ink → mute → soft → dim moves TOWARD the page in both themes: light inks
+    // lighten (L* rises from 16.6), dark inks darken (L* falls from 94.3). Either way, all
+    // three gaps must share a sign, or a step has jumped the wrong side of its neighbour.
+    const sign = themeName === 'light' ? 1 : -1;
+    for (const [i, g] of gaps.entries()) {
+      expect(g * sign, `${INK_TOKENS[i]}→${INK_TOKENS[i + 1]} runs the wrong way`).toBeGreaterThan(0);
+      expect(Math.abs(g), `${INK_TOKENS[i]}→${INK_TOKENS[i + 1]} is only ${Math.abs(g).toFixed(1)} L* apart`).toBeGreaterThan(4);
+    }
+  });
+});

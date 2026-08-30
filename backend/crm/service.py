@@ -35,6 +35,13 @@ from crm import (
 logger = logging.getLogger(__name__)
 
 DEAL_STAGES = ["lead", "qualified", "proposal", "negotiation", "won", "lost"]
+# The two terminal stages, as a Python tuple the tool layer can test membership against
+# (#99) — OPEN_PREDICATE below is the SQL statement of the same fact, and a test pins the
+# two in agreement. OPEN_STAGES is the complement on purpose: a stage added to
+# DEAL_STAGES later is open unless it is declared terminal here. scoring_service keeps its
+# own _TERMINAL_* copies deliberately (importing service there is a circular import).
+CLOSED_STAGES = ("won", "lost")
+OPEN_STAGES = tuple(s for s in DEAL_STAGES if s not in CLOSED_STAGES)
 CONTACT_STATUSES = ["active", "inactive", "archived"]
 TASK_PRIORITIES = ["low", "medium", "high"]
 COMPANY_STATUSES = ["active", "archived"]
@@ -45,9 +52,13 @@ COMPANY_STATUSES = ["active", "archived"]
 # aggregate together — a deal that vanishes from the Kanban but still inflates the
 # dashboard's pipeline value is worse than no archive at all. Named so the sweep is
 # greppable: every deal-reading query below carries one of these two forms, and the
-# only deliberate exceptions are get_deal (fetch-by-id must still resolve an archived
-# deal, so it can be shown/restored/merged) and the is-the-CRM-empty counts (an
-# archived deal is still data).
+# deliberate exceptions are get_deal (fetch-by-id must still resolve an archived deal,
+# so it can be shown/restored/merged), the is-the-CRM-empty counts (an archived deal is
+# still data), and the two OPT-IN holes that make an archive recoverable —
+# search_deals(include_archived=True) and, since issue #83, get_pipeline(
+# include_archived=True). Both default to False, and get_pipeline's flag opens its deals
+# query only: stage_summary keeps the sweep unconditionally, because an archived deal may
+# be findable but must never be money.
 # Public so crm/analytics_service.py imports them rather than re-typing the literal —
 # a second copy is exactly how a sweep site gets missed when the definition changes.
 LIVE_PREDICATE = "archived_at IS NULL"
@@ -477,6 +488,10 @@ def delete_contact(contact_id: int) -> bool:
         # capture the deal's contact_id before delete and score_on_event(contact_ids=(...))
         # after commit — a removed deal changes its former contact's deal-linkage factor.
         # It must also DELETE the deal's deal_ai_touch_evidence row (#56, FK-less too).
+        # Note attachments (#57) need NO line here: crm_chatter_attachments holds a real
+        # FK to crm_chatter ON DELETE CASCADE, so the DELETE below takes them with it.
+        # That is the whole reason it was given an FK where the polymorphic tables
+        # around it could not have one. Pinned by an integration test.
         cur.execute(
             "DELETE FROM crm_chatter WHERE entity_type = 'contact' AND entity_id = %s",
             (contact_id,),
@@ -512,18 +527,25 @@ def get_contact_detail(contact_id: int) -> dict | None:
     )
     if not contact:
         return None
+    # Every rollup below ends on `id` so its order is TOTAL (issue #58). Ties are the
+    # norm, not the exception, in all three: timestamps default to `now()` — which is
+    # TRANSACTION start, so rows written together are byte-identical, and an import or
+    # `seed_data` writes a whole batch that way — while the task sort's leading keys are
+    # a 0/1 flag and a `due_date` that is very often the empty string. Under the LIMITs,
+    # an untotalled order lets a row show up twice or not at all between two reads.
     deals = pg_fetchall(
         f"SELECT * FROM deals WHERE contact_id = %s AND {LIVE_PREDICATE} "
-        "ORDER BY updated_at DESC",
+        "ORDER BY updated_at DESC, id DESC",
         (contact_id,),
     )
     tasks = pg_fetchall(
         f"SELECT * FROM tasks WHERE contact_id = %s AND {LIVE_TASK_PREDICATE} "
-        f"AND {NOT_DROPPED_TASK} ORDER BY completed ASC, due_date ASC LIMIT 20",
+        f"AND {NOT_DROPPED_TASK} ORDER BY completed ASC, due_date ASC, id ASC LIMIT 20",
         (contact_id,),
     )
     activity = pg_fetchall(
-        "SELECT * FROM activity_log WHERE contact_id = %s ORDER BY created_at DESC LIMIT 20",
+        "SELECT * FROM activity_log WHERE contact_id = %s "
+        "ORDER BY created_at DESC, id DESC LIMIT 20",
         (contact_id,),
     )
     return {**contact, "deals": deals, "tasks": tasks, "activity": activity}
@@ -757,7 +779,8 @@ def delete_company(company_id: int) -> bool:
         if cur.fetchone() is None:
             return False
         # Company chatter arrived with issue #22; without this a deleted company's
-        # notes would resurface on whatever company later reuses its SERIAL id.
+        # notes would resurface on whatever company later reuses its SERIAL id. Their
+        # #57 attachments ride along on the FK cascade — see delete_contact.
         cur.execute(
             "DELETE FROM crm_chatter WHERE entity_type = 'company' AND entity_id = %s",
             (company_id,),
@@ -792,13 +815,18 @@ def get_company_detail(company_id: int) -> dict | None:
     company = get_company(company_id)
     if not company:
         return None
+    # Same rule as get_contact_detail: every rollup ends on `id` (issue #58). Names are
+    # not unique either — two people at one company can share a name, and the importer
+    # produces exactly that.
     contacts = pg_fetchall(
-        "SELECT * FROM contacts WHERE company_id = %s ORDER BY name ASC", (company_id,)
+        "SELECT * FROM contacts WHERE company_id = %s ORDER BY name ASC, id ASC",
+        (company_id,),
     )
     deals = pg_fetchall(
         f"""SELECT d.*, c.name AS contact_name
             FROM deals d LEFT JOIN contacts c ON d.contact_id = c.id
-            WHERE d.company_id = %s AND {LIVE_PREDICATE_D} ORDER BY d.updated_at DESC""",
+            WHERE d.company_id = %s AND {LIVE_PREDICATE_D}
+            ORDER BY d.updated_at DESC, d.id DESC""",
         (company_id,),
     )
     activity = pg_fetchall(
@@ -814,7 +842,7 @@ def get_company_detail(company_id: int) -> dict | None:
             WHERE a.contact_id IN (SELECT id FROM contacts WHERE company_id = %s)
                OR a.deal_id IN (SELECT id FROM deals WHERE company_id = %s
                                  AND {LIVE_PREDICATE})
-            ORDER BY a.created_at DESC LIMIT 20""",
+            ORDER BY a.created_at DESC, a.id DESC LIMIT 20""",
         (company_id, company_id),
     )
     # Single-currency (USD) sum, matching the rest of the app's hardcoded '$'.
@@ -870,14 +898,16 @@ def get_deal_detail(deal_id: int) -> dict | None:
     if not deal:
         return None
     activity = pg_fetchall(
-        "SELECT * FROM activity_log WHERE deal_id = %s ORDER BY created_at DESC LIMIT 20", (deal_id,)
+        "SELECT * FROM activity_log WHERE deal_id = %s "
+        "ORDER BY created_at DESC, id DESC LIMIT 20",
+        (deal_id,),
     )
     # custom_fields is embedded (issue #22 Q12a) so one read answers "tell me about
     # this deal" — previously the assistant needed a second crm_get_deal_fields call.
     return _embed_custom_fields([{**deal, "activity": activity}])[0]
 
 
-def get_pipeline(stage: str | None = None) -> dict:
+def get_pipeline(stage: str | None = None, include_archived: bool = False) -> dict:
     # Single query (optional stage WHERE) so the two branches can't drift. Beyond the
     # contact-name join, the board payload carries `company_name` (mirrors get_deal) for
     # keyword search, and a derived `last_activity_at` (issue #21) = the most recent of the
@@ -901,7 +931,30 @@ def get_pipeline(stage: str | None = None) -> dict:
     # function returns `deals` AND a separately-computed `stage_summary`, so a filter
     # applied to one and not the other would show filtered cards under unfiltered
     # totals.
-    where = f"WHERE {LIVE_PREDICATE_D}" + (" AND d.stage = %s" if stage else "")
+    # `include_archived` (issue #83) is the second sanctioned hole in the archived-deal
+    # sweep, after crm_search_deals(include_archived=true) — and it is what makes an
+    # accidental archive recoverable without an AI provider: the board's Archived facet
+    # sets it, the card renders inert, and the deal sheet offers Restore.
+    #
+    # Scale note, distinct from the one above: the live board is unpaginated but bounded by
+    # OPEN WORKLOAD, whereas the widened board is bounded by all-time history — every merge
+    # archives a source, and junk archives never leave. So this branch grows monotonically
+    # where the default one does not. Fine at v1 scale, and the facet is off by default; the
+    # upgrade path is a server-side cap on this branch, or the paginated archived-deals view
+    # that issue #83 deliberately left out of scope.
+    #
+    # It opens the DEALS QUERY ONLY. stage_summary below keeps LIVE_PREDICATE
+    # unconditionally, which looks like exactly the one-sided filter the owner_id note
+    # above forbids — but the asymmetry is the rule here, not a bug in it. Owner is a
+    # symmetric facet: cards and totals must describe the same set or the page lies.
+    # Archived is not: an archived deal must be FINDABLE (or it is unrecoverable) and must
+    # never be MONEY (won + archived would book revenue no report can see). The client
+    # mirrors that same split — every $ aggregate on the board derives from the live
+    # subset — so cards and totals still agree about value.
+    conditions = [] if include_archived else [LIVE_PREDICATE_D]
+    if stage:
+        conditions.append("d.stage = %s")
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     deals = pg_fetchall(
         f"""SELECT d.*, c.name AS contact_name, co.name AS company_name,
                    la.last_at AS last_activity_at
@@ -917,11 +970,16 @@ def get_pipeline(stage: str | None = None) -> dict:
                 ) events GROUP BY deal_id
             ) la ON la.deal_id = d.id
             {where}
-            ORDER BY d.updated_at DESC""",
+            -- The board is unpaginated today, so this tiebreaker only steadies the
+            -- within-stage card order across refreshes. It is load-bearing for issue
+            -- #59, which puts a LIMIT/OFFSET on this exact reader: at that point an
+            -- untotalled order becomes duplicated and missing cards, not just churn.
+            ORDER BY d.updated_at DESC, d.id DESC""",
         (stage,) if stage else (),
     )
 
-    # Value summaries per stage (open stages only).
+    # Value summaries per stage (open stages only). NEVER opened by include_archived —
+    # see the note above the deals query.
     stage_summary = pg_fetchall(
         f"""SELECT stage, COUNT(*) AS count, COALESCE(SUM(value), 0) AS total_value
             FROM deals WHERE stage NOT IN ('won', 'lost') AND {LIVE_PREDICATE}
@@ -946,9 +1004,60 @@ def list_deals(stage: str | None = None, contact_id: int | None = None, limit: i
     return pg_fetchall(
         f"""SELECT d.*, c.name AS contact_name
             FROM deals d LEFT JOIN contacts c ON d.contact_id = c.id
-            {where} ORDER BY d.updated_at DESC LIMIT %s""",
+            {where} ORDER BY d.updated_at DESC, d.id DESC LIMIT %s""",
         params,
     )
+
+
+# Every `deals` column `_write_deal_update` can be asked to write, mapped to its
+# destination type for the cast in the distinctness test.
+#
+# NOTE: these VALUES are interpolated into SQL (`%s::{type}`), so they are type names, not
+# data — keep them fixed literals here and never let a caller reach this map.
+#
+# This is deliberately NOT the same set as what a user or the assistant may write: it
+# covers internal-only columns too (`lost_reason`, whose sole writer is `mark_deal_lost`),
+# and it grows whenever a new internal write path routes through the chokepoint. The
+# user-facing allowlist is `_DEAL_USER_WRITABLE`, hand-maintained and default-closed;
+# deriving one from the other would mean declaring a type for an internal column silently
+# made it writable by `crm_update_deal` and `PUT /api/crm/deals/{id}` in the same commit.
+# A hermetic test asserts `_DEAL_USER_WRITABLE <= _DEAL_COLUMN_TYPES.keys()`, which keeps
+# "no writable column without a declared type" without inverting the safe direction.
+#
+# The cast is not optional, because assignment context and comparison context do NOT agree
+# and they disagree in opposite directions:
+#   * INTEGER promotes on comparison. `probability = 40.1` STORES 40 (unchanged), but a
+#     bare `probability IS DISTINCT FROM 40.1` promotes the stored 40 to float, calls it
+#     distinct and fires the UPDATE — bumping `updated_at` for a write that changed
+#     nothing, the exact harm #96 exists to stop.
+#   * TEXT accepts an I/O conversion on assignment and has NO operator for comparison.
+#     `title = 12345` stores '12345' and always has, but a bare
+#     `title IS DISTINCT FROM 12345` raises `operator does not exist: text = integer`.
+#     That path is live: `crm_update_deal` forwards raw, unvalidated LLM arguments, and a
+#     psycopg2 error there escapes as the registry's generic "please try again", looping
+#     the model on a permanent condition.
+# Casting ONLY the comparison operand leaves assignment behavior — including its type
+# errors, e.g. a boolean into an INTEGER column — as it was. (One SQLSTATE moves: a boolean
+# into `value` now raises CannotCoerce 42846 from the cast rather than DatatypeMismatch
+# 42804 from the SET. Both still raise, and nothing anywhere catches either code — they
+# land in the same generic handler — so there is no behavioral difference.)
+_DEAL_COLUMN_TYPES = {
+    "title": "text", "stage": "text", "notes": "text", "currency": "text",
+    "expected_close_date": "text", "lost_reason": "text",
+    "value": "float8",
+    "probability": "int", "contact_id": "int", "company_id": "int", "owner_id": "int",
+}
+
+# The security boundary: what unvalidated input — `crm_update_deal` forwards the model's
+# raw kwargs, and `PUT /api/crm/deals/{id}` its body — may write through `update_deal`.
+# Hand-maintained and default-CLOSED on purpose: a column becomes writable here only by
+# being typed out, never as a side effect of some other list growing. `lead_score` (never
+# user/tool/assistant-writable) and `archived_at` (owned by `archive_deal`) are absent and
+# must stay absent.
+_DEAL_USER_WRITABLE = frozenset({
+    "title", "stage", "value", "notes", "expected_close_date", "probability", "currency",
+    "contact_id", "company_id", "owner_id",
+})
 
 
 def _classify_deal_update(
@@ -1017,16 +1126,32 @@ def _write_deal_update(deal_id: int, filtered: dict) -> bool:
        originally put it) so every funneled write rescores — including the #22
        lifecycle verbs (mark won/lost) #18 never knew about. On a re-link both the
        old and the new contact changed inputs. score_on_event never raises.
+    5. **No-op writes touch nothing** (#96) — the UPDATE carries an
+       ``IS DISTINCT FROM`` test over exactly the columns it is about to set, so a
+       call that would write every column the value it already holds matches no row
+       and ``updated_at`` does not move. ``LAST_TOUCH_SQL`` reads ``updated_at`` as a
+       touch, so without this a redundant call — the assistant re-asserting a deal's
+       current stage via ``crm_update_deal_stage``, or ``PUT /api/crm/deals/{id}``
+       resaving an unchanged form — reset the deal's staleness clock and silently
+       dropped it out of ``get_stale_deals`` and the heartbeat's nudges for a whole
+       window with nothing changed. ``bulk_move_deals`` and ``archive_deal`` already
+       guarded against exactly this; this path was the outlier.
 
     Rules 1 and 2 — and the archived-deal refusal and probability settling — are
     resolved by ``_classify_deal_update``, shared with ``bulk_move_deals`` (#55) so the
     single-deal and set-based paths cannot drift. This function owns the I/O: the lock,
     the write, the audit row, and the post-commit rescore.
 
-    Returns False when the deal does not exist. ``filtered`` must already be
-    validated/clamped by the caller — this function writes what it is given, and must
-    be non-empty (an empty map would build ``SET , updated_at = …``). No caller can
-    reach that today; the guard is here so a future one can't either.
+    Returns False when the deal does not exist — and True for a no-op, which is why
+    rule 5 needs no caller changes: False means "no such deal" and all four callers
+    turn it into None (a 404 / a tool error), where a deal that already holds the
+    requested state must still be returned.
+
+    ``filtered`` must already be validated/clamped by the caller — this function writes
+    what it is given, and must be non-empty (an empty map would build
+    ``SET , updated_at = …``, and would also make the distinctness test below vacuously
+    false). No caller can reach that today; the guard is here so a future one can't
+    either.
     """
     if not filtered:
         raise ValueError("_write_deal_update requires at least one column to set")
@@ -1043,12 +1168,43 @@ def _write_deal_update(deal_id: int, filtered: dict) -> bool:
         filtered, stage_event = _classify_deal_update(
             deal_id, old_stage, archived_at, filtered
         )
+        # Rule 5. Postgres decides whether anything would actually change, not Python:
+        # the row is already locked, so `IS DISTINCT FROM` over the very columns being SET
+        # is an exact statement of "this write is a no-op", evaluated with each column's
+        # own type semantics (see _DEAL_COLUMN_TYPES for why the cast is mandatory) and
+        # handling NULL — an unlinked contact_id — the way `=` would not. Comparing a
+        # pre-image in Python instead would be subtly wrong on types the tool layer can
+        # reach: the assistant's arguments are not runtime schema-validated, and
+        # `1.0 == True` is True in Python where Postgres REFUSES to assign a boolean to a
+        # DOUBLE PRECISION column, which would turn an invalid write into a silent no-op.
+        # `updated_at` is set but deliberately NOT part of the test: the question is
+        # whether anything ELSE changed. Values bind twice — once to SET, once to compare.
+        #
+        # Checked HERE, not on the way in: _classify_deal_update can ADD columns
+        # (lost_reason, probability), so this is the first point the final written map
+        # exists. Named explicitly rather than left to a bare KeyError on the cast lookup.
+        undeclared = set(filtered) - _DEAL_COLUMN_TYPES.keys()
+        if undeclared:
+            raise ValueError(
+                f"_write_deal_update: no declared type for {sorted(undeclared)} — "
+                "add it to _DEAL_COLUMN_TYPES"
+            )
         set_clause = ", ".join(f"{k} = %s" for k in filtered)
-        cur.execute(
-            f"UPDATE deals SET {set_clause}, updated_at = %s WHERE id = %s",
-            list(filtered.values()) + [_now(), deal_id],
+        distinct_clause = " OR ".join(
+            f"{k} IS DISTINCT FROM %s::{_DEAL_COLUMN_TYPES[k]}" for k in filtered
         )
-        if stage_event:
+        values = list(filtered.values())
+        cur.execute(
+            f"UPDATE deals SET {set_clause}, updated_at = %s "
+            f"WHERE id = %s AND ({distinct_clause})",
+            values + [_now(), deal_id] + values,
+        )
+        # 0 means "the row exists (we hold its lock) and no column would change".
+        changed = cur.rowcount > 0
+        # A stage event exists only when _classify_deal_update saw new_stage != old_stage,
+        # so `stage` differs, so the row IS distinct and the UPDATE fired — gating on
+        # `changed` too makes "no write, no history" structural instead of inferred.
+        if stage_event and changed:
             cur.execute(
                 "INSERT INTO deal_stage_events (deal_id, old_stage, new_stage) "
                 "VALUES (%s, %s, %s)",
@@ -1056,6 +1212,14 @@ def _write_deal_update(deal_id: int, filtered: dict) -> bool:
             )
     # After commit, on purpose: a scoring read inside the transaction would see (and
     # lengthen) the FOR UPDATE window. Dedup/None-filtering is score_on_event's job.
+    # Deliberately NOT gated on `changed`, unlike the stage event above — that is the one
+    # place this path does not mirror bulk's skip, and it is the correct asymmetry.
+    # score_on_event is swallowed on failure, and the daily refresh EXCLUDES terminal
+    # deals that already carry a score (scoring_service: `AND NOT (stage IN ('won','lost')
+    # AND lead_score IS NOT NULL)`), so a mark_deal_won whose rescore failed would keep a
+    # stale score forever — re-calling mark_deal_won is its only repair route, and gating
+    # would close it. It cannot reintroduce #96: recompute_deal writes lead_score /
+    # lead_score_at and never updated_at.
     scoring_service.score_on_event(
         deal_ids=(deal_id,),
         contact_ids=(filtered.get("contact_id"), old_contact_id),
@@ -1118,10 +1282,12 @@ def search_deals(
     sort_expr = (f"NULLIF(d.{sort_col}, '') {direction} NULLS LAST"
                  if sort_col == "expected_close_date" else f"d.{sort_col} {direction}")
 
-    # This is the ONLY read that can surface an archived deal, which makes it the way
-    # back from an accidental archive or a wrong merge: without it a soft archive is a
-    # one-way door, since every other list/board/rollup filters them out and get_deal
-    # needs an id nothing would tell you.
+    # One of the two reads that can surface an archived deal (the other is
+    # get_pipeline(include_archived=True), issue #83's board facet), which makes this the
+    # way back from an accidental archive or a wrong merge: without one of them a soft
+    # archive is a one-way door, since every other list/board/rollup filters them out and
+    # get_deal needs an id nothing would tell you. This one is the assistant's route back
+    # and needs a provider; #83's is the keyless one.
     conditions = [] if include_archived else [LIVE_PREDICATE_D]
     params: list = []
     if search:
@@ -1166,11 +1332,10 @@ def search_deals(
 
 
 def update_deal(deal_id: int, **fields) -> dict | None:
-    # lost_reason is deliberately NOT in `allowed`: mark_deal_lost is its single
-    # writer, so a reason always arrives with the close (and its timeline note) and
+    # lost_reason is deliberately absent from _DEAL_USER_WRITABLE: mark_deal_lost is its
+    # single writer, so a reason always arrives with the close (and its timeline note) and
     # can never be set on a deal that isn't lost.
-    allowed = {"title", "stage", "value", "notes", "expected_close_date", "probability", "currency",
-               "contact_id", "company_id", "owner_id"}
+    allowed = _DEAL_USER_WRITABLE
     filtered = {k: v for k, v in fields.items() if k in allowed}
     if "stage" in filtered and filtered["stage"] not in DEAL_STAGES:
         return None
@@ -1209,9 +1374,9 @@ def bulk_move_deals(deal_ids: list[int], stage: str) -> dict:
     Returns ``{ok, updated, updated_ids, errors}``. Whole-request problems (bad stage,
     empty list, over the cap) come back as ``ok: False`` having touched no connection;
     per-deal problems ride ``errors`` while everything else still commits. That
-    per-deal isolation is the one deliberate contract difference from
-    ``_write_deal_update``, which raises: one archived deal in a 50-deal selection
-    must not sink the batch.
+    per-deal isolation is a deliberate contract difference from ``_write_deal_update``,
+    which raises: one archived deal in a 50-deal selection must not sink the batch. (It is
+    not the only difference — the closing paragraph covers the others.)
 
     Correctness comes from calling the SAME ``_classify_deal_update`` the single-deal
     path calls, once per locked row — pure in-memory work, no I/O — so the archived
@@ -1229,21 +1394,28 @@ def bulk_move_deals(deal_ids: list[int], stage: str) -> dict:
     A deal already in the target stage is skipped ENTIRELY — no write, so no
     ``updated_at`` bump. That is deliberate: ``LAST_TOUCH_SQL`` reads ``updated_at`` as
     a touch, so bumping it would reset the staleness clock on deals this call did not
-    actually change. Note this IS a difference from ``update_deal_stage``, which writes
-    (and bumps ``updated_at``) even when the stage is unchanged. The shared classifier
-    guarantees the two paths agree on WHAT to write; it does not decide WHETHER to write,
-    and only bulk skips the no-op. Aligning the single-deal path would change behavior
-    predating this issue, so it is deliberately left alone.
+    actually change. Since #96 the single-deal path holds the same invariant, reached a
+    different way: ``_write_deal_update``'s UPDATE carries an ``IS DISTINCT FROM`` test,
+    so a same-stage move there matches no row. The shared classifier guarantees the two
+    paths agree on WHAT to write; each decides WHETHER to write for itself, and they now
+    agree there too — an integration test pins a same-stage move through both paths to
+    an unmoved ``updated_at`` and no stage event.
 
-    Don't read that as "unreachable" — it isn't. The *UI* never sends a same-stage move
-    (``handleKanbanMove`` returns early on a same-column drop and the detail sheet checks
-    ``deal.stage !== stage``), but two non-UI callers do reach it: ``crm_update_deal_stage``
+    The skip is load-bearing rather than theoretical. The *UI* never sends a same-stage
+    move (``handleKanbanMove`` returns early on a same-column drop and the detail sheet
+    checks ``deal.stage !== stage``), but two non-UI callers do: ``crm_update_deal_stage``
     re-asserting a deal's current stage (an easy assistant redundancy) and
-    ``PUT /api/crm/deals/{id}`` with an unchanged stage. Both bump ``updated_at`` and so
-    reset that deal's staleness clock for the whole window, dropping it out of
-    ``get_stale_deals`` and the heartbeat nudges with nothing actually changed. Fixing it
-    belongs with the single-deal path; note the parity integration test has no same-stage
-    case, so nothing currently catches it.
+    ``PUT /api/crm/deals/{id}`` with an unchanged form.
+
+    Differences from the single-deal path that survive on purpose: this one raises vs
+    collects ``errors`` (above); it rescores only ``updated_ids`` where the single-deal
+    path rescores unconditionally (see ``_write_deal_update``'s note on why); and its
+    no-op skip is decided in Python on the locked pre-image (``old_stage == stage``)
+    rather than in SQL. That last one is sound HERE and only here: bulk writes exactly one
+    caller-controlled column, ``stage``, always a ``DEAL_STAGES`` string validated before
+    the connection opens, so there is no cross-type comparison to get wrong. The
+    single-deal path writes an arbitrary column map from unvalidated tool arguments and
+    must let Postgres judge.
     """
     if stage not in DEAL_STAGES:
         return {"ok": False, "updated": 0, "updated_ids": [], "errors": [f"Invalid stage: {stage}"]}
@@ -1488,6 +1660,10 @@ def merge_deals(target_deal_id: int, source_deal_id: int) -> dict:
             (target_deal_id, f"[Merged from deal #{source_deal_id}] ",
              chatter_service.MAX_MESSAGE_LEN, source_deal_id),
         )
+        # The copies carry the message text only — #57 attachments are NOT duplicated onto
+        # them. Deliberate: the source deal is archived rather than deleted, so its notes
+        # keep their attachments and stay readable, and copying multi-MB blobs to gap-fill
+        # a merge would double the storage for a second view of the same files.
         # DO UPDATE ... WHERE, not DO NOTHING: clearing a custom field UPSERTs
         # value='' rather than deleting the row (field_service.set_field_values), so
         # "the target left it blank" usually means an EXISTING row holding ''. DO
@@ -1930,7 +2106,7 @@ def get_activity_log(contact_id: int | None = None, deal_id: int | None = None, 
             FROM activity_log a
             LEFT JOIN contacts c ON a.contact_id = c.id
             LEFT JOIN deals d ON a.deal_id = d.id
-            {where} ORDER BY a.created_at DESC LIMIT %s""",
+            {where} ORDER BY a.created_at DESC, a.id DESC LIMIT %s""",
         params,
     )
 
@@ -2011,7 +2187,10 @@ def get_dashboard_stats() -> dict:
         f"""SELECT d.*, c.name AS contact_name
             FROM deals d LEFT JOIN contacts c ON d.contact_id = c.id
             WHERE d.stage NOT IN ('won', 'lost') AND {LIVE_PREDICATE_D}
-            ORDER BY d.value DESC LIMIT 5"""
+            -- `value` is a round number that repeats constantly across a pipeline, so
+            -- without d.id the five deals on the dashboard can differ between two
+            -- loads with nothing having changed (issue #58).
+            ORDER BY d.value DESC, d.id DESC LIMIT 5"""
     )
 
     return {
@@ -2199,6 +2378,9 @@ AGE_BUCKETS = ((0, 7, "0-7"), (8, 30, "8-30"), (31, 90, "31-90"), (91, None, "91
 
 # Open-deal predicate (DEAL_STAGES sentinels; no status column / CHECK exists).
 # Public for the same single-source-of-truth reason as LIVE_PREDICATE above.
+# This is the SQL statement of CLOSED_STAGES (defined beside DEAL_STAGES); the literal
+# stays hand-written rather than interpolated — every deal-reading query embeds this
+# string, and a test pins the two spellings in agreement instead.
 OPEN_PREDICATE = "stage NOT IN ('won', 'lost')"
 OPEN_PREDICATE_D = "d.stage NOT IN ('won', 'lost')"
 
@@ -2609,9 +2791,15 @@ def summarize_analytics(analytics: dict) -> dict:
 # here alongside crm_chatter. The GLOBAL schema table crm_field_definitions is user
 # *configuration* — it is NOT entity data, survives demo-clear, and is truncated only
 # by clear_all (see _truncate_all).
+# crm_chatter_attachments (#57) belongs here on this tuple's own terms — it is the user's
+# own uploaded bytes, and every reset path does clear it. It is deliberately absent from
+# is_crm_empty/_crm_empty_in_txn, which is a DIFFERENT question and not a contradiction:
+# those ask "is the CRM empty", and the FK to crm_chatter being ON DELETE CASCADE makes
+# "attachments exist while crm_chatter is empty" unrepresentable, so counting it there
+# could never change an answer.
 _CRM_TABLES = (
     "companies", "contacts", "deals", "tasks", "task_projects", "activity_log",
-    "crm_chatter", "crm_field_values", "crm_field_provenance",
+    "crm_chatter", "crm_chatter_attachments", "crm_field_values", "crm_field_provenance",
 )
 
 
@@ -2867,17 +3055,24 @@ def _truncate_all(cur, include_definitions: bool = False) -> None:
     # (touch_count_service._store_touch_count) locks the deals row first and then writes
     # this table — the same deals-before-it order TRUNCATE takes, so no inversion. RESTART
     # IDENTITY is a no-op for it: the PK is deal_id, so it owns no sequence.
+    # crm_chatter_attachments (#57) sits immediately AFTER crm_chatter in both variants,
+    # and is not optional: it holds a real FK to crm_chatter, so Postgres refuses to
+    # truncate crm_chatter without it in the same statement (the deal_stage_events and
+    # task_projects rule). Position matches its writers — create_attachment and
+    # delete_attachment both lock the crm_chatter row FIRST and then touch this table, so
+    # a chatter-before-attachments TRUNCATE order can't invert against either.
     if include_definitions:
         cur.execute(
             "TRUNCATE companies, contacts, deals, activity_log, tasks, task_projects, "
-            "crm_chatter, crm_field_definitions, crm_field_values, crm_field_provenance, "
-            "deal_stage_events, proactive_nudges, deal_ai_touch_evidence RESTART IDENTITY"
+            "crm_chatter, crm_chatter_attachments, crm_field_definitions, crm_field_values, "
+            "crm_field_provenance, deal_stage_events, proactive_nudges, "
+            "deal_ai_touch_evidence RESTART IDENTITY"
         )
     else:
         cur.execute(
             "TRUNCATE companies, contacts, deals, activity_log, tasks, task_projects, "
-            "crm_chatter, crm_field_values, crm_field_provenance, deal_stage_events, "
-            "proactive_nudges, deal_ai_touch_evidence RESTART IDENTITY"
+            "crm_chatter, crm_chatter_attachments, crm_field_values, crm_field_provenance, "
+            "deal_stage_events, proactive_nudges, deal_ai_touch_evidence RESTART IDENTITY"
         )
 
 

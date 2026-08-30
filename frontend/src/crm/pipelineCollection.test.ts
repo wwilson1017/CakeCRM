@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import type { CrmDeal } from '../core/types';
 import type { FacetDef, MultiFacetDef, SingleFacetDef, BooleanFacetDef, RangeFacetDef } from '../shared/collection';
 import type { CrmUser } from './useUsers';
-import { makePipelineCollectionConfig } from './pipelineCollection';
+import { archivedSelectionIncludesArchived, makePipelineCollectionConfig } from './pipelineCollection';
 import { isManualSort } from '../shared/search';
 import { PIPELINE_DEFAULT_SORT, pipelineSortFields } from './pipelineSort';
 
@@ -148,5 +148,57 @@ describe('search and persistence', () => {
   it('rests on the arrayOrder sort, which is what keeps the list "natural" at rest', () => {
     expect(isManualSort(PIPELINE_DEFAULT_SORT, pipelineSortFields(() => ''))).toBe(true);
     expect(build().sort?.defaultSort).toEqual(PIPELINE_DEFAULT_SORT);
+  });
+});
+
+// ── The Archived facet (issue #83, re-expressed on the layer by #74) ──────────
+// #83 shipped this as an `archived` key on `AdvancedFilters` plus a hand-rolled
+// sessionStorage coercion. #74 retired both — the value lives in the layer's envelope now —
+// so the assertions that guarded it move here, to the surface that owns the rule. Two
+// contracts are load-bearing and neither is visible at the call site: the facet is what
+// makes archived deals REACHABLE, and it is also the only facet that widens the FETCH.
+describe('archived facet', () => {
+  const live = deal({ id: 1 });
+  const archived = deal({ id: 2, archived_at: '2026-08-20T00:00:00+00:00' });
+  const archivedFacet = () => facet<SingleFacetDef<CrmDeal>>('archived');
+
+  it('offers exactly the two states that widen the fetch', () => {
+    expect(archivedFacet().options.map(o => o.value)).toEqual(['include', 'only']);
+  });
+
+  it("passes both under 'include'", () => {
+    const f = archivedFacet();
+    expect(f.predicate(live, 'include')).toBe(true);
+    expect(f.predicate(archived, 'include')).toBe(true);
+  });
+
+  it("passes archived deals ONLY under 'only' — the recovery view", () => {
+    const f = archivedFacet();
+    expect(f.predicate(live, 'only')).toBe(false);
+    expect(f.predicate(archived, 'only')).toBe(true);
+  });
+
+  it('fails an unrecognised value toward LIVE-ONLY, never toward a wider board', () => {
+    // The layer's scalar coercion accepts any string, so a hand-edited or legacy envelope can
+    // carry one. Widening the board on junk would show archived deals to a session that never
+    // asked — and `archivedSelectionIncludesArchived` keeps the FETCH narrow for the same value,
+    // so the two halves agree.
+    expect(archivedFacet().predicate(archived, 'bogus')).toBe(false);
+    expect(archivedFacet().predicate(live, 'bogus')).toBe(true);
+    expect(archivedSelectionIncludesArchived('bogus')).toBe(false);
+  });
+
+  it('is a plain single facet, so the layer counts it and Clear filters resets it', () => {
+    // #83 counted `archived` in `advancedActiveCount` and cleared it with the other facets.
+    // On the layer both fall out of `kind: 'single'` — `selectionActive` counts any non-null
+    // selection and `clearFacets` restores `defaultSelection`, which for 'single' is null.
+    expect(archivedFacet().kind).toBe('single');
+  });
+
+  it('widens the fetch for exactly the two real selections and nothing else', () => {
+    expect(archivedSelectionIncludesArchived('include')).toBe(true);
+    expect(archivedSelectionIncludesArchived('only')).toBe(true);
+    expect(archivedSelectionIncludesArchived(null)).toBe(false);
+    expect(archivedSelectionIncludesArchived(undefined)).toBe(false);
   });
 });

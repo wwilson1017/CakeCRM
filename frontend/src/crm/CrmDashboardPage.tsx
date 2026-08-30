@@ -588,6 +588,11 @@ export function CrmDashboardPage() {
           onClose={() => { setSelectedDeal(null); reload(); }}
           onEdit={(d) => { setSelectedDeal(null); setEditDeal(d); }}
           onStageChange={updateDealStage}
+          // The archived banner and its Restore button render on ANY host (issue #83): the
+          // sheet reads `archived_at` from its own detail fetch, so a deal archived after
+          // this page loaded shows them here too. Without this the restore would succeed
+          // server-side while the sheet stayed open over stale dashboard numbers.
+          onRestored={() => { setSelectedDeal(null); reload(); }}
         />
       )}
     </div>

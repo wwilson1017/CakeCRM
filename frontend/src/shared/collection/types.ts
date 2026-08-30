@@ -26,7 +26,7 @@
 import type { ReactNode, Ref } from 'react';
 import type { FacetOption, SortFieldDef, SortState } from '../search';
 import type { ListColumn } from '../listview';
-import type { KanbanColumnDef } from '../dnd';
+import type { DragDisabled, KanbanColumnDef } from '../dnd';
 
 // ---------------------------------------------------------------------------------------------
 // Identity & persistence
@@ -401,8 +401,16 @@ export interface CollectionKanbanProps<T, C = unknown> {
   renderColumn: (column: KanbanColumnDef<C>, children: ReactNode) => ReactNode;
   renderCard: (item: T, columnId: string | number, isDragging: boolean) => ReactNode;
   renderEmptyColumn?: (column: KanbanColumnDef<C>) => ReactNode;
-  /** App extras (isMobile, bulkPending) — OR'd with the layer's `dragLocked`. */
-  dragDisabled?: boolean;
+  /**
+   * App extras (isMobile, bulkPending) — OR'd with the layer's `dragLocked`.
+   *
+   * `true` disables the whole board; a PREDICATE answers per card, which is what a board
+   * carrying rows that are visible but not workable needs (issue #83's archived deals: on the
+   * board so they can be found and restored, but the server refuses a stage change on one).
+   * The layer's own `dragLocked` still wins — it is a board-wide claim, so it collapses a
+   * predicate to `true` rather than being OR'd into it.
+   */
+  dragDisabled?: DragDisabled<T>;
   /** Pass-throughs to `shared/dnd`'s board/column containers (scroller layout, column
    *  spacing) — presentation the app owns, like its renderColumn chrome. */
   className?: string;

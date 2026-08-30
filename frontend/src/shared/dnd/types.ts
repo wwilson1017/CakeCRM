@@ -1,4 +1,5 @@
 import type { ReactNode, Ref } from 'react';
+import type { DragDisabled } from './dragDisabled';
 
 export interface KanbanItem {
   id: number | string;
@@ -26,8 +27,12 @@ export interface KanbanBoardProps<TItem extends KanbanItem, TColumn> {
   renderEmptyColumn?: (column: KanbanColumnDef<TColumn>) => ReactNode;
   className?: string;
   columnClassName?: string;
-  /** Disable drag-and-drop entirely (e.g. on touch/mobile layouts). */
-  dragDisabled?: boolean;
+  /**
+   * Disable drag-and-drop: `true` for the whole board (touch/mobile layouts, a bulk
+   * operation in flight), or a predicate consulted per card (issue #83 — an archived deal
+   * stays visible so it can be restored, but must not drag). See `./dragDisabled`.
+   */
+  dragDisabled?: DragDisabled<TItem>;
   /** Ref to the scrolling board container (for scroll-snap sync/jump). */
   scrollerRef?: Ref<HTMLDivElement>;
 }

@@ -5,6 +5,10 @@ import type { CrmNote } from '../../core/types';
 import { mono, INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, ACCENT, ACCENT_INK, inputStyle } from '../../shared/styles';
 import { toast } from '../../shared/toast';
 import { formatDate } from '../../shared/formatDate';
+import { MAX_NOTE_LEN } from '../chatterComposer';
+import { useChatterPost } from '../useChatterPost';
+import { NoteComposer } from './NoteComposer';
+import { NoteAttachments } from './NoteAttachments';
 
 interface Props {
   entityType: 'deal' | 'contact' | 'company';
@@ -20,10 +24,6 @@ interface Props {
   onChanged?: () => void;
 }
 
-// Mirrors chatter_service.MAX_MESSAGE_LEN — caps input client-side so an oversized
-// paste is prevented rather than round-tripping to a 400.
-const MAX_NOTE_LEN = 10000;
-
 /**
  * Chatter — the editable, archivable notes thread for a deal, contact, or company
  * (companies joined in issue #22), shown alongside the activity timeline.
@@ -36,8 +36,6 @@ export function NotesThread({ entityType, entityId, onChanged }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
-  const [draft, setDraft] = useState('');
-  const [submitting, setSubmitting] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editText, setEditText] = useState('');
 
@@ -63,27 +61,42 @@ export function NotesThread({ entityType, entityId, onChanged }: Props) {
   // (matches ContactDetailPage; satisfies react-hooks/set-state-in-effect).
   useEffect(() => { queueMicrotask(load); }, [load]);
 
-  async function addNote() {
-    if (!draft.trim() || submitting) return;
-    setSubmitting(true);
-    try {
-      await api(`/api/crm/chatter/${entityType}/${entityId}/note`, {
-        method: 'POST',
-        body: JSON.stringify({ message: draft.trim() }),
-      });
-      setDraft('');
-      load();
-      onChanged?.();
-    } catch (err) {
-      toast.error('Failed to add note.');
-      // The write may still have committed and moved this contact's last_contact_at, so
-      // reload rather than leave the thread — and the host's column — showing the old
-      // state. A definite 4xx wrote nothing (#77).
-      if (writeMayHaveLanded(err)) { load(); onChanged?.(); }
-    } finally {
-      setSubmitting(false);
-    }
-  }
+  // #57's compose flow carrying #77's semantics. The old inline `addNote` is gone — the
+  // post-then-upload sequence lives in useChatterPost now — but both of #77's rules still
+  // apply and are threaded through here rather than lost with it.
+  //
+  // Rule 1: every mutation notifies the host, because a contact's notes feed its derived
+  // `last_contact_at`.
+  const reload = useCallback(() => { load(); onChanged?.(); }, [load, onChanged]);
+
+  // Rule 2: a FAILED create may still have committed, so reload before re-throwing. The
+  // re-throw is load-bearing in the other direction (#57): useChatterPost lets a create
+  // failure reject so the composer keeps the text and files the user is about to lose.
+  // A definite 4xx wrote nothing.
+  const createNote = useCallback(
+    async (message: string) => {
+      try {
+        // The route already returns the created row, which is what gives the attachment
+        // uploads a note id to aim at.
+        return await api<{ id: number }>(
+          `/api/crm/chatter/${entityType}/${entityId}/note`,
+          { method: 'POST', body: JSON.stringify({ message }) },
+        );
+      } catch (err) {
+        toast.error('Failed to add note.');
+        if (writeMayHaveLanded(err)) reload();
+        throw err;
+      }
+    },
+    [entityType, entityId, reload],
+  );
+
+  // Retry state names a note id on a SPECIFIC record, so the hook is keyed to the entity:
+  // the deal sheet does not remount between deals, and a stale Retry button would file a
+  // photo onto the previous deal's note.
+  const { post, retryFiles, retry, discardRetry, notice } = useChatterPost(
+    `${entityType}:${entityId}`, createNote, reload,
+  );
 
   async function saveEdit(id: number) {
     if (!editText.trim()) return;
@@ -94,49 +107,48 @@ export function NotesThread({ entityType, entityId, onChanged }: Props) {
       });
       setEditingId(null);
       setEditText('');
-      load();
-      onChanged?.();
+      reload();
     } catch (err) {
       toast.error('Failed to save note.');
       // The write may still have committed and moved this contact's last_contact_at, so
       // reload rather than leave the thread — and the host's column — showing the old
       // state. A definite 4xx wrote nothing (#77).
-      if (writeMayHaveLanded(err)) { load(); onChanged?.(); }
+      if (writeMayHaveLanded(err)) reload();
     }
   }
 
   async function setArchived(id: number, archived: boolean) {
     try {
       await api(`/api/crm/chatter/note/${id}/${archived ? 'archive' : 'unarchive'}`, { method: 'POST' });
-      load();
-      onChanged?.();
+      reload();
     } catch (err) {
       toast.error(`Failed to ${archived ? 'archive' : 'restore'} note.`);
-      // See addNote: archiving the newest note changes last_contact_at too.
-      if (writeMayHaveLanded(err)) { load(); onChanged?.(); }
+      // See createNote: archiving the newest note changes last_contact_at too.
+      if (writeMayHaveLanded(err)) reload();
     }
   }
 
   return (
     <div>
-      {/* Composer */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'flex-start' }}>
-        <textarea
-          placeholder="Add a note…"
-          value={draft}
-          onChange={e => setDraft(e.target.value)}
-          onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') addNote(); }}
-          rows={2}
-          maxLength={MAX_NOTE_LEN}
-          style={{ ...inputStyle, flex: 1, width: undefined, fontSize: 13, resize: 'vertical', minHeight: 38 }}
-        />
-        <button onClick={addNote} disabled={submitting || !draft.trim()} style={{
-          background: ACCENT, color: ACCENT_INK, border: 'none',
-          padding: '8px 16px', borderRadius: 4, fontSize: 13, fontWeight: 500,
-          cursor: submitting || !draft.trim() ? 'default' : 'pointer',
-          opacity: submitting || !draft.trim() ? 0.5 : 1, flexShrink: 0,
-        }}>{submitting ? 'Saving…' : 'Add'}</button>
-      </div>
+      {/* Composer (#57) — a ~6-line auto-growing box that also takes attachments by
+          paste, drop or the Attach button. The post-then-upload sequence and its
+          partial-failure retry live in useChatterPost.
+
+          The `key` is load-bearing, not tidiness. The composer owns the draft text and the
+          staged files, and the deal sheet does NOT remount between deals — so without it,
+          typing a note on deal A, switching to deal B and pressing Post would file A's
+          words and A's screenshot onto B. Keying on the entity discards the draft with the
+          record it belongs to (and unmounts the staged previews, freeing their object
+          URLs). useChatterPost's own guard covers the retry batch; this covers the draft,
+          which that guard cannot see. */}
+      <NoteComposer
+        key={`${entityType}:${entityId}`}
+        onSubmit={post}
+        retryFiles={retryFiles}
+        onRetry={retry}
+        onDiscardRetry={discardRetry}
+        notice={notice}
+      />
 
       {/* Show-archived toggle — always rendered so archived notes stay reachable
           even when every active note has been archived (which would otherwise
@@ -179,6 +191,9 @@ export function NotesThread({ entityType, entityId, onChanged }: Props) {
                   <p style={{ fontSize: 13, color: INK, margin: 0, whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
                     {n.message}
                   </p>
+                  {n.attachments && n.attachments.length > 0 && (
+                    <NoteAttachments items={n.attachments} onChanged={reload} />
+                  )}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 4, flexWrap: 'wrap' }}>
                     <span style={{ ...mono(10), color: INK_DIM }}>{formatDate(n.created_at)}</span>
                     {n.updated_at && <span style={{ ...mono(10), color: INK_DIM }}>· edited</span>}

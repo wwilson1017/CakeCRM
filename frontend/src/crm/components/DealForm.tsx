@@ -5,6 +5,7 @@ import { OwnerSelect } from './OwnerSelect';
 import { labelStyle, inputStyle, CORAL, LINE, INK_DIM, mono } from '../../shared/styles';
 import { formModalOverlay, formModalContent, formTitle, btnPrimary, btnSecondary } from '../styles';
 import { STAGE_ORDER } from '../constants';
+import { isArchivedDeal } from '../pipelineFilters';
 import type { CrmDeal, CrmContact, CrmCompany } from '../../core/types';
 import { CustomFieldInputs } from './CustomFieldInputs';
 import { useCustomFieldsForm, putCustomFields } from './useCustomFieldsForm';
@@ -20,6 +21,10 @@ interface Props {
 export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
   const { currentUser } = useAuth();
   const isEdit = !!deal;
+  // A soft-archived deal (issue #83) can be edited, but not re-staged — see the Stage field.
+  // Shares the board's predicate rather than re-deriving `archived_at != null`, so there is
+  // exactly one definition of "archived" in the app.
+  const isArchived = !!deal && isArchivedDeal(deal);
   const [title, setTitle] = useState(deal?.title || '');
   const [stage, setStage] = useState(deal?.stage || 'lead');
   const [value, setValue] = useState(deal?.value?.toString() || '');
@@ -90,10 +95,18 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
     setSaving(true); setError('');
     try {
       const body: Record<string, unknown> = {
-        title, stage, value: parseFloat(value) || 0,
+        title, value: parseFloat(value) || 0,
         probability: parseInt(probability) || 0,
         expected_close_date: expectedClose, notes,
       };
+      // Send `stage` only when it can be user intent. On an archived deal the select is
+      // disabled, so its value is just whatever the row carried when this form opened —
+      // and if the deal moved stage elsewhere since (the assistant, another tab) that
+      // stale value differs from the server's, which refuses a stage change on an archived
+      // deal by rejecting the WHOLE update. Omitting the field leaves it unset, so every
+      // other edit still saves. This is the same data-loss the disabled select exists to
+      // prevent; locking the control alone did not close it.
+      if (!isArchived) body.stage = stage;
       body.contact_id = selectedContact;  // always send (null unlinks the contact)
       body.company_id = selectedCompany;  // always send (null unlinks the company)
       // Omitted on an untouched create so the server assigns the caller; on an
@@ -147,9 +160,23 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div>
               <label style={labelStyle}>Stage</label>
-              <select value={stage} onChange={e => setStage(e.target.value)} style={{ ...inputStyle, textTransform: 'capitalize' }}>
+              {/* Locked on an archived deal (issue #83). The server refuses a stage change
+                  on one and rejects the WHOLE update, so leaving this editable would throw
+                  away every other field the user had just typed. Every other field stays
+                  editable — only the stage is refused. */}
+              <select
+                value={stage}
+                onChange={e => setStage(e.target.value)}
+                disabled={isArchived}
+                style={{ ...inputStyle, textTransform: 'capitalize', opacity: isArchived ? 0.6 : 1 }}
+              >
                 {STAGE_ORDER.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
+              {isArchived && (
+                <p style={{ fontSize: 11, color: INK_DIM, margin: '4px 0 0' }}>
+                  Restore the deal to change its stage.
+                </p>
+              )}
             </div>
             <div><label style={labelStyle}>Value ($)</label><input type="number" step="any" min="0" value={value} onChange={e => setValue(e.target.value)} style={inputStyle} /></div>
           </div>

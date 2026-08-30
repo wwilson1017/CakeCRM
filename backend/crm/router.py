@@ -20,10 +20,11 @@ Companies:
   DELETE /api/crm/companies/:id         — delete (contacts/deals unlink, not deleted)
 
 Deals:
-  GET    /api/crm/deals                 — pipeline list / filtered
+  GET    /api/crm/deals                 — pipeline list / filtered (?include_archived= on the board)
   GET    /api/crm/deals/:id             — detail
   POST   /api/crm/deals                 — create
   PUT    /api/crm/deals/:id             — update
+  POST   /api/crm/deals/:id/restore     — un-archive a soft-archived deal
   POST   /api/crm/deals/bulk-move       — move many deals to one stage (one transaction)
   POST   /api/crm/deals/touch-count/backfill        — recompute AI touch counts (?scope=null|all&force=)
   GET    /api/crm/deals/touch-count/backfill/status — backfill progress
@@ -48,6 +49,10 @@ Chatter (notes threads on a deal or contact):
   PATCH  /api/crm/chatter/note/:id      — edit a note
   POST   /api/crm/chatter/note/:id/archive      — soft-archive a note
   POST   /api/crm/chatter/note/:id/unarchive    — restore an archived note
+  POST   /api/crm/chatter/note/:id/attachments  — attach one file to a note (multipart)
+  GET    /api/crm/chatter/attachments/:id/thumb — server-generated thumbnail (auth)
+  GET    /api/crm/chatter/attachments/:id/file  — original bytes (auth)
+  DELETE /api/crm/chatter/attachments/:id       — remove an attachment
 
 Custom fields (user-defined fields on contacts/companies/deals):
   GET    /api/crm/fields                — list definitions (?entity_type=)
@@ -82,14 +87,25 @@ Other:
 import csv
 import io
 import logging
+from urllib.parse import quote
 
 import psycopg2
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Header,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+)
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, StrictInt, field_validator
 
 from core.auth import get_current_user, require_admin
 from crm import (
+    attachment_service,
     chatter_service,
     field_service,
     gtd_common,
@@ -421,12 +437,29 @@ async def delete_contact(contact_id: int, user=Depends(get_current_user)):
 @router.get("/deals")
 async def list_deals(
     stage: str = "", contact_id: int | None = None,
+    include_archived: bool = False,
     user=Depends(get_current_user),
 ):
-    if stage or contact_id:
+    """Pipeline board payload, or a filtered deal list when stage/contact_id is given.
+
+    `include_archived` (issue #83) applies to the BOARD payload only — it is the one
+    opt-in hole in the archived-deal sweep that lets the UI find and restore an
+    accidentally archived deal. It is refused rather than ignored alongside
+    stage/contact_id: that branch is a different service function which keeps the sweep,
+    and silently dropping an advertised flag is worse than saying no.
+    """
+    # `contact_id is not None`, not a truthiness test: `?contact_id=0` is falsy, so a
+    # truthiness test would drop it through to the board branch — returning the whole
+    # pipeline for a request that asked to filter, and slipping past the refusal below.
+    if stage or contact_id is not None:
+        if include_archived:
+            raise HTTPException(
+                status_code=400,
+                detail="include_archived is not supported with stage or contact_id",
+            )
         deals = crm.list_deals(stage=stage or None, contact_id=contact_id)
         return {"deals": deals, "count": len(deals)}
-    return crm.get_pipeline()
+    return crm.get_pipeline(include_archived=include_archived)
 
 
 @router.get("/deals/{deal_id}")
@@ -488,6 +521,32 @@ async def bulk_move_deals(body: BulkDealMove, user=Depends(get_current_user)):
     updated deal and linked contact, bounded by BULK_MOVE_MAX.
     """
     return await run_in_threadpool(crm.bulk_move_deals, body.deal_ids, body.stage)
+
+
+# Restore is the recoverability half of issue #83: archiving a deal was reachable only
+# through the assistant, so on a keyless install an accidental archive (or `merge_deals`'
+# source-archival) was permanent. ARCHIVE deliberately gets no route here — the gate scope
+# is view + restore only; a UI archive affordance lands with the deal-detail parity port.
+#
+# Sync `def` on purpose, which makes this the one non-async handler in the file: the work
+# is blocking psycopg2 plus a lead-score recompute, and FastAPI runs a sync endpoint in a
+# threadpool instead of on the event loop. Its `async def` neighbours do the same blocking
+# work directly on the loop — that is pre-existing and out of scope here, not a convention
+# worth propagating (bulk-move already opts out via run_in_threadpool for the same reason).
+# No path collision — /deals/touch-count/backfill shares the segment count but differs in
+# its terminal segment.
+#
+# Restoring is idempotent (restoring a live deal is a no-op NULL write) and
+# member-accessible: ownership is not access control here, and this is ordinary record
+# CRUD, the same tier as PUT /deals/{id}. Note that restoring a deal that was archived by
+# a MERGE is not an undo — the merge already repointed activity/tasks, copied notes and
+# gap-filled custom fields onto the target; restore only makes the source visible again.
+@router.post("/deals/{deal_id}/restore")
+def restore_deal(deal_id: int, user=Depends(get_current_user)):
+    result = crm.archive_deal(deal_id, archived=False)
+    if not result:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    return result
 
 
 # ── AI touch counts (issue #16) ───────────────────────────────────────────────
@@ -1037,6 +1096,174 @@ async def smart_import_confirm(body: SmartImportConfirm, user=Depends(get_curren
 # Threaded free-text notes on a deal or contact, rendered alongside the activity
 # timeline. Validation (entity type/existence, non-empty message) lives in
 # chatter_service and surfaces here as ValueError → 400.
+
+# ── Note attachments (issue #57) ──────────────────────────────────────────────
+# Registered BEFORE /chatter/{entity_type}/{entity_id} deliberately. DELETE
+# /chatter/attachments/{id} has the same three-segment shape as that GET, and while the
+# methods differ today, a literal-prefix route one refactor away from being shadowed by a
+# wildcard is not a thing to leave to luck. All four carry get_current_user — these bytes
+# are private CRM content, and the frontend fetches them with the Bearer token rather than
+# pointing a bare <img src> at an open URL (there is no cookie auth to make that work,
+# and an unauthenticated media URL is exactly what the issue rules out).
+#
+# All four are sync `def`: they do blocking psycopg2 work, and the upload additionally runs
+# Pillow. FastAPI runs a sync handler in its threadpool, so nothing here occupies the event
+# loop — the same reason core.auth.get_current_user and the login handlers are sync. The
+# neighbouring chatter routes are `async def` because they only hand off to a service.
+
+# The routes below serve stored bytes back to a browser, so both headers are load-bearing:
+# nosniff stops a mislabelled body being re-interpreted as markup, and an attachment
+# disposition stops direct navigation rendering anything in the app's origin at all. The UI
+# never navigates to these URLs — it fetches them and renders object URLs — so the
+# disposition costs nothing.
+_MEDIA_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    # NOT `immutable`, and not a long max-age: `TRUNCATE ... RESTART IDENTITY` reuses
+    # attachment ids, so a cached /attachments/1/file could otherwise be served for a
+    # DIFFERENT attachment after a CRM reset — and a fresh immutable response is never
+    # revalidated, so a hard-deleted attachment would stay viewable in that browser.
+    # `no-cache` still stores the response; it just makes every reuse revalidate, which is
+    # what turns the ETag below into a real bandwidth win without the staleness.
+    "Cache-Control": "private, no-cache",
+    # The response varies by who asked, so a shared cache must never cross-serve it.
+    "Vary": "Authorization",
+}
+
+
+def _etag_matches(if_none_match: str | None, etag: str) -> bool:
+    """RFC 9110 If-None-Match: `*`, a comma-separated list, and weak validators.
+
+    Raw string equality would miss every one of those forms and silently disable the 304
+    path — the fast path is the whole point, so it has to actually fire.
+    """
+    if not if_none_match:
+        return False
+    for raw in if_none_match.split(","):
+        candidate = raw.strip()
+        if not candidate:
+            continue
+        if candidate == "*":
+            return True
+        # A weak validator compares equal to its strong twin here: the bytes behind an id
+        # never change, so there is no semantic distinction left to preserve.
+        if candidate.startswith("W/"):
+            candidate = candidate[2:]
+        if candidate == etag:
+            return True
+    return False
+
+
+def _content_disposition(filename: str) -> str:
+    """`attachment` disposition with both the ASCII fallback and the RFC 5987 form.
+
+    quote() must be called with safe="" — its default leaves `/` unescaped, which is not
+    the RFC 5987 encoding. The service has already normalized the name, so it carries no
+    quotes, backslashes, control characters or path segments.
+    """
+    ascii_name = filename.encode("ascii", "ignore").decode("ascii").strip()
+    # A name that is entirely non-ASCII strips down to nothing, or to a bare extension
+    # ("写真.png" -> ".png") — which a legacy client would save as a hidden dotfile. Give
+    # the fallback a real basename; clients that understand filename* never see it.
+    #
+    # Gated on the name having actually LOST characters, not merely on the fallback
+    # starting with a dot: a file genuinely named ".htaccess" survives normalization intact
+    # and must keep its name, where an earlier version rewrote it to "attachment.htaccess".
+    if ascii_name != filename and (not ascii_name or ascii_name.startswith(".")):
+        ascii_name = f"attachment{ascii_name}"
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename, safe='')}"
+
+
+@router.post("/chatter/note/{note_id}/attachments")
+def add_note_attachment(
+    note_id: int,
+    file: UploadFile = File(...),
+    user=Depends(get_current_user),
+):
+    """Attach one file to an existing note (multipart, field `file`)."""
+    # Bounded read: take cap+1 bytes and reject if it came back over, rather than trusting
+    # Content-Length. The repo-wide idiom (assistant/router.py, the CSV import above).
+    file.file.seek(0)
+    data = file.file.read(attachment_service.MAX_ATTACHMENT_BYTES + 1)
+    if len(data) > attachment_service.MAX_ATTACHMENT_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Attachments are limited to "
+                   f"{attachment_service.MAX_ATTACHMENT_BYTES // (1024 * 1024)} MB.",
+        )
+    try:
+        return attachment_service.create_attachment(
+            note_id, data=data, filename=file.filename, uploaded_by=user["id"],
+        )
+    except attachment_service.AttachmentError as e:
+        raise HTTPException(status_code=_ATTACHMENT_STATUS[e.code], detail=str(e)) from None
+
+
+# Code → status in one table, so reworded copy can never move a status by accident.
+_ATTACHMENT_STATUS = {
+    "note_not_found": 404,
+    "note_archived": 404,
+    "limit_exceeded": 400,
+    "file_too_large": 413,
+    "file_empty": 400,
+}
+
+
+@router.get("/chatter/attachments/{attachment_id}/thumb")
+def get_note_attachment_thumb(
+    attachment_id: int,
+    if_none_match: str | None = Header(None, alias="If-None-Match"),
+    user=Depends(get_current_user),
+):
+    """The server-generated thumbnail — the ONLY image bytes a list view ever fetches."""
+    # Metadata first so a revalidation never reads the blob. The thumb ETag is distinct
+    # from the file's so the two resources can't cross-satisfy each other.
+    meta = attachment_service.get_meta(attachment_id)
+    if meta is None or not meta["has_thumb"]:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    etag = f'"{meta["sha256"]}-thumb"'
+    if _etag_matches(if_none_match, etag):
+        return Response(status_code=304, headers={**_MEDIA_HEADERS, "ETag": etag})
+    row = attachment_service.get_thumb(attachment_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    return Response(
+        content=row["thumb_data"],
+        media_type=row["thumb_mime"],
+        headers={**_MEDIA_HEADERS, "ETag": etag,
+                 "Content-Disposition": _content_disposition(meta["filename"])},
+    )
+
+
+@router.get("/chatter/attachments/{attachment_id}/file")
+def get_note_attachment_file(
+    attachment_id: int,
+    if_none_match: str | None = Header(None, alias="If-None-Match"),
+    user=Depends(get_current_user),
+):
+    """The original bytes. Fetched only on an explicit open/download, never in a list."""
+    meta = attachment_service.get_meta(attachment_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    etag = f'"{meta["sha256"]}"'
+    if _etag_matches(if_none_match, etag):
+        return Response(status_code=304, headers={**_MEDIA_HEADERS, "ETag": etag})
+    row = attachment_service.get_file(attachment_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    return Response(
+        content=row["data"],
+        media_type=row["mime_type"],
+        headers={**_MEDIA_HEADERS, "ETag": etag,
+                 "Content-Disposition": _content_disposition(row["filename"])},
+    )
+
+
+@router.delete("/chatter/attachments/{attachment_id}")
+def delete_note_attachment(attachment_id: int, user=Depends(get_current_user)):
+    if not attachment_service.delete_attachment(attachment_id):
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    return {"ok": True}
+
 
 @router.get("/chatter/{entity_type}/{entity_id}")
 async def get_chatter(

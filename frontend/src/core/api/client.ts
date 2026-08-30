@@ -71,3 +71,47 @@ export async function api<T = unknown>(
 
   return res.json();
 }
+
+/**
+ * Fetch binary content with the same auth as `api()` (issue #57).
+ *
+ * `api()` ends in `res.json()`, so it cannot carry bytes. This is its sibling rather than
+ * a flag on it: the two differ only in how the body is read, and every auth rule —
+ * the Bearer header, the never-settling 401 that lets the page navigate to /login without
+ * flashing a false error, the `ApiError` with its status — is identical and must stay
+ * identical.
+ *
+ * This exists because a bare `<img src="/api/...">` cannot work here: CakeCRM's auth is a
+ * Bearer token from sessionStorage with no cookie fallback, so a browser-issued image
+ * request carries no credential at all. Callers turn the returned Blob into an object URL
+ * and are responsible for revoking it — see `crm/useAuthedBlobUrl.ts`, which is the only
+ * place in the app that should be doing that by hand.
+ *
+ * `signal` is not optional decoration: these responses can be multi-megabyte, so a caller
+ * that navigates away without aborting keeps downloading and materializing a Blob nobody
+ * will ever read. Abandoning the promise is not enough — only the signal stops the bytes.
+ */
+export async function apiBlob(path: string, signal?: AbortSignal): Promise<Blob> {
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  const res = await fetch(path, { headers, signal });
+
+  if (res.status === 401) {
+    sessionStorage.removeItem(TOKEN_KEY);
+    window.location.href = '/login';
+    return new Promise<never>(() => {});
+  }
+
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const body = await res.json();
+      if (typeof body.detail === 'string' && body.detail) detail = body.detail;
+    } catch { /* not JSON */ }
+    throw new ApiError(`API error ${res.status}: ${detail}`, res.status, detail);
+  }
+
+  return res.blob();
+}

@@ -25,7 +25,13 @@
  *     `state.visibleItems` the same array, which is the precondition for the bulk bar's count
  *     (computed by the layer from the current view) and the apply payload (recomputed by the
  *     page from `visibleItems`) being the same set. Adding one would split them silently.
- *     Archived deals never reach the board anyway — the server's LIVE_PREDICATE excludes them.
+ *     Since #83 archived deals CAN reach the board, so that is no longer a free absence — the
+ *     Archived facet below carries them instead, as an ordinary `single` facet. The layer's
+ *     voided tri-state was the other candidate and was declined: its resting value (`null`)
+ *     means SHOW ALL where ours must mean live-only, so adopting it would have meant teaching
+ *     the shared layer a per-config default plus per-config copy ("Voided" is not the word for
+ *     an archived deal) — shared-layer design this port has no mandate to do. What the board
+ *     needs beyond the facet, it reads from `isArchivedDeal` directly.
  */
 
 import type { CollectionConfig, FacetDef } from '../shared/collection';
@@ -38,6 +44,7 @@ import { STAGE_COLORS, STAGE_ORDER } from './constants';
 import {
   EMPTY_ADVANCED,
   dealMatchesAdvanced,
+  isArchivedDeal,
   type ActivityPreset,
   type ClosePreset,
 } from './pipelineFilters';
@@ -58,6 +65,22 @@ export const ACTIVITY_OPTIONS: FacetOption[] = [
   { value: 'stale30', label: 'No activity in 30+ days' },
   { value: 'none', label: 'No activity logged' },
 ];
+
+/** Archived visibility (issue #83), carried over verbatim from the retired filter bar. Unlike
+ *  every other facet this one also widens the server FETCH — `PipelinePage` keys
+ *  `?include_archived=true` off it — because archived deals are swept out of the board payload
+ *  and a client predicate cannot filter rows it never received. "Archived only" is the recovery
+ *  view: the way back from an accidental archive on an install with no AI provider. */
+export const ARCHIVED_OPTIONS: FacetOption[] = [
+  { value: 'include', label: 'Include archived' },
+  { value: 'only', label: 'Archived only' },
+];
+
+/** The two selections that widen the fetch. Exported so `PipelinePage` tests the SAME values
+ *  the facet offers rather than re-typing the strings. */
+export function archivedSelectionIncludesArchived(value: unknown): boolean {
+  return value === 'include' || value === 'only';
+}
 
 export interface PipelineConfigDeps {
   /** The install roster (`useUsers().users`) — options only; the facet is always declared. */
@@ -124,6 +147,23 @@ export function makePipelineCollectionConfig(deps: PipelineConfigDeps): Collecti
       options: ACTIVITY_OPTIONS,
       predicate: (d, v) =>
         dealMatchesAdvanced(d, { ...EMPTY_ADVANCED, lastActivity: v as ActivityPreset }, new Date()),
+    },
+    {
+      kind: 'single',
+      key: 'archived',
+      label: 'Archived',
+      options: ARCHIVED_OPTIONS,
+      // Selected ⇒ archived rows are wanted, so 'include' passes everything and 'only' keeps
+      // just them. The `!isArchivedDeal` fallback covers a value that is neither — the layer's
+      // scalar coercion accepts any string, and an unrecognised one must fail toward LIVE-ONLY
+      // (the resting behaviour) rather than quietly widening the board.
+      //
+      // The resting state (`null` ⇒ inactive ⇒ this predicate never runs) is enforced by the
+      // SERVER, not here: `get_pipeline`'s LIVE_PREDICATE, which is why the facet widens the
+      // fetch at all. `PipelinePage.load` closes the one gap that leaves — a live-only refetch
+      // that is deferred or fails while archived rows are still in `data`.
+      predicate: (d, v) =>
+        v === 'include' ? true : v === 'only' ? isArchivedDeal(d) : !isArchivedDeal(d),
     },
   ];
 

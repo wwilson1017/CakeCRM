@@ -4,6 +4,7 @@ import type { CrmDeal, CrmActivity } from '../../core/types';
 import { STAGE_COLORS } from '../constants';
 import { mono, INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, ACCENT_INK, GOLD, SAGE, FONT_DISPLAY } from '../../shared/styles';
 import { modalOverlay, modalContent, mobileDragHandle, btnDanger } from '../styles';
+import { toast } from '../../shared/toast';
 import { ActivityTimeline } from './ActivityTimeline';
 import { NotesThread } from './NotesThread';
 import { ScorePill } from './badges';
@@ -19,9 +20,13 @@ interface DealDetailSheetProps {
   onClose: () => void;
   onEdit: (deal: CrmDeal) => void;
   onStageChange: (deal: CrmDeal, stage: string) => void;
+  /** A deal was un-archived here (issue #83). Receives the row the server returned so the
+   *  host can patch it in place — a silent refetch can fail invisibly, which would leave
+   *  the board showing a deal as archived after a restore that actually happened. */
+  onRestored?: (deal: CrmDeal) => void;
 }
 
-export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange }: DealDetailSheetProps) {
+export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange, onRestored }: DealDetailSheetProps) {
   // Publish this deal as the open record while the sheet is mounted (issue #14).
   // Deals have no route, so this IS the deal open/close signal for both Pipeline
   // and Dashboard — no edits to either page.
@@ -40,6 +45,19 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
   // list-row prop, so an in-sheet activity mutation (or the daily refresh / another client)
   // updates the pill on the next loadDetail rather than showing a stale score until close.
   const [leadScore, setLeadScore] = useState<number | null | undefined>(deal.lead_score);
+  // Archived state comes from the re-fetchable detail too (issue #83), not only the frozen
+  // list-row prop: the assistant can archive a deal between the board's load and this sheet
+  // opening, and `get_deal` resolves an archived deal by design. Seeded from the prop so
+  // the banner is right on first paint.
+  //
+  // Accepted limitation: between first paint and `loadDetail` resolving, the archive-gated
+  // actions still reflect the prop, so a deal archived externally shows Mark Won/Lost for
+  // that window. NOT gated on the fetch — every other field in this sheet renders from the
+  // frozen prop until the detail lands (`stage` gates those same buttons the same way), so
+  // gating only these would buy a sub-second race at the cost of buttons that pop in after
+  // the sheet opens. The worst outcome in that window is a refused write, not a bad one.
+  const [archivedAt, setArchivedAt] = useState<string | null | undefined>(deal.archived_at);
+  const [restoring, setRestoring] = useState(false);
   const { byField, confirm, confirming } = useProvenance('deal', deal.id);
   const badge = (f: string) => (
     <ProvenanceBadge prov={byField[f]} onConfirm={() => confirm(f)} confirming={confirming === f} />
@@ -53,12 +71,34 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
       setActivity(detail.activity || []);
       setTouchCount(detail.ai_touch_count);
       setLeadScore(detail.lead_score);
+      setArchivedAt(detail.archived_at);
     } catch {
       // Non-fatal: the sheet still shows deal fields + chatter; leave activity as-is.
     }
   }, [deal.id]);
 
   useEffect(() => { queueMicrotask(loadDetail); }, [loadDetail]);
+
+  // Restore (issue #83). Self-contained POST — the same shape NotesThread uses for the
+  // chatter archive/unarchive pair — but the authoritative row goes UP to the host rather
+  // than being thrown away in favour of a refetch that can fail silently. `restoring` is
+  // reset only on failure: on success the host unmounts this sheet.
+  async function restoreDeal() {
+    setRestoring(true);
+    try {
+      const restored = await api<CrmDeal>(`/api/crm/deals/${deal.id}/restore`, { method: 'POST' });
+      setArchivedAt(null);
+      onRestored?.(restored);
+    } catch {
+      toast.error('Failed to restore deal.');
+    } finally {
+      // Reset on BOTH paths. A host that closes the sheet on `onRestored` unmounts this
+      // anyway, but `onRestored` is optional and the banner renders on every host — leaving
+      // `restoring` stuck true would strand the button on "Restoring…" for any host that
+      // keeps the sheet open.
+      setRestoring(false);
+    }
+  }
 
   return (
     <div
@@ -127,11 +167,35 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
           </p>
         )}
 
-        {/* No archived-deal banner here on purpose. Archiving is assistant-only in
-            Phase 1 (issue #22) and every surface that opens this sheet — the pipeline
-            board and the dashboard — filters archived deals out, so a banner would be
-            unreachable UI implying a path that doesn't exist. Add it back together
-            with the "Archived" pipeline facet that makes an archived deal openable. */}
+        {/* The archived-deal banner #22 Phase 1 deliberately left out, now that the
+            pipeline's Archived facet (issue #83) makes an archived deal reachable. This is
+            the ONLY way back on an install with no AI provider: the assistant's
+            crm_archive_deal(archived=false) needs a key, this doesn't.
+            Neutral dashed border rather than a danger tint — archived is a state, not a
+            problem. The copy is deliberately narrow: archived deals leave pipeline totals
+            and deal rollups, but their history stays in the activity feed by design. */}
+        {archivedAt && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+            border: `1px dashed ${LINE_STRONG}`, borderRadius: 6,
+            padding: '10px 12px', marginBottom: 16,
+          }}>
+            <span style={{ ...mono(10), color: INK_DIM }}>ARCHIVED</span>
+            <span style={{ fontSize: 13, color: INK_MUTE, flex: 1, lineHeight: 1.5 }}>
+              Archived {new Date(archivedAt).toLocaleDateString()} — excluded from pipeline
+              totals and deal rollups.
+            </span>
+            <button
+              onClick={restoreDeal}
+              disabled={restoring}
+              style={{
+                padding: '8px 14px', borderRadius: 6, border: `1px solid ${LINE_STRONG}`,
+                background: 'transparent', color: INK, fontSize: 13,
+                cursor: restoring ? 'default' : 'pointer', opacity: restoring ? 0.5 : 1,
+              }}
+            >{restoring ? 'Restoring…' : 'Restore'}</button>
+          </div>
+        )}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
           {deal.contact_name && (
@@ -192,12 +256,20 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
             border: `1px solid ${LINE_STRONG}`, background: 'transparent',
             color: INK_MUTE, fontSize: 13, cursor: 'pointer',
           }}>Close</button>
-          <button onClick={() => onEdit(deal)} style={{
+          {/* Hand the edit form the RE-FETCHED archived state, not the frozen board row:
+              otherwise a deal archived after the board loaded shows the banner here while
+              DealForm still sees `archived_at: null`, leaves Stage editable, and lets the
+              user compose an update the server will reject wholesale. */}
+          <button onClick={() => onEdit({ ...deal, archived_at: archivedAt })} style={{
             padding: '10px 16px', borderRadius: 6,
             border: `1px solid ${LINE_STRONG}`, background: 'transparent',
             color: INK, fontSize: 13, cursor: 'pointer',
           }}>Edit</button>
-          {deal.stage !== 'won' && deal.stage !== 'lost' && (
+          {/* Hidden on an archived deal (issue #83): the server refuses a stage change on
+              one (`_classify_deal_update` raises → 400) and the caller's catch reports a
+              generic failure, so these would be a dead end. Restore first. Edit stays —
+              editing an archived deal's other fields is legal. */}
+          {!archivedAt && deal.stage !== 'won' && deal.stage !== 'lost' && (
             <>
               <button onClick={() => onStageChange(deal, 'won')} style={{
                 padding: '10px 16px', borderRadius: 6,

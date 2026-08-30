@@ -16,8 +16,9 @@ import type { CrmDeal } from '../../core/types';
 import type { PipelineSortField } from '../pipelineSort';
 import { stageLabel } from '../pipelineBoard';
 import { STAGE_COLORS } from '../constants';
-import { INK, INK_DIM } from '../../shared/styles';
+import { INK, INK_DIM, LINE_STRONG, mono } from '../../shared/styles';
 import { ScorePill, TouchCountPill } from './badges';
+import { isArchivedDeal } from '../pipelineFilters';
 
 /** Every sortable field except the array order, plus the display-only stage column. */
 type PipelineColumnKey = Exclude<PipelineSortField, 'boardOrder'> | 'stage';
@@ -53,7 +54,21 @@ export function buildPipelineListColumns(
     {
       key: 'title',
       header: 'Deal',
-      render: d => <span style={{ color: INK, fontWeight: 500 }}>{d.title}</span>,
+      // The ARCHIVED marker rides the title cell rather than getting a column of its own: the
+      // rows are only reachable with the Archived facet on, so a permanent column would be empty
+      // almost always. The board labels its cards the same way (issue #83) and the two views
+      // must not disagree about whether a row is workable.
+      render: d => (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          {isArchivedDeal(d) && (
+            <span style={{
+              ...mono(9, INK_DIM), border: `1px solid ${LINE_STRONG}`, borderRadius: 3,
+              padding: '1px 4px', flexShrink: 0,
+            }}>ARCHIVED</span>
+          )}
+          <span style={{ color: INK, fontWeight: 500, opacity: isArchivedDeal(d) ? 0.65 : 1 }}>{d.title}</span>
+        </span>
+      ),
     },
     {
       key: 'company',

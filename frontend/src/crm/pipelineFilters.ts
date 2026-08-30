@@ -39,11 +39,33 @@ export type ClosePreset = 'overdue' | 'next7' | 'thisMonth' | 'noDate';
  *  activity is not counted — hence "no activity logged", not "never contacted". */
 export type ActivityPreset = 'le7' | 'le30' | 'stale30' | 'none';
 
+/** Archived-deal visibility (issue #83). `null` = live deals only, the default and what the
+ *  server returns unasked. `'include'` shows archived deals alongside live ones; `'only'` is
+ *  the recovery view — "where did that deal go?".
+ *
+ *  This is the ONE facet that also widens the FETCH: archived deals are swept out of
+ *  `get_pipeline()` server-side, so a purely client-side predicate would have nothing to
+ *  filter. `PipelinePage` keys `?include_archived=true` off this being non-null. Unlike the
+ *  two presets below the value itself lives in the collection layer's envelope since #74 —
+ *  `pipelineCollection.ts` declares it as a `CustomFacetDef`, which is the layer's escape
+ *  hatch for a facet whose value is neither a scalar nor a set. */
+export type ArchivedPreset = 'include' | 'only';
+
+/** True when a deal has been soft-archived (issue #22's `deals.archived_at`; NULL = live).
+ *  The single archived predicate for the whole board — the facet, the money aggregates, the
+ *  bulk selection and the drag gate all ask this one function, so they cannot drift about
+ *  what "archived" means. */
+export function isArchivedDeal(deal: CrmDeal): boolean {
+  return deal.archived_at != null;
+}
+
 /** The two buckets whose RULES are non-obvious enough to be worth a shared predicate.
- *  Stage, owner and value used to live here too; since #74 they are plain `FacetDef`s in
- *  `pipelineCollection.ts` (a set membership, a nullish-coalesce and a numeric range — the
- *  collection layer expresses all three directly), so keeping a second copy here would have
- *  left two homes for one rule with nothing forcing them to agree. */
+ *  Stage, owner, value and archived used to live here too; since #74 they are plain
+ *  `FacetDef`s in `pipelineCollection.ts` (a set membership, a nullish-coalesce, a numeric
+ *  range and a null check — the collection layer expresses all four directly), so keeping a
+ *  second copy here would have left two homes for one rule with nothing forcing them to
+ *  agree. `isArchivedDeal` stays exported because the BOARD asks it too — the money
+ *  aggregates, the bulk payload and the per-card drag gate all read it outside the facet. */
 export interface AdvancedFilters {
   closeDate: ClosePreset | null;
   lastActivity: ActivityPreset | null;

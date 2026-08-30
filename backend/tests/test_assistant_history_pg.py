@@ -71,6 +71,50 @@ def test_migration_tables_and_singleton(pg_db):
     assert ident["name"] == "Baker" and ident["personality"] == ""
 
 
+def test_name_brand_migration_resets_a_renamed_assistant(pg_db):
+    """#71's one-shot reset, on its own throwaway DB (same pattern as the #35 backfill
+    test). It has to be proved on a RENAMED row: on a fresh database the table's own
+    ``DEFAULT 'Baker'`` already satisfies every other assertion in this file, so a
+    migration that was mistyped, inverted, or deleted outright would look identical to
+    one that worked. Seeding the pre-#71 state is the only thing that can tell them
+    apart.
+
+    The application never reads this column any more, so this test guards the ROLLBACK
+    contract specifically: a pre-#71 binary does `SELECT name`, and what it finds must
+    still be the brand.
+    """
+    from pathlib import Path
+
+    import psycopg2 as _pg
+
+    migrations = Path(__file__).resolve().parent.parent / "migrations"
+    reset_sql = (migrations / "20260826010825_assistant_name_is_a_brand.sql").read_text()
+
+    conn = _pg.connect(pg_db)
+    conn.autocommit = True
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE assistant_identity SET name = 'Ace' WHERE id = 1")
+        cur.execute("SELECT name FROM assistant_identity WHERE id = 1")
+        assert cur.fetchone()[0] == "Ace"  # the pre-#71 state really is in place
+
+        cur.execute(reset_sql)
+        cur.execute("SELECT name FROM assistant_identity WHERE id = 1")
+        assert cur.fetchone()[0] == "Baker"
+
+        # Idempotent, and a no-op second run touches nothing.
+        cur.execute(reset_sql)
+        assert cur.rowcount == 0
+        cur.execute("SELECT name FROM assistant_identity WHERE id = 1")
+        assert cur.fetchone()[0] == "Baker"
+    finally:
+        # The DB is module-scoped and _clean only truncates the message tables, so an
+        # assertion failure above must not leave 'Ace' behind for the next test.
+        with conn.cursor() as c:
+            c.execute("UPDATE assistant_identity SET name = 'Baker' WHERE id = 1")
+        conn.close()
+
+
 def test_jsonb_roundtrips_as_python_lists(pg_db):
     from assistant import history
     conv = history.create_conversation()
