@@ -57,7 +57,10 @@ async def upload_logo(
             status_code=400,
             detail=f"Unsupported image type: {file.content_type}. Allowed: PNG, JPEG, GIF, WebP",
         )
-    data = await file.read()
+    # Bounded read: take cap+1 bytes and reject if it came back over, the repo-wide idiom
+    # (crm/router.py's import + attachment routes, assistant/router.py). An unbounded read
+    # here buffered the whole part in memory before the size check could refuse it.
+    data = await file.read(MAX_LOGO_BYTES + 1)
     if len(data) > MAX_LOGO_BYTES:
         raise HTTPException(status_code=400, detail="Logo must be under 2 MB")
     if not storage.save_logo(data):

@@ -611,25 +611,37 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   request (an assistant upload: 5 × 10 MB); a test pins that ordering, and another pins the
   spool-before-dependencies behaviour that makes middleware the only workable layer.
   **That backstop is not an admission limit, and #127 split the two.** A disk backstop
-  sized for the app's largest route is 6.4× what a chatter attachment may be, so everything
-  from 10 MB to 64 MB was admitted, spooled and parsed before the route's bounded read
-  refused it — the cheap outer gate the upload never had. `main._ROUTE_REQUEST_LIMITS` is
-  therefore a first-match-wins path-pattern → ceiling table consulted by the SAME
-  middleware (`_request_limit_for`), giving that one route
-  `MAX_ATTACHMENT_BYTES + MULTIPART_ENVELOPE_BYTES` and leaving every other path on the
-  global ceiling. It lives in the existing middleware rather than a `Depends` guard or a
-  second middleware for the reason the paragraph above already establishes — middleware is
-  the only layer that runs before the body is consumed — and the note id is matched as
-  `\d+` so a near-miss path falls back to the backstop instead of inheriting a limit meant
-  for something else. The per-route ceiling owes the same "clears the feature limit"
-  assertion the global one does, in both directions (above `MAX_ATTACHMENT_BYTES`, below
-  `MAX_REQUEST_BYTES`), and its headline test asserts the **parser never ran** rather than
-  merely a 413 — the route has always 413'd, so a status-only assertion would pass against
-  the bug. **Adding an upload route means adding its row here**, or it silently admits
-  64 MB. Unchanged and deliberate: a **chunked** body declaring no Content-Length still
-  slips both ceilings and is caught only by the route's `read(cap + 1)` — bounded in
-  memory, still spooled — because counting bytes as they stream stays "real machinery for
-  a case no browser produces". `crm_chatter_attachments` is the second CRM table
+  sized for the app's largest route is 6.4× what a chatter attachment may be — and 32-64×
+  what the logo and CSV-import routes accept — so everything between each route's real cap
+  and 64 MB was admitted, spooled and parsed before that route's bounded read refused it:
+  the cheap outer gate none of these uploads had. `main._ROUTE_REQUEST_LIMITS` is therefore
+  a first-match-wins path-pattern → ceiling table consulted by the SAME middleware
+  (`_request_limit_for`), sizing **each** upload route at its own feature limit plus
+  `MULTIPART_ENVELOPE_BYTES` and leaving every other path on the global ceiling. It lives
+  in the existing middleware rather than a `Depends` guard or a second middleware for the
+  reason the paragraph above already establishes — middleware is the only layer that runs
+  before the body is consumed — and the note id is matched as `\d+` so a near-miss path
+  falls back to the backstop instead of inheriting a limit meant for something else. The
+  **assistant** upload route is deliberately absent: its legitimate 5 × 10 MB already sits
+  close to the 64 MB backstop, so a row would only restate it. #127 also gave
+  `branding/router.upload_logo` the repo-wide `read(cap + 1)` idiom — it was the one upload
+  route still doing an unbounded `await file.read()`, buffering the whole part before the
+  size check could refuse it.
+  Three properties are pinned, and the first two are pinned that way because the obvious
+  test does **not** fail against the bug: the headline test asserts the **parser never ran**
+  rather than merely a 413 (the routes have always 413'd) and sizes its body from the
+  FEATURE cap, never from `_request_limit_for` — sizing it off the function under test made
+  it pass with the table emptied, since the request then simply hit the global ceiling
+  instead; the mounted-route guard asserts the table is **non-empty** before looping, since
+  a `for` over an empty table passes while checking nothing; and
+  `test_every_upload_route_is_bounded_below_the_backstop` enumerates every `UploadFile`
+  route from the app itself, so **a new upload route that forgets its row fails CI** rather
+  than silently admitting 64 MB. Unchanged and deliberate: a **chunked** body declaring no
+  Content-Length still slips both ceilings and is caught only by the route's
+  `read(cap + 1)` — bounded in memory, still spooled — because counting bytes as they
+  stream stays "real machinery for a case no browser produces". A *lying* Content-Length is
+  not a third hole: h11 delivers exactly the declared byte count to the app, so the
+  transport enforces the number the middleware trusted. `crm_chatter_attachments` is the second CRM table
   with a **real FK** (`crm_chatter ON DELETE CASCADE`), which is the whole lifecycle
   design: `delete_contact`/`delete_company` need NO new code, and the FK means the table
   MUST ride BOTH `_truncate_all` statements (Postgres refuses to truncate a referenced

@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 
 from alerts.router import router as alerts_router
 from assistant.router import router as assistant_router
-from branding.router import router as branding_router
+from branding.router import MAX_LOGO_BYTES, router as branding_router
 from context_files.router import router as context_files_router
 from core import postgres
 from core.auth import router as auth_router
@@ -34,7 +34,7 @@ from core.config import settings
 from core.storage import atomic_write
 from crm import attachment_service
 from crm.gtd_router import router as gtd_router
-from crm.router import router as crm_router
+from crm.router import MAX_UPLOAD_BYTES as crm_upload_max_bytes, router as crm_router
 from crm.todo_capture import router as todo_capture_router
 from crm.todo_web import (
     public_api_router as todo_web_public_api,
@@ -207,15 +207,21 @@ MAX_REQUEST_BYTES = 64 * 1024 * 1024
 
 # Room for the multipart envelope around one file part: the boundary pair, the
 # Content-Disposition (including a filename the client may send longer than the 120 bytes
-# the service will store), the part's Content-Type, and the CRLFs. Deliberately generous —
-# it is headroom on a rejection threshold, not a budget anyone spends.
+# the service will store), the part's Content-Type, and the CRLFs. A real browser envelope
+# is well under 1 KB; 64 KB reserves ~64x that. Deliberately generous because it is
+# headroom on a rejection threshold, not a budget anyone spends — the cost of being too
+# tight is 413ing a correct upload, and the cost of being loose is 64 KB.
 MULTIPART_ENVELOPE_BYTES = 64 * 1024
 
-# Routes whose legitimate maximum is far below the global ceiling get their own, tighter
-# one — because for a multipart body the global ceiling is the ONLY thing standing between
-# a caller and a full spool-to-disk plus parse (see above: the route's own bounded read
-# runs too late). #57 left chatter attachments admitting 64 MB to reject at 10 MB; this
-# closes that to the smallest number that still clears a real 10 MB upload.
+# Every upload route's admission ceiling, because for a multipart body the ceiling here is
+# the ONLY thing standing between a caller and a full spool-to-disk plus parse (see above:
+# the route's own bounded read runs too late). Sized per route at its real feature limit
+# plus the envelope, rather than leaving each one on a 64 MB disk backstop it can overrun
+# by 32-64x.
+#
+# The assistant upload route is deliberately ABSENT: its legitimate maximum is MAX_FILES x
+# MAX_FILE_SIZE = 50 MB against the same 64 MB backstop, so the global ceiling is already
+# the tight one there and a row would only duplicate it.
 #
 # First match wins, falling back to MAX_REQUEST_BYTES. The note id is matched as `\d+` so
 # only the real route is covered — a near-miss path is left to the global ceiling rather
@@ -224,6 +230,18 @@ _ROUTE_REQUEST_LIMITS: tuple[tuple[re.Pattern[str], int], ...] = (
     (
         re.compile(r"^/api/crm/chatter/note/\d+/attachments/?$"),
         attachment_service.MAX_ATTACHMENT_BYTES + MULTIPART_ENVELOPE_BYTES,
+    ),
+    (
+        re.compile(r"^/api/crm/import/?$"),
+        crm_upload_max_bytes + MULTIPART_ENVELOPE_BYTES,
+    ),
+    (
+        re.compile(r"^/api/crm/smart-import/parse/?$"),
+        crm_upload_max_bytes + MULTIPART_ENVELOPE_BYTES,
+    ),
+    (
+        re.compile(r"^/api/branding/logo/?$"),
+        MAX_LOGO_BYTES + MULTIPART_ENVELOPE_BYTES,
     ),
 )
 
