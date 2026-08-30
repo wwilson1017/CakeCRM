@@ -72,6 +72,7 @@ Lead scores (issue #18):
 
 Other:
   GET    /api/crm/dashboard             — summary stats
+  GET    /api/crm/dashboard/today       — ranked "what needs me today" list (?owner_id)
   GET    /api/crm/dashboard/weekly-touches — open deals touched in a window (?start, ?end)
   GET    /api/crm/analytics             — win/loss, activity volume, deal aging (?days, ?stale_days)
   GET    /api/crm/demo-status           — first-run onboarding / sample-data state
@@ -113,6 +114,7 @@ from crm import (
     provenance_service,
     scoring_service,
     service as crm,
+    today_service,
     todo_tokens,
     touch_count_service,
 )
@@ -779,6 +781,24 @@ async def delete_activity(activity_id: int, user=Depends(get_current_user)):
 @router.get("/dashboard")
 async def dashboard(user=Depends(get_current_user)):
     return crm.get_dashboard_stats()
+
+
+@router.get("/dashboard/today")
+async def dashboard_today(
+    owner_id: int | None = Query(None),
+    user=Depends(get_current_user),
+):
+    """The Today panel (issue #130): one ranked list of what needs attention today.
+
+    `owner_id` absent means everyone (the `list_tasks` idiom — no separate flag or
+    magic value); present means that person's view, which deliberately INCLUDES
+    unassigned tasks, because someone has to catch them. Reminders carry no owner
+    column at all and appear in every scope.
+
+    Pure SQL, so the ranking is identical with zero AI providers configured. Rank 2 of
+    the ladder is reserved for the hot-deals follow-up (#125) and is never emitted yet.
+    """
+    return today_service.get_today(owner_id=owner_id)
 
 
 @router.get("/dashboard/weekly-touches")
