@@ -196,6 +196,17 @@ const ON_DEAL_CARD = ['amber', 'green', 'ai'];
  */
 const ON_FOREIGN_STAGE_ROW = ['red', 'amber'];
 
+/**
+ * `CrmLayout`'s sample-data banner, the one place a hue wash is nested INSIDE another wash of
+ * the same hue: the banner is `tint(GOLD_FILL, 8)` over the page, and its "clear" button is
+ * `tint(GOLD_FILL, 12)` inside that, carrying GOLD_TEXT. The banner also swaps its own label to
+ * CORAL_TEXT on failure, which is the only place red text lands on an amber wash.
+ *
+ * Both pass comfortably today (worst 4.53:1), so unlike the deal-card stack this costs no design
+ * change — it is modelled so a future retune of amber cannot break it silently.
+ */
+const BANNER_WASH_PCT = 8;
+
 function surfaces(hue: string, tokens: Record<string, string>): Record<string, Rgb> {
   const rgb = (k: string) => hexToRgb(resolve(tokens, k));
   const out: Record<string, Rgb> = {};
@@ -222,6 +233,14 @@ function surfaces(hue: string, tokens: Record<string, string>): Record<string, R
         out[`stage12-${s}/${base}`] = over(rgb(`stage-${s}`), 12, rgb(base));
       }
     }
+  }
+
+  // The sample-data banner (see BANNER_WASH_PCT): amber's own 12% button nested in the 8%
+  // banner, and red's error label directly on that banner.
+  for (const base of BASES) {
+    const banner = over(rgb('amber'), BANNER_WASH_PCT, rgb(base));
+    if (hue === 'amber') out[`own12/amber${BANNER_WASH_PCT}/${base}`] = over(rgb('amber'), 12, banner);
+    if (hue === 'red') out[`amber${BANNER_WASH_PCT}/${base}`] = banner;
   }
 
   return out;
@@ -301,6 +320,7 @@ describe.each([
       + ownWashes * BASES.length                        // its own washes, over each
       + ON_DEAL_CARD.length * STAGES.length             // pills inside a stage-washed deal card
       + ON_FOREIGN_STAGE_ROW.length * STAGES.length * 2 // idle-days text on a foreign stage row
+      + BASES.length * 2                                // the banner: amber's button, red's label
       + BASES.length * 3;                               // accent: raw + soft + the 12% tab wash
     expect(checked, 'surface count drifted — a composition key collided, or a producer list changed').toBe(expected);
 
@@ -308,10 +328,14 @@ describe.each([
   });
 
   it('keeps every -text token on the legible side of its own fill', () => {
-    // A direction check, not a contrast one. In light a text token must be no LIGHTER than its
-    // fill; in dark, no darker. Equality is legal — most dark tokens are `var()` passthroughs.
-    // Without this, a typo that swapped two values could still satisfy the ratio sweep while
-    // rendering the wrong hue, and the sweep alone would not notice.
+    // A DIRECTION check, and only that — worth stating precisely, because it is tempting to
+    // read it as "the text token is still the right hue". It is not: it checks luminance moved
+    // the legible way (in light a text token is no LIGHTER than its fill; in dark, no darker),
+    // so it catches a swapped pair or a value edited in the wrong direction, but a same-hue-
+    // family value at a plausible luminance would pass. Equality is legal — most dark tokens
+    // are `var()` passthroughs. Enforcing actual hue identity would need an OKLCH hue-distance
+    // rule; for a hand-written 12-token palette whose every value is also swept for contrast
+    // above, that is not worth the machinery.
     const sign = themeName === 'light' ? 1 : -1;
     for (const hue of [...HUES, 'accent']) {
       const fill = luminance(hexToRgb(resolve(tokens, hue)));

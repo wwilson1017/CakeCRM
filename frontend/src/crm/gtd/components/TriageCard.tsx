@@ -205,7 +205,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
           disabled={busy}
           onClick={() => void patch({ star: !todo.star }, false)}
           className={`shrink-0 text-xl leading-none disabled:opacity-50 ${
-            todo.star ? 'text-ck-amber' : 'text-line hover:text-ck-amber'
+            todo.star ? 'text-ck-amber-text' : 'text-line hover:text-ck-amber-text'
           }`}
           aria-label="Star as today priority"
         >
