@@ -138,8 +138,10 @@ const ARCHIVED = deal({
 });
 const RESTORED = deal({ id: 2, title: 'Zebra rebuild', stage: 'lead', value: 99_999, archived_at: null });
 
-const LIVE_PATH = '/api/crm/deals';
-const ARCHIVED_PATH = '/api/crm/deals?include_archived=true';
+// #59: the board sweeps keyset pages instead of issuing one bare GET. Every fixture here
+// is well under one page, so each load is exactly one request — at these page-0 URLs.
+const LIVE_PATH = '/api/crm/deals?sort=id&limit=501';
+const ARCHIVED_PATH = '/api/crm/deals?sort=id&limit=501&include_archived=true';
 
 interface RouteOptions {
   /** Board payload for the plain (live-only) request the server answers unasked. */

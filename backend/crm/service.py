@@ -907,7 +907,62 @@ def get_deal_detail(deal_id: int) -> dict | None:
     return _embed_custom_fields([{**deal, "activity": activity}])[0]
 
 
-def get_pipeline(stage: str | None = None, include_archived: bool = False) -> dict:
+# ── The board read, shared by all three of its bounding modes (issue #59) ─────
+# One SELECT list and one FROM/JOIN block, so the unbounded board, a keyset page and
+# the assistant tool's per-stage window cannot drift about which columns a deal has.
+_PIPELINE_DEAL_COLS = """d.*, c.name AS contact_name, co.name AS company_name,
+                   la.last_at AS last_activity_at"""
+
+_PIPELINE_JOINS = """FROM deals d
+            LEFT JOIN contacts c ON d.contact_id = c.id
+            LEFT JOIN companies co ON d.company_id = co.id"""
+
+# Issue #21's last-touch blend, WHOLE-CORPUS form: aggregates all of activity_log +
+# un-archived deal chatter once, then joins. Affordable exactly when the statement reads
+# the whole corpus in one pass (the unbounded board, the tool's window) — never once per
+# page of a sweep; see the LATERAL twin below and _CONTACT_LAST_TOUCH_JOIN.
+_PIPELINE_LAST_ACTIVITY_GROUPED = """LEFT JOIN (
+                SELECT deal_id, MAX(created_at) AS last_at FROM (
+                    SELECT deal_id, created_at FROM activity_log WHERE deal_id IS NOT NULL
+                    UNION ALL
+                    SELECT entity_id AS deal_id, created_at FROM crm_chatter
+                    WHERE entity_type = 'deal' AND archived = 0
+                ) events GROUP BY deal_id
+            ) la ON la.deal_id = d.id"""
+
+# The same two lanes, the same alias, per DEAL. Touches only the page's rows, which is
+# what a reader that runs once per page of a corpus sweep must do (the rule
+# _CONTACT_LAST_TOUCH_JOIN states for the contact list). idx_activity_deal and
+# idx_crm_chatter_entity drive the lookup; neither carries created_at, so the MAX still
+# reads that deal's own event rows — bounded by the page, where the grouped form is
+# bounded by the whole table. A composite (deal_id, created_at) index is the next
+# improvement if it ever measures, and is purely additive.
+#
+# ANY semantic edit to one twin must be made to the other; the integration suite pins
+# that they return identical last_activity_at for the same deals.
+_PIPELINE_LAST_ACTIVITY_LATERAL = """LEFT JOIN LATERAL (
+                SELECT MAX(e.created_at) AS last_at FROM (
+                    SELECT created_at FROM activity_log WHERE deal_id = d.id
+                    UNION ALL
+                    SELECT created_at FROM crm_chatter
+                    WHERE entity_type = 'deal' AND entity_id = d.id AND archived = 0
+                ) e
+            ) la ON TRUE"""
+
+# The board's PRESENTATION recency order — one definition for the unbounded board's
+# ORDER BY, the window mode's partition ranking, and that window's outer ORDER BY. Ends
+# on the id term issue #58 requires; test_order_by_fragment_constants_are_total checks it.
+# (A keyset PAGE deliberately does NOT use this: its order is a cursor order, d.id ASC.)
+_PIPELINE_RECENCY_ORDER = "d.updated_at DESC, d.id DESC"
+
+
+def get_pipeline(
+    stage: str | None = None,
+    include_archived: bool = False,
+    limit: int | None = None,
+    after_id: int | None = None,
+    limit_per_stage: int | None = None,
+) -> dict:
     # Single query (optional stage WHERE) so the two branches can't drift. Beyond the
     # contact-name join, the board payload carries `company_name` (mirrors get_deal) for
     # keyword search, and a derived `last_activity_at` (issue #21) = the most recent of the
@@ -915,16 +970,28 @@ def get_pipeline(stage: str | None = None, include_archived: bool = False) -> di
     # POST /api/crm/activity — never written by edits/stage-moves) blended with un-archived
     # deal chatter notes. The UNION-ALL/GROUP BY yields one row per deal; the LEFT JOIN
     # leaves `last_at` NULL when a deal has neither → the client's "no activity" bucket.
-    # Scale note: the subquery aggregates the whole activity_log + chatter before the join
-    # (the stage WHERE can't push into it) — accepted at single-user v1 scale, where the
-    # unpaginated all-deals board is the binding constraint, not this once-per-load aggregate.
-    # If deal/activity volume ever grows, switch to a per-deal LATERAL MAX (indexes exist:
-    # idx_activity_deal, idx_crm_chatter_entity) or a maintained last-activity column.
+    # Scale note: the GROUPED join aggregates the whole activity_log + chatter before the
+    # join (the stage WHERE can't push into it). That is the right plan for a statement
+    # that reads the whole corpus in one pass, and the wrong one for a page of a sweep —
+    # which is why issue #59 gave it a LATERAL twin and the keyset mode below uses that
+    # instead. See _PIPELINE_LAST_ACTIVITY_GROUPED / _PIPELINE_LAST_ACTIVITY_LATERAL.
+    #
+    # Issue #59 added three bounding modes over ONE condition list, so the HTTP board and
+    # the assistant's crm_get_pipeline share one implementation rather than each capping
+    # its own way (which is how the two would later disagree about "newest per stage"):
+    #   * default (limit and limit_per_stage both None) — unchanged, the whole board;
+    #   * KEYSET PAGE (`limit`, optional `after_id`) — the board's transport. Ordered by
+    #     the immutable PK because that is what makes a cursor meaningful; the frontend
+    #     sweeps every page and reassembles the complete corpus before rendering, so this
+    #     is invisible to the user and the facet model (#21/#77) is untouched;
+    #   * PER-STAGE WINDOW (`limit_per_stage`) — the assistant tool's cap, in SQL, so a
+    #     25-per-stage answer stops reading every deal in the database.
     #
     # There is deliberately NO owner_id parameter here, unlike list_contacts/
-    # list_companies/list_tasks (issue #60). The board is not paginated — it already
-    # loads every live deal in one request and every other facet (#21: keyword, stage,
-    # value, close date, last activity) filters client-side over that array. Owner
+    # list_companies/list_tasks (issue #60). The board is fetched in keyset pages since
+    # #59, but it still assembles EVERY live deal client-side and every other facet
+    # (#21: keyword, stage, value, close date, last activity) filters client-side over
+    # that complete array — a server-side facet would be a second filtering model. Owner
     # joins them, so `d.owner_id` simply rides along in `d.*` and the picker resolves
     # names from the /api/users call the owner dropdowns need anyway. A server
     # parameter would buy nothing and cost a second code path — and worse, this
@@ -936,12 +1003,13 @@ def get_pipeline(stage: str | None = None, include_archived: bool = False) -> di
     # accidental archive recoverable without an AI provider: the board's Archived facet
     # sets it, the card renders inert, and the deal sheet offers Restore.
     #
-    # Scale note, distinct from the one above: the live board is unpaginated but bounded by
-    # OPEN WORKLOAD, whereas the widened board is bounded by all-time history — every merge
-    # archives a source, and junk archives never leave. So this branch grows monotonically
-    # where the default one does not. Fine at v1 scale, and the facet is off by default; the
-    # upgrade path is a server-side cap on this branch, or the paginated archived-deals view
-    # that issue #83 deliberately left out of scope.
+    # Scale note, distinct from the one above: the live board is bounded by OPEN WORKLOAD,
+    # whereas the widened board is bounded by all-time history — every merge archives a
+    # source, and junk archives never leave. So this branch grows monotonically where the
+    # default one does not. Issue #83 named "a server-side cap on this branch" as the
+    # upgrade path; #59 delivered it — `limit`/`after_id` page BOTH branches, and the
+    # frontend carries the facet on every page of the sweep so the two corpora can never
+    # interleave. (A dedicated archived-deals view is still out of scope.)
     #
     # It opens the DEALS QUERY ONLY. stage_summary below keeps LIVE_PREDICATE
     # unconditionally, which looks like exactly the one-sided filter the owner_id note
@@ -951,43 +1019,113 @@ def get_pipeline(stage: str | None = None, include_archived: bool = False) -> di
     # never be MONEY (won + archived would book revenue no report can see). The client
     # mirrors that same split — every $ aggregate on the board derives from the live
     # subset — so cards and totals still agree about value.
+    # Refuse the meaningless combinations BEFORE any query, so a bad call costs no round
+    # trip and the router's ValueError -> 400 mapping needs no database. No `< 1` bounds
+    # here: the route enforces them with Query(ge=...) and the tool clamps via
+    # _bounded_limit, exactly as every sibling reader trusts its callers.
+    if after_id is not None and limit is None:
+        raise ValueError("after_id requires limit")
+    if limit_per_stage is not None and (limit is not None or after_id is not None):
+        raise ValueError("limit_per_stage cannot be combined with limit or after_id")
+
     conditions = [] if include_archived else [LIVE_PREDICATE_D]
+    params: list = []
     if stage:
         conditions.append("d.stage = %s")
+        params.append(stage)
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-    deals = pg_fetchall(
-        f"""SELECT d.*, c.name AS contact_name, co.name AS company_name,
-                   la.last_at AS last_activity_at
-            FROM deals d
-            LEFT JOIN contacts c ON d.contact_id = c.id
-            LEFT JOIN companies co ON d.company_id = co.id
-            LEFT JOIN (
-                SELECT deal_id, MAX(created_at) AS last_at FROM (
-                    SELECT deal_id, created_at FROM activity_log WHERE deal_id IS NOT NULL
-                    UNION ALL
-                    SELECT entity_id AS deal_id, created_at FROM crm_chatter
-                    WHERE entity_type = 'deal' AND archived = 0
-                ) events GROUP BY deal_id
-            ) la ON la.deal_id = d.id
+
+    deals_truncated = False
+    if limit is not None:
+        # KEYSET PAGE. The cursor is appended to the ROW query only — it is the window,
+        # not a filter (list_contacts states the same rule), so it never joins the shared
+        # condition list that a COUNT would also read.
+        #
+        # ORDER BY d.id ASC because a cursor is only meaningful against an immutable,
+        # append-only key: under `updated_at` a row edited mid-sweep would move across the
+        # boundary and be duplicated or skipped. That is a TRANSPORT order — the caller
+        # reassembles the corpus and restores presentation order (see pipelineAssembly.ts).
+        #
+        # The ORDER BY and LIMIT are literal text on purpose: #58's static scanner judges
+        # this site directly, and hiding either behind a variable would make it undecidable
+        # and force a registry entry instead of an answer.
+        row_conditions = conditions + (["d.id > %s"] if after_id is not None else [])
+        row_where = f"WHERE {' AND '.join(row_conditions)}" if row_conditions else ""
+        deals = pg_fetchall(
+            f"""SELECT {_PIPELINE_DEAL_COLS}
+            {_PIPELINE_JOINS}
+            {_PIPELINE_LAST_ACTIVITY_LATERAL}
+            {row_where}
+            ORDER BY d.id ASC
+            LIMIT %s""",
+            params + ([after_id] if after_id is not None else []) + [limit],
+        )
+    elif limit_per_stage is not None:
+        # PER-STAGE WINDOW. Rank within each stage by the presentation order, then keep
+        # ONE rank more than asked: that surplus row is the truncation probe and is
+        # dropped, which makes `deals_truncated` exact without a second COUNT — the same
+        # over-fetch-by-one rule #77 uses for hasMore. The inner alias is `d` so the outer
+        # ORDER BY can reuse _PIPELINE_RECENCY_ORDER, and the global recency order
+        # reproduces the trimmed-list order this mode replaced.
+        rows = pg_fetchall(
+            f"""SELECT * FROM (
+                SELECT {_PIPELINE_DEAL_COLS},
+                       ROW_NUMBER() OVER (PARTITION BY d.stage
+                                          ORDER BY {_PIPELINE_RECENCY_ORDER}) AS rn
+                {_PIPELINE_JOINS}
+                {_PIPELINE_LAST_ACTIVITY_GROUPED}
+                {where}
+            ) d
+            WHERE d.rn <= %s
+            ORDER BY {_PIPELINE_RECENCY_ORDER}""",
+            params + [limit_per_stage + 1],
+        )
+        deals = []
+        for row in rows:
+            if row.pop("rn") > limit_per_stage:
+                deals_truncated = True  # this stage had more than the cap
+                continue
+            deals.append(row)
+    else:
+        deals = pg_fetchall(
+            f"""SELECT {_PIPELINE_DEAL_COLS}
+            {_PIPELINE_JOINS}
+            {_PIPELINE_LAST_ACTIVITY_GROUPED}
             {where}
-            -- The board is unpaginated today, so this tiebreaker only steadies the
-            -- within-stage card order across refreshes. It is load-bearing for issue
-            -- #59, which puts a LIMIT/OFFSET on this exact reader: at that point an
-            -- untotalled order becomes duplicated and missing cards, not just churn.
-            ORDER BY d.updated_at DESC, d.id DESC""",
-        (stage,) if stage else (),
-    )
+            -- This tiebreaker makes the recency order total (issue #58). It steadies the
+            -- within-stage card order across refreshes here; #59's keyset pages order by
+            -- d.id instead, and its window mode ranks partitions by this same constant.
+            ORDER BY {_PIPELINE_RECENCY_ORDER}""",
+            params,
+        )
 
-    # Value summaries per stage (open stages only). NEVER opened by include_archived —
-    # see the note above the deals query.
-    stage_summary = pg_fetchall(
-        f"""SELECT stage, COUNT(*) AS count, COALESCE(SUM(value), 0) AS total_value
-            FROM deals WHERE stage NOT IN ('won', 'lost') AND {LIVE_PREDICATE}
-            GROUP BY stage"""
-    )
-    total_pipeline = sum(s["total_value"] for s in stage_summary)
+    if after_id is not None:
+        # A continuation page of a corpus sweep never reads the aggregate. Re-running a
+        # whole-table GROUP BY on every one of up to MAX_PAGES pages would multiply the
+        # exact cost this issue exists to contain — for numbers PipelinePage provably
+        # discards (its PipelineData reads only `deals`).
+        #
+        # Keyed on the CURSOR, not on `limit`, for the same reason _count_or_none is: a
+        # FIRST page is indistinguishable from an ordinary bounded request whose caller may
+        # legitimately want the envelope, so the sweep pays for the aggregate exactly once.
+        stage_summary = None
+        total_pipeline = None
+    else:
+        # Value summaries per stage (open stages only). NEVER opened by include_archived —
+        # see the note above the deals query. Computed over every matching deal, so the
+        # window mode's trimmed list still reports true counts and values.
+        stage_summary = pg_fetchall(
+            f"""SELECT stage, COUNT(*) AS count, COALESCE(SUM(value), 0) AS total_value
+                FROM deals WHERE stage NOT IN ('won', 'lost') AND {LIVE_PREDICATE}
+                GROUP BY stage"""
+        )
+        total_pipeline = sum(s["total_value"] for s in stage_summary)
 
-    return {"deals": deals, "stage_summary": stage_summary, "total_pipeline_value": total_pipeline}
+    result = {"deals": deals, "stage_summary": stage_summary,
+              "total_pipeline_value": total_pipeline}
+    if limit_per_stage is not None:
+        result["deals_truncated"] = deals_truncated
+    return result
 
 
 def list_deals(stage: str | None = None, contact_id: int | None = None, limit: int = 50) -> list[dict]:
@@ -996,7 +1134,11 @@ def list_deals(stage: str | None = None, contact_id: int | None = None, limit: i
     if stage:
         conditions.append("d.stage = %s")
         params.append(stage)
-    if contact_id:
+    # `is not None`, not truthiness: the ROUTE deliberately treats `?contact_id=0` as a
+    # supplied filter (test_contact_id_zero_is_a_filter_not_a_fallthrough pins that), so a
+    # truthiness test here silently dropped it and answered a filtered request with the
+    # WHOLE deal list. `stage` keeps its truthiness test — there "" genuinely means absent.
+    if contact_id is not None:
         conditions.append("d.contact_id = %s")
         params.append(contact_id)
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""

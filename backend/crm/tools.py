@@ -1181,25 +1181,18 @@ def _summarize_deal(deal: dict) -> dict:
 def crm_get_pipeline(stage: str | None = None, limit_per_stage: int = 25) -> dict:
     """Pipeline board, with the per-stage deal LIST capped for the model's context.
 
-    The cap is applied here rather than in the service so the Kanban board (which
-    needs every card to render) is untouched. stage_summary is computed over all
-    deals, so the counts and values stay true even when the list is trimmed —
-    `deals_truncated` tells the model when it is looking at a partial list.
+    Since issue #59 the cap is a SQL window in the service, not a Python trim over a
+    fully-fetched board: answering "25 per stage" no longer reads every deal in the
+    database. The board's own read is untouched — it asks for no cap. stage_summary is
+    still computed over all deals, so the counts and values stay true even when the list
+    is trimmed, and `deals_truncated` tells the model when it is looking at a partial
+    list (the service derives it from a one-rank-per-stage over-fetch, so it is exact).
     """
     limit_per_stage = _bounded_limit(limit_per_stage, default=25)
-    result = crm.get_pipeline(stage=stage)
-    deals = result.get("deals") or []
-    per_stage: dict[str, int] = {}
-    trimmed = []
-    for deal in deals:  # already ordered updated_at DESC — newest per stage survives
-        key = deal.get("stage") or ""
-        if per_stage.get(key, 0) >= limit_per_stage:
-            continue
-        per_stage[key] = per_stage.get(key, 0) + 1
-        trimmed.append(_summarize_deal(deal))
-    return {**result, "deals": trimmed,
-            "limit_per_stage": limit_per_stage,
-            "deals_truncated": len(trimmed) < len(deals)}
+    result = crm.get_pipeline(stage=stage, limit_per_stage=limit_per_stage)
+    return {**result,
+            "deals": [_summarize_deal(d) for d in result.get("deals") or []],
+            "limit_per_stage": limit_per_stage}
 
 
 def crm_search_deals(

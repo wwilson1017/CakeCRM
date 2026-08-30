@@ -698,14 +698,16 @@ def test_deals_board_defaults_to_live_only(client, monkeypatch):
     seen = {}
     monkeypatch.setattr(service, "get_pipeline", lambda **kw: seen.update(kw) or {"deals": []})
     assert client.get("/api/crm/deals").status_code == 200
-    assert seen == {"include_archived": False}
+    # #59 added limit/after_id; a caller that omits them must reach the service asking for
+    # the WHOLE board, not for a page of it.
+    assert seen == {"include_archived": False, "limit": None, "after_id": None}
 
 
 def test_deals_board_passes_include_archived_through(client, monkeypatch):
     seen = {}
     monkeypatch.setattr(service, "get_pipeline", lambda **kw: seen.update(kw) or {"deals": []})
     assert client.get("/api/crm/deals?include_archived=true").status_code == 200
-    assert seen == {"include_archived": True}
+    assert seen == {"include_archived": True, "limit": None, "after_id": None}
 
 
 def test_include_archived_is_refused_not_ignored_with_other_filters(client, monkeypatch):
@@ -766,6 +768,74 @@ def test_contact_id_zero_is_a_filter_not_a_fallthrough(client, monkeypatch):
     monkeypatch.setattr(service, "list_deals", lambda **kw: [])
     assert client.get("/api/crm/deals?contact_id=0").status_code == 200
     assert client.get("/api/crm/deals?contact_id=0&include_archived=true").status_code == 400
+
+
+# ── #59: the board's keyset page parameters ──────────────────────────────────
+
+def test_board_keyset_params_reach_the_service(client, monkeypatch):
+    seen: dict = {}
+    monkeypatch.setattr(service, "get_pipeline", lambda **kw: seen.update(kw) or {"deals": []})
+
+    assert client.get("/api/crm/deals?sort=id&limit=501&after_id=7").status_code == 200
+    assert seen == {"include_archived": False, "limit": 501, "after_id": 7}
+
+    seen.clear()
+    assert client.get("/api/crm/deals?sort=id&limit=501").status_code == 200
+    assert seen["limit"] == 501 and seen["after_id"] is None
+
+
+def test_board_pagination_refused_with_stage_or_contact_filter(client, monkeypatch):
+    """`list_deals` has no cursor, so honouring a page there is impossible — and dropping
+    it silently looks exactly like a client stuck re-reading page one."""
+    def explode(**kw):
+        raise AssertionError("a paginated filter request reached a service function")
+    monkeypatch.setattr(service, "get_pipeline", explode)
+    monkeypatch.setattr(service, "list_deals", explode)
+
+    assert client.get("/api/crm/deals?stage=lead&limit=5").status_code == 400
+    assert client.get("/api/crm/deals?contact_id=4&limit=5&after_id=2").status_code == 400
+    # contact_id=0 is falsy but IS a filter — it must refuse like any other filter.
+    assert client.get("/api/crm/deals?contact_id=0&limit=5").status_code == 400
+
+
+def test_after_id_without_limit_is_400(client):
+    """No monkeypatch on purpose: the real service refuses before it touches Postgres, so
+    a clean 400 here is also the proof that validation precedes I/O."""
+    r = client.get("/api/crm/deals?after_id=7")
+    assert r.status_code == 400
+    assert r.json()["detail"] == "after_id requires limit"
+
+
+def test_board_refuses_a_sort_it_would_not_honour(client, monkeypatch):
+    """The shared wire format always sends `sort=id`, and that is what makes the cursor
+    meaningful. Accepting `sort=updated_at` and returning id order anyway would be exactly
+    the silently-ignored pagination input the cursor rules exist to prevent."""
+    seen: dict = {}
+    monkeypatch.setattr(service, "get_pipeline", lambda **kw: seen.update(kw) or {"deals": []})
+
+    assert client.get("/api/crm/deals?sort=updated_at&limit=5").status_code == 400
+    assert client.get("/api/crm/deals?sort=updated_at&after_id=1&limit=5").status_code == 400
+    assert seen == {}, "a refused request must not reach the service"
+    # Unpaginated callers are unaffected — `sort` stays accepted-and-ignored there.
+    assert client.get("/api/crm/deals?sort=updated_at").status_code == 200
+
+
+def test_board_limit_and_cursor_bounds_are_enforced_by_the_route(client, monkeypatch):
+    monkeypatch.setattr(service, "get_pipeline", lambda **kw: {"deals": []})
+    assert client.get("/api/crm/deals?limit=0").status_code == 422
+    assert client.get("/api/crm/deals?limit=1001").status_code == 422
+    assert client.get("/api/crm/deals?limit=5&after_id=-1").status_code == 422
+
+
+def test_after_id_zero_is_a_cursor_page(client, monkeypatch):
+    """SERIAL ids start at 1, so `after_id=0` selects the same rows as a first page — but
+    it IS a cursor, so the summary is suppressed like any continuation. Our own client
+    never sends it (assemblyPageParams omits after_id on page 0); pinned so the edge is
+    defined rather than discovered."""
+    seen: dict = {}
+    monkeypatch.setattr(service, "get_pipeline", lambda **kw: seen.update(kw) or {"deals": []})
+    assert client.get("/api/crm/deals?limit=5&after_id=0").status_code == 200
+    assert seen["after_id"] == 0
 
 
 # ── #77: the list pages' keyset assembly parameters ──────────────────────────
