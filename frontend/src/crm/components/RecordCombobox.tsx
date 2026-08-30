@@ -193,8 +193,12 @@ export function RecordCombobox<T>({
       // Kept inline rather than thrown: the user is mid-form, and the name they typed is
       // still in the box to correct. A toast would scroll away from the field it is about.
       setError(err instanceof Error ? err.message.replace(/^API error \d+: /, '') : 'Could not create');
+    } finally {
+      // `finally`, because the superseded branch above RETURNS: releasing the flag only on
+      // the fall-through path would leave the row disabled and reading "Creating…" for the
+      // rest of the form's life, every time a create was interrupted.
+      setCreating(false);
     }
-    setCreating(false);
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -256,7 +260,14 @@ export function RecordCombobox<T>({
           autoComplete="off"
           value={open ? query : (value != null ? valueLabel : '')}
           placeholder={value != null ? valueLabel : emptyLabel}
-          onChange={e => { setQuery(e.target.value); setError(''); }}
+          onChange={e => {
+            // Typing supersedes an in-flight create too: the input stays enabled while one
+            // runs, so without this a create for "Alpha" can land and select itself after
+            // the user has moved on to typing "Beta".
+            intentRef.current++;
+            setQuery(e.target.value);
+            setError('');
+          }}
           onFocus={openList}
           onClick={openList}
           onKeyDown={onKeyDown}

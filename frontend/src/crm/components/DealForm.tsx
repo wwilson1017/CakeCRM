@@ -78,6 +78,11 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
   // get_pipeline both join contact_name and company_name, so every path that opens this
   // form arrives with them.
   const [contactLabel, setContactLabel] = useState(deal?.contact_name || '');
+  // Known gap, deliberately left: an already-linked ARCHIVED company shows undecorated until
+  // the picker is opened, because the deal payload carries `company_name` but not the
+  // company's status. Adding it means widening `get_deal` AND `get_pipeline` — the latter
+  // being the board's once-per-load aggregate — to decorate one closed control. Search
+  // results and any new selection do carry the marker.
   const [companyLabel, setCompanyLabel] = useState(deal?.company_name || '');
   // Owner (issue #60). On an EDIT the record's own owner is used verbatim — `null`
   // means unassigned and must survive, or saving an unrelated field would silently
@@ -147,9 +152,14 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
     contactTouched.current = true;
     setSelectedContact(c?.id ?? null);
     setContactLabel(c?.name || '');
-    if (c && c.company_id != null && !companyTouched.current) {
+    // An auto-derived company FOLLOWS the contact it was derived from — including to
+    // nothing. Only filling when the new contact HAS a company would strand the previous
+    // contact's company on the deal, silently linking it to an organisation neither the
+    // user nor the current contact ever named. Clearing the contact outright is left alone:
+    // there is no new contact to derive from, and the company may be all the user has.
+    if (c && !companyTouched.current) {
       setSelectedCompany(c.company_id);
-      setCompanyLabel(c.company_name || c.company || '');
+      setCompanyLabel(c.company_id != null ? (c.company_name || c.company || '') : '');
     }
   }
 

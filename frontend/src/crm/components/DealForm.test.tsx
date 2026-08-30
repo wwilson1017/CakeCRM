@@ -556,3 +556,42 @@ describe('DealForm — whose choice wins', () => {
     expect(combobox('company').value).toBe('Wound Down Ltd (archived)');
   });
 });
+
+describe('DealForm — an auto-filled company follows its contact', () => {
+  it('clears an auto-derived company when the new contact has none', async () => {
+    // Filling only when the new contact HAS a company strands the PREVIOUS contact's
+    // company on the deal — linking it to an organisation neither the user nor the current
+    // contact ever named.
+    mockApi([
+      contact({ id: 3, name: 'Acme Person', company_id: 9, company_name: 'Acme Corp' }),
+      contact({ id: 4, name: 'Freelancer' }),
+    ]);
+    await render();
+    await act(async () => { typeInto(titleInput(), 'Follows the contact'); });
+    await openPicker('contact');
+    await clickOption(t => t.includes('Acme Person'));       // auto-fills company 9
+    await openPicker('contact');
+    await clickOption(t => t.includes('Freelancer'));        // has no company
+    await submit();
+
+    expect(dealPost()).toMatchObject({ contact_id: 4, company_id: null });
+  });
+
+  it('still leaves a company the user picked alone', async () => {
+    // The rule is "auto-derived follows the contact", not "the contact owns the field".
+    mockApi([
+      contact({ id: 3, name: 'Acme Person', company_id: 9, company_name: 'Acme Corp' }),
+      contact({ id: 4, name: 'Freelancer' }),
+    ]);
+    await render();
+    await act(async () => { typeInto(titleInput(), 'Deliberate wins'); });
+    await openPicker('company');
+    await typeInPicker('company', 'Chosen Co');
+    await clickOption(t => t.startsWith('Create '));
+    await openPicker('contact');
+    await clickOption(t => t.includes('Freelancer'));
+    await submit();
+
+    expect(dealPost()).toMatchObject({ contact_id: 4, company_id: 22 });
+  });
+});

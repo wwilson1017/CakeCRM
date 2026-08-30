@@ -400,3 +400,42 @@ describe('RecordCombobox — reopening', () => {
     expect(search.mock.calls.every(([q]) => q === '')).toBe(true);
   });
 });
+
+describe('RecordCombobox — recovering from an interrupted create', () => {
+  it('re-enables Create after an interrupted one, instead of wedging on "Creating…"', async () => {
+    // The superseded branch RETURNS, so releasing `creating` only on the fall-through path
+    // leaves the row disabled for the rest of the form's life.
+    let release: (r: Rec) => void = () => {};
+    mount({
+      search: vi.fn(async () => []),
+      create: vi.fn(() => new Promise<Rec>(res => { release = res; })),
+    });
+    await open();
+    await type('Newco');
+    await settle();
+    await act(async () => { createRow()!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    await press('Escape');
+    await act(async () => { release({ id: 99, name: 'Newco' }); });
+
+    await open();
+    await type('Newco');
+    await settle();
+    expect(createRow()!.disabled).toBe(false);
+  });
+
+  it('does not let a create land on a query the user has since retyped', async () => {
+    let release: (r: Rec) => void = () => {};
+    const props = mount({
+      search: vi.fn(async () => []),
+      create: vi.fn(() => new Promise<Rec>(res => { release = res; })),
+    });
+    await open();
+    await type('Alpha');
+    await settle();
+    await act(async () => { createRow()!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    await type('Beta');                                      // still typing; create in flight
+    await act(async () => { release({ id: 99, name: 'Alpha' }); });
+
+    expect(props.onSelect).not.toHaveBeenCalled();
+  });
+});
