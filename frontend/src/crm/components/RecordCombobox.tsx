@@ -216,6 +216,21 @@ export function RecordCombobox<T>({
     setError('');   // a prior create's failure is not news about the record just chosen
   }
 
+  /**
+   * Unlink, and supersede any in-flight create while doing it.
+   *
+   * Clearing is a CHOICE about this field, so it belongs with `choose`, typing and Escape
+   * rather than with passive dismissal. The × is reachable during a create — dismissing the
+   * popover reveals it over the existing selection — and without the bump a create started
+   * moments earlier would still pass its intent check and fill the field the user just
+   * emptied.
+   */
+  function clearSelection() {
+    intentRef.current++;
+    setError('');
+    onSelect(null);
+  }
+
   async function quickCreate() {
     if (!trimmed || creating) return;
     // The search's request-id guard does not cover creates. Without this, a slow create
@@ -337,7 +352,7 @@ export function RecordCombobox<T>({
           <button
             type="button"
             aria-label={`Clear ${label.toLowerCase()}`}
-            onClick={() => { setError(''); onSelect(null); }}
+            onClick={clearSelection}
             style={{
               position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)',
               border: 'none', background: 'transparent', color: INK_DIM,

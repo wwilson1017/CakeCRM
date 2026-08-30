@@ -599,3 +599,32 @@ describe('RecordCombobox — closing is not cancelling', () => {
     expect(container.textContent).not.toContain('boom');
   });
 });
+
+describe('RecordCombobox — clearing supersedes a pending create', () => {
+  it('does not let an in-flight create refill a field the user just cleared', async () => {
+    // The × is reachable mid-create: dismissing the popover reveals it over the existing
+    // selection. Clearing is a CHOICE about this field, so it must invalidate the create the
+    // same way choosing another record does — otherwise the create lands and fills the field
+    // the user just emptied.
+    let release: (r: Rec) => void = () => {};
+    const props = mount({
+      value: 1,
+      valueLabel: 'Acme Corp',
+      search: vi.fn(async () => []),
+      create: vi.fn(() => new Promise<Rec>(res => { release = res; })),
+    });
+    await open();
+    await type('Newco');
+    await settle();
+    await act(async () => { createRow()!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    await act(async () => {
+      document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));   // reveals the ×
+    });
+    const clear = container.querySelector('button[aria-label="Clear company"]') as HTMLButtonElement;
+    await act(async () => { clear.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    await act(async () => { release({ id: 99, name: 'Newco' }); });
+
+    expect(props.onSelect).toHaveBeenCalledTimes(1);
+    expect(props.onSelect).toHaveBeenCalledWith(null);
+  });
+});
