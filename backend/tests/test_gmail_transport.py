@@ -243,17 +243,35 @@ def test_real_socket_hang_is_bounded(monkeypatch):
     monkeypatch.setattr(client, "_HTTP_TIMEOUT_SECONDS", 0.25)
     transport = client._build_transport(Credentials(token="t"), time.monotonic() + 60)
 
-    started = time.monotonic()
-    try:
-        with pytest.raises(TimeoutError) as caught:
+    # Run the request on a worker and join with a hard ceiling. If the timeout ever
+    # regresses, the read blocks forever -- calling it inline would WEDGE the suite
+    # instead of failing it, which is the one outcome a regression test must not have.
+    box = {}
+
+    def attempt():
+        try:
             transport.request(f"http://127.0.0.1:{port}/", "GET")
-        elapsed = time.monotonic() - started
+            box["outcome"] = "returned"
+        except BaseException as e:      # noqa: BLE001 - carry any outcome back to assert on
+            box["outcome"] = e
+
+    worker = threading.Thread(target=attempt, daemon=True)
+    started = time.monotonic()
+    worker.start()
+    worker.join(timeout=10)
+    elapsed = time.monotonic() - started
+    try:
+        assert not worker.is_alive(), "the read was never bounded -- transport timeout regressed"
+        outcome = box["outcome"]
         # Bounded at all is the claim; the generous ceiling keeps this off CI's
         # flakiness budget while still failing loudly against an unbounded read.
         assert elapsed < 10
-        # It arrives as a builtin TimeoutError -- NOT a RefreshError, which is the
-        # only class that reaches store.mark_broken.
-        assert not isinstance(caught.value, RefreshError)
+        # The transport frame translates it, so the caller sees the retryable class --
+        # and NOT a RefreshError, the only class that reaches store.mark_broken.
+        assert isinstance(outcome, GmailTimeoutError)
+        assert not isinstance(outcome, (RefreshError, OSError, TimeoutError))
+        # A stalled read means the request was already on the wire: retries are not free.
+        assert outcome.started is True
     finally:
         transport.close()
         for conn, _addr in held:
@@ -326,8 +344,59 @@ def test_timeout_error_is_outside_the_socket_error_hierarchy():
     GmailTimeoutError out of that hierarchy is what stops a budget refusal from being
     retried as a transient network blip -- which would multiply the very wall clock
     the budget exists to bound."""
-    err = GmailTimeoutError("x")
+    err = GmailTimeoutError("x", started=False)
     assert not isinstance(err, (OSError, TimeoutError, GmailAuthError))
+
+
+def test_socket_timeout_is_translated_at_the_transport_frame(monkeypatch):
+    """Translating in call_gmail would be too late: a raw TimeoutError escaping the
+    transport is visible to googleapiclient's _retry_request, which special-cases socket
+    errors and would retry it under any num_retries > 0. Assert the caller of
+    transport.request() -- i.e. the SDK -- never sees the raw class."""
+    transport = client._build_transport(Credentials(token="t"), time.monotonic() + 60)
+    transport.http._conn_request = lambda *a, **k: (_ for _ in ()).throw(TimeoutError("timed out"))
+    try:
+        with pytest.raises(GmailTimeoutError) as caught:
+            transport.request("https://gmail.googleapis.com/x", "GET")
+        assert caught.value.started is True
+    finally:
+        transport.close()
+
+
+def test_budget_refusal_reports_that_nothing_was_sent(monkeypatch):
+    """The two timeout origins differ in what a caller may safely do next, so the flag
+    that distinguishes them is part of the contract, not a debug aid."""
+    transport = client._build_transport(Credentials(token="t"), time.monotonic() - 1)
+    reached = []
+    transport.http._conn_request = lambda *a, **k: reached.append(1)
+    try:
+        with pytest.raises(GmailTimeoutError) as caught:
+            transport.request("https://gmail.googleapis.com/x", "GET")
+        assert caught.value.started is False
+        assert reached == []          # refused before the socket was touched
+    finally:
+        transport.close()
+
+
+def test_draft_timeout_wording_tracks_whether_the_request_was_sent(monkeypatch):
+    """gmail_create_draft is a WRITE. Telling the user "nothing happened" after a
+    mid-flight stall would invite a duplicate draft, since Gmail may have created one
+    and lost only the response."""
+    def raise_with(started):
+        def boom(*a, **k):
+            raise GmailTimeoutError(client._TIMEOUT_MESSAGE, started=started)
+        return boom
+
+    monkeypatch.setattr(tools.client, "call_gmail", raise_with(False))
+    safe = tools.gmail_create_draft(to="a@b.com", subject="s", body="b")
+    assert "retrying is safe" in safe["error"]
+    assert "needs_reconnect" not in safe
+
+    monkeypatch.setattr(tools.client, "call_gmail", raise_with(True))
+    unknown = tools.gmail_create_draft(to="a@b.com", subject="s", body="b")
+    assert "Check Gmail" in unknown["error"]
+    assert "retrying is safe" not in unknown
+    assert "needs_reconnect" not in unknown
 
 
 @pytest.mark.parametrize(
@@ -341,7 +410,7 @@ def test_timeout_error_is_outside_the_socket_error_hierarchy():
 def test_executors_report_a_timeout_as_retryable_not_reconnect(monkeypatch, executor, kwargs):
     """A timeout must never tell the user to reconnect a connection that is fine."""
     def boom(*a, **k):
-        raise GmailTimeoutError(client._TIMEOUT_MESSAGE)
+        raise GmailTimeoutError(client._TIMEOUT_MESSAGE, started=True)
 
     monkeypatch.setattr(tools.client, "call_gmail", boom)
     out = executor(**kwargs)

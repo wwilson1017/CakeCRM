@@ -125,9 +125,15 @@ def gmail_create_draft(to: str, subject: str, body: str, cc: str = "", bcc: str 
     except GmailAuthError as e:
         return {"error": str(e), "needs_reconnect": True}
     except GmailTimeoutError as e:
-        # Retryable, and NOT a broken connection — deliberately no needs_reconnect.
-        # No draft was created: the request never completed.
-        return {"error": str(e)}
+        # NOT a broken connection — deliberately no needs_reconnect. But this is a WRITE,
+        # so whether a retry is safe depends on how far the request got: refused before it
+        # was sent means nothing reached Gmail, while a mid-flight stall means Gmail may
+        # have created the draft and only lost the response. Saying "nothing happened"
+        # there would invite a duplicate draft.
+        if e.started:
+            return {"error": f"{e} Check Gmail for a draft before retrying — it may have "
+                             "been created even though the reply was lost."}
+        return {"error": f"{e} No draft was created, so retrying is safe."}
     except Exception as e:
         logger.error("gmail_create_draft failed: %s", e)
         return {"error": "Creating the Gmail draft failed. Please try again."}

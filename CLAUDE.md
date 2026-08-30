@@ -122,20 +122,30 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   against it being False.
   A timeout raises **`GmailTimeoutError`, a plain `Exception`** — deliberately not a
   `TimeoutError`/`OSError` subclass, so googleapiclient's `_retry_request` socket-error
-  handling can never retry it and multiply the wall clock the budget exists to bound. It is
-  **retryable by contract**: disjoint from `RefreshError`, so it can never reach
+  handling can never retry it and multiply the wall clock the budget exists to bound. The
+  translation happens **in `_BudgetHttp.request` itself, not in `call_gmail`**: a raw
+  `TimeoutError` escaping the transport frame is visible to `_retry_request`, so translating
+  one level up would be too late (`call_gmail` keeps a backstop `except TimeoutError` anyway).
+  It never means a broken connection: disjoint from `RefreshError`, so it cannot reach
   `store.mark_broken` (verified through the real SDK refresh path, not assumed — google-auth
   wraps only `HttpLib2Error` into `TransportError`, so a stalled socket surfaces raw), and the
-  three executors return it **without `needs_reconnect`**. The OAuth callback keeps its
-  revoke-on-any-failure behavior — a deliberate, documented exception to that contract, since
-  from its seat a timeout is indistinguishable from a broken grant and reconnecting is one
-  click.
+  three executors return it **without `needs_reconnect`**.
+  **It carries `started`, because "retryable" is not one answer for a write.** `False` = the
+  budget refused before the socket was touched, so nothing reached Gmail and a retry is safe;
+  `True` = a socket stalled mid-flight, so the outcome is unknown — Gmail may have acted and
+  lost only the response. `gmail_create_draft` words its result off that flag rather than
+  claiming nothing happened, which would invite a duplicate draft. The OAuth callback keeps
+  its revoke-on-any-failure behavior — a deliberate, documented exception, since from its seat
+  a timeout is indistinguishable from a broken grant and reconnecting is one click.
   `gmail_scan` **keeps** its daemon-worker + `_inflight` + join-deadline machinery, now as a
-  backstop for what a socket timeout cannot bound (DNS stalls, CPU starvation) rather than as
-  a workaround for a missing timeout; its budget being strictly inside the join deadline makes
-  the abandoned-worker leak unreachable *for transport hangs*, and its docstrings now say
-  plainly that a worker abandoned for one of the other causes may still be unbounded and that
-  `_inflight` caps concurrency without guaranteeing recovery.
+  backstop rather than as a workaround for a missing timeout. Its budget sitting inside the
+  join deadline (`_SCAN_CALL_BUDGET + _HTTP_TIMEOUT_SECONDS < _SCAN_HTTP_DEADLINE`, pinned by
+  test) makes the abandoned-worker leak unreachable for the **common single-stall** case —
+  **necessary, not sufficient**, and the machinery stays precisely because of the gap: the
+  timeout bounds one socket *operation*, so a request stalling separately on connect, TLS and
+  read can still outlast the join, as can a DNS stall or CPU starvation. The docstrings now say
+  plainly that a worker abandoned for those reasons may still be unbounded and that `_inflight`
+  caps concurrency without guaranteeing recovery.
   `httplib2` and `google-auth-httplib2` moved from incidental transitives to **pinned direct
   dependencies** (the `pillow` precedent — a transitive extra is not a dependency contract).
   All of it is **hermetically tested against the real SDK**, which retires the issue's stated

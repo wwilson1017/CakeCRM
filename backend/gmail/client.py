@@ -56,10 +56,20 @@ class GmailAuthError(Exception):
 class GmailTimeoutError(Exception):
     """A Gmail call ran out of time — one stalled request, or the per-call budget.
 
-    RETRYABLE, and never a broken connection: call_gmail must not mark_broken on it
-    and the executors must not return needs_reconnect for it. Deliberately NOT a
-    subclass of TimeoutError/OSError — googleapiclient's _retry_request treats socket
-    errors specially, and this must stay invisible to it. The message is user-facing."""
+    Never a broken connection: call_gmail must not mark_broken on it and the executors
+    must not return needs_reconnect for it. Deliberately NOT a subclass of
+    TimeoutError/OSError — googleapiclient's _retry_request treats socket errors
+    specially, and this must stay invisible to it. The message is user-facing.
+
+    `started` says whether the request had already gone out, which is what decides
+    whether a RETRY IS SAFE. False = the budget refused to start it, so the server never
+    saw it and nothing was written. True = a socket stalled mid-flight, so the outcome is
+    genuinely unknown: Gmail may have processed the request and lost only the response.
+    A write tool must not tell the user "nothing happened" in that case."""
+
+    def __init__(self, message: str, *, started: bool):
+        super().__init__(message)
+        self.started = started
 
 
 # Runtime allow-list: the ONLY operations call_gmail will execute. There is no
@@ -135,8 +145,16 @@ def _build_transport(creds, deadline: float):
     class _BudgetHttp(httplib2.Http):
         def request(self, *args, **kwargs):
             if time.monotonic() >= deadline:
-                raise GmailTimeoutError(_TIMEOUT_MESSAGE)
-            return super().request(*args, **kwargs)
+                # Refused before the socket was touched, so nothing reached Gmail.
+                raise GmailTimeoutError(_TIMEOUT_MESSAGE, started=False)
+            try:
+                return super().request(*args, **kwargs)
+            except TimeoutError as e:
+                # Translate HERE, not in call_gmail: a raw socket timeout escaping this
+                # frame is visible to googleapiclient's _retry_request, which special-
+                # cases socket errors and would retry it under any num_retries > 0 —
+                # multiplying the wall clock this budget exists to bound.
+                raise GmailTimeoutError(_TIMEOUT_MESSAGE, started=True) from e
 
     http = _BudgetHttp(timeout=_HTTP_TIMEOUT_SECONDS)
     # Parity with the SDK's build_http(): Google uses 308 for resumable uploads, not
@@ -255,11 +273,12 @@ def call_gmail(op, *, budget_seconds: float | None = None, **kwargs):
         store.mark_broken(prev_refresh_enc)
         raise GmailAuthError("Gmail connection expired — reconnect it in Settings.")
     except TimeoutError as e:
-        # One stalled socket op (socket.timeout IS TimeoutError on 3.10+), raised by
-        # the transport — the ops layer never raises it. Disjoint from RefreshError,
-        # so a timeout can never reach mark_broken: a stalled request says nothing
-        # about whether the credential is still good.
-        raise GmailTimeoutError(_TIMEOUT_MESSAGE) from e
+        # Backstop only — _BudgetHttp.request already translates a stalled socket at the
+        # transport frame. This catches a TimeoutError raised anywhere else in the stack,
+        # and assumes the request WAS in flight because that is the conservative reading
+        # for a write. Disjoint from RefreshError either way, so a timeout can never reach
+        # mark_broken: a stalled request says nothing about whether the credential is good.
+        raise GmailTimeoutError(_TIMEOUT_MESSAGE, started=True) from e
     finally:
         try:
             service.close()
