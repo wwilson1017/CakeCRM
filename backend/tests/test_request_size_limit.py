@@ -313,34 +313,97 @@ def test_each_ceiling_is_exactly_its_feature_cap_plus_the_envelope():
         )
 
 
+#: Deliberately unbounded, with the reason. The assistant's legitimate maximum is
+#: MAX_FILES x MAX_FILE_SIZE = 50 MB against the same 64 MB backstop, so the global ceiling
+#: is already the tight one there and a row would only restate it.
+_EXEMPT_UPLOAD_ROUTES = {"/api/assistant/chat/upload"}
+
+
+def _upload_routes() -> list[str]:
+    """Every mounted route that accepts a file, read from FastAPI's own dependency graph.
+
+    `dependant.body_params` rather than the endpoint's `__annotations__`: the annotation
+    string misses `list[UploadFile]`, a `bytes = File(...)` parameter, and anything supplied
+    through a dependency — each of which is a real upload the guard would wave through.
+    Body-bearing methods, not just POST, since a PUT/PATCH upload spools identically.
+    """
+    found = []
+    for route in main.app.routes:
+        methods = getattr(route, "methods", set()) or set()
+        if not methods & {"POST", "PUT", "PATCH"}:
+            continue
+        dependant = getattr(route, "dependant", None)
+        params = getattr(dependant, "body_params", []) if dependant else []
+        takes_upload = any(
+            "UploadFile" in str(getattr(p.field_info, "annotation", "")) for p in params
+        )
+        if takes_upload:
+            found.append(getattr(route, "path", ""))
+    return found
+
+
+def test_the_upload_route_detector_sees_the_known_uploads():
+    """The guard below is only as good as this detector, and a detector that quietly stops
+    matching turns it into a permanent green. Pin what it must find."""
+    found = set(_upload_routes())
+    assert {
+        "/api/crm/chatter/note/{note_id}/attachments",
+        "/api/crm/import",
+        "/api/crm/smart-import/parse",
+        "/api/branding/logo",
+        "/api/assistant/chat/upload",  # list[UploadFile] — missed by an annotation scan
+    } <= found, f"the upload detector stopped seeing known upload routes; found {found}"
+    # ...and it must not simply return everything.
+    assert "/api/crm/deals/bulk-move" not in found
+
+
 def test_every_upload_route_is_bounded_below_the_backstop():
     """The table's real contract, stated as a property rather than a list.
 
-    An upload route left out of the table silently admits 64 MB — which is exactly the bug
-    #127 fixed, so a NEW upload route must not be able to reintroduce it unnoticed. Every
-    route taking an UploadFile is enumerated from the app itself; the one deliberate
-    exemption is the assistant's, whose 50 MB legitimate maximum is already close to the
-    backstop.
+    An upload route left out of the table silently admits 64 MB — exactly the bug #127
+    fixed — so a NEW upload route must not be able to reintroduce it unnoticed.
     """
-    exempt = {"/api/assistant/chat/upload", "/api/assistant/chat"}
-
-    unbounded = []
-    for route in main.app.routes:
-        path = getattr(route, "path", "")
-        if "POST" not in getattr(route, "methods", set()) or path in exempt:
-            continue
-        endpoint = getattr(route, "endpoint", None)
-        annotations = getattr(endpoint, "__annotations__", {}) or {}
-        takes_upload = any(
-            "UploadFile" in str(annotation) for annotation in annotations.values()
-        )
-        if not takes_upload:
-            continue
-        if main._request_limit_for(_concrete(path)) >= main.MAX_REQUEST_BYTES:
-            unbounded.append(path)
+    unbounded = [
+        path
+        for path in _upload_routes()
+        if path not in _EXEMPT_UPLOAD_ROUTES
+        and main._request_limit_for(_concrete(path)) >= main.MAX_REQUEST_BYTES
+    ]
 
     assert not unbounded, (
         f"upload route(s) with no per-route ceiling, so they admit {main.MAX_REQUEST_BYTES} "
         f"bytes before their own cap can refuse: {unbounded}. Add a row to "
-        f"main._ROUTE_REQUEST_LIMITS, or add the path to this test's `exempt` set with a reason."
+        f"main._ROUTE_REQUEST_LIMIT_SPECS, or add the path to _EXEMPT_UPLOAD_ROUTES "
+        f"with a reason."
     )
+
+
+def test_a_trailing_slash_does_not_reach_the_parser(attachment_client, monkeypatch):
+    """Two reviewers disagreed about whether `redirect_slashes` opens a hole here, so the
+    answer is pinned rather than remembered.
+
+    The compiled patterns are end-anchored and carry no optional slash, so
+    `/note/7/attachments/` matches no row. It also reaches no endpoint: the router answers
+    with a 307 before any body is parsed, and the redirect target is the canonical path,
+    which IS bounded. A redirect is not a bypass.
+    """
+    parsed = []
+    real_parse = formparsers.MultiPartParser.parse
+
+    async def counting_parse(self, *a, **k):
+        parsed.append(1)
+        return await real_parse(self, *a, **k)
+
+    monkeypatch.setattr(formparsers.MultiPartParser, "parse", counting_parse)
+
+    oversized = attachment_service.MAX_ATTACHMENT_BYTES + main.MULTIPART_ENVELOPE_BYTES + 1
+    body = {"file": ("f.bin", b"x" * oversized)}
+
+    r = attachment_client.post(ATTACHMENT_PATH + "/", files=body, follow_redirects=False)
+    assert r.status_code == 307
+    assert parsed == []
+
+    # Followed, it lands on the bounded path and is refused there — still unparsed.
+    r = attachment_client.post(ATTACHMENT_PATH + "/", files=body, follow_redirects=True)
+    assert r.status_code == 413
+    assert parsed == []
