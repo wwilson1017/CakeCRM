@@ -12,6 +12,7 @@ import asyncio
 import contextvars
 import logging
 import os
+import re
 import uuid as _uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -31,6 +32,7 @@ from core.auth import router as auth_router
 from core.auth_2fa import router as auth_2fa_router
 from core.config import settings
 from core.storage import atomic_write
+from crm import attachment_service
 from crm.gtd_router import router as gtd_router
 from crm.router import router as crm_router
 from crm.todo_capture import router as todo_capture_router
@@ -203,13 +205,43 @@ app = FastAPI(
 # as they stream, which is real machinery for a case no browser produces.
 MAX_REQUEST_BYTES = 64 * 1024 * 1024
 
+# Room for the multipart envelope around one file part: the boundary pair, the
+# Content-Disposition (including a filename the client may send longer than the 120 bytes
+# the service will store), the part's Content-Type, and the CRLFs. Deliberately generous —
+# it is headroom on a rejection threshold, not a budget anyone spends.
+MULTIPART_ENVELOPE_BYTES = 64 * 1024
+
+# Routes whose legitimate maximum is far below the global ceiling get their own, tighter
+# one — because for a multipart body the global ceiling is the ONLY thing standing between
+# a caller and a full spool-to-disk plus parse (see above: the route's own bounded read
+# runs too late). #57 left chatter attachments admitting 64 MB to reject at 10 MB; this
+# closes that to the smallest number that still clears a real 10 MB upload.
+#
+# First match wins, falling back to MAX_REQUEST_BYTES. The note id is matched as `\d+` so
+# only the real route is covered — a near-miss path is left to the global ceiling rather
+# than silently given a limit meant for something else.
+_ROUTE_REQUEST_LIMITS: tuple[tuple[re.Pattern[str], int], ...] = (
+    (
+        re.compile(r"^/api/crm/chatter/note/\d+/attachments/?$"),
+        attachment_service.MAX_ATTACHMENT_BYTES + MULTIPART_ENVELOPE_BYTES,
+    ),
+)
+
+
+def _request_limit_for(path: str) -> int:
+    """The Content-Length ceiling admitting `path`, tightest applicable one first."""
+    for pattern, limit in _ROUTE_REQUEST_LIMITS:
+        if pattern.match(path):
+            return limit
+    return MAX_REQUEST_BYTES
+
 
 @app.middleware("http")
 async def request_size_limit_middleware(request: Request, call_next):
     declared = request.headers.get("content-length")
     if declared:
         try:
-            if int(declared) > MAX_REQUEST_BYTES:
+            if int(declared) > _request_limit_for(request.url.path):
                 return JSONResponse(
                     status_code=413,
                     content={"detail": "Request too large."},

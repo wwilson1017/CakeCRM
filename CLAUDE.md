@@ -609,7 +609,27 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   64 MB middleware backstop (Content-Length only) that runs before the body is consumed.
   It is a disk backstop, not a feature limit, so it must stay above the largest legitimate
   request (an assistant upload: 5 × 10 MB); a test pins that ordering, and another pins the
-  spool-before-dependencies behaviour that makes middleware the only workable layer. `crm_chatter_attachments` is the second CRM table
+  spool-before-dependencies behaviour that makes middleware the only workable layer.
+  **That backstop is not an admission limit, and #127 split the two.** A disk backstop
+  sized for the app's largest route is 6.4× what a chatter attachment may be, so everything
+  from 10 MB to 64 MB was admitted, spooled and parsed before the route's bounded read
+  refused it — the cheap outer gate the upload never had. `main._ROUTE_REQUEST_LIMITS` is
+  therefore a first-match-wins path-pattern → ceiling table consulted by the SAME
+  middleware (`_request_limit_for`), giving that one route
+  `MAX_ATTACHMENT_BYTES + MULTIPART_ENVELOPE_BYTES` and leaving every other path on the
+  global ceiling. It lives in the existing middleware rather than a `Depends` guard or a
+  second middleware for the reason the paragraph above already establishes — middleware is
+  the only layer that runs before the body is consumed — and the note id is matched as
+  `\d+` so a near-miss path falls back to the backstop instead of inheriting a limit meant
+  for something else. The per-route ceiling owes the same "clears the feature limit"
+  assertion the global one does, in both directions (above `MAX_ATTACHMENT_BYTES`, below
+  `MAX_REQUEST_BYTES`), and its headline test asserts the **parser never ran** rather than
+  merely a 413 — the route has always 413'd, so a status-only assertion would pass against
+  the bug. **Adding an upload route means adding its row here**, or it silently admits
+  64 MB. Unchanged and deliberate: a **chunked** body declaring no Content-Length still
+  slips both ceilings and is caught only by the route's `read(cap + 1)` — bounded in
+  memory, still spooled — because counting bytes as they stream stays "real machinery for
+  a case no browser produces". `crm_chatter_attachments` is the second CRM table
   with a **real FK** (`crm_chatter ON DELETE CASCADE`), which is the whole lifecycle
   design: `delete_contact`/`delete_company` need NO new code, and the FK means the table
   MUST ride BOTH `_truncate_all` statements (Postgres refuses to truncate a referenced
