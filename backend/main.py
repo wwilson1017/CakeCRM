@@ -251,7 +251,8 @@ _ROUTE_REQUEST_LIMITS: tuple[tuple[re.Pattern[str], int], ...] = tuple(
 
 
 def _request_limit_for(path: str) -> int:
-    """The Content-Length ceiling admitting `path`, tightest applicable one first."""
+    """The Content-Length ceiling admitting `path`: the first matching row, in declaration
+    order. Nothing sorts by tightness, so overlapping rows resolve by position."""
     for pattern, limit in _ROUTE_REQUEST_LIMITS:
         if pattern.match(path):
             return limit

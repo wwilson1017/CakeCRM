@@ -614,8 +614,9 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   sized for the app's largest route is 6.4× what a chatter attachment may be — and 32-64×
   what the logo and CSV-import routes accept — so everything between each route's real cap
   and 64 MB was admitted, spooled and parsed before that route's bounded read refused it:
-  the cheap outer gate none of these uploads had. `main._ROUTE_REQUEST_LIMITS` is therefore
-  a first-match-wins path-pattern → ceiling table consulted by the SAME middleware
+  the cheap outer gate none of these uploads had. `main._ROUTE_REQUEST_LIMIT_SPECS` (the
+  hand-edited table; `_ROUTE_REQUEST_LIMITS` is its compiled derivative) is therefore
+  a first-match-wins path-template → ceiling table consulted by the SAME middleware
   (`_request_limit_for`), sizing **each** upload route at its own feature limit plus
   `MULTIPART_ENVELOPE_BYTES` and leaving every other path on the global ceiling. It lives
   in the existing middleware rather than a `Depends` guard or a second middleware for the
@@ -643,11 +644,21 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   it pass with the table emptied, since the request then simply hit the global ceiling
   instead; the mounted-route guard asserts the table is **non-empty** before looping, since
   a `for` over an empty table passes while checking nothing; and
-  `test_every_upload_route_is_bounded_below_the_backstop` enumerates every `UploadFile`
+  `test_every_upload_route_is_bounded_below_the_backstop` enumerates every file-taking
   route from the app itself, so **a new upload route that forgets its row fails CI** rather
-  than silently admitting 64 MB. A fourth pins each row's exact `feature cap + envelope`
-  arithmetic, because a wrong VALUE (a row at 63 MB) satisfies every structural guard while
-  reopening nearly the whole window. Unchanged and deliberate: a **chunked** body declaring no
+  than silently admitting 64 MB. That last one is only as good as its detector, so the
+  detector reads FastAPI's dependency graph via `get_flat_dependant` +
+  `isinstance(field_info, params.File)` and carries its own synthetic self-test: the
+  obvious version — a string match for `UploadFile` on `route.dependant.body_params` —
+  silently misses `data: bytes = File(...)` (annotated `bytes`) and any file arriving
+  through a `Depends(...)` sub-dependency (`body_params` is not flattened), which are both
+  ordinary FastAPI and would have been waved through green. A fourth test pins each row's
+  exact `feature cap + envelope` arithmetic, because a wrong VALUE (a row at 63 MB)
+  satisfies every structural guard while reopening nearly the whole window. Two of these
+  are pinned at the MIDDLEWARE rather than at the helper, which is not a stylistic
+  preference: a root_path test that calls `_request_limit_for(get_route_path(...))` itself
+  passes no matter what the middleware feeds in — reverting the fix left the file green.
+  Unchanged and deliberate: a **chunked** body declaring no
   Content-Length still slips both ceilings and is caught only by the route's
   `read(cap + 1)` — bounded in memory, still spooled — because counting bytes as they
   stream stays "real machinery for a case no browser produces". A *lying* Content-Length is

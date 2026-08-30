@@ -13,7 +13,17 @@ import re
 import pytest
 import starlette.formparsers as formparsers
 from conftest import fake_admin
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+    params as fastapi_params,
+)
+from fastapi.dependencies.utils import get_flat_dependant
 from fastapi.testclient import TestClient
 from starlette._utils import get_route_path
 
@@ -211,20 +221,56 @@ def test_any_id_the_router_accepts_is_bounded(note_id):
 
 
 def test_a_root_path_prefix_does_not_lift_the_ceiling():
-    """Behind a path-prefixing proxy the raw ASGI path carries a prefix the compiled
-    patterns don't have, while the ROUTER matches the stripped path — so reading
-    `request.url.path` would reach the endpoint with the ceiling silently back at 64 MB."""
+    """The mechanism: the stripped path is bounded, the raw one is not.
+
+    This pins the two path strings only. It deliberately does NOT stand alone — see the
+    middleware-level test below, without which reverting the fix stays CI-green.
+    """
     scope = {
         "type": "http",
         "path": "/cakecrm/api/crm/chatter/note/7/attachments",
         "root_path": "/cakecrm",
     }
-    limit = main._request_limit_for(get_route_path(scope))
-    assert limit < main.MAX_REQUEST_BYTES
-
+    assert main._request_limit_for(get_route_path(scope)) < main.MAX_REQUEST_BYTES
     # ...and the un-stripped path is exactly what would have gone wrong, which is why the
     # middleware must not use it.
     assert main._request_limit_for(scope["path"]) == main.MAX_REQUEST_BYTES
+
+
+def test_the_middleware_strips_root_path_before_matching(monkeypatch):
+    """The WIRING, which the pure-function test above cannot observe.
+
+    That test calls `_request_limit_for(get_route_path(...))` itself, so it passes no matter
+    which path string the middleware actually feeds in — swapping the middleware back to
+    `request.url.path` left the whole file green. This drives a real request through a
+    root_path-mounted app instead, so the regression fails here.
+    """
+    parsed = []
+    real_parse = formparsers.MultiPartParser.parse
+
+    async def counting_parse(self, *a, **k):
+        parsed.append(1)
+        return await real_parse(self, *a, **k)
+
+    monkeypatch.setattr(formparsers.MultiPartParser, "parse", counting_parse)
+
+    app = FastAPI(root_path="/cakecrm")
+    app.middleware("http")(main.request_size_limit_middleware)
+
+    @app.post("/api/crm/chatter/note/{note_id}/attachments")
+    def upload(note_id: int, file: UploadFile = File(...), user=Depends(get_current_user)):
+        return {"n": len(file.file.read())}
+
+    app.dependency_overrides[get_current_user] = fake_admin
+
+    oversized = attachment_service.MAX_ATTACHMENT_BYTES + main.MULTIPART_ENVELOPE_BYTES + 1
+    r = TestClient(app, root_path="/cakecrm").post(
+        "/cakecrm/api/crm/chatter/note/7/attachments",
+        files={"file": ("f.bin", b"x" * oversized)},
+    )
+
+    assert r.status_code == 413
+    assert parsed == []
 
 
 def test_a_non_numeric_id_does_not_reach_the_parser(attachment_client, monkeypatch):
@@ -319,32 +365,41 @@ def test_each_ceiling_is_exactly_its_feature_cap_plus_the_envelope():
 _EXEMPT_UPLOAD_ROUTES = {"/api/assistant/chat/upload"}
 
 
-def _upload_routes() -> list[str]:
-    """Every mounted route that accepts a file, read from FastAPI's own dependency graph.
+def _route_takes_upload(route) -> bool:
+    """Whether `route` accepts a file, asked of FastAPI's own dependency graph.
 
-    `dependant.body_params` rather than the endpoint's `__annotations__`: the annotation
-    string misses `list[UploadFile]`, a `bytes = File(...)` parameter, and anything supplied
-    through a dependency — each of which is a real upload the guard would wave through.
+    Two deliberate choices, each because the obvious version has a blind spot that leaves
+    a real upload route undetected while the guard reports green:
+
+    * `get_flat_dependant`, not `route.dependant` — `body_params` is NOT flattened, so an
+      `UploadFile` supplied through a `Depends(...)` sub-dependency lives on the
+      sub-dependant and is invisible from the top.
+    * `isinstance(field_info, params.File)`, not a string match on the annotation — the
+      documented `data: bytes = File(...)` idiom annotates as `bytes`, so an annotation
+      scan misses it entirely. `params.File` is the marker FastAPI itself keys on, which
+      makes the test annotation-independent.
+    """
+    flat = get_flat_dependant(route.dependant)
+    return any(isinstance(p.field_info, fastapi_params.File) for p in flat.body_params)
+
+
+def _upload_routes() -> list[str]:
+    """Every mounted route that accepts a file.
+
     Body-bearing methods, not just POST, since a PUT/PATCH upload spools identically.
     """
-    found = []
-    for route in main.app.routes:
-        methods = getattr(route, "methods", set()) or set()
-        if not methods & {"POST", "PUT", "PATCH"}:
-            continue
-        dependant = getattr(route, "dependant", None)
-        params = getattr(dependant, "body_params", []) if dependant else []
-        takes_upload = any(
-            "UploadFile" in str(getattr(p.field_info, "annotation", "")) for p in params
-        )
-        if takes_upload:
-            found.append(getattr(route, "path", ""))
-    return found
+    return [
+        getattr(route, "path", "")
+        for route in main.app.routes
+        if (getattr(route, "methods", set()) or set()) & {"POST", "PUT", "PATCH"}
+        and getattr(route, "dependant", None) is not None
+        and _route_takes_upload(route)
+    ]
 
 
 def test_the_upload_route_detector_sees_the_known_uploads():
     """The guard below is only as good as this detector, and a detector that quietly stops
-    matching turns it into a permanent green. Pin what it must find."""
+    matching turns it into a permanent green. Pin what it must find in the REAL app."""
     found = set(_upload_routes())
     assert {
         "/api/crm/chatter/note/{note_id}/attachments",
@@ -355,6 +410,57 @@ def test_the_upload_route_detector_sees_the_known_uploads():
     } <= found, f"the upload detector stopped seeing known upload routes; found {found}"
     # ...and it must not simply return everything.
     assert "/api/crm/deals/bulk-move" not in found
+
+
+def test_the_upload_route_detector_flags_every_upload_shape():
+    """The detector's self-test on SYNTHETIC routes, per the repo's guard convention: cases
+    it must flag, and near-miss cases it must not.
+
+    The two `must flag` shapes below are exactly the ones an annotation scan of
+    `route.dependant` waves through, and both are ordinary FastAPI — a plain `bytes` file
+    parameter and a shared file-validator dependency, which is the natural refactor once
+    there are several upload routes.
+    """
+    probe = FastAPI()
+
+    def file_dep(inner: UploadFile = File(...)) -> UploadFile:
+        return inner
+
+    @probe.post("/must-flag/plain")
+    def _plain(file: UploadFile = File(...)): ...
+
+    @probe.post("/must-flag/as-bytes")
+    def _as_bytes(data: bytes = File(...)): ...
+
+    @probe.post("/must-flag/via-depends")
+    def _via_depends(f=Depends(file_dep)): ...
+
+    @probe.put("/must-flag/put")
+    def _put(file: UploadFile = File(...)): ...
+
+    @probe.post("/must-not/form-only")
+    def _form_only(name: str = Form(...)): ...
+
+    @probe.post("/must-not/json")
+    def _json(name: str): ...
+
+    @probe.get("/must-not/get")
+    def _get(): ...
+
+    flagged = {
+        route.path
+        for route in probe.routes
+        if (getattr(route, "methods", set()) or set()) & {"POST", "PUT", "PATCH"}
+        and getattr(route, "dependant", None) is not None
+        and _route_takes_upload(route)
+    }
+    must_flag = {
+        "/must-flag/plain",
+        "/must-flag/as-bytes",
+        "/must-flag/via-depends",
+        "/must-flag/put",
+    }
+    assert flagged == must_flag, f"detector flagged {flagged}, expected exactly {must_flag}"
 
 
 def test_every_upload_route_is_bounded_below_the_backstop():
