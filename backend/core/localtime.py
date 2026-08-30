@@ -12,7 +12,7 @@ date the same todo is rendered against.
 """
 
 import os
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 
@@ -40,3 +40,27 @@ def today_local() -> date:
     ``todayStr()`` derives it from local date parts for the same reason.
     """
     return now_local().date()
+
+
+def local_day_bounds(day: date | None = None) -> tuple[datetime, datetime]:
+    """``[start, next_start)`` for one local calendar day, as aware instants.
+
+    For querying a TIMESTAMPTZ column by local calendar day (issue #130's Today
+    panel reads ``reminders.due_at`` this way). Computed in Python rather than with
+    SQL's ``AT TIME ZONE`` so ``zoneinfo`` stays the single timezone authority:
+    Postgres ships its own tz database, and two copies of the same rule are exactly
+    how a boundary drifts apart.
+
+    Built from calendar fields rather than ``start + 24h``, so a DST day is honestly
+    23 or 25 hours long. The zone is read ONCE — ``tz()`` re-reads the environment on
+    every call, and a day whose two ends came from different zones is not a day.
+
+    Pass ``day`` explicitly when the caller already decided which day it is: reading
+    the clock a second time can straddle midnight and bound a different day than the
+    one the rest of the request is about.
+    """
+    zone = tz()
+    d = day if day is not None else datetime.now(zone).date()
+    start = datetime.combine(d, time.min, tzinfo=zone)
+    end = datetime.combine(d + timedelta(days=1), time.min, tzinfo=zone)
+    return start, end

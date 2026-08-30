@@ -6,8 +6,10 @@ import { ActivityTimeline } from './components/ActivityTimeline';
 import { DealForm } from './components/DealForm';
 import { DealDetailSheet } from './components/DealDetailSheet';
 import { StatCard } from './components/StatCard';
+import { TodayPanel } from './components/TodayPanel';
 import { WeeklyTouchesCard } from './components/WeeklyTouchesCard';
 import { STAGE_COLORS, STAGE_ORDER } from './constants';
+import { stageWriteRequest } from './dealStageWrite';
 import { WarmHalo } from '../shared/WarmHalo';
 import { useIsMobile } from '../shared/useIsMobile';
 import { LoadError } from '../shared/LoadError';
@@ -44,8 +46,9 @@ export function CrmDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [selectedDeal, setSelectedDeal] = useState<CrmDeal | null>(null);
   const [editDeal, setEditDeal] = useState<CrmDeal | null>(null);
-  // Bumped by reload() to refetch the weekly-touches card alongside the rest.
-  const [touchesKey, setTouchesKey] = useState(0);
+  // Bumped by reload() to refetch the self-fetching cards alongside the rest.
+  // Two consumers now: WeeklyTouchesCard (#76) and TodayPanel (#130).
+  const [cardRefreshKey, setCardRefreshKey] = useState(0);
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   // Monotonic id so a slow in-flight analytics request can't overwrite a newer
@@ -64,11 +67,12 @@ export function CrmDashboardPage() {
   function reload() {
     // refresh after a mutation; stale data beats a blank page. Refetches BOTH
     // dashboard and analytics so win/loss, activity, and staleness stay current,
-    // and bumps touchesKey so the weekly-touches card refetches with them —
-    // otherwise logging an activity here updates every panel except that one.
+    // and bumps cardRefreshKey so the cards that fetch their own data — Weekly
+    // Touches and the Today panel — refetch with them; otherwise logging an
+    // activity here would update every panel except those two.
     api<CrmDashboard>('/api/crm/dashboard').then(setData).catch(() => {});
     loadAnalytics();
-    setTouchesKey(k => k + 1);
+    setCardRefreshKey(k => k + 1);
   }
 
   function openDeal(id: number) {
@@ -81,11 +85,12 @@ export function CrmDashboardPage() {
       .catch(() => { toast.error('Could not open that deal — it may have been deleted.'); loadAnalytics(); });
   }
 
-  async function updateDealStage(deal: CrmDeal, stage: string) {
+  async function updateDealStage(deal: CrmDeal, stage: string, lostReason?: string) {
     try {
-      await api(`/api/crm/deals/${deal.id}`, {
-        method: 'PUT', body: JSON.stringify({ stage }),
-      });
+      // `lostReason` is present only for a Mark Lost taken through the reason dialog,
+      // which routes to the mark-lost verb instead of the plain stage PUT (issue #128).
+      const { path, init } = stageWriteRequest(deal.id, stage, lostReason);
+      await api(path, init);
       setSelectedDeal(null);
       reload();
     } catch (err) {
@@ -159,6 +164,14 @@ export function CrmDashboardPage() {
         </h1>
       </div>
 
+      {/* What needs you today (issue #130), above the stat row: the page's one
+          "do this now" surface. Keyless, and self-hiding while it has nothing to say. */}
+      <TodayPanel
+        refreshKey={cardRefreshKey}
+        wrapperStyle={{ padding: `0 ${px} 18px`, position: 'relative', zIndex: 2 }}
+        onMutated={reload}
+      />
+
       {/* Parity stat row (issue #76 — cake_os DashboardTab's four cards). Built from
           the dashboard payload ALONE, so it survives an analytics fetch failure; the
           Snapshot below needs /api/crm/analytics and vanishes without it, which is
@@ -229,7 +242,7 @@ export function CrmDashboardPage() {
           own padding — an empty wrapper here would leave a mystery gap on the page
           it is supposed to be invisible from. */}
       <WeeklyTouchesCard
-        refreshKey={touchesKey}
+        refreshKey={cardRefreshKey}
         wrapperStyle={{ padding: `6px ${px} 22px`, position: 'relative', zIndex: 2 }}
         // issue #56: the sheet carries the per-event evidence behind each touch count,
         // which is the drill-down #76 deferred to this issue.

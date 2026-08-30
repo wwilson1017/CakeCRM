@@ -12,6 +12,8 @@ import { AiTouchDetail } from './AiTouchDetail';
 import { ProvenanceBadge } from './ProvenanceBadge';
 import { useProvenance } from '../useProvenance';
 import { CustomFieldsSection } from './CustomFieldsSection';
+import { LostReasonModal } from './LostReasonModal';
+import { OwnerName } from './OwnerName';
 import { usePublishActiveRecord } from '../RecordContext';
 
 interface DealDetailSheetProps {
@@ -19,7 +21,14 @@ interface DealDetailSheetProps {
   isMobile: boolean;
   onClose: () => void;
   onEdit: (deal: CrmDeal) => void;
-  onStageChange: (deal: CrmDeal, stage: string) => void;
+  /** `lostReason` is present ONLY for a Mark Lost taken through the reason dialog — a
+   *  string, possibly empty. Every other move leaves it undefined, which is what tells the
+   *  host to use the plain stage PUT rather than the mark-lost verb (see dealStageWrite).
+   *
+   *  May return a promise; the sheet awaits it to keep the close-out buttons disabled for
+   *  the duration. A host that resolves synchronously (Pipeline, which closes the sheet
+   *  itself) is unaffected. */
+  onStageChange: (deal: CrmDeal, stage: string, lostReason?: string) => void | Promise<void>;
   /** A deal was un-archived here (issue #83). Receives the row the server returned so the
    *  host can patch it in place — a silent refetch can fail invisibly, which would leave
    *  the board showing a deal as archived after a restore that actually happened. */
@@ -57,11 +66,34 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
   // gating only these would buy a sub-second race at the cost of buttons that pop in after
   // the sheet opens. The worst outcome in that window is a refused write, not a bad one.
   const [archivedAt, setArchivedAt] = useState<string | null | undefined>(deal.archived_at);
+  // Stage rides the same re-fetchable state as archivedAt above, and for a sharper reason
+  // than staleness: a close whose response was lost may ALREADY have committed. The catch
+  // path re-enables the close-out buttons, so reading the frozen prop would keep offering
+  // Mark Lost on a deal the server has already marked lost — and a retry appends a second
+  // "Deal lost —" note, since mark_deal_lost writes one on every call that finds the deal.
+  const [stage, setStage] = useState(deal.stage);
   const [restoring, setRestoring] = useState(false);
+  // Mark Lost opens the reason dialog instead of closing the deal immediately (issue #128).
+  const [askingLostReason, setAskingLostReason] = useState(false);
+  // A close-out is in flight. Needed because the two hosts dismiss differently: Pipeline
+  // clears its selection synchronously, but CrmDashboardPage awaits the write and KEEPS the
+  // sheet open on failure so the user can retry — so without this the buttons stay live
+  // during the request, and a second Mark Lost writes a second "Deal lost —" timeline note
+  // (mark_deal_lost appends one on every call that finds the deal, no-op write included).
+  // The modal's own latch cannot cover this: it unmounts as soon as the first one confirms.
+  const [closing, setClosing] = useState(false);
+  // Disable the close-out pair while EITHER a write is in flight or the reason dialog
+  // is open. The dialog half is defence in depth behind the modal's focus trap: the
+  // sheet stays a live DOM subtree underneath, and Mark Won sitting one stray Tab away
+  // from an open Mark Lost dialog is a wrong write, not just an a11y lapse.
+  const closeOutDisabled = closing || askingLostReason;
   const { byField, confirm, confirming } = useProvenance('deal', deal.id);
   const badge = (f: string) => (
     <ProvenanceBadge prov={byField[f]} onConfirm={() => confirm(f)} confirming={confirming === f} />
   );
+  // Whether this sheet is still on screen when an awaited write settles — see closeOut.
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
   const reqRef = useRef(0);
   const loadDetail = useCallback(async () => {
     const reqId = ++reqRef.current;
@@ -72,6 +104,7 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
       setTouchCount(detail.ai_touch_count);
       setLeadScore(detail.lead_score);
       setArchivedAt(detail.archived_at);
+      setStage(detail.stage);
     } catch {
       // Non-fatal: the sheet still shows deal fields + chatter; leave activity as-is.
     }
@@ -97,6 +130,29 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
       // `restoring` stuck true would strand the button on "Restoring…" for any host that
       // keeps the sheet open.
       setRestoring(false);
+    }
+  }
+
+  // Close the deal out (issue #128). Awaits the host so both buttons stay `disabled` for
+  // the whole write — that attribute IS the re-entry guard, and it covers the modal path
+  // too, since the only way back into the dialog is the Mark Lost button.
+  //
+  // Resets on BOTH paths for the same reason `restoreDeal` does: the dashboard keeps this
+  // sheet open when the write fails, so a latched-true flag would leave the user unable to
+  // retry the close they just watched fail.
+  async function closeOut(toStage: string, lostReason?: string) {
+    setClosing(true);
+    try {
+      await onStageChange(deal, toStage, lostReason);
+    } finally {
+      setClosing(false);
+      // Still mounted means the host did NOT dismiss us — which for the dashboard host is
+      // its failure path (it swallows the error itself, so nothing rejects here). The
+      // outcome of that write is genuinely UNKNOWN: a dropped connection or a 5xx can
+      // arrive after the server already committed. So reconcile against the server before
+      // offering a retry — a close that did land re-reads as stage 'lost' and these
+      // buttons disappear, instead of inviting a second mark_deal_lost.
+      if (mountedRef.current) void loadDetail();
     }
   }
 
@@ -153,15 +209,25 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
         <AiTouchDetail dealId={deal.id} count={touchCount} />
 
         {deal.notes && (
-          <p style={{ fontSize: 14, color: INK_MUTE, marginBottom: 16, lineHeight: 1.5 }}>
+          <p style={{
+            fontSize: 14, color: INK_MUTE, marginBottom: 16, lineHeight: 1.5,
+            whiteSpace: 'pre-wrap',
+          }}>
             {deal.notes} {badge('notes')}
           </p>
         )}
 
         {/* Why the deal was lost (issue #22). Cleared automatically if the deal is
-            reopened, so this only ever shows on a currently-lost deal. */}
+            reopened, so this only ever shows on a currently-lost deal.
+            `pre-wrap` because #128 made the reason multi-line: this is the one surface
+            that shows it, so collapsing the newlines here would deliver half the feature
+            (the same defect the blueprint hit on note bodies). `deal.notes` above is a
+            multi-line textarea too and had the identical bug. */}
         {deal.lost_reason && (
-          <p style={{ fontSize: 13, color: INK_MUTE, marginBottom: 16, lineHeight: 1.5 }}>
+          <p style={{
+            fontSize: 13, color: INK_MUTE, marginBottom: 16, lineHeight: 1.5,
+            whiteSpace: 'pre-wrap',
+          }}>
             <span style={{ ...mono(10), color: INK_DIM, marginRight: 6 }}>LOST REASON</span>
             {deal.lost_reason} {badge('lost_reason')}
           </p>
@@ -198,6 +264,13 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
         )}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
+          {/* Rendered unconditionally, unlike every other row here (issue #128): an
+              unassigned owner is a real state, and hiding the row is what makes
+              "unassigned" indistinguishable from "not displayed". */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ ...mono(10), color: INK_DIM }}>Owner</span>
+            <OwnerName ownerId={deal.owner_id} />
+          </div>
           {deal.contact_name && (
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <span style={{ ...mono(10), color: INK_DIM }}>Contact</span>
@@ -269,21 +342,42 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
               one (`_classify_deal_update` raises → 400) and the caller's catch reports a
               generic failure, so these would be a dead end. Restore first. Edit stays —
               editing an archived deal's other fields is legal. */}
-          {!archivedAt && deal.stage !== 'won' && deal.stage !== 'lost' && (
+          {!archivedAt && stage !== 'won' && stage !== 'lost' && (
             <>
-              <button onClick={() => onStageChange(deal, 'won')} style={{
+              <button onClick={() => void closeOut('won')} disabled={closeOutDisabled} style={{
                 padding: '10px 16px', borderRadius: 6,
                 background: SAGE, color: ACCENT_INK,
-                border: 'none', fontWeight: 500, fontSize: 13, cursor: 'pointer',
+                border: 'none', fontWeight: 500, fontSize: 13,
+                cursor: closeOutDisabled ? 'default' : 'pointer',
+                opacity: closeOutDisabled ? 0.5 : 1,
                 flex: 1,
               }}>Mark Won</button>
-              <button onClick={() => onStageChange(deal, 'lost')} style={{
+              {/* Ask for the reason first (issue #128). `lost_reason` has no other human
+                  writer — it is excluded from _DEAL_USER_WRITABLE, so before this the
+                  field could be read on this very sheet but only ever written by the
+                  assistant. */}
+              <button onClick={() => setAskingLostReason(true)} disabled={closeOutDisabled} style={{
                 ...btnDanger,
                 padding: '10px 16px', borderRadius: 6, fontSize: 13,
+                cursor: closeOutDisabled ? 'default' : 'pointer',
+                opacity: closeOutDisabled ? 0.5 : 1,
               }}>Mark Lost</button>
             </>
           )}
         </div>
+
+        {askingLostReason && (
+          <LostReasonModal
+            dealTitle={deal.title}
+            onCancel={() => setAskingLostReason(false)}
+            onConfirm={reason => {
+              setAskingLostReason(false);
+              // Always a string, never undefined — that is what routes this to the
+              // mark-lost verb even when the rep left the box empty.
+              void closeOut('lost', reason);
+            }}
+          />
+        )}
       </div>
     </div>
   );

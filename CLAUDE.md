@@ -85,6 +85,81 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   falsely refuse a valid draft. The two-step thread fetch was evaluated and
   **declined** (it doubles common-case calls/latency/quota to bound memory only for rare
   long threads).
+  **The HTTP transport is ours since #64, and the issue's premise was wrong about why.**
+  It reported that `build("gmail","v1",credentials=creds,…)` left requests able to "block
+  indefinitely". Measured, a silent socket already could not: passing `credentials=` hands
+  transport construction to the SDK, whose `build_http()` applies
+  `socket.getdefaulttimeout()` if set and otherwise `DEFAULT_HTTP_TIMEOUT_SEC = 60`. Be
+  precise about what that bought, since the same precision applies to our own 20s: it is a
+  **socket-inactivity** timeout, bounding how long one read or connect may sit silent — not
+  total request duration, and not DNS. There was no aggregate budget of any kind.
+  The real defect was that **aggregate**, because one `call_gmail` fans out *sequentially*
+  with a fresh ceiling per request: `list_messages_op` is 1 × `messages.list` + 1 ×
+  `messages.get` **per message**, so `gmail_search(max_results=25)` is 26 requests — at one
+  60s stall each, **≈26 minutes** parked on one SSE turn (`engine.py` awaits `execute_tool`
+  with no `wait_for`), and a `gmail_scan` pass 51 requests ≈ 51 min. A per-request timeout
+  alone would not have fixed the reported symptom. Secondary, but the reason a value must be
+  *owned* rather than inherited: `build_http()` reads the process-global
+  `socket.setdefaulttimeout()` first, so any dependency could silently redefine Gmail's
+  timeout in either direction.
+  So `build()` now takes **`http=` and never `credentials=`** — the SDK treats them as
+  mutually exclusive and raises if given both — carrying `AuthorizedHttp` over a
+  `_BudgetHttp(httplib2.Http)` with an explicit `_HTTP_TIMEOUT_SECONDS = 20`. That 20s is a
+  **per-socket-op stall detector, not a total-duration cap**, so a large response that keeps
+  flowing is never cut off. `_BudgetHttp.request` additionally refuses to **start** a request
+  once the call's budget (`_CALL_BUDGET_SECONDS = 90`; `gmail_scan` passes its own
+  `_SCAN_CALL_BUDGET = 60`) is spent. **The gate is the INNER http, not a wrapper around
+  `AuthorizedHttp`, and that placement is load-bearing**: `AuthorizedHttp` builds its refresh
+  transport as `Request(self.http)`, so the token-refresh round-trip is gated too — an outer
+  wrapper would let it past entirely — and `build()` still receives a genuine
+  `AuthorizedHttp`, so the SDK's `get_credentials_from_http` (universe-domain resolution) and
+  every property proxy work with no delegation code. State the guarantee precisely: it covers
+  every top-level SDK request and every OAuth refresh, and because it gates request *starts*
+  the ceiling is the budget plus one request — a peer trickling bytes forever would defeat it,
+  which is out of threat model when the peer is Google's API.
+  `call_gmail` resolves an **absolute deadline before its own setup** (store read, decrypt,
+  `build()`), not after — that shared epoch is the whole reason `_SCAN_CALL_BUDGET +
+  _HTTP_TIMEOUT_SECONDS < _SCAN_HTTP_DEADLINE` means anything, since a budget starting after
+  setup would run from a later, unknown instant. A non-finite or non-positive budget is
+  refused rather than accepted: **NaN would disable the gate silently**, every comparison
+  against it being False.
+  A timeout raises **`GmailTimeoutError`, a plain `Exception`** — deliberately not a
+  `TimeoutError`/`OSError` subclass, so googleapiclient's `_retry_request` socket-error
+  handling can never retry it and multiply the wall clock the budget exists to bound. The
+  translation happens **in `_BudgetHttp.request` itself, not in `call_gmail`**: a raw
+  `TimeoutError` escaping the transport frame is visible to `_retry_request`, so translating
+  one level up would be too late (`call_gmail` keeps a backstop `except TimeoutError` anyway).
+  It never means a broken connection: disjoint from `RefreshError`, so it cannot reach
+  `store.mark_broken` (verified through the real SDK refresh path, not assumed — google-auth
+  wraps only `HttpLib2Error` into `TransportError`, so a stalled socket surfaces raw), and the
+  three executors return it **without `needs_reconnect`**.
+  **It carries `started`, because "retryable" is not one answer for a write.** `False` = the
+  budget refused before the socket was touched, so nothing reached Gmail and a retry is safe;
+  `True` = a socket stalled mid-flight, so the outcome is unknown — Gmail may have acted and
+  lost only the response. `gmail_create_draft` words its result off that flag rather than
+  claiming nothing happened, which would invite a duplicate draft. The OAuth callback keeps
+  its revoke-on-any-failure behavior — a deliberate, documented exception, since from its seat
+  a timeout is indistinguishable from a broken grant and reconnecting is one click.
+  `gmail_scan` **keeps** its daemon-worker + `_inflight` + join-deadline machinery, now as a
+  backstop rather than as a workaround for a missing timeout. Its budget sitting inside the
+  join deadline (`_SCAN_CALL_BUDGET + _HTTP_TIMEOUT_SECONDS < _SCAN_HTTP_DEADLINE`, pinned by
+  test) makes the abandoned-worker leak unreachable for the **common single-stall** case —
+  **necessary, not sufficient**, and the machinery stays precisely because of the gap: the
+  timeout bounds one socket *operation*, so a request stalling separately on connect, TLS and
+  read can still outlast the join, as can a DNS stall or CPU starvation. The docstrings now say
+  plainly that a worker abandoned for those reasons may still be unbounded and that `_inflight`
+  caps concurrency without guaranteeing recovery.
+  `httplib2` and `google-auth-httplib2` moved from incidental transitives to **pinned direct
+  dependencies** (the `pillow` precedent — a transitive extra is not a dependency contract).
+  All of it is **hermetically tested against the real SDK**, which retires the issue's stated
+  reason for deferral ("cannot be verified in the automation environment"): Gmail uses static
+  discovery so `build()` makes no network call, `backend/tests/test_gmail_transport.py` drives
+  the real `build()` and the real ops with a fake wire installed *below* the gate (never
+  monkeypatching the gate under test), and a loopback black-hole socket proves a genuine
+  read-hang is bounded. A parity test pins that dropping `credentials=` loses nothing for an
+  authorized-user credential (`requires_scopes` is False, so the SDK's scoping step is the
+  identity; the JWT branch is service-account-only) — an invariant rather than an argument,
+  because a service-account credential would *not* be equivalent.
 - **Multi-provider AI** via the `AIProvider` ABC (Anthropic, OpenAI, Gemini, Ollama,
   Together). Never call a provider SDK directly from feature code. Cheap background
   AI work (touch counts, classification) uses the light tier via
@@ -148,6 +223,42 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `heartbeat.service._heartbeat_prompt`, which states plainly that everything a CRM
   tool returns is DATA the user or a third party typed, never instructions. Any future
   background-callable read should assume its payload can carry hostile text.
+  **Since #114 the allowlist is no longer derived from `writes` alone**, because
+  `writes:False` means "changes nothing", not "safe unattended": `background_allowlist()`
+  now subtracts `background.BACKGROUND_EXCLUDED_TOOLS`, which IS
+  `delimiters.UNTRUSTED_SOURCE_TOOLS` (the live external-account reads — today
+  `gmail_search`/`gmail_read_thread`) rather than a second hand-maintained list. For a
+  future *Gmail* reader that is automatic: `test_gmail_guard`'s existing pin fails CI
+  until the new tool is added to that set, and adding it excludes it here with no second
+  edit. **It is NOT automatic for a future non-Gmail external read** (some other
+  connector): the set stays a reviewed denylist, so such a tool is background-callable
+  until someone adds it. Deny-by-default would need per-tool background-safety metadata
+  on every def — a real design change, deliberately not built here; the rule for now is
+  that adding a connection-gated read means adding it to `UNTRUSTED_SOURCE_TOOLS`. The one-notification ceiling had held
+  *mechanically* while still being an exfiltration channel: the interactive engine answers
+  those reads with the power→normal taint, but an unattended turn has no analogue — nobody
+  reads the fence — so injected reminder/CRM text could steer it `gmail_search` →
+  `gmail_read_thread` → private mail inside the one permitted `notify_user` (web push +
+  Telegram). `_run_turn` ALSO clamps the caller-supplied `allowed_tools` by the same
+  subtraction, one line covering both enforcement points (advertisement and execution both
+  read that variable), so the exclusion is a property of the background *mode*, not of one
+  builder. It is deliberately narrow: the wider "reads + `notify_user`" ceiling is still
+  the CALLER's declaration, and a caller-supplied write still executes — which is what
+  `test_write_executes_without_confirmation` pins and what the write budget exists to
+  bound. Intersecting `_run_turn` with `background_allowlist()` to make that whole ceiling
+  mode-enforced was raised twice in review and **declined here**: it changes #6's designed
+  contract (the mode exists to let a caller permit a write) and is a decision for its own
+  issue, not a side effect of #114. What holds it today is that all three callers use the
+  builder, each pinned by a test — `test_heartbeat`'s two (added with #114) and
+  `test_proactive_service`'s. **Scope, stated precisely:** this
+  removes LIVE mailbox access only. Sender + subject that #17's deterministic `gmail_scan`
+  already wrote into `activity_log` stay readable through ordinary CRM reads
+  (`crm_get_activity_log`, `crm_dashboard`) — that is CRM data by design, and out of scope
+  per the issue's gate decision. So the accurate claim is "a background turn cannot
+  initiate a Gmail search or thread read", never "cannot see anything mail-derived".
+  Context-file reads stay background-callable (they are Baker's own notes — the
+  `_RECORDED_CONTEXT_MARKER` call), and `gmail_scan` itself is untouched: it never goes
+  through the assistant registry.
   The assistant has a **long-term memory + nightly dreaming**
   (landed #5, `backend/memory/` + `backend/dreaming/`, **pure-algorithmic — no AI
   calls**): temporal facts in Postgres (`memory_facts`, generated `tsvector` + GIN,
@@ -414,7 +525,55 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   #13 and #35 by linking contacts that are still `company_id IS NULL` with matching
   text. Unlike #13's it deliberately does **not** inherit company onto deals: `NULL`
   no longer unambiguously means "never set" (a user can clear a deal's company), and
-  no ingestion path creates deals anyway. User-defined **custom fields** (#19) add a
+  no ingestion path creates deals anyway.
+  **Inline quick-create** (#123) makes the deal form the first surface that can create a
+  linked record without leaving it: `frontend/src/crm/components/RecordCombobox.tsx` is a
+  generic server-searching picker with a `Create "<name>"…` row, and `DealForm` uses two of
+  them for Contact and Company. It **replaces** the "fetch the first 200 rows into a
+  `<select>`" pattern, and with it the capped-page hazard each form used to hand-patch: an
+  out-of-page link had no `<option>`, so the control rendered blank and read as *none* —
+  `DealForm` carried an append guard for the deal's own company and never had one for its
+  contact. The selected record's LABEL is now a prop seeded from `deal.contact_name` /
+  `deal.company_name`, so the display is correct by construction and both guards are gone.
+  **That makes the joined name a wire-format requirement, not a nicety:** any query whose
+  rows can reach this form must carry BOTH names or the picker renders empty for a link that
+  exists, reproducing the bug it replaced. `get_deal` and `get_pipeline` already did;
+  `get_dashboard_stats`' `top_deals` did **not**, and the dashboard hands its rows straight
+  to the deal sheet and on to `DealForm` — so #123 added the `companies` join there and
+  `test_top_deals_joins_the_company_name` pins it. The picker is deliberately NOT built on
+  `shared/search`: `SearchInput` has no listbox, and that module documents itself (in
+  `shared/search/index.ts`) as client-side-only over an already-loaded dataset, explicitly
+  disclaiming server-paginated contacts and companies. **Three corrections to that issue's own pointers, each verified:**
+  the search param is **`q`**, not the `?search=` it names (which `list_contacts` ignores, so
+  building against it ships a picker that always shows the unfiltered first page); `DealCreate`
+  has no free-text `company` field the way `ContactCreate` does, so a typed company must be
+  resolved to an id before the deal is saved; and `POST /companies` does **not** go through
+  the #35 resolver — it INSERTs unconditionally and surfaces a `uq_companies_name_ci`
+  collision as a 400. That last one is why **`POST /api/crm/companies/resolve`** exists: it
+  delegates to `resolve_or_create_company_ids` verbatim, so quick-create is get-or-create
+  (race-safe by construction, one normalizer owned by SQL) while the full New Company form
+  keeps its honest "already exists" error. Contact quick-create needs no new endpoint —
+  `POST /contacts` with a name already works. **The ownership split is deliberate**: the
+  contact is created with the name ONLY, so `_create_payload` assigns the caller, while the
+  company rides the resolver and is left unassigned — the rule
+  `test_auto_created_companies_are_left_unassigned` pins by reading that function's source.
+  The trimmed query is the single form used for BOTH searching and creating, which is what
+  closes the leading/trailing-whitespace duplicate hole for free. Reusable by design for
+  **#126** (ContactForm's company field), which is blocked on this and adopts the component
+  unchanged.
+  Three rules inside the picker are subtle enough to state, because each was a bug first:
+  **closing is not cancelling** — an outside click (the form's own Save button is one)
+  closes the popover but does NOT abandon an in-flight quick-create, since the record is
+  written either way, and `onBusyChange` lets `DealForm` refuse to submit underneath one
+  rather than saving a deal without the link that is about to exist; **Enter is swallowed
+  but does not select** until the user has typed or arrowed, because the list opens on focus
+  and there is no "nothing highlighted" state, so a habitual Enter in an already-linked
+  field would otherwise replace the link with whatever sorted first; and **display text and
+  match text are different things** (`getMatchText`), because the company picker decorates
+  an archived row `"Acme (archived)"` and matching on that would offer to create a duplicate
+  of the row directly above. The contact side's exact-match dedupe only sees the 20-row
+  page — companies are immune, resolving server-side — which is documented at
+  `PICKER_LIMIT` as an accepted single-install trade. User-defined **custom fields** (#19) add a
   two-table EAV (`crm_field_definitions` + `crm_field_values`) on contacts/companies/
   deals, managed in `/crm/settings`, rendered in the entity forms and detail pages, and
   exposed to the assistant via `crm_{get,set}_{contact,company,deal}_fields`;
@@ -582,7 +741,38 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   spelling (a test pins them in agreement). The service, the REST route and
   `crm_update_deal`/`crm_create_deal` stay permissive by design — this is interface
   honesty, not a data-integrity boundary; closes route to `crm_mark_deal_won`/`_lost`,
-  which *can* record a lost reason. Chatter now also attaches to
+  which *can* record a lost reason.
+  **A human can write that reason since #128**, through `POST /api/crm/deals/:id/mark-lost`
+  → `service.mark_deal_lost`. Before it, `lost_reason` rendered on the deal sheet but the
+  assistant was its only writer — `_DEAL_USER_WRITABLE` excludes the column, so a keyless
+  install could read a lost reason and never type one. The route delegates to the lifecycle
+  verb rather than widening that set, which is what preserves the invariant the exclusion
+  exists for: a reason still arrives only WITH the close, and can never be pasted onto a deal
+  that isn't lost. `mark_deal_lost` gained an `author_id` the route fills from
+  `get_current_user` — the generated "Deal lost —" chatter note is a human's typed prose, so
+  leaving it NULL would file a rep's own work as Unattributed (the assistant tool still omits
+  it, which stays correct for Phase A). The endpoint is chosen by the ACTION, not the text:
+  `crm/dealStageWrite.stageWriteRequest` (shared by `PipelinePage` and `CrmDashboardPage`, so
+  they cannot drift) routes to the verb whenever the Mark Lost dialog was used *even with an
+  empty reason*, because `PUT /deals/:id {stage:'lost'}` does not zero `probability` and
+  writes no note — a drag or bulk move still takes the plain PUT. `components/LostReasonModal`
+  reuses #57's `composerKeyAction`, inheriting its IME (`isComposing` off the NATIVE event)
+  and AltGr guards instead of the blueprint's weaker inline chord, and renders through a
+  **portal**: `DealDetailSheet`'s root sets `zIndex: 39` so the assistant launcher can float
+  above it, which establishes a stacking context no descendant can escape. It also holds a
+  synchronous submit-once latch, because `_write_deal_update` returns True for a no-op, so a
+  repeat submit would append a second note. The REST boundary **rejects** a reason past
+  `MAX_LOST_REASON` (422) where the service truncates — deliberately unlike `BulkDealMove`,
+  which declines a Pydantic cap because *its* service refuses with a renderable sentence;
+  silently dropping the tail of typed prose is data loss, not a refusal worth preserving.
+  **Owner is displayed since #128** too, via `components/OwnerName` on the deal sheet and the
+  contact/company detail pages. `useUsers().nameFor()` already resolved NULL to "Unassigned"
+  but only the pipeline facet chip consumed it, so an owner was editable and filterable yet
+  never *shown* — worse than the blueprint's blank-row bug. Those rows render
+  **unconditionally**, unlike every hide-when-blank neighbour: NULL owner is a real state
+  (#60) and a hidden row is what makes it unreadable as one, so a `{owner_id && …}` wrapper
+  reintroduces the bug. On `CompanyDetailPage` it is its own line rather than a `subline`
+  term, since that string is built by dropping blank fields. Chatter now also attaches to
   **companies** (zero-migration: `entity_type` is
   free TEXT), cleaned in `delete_company`.
   **Chatter notes take attachments** (#57, `backend/crm/attachment_service.py` +
@@ -611,7 +801,61 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   64 MB middleware backstop (Content-Length only) that runs before the body is consumed.
   It is a disk backstop, not a feature limit, so it must stay above the largest legitimate
   request (an assistant upload: 5 × 10 MB); a test pins that ordering, and another pins the
-  spool-before-dependencies behaviour that makes middleware the only workable layer. `crm_chatter_attachments` is the second CRM table
+  spool-before-dependencies behaviour that makes middleware the only workable layer.
+  **That backstop is not an admission limit, and #127 split the two.** A disk backstop
+  sized for the app's largest route is 6.4× what a chatter attachment may be — and 32-64×
+  what the logo and CSV-import routes accept — so everything between each route's real cap
+  and 64 MB was admitted, spooled and parsed before that route's bounded read refused it:
+  the cheap outer gate none of these uploads had. `main._ROUTE_REQUEST_LIMIT_SPECS` (the
+  hand-edited table; `_ROUTE_REQUEST_LIMITS` is its compiled derivative) is therefore
+  a first-match-wins path-template → ceiling table consulted by the SAME middleware
+  (`_request_limit_for`), sizing **each** upload route at its own feature limit plus
+  `MULTIPART_ENVELOPE_BYTES` and leaving every other path on the global ceiling. It lives
+  in the existing middleware rather than a `Depends` guard or a second middleware for the
+  reason the paragraph above already establishes — middleware is the only layer that runs
+  before the body is consumed.
+  **The table is keyed by the route's path TEMPLATE and compiled with Starlette's own
+  `compile_path`, and hand-writing those patterns instead is a bypass, not a style choice.**
+  A hand-written `\d+` for `{note_id}` reads as obviously correct and is wrong: `note_id:
+  int` is FastAPI **validation**, not routing, so the router compiles that parameter to
+  `[^/]+` and `/api/crm/chatter/note/abc/attachments` reaches the multipart parser, spools,
+  and only then returns 422 — under a `\d+` gate it drew the 64 MB backstop the whole table
+  exists to avoid. An admission pattern must cover everything the ROUTER accepts, not
+  everything the handler will go on to accept; deriving it from the template is what makes
+  that unrepresentable rather than merely fixed once. (An earlier revision of this work
+  shipped the `\d+` version and a test that asserted the bypass was correct behavior.) The
+  **assistant** upload route is deliberately absent: its legitimate 5 × 10 MB already sits
+  close to the 64 MB backstop, so a row would only restate it. #127 also gave
+  `branding/router.upload_logo` the repo-wide `read(cap + 1)` idiom — it was the one upload
+  route still doing an unbounded `await file.read()`, buffering the whole part before the
+  size check could refuse it.
+  Three properties are pinned, and the first two are pinned that way because the obvious
+  test does **not** fail against the bug: the headline test asserts the **parser never ran**
+  rather than merely a 413 (the routes have always 413'd) and sizes its body from the
+  FEATURE cap, never from `_request_limit_for` — sizing it off the function under test made
+  it pass with the table emptied, since the request then simply hit the global ceiling
+  instead; the mounted-route guard asserts the table is **non-empty** before looping, since
+  a `for` over an empty table passes while checking nothing; and
+  `test_every_upload_route_is_bounded_below_the_backstop` enumerates every file-taking
+  route from the app itself, so **a new upload route that forgets its row fails CI** rather
+  than silently admitting 64 MB. That last one is only as good as its detector, so the
+  detector reads FastAPI's dependency graph via `get_flat_dependant` +
+  `isinstance(field_info, params.File)` and carries its own synthetic self-test: the
+  obvious version — a string match for `UploadFile` on `route.dependant.body_params` —
+  silently misses `data: bytes = File(...)` (annotated `bytes`) and any file arriving
+  through a `Depends(...)` sub-dependency (`body_params` is not flattened), which are both
+  ordinary FastAPI and would have been waved through green. A fourth test pins each row's
+  exact `feature cap + envelope` arithmetic, because a wrong VALUE (a row at 63 MB)
+  satisfies every structural guard while reopening nearly the whole window. Two of these
+  are pinned at the MIDDLEWARE rather than at the helper, which is not a stylistic
+  preference: a root_path test that calls `_request_limit_for(get_route_path(...))` itself
+  passes no matter what the middleware feeds in — reverting the fix left the file green.
+  Unchanged and deliberate: a **chunked** body declaring no
+  Content-Length still slips both ceilings and is caught only by the route's
+  `read(cap + 1)` — bounded in memory, still spooled — because counting bytes as they
+  stream stays "real machinery for a case no browser produces". A *lying* Content-Length is
+  not a third hole: h11 delivers exactly the declared byte count to the app, so the
+  transport enforces the number the middleware trusted. `crm_chatter_attachments` is the second CRM table
   with a **real FK** (`crm_chatter ON DELETE CASCADE`), which is the whole lifecycle
   design: `delete_contact`/`delete_company` need NO new code, and the FK means the table
   MUST ride BOTH `_truncate_all` statements (Postgres refuses to truncate a referenced
@@ -925,6 +1169,62 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   way the old tab bar never did. `OwnerScopeToggle` is
   **deleted** — an Owner facet with an Unassigned bucket replaces it and can select any
   owner, hiding itself on a single-seat install the same way.
+- **The dashboard leads with a Today panel** (#130, `backend/crm/today_service.py` +
+  `GET /api/crm/dashboard/today` + `frontend/src/crm/{todayPanel.ts,components/TodayPanel.tsx}`):
+  ONE ranked list of what needs the viewer today, above the stat row, capped at 5 with a
+  "+N more today" expander. Pure SQL and pure Python — identical with zero AI providers.
+  The ladder is `1 starred · 2 RESERVED · 3 overdue · 4 reminders due today · 5 due today`;
+  **rank 2 is emitted by nothing** and is held for hot+stale deals (#125), so that
+  follow-up lands as an insertion rather than a renumbering of every rank below it.
+  **One clock, and that is the mechanism, not a convention:** `get_today()` reads
+  `gtd_common.today_local_str()` — the identical call `gtd_service.today_view()` makes —
+  and the reminder window is derived FROM that captured day via the new
+  `core.localtime.local_day_bounds()`, never a second clock read, so a request crossing
+  local midnight cannot bound tasks to one day and reminders to the next. Those bounds are
+  computed in Python rather than with SQL's `AT TIME ZONE` so `zoneinfo` stays the single
+  timezone authority (Postgres ships its own tz database, and two copies of one rule drift).
+  Building this exposed a real split it would otherwise have sat beside, so **#130 also
+  moved three UTC-day decisions onto the configured day** — `get_dashboard_stats`
+  (the "Overdue tasks" stat inches below the panel), `analytics_service.get_deal_health`
+  (whose comment cited the dashboard as precedent) and `proactive.collect_digest` (which
+  told a 6pm Central reader that tomorrow's tasks were due today). One defect, three
+  sibling sites, one sweep; Weekly Touches deliberately stays UTC. There were no existing
+  assertions to update — none of the three pinned the day at all, which is why the split
+  survived — so `test_crm_today.py` adds deterministic ones and keeps all three together,
+  because "is this task overdue" must not depend on which report asked.
+  **Owner scope is a panel-local Mine/Everyone control**, hidden on a single-seat install:
+  the issue named `OwnerScopeToggle`, but #77 deleted it and its replacement is a
+  list-page facet, wrong shape for a compact card. Mine sends `owner_id=<me>`, Everyone
+  omits the param (the `list_tasks` idiom — no flag, no magic value), and the tasks
+  predicate is deliberately WIDER than `list_tasks`' strict `owner_id = %s`:
+  `(owner_id = %s OR owner_id IS NULL)`, because unassigned work must appear in "my" view
+  — someone has to catch it — badged with `useUsers`' existing `UNASSIGNED_LABEL` (#128's
+  label convention).
+  **Reminders are scope-invariant** and appear in every scope: they have no owner column
+  and are install-wide by design (Phase B), which is the strongest form of that same rule.
+  They wear no Unassigned badge, since that label invites an action that cannot exist for
+  a reminder. Counts stay honest **structurally** rather than by a shared filter: the
+  endpoint returns the FULL ranked list uncapped (`today_view()`'s precedent) and the
+  client derives both the five visible rows and the "+N" from that ONE array, so there is
+  no rows-vs-COUNT seam to disagree across. The ceiling is stated in the module docstring;
+  the upgrade path is a probe-row `truncated` flag (#56's idiom), not pagination.
+  The ladder is a **pure function** (`build_today_items`) with no I/O and no clock, so it
+  is unit-tested with zero mocks while SQL keeps only membership. On the client, the panel
+  re-sorts nothing — it renders `items` in server order — and even due labels compare
+  against the payload's own `date`. It reloads on the **server's** next midnight, carried
+  as an absolute `next_refresh_at`: `useLocalDay` fires at the BROWSER's midnight, which
+  on a default install (`TIMEZONE` unset ⇒ server on UTC) is hours away, so keying on it
+  would strand a tab on yesterday's list — the very failure that hook exists to prevent,
+  merely relocated. That timer re-arms on a monotonic tick for #77's bail-out reason.
+  Task rows navigate to `/crm/tasks` because **no task-detail URL exists** (the route is
+  mode-routed); the row's complete-checkbox is how you act on one, and it calls the normal
+  `PUT /api/crm/tasks/{id}/complete` so `_apply_task_update_cur`'s invariants (repeat-spawn,
+  the GTD CHECK) hold for free. Checkbox and row-open are **sibling** controls, not a
+  button nested in a `role="button"` row: nesting puts a control inside a control for AT,
+  and Space on the checkbox would bubble a keydown and navigate away, which an `onClick`
+  `stopPropagation` cannot prevent. Badges are text-only in existing tokens — deliberately
+  no `tint()` background, which would owe an entry in `inkContrast.test.ts`'s surface
+  registry (#68).
 - **Tasks have two modes over ONE store** (#70), and **GTD is the default** (#102).
   `crm_meta.task_mode` is `normal` or `gtd`; GTD is a presentation + tool surface over the *same* `tasks` rows, never a
   second table — which is what keeps the dashboard counts, contact/deal rollups,
@@ -1244,18 +1544,21 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Gmail (read + draft only: `gmail_connection` singleton, BYO OAuth at `/api/gmail`, tools `gmail_search`/`gmail_read_thread`/`gmail_create_draft`, guard test + SECURITY.md) — **landed #8** as `backend/gmail/` + `frontend/src/crm/components/GmailCard.tsx` | `chatty/backend/integrations/google/` |
 | Gmail connection-race hardening (`connection_generation` optimistic lock + CAS on token persist; pending-draft binding through the shared confirm flow; ciphertext CAS on `mark_broken`; atomic clear-and-capture on disconnect/app-replace; capped recovery of attachment-stored text bodies) — **landed #43** across `backend/gmail/*` + `backend/assistant/{engine,history}.py` | Follow-up to #8 (no blueprint — back-port candidate to CAKE OS) |
 | Gmail touch-scan heartbeat job (read-only inbox scan → sender→contact match → idempotent `email` touch logging feeding #16; `gmail_scan_state`/`gmail_scanned_messages`/`gmail_unmatched_correspondents` tables; own `gmail_scan` scheduler job; "create contact?" alerts) — **landed #17** as `backend/gmail_scan/` | New capability (no blueprint — back-port candidate to CAKE OS) |
+| Owned Gmail HTTP transport (`build(http=…)` over `AuthorizedHttp` wrapping a budget-gating `httplib2.Http` subclass; `_HTTP_TIMEOUT_SECONDS` per-socket-op stall bound + a per-call request budget resolved before setup; `GmailTimeoutError` as a retryable non-reconnect class; `gmail_scan` budget kept strictly inside its join deadline; `httplib2`/`google-auth-httplib2` pinned) — **landed #64** as `backend/gmail/{client,tools}.py` + `backend/gmail_scan/service.py` + `backend/tests/test_gmail_transport.py`. **Corrects the issue's premise**: a silent socket was never unbounded — the SDK's `build_http()` already applied a 60s socket-inactivity timeout — the defect was that there was no *aggregate* bound over a sequential fan-out, plus the fact that the 60s was an implicit default any `socket.setdefaulttimeout()` caller could redefine. Also retires its stated blocker: static discovery makes `build()` network-free, so the whole stack is hermetically testable against the real SDK | Follow-up to #8/#43 (no blueprint — back-port candidate to CAKE OS) |
 | Kanban drag-and-drop | `cake_os/frontend/src/shared/dnd/` |
 | **Shared collection layer** (the CRM UI's interaction substrate) — **landed #73** as `frontend/src/shared/{search,listview,collection,overlay,hooks}/` with their co-located tests, plus the vitest harness. `search` (SearchInput/SearchFilterBar/SortControl + `match`/`persist`/`sort`), `listview` (ListView/ViewSwitcher + `headerSort`/`sortRows`), `collection` (CollectionView, `facets`, `useCollectionState`, `usePageAssembly`, `visibleOrder`, `views/{Cards,CollectionList,Kanban}`, `detail/CollectionDetail`, `closePolicy`), and `overlay/DetailModal` (pulled in because `CollectionDetail` wraps it). **#73 landed the layer ONLY — no CRM surface was rewired**; Pipeline/Contacts/detail adopt it in their own issues. **Adopted by #77** on Contacts/Companies/Tasks (the pipeline board keeps #21's own filter bar). Adaptations from the blueprint: `lucide-react` swapped for the in-repo `shared/icons.tsx` (no new dependency; `IconChevronLeft` added); the blueprint's `corrections` dependency reduced to a local 3-line `collection/voidedRowClass.ts` (the `voided` tri-state itself is generic and inert unless a config supplies `getVoided`); `shared/pagination` is NOT reachable from the layer and was not ported; the app-local `detailClosePolicy.ts` became `collection/closePolicy.ts` since CakeCRM has one CRM app; and the ported code was modernized for CakeCRM's stricter `eslint-plugin-react-hooks` v7 ruleset (`configs.recommended`, which the blueprint does not enable) — ref-writes-during-render and setState-in-effect were removed rather than suppressed. Styling: the layer keeps the blueprint's Tailwind utility classes, wired to CakeCRM's theme by **semantic aliases** in `index.css`'s `@theme static` (`cream`→`ck-card`, `sand`→`ck-bg`, `charcoal`→`ck-ink`, `muted`→`ck-ink-mute`, `line`→`ck-line-strong`, `brand`→`ck-accent`, `font-heading`→`font-display`) — declared as `var(...)` so `.dark` re-resolves them and the layer inherits dark mode with no `dark:` variants. Accent-as-TEXT deliberately routes through `text-ck-accent-text` per #54's WCAG rule, never `text-brand`. The `dock:` custom variant is defined in `index.css` for `DetailModal`'s takeover-vs-centred switch. | `cake_os/frontend/src/shared/{search,listview,collection,overlay}/` |
 | Theme + dark mode (fixed `--color-ck-*` palette, `.dark` semantic-token override, self-hosted Montserrat/Open Sans, `useTheme` + `ThemeToggle`, accent-picker removal) — **landed #54** as `frontend/src/index.css` + `core/theme/useTheme.ts` + `crm/components/ThemeToggle.tsx` | `cake_os/frontend/src/index.css` + `core/theme/useTheme.ts` (read from `origin/master`) |
 | Companies (first-class entity: `companies` table, `company_id` FKs, rollup detail page, text→FK backfill migration) — **landed #13** | `cake_os/backend/apps/crm/company_service.py` |
 | Company link coherence (shared batched `resolve_or_create_company_ids()` resolve-or-auto-create on every ingestion path; contact list/search LEFT JOIN + `company_name`; second one-shot backfill) — **landed #35** | New capability (gate decision on issue #35; shared with the #61 importer) |
+| Inline quick-create for a deal's Contact and Company (`frontend/src/crm/components/RecordCombobox.tsx` — a generic server-searching combobox with a `Create "<name>"…` row, keyboard nav and `role="combobox"`/`listbox` a11y — wired into `DealForm`, plus `POST /api/crm/companies/resolve` exposing the #35 primitive over REST) — **landed #123**. Retires the capped-200 `<select>` pattern in the deal form and the two hand-written out-of-page append guards with it. **Corrects three of the issue's own pointers** (the search param is `q` not `search`; `DealCreate` takes no free-text company; `POST /companies` does NOT use the resolver and 400s on a case/whitespace duplicate) — see the CRM bullet for the ownership split and why the resolve endpoint had to exist. Built reusably for **#126**, which is blocked on it | New capability (no blueprint — cake_os's entity forms use plain capped `<select>`s too; back-port candidate to CAKE OS) |
 | Chatter/notes (`crm_chatter`) — **landed #15** as `backend/crm/chatter_service.py` + `frontend/src/crm/components/NotesThread.tsx` | `cake_os/backend/apps/crm/chatter_service.py` |
 | Chatter note attachments + readable composer (`crm_chatter_attachments` bytea + FK CASCADE; `crm/attachment_service.py`; `core/thumbnails.py`; 4 auth-guarded routes; `apiBlob` + `useAuthedBlobUrl`; `NoteComposer`/`NoteAttachments`/`AttachmentLightbox`) — **landed #57**. **Corrects two premises in the issue.** (1) "Reuse the existing assistant uploads storage (`backend/assistant/uploads.py`)" cannot be complied with literally — that module is a TEXT EXTRACTOR that discards the bytes ("there is no attachments table and no file cache", its own docstring), so there was no first store to reuse and #57 creates CakeCRM's first one; the instruction's intent (exactly ONE place uploaded bytes live) is honored, and what IS reused from it is the constant/`UploadError` idiom, the lazy-import discipline for heavy libs, and the repo-wide `read(cap + 1)` bounded read. (2) The three cited upstream issues are **three lineages, not one**: cake_os **#1526** (`53b0f3627`) is the attachments + composer work, and it landed as a NEW platform app `backend/apps/chatter/`, not in `apps/crm/chatter_service.py`; **#1215** and **#1331** are the CRM image **gallery** (auth-guarded fetch, server-side thumbnails), so **cake_os chatter has no server-side thumbnails at all** — its `width_px`/`height_px` are client-supplied and `docs/MEDIA_STORAGE.md` lists thumbnails as deferred. Since Will's gate made thumbnails non-negotiable, the pipeline is ported from the gallery lineage instead, adapted base64→bytes and with the unused `crop_square` mode dropped (CSS `object-fit` crops). Auth-guarded serving is an **adaptation, not a port**: cake_os mints GCS V4 signed URLs, CakeCRM has no object store, so it serves from an authenticated endpoint and the client builds object URLs — which is the pre-#1215 pattern cake_os replaced, and the only one Bearer-token-only auth permits. NOT ported: GCS/object storage, the `Surface`/`SURFACES` four-app registry and the `chatter_messages` rail, `core/chatter.can_view` (CakeCRM has one surface and no per-object ACLs), `core/upload_admission.py`, `core/audit.py` void-with-reason (this repo hard-deletes and has no audit chain), uploader-only write gates (they would contradict #60's any-member model), client-side downscale, the batch `?note_ids=` endpoint + `useNoteAttachments` (metadata embeds into `get_chatter` instead), and width/height/duration columns | `cake_os/backend/apps/chatter/{service,router}.py` + `frontend/src/shared/chatter/*` (flow); `cake_os/backend/core/thumbnails.py` + `apps/crm/image_service.py` (thumbnails) |
 | Custom fields (EAV `crm_field_definitions`/`crm_field_values`, Settings editor, entity-form + detail-page value inputs, 6 `crm_*_fields` tools) — **landed #19** as `backend/crm/field_service.py` + `frontend/src/crm/components/{CustomFieldSettings,CustomFieldsSection,CustomFieldInputs}.tsx` | `cake_os/backend/apps/crm/field_service.py` |
 | Touch counts + field provenance (`deals.ai_touch_*` cols + in-process recompute worker; `crm_field_provenance` + `AiBadge`/`ProvenanceBadge`/`TouchCountPill`) — **landed #16** as `backend/crm/touch_count_service.py` + `provenance_service.py`. **Per-event verdict detail view landed #56**: the `deal_ai_touch_evidence` JSONB snapshot (FK-less, one row per deal, written in the count's own transaction and rowcount-gated), `touch_count_service.get_touch_evidence` + `GET /api/crm/deals/:id/touch-count/evidence`, and `frontend/src/crm/{touchEvidence.ts,components/AiTouchDetail.tsx}` — at which point `ai_touch_count` became the **derived sum of per-line verdicts** so the pill and its explanation cannot disagree (see the CRM bullet for the window shrink and the `verdict_state` reconciliation) | `cake_os/backend/apps/crm/touch_count_service.py`, `provenance_service.py` (the detail view + its evidence table are ported from the blueprint CRM's touch-count evidence feature) |
 | Lead scoring (pure-algorithmic `lead_score` 0-100 on deals+contacts; event-triggered inline recompute serialized by a per-entity advisory lock + a bounded daily heartbeat refresh + backfill endpoint/tools `crm_get_lead_score`/`crm_recompute_lead_scores`; sortable contact list + `ScorePill`) — **landed #18** as `backend/crm/scoring_service.py`. Since the #22 merge the write-event chokepoint for deal-column writes is `service._write_deal_update` (one hook covers the #22 lifecycle verbs too), with `archive_deal`/`merge_deals` hooked separately; archived deals are excluded from the contact deal-linkage aggregate | `cake_os/backend/apps/crm/scoring_service.py` |
 | Scoring, analytics — analytics **landed #20** as `service.get_analytics()`/`summarize_analytics()` + `GET /api/crm/analytics` + `crm_analytics` tool + enriched `CrmDashboardPage` (win/loss, activity volume, read-time deal aging from existing timestamps — no migration; stage-duration metrics dropped, no stage-change audit trail; scoring landed separately in #18 above) | `cake_os/backend/apps/crm/*_service.py` |
-| Dashboard parity (stat row + Weekly Touches) — **landed #76** as `service.get_weekly_touches()` + `GET /api/crm/dashboard/weekly-touches` + `frontend/src/crm/components/WeeklyTouchesCard.tsx`, plus `total_companies` on `get_dashboard_stats()` and a four-tile stat row on `CrmDashboardPage`. Ported for CONTENT parity, **additively** — the blueprint component is written against Tailwind classes (`bg-cream`/`text-charcoal`/`font-heading`) that #54 removed, and a literal replacement would have deleted #20's analytics sections. The blueprint's PER-REP grouping collapses to per-DEAL (no owner columns, single-user); the envelope keeps `window`/`total_touches`/`total_open_deals` with `deals` where it had `reps`, so a later multi-user port is a re-grouping. **Two separate signals, deliberately:** window MEMBERSHIP is `LAST_TOUCH_SQL` — the same keyless GREATEST(edit, newest activity, newest live note) expression `analytics_service.get_stale_deals` uses, so the card and the "Needs a touch" panel on the same page can never disagree about what a touch is — while the per-deal NUMBER is #16's `ai_touch_count`, which is what supplies the zero-keys gate (no provider ⇒ every count NULL ⇒ `computed_deals == 0` ⇒ the card renders `null`; it owns its own wrapper padding, so hiding leaves no gap). Membership is emphatically NOT `deals.ai_touch_count_at`: that column is #16's stale-write-guard watermark (it only advances when a provider answered and the CAS accepted, and falls back to the deal's `created_at`), so keying a window off it made every provider timeout silently drop a deal from an accountability number — and left numerator and denominator with different coverage on a half-backfilled install. Because membership is keyless, both sides of the ratio are coverage-independent. The touch-count colour ramp moved to `crm/constants.ts` and is shared with `TouchCountPill` (one number, one colour, app-wide). Window math mirrors the blueprint but on UTC calendar days — no CT convention here (and `get_dashboard_stats` already decides overdue against a UTC day), so the inclusive end-day bound is a plain +1 day, guarded against the `datetime.max` OverflowError that is not a `ValueError`; the filter is labelled UTC rather than converting per viewer. Drill-down landed with #56: each row opens the deal sheet via `onOpenDeal`, whose evidence section explains that deal's number event by event. | `cake_os/frontend/src/apps/crm/components/DashboardTab.tsx` + `WeeklyTouchesCard.tsx` + `backend/apps/crm/dashboard_service.py` |
+| Dashboard parity (stat row + Weekly Touches) — **landed #76** as `service.get_weekly_touches()` + `GET /api/crm/dashboard/weekly-touches` + `frontend/src/crm/components/WeeklyTouchesCard.tsx`, plus `total_companies` on `get_dashboard_stats()` and a four-tile stat row on `CrmDashboardPage`. Ported for CONTENT parity, **additively** — the blueprint component is written against Tailwind classes (`bg-cream`/`text-charcoal`/`font-heading`) that #54 removed, and a literal replacement would have deleted #20's analytics sections. The blueprint's PER-REP grouping collapses to per-DEAL (no owner columns, single-user); the envelope keeps `window`/`total_touches`/`total_open_deals` with `deals` where it had `reps`, so a later multi-user port is a re-grouping. **Two separate signals, deliberately:** window MEMBERSHIP is `LAST_TOUCH_SQL` — the same keyless GREATEST(edit, newest activity, newest live note) expression `analytics_service.get_stale_deals` uses, so the card and the "Needs a touch" panel on the same page can never disagree about what a touch is — while the per-deal NUMBER is #16's `ai_touch_count`, which is what supplies the zero-keys gate (no provider ⇒ every count NULL ⇒ `computed_deals == 0` ⇒ the card renders `null`; it owns its own wrapper padding, so hiding leaves no gap). Membership is emphatically NOT `deals.ai_touch_count_at`: that column is #16's stale-write-guard watermark (it only advances when a provider answered and the CAS accepted, and falls back to the deal's `created_at`), so keying a window off it made every provider timeout silently drop a deal from an accountability number — and left numerator and denominator with different coverage on a half-backfilled install. Because membership is keyless, both sides of the ratio are coverage-independent. The touch-count colour ramp moved to `crm/constants.ts` and is shared with `TouchCountPill` (one number, one colour, app-wide). Window math mirrors the blueprint but on UTC calendar days — no CT convention here, so the inclusive end-day bound is a plain +1 day, guarded against the `datetime.max` OverflowError that is not a `ValueError`; the filter is labelled UTC rather than converting per viewer. It **stays** UTC after #130 moved this module's "today" decisions onto the configured timezone (that bullet has the reasoning): a labelled absolute window the caller names explicitly is a different question from "is this task overdue right now". Drill-down landed with #56: each row opens the deal sheet via `onOpenDeal`, whose evidence section explains that deal's number event by event. | `cake_os/frontend/src/apps/crm/components/DashboardTab.tsx` + `WeeklyTouchesCard.tsx` + `backend/apps/crm/dashboard_service.py` |
+| Dashboard Today panel (one ranked Top-5 of what needs me today: `backend/crm/today_service.py` with the pure `build_today_items` ladder, `core.localtime.local_day_bounds`, `reminders.service.list_pending_between`, `GET /api/crm/dashboard/today`, `frontend/src/crm/{todayPanel.ts,components/TodayPanel.tsx}`; plus the three-site UTC→configured-day sweep) — **landed #130**. See the CRM bullet for the ladder, the one-clock rule, the reserved rank 2 and the reminders-are-scope-invariant decision. **Corrects three premises in the issue**, each verified against the tree rather than the issue text: (1) it says to widen scope via "the existing `OwnerScopeToggle` (#60)" — #77 **deleted** that component, and its replacement is a multi-select list-page facet, so the panel carries its own two-button control instead; (2) it specifies "task → task" click-through — there is **no task-detail URL** anywhere (`/crm/tasks` is mode-routed and both modes keep detail in component state), so task rows go to `/crm/tasks` and the row checkbox covers acting on the specific task; (3) it treats the owner filter as reaching every row — `reminders` has **no owner column at all** and is install-wide by design, so reminders are scope-invariant and count coherence is structural (one array, sliced) rather than a shared WHERE builder. The issue's "Owner filter rides the shared WHERE builders" is honored in spirit — one filter, applied once — but there is no builder to ride: the shared builders are `_contact_search_where`/`_company_search_where`, and neither tasks nor reminders has one | New capability (no blueprint — back-port candidate to CAKE OS) |
 | Assistant tool set + sales behaviors — **Phase 1 landed #22**: 9 new tools (`crm_search_deals`, `crm_mark_deal_won`/`_lost`, `crm_archive_deal`, `crm_merge_deals`, `crm_get_stale_deals`, `crm_get_contact_staleness`, `crm_find_duplicates`, `crm_scan_gaps`) in `backend/crm/analytics_service.py` + `service.py`, parity closes (embedded `custom_fields`, tool-side `limit_per_stage`, `limit` on find/search, company chatter), the genericized static `identity.SALES_GUIDE` prompt block + sales `QuickActions`. **Phases 2 + 3 landed together** once #17/#18/#20 all merged (the three-PR split was dependency ordering, and every dependency cleared at once): **Phase 2** = `crm_get_deal_health` + `crm_get_pipeline_analytics` in `analytics_service.py` (see the CRM bullet above); **Phase 3** = `backend/proactive/` — a daily pipeline digest and stale-deal / untouched-contact nudges on their own `proactive` scheduler job. Both are **keyless-first**: the digest is deterministic SQL and the nudges read Phase 1's pure-SQL detectors, with an optional single `run_background_turn` (read tools + `notify_user`, digest numbers in the USER message) adding at most one extra notification when a provider exists. Every send **claims before it delivers** — the digest via a one-statement rowcount UPDATE on `heartbeat_state` (so two ticks can't both push), each nudge via a conditional upsert on `proactive_nudges` — because a crash that loses one notification beats one that re-sends every tick. `proactive_nudges` is polymorphic and FK-less, so it MUST stay in the `_truncate_all` sweep. NOT ported: `get_rep_performance` (no owner columns), `enrich_field` (no web tools), lead-import tools (own issue) | `cake_os/backend/apps/crm/tools/` + the blueprint sales agent's config |
 | Todo-GTD task mode (one store: widened `tasks` + `task_projects`; `crm/gtd_{common,service,router,tools}.py`, `crm/todo_{capture,web,pwa,tokens}.py`, `core/{ratelimit,localtime}.py`; `frontend/src/crm/gtd/*` + `components/TaskModeCard.tsx`) — **landed #70**. **Source note, because the issue says otherwise:** the `<!-- auto-answer -->` directed "port from chatty, not cake_os" on the premise that cake_os was behind. It is not — cake_os's `todo_gtd/common.py` header states it IS chatty's todo ported to Postgres, extended with `weekdays`/`every:N` repeats, a Today view, quick-add and `auto_star_on_due`. Chatty's is SQLite behind a process-wide write lock. So each half came from whichever tree is genuinely ahead, and the answer's file-level instructions were followed exactly where it gave them: **public capture + web app + rate limiter + PWA manifest from chatty** (`capture.py`/`web.py`/`ratelimit.py`/`pwa.py`, named explicitly in the answer), **GTD core from cake_os** (already Postgres, already on `pg_fetchall`/`row_to_dict`, and the only tree with the three features the issue's own scope list demands). NOT ported: cake_os's owner-scoped GTD *views* — since #60 a task carries `owner_id` and every task write path threads it (including the repeat-spawn, so a recurring task keeps its assignee), but the GTD lists are deliberately unscoped: GTD is one person's working surface, and the no-login capture/web surfaces have no user identity to scope by. The Projects/CRM card-link connector (`tasks` already carries contact_id/deal_id — `RecordChip` is the native replacement), `todo_get_capture_link`/`todo_get_web_link` (links are secrets; they live in Settings, not in a chat transcript), cake_os's `ConcurrencyGate` (chatty's limiter is what the answer named), `always_confirm` (no engine support — all six mutating tools carry `writes:true` instead), and the copy buttons (not in the issue's scope). `ProjectsPage` renders a plain card grid rather than `shared/collection`. #77 adopted the layer on Contacts/Companies/Tasks but deliberately NOT here: the issue scopes exactly those three, this is a GTD surface over GTD's own API, and it was being changed concurrently — so its adoption is a follow-up, not part of #77. | `chatty/backend/core/todo/{capture,web,pwa,ratelimit}.py` + `chatty/frontend/src/todo/publicMode.ts`; `cake_os/backend/apps/todo_gtd/*` + `cake_os/frontend/src/apps/todo-gtd/*` |
 | Bulk deal operations (per-stage Select All + card multi-select, inline bulk bar, atomic set-based backend, `crm_bulk_move_deals` tool) — **landed #55** as `service.bulk_move_deals` + `_classify_deal_update` + `POST /api/crm/deals/bulk-move` + `PipelinePage` selection UI + pure `crm/bulk{Selection,Outcome}.ts` (+ `ApiError` in `core/api/client.ts`). NOT ported, each because the column does not exist here: the `status` dual-write and its multiple-assignment fix (won/lost ARE stages in CakeCRM), the ~60-line `display_order` request-order replay (deals carry no rank column — columns sort by `lead_score`), and the `owner_email` branch (single-user; #60 owns ownership). Also cut: the chatter translation layer (`log_events_bulk`, `lost_reason_note`/`lost_reason_cleared` kinds) because CakeCRM's stage audit IS `deal_stage_events` and a single-deal move writes no chatter either — so bulk writing none is parity, not a gap; client-side chunking (`BULK_CHUNK_SIZE` + the multi-chunk fold) since one request under a 200-cap covers an unpaginated single-user board, though the rejected-vs-unconfirmed distinction it protects survives in the collapsed `bulkOutcome.ts`; `reconcileBulkResult` (the blueprint's own PipelineTab never uses it — it serves the list surfaces, which patch rows in place, where the board always reconciles by refetching); the `BulkUpdateModal` (an inline bar is enough for one action); and bulk mark-won/mark-lost (the issue scopes bulk to stage-move; `crm_mark_deal_lost` stays the reason-capturing close). Two deliberate divergences FROM the blueprint: its bulk fetch takes no row locks, ours takes `ORDER BY id FOR UPDATE`; and its rejected path cannot revert, ours reverts to each deal's server-confirmed stage. | `cake_os/backend/apps/crm/deal_service.bulk_update_deals` + `frontend/src/apps/crm/{bulkSelection,bulkUpdateOutcome}.ts` + the PipelineTab selection/BulkBar |
@@ -1263,5 +1566,6 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Archived deals reachable from the UI (Archived facet + inert board cards + `POST /api/crm/deals/:id/restore` + the deal sheet's archived banner/Restore; `get_pipeline(include_archived=)`; per-item `shared/dnd` `dragDisabled`) — **landed #83** across `backend/crm/{service,router}.py` + `frontend/src/crm/{pipelineFilters.ts,PipelinePage.tsx,components/{PipelineFilterBar,DealDetailSheet,DealForm}.tsx}` + `frontend/src/shared/dnd/dragDisabled.ts`. **Not a port — this is the first deal-restore capability in either tree**, which corrects the gate decision's "extends the family pattern" framing: cake_os's Status/`archived` facet exists only for Contacts/Companies over a plain `status` enum (Companies restore by editing that select; Contacts have no restore path at all), and its *deals* have neither a facet nor any restore, front or back — `deal_service.archive_deal` there even hard-drops open todos with the comment "un-archiving never resurrects them". Its list endpoints also default to returning archived rows, where CakeCRM's `LIVE_PREDICATE` + explicit `include_archived: bool = False` is the stronger contract. So the in-repo precedents govern: the chatter-note `/archive`+`/unarchive` POST pair for the route shape, `crm_search_deals(include_archived)` for the flag. **Carry-forward for #109 (#74) / #110 (#75)**, which rewrite these exact surfaces and are *siblings*, not a stack (both branch off `main`; they conflict with each other on `PipelinePage.tsx`): the logic is deliberately three small exported units — (1) `pipelineFilters.isArchivedDeal` becomes `getVoided` on #74's `pipelineCollection.ts`, whose header calls the omission load-bearing *because* "the server's LIVE_PREDICATE excludes them", which this PR retires; (2) the wire contract `GET /api/crm/deals?include_archived=true` — deals array only, `stage_summary` always live-only; (3) the sheet's banner + Restore + the archived gate on Mark Won/Lost move into #75's `DealDetailBody`, whose `onBoard`/`stageWritable` split already anticipates archived deals. That port is **not** a free pass-through and needs three pieces of collection-layer work: `KanbanViewConfig.voidedPolicy: 'facet'` (already in #73's layer) so voided items stay on the board, a config-level default of `'hide'` (the layer's `VoidedFilter` `null` means *show all*), and the same `boolean \| (item) => boolean` widening on the layer's own kanban `dragDisabled`, which is still a scalar and so cannot pass a per-card predicate through | New capability (no blueprint — cake_os has no deals archived facet or restore; back-port candidate to CAKE OS) |
 | Settings page shell (four-section IA in `crm/settingsSections.ts`; underline-tab `<nav>` of `<Link>`s with `?section=` deep links; `components/SettingsCard.tsx` heading/description/padding shell adopted by all nine cards; `components/BrandingCard.tsx` extracted out of the page; member/admin partition, nav and Gmail-callback tests) — **landed #103** as `frontend/src/crm/{SettingsPage.tsx,settingsSections.ts,styles.ts}` + `frontend/src/crm/components/{SettingsCard,BrandingCard}.tsx` + shell adoption in the eight existing cards. Behaviour-preserving apart from three deliberate repairs the chain had accumulated: Team / Assistant memory / Task mode rendered bare `cardStyle` and so had **no padding at all**, Telegram hard-coded `padding: 28` (it took no `isMobile` prop), and Task mode's description spread `labelStyle` and rendered its sentence as 10 px tracked uppercase. Normalising onto `settingsDescription` also moves Assistant memory's description `maxWidth` 560 → 460 and Branding's + Change password's description margin 24 → 20, and Task mode's "No-login links" `<h3>` moves from mono-uppercase `sectionHeading()` to sans-semibold `settingsSubheading`. The Task-mode card's TITLE was renamed **"Tasks" → "Task mode"** (beside "Assistant memory" the bare noun read as the tasks page) — `README.md` and `SECURITY.md` navigation paths were updated for that and for the new section level. `CustomFieldSettings`' entity strip stays `filterTab` but gains `role="group"` + `aria-pressed`, so AT hears a filter there and navigation in the strip above it. Review also gated Notifications' install-wide digest toggle behind `isAdmin` (see the multi-user bullet) — a pre-existing leak this PR's own gating claim made untenable | New capability (no blueprint) |
 | **List-page parity on the collection layer** (Contacts/Companies/Tasks: keyset corpus sweep + client-side search/facets/sort, derived `last_contact_at`, routed-detail-as-selection, Owner facet) — **landed #77** as `frontend/src/crm/{collectionConfig.ts,listColumns.tsx,assemblyPage.ts,usePatchableAssembly.ts,ContactsPage,CompaniesPage,TasksPage}` + `components/RefreshButton.tsx` + `sort=id`/`after_id` on the three list endpoints. **The issue's premise is wrong about Tasks**: `cake_os/.../components/TasksTab.tsx` does not exist — that CRM has four tabs (Dashboard/Contacts/Companies/Pipeline) and keeps tasks in a separate `todo-gtd` app that never adopted the layer, so the Tasks page is designed here in the layer's idiom rather than ported. NOT ported: `listRow.ts` (its `toListRow` strip exists because the blueprint's detail BODIES gate enrichment on field presence; CakeCRM's detail pages fetch by id unconditionally, and the overlay merges rather than replaces, so a detail-shaped row is harmless), `lastContact.ts` (deal-specific, with a custom-field precedence that has no analogue — `gtd/util.formatAge` renders ours), the bulk bar (no bulk contact endpoint exists here), `CrmContext`/`pendingNavigation` (real routes, not a tab shell), `useFetchOnce`/`fetchCrmTeam` (`useUsers` is the equivalent), and a Cards view (list-only with responsive column hiding, the blueprint's own call). Two deliberate divergences FROM the blueprint: it pages the sweep by OFFSET over `created_at asc`, ours is a keyset walk on `id` (neither CakeCRM endpoint had an ascending immutable order, and both hard-delete); and its detail rides the modal shell, ours stays routed for the z-index/deep-link reasons in the CRM bullet | `cake_os/frontend/src/apps/crm/{components/{ContactsTab,CompaniesTab,crmListColumns}.tsx,collectionConfig.ts,hooks/usePatchableAssembly.ts}` (Tasks: no blueprint) |
+| Composer & label parity (human-writable lost reason + visible owner) — **landed #128** as `POST /api/crm/deals/:id/mark-lost` + `mark_deal_lost(author_id=)` + `crm/dealStageWrite.ts` + `components/{LostReasonModal,OwnerName}.tsx` + Owner rows on the deal sheet and the contact/company detail pages. **The issue's premise was stale on all three items, and only one was a port.** (3) *Note composer keys* was **already shipped by #57/#121** — plain Enter inserts a newline, Cmd/Ctrl+Enter posts, the hint reads `Cmd/Ctrl+Enter to post`, and both the IME and AltGr guards were already in `chatterComposer.composerKeyAction`; nothing was changed for it, and the new modal REUSES that helper rather than copying the blueprint's inline chord check (which has neither guard). (1) *Multi-line lost reason* had **no input to widen** — the blueprint turned an existing `<input>` into a `<textarea>` inside its `LostReasonModal`, while here Mark Lost moved the stage silently and `lost_reason` had no human writer at all, so the capture was built rather than ported. (2) *Unassigned owner* had **no owner row to relabel** — the blueprint's Owner row rendered through a hide-when-blank primitive, where CakeCRM displayed the owner nowhere, so the display was added. NOT ported: the blueprint's unbounded reason field (the service truncates at `MAX_LOST_REASON`, so the field caps and the route 422s instead), and its bulk mark-lost reason (#55 scopes bulk to stage-move). **Known gaps, stated rather than implied:** drag-to-Lost, bulk-move and `DealForm`'s stage select still close deals with no reason, and a reason cannot be corrected after the close — this makes the explicit Mark Lost action carry one, it does not make every close carry one | `cake_os/frontend/src/apps/crm/components/PipelineTab.tsx` (`LostReasonModal`) + `DealDetailBody.tsx` (the Owner row) |
 | **Server-side pipeline pagination** (opt-in `limit`/`after_id` keyset pages + a `limit_per_stage` SQL window in ONE `get_pipeline`; `crm/pipelineAssembly.ts` sweep; `sort` refusal on the deals route) — **landed #59** as `backend/crm/{service,router,tools}.py` + `frontend/src/crm/{pipelineAssembly.ts,PipelinePage.tsx}`. **The blueprint framing in the issue body is loose in two ways, both verified in source.** (1) cake_os #1213 "set-based reads" is `bulk_update_deals` going set-based — a WRITE-path batch fetch, not a pipeline read — so nothing here was built "on top of" it. (2) cake_os's pagination is **transport chunking invisible to the user**, not a load-more UX: `deal_service.get_pipeline_page` is a flat `ORDER BY d.id ASC LIMIT/OFFSET` with a full-set aggregate per page, and its `fetchPipeline()` walks every page before rendering once over the complete set, keeping facets/sort/Select-All client-side by explicit decision. Its kanban even disables the shared layer's truncated-column mechanism (`columnCap: Number.MAX_SAFE_INTEGER`) because at ~1,300 deals in one stage it hid the board and locked drag — so a load-more/truncated-column board would have been a **divergence** from the blueprint, not a port of it. That settles the issue's "design decision", together with Will's gate (#54 owns the fork) and #77's in-repo precedent. **Three deliberate improvements on the blueprint**, each because a CakeCRM rule supersedes it: keyset not OFFSET (the repo bans OFFSET sweeps — a deletion behind the cursor skips a row); `hasMore` from an over-fetched row, not a cross-transaction total (#77's rule); and the HTTP route and the agent tool **share one service mechanism**, where cake_os's tool Python-slices an unbounded read — which is the issue's literal ask, and stops `crm_get_pipeline` BUILDING every deal row into the process to return 25 per stage (Postgres still ranks the whole partition before the outer `rn` filter — the win is rows transferred and held, not a smaller scan; a lateral-per-stage rewrite is what would shrink the scan, and is its own perf project). `stage_summary` stays a separate always-live-only full-set aggregate, and is `null` on continuation pages (the `_count_or_none` rule, keyed on the CURSOR so the sweep pays once and an ordinary `?limit=` caller still gets the envelope). `deals_truncated` is derived from a per-partition `rn <= limit + 1` probe — never from `stage_summary`, which excludes won/lost while the cap applies to every stage. `limit_per_stage` is deliberately NOT an HTTP param (no consumer; purely additive later). Also fixed in-PR: `list_deals` used `if contact_id:`, so `?contact_id=0` — which the route deliberately treats as a filter — silently returned every deal. NOT done: a LATERAL-everywhere unification, and a `(deal_id, created_at)` composite index (no measured need; both stated as upgrade paths) | `cake_os/backend/apps/crm/deal_service.get_pipeline_page` + `frontend/src/apps/crm/api.fetchPipeline` (consulted, then diverged from on three points above) |
 | **Sync bot — receiving half** (`.github/workflows/sync-intake.yml` + `scripts/sync_intake.py` + `SYNC_LEDGER.md` + `docs/SYNC.md`) — **landed #23**. cake_os fires a keyless `workflow_dispatch` carrying merge **metadata only**; CakeCRM validates, classifies the paths, dedupes on a full-SHA marker, and files an **un-`greenlit`** `sync-intake` issue. Translation is NOT done here — an intake issue enters the ordinary `/auto-issues` pipeline, whose worker reads cake_os from the local clone. **Two structural guarantees:** (1) *never a push* — the sender's token holds **Actions: write** only, which cannot push/PR/create-issue (`repository_dispatch` was rejected because its token needs **Contents: write**, i.e. push-capable against an unprotected `main`); (2) *no upstream text* — the payload has no free-text field, and **no cake_os path is rendered either**, because a path is only *prefix*-constrained and the filename after it is free text that could carry a customer name or forge the dedupe marker. The issue instead names **CakeCRM's own counterpart path**, and only when that file already exists here (already-public name); everything else becomes a count. Asserted, not argued: `test_sync_intake.py` feeds sentinel paths and fails CI if one survives rendering. Verdicts (`crm-code`/`shared-dnd-only`/`internal-paths-only`/`docs-only`/`no-watched-files`) are deliberately **factual, not portability judgments** — portability isn't decidable from a path. `shared-dnd-only` is its own verdict because cake_os's `shared/dnd/` has **13 non-CRM consumers** (CRM is 1 of 14), so a dnd touch is weak CRM evidence. Dedupe is the full-SHA marker check **plus a per-SHA `concurrency` group** (`sync-intake-<sha>`) closing the check-then-create race. The distinction is the whole point: a *global* group would drop distinct intakes (only one run may sit pending), while keying on the SHA serializes exactly the duplicate deliveries and drops nothing. The workflow self-provisions its label and declares `permissions: issues: write` explicitly (the repo default is `read`). **The sender half lives in cake_os and is not built yet** — `docs/SYNC.md` §6 is its spec. | New capability (no blueprint — the cake_os half is its own issue there) |
