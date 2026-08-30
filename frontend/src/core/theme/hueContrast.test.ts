@@ -243,6 +243,12 @@ function surfaces(hue: string, tokens: Record<string, string>): Record<string, R
     if (hue === 'red') out[`amber${BANNER_WASH_PCT}/${base}`] = banner;
   }
 
+  // `LoadError`: a `tint(CORAL_FILL, 6)` panel whose Retry action is GOLD_TEXT — the mirror of
+  // the banner above, and the only other place one hue's glyph sits on another hue's own wash.
+  if (hue === 'amber') {
+    for (const base of BASES) out[`red6/${base}`] = over(rgb('red'), 6, rgb(base));
+  }
+
   return out;
 }
 
@@ -321,6 +327,7 @@ describe.each([
       + ON_DEAL_CARD.length * STAGES.length             // pills inside a stage-washed deal card
       + ON_FOREIGN_STAGE_ROW.length * STAGES.length * 2 // idle-days text on a foreign stage row
       + BASES.length * 2                                // the banner: amber's button, red's label
+      + BASES.length                                    // LoadError: amber Retry on a red 6% panel
       + BASES.length * 3;                               // accent: raw + soft + the 12% tab wash
     expect(checked, 'surface count drifted — a composition key collided, or a producer list changed').toBe(expected);
 
