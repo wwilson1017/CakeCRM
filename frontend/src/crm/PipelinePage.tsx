@@ -7,6 +7,7 @@ import { DealForm } from './components/DealForm';
 import { DealDetailSheet } from './components/DealDetailSheet';
 import { ScorePill, TouchCountPill } from './components/badges';
 import { STAGE_COLORS, STAGE_ORDER } from './constants';
+import { stageWriteRequest } from './dealStageWrite';
 import { IconPlus } from '../shared/icons';
 import { useIsMobile } from '../shared/useIsMobile';
 import { LoadError } from '../shared/LoadError';
@@ -316,7 +317,15 @@ export function PipelinePage() {
   // its optimistic fromStage — so even if two chained writes for one deal BOTH fail,
   // the board rolls back to the true server stage instead of an intermediate stage
   // that never persisted.
-  const moveDealStage = useCallback((deal: CrmDeal, toStage: string, fromStage: string) => {
+  //
+  // `lostReason` (issue #128) only changes WHICH request this op issues — it is captured
+  // per operation alongside `seq`, inside the same per-deal promise chain, so every
+  // invariant above is untouched: the chain still serializes, the sequence check still
+  // discards a superseded response, and rollback still reads the confirmed stage. Both
+  // endpoints return the same `get_deal` projection, so the reconcile merge is unchanged.
+  const moveDealStage = useCallback((
+    deal: CrmDeal, toStage: string, fromStage: string, lostReason?: string,
+  ) => {
     // A bulk move in flight owns the board until its reconcile refetch lands. A single-deal
     // write started now could reconcile (or roll back) against the stage the bulk request is
     // in the middle of changing, clobbering server truth we're about to fetch.
@@ -335,9 +344,8 @@ export function PipelinePage() {
     const prior = dealWriteChain.current.get(dealId) ?? Promise.resolve();
     const run = prior.then(async () => {
       try {
-        const updated = await api<CrmDeal>(`/api/crm/deals/${dealId}`, {
-          method: 'PUT', body: JSON.stringify({ stage: toStage }),
-        });
+        const { path, init } = stageWriteRequest(dealId, toStage, lostReason);
+        const updated = await api<CrmDeal>(path, init);
         // Record server truth for THIS write regardless of supersession — a later
         // failed move in the same chain reverts to a real confirmed stage, not an
         // optimistic intermediate. Use the response's stage, not toStage, so the
@@ -403,9 +411,9 @@ export function PipelinePage() {
   // Detail-sheet handler (Mark Won / Lost) — optimistic move + close the sheet. Also refresh
   // the board (like onClose) so an in-sheet note/activity logged before this dismissal lands
   // its last_activity_at; if a stage move fired, the refresh defers until that PUT settles.
-  const updateDealStage = useCallback((deal: CrmDeal, stage: string) => {
+  const updateDealStage = useCallback((deal: CrmDeal, stage: string, lostReason?: string) => {
     if (deal.stage !== stage) {
-      moveDealStage(deal, stage, deal.stage);
+      moveDealStage(deal, stage, deal.stage, lostReason);
       revealStage(stage);
     }
     setSelectedDealId(null);

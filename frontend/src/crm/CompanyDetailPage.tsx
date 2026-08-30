@@ -14,6 +14,7 @@ import { IconArrowLeft } from '../shared/icons';
 import { useIsMobile } from '../shared/useIsMobile';
 import { confirmDialog } from '../shared/confirm';
 import { toast } from '../shared/toast';
+import { OwnerName } from './components/OwnerName';
 import {
   INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG,
   FONT_DISPLAY,
@@ -133,6 +134,15 @@ export function CompanyDetailPage({ onChanged, onDeleted, onWriteUncertain }: Co
           </div>
         </div>
         {subline && <p style={{ fontSize: 14, color: INK_MUTE, marginTop: 6 }}>{subline}</p>}
+        {/* Its OWN line rather than another `subline` term (issue #128): that string is
+            built by dropping blank fields, so an unassigned owner would vanish from it —
+            which is precisely the state this needs to show. */}
+        <p style={{
+          display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, marginBottom: 0,
+        }}>
+          <span style={{ ...mono(10), color: INK_DIM }}>Owner</span>
+          <OwnerName ownerId={company.owner_id} />
+        </p>
       </div>
 
       {/* Notes */}

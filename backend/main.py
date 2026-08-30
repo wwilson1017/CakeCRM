@@ -12,6 +12,7 @@ import asyncio
 import contextvars
 import logging
 import os
+import re
 import uuid as _uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -21,18 +22,21 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette._utils import get_route_path
+from starlette.routing import compile_path
 
 from alerts.router import router as alerts_router
 from assistant.router import router as assistant_router
-from branding.router import router as branding_router
+from branding.router import MAX_LOGO_BYTES, router as branding_router
 from context_files.router import router as context_files_router
 from core import postgres
 from core.auth import router as auth_router
 from core.auth_2fa import router as auth_2fa_router
 from core.config import settings
 from core.storage import atomic_write
+from crm import attachment_service
 from crm.gtd_router import router as gtd_router
-from crm.router import router as crm_router
+from crm.router import MAX_UPLOAD_BYTES as crm_upload_max_bytes, router as crm_router
 from crm.todo_capture import router as todo_capture_router
 from crm.todo_web import (
     public_api_router as todo_web_public_api,
@@ -203,13 +207,72 @@ app = FastAPI(
 # as they stream, which is real machinery for a case no browser produces.
 MAX_REQUEST_BYTES = 64 * 1024 * 1024
 
+# Room for the multipart envelope around one file part: the boundary pair, the
+# Content-Disposition (including a filename the client may send longer than the 120 bytes
+# the service will store), the part's Content-Type, and the CRLFs. A real browser envelope
+# is well under 1 KB; 64 KB reserves ~64x that. Deliberately generous because it is
+# headroom on a rejection threshold, not a budget anyone spends — the cost of being too
+# tight is 413ing a correct upload, and the cost of being loose is 64 KB.
+MULTIPART_ENVELOPE_BYTES = 64 * 1024
+
+# Every upload route's admission ceiling, because for a multipart body the ceiling here is
+# the ONLY thing standing between a caller and a full spool-to-disk plus parse (see above:
+# the route's own bounded read runs too late). Sized per route at its real feature limit
+# plus the envelope, rather than leaving each one on a 64 MB disk backstop it can overrun
+# by 32-64x.
+#
+# Keyed by the route's own path TEMPLATE, compiled with Starlette's `compile_path` — the
+# same function the router uses — so an entry matches exactly the set of paths that reach
+# that endpoint. Writing these patterns by hand is what makes them wrong: a hand-written
+# `\d+` for `{note_id}` looks right and is a bypass, because the router compiles that
+# parameter to `[^/]+` (`note_id: int` is FastAPI VALIDATION, applied after the body is
+# already parsed). `/note/abc/attachments` therefore reaches the parser while missing a
+# `\d+` gate, spooling an oversized body under the 64 MB backstop — the exact hole this
+# table exists to close. Deriving the pattern from the template makes that class of drift
+# unrepresentable rather than merely fixed.
+#
+# The assistant upload route is deliberately ABSENT: its legitimate maximum is MAX_FILES x
+# MAX_FILE_SIZE = 50 MB against the same 64 MB backstop, so the global ceiling is already
+# the tight one there and a row would only duplicate it.
+_ROUTE_REQUEST_LIMIT_SPECS: tuple[tuple[str, int], ...] = (
+    (
+        "/api/crm/chatter/note/{note_id}/attachments",
+        attachment_service.MAX_ATTACHMENT_BYTES + MULTIPART_ENVELOPE_BYTES,
+    ),
+    ("/api/crm/import", crm_upload_max_bytes + MULTIPART_ENVELOPE_BYTES),
+    ("/api/crm/smart-import/parse", crm_upload_max_bytes + MULTIPART_ENVELOPE_BYTES),
+    ("/api/branding/logo", MAX_LOGO_BYTES + MULTIPART_ENVELOPE_BYTES),
+)
+
+# First match wins, falling back to MAX_REQUEST_BYTES.
+_ROUTE_REQUEST_LIMITS: tuple[tuple[re.Pattern[str], int], ...] = tuple(
+    (compile_path(template)[0], limit) for template, limit in _ROUTE_REQUEST_LIMIT_SPECS
+)
+
+
+def _request_limit_for(path: str) -> int:
+    """The Content-Length ceiling admitting `path`: the first matching row, in declaration
+    order. Nothing sorts by tightness, so overlapping rows resolve by position."""
+    for pattern, limit in _ROUTE_REQUEST_LIMITS:
+        if pattern.match(path):
+            return limit
+    return MAX_REQUEST_BYTES
+
 
 @app.middleware("http")
 async def request_size_limit_middleware(request: Request, call_next):
     declared = request.headers.get("content-length")
     if declared:
         try:
-            if int(declared) > MAX_REQUEST_BYTES:
+            # `get_route_path`, not `request.url.path`: the router matches on the path with
+            # `root_path` stripped, so behind a path-prefixing proxy (or under an ASGI mount)
+            # the raw path carries a prefix the compiled patterns do not have — the route
+            # would still be reached while its ceiling silently reverted to the 64 MB
+            # backstop. Same principle as compiling the patterns with `compile_path`: match
+            # what the router matches. It is Starlette-private, which is deliberate — if it
+            # moves, the import fails loudly at startup (and in CI's import check) rather
+            # than drifting quietly, which is the failure mode that actually costs us here.
+            if int(declared) > _request_limit_for(get_route_path(request.scope)):
                 return JSONResponse(
                     status_code=413,
                     content={"detail": "Request too large."},

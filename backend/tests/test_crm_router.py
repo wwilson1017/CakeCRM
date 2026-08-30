@@ -417,6 +417,72 @@ def test_company_create_duplicate_name_400(client, monkeypatch):
     assert "already exists" in resp.json()["detail"]
 
 
+# ── POST /companies/resolve — get-or-create for the inline picker (issue #123) ─
+
+def test_company_resolve_delegates_to_the_shared_resolver(client, monkeypatch):
+    """The whole point of the route: it must not match the name itself.
+
+    The normalization is the uq_companies_name_ci index expression, and the primitive's
+    own docstring warns that Python's case-folding can disagree with the database's
+    LOWER() — so a second spelling of the rule in the router is how a company we just
+    created gets stranded and a duplicate appears anyway.
+    """
+    seen = {}
+    monkeypatch.setattr(service, "resolve_or_create_company_ids",
+                        lambda names: seen.update(names=names) or {names[0]: 7})
+    monkeypatch.setattr(service, "get_company", lambda cid: {"id": cid, "name": "Acme"})
+
+    resp = client.post("/api/crm/companies/resolve", json={"name": "acme"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {"id": 7, "name": "Acme"}
+    assert seen["names"] == ["acme"]
+
+
+def test_company_resolve_passes_the_name_through_untrimmed(client, monkeypatch):
+    """The primitive's contract is {raw spelling exactly as passed: id}, so the route
+    looks the result up by the same string it sent. Trimming here would be a second
+    owner of a rule that belongs to SQL — and would break the lookup if the two
+    disagreed about what counts as whitespace."""
+    seen = {}
+    monkeypatch.setattr(service, "resolve_or_create_company_ids",
+                        lambda names: seen.update(names=names) or {names[0]: 3})
+    monkeypatch.setattr(service, "get_company", lambda cid: {"id": cid, "name": "Acme"})
+
+    assert client.post("/api/crm/companies/resolve", json={"name": "  Acme  "}).status_code == 200
+    assert seen["names"] == ["  Acme  "]
+
+
+def test_company_resolve_blank_name_400(client, monkeypatch):
+    """Mirrors POST /companies' guard rather than inventing its own."""
+    def unreached(names):
+        raise AssertionError("the resolver must not be called for a blank name")
+    monkeypatch.setattr(service, "resolve_or_create_company_ids", unreached)
+
+    for name in ("", "   ", "\t\n"):
+        resp = client.post("/api/crm/companies/resolve", json={"name": name})
+        assert resp.status_code == 400, name
+        assert "required" in resp.json()["detail"].lower()
+
+
+def test_company_resolve_unresolvable_is_409_not_a_half_answer(client, monkeypatch):
+    """The primitive yields no id only in its documented race (the row was deleted
+    between its two statements). Nothing was linked, so the route must refuse rather
+    than return something the form would store as a company_id."""
+    monkeypatch.setattr(service, "resolve_or_create_company_ids", lambda names: {})
+    monkeypatch.setattr(service, "get_company", lambda cid: None)
+
+    assert client.post("/api/crm/companies/resolve", json={"name": "Acme"}).status_code == 409
+
+
+def test_company_resolve_missing_row_is_409(client, monkeypatch):
+    """Same refusal when the id resolves but the read-back finds nothing."""
+    monkeypatch.setattr(service, "resolve_or_create_company_ids", lambda names: {names[0]: 9})
+    monkeypatch.setattr(service, "get_company", lambda cid: None)
+
+    assert client.post("/api/crm/companies/resolve", json={"name": "Acme"}).status_code == 409
+
+
 def test_company_update_duplicate_name_400(client, monkeypatch):
     def raise_unique(cid, **kw):
         raise psycopg2.errors.UniqueViolation()
@@ -851,3 +917,110 @@ def test_an_out_of_range_cursor_is_a_422_not_a_500(client):
     too_big = 2_147_483_648
     for path in ("/api/crm/tasks", "/api/crm/contacts", "/api/crm/companies"):
         assert client.get(f"{path}?after_id={too_big}&sort=id").status_code == 422, path
+
+
+# ── POST /deals/:id/mark-lost (issue #128) ────────────────────────────────────
+# The only human writer of `lost_reason`. `_DEAL_USER_WRITABLE` excludes the column
+# on purpose, so these pin that the route reaches the lifecycle verb (and carries the
+# author) rather than the general update path.
+
+def test_mark_lost_passes_reason_and_author(client, monkeypatch):
+    seen = {}
+
+    def fake(deal_id, lost_reason="", author_id=None):
+        seen.update(deal_id=deal_id, lost_reason=lost_reason, author_id=author_id)
+        return {"id": deal_id, "stage": "lost", "lost_reason": lost_reason}
+
+    monkeypatch.setattr(service, "mark_deal_lost", fake)
+    res = client.post(
+        "/api/crm/deals/7/mark-lost",
+        json={"lost_reason": "Chose a competitor.\nPrice was the deciding factor."},
+    )
+
+    assert res.status_code == 200
+    assert seen["deal_id"] == 7
+    # Newlines survive the round trip — the whole point of a multi-line reason.
+    assert "\n" in seen["lost_reason"]
+    # Authorship, not ownership (#60): a reason a rep typed must credit that rep, or
+    # per-rep activity undercounts them. FAKE_ADMIN's id.
+    assert seen["author_id"] == 1
+
+
+def test_mark_lost_with_a_blank_reason_still_uses_the_lifecycle_verb(client, monkeypatch):
+    """An explicit Mark Lost with no prose is still a close, not a plain stage edit.
+
+    PUT /deals/:id with {stage: 'lost'} would leave `probability` untouched; only this
+    verb zeroes it. So the endpoint is chosen by the ACTION, never by whether the user
+    happened to type something.
+    """
+    calls = []
+    monkeypatch.setattr(
+        service, "mark_deal_lost",
+        lambda deal_id, lost_reason="", author_id=None: (
+            calls.append(lost_reason) or {"id": deal_id, "stage": "lost"}
+        ),
+    )
+    assert client.post("/api/crm/deals/7/mark-lost", json={}).status_code == 200
+    assert calls == [""]
+
+
+def test_mark_lost_archived_deal_is_400_not_500(client, monkeypatch):
+    """_write_deal_update raises on a stage change to an archived deal — a refusal the
+    caller can act on, mapped like PUT /deals/:id does."""
+    def boom(deal_id, lost_reason="", author_id=None):
+        raise ValueError("Cannot change the stage of an archived deal")
+
+    monkeypatch.setattr(service, "mark_deal_lost", boom)
+    res = client.post("/api/crm/deals/7/mark-lost", json={"lost_reason": "x"})
+    assert res.status_code == 400
+    assert "archived" in res.json()["detail"]
+
+
+def test_mark_lost_missing_deal_404(client, monkeypatch):
+    monkeypatch.setattr(
+        service, "mark_deal_lost", lambda deal_id, lost_reason="", author_id=None: None
+    )
+    assert client.post("/api/crm/deals/999/mark-lost", json={}).status_code == 404
+
+
+def test_mark_lost_rejects_an_oversized_reason_instead_of_truncating(client, monkeypatch):
+    """The service TRUNCATES at MAX_LOST_REASON. Silently dropping the tail of a rep's
+    typed prose is data loss, so the REST boundary refuses and the service is never
+    reached — the browser caps at the same length, so only a raw client can hit this."""
+    called = []
+    monkeypatch.setattr(
+        service, "mark_deal_lost",
+        lambda deal_id, lost_reason="", author_id=None: called.append(1),
+    )
+    over = "x" * (service.MAX_LOST_REASON + 1)
+    assert client.post(
+        "/api/crm/deals/7/mark-lost", json={"lost_reason": over}
+    ).status_code == 422
+    assert called == []
+    # …and exactly at the cap is still accepted.
+    monkeypatch.setattr(
+        service, "mark_deal_lost",
+        lambda deal_id, lost_reason="", author_id=None: {"id": deal_id, "stage": "lost"},
+    )
+    at_cap = "x" * service.MAX_LOST_REASON
+    assert client.post(
+        "/api/crm/deals/7/mark-lost", json={"lost_reason": at_cap}
+    ).status_code == 200
+
+
+def test_the_frontend_lost_reason_cap_matches_the_server():
+    """The composer's cap is a hand-copied mirror of MAX_LOST_REASON, so it can drift.
+
+    Drift is not symmetric: a frontend cap ABOVE the server's turns a 422 into the user's
+    problem after they have written the reason, which is exactly what the Pydantic bound
+    exists to prevent them from hitting. Read the shipped constant rather than restating
+    the number, the way inkContrast.test.ts parses the shipped CSS.
+    """
+    import re
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[2]
+           / "frontend" / "src" / "crm" / "constants.ts").read_text(encoding="utf-8")
+    match = re.search(r"export const MAX_LOST_REASON\s*=\s*(\d+)", src)
+    assert match, "MAX_LOST_REASON is gone from frontend/src/crm/constants.ts"
+    assert int(match.group(1)) == service.MAX_LOST_REASON
