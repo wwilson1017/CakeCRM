@@ -124,7 +124,10 @@ def background_allowlist(registry) -> set[str]:
     a hard boundary against prompt injection via reminder/CRM text: even if the
     model were steered by injected content, the worst it can do is send one
     notification — it can never create/log/update/delete CRM records, and (since
-    #114) that notification can no longer be filled with the connected mailbox.
+    #114) it cannot fetch live mailbox content to put in that notification. Stated
+    that precisely on purpose: mail-DERIVED text can still reach the turn, because
+    #17's gmail_scan logs a sender and subject into activity_log and the CRM reads
+    return it like any other record.
     """
     return (read_tool_names(registry) - BACKGROUND_EXCLUDED_TOOLS) | {"notify_user"}
 

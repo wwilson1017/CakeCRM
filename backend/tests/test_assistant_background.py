@@ -8,7 +8,7 @@ refuses to run inside an event loop.
 """
 
 
-from assistant import background
+from assistant import background, delimiters
 from assistant.background import BackgroundResult, run_background_turn
 
 
@@ -40,11 +40,14 @@ class FakeProvider:
 class FakeRegistry:
     def __init__(self, writes=frozenset()):
         self._writes = set(writes)
-        # The Gmail reads are advertised here on purpose: they are writes:False, so a
-        # registry WITHOUT them would let the #114 exclusion tests pass vacuously.
         self.writes_map = {"crm_dashboard": False, "crm_create_task": True, "crm_delete_contact": True,
-                           "notify_user": True,
-                           "gmail_search": False, "gmail_read_thread": False}
+                           "notify_user": True}
+        # Advertise every untrusted-source read (writes:False, as they really are), or the
+        # #114 exclusion tests would pass vacuously against a registry lacking them.
+        # Derived from the real set, not re-listed: a second hand-maintained copy here
+        # would break CI the day a third tool joins UNTRUSTED_SOURCE_TOOLS, which is
+        # exactly the drift this feature is written to avoid.
+        self.writes_map.update({name: False for name in delimiters.UNTRUSTED_SOURCE_TOOLS})
         self.calls = []
 
     def is_write(self, name):
@@ -168,28 +171,26 @@ def test_allowlist_is_reads_plus_notify_only():
 
 def test_untrusted_source_reads_are_excluded_from_the_allowlist():
     """The Gmail reads are writes:False, so the pre-#114 derivation admitted them and a
-    prompt injection could exfiltrate mail through the one permitted notify_user."""
-    reg = FakeRegistry()
+    prompt injection could exfiltrate mail through the one permitted notify_user.
+
+    Written against the whole BACKGROUND_EXCLUDED_TOOLS set rather than today's two
+    names, so a tool added to it later is covered here with no edit to this file."""
     excluded = set(background.BACKGROUND_EXCLUDED_TOOLS)
-    # Guard against a vacuous pass: the registry must actually advertise them.
-    assert excluded <= reg.writes_map.keys()
-    assert excluded and not (excluded & set(reg._writes))   # they are READS, not writes
+    assert excluded, "empty exclusion set would make every assertion below vacuous"
+
+    reg = FakeRegistry()
+    assert excluded <= reg.writes_map.keys()                # the registry advertises them
+    assert not (excluded & set(reg._writes))                # as READS, not writes
 
     allowed = background.background_allowlist(reg)
     assert excluded.isdisjoint(allowed), f"untrusted-source reads leaked: {excluded & allowed}"
     assert "crm_dashboard" in allowed        # ordinary reads are untouched
 
 
-def test_every_untrusted_source_tool_is_excluded_not_just_todays_two():
-    """Behavioral coupling to delimiters.UNTRUSTED_SOURCE_TOOLS rather than a shape
-    assertion: a tool added to that set later is excluded here with no further edit."""
-    from assistant import delimiters
-
-    assert delimiters.UNTRUSTED_SOURCE_TOOLS, "empty set would make the check below vacuous"
-    reg = FakeRegistry()
-    reg.writes_map.update({name: False for name in delimiters.UNTRUSTED_SOURCE_TOOLS})
-    allowed = background.background_allowlist(reg)
-    assert set(delimiters.UNTRUSTED_SOURCE_TOOLS).isdisjoint(allowed)
+def test_background_exclusion_tracks_the_shared_untrusted_source_set():
+    """The exclusion must stay coupled to the set the interactive engine taints off, so
+    the two loops can never disagree about which reads carry third-party content."""
+    assert background.BACKGROUND_EXCLUDED_TOOLS is delimiters.UNTRUSTED_SOURCE_TOOLS
 
 
 def test_untrusted_source_read_is_refused_even_when_a_caller_allows_it(monkeypatch):

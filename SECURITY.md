@@ -38,18 +38,21 @@ Because scopes can't guarantee it, the guarantee lives in code:
 - `gmail_create_draft` is a **write** tool, so in the assistant's default (normal)
   mode it passes through the human-confirmation gate: the draft is not created until
   you approve it, and you see the full recipient/subject/body first.
-- **The assistant only searches or opens your mail when you are there.** The two read
-  tools are available in conversations you are having; they are withheld from the
-  assistant's *unattended* runs (the background heartbeat, a firing reminder, the
-  proactive digest), where nobody is watching the screen. Such a run may send you at
-  most one notification, and without the read tools that notification cannot be filled
-  with the contents of your email — so text planted in a reminder or a CRM record has
-  no route to your inbox. This is about the assistant's own reading: the optional
-  **email touch-scan** is a separate, deterministic job that does check your inbox on a
-  schedule without you present. It involves no AI, follows fixed rules, and records only
-  a sender and subject against a contact it already knows — and an unattended assistant
-  run can see that record afterwards as ordinary CRM history, like any other logged
-  activity. Turn the scan off and nothing automated reads your mail at all.
+- **The assistant only searches or opens your mail in a conversation with you.** The two
+  read tools are offered in interactive chats; they are withheld from the assistant's
+  *unattended* runs (the background heartbeat, a firing reminder, the proactive digest).
+  Such a run may send you at most one notification, and without the read tools it cannot
+  pull your messages in order to put them there — so text planted in a reminder or a CRM
+  record cannot turn that notification into a copy of your mail.
+  Two limits on that promise, stated plainly rather than glossed over. First, it covers
+  the assistant's own reading; the optional **email touch-scan** is a separate,
+  deterministic job that does check your inbox on a schedule without you present — no AI,
+  fixed rules, and it records only a sender and subject against a contact you already
+  have. Second, once the scan has recorded that sender and subject, an unattended run can
+  read it back as ordinary CRM history like any other logged activity. So the precise
+  guarantee is that an unattended run cannot *fetch* from your mailbox, not that nothing
+  mail-derived can reach it. With the scan switched off, no unattended part of CakeCRM
+  reads your mail at all.
 
 ### The automated guard
 
