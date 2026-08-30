@@ -767,6 +767,111 @@ def test_get_pipeline_stage_branch_carries_new_fields(rec):
     assert rec.params_for("last_activity_at") == ["lead"]
 
 
+# ── Pipeline board: the three bounding modes (issue #59) ──────────────────────
+
+def test_get_pipeline_keyset_first_page(rec):
+    rec.fetchall_queue = [[], []]
+    out = service.get_pipeline(limit=501)
+
+    sql = rec.sql_containing("ORDER BY d.id ASC")
+    assert "LIMIT %s" in sql
+    # A page must use the per-deal LATERAL, never the whole-table grouped aggregate:
+    # the grouped form would scan all of activity_log on every page of a sweep.
+    assert "LEFT JOIN LATERAL" in sql and "GROUP BY deal_id" not in sql
+    # ...while still carrying every column the unbounded board carries.
+    assert "la.last_at AS last_activity_at" in sql and "co.name AS company_name" in sql
+    assert "d.id > %s" not in sql, "a first page has no cursor"
+    assert rec.params_for("ORDER BY d.id ASC") == [501]
+    # A FIRST page still pays for — and returns — the envelope.
+    assert out["stage_summary"] == [] and out["total_pipeline_value"] == 0
+    # ...and never advertises a truncation flag: that answers a per-stage-cap question
+    # this mode was not asked. The sweep derives hasMore from an over-fetched ROW.
+    assert "deals_truncated" not in out
+
+
+def test_get_pipeline_cursor_page_skips_the_aggregate(rec):
+    rec.fetchall_queue = [[]]
+    out = service.get_pipeline(limit=501, after_id=1207)
+
+    assert rec.params_for("d.id > %s") == [1207, 501]
+    assert len(rec.calls) == 1, "a continuation page must not run the stage_summary aggregate"
+    assert out["stage_summary"] is None and out["total_pipeline_value"] is None
+
+
+def test_get_pipeline_keyset_respects_include_archived_and_stage(rec):
+    rec.fetchall_queue = [[]]
+    service.get_pipeline(limit=10, after_id=5, include_archived=True)
+    assert "archived_at IS NULL" not in rec.sql_containing("ORDER BY d.id ASC")
+
+    rec.calls.clear()
+    rec.fetchall_queue = [[], []]
+    service.get_pipeline(stage="lead", limit=10)
+    sql = rec.sql_containing("ORDER BY d.id ASC")
+    assert "d.stage = %s" in sql
+    # The stage filter leads the params, the cap trails them — one shared condition list.
+    assert rec.params_for("ORDER BY d.id ASC") == ["lead", 10]
+
+
+def test_get_pipeline_window_caps_per_stage_in_sql(rec):
+    # Three lead deals ranked 1..3 and one won deal, for a cap of 2: the rank-3 row is the
+    # over-fetch probe and must be dropped, leaving the truncation flag set.
+    rec.fetchall_queue = [
+        [{"id": 3, "stage": "lead", "rn": 1}, {"id": 2, "stage": "lead", "rn": 2},
+         {"id": 9, "stage": "won", "rn": 1}, {"id": 1, "stage": "lead", "rn": 3}],
+        [{"stage": "lead", "count": 10, "total_value": 999}],
+    ]
+    out = service.get_pipeline(limit_per_stage=2)
+
+    sql = rec.sql_containing("ROW_NUMBER")
+    assert "PARTITION BY d.stage" in sql
+    assert "ORDER BY d.updated_at DESC, d.id DESC" in sql
+    # The window reads the whole corpus in one statement, so it keeps the grouped join.
+    assert "GROUP BY deal_id" in sql and "LEFT JOIN LATERAL" not in sql
+    assert rec.params_for("ROW_NUMBER") == [3], "asks for cap + 1, the truncation probe"
+
+    assert [d["id"] for d in out["deals"]] == [3, 2, 9]
+    assert all("rn" not in d for d in out["deals"]), "the rank must never leave the service"
+    assert out["deals_truncated"] is True
+    # Counts and value still cover EVERY deal — trimming the list must not lie.
+    assert out["stage_summary"][0]["count"] == 10
+
+
+def test_get_pipeline_window_reports_no_truncation_when_it_fits(rec):
+    rec.fetchall_queue = [[{"id": 1, "stage": "lead", "rn": 1}], []]
+    assert service.get_pipeline(limit_per_stage=2)["deals_truncated"] is False
+
+    # The default board has no cap, so it must not advertise a truncation flag at all.
+    rec.fetchall_queue = [[{"id": 1, "stage": "lead"}], []]
+    assert "deals_truncated" not in service.get_pipeline()
+
+
+def test_list_deals_treats_contact_id_zero_as_a_filter(rec):
+    """The ROUTE deliberately routes `?contact_id=0` here rather than to the board (see
+    test_contact_id_zero_is_a_filter_not_a_fallthrough), so a truthiness test in the
+    service answered that filtered request with the WHOLE deal list."""
+    rec.fetchall_queue = [[]]
+    service.list_deals(contact_id=0)
+    assert "d.contact_id = %s" in rec.sql_containing("FROM deals d")
+    assert rec.params_for("d.contact_id = %s") == [0, 50]
+
+    # An omitted contact_id still means "no filter" — the fix must not invent one.
+    # (The needle is the WHERE predicate, not `d.contact_id`, which is also the JOIN key.)
+    rec.calls.clear()
+    rec.fetchall_queue = [[]]
+    service.list_deals()
+    assert "d.contact_id = %s" not in rec.sql_containing("FROM deals d")
+    assert rec.params_for("FROM deals d") == [50]
+
+
+def test_get_pipeline_refuses_meaningless_combinations(rec):
+    for kwargs in ({"after_id": 5},
+                   {"limit": 5, "limit_per_stage": 5},
+                   {"after_id": 5, "limit": 5, "limit_per_stage": 5}):
+        with pytest.raises(ValueError):
+            service.get_pipeline(**kwargs)
+    assert rec.calls == [], "a refused call must not reach Postgres"
+
+
 def test_search_companies_status_filter(rec):
     service.search_companies("acme", status="active")
     sql = rec.sql_containing("FROM companies WHERE")

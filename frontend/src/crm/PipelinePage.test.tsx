@@ -89,7 +89,11 @@ beforeEach(() => {
   api.mockReset();
   api.mockImplementation((url: string, init: { body: string }) => {
     if (url === '/api/users') return Promise.resolve({ users: [] });
-    if (url === '/api/crm/deals') return Promise.resolve({ deals: DEALS });
+    // #59 turned the board's one GET into a keyset sweep, so the URL carries the page-0
+    // cursor params. Every fixture here is well under one page, so a load is still
+    // exactly one request — matching on the prefix keeps this suite about the PAGE
+    // rather than about pipelineAssembly's wire format, which has its own tests.
+    if (url.startsWith('/api/crm/deals?sort=id')) return Promise.resolve({ deals: DEALS });
     // A bulk move must answer in the real envelope: `{}` reads as ok:false, which
     // classifyBulkMove correctly calls a REFUSAL — a silently wrong premise for any test
     // asserting on what happens after a successful move.
@@ -328,7 +332,7 @@ describe('an empty board shows ONE explanation, not two', () => {
   it('does not stack the filter message on the layer\'s own empty state', async () => {
     api.mockImplementation((url: string) => {
       if (url === '/api/users') return Promise.resolve({ users: [] });
-      if (url === '/api/crm/deals') return Promise.resolve({ deals: [] });
+      if (url.startsWith('/api/crm/deals?sort=id')) return Promise.resolve({ deals: [] });
       return Promise.resolve({});
     });
     // A persisted query from a previous session, on an install that has no deals yet.

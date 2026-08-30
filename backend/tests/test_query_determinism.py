@@ -730,6 +730,17 @@ def test_order_by_fragment_constants_are_total():
             verdict = order_by_verdict(f"SELECT 1 FROM t ORDER BY {fragment} LIMIT %s")
             assert verdict is None, f"{name}[{key!r}] -> {fragment!r}: {verdict}"
             checked += 1
+
+    # Scalar fragment constants (#59): one string rather than a sort dict, but the same
+    # question. _PIPELINE_RECENCY_ORDER is interpolated into the board's ORDER BY, the
+    # window's PARTITION ranking and that window's outer ORDER BY, so a lost tiebreaker
+    # here would hand out ROW_NUMBER ranks arbitrarily as well as churning card order.
+    for name in ("_PIPELINE_RECENCY_ORDER",):
+        fragment = getattr(service, name)
+        verdict = order_by_verdict(f"SELECT 1 FROM t ORDER BY {fragment} LIMIT %s")
+        assert verdict is None, f"{name} -> {fragment!r}: {verdict}"
+        checked += 1
+
     assert checked, "no ORDER BY fragment constants found — was one renamed or removed?"
 
 
@@ -749,6 +760,35 @@ def _contact_sort_keys():
     # Parametrizing off the live dict means a sort option added later is covered here
     # automatically instead of needing this list edited.
     return sorted(_CONTACT_SORTS) + ["not-a-real-sort"]  # the last exercises the fallback
+
+
+def test_pipeline_keyset_pages_are_totally_ordered(crm_recorder):
+    """#59's keyset page is the cap the hardened-uncapped test was holding the door for.
+
+    Judged on the RUNTIME SQL so the {joins}/{where} interpolations are resolved — the
+    static scan sees the same literal ORDER BY/LIMIT, and this proves the resolved
+    statement agrees.
+    """
+    from crm import service
+
+    service.get_pipeline(limit=5)
+    service.get_pipeline(limit=5, after_id=7)
+    service.get_pipeline(limit=5, after_id=7, include_archived=True)
+    _assert_recorded_orders_are_total(crm_recorder)
+
+
+def test_pipeline_window_ranks_on_a_total_order(crm_recorder):
+    """The window statement carries no LIMIT, so the capped-reader scan ignores it — but a
+    ROW_NUMBER partition ordered by a non-unique key hands out ranks arbitrarily, which is
+    the same dupes-and-gaps bug wearing a different clause. Pin the resolved OVER()
+    ordering directly."""
+    from crm import service
+
+    service.get_pipeline(limit_per_stage=3)
+    sql = next(s for s in crm_recorder.sql if "ROW_NUMBER" in s)
+    m = re.search(r"OVER \(PARTITION BY d\.stage\s+ORDER BY\s+(.*?)\)", sql, re.S)
+    assert m, f"no window ordering found in: {sql}"
+    assert _normalize(_split_terms(m.group(1))[-1]) == "d.id", m.group(1)
 
 
 @pytest.mark.parametrize("sort", _contact_sort_keys())
@@ -824,7 +864,11 @@ def test_hardened_uncapped_readers_keep_their_tiebreaker(monkeypatch):
     These sort by a non-unique column with no LIMIT, so nothing can dupe or vanish today
     and the source scan skips them by design. They were given a tiebreaker anyway so that
     adding a cap later cannot quietly reintroduce the bug — ``get_pipeline`` being the
-    reader #59 will paginate. That promise is worth nothing unless something fails when
+    reader #59 has since paginated. Its DEFAULT read is still uncapped (that is the
+    contract: a bare call returns the whole board), so it stays here; #59's opt-in keyset
+    page is a separate, literally-capped site the static scan judges on its own, and
+    ``test_pipeline_keyset_pages_are_totally_ordered`` covers it behaviorally. That
+    promise is worth nothing unless something fails when
     the term is dropped, which is what this test is for: it appends a LIMIT to the
     emitted SQL and applies exactly the rule that will govern these readers the moment
     one is really added.
