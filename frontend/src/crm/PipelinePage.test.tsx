@@ -1291,6 +1291,54 @@ describe('PipelinePage — deal deep links', () => {
     expect(deadLinkNotice()).toBeNull();
   });
 
+  it('does not retire a link whose refresh was merely superseded', async () => {
+    // Found by the PR reviewer. `load` returns false for three different reasons, and only
+    // one of them is a failure: it also returns false when DEFERRED behind a write and when
+    // SUPERSEDED by a newer load. Following the same link again starts a newer load and
+    // supersedes the first — retiring on that marked the SECOND navigation handled, so its
+    // successful payload arrived and opened nothing at all.
+    // ORDER IS THE WHOLE TEST: the superseded attempt has to settle BEFORE the newer
+    // payload arrives. If the newer one lands first it has already opened the deal, and a
+    // late retirement changes nothing visible — which is exactly how a first cut of this
+    // test passed against the bug.
+    const NEW_DEAL = deal({ id: 77, title: 'Fresh signing', stage: 'lead', value: 500 });
+    const firstAttempt = deferred<{ deals: CrmDeal[] }>();
+    const secondAttempt = deferred<{ deals: CrmDeal[] }>();
+    let boardCalls = 0;
+    routeApi({
+      over: (path) => {
+        if (path !== LIVE_PATH) return undefined;
+        boardCalls += 1;
+        if (boardCalls === 1) return { deals: [LIVE] };
+        if (boardCalls === 2) return firstAttempt.promise;    // held, then superseded
+        return secondAttempt.promise;                         // held, the real answer
+      },
+    });
+
+    await render('/crm/pipeline');
+    await renderThenNavigate('/crm/pipeline?deal=77');
+    expect(boardCalls).toBe(2);
+
+    // The same link again: a newer navigation starting a newer load, which supersedes the
+    // first — `load` will hand the first one back `applied === false`.
+    await renderThenNavigate('/crm/pipeline?deal=77');
+    expect(boardCalls).toBe(3);
+
+    // The superseded attempt settles FIRST. Retiring on it marks the second navigation
+    // handled, and its answer below then opens nothing at all.
+    await act(async () => { firstAttempt.resolve({ deals: [LIVE] }); });
+    await flush();
+    expect(deadLinkNotice()).toBeNull();
+
+    // The second navigation's own answer, carrying the deal.
+    await act(async () => { secondAttempt.resolve({ deals: [LIVE, NEW_DEAL] }); });
+    await flush();
+
+    expect(container.textContent).toContain('Fresh signing');
+    expect(button('Close')).toBeTruthy();
+    expect(deadLinkNotice()).toBeNull();
+  });
+
   it('lets the user dismiss the notice, and does not re-raise it on its own', async () => {
     routeApi();
     await render('/crm/pipeline?deal=404');

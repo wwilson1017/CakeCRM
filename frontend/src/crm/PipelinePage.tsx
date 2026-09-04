@@ -140,6 +140,9 @@ export function PipelinePage() {
   // has to survive the board changing underneath it, and the user has to be able to dismiss
   // it without the next render putting it straight back.
   const [deadDeepLinkDealId, setDeadDeepLinkDealId] = useState<number | null>(null);
+  // The navigation currently being resolved, readable from an async continuation — the
+  // retirement check below runs after an await and cannot see the render's value.
+  const deepLinkKeyRef = useRef<string | null>(null);
   // Which deal, if any, the sheet on screen was opened by a LINK. Distinct from
   // `handledDeepLink`, which never clears until the next link: this one clears the moment
   // the user takes over the sheet (closes it, or opens a card themselves), so a later link
@@ -442,6 +445,10 @@ export function PipelinePage() {
   }, [replayDeferredLoad]);
 
   useEffect(() => { loadRef.current = load; }, [load]);
+
+  // Mirrored in an effect, not during render — a render-phase ref write is a build error
+  // under this repo's react-hooks ruleset.
+  useEffect(() => { deepLinkKeyRef.current = deepLink.key; }, [deepLink.key]);
 
   // Mount, and again whenever the Archived facet changes WHICH deals the server should
   // send. The ref is synced here rather than during render (a render-phase ref write is a
@@ -872,7 +879,9 @@ export function PipelinePage() {
   useEffect(() => {
     if (deepLinkState !== 'refresh') return;
     const target = deepLink.dealId;
+    const attemptKey = deepLink.key;
     queueMicrotask(() => {
+      const genBefore = loadGen.current;
       void load(true).then(applied => {
         // A refresh that never landed leaves the verdict at `refresh` forever, and this
         // effect will not run again — so the link would sit armed until some unrelated load
@@ -881,10 +890,17 @@ export function PipelinePage() {
         // stays silent, which is the documented trade, and following the link again retries
         // because the resolution keys off the navigation.
         //
-        // `pendingRefresh` means the load was DEFERRED behind a write, not lost — that one
-        // replays on its own and must stay armed. And setState here is inside a promise
-        // continuation, not synchronously in the effect body, which is what the ruleset bans.
-        if (!applied && !pendingRefresh.current) setHandledDeepLink(target);
+        // But `applied === false` is not the same as "failed". `load` also returns false
+        // when it was DEFERRED behind a write and when it was SUPERSEDED by a newer load,
+        // and in both of those someone else is still going to settle this link — retiring
+        // on them makes the link do nothing at all, which is the opposite of the fix. So
+        // all three have to hold: the load really failed, nothing replaced it, and the
+        // navigation it belonged to is still the one on screen.
+        if (applied) return;
+        if (pendingRefresh.current) return;                    // deferred; it replays itself
+        if (loadGen.current !== genBefore + 1) return;         // superseded by a newer load
+        if (deepLinkKeyRef.current !== attemptKey) return;     // a newer navigation owns this
+        setHandledDeepLink(target);
       });
     });
   }, [deepLinkState, deepLink.dealId, deepLink.key, load]);
