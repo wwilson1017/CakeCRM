@@ -282,6 +282,66 @@ describe('CompanyRollupReport', () => {
     expect(text()).toContain('timeline archived=true');
   });
 
+  it('keeps the report on screen while the archive toggle reloads it', async () => {
+    // Blanking to a bare loading line unmounts every section, the document collapses, and
+    // the browser clamps scrollY to 0 — so ticking the checkbox threw the reader back to the
+    // top of an account they were reading halfway down.
+    let releaseSecond!: (v: unknown) => void;
+    apiMock.mockImplementation((url: string) =>
+      String(url).includes('include_archived=true')
+        ? new Promise(r => { releaseSecond = r; })
+        : Promise.resolve(rollup({ deals: [deal({ id: 1, title: 'Live deal' })] as never })));
+    await mount();
+    expect(text()).toContain('Live deal');
+
+    const box = container.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    act(() => { box.click(); });
+    await settle();
+    expect(text()).toContain('Live deal');
+    expect(text()).toContain('refreshing');
+    expect(text()).not.toContain('Loading company report');
+
+    await act(async () => { releaseSecond(rollup({ deals: [deal({ id: 2, title: 'Old deal' })] as never })); });
+    await settle();
+    expect(text()).toContain('Old deal');
+    expect(text()).not.toContain('refreshing');
+  });
+
+  it('falls through to the error card when a reload fails, rather than showing stale data', async () => {
+    apiMock.mockImplementation((url: string) =>
+      String(url).includes('include_archived=true')
+        ? Promise.reject(new Error('boom'))
+        : Promise.resolve(rollup({ deals: [deal({ id: 1, title: 'Live deal' })] as never })));
+    await mount();
+    const box = container.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    act(() => { box.click(); });
+    await settle();
+    expect(text()).toContain("Couldn't load this company report");
+    expect(text()).not.toContain('Live deal');
+  });
+
+  it('hides Collapse all when the open rows are no longer on screen', async () => {
+    // Expanding an archived deal and then switching the filter off leaves its id in the
+    // Set, which would otherwise show a control with nothing to collapse.
+    apiMock.mockImplementation((url: string) =>
+      String(url).includes('include_archived=true')
+        ? Promise.resolve(rollup({
+            deals: [deal({ id: 9, title: 'Old', archived_at: '2026-02-01T00:00:00+00:00' })] as never,
+          }))
+        : Promise.resolve(rollup({ deals: [] })));
+    await mount();
+    const box = container.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    act(() => { box.click(); });
+    await settle();
+    act(() => { expanders()[0].click(); });
+    await settle();
+    expect(buttonSaying('Collapse all')).toBeDefined();
+
+    act(() => { box.click(); });
+    await settle();
+    expect(buttonSaying('Collapse all')).toBeUndefined();
+  });
+
   it('shows the loading state before the first response rather than an empty report', async () => {
     apiMock.mockReturnValue(new Promise(() => {}));
     await mount();

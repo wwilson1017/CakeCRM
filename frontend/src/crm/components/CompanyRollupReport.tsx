@@ -30,6 +30,7 @@ import {
 } from '../../shared/styles';
 import { btnSmall, cardStyle, sectionHeading } from '../styles';
 import { PriorityBadge, ScorePill, StatusBadge, TouchCountPill } from './badges';
+import { displayValue } from './CustomFieldsSection';
 import { OwnerName } from './OwnerName';
 import { CompanyTimeline } from './CompanyTimeline';
 
@@ -120,9 +121,11 @@ function CustomFields({ fields }: { fields: CrmRollupField[] }) {
       <div style={sectionHeading()}>Custom fields</div>
       {fields.map(f => (
         <InfoRow key={f.field_key} label={f.name}>
-          {f.field_type === 'boolean' && f.value != null
-            ? (f.value === '1' ? 'Yes' : f.value === '0' ? 'No' : f.value)
-            : f.value}
+          {/* One definition of the wire-format-to-label rule, shared with the detail
+              pages' editor — a second copy drifts the day another type gets a display
+              form. `displayValue` renders an unset field as an em dash, which InfoRow
+              already does, so only a set value is passed through it. */}
+          {f.value == null || f.value === '' ? null : displayValue(f)}
         </InfoRow>
       ))}
     </div>
@@ -197,6 +200,11 @@ function SectionShell({
   // present but permanently dead is worse than one that is absent. Collapse all and per-row
   // expansion stay available at any count.
   const canExpandAll = rowIds.length > 0 && rowIds.length <= EXPAND_ALL_MAX;
+  // Ask whether any row ON SCREEN is open, not whether the Set is non-empty: expanding an
+  // archived deal and then switching the filter off leaves its id behind, which would show
+  // a "Collapse all" control with nothing to collapse. Same stale-id class the pipeline
+  // board's `applicableBulkIds` intersection exists to prevent.
+  const anyOpen = rowIds.some(id => open.has(id));
   return (
     <section style={{ borderTop: `1px solid ${LINE_STRONG}`, paddingTop: 24, marginTop: 24 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
@@ -208,7 +216,7 @@ function SectionShell({
             Expand all
           </button>
         )}
-        {open.size > 0 && (
+        {anyOpen && (
           <button type="button" style={btnSmall} onClick={() => setOpen(new Set())}>
             Collapse all
           </button>
@@ -375,7 +383,9 @@ export function CompanyRollupReport({ companyId, onCompanyName }: Props) {
   // Row expansion is LOCAL state, and the page mounts this component with key={companyId}.
   // That pairing is the whole design: switching company remounts and so collapses every
   // row (which is what you want — row 3 of one account is not row 3 of another), while
-  // toggling the archived filter does not remount, so the reader keeps their place.
+  // toggling the archived filter does not remount, so the expanded rows stay expanded and
+  // the previous payload stays on screen while the new one loads (see `rollup` below —
+  // keeping the layout mounted is what preserves the scroll position too).
   const [openDeals, setOpenDeals] = useState<ReadonlySet<number>>(EMPTY);
   const [openContacts, setOpenContacts] = useState<ReadonlySet<number>>(EMPTY);
 
@@ -386,7 +396,15 @@ export function CompanyRollupReport({ companyId, onCompanyName }: Props) {
   const key = `${companyId}:${includeArchived}:${reloadNonce}`;
   const [state, setState] = useState<RollupState | null>(null);
   const current = state && state.key === key ? state : null;
-  const rollup = current?.data ?? null;
+  // While a NEW key is in flight, keep the PREVIOUS payload on screen. Dropping to a bare
+  // loading line unmounts every section and the timeline with them, the document collapses
+  // to a few hundred pixels, and the browser clamps scrollY to 0 — so ticking the archived
+  // checkbox threw the reader back to the top of an account they were reading halfway down.
+  // The component is keyed by companyId, so `state` can only ever hold THIS company's data.
+  // A failed refetch still falls through to the error card: on failure `current.data` is
+  // null and `current` IS `state`, so there is no stale payload to fall back to.
+  const rollup = current?.data ?? state?.data ?? null;
+  const refreshing = current === null;
   const failed = current?.failed ?? false;
 
   useEffect(() => {
@@ -495,6 +513,7 @@ export function CompanyRollupReport({ companyId, onCompanyName }: Props) {
             onChange={e => setIncludeArchived(e.target.checked)}
           />
           Include archived deals and archived notes
+          {refreshing && <span style={{ color: INK_DIM }}>· refreshing…</span>}
         </label>
       </div>
 
