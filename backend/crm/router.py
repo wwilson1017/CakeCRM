@@ -116,6 +116,7 @@ from crm import (
     field_service,
     gtd_common,
     provenance_service,
+    report_service,
     scoring_service,
     service as crm,
     today_service,
@@ -1525,6 +1526,53 @@ async def list_companies(
 async def get_company(company_id: int, user=Depends(get_current_user)):
     result = crm.get_company_detail(company_id)
     if not result:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return result
+
+
+@router.get("/companies/{company_id}/report")
+async def company_report(
+    company_id: int,
+    include_archived: bool = False,
+    user=Depends(get_current_user),
+):
+    """The Reports page's one-company rollup (issue #144).
+
+    Deliberately not ``get_company_detail``: that reader serves the Companies detail panel
+    (20 activities, no notes, no truncation flags). This one is the report — every contact,
+    every live deal, each child's newest activities with per-record truncation flags.
+
+    ``include_archived`` widens BOTH archived axes at once (deals by ``archived_at``, notes
+    by ``crm_chatter.archived``) so the page and its timeline never disagree about which
+    records exist. Contacts are always included and rendered marked — ``contacts.status`` is
+    not a sweep, and an archived contact is still this company's history.
+
+    Keyless and behind ``get_current_user``: any member may read any record (#60 — ownership
+    is an assignment, not access control).
+    """
+    result = report_service.get_company_rollup(company_id, include_archived=include_archived)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return result
+
+
+@router.get("/companies/{company_id}/timeline")
+async def company_timeline(
+    company_id: int,
+    limit: int = Query(100, ge=1, le=report_service.TIMELINE_MAX_LIMIT),
+    offset: int = Query(0, ge=0),
+    include_archived: bool = False,
+    user=Depends(get_current_user),
+):
+    """The rollup's merged notes + activities feed, newest first (issue #144).
+
+    LIMIT/OFFSET paged with a ``limit + 1`` probe driving ``has_more`` — never a second
+    COUNT, which would go stale beside the page it describes.
+    """
+    result = report_service.get_company_timeline(
+        company_id, limit=limit, offset=offset, include_archived=include_archived
+    )
+    if result is None:
         raise HTTPException(status_code=404, detail="Company not found")
     return result
 

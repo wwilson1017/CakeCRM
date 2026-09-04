@@ -53,6 +53,9 @@ export interface CrmDeal {
   updated_at: string;
   ai_touch_count?: number | null;       // AI-estimated touch count (issue #16); null = uncomputed
   ai_touch_count_at?: string | null;
+  // How many evidence lines #56 judged to produce that count. It rides every `SELECT d.*`
+  // response and was simply never declared; the Reports rollup (#144) is its first reader.
+  ai_touch_evidence_count?: number | null;
   lost_reason?: string;                 // why a lost deal was lost (issue #22); '' when unset
   archived_at?: string | null;          // soft-archive (issue #22); null = live
   // Pipeline board only (issue #21): MAX of the deal's activity_log rows + un-archived
@@ -379,4 +382,88 @@ export interface AiTouchEvidenceResponse {
   evaluated: number;
   truncated: boolean;
   events: AiTouchEvidenceEvent[];
+}
+
+// GET /api/crm/companies/:id/report (issue #144) — the Reports page's one-company rollup.
+// The child lists are capped server-side and say so; the headline numbers in `summary` are
+// their own aggregate over the full tables, so no cap and no archive toggle can move them.
+// Every expanded row renders entirely from this payload — custom fields and open tasks ride
+// it, batched — so opening a row costs no request.
+
+/** One custom field on a rolled-up record: EVERY definition, whether or not it is filled in. */
+export interface CrmRollupField {
+  field_key: string;
+  name: string;
+  field_type: string;
+  value: string | null;
+}
+
+export interface CrmRollupChild {
+  activities: CrmActivity[];
+  activities_truncated: boolean;
+  custom_fields: CrmRollupField[];
+}
+
+export interface CrmRollupSummary {
+  open_deal_count: number;
+  open_deal_value: number;
+  /**
+   * The one currency every open deal agrees on, or null when they disagree (and when
+   * there are no open deals). `deals.currency` is user-writable, so a sum across
+   * currencies is a false number — null means "do not render this as one figure".
+   */
+  open_deal_currency: string | null;
+  /** `status = 'active'` only: BOTH inactive and archived are excluded, because the chip
+   *  this feeds says "Active contacts". The contacts LIST below is unfiltered. */
+  contact_count: number;
+}
+
+export interface CrmCompanyRollup {
+  company: CrmCompany;
+  company_custom_fields: CrmRollupField[];
+  summary: CrmRollupSummary;
+  contacts: (CrmContact & CrmRollupChild)[];
+  deals: (CrmDeal & CrmRollupChild & {
+    last_activity_at: string | null;
+    tasks: CrmTask[];
+    tasks_truncated: boolean;
+  })[];
+  contacts_truncated: boolean;
+  deals_truncated: boolean;
+}
+
+/**
+ * One row of the merged company feed (GET /api/crm/companies/:id/timeline).
+ *
+ * `source` says which table the row came from. It is not decoration: notes live in
+ * `crm_chatter` and activities in `activity_log`, two tables with INDEPENDENT id sequences,
+ * so `id` alone repeats across the feed. `(created_at, source, id)` is the server's total
+ * order, and `${source}:${id}` is the only safe React key or dedupe key.
+ */
+export interface CrmTimelineEntry {
+  source: 'note' | 'activity';
+  id: number;
+  entity_type: 'company' | 'contact' | 'deal';
+  entity_id: number;
+  /** The activity kind ("call", "email", …). Null for a note. */
+  activity: string | null;
+  /** A note's text, or an activity's note ('' when it carries none). */
+  message: string;
+  created_at: string;
+  /** Notes only: set on edit, null when never edited. Always null for an activity. */
+  updated_at: string | null;
+  /** 0/1 for notes; always 0 for activities, which have no archived concept. */
+  archived: number;
+  /** Note author / activity actor. Null = unattributed (the assistant's own writes). */
+  actor_id: number | null;
+  /** The parent record's display name, hydrated per page. */
+  source_name: string;
+  source_archived: boolean;
+  /** Notes only. */
+  attachments?: CrmAttachment[];
+}
+
+export interface CrmTimelinePage {
+  entries: CrmTimelineEntry[];
+  has_more: boolean;
 }

@@ -37,6 +37,11 @@ const PipelinePage = lazy(() => import('./crm/PipelinePage').then((m) => ({ defa
 const RemindersPage = lazy(() => import('./crm/RemindersPage').then((m) => ({ default: m.RemindersPage })));
 const SettingsPage = lazy(() => import('./crm/SettingsPage').then((m) => ({ default: m.SettingsPage })));
 const MemoryPage = lazy(() => import('./crm/MemoryPage').then((m) => ({ default: m.MemoryPage })));
+// Reports (#144) — lazy like every other page here, per the rule above: a static page
+// import would re-bundle it into the shell chunk every CRM visitor downloads.
+const ReportsPage = lazy(() =>
+  import('./crm/ReportsPage').then((m) => ({ default: m.ReportsPage })),
+);
 const DonePage = lazy(() => import('./crm/gtd/pages').then((m) => ({ default: m.DonePage })));
 const InboxPage = lazy(() => import('./crm/gtd/pages').then((m) => ({ default: m.InboxPage })));
 const NextActionsPage = lazy(() => import('./crm/gtd/pages').then((m) => ({ default: m.NextActionsPage })));
@@ -127,6 +132,7 @@ export default function App() {
               <Route path="tasks/done" element={<TasksModeRouter gtd={<DonePage />} normal="redirect" />} />
               <Route path="tasks/review" element={<TasksModeRouter gtd={<ReviewPage />} normal="redirect" />} />
               <Route path="tasks/search" element={<TasksModeRouter gtd={<SearchPage />} normal="redirect" />} />
+              <Route path="reports" element={<ReportsPage />} />
               <Route path="reminders" element={<RemindersPage />} />
               <Route path="memory" element={<MemoryPage />} />
               <Route path="settings" element={<SettingsPage />} />
