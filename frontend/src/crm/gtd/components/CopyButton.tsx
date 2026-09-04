@@ -27,10 +27,15 @@ const FACE = {
  * is a real place this button lands. Silently staying on "Copy" there leaves the
  * user unable to tell a failed copy from a tap that never registered.
  *
- * The outcome also goes to a `role="status"` region, because the button's
- * accessible name comes from `aria-label` and so does NOT change when the
- * visible text does — without the live region a screen-reader user gets no
- * confirmation at all.
+ * Two accessibility mechanisms, deliberately, because they answer two different
+ * questions. The `aria-label` leads with the VISIBLE word once there is an
+ * outcome ("Copied — Copy the whole todo"): a fixed label would leave the
+ * accessible name without the text on screen, which is WCAG 2.5.3 (Label in
+ * Name) and, concretely, means a voice-control user saying "Copied" matches
+ * nothing. The `role="status"` region is what actually ANNOUNCES the outcome —
+ * screen readers vary in whether they re-read a changed name on the focused
+ * element, and VoiceOver on the phone this targets is the least reliable of
+ * them. Hearing it twice is the acceptable cost of not missing it.
  */
 export function CopyButton({ text, label }: Props) {
   const { status, copy } = useCopyToClipboard();
@@ -41,7 +46,7 @@ export function CopyButton({ text, label }: Props) {
       <button
         type="button"
         onClick={() => void copy(text())}
-        aria-label={label}
+        aria-label={status === 'idle' ? label : `${face.text} — ${label}`}
         title={label}
         className={`inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-heading transition-colors ${face.tone}`}
       >

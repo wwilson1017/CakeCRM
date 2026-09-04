@@ -19,9 +19,14 @@ import { useState, useCallback, useRef, useEffect } from 'react';
  *
  * `readonly` + an off-screen position rather than `display:none` or
  * `visibility:hidden`: the selection APIs ignore a box that is not rendered, and
- * a focused editable would pop the software keyboard on the phone this exists
+ * a readonly field does not pop the software keyboard on the phone this exists
  * for. Restoring focus afterwards keeps the edit sheet's field from losing the
  * caret to a copy.
+ *
+ * Off-screen HORIZONTALLY, at top 0. Parking it at a large negative `top`
+ * instead makes WebKit scroll the page to reach it when it takes focus, so
+ * tapping Copy on a phone jumps you to the top of the list. The 16px font size
+ * is the other half of that: iOS zooms into any focused field below it.
  */
 function legacyCopy(text: string): boolean {
   const previous = document.activeElement as HTMLElement | null;
@@ -29,10 +34,16 @@ function legacyCopy(text: string): boolean {
   area.value = text;
   area.setAttribute('readonly', '');
   area.style.position = 'fixed';
-  area.style.top = '-9999px';
+  area.style.top = '0';
+  area.style.left = '-9999px';
+  area.style.fontSize = '16px';
   area.style.opacity = '0';
   document.body.appendChild(area);
   try {
+    // `select()` does NOT move focus, and `execCommand('copy')` copies from the
+    // focused element — so without this WebKit copies whatever the user was
+    // last in (or nothing) instead of the staged text.
+    area.focus();
     area.select();
     area.setSelectionRange(0, text.length);
     return document.execCommand('copy');

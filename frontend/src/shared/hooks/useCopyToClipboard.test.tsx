@@ -38,7 +38,12 @@ beforeEach(() => {
   // jsdom does not implement execCommand at all; read back the staging textarea
   // the fallback mounts, which is what a real 'copy' would take its text from.
   (document as unknown as { execCommand: () => boolean }).execCommand = vi.fn(() => {
-    execCopied.push(document.querySelector<HTMLTextAreaElement>('textarea[readonly]')?.value ?? '');
+    // Read the FOCUSED element, exactly as the real execCommand('copy') does.
+    // Querying the staging textarea directly would pass even if the fallback
+    // never focused it — and a copy that never takes focus copies whatever the
+    // user was last in instead.
+    const active = document.activeElement as HTMLTextAreaElement | null;
+    execCopied.push(active?.tagName === 'TEXTAREA' ? active.value : '');
     return true;
   });
   vi.spyOn(console, 'warn').mockImplementation(() => {});

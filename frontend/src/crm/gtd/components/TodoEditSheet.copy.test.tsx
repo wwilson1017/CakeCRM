@@ -83,8 +83,10 @@ async function render(todo: Todo | null = TODO) {
   });
 }
 
+// Ends-with, because the accessible name gains the visible outcome word once
+// there is one ("Copied — Copy the whole todo"), which is WCAG 2.5.3.
 const copyButton = (label: string): HTMLButtonElement => {
-  const found = container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+  const found = container.querySelector<HTMLButtonElement>(`button[aria-label$="${label}"]`);
   if (!found) throw new Error(`no button labelled "${label}"`);
   return found;
 };
@@ -146,8 +148,8 @@ describe('TodoEditSheet copy buttons', () => {
 
   it('offers nothing to copy while the action is still blank', async () => {
     await render(null);
-    expect(container.querySelector('button[aria-label="Copy the whole todo"]')).toBeNull();
-    expect(container.querySelector('button[aria-label="Copy just the next action"]')).toBeNull();
+    expect(container.querySelector('button[aria-label$="Copy the whole todo"]')).toBeNull();
+    expect(container.querySelector('button[aria-label$="Copy just the next action"]')).toBeNull();
 
     await typeTitle('Buy milk');
     expect(copyButton('Copy the whole todo')).toBeTruthy();
@@ -165,7 +167,11 @@ describe('TodoEditSheet copy buttons', () => {
     // Read the staging textarea the fallback mounts, which is what a real
     // execCommand('copy') would take the text from.
     (document as unknown as { execCommand: () => boolean }).execCommand = vi.fn(() => {
-      execCopied.push(document.querySelector<HTMLTextAreaElement>('textarea[readonly]')?.value ?? '');
+      // Read the FOCUSED element, exactly as the real execCommand('copy') does:
+      // querying the staging textarea directly would pass even if the fallback
+      // never focused it.
+      const active = document.activeElement as HTMLTextAreaElement | null;
+      execCopied.push(active?.tagName === 'TEXTAREA' ? active.value : '');
       return true;
     });
 
@@ -190,6 +196,9 @@ describe('TodoEditSheet copy buttons', () => {
 
     const button = copyButton('Copy just the next action');
     expect(button.textContent).toContain('Copy failed');
+    // The accessible name carries the visible word too — a fixed label would
+    // leave a voice-control user with nothing matching what is on screen.
+    expect(button.getAttribute('aria-label')).toBe('Copy failed — Copy just the next action');
     // Scoped to THIS button's own region — each Copy button carries one, and
     // the other is still idle and empty.
     const status = button.parentElement?.querySelector('[role="status"]');

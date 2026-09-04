@@ -22,7 +22,11 @@ interface Props {
 }
 
 const inputCls = 'w-full rounded-lg border border-line bg-cream px-3 py-2 text-base sm:text-sm text-charcoal focus:border-brand focus:outline-none';
-const labelCls = 'block text-xs font-heading font-semibold text-muted mb-1';
+// Split so the flex-row label can opt out of the margin. Appending `mb-0` to
+// `labelCls` would NOT win: Tailwind emits utilities in its own order (mb-0
+// before mb-1), and equal specificity means the later rule takes it.
+const labelBase = 'block text-xs font-heading font-semibold text-muted';
+const labelCls = `${labelBase} mb-1`;
 
 /** Full-field editor — centered modal on desktop, bottom sheet on mobile. */
 export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onSaved }: Props) {
@@ -134,7 +138,7 @@ export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onS
         <div className="mt-4 space-y-3">
           <div>
             <div className="mb-1 flex items-center justify-between gap-3">
-              <label className={`${labelCls} mb-0`} htmlFor="gtd-title">
+              <label className={labelBase} htmlFor="gtd-title">
                 What&rsquo;s the next action?
               </label>
               {/* Just this line — the common case is pasting the action itself
