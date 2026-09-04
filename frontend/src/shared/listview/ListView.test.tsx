@@ -28,10 +28,20 @@ const COLUMNS: ListColumn<Row>[] = [
 ];
 
 // A cell carrying its own interactive control — the shape the collection layer's selection
-// checkbox and a CRM list column's inline link/button both take (#148).
+// checkbox and a CRM list column's inline button both take (#148). `guarded` follows the
+// contract (stops click propagation, as the Tasks complete-toggle and the selection checkbox
+// do); `bare` deliberately does not, so the contract's sharp edge is executable rather than
+// assumed.
 const INTERACTIVE_COLUMNS: ListColumn<Row>[] = [
   ...COLUMNS,
-  { key: 'action', header: 'Action', render: () => <button type="button">act</button> },
+  {
+    key: 'guarded',
+    header: 'Guarded',
+    render: () => (
+      <button type="button" onClick={e => e.stopPropagation()}>act</button>
+    ),
+  },
+  { key: 'bare', header: 'Bare', render: () => <button type="button">bare</button> },
 ];
 
 const ROWS: Row[] = [
@@ -176,6 +186,37 @@ describe('ListView', () => {
     // action: Space is how a native checkbox is toggled. Reorder those two lines and every
     // callback assertion above stays green while Space stops working on the selection column.
     expect(space.defaultPrevented).toBe(false);
+  });
+
+  it('survives the CLICK a real browser fires after Enter on a cell control', () => {
+    // The keydown guard alone does not finish the job, and a keydown-only test hides that:
+    // activating a `<button>` with Enter or Space makes the browser dispatch a `click` on it,
+    // which bubbles to the row's own `onClick`. jsdom does not synthesize that click, so the
+    // test above passes either way. What actually stops the row opening is the CELL control's
+    // `stopPropagation` — the contract this component has always required of an interactive
+    // cell — so dispatch the click explicitly and prove it holds.
+    const onRowClick = vi.fn();
+    const el = render(<ListView columns={INTERACTIVE_COLUMNS} items={ROWS} onRowClick={onRowClick} />);
+    const guarded = el.querySelectorAll('tbody tr')[0].querySelectorAll('td button')[0];
+
+    act(() => { guarded.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); });
+    act(() => { guarded.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(onRowClick).not.toHaveBeenCalled();
+  });
+
+  it('does open the row from a cell control that skips stopPropagation — the contract, stated', () => {
+    // The sharp edge, executable rather than assumed: the row's click path is deliberately NOT
+    // guarded on the event target (a mouse click always targets a cell, so that test would
+    // swallow every row click), so a cell control that forgets `stopPropagation` opens the row
+    // on both mouse AND keyboard activation. Every shipped interactive cell stops it — the
+    // collection layer's selection checkbox and the Tasks complete-toggle. This test is the
+    // reason a new one must too; if the row ever DOES guard its click path, it should fail.
+    const onRowClick = vi.fn();
+    const el = render(<ListView columns={INTERACTIVE_COLUMNS} items={ROWS} onRowClick={onRowClick} />);
+    const bare = el.querySelectorAll('tbody tr')[0].querySelectorAll('td button')[1];
+
+    act(() => { bare.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(onRowClick).toHaveBeenCalledWith(ROWS[0]);
   });
 
   it('renders an inert row — no tab stop, no pointer affordance — when onRowClick is omitted', () => {

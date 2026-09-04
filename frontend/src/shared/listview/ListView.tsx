@@ -61,7 +61,11 @@ export interface ListViewProps<TItem extends { id: number | string }> {
    * selection checkbox, a CRM list column's inline link or button) and would
    * orphan every cell's implicit `role="cell"`, which needs a `role="row"` parent.
    * Cells carrying their own interactive controls still stop CLICK propagation —
-   * that contract is unchanged.
+   * that contract is unchanged, and it is load-bearing for the KEYBOARD too: activating a
+   * cell's `<button>` with Enter or Space makes the browser dispatch a `click` on it, which
+   * bubbles here. The keydown guard cannot see that click, so a cell control that omits
+   * `onClick={e => e.stopPropagation()}` opens the row on Enter as well as on a mouse click.
+   * `ListView.test.tsx` pins both halves of that contract.
    */
   onRowClick?: (item: TItem) => void;
   emptyMessage?: string;
@@ -205,8 +209,12 @@ export default function ListView<TItem extends { id: number | string }>({
             outside ARIA's defined table interaction model — the model that would cover it is
             `role="grid"`, which obliges full 2D arrow-key cell navigation and is a much larger
             change than this one. `role="button"` is the option that is simply wrong, for the
-            reason in `onRowClick`'s doc. Upgrade path for both: adopt `grid` semantics with a
-            roving tabindex if these lists ever grow real in-table keyboard navigation. */}
+            reason in `onRowClick`'s doc. So a reader is told "row", not "opens this record".
+            Upgrade path, and the only one that fully closes 4.1.2: give each column set a
+            designated primary cell rendering a real `<a>`/`<button>` and move the tab stop
+            onto that control, leaving the row itself unfocusable. That is a change to every
+            adopting surface's columns rather than to this file, which is why it is not this
+            fix — this one buys keyboard OPERABILITY for every adopter at once. */}
         {onRowClick && rows.length > 0 && (
           <p id={hintId} className="sr-only">
             Rows are interactive: focus a row and press Enter or Space to open its record.
