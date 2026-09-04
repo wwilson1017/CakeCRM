@@ -5,17 +5,14 @@
 
 import { Navigate } from 'react-router-dom';
 import { useAuth } from './AuthContext';
+import BootFallback from '../components/BootFallback';
 
 export function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isLoggedIn, loading } = useAuth();
 
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-ck-bg">
-        <div className="w-8 h-8 border-2 border-ck-accent border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
-  }
+  // The same spinner a chunk load shows (#149), so an auth check and a code-split gap look
+  // like one app rather than two loading states.
+  if (loading) return <BootFallback />;
 
   if (!isLoggedIn) {
     return <Navigate to="/login" replace />;

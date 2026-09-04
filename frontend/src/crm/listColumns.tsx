@@ -14,15 +14,22 @@
  *   `index.css`'s semantic aliases), not the pages' inline `crm/styles.ts` objects. Accent
  *   used as TEXT goes through `text-ck-accent-text`, never the raw accent — the brand red is
  *   only 3.15:1 on the dark card (#54).
+ * - **Where the row's action is a ROUTE rather than an overlay, the title cell also carries a
+ *   real `<Link>` with `stopPropagation`** (#148). Since that issue the row itself is a
+ *   keyboard stop, but an anchor adds what no click handler can hand-roll: it announces as a
+ *   link, and it carries Ctrl/Cmd-click, middle-click and right-click into a new tab —
+ *   a middle click never fires `click` at all, so the row handler cannot see it. Contacts and
+ *   Companies navigate and so take the anchor; Tasks opens a detail overlay and does not.
  *
  * The file exports no component, so `react-refresh/only-export-components` stays quiet.
  */
+import { Link } from 'react-router-dom';
 import { ChipButton } from '../shared/search';
 import { IconCheck, IconX } from '../shared/icons';
 import type { ListColumn } from '../shared/listview';
 import type { CrmCompany, CrmContact, CrmTask } from '../core/types';
 import { PriorityBadge, ScorePill, StatusBadge } from './components/badges';
-import { LINE_STRONG, SAGE, tint } from '../shared/styles';
+import { LINE_STRONG, SAGE_FILL, SAGE_TEXT, tint } from '../shared/styles';
 import { formatAge, dueLabel } from './gtd/util';
 import {
   CONTACT_SORT_FIELDS, COMPANY_SORT_FIELDS, TASK_SORT_FIELDS,
@@ -45,9 +52,18 @@ export function buildContactColumns(): ListColumn<CrmContact>[] {
     {
       key: 'name',
       header: 'Name',
+      // A REAL link, not only the row's handler — see the route-shaped-surface note in the
+      // header. `stopPropagation` keeps a plain click from ALSO firing the row's navigate,
+      // which is the same contract every interactive cell in this file follows.
       render: c => (
         <div className="min-w-0">
-          <div className="truncate text-charcoal">{c.name}</div>
+          <Link
+            to={`/crm/contacts/${c.id}`}
+            onClick={e => e.stopPropagation()}
+            className="block truncate text-charcoal hover:text-ck-accent-text"
+          >
+            {c.name}
+          </Link>
           {c.title && <div className="truncate text-xs text-muted">{c.title}</div>}
         </div>
       ),
@@ -97,7 +113,20 @@ export function buildContactColumns(): ListColumn<CrmContact>[] {
 
 export function buildCompanyColumns(): ListColumn<CrmCompany>[] {
   const cols: (ListColumn<CrmCompany> & { key: CompanySortKey | Display<'phone'> })[] = [
-    { key: 'name', header: 'Name', render: c => <span className="text-charcoal">{c.name}</span> },
+    {
+      key: 'name',
+      header: 'Name',
+      // A REAL link — see the route-shaped-surface note in the header.
+      render: c => (
+        <Link
+          to={`/crm/companies/${c.id}`}
+          onClick={e => e.stopPropagation()}
+          className="text-charcoal hover:text-ck-accent-text"
+        >
+          {c.name}
+        </Link>
+      ),
+    },
     {
       key: 'industry', header: 'Industry', className: 'hidden sm:table-cell',
       render: c => <span className="text-muted">{c.industry || DASH}</span>,
@@ -137,10 +166,10 @@ export function buildTaskColumns(
           onClick={e => { e.stopPropagation(); onToggleComplete(t); }}
           style={{
             width: 20, height: 20, borderRadius: 4, flexShrink: 0,
-            border: `1.5px solid ${t.completed ? SAGE : LINE_STRONG}`,
-            background: t.completed ? tint(SAGE, 20) : 'transparent',
+            border: `1.5px solid ${t.completed ? SAGE_FILL : LINE_STRONG}`,
+            background: t.completed ? tint(SAGE_FILL, 20) : 'transparent',
             cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: SAGE,
+            color: SAGE_TEXT,
           }}
         >
           {!!t.completed && <IconCheck size={12} strokeWidth={2.5} />}
@@ -178,7 +207,7 @@ export function buildTaskColumns(
         // ck-red, not the brand accent: red-as-danger is the app-wide convention for
         // overdue (TaskDetailBody, the dashboard tiles, the badges), and the two tokens
         // are genuinely different colours in both themes.
-        return <span className={late ? 'font-semibold text-ck-red' : 'text-muted'}>{text}</span>;
+        return <span className={late ? 'font-semibold text-ck-red-text' : 'text-muted'}>{text}</span>;
       },
     },
   ];

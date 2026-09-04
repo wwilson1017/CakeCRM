@@ -4,7 +4,7 @@ import type { CrmFieldDefinition } from '../../core/types';
 import { confirmDialog } from '../../shared/confirm';
 import { toast } from '../../shared/toast';
 import {
-  INK, INK_MUTE, INK_DIM, CORAL, ACCENT, ACCENT_TEXT, mono, labelStyle, inputStyle,
+  INK, INK_MUTE, INK_DIM, CORAL_TEXT, ACCENT, ACCENT_TEXT, mono, labelStyle, inputStyle,
   LINE,
 } from '../../shared/styles';
 import { btnPrimary, btnSecondary, filterTab } from '../styles';
@@ -133,7 +133,7 @@ export function CustomFieldSettings({ isMobile }: { isMobile: boolean }) {
       </div>
 
       {loadError ? (
-        <p style={{ color: CORAL, fontSize: 13 }}>Couldn't load custom fields.</p>
+        <p style={{ color: CORAL_TEXT, fontSize: 13 }}>Couldn't load custom fields.</p>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {defs.length === 0 ? (
@@ -157,7 +157,7 @@ export function CustomFieldSettings({ isMobile }: { isMobile: boolean }) {
                 ) : null}
               </div>
               <button onClick={() => removeField(f)} style={{
-                background: 'none', border: 'none', color: CORAL, fontSize: 12,
+                background: 'none', border: 'none', color: CORAL_TEXT, fontSize: 12,
                 cursor: 'pointer', padding: 0, flexShrink: 0,
               }}>Delete</button>
             </div>

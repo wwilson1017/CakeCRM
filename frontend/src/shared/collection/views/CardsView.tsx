@@ -65,16 +65,11 @@ export default function CardsView<T>({
                   return <div key={id}>{cards.renderCard(item)}</div>;
                 }
                 const subtitle = cardsConfig.getSubtitle?.(item) ?? null;
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() => onSelect?.(id)}
-                    aria-current={selectedId === id || undefined}
-                    className={`flex flex-col overflow-hidden rounded-xl border bg-cream text-left transition-shadow hover:shadow-md ${
-                      selectedId === id ? 'border-brand ring-1 ring-brand' : 'border-line'
-                    }`}
-                  >
+                const cardClass = `flex flex-col overflow-hidden rounded-xl border bg-cream text-left ${
+                  selectedId === id ? 'border-brand ring-1 ring-brand' : 'border-line'
+                }`;
+                const body = (
+                  <>
                     {cards?.renderThumb && cards.renderThumb(item)}
                     <div className={`flex flex-1 flex-col gap-1 p-3 ${getVoided ? voidedRowClass(getVoided(item)) : ''}`}>
                       <div className="flex items-start justify-between gap-2">
@@ -93,6 +88,27 @@ export default function CardsView<T>({
                       </div>
                       {subtitle && <span className="break-words text-xs text-muted">{subtitle}</span>}
                     </div>
+                  </>
+                );
+                // Interactivity follows `onSelect`, the rule the list view adopted in #148.
+                // Rendering the `<button>` unconditionally gave a page with nothing to open a
+                // focusable card and a hover shadow that both do nothing — the same "affordance
+                // that lies" the list-view seam was changed to remove, one file over. No shipped
+                // surface hits it (all three CRM pages wire `onSelect`), so this keeps the two
+                // views telling ONE story rather than fixing a live bug. `aria-current` goes with
+                // the button: without a select handler there is no selection to be current in.
+                if (!onSelect) {
+                  return <div key={id} className={cardClass}>{body}</div>;
+                }
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => onSelect(id)}
+                    aria-current={selectedId === id || undefined}
+                    className={`${cardClass} transition-shadow hover:shadow-md`}
+                  >
+                    {body}
                   </button>
                 );
               })}

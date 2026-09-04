@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { labelStyle, inputStyle, BG_ELEV, BG_RAISED, LINE_STRONG, SHADOW, INK, INK_MUTE, INK_DIM, ACCENT_TEXT, CORAL, HOVER, FONT_SANS } from '../../shared/styles';
+import { labelStyle, inputStyle, BG_ELEV, BG_RAISED, LINE_STRONG, SHADOW, INK, INK_MUTE, INK_DIM, ACCENT_TEXT, CORAL_TEXT, HOVER, FONT_SANS } from '../../shared/styles';
 import { useDebounce } from '../../shared/hooks/useDebounce';
 
 /**
@@ -69,11 +69,23 @@ interface Props<T> {
    */
   onBusyChange?: (busy: boolean) => void;
   id?: string;
+  /**
+   * Element id describing this field, forwarded to the input as `aria-describedby`
+   * (issue #126).
+   *
+   * Additive and optional: a caller that omits it renders exactly as before. It exists
+   * because a caller can render explanatory text this component cannot see — ContactForm
+   * puts a contact's unlinked legacy company name there, which for such a contact is the
+   * only stored copy of that name. Adjacent text alone is not enough: a screen reader in
+   * forms mode moves control to control, so an unassociated paragraph is reachable in
+   * principle and skipped in practice.
+   */
+  describedBy?: string;
 }
 
 export function RecordCombobox<T>({
   label, value, valueLabel, emptyLabel, search, create,
-  getId, getLabel, getMatchText, getSublabel, onSelect, onBusyChange, id,
+  getId, getLabel, getMatchText, getSublabel, onSelect, onBusyChange, id, describedBy,
 }: Props<T>) {
   const matchTextOf = getMatchText ?? getLabel;
   const [open, setOpen] = useState(false);
@@ -212,6 +224,15 @@ export function RecordCombobox<T>({
   /** Close AND abandon an in-flight create — an explicit "never mind". */
   function cancel() {
     intentRef.current++;
+    // Stop reporting BUSY too, which the intent bump alone does not do. `creatingName` was
+    // otherwise cleared only when the request settled, so a hung resolver left the
+    // surrounding form locked — Save disabled, and in ContactForm the legacy-name Remove
+    // with it — long after the user had said never mind. Releasing it here is safe
+    // precisely because the bump above already invalidated the result: whatever lands can
+    // no longer select itself, so submitting now cannot lose a link that is about to
+    // exist. That is exactly the distinction `dismiss` does NOT get — a click-away leaves
+    // the create wanted, so it stays busy.
+    setCreatingName(null);
     setOpen(false);
   }
 
@@ -339,6 +360,7 @@ export function RecordCombobox<T>({
           aria-haspopup="listbox"
           aria-autocomplete="list"
           aria-activedescendant={open && rowCount > 0 ? `${listId}-${active}` : undefined}
+          aria-describedby={describedBy}
           autoComplete="off"
           value={open ? query : (value != null ? valueLabel : '')}
           placeholder={value != null ? valueLabel : emptyLabel}
@@ -370,7 +392,7 @@ export function RecordCombobox<T>({
           </button>
         )}
       </div>
-      {error && <p style={{ color: CORAL, fontSize: 11, margin: '4px 0 0' }}>{error}</p>}
+      {error && <p style={{ color: CORAL_TEXT, fontSize: 11, margin: '4px 0 0' }}>{error}</p>}
       {open && (
         <div
           style={{
@@ -420,7 +442,7 @@ export function RecordCombobox<T>({
             )}
           </ul>
           {searchFailed && (
-            <p style={{ margin: 0, padding: '7px 10px', fontSize: 12, color: CORAL }}>
+            <p style={{ margin: 0, padding: '7px 10px', fontSize: 12, color: CORAL_TEXT }}>
               Search failed — results may be incomplete.
             </p>
           )}

@@ -25,6 +25,14 @@ export interface KanbanBoardProps<TItem extends KanbanItem, TColumn> {
   renderColumn: (column: KanbanColumnDef<TColumn>, children: ReactNode) => ReactNode;
   renderCard: (item: TItem, columnId: string | number, isDragging: boolean) => ReactNode;
   renderEmptyColumn?: (column: KanbanColumnDef<TColumn>) => ReactNode;
+  /**
+   * Classes for the board's scroll container. `KanbanBoard` marks this element
+   * `data-kanban-scroller` and `collision.ts` measures ITS box to decide where the board really
+   * shows its cards and lanes — so this className must carry the board's overflow (today both
+   * consumers pass `overflow-x-auto`). Without one the element is as wide as its content, the clip
+   * measures the whole board rather than the visible part, and hit-testing silently reverts to
+   * treating off-screen geometry as real.
+   */
   className?: string;
   columnClassName?: string;
   /**

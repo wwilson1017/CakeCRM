@@ -21,15 +21,37 @@ export const BG_RAISED = 'var(--color-ck-raised)';
 export const ACCENT = 'var(--color-ck-accent)';
 export const ACCENT_INK = 'var(--color-ck-accent-ink)';
 export const ACCENT_SOFT = 'var(--color-ck-accent-soft)';
-// Accent as *text*/icon. Same value as ACCENT in light; lighter under .dark, where
-// the fixed brand red fails WCAG AA on a dark surface. Fills keep ACCENT.
+// Accent as *text*/icon. Darker than ACCENT in light, lighter under .dark — the fixed
+// brand red fails WCAG AA as body text on BOTH a light wash and a dark surface. Fills
+// keep ACCENT, so the brand red itself is unchanged.
 export const ACCENT_TEXT = 'var(--color-ck-accent-text)';
-export const GOLD = 'var(--color-ck-amber)';
-export const CORAL = 'var(--color-ck-red)';
-export const SAGE = 'var(--color-ck-green)';
+
+// ── Status + stage hues: one hue, two tokens (issue #119) ────────────────────
+// `_FILL` paints a background, border, dot or bar; `_TEXT` paints a glyph — text or an
+// icon. The split exists because a chip's background is `tint(<the same hue>, 12)`, so
+// a single token cannot be darkened for legibility without darkening the wash under it
+// (see the FILL vs TEXT block in index.css for the full derivation).
+//
+// The suffixes are mandatory here and absent on ACCENT on purpose: these four USED to be
+// bare names covering both roles, and that ambiguity is precisely what shipped eleven
+// AA failures — so the compiler now makes every consumer state which role it means.
+// ACCENT predates the rule, is overwhelmingly a fill, and renaming it would churn ~30
+// files that are already correct.
+export const GOLD_FILL = 'var(--color-ck-amber)';
+export const GOLD_TEXT = 'var(--color-ck-amber-text)';
+export const CORAL_FILL = 'var(--color-ck-red)';
+export const CORAL_TEXT = 'var(--color-ck-red-text)';
+export const SAGE_FILL = 'var(--color-ck-green)';
+export const SAGE_TEXT = 'var(--color-ck-green-text)';
 // Informational blue for assistant-authored surfaces (provenance, AI touch counts).
 // Deliberately NOT the accent — these badges mean "an AI wrote this", not "brand".
-export const AI = 'var(--color-ck-ai)';
+export const AI_FILL = 'var(--color-ck-ai)';
+export const AI_TEXT = 'var(--color-ck-ai-text)';
+
+// Foreground for text sitting ON a solid status fill (Mark Won, Mark Complete, the
+// danger confirm). Not ACCENT_INK: that is white in both themes, which is right on the
+// brand red but only 2.49:1 on the green `.dark` lightened for text.
+export const ON_STATUS = 'var(--color-ck-on-status)';
 
 // ── Chrome ───────────────────────────────────────────────────────────────────
 // Declared per theme in index.css rather than derived here: HOVER is an *ink* tint,

@@ -116,7 +116,7 @@ export default function PipelineFilterBar({ search, advanced, onSearchChange, on
               borderRadius: 4, cursor: 'pointer', fontSize: 13, color: INK, textTransform: 'capitalize',
             }}>
               <input type="checkbox" checked={advanced.stages.includes(stage)} onChange={() => toggleStage(stage)} style={{ width: 14, height: 14, accentColor: ACCENT }} />
-              <span style={{ width: 9, height: 9, borderRadius: '50%', flexShrink: 0, background: STAGE_COLORS[stage]?.color || INK_DIM }} />
+              <span style={{ width: 9, height: 9, borderRadius: '50%', flexShrink: 0, background: STAGE_COLORS[stage]?.fill || INK_DIM }} />
               <span>{stage}</span>
             </label>
           ))}
