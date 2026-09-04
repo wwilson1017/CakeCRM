@@ -22,6 +22,7 @@
 import { useEffect, useState } from 'react';
 
 import { api } from '../../core/api/client';
+import { copyToClipboard } from '../../shared/hooks/useCopyToClipboard';
 import { CORAL_TEXT, FONT_SANS, INK_MUTE, labelStyle } from '../../shared/styles';
 import { toast } from '../../shared/toast';
 import { useSetTaskMode, useTaskMode } from '../gtd/TaskModeContext';
@@ -89,12 +90,12 @@ export function TaskModeCard({ isMobile }: { isMobile: boolean }) {
   const linkFor = (path: string) => `${window.location.origin}${path}`;
 
   async function copy(path: string) {
-    try {
-      await navigator.clipboard.writeText(linkFor(path));
-      toast.success('Link copied.');
-    } catch {
-      toast.error('Could not copy — select the link and copy it manually.');
-    }
+    // Through the shared helper for its non-secure-context fallback: these links
+    // exist to be opened on a LAN over plain http, which is exactly where
+    // `navigator.clipboard` is undefined — so the bare async API failed on the
+    // one deployment this button serves.
+    if (await copyToClipboard(linkFor(path))) toast.success('Link copied.');
+    else toast.error('Could not copy — select the link and copy it manually.');
   }
 
   const modeButton = (value: TaskMode, label: string, hint: string) => (
