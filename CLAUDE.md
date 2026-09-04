@@ -1275,7 +1275,11 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   app, which A/B'd it against `main`; the cue is what invites people to type in the box, so it
   is fixed alongside it. `useSerialCommit` is shared by the notes box and the date for the same
   reason both need it — two writes to one column, in flight together, land in whichever order
-  the server picks — and a resolving write flushes both, so filing carries them. `pendingDue` mirrors the existing
+  the server picks — and a resolving write flushes both, so filing carries them. The trade-off
+  commit-on-blur brings, measured rather than assumed: an entry that is never blurred is lost
+  on a hard reload. Every path that ends the interaction inside the app — filing, Edit, Delete,
+  promoting another card, Tab, clicking anywhere — blurs and commits, so only closing the tab
+  with focus still in the box loses it. The same trade-off the notes box already makes. `pendingDue` mirrors the existing
   `pendingTitle` so the CONTROLLED field does not revert to the prop for the length of the
   refetch, and `current` — what the Edit sheet is handed — carries title, notes and date
   from the card's view, never the lagging prop. **The card renders its own view of the
