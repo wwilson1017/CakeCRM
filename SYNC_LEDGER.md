@@ -69,7 +69,8 @@ Note that `chatty` rows are historical only. chatty was **retired as a sync sour
 
 ## Ledger (live — one row per synced upstream change)
 
-Populated by port PRs from here on. Empty until the first intake is ported.
+Populated by port PRs from here on.
 
 | Feature | Source | CakeCRM PR / issue | Date |
 |---|---|---|---|
+| Kanban pointer-based drop-target resolution (short/empty columns accept a drop at any height) | PR #1813 (`f367e7cf8`) | #147 | 2026-09-04 |
