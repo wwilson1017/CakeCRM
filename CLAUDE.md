@@ -1360,13 +1360,18 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   mounted, so chat state survives open/close; the ~347 kB chunk (react-markdown +
   highlight.js) simply arrives before the first open, and is never requested at all on a
   keyless install.
-  **Three Suspense boundaries**, each for its own reason: `Root` (cold boot of either
-  surface), `App` above `<Routes>` with `ConfirmHost`/`ToastViewport` deliberately OUTSIDE it
-  (a toast in flight or an open confirm dialog must not be replaced by a spinner), and
-  **`CrmLayout` around `<Outlet />`** — the one upstream did not need, because our layout is a
-  nested route and the task-mode flip (`null → 'gtd'`) is a plain `setState` in a `.then`,
-  **not** a router transition, so without it the whole shell would swap to a spinner while a
-  task chunk loads. React Router 7 wraps navigations in `startTransition`, so in-app
+  **Three route-level Suspense boundaries**, each for its own reason — plus the drawer-local
+  fourth described above: `Root` (cold boot of either surface), `App` above `<Routes>` with
+  `ConfirmHost`/`ToastViewport` deliberately OUTSIDE it (a toast in flight or an open confirm
+  dialog must not be replaced by a spinner), and **`CrmLayout` around `<Outlet />`** — the one
+  upstream did not need, because our layout is a nested route and the task-mode flip
+  (`null → 'gtd'`) is a plain `setState` in a `.then`, **not** a router transition, so without
+  it the whole shell would swap to a spinner while a task chunk loads. That last boundary has
+  a second invariant beyond "the Outlet is inside it", and it is the one worth stating: the
+  nav, sign-out and launcher must stay OUTSIDE. Hoisting the boundary to wrap the whole layout
+  body keeps the Outlet nested and satisfies every positional check while turning each route
+  chunk load into a full-shell spinner, which is the failure it exists to prevent — so it is
+  pinned twice, positionally in `bootSplit.test.ts` and behaviourally in `CrmLayout.test.tsx`. React Router 7 wraps navigations in `startTransition`, so in-app
   navigation keeps the old screen up and the fallbacks are seen on cold loads only.
   `core/components/ChunkErrorBoundary` wraps `Root`'s Suspense and is the app's **first
   general error boundary**: it catches every render error below it (a themed card with a

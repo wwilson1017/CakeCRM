@@ -444,8 +444,29 @@ describe('boot split (#149) — the CRM shell', () => {
     const src = read('./crm/CrmLayout.tsx');
     expect(count(src, '<Suspense')).toBe(1);
     expect(count(src, '<Outlet />')).toBe(1);
-    expect(src.indexOf('<Suspense')).toBeLessThan(src.indexOf('<Outlet />'));
-    expect(src.indexOf('<Outlet />')).toBeLessThan(src.indexOf('</Suspense>'));
+    const open = src.indexOf('<Suspense');
+    const close = src.indexOf('</Suspense>');
+    expect(open).toBeLessThan(src.indexOf('<Outlet />'));
+    expect(src.indexOf('<Outlet />')).toBeLessThan(close);
+
+    // "The Outlet is inside it" is only HALF the invariant, and the weaker half. Hoisting the
+    // boundary to wrap the entire layout body — nav, logo, bell, launcher, with the Outlet
+    // still nested somewhere inside — satisfies every assertion above while turning each route
+    // chunk load and each task-mode flip into a full-shell spinner, which is precisely the
+    // behaviour this boundary was added to PREVENT. (Measured: that mutation kept all 803
+    // frontend tests green before these two lines existed.) So pin what must stay OUTSIDE.
+    // Stated as "not BETWEEN the tags" rather than "before the open tag", because outside is
+    // outside in either direction and pinning the current source order would fail a correct
+    // rearrangement for no reason.
+    const navMarkers = ['NAV_ITEMS.map', 'Sign out'];
+    expect(navMarkers.length).toBe(2);
+    for (const marker of navMarkers) {
+      const occurrences: number[] = [];
+      for (let at = src.indexOf(marker); at !== -1; at = src.indexOf(marker, at + 1)) occurrences.push(at);
+      expect(occurrences.length, `CrmLayout still renders ${marker}`).toBeGreaterThan(0);
+      const swallowed = occurrences.filter((at) => at > open && at < close);
+      expect(swallowed, `${marker} renders OUTSIDE the route Suspense, never inside it`).toEqual([]);
+    }
   });
 
   it('the assistant drawer loads its chat surface lazily, by leaf path', () => {
