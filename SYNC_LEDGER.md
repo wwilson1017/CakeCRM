@@ -69,7 +69,8 @@ Note that `chatty` rows are historical only. chatty was **retired as a sync sour
 
 ## Ledger (live — one row per synced upstream change)
 
-Populated by port PRs from here on. Empty until the first intake is ported.
+Populated by port PRs from here on.
 
 | Feature | Source | CakeCRM PR / issue | Date |
 |---|---|---|---|
+| Route-level code splitting of the frontend boot path (`Root.tsx` dispatch with both branches lazy, lazy route table + one shared GTD `pages.ts`, lazy assistant drawer, `ChunkErrorBoundary` + `BootFallback`, `bootSplit` source guard + `bootSplitBuild` chunk-graph guard) | PR #2150 (`1c10ccf`) | #149 | 2026-09-04 |
