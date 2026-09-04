@@ -73,3 +73,4 @@ Populated by port PRs from here on. Empty until the first intake is ported.
 
 | Feature | Source | CakeCRM PR / issue | Date |
 |---|---|---|---|
+| Todo-GTD copy buttons + long-title wrapping | `e00e05cde` | #151 | — |
