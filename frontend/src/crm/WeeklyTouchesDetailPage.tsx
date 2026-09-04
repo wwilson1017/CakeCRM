@@ -6,10 +6,17 @@
  * `DealDetailSheet` the dashboard opens, whose #56 evidence section explains that deal's
  * count event by event — so the chain from "3 touched" to "why 3" stays unbroken.
  *
- * Every window decision belongs to the server. The card forwards the exact instants it
- * displayed as `ws`/`we`, this page forwards them on verbatim, and the label comes back in
- * the payload — so the page can never re-resolve "last 7 days" against a later `now` and
- * list a different week than the number that was clicked.
+ * Every window decision belongs to the server. This page forwards the card's `start`/`end`
+ * calendar days when a custom range is applied and nothing at all on the rolling default,
+ * and the label comes back in the payload — so it asks the card's own question, resolved at
+ * the moment the page opens.
+ *
+ * It deliberately does NOT inherit the card's exact instants, which an earlier revision did.
+ * Freezing the bounds looks like it guarantees the page lists what the clicked number
+ * counted; it cannot, because membership is "this deal's CURRENT most recent touch falls in
+ * the window". A touch made after the card rendered moves the deal past a frozen upper bound
+ * and deletes it from this page — including a touch made FROM this page, so logging a call
+ * made the deal you had just worked disappear from the list of deals you touched.
  *
  * NO zero-keys gate here, deliberately. The card hides itself when no provider has ever
  * run, because a KPI of blank estimates is worse than no KPI; this page is reached from
