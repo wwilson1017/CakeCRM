@@ -26,6 +26,14 @@ AUTH_PASSWORD=<pw> \
   Chrome, no download). Capture the migration log, live API responses, and UI renders.
 - `POST /api/login` returns `access_token` (not `token`); the login route rate-limits
   ~10/5min — an exploratory verifier can lock itself out.
+- Three more that differ from the obvious guess (confirmed #148, 2026-09-04): the app reads
+  `.env` from the **repo root**, not `backend/`; the auth router mounts at `/api`, so
+  `/api/auth/login` 405s and `POST /api/login` is the only login path; and vite binds
+  **IPv6-only**, so `http://127.0.0.1:<port>` gives connection-refused while the log says
+  "ready" — reach it over `localhost`.
+- Seed the throwaway DB with `POST /api/crm/load-sample-data` before asserting anything at row
+  level. An empty database renders list pages with no rows, which makes every row-level
+  assertion vacuous rather than failing.
 - The `gs://cake-pr-evidence` bucket DOES work for uploads (`pr-36`, `pr-42`) — it's the
   cake_os *scaffolding* that doesn't transfer, not the bucket.
 - Never `docker compose up` CakeCRM's own compose on this machine (it maps 5432:5432 and
