@@ -69,7 +69,8 @@ Note that `chatty` rows are historical only. chatty was **retired as a sync sour
 
 ## Ledger (live — one row per synced upstream change)
 
-Populated by port PRs from here on. Empty until the first intake is ported.
+Populated by port PRs from here on.
 
 | Feature | Source | CakeCRM PR / issue | Date |
 |---|---|---|---|
+| Weekly Touches grouped per sales rep, plus a per-rep page listing that rep's touched open deals in full | `backend/apps/crm/dashboard_service.py` + `frontend/src/apps/crm/components/{WeeklyTouchesCard,WeeklyTouchesDetailPage}.tsx` @ `8e4d202f9` (cake_os #602) | #146 | 2026-09-04 |
