@@ -148,6 +148,23 @@ const dueInput = () => container.querySelector<HTMLInputElement>('input[aria-lab
 const notesBox = () => container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Notes"]')!;
 const contextPicker = () =>
   container.querySelector<HTMLSelectElement>('select[aria-label="Set context and file this todo"]')!;
+const titleText = () =>
+  container.querySelector<HTMLElement>('span[role="button"]')!.textContent;
+const projectPicker = () =>
+  container.querySelector<HTMLSelectElement>('select[aria-label="Project"]')!;
+const newProjectInput = () =>
+  container.querySelector<HTMLInputElement>('input[aria-label="New project name"]')!;
+const submitForm = (el: Element) => {
+  act(() => {
+    el.closest('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  });
+};
+const startTitleSave = (to: string) => {
+  click(container.querySelector('span[role="button"]')!);
+  const editor = container.querySelector<HTMLInputElement>('input[aria-label="Todo title"]')!;
+  setValue(editor, to);
+  unfocus(editor);
+};
 const cue = () =>
   [...container.querySelectorAll('span[aria-hidden="true"]')]
     .find(el => (el.textContent ?? '').trim() === 'Add due date');
@@ -273,9 +290,6 @@ describe('the inline title is optimistic too', () => {
   // `pendingTitle` predates this port and had the same defect the date override was fixed
   // for: set on a successful rename and never released, so the card would pin the name it
   // last wrote and ignore every later change to it. One adoption block covers both.
-  const titleText = () =>
-    container.querySelector<HTMLElement>('span[role="button"]')!.textContent;
-
   it('stops pinning the title once the row moves on', async () => {
     render();
     click(container.querySelector('span[role="button"]')!);
@@ -470,6 +484,22 @@ describe('fields written straight through still reach the sheet', () => {
     expect(onEdit.mock.calls[0][0].star).toBe(true);
   });
 
+  it('hands the sheet a project it created mid-triage', async () => {
+    // `createAndAssign` writes `project_id` through its own call rather than `patch`, and
+    // `setBusy(false)` runs before the parent's reload resolves — so without adopting that
+    // response too, Edit opens on the pre-assignment value and the sheet undoes the
+    // assignment the user just made.
+    render({ project_id: null });
+    setValue(projectPicker(), 'new');
+    setValue(newProjectInput(), 'Garage');
+    submitForm(newProjectInput());
+    await settle();
+
+    click(button('Edit'));
+    await settle();
+    expect(onEdit.mock.calls[0][0].project_id).toBe(9);
+  });
+
   it('hands the sheet the project it just assigned', async () => {
     render({ project_id: null });
     setValue(container.querySelector<HTMLSelectElement>('select[aria-label="Project"]')!, '3');
@@ -497,13 +527,6 @@ describe('writes decide against the state as it is NOW', () => {
   // created during one render closes over that render's values, so a handler that compared
   // against what it captured would be deciding on state that is arbitrarily old — and here
   // that is data loss, not just staleness.
-  const startTitleSave = (to: string) => {
-    click(container.querySelector('span[role="button"]')!);
-    const editor = container.querySelector<HTMLInputElement>('input[aria-label="Todo title"]')!;
-    setValue(editor, to);
-    unfocus(editor);
-  };
-
   it('does not discard notes typed while another write was in flight', async () => {
     // The title save answers with a row whose notes are still the old ones. Comparing
     // against the draft captured when THAT request began sees an empty box, calls it clean,
@@ -550,20 +573,84 @@ describe('writes decide against the state as it is NOW', () => {
     expect(labels).toEqual(['Set context…', '@calls', '@errands', '+ New context…']);
   });
 
-  it('stops re-sending once the write is acknowledged, even on a stale response', async () => {
-    // An acknowledgement establishes that the text IS on the server whatever version the
-    // response carries. Leaving the baseline behind because the row was too old to adopt
-    // would leave the box reading dirty, and re-sending, for as long as it is open.
-    render({ notes: 'before', updated_at: '2026-08-06T12:30:00.000000+00:00' });
+  it('does not re-send a note the server acknowledged', async () => {
+    render({ notes: 'before' });
     setValue(notesBox(), 'mine');
     unfocus(notesBox());
     await settle();
     expect(updateTodoMock).toHaveBeenCalledTimes(1);
 
-    // The response was stamped BEFORE the row the card already holds, so it was not adopted.
     unfocus(notesBox());
     await settle();
     expect(updateTodoMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-sends a note a later write superseded', async () => {
+    // `_now()` is stamped under the row's own FOR UPDATE lock, so a row NEWER than our
+    // response was committed after our write. If it does not carry our text, ours was
+    // replaced — and calling the box clean on the strength of the acknowledgement alone
+    // would strand a paragraph the server does not have, silently and with no error.
+    let release: (v: Todo) => void = () => {};
+    updateTodoMock.mockImplementationOnce(() => new Promise<Todo>(res => { release = res; }));
+    render({ notes: 'before', updated_at: '2026-08-06T12:00:00.000000+00:00' });
+    setValue(notesBox(), 'mine');
+    unfocus(notesBox());
+
+    // Someone else's write lands first, and it does not carry our text.
+    render({ notes: 'theirs', updated_at: '2026-08-06T12:00:09.000000+00:00' });
+    await act(async () => {
+      release({ ...TODO, notes: 'mine', updated_at: '2026-08-06T12:00:05.000000+00:00' });
+    });
+    await settle();
+
+    expect(notesBox().value).toBe('mine');
+    unfocus(notesBox());
+    await settle();
+    expect(updateTodoMock).toHaveBeenNthCalledWith(2, 7, { notes: 'mine' });
+  });
+
+  it('keeps an override while an EARLIER write of its own answers first', async () => {
+    // A row is not evidence about a write still in flight. The notes write was sent first
+    // and answers first, carrying the pre-rename title — releasing the override on that
+    // disagreement flashes the old name back and hands it to the sheet, whose full-row save
+    // then reverts the rename.
+    let releaseNotes: (v: Todo) => void = () => {};
+    updateTodoMock
+      .mockImplementationOnce(() => new Promise<Todo>(res => { releaseNotes = res; }))
+      .mockImplementationOnce(() => new Promise<Todo>(() => {}));
+    render({ title: 'A', notes: 'before', updated_at: '2026-08-06T12:00:00.000000+00:00' });
+    setValue(notesBox(), 'jot');
+    unfocus(notesBox());   // the notes write goes out first
+    startTitleSave('B');   // …and the rename goes out behind it, still in flight
+
+    await act(async () => {
+      releaseNotes({
+        ...TODO, title: 'A', notes: 'jot', updated_at: '2026-08-06T12:00:05.000000+00:00',
+      });
+    });
+    await settle();
+
+    expect(titleText()).toBe('B');
+    click(button('Edit'));
+    await settle();
+    expect(onEdit.mock.calls[0][0].title).toBe('B');
+  });
+
+  it('does not open the sheet after the card is swapped away', async () => {
+    // Opening waits on the flush, and nothing gates the inbox queue meanwhile — promoting
+    // another row unmounts this card, and the continuation would open the sheet on the todo
+    // the user just navigated away from.
+    let release: (v: Todo) => void = () => {};
+    updateTodoMock.mockImplementationOnce(() => new Promise<Todo>(res => { release = res; }));
+    render();
+    setValue(notesBox(), 'jot');
+    click(button('Edit'));
+    act(() => { root.render(<div />); });
+
+    await act(async () => { release({ ...TODO, notes: 'jot', updated_at: nextStamp() }); });
+    await settle();
+
+    expect(onEdit).not.toHaveBeenCalled();
   });
 
   it('opens the sheet on a star the flush response brought back', async () => {

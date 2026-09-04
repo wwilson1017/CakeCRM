@@ -104,19 +104,23 @@ type CardAction =
  * write echoing back off a read taken before it committed, and adopting it is what would
  * rewind the notes box the instant a save succeeded.
  *
- * Two rules keep it from destroying work. Unsaved text of the user's own is never
- * overwritten — it stays on screen and stays dirty. And an override is released only when
- * the adopted row DISAGREES with it: releasing one that already matches would churn state
- * for nothing, and the value it holds is the one the user is looking at.
+ * Unsaved text of the user's own is never overwritten — it stays on screen and stays dirty.
+ *
+ * Adoption deliberately does NOT touch the optimistic overrides. Each is released when its
+ * OWN write settles, because a row is not evidence about a write still in flight: releasing
+ * one because the adopted row disagrees with it cannot tell "someone changed this elsewhere"
+ * from "this row was committed before my write was". An earlier write of this card's own,
+ * answering first, carries exactly that disagreement — and releasing on it flashes the field
+ * back to the value the override exists to hide, and hands the Edit sheet the old value,
+ * whose full-row save then reverts the change.
  */
 function adopt(s: CardState, r: Todo): CardState {
   if (!isNewer(r.updated_at, s.row.updated_at)) return s;
   return {
+    ...s,
     row: r,
     savedNotes: r.notes,
     notesDraft: s.notesDraft === s.savedNotes ? r.notes : s.notesDraft,
-    pendingDue: s.pendingDue !== null && s.pendingDue !== r.due_date ? null : s.pendingDue,
-    pendingTitle: s.pendingTitle !== null && s.pendingTitle !== r.title ? null : s.pendingTitle,
   };
 }
 
@@ -124,16 +128,17 @@ function reduce(s: CardState, a: CardAction): CardState {
   switch (a.type) {
     case 'adopt':
       return adopt(s, a.row);
-    case 'notes-saved': {
-      const next = adopt(s, a.row);
-      // The write was ACKNOWLEDGED, so this text is on the server whatever the response's
-      // version says — move the baseline even when the row was too old to adopt, or the box
-      // reads dirty, and re-sends, for as long as it is open. Deliberately only the
-      // baseline: writing the sent text into a row that was rejected as older would mint a
-      // version that never existed, and no later copy of the real row could repair it,
-      // because it would carry the same (or an older) timestamp and be rejected in turn.
-      return next.savedNotes === s.savedNotes ? { ...next, savedNotes: a.value } : next;
-    }
+    case 'notes-saved':
+      // Just an adoption. There is deliberately no "the write was acknowledged, so trust the
+      // text over the version" branch: `_now()` is stamped under the row's own `FOR UPDATE`
+      // lock (`service._apply_task_update_cur`), so `updated_at` is monotonic PER ROW, and a
+      // held row newer than this response was therefore committed AFTER our write. Either it
+      // already carries our text — in which case adoption has moved the baseline and the
+      // branch would be a no-op — or a later write replaced our text, in which case marking
+      // the box clean would strand a paragraph the server does not have, silently and with
+      // no error. Leaving it dirty re-sends it, which is the same last-write-wins rule the
+      // unsaved-draft case above already follows.
+      return adopt(s, a.row);
     case 'notes-draft':
       return s.notesDraft === a.value ? s : { ...s, notesDraft: a.value };
     case 'due':
@@ -218,6 +223,11 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
 
   // The notes write in flight, so a second commit queues BEHIND it instead of racing it.
   const notesInFlight = useRef<Promise<boolean> | null>(null);
+  // Opening the sheet waits on that write, and nothing gates the inbox queue meanwhile —
+  // promoting another row unmounts this card while the flush is still running, and the
+  // continuation would then open the sheet on the todo the user just navigated away from.
+  const mounted = useRef(true);
+  useLayoutEffect(() => () => { mounted.current = false; }, []);
 
   /**
    * Commit the notes box if it holds anything new; resolves false only when a write was
@@ -301,8 +311,8 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
       if (notesOk) setError('');
       // Adopt the response for the same reason the notes save does. Star and project are
       // written straight through here and never rendered optimistically, so this is the ONLY
-      // thing that keeps them current for `current` — without it the Edit sheet can open on
-      // the pre-write values once `busy` clears but before the refetch lands, and its
+      // thing that keeps them current for `payload()` — without it the Edit sheet can open
+      // on the pre-write values once `busy` clears but before the refetch lands, and its
       // full-row save reverts them.
       apply({ type: 'adopt', row: await updateTodo(todo.id, fields) });
       if (resolves) {
@@ -370,7 +380,10 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
     // The project EXISTS from here on, whatever happens next.
     setNewProject(null);
     try {
-      await updateTodo(todo.id, { project_id: created.id });
+      // Adopted like every other write on this card: `setBusy(false)` runs before the
+      // parent's reload resolves, so without this the Edit sheet can open on the pre-
+      // assignment `project_id` and its full-row save undoes the assignment.
+      apply({ type: 'adopt', row: await updateTodo(todo.id, { project_id: created.id }) });
     } catch {
       // A TOAST, not this card's inline error: promoting another queue row is not
       // gated on `busy`, so the user can swap the head item while these two writes
@@ -397,17 +410,15 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
       return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Update failed');
-      apply({ type: 'title', value: null }); // never written — don't let the sheet adopt it
       return false;
+    } finally {
+      // Released here, where this write settles — the one moment that IS evidence about it.
+      // On success the response just adopted carries the new title, so the override has
+      // nothing left to add; on failure nothing was written and it must not go on showing a
+      // name the server never took. Either way the card falls back to the row it holds.
+      apply({ type: 'title', value: null });
     }
   };
-
-  // What the sheet is handed: this card's best view of the row, never the lagging prop.
-  // All three of these can be ahead of `todo` while a refetch is in flight, and the sheet
-  // writes back every field it is given — so passing the prop would silently revert a
-  // rename, a date, or a paragraph the user just typed. (Star and project are absent
-  // because they are written straight through `patch` and never rendered optimistically,
-  // so the prop is the only view of them this card has.)
 
   const remove = async () => {
     if (busy) return;
@@ -555,20 +566,23 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
               onBlur={() => setDueFocused(false)}
               onChange={e => {
                 const picked = e.target.value;
-                // The write below sets `busy`, which DISABLES this input — and React does
-                // not dispatch to a disabled target, so `onBlur` never runs and the flag
-                // would strand `true` for the life of the card. (The browser does fire
-                // blur; React simply declines to call the handler. There is no browser
-                // quirk to go looking for.) A stranded `true` is invisible while a date is
-                // set, because `dueValue` hides the cue on its own — and then bites the
-                // moment the date is cleared: an empty box, the cue suppressed by a focus
-                // that ended long ago, and the user back to a bare `mm/dd/yyyy`.
+                // The write below sets `busy`, which DISABLES this input while it runs, and
+                // whether a focused element still fires `blur` when it is disabled is
+                // BROWSER-dependent — historically not in Chromium, yes in Firefox. So
+                // `onBlur` cannot be relied on to clear the flag, and a stranded `true` is
+                // invisible while a date is set, because `dueValue` hides the cue on its
+                // own; it bites the moment the date is cleared, leaving an empty box with
+                // the cue suppressed by a focus that ended long ago. Clearing it here costs
+                // nothing on the browsers that do fire blur. (React-DOM's disabled-target
+                // suppression covers only MOUSE events, so it is not the mechanism here.)
                 setDueFocused(false);
                 apply({ type: 'due', value: picked });
-                // Reverted on failure, exactly like `pendingTitle`: nothing was written, so
-                // the field must not go on showing a date the server never took.
+                // Released when this write settles, either way — the same rule `saveTitle`
+                // follows. On success `patch` has adopted a response carrying the new date;
+                // on failure nothing was written and the field must not go on showing a date
+                // the server never took.
                 void patch({ due_date: picked }, false)
-                  .then(ok => { if (!ok) apply({ type: 'due', value: null }); });
+                  .then(() => apply({ type: 'due', value: null }));
               }}
               className={`${inputCls} min-w-40`}
               aria-label="Due date"
@@ -593,9 +607,10 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
               // flight — and the sheet writes `notes` too. Without ordering them this
               // card's older PUT can land after the sheet's Save and overwrite it. Opened
               // regardless of the result: a draft the server rejected is exactly what the
-              // sheet is there to rescue, and `current` hands it over either way.
+              // sheet is there to rescue, and `payload()` hands it over either way.
               setEditPending(true);
               void flushNotes().then(() => {
+                if (!mounted.current) return;
                 setEditPending(false);
                 onEdit(payload());
               });
