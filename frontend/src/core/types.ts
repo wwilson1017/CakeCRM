@@ -355,18 +355,42 @@ export interface AiTouchEvidenceResponse {
 }
 
 // GET /api/crm/companies/:id/report (issue #144) — the Reports page's one-company rollup.
-// Both child lists are capped server-side; the `*_truncated` flags say so rather than letting
-// the page quietly under-report an account. Every child carries `activities` AND
-// `activities_truncated` — an absent key would read as "not loaded", `[]` means "none".
+// The child lists are capped server-side and say so; the headline numbers in `summary` are
+// their own aggregate over the full tables, so no cap and no archive toggle can move them.
+// Every expanded row renders entirely from this payload — custom fields and open tasks ride
+// it, batched — so opening a row costs no request.
+
+/** One custom field on a rolled-up record: EVERY definition, whether or not it is filled in. */
+export interface CrmRollupField {
+  field_key: string;
+  name: string;
+  field_type: string;
+  value: string | null;
+}
+
 export interface CrmRollupChild {
   activities: CrmActivity[];
   activities_truncated: boolean;
+  custom_fields: CrmRollupField[];
+}
+
+export interface CrmRollupSummary {
+  open_deal_count: number;
+  open_deal_value: number;
+  /** Excludes archived contacts, though the contacts LIST below includes them. */
+  contact_count: number;
 }
 
 export interface CrmCompanyRollup {
   company: CrmCompany;
+  company_custom_fields: CrmRollupField[];
+  summary: CrmRollupSummary;
   contacts: (CrmContact & CrmRollupChild)[];
-  deals: (CrmDeal & CrmRollupChild & { last_activity_at: string | null })[];
+  deals: (CrmDeal & CrmRollupChild & {
+    last_activity_at: string | null;
+    tasks: CrmTask[];
+    tasks_truncated: boolean;
+  })[];
   contacts_truncated: boolean;
   deals_truncated: boolean;
 }

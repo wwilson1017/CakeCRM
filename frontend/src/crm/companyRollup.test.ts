@@ -7,9 +7,7 @@ import {
   groupTimelineByDate,
   isArchivedContact,
   isArchivedDeal,
-  isOpenDeal,
   partitionArchived,
-  rollupSummary,
   timelineSourceLabel,
 } from './companyRollup';
 import type { CrmContact, CrmDeal, CrmTimelineEntry } from '../core/types';
@@ -43,69 +41,12 @@ function entry(over: Partial<CrmTimelineEntry> = {}): CrmTimelineEntry {
   };
 }
 
-describe('rollupSummary', () => {
-  it('counts and sums only deals that are live AND in an open stage', () => {
-    // The CakeCRM-specific trap: `stage` and `archived_at` are two independent axes, so an
-    // archived deal sitting in an open stage must NOT be counted. A port that reads only the
-    // blueprint's single `status` field would count it.
-    const summary = rollupSummary(
-      [
-        deal({ id: 1, stage: 'proposal', value: 1000 }),
-        deal({ id: 2, stage: 'won', value: 5000 }),
-        deal({ id: 3, stage: 'lost', value: 7000 }),
-        deal({ id: 4, stage: 'lead', value: 9000, archived_at: '2026-02-01T00:00:00+00:00' }),
-      ],
-      [],
-    );
-    expect(summary.openDealCount).toBe(1);
-    expect(summary.openDealValue).toBe(1000);
-  });
-
-  it('treats a non-finite value as zero instead of poisoning the whole sum', () => {
-    const summary = rollupSummary(
-      [deal({ id: 1, value: NaN }), deal({ id: 2, value: 250 })],
-      [],
-    );
-    expect(summary.openDealValue).toBe(250);
-  });
-
-  it('excludes archived contacts from the contact count', () => {
-    const summary = rollupSummary([], [
-      contact({ id: 1, status: 'active' }),
-      contact({ id: 2, status: 'inactive' }),
-      contact({ id: 3, status: 'archived' }),
-    ]);
-    expect(summary.contactCount).toBe(2);
-  });
-
-  it('reports zeros and unset partial flags for an empty account', () => {
-    // Partial defaults to FALSE, never true — claiming a total is incomplete when it is not
-    // would put a bogus "≥" in front of an exact number.
-    expect(rollupSummary([], [])).toEqual({
-      openDealCount: 0, openDealValue: 0, contactCount: 0,
-      dealsPartial: false, contactsPartial: false,
-    });
-  });
-
-  it('carries the truncation flags through independently', () => {
-    const summary = rollupSummary([], [], { deals: true });
-    expect(summary.dealsPartial).toBe(true);
-    expect(summary.contactsPartial).toBe(false);
-  });
-});
-
 describe('archived predicates', () => {
   it('reads deals on archived_at and contacts on status', () => {
     expect(isArchivedDeal(deal({ archived_at: '2026-02-01T00:00:00+00:00' }))).toBe(true);
     expect(isArchivedDeal(deal({ archived_at: null }))).toBe(false);
     expect(isArchivedContact(contact({ status: 'archived' }))).toBe(true);
     expect(isArchivedContact(contact({ status: 'inactive' }))).toBe(false);
-  });
-
-  it('treats an archived open-stage deal as not open', () => {
-    expect(isOpenDeal(deal({ stage: 'lead', archived_at: '2026-02-01T00:00:00+00:00' }))).toBe(false);
-    expect(isOpenDeal(deal({ stage: 'lead' }))).toBe(true);
-    expect(isOpenDeal(deal({ stage: 'won' }))).toBe(false);
   });
 });
 
@@ -227,7 +168,7 @@ describe('timelineSourceLabel / describeTimelineEntry', () => {
 });
 
 describe('EXPAND_ALL_MAX', () => {
-  it('is the blueprint ceiling that keeps one click from storming the server', () => {
+  it('is the DOM ceiling on the one bulk expand control', () => {
     expect(EXPAND_ALL_MAX).toBe(50);
   });
 });

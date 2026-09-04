@@ -1,3 +1,4 @@
+import { Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './core/auth/AuthContext';
 import { ProtectedRoute } from './core/auth/ProtectedRoute';
@@ -12,6 +13,18 @@ import { PipelinePage } from './crm/PipelinePage';
 import { RemindersPage } from './crm/RemindersPage';
 import { SettingsPage } from './crm/SettingsPage';
 import { MemoryPage } from './crm/MemoryPage';
+
+// Reports (#144), registered LAZILY on purpose. Every other page above is a static import
+// today, but PR #149 converts this whole table to route-level lazy() chunks and adds
+// src/bootSplit.test.ts, which fails on any static page import here. Registering this one
+// the way #149 does — plus the local <Suspense> it needs, since this version of the file
+// has no outer boundary yet — makes that merge a keep-both.
+//
+// SHIP ORDER: #149's guard also pins exactly ONE <Suspense> in this file. Whichever of
+// this PR and #146 lands after #149 must delete its local wrapper.
+const ReportsPage = lazy(() =>
+  import('./crm/ReportsPage').then((m) => ({ default: m.ReportsPage })),
+);
 import { DonePage } from './crm/gtd/DonePage';
 import { InboxPage } from './crm/gtd/InboxPage';
 import { NextActionsPage } from './crm/gtd/NextActionsPage';
@@ -79,6 +92,10 @@ export default function App() {
             <Route path="tasks/done" element={<TasksModeRouter gtd={<DonePage />} normal="redirect" />} />
             <Route path="tasks/review" element={<TasksModeRouter gtd={<ReviewPage />} normal="redirect" />} />
             <Route path="tasks/search" element={<TasksModeRouter gtd={<SearchPage />} normal="redirect" />} />
+            <Route
+              path="reports"
+              element={<Suspense fallback={null}><ReportsPage /></Suspense>}
+            />
             <Route path="reminders" element={<RemindersPage />} />
             <Route path="memory" element={<MemoryPage />} />
             <Route path="settings" element={<SettingsPage />} />

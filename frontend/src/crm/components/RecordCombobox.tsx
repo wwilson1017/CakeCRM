@@ -38,8 +38,15 @@ interface Props<T> {
   emptyLabel: string;
   /** Query the server. Called with the TRIMMED query; "" means "first page, unfiltered". */
   search: (query: string) => Promise<T[]>;
-  /** Create a record from a typed name and return it. Called with the TRIMMED name. */
-  create: (name: string) => Promise<T>;
+  /**
+   * Create a record from a typed name and return it. Called with the TRIMMED name.
+   *
+   * OMIT it for a read-only picker (the Reports page, issue #144): no Create row is ever
+   * offered and Enter on an empty result list does nothing. The gate is `canCreate`, which
+   * every other create path is derived from — `showCreate`, the Enter handler and
+   * `quickCreate` itself — so there is one place to get this right rather than four.
+   */
+  create?: (name: string) => Promise<T>;
   getId: (record: T) => number;
   getLabel: (record: T) => string;
   /**
@@ -122,7 +129,7 @@ export function RecordCombobox<T>({
   // Create stays available: refusing it would strand a user whose search backend is down.
   const searchFailed = fresh && settled.failed;
   const exactMatch = results.some(r => matchTextOf(r).trim().toLowerCase() === trimmed.toLowerCase());
-  const canCreate = trimmed !== '' && !loading && !exactMatch;
+  const canCreate = create !== undefined && trimmed !== '' && !loading && !exactMatch;
   // The row also stays up while a create is in flight, even when `canCreate` has gone false
   // because the user kept typing (a new query is `loading`, which suppresses it). Otherwise
   // the one piece of feedback that a record IS being written vanishes mid-request.
@@ -232,7 +239,7 @@ export function RecordCombobox<T>({
   }
 
   async function quickCreate() {
-    if (!trimmed || creating) return;
+    if (!create || !trimmed || creating) return;
     // The search's request-id guard does not cover creates. Without this, a slow create
     // still calls `choose` after the user has dismissed the list, cleared the field or
     // picked an existing row — silently replacing the choice they actually made.

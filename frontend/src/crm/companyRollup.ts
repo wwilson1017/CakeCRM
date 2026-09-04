@@ -1,73 +1,37 @@
 /**
  * Pure seams behind the Reports page's company rollup (issue #144).
  *
- * Everything here is data-in / data-out so the interesting rules — what counts as an open
- * deal, how a two-table feed is keyed, how a day boundary is drawn — are testable without
- * rendering anything. Ported from cake_os `companyRollup.ts` (#2336) and adapted where
- * CakeCRM's schema differs, which is mostly one place: the blueprint has a single
- * `deal.status` field carrying open/won/lost/archived, and CakeCRM has TWO columns on two
- * different axes — `stage` (won/lost are stages) and `archived_at` (NULL = live). A deal can
- * be archived while sitting in an open stage, so every "is this deal counted" question has to
- * ask both.
+ * Everything here is data-in / data-out so the interesting rules — how a two-table feed is
+ * keyed, how a day boundary is drawn, which rows read as archived — are testable without
+ * rendering anything. Ported from cake_os `companyRollup.ts` (#2336), minus its
+ * `rollupSummary`: the blueprint reduces its headline chips from the returned children,
+ * which lets a capped list move a headline number, so this port takes them from the
+ * server's own aggregate instead.
+ *
+ * Where CakeCRM's schema differs, it differs in one place that matters here: the blueprint
+ * has a single `deal.status` carrying open/won/lost/archived, while CakeCRM has TWO columns
+ * on two different axes — `stage` (won and lost ARE stages) and `archived_at` (NULL = live)
+ * — and contacts archive on a third, `status`. So "is this row archived" takes a predicate
+ * per entity rather than reading one shared column.
  */
-import type { CrmContact, CrmDeal, CrmTimelineEntry } from '../core/types';
-import { OPEN_STAGES } from './constants';
+import type { CrmContact, CrmTimelineEntry } from '../core/types';
 import { isArchivedDeal } from './pipelineFilters';
 
 /**
  * Above this many rows in a section, the "Expand all" control is WITHHELD (not disabled).
- * Each expanded row fires its own reads — custom fields, and for a deal its tasks — so one
- * click on a large account would be an account-sized request storm. Per-row expansion and
- * "Collapse all" stay available at any count.
+ *
+ * The blueprint's reason was network — each expanded row fetched its own custom fields and
+ * tasks, so one click was an account-sized request storm. That reason is gone here: the
+ * rollup embeds both, batched, and an expanded row issues no request at all. What remains
+ * is DOM: every field of every record of a 200-row section rendered at once is a real cost
+ * on a modest machine. Per-row expansion and "Collapse all" stay available at any count,
+ * which is why withholding the one bulk control is enough.
  */
 export const EXPAND_ALL_MAX = 50;
 
 /** The report's one archived predicate per axis, so no caller re-derives either. */
 export { isArchivedDeal };
 export const isArchivedContact = (c: CrmContact): boolean => c.status === 'archived';
-
-const OPEN_STAGE_SET = new Set<string>(OPEN_STAGES);
-
-/** Live AND in a non-terminal stage. Both columns, because they are different axes. */
-export function isOpenDeal(deal: CrmDeal): boolean {
-  return !isArchivedDeal(deal) && OPEN_STAGE_SET.has(deal.stage);
-}
-
-export interface RollupSummary {
-  openDealCount: number;
-  openDealValue: number;
-  contactCount: number;
-  dealsPartial: boolean;
-  contactsPartial: boolean;
-}
-
-/**
- * The three header chips.
- *
- * A non-finite `value` contributes 0 rather than poisoning the whole sum with NaN — one bad
- * row must not blank the number the page exists to show. The partial flags default to FALSE,
- * never true: claiming a total is incomplete when it isn't is its own kind of wrong.
- */
-export function rollupSummary(
-  deals: CrmDeal[],
-  contacts: CrmContact[],
-  truncated: { deals?: boolean; contacts?: boolean } = {},
-): RollupSummary {
-  let openDealCount = 0;
-  let openDealValue = 0;
-  for (const deal of deals) {
-    if (!isOpenDeal(deal)) continue;
-    openDealCount += 1;
-    openDealValue += Number.isFinite(deal.value) ? deal.value : 0;
-  }
-  return {
-    openDealCount,
-    openDealValue,
-    contactCount: contacts.filter((c) => !isArchivedContact(c)).length,
-    dealsPartial: truncated.deals === true,
-    contactsPartial: truncated.contacts === true,
-  };
-}
 
 /**
  * Live rows first, archived after, relative input order preserved inside each half, input
