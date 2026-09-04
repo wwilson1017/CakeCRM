@@ -1,47 +1,61 @@
 import { useState, useEffect, useRef } from 'react';
-import type { CSSProperties, KeyboardEvent } from 'react';
+import type { CSSProperties } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../../core/api/client';
 import type { CrmWeeklyTouches } from '../../core/types';
 import {
-  INK, INK_MUTE, INK_DIM, LINE, CORAL_TEXT,
-  FONT_DISPLAY, mono, labelStyle, inputStyle, formatNumber,
+  INK, INK_MUTE, INK_DIM, LINE, CORAL_TEXT, ACCENT_TEXT,
+  FONT_DISPLAY, mono, labelStyle, inputStyle,
 } from '../../shared/styles';
 import { cardStyle, sectionHeading, btnPrimary, btnSecondary } from '../styles';
-import { touchCountColor } from '../constants';
+import { RepLabel } from './RepLabel';
+import { TouchDealRow } from './TouchDealRow';
+import { ownerParamOf, touchDetailPath } from '../weeklyTouches';
 
 /**
  * Weekly Touches KPI (issue #76) — how many open deals got touched in a window.
  *
- * The blueprint (cake_os WeeklyTouchesCard) breaks this down per rep; CakeCRM is
- * single-user, so the rows are per DEAL instead — which also surfaces the number
- * #16 exists for: the 12-touches idea says deals close between touch 5 and 12, and
- * reps quit at 1-4. Hence the colour ramp on each count (shared with TouchCountPill
- * via crm/constants.ts, so one number never renders in two colours).
+ * Grouped per DEAL OWNER since #146. #76 shipped it per deal because CakeCRM was
+ * single-user and there were no owner columns; #60 landed `deals.owner_id`, so the rows
+ * are now the reps the blueprint always had, each expanding to their own top deals. Every
+ * owner of an open deal gets a row — including the ones who touched nothing, which is the
+ * point of a weekly accountability pull — and the unowned deals are a bucket named
+ * "Unassigned" rather than an exclusion, which is what makes the headline the sum of the
+ * rows beneath it.
  *
- * Two distinct signals, per the server: window MEMBERSHIP is keyless and
- * event-grained (edits, activities, live notes), while the per-deal NUMBER is #16's
- * AI estimate — and a lifetime-ish one, which the body copy says out loud so a "12"
- * isn't read as twelve touches this week.
+ * The per-deal number is what #16 exists for: the 12-touches idea says deals close between
+ * touch 5 and 12 and reps quit at 1-4, hence the colour ramp on each count (shared with
+ * TouchCountPill via crm/constants.ts, so one number never renders in two colours).
  *
- * ZERO AI KEYS: renders nothing at all. `computed_deals === 0` means no touch count
- * has ever been computed, which is exactly the no-provider state (the touch-count
- * worker needs a light-tier model).
+ * Two distinct signals, per the server: window MEMBERSHIP is keyless and event-grained
+ * (edits, activities, live notes), while the per-deal NUMBER is #16's AI estimate — and a
+ * lifetime-ish one, which the body copy says out loud so a "12" isn't read as twelve
+ * touches this week.
  *
- * The drill-down list behind a number is issue #56; there is deliberately no link
- * here yet.
+ * ZERO AI KEYS: renders nothing at all. `computed_deals === 0` means no touch count has
+ * ever been computed, which is exactly the no-provider state (the touch-count worker needs
+ * a light-tier model). Unchanged by the grouping, and still window-INDEPENDENT — a quiet
+ * week must not look like a missing provider.
  *
- * `wrapperStyle` is the page's spacing/layering for this slot. The card owns it so
- * that hiding removes the padding too — a wrapper in the parent would leave a gap
- * on the very page this is meant to be invisible from. `refreshKey` lets the page
- * refetch this card along with the rest after a mutation.
+ * A "mine only" scope was considered for this card (#146) and deliberately declined:
+ * Weekly Touches is a comparison view, so hiding the other reps removes the feature. If it
+ * is ever wanted, it is a CLIENT-side filter of `data.reps` by `useAuth().currentUser.id`
+ * — the payload already carries every rep — not a backend parameter, whose absent/NULL
+ * semantics would collide with the Unassigned bucket.
+ *
+ * `wrapperStyle` is the page's spacing/layering for this slot. The card owns it so that
+ * hiding removes the padding too — a wrapper in the parent would leave a gap on the very
+ * page this is meant to be invisible from. `refreshKey` lets the page refetch this card
+ * along with the rest after a mutation.
  */
 
 export function WeeklyTouchesCard(
   { wrapperStyle, refreshKey = 0, onOpenDeal }: {
     wrapperStyle?: CSSProperties;
     refreshKey?: number;
-    // issue #56: opening the deal sheet is the drill-down #76 deliberately deferred —
-    // the sheet carries the per-event evidence behind each of these numbers.
+    // issue #56: opening the deal sheet is the per-event drill-down #76 deferred — the
+    // sheet carries the evidence behind each of these numbers. The uncapped per-rep list
+    // is the #146 detail page, linked from each rep row.
     onOpenDeal?: (dealId: number) => void;
   },
 ) {
@@ -51,9 +65,20 @@ export function WeeklyTouchesCard(
   const [applied, setApplied] = useState<{ start: string; end: string } | null>(null);
   const [startInput, setStartInput] = useState('');
   const [endInput, setEndInput] = useState('');
-  const [data, setData] = useState<CrmWeeklyTouches | null>(null);
+  // The payload TOGETHER with the range that produced it. Keeping them in one piece of
+  // state is what makes the Details links honest: `applied` moves the moment Apply or
+  // reset is pressed, but a FAILED refetch deliberately leaves the previous numbers on
+  // screen — so a link built from `applied` would point at the new (or failed) range while
+  // the counts beside it still describe the old one, and reset-then-fail would send the
+  // user to the rolling default from a card showing a custom week.
+  const [result, setResult] = useState<
+    { data: CrmWeeklyTouches; range: { start: string; end: string } | null } | null
+  >(null);
   const [loading, setLoading] = useState(true);
   const [fetchFailed, setFetchFailed] = useState(false);
+  // Which rep rows are open. Keyed by the URL spelling of the bucket so the null owner has
+  // a key at all — `null` and `0` would collide in a Set<number>.
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   // Monotonic id: a slow request for an old window must not overwrite a newer one.
   const reqId = useRef(0);
 
@@ -65,7 +90,11 @@ export function WeeklyTouchesCard(
     // Stale-while-revalidate: the previous window's numbers stay on screen until the
     // new ones land, so applying a filter doesn't blank the card.
     api<CrmWeeklyTouches>(`/api/crm/dashboard/weekly-touches${qs}`)
-      .then(d => { if (id === reqId.current) { setData(d); setFetchFailed(false); } })
+      // `applied` is captured from this render, so the stored range is exactly the one
+      // this response answers — not whatever the control has moved on to since.
+      .then(d => {
+        if (id === reqId.current) { setResult({ data: d, range: applied }); setFetchFailed(false); }
+      })
       // Log before hiding: a 500 from a broken query would otherwise be pixel-identical
       // to the intended zero-keys hide, so a real regression could ship unnoticed.
       //
@@ -73,9 +102,9 @@ export function WeeklyTouchesCard(
       // an absent one). On a REFETCH it must not: the user pressed Apply, and blanking
       // the card would take the date inputs and the reset button with it — their own
       // action would look like it broke the feature, with no way back. So keep the last
-      // good data and show an inline error beside Apply instead. Leaving `data` alone
+      // good data and show an inline error beside Apply instead. Leaving `result` alone
       // does both: it is still null on a failed first load, and still the last good
-      // payload on a failed refetch.
+      // payload — and the last good RANGE — on a failed refetch.
       .catch(err => {
         console.error('Failed to load weekly touches:', err);
         if (id === reqId.current) setFetchFailed(true);
@@ -88,10 +117,26 @@ export function WeeklyTouchesCard(
 
   const apply = () => { if (canApply) setApplied({ start: startInput, end: endInput }); };
   const reset = () => { setApplied(null); setStartInput(''); setEndInput(''); };
+  const toggle = (key: string) => setExpanded(prev => {
+    const next = new Set(prev);
+    if (!next.delete(key)) next.add(key);
+    return next;
+  });
+
+  const data = result?.data ?? null;
+  // Read out alongside `data` so the link and the numbers are narrowed together —
+  // `null` here legitimately means the rolling default, not "not loaded".
+  const shownRange = result?.range ?? null;
 
   // Hidden affordance, never an error (product rule): no provider ⇒ nothing computed.
   // `loading` is checked first so the card doesn't flash in and out on mount.
   if (loading || !data || data.computed_deals === 0) return null;
+
+  // The degenerate case #146 preserves: one bucket renders its deals flat, with no
+  // expander and no indent — visually what the card was before the re-grouping. Derived
+  // from the PAYLOAD, not from the user roster: a single-seat install whose assistant or
+  // importer created unowned deals genuinely has two buckets, and both must show.
+  const single = data.reps.length === 1;
 
   return (
     <div style={wrapperStyle}>
@@ -107,6 +152,7 @@ export function WeeklyTouchesCard(
         Open deals edited, noted, or logged against in this window — however many times,
         each deal counts once. Creating a deal doesn't count. The number beside each deal
         is its AI-estimated<em> lifetime</em> touch count, not this window's.
+        {!single && ' Grouped by deal owner.'}
       </p>
 
       {/* Date range filter */}
@@ -171,64 +217,111 @@ export function WeeklyTouchesCard(
         {' '}open deals touched
       </div>
 
-      {data.deals.length === 0 ? (
+      {data.reps.length === 0 ? (
         <p style={{ fontSize: 13, color: INK_DIM, margin: 0 }}>
           No open deals touched in this window.
         </p>
       ) : (
         <div style={{ borderTop: `1px solid ${LINE}` }}>
-          {data.deals.map(deal => (
-            <div
-              key={deal.id}
-              {...(onOpenDeal ? {
-                role: 'button',
-                tabIndex: 0,
-                onClick: () => onOpenDeal(deal.id),
-                onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    onOpenDeal(deal.id);
-                  }
-                },
-              } : {})}
-              style={{
-                padding: '10px 0', borderBottom: `1px solid ${LINE}`,
-                display: 'flex', alignItems: 'center', gap: 12,
-                cursor: onOpenDeal ? 'pointer' : undefined,
-              }}
-            >
-              <div style={{ flex: 1, minWidth: 0 }}>
+          {data.reps.map(rep => {
+            const key = ownerParamOf(rep.user_id);
+            const open = single || expanded.has(key);
+            const unassigned = rep.user_id === null;
+            // The range these NUMBERS came from, not the one the control currently
+            // holds — see `result`. And a range, not the payload's instants: the page
+            // re-resolves the same window kind, so a deal touched since the card loaded
+            // stays in the list rather than falling past a frozen upper bound.
+            const detailPath = touchDetailPath(rep.user_id, shownRange);
+            return (
+              <div key={key}>
+                {/* Rendered in the SERVER's order and never re-sorted here: the backend
+                    sinks Unassigned last and ranks the rest by touches, and a second sort
+                    would only be a place for the two to disagree. */}
                 <div style={{
-                  fontSize: 14, color: INK,
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                }}>{deal.title}</div>
-                <div style={{ ...mono(10, INK_MUTE), marginTop: 3 }}>
-                  {deal.company_name || deal.contact_name || 'No contact'}
+                  display: 'flex', alignItems: 'center', gap: 12,
+                  padding: single ? '0 0 8px' : '10px 0',
+                  borderBottom: single ? undefined : `1px solid ${LINE}`,
+                }}>
+                  {/* Two SIBLING controls — a link nested inside a button is neither
+                      clickable as a link nor announced as one. The single-rep case keeps
+                      the label (an owner must always render, #128) but drops the toggle,
+                      since there is nothing to collapse. */}
+                  {single ? (
+                    <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                      <RepLabel name={rep.name} unassigned={unassigned} />
+                      <RepCount touches={rep.touches} openDeals={rep.open_deals} />
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      aria-expanded={open}
+                      onClick={() => toggle(key)}
+                      style={{
+                        flex: 1, minWidth: 0, display: 'flex', alignItems: 'baseline', gap: 8,
+                        background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                        textAlign: 'left', font: 'inherit',
+                      }}
+                    >
+                      <span aria-hidden="true" style={mono(10, INK_DIM)}>{open ? '▾' : '▸'}</span>
+                      <RepLabel name={rep.name} unassigned={unassigned} />
+                      <RepCount touches={rep.touches} openDeals={rep.open_deals} />
+                    </button>
+                  )}
+                  {rep.touches > 0 && (
+                    <Link
+                      to={detailPath}
+                      aria-label={`All touched deals for ${rep.name}`}
+                      style={{ ...mono(10, ACCENT_TEXT), textDecoration: 'none', flexShrink: 0 }}
+                    >Details →</Link>
+                  )}
                 </div>
+
+                {open && (rep.deals.length === 0 ? (
+                  <p style={{
+                    fontSize: 13, color: INK_DIM, margin: 0,
+                    padding: '10px 0', paddingLeft: single ? 0 : 18,
+                  }}>
+                    No open deals touched in this window.
+                  </p>
+                ) : (
+                  <>
+                    {rep.deals.map(deal => (
+                      <TouchDealRow
+                        key={deal.id}
+                        deal={deal}
+                        onOpen={onOpenDeal}
+                        indent={!single}
+                      />
+                    ))}
+                    {/* The server caps each rep's rows; without this a rep's headline (12)
+                        and their list (10) silently disagree. Derived from the two numbers,
+                        so it needs no knowledge of the server's limit. */}
+                    {rep.touches > rep.deals.length && (
+                      <div style={{
+                        ...mono(10, INK_DIM),
+                        padding: '10px 0', paddingLeft: single ? 0 : 18,
+                      }}>
+                        Showing the top {rep.deals.length} of {rep.touches} touched deals ·{' '}
+                        <Link to={detailPath} style={{ color: ACCENT_TEXT }}>See all</Link>
+                      </div>
+                    )}
+                  </>
+                ))}
               </div>
-              <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                <div
-                  title="AI-estimated touches, from recent notes & activities. Most deals close between touch 5 and 12."
-                  style={{
-                    fontFamily: FONT_DISPLAY, fontSize: 17,
-                    color: touchCountColor(deal.touch_count),
-                  }}
-                >{deal.touch_count ?? '—'}</div>
-                <div style={mono(10, INK_DIM)}>${formatNumber(deal.value)}</div>
-              </div>
-            </div>
-          ))}
-          {/* The server caps the list; without this the headline (40) and the list (10)
-              silently disagree. Derived from the two numbers, so it needs no knowledge
-              of the server's limit. */}
-          {data.total_touches > data.deals.length && (
-            <div style={{ ...mono(10, INK_DIM), padding: '10px 0' }}>
-              Showing the top {data.deals.length} of {data.total_touches} touched deals.
-            </div>
-          )}
+            );
+          })}
         </div>
       )}
       </div>
     </div>
+  );
+}
+
+function RepCount({ touches, openDeals }: { touches: number; openDeals: number }) {
+  return (
+    <span style={{ fontSize: 13, color: INK_MUTE, flexShrink: 0 }}>
+      <span style={{ fontFamily: FONT_DISPLAY, fontSize: 17, color: INK }}>{touches}</span>
+      {' of '}{openDeals} touched
+    </span>
   );
 }

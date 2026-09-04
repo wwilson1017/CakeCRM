@@ -48,6 +48,13 @@ const SomedayPage = lazy(() => import('./crm/gtd/pages').then((m) => ({ default:
 const TodayPage = lazy(() => import('./crm/gtd/pages').then((m) => ({ default: m.TodayPage })));
 const WaitingPage = lazy(() => import('./crm/gtd/pages').then((m) => ({ default: m.WaitingPage })));
 
+// Weekly Touches per-rep drill-down (#146), reached from the dashboard's Weekly Touches
+// card. Lazy like every other page here, per the rule above: a static page import would
+// re-bundle this page into the shell chunk every CRM visitor downloads.
+const WeeklyTouchesDetailPage = lazy(() =>
+  import('./crm/WeeklyTouchesDetailPage').then((m) => ({ default: m.WeeklyTouchesDetailPage })),
+);
+
 export default function App() {
   // The no-login todo surface used to be dispatched from here, by an early return above
   // this router. It now lives in `Root.tsx`, which decides BEFORE this module is fetched —
@@ -97,6 +104,9 @@ export default function App() {
               }
             >
               <Route index element={<CrmDashboardPage />} />
+              {/* Reached from the dashboard's Weekly Touches card, so it is deliberately
+                  absent from CrmLayout's NAV_ITEMS — the same way /crm/memory is. */}
+              <Route path="touches/:owner" element={<WeeklyTouchesDetailPage />} />
               {/* One route per entity, list and detail both (#77). The list page renders the
                   detail page when :id is present, so the route element never changes and its
                   swept corpus survives open → back without re-fetching. Every existing
