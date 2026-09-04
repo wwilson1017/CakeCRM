@@ -32,6 +32,12 @@ from crm import (
     touch_count_service,
 )
 
+# One resolver for a person's label, so the Weekly Touches rep rows and the Team
+# settings list can never spell the same user differently. `users.service` imports only
+# `core.postgres`, so this adds no cycle — the router that would drag `core.auth` in
+# lives in `users.router` and is not imported here.
+from users import service as users_service
+
 logger = logging.getLogger(__name__)
 
 DEAL_STAGES = ["lead", "qualified", "proposal", "negotiation", "won", "lost"]
@@ -2395,9 +2401,20 @@ def get_dashboard_stats() -> dict:
 # and a per-viewer window here would disagree with the overdue-task count above it.
 _TOUCH_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
-# Rows shown under the headline. The card is a KPI, not a deal list — the full
-# drill-down is issue #56.
+# Rows shown under each rep, PER REP since #146 (it was one global cap while the card
+# had a single implicit rep). The card is a KPI, not a deal list — the per-deal evidence
+# drill-down is issue #56, and the uncapped per-rep list is the #146 detail page.
 WEEKLY_TOUCHES_LIMIT = 10
+
+# The bucket name the drill-down URL uses for deals with no owner. `deals.owner_id` is
+# nullable forever (#60) — the Gmail scan, the assistant and the CSV importer all
+# legitimately produce it — so NULL is a bucket to name, not a row to drop.
+TOUCH_OWNER_UNASSIGNED = "unassigned"
+
+# `users.id` is a 32-bit SERIAL and `deals.owner_id` a 32-bit INTEGER, so an id past this
+# reaches Postgres as an out-of-range comparison and surfaces as a 500 on what is really
+# malformed user input.
+_MAX_USER_ID = 2147483647
 
 
 def _parse_touch_date(value: str) -> datetime:
@@ -2445,86 +2462,312 @@ def _resolve_touch_window(
     return start_dt, window_end, f"{start} – {end}", True
 
 
-def get_weekly_touches(start: str | None = None, end: str | None = None) -> dict:
-    """Open deals touched in the window, keyed off #16's AI touch counts.
+def parse_touch_owner(raw: str | None) -> int | None:
+    """The detail route's owner: a user id, or the literal ``unassigned`` for the NULL bucket.
 
-    CakeCRM is single-user, so the blueprint's PER-REP breakdown
-    (cake_os ``dashboard_service.get_weekly_touches``, grouped on ``owner_email``)
-    collapses — there are no owner columns and the rep universe would always be one
-    row. It becomes per-DEAL instead, keeping the blueprint's envelope
-    (``window``/``total_touches``/``total_open_deals``) with ``deals`` where it had
-    ``reps``, so a later multi-user port is a re-grouping rather than a rewrite.
+    A REQUIRED param carrying a literal for NULL, deliberately unlike ``/dashboard/today``'s
+    ``owner_id`` (where absent means everyone): the drill-down is always exactly ONE bucket,
+    and the unowned bucket is one of them, so "absent" is never a state here.
 
-    Two different signals, deliberately:
-
-    * **Window membership** is ``LAST_TOUCH_SQL`` — the same keyless GREATEST(edit,
-      newest activity, newest live note) expression the "Needs a touch" panel uses via
-      ``analytics_service.get_stale_deals``. It is exact, event-grained, and needs no
-      provider. It is emphatically NOT ``deals.ai_touch_count_at``: that column is
-      #16's stale-write-guard key (an evidence watermark that falls back to the deal's
-      ``created_at`` and is only advanced when a provider answered and the CAS
-      accepted), so using it here made every provider timeout silently delete a deal
-      from a weekly accountability number — and disagreed with the stale-deal panel
-      200px below on the same page.
-
-      Creation is NOT a touch: ``create_deal`` leaves ``updated_at == created_at``, so
-      without the ``last_touch <> created_at`` guard a fresh import or a sample-data
-      load would report every new deal as worked. The blueprint excludes deal creation
-      for exactly this reason. Note this makes ``LAST_TOUCH_SQL``'s floor on
-      ``d.updated_at`` load-bearing: any future writer that bumps ``updated_at`` on a
-      schedule (rather than on a real edit) would silently read as a touch — which is
-      why ``archive_deal`` deliberately does not bump it.
-    * **The number shown per deal** is #16's ``ai_touch_count`` — that is the
-      "#16 touch-count data" the issue asked to key off, and it is what supplies the
-      zero-keys gate: with no provider the worker never runs, every count stays NULL,
-      ``computed_deals`` is 0, and the card hides itself rather than rendering an empty
-      or erroring panel (product rule: hidden affordance, never an error).
-
-    Because membership no longer depends on AI coverage, numerator and denominator are
-    both coverage-independent — a half-backfilled install can't report "1 of 40" when
-    the user really touched 15.
+    ASCII digits only — ``str.isdigit()`` accepts superscripts, which ``int()`` then rejects
+    with an unhandled 500 rather than the 400 this is.
     """
-    window_start, window_end, label, custom = _resolve_touch_window(start, end)
+    value = (raw or "").strip()
+    if value == TOUCH_OWNER_UNASSIGNED:
+        return None
+    if re.fullmatch(r"[0-9]+", value):
+        owner_id = int(value)
+        if 1 <= owner_id <= _MAX_USER_ID:
+            return owner_id
+    raise ValueError("owner must be a user id or 'unassigned'")
 
-    # One pass for all three scalars: the denominator (open deals), the numerator
-    # (touched in-window), and computed_deals — the has-anything-been-computed gate,
-    # which counts non-NULL ai_touch_count across ALL open deals, not just in-window
-    # ones. Counting it in-window would hide the card during a quiet week even with a
-    # provider configured, which is a different (and wrong) meaning.
-    # The inner SELECT is for readability — Postgres inlines it, so LAST_TOUCH_SQL's
-    # correlated subqueries are evaluated per comparison, not once. Fine at this scale
-    # (the sibling get_stale_deals scans the same expression on the same page load).
-    totals = pg_fetchone(
-        f"""SELECT COUNT(*) AS open_deals,
-                   COUNT(ai_touch_count) AS computed_deals,
+
+def _to_utc(value: datetime) -> datetime:
+    """Naive → assumed UTC; aware → converted. ValueError on an unrepresentable shift."""
+    try:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    except (OverflowError, ValueError):
+        # The trap _resolve_touch_window's end-day bound already hit: shifting a datetime
+        # near datetime.min/max raises OverflowError, which is NOT a ValueError and would
+        # escape the router's handler as a 500 on ordinary (if silly) input.
+        raise ValueError("window bound is out of range") from None
+
+
+def _exact_window_label(window_start: datetime, window_end: datetime) -> str:
+    """Label for an explicit instant range.
+
+    Whole UTC days render exactly like the card's custom label (end-inclusive), so a range
+    picked on the dashboard reads identically on the drill-down. Anything else is shown as
+    the instants it is — including the rolling window, which is honest rather than a
+    calendar range it isn't. Two consequences worth naming rather than engineering around:
+    a rolling window requested exactly at UTC midnight does read as whole days (a different
+    wording of the same true window), and the minute-precision form renders two bounds less
+    than a minute apart identically — the label describes the window, it doesn't identify it.
+    """
+    midnight = datetime.min.time()
+    if window_start.time() == midnight and window_end.time() == midnight:
+        return f"{window_start:%Y-%m-%d} – {window_end - timedelta(days=1):%Y-%m-%d}"
+    return f"{window_start:%Y-%m-%d %H:%M} – {window_end:%Y-%m-%d %H:%M} UTC"
+
+
+def _resolve_detail_window(
+    start: str | None, end: str | None, ws: str | None, we: str | None
+) -> tuple[datetime, datetime, str]:
+    """Drill-down window: exact instants when the card forwards them, else the card's own.
+
+    The card sends the EXACT bounds it displayed as ``ws``/``we`` so the list can never
+    drift from the number the user clicked — which matters most on the ROLLING default
+    window, where ``now`` moves between the card's request and the page's, and a
+    re-resolution would quietly list a different week.
+
+    ``ws``/``we`` are INSTANTS, and a date-only value is rejected even though
+    ``fromisoformat`` accepts one: ``start``/``end`` are end-INCLUSIVE calendar days while
+    ``ws``/``we`` are a half-open instant range, so accepting a bare date would give two
+    identical-looking URLs two different meanings. Carrying both pairs is refused outright
+    — such a URL is a bug, not a preference.
+    """
+    ws = (ws or "").strip() or None
+    we = (we or "").strip() or None
+    if ws is None and we is None:
+        window_start, window_end, label, _custom = _resolve_touch_window(start, end)
+        return window_start, window_end, label
+    if ws is None or we is None:
+        raise ValueError("Exact window requires both ws and we")
+    if (start or "").strip() or (end or "").strip():
+        raise ValueError("ws/we cannot be combined with start/end")
+    for raw in (ws, we):
+        if "T" not in raw and " " not in raw:
+            raise ValueError(
+                f"Invalid instant '{raw}'; ws/we must carry a time, not just a date"
+            )
+    try:
+        window_start = datetime.fromisoformat(ws)
+        window_end = datetime.fromisoformat(we)
+    except ValueError:
+        raise ValueError("ws/we must be ISO-8601 datetimes") from None
+    window_start = _to_utc(window_start)
+    window_end = _to_utc(window_end)
+    if window_end <= window_start:
+        raise ValueError("we must be after ws")
+    return window_start, window_end, _exact_window_label(window_start, window_end)
+
+
+def _touch_owner_scope(owner_scoped: bool, owner_id: int | None) -> tuple[str, list]:
+    """WHERE fragment + params for one owner bucket.
+
+    An explicit flag rather than "owner_id=None means everyone": here None IS a bucket
+    (Unassigned), so the two states have to stay distinguishable.
+    """
+    if not owner_scoped:
+        return "", []
+    if owner_id is None:
+        return " AND d.owner_id IS NULL", []
+    return " AND d.owner_id = %s", [owner_id]
+
+
+def _touch_rep_rows(
+    window_start: datetime,
+    window_end: datetime,
+    *,
+    owner_scoped: bool,
+    owner_id: int | None,
+) -> list[dict]:
+    """One row per owner bucket: open deals, computed counts, deals touched in the window.
+
+    This query alone defines the rep universe AND every total the payload reports, so a rep
+    who touched nothing still gets a row — seeing who did nothing is the point of a weekly
+    accountability pull — and the NULL owner is a bucket rather than an exclusion, which is
+    what makes the totals the sums of the buckets.
+
+    ``computed_deals`` sits OUTSIDE the window FILTER on purpose (#76's reasoning,
+    unchanged): it counts non-NULL ``ai_touch_count`` across ALL open deals, because it is
+    the has-a-provider-ever-run gate. Scoping it to the window would turn "no provider
+    configured" into "no touches this week" and hide the card during a quiet week on a
+    fully configured install.
+
+    LEFT JOIN, never INNER: an INNER JOIN would drop the unowned bucket. No ORDER BY — rep
+    order is the shaper's, so there is one definition of it and it is testable with no DB.
+    """
+    owner_sql, owner_params = _touch_owner_scope(owner_scoped, owner_id)
+    return pg_fetchall(
+        f"""SELECT d.owner_id AS user_id, u.name, u.email,
+                   COUNT(*) AS open_deals,
+                   COUNT(d.ai_touch_count) AS computed_deals,
                    COUNT(*) FILTER (
-                       WHERE last_touch >= %s AND last_touch < %s
-                         AND last_touch <> created_at
+                       WHERE t.last_touch >= %s AND t.last_touch < %s
+                         AND t.last_touch <> d.created_at
                    ) AS touched_deals
-            FROM (
-                SELECT d.ai_touch_count, d.created_at, {LAST_TOUCH_SQL} AS last_touch
-                FROM deals d
-                WHERE {LIVE_PREDICATE_D} AND {OPEN_PREDICATE_D}
-            ) t""",
-        (window_start, window_end),
-    ) or {}
-
-    deals = pg_fetchall(
-        f"""SELECT d.id, d.title, d.value, d.stage,
-                   d.ai_touch_count AS touch_count,
-                   t.last_touch AS touched_at,
-                   c.name AS contact_name, co.name AS company_name
             FROM deals d
             JOIN LATERAL (SELECT {LAST_TOUCH_SQL} AS last_touch) t ON TRUE
-            LEFT JOIN contacts c ON d.contact_id = c.id
-            LEFT JOIN companies co ON d.company_id = co.id
-            WHERE {LIVE_PREDICATE_D} AND {OPEN_PREDICATE_D}
-              AND t.last_touch >= %s AND t.last_touch < %s
-              AND t.last_touch <> d.created_at
-            ORDER BY d.ai_touch_count DESC NULLS LAST, d.id DESC
-            LIMIT %s""",
-        (window_start, window_end, WEEKLY_TOUCHES_LIMIT),
+            LEFT JOIN users u ON u.id = d.owner_id
+            WHERE {LIVE_PREDICATE_D} AND {OPEN_PREDICATE_D}{owner_sql}
+            GROUP BY d.owner_id, u.name, u.email""",
+        [window_start, window_end, *owner_params],
     )
+
+
+def _touched_deal_rows(
+    window_start: datetime,
+    window_end: datetime,
+    *,
+    owner_scoped: bool,
+    owner_id: int | None,
+    per_rep_limit: int | None,
+) -> list[dict]:
+    """The touched deals themselves, ranked and capped PER OWNER (not globally).
+
+    The window filter lives in the inner query and the cap in the outer one, so ``rn`` ranks
+    only deals that actually count — capping before filtering would silently return fewer
+    than the limit. ``PARTITION BY d.owner_id`` puts every unowned deal in one partition,
+    which is exactly the Unassigned bucket.
+
+    A global ``LIMIT`` (what #76 had, when the card had one implicit rep) would leave rep
+    rows showing a count with no rows beneath them and make the truncation line lie.
+    ``per_rep_limit=None`` returns everything, which is the drill-down's whole purpose; the
+    window function is computed on that path too, because one SQL string both paths share
+    beats two that have to agree.
+    """
+    owner_sql, owner_params = _touch_owner_scope(owner_scoped, owner_id)
+    cap_sql = "WHERE rn <= %s" if per_rep_limit is not None else ""
+    cap_params = [per_rep_limit] if per_rep_limit is not None else []
+    return pg_fetchall(
+        f"""SELECT id, title, value, stage, owner_id,
+                   touch_count, touched_at, contact_name, company_name
+            FROM (
+                SELECT d.id, d.title, d.value, d.stage, d.owner_id,
+                       d.ai_touch_count AS touch_count,
+                       t.last_touch AS touched_at,
+                       c.name AS contact_name, co.name AS company_name,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY d.owner_id
+                           ORDER BY d.ai_touch_count DESC NULLS LAST, d.id DESC
+                       ) AS rn
+                FROM deals d
+                JOIN LATERAL (SELECT {LAST_TOUCH_SQL} AS last_touch) t ON TRUE
+                LEFT JOIN contacts c ON d.contact_id = c.id
+                LEFT JOIN companies co ON d.company_id = co.id
+                WHERE {LIVE_PREDICATE_D} AND {OPEN_PREDICATE_D}
+                  AND t.last_touch >= %s AND t.last_touch < %s
+                  AND t.last_touch <> d.created_at{owner_sql}
+            ) ranked
+            {cap_sql}
+            ORDER BY owner_id NULLS LAST, rn""",
+        [window_start, window_end, *owner_params, *cap_params],
+    )
+
+
+def _shape_touch_reps(rep_rows: list[dict], deal_rows: list[dict]) -> list[dict]:
+    """Attach ranked deal rows to their owner bucket. Pure — no DB, so tests reach all of it.
+
+    The two queries are two ``pg_fetchall`` calls and therefore two connections and two
+    snapshots, so they are NOT guaranteed to describe the same instant. What IS guaranteed:
+    the rep universe and every total come from ``rep_rows`` alone, so a headline can never
+    exceed what its own query saw.
+
+    A deal row whose owner has no bucket can only come from a write landing between the two
+    reads (a reassignment, a close, an archive). It is DROPPED rather than minting a bucket
+    with no counts, which would render "0 of 0 touched" above real deals — a visible lie in
+    place of one missing row on one refresh. Logged, because a silent drop that stopped
+    being rare would otherwise be invisible.
+
+    Simplification: one CTE returning the aggregate plus ``json_agg``-ed ranked rows would
+    be a single statement and therefore a single snapshot, closing the window entirely.
+    Declined — it costs a JSON row shape in every hermetic fixture to close a millisecond
+    gap on a card that refetches on its own.
+    """
+    slots: dict[int | None, dict] = {}
+    for row in rep_rows:
+        user_id = row.get("user_id")
+        user = None
+        if user_id is not None:
+            user = {"id": user_id, "name": row.get("name"), "email": row.get("email")}
+        slots[user_id] = {
+            "user_id": user_id,
+            # One resolver, shared with the Team settings list: name → email → "User N",
+            # and "Unassigned" for the NULL bucket. Deliberately NOT _shape_per_rep's
+            # "Unattributed", which is the AUTHORSHIP word — this column is ownership.
+            "name": users_service.display_name(user),
+            # `or 0`, never .get(k, 0): a SQL NULL makes the key present-but-None, so the
+            # default would never fire and None would reach the UI.
+            "open_deals": int(row.get("open_deals") or 0),
+            "touches": int(row.get("touched_deals") or 0),
+            "deals": [],
+        }
+
+    for deal in deal_rows:
+        slot = slots.get(deal.get("owner_id"))
+        if slot is None:
+            logger.warning(
+                "weekly touches: dropping deal %s — owner %s has no bucket "
+                "(a write landed between the two reads)",
+                deal.get("id"), deal.get("owner_id"),
+            )
+            continue
+        # Appended in the query's rank order and never re-sorted here: that ORDER BY is what
+        # the per-rep cap was computed against, so a second sort would show a different ten.
+        slot["deals"].append(deal)
+
+    # Busiest first on the number the card compares reps by, then pipeline size, then name
+    # for a stable order between equals. Unassigned sinks last so a bucket that is nobody
+    # never leads a table of people (the _shape_per_rep rule).
+    return sorted(
+        slots.values(),
+        key=lambda s: (
+            s["user_id"] is None,
+            -s["touches"],
+            -s["open_deals"],
+            s["name"].casefold(),
+            s["user_id"] or 0,
+        ),
+    )
+
+
+def get_weekly_touches(start: str | None = None, end: str | None = None) -> dict:
+    """Open deals touched in the window, grouped per owner, keyed off #16's AI touch counts.
+
+    #76 shipped this per DEAL because CakeCRM was single-user, keeping the blueprint's
+    envelope so that "a later multi-user port is a re-grouping". #60 landed
+    ``deals.owner_id`` and #146 is that re-grouping: ``reps`` now stands where the blueprint
+    had it, each rep carrying their own capped deal rows so the #56 evidence drill-down
+    still works straight from the card.
+
+    Two different signals, deliberately — and the re-grouping changes neither:
+
+    * **Window membership** is ``LAST_TOUCH_SQL`` — the same keyless GREATEST(edit, newest
+      activity, newest live note) expression the "Needs a touch" panel uses via
+      ``analytics_service.get_stale_deals``. It is exact, event-grained, and needs no
+      provider. It is emphatically NOT ``deals.ai_touch_count_at``: that column is #16's
+      stale-write-guard key (an evidence watermark that falls back to the deal's
+      ``created_at`` and only advances when a provider answered and the CAS accepted), so
+      using it here made every provider timeout silently delete a deal from a weekly
+      accountability number — and disagreed with the stale-deal panel 200px below it.
+
+      Creation is NOT a touch: ``create_deal`` leaves ``updated_at == created_at``, so
+      without the ``last_touch <> created_at`` guard a fresh import or a sample-data load
+      would report every new deal as worked. Note this makes ``LAST_TOUCH_SQL``'s floor on
+      ``d.updated_at`` load-bearing: any future writer that bumps ``updated_at`` on a
+      schedule (rather than on a real edit) would silently read as a touch — which is why
+      ``archive_deal`` deliberately does not bump it.
+    * **The number shown per deal** is #16's ``ai_touch_count``, and it is what supplies the
+      zero-keys gate: with no provider the worker never runs, every count stays NULL,
+      ``computed_deals`` is 0, and the card hides itself rather than rendering an empty or
+      erroring panel (product rule: hidden affordance, never an error).
+
+    Because membership never depends on AI coverage, numerator and denominator are both
+    coverage-independent — a half-backfilled install can't report "1 of 40" when the user
+    really touched 15.
+    """
+    window_start, window_end, label, custom = _resolve_touch_window(start, end)
+    rep_rows = _touch_rep_rows(
+        window_start, window_end, owner_scoped=False, owner_id=None
+    )
+    deal_rows = _touched_deal_rows(
+        window_start, window_end,
+        owner_scoped=False, owner_id=None, per_rep_limit=WEEKLY_TOUCHES_LIMIT,
+    )
+    reps = _shape_touch_reps(rep_rows, deal_rows)
 
     return {
         "window": {
@@ -2533,12 +2776,69 @@ def get_weekly_touches(start: str | None = None, end: str | None = None) -> dict
             "label": label,
             "custom": custom,
         },
+        "reps": reps,
+        # Sums of the buckets, which partition the open-deal set because the unowned deals
+        # are a bucket rather than an exclusion — so the headline is arithmetically the rows
+        # beneath it, not a separate number that could drift from them.
+        "total_touches": sum(r["touches"] for r in reps),
+        "total_open_deals": sum(r["open_deals"] for r in reps),
+        "computed_deals": sum(int(r.get("computed_deals") or 0) for r in rep_rows),
+    }
+
+
+def get_weekly_touch_detail(
+    owner_id: int | None,
+    start: str | None = None,
+    end: str | None = None,
+    ws: str | None = None,
+    we: str | None = None,
+) -> dict | None:
+    """One owner bucket's touched open deals, UNCAPPED (issue #146).
+
+    Returns ``None`` for a user id that does not exist, which the router turns into a 404.
+    The Unassigned bucket always resolves, and so does a real rep with nothing open — they
+    get a zero row, because "this rep touched nothing" is an answer, not a missing page.
+
+    Shares both query builders with the card, so there is exactly one SQL definition of a
+    touched deal and the drill-down cannot disagree with the number that led to it about
+    what it is counting.
+
+    No ``custom`` flag on this window, deliberately: on the card it means "the user picked a
+    range", and forwarded rolling bounds would set it while the card said "Last 7 days".
+    """
+    # Validate the window before any DB read: a malformed link is a 400, and finding that
+    # out should cost nothing.
+    window_start, window_end, label = _resolve_detail_window(start, end, ws, we)
+
+    user = None
+    if owner_id is not None:
+        user = users_service.get_user(owner_id)
+        if user is None:
+            return None
+
+    rep_rows = _touch_rep_rows(
+        window_start, window_end, owner_scoped=True, owner_id=owner_id
+    )
+    deal_rows = _touched_deal_rows(
+        window_start, window_end,
+        owner_scoped=True, owner_id=owner_id, per_rep_limit=None,
+    )
+    reps = _shape_touch_reps(rep_rows, deal_rows)
+    rep = reps[0] if reps else {"user_id": owner_id, "open_deals": 0, "touches": 0, "deals": []}
+    deals = rep.pop("deals")
+    # Resolved from the user row rather than from the bucket, so a rep with no open deals
+    # (and therefore no aggregate row) is still named. `user` carries a password hash — it
+    # must never reach the payload; display_name reads only id/name/email.
+    rep["name"] = users_service.display_name(user)
+
+    return {
+        "window": {
+            "start": window_start.isoformat(),
+            "end": window_end.isoformat(),
+            "label": label,
+        },
+        "rep": rep,
         "deals": deals,
-        # `or 0` rather than a dict default: a SQL NULL would make the key present
-        # but None, so a plain .get(k, 0) would hand None straight to the UI.
-        "total_touches": totals.get("touched_deals") or 0,
-        "total_open_deals": totals.get("open_deals") or 0,
-        "computed_deals": totals.get("computed_deals") or 0,
     }
 
 

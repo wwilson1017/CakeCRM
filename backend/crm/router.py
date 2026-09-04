@@ -76,6 +76,8 @@ Other:
   GET    /api/crm/dashboard             — summary stats
   GET    /api/crm/dashboard/today       — ranked "what needs me today" list (?owner_id)
   GET    /api/crm/dashboard/weekly-touches — open deals touched in a window (?start, ?end)
+  GET    /api/crm/dashboard/weekly-touches/detail — one rep's touched deals, uncapped
+         (?owner=<id|unassigned>, plus ?ws/?we exact instants or ?start/?end days)
   GET    /api/crm/analytics             — win/loss, activity volume, deal aging (?days, ?stale_days)
   GET    /api/crm/demo-status           — first-run onboarding / sample-data state
   POST   /api/crm/load-sample-data      — seed fictional demo data (first run)
@@ -861,6 +863,38 @@ async def weekly_touches(
     except ValueError as e:
         # Malformed / half-specified range — the caller's input, not a server fault.
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/dashboard/weekly-touches/detail")
+async def weekly_touches_detail(
+    owner: str = Query(..., description="A user id, or the literal 'unassigned'"),
+    start: str | None = Query(None),
+    end: str | None = Query(None),
+    ws: str | None = Query(None),
+    we: str | None = Query(None),
+    user=Depends(get_current_user),
+):
+    """One rep's touched open deals, uncapped (issue #146).
+
+    `owner` is REQUIRED and carries a literal `unassigned` for the NULL bucket, unlike
+    `/dashboard/today`'s absent-means-everyone `owner_id`: this drill-down is always
+    exactly one bucket, and the unowned deals are one of them.
+
+    The card forwards the exact ISO instants it displayed as `ws`/`we`, so the list matches
+    the number that was clicked even on the rolling window, where `now` would otherwise
+    move between the two requests. `start`/`end` (UTC calendar days) serve direct
+    navigation. Not admin-gated: ownership is an assignment, not access control (#60), so
+    every member sees every rep's row.
+    """
+    try:
+        result = crm.get_weekly_touch_detail(
+            owner_id=crm.parse_touch_owner(owner), start=start, end=end, ws=ws, we=we
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if result is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return result
 
 
 @router.get("/analytics")

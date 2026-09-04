@@ -1,3 +1,4 @@
+import { Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './core/auth/AuthContext';
 import { ProtectedRoute } from './core/auth/ProtectedRoute';
@@ -27,6 +28,21 @@ import { isTodoPublicMode } from './crm/gtd/publicMode';
 import { TasksModeRouter } from './crm/gtd/TasksModeRouter';
 import { ToastViewport } from './shared/ToastViewport';
 import { ConfirmHost } from './shared/ConfirmHost';
+
+// Weekly Touches per-rep drill-down (#146), registered LAZILY on purpose.
+//
+// Every other page above is a static import today, but PR #149 converts this whole
+// table to route-level `lazy()` chunks and adds `src/bootSplit.test.ts`, which fails
+// on any static page import here. Registering this one the way #149 does — plus the
+// local <Suspense> it needs, since this version of the file has no outer boundary
+// yet — makes that merge a keep-both with no edit.
+//
+// It costs today's bundle nothing either: this build emits a single chunk regardless
+// (rolldown's code splitting is not enabled here — that is exactly what #149 turns
+// on), so the `lazy()` is merge compatibility now and a real chunk after that lands.
+const WeeklyTouchesDetailPage = lazy(() =>
+  import('./crm/WeeklyTouchesDetailPage').then((m) => ({ default: m.WeeklyTouchesDetailPage })),
+);
 
 export default function App() {
   // The no-login todo surface replaces the whole app: no auth provider, no CRM
@@ -59,6 +75,16 @@ export default function App() {
             }
           >
             <Route index element={<CrmDashboardPage />} />
+            {/* Reached from the dashboard's Weekly Touches card, so it is deliberately
+                absent from CrmLayout's NAV_ITEMS — the same way /crm/memory is. */}
+            <Route
+              path="touches/:owner"
+              element={
+                <Suspense fallback={null}>
+                  <WeeklyTouchesDetailPage />
+                </Suspense>
+              }
+            />
             {/* One route per entity, list and detail both (#77). The list page renders the
                 detail page when :id is present, so the route element never changes and its
                 swept corpus survives open → back without re-fetching. Every existing

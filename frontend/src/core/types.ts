@@ -211,27 +211,51 @@ export interface CrmDashboard {
   top_deals: CrmDeal[];
 }
 
-// GET /api/crm/dashboard/weekly-touches (issue #76). Open deals touched in a
-// window, keyed off #16's AI touch counts. Single-user, so the blueprint's per-rep
-// rows are per-deal here. `computed_deals` is the zero-keys gate: 0 means no touch
-// count has ever been computed (no AI provider), and the card renders nothing.
+// GET /api/crm/dashboard/weekly-touches (issue #76; grouped per deal owner since #146).
+// Window MEMBERSHIP is keyless and event-grained (edits, activities, live notes); the
+// per-deal NUMBER is #16's AI estimate. `computed_deals` is the zero-keys gate: 0 means no
+// touch count has ever been computed (no AI provider), and the card renders nothing.
 export interface CrmWeeklyTouchDeal {
   id: number;
   title: string;
   value: number;
   stage: string;
+  /** The bucket this row belongs to; null is the Unassigned bucket (a real state, #60). */
+  owner_id: number | null;
   touch_count: number | null;
   touched_at: string | null;
   contact_name: string | null;
   company_name: string | null;
 }
 
+export interface CrmWeeklyTouchRep {
+  /** null = the Unassigned bucket. It is a bucket rather than an exclusion, which is what
+   *  makes the totals below the sums of these rows. */
+  user_id: number | null;
+  /** Server-resolved: name → email → "User N", or "Unassigned" for the null bucket. */
+  name: string;
+  open_deals: number;
+  touches: number;
+  /** Capped PER REP by the server. `touches > deals.length` means this rep is truncated,
+   *  which is what the card's "See all" link is for. */
+  deals: CrmWeeklyTouchDeal[];
+}
+
 export interface CrmWeeklyTouches {
   window: { start: string; end: string; label: string; custom: boolean };
-  deals: CrmWeeklyTouchDeal[];
+  reps: CrmWeeklyTouchRep[];
   total_touches: number;
   total_open_deals: number;
   computed_deals: number;
+}
+
+// GET /api/crm/dashboard/weekly-touches/detail (issue #146): ONE bucket, uncapped. No
+// `custom` flag on this window — on the card it means "the user picked a range", and
+// forwarded rolling bounds would set it while the card said "Last 7 days".
+export interface CrmWeeklyTouchDetail {
+  window: { start: string; end: string; label: string };
+  rep: Omit<CrmWeeklyTouchRep, 'deals'>;
+  deals: CrmWeeklyTouchDeal[];
 }
 
 // GET /api/crm/dashboard/today (issue #130). One ranked list of what needs the viewer
