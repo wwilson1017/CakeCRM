@@ -103,16 +103,16 @@ function renderHook(resetMs?: number) {
 }
 
 describe('useCopyToClipboard', () => {
-  it('raises the copied flag and lowers it again on its own', async () => {
+  it('reports a copy and clears the report on its own', async () => {
     vi.useFakeTimers();
     const { result, unmount } = renderHook(1500);
-    expect(result.current.copied).toBe(false);
+    expect(result.current.status).toBe('idle');
 
     await act(async () => { await result.current.copy('hello'); });
-    expect(result.current.copied).toBe(true);
+    expect(result.current.status).toBe('copied');
 
     await act(async () => { vi.advanceTimersByTime(1500); });
-    expect(result.current.copied).toBe(false);
+    expect(result.current.status).toBe('idle');
     unmount();
   });
 
@@ -124,7 +124,49 @@ describe('useCopyToClipboard', () => {
     let ok = true;
     await act(async () => { ok = await result.current.copy('doomed'); });
     expect(ok).toBe(false);
-    expect(result.current.copied).toBe(false);
+    expect(result.current.status).toBe('failed');
+    unmount();
+  });
+
+  // The bug this ordering exists to prevent: copy, edit, retry within resetMs
+  // and have the retry FAIL. Reporting the first attempt's success against the
+  // second attempt's text is worse than saying nothing.
+  it('does not let a previous success vouch for a failed retry', async () => {
+    vi.useFakeTimers();
+    const { result, unmount } = renderHook(1500);
+
+    await act(async () => { await result.current.copy('first'); });
+    expect(result.current.status).toBe('copied');
+
+    setClipboard(undefined);
+    (document as unknown as { execCommand: () => boolean }).execCommand = vi.fn(() => false);
+    await act(async () => { await result.current.copy('second'); });
+
+    expect(result.current.status).toBe('failed');
+    unmount();
+  });
+
+  // Two writes in flight at once resolve in whatever order the browser manages,
+  // which is not click order — only the newest click may set the status.
+  it('lets only the newest attempt report', async () => {
+    let releaseFirst!: () => void;
+    setClipboard((t: string) => {
+      if (t === 'slow') return new Promise<void>(resolve => { releaseFirst = resolve; });
+      apiCopied.push(t);
+      return Promise.resolve();
+    });
+    const { result, unmount } = renderHook();
+
+    let slow!: Promise<boolean>;
+    act(() => { slow = result.current.copy('slow'); });
+    await act(async () => { await result.current.copy('fast'); });
+    expect(result.current.status).toBe('copied');
+
+    // The stale attempt resolving must not restart the clock on a report it no
+    // longer owns.
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    await act(async () => { releaseFirst(); await slow; });
+    expect(setTimeoutSpy).not.toHaveBeenCalled();
     unmount();
   });
 

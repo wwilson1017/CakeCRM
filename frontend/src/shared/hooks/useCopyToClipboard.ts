@@ -74,31 +74,47 @@ export async function copyToClipboard(text: string): Promise<boolean> {
   return legacyCopy(text);
 }
 
+/** What the affordance should be saying right now. */
+export type CopyStatus = 'idle' | 'copied' | 'failed';
+
 /**
- * `copyToClipboard` plus the transient "Copied" flag a button renders.
+ * `copyToClipboard` plus the transient status a button renders.
  *
- * A failed copy leaves `copied` false, so the affordance simply never confirms —
- * consumers that owe the user a louder answer (a toast, say) read the resolved
- * boolean from `copy` instead.
+ * ONE status rather than a `copied` flag beside a `failed` flag: the two are
+ * mutually exclusive and share a reset timer, and a pair of booleans can hold
+ * the impossible state where both are true.
+ *
+ * Every attempt resets the status before it starts. Without that, a copy that
+ * succeeded and a retry 1.5s later that FAILED leave the button still wearing
+ * the first attempt's green "Copied" — the user reads it as confirmation of the
+ * attempt that just failed, which is worse than no feedback at all.
  */
 export function useCopyToClipboard(resetMs = 1500) {
-  const [copied, setCopied] = useState(false);
+  const [status, setStatus] = useState<CopyStatus>('idle');
   const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const mountedRef = useRef(false);
+  // Only the newest attempt may write the status. Two copies can be in flight at
+  // once (a slow rejecting write falls back while a second click resolves), and
+  // resolution order is not click order.
+  const attemptRef = useRef(0);
 
   const copy = useCallback(async (text: string) => {
+    const attempt = ++attemptRef.current;
+    if (timerRef.current) clearTimeout(timerRef.current);
+    setStatus('idle');
+
     const ok = await copyToClipboard(text);
-    if (!ok) return false;
+
     // The write is asynchronous, so the sheet may already be gone by the time it
     // resolves — tap Copy and close, or clear the title and unmount the button.
     // Clearing the timer on unmount is not enough on its own: without this check
     // the resolving promise starts a NEW one, after the cleanup that was meant
     // to end them.
-    if (!mountedRef.current) return true;
-    setCopied(true);
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => setCopied(false), resetMs);
-    return true;
+    if (!mountedRef.current || attempt !== attemptRef.current) return ok;
+
+    setStatus(ok ? 'copied' : 'failed');
+    timerRef.current = setTimeout(() => setStatus('idle'), resetMs);
+    return ok;
   }, [resetMs]);
 
   // The reset timer outlives the component otherwise: copy, then close the edit
@@ -113,5 +129,5 @@ export function useCopyToClipboard(resetMs = 1500) {
     };
   }, []);
 
-  return { copied, copy };
+  return { status, copy };
 }

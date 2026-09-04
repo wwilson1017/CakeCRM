@@ -7,6 +7,12 @@ interface Props {
   label: string;
 }
 
+const FACE = {
+  idle: { glyph: '⧉', text: 'Copy', tone: 'border-line text-muted hover:bg-sand' },
+  copied: { glyph: '✓', text: 'Copied', tone: 'border-green-600 text-green-700 dark:text-green-300' },
+  failed: { glyph: '!', text: 'Copy failed', tone: 'border-line text-ck-accent-text' },
+} as const;
+
 /**
  * The Copy affordance used twice in the edit sheet: once beside the heading for
  * the whole todo, once beside the next-action label for just that line.
@@ -14,24 +20,37 @@ interface Props {
  * Sized for a thumb (36px tall) rather than for the label it sits next to —
  * this is the one control on the sheet a phone user reaches for without meaning
  * to focus a field, so it must not be a mis-tap away from the input beside it.
+ *
+ * It reports failure rather than dropping it, which the blueprint does not do
+ * and this port needs: the whole reason for the shared helper's legacy fallback
+ * is the plain-http `/todo/{token}` install, so a browser where BOTH paths fail
+ * is a real place this button lands. Silently staying on "Copy" there leaves the
+ * user unable to tell a failed copy from a tap that never registered.
+ *
+ * The outcome also goes to a `role="status"` region, because the button's
+ * accessible name comes from `aria-label` and so does NOT change when the
+ * visible text does — without the live region a screen-reader user gets no
+ * confirmation at all.
  */
 export function CopyButton({ text, label }: Props) {
-  const { copied, copy } = useCopyToClipboard();
+  const { status, copy } = useCopyToClipboard();
+  const face = FACE[status];
 
   return (
-    <button
-      type="button"
-      onClick={() => void copy(text())}
-      aria-label={label}
-      title={label}
-      className={`inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-heading transition-colors ${
-        copied
-          ? 'border-green-600 text-green-700 dark:text-green-300'
-          : 'border-line text-muted hover:bg-sand'
-      }`}
-    >
-      <span aria-hidden="true">{copied ? '✓' : '⧉'}</span>
-      {copied ? 'Copied' : 'Copy'}
-    </button>
+    <span className="inline-flex shrink-0 items-center">
+      <button
+        type="button"
+        onClick={() => void copy(text())}
+        aria-label={label}
+        title={label}
+        className={`inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-heading transition-colors ${face.tone}`}
+      >
+        <span aria-hidden="true">{face.glyph}</span>
+        {face.text}
+      </button>
+      <span role="status" className="sr-only">
+        {status === 'idle' ? '' : `${label}: ${face.text}`}
+      </span>
+    </span>
   );
 }

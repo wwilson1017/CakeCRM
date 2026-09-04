@@ -176,4 +176,23 @@ describe('TodoEditSheet copy buttons', () => {
     // And it cleans up after itself rather than leaving a stray node behind.
     expect(document.querySelector('textarea[readonly]')).toBeNull();
   });
+
+  // Where BOTH paths fail, the button has to say so. Staying on "Copy" leaves
+  // the user unable to tell a failed copy from a tap that never registered —
+  // and the outcome must reach a screen reader too, since the button's
+  // accessible name is a fixed aria-label that does not change with the text.
+  it('says so when the copy could not happen at all', async () => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined });
+    (document as unknown as { execCommand: () => boolean }).execCommand = vi.fn(() => false);
+
+    await render();
+    await clickCopy('Copy just the next action');
+
+    const button = copyButton('Copy just the next action');
+    expect(button.textContent).toContain('Copy failed');
+    // Scoped to THIS button's own region — each Copy button carries one, and
+    // the other is still idle and empty.
+    const status = button.parentElement?.querySelector('[role="status"]');
+    expect(status?.textContent).toBe('Copy just the next action: Copy failed');
+  });
 });
