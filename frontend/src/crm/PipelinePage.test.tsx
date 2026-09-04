@@ -55,7 +55,7 @@
 // which would pin the harness rather than the component. The generation is kept because it
 // is the rule that stays correct if that surface ever changes — a board rendered ALONGSIDE
 // the spinner, or any second non-silent trigger, makes it load-bearing immediately.
-import { act } from 'react';
+import { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -117,7 +117,7 @@ const { ActiveRecordProvider } = await import('./RecordContext');
 // PipelinePage reads `?stage=` through useSearchParams, and the deal sheet publishes the
 // open record — both are ambient app scaffolding the test supplies rather than the
 // component being reshaped to avoid them.
-const { MemoryRouter } = await import('react-router-dom');
+const { MemoryRouter, useNavigate } = await import('react-router-dom');
 
 function deal(over: Partial<CrmDeal> = {}): CrmDeal {
   return {
@@ -239,14 +239,46 @@ afterEach(() => {
   container.remove();
 });
 
-async function render() {
+async function render(url = '/crm/pipeline') {
   await act(async () => {
     root.render(
-      <MemoryRouter><ActiveRecordProvider><PipelinePage /></ActiveRecordProvider></MemoryRouter>,
+      <MemoryRouter initialEntries={[url]}>
+        <ActiveRecordProvider><PipelinePage /></ActiveRecordProvider>
+      </MemoryRouter>,
     );
   });
   // `load` is dispatched through queueMicrotask, and the board only renders once its
   // payload has resolved through it — drain that chain before asserting.
+  await flush();
+}
+
+/** Navigate a MOUNTED page to a new URL — the deep-link case that matters most, since the
+ *  assistant's drawer is a slide-over: clicking a link it produced changes the search
+ *  params of a page that is already showing a board, without remounting anything. A plain
+ *  `render()` cannot express that; it would always look like a cold load. */
+function Navigator({ to }: { to: string | null }) {
+  const navigate = useNavigate();
+  useEffect(() => { if (to) navigate(to); }, [navigate, to]);
+  return null;
+}
+
+async function renderThenNavigate(to: string) {
+  await act(async () => {
+    root.render(
+      <MemoryRouter initialEntries={['/crm/pipeline']}>
+        <ActiveRecordProvider><PipelinePage /></ActiveRecordProvider>
+      </MemoryRouter>,
+    );
+  });
+  await flush();
+  await act(async () => {
+    root.render(
+      <MemoryRouter initialEntries={['/crm/pipeline']}>
+        <ActiveRecordProvider><PipelinePage /><Navigator to={to} /></ActiveRecordProvider>
+      </MemoryRouter>,
+    );
+  });
+  await flush();
   await flush();
 }
 
@@ -802,5 +834,199 @@ describe('PipelinePage — archived deals', () => {
     expect(card('Globex expansion')).toBeTruthy();
     // ...by making exactly one more request, not by being lucky.
     expect(boardRequests()).toHaveLength(3);
+  });
+});
+
+
+// ── Deal deep links (issue #145) ────────────────────────────────────────────────────
+//
+// The assistant attaches `/crm/pipeline?deal=N` to every deal it names, including in
+// Telegram messages and notifications that leave the app entirely. A link that silently
+// does nothing is the dead end #145 was filed to close — and a link that WRONGLY says the
+// deal was deleted is worse than the dead end, which is what the refresh below is for.
+//
+// Resolution happens during render (this repo's react-hooks ruleset makes a synchronous
+// setState inside an effect a build error), so "does it settle instead of looping?" is a
+// real question about this code and not a hypothetical — every test here would time out
+// rather than fail if it did not.
+
+/** The dead-link notice's text, or null when it is not on screen. */
+function deadLinkNotice(): string | null {
+  const el = [...container.querySelectorAll('span')]
+    .find(n => n.textContent?.includes("isn't on this board"));
+  return el?.textContent?.replace(/\s+/g, ' ').trim() ?? null;
+}
+
+describe('PipelinePage — deal deep links', () => {
+  it('opens the named deal on a cold load', async () => {
+    routeApi();
+    await render(`/crm/pipeline?deal=${LIVE.id}`);
+
+    // The detail sheet is open on that deal, not merely scrolled to its card.
+    expect(button('Close')).toBeTruthy();
+    expect(container.textContent).toContain('Acme renewal');
+    expect(deadLinkNotice()).toBeNull();
+  });
+
+  it('says nothing at all about a deal id that is not a deal id', async () => {
+    routeApi();
+    await render('/crm/pipeline?deal=abc');
+
+    // A malformed link is not a deleted deal. Accusing anyone of deleting "abc" would be
+    // the same wrong answer the notice exists to avoid, just with worse wording.
+    expect(deadLinkNotice()).toBeNull();
+    expect(button('Close')).toBeFalsy();
+  });
+
+  it('warns that a deal missing from the board may be archived or deleted', async () => {
+    routeApi();
+    await render('/crm/pipeline?deal=404');
+
+    const notice = deadLinkNotice();
+    expect(notice).toContain('#404');
+    expect(notice).toContain('archived or deleted');
+  });
+
+  it('opens an archived deal from a link when the Archived facet is showing it', async () => {
+    // The notice tells the user to turn the facet on, so following that advice has to
+    // work: with archived rows in the payload the link resolves like any other.
+    routeApi();
+    await render(`/crm/pipeline?deal=${ARCHIVED.id}`);
+    expect(deadLinkNotice()).toContain(`#${ARCHIVED.id}`);
+
+    await pickArchivedFacet('Include archived');
+    expect(deadLinkNotice()).toBeNull();
+    expect(button('Close')).toBeTruthy();
+    expect(container.textContent).toContain('Zebra rebuild');
+  });
+
+  it('refreshes before accusing when the board on screen predates the link', async () => {
+    // THE false-accusation case, and the most reachable one: the assistant creates a deal
+    // and hands back its link while its drawer sits over an already-loaded board. That
+    // board is silent about the new deal, not evidence against it.
+    const NEW_DEAL = deal({ id: 77, title: 'Fresh signing', stage: 'lead', value: 500 });
+    let served: CrmDeal[] = [LIVE];
+    routeApi({ over: (path) => (path === LIVE_PATH ? { deals: served } : undefined) });
+
+    await act(async () => {
+      root.render(
+        <MemoryRouter initialEntries={['/crm/pipeline']}>
+          <ActiveRecordProvider><PipelinePage /></ActiveRecordProvider>
+        </MemoryRouter>,
+      );
+    });
+    await flush();
+    expect(boardRequests()).toHaveLength(1);
+    expect(card('Fresh signing')).toBeFalsy();
+
+    // The deal is created behind the board's back, then the link arrives.
+    served = [LIVE, NEW_DEAL];
+    await renderThenNavigate('/crm/pipeline?deal=77');
+
+    // It refetched rather than declaring the deal gone, and then opened it.
+    expect(deadLinkNotice()).toBeNull();
+    expect(container.textContent).toContain('Fresh signing');
+  });
+
+  it('refreshes SILENTLY, which is what proves the page was never remounted', async () => {
+    // The anti-vacuity test for every "already-loaded board" case in this block. A remount
+    // would reload from scratch and find whatever the server now says — visibly identical
+    // to a stale-board refresh, and it would make those tests assert nothing. The two are
+    // told apart by HOW the load is taken: a mount load is non-silent, and `loading`
+    // returns the spinner INSTEAD OF the board, so the board would be gone from the DOM.
+    const held = deferred<{ deals: CrmDeal[] }>();
+    let boardCalls = 0;
+    routeApi({
+      over: (path) => {
+        if (path !== LIVE_PATH) return undefined;
+        boardCalls += 1;
+        return boardCalls === 1 ? { deals: [LIVE] } : held.promise;
+      },
+    });
+
+    await renderThenNavigate('/crm/pipeline?deal=404');
+
+    expect(boardCalls).toBe(2);                  // the link really did trigger a refetch
+    expect(card('Acme renewal')).toBeTruthy();   // ...and the board never left the screen
+    expect(deadLinkNotice()).toBeNull();         // ...and it accused nobody while waiting
+
+    await act(async () => { held.resolve({ deals: [LIVE] }); });
+    await flush();
+    expect(deadLinkNotice()).toContain('#404');
+  });
+
+  it('asks for fresh data exactly once, then accuses only if the deal is still missing', async () => {
+    // The other half of the same rule: the refresh must be bounded, or a genuinely deleted
+    // deal would refetch the board forever instead of saying so.
+    routeApi();
+    await renderThenNavigate('/crm/pipeline?deal=404');
+    const afterFirst = boardRequests().length;
+
+    expect(deadLinkNotice()).toContain('#404');
+    // Settle repeatedly: a render-phase resolution that failed to converge would keep
+    // firing loads here rather than sitting still.
+    await flush();
+    await flush();
+    expect(boardRequests()).toHaveLength(afterFirst);
+  });
+
+  it('says nothing when the refresh it asked for fails', async () => {
+    // A failed load applies no payload, so the board never becomes authoritative about the
+    // link. Saying nothing loses a correct notice about a genuinely deleted deal; saying
+    // "archived or deleted" would tell the user their live deal was gone because a request
+    // failed. The trade is deliberate.
+    let boardCalls = 0;
+    routeApi({
+      over: (path) => {
+        if (path !== LIVE_PATH) return undefined;
+        boardCalls += 1;
+        return boardCalls === 1 ? { deals: [LIVE] } : Promise.reject(new Error('network'));
+      },
+    });
+
+    await renderThenNavigate('/crm/pipeline?deal=404');
+    await flush();
+
+    expect(boardCalls).toBeGreaterThan(1);   // it really did try
+    expect(deadLinkNotice()).toBeNull();     // and it really did stay quiet
+  });
+
+  it('lets the user dismiss the notice, and does not re-raise it on its own', async () => {
+    routeApi();
+    await render('/crm/pipeline?deal=404');
+    expect(deadLinkNotice()).toBeTruthy();
+
+    await click(button('Dismiss'), 'Dismiss');
+    expect(deadLinkNotice()).toBeNull();
+
+    // A board refresh is the event most likely to re-raise a dismissed notice, since it is
+    // what re-runs the whole resolution. Dismissal is per-target, so it must survive one.
+    await reopenAndClose('Acme renewal');
+    expect(deadLinkNotice()).toBeNull();
+  });
+
+  it('does not reopen the sheet after the user closes it, though the link is still in the URL', async () => {
+    // The parameter is deliberately kept — it makes reload reopen the deal and the address
+    // bar a real copy source — so "resolve once per target" has to be what stops the sheet
+    // from springing back the moment it is closed.
+    routeApi();
+    await render(`/crm/pipeline?deal=${LIVE.id}`);
+    expect(button('Close')).toBeTruthy();
+
+    await click(button('Close'), 'Close');
+    expect(button('Close')).toBeFalsy();
+  });
+
+  it('opens a deal a filter is hiding, rather than calling it deleted', async () => {
+    // Membership is asked of the whole payload, never of the filtered view: a session facet
+    // says nothing about whether a deal exists, and the sheet opens over the board however
+    // few cards the columns are showing.
+    routeApi({ live: [LIVE, deal({ id: 9, title: 'Globex expansion', stage: 'won' })] });
+    await render('/crm/pipeline');
+    await pickActivityFacet('No activity logged');
+
+    await renderThenNavigate('/crm/pipeline?deal=9');
+    expect(deadLinkNotice()).toBeNull();
+    expect(button('Close')).toBeTruthy();
   });
 });

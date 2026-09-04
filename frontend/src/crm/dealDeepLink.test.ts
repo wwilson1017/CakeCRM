@@ -50,7 +50,6 @@ describe('deepLinkVerdict', () => {
     boardLoaded: true,
     dealOnBoard: true,
     boardRefreshedSinceLink: true,
-    refreshRequested: false,
   };
 
   it('does nothing when the URL names no deal', () => {
@@ -80,19 +79,15 @@ describe('deepLinkVerdict', () => {
       .toBe('refresh');
   });
 
-  it('stays silent instead of accusing when the one refresh never landed', () => {
-    // A failed refresh leaves the board un-advanced forever. Saying nothing loses a
-    // correct notice about a genuinely deleted deal; saying "dead" here would tell a rep
-    // their live deal was deleted because the network blipped.
-    expect(deepLinkVerdict({
-      ...base, dealOnBoard: false, boardRefreshedSinceLink: false, refreshRequested: true,
-    })).toBe('idle');
-  });
-
-  it('asks for at most one refresh per link', () => {
+  it('never reaches dead while the board is older than the link, however often it is asked', () => {
+    // This is what bounds the refresh to one attempt and keeps a failed refresh silent.
+    // A failed load applies no payload, so this input is unchanged and the verdict is
+    // stable — the caller's effect, keyed on the verdict, does not re-run. Saying nothing
+    // loses a correct notice about a genuinely deleted deal; saying "dead" here would tell
+    // a rep their live deal was deleted because the network blipped.
     const missOnStaleBoard = { ...base, dealOnBoard: false, boardRefreshedSinceLink: false };
-    expect(deepLinkVerdict({ ...missOnStaleBoard, refreshRequested: false })).toBe('refresh');
-    expect(deepLinkVerdict({ ...missOnStaleBoard, refreshRequested: true })).not.toBe('refresh');
+    expect(deepLinkVerdict(missOnStaleBoard)).toBe('refresh');
+    expect(deepLinkVerdict(missOnStaleBoard)).toBe('refresh');
   });
 
   it('opens a deal the board holds even on a stale board', () => {

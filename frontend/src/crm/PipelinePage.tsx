@@ -25,6 +25,9 @@ import {
   loadFilterState, saveFilterState,
 } from './pipelineFilters';
 import { applicableBulkIds } from './bulkSelection';
+import {
+  DEAL_DEEP_LINK_PARAM, deepLinkVerdict, parseDealDeepLinkId,
+} from './dealDeepLink';
 import { sweepPipelineDeals } from './pipelineAssembly';
 import { classifyBulkMove, describeBulkMove, type BulkMoveResponse, type BulkNotice } from './bulkOutcome';
 
@@ -73,6 +76,57 @@ export function PipelinePage() {
     setSeenDeepLink(validDeepLink);
     if (validDeepLink) setFilters(EMPTY_FILTER_STATE);
   }
+
+  // Deal deep link (/crm/pipeline?deal=N) — issue #145. The assistant attaches this URL
+  // to every deal it names, in chat and in messages that leave the app, so clicking one
+  // has to land on that deal. Sibling of the ?stage= link above, and resolved the same
+  // way: React's render-time "reset state when an input changes" pattern, NOT an effect.
+  // That is not a style choice — this repo's react-hooks ruleset makes a synchronous
+  // setState inside an effect a build-blocking error, and suppressing it is not an option.
+  //
+  // The RULES live in `dealDeepLink.ts` as a pure function. vitest runs in node, so logic
+  // left in this component is untestable, and deciding whether a deal is really gone is
+  // the whole correctness story of the feature.
+  //
+  // Unlike ?stage=, the parameter is deliberately NOT stripped once consumed. ?stage= is a
+  // one-shot "scroll here" intent; ?deal= NAMES A RECORD, which is what a URL is for — so
+  // leaving it makes reload reopen the deal and makes the address bar a real copy source.
+  // (#75's Copy-link button therefore has a URL to copy that survives a refresh.)
+  const deepLinkDealId = parseDealDeepLinkId(searchParams.get(DEAL_DEEP_LINK_PARAM));
+  // The link being resolved, plus the board that was on screen when it arrived. One
+  // object so a new target resets both together and they can never disagree about which
+  // link the snapshot belongs to.
+  const [deepLink, setDeepLink] = useState<{ dealId: number | null; boardAtArrival: PipelineData | null }>(
+    { dealId: null, boardAtArrival: null },
+  );
+  // The target the user has already dealt with — the sheet was opened for it, or they
+  // dismissed its notice. One value for both because a link is either found or dead, never
+  // both; it is keyed by id, so re-clicking a dead link later warns again instead of
+  // staying silently dismissed forever.
+  const [handledDeepLink, setHandledDeepLink] = useState<number | null>(null);
+  if (deepLinkDealId !== deepLink.dealId) {
+    setDeepLink({ dealId: deepLinkDealId, boardAtArrival: data });
+  }
+  // Membership is asked of the WHOLE payload, never of `filteredDeals`: a session facet
+  // that hides a card says nothing about whether the deal exists, and the detail sheet
+  // opens over the board regardless of what the columns are showing. An archived deal IS
+  // genuinely absent (the fetch excludes them unless the Archived facet is on), which is
+  // the case the notice exists for.
+  const deepLinkedDeal = deepLink.dealId === null
+    ? null
+    : (data?.deals ?? []).find(d => d.id === deepLink.dealId) ?? null;
+  const deepLinkState = deepLinkVerdict({
+    dealId: deepLink.dealId,
+    boardLoaded: data !== null,
+    dealOnBoard: deepLinkedDeal !== null,
+    boardRefreshedSinceLink: data !== deepLink.boardAtArrival,
+  });
+  if (deepLinkState === 'open' && deepLinkedDeal && handledDeepLink !== deepLink.dealId) {
+    setHandledDeepLink(deepLink.dealId);
+    setSelectedDeal(deepLinkedDeal);
+  }
+  const deadDeepLinkDealId =
+    deepLinkState === 'dead' && handledDeepLink !== deepLink.dealId ? deepLink.dealId : null;
 
   const columnRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   // Last stage the deep-link effect scrolled to — re-fires per NEW target, once each.
@@ -693,6 +747,24 @@ export function PipelinePage() {
     setSearchParams(next, { replace: true });
   }, [data, searchParams, setSearchParams]);
 
+  // The only side effect the deep link needs: the board on screen predates the link, so
+  // refresh once before deciding anything. The assistant hands out links to deals it has
+  // just created, and this page stays mounted while its drawer is open — that board is
+  // silent about the deal, not evidence against it.
+  //
+  // Bounded to ONE attempt by these deps rather than by a flag: a `refresh` verdict is
+  // stable, so a failed load — which applies no payload and so changes neither `data` nor
+  // the verdict — does not re-run this. The pipeline then says nothing at all rather than
+  // accusing anyone, which is the trade `deepLinkVerdict` documents.
+  //
+  // `queueMicrotask` for the same reason the mount effect below uses it: `load` calls
+  // setState, and calling it synchronously from an effect body is a build-blocking error
+  // under this repo's react-hooks ruleset.
+  useEffect(() => {
+    if (deepLinkState !== 'refresh') return;
+    queueMicrotask(() => { void load(true); });
+  }, [deepLinkState, load]);
+
   if (loading) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', padding: '80px 0' }}>
@@ -733,6 +805,22 @@ export function PipelinePage() {
           isMobile={isMobile}
         />
       </div>
+
+      {deadDeepLinkDealId !== null && (
+        <div style={{
+          ...stageCard(BG_CARD, ACCENT), padding: '12px 14px', marginBottom: 12,
+          display: 'flex', alignItems: 'flex-start', gap: 12,
+        }}>
+          <span style={{ fontSize: 13, color: INK, lineHeight: 1.45, flex: 1 }}>
+            That link points to deal #{deadDeepLinkDealId}, which isn't on this board — it
+            may have been archived or deleted. Turn on the Archived filter to look for it.
+          </span>
+          <button onClick={() => setHandledDeepLink(deadDeepLinkDealId)}
+                  style={{ ...btnSecondary, ...btnSmall, flexShrink: 0 }}>
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {bulkNotice && (
         <div style={{

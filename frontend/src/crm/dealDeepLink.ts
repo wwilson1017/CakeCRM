@@ -59,8 +59,6 @@ export interface DeepLinkVerdictInput {
    * deal can be absent from it.
    */
   boardRefreshedSinceLink: boolean;
-  /** Has a refresh already been requested for this link? Bounds `refresh` to one try. */
-  refreshRequested: boolean;
 }
 
 export type DeepLinkVerdict =
@@ -92,11 +90,15 @@ export type DeepLinkVerdict =
  *    stale board is `refresh`, and only a miss on a board fetched since the link is
  *    `dead`.
  *
- *    `refreshRequested` bounds that to a single attempt. If the refresh fails, the board
- *    never advances and this stays at `refresh` — saying NOTHING rather than risking a
- *    false accusation. A genuinely deleted deal then reads as the old silent no-op until
- *    the next successful load: worse than a correct notice, better than a confident
- *    wrong one.
+ *    That refresh is bounded to ONE attempt without any flag here, and deliberately so:
+ *    a `refresh` verdict is stable, so the caller's effect — keyed on the verdict and the
+ *    deal id — does not re-run while it holds. A failed refresh applies no payload, so
+ *    `boardRefreshedSinceLink` stays false, the verdict stays `refresh`, and the pipeline
+ *    says NOTHING rather than risking a false accusation. A genuinely deleted deal then
+ *    reads as the old silent no-op until the next successful load: worse than a correct
+ *    notice, better than a confident wrong one. Encoding the attempt as an input here was
+ *    tried and removed — it can only be maintained by a ref, and reading a ref during
+ *    render is a build-blocking error under this repo's react-hooks ruleset.
  *
  * Note what is deliberately NOT an input: the board's facet filters. `dealOnBoard` is
  * asked of the whole payload, never of the filtered view — a session filter that hides a
@@ -104,10 +106,10 @@ export type DeepLinkVerdict =
  * board regardless of what the columns are showing.
  */
 export function deepLinkVerdict(input: DeepLinkVerdictInput): DeepLinkVerdict {
-  const { dealId, boardLoaded, dealOnBoard, boardRefreshedSinceLink, refreshRequested } = input;
+  const { dealId, boardLoaded, dealOnBoard, boardRefreshedSinceLink } = input;
   if (dealId === null) return 'idle';
   if (!boardLoaded) return 'idle';
   if (dealOnBoard) return 'open';
-  if (!boardRefreshedSinceLink) return refreshRequested ? 'idle' : 'refresh';
+  if (!boardRefreshedSinceLink) return 'refresh';
   return 'dead';
 }
