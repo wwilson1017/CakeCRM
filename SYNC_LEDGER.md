@@ -73,4 +73,4 @@ Populated by port PRs from here on.
 
 | Feature | Source | CakeCRM PR / issue | Date |
 |---|---|---|---|
-| Kanban pointer-based drop-target resolution (short/empty columns accept a drop at any height) | PR #1813 (`f367e7cf8`) | #147 | 2026-09-04 |
+| Kanban pointer-based drop-target resolution (short/empty columns accept a drop at any height) | PR #1813 (`f367e7cf8`), plus the board-box clip from PR #1956 (`e605b49c4`) — whose board-bounding half was deliberately not ported | #147 | 2026-09-04 |

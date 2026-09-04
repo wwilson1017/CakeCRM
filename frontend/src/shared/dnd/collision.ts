@@ -149,6 +149,13 @@ function clampToBox(rect: ClientRect, clip: ClientRect | null | undefined): Clie
  * **This diverges from the blueprint, which clips only cards.** Its rationale for keeping every
  * lane covers the vertical case and does not reach this one; cards are already clipped on both
  * axes, so treating the x axis differently for lanes was the inconsistency, not the fix.
+ *
+ * The y axis has a mirror of the hole this closes, and it is inert HERE rather than absent: on the
+ * widening's skip paths a lane vertically outside the board box keeps its raw y, since nothing
+ * clamps it. No board in this repo can reach that, because none gives the SCROLLER a vertical fold
+ * — `max-h-[70vh]` sits on the columns, whose droppable is itself the scrollport — so the board box
+ * only ever bites on x. A consumer that bounds the board's own height would make it reachable, and
+ * the fix would be to clamp y here too on exactly those paths.
  */
 function clampX(rect: ClientRect, clip: ClientRect | null | undefined): ClientRect | null {
   if (!clip) return rect;
