@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { PointerEvent as ReactPointerEvent, MouseEvent as ReactMouseEvent, KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import { api, ApiError } from '../core/api/client';
 import type { CrmDeal } from '../core/types';
 import { DealForm } from './components/DealForm';
@@ -25,6 +25,9 @@ import {
   loadFilterState, saveFilterState,
 } from './pipelineFilters';
 import { applicableBulkIds } from './bulkSelection';
+import {
+  DEAL_DEEP_LINK_PARAM, deepLinkVerdict, parseDealDeepLinkId,
+} from './dealDeepLink';
 import { sweepPipelineDeals } from './pipelineAssembly';
 import { classifyBulkMove, describeBulkMove, type BulkMoveResponse, type BulkNotice } from './bulkOutcome';
 
@@ -41,11 +44,31 @@ interface PipelineData {
 
 export function PipelinePage() {
   const [data, setData] = useState<PipelineData | null>(null);
+  // Board load generations: the newest load STARTED, and the newest whose payload was
+  // APPLIED. Both are state rather than refs because the deep-link block below reads them
+  // during render, and both halves are needed to answer its one question — "has the server
+  // answered ABOUT THIS LINK?".
+  //
+  // `data`'s own identity is no signal at all — every optimistic update on this page (a
+  // drag's stage patch, its rollback, the same-column reorder, a bulk reconcile) replaces
+  // the object without asking the server anything. That was a real false accusation.
+  //
+  // A count of APPLIED payloads would fix that much, but generations answer a sharper
+  // question: a load that started BEFORE the link cannot know about a deal created after
+  // it, so its landing must not settle the link. In practice `load` already drops such a
+  // payload — a newer load bumps `loadGen`, and a racing write defers it — so this is the
+  // last line rather than the only one, and it is kept because it costs nothing and does
+  // not depend on those guards keeping their current shape.
+  const [boardLoads, setBoardLoads] = useState({ started: 0, applied: 0 });
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [editDeal, setEditDeal] = useState<CrmDeal | null>(null);
   const [selectedDeal, setSelectedDeal] = useState<CrmDeal | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
+  // Every navigation gets a fresh key, including one to the URL already showing. That is
+  // what makes following the SAME deep link twice a distinguishable event (issue #145) —
+  // the parsed id alone cannot tell a second click from no click at all.
+  const location = useLocation();
   const isMobile = useIsMobile();
 
   // Client-side facet filtering (issue #21). One envelope (search + advanced facets)
@@ -72,6 +95,137 @@ export function PipelinePage() {
   if (validDeepLink !== seenDeepLink) {
     setSeenDeepLink(validDeepLink);
     if (validDeepLink) setFilters(EMPTY_FILTER_STATE);
+  }
+
+  // Deal deep link (/crm/pipeline?deal=N) — issue #145. The assistant attaches this URL
+  // to every deal it names, in chat and in messages that leave the app, so clicking one
+  // has to land on that deal. Sibling of the ?stage= link above, and resolved the same
+  // way: React's render-time "reset state when an input changes" pattern, NOT an effect.
+  // That is not a style choice — this repo's react-hooks ruleset makes a synchronous
+  // setState inside an effect a build-blocking error, and suppressing it is not an option.
+  //
+  // The RULES live in `dealDeepLink.ts` as a pure function. vitest runs in node, so logic
+  // left in this component is untestable, and deciding whether a deal is really gone is
+  // the whole correctness story of the feature.
+  //
+  // Unlike ?stage=, the parameter is NOT stripped once acted on — the resolution keys off
+  // the NAVIGATION instead. ?stage= is a one-shot "scroll here" intent; ?deal= names a
+  // record, which is what a URL is for, so keeping it makes reload reopen the deal and the
+  // address bar a real copy source.
+  //
+  // Stripping was tried, because leaving the id in the URL makes a second click on the same
+  // link indistinguishable from no click at all — and a chat transcript is exactly where one
+  // gets clicked twice. Keying on `location.key` answers that without a rewrite: every
+  // navigation is its own event, including one to the URL already showing. Stripping also
+  // turned out to cost more than it bought — the rewrite is itself a navigation, so it
+  // re-armed the link it had just resolved and fired a second board refresh, and it raced
+  // the ?stage= consumer for the same parameter object.
+  //
+  // Worth flagging for #75, which specifies stripping for its Copy-link button: that came
+  // from the blueprint, whose own notes call the lost deal on refresh a caveat. Here the
+  // address bar survives a reload, so the button has something real to copy.
+  const deepLinkDealId = parseDealDeepLinkId(searchParams.get(DEAL_DEEP_LINK_PARAM));
+  // The link being resolved, plus the newest load generation that had already STARTED when
+  // it arrived. One object so a new target resets both together and they can never disagree
+  // about which link the snapshot belongs to. See `boardLoads` above for why a generation
+  // and not an object identity or a plain count.
+  const [deepLink, setDeepLink] = useState<{
+    dealId: number | null; loadsAtArrival: number; key: string | null;
+  }>({ dealId: null, loadsAtArrival: 0, key: null });
+  // The target the user has already dealt with, so the sheet does not spring back open the
+  // moment they close it. Cleared when a new target arrives, which is what lets the same
+  // link be followed again later.
+  const [handledDeepLink, setHandledDeepLink] = useState<number | null>(null);
+  // The dead-link notice, held as its own state rather than derived from the verdict — it
+  // has to survive the board changing underneath it, and the user has to be able to dismiss
+  // it without the next render putting it straight back.
+  const [deadDeepLinkDealId, setDeadDeepLinkDealId] = useState<number | null>(null);
+  // The navigation currently being resolved, readable from an async continuation — the
+  // retirement check below runs after an await and cannot see the render's value.
+  const deepLinkKeyRef = useRef<string | null>(null);
+  // Which deal, if any, the sheet on screen was opened by a LINK. Distinct from
+  // `handledDeepLink`, which never clears until the next link: this one clears the moment
+  // the user takes over the sheet (closes it, or opens a card themselves), so a later link
+  // supersedes only a sheet a link put there. Tracking the id alone would close a card the
+  // user had opened by hand just because a previous link had once opened the same deal.
+  const [linkOpenedDeal, setLinkOpenedDeal] = useState<number | null>(null);
+  // Re-arm on the NAVIGATION, not on the parsed id. Two reasons, both dead ends otherwise:
+  // following the same link twice never changes the id, and a link whose refresh FAILED is
+  // never consumed, so its parameter is still sitting there and a retry would look
+  // identical to no click at all.
+  // Leaving the parameter behind forgets which navigation we resolved. Back/Forward
+  // RESTORES a history entry's original key rather than minting one, so without this,
+  // returning to a `?deal=` entry the user had already visited would not re-arm — a reload
+  // reopened the deal but Back did not, which nobody would predict.
+  if (deepLinkDealId === null && deepLink.key !== null) {
+    setDeepLink({ dealId: null, loadsAtArrival: 0, key: null });
+    // Clear the notice with it. Navigating away — clicking the Pipeline nav item from
+    // `/crm/pipeline?deal=404`, say — leaves this page mounted, so a notice about a link
+    // that is no longer in the URL would otherwise sit there with nothing to dismiss it.
+    // `linkOpenedDeal` deliberately survives: the sheet is still open and still the one a
+    // link put there, so a later link should still supersede it.
+    setDeadDeepLinkDealId(null);
+    setHandledDeepLink(null);
+  }
+  if (deepLinkDealId !== null && location.key !== deepLink.key) {
+    setDeepLink({ dealId: deepLinkDealId, loadsAtArrival: boardLoads.started, key: location.key });
+    setHandledDeepLink(null);
+    setDeadDeepLinkDealId(null);
+    // A new link supersedes the sheet the PREVIOUS one opened — otherwise following a link
+    // to a deal that turns out to be gone leaves the old deal's sheet on screen, reading as
+    // though the new link had opened the wrong record.
+    if (selectedDeal !== null && selectedDeal.id === linkOpenedDeal) {
+      setSelectedDeal(null);
+      setLinkOpenedDeal(null);
+    }
+  }
+  // Membership is asked of the WHOLE payload, never of `filteredDeals`: a session facet
+  // that hides a card says nothing about whether the deal exists, and the detail sheet
+  // opens over the board regardless of what the columns are showing. An archived deal IS
+  // genuinely absent (the fetch excludes them unless the Archived facet is on), which is
+  // the case the notice exists for.
+  const deepLinkedDeal = deepLink.dealId === null
+    ? null
+    : (data?.deals ?? []).find(d => d.id === deepLink.dealId) ?? null;
+  const deepLinkState = deepLinkVerdict({
+    dealId: deepLink.dealId,
+    boardLoaded: data !== null,
+    dealOnBoard: deepLinkedDeal !== null,
+    boardRefreshedSinceLink: boardLoads.applied > deepLink.loadsAtArrival,
+  });
+  // Act only on a render where the resolved target is still the one this navigation named.
+  // The block above SCHEDULES a new target, but this render still evaluates the old one —
+  // React discards the pass's output, not the state updates queued during it — so without
+  // this gate a superseded link could raise its notice on the way out and leave it there.
+  //
+  // Honest about coverage: this one is defence in depth and no test isolates it. The
+  // sequence it guards needs an unresolved link to reach a verdict in the very render a
+  // second link supersedes it, which is not reachable from the page's own controls. It is
+  // kept because it costs a comparison and the alternative is reasoning about queued
+  // updates from a discarded render pass every time this block is touched.
+  const deepLinkIsCurrent = deepLink.key === location.key;
+  if (deepLinkIsCurrent && deepLinkState === 'open' && deepLinkedDeal
+      && handledDeepLink !== deepLink.dealId) {
+    setHandledDeepLink(deepLink.dealId);
+    setSelectedDeal(deepLinkedDeal);
+    setLinkOpenedDeal(deepLink.dealId);
+  } else if (deepLinkIsCurrent && deepLinkState === 'dead'
+             && handledDeepLink !== deepLink.dealId) {
+    setHandledDeepLink(deepLink.dealId);
+    setDeadDeepLinkDealId(deepLink.dealId);
+  }
+  // The notice claims the deal is not on this board, and tells the user how to bring it
+  // back — the Archived facet is the documented route, and it refetches. The moment the
+  // deal is there the claim is false, so the notice goes; opening it is what following the
+  // link asked for. It cannot be left to the resolution above, which acts once per
+  // navigation and has already had its turn by the time the facet refetches.
+  const noticedDealNowOnBoard = deadDeepLinkDealId === null
+    ? null
+    : (data?.deals ?? []).find(d => d.id === deadDeepLinkDealId) ?? null;
+  if (noticedDealNowOnBoard) {
+    setDeadDeepLinkDealId(null);
+    setSelectedDeal(noticedDealNowOnBoard);
+    setLinkOpenedDeal(noticedDealNowOnBoard.id);
   }
 
   const columnRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -200,6 +354,8 @@ export function PipelinePage() {
     // request itself, since two quick facet flips can otherwise resolve out of order and
     // leave the board showing the wrong content set.
     const myLoad = ++loadGen.current;
+    // Mirror the generation into state so the deep-link resolution can read it in render.
+    setBoardLoads(b => ({ ...b, started: myLoad }));
     // The SPINNER gets its OWN generation, bumped only by non-silent loads. It cannot ride
     // `loadGen`, which silent refreshes bump too: gating the reset on that would strand the
     // spinner forever once a silent refresh started after a non-silent one — the loser
@@ -243,6 +399,10 @@ export function PipelinePage() {
         return false;
       }
       setData(d);
+      // The ONLY place a server payload is applied. Record WHICH load applied it, so a
+      // reader can ask whether the answer post-dates something rather than merely that an
+      // answer arrived (issue #145). `Math.max` because loads can settle out of order.
+      setBoardLoads(b => (myLoad > b.applied ? { ...b, applied: myLoad } : b));
       hasLoadedOnce.current = true;
       dealConfirmedStage.current = new Map(d.deals.map(deal => [deal.id, deal.stage]));
       // Intersect the selection with the deals this payload says are LIVE. Masking an
@@ -285,6 +445,10 @@ export function PipelinePage() {
   }, [replayDeferredLoad]);
 
   useEffect(() => { loadRef.current = load; }, [load]);
+
+  // Mirrored in an effect, not during render — a render-phase ref write is a build error
+  // under this repo's react-hooks ruleset.
+  useEffect(() => { deepLinkKeyRef.current = deepLink.key; }, [deepLink.key]);
 
   // Mount, and again whenever the Archived facet changes WHICH deals the server should
   // send. The ref is synced here rather than during render (a render-phase ref write is a
@@ -693,6 +857,54 @@ export function PipelinePage() {
     setSearchParams(next, { replace: true });
   }, [data, searchParams, setSearchParams]);
 
+  // The only side effect the deep link needs: the board on screen predates the link, so
+  // refresh once before deciding anything. The assistant hands out links to deals it has
+  // just created, and this page stays mounted while its drawer is open — that board is
+  // silent about the deal, not evidence against it.
+  //
+  // Bounded to ONE attempt by these deps rather than by a flag: a `refresh` verdict is
+  // stable, so a failed load — which applies no payload and so changes neither `data` nor
+  // the verdict — does not re-run this. The pipeline then says nothing at all rather than
+  // accusing anyone, which is the trade `deepLinkVerdict` documents.
+  //
+  // `queueMicrotask` for the same reason the mount effect below uses it: `load` calls
+  // setState, and calling it synchronously from an effect body is a build-blocking error
+  // under this repo's react-hooks ruleset.
+  // Keyed on the NAVIGATION as well as the verdict. Two cases need it, and both are dead
+  // ends on a verdict-only dependency because the verdict sits at `refresh` for each: a
+  // second link followed while the first is still refreshing would ride the first one's
+  // request, whose generation predates it and so can never settle it; and retrying the same
+  // link after a failed refresh changes neither the verdict nor the id, so nothing re-runs
+  // at the moment the user has most reason to try again.
+  useEffect(() => {
+    if (deepLinkState !== 'refresh') return;
+    const target = deepLink.dealId;
+    const attemptKey = deepLink.key;
+    queueMicrotask(() => {
+      const genBefore = loadGen.current;
+      void load(true).then(applied => {
+        // A refresh that never landed leaves the verdict at `refresh` forever, and this
+        // effect will not run again — so the link would sit armed until some unrelated load
+        // minutes later (closing another card's sheet, a facet flip) happened to satisfy it
+        // and popped a sheet open with no gesture toward it. Retire it instead: the page
+        // stays silent, which is the documented trade, and following the link again retries
+        // because the resolution keys off the navigation.
+        //
+        // But `applied === false` is not the same as "failed". `load` also returns false
+        // when it was DEFERRED behind a write and when it was SUPERSEDED by a newer load,
+        // and in both of those someone else is still going to settle this link — retiring
+        // on them makes the link do nothing at all, which is the opposite of the fix. So
+        // all three have to hold: the load really failed, nothing replaced it, and the
+        // navigation it belonged to is still the one on screen.
+        if (applied) return;
+        if (pendingRefresh.current) return;                    // deferred; it replays itself
+        if (loadGen.current !== genBefore + 1) return;         // superseded by a newer load
+        if (deepLinkKeyRef.current !== attemptKey) return;     // a newer navigation owns this
+        setHandledDeepLink(target);
+      });
+    });
+  }, [deepLinkState, deepLink.dealId, deepLink.key, load]);
+
   if (loading) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', padding: '80px 0' }}>
@@ -733,6 +945,22 @@ export function PipelinePage() {
           isMobile={isMobile}
         />
       </div>
+
+      {deadDeepLinkDealId !== null && (
+        <div style={{
+          ...stageCard(BG_CARD, ACCENT), padding: '12px 14px', marginBottom: 12,
+          display: 'flex', alignItems: 'flex-start', gap: 12,
+        }}>
+          <span style={{ fontSize: 13, color: INK, lineHeight: 1.45, flex: 1 }}>
+            That link points to deal #{deadDeepLinkDealId}, which isn't on this board — it
+            may have been archived or deleted. Turn on the Archived filter to look for it.
+          </span>
+          <button onClick={() => setDeadDeepLinkDealId(null)}
+                  style={{ ...btnSecondary, ...btnSmall, flexShrink: 0 }}>
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {bulkNotice && (
         <div style={{
@@ -822,7 +1050,10 @@ export function PipelinePage() {
           const archived = isArchivedDeal(deal);
           return (
             <DealBoardCard
-              deal={deal} columnStage={String(columnId)} onOpen={() => setSelectedDeal(deal)}
+              deal={deal} columnStage={String(columnId)}
+              // Opening a card by hand takes the sheet away from whatever link last owned
+              // it, so a later link supersedes only what a link actually put there.
+              onOpen={() => { setSelectedDeal(deal); setLinkOpenedDeal(null); }}
               selectable={!isMobile && !archived}
               isSelected={!archived && bulkSelected.has(deal.id)}
               onToggleSelect={() => toggleSelect(deal.id)}
@@ -850,7 +1081,7 @@ export function PipelinePage() {
           // Silent-refresh the board on close so an in-sheet note/activity log updates the
           // deal's last_activity_at (and touch count) without a spinner flash — closes the
           // "filter stale deals → log a touch → it leaves the stale bucket" loop.
-          onClose={() => { setSelectedDeal(null); load(true); }}
+          onClose={() => { setSelectedDeal(null); setLinkOpenedDeal(null); load(true); }}
           onEdit={(d) => { setSelectedDeal(null); setEditDeal(d); }}
           onStageChange={updateDealStage}
           onRestored={restoreDeal}
