@@ -114,7 +114,7 @@ export function LoginPage() {
               placeholder="Enter your password"
               className={inputClass}
             />
-            {error && <p className="text-ck-red text-sm mt-3 mb-0">{error}</p>}
+            {error && <p className="text-ck-red-text text-sm mt-3 mb-0">{error}</p>}
             <button
               type="submit"
               disabled={loading || !email || !password}
@@ -153,7 +153,7 @@ export function LoginPage() {
               />
               Trust this browser for 30 days
             </label>
-            {error && <p className="text-ck-red text-sm mt-3 mb-0">{error}</p>}
+            {error && <p className="text-ck-red-text text-sm mt-3 mb-0">{error}</p>}
             <button type="submit" disabled={loading || !code} className={`${buttonClass} mt-5`}>
               {loading ? 'Verifying...' : 'Verify'}
             </button>

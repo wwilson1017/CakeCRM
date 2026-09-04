@@ -76,7 +76,7 @@ export function TodoRow({ todo, onToggleDone, onToggleStar, onEdit, showStatus }
         type="button"
         onClick={() => onToggleStar(todo)}
         className={`mt-0.5 shrink-0 text-lg leading-none ${
-          todo.star ? 'text-amber-500' : 'text-line hover:text-amber-400'
+          todo.star ? 'text-ck-amber-text' : 'text-line hover:text-ck-amber-text'
         }`}
         aria-label={todo.star ? 'Unstar' : 'Star as today priority'}
       >

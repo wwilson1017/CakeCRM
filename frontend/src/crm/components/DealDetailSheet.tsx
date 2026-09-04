@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '../../core/api/client';
 import type { CrmDeal, CrmActivity } from '../../core/types';
 import { STAGE_COLORS } from '../constants';
-import { mono, INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, ACCENT_INK, GOLD, SAGE, FONT_DISPLAY } from '../../shared/styles';
+import { mono, INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, GOLD_TEXT, SAGE_FILL, ON_STATUS, FONT_DISPLAY } from '../../shared/styles';
 import { modalOverlay, modalContent, mobileDragHandle, btnDanger } from '../styles';
 import { toast } from '../../shared/toast';
 import { ActivityTimeline } from './ActivityTimeline';
@@ -186,7 +186,7 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
           <span style={{
             display: 'inline-flex', alignItems: 'center', gap: 8, flexShrink: 0, marginLeft: 12,
           }}>
-            <span style={{ fontFamily: FONT_DISPLAY, fontSize: 20, color: GOLD }}>
+            <span style={{ fontFamily: FONT_DISPLAY, fontSize: 20, color: GOLD_TEXT }}>
               ${deal.value.toLocaleString()}
             </span>
             {badge('value')}
@@ -198,7 +198,7 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
           fontSize: 12, color: INK_MUTE, marginBottom: 16,
         }}>
           <span style={{ textTransform: 'capitalize' }}>
-            Stage: <span style={{ color: STAGE_COLORS[deal.stage]?.color || INK }}>{deal.stage}</span>
+            Stage: <span style={{ color: STAGE_COLORS[deal.stage]?.text || INK }}>{deal.stage}</span>
           </span>
           {badge('stage')}
         </div>
@@ -346,8 +346,12 @@ export function DealDetailSheet({ deal, isMobile, onClose, onEdit, onStageChange
             <>
               <button onClick={() => void closeOut('won')} disabled={closeOutDisabled} style={{
                 padding: '10px 16px', borderRadius: 6,
-                background: SAGE, color: ACCENT_INK,
+                background: SAGE_FILL, color: ON_STATUS,
                 border: 'none', fontWeight: 500, fontSize: 13,
+                // #128's disabled affordance kept alongside #119's tokens — the two edits are
+                // orthogonal (hue vs. interactivity). The dimming is not a #119 violation:
+                // that rule governs a container holding a chip, and WCAG 1.4.3 exempts
+                // inactive controls from the contrast minimum.
                 cursor: closeOutDisabled ? 'default' : 'pointer',
                 opacity: closeOutDisabled ? 0.5 : 1,
                 flex: 1,

@@ -7,7 +7,7 @@ import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { subscribeConfirms, getCurrentConfirm, settleConfirm } from './confirm';
 import type { ConfirmOptions } from './confirm';
 import {
-  BG_ELEV, LINE_STRONG, INK, INK_MUTE, INK_SOFT, ACCENT, ACCENT_INK, CORAL,
+  BG_ELEV, LINE_STRONG, INK, INK_MUTE, INK_SOFT, ACCENT, ACCENT_INK, CORAL_FILL, ON_STATUS,
   FONT_DISPLAY, FONT_SANS,
   SCRIM, SHADOW,
 } from './styles';
@@ -111,7 +111,11 @@ function ConfirmCard({ options }: { options: ConfirmOptions }) {
             onClick={() => settleConfirm(true)}
             style={{
               flex: 1, padding: '9px 16px', borderRadius: 4,
-              background: danger ? CORAL : ACCENT, color: ACCENT_INK,
+              // ON_STATUS, not ACCENT_INK, on the danger branch: white is right on the
+              // brand red (4.66:1 in both themes) but only 2.96:1 on the red `.dark`
+              // lightened for text. ON_STATUS flips per theme; ACCENT keeps white.
+              background: danger ? CORAL_FILL : ACCENT,
+              color: danger ? ON_STATUS : ACCENT_INK,
               border: 'none', fontWeight: 500, cursor: 'pointer',
               fontSize: 13, fontFamily: FONT_SANS,
             }}

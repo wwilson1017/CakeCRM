@@ -85,7 +85,7 @@ export function OllamaSetup({ onConnected }: Props) {
       <div className="flex flex-col gap-3">
         <div className="flex items-center gap-2">
           <span className="w-2 h-2 rounded-full bg-ck-green" />
-          <span className="text-sm text-ck-green">Ollama detected</span>
+          <span className="text-sm text-ck-green-text">Ollama detected</span>
         </div>
 
         <div>
@@ -99,7 +99,7 @@ export function OllamaSetup({ onConnected }: Props) {
           </select>
         </div>
 
-        {error && <p className="text-ck-red text-xs m-0">{error}</p>}
+        {error && <p className="text-ck-red-text text-xs m-0">{error}</p>}
 
         <button
           onClick={connect}
@@ -118,7 +118,7 @@ export function OllamaSetup({ onConnected }: Props) {
       <div className="flex flex-col gap-3">
         <div className="flex items-center gap-2">
           <span className="w-2 h-2 rounded-full bg-ck-amber" />
-          <span className="text-sm text-ck-amber">Ollama is running but no models are installed</span>
+          <span className="text-sm text-ck-amber-text">Ollama is running but no models are installed</span>
         </div>
 
         <p className="text-xs text-ck-ink-mute m-0">
@@ -149,7 +149,7 @@ export function OllamaSetup({ onConnected }: Props) {
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2">
         <span className="w-2 h-2 rounded-full bg-ck-red" />
-        <span className="text-sm text-ck-red">Ollama not detected</span>
+        <span className="text-sm text-ck-red-text">Ollama not detected</span>
       </div>
 
       <div className="bg-ck-raised rounded-md px-4 py-3 flex flex-col gap-2">
@@ -189,7 +189,7 @@ export function OllamaSetup({ onConnected }: Props) {
             placeholder="http://localhost:11434"
             className="w-full box-border border border-ck-line-strong rounded-md bg-ck-card px-3 py-2 text-sm text-ck-ink placeholder:text-ck-ink-soft"
           />
-          {error && <p className="text-ck-red text-xs m-0">{error}</p>}
+          {error && <p className="text-ck-red-text text-xs m-0">{error}</p>}
           <button
             onClick={connect}
             disabled={connecting || !customUrl.trim()}

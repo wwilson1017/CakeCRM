@@ -22,7 +22,8 @@
 import { useEffect, useState } from 'react';
 
 import { api } from '../../core/api/client';
-import { CORAL, FONT_SANS, INK_MUTE, labelStyle } from '../../shared/styles';
+import { copyToClipboard } from '../../shared/hooks/useCopyToClipboard';
+import { CORAL_TEXT, FONT_SANS, INK_MUTE, labelStyle } from '../../shared/styles';
 import { toast } from '../../shared/toast';
 import { useSetTaskMode, useTaskMode } from '../gtd/TaskModeContext';
 import type { TaskMode } from '../gtd/TaskModeContext';
@@ -89,12 +90,12 @@ export function TaskModeCard({ isMobile }: { isMobile: boolean }) {
   const linkFor = (path: string) => `${window.location.origin}${path}`;
 
   async function copy(path: string) {
-    try {
-      await navigator.clipboard.writeText(linkFor(path));
-      toast.success('Link copied.');
-    } catch {
-      toast.error('Could not copy — select the link and copy it manually.');
-    }
+    // Through the shared helper for its non-secure-context fallback: these links
+    // exist to be opened on a LAN over plain http, which is exactly where
+    // `navigator.clipboard` is undefined — so the bare async API failed on the
+    // one deployment this button serves.
+    if (await copyToClipboard(linkFor(path))) toast.success('Link copied.');
+    else toast.error('Could not copy — select the link and copy it manually.');
   }
 
   const modeButton = (value: TaskMode, label: string, hint: string) => (
@@ -146,7 +147,7 @@ export function TaskModeCard({ isMobile }: { isMobile: boolean }) {
               A phone bookmark that drops text straight into your inbox. It cannot read
               anything back.{' '}
               {surfaces.capture_public
-                ? <strong style={{ color: CORAL }}>Anyone who knows this address can add to your inbox — add a secret link to restrict it.</strong>
+                ? <strong style={{ color: CORAL_TEXT }}>Anyone who knows this address can add to your inbox — add a secret link to restrict it.</strong>
                 : 'Only someone with the secret link can post to it.'}
             </p>
             <SurfaceRow
@@ -167,7 +168,7 @@ export function TaskModeCard({ isMobile }: { isMobile: boolean }) {
             <p style={{ fontFamily: FONT_SANS, fontSize: 13, color: INK_MUTE, margin: '0 0 8px' }}>
               The whole todo app, with no login. Off by default.{' '}
               {surfaces.todo_web_enabled && surfaces.web_public && (
-                <strong style={{ color: CORAL }}>
+                <strong style={{ color: CORAL_TEXT }}>
                   Anyone who knows this address can read and edit every todo. Add a secret link.
                 </strong>
               )}

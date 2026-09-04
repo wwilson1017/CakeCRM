@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { api } from '../../core/api/client';
 import type { CrmWeeklyTouches } from '../../core/types';
 import {
-  INK, INK_MUTE, INK_DIM, LINE, CORAL, ACCENT_TEXT,
+  INK, INK_MUTE, INK_DIM, LINE, CORAL_TEXT, ACCENT_TEXT,
   FONT_DISPLAY, mono, labelStyle, inputStyle,
 } from '../../shared/styles';
 import { cardStyle, sectionHeading, btnPrimary, btnSecondary } from '../styles';
@@ -197,12 +197,12 @@ export function WeeklyTouchesCard(
           >Last 7 days</button>
         )}
         {rangeInvalid && (
-          <span style={{ fontSize: 12, color: CORAL, alignSelf: 'center' }}>
+          <span style={{ fontSize: 12, color: CORAL_TEXT, alignSelf: 'center' }}>
             End date must be on or after start date.
           </span>
         )}
         {!rangeInvalid && fetchFailed && (
-          <span style={{ fontSize: 12, color: CORAL, alignSelf: 'center' }}>
+          <span style={{ fontSize: 12, color: CORAL_TEXT, alignSelf: 'center' }}>
             Couldn't load that range — showing the last result.
           </span>
         )}
