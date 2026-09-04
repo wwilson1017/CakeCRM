@@ -519,8 +519,8 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   Contact list/search LEFT JOIN `companies` and expose `company_name`; the UI renders
   `company_name || company` and search matches the joined name, so a linked contact is
   findable/displayable even with empty or stale legacy text. The legacy
-  `contacts.company` column stays in place, non-authoritative (the freetext↔link
-  combobox merge is deliberate follow-up); a second one-shot backfill migration
+  `contacts.company` column stays in place, non-authoritative (**the freetext↔link merge
+  landed #126 in `ContactForm`; the COLUMN stays**); a second one-shot backfill migration
   (`20260816203810_company_link_backfill.sql`) repairs installs that imported between
   #13 and #35 by linking contacts that are still `company_id IS NULL` with matching
   text. Unlike #13's it deliberately does **not** inherit company onto deals: `NULL`
@@ -573,7 +573,42 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   an archived row `"Acme (archived)"` and matching on that would offer to create a duplicate
   of the row directly above. The contact side's exact-match dedupe only sees the 20-row
   page — companies are immune, resolving server-side — which is documented at
-  `PICKER_LIMIT` as an accepted single-install trade. User-defined **custom fields** (#19) add a
+  `PICKER_LIMIT` as an accepted single-install trade.
+  **#126 is the second surface**, and it is the freetext↔link merge the #35 bullet deferred:
+  `ContactForm`'s free-text `Company` input and its capped `Linked Company` `<select>` become
+  ONE `RecordCombobox`, consumed unchanged. So the form no longer has a way to record a
+  company name without a company row behind it — typing an unmatched name offers
+  `Create "…"`, which resolves to a real deduplicated row. The `contacts.company` COLUMN is
+  untouched and still non-authoritative; the form keeps writing it in step with the link so
+  the two cannot contradict. The one rule worth stating, because nothing on screen shows it:
+  **an untouched company field omits BOTH `company` and `company_id` from a `PUT`.** The
+  update route reads its body with `model_dump(exclude_unset=True)`, so an omitted key is not
+  written at all — and that is the only thing standing between a pre-#35 contact holding
+  unmatched free text and the silent erasure of the only record of that name, by someone who
+  opened the form to fix a phone number. Sending `company: ''` would do it. Touching the
+  field (pick, create, or the × clear) sends both keys; a CREATE always sends both, having no
+  prior value to protect and no way to express absence (`POST /contacts` dumps without
+  `exclude_unset`). Such a contact renders its free text as the picker's empty label plus a
+  *not linked* hint, which both disappear the moment the user speaks for the field — left up,
+  the label would keep naming a company they had just cleared. **Divergence from the
+  blueprint, deliberate:** cake_os's `QuickAddModal` (#2016/#2049) defers the company create
+  to submit so an abandoned form leaves nothing behind; CakeCRM creates on row press, because
+  that is `RecordCombobox`'s shipped contract and the issue mandates one component for both
+  surfaces. The cost is bounded — quick-create goes through the `/resolve` get-or-create, so
+  an abandoned form leaves at most one unowned company and a retry reuses it.
+  Two consequences of reusing the component unchanged are **accepted, not overlooked**.
+  (1) The picker's × is gated on a non-null value and `companyTouched` is set only by
+  choosing or clearing, so an unlinked contact would have had NO way to delete a wrong
+  legacy name without first linking some company to it — `ContactForm` therefore renders its
+  own inline **Remove** action on the not-linked hint. (2) Typing a name and pressing Save
+  **discards it**: the widget keeps its query private and reports only choose/create/clear,
+  where the removed free-text input committed on Save. `Create "…"` is the commit
+  affordance. That is `RecordCombobox`'s contract and has been true of `DealForm`'s two
+  pickers since #123, so it is a property of the component, not a regression this issue
+  introduced; both are pinned by tests in `ContactForm.test.tsx`. The one capability
+  genuinely retired is editing unlinked free text to a DIFFERENT arbitrary string without
+  linking — which is the merge the #35 bullet deferred, not a side effect of it.
+  User-defined **custom fields** (#19) add a
   two-table EAV (`crm_field_definitions` + `crm_field_values`) on contacts/companies/
   deals, managed in `/crm/settings`, rendered in the entity forms and detail pages, and
   exposed to the assistant via `crm_{get,set}_{contact,company,deal}_fields`;
