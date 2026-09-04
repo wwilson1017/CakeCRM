@@ -134,6 +134,24 @@ describe('RecordCombobox — quick create', () => {
     expect(createRow()?.textContent).toBe('Create "Newco"…');
   });
 
+  it('offers no Create row at all when `create` is omitted', async () => {
+    // The read-only shape the Reports page uses (issue #144). `create` was widened from
+    // required to optional, so the gate has to be the ABSENCE of the prop rather than a
+    // falsy value: every create path here derives from `canCreate`, and a picker that could
+    // still mint a company from a report would be a write on a read-only surface.
+    // No results, so `Create "Zeta"` is the ONLY row a create-enabled picker would show —
+    // which is what makes its absence here meaningful rather than incidental.
+    const props = mount({ create: undefined, search: vi.fn(async () => [] as Rec[]) });
+    await open();
+    await type('Zeta');
+    await settle();
+    expect(createRow()).toBeUndefined();
+    expect(rowLabels().some(l => l.startsWith('Create '))).toBe(false);
+    // Enter with nothing matching must not select or create anything.
+    await press('Enter');
+    expect(props.onSelect).not.toHaveBeenCalled();
+  });
+
   it('does NOT offer Create when a result matches case-insensitively', async () => {
     // Otherwise the picker invites you to create a duplicate of the row directly above it.
     mount({ search: vi.fn(async () => [ACME]) });

@@ -15,10 +15,15 @@ import '@fontsource/open-sans/latin-600.css'
 // explicit weight and none exceeds 600.
 import '@fontsource/open-sans/latin-700.css'
 import './index.css'
-import App from './App.tsx'
+// Root, not App: it dispatches between the public todo surface and the CRM with BOTH
+// branches lazy, which is what keeps a /todo visitor from downloading the CRM (#149).
+// This is the entry module, so everything it reaches eagerly is downloaded by every
+// visitor on every surface — importing App here would put the CRM shell back in front
+// of all of them, /todo included.
+import Root from './Root.tsx'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <Root />
   </StrictMode>,
 )

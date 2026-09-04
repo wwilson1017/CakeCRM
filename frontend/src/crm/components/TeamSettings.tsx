@@ -16,7 +16,7 @@ import { useState } from 'react';
 
 import { api } from '../../core/api/client';
 import { useAuth } from '../../core/auth/AuthContext';
-import { CORAL, FONT_SANS, INK_MUTE, INK_SOFT, LINE, labelStyle, inputStyle } from '../../shared/styles';
+import { CORAL_TEXT, FONT_SANS, INK_MUTE, INK_SOFT, LINE, labelStyle, inputStyle } from '../../shared/styles';
 import { toast } from '../../shared/toast';
 import { useUsers, invalidateUsers, type CrmUser } from '../useUsers';
 import { btnPrimary, btnSecondary, btnSmall } from '../styles';
@@ -249,7 +249,7 @@ export function TeamSettings({ isMobile }: { isMobile: boolean }) {
             <option value="member">Member — full CRM access</option>
             <option value="admin">Admin — also manages users, keys and integrations</option>
           </select>
-          {error && <p style={{ color: CORAL, fontSize: 13, marginTop: 0 }}>{error}</p>}
+          {error && <p style={{ color: CORAL_TEXT, fontSize: 13, marginTop: 0 }}>{error}</p>}
           <button
             type="button" style={btnPrimary} disabled={saving || !email || !password}
             onClick={createUser}

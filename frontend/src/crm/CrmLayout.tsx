@@ -1,12 +1,14 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { Suspense, useState, useEffect, useCallback } from 'react';
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../core/api/client';
 import { useAuth } from '../core/auth/AuthContext';
 import { useBranding } from '../core/branding/BrandingContext';
+import BootFallback from '../core/components/BootFallback';
+import ChunkErrorBoundary from '../core/components/ChunkErrorBoundary';
 import { useIsMobile } from '../shared/useIsMobile';
 import { MobileMenuDrawer } from '../shared/MobileMenuDrawer';
 import { confirmDialog } from '../shared/confirm';
-import { INK, INK_SOFT, INK_MUTE, LINE, LINE_STRONG, ACCENT, GOLD, FONT_DISPLAY, FONT_SANS, CORAL, tint } from '../shared/styles';
+import { INK, INK_SOFT, INK_MUTE, LINE, LINE_STRONG, ACCENT, GOLD_FILL, GOLD_TEXT, FONT_DISPLAY, FONT_SANS, CORAL_TEXT, tint } from '../shared/styles';
 import { modalOverlay, modalContent, btnPrimary, btnSecondary } from './styles';
 import { AiKeyNudge } from './components/AiKeyNudge';
 import { AssistantLauncher } from './components/AssistantLauncher';
@@ -24,6 +26,7 @@ const NAV_ITEMS = [
   { to: '/crm/companies', label: 'Companies' },
   { to: '/crm/tasks', label: 'Tasks' },
   { to: '/crm/reminders', label: 'Reminders' },
+  { to: '/crm/reports', label: 'Reports' },
 ];
 
 interface DemoStatus {
@@ -72,7 +75,7 @@ function OnboardingDialog({ onLoad, onDismiss }: {
           how CakeCRM works. You can clear it anytime, or start with an empty CRM.
         </p>
         {error && (
-          <p style={{ fontFamily: FONT_SANS, fontSize: 13, color: CORAL, margin: '12px 0 0' }}>
+          <p style={{ fontFamily: FONT_SANS, fontSize: 13, color: CORAL_TEXT, margin: '12px 0 0' }}>
             Couldn't load sample data. Please try again.
           </p>
         )}
@@ -117,8 +120,8 @@ function DemoBanner({ onClear, isMobile }: {
 
   return (
     <div style={{
-      background: tint(GOLD, 8),
-      borderBottom: `1px solid ${tint(GOLD, 15)}`,
+      background: tint(GOLD_FILL, 8),
+      borderBottom: `1px solid ${tint(GOLD_FILL, 15)}`,
       padding: isMobile ? '10px 16px' : '8px 28px',
       display: 'flex',
       flexDirection: isMobile ? 'column' : 'row',
@@ -127,7 +130,7 @@ function DemoBanner({ onClear, isMobile }: {
       gap: isMobile ? 8 : 16,
     }}>
       <span style={{
-        fontFamily: FONT_SANS, fontSize: 13, color: error ? CORAL : GOLD, lineHeight: 1.4,
+        fontFamily: FONT_SANS, fontSize: 13, color: error ? CORAL_TEXT : GOLD_TEXT, lineHeight: 1.4,
       }}>
         {error
           ? 'Failed to clear example data. Please try again.'
@@ -137,8 +140,8 @@ function DemoBanner({ onClear, isMobile }: {
         onClick={handleClear}
         disabled={clearing}
         style={{
-          background: tint(GOLD, 12), color: GOLD,
-          border: `1px solid ${tint(GOLD, 20)}`, borderRadius: 4,
+          background: tint(GOLD_FILL, 12), color: GOLD_TEXT,
+          border: `1px solid ${tint(GOLD_FILL, 20)}`, borderRadius: 4,
           padding: '4px 14px', fontSize: 12, fontFamily: FONT_SANS,
           fontWeight: 500, cursor: clearing ? 'wait' : 'pointer',
           opacity: clearing ? 0.6 : 1, whiteSpace: 'nowrap',
@@ -174,6 +177,10 @@ interface SetupStatus { ai_ready: boolean; credentials_present: boolean; }
 export function CrmLayout() {
   const isMobile = useIsMobile();
   const navigate = useNavigate();
+  // Feeds the route boundary's resetKey below: a caught error must clear when the user
+  // navigates away from the page that threw, or one crash freezes the content column for the
+  // rest of the session while the nav around it keeps working.
+  const location = useLocation();
   const { logout, isAdmin } = useAuth();
   const { branding, logoVersion } = useBranding();
   const [showMenu, setShowMenu] = useState(false);
@@ -398,7 +405,23 @@ export function CrmLayout() {
             page — 'gtd' would render a shell whose every request 404s. */}
         <TaskModeContext.Provider value={status ? (status.task_mode ?? 'normal') : null}>
           <TaskModeSetterContext.Provider value={handleSetTaskMode}>
-            <Outlet />
+            {/* Route chunks load here (#149), INSIDE the chrome: a page's first visit — or the
+                task mode flipping from unknown to GTD, which is a plain setState and not a
+                router transition — suspends only the content column, so the nav stays put
+                and this layout's demo-status/setup fetches run in parallel with the download
+                instead of after it.
+                The boundary is the other half, and it is NOT redundant with Root's: Suspense
+                catches a PENDING chunk, never a REJECTED one, so after a deploy (which replaces
+                dist wholesale — all 14 route chunks 404 at once) a first visit to any page would
+                otherwise throw past this, past App's Suspense, past ConfirmHost/ToastViewport,
+                and take the whole shell down. scope="route" keeps the failure in the content
+                column while still allowing the one-shot deploy-skew reload, because unlike the
+                assistant drawer the user IS blocked: they asked for this page. */}
+            <ChunkErrorBoundary scope="route" resetKey={location.pathname}>
+              <Suspense fallback={<BootFallback variant="panel" />}>
+                <Outlet />
+              </Suspense>
+            </ChunkErrorBoundary>
           </TaskModeSetterContext.Provider>
         </TaskModeContext.Provider>
       </div>

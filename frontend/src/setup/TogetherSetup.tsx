@@ -54,7 +54,7 @@ export function TogetherSetup({ onConnected }: Props) {
         className="w-full box-border border border-ck-line-strong rounded-md bg-ck-card px-3 py-2 text-sm text-ck-ink placeholder:text-ck-ink-soft"
       />
 
-      {error && <p className="text-ck-red text-xs m-0">{error}</p>}
+      {error && <p className="text-ck-red-text text-xs m-0">{error}</p>}
 
       <a
         href="https://api.together.xyz/settings/api-keys"

@@ -1,16 +1,10 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { ToastViewport } from '../../shared/ToastViewport';
-import { DonePage } from './DonePage';
-import { InboxPage } from './InboxPage';
-import { NextActionsPage } from './NextActionsPage';
-import { ProjectDetailPage } from './ProjectDetailPage';
-import { ProjectsPage } from './ProjectsPage';
+import {
+  DonePage, InboxPage, NextActionsPage, ProjectDetailPage, ProjectsPage,
+  ReviewPage, SearchPage, SomedayPage, TodayPage, WaitingPage,
+} from './pages';
 import { TODO_PUBLIC_BASE } from './publicMode';
-import { ReviewPage } from './ReviewPage';
-import { SearchPage } from './SearchPage';
-import { SomedayPage } from './SomedayPage';
-import { TodayPage } from './TodayPage';
-import { WaitingPage } from './WaitingPage';
 
 /**
  * The no-login todo app.
@@ -21,7 +15,13 @@ import { WaitingPage } from './WaitingPage';
  * `todoPath`) stays inside the token'd prefix and the secret rides along.
  *
  * These are the same page components the CRM renders; only the API base and the
- * routing differ, which is why there is no second copy of any page.
+ * routing differ, which is why there is no second copy of any page. They come through
+ * `./pages` — the same module `App.tsx` lazy-loads — so both mounts share ONE GTD chunk.
+ *
+ * Since #149 the dispatch that mounts this is `Root.tsx`, above App, with both branches
+ * lazy: a /todo visitor downloads this graph and never a CRM chunk. Root.tsx is the file
+ * to read before changing anything about how this mounts; `bootSplit.test.ts` pins what
+ * this graph may reach.
  */
 export function PublicTodoApp() {
   return (

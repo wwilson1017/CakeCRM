@@ -14,7 +14,14 @@ interface Props {
 
 const isEmpty = (v: CrmFieldValue) => v.value == null || v.value.trim() === '';
 
-function displayValue(f: CrmFieldValue): string {
+/**
+ * The wire format a custom field stores, rendered for reading.
+ *
+ * Typed on the two fields it actually reads rather than on `CrmFieldValue`, so the Reports
+ * rollup (#144) can pass its own `CrmRollupField` and both surfaces render a boolean from
+ * ONE definition. A second copy drifts the day another type gets a display form.
+ */
+export function displayValue(f: { field_type: string; value: string | null }): string {
   if (f.value == null || f.value === '') return '—';
   if (f.field_type === 'boolean') return f.value === '1' ? 'Yes' : f.value === '0' ? 'No' : f.value;
   return f.value;

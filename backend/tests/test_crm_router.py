@@ -15,7 +15,13 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from core.auth import get_current_user
-from crm import provenance_service, scoring_service, service, touch_count_service
+from crm import (
+    provenance_service,
+    report_service,
+    scoring_service,
+    service,
+    touch_count_service,
+)
 from crm.router import router as crm_router
 
 
@@ -1104,3 +1110,59 @@ def test_the_frontend_lost_reason_cap_matches_the_server():
     match = re.search(r"export const MAX_LOST_REASON\s*=\s*(\d+)", src)
     assert match, "MAX_LOST_REASON is gone from frontend/src/crm/constants.ts"
     assert int(match.group(1)) == service.MAX_LOST_REASON
+
+
+# ── Reports rollup routes (#144) ──────────────────────────────────────────────
+
+def test_report_routes_404_when_the_company_is_missing(client, monkeypatch):
+    """The service signals a missing company with None; the routes must turn that into 404."""
+    monkeypatch.setattr(report_service, "get_company_rollup", lambda cid, include_archived=False: None)
+    monkeypatch.setattr(
+        report_service, "get_company_timeline",
+        lambda cid, limit=100, offset=0, include_archived=False: None,
+    )
+    assert client.get("/api/crm/companies/999/report").status_code == 404
+    assert client.get("/api/crm/companies/999/timeline").status_code == 404
+
+
+def test_report_route_forwards_include_archived(client, monkeypatch):
+    seen = {}
+
+    def fake(company_id, include_archived=False):
+        seen["args"] = (company_id, include_archived)
+        return {"company": {"id": company_id}}
+
+    monkeypatch.setattr(report_service, "get_company_rollup", fake)
+    assert client.get("/api/crm/companies/7/report").status_code == 200
+    assert seen["args"] == (7, False)
+    client.get("/api/crm/companies/7/report?include_archived=true")
+    assert seen["args"] == (7, True)
+
+
+def test_timeline_route_forwards_paging_and_the_archived_flag(client, monkeypatch):
+    seen = {}
+
+    def fake(company_id, limit=100, offset=0, include_archived=False):
+        seen["args"] = (company_id, limit, offset, include_archived)
+        return {"entries": [], "has_more": False}
+
+    monkeypatch.setattr(report_service, "get_company_timeline", fake)
+    assert client.get("/api/crm/companies/7/timeline").status_code == 200
+    assert seen["args"] == (7, 100, 0, False)
+    client.get("/api/crm/companies/7/timeline?limit=25&offset=50&include_archived=true")
+    assert seen["args"] == (7, 25, 50, True)
+
+
+def test_timeline_route_refuses_an_out_of_range_page(client, monkeypatch):
+    """FastAPI must reject before the handler runs — the service is never reached."""
+    called = []
+    monkeypatch.setattr(
+        report_service, "get_company_timeline",
+        lambda *a, **k: called.append(1) or {"entries": [], "has_more": False},
+    )
+    assert client.get("/api/crm/companies/7/timeline?limit=0").status_code == 422
+    assert client.get(
+        f"/api/crm/companies/7/timeline?limit={report_service.TIMELINE_MAX_LIMIT + 1}"
+    ).status_code == 422
+    assert client.get("/api/crm/companies/7/timeline?offset=-1").status_code == 422
+    assert called == []

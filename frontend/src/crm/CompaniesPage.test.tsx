@@ -118,4 +118,14 @@ describe('the companies route', () => {
 
     expect(listCalls().length).toBe(afterFirstLoad);
   });
+
+  it('renders the name cell as a real link, so a row can be opened in a new tab (#148)', async () => {
+    // See the matching test on Contacts: the anchor carries the new-tab and link-semantics
+    // half of #148 that a row click handler cannot.
+    mountAt('/crm/companies');
+    await settle();
+    const link = container.querySelector('tbody a') as HTMLAnchorElement | null;
+    expect(link?.getAttribute('href')).toBe('/crm/companies/1');
+    expect(link?.textContent).toContain('Acme');
+  });
 });
