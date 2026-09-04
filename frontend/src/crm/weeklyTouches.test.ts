@@ -10,13 +10,6 @@ import {
   touchDetailPath,
 } from './weeklyTouches';
 
-const window_ = {
-  start: '2026-08-15T14:03:11+00:00',
-  end: '2026-08-22T14:03:11+00:00',
-  label: 'Last 7 days',
-  custom: false,
-};
-
 describe('ownerParamOf / parseOwnerParam', () => {
   it('spells the null bucket as a literal, not an absent param', () => {
     // `deals.owner_id` is nullable forever (#60), and /dashboard/today's
@@ -61,38 +54,44 @@ describe('ownerParamOf / parseOwnerParam', () => {
 });
 
 describe('touchDetailPath', () => {
-  it('carries the exact window bounds and encodes the offset\'s plus sign', () => {
-    // Sent raw, the `+` in `+00:00` arrives at the server as a space and fails to parse.
-    const path = touchDetailPath(7, window_);
-    expect(path).toContain('/crm/touches/7?');
-    expect(path).toContain('ws=2026-08-15T14%3A03%3A11%2B00%3A00');
-    expect(path).toContain('we=2026-08-22T14%3A03%3A11%2B00%3A00');
+  it('carries no window at all on the rolling default', () => {
+    // The page re-resolves "last 7 days" at open time. Forwarding the card's exact
+    // instants instead would freeze the upper bound, and membership is "this deal's
+    // CURRENT most recent touch falls in the window" — so a deal touched since the card
+    // rendered would fall past that bound and vanish from the page it was clicked from.
+    expect(touchDetailPath(7, null)).toBe('/crm/touches/7');
+  });
+
+  it('carries the card\'s custom range as the same calendar days the card sends', () => {
+    const path = touchDetailPath(7, { start: '2026-06-16', end: '2026-06-20' });
+    expect(path).toBe('/crm/touches/7?start=2026-06-16&end=2026-06-20');
   });
 
   it('uses the literal for the unassigned bucket', () => {
-    expect(touchDetailPath(null, window_)).toContain('/crm/touches/unassigned?');
+    expect(touchDetailPath(null, null)).toBe('/crm/touches/unassigned');
   });
 });
 
 describe('touchDetailApiPath', () => {
   it('forwards only the window params actually present, and invents none', () => {
-    const search = new URLSearchParams({ ws: 'A', we: 'B', irrelevant: 'x' });
+    const search = new URLSearchParams({ start: 'S', end: 'E', irrelevant: 'x' });
     const path = touchDetailApiPath('7', search);
 
-    expect(path).toBe('/api/crm/dashboard/weekly-touches/detail?owner=7&ws=A&we=B');
+    expect(path).toBe('/api/crm/dashboard/weekly-touches/detail?owner=7&start=S&end=E');
     expect(path).not.toContain('irrelevant');
   });
 
-  it('passes calendar days through for direct navigation', () => {
-    const path = touchDetailApiPath('unassigned', new URLSearchParams({ start: 'S', end: 'E' }));
-    expect(path).toBe(
-      '/api/crm/dashboard/weekly-touches/detail?owner=unassigned&start=S&end=E',
-    );
+  it('ignores a stale instant-pair URL rather than passing it to the server', () => {
+    // Links minted before the window was re-resolved rather than frozen carry ws/we.
+    // They are not a supported param any more, and the server would 422 on nothing —
+    // dropping them degrades such a link to the rolling default, which is what it meant.
+    const path = touchDetailApiPath('7', new URLSearchParams({ ws: 'A', we: 'B' }));
+    expect(path).toBe('/api/crm/dashboard/weekly-touches/detail?owner=7');
   });
 
   it('asks for the default window when the page URL carries none', () => {
-    expect(touchDetailApiPath('7', new URLSearchParams())).toBe(
-      '/api/crm/dashboard/weekly-touches/detail?owner=7',
+    expect(touchDetailApiPath('unassigned', new URLSearchParams())).toBe(
+      '/api/crm/dashboard/weekly-touches/detail?owner=unassigned',
     );
   });
 });

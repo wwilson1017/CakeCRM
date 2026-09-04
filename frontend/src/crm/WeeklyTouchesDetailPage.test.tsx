@@ -131,16 +131,22 @@ const detailCalls = () =>
   api.mock.calls.map(c => String(c[0])).filter(u => u.includes('weekly-touches/detail'));
 
 describe('WeeklyTouchesDetailPage (issue #146)', () => {
-  it('forwards the owner and the exact window instants verbatim', async () => {
-    await renderAt(
-      '/crm/touches/3?ws=2026-08-15T00%3A00%3A00%2B00%3A00&we=2026-08-22T00%3A00%3A00%2B00%3A00',
-    );
+  it('forwards a custom range verbatim and does no date arithmetic of its own', async () => {
+    await renderAt('/crm/touches/3?start=2026-06-16&end=2026-06-20');
 
-    // The client does no date arithmetic: re-resolving "last 7 days" here would list a
-    // different week than the number that was clicked.
     expect(detailCalls()).toEqual([
-      '/api/crm/dashboard/weekly-touches/detail?owner=3'
-      + '&ws=2026-08-15T00%3A00%3A00%2B00%3A00&we=2026-08-22T00%3A00%3A00%2B00%3A00',
+      '/api/crm/dashboard/weekly-touches/detail?owner=3&start=2026-06-16&end=2026-06-20',
+    ]);
+  });
+
+  it('asks for the rolling default when the link carries no range', async () => {
+    // Which is the point of NOT forwarding the card's frozen instants: the server
+    // re-resolves the same window kind, so a deal touched since the card rendered is
+    // still in the list rather than having fallen past a frozen upper bound.
+    await renderAt('/crm/touches/3');
+
+    expect(detailCalls()).toEqual([
+      '/api/crm/dashboard/weekly-touches/detail?owner=3',
     ]);
   });
 
@@ -421,26 +427,40 @@ describe('WeeklyTouchesDetailPage (issue #146)', () => {
     expect(container.textContent).toContain('Sam Okafor');
   });
 
-  it('ignores a slow response that lost its race on the SAME url', async () => {
-    // Leaving a rep and coming straight back leaves two requests in flight for the same
-    // path, so the path key cannot separate them — this is the race only the monotonic
-    // request id catches, and the one a user actually hits by double-clicking Back.
-    let resolveStale: (v: unknown) => void = () => {};
-    api.mockReturnValueOnce(new Promise(res => { resolveStale = res; }));
+  it('ignores a slow refetch that lost its race WITHIN one mount', async () => {
+    // Navigating away and back remounts the view (it is keyed on the request), so a
+    // stale response then lands on an unmounted instance and setState is a no-op — the
+    // id guard is never consulted. The race it actually decides is two refetches of the
+    // SAME url inside one mount, which every sheet close triggers.
     await renderAt('/crm/touches/3');
 
-    api.mockReturnValueOnce(new Promise(() => {}));       // rep 4, never settles
-    await act(async () => { nav.go('/crm/touches/4'); });
+    // Reload #2: open a deal and close the sheet, holding the refetch open.
+    api.mockResolvedValueOnce({ id: 41, title: 'Deal 41', stage: 'proposal' });
+    await act(async () => {
+      (container.querySelector('[role="button"]') as HTMLElement).click();
+    });
+    let resolveStale: (v: unknown) => void = () => {};
+    api.mockReturnValueOnce(new Promise(res => { resolveStale = res; }));
+    await act(async () => {
+      (container.querySelector('[data-testid="sheet-close"]') as HTMLElement).click();
+    });
 
+    // Reload #3, same url, resolves FIRST with new numbers.
+    api.mockResolvedValueOnce({ id: 41, title: 'Deal 41', stage: 'proposal' });
+    await act(async () => {
+      (container.querySelector('[role="button"]') as HTMLElement).click();
+    });
     api.mockResolvedValueOnce({
       ...detail, rep: { ...detail.rep, touches: 9, open_deals: 9 },
     });
-    await act(async () => { nav.go('/crm/touches/3'); });
+    await act(async () => {
+      (container.querySelector('[data-testid="sheet-close"]') as HTMLElement).click();
+    });
     expect(container.textContent).toContain('9 of 9 open deals touched');
 
-    // The very first request finally answers, with the OLD numbers and a matching path.
+    // Reload #2 finally answers, with the older payload and the same path.
     await act(async () => { resolveStale(detail); });
     expect(container.textContent).toContain('9 of 9 open deals touched');
-    expect(container.textContent).not.toContain('12 open deals touched');
+    expect(container.textContent).not.toContain('2 of 12 open deals touched');
   });
 });

@@ -11,8 +11,6 @@
  * the kind of thing that is easy to get subtly wrong and cheap to pin in a test with no DOM.
  */
 
-import type { CrmWeeklyTouches } from '../core/types';
-
 /** The URL spelling of the null-owner bucket. `deals.owner_id` is nullable forever (#60),
  *  so the drill-down needs a way to address "nobody" that is not an absent param. */
 export const UNASSIGNED_OWNER_PARAM = 'unassigned';
@@ -47,23 +45,25 @@ export function parseOwnerParam(raw: string | undefined): OwnerParam {
 }
 
 /**
- * The detail page's path, carrying the EXACT window bounds currently on screen.
+ * The detail page's path, carrying the card's CUSTOM range when one is applied and nothing
+ * at all when the card is on its rolling default.
  *
- * Built from the payload's `window`, never from the card's `applied` filter state: a
- * custom range whose fetch failed leaves `applied` describing a window the numbers on
- * screen do not, and the drill-down must list what the number counted. On the rolling
- * default window this is what stops the page from re-resolving "last 7 days" against a
- * later `now` and quietly listing a different week.
- *
- * `URLSearchParams` is what encodes the `+` in a `+00:00` offset; string concatenation
- * would deliver it to the server as a space, which `fromisoformat` then rejects.
+ * It forwards the same `YYYY-MM-DD` days the card sends, NOT the exact instants the
+ * payload's `window` reports — which is the opposite of what this function did first, and
+ * the reason is worth keeping: freezing the bounds looks like it guarantees the page lists
+ * what the clicked number counted, but membership is "this deal's CURRENT most recent touch
+ * falls in the window", so a touch made after the card rendered pushes the deal past a
+ * frozen upper bound and DELETES it from the page — including a touch made from that page.
+ * Sending the window's KIND instead lets the server ask the same question at open time.
  */
 export function touchDetailPath(
   userId: number | null,
-  window: CrmWeeklyTouches['window'],
+  applied: { start: string; end: string } | null,
 ): string {
-  const qs = new URLSearchParams({ ws: window.start, we: window.end });
-  return `/crm/touches/${ownerParamOf(userId)}?${qs}`;
+  const path = `/crm/touches/${ownerParamOf(userId)}`;
+  if (!applied) return path;
+  const qs = new URLSearchParams({ start: applied.start, end: applied.end });
+  return `${path}?${qs}`;
 }
 
 /**
@@ -76,7 +76,7 @@ export function touchDetailPath(
  */
 export function touchDetailApiPath(owner: string, search: URLSearchParams): string {
   const qs = new URLSearchParams({ owner });
-  for (const key of ['ws', 'we', 'start', 'end']) {
+  for (const key of ['start', 'end']) {
     const value = search.get(key);
     if (value) qs.set(key, value);
   }

@@ -77,7 +77,7 @@ Other:
   GET    /api/crm/dashboard/today       — ranked "what needs me today" list (?owner_id)
   GET    /api/crm/dashboard/weekly-touches — open deals touched in a window (?start, ?end)
   GET    /api/crm/dashboard/weekly-touches/detail — one rep's touched deals, in full
-         (?owner=<id|unassigned>, plus ?ws/?we exact instants or ?start/?end days)
+         (?owner=<id|unassigned>, ?start, ?end)
   GET    /api/crm/analytics             — win/loss, activity volume, deal aging (?days, ?stale_days)
   GET    /api/crm/demo-status           — first-run onboarding / sample-data state
   POST   /api/crm/load-sample-data      — seed fictional demo data (first run)
@@ -870,8 +870,6 @@ async def weekly_touches_detail(
     owner: str = Query(..., description="A user id, or the literal 'unassigned'"),
     start: str | None = Query(None),
     end: str | None = Query(None),
-    ws: str | None = Query(None),
-    we: str | None = Query(None),
     user=Depends(get_current_user),
 ):
     """One rep's touched open deals — the whole list, not the card's ten (issue #146).
@@ -880,15 +878,17 @@ async def weekly_touches_detail(
     `/dashboard/today`'s absent-means-everyone `owner_id`: this drill-down is always
     exactly one bucket, and the unowned deals are one of them.
 
-    The card forwards the exact ISO instants it displayed as `ws`/`we`, so the list matches
-    the number that was clicked even on the rolling window, where `now` would otherwise
-    move between the two requests. `start`/`end` (UTC calendar days) serve direct
-    navigation. Not admin-gated: ownership is an assignment, not access control (#60), so
-    every member sees every rep's row.
+    `start`/`end` are the SAME UTC calendar days the card takes, so a custom range picked
+    on the dashboard is asked here as the same question; omitting both is the rolling
+    default, re-resolved at this request rather than inherited as frozen instants (see
+    `get_weekly_touch_detail` for why freezing is not merely unnecessary but wrong).
+
+    Not admin-gated: ownership is an assignment, not access control (#60), so every member
+    sees every rep's row.
     """
     try:
         result = crm.get_weekly_touch_detail(
-            owner_id=crm.parse_touch_owner(owner), start=start, end=end, ws=ws, we=we
+            owner_id=crm.parse_touch_owner(owner), start=start, end=end
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

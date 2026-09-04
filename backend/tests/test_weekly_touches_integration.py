@@ -25,11 +25,11 @@ pytestmark = pytest.mark.integration
 
 ADMIN_DSN = os.getenv("TEST_ADMIN_DSN", "postgresql://cake:cake_dev@localhost:5432/cake")
 
-# A window comfortably around "now", so every fixture touch lands inside it and the
-# rolling default the card uses is what is under test.
 NOW = datetime.now(timezone.utc)
-WS = (NOW - timedelta(days=3)).isoformat()
-WE = (NOW + timedelta(days=1)).isoformat()
+
+# A custom range the drill-down can be asked for by DAY, the same way the card takes one.
+RANGE_START = (NOW - timedelta(days=3)).strftime("%Y-%m-%d")
+RANGE_END = (NOW + timedelta(days=1)).strftime("%Y-%m-%d")
 
 
 @pytest.fixture(scope="module")
@@ -306,7 +306,7 @@ def test_no_provider_means_no_computed_deals_but_real_touch_numbers():
     assert (out["total_touches"], out["total_open_deals"]) == (1, 1)   # honest anyway
 
 
-def test_detail_returns_one_bucket_uncapped():
+def test_detail_returns_one_bucket_in_full():
     from crm import service
 
     ada = _user("Ada")
@@ -316,7 +316,7 @@ def test_detail_returns_one_bucket_uncapped():
         _deal(f"Ada {i}", owner=ada)
     _deal("Bob only", owner=bob)
 
-    out = service.get_weekly_touch_detail(owner_id=ada, ws=WS, we=WE)
+    out = service.get_weekly_touch_detail(owner_id=ada)
 
     assert out["rep"]["name"] == "Ada"
     assert out["rep"]["touches"] == limit + 4
@@ -332,7 +332,7 @@ def test_detail_for_the_unassigned_bucket_selects_exactly_the_unowned_deals():
     _deal("Nobody one")
     _deal("Nobody two")
 
-    out = service.get_weekly_touch_detail(owner_id=None, ws=WS, we=WE)
+    out = service.get_weekly_touch_detail(owner_id=None)
 
     assert out["rep"] == {"user_id": None, "name": "Unassigned", "open_deals": 2, "touches": 2}
     assert {d["title"] for d in out["deals"]} == {"Nobody one", "Nobody two"}
@@ -342,7 +342,7 @@ def test_detail_for_a_real_rep_with_nothing_open_is_a_zero_row():
     from crm import service
 
     sam = _user("Sam")
-    out = service.get_weekly_touch_detail(owner_id=sam, ws=WS, we=WE)
+    out = service.get_weekly_touch_detail(owner_id=sam)
 
     assert out["rep"] == {"user_id": sam, "name": "Sam", "open_deals": 0, "touches": 0}
     assert out["deals"] == []
@@ -351,17 +351,13 @@ def test_detail_for_a_real_rep_with_nothing_open_is_a_zero_row():
 def test_detail_for_an_unknown_user_is_none():
     from crm import service
 
-    assert service.get_weekly_touch_detail(owner_id=987654, ws=WS, we=WE) is None
+    assert service.get_weekly_touch_detail(owner_id=987654) is None
 
 
 def test_the_card_and_the_detail_agree_about_one_rep():
-    """The two surfaces share both query builders; this is the claim that matters.
-
-    The detail call is given the card's OWN window bounds, exactly as the card's link
-    forwards them. Building an independent window here would let the detail path ignore
-    ws/we and re-resolve the default while this test stayed green — which is the drift the
-    whole ws/we mechanism exists to prevent.
-    """
+    """The two surfaces share both query builders AND the window resolver; this is the
+    claim that matters. Neither is given an explicit range, so both resolve the rolling
+    default — which is exactly how the card's link reaches this function."""
     from crm import service
 
     ada = _user("Ada")
@@ -369,13 +365,8 @@ def test_the_card_and_the_detail_agree_about_one_rep():
         _deal(f"Ada {i}", owner=ada)
     _deal("Ada quiet", owner=ada, touched=False)
 
-    card_payload = service.get_weekly_touches()
-    card = _reps(card_payload)["Ada"]
-    detail = service.get_weekly_touch_detail(
-        owner_id=ada,
-        ws=card_payload["window"]["start"],
-        we=card_payload["window"]["end"],
-    )
+    card = _reps(service.get_weekly_touches())["Ada"]
+    detail = service.get_weekly_touch_detail(owner_id=ada)
 
     assert (detail["rep"]["touches"], detail["rep"]["open_deals"]) == (
         card["touches"], card["open_deals"]
@@ -383,14 +374,14 @@ def test_the_card_and_the_detail_agree_about_one_rep():
     assert {d["id"] for d in detail["deals"]} == {d["id"] for d in card["deals"]}
 
 
-def test_the_forwarded_window_really_bounds_the_detail_list():
-    """A touch BETWEEN the two windows is what separates "honoured ws/we" from "ignored
-    them and re-resolved the default".
+def test_a_custom_range_really_bounds_the_detail_list():
+    """A touch inside the default window but outside the requested range separates
+    "honoured start/end" from "ignored them and resolved the default".
 
-    The default window is the rolling last 7 days; WS/WE here is the last 3. A deal
-    touched 5 days ago therefore sits INSIDE the default and OUTSIDE the forwarded one,
-    so the card counts it and the drill-down must not. A touch 30 days old would have
-    been excluded by both and proved nothing.
+    The card's default window is the rolling last 7 days; the range asked for here is the
+    last 3. A deal touched 5 days ago therefore sits INSIDE the default and OUTSIDE the
+    range, so the card counts it and the ranged drill-down must not. A touch 30 days old
+    would have been excluded by both and proved nothing.
     """
     from core.postgres import pg_execute
     from crm import service
@@ -409,9 +400,57 @@ def test_the_forwarded_window_really_bounds_the_detail_list():
     assert {d["id"] for d in card["deals"]} == {recent, five_days}
     assert card["touches"] == 2
 
-    # The forwarded 3-day window sees only one — and would see two if ws/we were ignored.
-    out = service.get_weekly_touch_detail(owner_id=ada, ws=WS, we=WE)
+    out = service.get_weekly_touch_detail(owner_id=ada, start=RANGE_START, end=RANGE_END)
 
     assert {d["id"] for d in out["deals"]} == {recent}
     assert out["rep"]["touches"] == 1
     assert out["rep"]["open_deals"] == 2      # still their whole book, window or not
+
+
+def test_a_deal_touched_after_the_card_loaded_is_still_on_the_drill_down():
+    """The regression Stage 4 found, and the reason the window is RE-RESOLVED rather than
+    forwarded as frozen instants.
+
+    Membership is "this deal's CURRENT most recent touch falls in the window", so freezing
+    the bounds does not freeze the answer: a touch made after the card rendered moves the
+    deal PAST a frozen upper bound and deletes it from the page the user just clicked
+    through to. Measured before the fix — the card said 2, the page said "1 of 2".
+    """
+    from core.postgres import pg_execute
+    from crm import service
+
+    ada = _user("Ada")
+    worked = _deal("Deal A", owner=ada)
+    _deal("Deal B", owner=ada)
+
+    card = _reps(service.get_weekly_touches())["Ada"]
+    assert card["touches"] == 2
+
+    # The ordinary next thing a rep does after reading the dashboard.
+    pg_execute(
+        "INSERT INTO activity_log (deal_id, activity, note, created_at) "
+        "VALUES (%s, 'call', 'rang them', now())", (worked,),
+    )
+
+    out = service.get_weekly_touch_detail(owner_id=ada)
+
+    assert out["rep"]["touches"] == 2
+    assert worked in {d["id"] for d in out["deals"]}
+
+
+def test_working_a_deal_from_the_drill_down_does_not_remove_it_from_the_list():
+    """The same defect from inside the page: the sheet's stage change calls reload(), and
+    under a frozen window the deal the user had just moved dropped out of its own list."""
+    from crm import service
+
+    ada = _user("Ada")
+    worked = _deal("Deal A", owner=ada)
+
+    before = service.get_weekly_touch_detail(owner_id=ada)
+    assert worked in {d["id"] for d in before["deals"]}
+
+    service.update_deal_stage(worked, "negotiation")
+
+    after = service.get_weekly_touch_detail(owner_id=ada)
+    assert after["rep"]["touches"] == 1
+    assert worked in {d["id"] for d in after["deals"]}

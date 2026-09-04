@@ -177,11 +177,10 @@ describe('WeeklyTouchesCard per-rep grouping (issue #146)', () => {
 
     // Sam touched nothing, so there is nothing to drill into.
     expect(hrefs).toHaveLength(2);
-    expect(hrefs[0]).toContain('/crm/touches/3?');
-    expect(hrefs[1]).toContain('/crm/touches/unassigned?');
-    // The exact window on screen is forwarded, with the offset's `+` encoded — sent raw
-    // it would reach the server as a space and be rejected.
-    expect(hrefs[0]).toContain('ws=2026-08-15T00%3A00%3A00%2B00%3A00');
+    // On the rolling default the link carries NO window: the page re-resolves it, so a
+    // deal touched between the card loading and the click stays in the list.
+    expect(hrefs[0]).toBe('/crm/touches/3');
+    expect(hrefs[1]).toBe('/crm/touches/unassigned');
   });
 
   it('shows a per-rep truncation line with a See all link, and only when truncated', async () => {

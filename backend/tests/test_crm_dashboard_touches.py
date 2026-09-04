@@ -161,89 +161,13 @@ def test_reversed_range_is_rejected():
         service._resolve_touch_window("2026-06-20", "2026-06-16")
 
 
-# ── Window resolution for the drill-down (pure — no DB) ──────────────────────
-
-_WS = "2026-06-16T00:00:00+00:00"
-_WE = "2026-06-21T00:00:00+00:00"
-
-
-def test_detail_window_falls_back_to_the_shared_resolver():
-    """No ws/we → the card's own resolution, so the two surfaces cannot drift apart."""
-    shared = service._resolve_touch_window("2026-06-16", "2026-06-20")
-    detail = service._resolve_detail_window("2026-06-16", "2026-06-20", None, None)
-    assert detail == shared[:3]
-    assert service._resolve_detail_window(None, None, None, None)[2] == "Last 7 days"
-
-
-def test_detail_window_prefers_exact_iso_bounds():
-    start, end, label = service._resolve_detail_window(None, None, _WS, _WE)
-    assert start == datetime(2026, 6, 16, tzinfo=timezone.utc)
-    assert end == datetime(2026, 6, 21, tzinfo=timezone.utc)
-    # Whole days read exactly like the card's custom label (end-inclusive), so a range
-    # picked on the dashboard says the same thing on the drill-down. Asserted against the
-    # card's own resolver rather than a hand-typed string, so the two are pinned equal.
-    assert label == service._resolve_touch_window("2026-06-16", "2026-06-20")[2]
-
-
-def test_detail_window_treats_naive_bounds_as_utc():
-    start, end, _ = service._resolve_detail_window(
-        None, None, "2026-06-16T00:00:00", "2026-06-21T00:00:00"
-    )
-    assert (start, end) == (
-        datetime(2026, 6, 16, tzinfo=timezone.utc),
-        datetime(2026, 6, 21, tzinfo=timezone.utc),
-    )
-
-
-def test_detail_window_normalizes_an_offset_to_utc():
-    start, _, _ = service._resolve_detail_window(None, None, "2026-06-16T02:00:00+02:00", _WE)
-    assert start == datetime(2026, 6, 16, tzinfo=timezone.utc)
-
-
-def test_detail_window_labels_instants_with_times_and_utc():
-    """The rolling window is not a calendar range, and saying so is the honest label."""
-    _, _, label = service._resolve_detail_window(
-        None, None, "2026-06-16T09:30:00+00:00", "2026-06-23T09:30:00+00:00"
-    )
-    assert label == "2026-06-16 09:30 – 2026-06-23 09:30 UTC"
-
-
-@pytest.mark.parametrize("ws,we", [(_WS, None), (None, _WE)])
-def test_detail_window_requires_both_ws_and_we(ws, we):
-    with pytest.raises(ValueError, match="both ws and we"):
-        service._resolve_detail_window(None, None, ws, we)
-
-
-@pytest.mark.parametrize("we", [_WS, "2026-06-15T00:00:00+00:00"])
-def test_detail_window_rejects_we_not_after_ws(we):
-    with pytest.raises(ValueError, match="after ws"):
-        service._resolve_detail_window(None, None, _WS, we)
-
-
-def test_detail_window_rejects_mixing_instants_with_calendar_days():
-    """A URL carrying both pairs is a bug, not a preference — they mean different things."""
-    with pytest.raises(ValueError, match="cannot be combined"):
-        service._resolve_detail_window("2026-06-16", "2026-06-20", _WS, _WE)
-
-
-def test_detail_window_rejects_a_date_only_instant():
-    """`fromisoformat` accepts '2026-06-16', but start/end are end-INCLUSIVE calendar days
-    while ws/we are a half-open instant range — accepting a bare date here would give two
-    identical-looking URLs two different meanings."""
-    with pytest.raises(ValueError, match="must carry a time"):
-        service._resolve_detail_window(None, None, "2026-06-16", "2026-06-21")
-
-
-def test_detail_window_rejects_non_iso():
-    with pytest.raises(ValueError, match="ISO-8601"):
-        service._resolve_detail_window(None, None, "last Tuesday at noon", _WE)
-
-
-def test_detail_window_out_of_range_raises_value_error_not_overflow_error():
-    """astimezone near datetime.max raises OverflowError, which is NOT a ValueError and
-    would escape the router's handler as a 500 rather than the 400 it is."""
-    with pytest.raises(ValueError):
-        service._resolve_detail_window(None, None, "9999-12-31T23:59:59-12:00", _WE)
+# The drill-down takes the SAME calendar days the card takes — there is no separate
+# instant format any more (see `get_weekly_touch_detail`).
+_START, _END = "2026-06-16", "2026-06-20"
+_BOUNDS = [
+    datetime(2026, 6, 16, tzinfo=timezone.utc),
+    datetime(2026, 6, 21, tzinfo=timezone.utc),
+]
 
 
 # ── Owner parsing ────────────────────────────────────────────────────────────
@@ -540,7 +464,7 @@ def known_user(monkeypatch):
 
 def test_detail_scopes_both_queries_to_the_owner(rec, known_user):
     rec.fetchall_queue = [[_rep(7, "Dana", open_deals=4, touched=2)], [_deal(1, 7)]]
-    out = service.get_weekly_touch_detail(owner_id=7, ws=_WS, we=_WE)
+    out = service.get_weekly_touch_detail(owner_id=7, start=_START, end=_END)
 
     for needle in ("GROUP BY d.owner_id", "LEFT JOIN companies"):
         assert "d.owner_id = %s" in rec.sql_containing(needle)
@@ -559,18 +483,14 @@ def test_detail_for_unassigned_uses_is_null_and_never_looks_up_a_user(rec, monke
     monkeypatch.setattr(service.users_service, "get_user", lambda uid: called.append(uid))
     rec.fetchall_queue = [[_rep(None, open_deals=2, touched=1)], [_deal(5, None)]]
 
-    out = service.get_weekly_touch_detail(owner_id=None, ws=_WS, we=_WE)
+    out = service.get_weekly_touch_detail(owner_id=None, start=_START, end=_END)
 
     assert called == []
     for needle in ("GROUP BY d.owner_id", "LEFT JOIN companies"):
         assert "d.owner_id IS NULL" in rec.sql_containing(needle)
-    bounds = [
-        datetime(2026, 6, 16, tzinfo=timezone.utc),
-        datetime(2026, 6, 21, tzinfo=timezone.utc),
-    ]
     # No owner param is bound on the IS NULL branch; the rows query still carries its cap.
-    assert rec.params_for("GROUP BY d.owner_id") == bounds
-    assert rec.params_for("LEFT JOIN companies") == bounds + [
+    assert rec.params_for("GROUP BY d.owner_id") == _BOUNDS
+    assert rec.params_for("LEFT JOIN companies") == _BOUNDS + [
         service.WEEKLY_TOUCHES_DETAIL_MAX + 1
     ]
     assert out["rep"]["name"] == "Unassigned"
@@ -581,7 +501,7 @@ def test_detail_asks_for_far_more_than_the_card_and_probes_one_past_its_ceiling(
     bounded — an unbounded query on a very large book is a production hazard — and it asks
     for one row past the ceiling so a full page can be told from an overflowing one without
     a second COUNT."""
-    service.get_weekly_touch_detail(owner_id=7, ws=_WS, we=_WE)
+    service.get_weekly_touch_detail(owner_id=7, start=_START, end=_END)
 
     cap = rec.params_for("LEFT JOIN companies")[-1]
     assert cap == service.WEEKLY_TOUCHES_DETAIL_MAX + 1
@@ -596,7 +516,7 @@ def test_detail_reports_truncation_and_keeps_the_aggregate_count(rec, known_user
         [_rep(7, "Dana", open_deals=900, touched=800)],
         [_deal(i, 7) for i in range(over)],
     ]
-    out = service.get_weekly_touch_detail(owner_id=7, ws=_WS, we=_WE)
+    out = service.get_weekly_touch_detail(owner_id=7, start=_START, end=_END)
 
     assert out["truncated"] is True
     assert len(out["deals"]) == service.WEEKLY_TOUCHES_DETAIL_MAX
@@ -604,14 +524,16 @@ def test_detail_reports_truncation_and_keeps_the_aggregate_count(rec, known_user
 
 
 def test_detail_returns_none_for_an_unknown_user_before_reading_any_deals(rec, known_user):
-    assert service.get_weekly_touch_detail(owner_id=999, ws=_WS, we=_WE) is None
+    assert service.get_weekly_touch_detail(owner_id=999, start=_START, end=_END) is None
     assert rec.calls == []
 
 
-def test_detail_reads_both_queries_on_one_repeatable_read_snapshot(rec, known_user, monkeypatch):
-    """The page shows a count and the rows behind it with no cap between them, so two
-    snapshots could render "6 of 5 open deals touched" — or, if the bucket vanished
-    between the reads, drop every row and report 0 for a rep who has them."""
+@pytest.mark.parametrize("call", ["card", "detail"])
+def test_both_surfaces_read_on_one_repeatable_read_snapshot(rec, known_user, monkeypatch, call):
+    """Each surface shows a count and the rows behind it on one screen, so two snapshots
+    are a way to render a contradiction — "6 of 5 open deals touched", a rep row with more
+    deals under it than its own number admits, or every row dropped because the bucket
+    vanished between the reads."""
     seen: list[str] = []
 
     class Recording(FakeCursor):
@@ -626,7 +548,10 @@ def test_detail_reads_both_queries_on_one_repeatable_read_snapshot(rec, known_us
             return one_cursor
 
     monkeypatch.setattr(service, "get_connection", lambda: OneCursorConnection(rec))
-    service.get_weekly_touch_detail(owner_id=7, ws=_WS, we=_WE)
+    if call == "card":
+        service.get_weekly_touches()
+    else:
+        service.get_weekly_touch_detail(owner_id=7, start=_START, end=_END)
 
     assert seen[0].upper().startswith("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
     # Both reads land on that ONE cursor, in order, so they cannot describe two instants.
@@ -637,12 +562,12 @@ def test_detail_reads_both_queries_on_one_repeatable_read_snapshot(rec, known_us
 
 def test_detail_validates_the_window_before_touching_the_database(rec, known_user):
     with pytest.raises(ValueError):
-        service.get_weekly_touch_detail(owner_id=7, ws="nonsense", we=_WE)
+        service.get_weekly_touch_detail(owner_id=7, start="nonsense", end=_END)
     assert rec.calls == []
 
 
 def test_detail_for_a_rep_with_nothing_open_is_a_zero_row_not_a_missing_page(rec, known_user):
-    out = service.get_weekly_touch_detail(owner_id=7, ws=_WS, we=_WE)
+    out = service.get_weekly_touch_detail(owner_id=7, start=_START, end=_END)
 
     assert out["rep"] == {"user_id": 7, "name": "Dana", "open_deals": 0, "touches": 0}
     assert out["deals"] == []
@@ -725,16 +650,15 @@ def detail_spy(monkeypatch):
 
 def test_detail_route_maps_the_owner_and_forwards_the_window(client, detail_spy):
     res = client.get(
-        "/api/crm/dashboard/weekly-touches/detail"
-        "?owner=7&ws=2026-06-16T00:00:00%2B00:00&we=2026-06-21T00:00:00%2B00:00"
+        "/api/crm/dashboard/weekly-touches/detail?owner=7&start=2026-06-16&end=2026-06-20"
     )
 
     assert res.status_code == 200
     assert detail_spy["owner_id"] == 7
-    # Forwarded verbatim — the client does no date arithmetic and the server owns the
-    # parse, so a hand-typed URL and a card link go through identical resolution.
-    assert detail_spy["ws"] == "2026-06-16T00:00:00+00:00"
-    assert detail_spy["we"] == "2026-06-21T00:00:00+00:00"
+    # The SAME calendar days the card takes, forwarded verbatim — the client does no date
+    # arithmetic, so a hand-typed URL and a card link resolve identically.
+    assert detail_spy["start"] == "2026-06-16"
+    assert detail_spy["end"] == "2026-06-20"
 
 
 def test_detail_route_maps_the_unassigned_literal_to_none(client, detail_spy):
@@ -760,13 +684,15 @@ def test_detail_route_maps_a_bad_owner_to_400(client, detail_spy):
 
 def test_detail_route_maps_a_bad_window_to_400(client, monkeypatch):
     def fake(**kwargs):
-        raise ValueError("we must be after ws")
+        raise ValueError("end date must be on or after start date")
 
     monkeypatch.setattr(service, "get_weekly_touch_detail", fake)
-    res = client.get("/api/crm/dashboard/weekly-touches/detail?owner=7&ws=x&we=y")
+    res = client.get(
+        "/api/crm/dashboard/weekly-touches/detail?owner=7&start=2026-06-20&end=2026-06-16"
+    )
 
     assert res.status_code == 400
-    assert "after ws" in res.json()["detail"]
+    assert "on or after" in res.json()["detail"]
 
 
 def test_detail_route_maps_an_unknown_user_to_404(client, monkeypatch):

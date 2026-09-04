@@ -2494,78 +2494,6 @@ def parse_touch_owner(raw: str | None) -> int | None:
     raise ValueError("owner must be a user id or 'unassigned'")
 
 
-def _to_utc(value: datetime) -> datetime:
-    """Naive → assumed UTC; aware → converted. ValueError on an unrepresentable shift."""
-    try:
-        if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc)
-    except (OverflowError, ValueError):
-        # The trap _resolve_touch_window's end-day bound already hit: shifting a datetime
-        # near datetime.min/max raises OverflowError, which is NOT a ValueError and would
-        # escape the router's handler as a 500 on ordinary (if silly) input.
-        raise ValueError("window bound is out of range") from None
-
-
-def _exact_window_label(window_start: datetime, window_end: datetime) -> str:
-    """Label for an explicit instant range.
-
-    Whole UTC days render exactly like the card's custom label (end-inclusive), so a range
-    picked on the dashboard reads identically on the drill-down. Anything else is shown as
-    the instants it is — including the rolling window, which is honest rather than a
-    calendar range it isn't. Two consequences worth naming rather than engineering around:
-    a rolling window requested exactly at UTC midnight does read as whole days (a different
-    wording of the same true window), and the minute-precision form renders two bounds less
-    than a minute apart identically — the label describes the window, it doesn't identify it.
-    """
-    midnight = datetime.min.time()
-    if window_start.time() == midnight and window_end.time() == midnight:
-        return f"{window_start:%Y-%m-%d} – {window_end - timedelta(days=1):%Y-%m-%d}"
-    return f"{window_start:%Y-%m-%d %H:%M} – {window_end:%Y-%m-%d %H:%M} UTC"
-
-
-def _resolve_detail_window(
-    start: str | None, end: str | None, ws: str | None, we: str | None
-) -> tuple[datetime, datetime, str]:
-    """Drill-down window: exact instants when the card forwards them, else the card's own.
-
-    The card sends the EXACT bounds it displayed as ``ws``/``we`` so the list can never
-    drift from the number the user clicked — which matters most on the ROLLING default
-    window, where ``now`` moves between the card's request and the page's, and a
-    re-resolution would quietly list a different week.
-
-    ``ws``/``we`` are INSTANTS, and a date-only value is rejected even though
-    ``fromisoformat`` accepts one: ``start``/``end`` are end-INCLUSIVE calendar days while
-    ``ws``/``we`` are a half-open instant range, so accepting a bare date would give two
-    identical-looking URLs two different meanings. Carrying both pairs is refused outright
-    — such a URL is a bug, not a preference.
-    """
-    ws = (ws or "").strip() or None
-    we = (we or "").strip() or None
-    if ws is None and we is None:
-        window_start, window_end, label, _custom = _resolve_touch_window(start, end)
-        return window_start, window_end, label
-    if ws is None or we is None:
-        raise ValueError("Exact window requires both ws and we")
-    if (start or "").strip() or (end or "").strip():
-        raise ValueError("ws/we cannot be combined with start/end")
-    for raw in (ws, we):
-        if "T" not in raw and " " not in raw:
-            raise ValueError(
-                f"Invalid instant '{raw}'; ws/we must carry a time, not just a date"
-            )
-    try:
-        window_start = datetime.fromisoformat(ws)
-        window_end = datetime.fromisoformat(we)
-    except ValueError:
-        raise ValueError("ws/we must be ISO-8601 datetimes") from None
-    window_start = _to_utc(window_start)
-    window_end = _to_utc(window_end)
-    if window_end <= window_start:
-        raise ValueError("we must be after ws")
-    return window_start, window_end, _exact_window_label(window_start, window_end)
-
-
 def _touch_owner_scope(owner_scoped: bool, owner_id: int | None) -> tuple[str, list]:
     """WHERE fragment + params for one owner bucket.
 
@@ -2695,32 +2623,55 @@ def _touched_deal_rows(
     )
 
 
+def _touch_snapshot_reads(
+    window_start: datetime,
+    window_end: datetime,
+    *,
+    owner_scoped: bool,
+    owner_id: int | None,
+    per_rep_limit: int,
+) -> tuple[list[dict], list[dict]]:
+    """Both weekly-touches reads, on ONE snapshot.
+
+    Every surface here puts a count and the rows behind it on the same screen, so two
+    snapshots are a way to render a contradiction: "6 of 5 open deals touched", a rep row
+    with more deals under it than its own number admits, or — if a bucket vanished between
+    the reads — every row dropped and 0 reported for a rep who has them. `REPEATABLE READ`
+    makes all of those unrepresentable rather than merely unlikely.
+
+    It costs one pooled connection held across two reads instead of two taken in turn,
+    which is the same total work; `core.postgres` bounds concurrency with a semaphore
+    either way. `SET TRANSACTION` must be the first statement of the transaction, which is
+    why it is issued before either read rather than inside the builders.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        rep_rows = _touch_rep_rows(
+            window_start, window_end,
+            owner_scoped=owner_scoped, owner_id=owner_id, cur=cur,
+        )
+        deal_rows = _touched_deal_rows(
+            window_start, window_end,
+            owner_scoped=owner_scoped, owner_id=owner_id,
+            per_rep_limit=per_rep_limit, cur=cur,
+        )
+    return rep_rows, deal_rows
+
+
 def _shape_touch_reps(rep_rows: list[dict], deal_rows: list[dict]) -> list[dict]:
     """Attach ranked deal rows to their owner bucket. Pure — no DB, so tests reach all of it.
 
-    The two queries are two ``pg_fetchall`` calls and therefore two connections and two
-    snapshots, so they are NOT guaranteed to describe the same instant. What IS guaranteed:
-    the rep universe and every total come from ``rep_rows`` alone, so a headline is always
-    internally consistent with the query that produced it.
+    The rep universe and every total come from ``rep_rows`` alone, so a headline is always
+    internally consistent with the query that produced it — and because both callers read
+    through ``_touch_snapshot_reads``, the rows beneath it describe the same instant.
 
-    A deal row whose owner has no bucket can only come from a write landing between the two
-    reads (a reassignment, a close, an archive). It is DROPPED rather than minting a bucket
-    with no counts, which would render "0 of 0 touched" above real deals — a visible lie in
-    place of one missing row on one refresh. Logged, because a silent drop that stopped
-    being rare would otherwise be invisible.
-
-    **Residual drift, stated rather than implied.** A write to a deal whose owner DOES have
-    a bucket is not reconciled: a deal touched between the two reads can put one more row
-    under a rep than their count admits, and a deal closed between them can leave the card
-    saying "showing the top 2 of 3" when 2 was all there was. Both last exactly one refresh
-    and neither loses data. The drill-down does NOT carry this residue — an untruncated list
-    there is the complete set, so ``get_weekly_touch_detail`` derives the count from the rows
-    (see below) and the page cannot contradict itself. Closing it on the CARD too needs one
-    snapshot: either a single CTE returning the aggregate plus ``json_agg``-ed ranked rows,
-    or both reads on one ``REPEATABLE READ`` connection via ``get_connection`` +
-    ``row_to_dict``. Declined for now because it trades a real cost — every hermetic fixture
-    in ``test_crm_dashboard_touches.py`` mocks the ``pg_*`` helpers, which a shared cursor
-    bypasses — against a millisecond window on a card that refetches on its own.
+    That makes the orphan branch below unreachable in production: a deal row whose owner has
+    no aggregate bucket would need the two reads to disagree, which one snapshot forbids. It
+    is kept because this is a PURE function over whatever rows it is handed, so a partial
+    fixture should fail an assertion rather than a ``KeyError`` — and if the invariant above
+    ever breaks, a dropped row and a log line beat a bucket with no counts rendering
+    "0 of 0 touched" above real deals.
     """
     slots: dict[int | None, dict] = {}
     for row in rep_rows:
@@ -2745,8 +2696,8 @@ def _shape_touch_reps(rep_rows: list[dict], deal_rows: list[dict]) -> list[dict]
         slot = slots.get(deal.get("owner_id"))
         if slot is None:
             logger.warning(
-                "weekly touches: dropping deal %s — owner %s has no bucket "
-                "(a write landed between the two reads)",
+                "weekly touches: dropping deal %s — owner %s has no aggregate bucket, "
+                "which should be unreachable under the shared snapshot",
                 deal.get("id"), deal.get("owner_id"),
             )
             continue
@@ -2805,10 +2756,9 @@ def get_weekly_touches(start: str | None = None, end: str | None = None) -> dict
     really touched 15.
     """
     window_start, window_end, label, custom = _resolve_touch_window(start, end)
-    rep_rows = _touch_rep_rows(
-        window_start, window_end, owner_scoped=False, owner_id=None
-    )
-    deal_rows = _touched_deal_rows(
+    # ONE snapshot for both reads, exactly as the drill-down does — see
+    # `_touch_snapshot_reads` for why a KPI cannot afford two.
+    rep_rows, deal_rows = _touch_snapshot_reads(
         window_start, window_end,
         owner_scoped=False, owner_id=None, per_rep_limit=WEEKLY_TOUCHES_LIMIT,
     )
@@ -2835,8 +2785,6 @@ def get_weekly_touch_detail(
     owner_id: int | None,
     start: str | None = None,
     end: str | None = None,
-    ws: str | None = None,
-    we: str | None = None,
 ) -> dict | None:
     """One owner bucket's touched open deals — the whole list, not the card's ten (#146).
 
@@ -2848,16 +2796,27 @@ def get_weekly_touch_detail(
     The Unassigned bucket always resolves, and so does a real rep with nothing open — they
     get a zero row, because "this rep touched nothing" is an answer, not a missing page.
 
-    Shares both query builders with the card, so there is exactly one SQL definition of a
-    touched deal and the drill-down cannot disagree with the number that led to it about
-    what it is counting.
+    Shares both query builders AND the window resolver with the card, so there is exactly
+    one SQL definition of a touched deal and one definition of the window it is counted in.
 
-    No ``custom`` flag on this window, deliberately: on the card it means "the user picked a
-    range", and forwarded rolling bounds would set it while the card said "Last 7 days".
+    **The window is RE-RESOLVED here, not forwarded as frozen instants, and that is the
+    correction Stage 4 forced.** Freezing the card's exact bounds looks like it guarantees
+    the page lists what the clicked number counted. It cannot, because membership under
+    ``LAST_TOUCH_SQL`` is "this deal's CURRENT most recent touch falls in the window" — a
+    statement about now, not a historical fact. So a touch made after the card rendered
+    moves that deal's ``last_touch`` past a frozen upper bound and DELETES it from the page,
+    including a touch the user makes from the page itself: log a call and the deal you just
+    worked disappears from the list of deals you touched. Reproduced on Postgres, and
+    covered by two integration tests.
+
+    Re-resolving asks the same question the card asks, at the moment the page is opened, so
+    the page is always internally consistent and always current. The cost is that a
+    dashboard left open for an hour can show a number an hour staler than the page it links
+    to — which is true, and is the honest version of the same disagreement.
     """
     # Validate the window before any DB read: a malformed link is a 400, and finding that
     # out should cost nothing.
-    window_start, window_end, label = _resolve_detail_window(start, end, ws, we)
+    window_start, window_end, label, _custom = _resolve_touch_window(start, end)
 
     user = None
     if owner_id is not None:
@@ -2865,25 +2824,13 @@ def get_weekly_touch_detail(
         if user is None:
             return None
 
-    # ONE snapshot for both reads. This page shows a count and the rows behind it on the
-    # same screen with no cap between them, so two snapshots could render "6 of 5 open
-    # deals touched" — and a bucket that vanished between the reads would drop every row
-    # and report 0 touches for a rep who has them. REPEATABLE READ is what makes those
-    # unrepresentable rather than merely unlikely. It is affordable here because the
-    # drill-down is one bucket on a page load; the card keeps its two pooled reads (see
-    # `_shape_touch_reps` for the residue that leaves and why it is tolerable there).
-    with get_connection() as conn:
-        cur = conn.cursor()
-        cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-        rep_rows = _touch_rep_rows(
-            window_start, window_end, owner_scoped=True, owner_id=owner_id, cur=cur
-        )
-        # One past the ceiling, so a full page can be told apart from a book that overflows
-        # it without a second COUNT — the same probe idiom #56's evidence list uses.
-        deal_rows = _touched_deal_rows(
-            window_start, window_end, owner_scoped=True, owner_id=owner_id,
-            per_rep_limit=WEEKLY_TOUCHES_DETAIL_MAX + 1, cur=cur,
-        )
+    # One past the ceiling, so a full page can be told apart from a book that overflows it
+    # without a second COUNT — the same probe idiom #56's evidence list uses.
+    rep_rows, deal_rows = _touch_snapshot_reads(
+        window_start, window_end,
+        owner_scoped=True, owner_id=owner_id,
+        per_rep_limit=WEEKLY_TOUCHES_DETAIL_MAX + 1,
+    )
 
     truncated = len(deal_rows) > WEEKLY_TOUCHES_DETAIL_MAX
     deal_rows = deal_rows[:WEEKLY_TOUCHES_DETAIL_MAX]

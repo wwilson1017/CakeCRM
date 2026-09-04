@@ -210,7 +210,10 @@ export function WeeklyTouchesCard(
             const key = ownerParamOf(rep.user_id);
             const open = single || expanded.has(key);
             const unassigned = rep.user_id === null;
-            const detailPath = touchDetailPath(rep.user_id, data.window);
+            // The card's APPLIED range, not the payload's instants: the page
+            // re-resolves the same window kind so a deal touched since the card loaded
+            // stays in the list rather than falling past a frozen upper bound.
+            const detailPath = touchDetailPath(rep.user_id, applied);
             return (
               <div key={key}>
                 {/* Rendered in the SERVER's order and never re-sorted here: the backend
