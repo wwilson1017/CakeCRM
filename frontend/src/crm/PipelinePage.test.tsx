@@ -1027,6 +1027,102 @@ describe('PipelinePage — deal deep links', () => {
     expect(deadLinkNotice()).toBeNull();     // and it really did stay quiet
   });
 
+  it('ignores a load that was already in flight when the link arrived', async () => {
+    // A load that STARTED before the link cannot know about a deal created after it, so its
+    // landing must not settle the link. This pins the OBSERVABLE guarantee — no false
+    // notice — through the nastiest arrangement reachable from the page's own controls: a
+    // board refresh in flight, a stage write pending (so the link's own refresh is deferred
+    // rather than sent), and the older payload landing into that.
+    //
+    // Honest about what it isolates: three guards hold here at once — `load`'s newest-wins
+    // `loadGen` check, its pending-write defer, and the generation comparison in the
+    // deep-link resolution — and this test cannot tell which one saved it. Removing the
+    // generation comparison alone still passes. It is kept as defence in depth, and this
+    // test is kept because the BEHAVIOUR is what must never regress, whichever guard is
+    // carrying it.
+    const NEW_DEAL = deal({ id: 77, title: 'Fresh signing', stage: 'lead', value: 500 });
+    const stale = deferred<{ deals: CrmDeal[] }>();
+    const write = deferred<CrmDeal>();
+    let boardCalls = 0;
+    routeApi({
+      over: (path, init) => {
+        if (init?.method === 'PUT') return write.promise;
+        if (path !== LIVE_PATH) return undefined;
+        boardCalls += 1;
+        if (boardCalls === 1) return { deals: [LIVE] };
+        if (boardCalls === 2) return stale.promise;   // started BEFORE the link
+        return { deals: [LIVE, NEW_DEAL] };
+      },
+    });
+
+    // A board refresh goes out (open and close a card) and is held...
+    await render('/crm/pipeline');
+    await click(card('Acme renewal'), 'card');
+    await click(button('Close'), 'Close');
+    expect(boardCalls).toBe(2);
+
+    // ...then a drag starts, so any further load defers rather than clobbering it.
+    await fireDrag(LIVE.id, 'won');
+
+    await renderThenNavigate('/crm/pipeline?deal=77');
+    expect(boardCalls).toBe(2);   // the link's own refresh was deferred, not sent
+
+    // So the OLDER load is the only one that lands. It knows nothing about deal 77 and
+    // must not be read as the server having answered about it.
+    await act(async () => { stale.resolve({ deals: [LIVE] }); });
+    await flush();
+    expect(deadLinkNotice()).toBeNull();
+
+    // The write settles, the deferred refresh replays, and THAT one settles the link.
+    await act(async () => { write.resolve({ ...LIVE, stage: 'won' }); });
+    await flush();
+    await flush();
+    expect(deadLinkNotice()).toBeNull();
+    expect(container.textContent).toContain('Fresh signing');
+  });
+
+  it('follows the same link again after the first visit is closed', async () => {
+    // The parameter is consumed, which is what makes this work: leaving it in the address
+    // bar meant a second click on the same link changed nothing, so after closing the sheet
+    // that link was dead for the rest of the session — and a chat transcript is exactly
+    // where the same link gets clicked twice.
+    routeApi();
+    await render(`/crm/pipeline?deal=${LIVE.id}`);
+    expect(button('Close')).toBeTruthy();
+    await click(button('Close'), 'Close');
+    expect(button('Close')).toBeFalsy();
+
+    await renderThenNavigate(`/crm/pipeline?deal=${LIVE.id}`);
+    expect(button('Close')).toBeTruthy();
+  });
+
+  it('replaces the previous link\'s sheet when a newer link resolves dead', async () => {
+    // Otherwise the old deal's sheet sits there through the new link's refresh and after its
+    // verdict, reading as though the new link had opened the wrong record.
+    routeApi();
+    await render(`/crm/pipeline?deal=${LIVE.id}`);
+    expect(container.textContent).toContain('Acme renewal');
+    expect(button('Close')).toBeTruthy();
+
+    await renderThenNavigate('/crm/pipeline?deal=404');
+    expect(button('Close')).toBeFalsy();
+    expect(deadLinkNotice()).toContain('#404');
+  });
+
+  it('takes back the notice when the user follows its advice and the deal appears', async () => {
+    // The notice tells the user to turn on the Archived filter. Doing so refetches and the
+    // deal arrives — at which point the notice's claim is false, and opening the deal is
+    // what following the link asked for in the first place.
+    routeApi();
+    await render(`/crm/pipeline?deal=${ARCHIVED.id}`);
+    expect(deadLinkNotice()).toContain(`#${ARCHIVED.id}`);
+
+    await pickArchivedFacet('Include archived');
+    expect(deadLinkNotice()).toBeNull();
+    expect(button('Close')).toBeTruthy();
+    expect(container.textContent).toContain('Zebra rebuild');
+  });
+
   it('lets the user dismiss the notice, and does not re-raise it on its own', async () => {
     routeApi();
     await render('/crm/pipeline?deal=404');

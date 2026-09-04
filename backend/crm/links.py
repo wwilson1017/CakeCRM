@@ -64,6 +64,14 @@ def deal_url(deal_id: int) -> str:
     ``FRONTEND_URL`` was set or Railway injected a public domain, which is what
     ``settings.frontend_url_is_default`` records.
 
+    Known limit, and a deployment note rather than a defect: a relative path is correct
+    in-app but is not clickable in Telegram or a push notification, which have no document
+    origin to resolve it against. There is no better answer from here — an absolute
+    ``http://localhost:5173/...`` is wrong for every reader who is not sitting at that
+    machine, and omitting the link entirely would take the feature away from the in-app
+    surfaces too. Any install whose assistant messages leave the app should set
+    ``FRONTEND_URL``.
+
     ``rstrip('/')`` because a configured base may or may not carry a trailing slash and
     ``deal_path`` already supplies the leading one.
 
