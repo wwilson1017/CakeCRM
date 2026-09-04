@@ -71,6 +71,7 @@ const detail = {
             label: 'Last 7 days' },
   rep: { user_id: 3, name: 'Dana Reyes', open_deals: 12, touches: 2 },
   deals: [deal(41, 4), deal(42, null)],
+  truncated: false,
 };
 
 let container: HTMLDivElement;
@@ -178,6 +179,75 @@ describe('WeeklyTouchesDetailPage (issue #146)', () => {
     await renderAt('/crm/touches/dana');
     expect(container.textContent).toContain('No such rep');
     expect(detailCalls()).toEqual([]);
+  });
+
+  it.each(['0', '2147483648'])(
+    'rejects the out-of-range owner %s as a bad rep, not a bad date range',
+    async owner => {
+      // The server 400s these. Left to the generic 4xx branch the page would blame the
+      // window and send the user to fix the wrong half of the URL.
+      await renderAt(`/crm/touches/${owner}`);
+      expect(container.textContent).toContain('No such rep');
+      expect(detailCalls()).toEqual([]);
+    },
+  );
+
+  it('says so when the list is only a prefix', async () => {
+    api.mockResolvedValue({ ...detail, truncated: true });
+    await renderAt('/crm/touches/3');
+    expect(container.textContent).toContain('Showing the first 2 touched deals');
+  });
+
+  it('shows no truncation notice on a complete list', async () => {
+    await renderAt('/crm/touches/3');
+    expect(container.textContent).not.toContain('Showing the first');
+  });
+
+  it('closes an open sheet when the route moves to another rep', async () => {
+    // Otherwise one rep's deal stays on screen over another rep's list.
+    await renderAt('/crm/touches/3');
+    api.mockResolvedValueOnce({ id: 41, title: 'Deal 41', stage: 'proposal' });
+    await act(async () => {
+      (container.querySelector('[role="button"]') as HTMLElement).click();
+    });
+    expect(container.querySelector('[data-testid="sheet"]')).not.toBeNull();
+
+    api.mockResolvedValue({ ...detail, rep: { ...detail.rep, user_id: 4, name: 'Sam' } });
+    await act(async () => { nav.go('/crm/touches/4'); });
+    expect(container.querySelector('[data-testid="sheet"]')).toBeNull();
+  });
+
+  it('opens the deal that was clicked LAST when two fetches race', async () => {
+    // Two deal requests race on one unchanged URL, so the list's path key cannot decide
+    // between them — only request order can. Clicking A then B must show B even when A
+    // answers second.
+    await renderAt('/crm/touches/3');
+    let resolveA: (v: unknown) => void = () => {};
+    api.mockReturnValueOnce(new Promise(res => { resolveA = res; }));
+    const rows = container.querySelectorAll('[role="button"]');
+    await act(async () => { (rows[0] as HTMLElement).click(); });
+
+    api.mockResolvedValueOnce({ id: 42, title: 'Deal 42', stage: 'proposal' });
+    await act(async () => { (rows[1] as HTMLElement).click(); });
+    expect(container.querySelector('[data-testid="sheet"]')?.textContent).toContain('42');
+
+    await act(async () => { resolveA({ id: 41, title: 'Deal 41', stage: 'proposal' }); });
+    expect(container.querySelector('[data-testid="sheet"]')?.textContent).toContain('42');
+  });
+
+  it('does not toast about a deal the user has already navigated away from', async () => {
+    await renderAt('/crm/touches/3');
+    let rejectA: (e: unknown) => void = () => {};
+    api.mockReturnValueOnce(new Promise((_res, rej) => { rejectA = rej; }));
+    await act(async () => {
+      (container.querySelector('[role="button"]') as HTMLElement).click();
+    });
+
+    api.mockResolvedValue({ ...detail, rep: { ...detail.rep, user_id: 4, name: 'Sam' } });
+    await act(async () => { nav.go('/crm/touches/4'); });
+    await act(async () => { rejectA(new ApiError('gone', 404)); });
+
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   it('treats a 404 as permanent — no Retry', async () => {

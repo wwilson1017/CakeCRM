@@ -495,7 +495,11 @@ def test_detail_scopes_both_queries_to_the_owner(rec, known_user):
     for needle in ("GROUP BY d.owner_id", "LEFT JOIN companies"):
         assert "d.owner_id = %s" in rec.sql_containing(needle)
         assert rec.params_for(needle)[2] == 7
-    assert out["rep"] == {"user_id": 7, "name": "Dana", "open_deals": 4, "touches": 2}
+    # `touches` is DERIVED from the returned rows on an untruncated list, so the count and
+    # the rows beneath it cannot disagree — the aggregate said 2, the list has 1, and the
+    # list wins because it IS the complete set for this bucket and window.
+    assert out["rep"] == {"user_id": 7, "name": "Dana", "open_deals": 4, "touches": 1}
+    assert out["truncated"] is False
     assert "password_hash" not in out["rep"]
     assert [d["id"] for d in out["deals"]] == [1]
     # No `custom` on this window: it means "the user picked a range" on the card, and
@@ -513,20 +517,43 @@ def test_detail_for_unassigned_uses_is_null_and_never_looks_up_a_user(rec, monke
     assert called == []
     for needle in ("GROUP BY d.owner_id", "LEFT JOIN companies"):
         assert "d.owner_id IS NULL" in rec.sql_containing(needle)
-        assert rec.params_for(needle) == [
-            datetime(2026, 6, 16, tzinfo=timezone.utc),
-            datetime(2026, 6, 21, tzinfo=timezone.utc),
-        ]
+    bounds = [
+        datetime(2026, 6, 16, tzinfo=timezone.utc),
+        datetime(2026, 6, 21, tzinfo=timezone.utc),
+    ]
+    # No owner param is bound on the IS NULL branch; the rows query still carries its cap.
+    assert rec.params_for("GROUP BY d.owner_id") == bounds
+    assert rec.params_for("LEFT JOIN companies") == bounds + [
+        service.WEEKLY_TOUCHES_DETAIL_MAX + 1
+    ]
     assert out["rep"]["name"] == "Unassigned"
 
 
-def test_detail_is_uncapped(rec, known_user):
-    """The card caps each rep; the whole point of this page is the rest of the list."""
+def test_detail_asks_for_far_more_than_the_card_and_probes_one_past_its_ceiling(rec, known_user):
+    """The card caps each rep at ten; this page's job is the rest of the list. It is still
+    bounded — an unbounded query on a very large book is a production hazard — and it asks
+    for one row past the ceiling so a full page can be told from an overflowing one without
+    a second COUNT."""
     service.get_weekly_touch_detail(owner_id=7, ws=_WS, we=_WE)
-    sql = rec.sql_containing("LEFT JOIN companies")
 
-    assert "rn <= %s" not in sql
-    assert " LIMIT " not in sql
+    cap = rec.params_for("LEFT JOIN companies")[-1]
+    assert cap == service.WEEKLY_TOUCHES_DETAIL_MAX + 1
+    assert cap > service.WEEKLY_TOUCHES_LIMIT
+
+
+def test_detail_reports_truncation_and_keeps_the_aggregate_count(rec, known_user):
+    """A page whose contract is "the full list" must not quietly serve a prefix — and once
+    the list IS a prefix, the count can no longer be derived from it."""
+    over = service.WEEKLY_TOUCHES_DETAIL_MAX + 1
+    rec.fetchall_queue = [
+        [_rep(7, "Dana", open_deals=900, touched=800)],
+        [_deal(i, 7) for i in range(over)],
+    ]
+    out = service.get_weekly_touch_detail(owner_id=7, ws=_WS, we=_WE)
+
+    assert out["truncated"] is True
+    assert len(out["deals"]) == service.WEEKLY_TOUCHES_DETAIL_MAX
+    assert out["rep"]["touches"] == 800
 
 
 def test_detail_returns_none_for_an_unknown_user_before_reading_any_deals(rec, known_user):

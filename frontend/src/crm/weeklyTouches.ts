@@ -23,16 +23,27 @@ export function ownerParamOf(userId: number | null): string {
 
 /** The parsed owner, kept as the RAW TOKEN rather than a number.
  *
- *  Deliberately not `Number(raw)`: the page only ever forwards this value back as a query
- *  param, so converting it buys nothing and costs precision on an id past 2^53 — the
- *  server is the one that range-checks it against a 32-bit column. `ok: false` is a
- *  malformed URL, which the page renders without ever issuing a request. */
+ *  Deliberately not `Number(raw)` for the value it carries: the page only ever forwards
+ *  this back as a query param, so converting it buys nothing and costs precision on a very
+ *  long digit string. The BOUNDS below are checked, though — and they mirror the server's
+ *  `parse_touch_owner` exactly (positive, at most a 32-bit id). Not for security, which is
+ *  the server's job either way, but for the message: an id the server rejects with a 400
+ *  would otherwise reach the page as a generic 4xx and be reported as a bad date range,
+ *  sending the user to look at the wrong half of the URL.
+ *
+ *  The length test comes first, so `Number()` only ever sees at most ten digits and is
+ *  exact. `ok: false` is a malformed URL, which the page renders without ever fetching. */
 export type OwnerParam = { ok: true; owner: string } | { ok: false };
+
+/** `users.id` is a 32-bit SERIAL, the same ceiling the server enforces. */
+const MAX_OWNER_ID = 2147483647;
 
 export function parseOwnerParam(raw: string | undefined): OwnerParam {
   if (raw === UNASSIGNED_OWNER_PARAM) return { ok: true, owner: UNASSIGNED_OWNER_PARAM };
-  if (raw !== undefined && /^[0-9]+$/.test(raw)) return { ok: true, owner: raw };
-  return { ok: false };
+  if (raw === undefined || !/^[0-9]{1,10}$/.test(raw)) return { ok: false };
+  const id = Number(raw);
+  if (id < 1 || id > MAX_OWNER_ID) return { ok: false };
+  return { ok: true, owner: raw };
 }
 
 /**

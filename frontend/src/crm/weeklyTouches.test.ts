@@ -30,12 +30,12 @@ describe('ownerParamOf / parseOwnerParam', () => {
     expect(parseOwnerParam(ownerParamOf(7))).toEqual({ ok: true, owner: '7' });
   });
 
-  it('keeps the id as a STRING so a huge one cannot lose precision', () => {
-    // The page only forwards this value; the server range-checks it against a 32-bit
-    // column. `Number()` here would silently round 9007199254740993 and ask for the
-    // wrong rep.
-    const huge = '9007199254740993';
-    expect(parseOwnerParam(huge)).toEqual({ ok: true, owner: huge });
+  it('carries the id as a STRING, never a re-serialized Number', () => {
+    // The page only forwards this value onward, so there is nothing to gain by converting
+    // it — and the bound check above is what keeps `Number()` exact where it IS used.
+    expect(parseOwnerParam('2147483647').ok && parseOwnerParam('2147483647')).toEqual({
+      ok: true, owner: '2147483647',
+    });
   });
 
   it.each([undefined, '', '7a', '-1', '7.0', 'Unassigned', '٣'])(
@@ -44,6 +44,20 @@ describe('ownerParamOf / parseOwnerParam', () => {
       expect(parseOwnerParam(raw)).toEqual({ ok: false });
     },
   );
+
+  it.each(['0', '2147483648', '99999999999', '9'.repeat(5000)])(
+    'rejects %p, mirroring the server\'s positive 32-bit bound',
+    raw => {
+      // Not a security check — the server validates regardless. It is a MESSAGE check:
+      // an id the server 400s reaches the page as a generic 4xx and would otherwise be
+      // reported as a bad date range, sending the user to the wrong half of the URL.
+      expect(parseOwnerParam(raw)).toEqual({ ok: false });
+    },
+  );
+
+  it('accepts the largest id the schema can hold', () => {
+    expect(parseOwnerParam('2147483647')).toEqual({ ok: true, owner: '2147483647' });
+  });
 });
 
 describe('touchDetailPath', () => {

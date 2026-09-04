@@ -76,7 +76,7 @@ Other:
   GET    /api/crm/dashboard             — summary stats
   GET    /api/crm/dashboard/today       — ranked "what needs me today" list (?owner_id)
   GET    /api/crm/dashboard/weekly-touches — open deals touched in a window (?start, ?end)
-  GET    /api/crm/dashboard/weekly-touches/detail — one rep's touched deals, uncapped
+  GET    /api/crm/dashboard/weekly-touches/detail — one rep's touched deals, in full
          (?owner=<id|unassigned>, plus ?ws/?we exact instants or ?start/?end days)
   GET    /api/crm/analytics             — win/loss, activity volume, deal aging (?days, ?stale_days)
   GET    /api/crm/demo-status           — first-run onboarding / sample-data state
@@ -874,7 +874,7 @@ async def weekly_touches_detail(
     we: str | None = Query(None),
     user=Depends(get_current_user),
 ):
-    """One rep's touched open deals, uncapped (issue #146).
+    """One rep's touched open deals — the whole list, not the card's ten (issue #146).
 
     `owner` is REQUIRED and carries a literal `unassigned` for the NULL bucket, unlike
     `/dashboard/today`'s absent-means-everyone `owner_id`: this drill-down is always

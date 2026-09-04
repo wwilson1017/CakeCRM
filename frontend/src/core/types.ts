@@ -256,6 +256,9 @@ export interface CrmWeeklyTouchDetail {
   window: { start: string; end: string; label: string };
   rep: Omit<CrmWeeklyTouchRep, 'deals'>;
   deals: CrmWeeklyTouchDeal[];
+  /** The server bounds even this list. True means `deals` is a prefix — the page says so
+   *  rather than presenting a partial list as the full one. */
+  truncated: boolean;
 }
 
 // GET /api/crm/dashboard/today (issue #130). One ranked list of what needs the viewer

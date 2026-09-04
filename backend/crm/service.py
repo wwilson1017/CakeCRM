@@ -2406,6 +2406,14 @@ _TOUCH_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # drill-down is issue #56, and the uncapped per-rep list is the #146 detail page.
 WEEKLY_TOUCHES_LIMIT = 10
 
+# The drill-down is "uncapped" relative to the card's ten, not literally unbounded: a rep
+# with a very large book would otherwise rank and serialize every open deal they own on one
+# page load. This ceiling is high enough that no real book reaches it, and when one does the
+# page SAYS so rather than silently showing a prefix — a hidden cap on a page whose whole
+# contract is "the full list" would be the dishonest version. Pagination is the upgrade path
+# if a book ever genuinely exceeds it.
+WEEKLY_TOUCHES_DETAIL_MAX = 500
+
 # The bucket name the drill-down URL uses for deals with no owner. `deals.owner_id` is
 # nullable forever (#60) — the Gmail scan, the assistant and the CSV importer all
 # legitimately produce it — so NULL is a bucket to name, not a row to drop.
@@ -2618,7 +2626,7 @@ def _touched_deal_rows(
     *,
     owner_scoped: bool,
     owner_id: int | None,
-    per_rep_limit: int | None,
+    per_rep_limit: int,
 ) -> list[dict]:
     """The touched deals themselves, ranked and capped PER OWNER (not globally).
 
@@ -2628,14 +2636,12 @@ def _touched_deal_rows(
     which is exactly the Unassigned bucket.
 
     A global ``LIMIT`` (what #76 had, when the card had one implicit rep) would leave rep
-    rows showing a count with no rows beneath them and make the truncation line lie.
-    ``per_rep_limit=None`` returns everything, which is the drill-down's whole purpose; the
-    window function is computed on that path too, because one SQL string both paths share
-    beats two that have to agree.
+    rows showing a count with no rows beneath them and make the truncation line lie. Both
+    surfaces share this one SQL string and differ only in the cap they pass — the card's
+    ten, the drill-down's much larger ceiling — because two strings that have to agree
+    about what a touched deal is would eventually stop agreeing.
     """
     owner_sql, owner_params = _touch_owner_scope(owner_scoped, owner_id)
-    cap_sql = "WHERE rn <= %s" if per_rep_limit is not None else ""
-    cap_params = [per_rep_limit] if per_rep_limit is not None else []
     return pg_fetchall(
         f"""SELECT id, title, value, stage, owner_id,
                    touch_count, touched_at, contact_name, company_name
@@ -2656,9 +2662,9 @@ def _touched_deal_rows(
                   AND t.last_touch >= %s AND t.last_touch < %s
                   AND t.last_touch <> d.created_at{owner_sql}
             ) ranked
-            {cap_sql}
+            WHERE rn <= %s
             ORDER BY owner_id NULLS LAST, rn""",
-        [window_start, window_end, *owner_params, *cap_params],
+        [window_start, window_end, *owner_params, per_rep_limit],
     )
 
 
@@ -2667,8 +2673,8 @@ def _shape_touch_reps(rep_rows: list[dict], deal_rows: list[dict]) -> list[dict]
 
     The two queries are two ``pg_fetchall`` calls and therefore two connections and two
     snapshots, so they are NOT guaranteed to describe the same instant. What IS guaranteed:
-    the rep universe and every total come from ``rep_rows`` alone, so a headline can never
-    exceed what its own query saw.
+    the rep universe and every total come from ``rep_rows`` alone, so a headline is always
+    internally consistent with the query that produced it.
 
     A deal row whose owner has no bucket can only come from a write landing between the two
     reads (a reassignment, a close, an archive). It is DROPPED rather than minting a bucket
@@ -2676,10 +2682,18 @@ def _shape_touch_reps(rep_rows: list[dict], deal_rows: list[dict]) -> list[dict]
     place of one missing row on one refresh. Logged, because a silent drop that stopped
     being rare would otherwise be invisible.
 
-    Simplification: one CTE returning the aggregate plus ``json_agg``-ed ranked rows would
-    be a single statement and therefore a single snapshot, closing the window entirely.
-    Declined — it costs a JSON row shape in every hermetic fixture to close a millisecond
-    gap on a card that refetches on its own.
+    **Residual drift, stated rather than implied.** A write to a deal whose owner DOES have
+    a bucket is not reconciled: a deal touched between the two reads can put one more row
+    under a rep than their count admits, and a deal closed between them can leave the card
+    saying "showing the top 2 of 3" when 2 was all there was. Both last exactly one refresh
+    and neither loses data. The drill-down does NOT carry this residue — an untruncated list
+    there is the complete set, so ``get_weekly_touch_detail`` derives the count from the rows
+    (see below) and the page cannot contradict itself. Closing it on the CARD too needs one
+    snapshot: either a single CTE returning the aggregate plus ``json_agg``-ed ranked rows,
+    or both reads on one ``REPEATABLE READ`` connection via ``get_connection`` +
+    ``row_to_dict``. Declined for now because it trades a real cost — every hermetic fixture
+    in ``test_crm_dashboard_touches.py`` mocks the ``pg_*`` helpers, which a shared cursor
+    bypasses — against a millisecond window on a card that refetches on its own.
     """
     slots: dict[int | None, dict] = {}
     for row in rep_rows:
@@ -2797,7 +2811,11 @@ def get_weekly_touch_detail(
     ws: str | None = None,
     we: str | None = None,
 ) -> dict | None:
-    """One owner bucket's touched open deals, UNCAPPED (issue #146).
+    """One owner bucket's touched open deals — the whole list, not the card's ten (#146).
+
+    Bounded by ``WEEKLY_TOUCHES_DETAIL_MAX`` rather than literally unbounded, and the
+    payload's ``truncated`` flag says so when the ceiling is reached, because a page whose
+    contract is "the full list" must not quietly serve a prefix.
 
     Returns ``None`` for a user id that does not exist, which the router turns into a 404.
     The Unassigned bucket always resolves, and so does a real rep with nothing open — they
@@ -2823,13 +2841,25 @@ def get_weekly_touch_detail(
     rep_rows = _touch_rep_rows(
         window_start, window_end, owner_scoped=True, owner_id=owner_id
     )
+    # One past the ceiling, so a full page can be told apart from a book that overflows it
+    # without a second COUNT — the same probe idiom #56's evidence list uses.
     deal_rows = _touched_deal_rows(
         window_start, window_end,
-        owner_scoped=True, owner_id=owner_id, per_rep_limit=None,
+        owner_scoped=True, owner_id=owner_id, per_rep_limit=WEEKLY_TOUCHES_DETAIL_MAX + 1,
     )
+    truncated = len(deal_rows) > WEEKLY_TOUCHES_DETAIL_MAX
+    deal_rows = deal_rows[:WEEKLY_TOUCHES_DETAIL_MAX]
+
     reps = _shape_touch_reps(rep_rows, deal_rows)
     rep = reps[0] if reps else {"user_id": owner_id, "open_deals": 0, "touches": 0, "deals": []}
     deals = rep.pop("deals")
+    if not truncated:
+        # DERIVED, not read from the aggregate: an untruncated list is by definition every
+        # touched deal in this bucket and window, computed from the same predicate — so
+        # taking the number from the rows is what makes "N touched" and the rows beneath it
+        # unable to contradict each other, even though the two queries are two snapshots.
+        # (The card cannot do this: its list is capped, so its count has to be the aggregate.)
+        rep["touches"] = len(deals)
     # Resolved from the user row rather than from the bucket, so a rep with no open deals
     # (and therefore no aggregate row) is still named. `user` carries a password hash — it
     # must never reach the payload; display_name reads only id/name/email.
@@ -2843,6 +2873,7 @@ def get_weekly_touch_detail(
         },
         "rep": rep,
         "deals": deals,
+        "truncated": truncated,
     }
 
 

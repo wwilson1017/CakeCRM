@@ -72,9 +72,17 @@ export function WeeklyTouchesDetailPage() {
 
   const [state, setState] = useState<PageState | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
-  const [selectedDeal, setSelectedDeal] = useState<CrmDeal | null>(null);
-  const [editDeal, setEditDeal] = useState<CrmDeal | null>(null);
+  // Both modals are stored WITH the path they belong to and derived below, exactly like
+  // the list — so a route change closes them by making them stop matching, with no
+  // setState in an effect (which this repo's react-hooks config rejects, and rightly:
+  // it is a cascading render for something the render can just compute).
+  const [selected, setSelected] = useState<{ path: string; deal: CrmDeal } | null>(null);
+  const [editing, setEditing] = useState<{ path: string; deal: CrmDeal } | null>(null);
   const reqId = useRef(0);
+  // A SECOND monotonic id, for the per-deal fetches. The list's guard cannot serve here:
+  // two deal requests race each other on ONE unchanged path, so clicking A then B has to
+  // be decided by request order, not by the URL.
+  const dealReqId = useRef(0);
 
   useEffect(() => {
     // Bumped BEFORE the early return: navigating from a valid owner to a malformed one
@@ -98,31 +106,60 @@ export function WeeklyTouchesDetailPage() {
       });
   }, [apiPath, reloadTick]);
 
+  // A route change invalidates any deal fetch still in flight. A REF write, not a state
+  // write: the sheet itself is already closed by the derivation below (its stored path
+  // stops matching), so nothing has to re-render — this only stops a slow response, or a
+  // failed one's toast, from landing under a URL that has moved on.
+  useEffect(() => {
+    dealReqId.current += 1;
+  }, [apiPath]);
+
   // Only state that describes the CURRENT url counts; anything else is the previous
   // route's answer and reads as loading.
   const current = state && state.path === apiPath ? state : null;
   const data = current?.data ?? null;
   const error: PageError | null = parsed.ok ? current?.error ?? null : 'notfound';
   const loading = parsed.ok && current === null;
+  // Same rule for the modals: one rep's deal must not stay open over another rep's list.
+  const selectedDeal = selected && selected.path === apiPath ? selected.deal : null;
+  const editDeal = editing && editing.path === apiPath ? editing.deal : null;
 
   // The dashboard's own wiring, copied rather than hoisted into a hook: PipelinePage and
   // CrmDashboardPage already each carry their own copy, and a shared hook for a third
   // consumer that differs in its reload function is not yet worth the indirection.
   function openDeal(id: number) {
+    const req = ++dealReqId.current;
+    const path = apiPath;
     api<CrmDeal>(`/api/crm/deals/${id}`)
-      .then(setSelectedDeal)
-      .catch(() => toast.error('Could not open that deal — it may have been deleted.'));
+      .then(deal => {
+        if (req === dealReqId.current && path !== null) setSelected({ path, deal });
+      })
+      // The guard covers the error path too: a failed fetch for a deal the user has
+      // already navigated away from must not raise a toast about it.
+      .catch(() => {
+        if (req === dealReqId.current) {
+          toast.error('Could not open that deal — it may have been deleted.');
+        }
+      });
   }
 
   function reload() {
     setReloadTick(t => t + 1);
   }
 
+  /** Also invalidates any deal fetch still in flight, so a slow one cannot reopen the
+   *  sheet the user just dismissed. */
+  function closeModals() {
+    dealReqId.current += 1;
+    setSelected(null);
+    setEditing(null);
+  }
+
   async function updateDealStage(deal: CrmDeal, stage: string, lostReason?: string) {
     try {
       const { path, init } = stageWriteRequest(deal.id, stage, lostReason);
       await api(path, init);
-      setSelectedDeal(null);
+      closeModals();
       reload();
     } catch {
       toast.error('Failed to move deal.');
@@ -200,6 +237,14 @@ export function WeeklyTouchesDetailPage() {
                     trailing={touchDate(deal.touched_at)}
                   />
                 ))}
+                {/* This page's contract is the full list, so a prefix has to announce
+                    itself — silently showing the first N would be the dishonest version. */}
+                {data.truncated && (
+                  <div style={{ ...mono(10, INK_DIM), padding: '10px 0' }}>
+                    Showing the first {data.deals.length} touched deals. Narrow the range on
+                    the dashboard to see the rest.
+                  </div>
+                )}
               </div>
             </div>
           </>
@@ -211,18 +256,22 @@ export function WeeklyTouchesDetailPage() {
           key={selectedDeal.id}
           deal={selectedDeal}
           isMobile={isMobile}
-          onClose={() => { setSelectedDeal(null); reload(); }}
-          onEdit={(d) => { setSelectedDeal(null); setEditDeal(d); }}
+          onClose={() => { closeModals(); reload(); }}
+          onEdit={(d) => {
+            dealReqId.current += 1;
+            setSelected(null);
+            if (apiPath !== null) setEditing({ path: apiPath, deal: d });
+          }}
           onStageChange={updateDealStage}
-          onRestored={() => { setSelectedDeal(null); reload(); }}
+          onRestored={() => { closeModals(); reload(); }}
         />
       )}
 
       {editDeal && (
         <DealForm
           deal={editDeal}
-          onClose={() => setEditDeal(null)}
-          onSaved={() => { setEditDeal(null); reload(); }}
+          onClose={() => setEditing(null)}
+          onSaved={() => { closeModals(); reload(); }}
         />
       )}
     </div>

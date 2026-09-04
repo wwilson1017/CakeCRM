@@ -117,7 +117,20 @@ def _deal(
     # owner_id set separately so the INSERT stays identical for the unowned case.
     pg_execute("UPDATE deals SET owner_id = %s WHERE id = %s", (owner, deal_id))
     if touched:
-        pg_execute("UPDATE deals SET updated_at = %s WHERE id = %s", (NOW, deal_id))
+        # A real edit: created an hour ago, updated since. Backdating `created_at` is how
+        # that gets modelled without putting `updated_at` in the FUTURE — the card's
+        # default window is `[now()-7d, now())`, exclusive at the top, so a touch stamped
+        # even a second ahead falls outside the very window under test.
+        #
+        # Writing the module-level NOW here instead (the first attempt) was worse: it is
+        # captured at import and is therefore OLDER than this row, leaving
+        # updated_at < created_at. Such a deal still counts, because the predicate is `<>`
+        # — but then nothing in the suite proves that an edit AFTER creation is what a
+        # touch means, which is the whole claim.
+        pg_execute(
+            "UPDATE deals SET created_at = created_at - interval '1 hour' WHERE id = %s",
+            (deal_id,),
+        )
     else:
         # A deal that was only ever created: updated_at == created_at.
         pg_execute("UPDATE deals SET created_at = updated_at WHERE id = %s", (deal_id,))
@@ -342,7 +355,13 @@ def test_detail_for_an_unknown_user_is_none():
 
 
 def test_the_card_and_the_detail_agree_about_one_rep():
-    """The two surfaces share both query builders; this is the claim that matters."""
+    """The two surfaces share both query builders; this is the claim that matters.
+
+    The detail call is given the card's OWN window bounds, exactly as the card's link
+    forwards them. Building an independent window here would let the detail path ignore
+    ws/we and re-resolve the default while this test stayed green — which is the drift the
+    whole ws/we mechanism exists to prevent.
+    """
     from crm import service
 
     ada = _user("Ada")
@@ -350,10 +369,39 @@ def test_the_card_and_the_detail_agree_about_one_rep():
         _deal(f"Ada {i}", owner=ada)
     _deal("Ada quiet", owner=ada, touched=False)
 
-    card = _reps(service.get_weekly_touches())["Ada"]
-    detail = service.get_weekly_touch_detail(owner_id=ada, ws=WS, we=WE)
+    card_payload = service.get_weekly_touches()
+    card = _reps(card_payload)["Ada"]
+    detail = service.get_weekly_touch_detail(
+        owner_id=ada,
+        ws=card_payload["window"]["start"],
+        we=card_payload["window"]["end"],
+    )
 
     assert (detail["rep"]["touches"], detail["rep"]["open_deals"]) == (
         card["touches"], card["open_deals"]
     )
     assert {d["id"] for d in detail["deals"]} == {d["id"] for d in card["deals"]}
+
+
+def test_the_forwarded_window_really_bounds_the_detail_list():
+    """A deal touched outside the forwarded window must not appear in it — the assertion
+    that fails if ws/we are accepted and then ignored."""
+    from core.postgres import pg_execute
+    from crm import service
+
+    ada = _user("Ada")
+    inside = _deal("Inside the window", owner=ada)
+    outside = _deal("Outside the window", owner=ada)
+    # Push one deal's only touch well before the window opens.
+    pg_execute(
+        "UPDATE deals SET updated_at = created_at - interval '30 days' WHERE id = %s",
+        (outside,),
+    )
+
+    out = service.get_weekly_touch_detail(owner_id=ada, ws=WS, we=WE)
+    ids = {d["id"] for d in out["deals"]}
+
+    assert inside in ids
+    assert outside not in ids
+    assert out["rep"]["open_deals"] == 2      # still their book
+    assert out["rep"]["touches"] == 1         # but only one touch in this window
