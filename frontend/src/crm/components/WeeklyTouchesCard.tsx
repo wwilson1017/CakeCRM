@@ -65,7 +65,15 @@ export function WeeklyTouchesCard(
   const [applied, setApplied] = useState<{ start: string; end: string } | null>(null);
   const [startInput, setStartInput] = useState('');
   const [endInput, setEndInput] = useState('');
-  const [data, setData] = useState<CrmWeeklyTouches | null>(null);
+  // The payload TOGETHER with the range that produced it. Keeping them in one piece of
+  // state is what makes the Details links honest: `applied` moves the moment Apply or
+  // reset is pressed, but a FAILED refetch deliberately leaves the previous numbers on
+  // screen — so a link built from `applied` would point at the new (or failed) range while
+  // the counts beside it still describe the old one, and reset-then-fail would send the
+  // user to the rolling default from a card showing a custom week.
+  const [result, setResult] = useState<
+    { data: CrmWeeklyTouches; range: { start: string; end: string } | null } | null
+  >(null);
   const [loading, setLoading] = useState(true);
   const [fetchFailed, setFetchFailed] = useState(false);
   // Which rep rows are open. Keyed by the URL spelling of the bucket so the null owner has
@@ -82,7 +90,11 @@ export function WeeklyTouchesCard(
     // Stale-while-revalidate: the previous window's numbers stay on screen until the
     // new ones land, so applying a filter doesn't blank the card.
     api<CrmWeeklyTouches>(`/api/crm/dashboard/weekly-touches${qs}`)
-      .then(d => { if (id === reqId.current) { setData(d); setFetchFailed(false); } })
+      // `applied` is captured from this render, so the stored range is exactly the one
+      // this response answers — not whatever the control has moved on to since.
+      .then(d => {
+        if (id === reqId.current) { setResult({ data: d, range: applied }); setFetchFailed(false); }
+      })
       // Log before hiding: a 500 from a broken query would otherwise be pixel-identical
       // to the intended zero-keys hide, so a real regression could ship unnoticed.
       //
@@ -90,9 +102,9 @@ export function WeeklyTouchesCard(
       // an absent one). On a REFETCH it must not: the user pressed Apply, and blanking
       // the card would take the date inputs and the reset button with it — their own
       // action would look like it broke the feature, with no way back. So keep the last
-      // good data and show an inline error beside Apply instead. Leaving `data` alone
+      // good data and show an inline error beside Apply instead. Leaving `result` alone
       // does both: it is still null on a failed first load, and still the last good
-      // payload on a failed refetch.
+      // payload — and the last good RANGE — on a failed refetch.
       .catch(err => {
         console.error('Failed to load weekly touches:', err);
         if (id === reqId.current) setFetchFailed(true);
@@ -110,6 +122,11 @@ export function WeeklyTouchesCard(
     if (!next.delete(key)) next.add(key);
     return next;
   });
+
+  const data = result?.data ?? null;
+  // Read out alongside `data` so the link and the numbers are narrowed together —
+  // `null` here legitimately means the rolling default, not "not loaded".
+  const shownRange = result?.range ?? null;
 
   // Hidden affordance, never an error (product rule): no provider ⇒ nothing computed.
   // `loading` is checked first so the card doesn't flash in and out on mount.
@@ -210,10 +227,11 @@ export function WeeklyTouchesCard(
             const key = ownerParamOf(rep.user_id);
             const open = single || expanded.has(key);
             const unassigned = rep.user_id === null;
-            // The card's APPLIED range, not the payload's instants: the page
-            // re-resolves the same window kind so a deal touched since the card loaded
+            // The range these NUMBERS came from, not the one the control currently
+            // holds — see `result`. And a range, not the payload's instants: the page
+            // re-resolves the same window kind, so a deal touched since the card loaded
             // stays in the list rather than falling past a frozen upper bound.
-            const detailPath = touchDetailPath(rep.user_id, applied);
+            const detailPath = touchDetailPath(rep.user_id, shownRange);
             return (
               <div key={key}>
                 {/* Rendered in the SERVER's order and never re-sorted here: the backend

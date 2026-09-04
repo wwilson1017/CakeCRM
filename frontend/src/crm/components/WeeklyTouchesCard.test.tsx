@@ -70,6 +70,16 @@ function detailLinks(): HTMLAnchorElement[] {
   return [...container.querySelectorAll('a[href^="/crm/touches/"]')] as HTMLAnchorElement[];
 }
 
+/** React tracks the input's value on its own node, so a plain assignment is invisible to
+ *  onChange. This is the documented setter-then-dispatch workaround. */
+function setDate(input: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype, 'value',
+  )!.set!;
+  setter.call(input, value);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
 describe('WeeklyTouchesCard drill-down (issue #56)', () => {
   it('opens the deal sheet on click, passing that row\'s id', async () => {
     const opened: number[] = [];
@@ -197,6 +207,47 @@ describe('WeeklyTouchesCard per-rep grouping (issue #146)', () => {
     // The Unassigned rep has 1 touch and 1 deal, so it is complete — no line.
     await act(async () => { repHeaders()[1].click(); });
     expect(container.textContent?.match(/Showing the top/g)).toHaveLength(1);
+  });
+
+  it('keeps the Details links pointing at the window the numbers came from', async () => {
+    // A failed refetch deliberately leaves the previous numbers on screen. The links must
+    // stay with them: built from the control's current value instead, applying a range
+    // that then fails would send the user to a window the card is not showing, and a
+    // failed RESET would send them to the rolling default from a card showing a custom
+    // week.
+    api.mockResolvedValue({ ...payload, window: { ...window_, custom: true } });
+    await render(<WeeklyTouchesCard />);
+    expect(detailLinks()[0].getAttribute('href')).toBe('/crm/touches/3');
+
+    // Apply a custom range whose fetch fails.
+    const [from, to] = [...container.querySelectorAll('input[type="date"]')] as HTMLInputElement[];
+    api.mockRejectedValueOnce(new Error('boom'));
+    await act(async () => {
+      setDate(from, '2026-06-16');
+      setDate(to, '2026-06-20');
+    });
+    const apply = [...container.querySelectorAll('button')].find(b => b.textContent === 'Apply')!;
+    await act(async () => { apply.click(); });
+
+    // The rows still describe the rolling window, so the link must too.
+    expect(container.textContent).toContain("Couldn't load that range");
+    expect(detailLinks()[0].getAttribute('href')).toBe('/crm/touches/3');
+  });
+
+  it('moves the Details links once a new range actually lands', async () => {
+    await render(<WeeklyTouchesCard />);
+    expect(detailLinks()[0].getAttribute('href')).toBe('/crm/touches/3');
+
+    const [from, to] = [...container.querySelectorAll('input[type="date"]')] as HTMLInputElement[];
+    await act(async () => {
+      setDate(from, '2026-06-16');
+      setDate(to, '2026-06-20');
+    });
+    const apply = [...container.querySelectorAll('button')].find(b => b.textContent === 'Apply')!;
+    await act(async () => { apply.click(); });
+
+    expect(detailLinks()[0].getAttribute('href'))
+      .toBe('/crm/touches/3?start=2026-06-16&end=2026-06-20');
   });
 
   it('shows the server\'s totals rather than a client-side sum of the reps', async () => {
