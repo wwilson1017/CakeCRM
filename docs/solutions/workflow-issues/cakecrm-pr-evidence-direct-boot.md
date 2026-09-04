@@ -26,8 +26,9 @@ AUTH_PASSWORD=<pw> \
   Chrome, no download). Capture the migration log, live API responses, and UI renders.
 - `POST /api/login` returns `access_token` (not `token`); the login route rate-limits
   ~10/5min — an exploratory verifier can lock itself out.
-- Three more that differ from the obvious guess (confirmed #148, 2026-09-04): the app reads
-  `.env` from the **repo root**, not `backend/`; the auth router mounts at `/api`, so
+- Three more that differ from the obvious guess (confirmed #148, 2026-09-04): the app loads
+  `.env` from BOTH the repo root and `backend/` (`core/config.py` calls `load_dotenv` on each,
+  root first — `load_dotenv` never overrides a key already set, so the root file wins on duplicates); the auth router mounts at `/api`, so
   `/api/auth/login` 405s and `POST /api/login` is the only login path; and vite binds
   **IPv6-only**, so `http://127.0.0.1:<port>` gives connection-refused while the log says
   "ready" — reach it over `localhost`.
