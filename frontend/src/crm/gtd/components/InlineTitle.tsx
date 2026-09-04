@@ -69,7 +69,7 @@ export function InlineTitle({ title, label, disabled, onSave, className = '' }: 
         }}
         onBlur={() => finish(true)}
         onClick={e => e.stopPropagation()}
-        className={`${className} w-full rounded border border-brand bg-cream px-1 py-0.5 focus:outline-none`}
+        className={`${className} w-full min-w-0 rounded border border-brand bg-cream px-1 py-0.5 focus:outline-none`}
       />
     );
   }
@@ -85,8 +85,12 @@ export function InlineTitle({ title, label, disabled, onSave, className = '' }: 
         e.preventDefault();
         start();
       }}
-      // `break-words` so a pasted URL wraps instead of widening the card.
-      className={`${className} cursor-text break-words rounded border border-transparent px-1 py-0.5 hover:border-line ${
+      // `break-words` so a pasted URL wraps instead of widening the card, and
+      // `min-w-0` so it can: this renders as a bare flex item on the triage
+      // card, and `overflow-wrap: break-word` is explicitly NOT considered when
+      // computing min-content size, so without this the item's automatic
+      // minimum stays the full width of the URL and the wrap never engages.
+      className={`${className} min-w-0 cursor-text break-words rounded border border-transparent px-1 py-0.5 hover:border-line ${
         saving ? 'opacity-50' : ''
       }`}
     >
