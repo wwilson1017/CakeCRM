@@ -12,7 +12,7 @@
 // row, so what you copy is what is on screen — including edits you have not
 // saved yet.
 
-import { STATUS_META } from './constants';
+import { REPEAT_OPTIONS, STATUS_META } from './constants';
 import type { TodoStatus } from './types';
 
 export interface TodoCopyFields {
@@ -40,6 +40,22 @@ export function nextActionCopyText(title: string): string {
 }
 
 /**
+ * The repeat rule as the sheet words it, not as the column stores it.
+ *
+ * Same principle as the status word above: a pasted todo should say what the
+ * screen says. `every:3` is storage syntax with no `REPEAT_OPTIONS` entry — the
+ * sheet renders it as "Every N days…" plus a number — so printing it raw is the
+ * form dump this module's header promises not to be. A deliberate divergence
+ * from both blueprints, which print the raw rule.
+ */
+function repeatLabel(repeat: string): string {
+  const known = REPEAT_OPTIONS.find(o => o.value === repeat);
+  if (known) return known.label;
+  if (repeat.startsWith('every:')) return `Every ${repeat.slice(6)} days`;
+  return repeat;
+}
+
+/**
  * The whole todo as plain text: the action on line one, then only the fields
  * that are actually set, then the notes. Absent fields are omitted rather than
  * printed empty — a pasted todo should read like a note, not like a form dump.
@@ -51,7 +67,7 @@ export function todoCopyText(f: TodoCopyFields): string {
   if (f.projectName) meta.push(`Project: ${f.projectName}`);
   if (f.context.trim()) meta.push(`Context: ${f.context.trim()}`);
   if (f.dueDate) meta.push(`Due: ${f.dueDate}`);
-  if (f.repeat) meta.push(`Repeat: ${f.repeat}`);
+  if (f.repeat) meta.push(`Repeat: ${repeatLabel(f.repeat)}`);
   if (f.tags.length) meta.push(`Tags: ${f.tags.join(', ')}`);
   if (f.star) meta.push('Starred: yes');
   blocks.push(meta.join('\n'));

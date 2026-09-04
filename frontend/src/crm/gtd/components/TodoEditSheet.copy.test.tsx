@@ -126,13 +126,21 @@ describe('TodoEditSheet copy buttons', () => {
       + 'Project: House repairs\n'
       + 'Context: @calls\n'
       + 'Due: 2026-08-15\n'
-      + 'Repeat: weekly\n'
+      + 'Repeat: Weekly\n'
       + 'Tags: home\n'
       + 'Starred: yes\n'
       + '\n'
       + 'Notes:\n'
       + 'He quoted $200 last time.',
     ]);
+  });
+
+  // Issue #151 asks for this button by name; neither blueprint ships one, so
+  // nothing upstream pins it.
+  it('copies just the notes from the button beside the notes label', async () => {
+    await render();
+    await clickCopy('Copy just the notes');
+    expect(written).toEqual(['He quoted $200 last time.']);
   });
 
   it('copies what is on screen, not the saved row', async () => {
@@ -150,6 +158,7 @@ describe('TodoEditSheet copy buttons', () => {
     await render(null);
     expect(container.querySelector('button[aria-label$="Copy the whole todo"]')).toBeNull();
     expect(container.querySelector('button[aria-label$="Copy just the next action"]')).toBeNull();
+    expect(container.querySelector('button[aria-label$="Copy just the notes"]')).toBeNull();
 
     await typeTitle('Buy milk');
     expect(copyButton('Copy the whole todo')).toBeTruthy();

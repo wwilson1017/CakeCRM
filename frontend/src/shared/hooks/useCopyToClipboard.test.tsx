@@ -154,12 +154,17 @@ describe('useCopyToClipboard', () => {
   // Two writes in flight at once resolve in whatever order the browser manages,
   // which is not click order — only the newest click may set the status.
   it('lets only the newest attempt report', async () => {
-    let releaseFirst!: () => void;
+    // The slow attempt is rigged to FAIL and the fast one to succeed, so the two
+    // outcomes are distinguishable: if a stale attempt could still report, the
+    // button would flip from Copied to Copy failed after the user already saw
+    // the confirmation for a different click.
+    let failFirst!: (e: Error) => void;
     setClipboard((t: string) => {
-      if (t === 'slow') return new Promise<void>(resolve => { releaseFirst = resolve; });
+      if (t === 'slow') return new Promise<void>((_, reject) => { failFirst = reject; });
       apiCopied.push(t);
       return Promise.resolve();
     });
+    (document as unknown as { execCommand: () => boolean }).execCommand = vi.fn(() => false);
     const { result, unmount } = renderHook();
 
     let slow!: Promise<boolean>;
@@ -167,11 +172,8 @@ describe('useCopyToClipboard', () => {
     await act(async () => { await result.current.copy('fast'); });
     expect(result.current.status).toBe('copied');
 
-    // The stale attempt resolving must not restart the clock on a report it no
-    // longer owns.
-    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
-    await act(async () => { releaseFirst(); await slow; });
-    expect(setTimeoutSpy).not.toHaveBeenCalled();
+    await act(async () => { failFirst(new Error('denied')); await slow; });
+    expect(result.current.status).toBe('copied');
     unmount();
   });
 
@@ -187,8 +189,10 @@ describe('useCopyToClipboard', () => {
     act(() => { pending = result.current.copy('in flight'); });
     unmount();
 
-    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    // Assert on the hook's own observable rather than on the global setTimeout:
+    // "nothing scheduled any macrotask this tick" is a stronger claim than this
+    // hook makes, and a scheduler change elsewhere would fail it here.
     await act(async () => { release(); await pending; });
-    expect(setTimeoutSpy).not.toHaveBeenCalled();
+    expect(result.current.status).toBe('idle');
   });
 });

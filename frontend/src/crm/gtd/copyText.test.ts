@@ -47,7 +47,7 @@ describe('todoCopyText', () => {
       + 'Project: House repairs\n'
       + 'Context: @calls\n'
       + 'Due: 2026-08-15\n'
-      + 'Repeat: weekly\n'
+      + 'Repeat: Weekly\n'
       + 'Tags: home, urgent\n'
       + 'Starred: yes\n'
       + '\n'
@@ -59,6 +59,13 @@ describe('todoCopyText', () => {
 
   it('drops notes that are only whitespace', () => {
     expect(todoCopyText({ ...base, notes: '   \n  ' })).toBe(todoCopyText(base));
+  });
+
+  // Same principle as the status word: `every:3` is storage syntax the sheet
+  // never shows, and this module promises to read like a note, not a form dump.
+  it('words the repeat rule the way the sheet does', () => {
+    expect(todoCopyText({ ...base, repeat: 'every:3' })).toContain('Repeat: Every 3 days');
+    expect(todoCopyText({ ...base, repeat: 'weekdays' })).toContain('Repeat: Weekdays');
   });
 
   // The status word comes from this app's own STATUS_META, which is what makes

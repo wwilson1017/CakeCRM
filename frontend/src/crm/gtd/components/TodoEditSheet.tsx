@@ -125,7 +125,12 @@ export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onS
       onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div className="max-h-[92dvh] w-full sm:max-w-lg overflow-y-auto rounded-t-2xl sm:rounded-2xl border border-line-faint bg-cream p-5 shadow-lg">
-        <div className="flex items-center justify-between gap-3">
+        {/* `min-h-9` on this row and the next: the Copy buttons appear on the
+            first keystroke, and each is 36px tall. Without the reservation,
+            typing one character grows both rows and shoves the autofocused
+            title input down under the caret — on the mobile bottom sheet, with
+            the keyboard up, which is the surface this feature is for. */}
+        <div className="flex min-h-9 items-center justify-between gap-3">
           <h2 className="font-heading text-lg font-bold text-charcoal">
             {todo ? 'Edit todo' : 'New todo'}
           </h2>
@@ -137,7 +142,7 @@ export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onS
 
         <div className="mt-4 space-y-3">
           <div>
-            <div className="mb-1 flex items-center justify-between gap-3">
+            <div className="mb-1 flex min-h-9 items-center justify-between gap-3">
               <label className={labelBase} htmlFor="gtd-title">
                 What&rsquo;s the next action?
               </label>
@@ -151,7 +156,18 @@ export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onS
                    onChange={e => setTitle(e.target.value)} />
           </div>
           <div>
-            <label className={labelCls} htmlFor="gtd-notes">Notes</label>
+            <div className="mb-1 flex min-h-9 items-center justify-between gap-3">
+              <label className={labelBase} htmlFor="gtd-notes">Notes</label>
+              {/* Issue #151 asks for this one by name. NEITHER blueprint has it
+                  — upstream's two buttons are the whole todo and the action
+                  line — but the notes are where an address or a pasted link
+                  actually lives, and the whole-todo copy would bury it under
+                  the action and up to seven metadata lines. Bare `trim()`
+                  rather than a formatter, because there is nothing to format. */}
+              {notes.trim() && (
+                <CopyButton text={() => notes.trim()} label="Copy just the notes" />
+              )}
+            </div>
             <textarea id="gtd-notes" className={`${inputCls} min-h-20`} value={notes}
                       onChange={e => setNotes(e.target.value)} />
           </div>
