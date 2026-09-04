@@ -13,6 +13,11 @@
  * it, batched server-side. Opening a row therefore costs no request, which is what makes
  * "Expand all" safe and what makes the row's field list complete — including the fields
  * nobody has filled in, which is the issue's load-bearing requirement.
+ *
+ * "Every field" is meant literally, derived timestamps included: a lead score or a touch
+ * count without the time it was computed is half a fact. The ONE deliberate omission is
+ * `company_id`, on both deals and contacts — it is the company whose report this is, so
+ * printing it would be a row that reads the same on every record of every account.
  */
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -307,8 +312,19 @@ function DealRow({ deal, open, onToggle }: {
           : null}
       </InfoRow>
       <InfoRow label="Lost reason">{deal.lost_reason}</InfoRow>
+      {/* A derived number without its derivation time is half a fact: a lead score or a
+          touch count is only as trustworthy as how recently it was computed, and both
+          columns ride the payload already. `ai_touch_evidence_count` is how many evidence
+          lines #56 judged, which is what makes the count auditable. */}
       <InfoRow label="Lead score">{deal.lead_score ?? null}</InfoRow>
+      <InfoRow label="Lead score at">
+        {deal.lead_score_at ? formatDate(deal.lead_score_at) : null}
+      </InfoRow>
       <InfoRow label="AI touches">{deal.ai_touch_count ?? null}</InfoRow>
+      <InfoRow label="AI touches at">
+        {deal.ai_touch_count_at ? formatDate(deal.ai_touch_count_at) : null}
+      </InfoRow>
+      <InfoRow label="AI evidence lines">{deal.ai_touch_evidence_count ?? null}</InfoRow>
       <InfoRow label="Archived at">{deal.archived_at ? formatDate(deal.archived_at) : null}</InfoRow>
       <InfoRow label="Created">{formatDate(deal.created_at)}</InfoRow>
       <InfoRow label="Updated">{formatDate(deal.updated_at)}</InfoRow>
@@ -358,6 +374,13 @@ function ContactRow({ contact, open, onToggle }: {
       <InfoRow label="Owner"><OwnerName ownerId={contact.owner_id} /></InfoRow>
       <InfoRow label="Tags">{contact.tags}</InfoRow>
       <InfoRow label="Lead score">{contact.lead_score ?? null}</InfoRow>
+      <InfoRow label="Lead score at">
+        {contact.lead_score_at ? formatDate(contact.lead_score_at) : null}
+      </InfoRow>
+      {/* The legacy free-text company field (#35 left it non-authoritative). Shown because
+          this is the one page where a value that disagrees with the LINK is visible as a
+          disagreement — everywhere else the joined name silently wins. */}
+      <InfoRow label="Company (legacy text)">{contact.company}</InfoRow>
       <InfoRow label="Created">{formatDate(contact.created_at)}</InfoRow>
       <InfoRow label="Updated">{formatDate(contact.updated_at)}</InfoRow>
       <div style={{ marginTop: 8 }}>

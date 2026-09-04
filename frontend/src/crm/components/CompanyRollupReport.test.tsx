@@ -203,6 +203,24 @@ describe('CompanyRollupReport', () => {
     expect(text()).toContain('Tier');
   });
 
+  it('shows a derived value together with the time it was derived', async () => {
+    // A lead score or a touch count is only as trustworthy as how recently it was computed,
+    // and both timestamps ride the payload already — omitting them made "every field" false.
+    apiMock.mockResolvedValue(rollup({
+      deals: [deal({
+        id: 1, lead_score: 72, lead_score_at: '2026-03-01T10:00:00+00:00',
+        ai_touch_count: 4, ai_touch_count_at: '2026-03-02T10:00:00+00:00',
+        ai_touch_evidence_count: 9,
+      })] as never,
+    }));
+    await mount();
+    act(() => { expanders()[0].click(); });
+    await settle();
+    expect(text()).toContain('Lead score at');
+    expect(text()).toContain('AI touches at');
+    expect(text()).toContain('AI evidence lines');
+  });
+
   it('expands a row without issuing any request', async () => {
     // Everything an expanded row needs rides the rollup payload, batched server-side. This
     // is what makes "Expand all" safe; per-row fetches would make one click ~150 requests.

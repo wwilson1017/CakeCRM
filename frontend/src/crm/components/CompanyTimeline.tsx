@@ -28,6 +28,7 @@ import {
 } from '../companyRollup';
 import { useUsers } from '../useUsers';
 import { formatDate } from '../../shared/formatDate';
+import { formatBytes } from '../chatterAttachments';
 import {
   ACCENT_TEXT, INK, INK_DIM, INK_MUTE, LINE, LINE_STRONG, FONT_DISPLAY, mono,
 } from '../../shared/styles';
@@ -90,12 +91,23 @@ function Entry({ entry, actor }: { entry: CrmTimelineEntry; actor: string | null
         {actor && <span style={{ fontSize: 12, color: INK_DIM }}>· {actor}</span>}
         {entry.updated_at && <span style={{ fontSize: 12, color: INK_DIM }}>· edited</span>}
         {entry.archived === 1 && <span style={{ fontSize: 12, color: INK_DIM }}>· archived</span>}
-        {entry.attachments && entry.attachments.length > 0 && (
-          <span style={{ fontSize: 12, color: INK_DIM }}>
-            · {entry.attachments.length} attachment{entry.attachments.length === 1 ? '' : 's'}
-          </span>
-        )}
       </div>
+      {entry.attachments && entry.attachments.length > 0 && (
+        // Named, not just counted: a bare number tells the reader something exists without
+        // saying what, and a deal's notes are not reachable from this page at all (deals
+        // have no route), so the count was the end of the trail. Deliberately NOT
+        // `NoteAttachments`: that component fetches a thumbnail per image and carries a
+        // delete control — one would be a request storm on a 100-row feed, the other a
+        // write on a read-only report. Opening a file means visiting the record's own
+        // notes thread.
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 4 }}>
+          {entry.attachments.map(a => (
+            <span key={a.id} style={{ fontSize: 12, color: INK_DIM }}>
+              {a.filename} <span style={{ color: INK_DIM }}>({formatBytes(a.byte_size)})</span>
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

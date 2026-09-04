@@ -53,6 +53,9 @@ export interface CrmDeal {
   updated_at: string;
   ai_touch_count?: number | null;       // AI-estimated touch count (issue #16); null = uncomputed
   ai_touch_count_at?: string | null;
+  // How many evidence lines #56 judged to produce that count. It rides every `SELECT d.*`
+  // response and was simply never declared; the Reports rollup (#144) is its first reader.
+  ai_touch_evidence_count?: number | null;
   lost_reason?: string;                 // why a lost deal was lost (issue #22); '' when unset
   archived_at?: string | null;          // soft-archive (issue #22); null = live
   // Pipeline board only (issue #21): MAX of the deal's activity_log rows + un-archived

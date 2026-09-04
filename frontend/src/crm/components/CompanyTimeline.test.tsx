@@ -212,6 +212,24 @@ describe('CompanyTimeline', () => {
     expect(text()).not.toContain('stale row');
   });
 
+  it('names an attachment rather than only counting it', async () => {
+    // A bare count says something exists without saying what, and a deal's notes are not
+    // reachable from this page (deals have no route), so the count was the end of the trail.
+    apiMock.mockResolvedValue(page([
+      entry({
+        id: 1,
+        attachments: [
+          { id: 5, note_id: 1, filename: 'quote.pdf', mime_type: 'application/pdf',
+            byte_size: 2048, has_thumb: false, created_at: '2026-03-02T15:00:00+00:00',
+            uploaded_by: null },
+        ],
+      }),
+    ]));
+    await mount();
+    expect(text()).toContain('quote.pdf');
+    expect(text()).not.toContain('1 attachment');
+  });
+
   it('marks an archived source and still links a contact source', async () => {
     apiMock.mockResolvedValue(page([
       entry({ id: 1, entity_type: 'contact', entity_id: 10, source_name: 'Ada', source_archived: true }),
