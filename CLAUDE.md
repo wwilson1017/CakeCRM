@@ -1264,7 +1264,14 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   opaque **"Add due date" overlay**, cleared by a value or by focus — and by `onChange`
   too, because the write that follows a pick sets `busy`, React does not dispatch to a
   disabled target, and `onBlur` would therefore never run (the flag is invisible while a
-  date is set and bites the moment it is cleared). `pendingDue` mirrors the existing
+  date is set and bites the moment it is cleared). A date input also reports a COMPLETE value the
+  moment every segment parses — after the year's FIRST digit while it is being typed, so
+  "12/24/2" arrives as `0002-12-24` — and writing that sets `busy`, which disables the input,
+  so the rest of the year goes nowhere and the truncated date is what gets stored. A typed
+  value is therefore **shown but not written until its year could be real**
+  (`yearIsPlausible`), and a half-typed one is dropped on blur rather than left looking saved.
+  The truncation predates this port; the cue is what invites people to type in the box, so it
+  is fixed alongside it. `pendingDue` mirrors the existing
   `pendingTitle` so the CONTROLLED field does not revert to the prop for the length of the
   refetch, and `current` — what the Edit sheet is handed — carries title, notes and date
   from the card's view, never the lagging prop. **The card renders its own view of the

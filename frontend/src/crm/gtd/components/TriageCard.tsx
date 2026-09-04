@@ -46,6 +46,22 @@ const linkCls = 'text-sm underline disabled:opacity-50';
  * away. Read out of the fractional field alone, so it does not care whether the zone is
  * written `+00:00` or `Z`; a lexical compare of the whole string would, since `Z` sorts
  * after `+`. */
+/**
+ * Could this date's year be one a person meant?
+ *
+ * A date input reports a COMPLETE value the moment every segment parses — which while the
+ * year is being TYPED means after its FIRST digit: "12/24/2" arrives as `0002-12-24`. Writing
+ * that would be bad on its own, and it does not stop there: the write sets `busy`, which
+ * DISABLES this input, so the remaining year digits go nowhere and the truncated date is what
+ * gets stored. Measured on the real app at every typing speed from 0 to 300ms per key.
+ *
+ * A year below 1000 is not a due date anyone means, so it reads as "still typing". The last
+ * keystroke of a typed year clears the bar and writes; a date picked from the calendar always
+ * arrives complete and writes immediately. (Pre-existing — the truncation predates the due-date
+ * cue — but the cue is what invites people to type in this box, so it is fixed here.)
+ */
+const yearIsPlausible = (iso: string): boolean => Number(iso.slice(0, 4)) >= 1000;
+
 const subMs = (iso: string): number => {
   const frac = /\.(\d+)/.exec(iso);
   return frac ? Number(frac[1].slice(3, 6).padEnd(3, '0')) : 0;
@@ -558,7 +574,14 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
               value={dueValue}
               disabled={busy}
               onFocus={() => setDueFocused(true)}
-              onBlur={() => setDueFocused(false)}
+              onBlur={() => {
+                setDueFocused(false);
+                // A half-typed year was never written, so it must not sit there looking
+                // saved — drop it and let the field fall back to the row. Losing an
+                // abandoned entry beats silently storing `0020-12-24`.
+                const half = stateRef.current.pendingDue;
+                if (half && !yearIsPlausible(half)) apply({ type: 'due', value: null });
+              }}
               onChange={e => {
                 const picked = e.target.value;
                 // The write below sets `busy`, which DISABLES this input while it runs, and
@@ -571,7 +594,10 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
                 // nothing on the browsers that do fire blur. (React-DOM's disabled-target
                 // suppression covers only MOUSE events, so it is not the mechanism here.)
                 setDueFocused(false);
+                // Shown either way, so the field renders what has been typed so far.
                 apply({ type: 'due', value: picked });
+                // …but not WRITTEN until the year could be real. See `yearIsPlausible`.
+                if (picked && !yearIsPlausible(picked)) return;
                 // Released when this write settles, either way — the same rule `saveTitle`
                 // follows. On success `patch` has adopted a response carrying the new date;
                 // on failure nothing was written and the field must not go on showing a date

@@ -249,6 +249,39 @@ describe('step 2 — the due-date cue', () => {
     expect(dueInput().value).toBe('2026-10-01');
   });
 
+  it('survives a date typed a keystroke at a time', async () => {
+    // The exact sequence a date input emits while the year is TYPED: it reports a complete
+    // value after the year's first digit, so "12/24/2026" arrives as four values. Writing
+    // the first sets `busy`, which disables the input, and the remaining digits go nowhere —
+    // `0002-12-24` is what reaches the server. Verified against the real app before this fix.
+    render();
+    setValue(dueInput(), '0002-12-24');
+    setValue(dueInput(), '0020-12-24');
+    setValue(dueInput(), '0202-12-24');
+    setValue(dueInput(), '2026-12-24');
+    await settle();
+
+    expect(updateTodoMock.mock.calls).toEqual([[7, { due_date: '2026-12-24' }]]);
+  });
+
+  it('drops a half-typed year rather than leaving it looking saved', async () => {
+    render();
+    setValue(dueInput(), '0020-12-24');
+    unfocus(dueInput());
+    await settle();
+
+    expect(updateTodoMock).not.toHaveBeenCalled();
+    expect(dueInput().value).toBe('');
+    expect(cue()).toBeTruthy();
+  });
+
+  it('still writes a date clear, which has no year to wait for', async () => {
+    render({ due_date: '2026-09-10' });
+    setValue(dueInput(), '');
+    await settle();
+    expect(updateTodoMock).toHaveBeenCalledWith(7, { due_date: '' });
+  });
+
   it('is inert to the pointer, so tapping it still opens the picker', () => {
     render();
     expect(cue()!.className).toContain('pointer-events-none');
