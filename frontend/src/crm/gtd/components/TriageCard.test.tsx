@@ -11,7 +11,7 @@
 // there.
 //
 // createRoot + React act, following the repo's other component tests — no RTL.
-import { act } from 'react';
+import { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
@@ -634,6 +634,31 @@ describe('writes decide against the state as it is NOW', () => {
     click(button('Edit'));
     await settle();
     expect(onEdit.mock.calls[0][0].title).toBe('B');
+  });
+
+  it('still opens the sheet under StrictMode', async () => {
+    // The app mounts under StrictMode, which runs an effect's setup, then its cleanup, then
+    // setup again. A cleanup-only mounted flag is left false by that sequence, and the Edit
+    // button then flushes the notes and silently does nothing — in every dev run.
+    act(() => {
+      root.render(
+        <StrictMode>
+          <TriageCard
+            todo={TODO}
+            projects={[PROJECT]}
+            contexts={['@calls']}
+            onProcessed={onProcessed}
+            onChanged={onChanged}
+            onEdit={onEdit}
+          />
+        </StrictMode>,
+      );
+    });
+    setValue(notesBox(), 'jot');
+    click(button('Edit'));
+    await settle();
+
+    expect(onEdit).toHaveBeenCalledTimes(1);
   });
 
   it('does not open the sheet after the card is swapped away', async () => {

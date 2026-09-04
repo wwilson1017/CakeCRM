@@ -151,11 +151,6 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [destination, setDestination] = useState<TodoStatus>('next_action');
-  // `pendingTitle`, `pendingDue` and the notes draft now live in the reducer below — a
-  // rename or a date this card just made, shadowing the row until the parent's reload feeds
-  // it back in. Blur-then-click means clicking Edit STARTS the rename and opens the sheet in
-  // the same gesture, and the sheet writes back every field it is handed, so passing the
-  // stale prop would silently revert what the user just did.
   // null = the picker is showing; a string = the inline create input is.
   const [newContext, setNewContext] = useState<string | null>(null);
   const [newProject, setNewProject] = useState<string | null>(null);
@@ -213,7 +208,13 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
   // promoting another row unmounts this card while the flush is still running, and the
   // continuation would then open the sheet on the todo the user just navigated away from.
   const mounted = useRef(true);
-  useLayoutEffect(() => () => { mounted.current = false; }, []);
+  // The setup half is not ceremony: StrictMode runs setup → cleanup → setup on mount, so a
+  // cleanup-only effect would leave this false for the life of the card and the Edit button
+  // would flush the notes and then silently do nothing, in every dev run.
+  useLayoutEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   /**
    * Commit the notes box if it holds anything new; resolves false only when a write was
