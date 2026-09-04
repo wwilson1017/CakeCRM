@@ -265,5 +265,11 @@ describe('voided rendering', () => {
     const tokens = struck.className.split(/\s+/);
     expect(tokens).not.toContain('opacity-60');
     expect(tokens).toContain('[&>td]:opacity-60');
+
+    // And the guarantee the dimming exists to protect: a voided row is still a keyboard stop
+    // that opens. Asserting only the class would stay green if voided rows lost their tabIndex.
+    expect(struck.getAttribute('tabindex')).toBe('0');
+    act(() => { struck.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); });
+    expect(onSelect).toHaveBeenCalledWith(3);
   });
 });

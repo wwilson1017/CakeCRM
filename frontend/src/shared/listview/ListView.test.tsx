@@ -169,8 +169,13 @@ describe('ListView', () => {
     const inner = el.querySelectorAll('tbody tr')[0].querySelector('td button')!;
 
     act(() => { inner.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); });
-    act(() => { inner.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true })); });
+    const space = new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true });
+    act(() => { inner.dispatchEvent(space); });
     expect(onRowClick).not.toHaveBeenCalled();
+    // The guard must return BEFORE `preventDefault`, so the control keeps its own default
+    // action: Space is how a native checkbox is toggled. Reorder those two lines and every
+    // callback assertion above stays green while Space stops working on the selection column.
+    expect(space.defaultPrevented).toBe(false);
   });
 
   it('renders an inert row — no tab stop, no pointer affordance — when onRowClick is omitted', () => {
@@ -200,6 +205,25 @@ describe('ListView', () => {
     // Interactive but empty: the empty state must not claim interactive rows.
     render(<ListView columns={COLUMNS} items={[]} onRowClick={() => {}} />);
     expect(el.querySelector('table')!.getAttribute('aria-describedby')).toBeNull();
+  });
+
+  it('gives two ListViews on one page their own hint, not a shared id', () => {
+    // The whole reason the id comes from `useId` rather than a constant. With a fixed id both
+    // tables' `aria-describedby` resolve to the FIRST hint in the document, and every
+    // single-table assertion above still passes.
+    const el = render(
+      <>
+        <ListView columns={COLUMNS} items={ROWS} onRowClick={() => {}} />
+        <ListView columns={COLUMNS} items={ROWS} onRowClick={() => {}} />
+      </>,
+    );
+    const [a, b] = [...el.querySelectorAll('table')].map(t => t.getAttribute('aria-describedby')!);
+    expect(a).not.toBe(b);
+    // Each IDREF must resolve INSIDE its own table's wrapper, not merely be unique.
+    for (const [i, id] of [a, b].entries()) {
+      const wrapper = el.children[i];
+      expect(wrapper.querySelector(`#${CSS.escape(id)}`)?.textContent).toContain('Rows are interactive');
+    }
   });
 
   it('renders the empty message', () => {

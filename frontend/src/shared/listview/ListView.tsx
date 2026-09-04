@@ -171,6 +171,13 @@ export default function ListView<TItem extends { id: number | string }>({
   // panel's ‹ › navigation without re-deriving it — see that module's docstring.
   const sorted = useMemo(() => sortRows(columns, items, sort), [columns, items, sort]);
 
+  // simplification: a row that holds focus and is then unmounted — by the cap re-arming above,
+  // or by a re-sort/refetch that drops it out of `rows` — sends focus to `<body>`, the browser
+  // default. Harmless before #148 (nothing here was focusable); reachable now, though it needs a
+  // list change to land while focus is parked on a row, and no CRM surface polls. Left as-is
+  // deliberately: restoring focus needs a roving-tabindex/focus-restoration layer, and a partial
+  // version (guessing a neighbour row) moves focus somewhere the user did not ask for, which is
+  // worse than the documented default. Upgrade path: adopt that layer with `role="grid"` above.
   const rows = showAll ? sorted : sorted.slice(0, renderCap);
   const truncated = sorted.length - rows.length;
 
@@ -189,7 +196,17 @@ export default function ListView<TItem extends { id: number | string }>({
             it holds. An instruction is description material, not a name.
 
             Rendered only when rows actually open something AND there are rows, so neither an
-            inert table nor an empty state ever claims otherwise. */}
+            inert table nor an empty state ever claims otherwise.
+
+            Two acknowledged ceilings, not oversights. (1) A table description is announced when a
+            reader ENTERS the table, which a Tab-only user driving focus straight onto a row may
+            not hear; delivering it per row instead would announce the same sentence on every one
+            of up to `renderCap` rows, which is the worse failure. (2) A focusable `role="row"` is
+            outside ARIA's defined table interaction model — the model that would cover it is
+            `role="grid"`, which obliges full 2D arrow-key cell navigation and is a much larger
+            change than this one. `role="button"` is the option that is simply wrong, for the
+            reason in `onRowClick`'s doc. Upgrade path for both: adopt `grid` semantics with a
+            roving tabindex if these lists ever grow real in-table keyboard navigation. */}
         {onRowClick && rows.length > 0 && (
           <p id={hintId} className="sr-only">
             Rows are interactive: focus a row and press Enter or Space to open its record.
