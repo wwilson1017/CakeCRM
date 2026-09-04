@@ -172,6 +172,23 @@ describe('ListView', () => {
     expect(onRowClick).not.toHaveBeenCalled();
   });
 
+  it('leaves a MODIFIED Enter or Space to the browser', () => {
+    // Shift+Space is page-up; Ctrl/Alt/Cmd combinations carry browser and input-method
+    // bindings. Acting on them would open a record AND suppress the shortcut.
+    const onRowClick = vi.fn();
+    const el = render(<ListView columns={COLUMNS} items={ROWS} onRowClick={onRowClick} />);
+    const row = el.querySelectorAll('tbody tr')[0];
+    for (const mod of ['metaKey', 'ctrlKey', 'altKey', 'shiftKey'] as const) {
+      for (const key of ['Enter', ' ']) {
+        const ev = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, [mod]: true });
+        act(() => { row.dispatchEvent(ev); });
+        // Not merely "did not open" — the shortcut must also survive to the browser.
+        expect(ev.defaultPrevented).toBe(false);
+      }
+    }
+    expect(onRowClick).not.toHaveBeenCalled();
+  });
+
   it('ignores a keystroke aimed at a control inside a cell', () => {
     const onRowClick = vi.fn();
     const el = render(<ListView columns={INTERACTIVE_COLUMNS} items={ROWS} onRowClick={onRowClick} />);

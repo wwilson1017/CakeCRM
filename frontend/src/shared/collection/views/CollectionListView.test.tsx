@@ -175,6 +175,11 @@ describe('selection column', () => {
     const box = document.querySelector('input[aria-label="Select row"]') as HTMLElement;
     act(() => { box.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true })); });
     act(() => { box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); });
+    // Space on a checkbox also makes a real browser dispatch a `click`, which jsdom does not
+    // synthesize — so model the whole lifecycle here rather than only its keydown half. The
+    // checkbox's own `stopPropagation` is what stops that click, and the click-path test above
+    // is what would catch its removal; this asserts the two halves compose on one control.
+    act(() => { box.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
     expect(onSelect).not.toHaveBeenCalled();
   });
 

@@ -266,6 +266,13 @@ export default function ListView<TItem extends { id: number | string }>({
                         // every row click. Click suppression stays the cell's own
                         // `stopPropagation`, exactly as before.
                         if (e.target !== e.currentTarget) return;
+                        // A modified Enter/Space belongs to the browser or the OS, not to us:
+                        // Shift+Space is page-up, and Ctrl/Alt/Cmd combinations carry browser and
+                        // input-method bindings. Without this the row would both swallow the
+                        // shortcut (`preventDefault` below) and open a record the user never
+                        // asked for. Bailing early is also the honest answer for Cmd+Enter — a
+                        // row is not a link and cannot honour "open in a new tab".
+                        if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
                         if (e.key !== 'Enter' && e.key !== ' ') return;
                         e.preventDefault(); // Space would otherwise scroll the page.
                         onRowClick(item);
