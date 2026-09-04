@@ -17,15 +17,23 @@
  *                          state survives open/close.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AssistantPanelBody } from '../../assistant';
+import BootFallback from '../../core/components/BootFallback';
 import { IconBot, IconX } from '../../shared/icons';
 import {
   INK, INK_MUTE, LINE, BG_CARD, ACCENT, ACCENT_TEXT, ACCENT_INK, FONT_DISPLAY,
   SCRIM, SHADOW,
 } from '../../shared/styles';
 import { useActiveRecord } from '../RecordContext';
+
+// The chat surface is the heaviest thing in the CRM (react-markdown + highlight.js), and it
+// is only ever needed once a provider is configured — so it is lazy (#149), imported by its
+// LEAF path (not the `assistant` barrel) and mounted the moment `aiReady` is true. That keeps
+// the drawer's contract below intact: it still mounts once and stays mounted, so chat state
+// survives open/close; the chunk simply arrives in the background before the first open.
+// With zero AI keys the chunk is never requested at all.
+const AssistantPanelBody = lazy(() => import('../../assistant/AssistantPanelBody'));
 
 export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
   const navigate = useNavigate();
@@ -171,7 +179,9 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
             {/* ASSISTANT-PANEL-BODY: the chat surface (issue #4). Fills the drawer;
                 recordContext makes it aware of the CRM record open behind it (#14). */}
             <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-              <AssistantPanelBody recordContext={record} />
+              <Suspense fallback={<BootFallback variant="panel" />}>
+                <AssistantPanelBody recordContext={record} />
+              </Suspense>
             </div>
           </div>
         </>

@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
+import { Suspense, useState, useEffect, useCallback } from 'react';
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { api } from '../core/api/client';
 import { useAuth } from '../core/auth/AuthContext';
 import { useBranding } from '../core/branding/BrandingContext';
+import BootFallback from '../core/components/BootFallback';
 import { useIsMobile } from '../shared/useIsMobile';
 import { MobileMenuDrawer } from '../shared/MobileMenuDrawer';
 import { confirmDialog } from '../shared/confirm';
@@ -398,7 +399,14 @@ export function CrmLayout() {
             page — 'gtd' would render a shell whose every request 404s. */}
         <TaskModeContext.Provider value={status ? (status.task_mode ?? 'normal') : null}>
           <TaskModeSetterContext.Provider value={handleSetTaskMode}>
-            <Outlet />
+            {/* Route chunks load here (#149), INSIDE the chrome: a page's first visit — or the
+                task mode flipping from unknown to GTD, which is a plain setState and not a
+                router transition — suspends only the content column, so the nav stays put
+                and this layout's demo-status/setup fetches run in parallel with the download
+                instead of after it. */}
+            <Suspense fallback={<BootFallback variant="panel" />}>
+              <Outlet />
+            </Suspense>
           </TaskModeSetterContext.Provider>
         </TaskModeContext.Provider>
       </div>

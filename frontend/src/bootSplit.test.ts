@@ -1,0 +1,415 @@
+// Issue #149: App.tsx statically imported every page, so the build emitted ONE eager chunk —
+// 1,001 kB raw / 291 kB gzip — that every visitor downloaded and executed before anything
+// rendered, including the no-login /todo/{token} PWA that is opened dozens of times a day on
+// a phone.
+//
+// The fix is structural, and structure is the only thing that can protect it: a RENDER test
+// cannot see this regression at all. `crm/gtd/PublicTodoApp.test.tsx` boots the real Root and
+// would keep passing, green and unchanged, if someone turned either lazy() back into a static
+// import and put the CRM back in front of every /todo visitor. That is what this file is for.
+//
+// THE CHUNKS, because the assertions below mean different things for each:
+//   - the ENTRY chunk — whatever `main.tsx` reaches eagerly (Root, BootFallback,
+//     ChunkErrorBoundary, publicMode). Downloaded by EVERY visitor, /todo included.
+//   - the PUBLIC TODO chunks — `PublicTodoApp` + the shared `crm/gtd/pages` module and its
+//     transitive graph. Downloaded by a /todo visitor and by a CRM visitor's first GTD page.
+//   - the SHELL chunk — whatever `App.tsx` reaches eagerly. Downloaded by every CRM visitor,
+//     the login page included.
+//   - the ROUTE chunks — one per lazy page (plus the assistant drawer), downloaded on demand.
+// A static page import in `App.tsx` inflates the SHELL (bad, but /todo is unaffected). A static
+// import in `main.tsx` or a non-lazy branch in `Root.tsx` inflates the ENTRY chunk, which is
+// the original 1 MB failure in miniature. A CRM module reachable from `PublicTodoApp` inflates
+// the PUBLIC download — the thing this issue exists to shrink — and no per-file allowlist can
+// see that, so the last describe walks the real transitive graph.
+//
+// It reads SOURCE rather than inspecting a build because it has to run in the normal
+// `npm test` sweep, where no `dist/` exists — and because the invariant IS about the import
+// statements. Source comes in through `import.meta.glob(…, { query: '?raw' })`: `node:fs` is
+// unavailable to a `src/**` test under tsconfig.app.json's `types: ["vite/client"]`, and
+// widening that was rejected in vitest.config.ts. (The empty-string trap documented there is
+// CSS-specific; `?raw` on .ts/.tsx returns the real text.)
+import * as ts from 'typescript';
+import { describe, expect, it } from 'vitest';
+
+/** Every non-test source module as text, keyed by its path relative to src/ ('./App.tsx'). */
+const SOURCES = import.meta.glob(['./**/*.{ts,tsx}', '!./**/*.test.*'], {
+  query: '?raw',
+  import: 'default',
+  eager: true,
+}) as Record<string, string>;
+
+function read(rel: string): string {
+  const src = SOURCES[rel];
+  if (src === undefined) throw new Error(`no source module at ${rel} — moved or renamed?`);
+  return src;
+}
+
+/** Compare specifiers without their extension — `./Root` and `./Root.tsx` are the same
+ *  module, and pinning the literal spelling would fail a correct refactor for no reason. */
+const bare = (spec: string) => spec.replace(/\.tsx?$/, '');
+
+function parse(source: string): ts.SourceFile {
+  return ts.createSourceFile('probe.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+}
+
+/**
+ * Every module this source pulls in EAGERLY, via the TypeScript parser rather than a regex.
+ *
+ * The AST is not fussiness — a regex misses real shapes (a wrapped import, a double-quoted
+ * path, an `export … from` re-export, a bare side-effect `import './App'` that binds nothing
+ * but still drags the whole graph in, two statements on one line, the whitespace-free
+ * `import{default as App}from'./App'`). `the scanner recognises …` below pins each of them.
+ *
+ * `import(…)` inside `lazy()` is an EXPRESSION, not an ImportDeclaration, so it is invisible
+ * here by construction. That is exactly right: the dynamic form is what we want, and a
+ * scanner that counted it would make every assertion below vacuous.
+ *
+ * `import type` / `export type` are skipped — they are erased at build time and carry no
+ * runtime weight, so banning them would fail a file for no payload cost.
+ */
+function staticImportSpecifiers(source: string): string[] {
+  const specifiers: string[] = [];
+  for (const statement of parse(source).statements) {
+    if (ts.isImportDeclaration(statement)) {
+      if (statement.importClause?.isTypeOnly) continue;
+    } else if (ts.isExportDeclaration(statement)) {
+      if (statement.isTypeOnly) continue;
+    } else {
+      continue;
+    }
+    const spec = statement.moduleSpecifier;
+    if (spec && ts.isStringLiteral(spec)) specifiers.push(spec.text);
+  }
+  return specifiers;
+}
+
+/** Every `import('…')` call in the source, anywhere in the tree (the lazy() arguments). */
+function dynamicImportSpecifiers(source: string): string[] {
+  const specifiers: string[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      const arg = node.arguments[0];
+      if (arg && ts.isStringLiteral(arg)) specifiers.push(arg.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(parse(source));
+  return specifiers;
+}
+
+/**
+ * Resolve a relative specifier the way the bundler does, against the SOURCES key space.
+ * Throws on a miss: "can't tell" must FAIL, not silently drop a module from the sweep.
+ */
+function resolve(importer: string, spec: string): string {
+  const parts = importer.split('/').slice(0, -1);
+  for (const seg of spec.split('/')) {
+    if (seg === '..') parts.pop();
+    else if (seg !== '.') parts.push(seg);
+  }
+  const base = parts.join('/');
+  for (const candidate of [base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`]) {
+    if (candidate in SOURCES) return candidate;
+  }
+  throw new Error(`cannot resolve '${spec}' from ${importer}`);
+}
+
+/**
+ * The transitive STATIC graph from one module: every source module the bundler puts in the
+ * same download as the root, plus every bare package specifier met on the way. Dynamic
+ * imports are deliberately not followed — that is the boundary this test exists to defend.
+ */
+function staticClosure(root: string): { modules: Set<string>; packages: Set<string> } {
+  const modules = new Set<string>();
+  const packages = new Set<string>();
+  const stack = [root];
+  while (stack.length) {
+    const key = stack.pop()!;
+    if (modules.has(key)) continue;
+    modules.add(key);
+    for (const spec of staticImportSpecifiers(read(key))) {
+      if (spec.endsWith('.css')) continue; // a stylesheet, not JS weight
+      if (spec.startsWith('.')) stack.push(resolve(key, spec));
+      else packages.add(spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0]);
+    }
+  }
+  return { modules, packages };
+}
+
+const count = (haystack: string, needle: string) => haystack.split(needle).length - 1;
+
+describe('boot split (#149) — the entry chunk', () => {
+  it('main.tsx imports nothing but React, stylesheets and Root', () => {
+    // An ALLOWLIST, not a ban on `./App`: main.tsx is the entry module, so anything it
+    // imports is eager for every visitor on every surface. Naming `./App` alone would let a
+    // static `PublicTodoApp` — or any page — in through the side door while this stayed green.
+    // Stylesheets (index.css, the @fontsource faces) are allowed by extension: CSS carries no
+    // JS graph, and that is the whole reason a CSS import cannot re-merge anything.
+    const allowed = new Set(['react', 'react-dom/client', './Root']);
+    const specs = staticImportSpecifiers(read('./main.tsx')).map(bare);
+    expect(specs).toContain('./Root');
+    expect(specs.filter((s) => !s.endsWith('.css') && !allowed.has(s))).toEqual([]);
+  });
+
+  it('Root.tsx lazy-loads BOTH branches of the public/CRM dispatch', () => {
+    const src = read('./Root.tsx');
+
+    // Root is reached eagerly from main.tsx, so its static imports are ENTRY-chunk weight —
+    // paid by every visitor. Allowlisted for the same reason main.tsx is.
+    const allowed = new Set([
+      'react',
+      './core/components/BootFallback',
+      './core/components/ChunkErrorBoundary',
+      './crm/gtd/publicMode',
+    ]);
+    const specs = staticImportSpecifiers(src).map(bare);
+    expect(specs.filter((s) => !allowed.has(s))).toEqual([]);
+
+    // Either branch going static would defeat the split: a static App ships the CRM to a
+    // /todo visitor, a static PublicTodoApp ships the todo app to every CRM visitor.
+    expect(dynamicImportSpecifiers(src).map(bare).sort()).toEqual(['./App', './crm/gtd/PublicTodoApp']);
+    expect(src).toMatch(/lazy\(\s*\(\)\s*=>\s*import\('\.\/App'\)/);
+    expect(src).toMatch(/lazy\(\s*\(\)\s*=>\s*\n?\s*import\('\.\/crm\/gtd\/PublicTodoApp'\)/);
+
+    // The boundary wraps the Suspense, not the other way round: a chunk that fails to load
+    // rejects INSIDE the Suspense, and only an ancestor boundary can catch it.
+    expect(count(src, '<ChunkErrorBoundary>')).toBe(1);
+    expect(count(src, '<Suspense')).toBe(1);
+    expect(src.indexOf('<ChunkErrorBoundary>')).toBeLessThan(src.indexOf('<Suspense'));
+  });
+
+  it('the entry chunk reaches no page, no CRM module and no heavy package', () => {
+    // The transitive proof for the file-level allowlists above: whatever main.tsx reaches
+    // statically is downloaded by a /todo visitor before the todo app is even requested.
+    const { modules, packages } = staticClosure('./main.tsx');
+    expect(modules).toContain('./Root.tsx');
+    expect(modules).toContain('./crm/gtd/publicMode.ts');
+    expect(modules.size).toBeLessThanOrEqual(5);
+    expect([...packages].sort()).toEqual(['react', 'react-dom']);
+  });
+});
+
+describe('boot split (#149) — the CRM shell', () => {
+  it('App.tsx imports no page module statically', () => {
+    const src = read('./App.tsx');
+
+    // The shell every CRM surface needs anyway. Listing them states the intended shape
+    // instead of banning a directory outright, so a reviewer can see what was meant to be
+    // eager and why — and adding to this list is a deliberate act, not an accident.
+    //
+    // EVERY ENTRY IS A LEAF MODULE, NEVER A BARREL — that is the invariant, not a preference.
+    // An allowlisted barrel is a hole this guard cannot see through: `export { default as
+    // SomePage } from './SomePage'` added to it re-inflates the shell with every assertion
+    // here still green. `./assistant` is the proof that shape is realistic in this repo (it
+    // re-exports AssistantPanelBody, the heaviest module in the app), and `./shared/dnd`,
+    // `./shared/search`, `./shared/collection`, `./shared/listview` are barrels too.
+    const eagerAllowed = new Set([
+      'react',
+      'react-router-dom',
+      './core/auth/AuthContext',
+      './core/auth/ProtectedRoute',
+      './core/branding/BrandingContext',
+      './core/components/BootFallback',
+      './login/LoginPage',
+      './crm/gtd/TasksModeRouter',
+      './shared/ToastViewport',
+      './shared/ConfirmHost',
+    ]);
+    const specs = staticImportSpecifiers(src).map(bare);
+    expect(specs.filter((s) => !eagerAllowed.has(s))).toEqual([]);
+
+    // Named explicitly as well as excluded by the allowlist, so a future edit that widens the
+    // list still trips over the barrels that actually re-export heavy modules.
+    for (const barrel of ['./assistant', './shared/dnd', './shared/collection', './shared/search', './shared/listview']) {
+      expect(specs, barrel).not.toContain(barrel);
+    }
+
+    // Sanity: the conversion actually happened and stayed converted — nine CRM pages plus the
+    // ten GTD routes. A route added as a lazy() raises this; one added statically fails above.
+    expect(dynamicImportSpecifiers(src).length).toBeGreaterThanOrEqual(19);
+  });
+
+  it('every GTD route in App.tsx goes through the one shared pages module', () => {
+    // Ten per-page dynamic imports would give the phone PWA ten chunk requests on every cold
+    // load: PublicTodoApp shares those modules, so the bundler would split each page out of
+    // the todo download into its own chunk. One module, one chunk, for both mounts.
+    const gtdDynamic = dynamicImportSpecifiers(read('./App.tsx')).filter((s) => s.startsWith('./crm/gtd/'));
+    expect(gtdDynamic.length).toBe(10);
+    expect(new Set(gtdDynamic)).toEqual(new Set(['./crm/gtd/pages']));
+  });
+
+  it('the toast and confirm hosts stay OUTSIDE the route Suspense boundary', () => {
+    // A toast in flight or an open confirm dialog must never be replaced by a loading state
+    // while a route chunk downloads. Purely positional — nothing but ordering in the JSX
+    // enforces it, so nothing but this notices if it moves.
+    const src = read('./App.tsx');
+
+    // Source ORDER, not a JSX-ancestry proof. What makes ordering sufficient is uniqueness:
+    // with exactly one Suspense in the file, "the host appears after the boundary closes" and
+    // "the host is outside it" coincide.
+    expect(count(src, '<Suspense')).toBe(1);
+    expect(count(src, '</Suspense>')).toBe(1);
+    expect(count(src, '<ConfirmHost />')).toBe(1);
+    expect(count(src, '<ToastViewport />')).toBe(1);
+
+    const suspenseOpen = src.indexOf('<Suspense');
+    const suspenseClose = src.indexOf('</Suspense>');
+    expect(suspenseOpen).toBeLessThan(src.indexOf('<Routes>'));
+    expect(src.indexOf('</Routes>')).toBeLessThan(suspenseClose);
+    expect(suspenseClose).toBeLessThan(src.indexOf('<ConfirmHost />'));
+    expect(suspenseClose).toBeLessThan(src.indexOf('<ToastViewport />'));
+  });
+
+  it('TasksModeRouter keeps TasksPage lazy — it is imported eagerly by the shell', () => {
+    const src = read('./crm/gtd/TasksModeRouter.tsx');
+    const specs = staticImportSpecifiers(src).map(bare);
+    expect(specs.filter((s) => !new Set(['react', 'react-router-dom', './TaskModeContext']).has(s))).toEqual([]);
+    // TasksPage drags the collection layer and @dnd-kit; static here = in the shell chunk.
+    expect(dynamicImportSpecifiers(src).map(bare)).toEqual(['../TasksPage']);
+  });
+
+  it('CrmLayout wraps its Outlet in a Suspense boundary', () => {
+    // The route chunks load INSIDE the chrome: the nav stays put, and the layout's own fetches
+    // run in parallel with the download instead of after it. Also the boundary that catches
+    // the task mode flipping from unknown to GTD — a plain setState, not a router transition,
+    // so without this the whole layout would be replaced by the fallback.
+    const src = read('./crm/CrmLayout.tsx');
+    expect(count(src, '<Suspense')).toBe(1);
+    expect(count(src, '<Outlet />')).toBe(1);
+    expect(src.indexOf('<Suspense')).toBeLessThan(src.indexOf('<Outlet />'));
+    expect(src.indexOf('<Outlet />')).toBeLessThan(src.indexOf('</Suspense>'));
+  });
+
+  it('the assistant drawer loads its chat surface lazily, by leaf path', () => {
+    // The heaviest graph in the app (react-markdown + highlight.js) rides CrmLayout's chunk
+    // otherwise, i.e. every authenticated page load — with zero AI keys included.
+    const src = read('./crm/components/AssistantLauncher.tsx');
+    const specs = staticImportSpecifiers(src).map(bare);
+    expect(specs).not.toContain('../../assistant');
+    expect(specs).not.toContain('../../assistant/AssistantPanelBody');
+    expect(dynamicImportSpecifiers(src).map(bare)).toEqual(['../../assistant/AssistantPanelBody']);
+    // Mounted whenever AI is ready, not on first open — that is the "stays mounted so chat
+    // state survives" contract, and it also means the chunk arrives before the first open.
+    expect(src.indexOf('{ready && (')).toBeLessThan(src.indexOf('<AssistantPanelBody'));
+  });
+
+  it('every lazy() is declared at module scope, never inside the component', () => {
+    // A lazy() evaluated inside the component would mint a new component identity on every
+    // render, remounting the whole route subtree (or, in AssistantLauncher, wiping the chat)
+    // — the never-declare-a-component-inside-a-component rule, in the shape these files could
+    // plausibly regress into.
+    const bodies: Array<[string, string]> = [
+      ['./App.tsx', 'export default function App()'],
+      ['./Root.tsx', 'export default function Root()'],
+      ['./crm/gtd/TasksModeRouter.tsx', 'export function TasksModeRouter('],
+      ['./crm/components/AssistantLauncher.tsx', 'export function AssistantLauncher('],
+    ];
+    expect(bodies.length).toBe(4);
+    for (const [file, marker] of bodies) {
+      const src = read(file);
+      const bodyStart = src.indexOf(marker);
+      expect(bodyStart, `${file} has ${marker}`).toBeGreaterThan(-1);
+      expect(src.slice(0, bodyStart), `${file} declares lazy() above the component`).toMatch(/lazy\(/);
+      expect(src.slice(bodyStart), `${file} has no lazy() inside the component`).not.toMatch(/lazy\(/);
+    }
+  });
+});
+
+describe('boot split (#149) — the public todo download', () => {
+  const GTD_PAGES = [
+    './DonePage', './InboxPage', './NextActionsPage', './ProjectDetailPage', './ProjectsPage',
+    './ReviewPage', './SearchPage', './SomedayPage', './TodayPage', './WaitingPage',
+  ];
+
+  it('crm/gtd/pages.ts re-exports exactly the ten GTD pages and nothing else', () => {
+    // This module IS the public surface's download (and App's shared GTD chunk). A CRM page
+    // re-exported from here would ship the CRM to every /todo visitor.
+    const src = read('./crm/gtd/pages.ts');
+    const statements = parse(src).statements;
+    expect(statements.length).toBe(10);
+    expect(statements.every((s) => ts.isExportDeclaration(s) && !s.isTypeOnly)).toBe(true);
+    expect(staticImportSpecifiers(src).map(bare).sort()).toEqual([...GTD_PAGES].sort());
+  });
+
+  it('PublicTodoApp imports its pages through that one module', () => {
+    const specs = staticImportSpecifiers(read('./crm/gtd/PublicTodoApp.tsx')).map(bare);
+    expect(specs.sort()).toEqual(['../../shared/ToastViewport', './pages', './publicMode', 'react-router-dom']);
+  });
+
+  it('nothing reachable from PublicTodoApp is a CRM module or a heavy package', () => {
+    // The transitive contract, walked over the real source graph. File-level allowlists
+    // cannot see a `crm/gtd/components/RecordChip` that one day imports `crm/components/…`
+    // and drags the CRM into the phone PWA's download; this does.
+    const { modules, packages } = staticClosure('./crm/gtd/PublicTodoApp.tsx');
+
+    // Coverage first, unconditionally, so the deny-list loop below can never pass on an
+    // empty sweep (vitest's `expect.requireAssertions` catches a zero-assertion test, not a
+    // sweep that quietly examined nothing).
+    expect(modules.size).toBeGreaterThanOrEqual(40);
+    for (const sentinel of ['./crm/gtd/pages.ts', './crm/gtd/TodoShell.tsx', './crm/gtd/api.ts', './shared/search/index.ts']) {
+      expect(modules, sentinel).toContain(sentinel);
+    }
+
+    // Everything the surface reaches lives in one of these places. `core/api/client` is the
+    // one known passenger: gtd/api.ts imports it for the authenticated branch and never calls
+    // it in public mode — measured at 1.1 kB raw, not worth a second client module.
+    const allowedPrefixes = ['./crm/gtd/', './shared/'];
+    const allowedLeaves = new Set(['./core/api/client.ts', './core/auth/tokenUtils.ts']);
+    const stray = [...modules].filter(
+      (m) => !allowedLeaves.has(m) && !allowedPrefixes.some((p) => m.startsWith(p)),
+    );
+    expect(stray).toEqual([]);
+
+    // Within shared/, the heavy sub-layers stay out: they are CRM interaction substrate, and
+    // `shared/collection` alone pulls @dnd-kit through KanbanView. If the todo surface ever
+    // adopts the collection layer (the ProjectsPage follow-up noted in CLAUDE.md), remove the
+    // entry HERE with the measured size delta in that PR — that is the deliberate act.
+    const heavy = [...modules].filter((m) =>
+      ['./shared/collection/', './shared/dnd/', './shared/listview/', './shared/overlay/'].some((p) => m.startsWith(p)),
+    );
+    expect(heavy).toEqual([]);
+
+    expect([...packages].sort()).toEqual(['react', 'react-router-dom']);
+  });
+});
+
+describe('boot split (#149) — the scanner itself', () => {
+  it('recognises every eager-import shape, and no dynamic one', () => {
+    // Pins the guard. Every entry here is a real way to bundle a page eagerly, and a regex
+    // predecessor of this scanner (upstream) missed each one in turn.
+    const eagerShapes: Array<[string, string]> = [
+      [`import App from './App'`, './App'],                                          // no semicolon
+      [`import App from "./App";`, './App'],                                         // double quotes
+      [`import {\n  PipelinePage,\n} from './crm/PipelinePage';`, './crm/PipelinePage'], // wrapped
+      [`export { PipelinePage } from './crm/PipelinePage';`, './crm/PipelinePage'],    // re-export
+      [`import './App';`, './App'],                                                  // side effect only
+      [`import React from 'react'; import App from './App';`, './App'],               // two on one line
+      [`import{default as App}from'./App'`, './App'],                                // no whitespace
+      [`import * as Everything from './App';`, './App'],                             // namespace
+    ];
+    expect(eagerShapes.length).toBe(8);
+    for (const [shape, expected] of eagerShapes) {
+      expect(staticImportSpecifiers(shape), shape).toContain(expected);
+    }
+
+    // …and these must stay invisible to the STATIC scanner, or every assertion above is vacuous.
+    expect(staticImportSpecifiers(`const A = lazy(() => import('./App'));`)).toEqual([]);
+    expect(staticImportSpecifiers(`import type { Foo } from './App';`)).toEqual([]);
+    expect(staticImportSpecifiers(`export type { Foo } from './App';`)).toEqual([]);
+
+    // …while the DYNAMIC scanner sees exactly them, in both spellings App.tsx uses.
+    expect(dynamicImportSpecifiers(`const A = lazy(() => import('./App'));`)).toEqual(['./App']);
+    expect(dynamicImportSpecifiers(`const P = lazy(() =>\n  import('./x/Page').then((m) => ({ default: m.Page })));`)).toEqual(['./x/Page']);
+    expect(dynamicImportSpecifiers(`import App from './App';`)).toEqual([]);
+  });
+
+  it('resolves specifiers the way the bundler does, and fails loudly when it cannot', () => {
+    expect(resolve('./App.tsx', './crm/gtd/pages')).toBe('./crm/gtd/pages.ts');
+    expect(resolve('./crm/gtd/InboxPage.tsx', '../../shared/search')).toBe('./shared/search/index.ts');
+    expect(resolve('./crm/gtd/PublicTodoApp.tsx', './publicMode')).toBe('./crm/gtd/publicMode.ts');
+    expect(resolve('./main.tsx', './Root.tsx')).toBe('./Root.tsx');
+    // "Can't tell" is a failure, never a module silently dropped from the sweep.
+    expect(() => resolve('./App.tsx', './does/not/exist')).toThrow(/cannot resolve/);
+    expect(() => read('./nope.tsx')).toThrow(/no source module/);
+  });
+});
