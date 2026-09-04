@@ -117,7 +117,7 @@ const { ActiveRecordProvider } = await import('./RecordContext');
 // PipelinePage reads `?stage=` through useSearchParams, and the deal sheet publishes the
 // open record — both are ambient app scaffolding the test supplies rather than the
 // component being reshaped to avoid them.
-const { MemoryRouter, useNavigate } = await import('react-router-dom');
+const { MemoryRouter, useLocation, useNavigate } = await import('react-router-dom');
 
 function deal(over: Partial<CrmDeal> = {}): CrmDeal {
   return {
@@ -222,6 +222,10 @@ beforeEach(() => {
     removeListener: () => {},
     dispatchEvent: () => false,
   })) as unknown as typeof window.matchMedia;
+  // jsdom implements no layout, so `Element.scrollIntoView` is simply absent and the
+  // ?stage= deep link throws on mount. A missing platform API, stubbed like `matchMedia`
+  // above — not a shim around our own code.
+  Element.prototype.scrollIntoView = () => {};
   // The filter envelope is persisted to sessionStorage, so a facet left on by one test
   // would silently arm the next one.
   sessionStorage.clear();
@@ -260,6 +264,31 @@ function Navigator({ to }: { to: string | null }) {
   const navigate = useNavigate();
   useEffect(() => { if (to) navigate(to); }, [navigate, to]);
   return null;
+}
+
+/** The router's live search string. `window.location` is useless under MemoryRouter, which
+ *  keeps its history in memory — an assertion against it passes whatever the page does. */
+const seenSearch = { current: '' };
+
+function LocationProbe() {
+  const loc = useLocation();
+  // In an effect, not during render: this repo's react-hooks ruleset forbids writing to a
+  // value defined outside the component while rendering.
+  useEffect(() => { seenSearch.current = loc.search; }, [loc.search]);
+  return null;
+}
+
+async function renderWithLocationProbe(url: string) {
+  seenSearch.current = '';
+  await act(async () => {
+    root.render(
+      <MemoryRouter initialEntries={[url]}>
+        <ActiveRecordProvider><PipelinePage /><LocationProbe /></ActiveRecordProvider>
+      </MemoryRouter>,
+    );
+  });
+  await flush();
+  await flush();
 }
 
 async function renderThenNavigate(to: string) {
@@ -1121,6 +1150,100 @@ describe('PipelinePage — deal deep links', () => {
     expect(deadLinkNotice()).toBeNull();
     expect(button('Close')).toBeTruthy();
     expect(container.textContent).toContain('Zebra rebuild');
+  });
+
+  it('resolves a second link that arrives while the first is still refreshing', async () => {
+    // Both links sit at the `refresh` verdict, so an effect keyed only on the verdict never
+    // re-runs for the second one — which would then ride the first link's request, whose
+    // generation predates it and therefore can never settle it. The second link would hang
+    // unresolved forever.
+    const DEAL_B = deal({ id: 88, title: 'Second signing', stage: 'lead', value: 900 });
+    const first = deferred<{ deals: CrmDeal[] }>();
+    let boardCalls = 0;
+    routeApi({
+      over: (path) => {
+        if (path !== LIVE_PATH) return undefined;
+        boardCalls += 1;
+        if (boardCalls === 1) return { deals: [LIVE] };
+        if (boardCalls === 2) return first.promise;   // link A's refresh, held
+        return { deals: [LIVE, DEAL_B] };             // link B's own refresh
+      },
+    });
+
+    await render('/crm/pipeline');
+    await renderThenNavigate('/crm/pipeline?deal=77');
+    expect(boardCalls).toBe(2);   // A asked, and is waiting
+
+    await renderThenNavigate('/crm/pipeline?deal=88');
+    expect(boardCalls).toBe(3);   // B asked for its OWN load rather than riding A's
+    expect(container.textContent).toContain('Second signing');
+    expect(deadLinkNotice()).toBeNull();
+
+    // A's stale answer arriving late must not now accuse B.
+    await act(async () => { first.resolve({ deals: [LIVE] }); });
+    await flush();
+    expect(deadLinkNotice()).toBeNull();
+  });
+
+  it('retries the same link after its refresh failed', async () => {
+    // A failed refresh resolves nothing, so the parameter is never consumed — which used to
+    // make the retry indistinguishable from no click at all, and the link dead for the rest
+    // of the session precisely when the user has most reason to try it again.
+    const NEW_DEAL = deal({ id: 77, title: 'Fresh signing', stage: 'lead', value: 500 });
+    let boardCalls = 0;
+    routeApi({
+      over: (path) => {
+        if (path !== LIVE_PATH) return undefined;
+        boardCalls += 1;
+        if (boardCalls === 1) return { deals: [LIVE] };
+        if (boardCalls === 2) return Promise.reject(new Error('network'));
+        return { deals: [LIVE, NEW_DEAL] };
+      },
+    });
+
+    await render('/crm/pipeline');
+    await renderThenNavigate('/crm/pipeline?deal=77');
+    await flush();
+    expect(boardCalls).toBe(2);
+    expect(deadLinkNotice()).toBeNull();     // it stayed quiet rather than accusing
+
+    // The same link, clicked again once the network is back.
+    await renderThenNavigate('/crm/pipeline?deal=77');
+    await flush();
+    expect(boardCalls).toBe(3);
+    expect(container.textContent).toContain('Fresh signing');
+  });
+
+  it('leaves a sheet the user opened by hand alone when a later link resolves dead', async () => {
+    // A link once opened deal 1; the user then closed it and opened that same card
+    // themselves. Tracking only "which id a link opened" would close their sheet on the next
+    // link — the sheet has to remember that the USER put it there.
+    routeApi();
+    await render(`/crm/pipeline?deal=${LIVE.id}`);
+    await click(button('Close'), 'Close');
+    await click(card('Acme renewal'), 'card opened by hand');
+    expect(button('Close')).toBeTruthy();
+
+    await renderThenNavigate('/crm/pipeline?deal=404');
+    expect(button('Close')).toBeTruthy();          // still theirs
+    expect(deadLinkNotice()).toContain('#404');    // and the new link still reports
+  });
+
+  it('keeps the deal in the URL, and lets ?stage= be consumed beside it', async () => {
+    // The parameter is deliberately kept, so a reload reopens the deal and the address bar
+    // is a real copy source. ?stage= beside it is still a one-shot intent and is consumed —
+    // the two must not interfere, which they would if both rewrote the same params object.
+    //
+    // Asserted through the ROUTER's location, not `window.location`: MemoryRouter keeps its
+    // history in memory and never touches the document URL, so reading `window.location`
+    // here would pass no matter what the page did.
+    routeApi();
+    await renderWithLocationProbe(`/crm/pipeline?stage=lead&deal=${LIVE.id}`);
+
+    expect(button('Close')).toBeTruthy();
+    const params = new URLSearchParams(seenSearch.current);
+    expect(params.get('deal')).toBe(String(LIVE.id));
+    expect(params.get('stage')).toBeNull();
   });
 
   it('lets the user dismiss the notice, and does not re-raise it on its own', async () => {
