@@ -9,8 +9,10 @@
  * geometrically nearest to its own neighbours for the whole horizontal drag: the short column's
  * few cards sit hundreds of pixels higher up. The drop refuses to stick until the user also
  * drags UP into the band where the short column's content happens to live — the extra,
- * non-obvious motion the pipeline board demands constantly once Won/Lost hide by default and
- * columns empty out.
+ * non-obvious motion the pipeline board demands whenever its stages are unevenly loaded, which
+ * is the normal shape of a funnel: deals pile up in one stage while another sits empty. The
+ * board's stage facet makes it sharper still, since narrowing to a few stages leaves the
+ * survivors further apart in height.
  *
  * The thesis of the fix is that **the drop lands where you point**. Getting there takes four
  * pieces, applied to the rect map dnd-kit hands the strategy — never to the DOM, because a CSS

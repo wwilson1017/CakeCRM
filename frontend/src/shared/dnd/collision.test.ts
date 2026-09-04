@@ -172,8 +172,8 @@ describe('boardCollisionDetection', () => {
   });
 
   it('names the card BELOW the gap between two cards, so the drop lands between them', () => {
-    // Cards in column B sit at y 110..170 and 180..240 — an 8px `gap-2` band at y 170..180
-    // belongs to neither rect as measured. `pointerWithin` needs literal containment, so without
+    // Cards in column B sit at y 110..170 and 180..240 — a 10px band at y 170..180 (the fixture's
+    // round stand-in for the board's real 8px `gap-2`) belongs to neither rect as measured. `pointerWithin` needs literal containment, so without
     // gap-closing the only hit is the column, which handleDragOver reads as "append to the end"
     // — and since appending never moves the cards above the pointer, nothing reflows it away.
     //
@@ -447,5 +447,84 @@ describe('boardCollisionDetection', () => {
     const collisions = boardCollisionDetection(input);
     expect(collisions).toEqual(closestCorners(input));
     expect(collisions.length).toBeGreaterThan(0);
+  });
+
+  it('skips widening entirely when a column measures NaN, rather than writing NaN onto every column', () => {
+    // The reason `withFullHeightColumns` tests `Number.isFinite` instead of a bare `bottom <= top`.
+    // A single NaN coordinate propagates through Math.min/max into the band, and every comparison
+    // against NaN is false — so `bottom <= top` waves it through and stamps a NaN-bounded rect onto
+    // EVERY column, including the ones that measured perfectly well. `pointerWithin` then contains
+    // nothing at all, the closestCorners fallback engages, and it answers with a card back in the
+    // source column.
+    //
+    // Only `top` is poisoned, which is what a partial measurement actually looks like.
+    const { droppableContainers, droppableRects } = board(0);
+    droppableRects.set('column-A', { ...droppableRects.get('column-A')!, top: NaN });
+
+    const poisoned = {
+      active,
+      collisionRect: DRAGGED_RECT,
+      // Inside column B's own small, correctly-measured rect (y 100..140) — so the answer does not
+      // depend on the widening, only on the widening having been SKIPPED rather than botched.
+      pointerCoordinates: { x: 470, y: 120 },
+      droppableContainers,
+      droppableRects,
+    };
+    expect(boardCollisionDetection(poisoned)[0]?.id).toBe('column-B');
+  });
+
+  it('leaves already-overlapping card rects exactly as measured instead of shrinking one', () => {
+    // `withClosedCardGaps` only ever GROWS a card upward. Two cards whose rects already overlap —
+    // because a transform moved them, or a drag animation is mid-flight — must be left alone: the
+    // grow logic run unconditionally would drag b2's top down to b1's bottom, cutting away the
+    // overlap band that is real, visible hit area for b2.
+    const containers: DroppableContainer[] = [column('A'), column('B'), card('b1', 'B'), card('b2', 'B')];
+    const rects = new Map<UniqueIdentifier, ClientRect>([
+      ['column-A', rect(A_LEFT, COLUMN_TOP, COLUMN_WIDTH, A_BOTTOM - COLUMN_TOP)],
+      ['column-B', rect(B_LEFT, COLUMN_TOP, COLUMN_WIDTH, 120)],
+      ['card-b1', rect(B_LEFT + 10, 100, 280, 70)], // y 100..170
+      ['card-b2', rect(B_LEFT + 10, 150, 280, 70)], // y 150..220 — overlaps b1 by 20px
+    ]);
+    const overlapping = {
+      active,
+      collisionRect: DRAGGED_RECT,
+      pointerCoordinates: { x: 470, y: 160 }, // inside the overlap band, which only b2 keeps
+      droppableContainers: containers,
+      droppableRects: rects,
+    };
+    // Shrunk to 170..220, b2 would not contain y=160 at all and only b1 would answer.
+    expect(boardCollisionDetection(overlapping).map(hit => String(hit.id))).toContain('card-b2');
+  });
+
+  it('widens a column that measures exactly zero height, on or off the board', () => {
+    // The column skip is on WIDTH, not area, and this is the case that makes the distinction load
+    // bearing: a board whose `columnClassName` sets no `min-h` and whose consumer renders no empty
+    // placeholder measures an empty column at zero height. It is the whole point of the module that
+    // such a column still accepts a drop, so "zero area means hidden" is the wrong simplification.
+    const containers: DroppableContainer[] = [column('A'), column('B')];
+    const rects = new Map<UniqueIdentifier, ClientRect>([
+      ['column-A', rect(A_LEFT, COLUMN_TOP, COLUMN_WIDTH, A_BOTTOM - COLUMN_TOP)],
+      ['column-B', rect(B_LEFT, COLUMN_TOP, COLUMN_WIDTH, 0)], // top === bottom
+    ]);
+    for (let i = 0; i < 20; i++) {
+      const id = `a${i + 1}`;
+      containers.push(card(id, 'A'));
+      rects.set(`card-${id}`, rect(A_LEFT + 10, COLUMN_TOP + i * 100, 280, 80));
+    }
+    const flat = {
+      active,
+      collisionRect: DRAGGED_RECT,
+      pointerCoordinates: { x: 470, y: 2000 },
+      droppableContainers: containers,
+      droppableRects: rects,
+    };
+    expect(boardCollisionDetection(flat)[0]?.id).toBe('column-B');
+
+    // And with a board box measured, where the column clips to `null` (nothing of it is on screen,
+    // since it has no height to show). A clipped-away LANE still receives the band and stays a
+    // target — only its cards would be dropped, and it has none.
+    expect(
+      boardCollisionDetection(inBoardBox(flat, rect(A_LEFT, COLUMN_TOP, 640, 2000)))[0]?.id,
+    ).toBe('column-B');
   });
 });

@@ -16,9 +16,12 @@ import type { KanbanItem } from './types';
  * exercises a REAL DOM `closest()` call against the string literal `KanbanBoard` actually
  * renders, so that rename breaks a test instead.
  *
- * It also proves the attribute sits on the same node `scrollerRef` forwards, since the pipeline
- * board uses that ref for its mobile scroll-snap sync — a board that marked one element and
- * forwarded another would clip against the wrong box.
+ * It also proves the attribute sits on the same node `scrollerRef` forwards. That ref is the only
+ * handle a consumer ever gets on this element (the collection layer's `KanbanView` passes one
+ * through from its config), so marking one element and forwarding another would leave a consumer
+ * measuring or scrolling a different box than the one hit-testing clips to. No CakeCRM surface
+ * supplies a `scrollerRef` today, which is exactly why the pairing needs a test rather than a
+ * caller to keep it honest.
  */
 interface Item extends KanbanItem {
   title: string;
