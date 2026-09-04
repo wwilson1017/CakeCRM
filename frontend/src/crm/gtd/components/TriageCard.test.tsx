@@ -60,8 +60,13 @@ const PROJECT: TodoProject = {
 // `updated_at`. So the fixtures have to move that column the way the server does — with one
 // frozen timestamp every response and every reload looks stale, the card ignores them all,
 // and the suite would be testing a component that never adopts anything.
+// …and in the shape the server emits: `_apply_task_update_cur` stamps `updated_at` from
+// `datetime.now(timezone.utc).isoformat()`, which is microseconds and a `+00:00` zone — not
+// `toISOString()`'s millisecond `Z`. Fixtures in the wrong shape would let a comparison bug
+// that only bites production pass here.
 let clock = 0;
-const nextStamp = () => new Date(Date.UTC(2026, 7, 6, 12, 0, ++clock)).toISOString();
+const nextStamp = () =>
+  `2026-08-06T12:00:${String(++clock).padStart(2, '0')}.000000+00:00`;
 
 let container: HTMLDivElement;
 let root: Root;
@@ -524,6 +529,25 @@ describe('writes decide against the state as it is NOW', () => {
     render({ notes: 'first', updated_at: '2026-08-06T12:00:00.123400+00:00' });
     render({ notes: 'second', updated_at: '2026-08-06T12:00:00.123900+00:00' });
     expect(notesBox().value).toBe('second');
+  });
+
+  it('breaks that tie on the fraction, not on the whole string', () => {
+    // The SAME instant, written `+00:00` and `Z`, is the same version — and an equal version
+    // is the echo this ordering exists to reject. A lexical compare of the whole timestamp
+    // would call the second one newer, because `Z` sorts after `+`, and adopt it. Only the
+    // fraction answers the question, and only it is free of how the zone is spelled.
+    render({ notes: 'first', updated_at: '2026-08-06T12:00:00.123400+00:00' });
+    render({ notes: 'second', updated_at: '2026-08-06T12:00:00.123400Z' });
+    expect(notesBox().value).toBe('first');
+  });
+
+  it('offers each context once, however the shared list spells it', () => {
+    // The meta list is the values other rows carry, so a legacy row with stray whitespace —
+    // or two differing only by it — would put a near-duplicate in the picker and give two
+    // options the same React key.
+    render({ context: '@calls' }, [' @calls ', '@calls', '@errands']);
+    const labels = [...contextPicker().options].map(o => o.textContent);
+    expect(labels).toEqual(['Set context…', '@calls', '@errands', '+ New context…']);
   });
 
   it('stops re-sending once the write is acknowledged, even on a stale response', async () => {

@@ -60,7 +60,9 @@ export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onS
   // reshuffle on every keystroke of a name being typed (the select is showing the sentinel
   // then, so its contents do not matter).
   const contextOptions = useMemo(() => {
-    const known = contexts.filter(Boolean);
+    // Trimmed and de-duplicated, so the list can neither hold a near-duplicate that fails to
+    // match the trimmed `own` value below nor give two options the same React key.
+    const known = [...new Set(contexts.map(c => c.trim()).filter(Boolean))];
     const own = (addingContext ? (todo?.context ?? '') : context).trim();
     return own && !known.includes(own) ? [own, ...known] : known;
   }, [contexts, context, addingContext, todo?.context]);

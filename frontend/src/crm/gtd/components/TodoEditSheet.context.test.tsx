@@ -170,6 +170,14 @@ describe('the context field is a real picker, not a datalist', () => {
     expect(await save()).toMatchObject({ context: '' });
   });
 
+  it('offers each context once, however the shared list spells it', () => {
+    // Same reason the triage card de-duplicates: the meta list is the values other rows
+    // carry, so whitespace variants would show a near-duplicate and share a React key.
+    render({ context: '@calls' }, [' @calls ', '@calls', '@errands']);
+    expect(labels()).toEqual(['No context', '@calls', '@errands', '+ New context…']);
+    expect(picker().selectedOptions[0].textContent).toBe('@calls');
+  });
+
   it('can still select a context whose name collides with the sentinel', () => {
     // Why the option values are indices rather than the context strings, exactly as
     // TriageCard documents: with string values this option would BE the sentinel, and

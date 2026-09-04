@@ -40,24 +40,33 @@ const destCls = 'rounded-lg border px-3 py-2 text-sm font-heading transition-col
 const inputCls = 'rounded-lg border border-line bg-cream px-2 py-1.5 text-sm text-charcoal focus:border-brand focus:outline-none disabled:opacity-50';
 const linkCls = 'text-sm underline disabled:opacity-50';
 
+/** The sub-millisecond part of an ISO timestamp, in microseconds within the millisecond.
+ * `Date.parse` truncates at the millisecond, and every task write stamps `updated_at` from
+ * `datetime.now(timezone.utc).isoformat()` — microseconds. This is the precision it threw
+ * away. Read out of the fractional field alone, so it does not care whether the zone is
+ * written `+00:00` or `Z`; a lexical compare of the whole string would, since `Z` sorts
+ * after `+`. */
+const subMs = (iso: string): number => {
+  const frac = /\.(\d+)/.exec(iso);
+  return frac ? Number(frac[1].slice(3, 6).padEnd(3, '0')) : 0;
+};
+
 /**
  * Is row version `a` strictly newer than `b`?
  *
- * `Date.parse` is the primary comparison but truncates to MILLISECONDS, while the server
- * renders `updated_at` with `datetime.isoformat()` off a Postgres TIMESTAMPTZ — microseconds.
- * Two commits inside the same millisecond would compare equal, and equal means "reject", so
- * the newer row would be dropped and the card left showing the older one for good. The string
- * comparison breaks that tie: every timestamp comes from the one serializer
- * (`core/postgres._postprocess_value`), so the values share a canonical shape whose lexical
- * order IS time order.
+ * Every task write bumps `updated_at` (`service._apply_task_update_cur`), so this orders
+ * every view of the record the card can be handed. Two commits inside the same millisecond
+ * would compare equal on `Date.parse` alone — and equal means "reject", which would drop the
+ * newer row and leave the card on the older one for good — so the tie falls to the
+ * microseconds `Date.parse` discarded.
  *
- * An unparseable value is never newer — a deliberate floor, not a live path.
+ * An unparseable value is never newer: a deliberate floor, not a live path.
  */
 const isNewer = (a: string, b: string): boolean => {
   const na = Date.parse(a);
   const nb = Date.parse(b);
   if (Number.isNaN(na) || Number.isNaN(nb)) return false;
-  return na !== nb ? na > nb : a > b;
+  return na !== nb ? na > nb : subMs(a) > subMs(b);
 };
 
 /**
@@ -266,8 +275,12 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
   // item's own context either way, so the card always has a way out that isn't
   // "retype what is already there".
   const options = useMemo(() => {
-    const known = contexts.filter(Boolean);
-    return row.context && !known.includes(row.context) ? [row.context, ...known] : known;
+    // Trimmed and de-duplicated. The shared meta is a list of values other rows carry, so a
+    // legacy row with stray whitespace — or two rows differing only by it — would otherwise
+    // put a near-duplicate in the picker and give two options the same React key.
+    const known = [...new Set(contexts.map(c => c.trim()).filter(Boolean))];
+    const own = row.context.trim();
+    return own && !known.includes(own) ? [own, ...known] : known;
   }, [contexts, row.context]);
 
   /** One write. `resolves` says whether it takes the item out of the inbox. */
