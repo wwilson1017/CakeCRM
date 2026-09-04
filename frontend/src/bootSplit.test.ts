@@ -194,22 +194,67 @@ function importMetaGlobPatterns(source: string): string[] {
 function lazyCallSites(source: string): Array<{ insideFunction: boolean }> {
   const file = parse(source);
 
-  // Which local identifier(s) refer to react's `lazy`?
+  // Which local identifier(s) refer to react's `lazy`? Three shapes, because each is a real
+  // way to write it and a scanner that knew only the first was MEASURED to be evadable: a
+  // module-scope `const mkLazy = lazy` plus `mkLazy(...)` inside the component body is a true
+  // remount regression that an import-name-only detector reported as clean.
   const names = new Set<string>();
+  const reactNamespaces = new Set<string>();
   for (const statement of file.statements) {
     if (!ts.isImportDeclaration(statement)) continue;
     if (!ts.isStringLiteral(statement.moduleSpecifier) || statement.moduleSpecifier.text !== 'react') continue;
-    const bindings = statement.importClause?.namedBindings;
+    const clause = statement.importClause;
+    if (!clause) continue;
+    // 1. `import { lazy }` / `import { lazy as makeLazy }`
+    const bindings = clause.namedBindings;
     if (bindings && ts.isNamedImports(bindings)) {
       for (const element of bindings.elements) {
         if ((element.propertyName ?? element.name).text === 'lazy') names.add(element.name.text);
       }
     }
+    // 2. `import React from 'react'` / `import * as React from 'react'` → `React.lazy(...)`
+    if (clause.name) reactNamespaces.add(clause.name.text);
+    if (bindings && ts.isNamespaceImport(bindings)) reactNamespaces.add(bindings.name.text);
   }
+
+  // 3. Module-scope re-aliasing, to a fixpoint: `const a = lazy; const b = a;`
+  for (let pass = 0; pass < 5; pass += 1) {
+    const before = names.size;
+    for (const statement of file.statements) {
+      if (!ts.isVariableStatement(statement)) continue;
+      for (const decl of statement.declarationList.declarations) {
+        const init = decl.initializer;
+        if (!init || !ts.isIdentifier(decl.name)) continue;
+        if (ts.isIdentifier(init) && names.has(init.text)) names.add(decl.name.text);
+        if (
+          ts.isPropertyAccessExpression(init) &&
+          init.name.text === 'lazy' &&
+          ts.isIdentifier(init.expression) &&
+          reactNamespaces.has(init.expression.text)
+        ) {
+          names.add(decl.name.text);
+        }
+      }
+    }
+    if (names.size === before) break;
+  }
+
+  const isLazyCallee = (expr: ts.Expression): boolean =>
+    (ts.isIdentifier(expr) && names.has(expr.text)) ||
+    (ts.isPropertyAccessExpression(expr) &&
+      expr.name.text === 'lazy' &&
+      ts.isIdentifier(expr.expression) &&
+      reactNamespaces.has(expr.expression.text));
+
+  /** Is this function the callback handed to a `lazy(...)` call? */
+  const isLazyArgument = (node: ts.Node): boolean => {
+    const parent = node.parent;
+    return !!parent && ts.isCallExpression(parent) && isLazyCallee(parent.expression) && parent.arguments[0] === node;
+  };
 
   const sites: Array<{ insideFunction: boolean }> = [];
   const visit = (node: ts.Node, insideFunction: boolean) => {
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && names.has(node.expression.text)) {
+    if (ts.isCallExpression(node) && isLazyCallee(node.expression)) {
       sites.push({ insideFunction });
     }
     // The lazy() ARGUMENT is itself an arrow function, so descending into a call we just
@@ -217,23 +262,11 @@ function lazyCallSites(source: string): Array<{ insideFunction: boolean }> {
     const opensScope =
       ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) ||
       ts.isArrowFunction(node) || ts.isMethodDeclaration(node);
-    const nested = insideFunction || (opensScope && !isLazyArgument(node, names));
+    const nested = insideFunction || (opensScope && !isLazyArgument(node));
     ts.forEachChild(node, (child) => visit(child, nested));
   };
   visit(file, false);
   return sites;
-}
-
-/** Is this function the callback handed to a `lazy(...)` call? */
-function isLazyArgument(node: ts.Node, names: Set<string>): boolean {
-  const parent = node.parent;
-  return (
-    !!parent &&
-    ts.isCallExpression(parent) &&
-    ts.isIdentifier(parent.expression) &&
-    names.has(parent.expression.text) &&
-    parent.arguments[0] === node
-  );
 }
 
 /**
@@ -603,6 +636,18 @@ describe('boot split (#149) — the scanner itself', () => {
     expect(lazyCallSites(commentOnly).map((s) => s.insideFunction)).toEqual([false]);
     // A `lazy` from somewhere else is not React's.
     expect(lazyCallSites(notReact)).toEqual([]);
+
+    // The evasions an import-name-only detector misses. The first was MEASURED against the
+    // real App.tsx before this branch existed: the guard stayed green while a lazy() inside the
+    // component body remounted the whole route subtree on every render.
+    const reAliased = `import { lazy } from 'react';\nconst mkLazy = lazy;\nfunction App() { const A = mkLazy(() => import('./A')); return <A />; }`;
+    const chained = `import { lazy } from 'react';\nconst a = lazy;\nconst b = a;\nfunction App() { const A = b(() => import('./A')); return <A />; }`;
+    const namespaced = `import * as React from 'react';\nfunction App() { const A = React.lazy(() => import('./A')); return <A />; }`;
+    const namespaceAlias = `import React from 'react';\nconst mk = React.lazy;\nfunction App() { const A = mk(() => import('./A')); return <A />; }`;
+    expect(lazyCallSites(reAliased).map((s) => s.insideFunction)).toEqual([true]);
+    expect(lazyCallSites(chained).map((s) => s.insideFunction)).toEqual([true]);
+    expect(lazyCallSites(namespaced).map((s) => s.insideFunction)).toEqual([true]);
+    expect(lazyCallSites(namespaceAlias).map((s) => s.insideFunction)).toEqual([true]);
   });
 
   it('sees import.meta.glob in every spelling that bundles a directory', () => {
