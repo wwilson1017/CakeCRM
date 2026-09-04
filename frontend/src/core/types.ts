@@ -353,3 +353,56 @@ export interface AiTouchEvidenceResponse {
   truncated: boolean;
   events: AiTouchEvidenceEvent[];
 }
+
+// GET /api/crm/companies/:id/report (issue #144) — the Reports page's one-company rollup.
+// Both child lists are capped server-side; the `*_truncated` flags say so rather than letting
+// the page quietly under-report an account. Every child carries `activities` AND
+// `activities_truncated` — an absent key would read as "not loaded", `[]` means "none".
+export interface CrmRollupChild {
+  activities: CrmActivity[];
+  activities_truncated: boolean;
+}
+
+export interface CrmCompanyRollup {
+  company: CrmCompany;
+  contacts: (CrmContact & CrmRollupChild)[];
+  deals: (CrmDeal & CrmRollupChild & { last_activity_at: string | null })[];
+  contacts_truncated: boolean;
+  deals_truncated: boolean;
+}
+
+/**
+ * One row of the merged company feed (GET /api/crm/companies/:id/timeline).
+ *
+ * `source` says which table the row came from. It is not decoration: notes live in
+ * `crm_chatter` and activities in `activity_log`, two tables with INDEPENDENT id sequences,
+ * so `id` alone repeats across the feed. `(created_at, source, id)` is the server's total
+ * order, and `${source}:${id}` is the only safe React key or dedupe key.
+ */
+export interface CrmTimelineEntry {
+  source: 'note' | 'activity';
+  id: number;
+  entity_type: 'company' | 'contact' | 'deal';
+  entity_id: number;
+  /** The activity kind ("call", "email", …). Null for a note. */
+  activity: string | null;
+  /** A note's text, or an activity's note ('' when it carries none). */
+  message: string;
+  created_at: string;
+  /** Notes only: set on edit, null when never edited. Always null for an activity. */
+  updated_at: string | null;
+  /** 0/1 for notes; always 0 for activities, which have no archived concept. */
+  archived: number;
+  /** Note author / activity actor. Null = unattributed (the assistant's own writes). */
+  actor_id: number | null;
+  /** The parent record's display name, hydrated per page. */
+  source_name: string;
+  source_archived: boolean;
+  /** Notes only. */
+  attachments?: CrmAttachment[];
+}
+
+export interface CrmTimelinePage {
+  entries: CrmTimelineEntry[];
+  has_more: boolean;
+}
