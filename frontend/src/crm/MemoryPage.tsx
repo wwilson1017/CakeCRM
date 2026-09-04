@@ -21,7 +21,7 @@ import { useIsMobile } from '../shared/useIsMobile';
 import { toast } from '../shared/toast';
 import { confirmDialog } from '../shared/confirm';
 import {
-  ACCENT_TEXT, BG_CARD, BG_RAISED, INK, INK_DIM, INK_MUTE, LINE, LINE_STRONG,
+  ACCENT, ACCENT_TEXT, BG_CARD, BG_RAISED, INK, INK_DIM, INK_MUTE, LINE, LINE_STRONG,
   FONT_MONO, tint,
 } from '../shared/styles';
 import { pagePadding, pageHeading, sectionHeading, cardStyle, btnPrimary, btnSecondary, btnDanger } from './styles';
@@ -53,9 +53,9 @@ export function MemoryPage() {
             onClick={() => setTab(t)}
             style={{
               ...btnSecondary,
-              background: tab === t ? tint(ACCENT_TEXT, 12) : 'transparent',
+              background: tab === t ? tint(ACCENT, 12) : 'transparent',
               color: tab === t ? ACCENT_TEXT : INK_MUTE,
-              borderColor: tab === t ? ACCENT_TEXT : LINE,
+              borderColor: tab === t ? ACCENT : LINE,
             }}
           >
             {t === 'files' ? 'Knowledge files' : 'Recorded facts'}
@@ -189,8 +189,8 @@ function FilesPanel({ isMobile }: { isMobile: boolean }) {
             style={{
               display: 'block', width: '100%', textAlign: 'left', cursor: 'pointer',
               padding: '10px 12px', marginBottom: 6, borderRadius: 8,
-              border: `1px solid ${selected === f.filename ? ACCENT_TEXT : LINE}`,
-              background: selected === f.filename ? tint(ACCENT_TEXT, 8) : BG_RAISED,
+              border: `1px solid ${selected === f.filename ? ACCENT : LINE}`,
+              background: selected === f.filename ? tint(ACCENT, 8) : BG_RAISED,
               color: INK, font: 'inherit',
             }}
           >

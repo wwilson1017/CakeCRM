@@ -222,4 +222,17 @@ describe('the corpus sweep across multiple pages', () => {
     expect(perMount).toBeLessThanOrEqual(2);   // StrictMode double-invoke, one call each
     expect(listCalls().every(u => !u.includes('after_id'))).toBe(true);
   });
+
+  it('renders the name cell as a real link, so a row can be opened in a new tab (#148)', async () => {
+    // The consumer half of #148. The row is keyboard-openable on its own, but an anchor adds
+    // what a click handler cannot hand-roll: link semantics for a screen reader, and native
+    // Cmd/Ctrl-click, middle-click and right-click into a new tab — a middle click fires no
+    // `click` event at all, so `onRowClick` never sees it. Contacts navigates on select, so
+    // it takes the anchor; Tasks opens an overlay and deliberately does not.
+    mountAt('/crm/contacts');
+    await settle();
+    const link = container.querySelector('tbody a') as HTMLAnchorElement | null;
+    expect(link?.getAttribute('href')).toBe('/crm/contacts/1');
+    expect(link?.textContent).toContain('Ada');
+  });
 });

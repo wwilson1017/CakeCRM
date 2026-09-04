@@ -8,7 +8,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import { api } from '../../core/api/client';
 import type { AiTouchEvidenceEvent, AiTouchEvidenceResponse } from '../../core/types';
-import { INK, INK_DIM, INK_MUTE, INK_SOFT, GOLD, LINE, SAGE, mono, tint } from '../../shared/styles';
+import { INK, INK_DIM, INK_MUTE, INK_SOFT, GOLD_FILL, LINE, SAGE_FILL, SAGE_TEXT, mono, tint } from '../../shared/styles';
 import { bannerCopy, coverageNote, stateLabel, summaryLine } from '../touchEvidence';
 import { TouchCountPill } from './badges';
 
@@ -17,7 +17,7 @@ function VerdictMarker({ event, open }: { event: AiTouchEvidenceEvent; open: boo
   const label = stateLabel(event.state, open);
   const base = { ...mono(10), whiteSpace: 'nowrap' as const, padding: '2px 8px', borderRadius: 4 };
   if (event.state === 'touch') {
-    return <span style={{ ...base, background: tint(SAGE, 12), color: SAGE }}>{label}</span>;
+    return <span style={{ ...base, background: tint(SAGE_FILL, 12), color: SAGE_TEXT }}>{label}</span>;
   }
   if (event.state === 'not_touch' || event.state === 'stage_move') {
     return <span style={{ ...base, background: tint(INK, 6), color: INK_SOFT }}>{label}</span>;
@@ -116,7 +116,7 @@ export function AiTouchDetail({ dealId, count }: { dealId: number; count?: numbe
             <>
               {banner && (
                 <p style={{
-                  fontSize: 12, color: INK, background: tint(GOLD, 10), lineHeight: 1.5,
+                  fontSize: 12, color: INK, background: tint(GOLD_FILL, 10), lineHeight: 1.5,
                   padding: '8px 10px', borderRadius: 4, marginBottom: 10,
                 }}>
                   {banner}

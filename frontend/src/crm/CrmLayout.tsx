@@ -8,7 +8,7 @@ import ChunkErrorBoundary from '../core/components/ChunkErrorBoundary';
 import { useIsMobile } from '../shared/useIsMobile';
 import { MobileMenuDrawer } from '../shared/MobileMenuDrawer';
 import { confirmDialog } from '../shared/confirm';
-import { INK, INK_SOFT, INK_MUTE, LINE, LINE_STRONG, ACCENT, GOLD, FONT_DISPLAY, FONT_SANS, CORAL, tint } from '../shared/styles';
+import { INK, INK_SOFT, INK_MUTE, LINE, LINE_STRONG, ACCENT, GOLD_FILL, GOLD_TEXT, FONT_DISPLAY, FONT_SANS, CORAL_TEXT, tint } from '../shared/styles';
 import { modalOverlay, modalContent, btnPrimary, btnSecondary } from './styles';
 import { AiKeyNudge } from './components/AiKeyNudge';
 import { AssistantLauncher } from './components/AssistantLauncher';
@@ -74,7 +74,7 @@ function OnboardingDialog({ onLoad, onDismiss }: {
           how CakeCRM works. You can clear it anytime, or start with an empty CRM.
         </p>
         {error && (
-          <p style={{ fontFamily: FONT_SANS, fontSize: 13, color: CORAL, margin: '12px 0 0' }}>
+          <p style={{ fontFamily: FONT_SANS, fontSize: 13, color: CORAL_TEXT, margin: '12px 0 0' }}>
             Couldn't load sample data. Please try again.
           </p>
         )}
@@ -119,8 +119,8 @@ function DemoBanner({ onClear, isMobile }: {
 
   return (
     <div style={{
-      background: tint(GOLD, 8),
-      borderBottom: `1px solid ${tint(GOLD, 15)}`,
+      background: tint(GOLD_FILL, 8),
+      borderBottom: `1px solid ${tint(GOLD_FILL, 15)}`,
       padding: isMobile ? '10px 16px' : '8px 28px',
       display: 'flex',
       flexDirection: isMobile ? 'column' : 'row',
@@ -129,7 +129,7 @@ function DemoBanner({ onClear, isMobile }: {
       gap: isMobile ? 8 : 16,
     }}>
       <span style={{
-        fontFamily: FONT_SANS, fontSize: 13, color: error ? CORAL : GOLD, lineHeight: 1.4,
+        fontFamily: FONT_SANS, fontSize: 13, color: error ? CORAL_TEXT : GOLD_TEXT, lineHeight: 1.4,
       }}>
         {error
           ? 'Failed to clear example data. Please try again.'
@@ -139,8 +139,8 @@ function DemoBanner({ onClear, isMobile }: {
         onClick={handleClear}
         disabled={clearing}
         style={{
-          background: tint(GOLD, 12), color: GOLD,
-          border: `1px solid ${tint(GOLD, 20)}`, borderRadius: 4,
+          background: tint(GOLD_FILL, 12), color: GOLD_TEXT,
+          border: `1px solid ${tint(GOLD_FILL, 20)}`, borderRadius: 4,
           padding: '4px 14px', fontSize: 12, fontFamily: FONT_SANS,
           fontWeight: 500, cursor: clearing ? 'wait' : 'pointer',
           opacity: clearing ? 0.6 : 1, whiteSpace: 'nowrap',

@@ -86,11 +86,39 @@
   --color-ck-accent-wine: #710606;
   --color-ck-accent-ink: #ffffff;
   --color-ck-accent-soft: color-mix(in srgb, var(--color-ck-accent) 9%, transparent);
-  /* Accent used as TEXT or an icon rather than as a fill. Identical to `accent` in
-     light; the .dark block lightens it, because the fixed brand red is only 3.15:1
-     on the dark card and fails WCAG AA as body text. Fills (buttons, bars, borders,
-     focus rings) keep `accent` so the brand red stays identical in both themes. */
-  --color-ck-accent-text: var(--color-ck-accent);
+  /* Accent used as TEXT or an icon rather than as a fill — see the FILL vs TEXT rule
+     below, which every hue in this palette now follows. Both themes carry a literal:
+     the fixed brand red is 3.15:1 on the dark card and 3.16:1 on a light accent wash,
+     so it fails WCAG AA as body text in BOTH directions. Fills (buttons, bars, borders,
+     focus rings) keep `accent`, so the brand red itself is unchanged, and ~50 call sites
+     already route text through this token — nothing had to move for light to be fixed. */
+  --color-ck-accent-text: #ba002a;
+
+  /* ── FILL vs TEXT, the rule for every hue below (issue #119) ────────────────
+     Each status and stage hue is TWO tokens, and which one a component reaches for is
+     decided by the ROLE, not the component:
+
+       fill  →  --color-ck-<hue>          background, border, dot, bar, progress track
+       text  →  --color-ck-<hue>-text     anything painted as a glyph: text or an icon
+
+     #54 lightened these hues under `.dark` so they stay legible on a dark surface but
+     never wrote the mirror rule for light, so in light mode all eleven failed AA 4.5:1
+     as text — worst `ScorePill` warm at 2.45:1 on a stage-washed deal card.
+
+     Splitting the token is not a stylistic preference, it is the only thing that works:
+     a chip's background IS `tint(<the same token>, 12)`, so darkening one token to fix
+     its text darkens the wash beneath it — clawing back most of the gain AND pushing the
+     neutral ramp under the floor #68 tuned it to (`ink-dim` on a stage-washed deal card
+     has 0.22 to spare). The wash has to hold still while the glyph moves. That is exactly
+     what `--color-ck-accent-text` above has always done; this generalises it.
+
+     Values are DERIVED, not chosen: each is the smallest OKLCH lightness step (hue angle
+     and chroma held; chroma reduced only where sRGB forces it) that clears 4.5:1 on every
+     surface the app really paints it on, with a little headroom (~4.55). Amber moves
+     furthest by a wide margin — a mid-gold simply cannot clear AA on a 12% gold wash
+     without landing in ochre. `core/theme/hueContrast.test.ts` re-derives the whole sweep
+     from THIS file and fails CI on any pairing under 4.5:1, so retuning one value is a
+     one-line edit that gets checked. */
 
   /* Status */
   --color-ck-green: #2e7d4f;
@@ -99,6 +127,17 @@
   /* Assistant-authored badges (provenance / AI touch counts) */
   --color-ck-ai: #3a6cb0;
 
+  --color-ck-green-text: #10663a;
+  --color-ck-amber-text: #7e5200;
+  --color-ck-red-text: #aa292e;
+  --color-ck-ai-text: #27599b;
+
+  /* Foreground for a status hue used as a SOLID action fill ("Mark Won", "Mark
+     Complete", the danger confirm). Not `accent-ink`: that is white in both themes,
+     which is right on the brand red (4.66:1 either way) but only 2.49:1 on the green
+     the `.dark` block lightened for text. So this one flips per theme instead. */
+  --color-ck-on-status: #ffffff;
+
   /* Pipeline stage hues (consumed by crm/constants.ts) */
   --color-ck-stage-lead: #3b6ea5;
   --color-ck-stage-qualified: #64748b;
@@ -106,6 +145,13 @@
   --color-ck-stage-negotiation: #c26b3c;
   --color-ck-stage-won: #2e7d4f;
   --color-ck-stage-lost: #c24141;
+
+  --color-ck-stage-lead-text: #2d6096;
+  --color-ck-stage-qualified-text: #505f76;
+  --color-ck-stage-proposal-text: #845600;
+  --color-ck-stage-negotiation-text: #9b4713;
+  --color-ck-stage-won-text: #186b3f;
+  --color-ck-stage-lost-text: #ad2d30;
 
   /* Chrome — hover is an ink tint, so it must be declared per theme (a light
      tint over a dark surface, not a dark tint that would vanish there). */
@@ -180,7 +226,9 @@
 
   --color-ck-accent-soft: color-mix(in srgb, var(--color-ck-accent) 20%, transparent);
   /* Same rule the status hues below follow: lighten so it stays legible on a dark
-     surface. 5.19:1 on card, 4.51:1 on an accent-soft chip. */
+     surface. 5.19:1 on card, 4.52:1 on an accent-soft chip. Left exactly where #54 put
+     it: it is a brand value another issue tuned on purpose, it clears AA, and moving it
+     0.3 L* to match #119's slightly wider headroom would be churn. */
   --color-ck-accent-text: #f0727f;
 
   --color-ck-green: #5fb585;
@@ -188,12 +236,34 @@
   --color-ck-red: #e8736b;
   --color-ck-ai: #7fa8dd;
 
+  /* Dark's hues were already tuned as TEXT by #54, so most `-text` tokens simply point
+     back at the fill and follow it if it is ever retuned — the passthrough is the point,
+     not laziness. Two carry a literal because #54 swept SAME-hue pairings only and these
+     two fail a CROSS-hue one the app really renders: `red` is the dashboard's "Nd idle"
+     label, which sits on whatever stage wash its row has (3.97:1 over a proposal row),
+     and `stage-lost` is 4.17:1 on its own 12% wash over `card`. */
+  --color-ck-green-text: var(--color-ck-green);
+  --color-ck-amber-text: var(--color-ck-amber);
+  --color-ck-red-text: #f57f76;
+  --color-ck-ai-text: var(--color-ck-ai);
+
+  /* Dark-mode reverse of the light value: near-black ON the lightened status hue.
+     6.91:1 on green, 5.82:1 on red — where white was 2.49:1 and 2.96:1. */
+  --color-ck-on-status: #1c1b19;
+
   --color-ck-stage-lead: #7aa8d8;
   --color-ck-stage-qualified: #9aa5b6;
   --color-ck-stage-proposal: #d9a441;
   --color-ck-stage-negotiation: #e0916a;
   --color-ck-stage-won: #5fb585;
   --color-ck-stage-lost: #e8736b;
+
+  --color-ck-stage-lead-text: var(--color-ck-stage-lead);
+  --color-ck-stage-qualified-text: var(--color-ck-stage-qualified);
+  --color-ck-stage-proposal-text: var(--color-ck-stage-proposal);
+  --color-ck-stage-negotiation-text: var(--color-ck-stage-negotiation);
+  --color-ck-stage-won-text: var(--color-ck-stage-won);
+  --color-ck-stage-lost-text: #f07b72;
 
   --color-ck-hover: rgba(240, 239, 232, 0.06);
   --color-ck-scrim: rgba(0, 0, 0, 0.7);

@@ -39,6 +39,11 @@ function makeConfig(key: string): CollectionConfig<Row> {
   };
 }
 
+// Every other DOM test in the repo sets this (see `shared/listview/ListView.test.tsx`); without
+// it React warns on every act() call and its flush guarantees are not the ones the assertions
+// below rely on. This file had been missing it.
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
 let container: HTMLDivElement;
 let root: Root;
 const latest: { current: CollectionState<Row> | null } = { current: null };
@@ -47,9 +52,12 @@ const onSelect = vi.fn();
 function Page({
   config,
   withSelection = false,
+  noSelect = false,
 }: {
   config: CollectionConfig<Row>;
   withSelection?: boolean;
+  /** A page that wires no `onSelect` at all — the surface with nothing to open (#148). */
+  noSelect?: boolean;
 }) {
   const state = useCollectionState(config, rows);
   const [selected, setSelected] = useState<ReadonlySet<string | number>>(new Set());
@@ -60,7 +68,12 @@ function Page({
     ? { selectedIds: selected, onChange: setSelected, renderBulkBar: () => null }
     : undefined;
   return (
-    <CollectionListView config={config} state={state} selection={selection} onSelect={onSelect} />
+    <CollectionListView
+      config={config}
+      state={state}
+      selection={selection}
+      onSelect={noSelect ? undefined : onSelect}
+    />
   );
 }
 
@@ -151,6 +164,44 @@ describe('selection column', () => {
     act(() => firstRow.click());
     expect(onSelect).toHaveBeenCalledWith(1);
   });
+
+  it('a KEYSTROKE on the checkbox never doubles as a row-open either (#148)', () => {
+    // The row is a keyboard stop now, and this checkbox is the concrete cell control
+    // ListView's `e.target === e.currentTarget` guard was written for — the checkbox stops
+    // CLICK propagation but has no key handler of its own, so only that guard stands between
+    // Space-on-a-checkbox and also opening the record. Proven here against the real injected
+    // column rather than a stand-in button.
+    renderPage({ config: makeConfig('selkeys'), withSelection: true });
+    const box = document.querySelector('input[aria-label="Select row"]') as HTMLElement;
+    act(() => { box.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true })); });
+    act(() => { box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); });
+    // Space on a checkbox also makes a real browser dispatch a `click`, which jsdom does not
+    // synthesize — so model the whole lifecycle here rather than only its keydown half. The
+    // checkbox's own `stopPropagation` is what stops that click, and the click-path test above
+    // is what would catch its removal; this asserts the two halves compose on one control.
+    act(() => { box.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('rows are keyboard stops that open the record (#148)', () => {
+    renderPage({ config: makeConfig('selkbd'), withSelection: true });
+    const firstRow = document.querySelector('tbody tr') as HTMLElement;
+    expect(firstRow.getAttribute('tabindex')).toBe('0');
+    act(() => { firstRow.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); });
+    expect(onSelect).toHaveBeenCalledWith(1);
+  });
+
+  it('rows are inert when the page wires no onSelect (#148)', () => {
+    // The ADAPTER decision: forwarding `row => onSelect?.(row.id)` would always be truthy, so
+    // a page with nothing to open would still mint a tab stop per row that does nothing —
+    // worse than no tab stop.
+    renderPage({ config: makeConfig('nosel_inert'), noSelect: true });
+    const firstRow = document.querySelector('tbody tr') as HTMLElement;
+    expect(firstRow.getAttribute('tabindex')).toBeNull();
+    expect(firstRow.className).not.toContain('cursor-pointer');
+    act(() => firstRow.click());
+    expect(onSelect).not.toHaveBeenCalled();
+  });
 });
 
 // A LIST-ONLY surface (CRM Contacts/Companies) has no `arrayOrder` field, so its resting
@@ -203,5 +254,27 @@ describe('voided rendering', () => {
     );
     expect(struck).toHaveLength(1);
     expect(struck[0].textContent).toContain('gamma');
+  });
+
+  it('dims the voided row through its CELLS, so the focus outline stays full-strength (#148)', () => {
+    // `opacity` composites an element's whole painting, its focus outline included. With
+    // `opacity-60` on the `<tr>` — as it was before #148 — a focused voided row's indicator
+    // fell to roughly 2.8:1 light / 1.8:1 dark, under WCAG 1.4.11's 3:1, on exactly the rows
+    // the non-destructive standard insists stay visible and openable.
+    renderPage({ config: makeConfig('voidfocus') });
+    const struck = [...document.querySelectorAll('tbody tr')].find(tr =>
+      tr.className.includes('line-through'),
+    ) as HTMLElement;
+    // Compared as class TOKENS, not substrings: `[&>td]:opacity-60` contains the literal text
+    // `opacity-60`, so a substring check here would pass for the broken row-level form too.
+    const tokens = struck.className.split(/\s+/);
+    expect(tokens).not.toContain('opacity-60');
+    expect(tokens).toContain('[&>td]:opacity-60');
+
+    // And the guarantee the dimming exists to protect: a voided row is still a keyboard stop
+    // that opens. Asserting only the class would stay green if voided rows lost their tabIndex.
+    expect(struck.getAttribute('tabindex')).toBe('0');
+    act(() => { struck.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); });
+    expect(onSelect).toHaveBeenCalledWith(3);
   });
 });

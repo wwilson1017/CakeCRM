@@ -16,7 +16,7 @@ import { useAuth } from '../../core/auth/AuthContext';
 import type { CrmToday, CrmTodayItem } from '../../core/types';
 import { loadPersistedState, savePersistedState } from '../../shared/search/persist';
 import {
-  ACCENT, FONT_DISPLAY, INK, INK_DIM, INK_MUTE, LINE, SAGE, mono,
+  ACCENT, FONT_DISPLAY, INK, INK_DIM, INK_MUTE, LINE, SAGE_TEXT, mono,
 } from '../../shared/styles';
 import { toast } from '../../shared/toast';
 import { dueLabel, parseUTC } from '../gtd/util';
@@ -240,7 +240,7 @@ function TodayRow({ item, today, showUnassigned, onOpen, onComplete }: RowProps)
         <button type="button" aria-label={`Complete ${item.title}`} onClick={() => onComplete(item.id)}
                 style={{ flexShrink: 0, width: 18, height: 18, padding: 0, borderRadius: 4, cursor: 'pointer',
                          border: `1px solid ${LINE}`, background: 'none', display: 'flex',
-                         alignItems: 'center', justifyContent: 'center', color: SAGE }} />
+                         alignItems: 'center', justifyContent: 'center', color: SAGE_TEXT }} />
       ) : (
         // Only tasks can be completed, but the badges still have to line up: without
         // this spacer a reminder row starts a checkbox-width to the left of every task

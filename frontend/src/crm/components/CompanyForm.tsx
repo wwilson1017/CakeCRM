@@ -3,7 +3,7 @@ import { api } from '../../core/api/client';
 import { writeMayHaveLanded } from '../usePatchableAssembly';
 import { useAuth } from '../../core/auth/AuthContext';
 import { OwnerSelect } from './OwnerSelect';
-import { labelStyle, inputStyle, CORAL, LINE, INK_DIM, mono } from '../../shared/styles';
+import { labelStyle, inputStyle, CORAL_TEXT, LINE, INK_DIM, mono } from '../../shared/styles';
 import { formModalOverlay, formModalContent, formTitle, btnPrimary, btnSecondary } from '../styles';
 import type { CrmCompany } from '../../core/types';
 import { CustomFieldInputs } from './CustomFieldInputs';
@@ -82,7 +82,7 @@ export function CompanyForm({ company, onClose, onSaved, onWriteUncertain }: Pro
         <h2 style={formTitle}>
           {isEdit ? 'Edit Company' : 'New Company'}
         </h2>
-        {error && <p style={{ color: CORAL, fontSize: 12, marginBottom: 12 }}>{error}</p>}
+        {error && <p style={{ color: CORAL_TEXT, fontSize: 12, marginBottom: 12 }}>{error}</p>}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div><label style={labelStyle}>Name *</label><input value={name} onChange={e => setName(e.target.value)} style={inputStyle} /></div>
