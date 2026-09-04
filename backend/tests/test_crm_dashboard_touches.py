@@ -17,6 +17,50 @@ from crm import service
 from crm.router import router as crm_router
 
 
+class FakeCursor:
+    """A cursor over the same queue the helpers read, for the paths that manage their own.
+
+    Rows go back out as TUPLES with a real ``description``, so ``row_to_dict`` runs for
+    real rather than being monkeypatched away — which matters here specifically, because
+    the drill-down reuses ONE cursor for two statements and ``row_to_dict`` reads
+    ``cursor.description``. A stub that handed back dicts would make the one bug this
+    shape is prone to (converting after the next ``execute``) invisible.
+    """
+
+    def __init__(self, rec):
+        self._rec = rec
+        self._rows: list = []
+        self.description = None
+
+    def execute(self, sql, params=()):
+        # Isolation-level statements carry no rows and are not part of the recorded SQL.
+        if sql.strip().upper().startswith("SET TRANSACTION"):
+            self._rows = []
+            self.description = None
+            return
+        self._rec.calls.append((" ".join(sql.split()), list(params)))
+        rows = self._rec.fetchall_queue.pop(0) if self._rec.fetchall_queue else []
+        self._rows = [tuple(r.values()) for r in rows]
+        self.description = [(k,) for k in rows[0]] if rows else []
+
+    def fetchall(self):
+        return self._rows
+
+
+class FakeConnection:
+    def __init__(self, rec):
+        self._rec = rec
+
+    def cursor(self):
+        return FakeCursor(self._rec)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
 class Recorder:
     """Records (normalized_sql, params) per helper call; returns queued rows."""
 
@@ -32,6 +76,9 @@ class Recorder:
     def fetchall(self, sql, params=()):
         self.calls.append((" ".join(sql.split()), list(params)))
         return self.fetchall_queue.pop(0) if self.fetchall_queue else []
+
+    def connection(self):
+        return FakeConnection(self)
 
     def sql_containing(self, needle: str) -> str:
         for sql, _ in self.calls:
@@ -51,6 +98,9 @@ def rec(monkeypatch):
     r = Recorder()
     monkeypatch.setattr(service, "pg_fetchone", r.fetchone)
     monkeypatch.setattr(service, "pg_fetchall", r.fetchall)
+    # The drill-down runs both its reads on ONE cursor so they share a snapshot, so the
+    # recorder has to be able to serve that path too.
+    monkeypatch.setattr(service, "get_connection", lambda: r.connection())
     return r
 
 
@@ -495,10 +545,7 @@ def test_detail_scopes_both_queries_to_the_owner(rec, known_user):
     for needle in ("GROUP BY d.owner_id", "LEFT JOIN companies"):
         assert "d.owner_id = %s" in rec.sql_containing(needle)
         assert rec.params_for(needle)[2] == 7
-    # `touches` is DERIVED from the returned rows on an untruncated list, so the count and
-    # the rows beneath it cannot disagree — the aggregate said 2, the list has 1, and the
-    # list wins because it IS the complete set for this bucket and window.
-    assert out["rep"] == {"user_id": 7, "name": "Dana", "open_deals": 4, "touches": 1}
+    assert out["rep"] == {"user_id": 7, "name": "Dana", "open_deals": 4, "touches": 2}
     assert out["truncated"] is False
     assert "password_hash" not in out["rep"]
     assert [d["id"] for d in out["deals"]] == [1]
@@ -559,6 +606,33 @@ def test_detail_reports_truncation_and_keeps_the_aggregate_count(rec, known_user
 def test_detail_returns_none_for_an_unknown_user_before_reading_any_deals(rec, known_user):
     assert service.get_weekly_touch_detail(owner_id=999, ws=_WS, we=_WE) is None
     assert rec.calls == []
+
+
+def test_detail_reads_both_queries_on_one_repeatable_read_snapshot(rec, known_user, monkeypatch):
+    """The page shows a count and the rows behind it with no cap between them, so two
+    snapshots could render "6 of 5 open deals touched" — or, if the bucket vanished
+    between the reads, drop every row and report 0 for a rep who has them."""
+    seen: list[str] = []
+
+    class Recording(FakeCursor):
+        def execute(self, sql, params=()):
+            seen.append(" ".join(sql.split()))
+            super().execute(sql, params)
+
+    one_cursor = Recording(rec)
+
+    class OneCursorConnection(FakeConnection):
+        def cursor(self):
+            return one_cursor
+
+    monkeypatch.setattr(service, "get_connection", lambda: OneCursorConnection(rec))
+    service.get_weekly_touch_detail(owner_id=7, ws=_WS, we=_WE)
+
+    assert seen[0].upper().startswith("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+    # Both reads land on that ONE cursor, in order, so they cannot describe two instants.
+    assert "GROUP BY d.owner_id" in seen[1]
+    assert "LEFT JOIN companies" in seen[2]
+    assert len(seen) == 3
 
 
 def test_detail_validates_the_window_before_touching_the_database(rec, known_user):

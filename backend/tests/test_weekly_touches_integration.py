@@ -384,24 +384,34 @@ def test_the_card_and_the_detail_agree_about_one_rep():
 
 
 def test_the_forwarded_window_really_bounds_the_detail_list():
-    """A deal touched outside the forwarded window must not appear in it — the assertion
-    that fails if ws/we are accepted and then ignored."""
+    """A touch BETWEEN the two windows is what separates "honoured ws/we" from "ignored
+    them and re-resolved the default".
+
+    The default window is the rolling last 7 days; WS/WE here is the last 3. A deal
+    touched 5 days ago therefore sits INSIDE the default and OUTSIDE the forwarded one,
+    so the card counts it and the drill-down must not. A touch 30 days old would have
+    been excluded by both and proved nothing.
+    """
     from core.postgres import pg_execute
     from crm import service
 
     ada = _user("Ada")
-    inside = _deal("Inside the window", owner=ada)
-    outside = _deal("Outside the window", owner=ada)
-    # Push one deal's only touch well before the window opens.
+    recent = _deal("Touched today", owner=ada)
+    five_days = _deal("Touched five days ago", owner=ada)
     pg_execute(
-        "UPDATE deals SET updated_at = created_at - interval '30 days' WHERE id = %s",
-        (outside,),
+        "UPDATE deals SET created_at = created_at - interval '30 days', "
+        "                 updated_at = now() - interval '5 days' WHERE id = %s",
+        (five_days,),
     )
 
-    out = service.get_weekly_touch_detail(owner_id=ada, ws=WS, we=WE)
-    ids = {d["id"] for d in out["deals"]}
+    # The card's default window is 7 days wide, so it sees BOTH.
+    card = _reps(service.get_weekly_touches())["Ada"]
+    assert {d["id"] for d in card["deals"]} == {recent, five_days}
+    assert card["touches"] == 2
 
-    assert inside in ids
-    assert outside not in ids
-    assert out["rep"]["open_deals"] == 2      # still their book
-    assert out["rep"]["touches"] == 1         # but only one touch in this window
+    # The forwarded 3-day window sees only one — and would see two if ws/we were ignored.
+    out = service.get_weekly_touch_detail(owner_id=ada, ws=WS, we=WE)
+
+    assert {d["id"] for d in out["deals"]} == {recent}
+    assert out["rep"]["touches"] == 1
+    assert out["rep"]["open_deals"] == 2      # still their whole book, window or not

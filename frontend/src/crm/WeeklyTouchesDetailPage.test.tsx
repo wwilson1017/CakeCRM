@@ -217,6 +217,41 @@ describe('WeeklyTouchesDetailPage (issue #146)', () => {
     expect(container.querySelector('[data-testid="sheet"]')).toBeNull();
   });
 
+  it('does not resurrect the sheet on returning to the rep it was opened from', async () => {
+    // The failure this catches is subtle: hiding the modal while the path differs leaves
+    // it in state, so 3 → 4 → 3 makes it match again and it reappears unbidden. Only
+    // destroying the state (remounting on the path) actually closes it.
+    await renderAt('/crm/touches/3');
+    api.mockResolvedValueOnce({ id: 41, title: 'Deal 41', stage: 'proposal' });
+    await act(async () => {
+      (container.querySelector('[role="button"]') as HTMLElement).click();
+    });
+    expect(container.querySelector('[data-testid="sheet"]')).not.toBeNull();
+
+    await act(async () => { nav.go('/crm/touches/4'); });
+    await act(async () => { nav.go('/crm/touches/3'); });
+
+    expect(container.querySelector('[data-testid="sheet"]')).toBeNull();
+    expect(container.textContent).toContain('Dana Reyes');
+  });
+
+  it('does not resurrect the edit form either', async () => {
+    await renderAt('/crm/touches/3');
+    api.mockResolvedValueOnce({ id: 41, title: 'Deal 41', stage: 'proposal' });
+    await act(async () => {
+      (container.querySelector('[role="button"]') as HTMLElement).click();
+    });
+    await act(async () => {
+      (container.querySelector('[data-testid="sheet-edit"]') as HTMLElement).click();
+    });
+    expect(container.querySelector('[data-testid="form"]')).not.toBeNull();
+
+    await act(async () => { nav.go('/crm/touches/4'); });
+    await act(async () => { nav.go('/crm/touches/3'); });
+
+    expect(container.querySelector('[data-testid="form"]')).toBeNull();
+  });
+
   it('opens the deal that was clicked LAST when two fetches race', async () => {
     // Two deal requests race on one unchanged URL, so the list's path key cannot decide
     // between them — only request order can. Clicking A then B must show B even when A

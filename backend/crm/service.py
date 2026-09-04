@@ -2579,12 +2579,31 @@ def _touch_owner_scope(owner_scoped: bool, owner_id: int | None) -> tuple[str, l
     return " AND d.owner_id = %s", [owner_id]
 
 
+def _touch_query(cur, sql: str, params: list) -> list[dict]:
+    """Run one weekly-touches read, on a caller-supplied cursor or a pooled connection.
+
+    The two reads have to be able to share ONE snapshot (see ``get_weekly_touch_detail``),
+    and ``pg_fetchall`` takes a fresh connection per call by definition. ``row_to_dict`` is
+    public for exactly this — a caller managing its own cursor inside a transaction.
+
+    Rows are converted to dicts BEFORE this returns, which is what makes reusing one cursor
+    for a second statement safe: ``row_to_dict`` reads ``cursor.description``, and the next
+    ``execute`` replaces it.
+    """
+    if cur is None:
+        return pg_fetchall(sql, params)
+    cur.execute(sql, params)
+    rows = cur.fetchall()
+    return [row_to_dict(cur, r) for r in rows]
+
+
 def _touch_rep_rows(
     window_start: datetime,
     window_end: datetime,
     *,
     owner_scoped: bool,
     owner_id: int | None,
+    cur=None,
 ) -> list[dict]:
     """One row per owner bucket: open deals, computed counts, deals touched in the window.
 
@@ -2601,9 +2620,13 @@ def _touch_rep_rows(
 
     LEFT JOIN, never INNER: an INNER JOIN would drop the unowned bucket. No ORDER BY — rep
     order is the shaper's, so there is one definition of it and it is testable with no DB.
+
+    ``cur`` lets a caller run this on its own cursor so it shares one snapshot with the
+    rows query (the drill-down does); omitted, it takes a pooled connection of its own.
     """
     owner_sql, owner_params = _touch_owner_scope(owner_scoped, owner_id)
-    return pg_fetchall(
+    return _touch_query(
+        cur,
         f"""SELECT d.owner_id AS user_id, u.name, u.email,
                    COUNT(*) AS open_deals,
                    COUNT(d.ai_touch_count) AS computed_deals,
@@ -2627,6 +2650,7 @@ def _touched_deal_rows(
     owner_scoped: bool,
     owner_id: int | None,
     per_rep_limit: int,
+    cur=None,
 ) -> list[dict]:
     """The touched deals themselves, ranked and capped PER OWNER (not globally).
 
@@ -2640,9 +2664,12 @@ def _touched_deal_rows(
     surfaces share this one SQL string and differ only in the cap they pass — the card's
     ten, the drill-down's much larger ceiling — because two strings that have to agree
     about what a touched deal is would eventually stop agreeing.
+
+    ``cur`` shares the caller's snapshot, exactly as in ``_touch_rep_rows``.
     """
     owner_sql, owner_params = _touch_owner_scope(owner_scoped, owner_id)
-    return pg_fetchall(
+    return _touch_query(
+        cur,
         f"""SELECT id, title, value, stage, owner_id,
                    touch_count, touched_at, contact_name, company_name
             FROM (
@@ -2838,28 +2865,32 @@ def get_weekly_touch_detail(
         if user is None:
             return None
 
-    rep_rows = _touch_rep_rows(
-        window_start, window_end, owner_scoped=True, owner_id=owner_id
-    )
-    # One past the ceiling, so a full page can be told apart from a book that overflows it
-    # without a second COUNT — the same probe idiom #56's evidence list uses.
-    deal_rows = _touched_deal_rows(
-        window_start, window_end,
-        owner_scoped=True, owner_id=owner_id, per_rep_limit=WEEKLY_TOUCHES_DETAIL_MAX + 1,
-    )
+    # ONE snapshot for both reads. This page shows a count and the rows behind it on the
+    # same screen with no cap between them, so two snapshots could render "6 of 5 open
+    # deals touched" — and a bucket that vanished between the reads would drop every row
+    # and report 0 touches for a rep who has them. REPEATABLE READ is what makes those
+    # unrepresentable rather than merely unlikely. It is affordable here because the
+    # drill-down is one bucket on a page load; the card keeps its two pooled reads (see
+    # `_shape_touch_reps` for the residue that leaves and why it is tolerable there).
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        rep_rows = _touch_rep_rows(
+            window_start, window_end, owner_scoped=True, owner_id=owner_id, cur=cur
+        )
+        # One past the ceiling, so a full page can be told apart from a book that overflows
+        # it without a second COUNT — the same probe idiom #56's evidence list uses.
+        deal_rows = _touched_deal_rows(
+            window_start, window_end, owner_scoped=True, owner_id=owner_id,
+            per_rep_limit=WEEKLY_TOUCHES_DETAIL_MAX + 1, cur=cur,
+        )
+
     truncated = len(deal_rows) > WEEKLY_TOUCHES_DETAIL_MAX
     deal_rows = deal_rows[:WEEKLY_TOUCHES_DETAIL_MAX]
 
     reps = _shape_touch_reps(rep_rows, deal_rows)
     rep = reps[0] if reps else {"user_id": owner_id, "open_deals": 0, "touches": 0, "deals": []}
     deals = rep.pop("deals")
-    if not truncated:
-        # DERIVED, not read from the aggregate: an untruncated list is by definition every
-        # touched deal in this bucket and window, computed from the same predicate — so
-        # taking the number from the rows is what makes "N touched" and the rows beneath it
-        # unable to contradict each other, even though the two queries are two snapshots.
-        # (The card cannot do this: its list is capped, so its count has to be the aggregate.)
-        rep["touches"] = len(deals)
     # Resolved from the user row rather than from the bucket, so a rep with no open deals
     # (and therefore no aggregate row) is still named. `user` carries a password hash — it
     # must never reach the payload; display_name reads only id/name/email.

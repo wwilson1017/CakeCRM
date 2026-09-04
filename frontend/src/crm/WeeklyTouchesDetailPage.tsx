@@ -1,7 +1,7 @@
 /**
- * Weekly Touches, one rep (issue #146) — the uncapped list behind a number on the card.
+ * Weekly Touches, one rep (issue #146) — the whole list behind a number on the card.
  *
- * The card is a KPI and caps each rep's rows; this page is the whole list, so a rep who
+ * The card is a KPI and caps each rep's rows; this page is the full list, so a rep who
  * touched thirty deals can be checked rather than sampled. Each row opens the same
  * `DealDetailSheet` the dashboard opens, whose #56 evidence section explains that deal's
  * count event by event — so the chain from "3 touched" to "why 3" stays unbroken.
@@ -35,19 +35,11 @@ import { stageWriteRequest } from './dealStageWrite';
 import { parseUTC } from './gtd/util';
 import { cardStyle, pageHeading, pagePadding } from './styles';
 
-/** A permanent failure (a malformed link) is not the same as a transient one, so Retry is
- *  offered for exactly one of them. `notfound` also covers an owner this page rejects
- *  before it ever fetches. */
+/** A permanent failure is not the same as a transient one, so Retry is offered for
+ *  exactly one of them. */
 type PageError = 'notfound' | 'invalid' | 'failed';
 
-/** The loaded payload TOGETHER with the path it describes.
- *
- *  React Router reuses this component instance across `/crm/touches/3 → /crm/touches/4`,
- *  so state keyed only by "is there data" would render one rep's rows, or a stale 404,
- *  under the other's URL for a frame. Deriving everything from `state.path === apiPath`
- *  makes that unrepresentable — the same discipline `useAuthedBlobUrl` uses. */
 interface PageState {
-  path: string;
   data: CrmWeeklyTouchDetail | null;
   error: PageError | null;
 }
@@ -66,78 +58,110 @@ export function WeeklyTouchesDetailPage() {
   const { owner } = useParams<{ owner: string }>();
   const [search] = useSearchParams();
   const isMobile = useIsMobile();
-
   const parsed = parseOwnerParam(owner);
-  const apiPath = parsed.ok ? touchDetailApiPath(parsed.owner, search) : null;
 
+  // A malformed owner never reaches the view, so it can never issue a request.
+  if (!parsed.ok) {
+    return (
+      <Frame isMobile={isMobile}>
+        <NoSuchRep />
+      </Frame>
+    );
+  }
+
+  // KEYED ON THE REQUEST, so a different rep — or a different window on the same rep —
+  // remounts the view outright and every piece of state goes with it: the list, the open
+  // sheet, the edit form, the request-id refs.
+  //
+  // Deriving "does this state belong to the current path?" instead was not enough: it
+  // HID the old sheet while the path differed but kept it in state, so /3 → /4 → /3
+  // matched again and brought it back. A key is React's own answer to "reset on route
+  // change", and it also keeps the reset out of an effect, which this repo's
+  // react-hooks config rejects (a cascading render for something a key does for free).
+  const apiPath = touchDetailApiPath(parsed.owner, search);
+  return <DetailView key={apiPath} apiPath={apiPath} isMobile={isMobile} />;
+}
+
+/** The page chrome both states share, so the back link and heading render even when there
+ *  is nothing to show under them. */
+function Frame({ isMobile, children }: { isMobile: boolean; children: React.ReactNode }) {
+  return (
+    <div style={pagePadding(isMobile)}>
+      <Link
+        to="/crm"
+        style={{ ...mono(10, INK_MUTE), textDecoration: 'none', display: 'inline-block' }}
+      >← Dashboard</Link>
+      <h1 style={{ ...pageHeading(isMobile), marginTop: 10 }}>Weekly touches</h1>
+      {children}
+    </div>
+  );
+}
+
+function NoSuchRep() {
+  return (
+    <div style={{ ...cardStyle, padding: 24, marginTop: 16 }}>
+      <p style={{ fontSize: 14, color: INK, margin: 0 }}>No such rep.</p>
+      <p style={{ fontSize: 13, color: INK_MUTE, margin: '8px 0 0' }}>
+        That link points at a person this install doesn't have. Open Weekly touches from
+        the dashboard to see who does.
+      </p>
+    </div>
+  );
+}
+
+function DetailView({ apiPath, isMobile }: { apiPath: string; isMobile: boolean }) {
   const [state, setState] = useState<PageState | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
-  // Both modals are stored WITH the path they belong to and derived below, exactly like
-  // the list — so a route change closes them by making them stop matching, with no
-  // setState in an effect (which this repo's react-hooks config rejects, and rightly:
-  // it is a cascading render for something the render can just compute).
-  const [selected, setSelected] = useState<{ path: string; deal: CrmDeal } | null>(null);
-  const [editing, setEditing] = useState<{ path: string; deal: CrmDeal } | null>(null);
+  const [selectedDeal, setSelectedDeal] = useState<CrmDeal | null>(null);
+  const [editDeal, setEditDeal] = useState<CrmDeal | null>(null);
   const reqId = useRef(0);
   // A SECOND monotonic id, for the per-deal fetches. The list's guard cannot serve here:
-  // two deal requests race each other on ONE unchanged path, so clicking A then B has to
-  // be decided by request order, not by the URL.
+  // two deal requests race each other within ONE mount, so clicking A then B has to be
+  // decided by request order.
   const dealReqId = useRef(0);
+  // Navigating to another rep UNMOUNTS this view (the parent re-keys), and a deal fetch
+  // left in flight still settles afterwards. Its `setState` is a harmless no-op, but its
+  // rejection would raise a toast about a deal on a page the user has already left.
+  const alive = useRef(true);
+  useEffect(() => () => { alive.current = false; }, []);
 
   useEffect(() => {
-    // Bumped BEFORE the early return: navigating from a valid owner to a malformed one
-    // must invalidate the request already in flight, or its response would land and
-    // render under a URL this page has already rejected.
+    // Still needed within a mount: `reloadTick` refetches the same path, so two responses
+    // can be in flight at once even though the URL never changed.
     const id = ++reqId.current;
-    if (apiPath === null) return;
     api<CrmWeeklyTouchDetail>(apiPath)
       .then(data => {
-        if (id === reqId.current) setState({ path: apiPath, data, error: null });
+        if (id === reqId.current) setState({ data, error: null });
       })
       .catch((err: unknown) => {
         if (id !== reqId.current) return;
-        // 404 is "no such rep" and 4xx is a link whose window the server refused — both
-        // permanent, so neither offers a Retry that could only fail again. Anything else
-        // (5xx, offline) is worth retrying.
+        // 404 is "no such rep" and any other 4xx is a link whose window the server
+        // refused — both permanent, so neither offers a Retry that could only fail again.
+        // Anything else (5xx, offline) is worth retrying.
         const status = err instanceof ApiError ? err.status : 0;
         const error: PageError =
           status === 404 ? 'notfound' : status >= 400 && status < 500 ? 'invalid' : 'failed';
-        setState({ path: apiPath, data: null, error });
+        setState({ data: null, error });
       });
   }, [apiPath, reloadTick]);
 
-  // A route change invalidates any deal fetch still in flight. A REF write, not a state
-  // write: the sheet itself is already closed by the derivation below (its stored path
-  // stops matching), so nothing has to re-render — this only stops a slow response, or a
-  // failed one's toast, from landing under a URL that has moved on.
-  useEffect(() => {
-    dealReqId.current += 1;
-  }, [apiPath]);
-
-  // Only state that describes the CURRENT url counts; anything else is the previous
-  // route's answer and reads as loading.
-  const current = state && state.path === apiPath ? state : null;
-  const data = current?.data ?? null;
-  const error: PageError | null = parsed.ok ? current?.error ?? null : 'notfound';
-  const loading = parsed.ok && current === null;
-  // Same rule for the modals: one rep's deal must not stay open over another rep's list.
-  const selectedDeal = selected && selected.path === apiPath ? selected.deal : null;
-  const editDeal = editing && editing.path === apiPath ? editing.deal : null;
+  const data = state?.data ?? null;
+  const error = state?.error ?? null;
+  const loading = state === null;
 
   // The dashboard's own wiring, copied rather than hoisted into a hook: PipelinePage and
   // CrmDashboardPage already each carry their own copy, and a shared hook for a third
   // consumer that differs in its reload function is not yet worth the indirection.
   function openDeal(id: number) {
     const req = ++dealReqId.current;
-    const path = apiPath;
     api<CrmDeal>(`/api/crm/deals/${id}`)
       .then(deal => {
-        if (req === dealReqId.current && path !== null) setSelected({ path, deal });
+        if (alive.current && req === dealReqId.current) setSelectedDeal(deal);
       })
       // The guard covers the error path too: a failed fetch for a deal the user has
-      // already navigated away from must not raise a toast about it.
+      // already dismissed — or navigated away from — must not raise a toast about it.
       .catch(() => {
-        if (req === dealReqId.current) {
+        if (alive.current && req === dealReqId.current) {
           toast.error('Could not open that deal — it may have been deleted.');
         }
       });
@@ -151,8 +175,8 @@ export function WeeklyTouchesDetailPage() {
    *  sheet the user just dismissed. */
   function closeModals() {
     dealReqId.current += 1;
-    setSelected(null);
-    setEditing(null);
+    setSelectedDeal(null);
+    setEditDeal(null);
   }
 
   async function updateDealStage(deal: CrmDeal, stage: string, lostReason?: string) {
@@ -166,21 +190,13 @@ export function WeeklyTouchesDetailPage() {
     }
   }
 
-  const unassigned = data?.rep.user_id === null;
-
   return (
-    <div style={pagePadding(isMobile)}>
-      <Link
-        to="/crm"
-        style={{ ...mono(10, INK_MUTE), textDecoration: 'none', display: 'inline-block' }}
-      >← Dashboard</Link>
-      <h1 style={{ ...pageHeading(isMobile), marginTop: 10 }}>Weekly touches</h1>
-
+    <Frame isMobile={isMobile}>
       {data && (
         <div style={{ fontSize: 13, color: INK_MUTE, margin: '10px 0 4px' }}>
           {/* Shared with the card's rep rows, so a bucket cannot be spelled or styled
               two ways depending on which surface you reached it from. */}
-          <RepLabel name={data.rep.name} unassigned={unassigned} />
+          <RepLabel name={data.rep.name} unassigned={data.rep.user_id === null} />
           {' · '}{data.window.label}
           {' · '}<span style={{ color: INK }}>{data.rep.touches}</span>
           {' of '}{data.rep.open_deals} open deals touched
@@ -191,15 +207,7 @@ export function WeeklyTouchesDetailPage() {
         <p style={{ fontSize: 13, color: INK_MUTE, marginTop: 16 }}>Loading…</p>
       )}
 
-      {error === 'notfound' && (
-        <div style={{ ...cardStyle, padding: 24, marginTop: 16 }}>
-          <p style={{ fontSize: 14, color: INK, margin: 0 }}>No such rep.</p>
-          <p style={{ fontSize: 13, color: INK_MUTE, margin: '8px 0 0' }}>
-            That link points at a person this install doesn't have. Open Weekly touches from
-            the dashboard to see who does.
-          </p>
-        </div>
-      )}
+      {error === 'notfound' && <NoSuchRep />}
 
       {error === 'invalid' && (
         <div style={{ ...cardStyle, padding: 24, marginTop: 16 }}>
@@ -259,8 +267,8 @@ export function WeeklyTouchesDetailPage() {
           onClose={() => { closeModals(); reload(); }}
           onEdit={(d) => {
             dealReqId.current += 1;
-            setSelected(null);
-            if (apiPath !== null) setEditing({ path: apiPath, deal: d });
+            setSelectedDeal(null);
+            setEditDeal(d);
           }}
           onStageChange={updateDealStage}
           onRestored={() => { closeModals(); reload(); }}
@@ -270,10 +278,10 @@ export function WeeklyTouchesDetailPage() {
       {editDeal && (
         <DealForm
           deal={editDeal}
-          onClose={() => setEditing(null)}
+          onClose={() => setEditDeal(null)}
           onSaved={() => { closeModals(); reload(); }}
         />
       )}
-    </div>
+    </Frame>
   );
 }
