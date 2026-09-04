@@ -186,13 +186,34 @@ describe('step 2 — the due-date cue', () => {
   });
 
   it('comes back after the date is cleared', async () => {
-    render({ due_date: '2026-09-10' });
+    // The focus is what makes this test able to fail. Picking a date sets `busy`, which
+    // DISABLES the input — and React does not dispatch to a disabled target, so onBlur
+    // never runs. Unless onChange clears the flag itself, `dueFocused` stays stuck true
+    // from this focus and goes on suppressing the cue long after the field was left.
+    render();
+    focus(dueInput());
+    expect(cue()).toBeUndefined();
+
+    setValue(dueInput(), '2026-09-10');
+    await settle();
     setValue(dueInput(), '');
     await settle();
-    expect(updateTodoMock).toHaveBeenCalledWith(7, { due_date: '' });
-    // The write disables the input, so React never calls onBlur — the cue would stay
-    // suppressed by a focus that ended long ago if onChange did not clear the flag too.
+
+    expect(updateTodoMock).toHaveBeenLastCalledWith(7, { due_date: '' });
     expect(cue()).toBeTruthy();
+  });
+
+  it('stops pinning the date once the row moves on', async () => {
+    // The optimistic value shadows the prop, so it has to be RELEASED when the row
+    // actually changes — otherwise the field pins the date this card last picked and
+    // ignores every later edit, the Edit sheet's own included, for the life of the card.
+    render();
+    setValue(dueInput(), '2026-09-10');
+    await settle();
+    expect(dueInput().value).toBe('2026-09-10');
+
+    render({ due_date: '2026-10-01' }); // the sheet moved it, and the parent reloaded
+    expect(dueInput().value).toBe('2026-10-01');
   });
 
   it('is inert to the pointer, so tapping it still opens the picker', () => {
@@ -229,6 +250,28 @@ describe('step 2 — the due-date cue', () => {
     await settle();
     expect(onEdit).toHaveBeenCalledTimes(1);
     expect(onEdit.mock.calls[0][0].due_date).toBe('2026-09-10');
+  });
+});
+
+describe('the inline title is optimistic too', () => {
+  // `pendingTitle` predates this port and had the same defect the date override was fixed
+  // for: set on a successful rename and never released, so the card would pin the name it
+  // last wrote and ignore every later change to it. One adoption block covers both.
+  const titleText = () =>
+    container.querySelector<HTMLElement>('span[role="button"]')!.textContent;
+
+  it('stops pinning the title once the row moves on', async () => {
+    render();
+    click(container.querySelector('span[role="button"]')!);
+    const editor = container.querySelector<HTMLInputElement>('input[aria-label="Todo title"]')!;
+    setValue(editor, 'dentist — reschedule');
+    unfocus(editor);
+    await settle();
+    expect(updateTodoMock).toHaveBeenCalledWith(7, { title: 'dentist — reschedule' });
+    expect(titleText()).toBe('dentist — reschedule');
+
+    render({ title: 'renamed somewhere else' }); // the sheet moved it, and the parent reloaded
+    expect(titleText()).toBe('renamed somewhere else');
   });
 });
 
@@ -306,6 +349,23 @@ describe('step 2 — notes without leaving triage', () => {
     expect(notesBox().value).toBe('the long version');
     click(button('Edit'));
     await settle();
+    expect(onEdit.mock.calls[0][0].notes).toBe('the long version');
+  });
+
+  it('opens the Edit sheet even when its own flush keeps failing', async () => {
+    // A draft the server rejects is exactly what the sheet is there to rescue, so the
+    // click must not be gated on the write. A persistent rejection, not a one-shot: the
+    // blur that precedes the click would otherwise consume it and the flush would succeed.
+    vi.spyOn(toast, 'error').mockImplementation(() => {});
+    updateTodoMock.mockRejectedValue(new Error('offline'));
+    render();
+    setValue(notesBox(), 'the long version');
+    unfocus(notesBox());
+    await settle();
+    click(button('Edit'));
+    await settle();
+
+    expect(onEdit).toHaveBeenCalledTimes(1);
     expect(onEdit.mock.calls[0][0].notes).toBe('the long version');
   });
 
@@ -404,6 +464,29 @@ describe('a note is part of the triage decision', () => {
 
     // Still only the first request — the second is queued, not racing.
     expect(updateTodoMock).toHaveBeenCalledTimes(1);
+    await act(async () => { release({ ...TODO, notes: 'first' }); });
+    await settle();
+
+    expect(updateTodoMock).toHaveBeenCalledTimes(2);
+    expect(updateTodoMock).toHaveBeenNthCalledWith(2, 7, { notes: 'second' });
+  });
+
+  it('collapses three stacked commits into one trailing write', async () => {
+    // Two callers chaining onto the SAME in-flight request wake on the same microtask and
+    // both read a baseline React has not re-rendered yet, so each fires a write. Only
+    // queueing on the tail of the chain — and moving the baseline synchronously — makes
+    // the second and third collapse into one.
+    let release: (v: Todo) => void = () => {};
+    updateTodoMock.mockImplementationOnce(() => new Promise<Todo>(res => { release = res; }));
+    render();
+    setValue(notesBox(), 'first');
+    unfocus(notesBox());          // starts the request
+    setValue(notesBox(), 'second');
+    unfocus(notesBox());          // queues
+    unfocus(notesBox());          // queues again, behind the queue — not behind the request
+    await settle();
+    expect(updateTodoMock).toHaveBeenCalledTimes(1);
+
     await act(async () => { release({ ...TODO, notes: 'first' }); });
     await settle();
 

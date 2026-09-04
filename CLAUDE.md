@@ -1267,7 +1267,12 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   date is set and bites the moment it is cleared). `pendingDue` mirrors the existing
   `pendingTitle` so the CONTROLLED field does not revert to the prop for the length of the
   refetch, and `current` — what the Edit sheet is handed — carries title, notes and date
-  from the card's view, never the lagging prop. Step 2 gains an inline **Notes** textarea
+  from the card's view, never the lagging prop. **An override is released when the row it
+  shadows MOVES**, compared against a `base*` snapshot — never because the prop currently
+  disagrees, which is the revert the override exists to prevent. That release is what stops
+  a successful write from pinning its own value for the life of the card, and it closes the
+  same pre-existing hole in `pendingTitle`, which is why one adoption block covers all three
+  fields. Step 2 gains an inline **Notes** textarea
   committed on blur through `flushNotes`: single-flight with ONE trailing run (two writes
   to the same column, in flight together, land in whichever order the server picks), and
   deliberately NOT taking the card-wide `busy` — the click that files the item is what

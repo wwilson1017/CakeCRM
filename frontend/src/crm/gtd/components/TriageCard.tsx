@@ -75,26 +75,46 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
   // dirty, and re-sending, for a whole round trip after it was already saved.
   const [baseNotes, setBaseNotes] = useState(todo.notes);
   const [notesDraft, setNotesDraft] = useState(todo.notes);
+  // The row as this card last saw it, for the two fields it renders optimistically. An
+  // override is released when its row MOVES, which is the only signal available here that
+  // the prop has caught up — see the adoption block below.
+  const [baseDue, setBaseDue] = useState(todo.due_date);
+  const [baseTitle, setBaseTitle] = useState(todo.title);
   const dest = DESTINATIONS.find(d => d.status === destination) ?? DESTINATIONS[0];
 
-  // Take notes that changed underneath this card — the Edit sheet writes them too, and
-  // `InboxPage` keys the card by todo id, so a same-id reload does NOT remount it and
-  // seeding state once would leave the box showing the pre-sheet text (which the next blur
-  // would then write back over the edit). Adopted during render — React's documented
-  // adjust-state-during-render, which converges in one extra pass rather than painting the
-  // stale value first the way an effect would.
+  // Take a row that changed underneath this card, and release any optimistic value it
+  // supersedes. `InboxPage` keys the card by todo id, so a same-id reload does NOT remount
+  // it — and both halves of that matter. Without the first, the notes box would go on
+  // showing the pre-sheet text, which the next blur would write straight back over the
+  // sheet's edit. Without the second, an override set by a SUCCESSFUL write would never be
+  // released: `dueValue` would pin the date this card last picked and ignore every later
+  // change to it, the Edit sheet's own included, for the life of the card.
+  //
+  // Adopted during render — React's documented adjust-state-during-render, which converges
+  // in one extra pass rather than painting the stale value first the way an effect would.
+  //
+  // An override is released only when the row it shadows actually MOVES, never on every
+  // render. Releasing one while the prop is still catching up is precisely the revert the
+  // override exists to prevent, so "the prop disagrees with me" cannot be the trigger.
   //
   // Unsaved text of the user's own is never overwritten: it stays on screen and stays dirty.
   //
   // Simplification vs. the blueprint, which orders every adoption by `updated_at`: this card
   // adopts only from the prop, never from a write's own response, so the worst a refetch
-  // arriving out of order can do is show an older note in an otherwise CLEAN box for the
-  // moment before the newer one lands. Version ordering becomes necessary if responses are
-  // ever adopted here too.
+  // arriving out of order can do is show an older value for the moment before the newer one
+  // lands. Version ordering becomes necessary if responses are ever adopted here too.
   if (todo.notes !== baseNotes) {
     const clean = notesDraft === baseNotes;
     setBaseNotes(todo.notes);
     if (clean) setNotesDraft(todo.notes);
+  }
+  if (todo.due_date !== baseDue) {
+    setBaseDue(todo.due_date);
+    setPendingDue(null);
+  }
+  if (todo.title !== baseTitle) {
+    setBaseTitle(todo.title);
+    setPendingTitle(null);
   }
 
   const dueValue = pendingDue ?? todo.due_date;
@@ -123,9 +143,15 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
       const { draft, base, id } = notesRef.current;
       if (draft === base) return Promise.resolve(true);
       setError('');
-      const req = updateTodo(id, { notes: draft })
+      return updateTodo(id, { notes: draft })
         .then(() => {
           setBaseNotes(draft);
+          // …and move the baseline in the ref SYNCHRONOUSLY as well. `setBaseNotes` only
+          // schedules a render, and the layout effect that refreshes this ref runs after
+          // it — so a continuation already queued behind this one would wake on the next
+          // microtask, still read the pre-write baseline, and send the very same text a
+          // second time.
+          notesRef.current = { ...notesRef.current, base: draft };
           onChanged();
           return true;
         })
@@ -138,16 +164,24 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
           // taking a paragraph the user typed with it.
           toast.error(msg);
           return false;
-        })
-        .finally(() => { if (notesInFlight.current === req) notesInFlight.current = null; });
-      notesInFlight.current = req;
-      return req;
+        });
     };
-    const running = notesInFlight.current;
-    // Queue behind an in-flight save rather than racing it: two writes to the same column,
-    // in flight together, land in whichever order the server picks. ONE trailing run is
-    // enough — `send` reads the LIVE draft, so it carries everything typed since.
-    return running ? running.then(send, send) : send();
+    // Queue behind the TAIL of the chain, not merely behind the request in flight. Two
+    // writes to the same column, in flight together, land in whichever order the server
+    // picks — and a third caller chaining onto the same raw request as the second would
+    // wake alongside it and fire a duplicate. One trailing run is enough because `send`
+    // reads the LIVE draft, so whichever continuation runs first carries everything typed
+    // since and the rest find nothing to do.
+    const tail = notesInFlight.current;
+    const next = tail ? tail.then(send, send) : send();
+    notesInFlight.current = next;
+    // Let the chain be garbage once it has drained, so an idle card starts a fresh one
+    // rather than accumulating continuations for the life of the session.
+    void next.then(
+      () => { if (notesInFlight.current === next) notesInFlight.current = null; },
+      () => { if (notesInFlight.current === next) notesInFlight.current = null; },
+    );
+    return next;
   };
 
   // An inbox item can already carry a context (quick-add parses "@ctx" while keeping
@@ -172,9 +206,9 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
     // result. Filing is this card's one exit — a note the server keeps rejecting (20k
     // characters, say) would otherwise trap the item in the inbox forever. The failure is
     // already said twice, inline and as a toast.
-    const notesOk = resolves ? await flushNotes() : true;
-    if (notesOk) setError('');
     try {
+      const notesOk = resolves ? await flushNotes() : true;
+      if (notesOk) setError('');
       await updateTodo(todo.id, fields);
       if (resolves) {
         // Deliberately STAYS busy — this card is spent. The parent's reload is async

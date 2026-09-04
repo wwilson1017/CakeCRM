@@ -68,9 +68,14 @@ export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onS
   // Derived every render from the context STRING rather than held in state: the meta list
   // arrives after the first render, and an index frozen at mount would then point at a
   // different context.
+  //
+  // Trimmed on BOTH sides. `contextOptions` inserts the trimmed value, and `save()` submits
+  // the trimmed value, so looking the raw one up would miss for a stored context carrying
+  // stray whitespace: `indexOf` returns -1, no option has value "-1", and the select falls
+  // back to reading "No context" for a todo that plainly has one.
   const contextSel = addingContext
     ? NEW_CONTEXT
-    : (context ? String(contextOptions.indexOf(context)) : '');
+    : (context.trim() ? String(contextOptions.indexOf(context.trim())) : '');
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
