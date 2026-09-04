@@ -38,11 +38,18 @@ export function dealDeepLink(dealId: number): string {
  * reaches here becomes a lookup and possibly a "that deal is gone" accusation. `Number`
  * alone would accept `''` (→ 0), `' 42 '`, `4.5`, `1e3` and `0x2a`; only a run of
  * digits naming a positive integer is a deal id.
+ *
+ * Bounded to a positive int4, matching `RecordContext`'s guard on the record ids it takes
+ * from routing — the backend's PKs are int4, so a larger number names nothing that could
+ * exist. Same rule, same reason; keeping the two bounds equal is what stops "valid record
+ * id" from meaning two things in one app.
  */
+const MAX_INT4 = 2_147_483_647;
+
 export function parseDealDeepLinkId(raw: string | null | undefined): number | null {
   if (!raw || !/^\d+$/.test(raw)) return null;
   const id = Number(raw);
-  return Number.isSafeInteger(id) && id > 0 ? id : null;
+  return Number.isSafeInteger(id) && id > 0 && id <= MAX_INT4 ? id : null;
 }
 
 export interface DeepLinkVerdictInput {
@@ -57,6 +64,13 @@ export interface DeepLinkVerdictInput {
    *
    * False means the board on screen is older than the link, which is the one way a live
    * deal can be absent from it.
+   *
+   * "A payload was APPLIED" means the server answered — not that the board object changed.
+   * The caller must not compute this by comparing state identity: an optimistic update
+   * (a drag's stage patch, its rollback, a bulk reconcile) replaces the board object
+   * without anyone having asked the server anything, and reading that as "the board caught
+   * up" makes this function declare a live deal deleted on the strength of an unrelated
+   * drag. That was a real bug, found in review.
    */
   boardRefreshedSinceLink: boolean;
 }

@@ -9,11 +9,14 @@ worked, the query-param form already had a sibling (``?stage=``) with a parser a
 consume-then-strip convention, and a second shape would mean two things to keep in
 step with one parser.
 
-**Why a module rather than an f-string at each call site.** Sixteen agent tools attach
-this link. Issue #145 was filed because *nothing* produced one, so the format was
-discoverable nowhere and the assistant's only option was to invent a path — an invented
-path is a broken link. A duplicated literal is how sixteen call sites drift apart the
-first time the frontend parser changes.
+**Why a module rather than an f-string at each call site.** Every agent tool that returns
+a deal record attaches this link — well over a dozen call sites. Issue #145 was filed
+because *nothing* produced one, so the format was discoverable nowhere and the assistant's
+only option was to invent a path, and an invented path is a broken link. A duplicated
+literal is how that many call sites drift apart the first time the frontend parser
+changes. (No tally is written down anywhere here on purpose: `CRM_DEAL_URL_TOOLS` is the
+count, and a number in prose is a second source of truth that goes stale silently — this
+one did, within a single review round.)
 
 **The frontend keeps its own copy** — ``dealDeepLink`` in
 ``frontend/src/crm/dealDeepLink.ts``, for the in-app link handoff, because a browser

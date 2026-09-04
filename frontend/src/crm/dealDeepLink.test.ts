@@ -39,6 +39,8 @@ describe('parseDealDeepLinkId', () => {
     // Beyond Number.MAX_SAFE_INTEGER two distinct ids compare equal, so a lookup could
     // match the wrong deal — refuse rather than guess.
     ['an unsafe integer', '9007199254740993'],
+    // The backend's PKs are int4, so anything larger names no deal that could exist.
+    ['a number past int4', '2147483648'],
   ])('rejects %s', (_label, raw) => {
     expect(parseDealDeepLinkId(raw as string | null | undefined)).toBeNull();
   });

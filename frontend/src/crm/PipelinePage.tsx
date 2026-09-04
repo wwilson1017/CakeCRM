@@ -44,6 +44,10 @@ interface PipelineData {
 
 export function PipelinePage() {
   const [data, setData] = useState<PipelineData | null>(null);
+  // How many times a SERVER payload has been applied. Distinct from `data`'s identity,
+  // which optimistic updates also change — see the deep-link block below, which is the
+  // one thing on this page that has to tell those two apart.
+  const [boardVersion, setBoardVersion] = useState(0);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [editDeal, setEditDeal] = useState<CrmDeal | null>(null);
@@ -93,11 +97,19 @@ export function PipelinePage() {
   // leaving it makes reload reopen the deal and makes the address bar a real copy source.
   // (#75's Copy-link button therefore has a URL to copy that survives a refresh.)
   const deepLinkDealId = parseDealDeepLinkId(searchParams.get(DEAL_DEEP_LINK_PARAM));
-  // The link being resolved, plus the board that was on screen when it arrived. One
-  // object so a new target resets both together and they can never disagree about which
-  // link the snapshot belongs to.
-  const [deepLink, setDeepLink] = useState<{ dealId: number | null; boardAtArrival: PipelineData | null }>(
-    { dealId: null, boardAtArrival: null },
+  // The link being resolved, plus the board VERSION that was on screen when it arrived.
+  // One object so a new target resets both together and they can never disagree about
+  // which link the snapshot belongs to.
+  //
+  // A version counter rather than the `data` object itself: `data`'s identity is bumped
+  // by every optimistic update on this page — a drag's stage patch, its rollback, the
+  // same-column reorder, a bulk reconcile — none of which asked the server anything. An
+  // identity comparison therefore reads "the board caught up" the moment the user drags
+  // an unrelated card, and the notice below would accuse a live deal of being deleted
+  // while its own refresh was still in flight. `boardVersion` advances only where a
+  // server payload is applied.
+  const [deepLink, setDeepLink] = useState<{ dealId: number | null; boardAtVersion: number }>(
+    { dealId: null, boardAtVersion: 0 },
   );
   // The target the user has already dealt with — the sheet was opened for it, or they
   // dismissed its notice. One value for both because a link is either found or dead, never
@@ -105,7 +117,7 @@ export function PipelinePage() {
   // staying silently dismissed forever.
   const [handledDeepLink, setHandledDeepLink] = useState<number | null>(null);
   if (deepLinkDealId !== deepLink.dealId) {
-    setDeepLink({ dealId: deepLinkDealId, boardAtArrival: data });
+    setDeepLink({ dealId: deepLinkDealId, boardAtVersion: boardVersion });
   }
   // Membership is asked of the WHOLE payload, never of `filteredDeals`: a session facet
   // that hides a card says nothing about whether the deal exists, and the detail sheet
@@ -119,7 +131,7 @@ export function PipelinePage() {
     dealId: deepLink.dealId,
     boardLoaded: data !== null,
     dealOnBoard: deepLinkedDeal !== null,
-    boardRefreshedSinceLink: data !== deepLink.boardAtArrival,
+    boardRefreshedSinceLink: boardVersion !== deepLink.boardAtVersion,
   });
   if (deepLinkState === 'open' && deepLinkedDeal && handledDeepLink !== deepLink.dealId) {
     setHandledDeepLink(deepLink.dealId);
@@ -297,6 +309,13 @@ export function PipelinePage() {
         return false;
       }
       setData(d);
+      // The ONLY place a server payload is applied. Every other setData on this page is
+      // an optimistic or local update (a drag's stage patch, its rollback, the
+      // same-column reorder bump, a bulk reconcile), which changes `data`'s identity
+      // without anyone having asked the server anything — so identity is not a usable
+      // "has the board caught up?" signal. The deep link needs exactly that signal, and
+      // this counter is it (issue #145).
+      setBoardVersion(v => v + 1);
       hasLoadedOnce.current = true;
       dealConfirmedStage.current = new Map(d.deals.map(deal => [deal.id, deal.stage]));
       // Intersect the selection with the deals this payload says are LIVE. Masking an

@@ -955,6 +955,42 @@ describe('PipelinePage — deal deep links', () => {
     expect(deadLinkNotice()).toContain('#404');
   });
 
+  it('is not fooled into accusing by an optimistic update landing mid-refresh', async () => {
+    // Found in review, and it was a real false accusation. "Has the board caught up?" used
+    // to be `data !== <the object on screen when the link arrived>` — but `data`'s identity
+    // is bumped by every optimistic update on this page (a drag's stage patch, its
+    // rollback, the same-column reorder, a bulk reconcile), none of which asked the server
+    // anything. Dragging an unrelated card while the deep link's own refresh was still in
+    // flight therefore read as "the server has spoken" and the page declared a live,
+    // just-created deal archived or deleted. Dragging is the most routine gesture on this
+    // page, so this was reachable constantly.
+    const NEW_DEAL = deal({ id: 77, title: 'Fresh signing', stage: 'lead', value: 500 });
+    const held = deferred<{ deals: CrmDeal[] }>();
+    let boardCalls = 0;
+    routeApi({
+      over: (path, init) => {
+        if (init?.method === 'PUT') return { ...LIVE, stage: 'lead' };
+        if (path !== LIVE_PATH) return undefined;
+        boardCalls += 1;
+        return boardCalls === 1 ? { deals: [LIVE] } : held.promise;
+      },
+    });
+
+    await renderThenNavigate('/crm/pipeline?deal=77');
+    expect(boardCalls).toBe(2);          // the catch-up refresh is in flight...
+    expect(deadLinkNotice()).toBeNull(); // ...and nothing has been decided yet
+
+    // A same-column drop: pure optimistic bookkeeping, no server answer about deal 77.
+    await fireDrag(LIVE.id, 'lead');
+    expect(deadLinkNotice()).toBeNull();
+
+    // Only the real payload may settle it — and here it does, correctly.
+    await act(async () => { held.resolve({ deals: [LIVE, NEW_DEAL] }); });
+    await flush();
+    expect(deadLinkNotice()).toBeNull();
+    expect(container.textContent).toContain('Fresh signing');
+  });
+
   it('asks for fresh data exactly once, then accuses only if the deal is still missing', async () => {
     // The other half of the same rule: the refresh must be bounded, or a genuinely deleted
     // deal would refetch the board forever instead of saying so.
@@ -1021,9 +1057,18 @@ describe('PipelinePage — deal deep links', () => {
     // Membership is asked of the whole payload, never of the filtered view: a session facet
     // says nothing about whether a deal exists, and the sheet opens over the board however
     // few cards the columns are showing.
-    routeApi({ live: [LIVE, deal({ id: 9, title: 'Globex expansion', stage: 'won' })] });
+    // `last_activity_at` is what makes the facet BITE: the 'No activity logged' preset
+    // keeps deals with none, so a deal without it (the shared factory's default) is never
+    // excluded and this test would pass against a regressed lookup too.
+    const HIDDEN = deal({
+      id: 9, title: 'Globex expansion', stage: 'won',
+      last_activity_at: '2026-08-30T00:00:00+00:00',
+    });
+    routeApi({ live: [LIVE, HIDDEN] });
     await render('/crm/pipeline');
     await pickActivityFacet('No activity logged');
+    // The facet really is hiding it — without this line the rest asserts nothing.
+    expect(card('Globex expansion')).toBeFalsy();
 
     await renderThenNavigate('/crm/pipeline?deal=9');
     expect(deadLinkNotice()).toBeNull();

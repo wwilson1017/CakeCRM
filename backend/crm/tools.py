@@ -1068,7 +1068,7 @@ CRM_TOOL_DEFS = [
 
 #: Appended to the description of every tool whose payload carries a deal ``url``.
 #:
-#: Single-sourced rather than restated per tool: sixteen near-identical sentences is
+#: Single-sourced rather than restated per tool: a dozen-plus near-identical sentences is
 #: exactly the shape that drifts, and #145 exists because the link format was
 #: discoverable nowhere. The model has to know the field exists AND that sharing it is
 #: the point — a ``url`` nothing is told to use is still no link, which was the reported
@@ -1085,7 +1085,16 @@ CRM_DEAL_URL_GUIDANCE = (
 
 #: The tools whose payload carries a deal ``url``, and which therefore must carry
 #: ``CRM_DEAL_URL_GUIDANCE``. Kept as one set, one name per line, next to the text it
-#: gates — that is what makes an omission visible. The blueprint's first pass appended
+#: gates — that is what makes an omission visible. Its SIZE is deliberately not written
+#: down in any comment: this set is the count, and the prose tally that used to sit here
+#: was wrong within one review round of being written.
+#:
+#: This file already has a second mechanism for appending shared text to a description:
+#: ``_COMPANY_NAME_NOTE``, concatenated inline at each of its three definitions. Both are
+#: kept, and the difference is the count. Three inline concatenations are readable at a
+#: glance and a missing one is visible; this many scattered over the definition table is
+#: exactly the shape whose omissions nobody can see — which is not hypothetical, it is
+#: what the blueprint shipped twice. The blueprint's first pass appended
 #: the guidance by hand at six definitions scattered over two hundred lines and silently
 #: missed four; nobody could see the gap, and the test guarding it listed the same six
 #: the code did, so it passed.
@@ -1121,7 +1130,7 @@ CRM_DEAL_URL_TOOLS = frozenset({
     "crm_get_stale_deals",
     "crm_find_duplicates",
     "crm_scan_gaps",
-    # Not deal tools by name; both hand back deal records anyway.
+    # Not deal tools by name; all three hand back deal records anyway.
     "crm_get_contact",
     "crm_dashboard",
     "crm_analytics",

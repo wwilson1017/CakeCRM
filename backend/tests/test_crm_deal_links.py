@@ -460,7 +460,10 @@ def test_lifecycle_writes_link_the_deal_they_just_changed(absolute_base, monkeyp
     narrates an outcome and the user wants to look at it. All four write confirmations
     were missing the guidance in the blueprint's first cut."""
     monkeypatch.setattr(tools, "_record_provenance", lambda *a, **k: None)
-    deal = lambda *a, **k: {"id": 42, "title": "Big One", "stage": "won"}  # noqa: E731
+
+    def deal(*_a, **_k):
+        return {"id": 42, "title": "Big One", "stage": "won"}
+
     monkeypatch.setattr(tools.crm, "mark_deal_won", deal)
     monkeypatch.setattr(tools.crm, "mark_deal_lost", deal)
     monkeypatch.setattr(tools.crm, "update_deal_stage", deal)
@@ -496,6 +499,22 @@ def test_pipeline_and_search_link_every_summarised_deal(absolute_base, monkeypat
     # The projection is still doing its job — `notes` is not a summary field.
     assert "notes" not in pipeline_deal
     assert tools.crm_search_deals()["deals"][0]["url"] == expected
+
+
+def test_get_deal_links_the_record_it_returns(absolute_base, monkeypatch):
+    """The structural guards are source-text greps: they prove `with_deal_url` is CALLED,
+    never that it is called on the right object. `with_deal_url(deal_id)` — passing the
+    int argument instead of the row, an easy slip beside `get_deal_health`, which really
+    does pass something nested — would satisfy both guards, silently return an int to the
+    model, and break the tool that exists to hand back the full record."""
+    monkeypatch.setattr(
+        tools.crm, "get_deal_detail",
+        lambda _id: {"id": 42, "title": "Big One", "stage": "lead", "value": 1000},
+    )
+    result = tools.crm_get_deal(42)
+    assert isinstance(result, dict)
+    assert result["url"] == absolute_base + FRONTEND_DEAL_PATH
+    assert result["title"] == "Big One"
 
 
 def test_a_tool_reporting_a_missing_deal_attaches_no_link(monkeypatch):
