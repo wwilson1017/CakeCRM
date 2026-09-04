@@ -275,4 +275,31 @@ describe('ChunkErrorBoundary (#149)', () => {
     expect(reload).toHaveBeenCalledTimes(1);
     expect(store.get(RELOAD_GUARD_KEY)).toBeTruthy();
   });
+
+  it('classifies a chunk failure that rejects with a plain object, not an Error', async () => {
+    // A promise can reject with anything. `String({message: '…'})` is "[object Object]", which
+    // matches no pattern — so this arrived as an ordinary render bug: no auto-recovery, and a
+    // card telling the user it is a bug rather than a deploy.
+    const store = workingStorage();
+    function OddRejection(): never {
+      throw { message: 'Failed to fetch dynamically imported module: /assets/X-abc.js', status: 404 };
+    }
+    await mount(<OddRejection />);
+
+    expect(host.textContent).toContain(CHUNK_TEXT);
+    expect(host.textContent).not.toContain(GENERIC_TEXT);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(store.get(RELOAD_GUARD_KEY)).toBeTruthy();
+  });
+
+  it('still treats a plain object with an unrelated message as an ordinary bug', async () => {
+    // The other direction, so the widening above cannot quietly reclassify render bugs as
+    // deploy skew and start reloading through them.
+    workingStorage();
+    function OddBug(): never { throw { message: 'undefined is not a function' }; }
+    await mount(<OddBug />);
+
+    expect(host.textContent).toContain(GENERIC_TEXT);
+    expect(reload).not.toHaveBeenCalled();
+  });
 });

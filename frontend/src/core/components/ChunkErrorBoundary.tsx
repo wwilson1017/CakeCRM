@@ -18,9 +18,27 @@ export const RELOAD_GUARD_KEY = 'cakecrm_chunk_reload';
  * trying to report it.
  */
 function isChunkLoadError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error ?? '');
   return /dynamically imported module|Importing a module script failed|error loading dynamically|Unable to preload CSS/i
-    .test(message);
+    .test(errorMessage(error));
+}
+
+/**
+ * The message text to match on, for a value React handed us that is only CONVENTIONALLY an
+ * `Error`.
+ *
+ * A promise can reject with anything, and `String({message: '…'})` is `"[object Object]"` —
+ * which matches no pattern, so a genuine chunk failure arriving as a plain object would be
+ * classified as an ordinary render bug: no auto-recovery, and a card telling the user this is a
+ * bug rather than a deploy. Reading `.message` off a non-Error object costs nothing and cannot
+ * misfire in the other direction, since a real render bug throws a real `Error` and takes the
+ * first branch.
+ */
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    return String((error as { message: unknown }).message ?? '');
+  }
+  return String(error ?? '');
 }
 
 type Props = {

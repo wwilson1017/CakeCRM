@@ -235,16 +235,29 @@ function lazyCallSites(source: string): Array<{ insideFunction: boolean }> {
   //     function App() { const mk = lazy; const P = mk(() => import('./P')); … }
   // …which is the exact remount bug this guard exists to catch, and it stayed green.
   const collectAliases = (node: ts.Node) => {
-    if (ts.isVariableDeclaration(node) && node.initializer && ts.isIdentifier(node.name)) {
+    if (ts.isVariableDeclaration(node) && node.initializer) {
       const init = node.initializer;
-      if (ts.isIdentifier(init) && names.has(init.text)) names.add(node.name.text);
-      if (
-        ts.isPropertyAccessExpression(init) &&
-        init.name.text === 'lazy' &&
-        ts.isIdentifier(init.expression) &&
-        reactNamespaces.has(init.expression.text)
-      ) {
-        names.add(node.name.text);
+      if (ts.isIdentifier(node.name)) {
+        // `const mk = lazy` / `const mk = React.lazy`
+        if (ts.isIdentifier(init) && names.has(init.text)) names.add(node.name.text);
+        if (
+          ts.isPropertyAccessExpression(init) &&
+          init.name.text === 'lazy' &&
+          ts.isIdentifier(init.expression) &&
+          reactNamespaces.has(init.expression.text)
+        ) {
+          names.add(node.name.text);
+        }
+      } else if (ts.isObjectBindingPattern(node.name) && ts.isIdentifier(init) && reactNamespaces.has(init.text)) {
+        // `const { lazy } = React` / `const { lazy: mk } = React` — the destructured form, which
+        // an identifier-only check skips entirely, leaving the binding unknown and every call
+        // through it invisible to the module-scope rule.
+        for (const element of node.name.elements) {
+          const sourceName = element.propertyName ?? element.name;
+          if (ts.isIdentifier(sourceName) && sourceName.text === 'lazy' && ts.isIdentifier(element.name)) {
+            names.add(element.name.text);
+          }
+        }
       }
     }
     ts.forEachChild(node, collectAliases);
@@ -695,6 +708,14 @@ describe('boot split (#149) — the scanner itself', () => {
     const localChained = `import { lazy } from 'react';\nfunction App() { const a = lazy; const b = a; const A = b(() => import('./A')); return <A />; }`;
     expect(lazyCallSites(localAlias).map((s) => s.insideFunction)).toEqual([true]);
     expect(lazyCallSites(localChained).map((s) => s.insideFunction)).toEqual([true]);
+
+    // The destructured form. `const { lazy } = React` binds through an ObjectBindingPattern,
+    // which an identifier-only alias check skips outright — so the binding stays unknown and
+    // every call through it is invisible to the module-scope rule.
+    const destructured = `import * as React from 'react';\nconst { lazy } = React;\nfunction App() { const A = lazy(() => import('./A')); return <A />; }`;
+    const destructuredRenamed = `import React from 'react';\nfunction App() { const { lazy: mk } = React; const A = mk(() => import('./A')); return <A />; }`;
+    expect(lazyCallSites(destructured).map((s) => s.insideFunction)).toEqual([true]);
+    expect(lazyCallSites(destructuredRenamed).map((s) => s.insideFunction)).toEqual([true]);
   });
 
   it('sees import.meta.glob in every spelling that bundles a directory', () => {
