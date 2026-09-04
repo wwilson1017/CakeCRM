@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 //
 // Scope: the drill-down page #146 added — what it asks the server for, how it survives
-// navigation between reps (React Router reuses the instance), which failures are
-// permanent, and that a row opens the deal sheet. The rendering of a row itself belongs
-// to TouchDealRow and is covered through the card.
-import { act, useEffect } from 'react';
+// navigation between reps, which failures are permanent, and that a row opens the deal
+// sheet. The rendering of a row itself belongs to TouchDealRow and is covered through
+// the card.
+import { StrictMode, act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -250,6 +250,20 @@ describe('WeeklyTouchesDetailPage (issue #146)', () => {
     await act(async () => { nav.go('/crm/touches/3'); });
 
     expect(container.querySelector('[data-testid="form"]')).toBeNull();
+  });
+
+  it('still opens deals under StrictMode\'s double effect cycle', async () => {
+    // `main.tsx` renders the app inside <StrictMode>, whose development cycle is
+    // setup → cleanup → setup. A liveness flag cleared only in cleanup stays false
+    // afterwards and swallows every deal the user clicks — in dev only, which is exactly
+    // where it would be met and mistaken for a broken endpoint.
+    await act(async () => root.render(<StrictMode>{page('/crm/touches/3')}</StrictMode>));
+    api.mockResolvedValueOnce({ id: 41, title: 'Deal 41', stage: 'proposal' });
+    await act(async () => {
+      (container.querySelector('[role="button"]') as HTMLElement).click();
+    });
+
+    expect(container.querySelector('[data-testid="sheet"]')?.textContent).toContain('41');
   });
 
   it('opens the deal that was clicked LAST when two fetches race', async () => {

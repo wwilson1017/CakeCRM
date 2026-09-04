@@ -17,7 +17,7 @@
  * renders "—" exactly as the card's rows already do.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 
 import { ApiError, api } from '../core/api/client';
@@ -122,8 +122,18 @@ function DetailView({ apiPath, isMobile }: { apiPath: string; isMobile: boolean 
   // Navigating to another rep UNMOUNTS this view (the parent re-keys), and a deal fetch
   // left in flight still settles afterwards. Its `setState` is a harmless no-op, but its
   // rejection would raise a toast about a deal on a page the user has already left.
+  //
+  // The flag is re-ARMED in setup, not merely cleared in cleanup: `main.tsx` renders under
+  // <StrictMode>, whose development cycle is setup → cleanup → setup, so a cleanup-only
+  // version leaves it false for the life of the mount and silently swallows every deal the
+  // user then clicks — in development only, which is precisely where it would be met and
+  // mistaken for a broken endpoint. `useLayoutEffect` so the re-arm lands before a click
+  // can be handled.
   const alive = useRef(true);
-  useEffect(() => () => { alive.current = false; }, []);
+  useLayoutEffect(() => {
+    alive.current = true;
+    return () => { alive.current = false; };
+  }, []);
 
   useEffect(() => {
     // Still needed within a mount: `reloadTick` refetches the same path, so two responses
