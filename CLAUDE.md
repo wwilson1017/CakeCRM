@@ -519,8 +519,8 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   Contact list/search LEFT JOIN `companies` and expose `company_name`; the UI renders
   `company_name || company` and search matches the joined name, so a linked contact is
   findable/displayable even with empty or stale legacy text. The legacy
-  `contacts.company` column stays in place, non-authoritative (the freetext↔link
-  combobox merge is deliberate follow-up); a second one-shot backfill migration
+  `contacts.company` column stays in place, non-authoritative (**the freetext↔link merge
+  landed #126 in `ContactForm`; the COLUMN stays**); a second one-shot backfill migration
   (`20260816203810_company_link_backfill.sql`) repairs installs that imported between
   #13 and #35 by linking contacts that are still `company_id IS NULL` with matching
   text. Unlike #13's it deliberately does **not** inherit company onto deals: `NULL`
@@ -559,8 +559,8 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `test_auto_created_companies_are_left_unassigned` pins by reading that function's source.
   The trimmed query is the single form used for BOTH searching and creating, which is what
   closes the leading/trailing-whitespace duplicate hole for free. Reusable by design for
-  **#126** (ContactForm's company field), which is blocked on this and adopts the component
-  unchanged.
+  **#126** (ContactForm's company field), which landed on it unchanged — see the paragraph
+  below.
   Three rules inside the picker are subtle enough to state, because each was a bug first:
   **closing is not cancelling** — an outside click (the form's own Save button is one)
   closes the popover but does NOT abandon an in-flight quick-create, since the record is
@@ -573,7 +573,42 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   an archived row `"Acme (archived)"` and matching on that would offer to create a duplicate
   of the row directly above. The contact side's exact-match dedupe only sees the 20-row
   page — companies are immune, resolving server-side — which is documented at
-  `PICKER_LIMIT` as an accepted single-install trade. User-defined **custom fields** (#19) add a
+  `PICKER_LIMIT` as an accepted single-install trade.
+  **#126 is the second surface**, and it is the freetext↔link merge the #35 bullet deferred:
+  `ContactForm`'s free-text `Company` input and its capped `Linked Company` `<select>` become
+  ONE `RecordCombobox`, consumed unchanged. So the form no longer has a way to record a
+  company name without a company row behind it — typing an unmatched name offers
+  `Create "…"`, which resolves to a real deduplicated row. The `contacts.company` COLUMN is
+  untouched and still non-authoritative; the form keeps writing it in step with the link so
+  the two cannot contradict. The one rule worth stating, because nothing on screen shows it:
+  **an untouched company field omits BOTH `company` and `company_id` from a `PUT`.** The
+  update route reads its body with `model_dump(exclude_unset=True)`, so an omitted key is not
+  written at all — and that is the only thing standing between a pre-#35 contact holding
+  unmatched free text and the silent erasure of the only record of that name, by someone who
+  opened the form to fix a phone number. Sending `company: ''` would do it. Touching the
+  field (pick, create, or the × clear) sends both keys; a CREATE always sends both, having no
+  prior value to protect and no way to express absence (`POST /contacts` dumps without
+  `exclude_unset`). Such a contact renders its free text as the picker's empty label plus a
+  *not linked* hint, which both disappear the moment the user speaks for the field — left up,
+  the label would keep naming a company they had just cleared. **Divergence from the
+  blueprint, deliberate:** cake_os's `QuickAddModal` (#2016/#2049) defers the company create
+  to submit so an abandoned form leaves nothing behind; CakeCRM creates on row press, because
+  that is `RecordCombobox`'s shipped contract and the issue mandates one component for both
+  surfaces. The cost is bounded — quick-create goes through the `/resolve` get-or-create, so
+  an abandoned form leaves at most one unowned company and a retry reuses it.
+  Two consequences of reusing the component unchanged are **accepted, not overlooked**.
+  (1) The picker's × is gated on a non-null value and `companyTouched` is set only by
+  choosing or clearing, so an unlinked contact would have had NO way to delete a wrong
+  legacy name without first linking some company to it — `ContactForm` therefore renders its
+  own inline **Remove** action on the not-linked hint. (2) Typing a name and pressing Save
+  **discards it**: the widget keeps its query private and reports only choose/create/clear,
+  where the removed free-text input committed on Save. `Create "…"` is the commit
+  affordance. That is `RecordCombobox`'s contract and has been true of `DealForm`'s two
+  pickers since #123, so it is a property of the component, not a regression this issue
+  introduced; both are pinned by tests in `ContactForm.test.tsx`. The one capability
+  genuinely retired is editing unlinked free text to a DIFFERENT arbitrary string without
+  linking — which is the merge the #35 bullet deferred, not a side effect of it.
+  User-defined **custom fields** (#19) add a
   two-table EAV (`crm_field_definitions` + `crm_field_values`) on contacts/companies/
   deals, managed in `/crm/settings`, rendered in the entity forms and detail pages, and
   exposed to the assistant via `crm_{get,set}_{contact,company,deal}_fields`;
@@ -1550,7 +1585,8 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Theme + dark mode (fixed `--color-ck-*` palette, `.dark` semantic-token override, self-hosted Montserrat/Open Sans, `useTheme` + `ThemeToggle`, accent-picker removal) — **landed #54** as `frontend/src/index.css` + `core/theme/useTheme.ts` + `crm/components/ThemeToggle.tsx` | `cake_os/frontend/src/index.css` + `core/theme/useTheme.ts` (read from `origin/master`) |
 | Companies (first-class entity: `companies` table, `company_id` FKs, rollup detail page, text→FK backfill migration) — **landed #13** | `cake_os/backend/apps/crm/company_service.py` |
 | Company link coherence (shared batched `resolve_or_create_company_ids()` resolve-or-auto-create on every ingestion path; contact list/search LEFT JOIN + `company_name`; second one-shot backfill) — **landed #35** | New capability (gate decision on issue #35; shared with the #61 importer) |
-| Inline quick-create for a deal's Contact and Company (`frontend/src/crm/components/RecordCombobox.tsx` — a generic server-searching combobox with a `Create "<name>"…` row, keyboard nav and `role="combobox"`/`listbox` a11y — wired into `DealForm`, plus `POST /api/crm/companies/resolve` exposing the #35 primitive over REST) — **landed #123**. Retires the capped-200 `<select>` pattern in the deal form and the two hand-written out-of-page append guards with it. **Corrects three of the issue's own pointers** (the search param is `q` not `search`; `DealCreate` takes no free-text company; `POST /companies` does NOT use the resolver and 400s on a case/whitespace duplicate) — see the CRM bullet for the ownership split and why the resolve endpoint had to exist. Built reusably for **#126**, which is blocked on it | New capability (no blueprint — cake_os's entity forms use plain capped `<select>`s too; back-port candidate to CAKE OS) |
+| Inline quick-create for a deal's Contact and Company (`frontend/src/crm/components/RecordCombobox.tsx` — a generic server-searching combobox with a `Create "<name>"…` row, keyboard nav and `role="combobox"`/`listbox` a11y — wired into `DealForm`, plus `POST /api/crm/companies/resolve` exposing the #35 primitive over REST) — **landed #123**. Retires the capped-200 `<select>` pattern in the deal form and the two hand-written out-of-page append guards with it. **Corrects three of the issue's own pointers** (the search param is `q` not `search`; `DealCreate` takes no free-text company; `POST /companies` does NOT use the resolver and 400s on a case/whitespace duplicate) — see the CRM bullet for the ownership split and why the resolve endpoint had to exist. Built reusably for **#126**, which landed on it unchanged | New capability (no blueprint — cake_os's entity forms use plain capped `<select>`s too; back-port candidate to CAKE OS) |
+| Contact form company field — the freetext↔link merge (`ContactForm`'s free-text `Company` input + its capped `Linked Company` `<select>` become ONE `RecordCombobox`, consumed unchanged; `ContactForm.test.tsx` added) — **landed #126**. The blueprint's `QuickAddModal` defers its company create to submit; CakeCRM creates on row press because that is the shipped component's contract and the issue mandates one component for both surfaces — bounded by `/resolve` being get-or-create. Two contract consequences are accepted and pinned by tests: an unlinked contact needs the form's own inline **Remove** action (the widget's × is gated on a non-null value), and a name typed without choosing `Create "…"` is discarded on Save, as it already is in `DealForm`. The load-bearing rule is that an UNTOUCHED company field omits both `company` and `company_id` from the `PUT`, so `exclude_unset` leaves a pre-#35 contact's unmatched free text intact | `cake_os/frontend/src/apps/crm/components/QuickAddModal.tsx` + `SearchableSelect.tsx` (#2016/#2045, #2049/#2069) |
 | Chatter/notes (`crm_chatter`) — **landed #15** as `backend/crm/chatter_service.py` + `frontend/src/crm/components/NotesThread.tsx` | `cake_os/backend/apps/crm/chatter_service.py` |
 | Chatter note attachments + readable composer (`crm_chatter_attachments` bytea + FK CASCADE; `crm/attachment_service.py`; `core/thumbnails.py`; 4 auth-guarded routes; `apiBlob` + `useAuthedBlobUrl`; `NoteComposer`/`NoteAttachments`/`AttachmentLightbox`) — **landed #57**. **Corrects two premises in the issue.** (1) "Reuse the existing assistant uploads storage (`backend/assistant/uploads.py`)" cannot be complied with literally — that module is a TEXT EXTRACTOR that discards the bytes ("there is no attachments table and no file cache", its own docstring), so there was no first store to reuse and #57 creates CakeCRM's first one; the instruction's intent (exactly ONE place uploaded bytes live) is honored, and what IS reused from it is the constant/`UploadError` idiom, the lazy-import discipline for heavy libs, and the repo-wide `read(cap + 1)` bounded read. (2) The three cited upstream issues are **three lineages, not one**: cake_os **#1526** (`53b0f3627`) is the attachments + composer work, and it landed as a NEW platform app `backend/apps/chatter/`, not in `apps/crm/chatter_service.py`; **#1215** and **#1331** are the CRM image **gallery** (auth-guarded fetch, server-side thumbnails), so **cake_os chatter has no server-side thumbnails at all** — its `width_px`/`height_px` are client-supplied and `docs/MEDIA_STORAGE.md` lists thumbnails as deferred. Since Will's gate made thumbnails non-negotiable, the pipeline is ported from the gallery lineage instead, adapted base64→bytes and with the unused `crop_square` mode dropped (CSS `object-fit` crops). Auth-guarded serving is an **adaptation, not a port**: cake_os mints GCS V4 signed URLs, CakeCRM has no object store, so it serves from an authenticated endpoint and the client builds object URLs — which is the pre-#1215 pattern cake_os replaced, and the only one Bearer-token-only auth permits. NOT ported: GCS/object storage, the `Surface`/`SURFACES` four-app registry and the `chatter_messages` rail, `core/chatter.can_view` (CakeCRM has one surface and no per-object ACLs), `core/upload_admission.py`, `core/audit.py` void-with-reason (this repo hard-deletes and has no audit chain), uploader-only write gates (they would contradict #60's any-member model), client-side downscale, the batch `?note_ids=` endpoint + `useNoteAttachments` (metadata embeds into `get_chatter` instead), and width/height/duration columns | `cake_os/backend/apps/chatter/{service,router}.py` + `frontend/src/shared/chatter/*` (flow); `cake_os/backend/core/thumbnails.py` + `apps/crm/image_service.py` (thumbnails) |
 | Custom fields (EAV `crm_field_definitions`/`crm_field_values`, Settings editor, entity-form + detail-page value inputs, 6 `crm_*_fields` tools) — **landed #19** as `backend/crm/field_service.py` + `frontend/src/crm/components/{CustomFieldSettings,CustomFieldsSection,CustomFieldInputs}.tsx` | `cake_os/backend/apps/crm/field_service.py` |
