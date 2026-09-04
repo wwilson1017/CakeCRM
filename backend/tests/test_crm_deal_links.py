@@ -208,6 +208,11 @@ DEAL_RETURNING_SERVICES = (
     # No tool reaches it today; the REST board does. Listed rather than waived so the first
     # tool that calls it has to decide about links rather than inherit an omission.
     "list_deals",
+    # #146's per-rep drill-down helper. Its SELECT hands back deal records — id, title,
+    # value, stage, owner_id, contact_name, company_name — so it belongs here even though
+    # only the REST weekly-touches surface calls it today, for the same reason as
+    # `list_deals` above: the first tool to reach it must decide about links.
+    "_touched_deal_rows",
 )
 
 #: Service functions that read the deals table but hand back no deal RECORD, each checked
@@ -225,6 +230,7 @@ NON_RECORD_DEAL_SERVICES = {
     "_truncate_all": "no return value",
     "clear_all": "no return value",
     "load_sample_data": "no return value",
+    "_touch_rep_rows": "one row per owner bucket — open/computed/touched counts, no deal rows",
     "_write_deal_update": "returns True/False — the caller re-reads the row it wants",
     "delete_company": "returns True/False; it reads deals only to unlink them",
     "delete_contact": "returns True/False; it reads deals only to unlink them",
