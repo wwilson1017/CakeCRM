@@ -14,13 +14,13 @@ import {
   ACCENT_SOFT,
   BG_CARD,
   BG_RAISED,
-  CORAL,
-  GOLD,
+  CORAL_FILL,
+  GOLD_FILL,
   INK,
   INK_MUTE,
   INK_SOFT,
   LINE,
-  SAGE,
+  SAGE_FILL,
   SHADOW,
 } from '../shared/styles';
 import { IdentitySettings } from './IdentitySettings';
@@ -115,7 +115,7 @@ export default function AssistantPanelBody({ recordContext = null }: AssistantPa
     if (!chat.contextUsage || !chat.contextUsage.contextWindow) return null;
     return Math.min(100, Math.round((chat.contextUsage.contextTokens / chat.contextUsage.contextWindow) * 100));
   }, [chat.contextUsage]);
-  const meterColor = meterPct == null ? INK_SOFT : meterPct >= 90 ? CORAL : meterPct >= 75 ? GOLD : SAGE;
+  const meterColor = meterPct == null ? INK_SOFT : meterPct >= 90 ? CORAL_FILL : meterPct >= 75 ? GOLD_FILL : SAGE_FILL;
 
   return (
     <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, background: BG_CARD, color: INK }}>

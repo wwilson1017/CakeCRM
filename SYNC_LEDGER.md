@@ -69,8 +69,10 @@ Note that `chatty` rows are historical only. chatty was **retired as a sync sour
 
 ## Ledger (live — one row per synced upstream change)
 
-Populated by port PRs from here on. Empty until the first intake is ported.
+Populated by port PRs from here on.
 
 | Feature | Source | CakeCRM PR / issue | Date |
 |---|---|---|---|
+| Todo-GTD copy buttons + long-title wrapping | `e00e05cde` | #151 | — |
+| Todo GTD triage & edit-sheet parity (due-date cue, inline Notes, real Context picker, legible step headings) | PR #2424 (`e3c06bba`), PR #2539 (`b936ac29`) | #150 | 2026-09-04 |
 | Keyboard-reachable `shared/listview` rows (WCAG 2.1.1) — every collection adopter inherits it, plus the consumer-side convention of a real link in a route-shaped surface's title cell | PR #1979 (39d1033) | #148 | — |

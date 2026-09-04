@@ -28,7 +28,7 @@ import { IconPlus } from '../shared/icons';
 import { useIsMobile } from '../shared/useIsMobile';
 import { toast } from '../shared/toast';
 import {
-  INK, INK_MUTE, INK_DIM, LINE_STRONG, CORAL, SAGE, ACCENT_INK, HOVER, mono,
+  INK, INK_MUTE, INK_DIM, LINE_STRONG, CORAL_TEXT, SAGE_FILL, ON_STATUS, HOVER, mono,
 } from '../shared/styles';
 import { pageHeading, btnPrimary, btnSecondary, btnSmall } from './styles';
 import { makeTasksCollectionConfig } from './collectionConfig';
@@ -207,7 +207,7 @@ function TaskDetailBody(
         {due && (
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
             <span style={{ ...mono(10), color: INK_DIM }}>Due</span>
-            <span style={{ fontSize: 13, color: late ? CORAL : INK, fontWeight: late ? 600 : 400 }}>
+            <span style={{ fontSize: 13, color: late ? CORAL_TEXT : INK, fontWeight: late ? 600 : 400 }}>
               {due.text}
             </span>
           </div>
@@ -223,8 +223,8 @@ function TaskDetailBody(
           onClick={() => { void onToggleComplete(); }}
           style={{
             flex: 1, padding: '10px 16px', borderRadius: 6,
-            background: task.completed ? HOVER : SAGE,
-            color: task.completed ? INK : ACCENT_INK,
+            background: task.completed ? HOVER : SAGE_FILL,
+            color: task.completed ? INK : ON_STATUS,
             border: 'none', fontWeight: 500, fontSize: 13, cursor: 'pointer',
           }}
         >

@@ -3,7 +3,7 @@ import { api } from '../../core/api/client';
 import { writeMayHaveLanded } from '../usePatchableAssembly';
 import { useAuth } from '../../core/auth/AuthContext';
 import { OwnerSelect } from './OwnerSelect';
-import { labelStyle, inputStyle, CORAL } from '../../shared/styles';
+import { labelStyle, inputStyle, CORAL_TEXT } from '../../shared/styles';
 import { formModalOverlay, formModalContent, formTitle, btnPrimary, btnSecondary } from '../styles';
 import type { CrmContact, CrmTask } from '../../core/types';
 
@@ -88,7 +88,7 @@ export function TaskForm({ task, contactId, dealId, onClose, onSaved, onWriteUnc
         <h2 style={formTitle}>
           {isEdit ? 'Edit Task' : 'New Task'}
         </h2>
-        {error && <p style={{ color: CORAL, fontSize: 12, marginBottom: 12 }}>{error}</p>}
+        {error && <p style={{ color: CORAL_TEXT, fontSize: 12, marginBottom: 12 }}>{error}</p>}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div>

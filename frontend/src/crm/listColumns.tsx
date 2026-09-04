@@ -29,7 +29,7 @@ import { IconCheck, IconX } from '../shared/icons';
 import type { ListColumn } from '../shared/listview';
 import type { CrmCompany, CrmContact, CrmTask } from '../core/types';
 import { PriorityBadge, ScorePill, StatusBadge } from './components/badges';
-import { LINE_STRONG, SAGE, tint } from '../shared/styles';
+import { LINE_STRONG, SAGE_FILL, SAGE_TEXT, tint } from '../shared/styles';
 import { formatAge, dueLabel } from './gtd/util';
 import {
   CONTACT_SORT_FIELDS, COMPANY_SORT_FIELDS, TASK_SORT_FIELDS,
@@ -166,10 +166,10 @@ export function buildTaskColumns(
           onClick={e => { e.stopPropagation(); onToggleComplete(t); }}
           style={{
             width: 20, height: 20, borderRadius: 4, flexShrink: 0,
-            border: `1.5px solid ${t.completed ? SAGE : LINE_STRONG}`,
-            background: t.completed ? tint(SAGE, 20) : 'transparent',
+            border: `1.5px solid ${t.completed ? SAGE_FILL : LINE_STRONG}`,
+            background: t.completed ? tint(SAGE_FILL, 20) : 'transparent',
             cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: SAGE,
+            color: SAGE_TEXT,
           }}
         >
           {!!t.completed && <IconCheck size={12} strokeWidth={2.5} />}
@@ -207,7 +207,7 @@ export function buildTaskColumns(
         // ck-red, not the brand accent: red-as-danger is the app-wide convention for
         // overdue (TaskDetailBody, the dashboard tiles, the badges), and the two tokens
         // are genuinely different colours in both themes.
-        return <span className={late ? 'font-semibold text-ck-red' : 'text-muted'}>{text}</span>;
+        return <span className={late ? 'font-semibold text-ck-red-text' : 'text-muted'}>{text}</span>;
       },
     },
   ];
