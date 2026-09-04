@@ -1295,8 +1295,12 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   version came back, but writing it into a row rejected as older would mint a version that
   never existed and that no later copy of the real row could repair. And `star`/`project_id`,
   written straight through and never rendered optimistically, stay current for the sheet only
-  because every write path adopts the response it already gets back; without that the sheet
-  opens on pre-write values once `busy` clears and its full-row save reverts them. Step 2 gains an inline **Notes** textarea
+  because every write path adopts the response it already gets back — `createAndAssign`'s own
+  `project_id` write included; without that the sheet opens on pre-write values once `busy`
+  clears and its full-row save reverts them. The known limit of ordering on `updated_at` is
+  that JOINed columns (`project_name`, `deal_title`, `contact_name`) never bump it, so a
+  rename made elsewhere reaches a mounted card only on the next reload — cosmetic, and the
+  alternative is versioning rows this card does not own. Step 2 gains an inline **Notes** textarea
   committed on blur through `flushNotes`: single-flight with ONE trailing run (two writes
   to the same column, in flight together, land in whichever order the server picks), and
   deliberately NOT taking the card-wide `busy` — the click that files the item is what
