@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { createTodo, deleteTodo, updateTodo } from '../api';
 import { REPEAT_OPTIONS, STATUS_META, TODO_STATUS_ORDER } from '../constants';
@@ -7,6 +7,10 @@ import type { Todo, TodoProject, TodoStatus } from '../types';
 import { parseTags } from '../util';
 
 const NEW_PROJECT = '__new__';
+// The context picker's option values are INDICES into `contextOptions`, never the context
+// strings — the same reason TriageCard.tsx gives: a context a user really named `__new__`
+// would otherwise collide with the sentinel and be impossible to select.
+const NEW_CONTEXT = '__new__';
 
 interface Props {
   /** null = create mode */
@@ -32,6 +36,8 @@ export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onS
   );
   const [newProject, setNewProject] = useState('');
   const [context, setContext] = useState(todo?.context ?? '');
+  // true = the picker has been swapped for the "type a brand new one" input.
+  const [addingContext, setAddingContext] = useState(false);
   const [tags, setTags] = useState((todo?.tags ?? []).join(', '));
   const [due, setDue] = useState(todo?.due_date ?? '');
   const [repeat, setRepeat] = useState(todo?.repeat ?? '');
@@ -42,6 +48,29 @@ export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onS
   const [autoStar, setAutoStar] = useState(todo?.auto_star_on_due ?? false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+
+  // The SELECTED context always gets an option, whether or not the shared meta lists it.
+  // Two ways it can be missing: the meta loads async (so a todo's own context isn't there
+  // on the first paint), and a refresh while this sheet is open can DROP a context the user
+  // just picked. Either way an option list without the current selection renders a select
+  // matching no option, while `save()` still submits the hidden string — the control and
+  // the payload disagreeing is worse than an extra option.
+  //
+  // While the create input is open the todo's original stands in, so the list does not
+  // reshuffle on every keystroke of a name being typed (the select is showing the sentinel
+  // then, so its contents do not matter).
+  const contextOptions = useMemo(() => {
+    const known = contexts.filter(Boolean);
+    const own = (addingContext ? (todo?.context ?? '') : context).trim();
+    return own && !known.includes(own) ? [own, ...known] : known;
+  }, [contexts, context, addingContext, todo?.context]);
+
+  // Derived every render from the context STRING rather than held in state: the meta list
+  // arrives after the first render, and an index frozen at mount would then point at a
+  // different context.
+  const contextSel = addingContext
+    ? NEW_CONTEXT
+    : (context ? String(contextOptions.indexOf(context)) : '');
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -153,12 +182,27 @@ export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onS
             </div>
             <div>
               <label className={labelCls} htmlFor="gtd-context">Context</label>
-              <input id="gtd-context" className={inputCls} list="gtd-contexts"
-                     placeholder="@calls" value={context}
-                     onChange={e => setContext(e.target.value)} />
-              <datalist id="gtd-contexts">
-                {contexts.map(c => <option key={c} value={c} />)}
-              </datalist>
+              {/* A <select>, not an <input list>/<datalist>: mobile browsers do not
+                  reliably render a datalist on a POPULATED text input, so the picker was
+                  invisible until the field was cleared. This is the same
+                  select-plus-escape-hatch shape the Inbox triage card already uses, and the
+                  shape Status/Project/Repeat use in this very form. */}
+              <select id="gtd-context" className={inputCls} value={contextSel}
+                      onChange={e => {
+                        const v = e.target.value;
+                        if (v === NEW_CONTEXT) { setAddingContext(true); setContext(''); return; }
+                        setAddingContext(false);
+                        setContext(v ? contextOptions[Number(v)] ?? '' : '');
+                      }}>
+                <option value="">No context</option>
+                {contextOptions.map((c, i) => <option key={c} value={i}>{c}</option>)}
+                <option value={NEW_CONTEXT}>+ New context…</option>
+              </select>
+              {addingContext && (
+                <input className={`${inputCls} mt-2`} placeholder="@calls"
+                       aria-label="New context" value={context}
+                       onChange={e => setContext(e.target.value)} />
+              )}
             </div>
             <div>
               <label className={labelCls} htmlFor="gtd-repeat">Repeat</label>

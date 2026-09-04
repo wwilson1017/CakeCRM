@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from '../../../shared/toast';
 import { createProject, deleteTodo, updateTodo } from '../api';
 import type { Todo, TodoProject, TodoStatus } from '../types';
@@ -35,7 +35,7 @@ const NEW_CONTEXT = 'new';
 // collide with a real one however the project is named.
 const NEW_PROJECT = 'new';
 
-const stepCls = 'mb-2 text-xs font-heading font-bold uppercase tracking-wide text-muted';
+const stepCls = 'mb-2 text-sm font-heading font-bold uppercase tracking-wide text-charcoal';
 const destCls = 'rounded-lg border px-3 py-2 text-sm font-heading transition-colors disabled:opacity-50';
 const inputCls = 'rounded-lg border border-line bg-cream px-2 py-1.5 text-sm text-charcoal focus:border-brand focus:outline-none disabled:opacity-50';
 const linkCls = 'text-sm underline disabled:opacity-50';
@@ -57,7 +57,98 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
   // null = the picker is showing; a string = the inline create input is.
   const [newContext, setNewContext] = useState<string | null>(null);
   const [newProject, setNewProject] = useState<string | null>(null);
+  // A native date input ignores `placeholder`, so step 2's empty-state cue is an overlay
+  // that has to know when the field has focus — otherwise it would sit on top of the
+  // native editor while a date is being picked.
+  const [dueFocused, setDueFocused] = useState(false);
+  // Opening the sheet waits on the notes flush, which is a round trip on a slow link.
+  const [editPending, setEditPending] = useState(false);
+  // The due date this card just wrote, until the parent's reload feeds it back in through
+  // `todo` — the same shape as `pendingTitle` above, and needed for the same reason: the
+  // input is CONTROLLED by the prop, so without it the field reverts to the old value the
+  // moment the write is sent (blanking, with the cue flashing back over it, when there was
+  // no date before) for the whole length of the refetch.
+  const [pendingDue, setPendingDue] = useState<string | null>(null);
+  // What the notes box shows, and the server value it is measured against. Dirty is
+  // `notesDraft !== baseNotes`, and the baseline moves the moment a write is ACKNOWLEDGED
+  // rather than when the parent's reload lands — deferring it would leave the box reading
+  // dirty, and re-sending, for a whole round trip after it was already saved.
+  const [baseNotes, setBaseNotes] = useState(todo.notes);
+  const [notesDraft, setNotesDraft] = useState(todo.notes);
   const dest = DESTINATIONS.find(d => d.status === destination) ?? DESTINATIONS[0];
+
+  // Take notes that changed underneath this card — the Edit sheet writes them too, and
+  // `InboxPage` keys the card by todo id, so a same-id reload does NOT remount it and
+  // seeding state once would leave the box showing the pre-sheet text (which the next blur
+  // would then write back over the edit). Adopted during render — React's documented
+  // adjust-state-during-render, which converges in one extra pass rather than painting the
+  // stale value first the way an effect would.
+  //
+  // Unsaved text of the user's own is never overwritten: it stays on screen and stays dirty.
+  //
+  // Simplification vs. the blueprint, which orders every adoption by `updated_at`: this card
+  // adopts only from the prop, never from a write's own response, so the worst a refetch
+  // arriving out of order can do is show an older note in an otherwise CLEAN box for the
+  // moment before the newer one lands. Version ordering becomes necessary if responses are
+  // ever adopted here too.
+  if (todo.notes !== baseNotes) {
+    const clean = notesDraft === baseNotes;
+    setBaseNotes(todo.notes);
+    if (clean) setNotesDraft(todo.notes);
+  }
+
+  const dueValue = pendingDue ?? todo.due_date;
+
+  // The notes write in flight, so a second commit queues BEHIND it instead of racing it.
+  const notesInFlight = useRef<Promise<boolean> | null>(null);
+  // A live view of the values the queued continuation below needs. It runs after further
+  // renders, so a plain closure would send text the user has since replaced. A layout
+  // effect, so a commit landing right after a render still reads that render's values.
+  const notesRef = useRef({ draft: notesDraft, base: baseNotes, id: todo.id });
+  useLayoutEffect(() => {
+    notesRef.current = { draft: notesDraft, base: baseNotes, id: todo.id };
+  });
+
+  /**
+   * Commit the notes box if it holds anything new; resolves false only when a write was
+   * attempted and failed.
+   *
+   * Deliberately does NOT take the card-wide `busy`, for the reason `saveTitle` gives
+   * below: clicking a button is what blurs the textarea, and a shared flag would swallow
+   * that very click. Non-resolving by construction — `onChanged`, never `onProcessed` —
+   * so jotting a note can never file the item.
+   */
+  const flushNotes = (): Promise<boolean> => {
+    const send = (): Promise<boolean> => {
+      const { draft, base, id } = notesRef.current;
+      if (draft === base) return Promise.resolve(true);
+      setError('');
+      const req = updateTodo(id, { notes: draft })
+        .then(() => {
+          setBaseNotes(draft);
+          onChanged();
+          return true;
+        })
+        .catch((e: unknown) => {
+          const msg = e instanceof Error ? e.message : 'Update failed';
+          setError(msg);
+          // A toast AS WELL, for the reason `createAndAssign` gives below: this card can
+          // unmount mid-flight — filing swaps the head item and `InboxPage` keys the card
+          // by todo id — and an inline message would land on a dead component and vanish,
+          // taking a paragraph the user typed with it.
+          toast.error(msg);
+          return false;
+        })
+        .finally(() => { if (notesInFlight.current === req) notesInFlight.current = null; });
+      notesInFlight.current = req;
+      return req;
+    };
+    const running = notesInFlight.current;
+    // Queue behind an in-flight save rather than racing it: two writes to the same column,
+    // in flight together, land in whichever order the server picks. ONE trailing run is
+    // enough — `send` reads the LIVE draft, so it carries everything typed since.
+    return running ? running.then(send, send) : send();
+  };
 
   // An inbox item can already carry a context (quick-add parses "@ctx" while keeping
   // status: inbox), and the shared meta can still be empty while it loads — offer the
@@ -72,7 +163,17 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
   const patch = async (fields: Record<string, unknown>, resolves: boolean): Promise<boolean> => {
     if (busy) return false;
     setBusy(true);
-    setError('');
+    // A note jotted in step 2 belongs to the same triage gesture, so it is committed WITH
+    // the decision: the click that files the item is the very thing that blurs the
+    // textarea, and flushing here puts the note on the row before the item leaves the
+    // inbox. Cheap when there is nothing pending — it resolves immediately.
+    //
+    // Its own write rather than folded into `fields`, and deliberately NOT gated on the
+    // result. Filing is this card's one exit — a note the server keeps rejecting (20k
+    // characters, say) would otherwise trap the item in the inbox forever. The failure is
+    // already said twice, inline and as a toast.
+    const notesOk = resolves ? await flushNotes() : true;
+    if (notesOk) setError('');
     try {
       await updateTodo(todo.id, fields);
       if (resolves) {
@@ -172,9 +273,18 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
     }
   };
 
-  // What the user believes this todo is called right now. Once the reload lands,
-  // `todo.title` catches up and the merge is a no-op.
-  const current = pendingTitle === null ? todo : { ...todo, title: pendingTitle };
+  // What the sheet is handed: this card's best view of the row, never the lagging prop.
+  // All three of these can be ahead of `todo` while a refetch is in flight, and the sheet
+  // writes back every field it is given — so passing the prop would silently revert a
+  // rename, a date, or a paragraph the user just typed. (Star and project are absent
+  // because they are written straight through `patch` and never rendered optimistically,
+  // so the prop is the only view of them this card has.)
+  const current: Todo = {
+    ...todo,
+    title: pendingTitle ?? todo.title,
+    notes: notesDraft,
+    due_date: dueValue,
+  };
 
   const remove = async () => {
     if (busy) return;
@@ -212,7 +322,6 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
           ★
         </button>
       </div>
-      {todo.notes && <p className="mt-1 whitespace-pre-wrap text-sm text-muted">{todo.notes}</p>}
       {(todo.deal_title || todo.contact_name) && (
         <p className="mt-1 text-xs"><RecordChip todo={todo} /></p>
       )}
@@ -306,18 +415,67 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
               </button>
             </form>
           )}
-          <input
-            type="date"
-            value={todo.due_date || ''}
-            disabled={busy}
-            onChange={e => void patch({ due_date: e.target.value || '' }, false)}
-            className={inputCls}
-            aria-label="Due date"
-          />
+          {/* A native date input ignores `placeholder` — browsers render their own empty
+              state instead — so the "Add due date" cue is an opaque overlay laid over the
+              whole control, exactly as a real placeholder would fill the field. It clears
+              as soon as there is a value or the field takes focus, so the native editor
+              and its calendar button are never covered while in use. `inset-px` covers the
+              control in every engine (WebKit renders a narrow box showing today's date
+              greyed rather than mm/dd/yyyy, so a partial overlay leaves digits peeking
+              out), and the width floor keeps the cue on one line. */}
+          <span className="relative inline-flex">
+            <input
+              type="date"
+              value={dueValue}
+              disabled={busy}
+              onFocus={() => setDueFocused(true)}
+              onBlur={() => setDueFocused(false)}
+              onChange={e => {
+                const picked = e.target.value;
+                // The write below sets `busy`, which DISABLES this input — and React does
+                // not dispatch to a disabled target, so `onBlur` never runs and the flag
+                // would strand `true` for the life of the card. (The browser does fire
+                // blur; React simply declines to call the handler. There is no browser
+                // quirk to go looking for.) A stranded `true` is invisible while a date is
+                // set, because `dueValue` hides the cue on its own — and then bites the
+                // moment the date is cleared: an empty box, the cue suppressed by a focus
+                // that ended long ago, and the user back to a bare `mm/dd/yyyy`.
+                setDueFocused(false);
+                setPendingDue(picked);
+                // Reverted on failure, exactly like `pendingTitle`: nothing was written, so
+                // the field must not go on showing a date the server never took.
+                void patch({ due_date: picked }, false).then(ok => { if (!ok) setPendingDue(null); });
+              }}
+              className={`${inputCls} min-w-40`}
+              aria-label="Due date"
+            />
+            {/* Keyed off `dueValue`, not the raw prop: without the optimistic value the
+                field reverts the instant the write is sent and the cue flashes back over
+                the date just chosen, for the whole length of the refetch. */}
+            {!dueValue && !dueFocused && (
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-px flex items-center whitespace-nowrap rounded-lg bg-cream pl-2 text-sm text-muted"
+              >
+                Add due date
+              </span>
+            )}
+          </span>
           <button
             type="button"
-            disabled={busy}
-            onClick={() => onEdit(current)}
+            disabled={busy || editPending}
+            onClick={() => {
+              // Clicking Edit is what blurs the textarea, so a notes write is already in
+              // flight — and the sheet writes `notes` too. Without ordering them this
+              // card's older PUT can land after the sheet's Save and overwrite it. Opened
+              // regardless of the result: a draft the server rejected is exactly what the
+              // sheet is there to rescue, and `current` hands it over either way.
+              setEditPending(true);
+              void flushNotes().then(() => {
+                setEditPending(false);
+                onEdit(current);
+              });
+            }}
             className={`${linkCls} text-muted hover:text-charcoal`}
           >
             Edit
@@ -331,6 +489,19 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
             Delete
           </button>
         </div>
+        {/* Notes belong to clarifying, not only to the full editor — jot the link or the
+            phone number without leaving triage. Saved on blur, non-resolving, so the item
+            stays in the inbox. This replaces the read-only preview that used to sit under
+            the title. */}
+        <textarea
+          value={notesDraft}
+          disabled={busy}
+          onChange={e => setNotesDraft(e.target.value)}
+          onBlur={() => void flushNotes()}
+          placeholder="Notes — links, numbers, anything you'll want when you do it"
+          className={`${inputCls} mt-2 block min-h-16 w-full`}
+          aria-label="Notes"
+        />
       </div>
 
       {/* Step 3 — the last step. Picking a context files it and clears the inbox. */}
