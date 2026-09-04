@@ -2395,16 +2395,20 @@ def get_dashboard_stats() -> dict:
 # simplification: a UTC calendar day is not the viewer's calendar day, so a user
 # several hours off UTC sees a window shifted by their offset. The UI labels the
 # control "UTC" so the number is honest rather than surprising. Upgrade path if that
-# stops being good enough: have the card send bounds computed from the viewer's local
-# midnight — deferred because every other day-boundary in this app is already UTC, and
-# a per-viewer window here would disagree with the overdue-task count above it.
+# stops being good enough: resolve the window against the viewer's local midnight
+# instead of UTC — deferred because every other day-boundary in this app is already
+# UTC, and a per-viewer window here would disagree with the overdue-task count above it.
 #
 # That upgrade path used to name the blueprint's absolute-instant (ws/we) form as the
-# shape to copy. #146 built it, and it is the wrong shape HERE: membership below is
-# "this deal's CURRENT most recent touch falls in the window", so a caller-supplied
-# instant range is not a historical fact and a frozen upper bound silently drops any
-# deal touched since. Local-midnight bounds would still be days — which is fine — but
-# they must be resolved per request, never carried between two surfaces as instants.
+# shape to copy. #146 built it, and it is the wrong shape for the ROLLING window:
+# membership below is "this deal's CURRENT most recent touch falls in the window", so
+# freezing a now-relative upper bound silently drops any deal touched since — including
+# one the user touches from the page that window is displaying.
+#
+# The rule is about the BOUND, not about the format: any bound defined relative to
+# request time is re-resolved on every request. A fixed calendar range is a historical
+# fact and is safe to pass between surfaces in either form — as days, or as the instants
+# they resolve to — which is why the drill-down happily takes `start`/`end` today.
 _TOUCH_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 # Rows shown under each rep, PER REP since #146 (it was one global cap while the card

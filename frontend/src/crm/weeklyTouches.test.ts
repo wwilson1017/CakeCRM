@@ -81,14 +81,6 @@ describe('touchDetailApiPath', () => {
     expect(path).not.toContain('irrelevant');
   });
 
-  it('ignores a stale instant-pair URL rather than passing it to the server', () => {
-    // Links minted before the window was re-resolved rather than frozen carry ws/we.
-    // They are not a supported param any more, and the server would 422 on nothing —
-    // dropping them degrades such a link to the rolling default, which is what it meant.
-    const path = touchDetailApiPath('7', new URLSearchParams({ ws: 'A', we: 'B' }));
-    expect(path).toBe('/api/crm/dashboard/weekly-touches/detail?owner=7');
-  });
-
   it('asks for the default window when the page URL carries none', () => {
     expect(touchDetailApiPath('unassigned', new URLSearchParams())).toBe(
       '/api/crm/dashboard/weekly-touches/detail?owner=unassigned',

@@ -313,10 +313,10 @@ describe('WeeklyTouchesDetailPage (issue #146)', () => {
   });
 
   it('treats a 400 as a permanent bad link, not something to retry', async () => {
-    // A malformed ws/we is 400. Classifying every non-404 as retryable would offer a
+    // A malformed start/end is 400. Classifying every non-404 as retryable would offer a
     // Retry that can only ever fail again.
-    api.mockRejectedValue(new ApiError('bad', 400, 'we must be after ws'));
-    await renderAt('/crm/touches/3?ws=x&we=y');
+    api.mockRejectedValue(new ApiError('bad', 400, 'Invalid date \'x\''));
+    await renderAt('/crm/touches/3?start=x&end=y');
     expect(container.textContent).toContain("date range isn't valid");
     expect(container.textContent).not.toContain('Retry');
   });
