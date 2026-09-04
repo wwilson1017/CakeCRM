@@ -1283,9 +1283,12 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   VERSION comparison, and it has to be: a write's response is newer than the prop the parent
   still holds, so comparing content would read that lagging prop as an outside change and
   rewind the notes box the instant a save succeeded, the next blur writing the pre-save text
-  back over it. `isNewer` falls back to a **string** compare on a millisecond tie, because
-  `Date.parse` truncates what the server renders with `datetime.isoformat()` off a microsecond
-  TIMESTAMPTZ, and equal means reject. An override is released only when the adopted row
+  back over it. `isNewer` breaks a millisecond tie on the **fractional
+  seconds**, because `Date.parse` truncates there while every task write stamps `updated_at`
+  from `datetime.now(timezone.utc).isoformat()` — microseconds — and equal means reject.
+  Reading the fraction rather than the whole string is what keeps it independent of how the
+  zone is spelled: `Z` sorts after `+`, so a lexical compare calls the same instant written
+  two ways a newer version and adopts the card's own echo. An override is released only when the adopted row
   DISAGREES with it, so a successful write cannot pin its own value for the life of the card —
   the same pre-existing hole `pendingTitle` had. An acknowledged notes write moves the
   **baseline only**, never the row: the acknowledgement proves the text is stored whatever
