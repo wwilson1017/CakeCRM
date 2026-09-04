@@ -1111,10 +1111,10 @@ describe('PipelinePage — deal deep links', () => {
   });
 
   it('follows the same link again after the first visit is closed', async () => {
-    // The parameter is consumed, which is what makes this work: leaving it in the address
-    // bar meant a second click on the same link changed nothing, so after closing the sheet
-    // that link was dead for the rest of the session — and a chat transcript is exactly
-    // where the same link gets clicked twice.
+    // Resolution keys off the NAVIGATION, which is what makes this work: with the id alone,
+    // a second click on the same link changed nothing, so after closing the sheet that link
+    // was dead for the rest of the session — and a chat transcript is exactly where the same
+    // link gets clicked twice.
     routeApi();
     await render(`/crm/pipeline?deal=${LIVE.id}`);
     expect(button('Close')).toBeTruthy();
@@ -1244,6 +1244,39 @@ describe('PipelinePage — deal deep links', () => {
     const params = new URLSearchParams(seenSearch.current);
     expect(params.get('deal')).toBe(String(LIVE.id));
     expect(params.get('stage')).toBeNull();
+  });
+
+  it('retires a link whose refresh failed instead of leaving it armed', async () => {
+    // A failed refresh leaves the verdict at `refresh` and the effect does not run again.
+    // Left armed, the link would sit there until some unrelated load minutes later — closing
+    // another card's sheet, a facet flip — happened to satisfy it, and a sheet would open
+    // with no gesture toward it. Retiring keeps the page silent, which is the documented
+    // trade, and following the link again still retries.
+    const NEW_DEAL = deal({ id: 77, title: 'Fresh signing', stage: 'lead', value: 500 });
+    let boardCalls = 0;
+    routeApi({
+      over: (path) => {
+        if (path !== LIVE_PATH) return undefined;
+        boardCalls += 1;
+        if (boardCalls === 1) return { deals: [LIVE] };
+        if (boardCalls === 2) return Promise.reject(new Error('network'));
+        return { deals: [LIVE, NEW_DEAL] };
+      },
+    });
+
+    await render('/crm/pipeline');
+    await renderThenNavigate('/crm/pipeline?deal=77');
+    await flush();
+    expect(boardCalls).toBe(2);
+    expect(deadLinkNotice()).toBeNull();
+
+    // An unrelated later load succeeds and brings the deal in. The link is retired, so
+    // nothing opens by itself.
+    await reopenAndClose('Acme renewal');
+    await flush();
+    expect(boardCalls).toBe(3);
+    expect(card('Fresh signing')).toBeTruthy();   // it really is on the board now
+    expect(button('Close')).toBeFalsy();          // ...and no sheet opened on its own
   });
 
   it('lets the user dismiss the notice, and does not re-raise it on its own', async () => {

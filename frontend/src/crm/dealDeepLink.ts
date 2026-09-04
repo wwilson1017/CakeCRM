@@ -22,6 +22,12 @@ export const DEAL_DEEP_LINK_PARAM = 'deal';
  * backend builds the same shape for every deal it hands the assistant, and
  * `PipelinePage` is the single parser both depend on. The duplication is unavoidable
  * — a browser cannot call Python — so it is pinned instead:
+ *
+ * Nothing in the app calls this yet: the backend is the only producer today, and #75's
+ * Copy-link button is the first browser-side one. It exists now because it is the anchor
+ * the cross-language pin reads, and shipping the shape without a pin is what let the
+ * blueprint's two producers drift.
+ *
  * `test_the_frontend_producer_agrees_with_the_backend_one` in
  * `backend/tests/test_crm_deal_links.py` READS this file, extracts the template below,
  * and fails if it disagrees with the Python one. Editing this string alone breaks the

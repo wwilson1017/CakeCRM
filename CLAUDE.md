@@ -925,10 +925,16 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   **The rule is stated rather than a chosen subset, and membership is decided by tracing
   what a tool's SERVICE returns — never by its name.** Far more tools qualify than the
   four the issue names: alongside the deal reads and all seven write confirmations,
-  `crm_get_contact` embeds the contact's deal rows, `crm_dashboard` returns five under
-  `top_deals`, `crm_analytics` returns a `stale_deals` list beside its scalars, and
-  `crm_find_duplicates`/`crm_scan_gaps` name deals one level deeper. The blueprint
-  shipped that same miss three times, each time reasoning from a tool's headline purpose.
+  `crm_get_contact` and `crm_get_company` embed their rollup's deal rows, `crm_dashboard`
+  returns five under `top_deals`, `crm_analytics` returns a `stale_deals` list beside its
+  scalars, and `crm_find_duplicates`/`crm_scan_gaps` name deals one level deeper. The
+  blueprint shipped that same miss three times, each time reasoning from a tool's headline
+  purpose — and so did this port: `crm_get_company` was found by the final reviewer, and
+  the converse guard was green because its own list of deal-returning services had been
+  hand-written and did not name `get_company_detail`. That list is now derived: a test
+  scans `crm.service` and `crm.analytics_service` for functions whose SQL reads the deals
+  table and fails on any that is classified in neither direction, so the next one has to be
+  looked at.
   `with_deal_url` is inert on anything without an integer `id` (`type(...) is int`, since
   `bool` is an int subclass and would emit `?deal=True`), so an error dict or `None`
   passes through — a link built from a missing id is worse than no link. The matching
@@ -959,7 +965,9 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   deal exists. A miss on a board that PREDATES the link earns one silent refresh before any
   notice, because the assistant hands out links to deals it just created while the drawer
   sits over an already-loaded board; if that refresh fails the page says NOTHING rather than
-  telling someone their live deal was deleted. Staleness is measured in **load generations**
+  telling someone their live deal was deleted; if that one refresh fails the link is
+  RETIRED rather than left armed, or an unrelated load minutes later would pop a sheet open
+  with no gesture toward it. Staleness is measured in **load generations**
   (`boardLoads`), never in `data`'s object identity — every optimistic update on that page
   replaces `data` without asking the server anything, and reading that as "the board caught
   up" produced exactly the false accusation the refresh exists to prevent (caught in
@@ -967,6 +975,15 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   user to turn on the Archived facet and that has to be allowed to work; and a newer link
   supersedes the sheet an older one opened, keyed on which deal a LINK opened so a card the
   user clicked themselves is left alone.
+  **The drawer is the primary surface, and it needed a fix outside this feature to work at
+  all:** `assistant/MarkdownContent` rendered every link `target="_blank"`, and the session
+  token lives in `sessionStorage`, which is per-tab and which a `noopener` tab does not
+  inherit — so an in-app deal link opened a tab with no session, bounced through `/login`
+  and landed on the dashboard with the id discarded. Same-origin links now navigate in the
+  same tab through a react-router `Link`; everything else still opens in a new tab with
+  `noopener noreferrer`. Internal-ness is decided by resolving the href with `URL` and
+  comparing origins, never by a `startsWith('/')` test — `//evil.com/x` starts with a slash
+  too, and an assistant message can carry a prompt-injected href.
   **One deployment note:** with neither `FRONTEND_URL` nor a Railway domain set, `deal_url`
   emits a relative path, which is correct in-app but not clickable in Telegram or a push
   notification. That is the least-wrong output (an absolute `http://localhost:5173/...` is

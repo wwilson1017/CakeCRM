@@ -136,8 +136,9 @@ export function PipelinePage() {
   // moment they close it. Cleared when a new target arrives, which is what lets the same
   // link be followed again later.
   const [handledDeepLink, setHandledDeepLink] = useState<number | null>(null);
-  // The dead-link notice, held as its own state rather than derived from the parameter —
-  // the parameter is consumed and stripped below, and the notice has to outlive that.
+  // The dead-link notice, held as its own state rather than derived from the verdict — it
+  // has to survive the board changing underneath it, and the user has to be able to dismiss
+  // it without the next render putting it straight back.
   const [deadDeepLinkDealId, setDeadDeepLinkDealId] = useState<number | null>(null);
   // Which deal, if any, the sheet on screen was opened by a LINK. Distinct from
   // `handledDeepLink`, which never clears until the next link: this one clears the moment
@@ -149,6 +150,13 @@ export function PipelinePage() {
   // following the same link twice never changes the id, and a link whose refresh FAILED is
   // never consumed, so its parameter is still sitting there and a retry would look
   // identical to no click at all.
+  // Leaving the parameter behind forgets which navigation we resolved. Back/Forward
+  // RESTORES a history entry's original key rather than minting one, so without this,
+  // returning to a `?deal=` entry the user had already visited would not re-arm — a reload
+  // reopened the deal but Back did not, which nobody would predict.
+  if (deepLinkDealId === null && deepLink.key !== null) {
+    setDeepLink({ dealId: null, loadsAtArrival: 0, key: null });
+  }
   if (deepLinkDealId !== null && location.key !== deepLink.key) {
     setDeepLink({ dealId: deepLinkDealId, loadsAtArrival: boardLoads.started, key: location.key });
     setHandledDeepLink(null);
@@ -199,8 +207,8 @@ export function PipelinePage() {
   // The notice claims the deal is not on this board, and tells the user how to bring it
   // back — the Archived facet is the documented route, and it refetches. The moment the
   // deal is there the claim is false, so the notice goes; opening it is what following the
-  // link asked for. This outlives the parameter, which was consumed as soon as the verdict
-  // landed, so it cannot be left to the resolution above.
+  // link asked for. It cannot be left to the resolution above, which acts once per
+  // navigation and has already had its turn by the time the facet refetches.
   const noticedDealNowOnBoard = deadDeepLinkDealId === null
     ? null
     : (data?.deals ?? []).find(d => d.id === deadDeepLinkDealId) ?? null;
@@ -856,8 +864,23 @@ export function PipelinePage() {
   // at the moment the user has most reason to try again.
   useEffect(() => {
     if (deepLinkState !== 'refresh') return;
-    queueMicrotask(() => { void load(true); });
-  }, [deepLinkState, deepLink.key, load]);
+    const target = deepLink.dealId;
+    queueMicrotask(() => {
+      void load(true).then(applied => {
+        // A refresh that never landed leaves the verdict at `refresh` forever, and this
+        // effect will not run again — so the link would sit armed until some unrelated load
+        // minutes later (closing another card's sheet, a facet flip) happened to satisfy it
+        // and popped a sheet open with no gesture toward it. Retire it instead: the page
+        // stays silent, which is the documented trade, and following the link again retries
+        // because the resolution keys off the navigation.
+        //
+        // `pendingRefresh` means the load was DEFERRED behind a write, not lost — that one
+        // replays on its own and must stay armed. And setState here is inside a promise
+        // continuation, not synchronously in the effect body, which is what the ruleset bans.
+        if (!applied && !pendingRefresh.current) setHandledDeepLink(target);
+      });
+    });
+  }, [deepLinkState, deepLink.dealId, deepLink.key, load]);
 
   if (loading) {
     return (

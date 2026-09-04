@@ -1130,8 +1130,9 @@ CRM_DEAL_URL_TOOLS = frozenset({
     "crm_get_stale_deals",
     "crm_find_duplicates",
     "crm_scan_gaps",
-    # Not deal tools by name; all three hand back deal records anyway.
+    # Not deal tools by name; all four hand back deal records anyway.
     "crm_get_contact",
+    "crm_get_company",
     "crm_dashboard",
     "crm_analytics",
 })
@@ -1558,6 +1559,12 @@ def crm_get_company(company_id: int) -> dict:
     result = crm.get_company_detail(company_id)
     if not result:
         return {"error": f"Company {company_id} not found"}
+    # The company rollup embeds its deals as full rows, exactly as the contact one does —
+    # "how are we doing with Acme?" is a deal question wearing a company's name. Missing
+    # this is the blueprint's own recorded failure repeated: the tool is named for a
+    # company, so nobody looked at what its service returns.
+    for deal in result.get("deals") or []:
+        with_deal_url(deal)
     return result
 
 

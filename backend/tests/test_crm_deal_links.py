@@ -200,8 +200,35 @@ DEAL_RETURNING_SERVICES = (
     "update_deal", "update_deal_stage", "mark_deal_won", "mark_deal_lost",
     "archive_deal", "merge_deals", "bulk_move_deals", "get_stale_deals",
     "find_duplicates", "scan_gaps", "get_deal_health", "get_dashboard_stats",
-    "get_contact_detail", "summarize_analytics",
+    "get_contact_detail", "get_company_detail", "summarize_analytics",
+    # Reachable only through `find_duplicates`, which is itself listed — but a future tool
+    # could call it directly, and it does hand back deal identities ({id, label} pairs that
+    # the deal branch links).
+    "find_duplicate_deals",
+    # No tool reaches it today; the REST board does. Listed rather than waived so the first
+    # tool that calls it has to decide about links rather than inherit an omission.
+    "list_deals",
 )
+
+#: Service functions that read the deals table but hand back no deal RECORD, each checked
+#: against its return statement. This is the other half of the list above:
+#: ``test_the_deal_returning_service_list_covers_every_service_that_reads_deals`` requires
+#: every deals-reading service to appear in one list or the other, so a new one cannot be
+#: silently absent from both.
+NON_RECORD_DEAL_SERVICES = {
+    "get_analytics": "daily series and bucket counts; summarize_analytics carries the records",
+    "get_pipeline_analytics": "per-stage durations and conversion rates, no rows",
+    "get_weekly_touches": "per-deal touch counts for one card — id, title, count, no deal row",
+    "get_contact_staleness": "contact rows; the deal join is only a has-open-deal test",
+    "is_crm_empty": "a boolean",
+    "_crm_empty_in_txn": "a boolean",
+    "_truncate_all": "no return value",
+    "clear_all": "no return value",
+    "load_sample_data": "no return value",
+    "_write_deal_update": "returns True/False — the caller re-reads the row it wants",
+    "delete_company": "returns True/False; it reads deals only to unlink them",
+    "delete_contact": "returns True/False; it reads deals only to unlink them",
+}
 
 #: Executors that reach a deal-returning service but legitimately return no deal record.
 #: Each verified by reading the service's return shape — a waiver is a recorded decision,
@@ -254,6 +281,54 @@ def test_no_executor_reaches_a_deal_returning_service_without_deciding_about_lin
         "returned five full deal rows. If it really returns no deal record, add it to "
         "NO_DEAL_PAYLOAD_WAIVERS with the reason."
     )
+
+
+def _services_that_read_the_deals_table() -> set[str]:
+    """Public service functions whose own SQL reads the deals table.
+
+    Derived from source rather than hand-listed, because the hand list is exactly where
+    this guard went blind once already: ``crm_get_company`` returns the company rollup's
+    full deal rows, and it sailed through because ``get_company_detail`` was not in
+    ``DEAL_RETURNING_SERVICES``. A converse guard whose input is a hand-written list can
+    only ever catch what someone already thought of.
+    """
+    from crm import analytics_service, service as crm_service
+
+    names = set()
+    for module in (crm_service, analytics_service):
+        for name, fn in vars(module).items():
+            if not callable(fn) or not getattr(fn, "__module__", "").startswith("crm."):
+                continue
+            try:
+                source = inspect.getsource(fn)
+            except (OSError, TypeError):  # pragma: no cover
+                continue
+            if re.search(r"\bFROM\s+deals\b", source, re.IGNORECASE):
+                names.add(name)
+    return names
+
+
+def test_the_deal_returning_service_list_covers_every_service_that_reads_deals():
+    """Every service whose SQL reads `deals` must be classified — as one that hands back
+    deal records (so an unlinked caller fails the converse guard), or as one that does not
+    (with the reason). Unclassified is the state that let `get_company_detail` through."""
+    classified = set(DEAL_RETURNING_SERVICES) | set(NON_RECORD_DEAL_SERVICES)
+    unclassified = sorted(_services_that_read_the_deals_table() - classified)
+    assert not unclassified, (
+        "These services read the deals table but are in neither DEAL_RETURNING_SERVICES nor "
+        "NON_RECORD_DEAL_SERVICES: " + ", ".join(unclassified) + ". Read the function's "
+        "return statement. If it hands back deal records, add it to the first list — every "
+        "tool that calls it must then attach a `url` or carry a waiver. If it returns only "
+        "counts or aggregates, add it to the second with the reason."
+    )
+
+
+def test_the_derived_service_scan_actually_finds_things():
+    """A scan that silently matched nothing would make the guard above vacuous while
+    reading green — the classification would trivially cover an empty set."""
+    found = _services_that_read_the_deals_table()
+    assert len(found) >= 10, f"the deals-table scan found only {sorted(found)}"
+    assert "get_company_detail" in found, "the scan misses the service that motivated it"
 
 
 def test_every_waiver_still_names_a_real_tool():
