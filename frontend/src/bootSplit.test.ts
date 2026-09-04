@@ -119,21 +119,147 @@ function resolve(importer: string, spec: string): string {
  * same download as the root, plus every bare package specifier met on the way. Dynamic
  * imports are deliberately not followed — that is the boundary this test exists to defend.
  */
-function staticClosure(root: string): { modules: Set<string>; packages: Set<string> } {
+function staticClosure(root: string): {
+  modules: Set<string>;
+  packages: Set<string>;
+  dynamic: Array<[string, string]>;
+  globs: string[];
+} {
   const modules = new Set<string>();
   const packages = new Set<string>();
+  // Every dynamic import found INSIDE the closure, as [importer, specifier]. Not followed —
+  // the dynamic edge is the boundary under test — but reported, because a `void
+  // import('../../CrmLayout')` in a GTD page downloads the CRM the moment /todo mounts, and
+  // following-nothing-and-reporting-nothing would call that graph clean.
+  const dynamic: Array<[string, string]> = [];
+  // `import.meta.glob` is the other way in, and the more dangerous one: with `eager: true` it
+  // bundles every match STATICALLY, so a single glob in a reached module can pull a directory
+  // into the download while no ImportDeclaration mentions any of it.
+  const globs: string[] = [];
   const stack = [root];
   while (stack.length) {
     const key = stack.pop()!;
     if (modules.has(key)) continue;
     modules.add(key);
-    for (const spec of staticImportSpecifiers(read(key))) {
+    const source = read(key);
+    for (const spec of staticImportSpecifiers(source)) {
       if (spec.endsWith('.css')) continue; // a stylesheet, not JS weight
       if (spec.startsWith('.')) stack.push(resolve(key, spec));
       else packages.add(spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0]);
     }
+    for (const spec of dynamicImportSpecifiers(source)) dynamic.push([key, spec]);
+    for (const pattern of importMetaGlobPatterns(source)) globs.push(`${key}: ${pattern}`);
   }
-  return { modules, packages };
+  return { modules, packages, dynamic, globs };
+}
+
+/**
+ * Every `import.meta.glob(...)` call in the source, reported by its first argument.
+ *
+ * Matched structurally (a call whose callee is a property access on `import.meta`) rather than
+ * by text, so `import.meta.glob` written across a line break or aliased through a local const is
+ * still seen. The first argument may be a string or an array of them; anything else is reported
+ * as `<computed>` so a glob built at runtime is never silently invisible.
+ */
+function importMetaGlobPatterns(source: string): string[] {
+  const patterns: string[] = [];
+  const visit = (node: ts.Node) => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === 'glob' &&
+      ts.isMetaProperty(node.expression.expression)
+    ) {
+      const arg = node.arguments[0];
+      if (arg && ts.isStringLiteral(arg)) patterns.push(arg.text);
+      else if (arg && ts.isArrayLiteralExpression(arg)) {
+        patterns.push(arg.elements.map((e) => (ts.isStringLiteral(e) ? e.text : '<computed>')).join(' , '));
+      } else patterns.push('<computed>');
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(parse(source));
+  return patterns;
+}
+
+/**
+ * Every call to React's `lazy`, with whether it sits inside a function.
+ *
+ * Resolves the LOCAL NAME `lazy` is imported under (`import { lazy as makeLazy } from 'react'`
+ * is the same call), so this cannot be dodged by renaming, and cannot be satisfied by the word
+ * appearing in a comment. A lazy() evaluated inside a component body mints a new component type
+ * on every render, remounting the whole subtree beneath it — the route content on each render
+ * for `App`, and the entire chat for `AssistantLauncher`.
+ */
+function lazyCallSites(source: string): Array<{ insideFunction: boolean }> {
+  const file = parse(source);
+
+  // Which local identifier(s) refer to react's `lazy`?
+  const names = new Set<string>();
+  for (const statement of file.statements) {
+    if (!ts.isImportDeclaration(statement)) continue;
+    if (!ts.isStringLiteral(statement.moduleSpecifier) || statement.moduleSpecifier.text !== 'react') continue;
+    const bindings = statement.importClause?.namedBindings;
+    if (bindings && ts.isNamedImports(bindings)) {
+      for (const element of bindings.elements) {
+        if ((element.propertyName ?? element.name).text === 'lazy') names.add(element.name.text);
+      }
+    }
+  }
+
+  const sites: Array<{ insideFunction: boolean }> = [];
+  const visit = (node: ts.Node, insideFunction: boolean) => {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && names.has(node.expression.text)) {
+      sites.push({ insideFunction });
+    }
+    // The lazy() ARGUMENT is itself an arrow function, so descending into a call we just
+    // recorded must not flip the flag — only a function that ENCLOSES the call counts.
+    const opensScope =
+      ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) ||
+      ts.isArrowFunction(node) || ts.isMethodDeclaration(node);
+    const nested = insideFunction || (opensScope && !isLazyArgument(node, names));
+    ts.forEachChild(node, (child) => visit(child, nested));
+  };
+  visit(file, false);
+  return sites;
+}
+
+/** Is this function the callback handed to a `lazy(...)` call? */
+function isLazyArgument(node: ts.Node, names: Set<string>): boolean {
+  const parent = node.parent;
+  return (
+    !!parent &&
+    ts.isCallExpression(parent) &&
+    ts.isIdentifier(parent.expression) &&
+    names.has(parent.expression.text) &&
+    parent.arguments[0] === node
+  );
+}
+
+/**
+ * Is a JSX element named `descendant` nested INSIDE one named `ancestor`?
+ *
+ * Source-position ordering ("`<ChunkErrorBoundary>` appears before `<Suspense`") is NOT this
+ * question, and the difference is the whole point: two SIBLINGS satisfy the ordering while the
+ * boundary catches nothing the Suspense throws. A rejected chunk would then escape and blank
+ * `#root` — the exact failure the boundary exists to prevent — with the guard still green.
+ */
+function jsxNests(source: string, ancestor: string, descendant: string): boolean {
+  const nameOf = (node: ts.Node): string | null => {
+    if (ts.isJsxElement(node)) return node.openingElement.tagName.getText();
+    if (ts.isJsxSelfClosingElement(node)) return node.tagName.getText();
+    return null;
+  };
+  let found = false;
+  const search = (node: ts.Node, insideAncestor: boolean) => {
+    if (found) return;
+    const name = nameOf(node);
+    const nowInside = insideAncestor || name === ancestor;
+    if (insideAncestor && name === descendant) { found = true; return; }
+    ts.forEachChild(node, (child) => search(child, nowInside));
+  };
+  search(parse(source), false);
+  return found;
 }
 
 const count = (haystack: string, needle: string) => haystack.split(needle).length - 1;
@@ -173,6 +299,10 @@ describe('boot split (#149) — the entry chunk', () => {
 
     // The boundary wraps the Suspense, not the other way round: a chunk that fails to load
     // rejects INSIDE the Suspense, and only an ancestor boundary can catch it.
+    // ANCESTRY, not source order. Two siblings would satisfy an index comparison while the
+    // boundary caught nothing the Suspense threw — a rejected chunk would escape it and blank
+    // the page, which is the one failure this whole composition exists to prevent.
+    expect(jsxNests(src, 'ChunkErrorBoundary', 'Suspense'), 'Suspense nests inside ChunkErrorBoundary').toBe(true);
     expect(count(src, '<ChunkErrorBoundary>')).toBe(1);
     expect(count(src, '<Suspense')).toBe(1);
     expect(src.indexOf('<ChunkErrorBoundary>')).toBeLessThan(src.indexOf('<Suspense'));
@@ -181,11 +311,16 @@ describe('boot split (#149) — the entry chunk', () => {
   it('the entry chunk reaches no page, no CRM module and no heavy package', () => {
     // The transitive proof for the file-level allowlists above: whatever main.tsx reaches
     // statically is downloaded by a /todo visitor before the todo app is even requested.
-    const { modules, packages } = staticClosure('./main.tsx');
+    const { modules, packages, dynamic, globs } = staticClosure('./main.tsx');
     expect(modules).toContain('./Root.tsx');
     expect(modules).toContain('./crm/gtd/publicMode.ts');
     expect(modules.size).toBeLessThanOrEqual(5);
     expect([...packages].sort()).toEqual(['react', 'react-dom']);
+
+    // Root's two branches are the ONLY dynamic imports the entry graph may hold. A third would
+    // be a chunk every visitor's boot path could fetch without any static import naming it.
+    expect(dynamic.map(([, spec]) => bare(spec)).sort()).toEqual(['./App', './crm/gtd/PublicTodoApp']);
+    expect(globs, 'no import.meta.glob in the entry graph').toEqual([]);
   });
 });
 
@@ -290,7 +425,15 @@ describe('boot split (#149) — the CRM shell', () => {
     expect(dynamicImportSpecifiers(src).map(bare)).toEqual(['../../assistant/AssistantPanelBody']);
     // Mounted whenever AI is ready, not on first open — that is the "stays mounted so chat
     // state survives" contract, and it also means the chunk arrives before the first open.
-    expect(src.indexOf('{ready && (')).toBeLessThan(src.indexOf('<AssistantPanelBody'));
+    // Both indices must EXIST before they are compared. `indexOf` returns -1 for a missing
+    // needle, and -1 is less than every real position — so the ordering assertion alone passes
+    // most loudly in exactly the case it is meant to catch: the `ready` gate deleted, and a
+    // keyless install downloading 347 kB it can never use.
+    const gate = src.indexOf('{ready && (');
+    const panel = src.indexOf('<AssistantPanelBody');
+    expect(gate, 'AssistantLauncher still gates the drawer on `ready`').toBeGreaterThan(-1);
+    expect(panel, 'AssistantLauncher still renders AssistantPanelBody').toBeGreaterThan(-1);
+    expect(gate).toBeLessThan(panel);
   });
 
   it('every lazy() is declared at module scope, never inside the component', () => {
@@ -307,10 +450,16 @@ describe('boot split (#149) — the CRM shell', () => {
     expect(bodies.length).toBe(4);
     for (const [file, marker] of bodies) {
       const src = read(file);
-      const bodyStart = src.indexOf(marker);
-      expect(bodyStart, `${file} has ${marker}`).toBeGreaterThan(-1);
-      expect(src.slice(0, bodyStart), `${file} declares lazy() above the component`).toMatch(/lazy\(/);
-      expect(src.slice(bodyStart), `${file} has no lazy() inside the component`).not.toMatch(/lazy\(/);
+      expect(src.indexOf(marker), `${file} has ${marker}`).toBeGreaterThan(-1);
+      // AST, not a text split on the component marker. A `/lazy\(/` regex over the source
+      // BELOW the marker answers a different question in both directions: a comment mentioning
+      // lazy() fails a correct file, and `const L = makeLazy(...)` — or any alias — passes a
+      // broken one. `lazyCallSites` resolves the actual `lazy` binding imported from react and
+      // reports whether each call sits under a function.
+      const sites = lazyCallSites(src);
+      expect(sites.length, `${file} calls lazy()`).toBeGreaterThan(0);
+      const nested = sites.filter((s) => s.insideFunction);
+      expect(nested, `${file} declares every lazy() at module scope`).toEqual([]);
     }
   });
 });
@@ -340,7 +489,7 @@ describe('boot split (#149) — the public todo download', () => {
     // The transitive contract, walked over the real source graph. File-level allowlists
     // cannot see a `crm/gtd/components/RecordChip` that one day imports `crm/components/…`
     // and drags the CRM into the phone PWA's download; this does.
-    const { modules, packages } = staticClosure('./crm/gtd/PublicTodoApp.tsx');
+    const { modules, packages, dynamic, globs } = staticClosure('./crm/gtd/PublicTodoApp.tsx');
 
     // Coverage first, unconditionally, so the deny-list loop below can never pass on an
     // empty sweep (vitest's `expect.requireAssertions` catches a zero-assertion test, not a
@@ -370,6 +519,16 @@ describe('boot split (#149) — the public todo download', () => {
     expect(heavy).toEqual([]);
 
     expect([...packages].sort()).toEqual(['react', 'react-router-dom']);
+
+    // The two ways CRM code can enter this download without any ImportDeclaration naming it,
+    // both of which the static walk above would call clean:
+    //   • a dynamic `void import('../../CrmLayout')` — a separate chunk, still fetched the
+    //     moment /todo mounts, so the phone downloads the CRM anyway;
+    //   • `import.meta.glob(..., { eager: true })` — bundled STATICALLY, a whole directory
+    //     pulled in with no specifier to allowlist against.
+    // Neither exists today, and both must stay a deliberate act rather than an accident.
+    expect(dynamic, 'no dynamic import inside the public todo graph').toEqual([]);
+    expect(globs, 'no import.meta.glob inside the public todo graph').toEqual([]);
   });
 });
 
@@ -411,5 +570,77 @@ describe('boot split (#149) — the scanner itself', () => {
     // "Can't tell" is a failure, never a module silently dropped from the sweep.
     expect(() => resolve('./App.tsx', './does/not/exist')).toThrow(/cannot resolve/);
     expect(() => read('./nope.tsx')).toThrow(/no source module/);
+  });
+
+  it('tells a nested JSX element from a merely later sibling', () => {
+    // The distinction the Root assertion rests on. Pinned in BOTH directions, because a
+    // detector that answered `true` for the sibling case would make that assertion an
+    // expensive way of restating source order.
+    const nested = `const R = () => (<Boundary><Suspense>{x}</Suspense></Boundary>);`;
+    const deep = `const R = () => (<Boundary><div><p><Suspense /></p></div></Boundary>);`;
+    const sibling = `const R = () => (<><Boundary>{a}</Boundary><Suspense>{b}</Suspense></>);`;
+    const before = `const R = () => (<><Suspense>{b}</Suspense><Boundary>{a}</Boundary></>);`;
+    expect(jsxNests(nested, 'Boundary', 'Suspense')).toBe(true);
+    expect(jsxNests(deep, 'Boundary', 'Suspense')).toBe(true);
+    expect(jsxNests(sibling, 'Boundary', 'Suspense')).toBe(false);
+    expect(jsxNests(before, 'Boundary', 'Suspense')).toBe(false);
+  });
+
+  it('finds lazy() calls through an alias, and knows module scope from a component body', () => {
+    // Pins `lazyCallSites` in both directions. A text scan gets each of these wrong: the
+    // aliased call is invisible to it, and the comment is a false positive.
+    const moduleScope = `import { lazy } from 'react';\nconst A = lazy(() => import('./A'));`;
+    const aliased = `import { lazy as makeLazy } from 'react';\nfunction C() { const A = makeLazy(() => import('./A')); return <A />; }`;
+    const insideBody = `import { lazy } from 'react';\nexport default function App() { const A = lazy(() => import('./A')); return <A />; }`;
+    const commentOnly = `import { lazy } from 'react';\nconst A = lazy(() => import('./A'));\nfunction App() { /* never call lazy( here */ return null; }`;
+    const notReact = `import { lazy } from 'other';\nfunction C() { return lazy(() => 1); }`;
+
+    expect(lazyCallSites(moduleScope).map((s) => s.insideFunction)).toEqual([false]);
+    expect(lazyCallSites(aliased).map((s) => s.insideFunction)).toEqual([true]);
+    expect(lazyCallSites(insideBody).map((s) => s.insideFunction)).toEqual([true]);
+    // The lazy() argument IS an arrow function; descending into it must not report the call
+    // that owns it as nested, or every correct file would fail.
+    expect(lazyCallSites(commentOnly).map((s) => s.insideFunction)).toEqual([false]);
+    // A `lazy` from somewhere else is not React's.
+    expect(lazyCallSites(notReact)).toEqual([]);
+  });
+
+  it('sees import.meta.glob in every spelling that bundles a directory', () => {
+    // `import.meta.glob` is the one construct that can pull a whole directory into a chunk
+    // with no specifier to allowlist — and this test file uses it itself, which is exactly why
+    // the detector must not be a text match for the literal call.
+    const plain = `const m = import.meta.glob('./crm/**/*.tsx', { eager: true });`;
+    const arrayArg = `const m = import.meta.glob(['./a/*.ts', '!./a/*.test.ts'], { query: '?raw' });`;
+    const wrapped = `const m = import.meta\n  .glob('./crm/**/*.tsx');`;
+    const computed = `const m = import.meta.glob(PATTERN);`;
+    const unrelated = `const m = shelf.glob('./a/*.ts'); const n = { glob: 1 };`;
+
+    expect(importMetaGlobPatterns(plain)).toEqual(['./crm/**/*.tsx']);
+    expect(importMetaGlobPatterns(arrayArg)).toEqual(['./a/*.ts , !./a/*.test.ts']);
+    expect(importMetaGlobPatterns(wrapped)).toEqual(['./crm/**/*.tsx']);
+    // A runtime-built pattern is reported, never silently invisible.
+    expect(importMetaGlobPatterns(computed)).toEqual(['<computed>']);
+    expect(importMetaGlobPatterns(unrelated)).toEqual([]);
+  });
+
+  it('the closure reports dynamic imports and globs without following them', () => {
+    // `staticClosure` must not FOLLOW a dynamic edge (that edge is the boundary under test)
+    // but must REPORT it, or a `void import('../../CrmLayout')` inside a GTD page reads as a
+    // clean graph. Pinned against the real App.tsx, whose lazy route table is exactly that
+    // shape: nineteen-plus dynamic edges, none of them followed into the closure.
+    const { modules, dynamic } = staticClosure('./App.tsx');
+    expect(dynamic.length).toBeGreaterThanOrEqual(20);
+
+    // Reported from EVERY module the closure reaches, not just the root — which is the whole
+    // point: `TasksModeRouter` is an eager leaf of App, and its own `lazy(() => import(
+    // '../TasksPage'))` is exactly the shape a CRM import hidden one hop down would take.
+    const importers = new Set(dynamic.map(([importer]) => importer));
+    expect(importers).toContain('./App.tsx');
+    expect(importers).toContain('./crm/gtd/TasksModeRouter.tsx');
+
+    // …and every target stayed OUT of the closure, which is what "not followed" means.
+    expect(modules).not.toContain('./crm/PipelinePage.tsx');
+    expect(modules).not.toContain('./crm/gtd/pages.ts');
+    expect(modules).not.toContain('./crm/TasksPage.tsx');
   });
 });

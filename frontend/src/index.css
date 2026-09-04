@@ -237,9 +237,19 @@ input:focus, textarea:focus, select:focus {
 /* Dark-mode syntax highlighting for assistant code blocks.
    `highlight.js/styles/github.css` (imported by assistant/MarkdownContent) is a fixed
    LIGHT theme — without this, a fenced code block paints a white slab inside the dark
-   drawer. It is emitted after this file in the bundle, so these rules win on
-   specificity, not order: `.dark .hljs` is (0,2,0) against its (0,1,0). Hues are
-   github-dark's, all >= 4.5:1 on --color-ck-raised. */
+   drawer. These rules win on SPECIFICITY, never on order: `.dark .hljs-x` is (0,2,0)
+   against its (0,1,0). That distinction became load-bearing with #149, which moved
+   github.css out of this stylesheet's bundle into the lazy assistant chunk — so the two
+   files no longer have a fixed emission order at all, and an order-dependent override
+   would now be a coin flip. Hues are github-dark's, all >= 4.5:1 on --color-ck-raised.
+
+   EVERY selector github.css colours needs a colour here, not just a font-style: a parent
+   `.dark .hljs { color }` cannot override an explicit colour on a CHILD element, whatever
+   the specificity of the parent's selector. `.hljs-emphasis` and `.hljs-strong` are the
+   two that set one (`color: #24292e`, near-black), so markdown *italic* and **bold**
+   inside a fenced block rendered near-black on the dark surface until they were given
+   hues here. Adding a rule below that sets only `font-style`/`font-weight` reintroduces
+   that bug for whatever selector it names. */
 .dark .hljs {
   color: var(--color-ck-ink);
   background: transparent;
@@ -267,8 +277,11 @@ input:focus, textarea:focus, select:focus {
 .dark .hljs-subst { color: var(--color-ck-ink); }
 .dark .hljs-section { color: #79c0ff; font-weight: bold; }
 .dark .hljs-bullet { color: #d9a441; }
-.dark .hljs-emphasis { font-style: italic; }
-.dark .hljs-strong { font-weight: bold; }
+/* github.css sets an explicit near-black `color` on both of these, which no parent rule can
+   override — hence the colour, not just the face. `ck-ink` matches `.dark .hljs`'s own body
+   colour, so emphasis reads as emphasis rather than as a different token type. */
+.dark .hljs-emphasis { color: var(--color-ck-ink); font-style: italic; }
+.dark .hljs-strong { color: var(--color-ck-ink); font-weight: bold; }
 .dark .hljs-addition { color: #7ee787; background-color: #0f5323; }
 .dark .hljs-deletion { color: #ffa198; background-color: #67060c; }
 

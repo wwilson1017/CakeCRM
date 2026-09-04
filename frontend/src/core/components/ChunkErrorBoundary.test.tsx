@@ -186,4 +186,53 @@ describe('ChunkErrorBoundary (#149)', () => {
     await act(async () => { button!.click(); });
     expect(reload).toHaveBeenCalledTimes(1);
   });
+
+  it('does NOT auto-reload while the browser reports itself offline', async () => {
+    // The browser words an offline fetch failure exactly like a deploy-skew one, and reloading
+    // is the wrong move for it: it discards a page the user can still read — and anything they
+    // were typing — for the browser's own offline screen, which the app cannot recover from.
+    // The card, with its manual button, is strictly better there.
+    const store = workingStorage();
+    vi.stubGlobal('navigator', { onLine: false });
+    await mount(<ChunkGone />);
+
+    expect(reload).not.toHaveBeenCalled();
+    // The attempt must not be SPENT either, or coming back online would find the one
+    // auto-recovery already used up on a failure it was never going to fix.
+    expect(store.get(RELOAD_GUARD_KEY)).toBeUndefined();
+    expect(host.textContent).toContain(CHUNK_TEXT);
+    expect(host.querySelector('button')?.textContent).toBe('Reload');
+  });
+
+  it('catches a lazy() chunk whose import REJECTS, not just a component that throws', async () => {
+    // Every case above throws during render. The failure this boundary actually exists for is a
+    // different mechanism: `lazy()` fetches a chunk, the fetch 404s after a deploy, and the
+    // PROMISE rejects — React then re-throws it through the nearest boundary. This pins the
+    // whole composition Root.tsx builds (boundary → Suspense → lazy), which no other test here
+    // exercises; `bootSplit` proves the JSX nests, this proves nesting that way works.
+    const { lazy, Suspense } = await import('react');
+    const Missing = lazy(() =>
+      Promise.reject(new Error('Failed to fetch dynamically imported module: /assets/Gone-abc123.js')),
+    );
+    const store = workingStorage();
+
+    root = createRoot(host);
+    await act(async () => {
+      root!.render(
+        <ChunkErrorBoundary>
+          <Suspense fallback={<div>LOADING</div>}>
+            <Missing />
+          </Suspense>
+        </ChunkErrorBoundary>,
+      );
+    });
+    // Let the rejected import settle and React commit the boundary's fallback.
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(host.textContent).not.toContain('LOADING');
+    expect(host.textContent).toContain(CHUNK_TEXT);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(store.get(RELOAD_GUARD_KEY)).toBeTruthy();
+  });
 });

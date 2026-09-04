@@ -66,7 +66,29 @@ export default class ChunkErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error('Render failed below ChunkErrorBoundary', error, info.componentStack);
-    if (isChunkLoadError(error) && this.claimReloadAttempt()) window.location.reload();
+    if (isChunkLoadError(error) && this.shouldAutoReload() && this.claimReloadAttempt()) {
+      window.location.reload();
+    }
+  }
+
+  /**
+   * Deploy skew is the case reloading FIXES; the browser's wording does not distinguish it from
+   * the cases reloading makes worse.
+   *
+   * The same four messages cover an offline transition, a captive portal, a proxy fault and a
+   * transient network blip. Reloading while offline is actively harmful: it throws away a page
+   * the user can still read — and any text they were typing into it — and replaces it with the
+   * browser's own offline error, from which the app cannot recover itself. A known-offline
+   * browser is the one signal available for free, so it is the one case handled; the residual
+   * (a proxy that fails while `onLine` is true) still auto-reloads once, which is the accepted
+   * cost of recovering the common case without a network probe.
+   *
+   * `onLine === false` is trustworthy in the direction used here — browsers report it only when
+   * there is genuinely no connection — while `true` famously means "an interface is up", which
+   * is why the test is for false rather than a requirement of true.
+   */
+  private shouldAutoReload(): boolean {
+    return typeof navigator === 'undefined' || navigator.onLine !== false;
   }
 
   // The subtree that held focus was just destroyed, so focus is stranded on nothing. Move it

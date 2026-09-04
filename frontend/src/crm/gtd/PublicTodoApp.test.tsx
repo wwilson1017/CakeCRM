@@ -126,10 +126,22 @@ describe('the /todo surface boots through Root (#149)', () => {
     // Every in-app link goes through todoPath(); the router basename is what turns those into
     // /todo/{token}/... . A bare /inbox here would mean the basename was lost and a tap would
     // leave the no-login surface for the authed app.
-    const hrefs = [...host.querySelectorAll('a')].map((a) => a.getAttribute('href') ?? '');
-    const inApp = hrefs.filter((h) => h.startsWith('/'));
-    expect(inApp.length).toBeGreaterThan(0);
-    expect(inApp.every((h) => h === TOKEN_BASE || h.startsWith(`${TOKEN_BASE}/`))).toBe(true);
+    //
+    // RESOLVED, not raw. Filtering to hrefs that start with '/' would skip exactly the
+    // dangerous class: a relative `href="inbox"` written into a page one day resolves against
+    // the CURRENT url, so from /todo/SECRETTOKEN/inbox it lands on /todo/SECRETTOKEN/inbox
+    // (fine) but from /todo/SECRETTOKEN it lands on /todo/inbox — the token silently dropped,
+    // a 404, and an installed PWA that dead-ends. `a.href` is the resolved absolute URL, so
+    // relative and absolute are checked the same way and neither can slip past.
+    const anchors = [...host.querySelectorAll('a')];
+    const sameOrigin = anchors
+      .map((a) => new URL(a.href, window.location.href))
+      .filter((u) => u.origin === window.location.origin);
+    expect(sameOrigin.length).toBeGreaterThan(0);
+    const escaping = sameOrigin
+      .map((u) => u.pathname)
+      .filter((p) => p !== TOKEN_BASE && !p.startsWith(`${TOKEN_BASE}/`));
+    expect(escaping, 'every in-app link stays inside the token base').toEqual([]);
   }, BOOT_TIMEOUT_MS);
 
   // The basename exists so a sub-path resolves to its own page. Without this case the suite
