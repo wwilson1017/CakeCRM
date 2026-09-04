@@ -428,8 +428,10 @@ export function CompanyRollupReport({ companyId, onCompanyName }: Props) {
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', margin: '18px 0 4px' }}>
           <SummaryChip label="Open deals" value={formatNumber(summary.open_deal_count)} />
           <SummaryChip label="Open value" value={money(summary.open_deal_value)} />
-          {/* Labelled so the chip and the section below cannot appear to disagree: the
-              section lists archived contacts, this number deliberately excludes them. */}
+          {/* Labelled precisely, because the number is precise: the server counts
+              `status = 'active'`, so inactive and archived contacts are both out, while
+              the section below lists every contact and states its own total. Two different
+              questions, each answered honestly — not one number fitting neither label. */}
           <SummaryChip label="Active contacts" value={formatNumber(summary.contact_count)} />
         </div>
 

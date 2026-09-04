@@ -58,9 +58,12 @@ function SourceChip({ entry }: { entry: CrmTimelineEntry }) {
     color: source.archived ? INK_DIM : ACCENT_TEXT,
     textDecoration: source.archived ? ('line-through' as const) : undefined,
   };
-  // An archived source stays a LINK: `GET /api/crm/deals/:id` has no live filter and the
-  // detail surfaces render an archived record so it can be restored. Withholding the link
-  // would strand exactly the record a reader most needs to reach.
+  // Companies and contacts link to their detail routes, and an archived one still links —
+  // both pages render an archived record, and withholding the link would strand exactly the
+  // record a reader most needs to reach. DEALS have no route at all in this app (the board
+  // opens them in a sheet), so a deal chip is plain text rather than a dead link. Giving it
+  // one would mean hosting the deal sheet here, which would put stage moves and an edit form
+  // on a report that is deliberately read-only.
   if (entry.entity_type === 'company') {
     return <Link to={`/crm/companies/${entry.entity_id}`} style={style}>{label}</Link>;
   }

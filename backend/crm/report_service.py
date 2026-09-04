@@ -35,6 +35,26 @@ divergences, each forced by a real difference here:
    every field — including the ones nobody has filled in — from data it already has. That
    is what keeps "Expand all" from turning one click into ~150 HTTP requests.
 
+**The payload ceiling, stated rather than implied.** At the documented maxima this response
+embeds 200 deals and 200 contacts, each with up to 25 activities, each deal with up to 25
+open tasks — so ~15,000 child rows plus the custom fields, and free text makes the byte size
+unbounded even though the row counts are not. Realistic accounts are in the tens and the
+truncation flags say so when they are not, but a very large account WILL produce a large
+response. The upgrade path is to make the per-record activity and task lists lazy (fetched on
+expand, as the blueprint fetched custom fields) rather than to raise or lower the caps; that
+would leave only the two child lists in the initial payload.
+
+**The per-parent caps bound the OUTPUT, not the database work.** Each `row_number()` window
+ranks every matching row for all selected parents and only then filters to `cap + 1`, so one
+deal with an enormous history still costs a full scan and sort of its rows. The bounded shape
+is a `LATERAL (… ORDER BY created_at DESC, id DESC LIMIT cap + 1)` per parent — the same
+GROUPED-vs-LATERAL split `service.get_pipeline` documents, whose rule ("LATERAL for a
+per-page read inside a capped reader") points here. It is deliberately not done yet, for the
+reason #59 gave for the same call: there is no measured need, and the supporting composite
+index (`activity_log(deal_id, created_at DESC, id DESC)`) does not exist either — today's
+indexes are single-column, so a LATERAL would still sort within each parent. Both belong to
+one measured perf change, not to this reader's first version.
+
 **What ``include_archived`` means, precisely** — the name is broad and the behaviour is
 not, so read this rather than inferring it. It widens exactly two things: **archived
 deals** (``deals.archived_at``) and **archived notes** (``crm_chatter.archived``). It does
@@ -152,18 +172,32 @@ def get_company_rollup(company_id: int, include_archived: bool = False) -> dict 
     # Exact headline numbers over the FULL tables — deliberately not a reduction of the
     # capped lists below, so no cap and no archive toggle can move them. Open = live AND
     # in a non-terminal stage: two columns, two axes, because there is no `status` here.
+    #
+    # `contact_count` is `status = 'active'`, NOT "not archived". `CONTACT_STATUSES` has
+    # three values, so the two differ by `inactive` — and the chip this feeds is labelled
+    # "Active contacts", which would be a lie about an inactive contact. The section below
+    # lists every contact and states its own total, so the two numbers are different
+    # questions answered honestly rather than one number that fits neither label.
+    #
+    # Both deal figures come from ONE scan of the filtered set; two sub-selects with the
+    # same WHERE would scan it twice for no reason.
+    #
+    # Single-currency (USD) sum, matching `service.get_company_detail` and the rest of the
+    # app's hardcoded '$'. Deals do carry a `currency` column, and summing across
+    # currencies is wrong in the abstract — but every other total in this CRM does the
+    # same, so a per-currency total HERE would make this report disagree with the
+    # dashboard, the pipeline header and the company detail page. Multi-currency is a
+    # product-wide change, not a detail of this reader.
     summary = pg_fetchone(
-        f"""SELECT
-              (SELECT COUNT(*) FROM deals
-                WHERE company_id = %s AND {LIVE_PREDICATE} AND {OPEN_PREDICATE})
-                AS open_deal_count,
-              (SELECT COALESCE(SUM(value), 0) FROM deals
-                WHERE company_id = %s AND {LIVE_PREDICATE} AND {OPEN_PREDICATE})
-                AS open_deal_value,
-              (SELECT COUNT(*) FROM contacts
-                WHERE company_id = %s AND status <> 'archived')
-                AS contact_count""",
-        (company_id, company_id, company_id),
+        f"""SELECT d.open_deal_count, d.open_deal_value, c.contact_count
+              FROM (SELECT COUNT(*) AS open_deal_count,
+                           COALESCE(SUM(value), 0) AS open_deal_value
+                      FROM deals
+                     WHERE company_id = %s AND {LIVE_PREDICATE} AND {OPEN_PREDICATE}) d,
+                   (SELECT COUNT(*) AS contact_count
+                      FROM contacts
+                     WHERE company_id = %s AND status = 'active') c""",
+        (company_id, company_id),
     )
 
     # Own query rather than `service.list_contacts`, which has no company_id filter.

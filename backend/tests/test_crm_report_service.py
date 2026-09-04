@@ -275,11 +275,26 @@ def test_summary_is_its_own_aggregate_over_the_full_tables(rec):
     assert result["summary"]["open_deal_count"] == 4
 
 
-def test_contact_count_excludes_archived_contacts_though_the_list_includes_them(rec):
+def test_contact_count_means_active_not_merely_unarchived(rec):
+    """The chip says "Active contacts", so an `inactive` contact must not be in it.
+
+    `CONTACT_STATUSES` is active/inactive/archived, so `status <> 'archived'` and
+    `status = 'active'` differ by exactly the middle value — and the looser one would make
+    the label untrue. The LIST below is unfiltered on purpose; the two numbers answer
+    different questions.
+    """
     _prime_rollup(rec, contacts=[{"id": 3, "name": "Ada", "status": "archived"}])
     report_service.get_company_rollup(7)
-    assert "status <> 'archived'" in rec.sql_containing("contact_count")
+    assert "status = 'active'" in rec.sql_containing("contact_count")
     assert "status" not in rec.sql_containing("FROM contacts WHERE company_id = %s ORDER BY name")
+
+
+def test_summary_reads_the_deal_set_once(rec):
+    """Two sub-selects with the same WHERE would scan the filtered set twice for nothing."""
+    _prime_rollup(rec)
+    report_service.get_company_rollup(7)
+    sql = rec.sql_containing("open_deal_count")
+    assert sql.count("FROM deals") == 1
 
 
 # ── Custom fields ───────────────────────────────────────────────────────────────────

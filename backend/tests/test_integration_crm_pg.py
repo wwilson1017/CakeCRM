@@ -1755,6 +1755,9 @@ def test_report_summary_is_unmoved_by_the_archived_toggle(pg_db):
     service.archive_deal(gone["id"])
     service.create_contact("Ada", company_id=co["id"])
     service.create_contact("Bob", company_id=co["id"], status="archived")
+    # The third status. "Active contacts" must exclude it too, or the chip's label is a lie
+    # — `status <> 'archived'` and `status = 'active'` differ by exactly this row.
+    service.create_contact("Cy", company_id=co["id"], status="inactive")
 
     narrow = report_service.get_company_rollup(co["id"])["summary"]
     wide = report_service.get_company_rollup(co["id"], include_archived=True)["summary"]
@@ -1762,6 +1765,8 @@ def test_report_summary_is_unmoved_by_the_archived_toggle(pg_db):
     assert narrow["open_deal_count"] == 1
     assert narrow["open_deal_value"] == 1000
     assert narrow["contact_count"] == 1
+    # ...while the LIST is unfiltered: all three contacts are this company's history.
+    assert len(report_service.get_company_rollup(co["id"])["contacts"]) == 3
 
 
 def test_report_rollup_caps_activities_per_record_not_globally(pg_db, monkeypatch):
