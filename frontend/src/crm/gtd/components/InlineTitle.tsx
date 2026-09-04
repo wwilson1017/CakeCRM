@@ -85,7 +85,8 @@ export function InlineTitle({ title, label, disabled, onSave, className = '' }: 
         e.preventDefault();
         start();
       }}
-      className={`${className} cursor-text rounded border border-transparent px-1 py-0.5 hover:border-line ${
+      // `break-words` so a pasted URL wraps instead of widening the card.
+      className={`${className} cursor-text break-words rounded border border-transparent px-1 py-0.5 hover:border-line ${
         saving ? 'opacity-50' : ''
       }`}
     >

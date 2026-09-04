@@ -5,6 +5,8 @@ import { REPEAT_OPTIONS, STATUS_META, TODO_STATUS_ORDER } from '../constants';
 import { isTodoPublicMode } from '../publicMode';
 import type { Todo, TodoProject, TodoStatus } from '../types';
 import { parseTags } from '../util';
+import { nextActionCopyText, todoCopyText } from '../copyText';
+import { CopyButton } from './CopyButton';
 
 const NEW_PROJECT = '__new__';
 
@@ -101,19 +103,46 @@ export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onS
     }
   };
 
+  // Copy reads the LIVE form, not `todo` — you can retype the action and copy it
+  // before saving, and what lands on the clipboard is what is on screen. Lazy
+  // (called on click) so the string is only built when it is wanted.
+  const copyFields = () => ({
+    title, notes, status,
+    projectName: projectSel === NEW_PROJECT
+      ? newProject.trim() || null
+      : projects.find(p => String(p.id) === projectSel)?.name ?? null,
+    context: context.trim(), tags: parseTags(tags),
+    dueDate: due || null, repeat: effectiveRepeat, star,
+  });
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-charcoal/40 p-0 sm:p-4"
       onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div className="max-h-[92dvh] w-full sm:max-w-lg overflow-y-auto rounded-t-2xl sm:rounded-2xl border border-line-faint bg-cream p-5 shadow-lg">
-        <h2 className="font-heading text-lg font-bold text-charcoal">
-          {todo ? 'Edit todo' : 'New todo'}
-        </h2>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="font-heading text-lg font-bold text-charcoal">
+            {todo ? 'Edit todo' : 'New todo'}
+          </h2>
+          {/* Whole todo — the heading names what this button copies. */}
+          {title.trim() && (
+            <CopyButton text={() => todoCopyText(copyFields())} label="Copy the whole todo" />
+          )}
+        </div>
 
         <div className="mt-4 space-y-3">
           <div>
-            <label className={labelCls} htmlFor="gtd-title">What&rsquo;s the next action?</label>
+            <div className="mb-1 flex items-center justify-between gap-3">
+              <label className={`${labelCls} mb-0`} htmlFor="gtd-title">
+                What&rsquo;s the next action?
+              </label>
+              {/* Just this line — the common case is pasting the action itself
+                  into a message, without the status/project scaffolding. */}
+              {title.trim() && (
+                <CopyButton text={() => nextActionCopyText(title)} label="Copy just the next action" />
+              )}
+            </div>
             <input id="gtd-title" className={inputCls} value={title} autoFocus
                    onChange={e => setTitle(e.target.value)} />
           </div>
