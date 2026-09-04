@@ -222,7 +222,17 @@ export function ContactForm({ contact, onClose, onSaved, onWriteUncertain }: Pro
             />
             {showLegacy && (
               <p style={{ fontSize: 11, color: INK_DIM, margin: '4px 0 0' }}>
-                Not linked to a company record — pick one or create it to link this contact.{' '}
+                {/* The name is repeated HERE, in real text, and not left to the input's
+                    placeholder alone. A placeholder is not a value: it is not announced as
+                    one, it vanishes the moment the user types, and it renders dim. For a
+                    company that exists only as this free text, that would make the sole
+                    stored copy of the name unreadable to a screen reader and invisible while
+                    searching for its replacement. (Associating this line with the input via
+                    `aria-describedby` would need a new `RecordCombobox` prop; the component
+                    is shared and being widened on another branch, so that is left out of
+                    this change.) */}
+                Saved as free text: “{legacyText}”. Not linked to a company record — pick one
+                or create it to link this contact.{' '}
                 {/* The picker's own × is gated on `value != null`, so an unlinked contact has
                     no clear action inside the widget — and `companyTouched` is only set by
                     choosing or clearing. Without this button, removing a wrong legacy name

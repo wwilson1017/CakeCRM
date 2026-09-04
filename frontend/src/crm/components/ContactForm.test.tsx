@@ -227,6 +227,18 @@ describe('ContactForm — the legacy free-text column', () => {
     expect(container.textContent).toContain(NOT_LINKED);
   });
 
+  it('names the company in real text, not only in the placeholder', async () => {
+    // A placeholder is not a value: screen readers do not announce it as one, and it
+    // disappears the moment the user types — which is exactly when they are searching for
+    // the company it names. For a name that exists ONLY as this free text, the sole stored
+    // copy would be unreadable at the moment it is most needed.
+    await render(contact({ company: 'Acme Widgets', company_id: null }));
+
+    const hint = [...container.querySelectorAll('p')]
+      .find(el => el.textContent?.includes(NOT_LINKED));
+    expect(hint?.textContent).toContain('Acme Widgets');
+  });
+
   it('stops advertising that text once the user speaks for the field', async () => {
     // Left in place, the empty label would keep naming a company the user had just cleared.
     mockApi([{ id: 9, name: 'Acme Corp', status: 'active' }]);
