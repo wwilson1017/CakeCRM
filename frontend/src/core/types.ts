@@ -377,7 +377,14 @@ export interface CrmRollupChild {
 export interface CrmRollupSummary {
   open_deal_count: number;
   open_deal_value: number;
-  /** Excludes archived contacts, though the contacts LIST below includes them. */
+  /**
+   * The one currency every open deal agrees on, or null when they disagree (and when
+   * there are no open deals). `deals.currency` is user-writable, so a sum across
+   * currencies is a false number — null means "do not render this as one figure".
+   */
+  open_deal_currency: string | null;
+  /** `status = 'active'` only: BOTH inactive and archived are excluded, because the chip
+   *  this feeds says "Active contacts". The contacts LIST below is unfiltered. */
   contact_count: number;
 }
 

@@ -51,7 +51,7 @@ function rollup(over: Partial<CrmCompanyRollup> = {}): CrmCompanyRollup {
   return {
     company: COMPANY,
     company_custom_fields: [],
-    summary: { open_deal_count: 0, open_deal_value: 0, contact_count: 0 },
+    summary: { open_deal_count: 0, open_deal_value: 0, open_deal_currency: 'USD', contact_count: 0 },
     contacts: [], deals: [], contacts_truncated: false, deals_truncated: false,
     ...over,
   } as CrmCompanyRollup;
@@ -104,7 +104,7 @@ describe('CompanyRollupReport', () => {
     // let a truncated page understate an account — and with archived deals included, could
     // make the open-deal count go DOWN as more history was requested.
     apiMock.mockResolvedValue(rollup({
-      summary: { open_deal_count: 12, open_deal_value: 48000, contact_count: 5 },
+      summary: { open_deal_count: 12, open_deal_value: 48000, open_deal_currency: 'USD', contact_count: 5 },
       deals: [deal()] as never,
     }));
     await mount();
@@ -113,9 +113,44 @@ describe('CompanyRollupReport', () => {
     expect(text()).toContain('5');
   });
 
+  it('refuses to state one total when the open deals span several currencies', async () => {
+    // `deals.currency` is user-writable, so a sum across currencies is a false number.
+    // The server sends open_deal_currency = null in that case; the chip must not render
+    // the sum as one figure.
+    apiMock.mockResolvedValue(rollup({
+      summary: {
+        open_deal_count: 2, open_deal_value: 2000, open_deal_currency: null, contact_count: 0,
+      },
+    }));
+    await mount();
+    expect(text()).toContain('Mixed currencies');
+    expect(text()).not.toContain('2,000');
+  });
+
+  it('renders each deal in its own currency, not a hardcoded dollar sign', async () => {
+    apiMock.mockResolvedValue(rollup({
+      summary: {
+        open_deal_count: 1, open_deal_value: 1000, open_deal_currency: 'EUR', contact_count: 0,
+      },
+      deals: [deal({ id: 1, title: 'Euro deal', value: 1000, currency: 'EUR' })] as never,
+    }));
+    await mount();
+    expect(text()).not.toContain('$1,000');
+    expect(text()).toContain('€');
+  });
+
+  it('falls back to the raw code rather than blanking on an invalid currency', async () => {
+    // Intl throws a RangeError on an unknown code, and the field is free text.
+    apiMock.mockResolvedValue(rollup({
+      deals: [deal({ id: 1, title: 'Odd', value: 500, currency: 'NOTACURRENCY' })] as never,
+    }));
+    await mount();
+    expect(text()).toContain('NOTACURRENCY 500');
+  });
+
   it('labels the contact chip as active, because the section below lists archived ones too', async () => {
     apiMock.mockResolvedValue(rollup({
-      summary: { open_deal_count: 0, open_deal_value: 0, contact_count: 1 },
+      summary: { open_deal_count: 0, open_deal_value: 0, open_deal_currency: null, contact_count: 1 },
       contacts: [contact({ id: 1 }), contact({ id: 2, name: 'Bob', status: 'archived' })] as never,
     }));
     await mount();

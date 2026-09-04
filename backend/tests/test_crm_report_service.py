@@ -289,6 +289,20 @@ def test_contact_count_means_active_not_merely_unarchived(rec):
     assert "status" not in rec.sql_containing("FROM contacts WHERE company_id = %s ORDER BY name")
 
 
+def test_summary_reports_a_currency_only_when_the_open_deals_agree(rec):
+    """`deals.currency` is user-writable, so a bare SUM across currencies is a false number.
+
+    The reader answers "which currency, if they all agree" rather than leaving the client to
+    guess — a client-side check would need every open deal, which is exactly what the cap
+    stops it from having.
+    """
+    _prime_rollup(rec)
+    report_service.get_company_rollup(7)
+    sql = rec.sql_containing("open_deal_currency")
+    assert "COUNT(DISTINCT currency) = 1" in sql
+    assert "MIN(currency)" in sql
+
+
 def test_summary_reads_the_deal_set_once(rec):
     """Two sub-selects with the same WHERE would scan the filtered set twice for nothing."""
     _prime_rollup(rec)

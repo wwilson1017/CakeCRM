@@ -1731,6 +1731,48 @@ def test_report_timeline_orders_two_id_spaces_without_duplicates_or_gaps(pg_db):
     ]
 
 
+def test_report_attributes_a_cross_company_activity_to_its_deals_company(pg_db):
+    """Where an activity lands when its contact and its deal belong to DIFFERENT companies.
+
+    The rule is absolute (`deal_id IS NULL` for the contact bucket), so a deal wins globally
+    rather than only among the deals on screen: the row belongs to the deal's company and
+    appears there exactly once, on neither surface of the contact's company. That is a
+    deliberate improvement on the blueprint, whose per-company predicates dropped such a row
+    from BOTH companies — every activity now has exactly one home. Pinned because the code's
+    documentation once claimed the blueprint's behaviour while doing this.
+    """
+    from crm import report_service, service
+
+    a = service.create_company("Acme")
+    b = service.create_company("Beta")
+    contact = service.create_contact("Ada", company_id=a["id"])
+    deal = service.create_deal("Beta deal", contact_id=contact["id"], company_id=b["id"])
+    service.log_activity("call", note="cross-company",
+                         contact_id=contact["id"], deal_id=deal["id"])
+
+    a_rollup = report_service.get_company_rollup(a["id"])
+    assert a_rollup["contacts"][0]["activities"] == []
+    assert a_rollup["deals"] == []
+    assert report_service.get_company_timeline(a["id"])["entries"] == []
+
+    b_rollup = report_service.get_company_rollup(b["id"])
+    assert [x["note"] for x in b_rollup["deals"][0]["activities"]] == ["cross-company"]
+    b_feed = report_service.get_company_timeline(b["id"])["entries"]
+    assert [(e["source"], e["message"]) for e in b_feed] == [("activity", "cross-company")]
+
+
+def test_report_summary_reports_a_currency_only_when_open_deals_agree(pg_db):
+    from crm import report_service, service
+
+    co = service.create_company("Acme")
+    service.create_deal("USD one", company_id=co["id"], stage="lead", value=100)
+    assert report_service.get_company_rollup(co["id"])["summary"]["open_deal_currency"] == "USD"
+
+    mixed = service.create_deal("Other", company_id=co["id"], stage="lead", value=100)
+    service.update_deal(mixed["id"], currency="EUR")
+    assert report_service.get_company_rollup(co["id"])["summary"]["open_deal_currency"] is None
+
+
 def test_report_rollup_and_timeline_survive_a_company_with_no_children(pg_db):
     """The empty-`ANY()` and empty-subquery paths, which SQL text alone cannot prove."""
     from crm import report_service, service
@@ -1739,7 +1781,8 @@ def test_report_rollup_and_timeline_survive_a_company_with_no_children(pg_db):
     rollup = report_service.get_company_rollup(co["id"])
     assert rollup["contacts"] == [] and rollup["deals"] == []
     assert rollup["summary"] == {
-        "open_deal_count": 0, "open_deal_value": 0, "contact_count": 0,
+        "open_deal_count": 0, "open_deal_value": 0,
+        "open_deal_currency": None, "contact_count": 0,
     }
     assert report_service.get_company_timeline(co["id"]) == {"entries": [], "has_more": False}
 

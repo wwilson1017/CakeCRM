@@ -113,10 +113,12 @@ export interface TimelineSource {
 const KINDS = { company: 'Company', contact: 'Contact', deal: 'Deal' } as const;
 
 /**
- * The source chip. Carries no "linkable" flag deliberately: an archived deal is still
- * reachable — `GET /api/crm/deals/:id` has no live filter and the detail sheet renders an
- * archived deal so it can be restored. Withholding the link would strand exactly the record a
- * reader most needs to reach.
+ * The source chip: which record a timeline row came from, and whether that record is
+ * archived. Carries no "linkable" flag deliberately — whether a kind is navigable is a
+ * property of the app's routes, not of the entry, so the renderer decides. Today companies
+ * and contacts link to their detail routes, archived ones included (both pages render an
+ * archived record, and withholding the link would strand exactly the record a reader most
+ * needs to reach), while deals have no route at all and render as plain text.
  */
 export function timelineSourceLabel(entry: CrmTimelineEntry): TimelineSource {
   return { kind: KINDS[entry.entity_type], name: entry.source_name, archived: entry.source_archived };

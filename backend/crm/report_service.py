@@ -60,9 +60,11 @@ not, so read this rather than inferring it. It widens exactly two things: **arch
 deals** (``deals.archived_at``) and **archived notes** (``crm_chatter.archived``). It does
 NOT govern contacts: ``contacts.status`` is not a sweep, an archived contact is still this
 company's history, so contacts are ALWAYS returned and rendered marked (this also matches
-``service.get_company_detail``'s documented asymmetry). ``summary.contact_count``
-nonetheless counts only non-archived contacts, and the UI labels that chip accordingly —
-the section and the chip are answering different questions on purpose.
+``service.get_company_detail``'s documented asymmetry). ``summary.contact_count`` is
+narrower still — it counts ``status = 'active'`` only, so BOTH ``inactive`` and ``archived``
+are out, because the chip it feeds says "Active contacts" and that word has to be true. The
+section below lists every contact and states its own total. Two different questions, each
+answered honestly, rather than one number that fits neither label.
 
 Archived deals being opt-in makes this the **third** sanctioned hole in the
 ``LIVE_PREDICATE`` sweep, in the same shape as the other two
@@ -182,16 +184,23 @@ def get_company_rollup(company_id: int, include_archived: bool = False) -> dict 
     # Both deal figures come from ONE scan of the filtered set; two sub-selects with the
     # same WHERE would scan it twice for no reason.
     #
-    # Single-currency (USD) sum, matching `service.get_company_detail` and the rest of the
-    # app's hardcoded '$'. Deals do carry a `currency` column, and summing across
-    # currencies is wrong in the abstract — but every other total in this CRM does the
-    # same, so a per-currency total HERE would make this report disagree with the
-    # dashboard, the pipeline header and the company detail page. Multi-currency is a
-    # product-wide change, not a detail of this reader.
+    # `open_deal_currency` is the single currency every open deal agrees on, or NULL when
+    # they do not agree (and when there are no open deals at all). It exists because
+    # `deals.currency` is USER-WRITABLE — it is in `service._DEAL_USER_WRITABLE` — so
+    # USD-only is a convention here, NOT an enforced invariant, and a bare SUM across
+    # currencies is a number that is simply false. The rest of the app sums anyway and
+    # prefixes '$' (`service.get_company_detail` documents that as a single-currency sum),
+    # but "every other screen does it" is consistency, not correctness, and this report
+    # states an account's value as a headline. So the sum still ships — it is right in the
+    # overwhelmingly common single-currency case — and the UI declines to render it as one
+    # figure when the currencies disagree, rather than inventing a total nobody owes.
     summary = pg_fetchone(
-        f"""SELECT d.open_deal_count, d.open_deal_value, c.contact_count
+        f"""SELECT d.open_deal_count, d.open_deal_value, d.open_deal_currency,
+                   c.contact_count
               FROM (SELECT COUNT(*) AS open_deal_count,
-                           COALESCE(SUM(value), 0) AS open_deal_value
+                           COALESCE(SUM(value), 0) AS open_deal_value,
+                           CASE WHEN COUNT(DISTINCT currency) = 1 THEN MIN(currency) END
+                             AS open_deal_currency
                       FROM deals
                      WHERE company_id = %s AND {LIVE_PREDICATE} AND {OPEN_PREDICATE}) d,
                    (SELECT COUNT(*) AS contact_count
@@ -236,9 +245,13 @@ def get_company_rollup(company_id: int, include_archived: bool = False) -> dict 
     # — showing archived history while archived history is switched off. Two review rounds
     # landed on this; keep the predicate absolute.
     #
-    # The accepted consequence, same as the blueprint's: an activity naming a contact of
-    # this company AND a deal of ANOTHER company shows on neither company's rollup. It is
-    # still on the contact's own page, and on this company's timeline.
+    # The consequence, which is NOT the blueprint's: because the rule is absolute, a deal
+    # wins globally rather than only among the deals on screen. An activity naming this
+    # company's contact AND another company's deal therefore belongs to that DEAL — it
+    # appears once, on the other company's rollup and timeline, and on neither of this
+    # company's. The blueprint's version dropped such a row from both companies (its
+    # predicates were per-company), so this is strictly better: every activity has exactly
+    # one home. It is reachable from the contact's own page either way.
     deal_acts = (
         pg_fetchall(
             """SELECT * FROM (

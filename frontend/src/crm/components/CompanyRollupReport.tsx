@@ -47,7 +47,22 @@ interface RollupState {
 }
 
 const EMPTY: ReadonlySet<number> = new Set();
-const money = (n: number): string => `$${Math.round(n).toLocaleString()}`;
+/**
+ * Money in the currency it is actually denominated in.
+ *
+ * `deals.currency` is user-writable free text, so this must not assume USD and must not
+ * assume the code is even valid — `Intl` throws a RangeError on an unknown one, and a
+ * report is not allowed to blank itself over a typo in a currency field.
+ */
+const money = (n: number, currency: string): string => {
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: 'currency', currency, maximumFractionDigits: 0,
+    }).format(n);
+  } catch {
+    return `${currency} ${Math.round(n).toLocaleString()}`;
+  }
+};
 const dash = '—';
 
 const toggle = (set: ReadonlySet<number>, id: number): ReadonlySet<number> => {
@@ -89,9 +104,11 @@ function SummaryChip({ label, value }: { label: string; value: string }) {
 }
 
 function TruncationNotice({ shown, noun }: { shown: number; noun: string }) {
+  // Deliberately not "older ones": deals are capped newest-updated-first but contacts are
+  // capped alphabetically, so "older" would be wrong for half the callers.
   return (
     <p style={{ fontSize: 12, color: INK_DIM, margin: '10px 0 0' }}>
-      Showing the first {shown} {noun} on this company. Older ones are not on this page.
+      Showing the first {shown} {noun} on this company. The rest are not on this page.
     </p>
   );
 }
@@ -254,7 +271,7 @@ function DealRow({ deal, open, onToggle }: {
               ...mono(10), color: stage?.color ?? INK_DIM,
               background: stage?.bg, borderRadius: 4, padding: '2px 6px',
             }}>{deal.stage}</span>
-            <span style={{ fontSize: 13, color: INK_MUTE }}>{money(deal.value)}</span>
+            <span style={{ fontSize: 13, color: INK_MUTE }}>{money(deal.value, deal.currency)}</span>
             <TouchCountPill count={deal.ai_touch_count} />
             <ScorePill score={deal.lead_score} compact />
             {archived && <StatusBadge status="archived" />}
@@ -269,7 +286,7 @@ function DealRow({ deal, open, onToggle }: {
     >
       <InfoRow label="Deal ID">{deal.id}</InfoRow>
       <InfoRow label="Stage">{deal.stage}</InfoRow>
-      <InfoRow label="Value">{money(deal.value)}</InfoRow>
+      <InfoRow label="Value">{money(deal.value, deal.currency)}</InfoRow>
       <InfoRow label="Probability">{`${deal.probability}%`}</InfoRow>
       <InfoRow label="Currency">{deal.currency}</InfoRow>
       <InfoRow label="Expected close">{deal.expected_close_date}</InfoRow>
@@ -383,8 +400,12 @@ export function CompanyRollupReport({ companyId, onCompanyName }: Props) {
     return () => { stale = true; };
   }, [companyId, includeArchived, key]);
 
-  const name = rollup?.company.name;
-  useEffect(() => { if (name) onCompanyName?.(name); }, [name, onCompanyName]);
+  // The DECORATED label, so a deep-linked `?company=7` shows "Acme (archived)" in the
+  // closed picker exactly as picking it from the list would. Handing back the raw name
+  // silently drops the marker on precisely the companies where it matters.
+  const label = rollup ? (rollup.company.status === 'archived'
+    ? `${rollup.company.name} (archived)` : rollup.company.name) : undefined;
+  useEffect(() => { if (label) onCompanyName?.(label); }, [label, onCompanyName]);
 
   const toggleDeal = useCallback((id: number) => setOpenDeals(prev => toggle(prev, id)), []);
   const toggleContact = useCallback((id: number) => setOpenContacts(prev => toggle(prev, id)), []);
@@ -427,7 +448,16 @@ export function CompanyRollupReport({ companyId, onCompanyName }: Props) {
 
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', margin: '18px 0 4px' }}>
           <SummaryChip label="Open deals" value={formatNumber(summary.open_deal_count)} />
-          <SummaryChip label="Open value" value={money(summary.open_deal_value)} />
+          {/* The server reports a single currency only when every open deal agrees on one.
+              When they do not, there is no honest total to show — `deals.currency` is
+              user-writable, so summing across currencies would state a number that is
+              simply false. The per-deal values below are each in their own currency. */}
+          <SummaryChip
+            label="Open value"
+            value={summary.open_deal_currency || summary.open_deal_count === 0
+              ? money(summary.open_deal_value, summary.open_deal_currency || 'USD')
+              : 'Mixed currencies'}
+          />
           {/* Labelled precisely, because the number is precise: the server counts
               `status = 'active'`, so inactive and archived contacts are both out, while
               the section below lists every contact and states its own total. Two different

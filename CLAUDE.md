@@ -1198,17 +1198,30 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `get_pipeline(include_archived=)`. `include_archived` widens exactly two things — archived
   deals and archived NOTES — and deliberately does not govern contacts: `contacts.status` is
   not a sweep, so contacts are always returned and rendered marked, matching
-  `get_company_detail`'s documented asymmetry. The contact chip is therefore labelled
-  "Active contacts", because it counts non-archived contacts while the section below lists
-  all of them.
+  `get_company_detail`'s documented asymmetry. `summary.contact_count` is narrower still —
+  `status = 'active'` only, so BOTH `inactive` and `archived` are out — because the chip it
+  feeds says "Active contacts" and that word has to be true; the section below lists every
+  contact and states its own total. Two questions, two honest numbers.
   **Activity attribution is mutually exclusive, and the near-miss is worth recording**: the
   contact bucket tests an absolute `deal_id IS NULL`, NOT membership of the deals being
   displayed. Those look equivalent and are not — an archived deal (or one past the child
   cap) is absent from the displayed set, so its activities silently reappeared under the
   contact with archived history switched OFF. The first draft shipped that; the Codex plan
-  review caught it. The accepted consequence is the blueprint's own: an activity naming this
-  company's contact and ANOTHER company's deal appears on neither rollup, though it stays on
-  the contact's page and on this company's timeline.
+  review caught it. Because the rule is absolute, a deal wins GLOBALLY rather than only among
+  the deals on screen: an activity naming this company's contact and ANOTHER company's deal
+  belongs to that deal and appears once, on the OTHER company's rollup and timeline. That is
+  better than the blueprint, whose per-company predicates dropped such a row from both — here
+  every activity has exactly one home. (The code documented the blueprint's behaviour while
+  implementing this one; the Codex verify turn caught the contradiction.)
+  **The open-value chip declines to lie about currency.** `deals.currency` is in
+  `_DEAL_USER_WRITABLE`, so USD-only is a convention here and NOT an enforced invariant, and a
+  bare `SUM(value)` across currencies is simply a false number. `summary.open_deal_currency`
+  is the single currency every open deal agrees on, or NULL when they disagree, and the chip
+  renders "Mixed currencies" instead of a total in that case; per-deal values render in their
+  own currency through `Intl`, falling back to the raw code because the column is free text.
+  The rest of the app still sums and prefixes `$` (`get_company_detail` documents that as a
+  single-currency sum), which is consistency rather than correctness — this report is the
+  first surface to decline it.
   **The headline chips are their own aggregate over the full tables**, never a reduction of
   the capped child lists — reducing the lists lets a cap change a headline number, and with
   archived deals competing for the same window, enabling MORE history could make the
