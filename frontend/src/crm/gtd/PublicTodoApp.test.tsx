@@ -30,7 +30,9 @@ vi.mock('./api', () => ({
   getFilters: vi.fn().mockResolvedValue({ contexts: [], tags: [], status_counts: {} }),
 }));
 
-const TOKEN_BASE = '/todo/SECRETTOKEN';
+/** The secret itself, separately, because `auditLinks` checks it does not leave the origin. */
+const TOKEN = 'SECRETTOKEN';
+const TOKEN_BASE = `/todo/${TOKEN}`;
 /** TodoShell's tagline — rendered by every GTD page in both modes, and by nothing in the CRM. */
 const TODO_SHELL_MARKER = 'Mind like water.';
 
@@ -111,6 +113,39 @@ async function settle(marker: string, timeoutMs = SETTLE_TIMEOUT_MS): Promise<vo
     + `host.textContent was ${JSON.stringify(host.textContent)}`);
 }
 
+/**
+ * Every link currently on screen stays inside the token'd prefix, and the token never leaves
+ * the origin.
+ *
+ * TWO separate questions, and the second is the one a same-origin-only check silently drops:
+ *
+ *   1. **Containment.** In-app links are built by `todoPath()` and the router basename turns
+ *      them into /todo/{token}/… . Checked on the RESOLVED absolute URL rather than the raw
+ *      attribute, because a relative `href="inbox"` resolves against the current URL — from
+ *      /todo/SECRETTOKEN that is /todo/inbox, the token silently dropped and the installed PWA
+ *      dead-ended — and a `startsWith('/')` filter would skip exactly that shape.
+ *   2. **Leakage.** A cross-origin anchor is not "not our problem": the token is the whole
+ *      secret of this surface, and an external href that embeds it hands it to another origin
+ *      (and to that request's Referer). Filtering cross-origin URLs out before checking is what
+ *      makes a leak invisible, so they are checked HERE rather than excluded.
+ */
+function auditLinks() {
+  const urls = [...host.querySelectorAll('a')].map((a) => new URL(a.href, window.location.href));
+  const sameOrigin = urls.filter((u) => u.origin === window.location.origin);
+  expect(sameOrigin.length, 'the page rendered in-app links to audit').toBeGreaterThan(0);
+
+  const escaping = sameOrigin
+    .map((u) => u.pathname)
+    .filter((path) => path !== TOKEN_BASE && !path.startsWith(`${TOKEN_BASE}/`));
+  expect(escaping, 'every in-app link stays inside the token base').toEqual([]);
+
+  const leaking = urls
+    .filter((u) => u.origin !== window.location.origin)
+    .map((u) => u.href)
+    .filter((href) => href.includes(TOKEN));
+  expect(leaking, 'no off-origin link carries the token').toEqual([]);
+}
+
 describe('the /todo surface boots through Root (#149)', () => {
   it('renders the todo app, on its own basename, and none of the CRM', async () => {
     await bootApp();
@@ -133,15 +168,7 @@ describe('the /todo surface boots through Root (#149)', () => {
     // (fine) but from /todo/SECRETTOKEN it lands on /todo/inbox — the token silently dropped,
     // a 404, and an installed PWA that dead-ends. `a.href` is the resolved absolute URL, so
     // relative and absolute are checked the same way and neither can slip past.
-    const anchors = [...host.querySelectorAll('a')];
-    const sameOrigin = anchors
-      .map((a) => new URL(a.href, window.location.href))
-      .filter((u) => u.origin === window.location.origin);
-    expect(sameOrigin.length).toBeGreaterThan(0);
-    const escaping = sameOrigin
-      .map((u) => u.pathname)
-      .filter((p) => p !== TOKEN_BASE && !p.startsWith(`${TOKEN_BASE}/`));
-    expect(escaping, 'every in-app link stays inside the token base').toEqual([]);
+    auditLinks();
   }, BOOT_TIMEOUT_MS);
 
   // The basename exists so a sub-path resolves to its own page. Without this case the suite
@@ -156,6 +183,10 @@ describe('the /todo surface boots through Root (#149)', () => {
     // Only InboxPage renders this empty state, and the mocked API returns no todos, so it is
     // a page identity that does not depend on styling or fixture data.
     expect(host.textContent).toContain('Inbox zero');
+
+    // Audited on a SUB-PATH too, not just the index. This is where a relative href actually
+    // resolves differently, so a one-route audit would be checking the easy case only.
+    auditLinks();
   }, BOOT_TIMEOUT_MS);
 
   // The other half of the same switch, and the more dangerous half: `isTodoPublicMode` decides

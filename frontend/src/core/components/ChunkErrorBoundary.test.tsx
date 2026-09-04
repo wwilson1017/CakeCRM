@@ -235,4 +235,44 @@ describe('ChunkErrorBoundary (#149)', () => {
     expect(reload).toHaveBeenCalledTimes(1);
     expect(store.get(RELOAD_GUARD_KEY)).toBeTruthy();
   });
+
+  it('a panel-scoped boundary contains the failure and never reloads the page', async () => {
+    // The assistant drawer's chunk is fetched in the background as soon as `aiReady` flips, with
+    // the drawer closed. Before this scope existed, that rejection propagated to Root and
+    // replaced the whole CRM — a half-typed deal form included — over a panel nobody opened.
+    const store = workingStorage();
+    root = createRoot(host);
+    await act(async () => {
+      root!.render(
+        <div>
+          <span>CRM STILL HERE</span>
+          <ChunkErrorBoundary scope="panel"><ChunkGone /></ChunkErrorBoundary>
+        </div>,
+      );
+    });
+
+    // Contained: the surrounding page survives…
+    expect(host.textContent).toContain('CRM STILL HERE');
+    // …the panel says its piece…
+    expect(host.textContent).toContain('Couldn\u2019t load this panel.');
+    // …and NOTHING reloaded, nor spent the app-scope one-shot guard on a background panel.
+    expect(reload).not.toHaveBeenCalled();
+    expect(store.get(RELOAD_GUARD_KEY)).toBeUndefined();
+
+    // The manual button is still offered — the user chooses, knowing what they have open.
+    const button = host.querySelector('button');
+    expect(button?.textContent).toBe('Reload the page');
+    await act(async () => { button!.click(); });
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('a panel-scoped boundary does not swallow the app-scope full-page card', async () => {
+    // Guards the default: omitting `scope` must still behave as the app boundary, or the Root
+    // composition silently loses its auto-recovery.
+    const store = workingStorage();
+    await mount(<ChunkGone />);
+    expect(host.textContent).toContain(CHUNK_TEXT);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(store.get(RELOAD_GUARD_KEY)).toBeTruthy();
+  });
 });

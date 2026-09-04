@@ -83,13 +83,23 @@ function staticImportSpecifiers(source: string): string[] {
   return specifiers;
 }
 
-/** Every `import('…')` call in the source, anywhere in the tree (the lazy() arguments). */
+/**
+ * Every `import('…')` call in the source, anywhere in the tree (the lazy() arguments).
+ *
+ * `isStringLiteralLike`, not `isStringLiteral`, and a `<computed>` entry for everything else —
+ * both because this scanner FAILS CLOSED or it is worthless. Recording only plain string
+ * literals meant a backtick import(`../../crm/CrmLayout`) produced no entry at all, so the
+ * public-graph assertion (`dynamic` must be empty) passed while that import downloaded the CRM
+ * on /todo. An import whose target cannot be read statically is exactly the case a guard must
+ * refuse, not the case it may skip.
+ */
 function dynamicImportSpecifiers(source: string): string[] {
   const specifiers: string[] = [];
   const visit = (node: ts.Node) => {
     if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
       const arg = node.arguments[0];
-      if (arg && ts.isStringLiteral(arg)) specifiers.push(arg.text);
+      if (arg && ts.isStringLiteralLike(arg)) specifiers.push(arg.text);
+      else specifiers.push('<computed>');
     }
     ts.forEachChild(node, visit);
   };
@@ -217,25 +227,31 @@ function lazyCallSites(source: string): Array<{ insideFunction: boolean }> {
     if (bindings && ts.isNamespaceImport(bindings)) reactNamespaces.add(bindings.name.text);
   }
 
-  // 3. Module-scope re-aliasing, to a fixpoint: `const a = lazy; const b = a;`
-  for (let pass = 0; pass < 5; pass += 1) {
-    const before = names.size;
-    for (const statement of file.statements) {
-      if (!ts.isVariableStatement(statement)) continue;
-      for (const decl of statement.declarationList.declarations) {
-        const init = decl.initializer;
-        if (!init || !ts.isIdentifier(decl.name)) continue;
-        if (ts.isIdentifier(init) && names.has(init.text)) names.add(decl.name.text);
-        if (
-          ts.isPropertyAccessExpression(init) &&
-          init.name.text === 'lazy' &&
-          ts.isIdentifier(init.expression) &&
-          reactNamespaces.has(init.expression.text)
-        ) {
-          names.add(decl.name.text);
-        }
+  // 3. Re-aliasing, to a fixpoint: `const a = lazy; const b = a;`
+  //
+  // Scanned over the WHOLE tree, not just `file.statements`. A module-scope-only sweep left the
+  // guard failing open through the shortest possible evasion — the alias declared inside the
+  // component next to the call it enables:
+  //     function App() { const mk = lazy; const P = mk(() => import('./P')); … }
+  // …which is the exact remount bug this guard exists to catch, and it stayed green.
+  const collectAliases = (node: ts.Node) => {
+    if (ts.isVariableDeclaration(node) && node.initializer && ts.isIdentifier(node.name)) {
+      const init = node.initializer;
+      if (ts.isIdentifier(init) && names.has(init.text)) names.add(node.name.text);
+      if (
+        ts.isPropertyAccessExpression(init) &&
+        init.name.text === 'lazy' &&
+        ts.isIdentifier(init.expression) &&
+        reactNamespaces.has(init.expression.text)
+      ) {
+        names.add(node.name.text);
       }
     }
+    ts.forEachChild(node, collectAliases);
+  };
+  for (let pass = 0; pass < 5; pass += 1) {
+    const before = names.size;
+    collectAliases(file);
     if (names.size === before) break;
   }
 
@@ -458,8 +474,11 @@ describe('boot split (#149) — the CRM shell', () => {
     // Stated as "not BETWEEN the tags" rather than "before the open tag", because outside is
     // outside in either direction and pinning the current source order would fail a correct
     // rearrangement for no reason.
-    const navMarkers = ['NAV_ITEMS.map', 'Sign out'];
-    expect(navMarkers.length).toBe(2);
+    // `AssistantLauncher` belongs on this list as much as the nav does: a boundary hoisted to
+    // swallow the launcher and the content — but not the nav — would pass a nav-only check
+    // while hiding the assistant every time a route chunk or the task mode is in flight.
+    const navMarkers = ['NAV_ITEMS.map', 'Sign out', '<AssistantLauncher'];
+    expect(navMarkers.length).toBe(3);
     for (const marker of navMarkers) {
       const occurrences: number[] = [];
       for (let at = src.indexOf(marker); at !== -1; at = src.indexOf(marker, at + 1)) occurrences.push(at);
@@ -669,6 +688,13 @@ describe('boot split (#149) — the scanner itself', () => {
     expect(lazyCallSites(chained).map((s) => s.insideFunction)).toEqual([true]);
     expect(lazyCallSites(namespaced).map((s) => s.insideFunction)).toEqual([true]);
     expect(lazyCallSites(namespaceAlias).map((s) => s.insideFunction)).toEqual([true]);
+
+    // The shortest evasion of all, and the one a module-scope-only alias sweep missed: the
+    // alias declared inside the component, right next to the call it enables.
+    const localAlias = `import { lazy } from 'react';\nfunction App() { const mk = lazy; const A = mk(() => import('./A')); return <A />; }`;
+    const localChained = `import { lazy } from 'react';\nfunction App() { const a = lazy; const b = a; const A = b(() => import('./A')); return <A />; }`;
+    expect(lazyCallSites(localAlias).map((s) => s.insideFunction)).toEqual([true]);
+    expect(lazyCallSites(localChained).map((s) => s.insideFunction)).toEqual([true]);
   });
 
   it('sees import.meta.glob in every spelling that bundles a directory', () => {
@@ -687,6 +713,21 @@ describe('boot split (#149) — the scanner itself', () => {
     // A runtime-built pattern is reported, never silently invisible.
     expect(importMetaGlobPatterns(computed)).toEqual(['<computed>']);
     expect(importMetaGlobPatterns(unrelated)).toEqual([]);
+  });
+
+  it('reads a dynamic import written any way it can be written, and fails closed on the rest', () => {
+    // The public-graph assertion is `dynamic` must be EMPTY, so a specifier this scanner cannot
+    // see is a specifier that graph is not protected against. Recording only plain string
+    // literals meant a backtick import produced no entry at all and slipped straight through.
+    expect(dynamicImportSpecifiers("const a = import('./A');")).toEqual(['./A']);
+    expect(dynamicImportSpecifiers('const a = import("./A");')).toEqual(['./A']);
+    expect(dynamicImportSpecifiers('const a = import(`./A`);')).toEqual(['./A']);
+    expect(dynamicImportSpecifiers('void import(`../../crm/CrmLayout`);')).toEqual(['../../crm/CrmLayout']);
+    // Unreadable statically → reported as computed, never omitted.
+    expect(dynamicImportSpecifiers('const a = import(PATH);')).toEqual(['<computed>']);
+    expect(dynamicImportSpecifiers('const a = import(`./pages/${name}`);')).toEqual(['<computed>']);
+    // A STATIC import is not a dynamic one, or every "dynamic must be empty" assertion inverts.
+    expect(dynamicImportSpecifiers("import A from './A';")).toEqual([]);
   });
 
   it('the closure reports dynamic imports and globs without following them', () => {

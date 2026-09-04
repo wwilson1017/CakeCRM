@@ -35,6 +35,7 @@ type Chunk = {
   facadeModuleId: string | null;
   modules: Record<string, unknown>;
   imports: string[];
+  code: string;
 };
 
 const ROOT = new URL('..', import.meta.url).pathname;
@@ -47,12 +48,24 @@ const ROOT = new URL('..', import.meta.url).pathname;
  * building in the mode we ship is the point of building at all.
  */
 async function buildChunks(): Promise<Chunk[]> {
-  const result = await build({
-    root: ROOT,
-    mode: 'production',
-    logLevel: 'silent',
-    build: { write: false },
-  });
+  // `mode: 'production'` alone is NOT enough, and the difference is measurable rather than
+  // theoretical: vitest sets `NODE_ENV=test`, and @vitejs/plugin-react reads THAT to choose its
+  // JSX runtime, so the build came out with `jsx-dev-runtime` and far less minification — a
+  // 369 kB entry chunk against the 187 kB we actually ship. Every byte budget below would then
+  // have been measuring a build no user receives. Set it for the duration and put it back.
+  const previousNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'production';
+  let result;
+  try {
+    result = await build({
+      root: ROOT,
+      mode: 'production',
+      logLevel: 'silent',
+      build: { write: false },
+    });
+  } finally {
+    process.env.NODE_ENV = previousNodeEnv;
+  }
   // `build()` is typed as output-or-watcher because the same call can watch; we never pass
   // `watch`, so narrow on the shape rather than asserting across the union.
   const bundle = Array.isArray(result) ? result[0] : result;
@@ -223,6 +236,53 @@ describe('boot split (#149) — the built chunk graph', () => {
       if (chunk.fileName === assistant.fileName) continue;
       expect(chunk.imports, `${chunk.fileName} must not statically import the assistant`)
         .not.toContain(assistant.fileName);
+    }
+  });
+
+  it('the entry and /todo downloads stay inside a size budget', () => {
+    // The deny-lists above name TODAY's heavy graphs, and that is their limit: `LoginPage` could
+    // statically import some large new dependency and every module-pattern assertion would pass
+    // while the shell doubled. A budget is the only assertion that catches a heavy import nobody
+    // thought to name — it measures the thing the issue is actually about.
+    //
+    // Numbers are JS bytes only — the emitted chunk code, no CSS and no fonts — so they are
+    // smaller than the per-surface figures in the PR description, which include the stylesheet.
+    // Each budget carries ~38% headroom over the measured figure so ordinary feature work never
+    // trips it. They are a REGRESSION alarm, not a target: if a change legitimately needs more,
+    // raise the number in the same commit and say why — that edit is the point, because it is
+    // what makes the cost visible to a reviewer instead of silent.
+    const jsBytes = (chunks: Chunk[]): number => {
+      const seen = new Set<string>();
+      const stack = chunks.map((c) => c.fileName);
+      let total = 0;
+      while (stack.length) {
+        const fileName = stack.pop()!;
+        if (seen.has(fileName)) continue;
+        seen.add(fileName);
+        const chunk = BY_FILE.get(fileName);
+        if (!chunk) throw new Error(`chunk '${fileName}' is imported but not emitted`);
+        total += Buffer.byteLength(chunk.code, 'utf8');
+        for (const dep of chunk.imports) stack.push(dep);
+      }
+      return total;
+    };
+
+    const budgets: Array<[string, number, Chunk[]]> = [
+      // measured 196.6 kB (entry chunk + the JSX runtime)
+      ['the entry chunk every visitor downloads', 272_000, [ENTRY]],
+      // measured 312.3 kB — the number this issue exists to hold down
+      ['the /todo PWA cold load', 431_000, [ENTRY, chunkFor('src/crm/gtd/PublicTodoApp.tsx')]],
+      // measured 259.6 kB
+      ['the CRM shell', 358_000, [ENTRY, chunkFor('src/App.tsx')]],
+    ];
+    expect(budgets.length).toBe(3);
+    for (const [label, budget, roots] of budgets) {
+      const bytes = jsBytes(roots);
+      // A floor as well as a ceiling: a budget that passes because the traversal returned
+      // nothing is not a budget. Anything under 50 kB means the graph, not the size, is wrong.
+      expect(bytes, `${label} measured a real graph`).toBeGreaterThan(50_000);
+      expect(bytes, `${label} is ${(bytes / 1024).toFixed(1)} kB, budget ${(budget / 1024).toFixed(0)} kB`)
+        .toBeLessThan(budget);
     }
   });
 

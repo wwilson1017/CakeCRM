@@ -23,7 +23,25 @@ function isChunkLoadError(error: unknown): boolean {
     .test(message);
 }
 
-type Props = { children: ReactNode };
+type Props = {
+  children: ReactNode;
+  /**
+   * How much of the app this boundary speaks for.
+   *
+   * `'app'` (default) is the one in `Root`: the tree below it IS the application, so a full-page
+   * card and a one-shot auto-reload are proportionate.
+   *
+   * `'panel'` wraps a NON-ESSENTIAL subtree — today the assistant drawer — and is the reason
+   * this prop exists rather than a second component. `AssistantPanelBody` mounts as soon as
+   * `aiReady` is true, drawer closed, in the background. A `Suspense` does not catch a REJECTED
+   * import, only a pending one, so without a boundary of its own a chunk that 404s after a
+   * deploy propagates to `Root` and replaces the entire CRM — including a half-typed deal form —
+   * over a panel the user was not even looking at. A panel boundary contains that to the panel
+   * and **never auto-reloads**: reloading to recover a background drawer would destroy exactly
+   * the work this containment is protecting. The user gets a compact message and decides.
+   */
+  scope?: 'app' | 'panel';
+};
 type State = { failed: boolean; chunk: boolean };
 
 /**
@@ -66,6 +84,7 @@ export default class ChunkErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error('Render failed below ChunkErrorBoundary', error, info.componentStack);
+    if (this.props.scope === 'panel') return; // contained: never reload the page for a panel
     if (isChunkLoadError(error) && this.shouldAutoReload() && this.claimReloadAttempt()) {
       window.location.reload();
     }
@@ -132,6 +151,34 @@ export default class ChunkErrorBoundary extends Component<Props, State> {
 
   render() {
     if (!this.state.failed) return this.props.children;
+
+    // A panel says its piece inside its own box and leaves the page alone. No auto-reload has
+    // run (see componentDidCatch), so the Reload button is the ONLY reload here and the user
+    // chooses it knowing what they have open.
+    if (this.props.scope === 'panel') {
+      const { chunk } = this.state;
+      return (
+        <div
+          ref={this.alertRef}
+          role="alert"
+          tabIndex={-1}
+          className="flex flex-col items-center justify-center gap-3 p-6 text-center text-ck-ink-mute"
+        >
+          <p className="m-0">
+            {chunk
+              ? 'Couldn’t load this panel. It may have been updated while your tab was open.'
+              : 'Something went wrong in this panel.'}
+          </p>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="bg-ck-accent hover:bg-ck-accent-dark text-ck-accent-ink font-display px-4 py-1.5 rounded cursor-pointer border-0"
+          >
+            Reload the page
+          </button>
+        </div>
+      );
+    }
     // A visible retry, not a white screen. Only a chunk failure is explained by a deploy:
     // telling someone hitting a deterministic render bug that "the app was updated" is false
     // AND self-defeating — they reload, hit the same crash, and stop reporting it.
