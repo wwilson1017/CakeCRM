@@ -442,6 +442,37 @@ describe('ContactForm — picking, clearing and creating', () => {
     // action — and that one DOES supersede.
     expect(container.querySelector('[aria-label="Clear company"]')).not.toBeNull();
   });
+
+  it('releases the form lock when the create is explicitly abandoned with Escape', async () => {
+    // Escape invalidates the create's result, so nothing is waiting to land and the form
+    // has nothing left to protect. Before this, the busy flag was cleared only when the
+    // request SETTLED — so a hung resolver left Save and Remove disabled indefinitely after
+    // the user had already said never mind. Click-away is deliberately different: that
+    // result is still wanted, so it stays busy.
+    let release!: (co: CompanyRow) => void;
+    const pending = new Promise<CompanyRow>(res => { release = res; });
+    mockApi([], { resolve: () => pending });
+
+    await render(contact({ company: 'Wrong Name Ltd', company_id: null }));
+    await openPicker();
+    await typeInPicker('Slowco');
+    await clickOption(t => t.startsWith('Create '));
+
+    const save = () => [...container.querySelectorAll('button')]
+      .find(b => /^(Update|Saving\.\.\.)$/.test(b.textContent?.trim() || '')) as HTMLButtonElement | undefined;
+    expect(save()?.disabled).toBe(true);
+
+    await act(async () => {
+      combobox().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+
+    expect(save()?.disabled).toBe(false);
+    const remove = [...container.querySelectorAll('button')]
+      .find(b => b.textContent?.trim() === 'Remove') as HTMLButtonElement | undefined;
+    expect(remove?.disabled).toBe(false);
+
+    await act(async () => { release({ id: 22, name: 'Slowco', status: 'active' }); await pending; });
+  });
 });
 
 describe('ContactForm — a save that fails', () => {

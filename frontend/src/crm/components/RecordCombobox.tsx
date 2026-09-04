@@ -217,6 +217,15 @@ export function RecordCombobox<T>({
   /** Close AND abandon an in-flight create — an explicit "never mind". */
   function cancel() {
     intentRef.current++;
+    // Stop reporting BUSY too, which the intent bump alone does not do. `creatingName` was
+    // otherwise cleared only when the request settled, so a hung resolver left the
+    // surrounding form locked — Save disabled, and in ContactForm the legacy-name Remove
+    // with it — long after the user had said never mind. Releasing it here is safe
+    // precisely because the bump above already invalidated the result: whatever lands can
+    // no longer select itself, so submitting now cannot lose a link that is about to
+    // exist. That is exactly the distinction `dismiss` does NOT get — a click-away leaves
+    // the create wanted, so it stays busy.
+    setCreatingName(null);
     setOpen(false);
   }
 
