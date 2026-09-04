@@ -5,6 +5,8 @@ import { REPEAT_OPTIONS, STATUS_META, TODO_STATUS_ORDER } from '../constants';
 import { isTodoPublicMode } from '../publicMode';
 import type { Todo, TodoProject, TodoStatus } from '../types';
 import { parseTags } from '../util';
+import { nextActionCopyText, todoCopyText } from '../copyText';
+import { CopyButton } from './CopyButton';
 
 const NEW_PROJECT = '__new__';
 // The context picker's option values are INDICES into `contextOptions`, never the context
@@ -24,7 +26,11 @@ interface Props {
 }
 
 const inputCls = 'w-full rounded-lg border border-line bg-cream px-3 py-2 text-base sm:text-sm text-charcoal focus:border-brand focus:outline-none';
-const labelCls = 'block text-xs font-heading font-semibold text-muted mb-1';
+// Split so the flex-row label can opt out of the margin. Appending `mb-0` to
+// `labelCls` would NOT win: Tailwind emits utilities in its own order (mb-0
+// before mb-1), and equal specificity means the later rule takes it.
+const labelBase = 'block text-xs font-heading font-semibold text-muted';
+const labelCls = `${labelBase} mb-1`;
 
 /** Full-field editor — centered modal on desktop, bottom sheet on mobile. */
 export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onSaved }: Props) {
@@ -137,24 +143,67 @@ export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onS
     }
   };
 
+  // Copy reads the LIVE form, not `todo` — you can retype the action and copy it
+  // before saving, and what lands on the clipboard is what is on screen. Lazy
+  // (called on click) so the string is only built when it is wanted.
+  const copyFields = () => ({
+    title, notes, status,
+    projectName: projectSel === NEW_PROJECT
+      ? newProject.trim() || null
+      : projects.find(p => String(p.id) === projectSel)?.name ?? null,
+    context: context.trim(), tags: parseTags(tags),
+    dueDate: due || null, repeat: effectiveRepeat, star,
+  });
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-charcoal/40 p-0 sm:p-4"
       onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div className="max-h-[92dvh] w-full sm:max-w-lg overflow-y-auto rounded-t-2xl sm:rounded-2xl border border-line-faint bg-cream p-5 shadow-lg">
-        <h2 className="font-heading text-lg font-bold text-charcoal">
-          {todo ? 'Edit todo' : 'New todo'}
-        </h2>
+        {/* `min-h-9` on this row and the next: the Copy buttons appear on the
+            first keystroke, and each is 36px tall. Without the reservation,
+            typing one character grows both rows and shoves the autofocused
+            title input down under the caret — on the mobile bottom sheet, with
+            the keyboard up, which is the surface this feature is for. */}
+        <div className="flex min-h-9 items-center justify-between gap-3">
+          <h2 className="font-heading text-lg font-bold text-charcoal">
+            {todo ? 'Edit todo' : 'New todo'}
+          </h2>
+          {/* Whole todo — the heading names what this button copies. */}
+          {title.trim() && (
+            <CopyButton text={() => todoCopyText(copyFields())} label="Copy the whole todo" />
+          )}
+        </div>
 
         <div className="mt-4 space-y-3">
           <div>
-            <label className={labelCls} htmlFor="gtd-title">What&rsquo;s the next action?</label>
+            <div className="mb-1 flex min-h-9 items-center justify-between gap-3">
+              <label className={labelBase} htmlFor="gtd-title">
+                What&rsquo;s the next action?
+              </label>
+              {/* Just this line — the common case is pasting the action itself
+                  into a message, without the status/project scaffolding. */}
+              {title.trim() && (
+                <CopyButton text={() => nextActionCopyText(title)} label="Copy just the next action" />
+              )}
+            </div>
             <input id="gtd-title" className={inputCls} value={title} autoFocus
                    onChange={e => setTitle(e.target.value)} />
           </div>
           <div>
-            <label className={labelCls} htmlFor="gtd-notes">Notes</label>
+            <div className="mb-1 flex min-h-9 items-center justify-between gap-3">
+              <label className={labelBase} htmlFor="gtd-notes">Notes</label>
+              {/* Issue #151 asks for this one by name. NEITHER blueprint has it
+                  — upstream's two buttons are the whole todo and the action
+                  line — but the notes are where an address or a pasted link
+                  actually lives, and the whole-todo copy would bury it under
+                  the action and up to seven metadata lines. Bare `trim()`
+                  rather than a formatter, because there is nothing to format. */}
+              {notes.trim() && (
+                <CopyButton text={() => notes.trim()} label="Copy just the notes" />
+              )}
+            </div>
             <textarea id="gtd-notes" className={`${inputCls} min-h-20`} value={notes}
                       onChange={e => setNotes(e.target.value)} />
           </div>
