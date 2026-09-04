@@ -35,7 +35,7 @@ const PICKER_LIMIT = 20;
 // in an effect's dependencies, and an inline arrow would re-fire the query every render.
 //
 // Deliberately duplicated from `DealForm.tsx` rather than extracted into a shared module:
-// that file is rewritten by an open PR (#110), and these are five one-line adapters
+// that file is rewritten by an open PR (#110), and these are six one-line adapters
 // configuring a generic component, not logic. The rule they encode lives once, in
 // `RecordCombobox`'s `getMatchText` contract. Worth folding into one module when both
 // forms are settled.
@@ -227,8 +227,23 @@ export function ContactForm({ contact, onClose, onSaved, onWriteUncertain }: Pro
                     no clear action inside the widget — and `companyTouched` is only set by
                     choosing or clearing. Without this button, removing a wrong legacy name
                     would be impossible without first linking some company to the contact,
-                    which is a capability the free-text input used to have. */}
-                <button type="button" onClick={() => pickCompany(null)} style={removeLegacyStyle}>
+                    which is a capability the free-text input used to have.
+
+                    Living OUTSIDE the widget is exactly why it must be inert while a
+                    quick-create runs. Every in-widget path that changes the selection bumps
+                    `RecordCombobox`'s private intent counter, which is how a create that
+                    lands late knows it was superseded; this button cannot reach that counter.
+                    Dismissing the popover deliberately does NOT abandon the create, so
+                    without the guard: start a create, click away, press Remove, and the
+                    create lands afterwards and silently re-links the company that was just
+                    removed. Once it has landed the widget's own × is available (the value is
+                    non-null by then) and that one DOES supersede. */}
+                <button
+                  type="button"
+                  onClick={() => pickCompany(null)}
+                  disabled={companyBusy}
+                  style={{ ...removeLegacyStyle, opacity: companyBusy ? 0.5 : 1, cursor: companyBusy ? 'default' : 'pointer' }}
+                >
                   Remove
                 </button>
               </p>

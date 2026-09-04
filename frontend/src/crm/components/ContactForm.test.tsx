@@ -16,6 +16,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ApiError } from '../../core/api/client';
 import type { CrmContact } from '../../core/types';
 
 const api = vi.hoisted(() => vi.fn());
@@ -79,10 +80,12 @@ afterEach(() => {
   container.remove();
 });
 
-async function render(c?: CrmContact) {
+async function render(c?: CrmContact, onWriteUncertain?: (err: unknown) => void) {
   await act(async () => {
     root.render(
-      <AuthProvider><ContactForm contact={c} onClose={() => {}} onSaved={() => {}} /></AuthProvider>,
+      <AuthProvider>
+        <ContactForm contact={c} onClose={() => {}} onSaved={() => {}} onWriteUncertain={onWriteUncertain} />
+      </AuthProvider>,
     );
   });
   await act(async () => { await Promise.resolve(); await Promise.resolve(); });
@@ -326,6 +329,11 @@ describe('ContactForm — picking, clearing and creating', () => {
     const body = post();
     expect(body.company_id).toBeNull();
     expect(body.company).toBe('');
+    // ...while `owner_id` on the SAME request stays omitted. The two fields were given
+    // opposite create-time defaults for different reasons — company has no absent-vs-null
+    // semantics on create, owner needs the server to assign the caller — so pin that a
+    // future refactor cannot couple them behind one shared "touched" notion.
+    expect(body).not.toHaveProperty('owner_id');
   });
 
   it('searches the server with ?q= rather than scanning a capped page', async () => {
@@ -377,5 +385,88 @@ describe('ContactForm — picking, clearing and creating', () => {
     await submit();
 
     expect(post()).toMatchObject({ name: 'Impatient Person', company_id: 22, company: 'Slowco' });
+  });
+
+  it('will not let Remove fire while a quick-create is in flight', async () => {
+    // Remove lives OUTSIDE RecordCombobox, so it cannot bump the widget's private intent
+    // counter — the thing that tells a late-landing create it was superseded. Dismissing the
+    // popover deliberately does not abandon the create, so an unguarded Remove could be
+    // pressed after the click-away and then silently overwritten when the create resolved,
+    // re-linking the company the user had just removed.
+    let release!: (co: CompanyRow) => void;
+    const pending = new Promise<CompanyRow>(res => { release = res; });
+    mockApi([], { resolve: () => pending });
+
+    await render(contact({ company: 'Wrong Name Ltd', company_id: null }));
+    await openPicker();
+    await typeInPicker('Slowco');
+    await clickOption(t => t.startsWith('Create '));
+
+    const remove = () => [...container.querySelectorAll('button')]
+      .find(b => b.textContent?.trim() === 'Remove') as HTMLButtonElement | undefined;
+    expect(remove()?.disabled).toBe(true);
+
+    await act(async () => { release({ id: 22, name: 'Slowco', status: 'active' }); await pending; });
+    // Once the create has landed the widget owns the value, so its own × is the clear
+    // action — and that one DOES supersede.
+    expect(container.querySelector('[aria-label="Clear company"]')).not.toBeNull();
+  });
+});
+
+describe('ContactForm — a save that fails', () => {
+  it('reports a refused write without asking the host to re-sweep', async () => {
+    // A 4xx proves nothing was written, so the host's copy of the row is still correct.
+    // Calling onWriteUncertain here would make every validation error re-fetch the corpus.
+    const onWriteUncertain = vi.fn();
+    api.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (init?.method === 'PUT') throw new ApiError('API error 400: bad', 400, 'Name is required');
+      if (path.startsWith('/api/crm/companies')) return { companies: [] };
+      if (path === '/api/users') return { users: [] };
+      if (path.includes('/fields')) return [];
+      return null;
+    });
+
+    await render(contact(), onWriteUncertain);
+    await submit();
+
+    expect(onWriteUncertain).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('API error 400');
+  });
+
+  it('tells the host to re-sweep when the outcome is genuinely unknown', async () => {
+    // A dropped connection or a 5xx can land AFTER Postgres committed, so the row on screen
+    // can no longer be vouched for. This is the #77 contract the merged payload rides on.
+    const onWriteUncertain = vi.fn();
+    api.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (init?.method === 'PUT') throw new Error('Failed to fetch');
+      if (path.startsWith('/api/crm/companies')) return { companies: [] };
+      if (path === '/api/users') return { users: [] };
+      if (path.includes('/fields')) return [];
+      return null;
+    });
+
+    await render(contact(), onWriteUncertain);
+    await submit();
+
+    expect(onWriteUncertain).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-enables Save after a failure, so the user can correct and retry', async () => {
+    // The catch path has to fall through to setSaving(false); if it did not, the form would
+    // sit disabled on "Saving..." with an error and no way to act on it.
+    api.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (init?.method === 'PUT') throw new ApiError('API error 400: bad', 400, 'nope');
+      if (path.startsWith('/api/crm/companies')) return { companies: [] };
+      if (path === '/api/users') return { users: [] };
+      if (path.includes('/fields')) return [];
+      return null;
+    });
+
+    await render(contact());
+    await submit();
+
+    const save = [...container.querySelectorAll('button')]
+      .find(b => b.textContent?.trim() === 'Update') as HTMLButtonElement | undefined;
+    expect(save?.disabled).toBe(false);
   });
 });
