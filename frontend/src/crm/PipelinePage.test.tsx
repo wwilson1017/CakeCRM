@@ -1279,6 +1279,18 @@ describe('PipelinePage — deal deep links', () => {
     expect(button('Close')).toBeFalsy();          // ...and no sheet opened on its own
   });
 
+  it('drops the notice when the user navigates away from the link', async () => {
+    // Found by the independent verifier. Clicking the app's own Pipeline nav item from
+    // `/crm/pipeline?deal=404` keeps this page mounted, so a notice about a link that is no
+    // longer in the URL used to sit there until dismissed by hand.
+    routeApi();
+    await render('/crm/pipeline?deal=404');
+    expect(deadLinkNotice()).toContain('#404');
+
+    await renderThenNavigate('/crm/pipeline');
+    expect(deadLinkNotice()).toBeNull();
+  });
+
   it('lets the user dismiss the notice, and does not re-raise it on its own', async () => {
     routeApi();
     await render('/crm/pipeline?deal=404');

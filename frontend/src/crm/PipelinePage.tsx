@@ -156,6 +156,13 @@ export function PipelinePage() {
   // reopened the deal but Back did not, which nobody would predict.
   if (deepLinkDealId === null && deepLink.key !== null) {
     setDeepLink({ dealId: null, loadsAtArrival: 0, key: null });
+    // Clear the notice with it. Navigating away — clicking the Pipeline nav item from
+    // `/crm/pipeline?deal=404`, say — leaves this page mounted, so a notice about a link
+    // that is no longer in the URL would otherwise sit there with nothing to dismiss it.
+    // `linkOpenedDeal` deliberately survives: the sheet is still open and still the one a
+    // link put there, so a later link should still supersede it.
+    setDeadDeepLinkDealId(null);
+    setHandledDeepLink(null);
   }
   if (deepLinkDealId !== null && location.key !== deepLink.key) {
     setDeepLink({ dealId: deepLinkDealId, loadsAtArrival: boardLoads.started, key: location.key });
