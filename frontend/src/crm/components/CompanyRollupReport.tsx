@@ -76,7 +76,10 @@ function InfoRow({ label, children }: { label: string; children?: React.ReactNod
 function SummaryChip({ label, value }: { label: string; value: string }) {
   return (
     <div style={{
-      background: tint(INK, 4), border: `1px solid ${LINE}`, borderRadius: 8,
+      // 5% matches the ink chips elsewhere in the app, and it is one of the two
+      // percentages `core/theme/inkContrast.test.ts` cross-products against every ink
+      // token in both themes (#68). A new percentage would be an unmeasured surface.
+      background: tint(INK, 5), border: `1px solid ${LINE}`, borderRadius: 8,
       padding: '10px 14px', minWidth: 120,
     }}>
       <div style={mono(10)}>{label}</div>

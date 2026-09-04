@@ -185,6 +185,9 @@ describe('CompanyRollupReport', () => {
     await mount();
     act(() => { buttonSaying('Expand all')!.click(); });
     await settle();
+    // `.every()` is vacuously true on an empty list, so a render that produced no rows at
+    // all would pass both assertions below. Pin the count first.
+    expect(expanders()).toHaveLength(2);
     expect(expanders().every(b => b.getAttribute('aria-expanded') === 'true')).toBe(true);
     act(() => { buttonSaying('Collapse all')!.click(); });
     await settle();
@@ -209,6 +212,28 @@ describe('CompanyRollupReport', () => {
     await mount();
     expect(text()).toContain('Showing the first 1 deals on this company');
     expect(text()).not.toContain('contacts on this company');
+  });
+
+  it('states a per-record truncation inside the row it belongs to', async () => {
+    // Distinct from the section notice above it: this is the only signal that ONE deal's own
+    // activity or task list was capped, and it renders only inside the expanded row.
+    apiMock.mockResolvedValue(rollup({
+      deals: [
+        deal({ id: 1, title: 'Busy', activities_truncated: true, tasks_truncated: true }),
+        deal({ id: 2, title: 'Quiet' }),
+      ] as never,
+    }));
+    await mount();
+    act(() => { expanders()[0].click(); });
+    await settle();
+    expect(text()).toContain('Only the most recent activity on this record is shown');
+    expect(text()).toContain('Only the first open tasks on this deal are shown');
+
+    act(() => { expanders()[0].click(); });
+    act(() => { expanders()[1].click(); });
+    await settle();
+    expect(text()).not.toContain('Only the most recent activity on this record is shown');
+    expect(text()).not.toContain('Only the first open tasks on this deal are shown');
   });
 
   it('refetches with include_archived and passes the flag to the timeline', async () => {

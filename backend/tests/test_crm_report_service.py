@@ -194,6 +194,29 @@ def test_deal_truncation_flag_follows_the_probe_row(rec, monkeypatch, returned, 
     assert len(result["deals"]) == 1
 
 
+@pytest.mark.parametrize("returned,expected", [(1, False), (2, True)])
+def test_contact_truncation_flag_follows_the_probe_row(rec, monkeypatch, returned, expected):
+    """Its own inline comparison, not the shared `_trim` helper — so it needs its own test."""
+    monkeypatch.setattr(report_service, "ROLLUP_CHILD_CAP", 1)
+    _prime_rollup(rec, contacts=[{"id": i, "name": "C"} for i in range(returned)])
+    result = report_service.get_company_rollup(7)
+    assert result["contacts_truncated"] is expected
+    assert len(result["contacts"]) == 1
+
+
+def test_task_truncation_is_flagged_per_deal(rec, monkeypatch):
+    monkeypatch.setattr(report_service, "TASKS_PER_DEAL_CAP", 1)
+    tasks = [
+        {"id": 1, "deal_id": 9, "title": "a", "rn": 1},
+        {"id": 2, "deal_id": 9, "title": "b", "rn": 2},
+        {"id": 3, "deal_id": 10, "title": "c", "rn": 1},
+    ]
+    _prime_rollup(rec, deals=[{"id": 9, "value": 0}, {"id": 10, "value": 0}], tasks=tasks)
+    busy, quiet = report_service.get_company_rollup(7)["deals"]
+    assert (len(busy["tasks"]), busy["tasks_truncated"]) == (1, True)
+    assert (len(quiet["tasks"]), quiet["tasks_truncated"]) == (1, False)
+
+
 def test_per_record_activity_cap_is_per_parent_not_global(rec, monkeypatch):
     """A busy deal must not starve a quiet sibling of its history."""
     monkeypatch.setattr(report_service, "ACTIVITY_PER_RECORD_CAP", 2)
