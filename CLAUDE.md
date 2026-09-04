@@ -1289,12 +1289,16 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   was cleared. Option values are **indices**, so a context literally named `__new__` stays
   selectable, and the SELECTED context always gets an option — the shared meta loads async
   and a refresh can drop a value, and a select matching no option while `save()` submits the
-  hidden string is worse than an extra option. Deliberately **simpler than the blueprint**,
-  which routes notes through a shared `useAutoSave` primitive and orders every adoption by
-  `updated_at`: this card adopts only from the prop, never from a write's own response, so
-  the worst an out-of-order refetch can do is show an older note in an otherwise CLEAN box
-  for the moment before the newer one lands. Porting the primitive for one textarea was not
-  worth it; version ordering becomes necessary if responses are ever adopted here too.
+  hidden string is worse than an extra option. The one place this stays **simpler than
+  the blueprint** is the commit primitive: the blueprint routes notes through a shared
+  `useAutoSave` (its `shared/autosave`, reused across several surfaces), where this card has
+  a local `flushNotes` — single-flight with one trailing run, queued on the **tail** of the
+  chain so a third caller cannot wake alongside the second and fire a duplicate, with the
+  baseline moved synchronously in the ref because `setRow` only schedules a render. Porting a
+  shared primitive for one textarea was not worth it. The `updated_at` ordering was: an
+  earlier cut of this port adopted only from the prop and compared content, and that produced
+  the save-rewind, the pinned override and the stale-star defects the paragraph above
+  describes.
   **#102 made GTD the default and the fail-safe.** Four readers resolve the mode —
   `service.get_task_mode()` plus thin `_task_mode()` wrappers in `assistant.identity`,
   `heartbeat.service` and `telegram.service` — and all four degrade to `gtd`, because a

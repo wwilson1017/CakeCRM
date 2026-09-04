@@ -56,6 +56,13 @@ const PROJECT: TodoProject = {
   created_at: '2026-08-06T12:00:00Z', updated_at: '2026-08-06T12:00:00Z',
 };
 
+// The card advances its view of the row from whichever source is NEWER, ordered on
+// `updated_at`. So the fixtures have to move that column the way the server does — with one
+// frozen timestamp every response and every reload looks stale, the card ignores them all,
+// and the suite would be testing a component that never adopts anything.
+let clock = 0;
+const nextStamp = () => new Date(Date.UTC(2026, 7, 6, 12, 0, ++clock)).toISOString();
+
 let container: HTMLDivElement;
 let root: Root;
 let onProcessed: Mock<() => void>;
@@ -67,8 +74,9 @@ beforeEach(() => {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
+  clock = 0;
   updateTodoMock.mockReset().mockImplementation((_id, fields) =>
-    Promise.resolve({ ...TODO, ...fields }));
+    Promise.resolve({ ...TODO, ...fields, updated_at: nextStamp() }));
   deleteTodoMock.mockReset().mockResolvedValue(undefined);
   createProjectMock.mockReset().mockResolvedValue({ ...PROJECT, id: 9, name: 'Garage' });
   onProcessed = vi.fn();
@@ -83,10 +91,13 @@ afterEach(() => {
 });
 
 function render(todo: Partial<Todo> = {}, contexts = ['@calls', '@errands'], projects = [PROJECT]) {
+  // Each render is a fresh row unless the case pins its own `updated_at`, so a re-render
+  // stands for the parent's refetch landing rather than for nothing at all.
+  const next: Todo = { ...TODO, updated_at: nextStamp(), ...todo };
   act(() => {
     root.render(
       <TriageCard
-        todo={{ ...TODO, ...todo }}
+        todo={next}
         projects={projects}
         contexts={contexts}
         onProcessed={onProcessed}
@@ -369,6 +380,23 @@ describe('step 2 — notes without leaving triage', () => {
     expect(onEdit.mock.calls[0][0].notes).toBe('the long version');
   });
 
+  it('opens the sheet on the notes as they stand when the flush finishes', async () => {
+    // Opening waits on the flush, which is a round trip, and the textarea stays editable
+    // throughout. A payload captured at click time would hand the sheet text the card has
+    // since replaced — and the sheet writes back every field it is given.
+    let release: (v: Todo) => void = () => {};
+    updateTodoMock.mockImplementationOnce(() => new Promise<Todo>(res => { release = res; }));
+    render();
+    setValue(notesBox(), 'first');
+    click(button('Edit'));
+    setValue(notesBox(), 'first, then more');
+    await act(async () => { release({ ...TODO, notes: 'first', updated_at: nextStamp() }); });
+    await settle();
+
+    expect(onEdit).toHaveBeenCalledTimes(1);
+    expect(onEdit.mock.calls[0][0].notes).toBe('first, then more');
+  });
+
   it('toasts a failed save, because this card can unmount before the message is read', async () => {
     const spy = vi.spyOn(toast, 'error').mockImplementation(() => {});
     updateTodoMock.mockRejectedValueOnce(new Error('offline'));
@@ -396,6 +424,18 @@ describe('step 2 — notes without leaving triage', () => {
     expect(notesBox().value).toBe('still typing this');
   });
 
+  it('does not rewind to the stale prop the moment the save lands', async () => {
+    // The write's response is newer than the prop the parent is still holding. Deciding
+    // adoption by CONTENT rather than by version reads that lagging prop as an outside
+    // change, resets the box to the pre-save text, and lets the next blur write it back
+    // over the save that just succeeded.
+    render({ notes: 'before' });
+    setValue(notesBox(), 'mine');
+    unfocus(notesBox());
+    await settle();
+    expect(notesBox().value).toBe('mine');
+  });
+
   it('follows the server again once the write lands', async () => {
     render({ notes: 'before' });
     setValue(notesBox(), 'mine');
@@ -405,6 +445,45 @@ describe('step 2 — notes without leaving triage', () => {
     // outside change instead of reading dirty for the length of the refetch.
     render({ notes: 'later, from elsewhere' });
     expect(notesBox().value).toBe('later, from elsewhere');
+  });
+});
+
+describe('fields written straight through still reach the sheet', () => {
+  // Star and project are never rendered optimistically, so adopting the WRITE RESPONSE is
+  // the only thing that keeps them current. Without it the sheet can open on the pre-write
+  // values once `busy` clears but before the refetch lands, and its full-row save reverts
+  // the change the user just made.
+  const star = () =>
+    container.querySelector<HTMLButtonElement>('button[aria-label="Star as today priority"]')!;
+
+  it('hands the sheet the star it just wrote', async () => {
+    render({ star: false });
+    click(star());
+    await settle();
+    click(button('Edit'));
+    await settle();
+    expect(onEdit.mock.calls[0][0].star).toBe(true);
+  });
+
+  it('hands the sheet the project it just assigned', async () => {
+    render({ project_id: null });
+    setValue(container.querySelector<HTMLSelectElement>('select[aria-label="Project"]')!, '3');
+    await settle();
+    click(button('Edit'));
+    await settle();
+    expect(onEdit.mock.calls[0][0].project_id).toBe(3);
+  });
+
+  it('toggles the star off the value it wrote, not the one the prop still shows', async () => {
+    // Two taps before the refetch lands: reading the prop the second time would send the
+    // same value again and leave the star stuck on.
+    render({ star: false });
+    click(star());
+    await settle();
+    click(star());
+    await settle();
+    expect(updateTodoMock).toHaveBeenNthCalledWith(1, 7, { star: true });
+    expect(updateTodoMock).toHaveBeenNthCalledWith(2, 7, { star: false });
   });
 });
 
@@ -452,9 +531,7 @@ describe('a note is part of the triage decision', () => {
     // Two writes to the same column, in flight together, land in whichever order the server
     // picks — so the later blur waits, then sends the text as it stands.
     let release: (v: Todo) => void = () => {};
-    updateTodoMock.mockImplementationOnce(
-      () => new Promise<Todo>(res => { release = res; }),
-    );
+    updateTodoMock.mockImplementationOnce(() => new Promise<Todo>(res => { release = res; }));
     render();
     setValue(notesBox(), 'first');
     unfocus(notesBox());
@@ -464,7 +541,7 @@ describe('a note is part of the triage decision', () => {
 
     // Still only the first request — the second is queued, not racing.
     expect(updateTodoMock).toHaveBeenCalledTimes(1);
-    await act(async () => { release({ ...TODO, notes: 'first' }); });
+    await act(async () => { release({ ...TODO, notes: 'first', updated_at: nextStamp() }); });
     await settle();
 
     expect(updateTodoMock).toHaveBeenCalledTimes(2);
@@ -487,7 +564,7 @@ describe('a note is part of the triage decision', () => {
     await settle();
     expect(updateTodoMock).toHaveBeenCalledTimes(1);
 
-    await act(async () => { release({ ...TODO, notes: 'first' }); });
+    await act(async () => { release({ ...TODO, notes: 'first', updated_at: nextStamp() }); });
     await settle();
 
     expect(updateTodoMock).toHaveBeenCalledTimes(2);
