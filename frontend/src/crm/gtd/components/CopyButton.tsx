@@ -14,8 +14,11 @@ const FACE = {
 } as const;
 
 /**
- * The Copy affordance used twice in the edit sheet: once beside the heading for
- * the whole todo, once beside the next-action label for just that line.
+ * The Copy affordance used three times in the edit sheet, each beside the thing
+ * it copies: the heading for the whole todo, the next-action label for just that
+ * line, and the Notes label for just the notes. The first two are the
+ * blueprint's; the notes one is what issue #151 asks for and neither blueprint
+ * has.
  *
  * Sized for a thumb (36px tall) rather than for the label it sits next to —
  * this is the one control on the sheet a phone user reaches for without meaning
