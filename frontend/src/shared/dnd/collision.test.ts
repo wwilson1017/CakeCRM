@@ -160,15 +160,23 @@ describe('boardCollisionDetection', () => {
     expect(boardCollisionDetection(fractional)[0]?.id).toBe('column-B');
   });
 
-  it('resolves a single-column board, which is never widened (the union is its own rect)', () => {
+  it('widens a single-column board too, since the band starts from the dragged rect', () => {
+    // A board filtered down to one stage, or a transient frame with one column measured. The one
+    // lane is NOT exempt: the band is the union of the columns AND the dragged rect, so it reaches
+    // past the lane's own bottom. Without widening, a pointer below the last card is inside
+    // nothing and falls back to a card further up — the original bug, in a one-column board.
     const single = {
       active,
-      collisionRect: DRAGGED_RECT,
-      pointerCoordinates: { x: 150, y: 290 },
+      collisionRect: DRAGGED_RECT, // y 1950..2030, far below the column's own 100..300
+      pointerCoordinates: { x: 150, y: 1000 }, // below the lane as measured, inside the band
       droppableContainers: [column('A')],
       droppableRects: new Map<UniqueIdentifier, ClientRect>([['column-A', rect(0, 100, 300, 200)]]),
     };
     expect(boardCollisionDetection(single)[0]?.id).toBe('column-A');
+    // …and it got there by POINTING at the lane, not through the distance fallback. With only one
+    // column there is nothing else for `closestCorners` to name, so the id alone cannot tell the
+    // two paths apart — the ranking VALUE can, and that is the whole difference widening makes.
+    expect(boardCollisionDetection(single)).not.toEqual(closestCorners(single));
   });
 
   it('names the card BELOW the gap between two cards, so the drop lands between them', () => {
@@ -274,6 +282,39 @@ describe('boardCollisionDetection', () => {
     expect(hits.filter(id => id.startsWith('card-'))).toEqual([]);
   });
 
+  it('does not let the closestCorners fallback name a card the clipping removed', () => {
+    // `pointerWithin` demands containment, so it answers nothing for a pointer in the GUTTER
+    // between two lanes and the strategy falls through to `closestCorners`. But that ranks by
+    // distance and therefore always names SOMETHING — handed the raw rects it will happily name a
+    // card below a column's internal fold, undoing piece 4 in exactly the case pointer containment
+    // could not cover. The fallback gets the clipped cards for that reason.
+    //
+    // Column A is its own scrollport (y 100..800) with 20 cards running to y 2092, so a9..a20 are
+    // real geometry nobody can see — and a19/a20 sit right beside the dragged rect at y 1950..2030,
+    // which is precisely what an unclipped fallback would reach for.
+    const containers: DroppableContainer[] = [column('A'), column('B')];
+    const rects = new Map<UniqueIdentifier, ClientRect>([
+      ['column-A', rect(A_LEFT, COLUMN_TOP, COLUMN_WIDTH, 700)], // scrollport: y 100..800
+      ['column-B', rect(B_LEFT, COLUMN_TOP, COLUMN_WIDTH, 40)],
+    ]);
+    for (let i = 0; i < 20; i++) {
+      const id = `a${i + 1}`;
+      containers.push(card(id, 'A'));
+      rects.set(`card-${id}`, rect(A_LEFT + 10, COLUMN_TOP + i * 100, 280, 92));
+    }
+    const gutter = {
+      active,
+      collisionRect: DRAGGED_RECT,
+      pointerCoordinates: { x: 310, y: 900 }, // the 20px gutter between A (ends 300) and B (starts 320)
+      droppableContainers: containers,
+      droppableRects: rects,
+    };
+    const hits = boardCollisionDetection(gutter).map(hit => String(hit.id));
+    expect(hits.length).toBeGreaterThan(0); // the fallback still answers — it just answers visibly
+    const belowTheFold = ['card-a9', 'card-a10', 'card-a15', 'card-a19', 'card-a20'];
+    expect(hits.filter(id => belowTheFold.includes(id))).toEqual([]);
+  });
+
   it('ignores a display:none column instead of dragging the board band up to y=0', () => {
     // An all-zeros measurement can never trip the x-range guard (its `right` is 0) and would
     // pull the union's top to the viewport origin, widening every column up under the header.
@@ -319,12 +360,16 @@ describe('boardCollisionDetection', () => {
       .not.toContain('card-a9');
   });
 
-  it("removes a card scrolled past the board's horizontal fold, while its column stays a target and a straddling neighbor keeps its sliver", () => {
+  it("drops a lane scrolled entirely past the board's horizontal fold, and keeps a straddling neighbor's sliver", () => {
     // Three columns side by side, wider than the board actually shows: A is fully on screen, B
     // straddles the right edge, C sits entirely past it — the shape of the pipeline board, whose
-    // container is `overflow-x-auto` and routinely holds more stages than fit the width. Only
-    // the CARDS should be affected; a scrolled-away column stays a drop target either way
-    // (piece 4's existing rule, unchanged by this fix).
+    // container is `overflow-x-auto` and routinely holds more stages than fit the width.
+    //
+    // The two axes are treated differently ON PURPOSE, and this is the case that separates them.
+    // A lane whose own cards scrolled out of view VERTICALLY stays a target (the test below pins
+    // that). A lane past the HORIZONTAL fold does not: its x-range points at page space beside the
+    // board where nothing is painted, so a drag released in the strip just outside the board's
+    // right edge would otherwise commit to a lane the user cannot see.
     const zDragged = rect(10, 110, 280, 80);
     const zActive: Active = {
       id: 'card-dragging',
@@ -346,12 +391,13 @@ describe('boardCollisionDetection', () => {
     const base = { active: zActive, collisionRect: zDragged, droppableContainers: containers, droppableRects: rects };
     const box = rect(0, 100, 620, 800); // the board shows x 0..620, y 100..900
 
-    // c1's real rect is fully right of the board box, so no pointer position can reach it — the
-    // pointer here sits exactly where c1 really is, and only its (widened) column answers.
+    // The pointer sits exactly where column C and its card really are, and where the board shows
+    // nothing. Neither may answer; the strategy falls through to `closestCorners` over what is
+    // actually on screen.
     const farHits = boardCollisionDetection(inBoardBox({ ...base, pointerCoordinates: { x: 950, y: 150 } }, box))
       .map(hit => String(hit.id));
     expect(farHits).not.toContain('card-c1');
-    expect(farHits).toContain('column-C');
+    expect(farHits).not.toContain('column-C');
 
     // b1 straddles the fold; its visible sliver (x 510..620) is still real, so a pointer there
     // still names the card, not just the column.
@@ -400,11 +446,12 @@ describe('boardCollisionDetection', () => {
   });
 
   it('keeps a lane whose own cards have scrolled out of the board as a drop target', () => {
-    // The board shows y 1000..1800 — the user is deep inside 40-card column A, so column B's two
-    // cards (up at y ~100) are far above the top of the board. Before the board was bounded this
-    // lane accepted a drop at any height, and it still must: this is exactly the moment someone
-    // wants to move a card into the short lane beside the long one. What must NOT survive is B's
-    // invisible CARDS — a drop there would commit to a position nobody can see.
+    // The VERTICAL half of the rule the test above draws the other half of. The board shows
+    // y 1000..1800 — the user is deep inside 40-card column A, so column B's two cards (up at
+    // y ~100) are far above the top of the board. The lane itself is still right there on screen
+    // beside A, and must still accept a drop: this is exactly the moment someone wants to move a
+    // card into the short lane beside the long one. What must NOT survive is B's invisible CARDS —
+    // a drop there would commit to a position nobody can see.
     const input = inBoardBox(args({ x: 470, y: 1200 }, 2), rect(A_LEFT, 1000, 640, 800));
     const hits = boardCollisionDetection(input).map(hit => String(hit.id));
     expect(hits).toContain('column-B');

@@ -126,6 +126,37 @@ function clampToBox(rect: ClientRect, clip: ClientRect | null | undefined): Clie
 }
 
 /**
+ * Cut a rect's HORIZONTAL range down to the part the board shows, leaving its y alone.
+ *
+ * This is the column's half of piece 4, and it is deliberately narrower than `clampToBox`. A lane
+ * must survive its own cards scrolling out of view VERTICALLY — that is the rule piece 4 states,
+ * and the moment you most want to drop into the short lane beside a long one. But a lane scrolled
+ * past the board's LEFT or RIGHT fold is not beside anything: it is off the board entirely, and
+ * its x-range points at page space where nothing of the board is painted. Left unclipped it is
+ * pointer-hittable there — a drop released in the strip just outside the board's right edge can
+ * land in a lane the user cannot see, which for the pipeline board means a deal silently changing
+ * to a stage nobody chose.
+ *
+ * So x is clipped and y is not. `null` means nothing of the lane is horizontally on screen, and
+ * the caller drops it from consideration entirely (rect map included — `pointerWithin` skips a
+ * container with no rect, and a column left in the map would still be hit at its raw off-board
+ * coordinates). Returns the same object when it changed nothing, for the identity checks
+ * downstream.
+ *
+ * **This diverges from the blueprint, which clips only cards.** Its rationale for keeping every
+ * lane covers the vertical case and does not reach this one; cards are already clipped on both
+ * axes, so treating the x axis differently for lanes was the inconsistency, not the fix.
+ */
+function clampX(rect: ClientRect, clip: ClientRect | null | undefined): ClientRect | null {
+  if (!clip) return rect;
+  const left = Math.max(rect.left, clip.left);
+  const right = Math.min(rect.right, clip.right);
+  if (right <= left) return null;
+  if (left === rect.left && right === rect.right) return rect;
+  return { top: rect.top, bottom: rect.bottom, height: rect.height, left, right, width: right - left };
+}
+
+/**
  * The attribute `KanbanBoard` marks its scroll region with, so this module can find it from a
  * droppable's own node. A machine contract, deliberately not a CSS class on the same element: a
  * class is free for anyone to restyle or rename, and the failure mode here is silent (cards
@@ -160,7 +191,8 @@ function measured(rects: Map<UniqueIdentifier, ClientRect>, containers: Droppabl
   /** Per column: the part of it the board shows, or `null` for a column scrolled out of view. */
   const columnClipByKey = new Map<string, ClientRect | null>();
   const cardsByColumn = new Map<string, Measured[]>();
-  const hiddenCardIds: UniqueIdentifier[] = [];
+  /** Cards cut away by a fold, plus any lane with nothing horizontally on screen. */
+  const hiddenIds: UniqueIdentifier[] = [];
 
   for (const container of containers) {
     const data = container.data.current;
@@ -172,10 +204,18 @@ function measured(rects: Map<UniqueIdentifier, ClientRect>, containers: Droppabl
     // all-zeros measurement, which cannot be pointed at, can never trip the x-range guard (its
     // `right` is 0), and would drag the band's top to viewport 0.
     if (!rect || rect.width <= 0) continue;
-    // The RAW rect stays the lane: its x-range is what tells columns apart, and its being a
-    // target must not depend on where its own cards happen to have scrolled to (piece 4).
-    columns.push({ id: container.id, rect });
+    // The lane keeps its full VERTICAL extent — its being a target must not depend on where its
+    // own cards have scrolled to (piece 4) — but its x is clipped to the board, because a lane
+    // past the horizontal fold is off the board rather than beside it. See `clampX`.
+    const lane = clampX(rect, viewportRect);
     const visible = clampToBox(rect, viewportRect);
+    if (!lane) {
+      hiddenIds.push(container.id);
+      // Its cards go with it: `null` here is what marks every one of them not-a-target below.
+      columnClipByKey.set(String(data.columnId), null);
+      continue;
+    }
+    columns.push({ id: container.id, rect: lane });
     if (visible) bandRects.push(visible);
     columnClipByKey.set(String(data.columnId), visible);
   }
@@ -194,7 +234,7 @@ function measured(rects: Map<UniqueIdentifier, ClientRect>, containers: Droppabl
     // off-board for as long as that column stays unmeasured.
     const visible = clip === null ? null : clampToBox(rect, clip ?? viewportRect);
     if (!visible) {
-      hiddenCardIds.push(container.id);
+      hiddenIds.push(container.id);
       continue;
     }
     const siblings = cardsByColumn.get(key);
@@ -202,7 +242,7 @@ function measured(rects: Map<UniqueIdentifier, ClientRect>, containers: Droppabl
     else cardsByColumn.set(key, [{ id: container.id, rect: visible }]);
   }
 
-  return { columns, bandRects, cardsByColumn, hiddenCardIds };
+  return { columns, bandRects, cardsByColumn, hiddenIds };
 }
 
 /**
@@ -210,8 +250,10 @@ function measured(rects: Map<UniqueIdentifier, ClientRect>, containers: Droppabl
  * cut down by a fold gets its visible sliver, and one cut away entirely is REMOVED —
  * `pointerWithin` skips any container with no rect, which is precisely "not a target".
  *
- * Columns are deliberately absent: they are lanes, not content, and the widening rewrites every
- * one of them next anyway (piece 4 explains why a scrolled-away lane must survive).
+ * `hiddenIds` also carries any LANE with nothing horizontally on screen (see `clampX`), which has
+ * to be deleted here rather than merely skipped: the widening below only writes the columns it was
+ * given, so a lane left in the map would still be hit at its raw, off-board coordinates. Surviving
+ * lanes are not written here — the widening rewrites every one of them next anyway.
  *
  * `clampToBox` hands back the very same object when it changed nothing, so the identity
  * check below is what keeps an unclipped board from cloning the map every frame for no reason.
@@ -219,7 +261,7 @@ function measured(rects: Map<UniqueIdentifier, ClientRect>, containers: Droppabl
 function withVisibleCards(
   rects: Map<UniqueIdentifier, ClientRect>,
   cardsByColumn: Map<string, Measured[]>,
-  hiddenCardIds: UniqueIdentifier[],
+  hiddenIds: UniqueIdentifier[],
 ): Map<UniqueIdentifier, ClientRect> {
   let out = rects;
   const own = () => {
@@ -227,7 +269,7 @@ function withVisibleCards(
     return out;
   };
 
-  for (const id of hiddenCardIds) own().delete(id);
+  for (const id of hiddenIds) own().delete(id);
   for (const cards of cardsByColumn.values()) {
     for (const { id, rect } of cards) {
       if (rects.get(id) !== rect) own().set(id, rect);
@@ -290,9 +332,9 @@ function columnsShareAnXRange(rects: ClientRect[]): boolean {
  * lane under the pointer as the target instead of falling back to a card in the source column.
  *
  * Skipped, leaving the rects as measured, whenever widening would be unsound or pointless: no
- * columns measured yet, a single column (the union IS its own rect), columns sharing an x-range,
- * or a band that did not come out finite. `pointerWithin` still runs on the untouched rects in
- * those cases — it just cannot reach into a short column's empty space.
+ * columns measured yet, columns sharing an x-range, or a band that did not come out finite.
+ * `pointerWithin` still runs on the untouched rects in those cases — it just cannot reach into a
+ * short column's empty space.
  */
 function withFullHeightColumns(
   rects: Map<UniqueIdentifier, ClientRect>,
@@ -314,9 +356,11 @@ function withFullHeightColumns(
   // `Number.isFinite` rather than a bare `bottom <= top`: a single NaN coordinate propagates
   // through Math.min/max, and every comparison against NaN is false, so `bottom <= top` would
   // wave it through and write NaN onto every column.
-  // `< 2`, not `=== 0`: with one column the union IS its own rect, so widening would write the
-  // same numbers back through a fresh Map. Returning early keeps that stated skip case true.
-  if (columns.length < 2 || !Number.isFinite(top) || !Number.isFinite(bottom) || bottom <= top) {
+  // `=== 0`, not `< 2`. A ONE-column board is widened like any other, because the band starts from
+  // the dragged rect and so is NOT that column's own rect: drag below the last card of the only
+  // lane — a board filtered to one stage, or a transient frame with one column measured — and
+  // without widening the pointer is inside nothing and falls back to a card further up.
+  if (columns.length === 0 || !Number.isFinite(top) || !Number.isFinite(bottom) || bottom <= top) {
     return rects;
   }
   if (columnsShareAnXRange(columns.map(c => c.rect))) return rects;
@@ -348,8 +392,9 @@ function withFullHeightColumns(
  * giving it to card i would insert one slot too high, above card i.
  *
  * The first card keeps its top and the last keeps its bottom. That second one matters: the free
- * space under a column's last card stays the column's, which `handleDragOver` reads as "append
- * to the end" — exactly right, since there is no card there to insert before.
+ * space under a column's last card stays the column's, which on a CROSS-column drag
+ * `handleDragOver` reads as "append to the end" — exactly right, since there is no card there to
+ * insert before. (On a same-column drag it does nothing at all; see the module docstring.)
  */
 function withClosedCardGaps(
   rects: Map<UniqueIdentifier, ClientRect>,
@@ -381,22 +426,24 @@ function withClosedCardGaps(
 }
 
 export const boardCollisionDetection: CollisionDetection = args => {
-  const { columns, bandRects, cardsByColumn, hiddenCardIds } = measured(
+  const { columns, bandRects, cardsByColumn, hiddenIds } = measured(
     args.droppableRects,
     args.droppableContainers,
   );
+  // The clipped map is kept separately because the FALLBACK needs it too: `closestCorners` merely
+  // ranks by distance and so always names something, and handed the raw rects it will happily name
+  // a card below a fold — undoing piece 4 in exactly the cases `pointerWithin` could not answer.
+  // It gets the visible cards WITHOUT the widening, so it keeps ranking by real geometry rather
+  // than by rects stretched to the whole board. Identical to `args.droppableRects` when nothing
+  // was clipped, so an unfolded board's fallback is unchanged.
+  const visibleRects = withVisibleCards(args.droppableRects, cardsByColumn, hiddenIds);
   const droppableRects = withClosedCardGaps(
-    withFullHeightColumns(
-      withVisibleCards(args.droppableRects, cardsByColumn, hiddenCardIds),
-      columns,
-      bandRects,
-      args.collisionRect,
-    ),
+    withFullHeightColumns(visibleRects, columns, bandRects, args.collisionRect),
     cardsByColumn,
   );
 
   const pointerHits = pointerWithin({ ...args, droppableRects });
-  if (pointerHits.length === 0) return closestCorners(args);
+  if (pointerHits.length === 0) return closestCorners({ ...args, droppableRects: visibleRects });
 
   const cardIds = new Set<UniqueIdentifier>();
   for (const cards of cardsByColumn.values()) for (const { id } of cards) cardIds.add(id);
