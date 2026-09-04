@@ -1290,12 +1290,21 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   from `datetime.now(timezone.utc).isoformat()` — microseconds — and equal means reject.
   Reading the fraction rather than the whole string is what keeps it independent of how the
   zone is spelled: `Z` sorts after `+`, so a lexical compare calls the same instant written
-  two ways a newer version and adopts the card's own echo. An override is released only when the adopted row
-  DISAGREES with it, so a successful write cannot pin its own value for the life of the card —
-  the same pre-existing hole `pendingTitle` had. An acknowledged notes write moves the
-  **baseline only**, never the row: the acknowledgement proves the text is stored whatever
-  version came back, but writing it into a row rejected as older would mint a version that
-  never existed and that no later copy of the real row could repair. And `star`/`project_id`,
+  two ways a newer version and adopts the card's own echo. **An override is released when its OWN write
+  settles**, success or failure — never because an adopted row disagrees with it. A row is not
+  evidence about a write still in flight, and the disagreement rule cannot tell "someone
+  changed this elsewhere" from "this row was committed before my write was": an earlier write
+  of the card's own, answering first, carries exactly that disagreement, so the rule flashed
+  the field back to the value the override exists to hide and handed the Edit sheet the old
+  one, whose full-row save then reverted the change. Releasing on settle also closes the
+  original hole — a successful write pinning its own value for the life of the card, which
+  `pendingTitle` had before this port. There is deliberately **no** "the write was
+  acknowledged, so trust the text over the version" rule for notes: `_now()` is stamped under
+  the row's own `FOR UPDATE` lock, so `updated_at` is monotonic per row and a held row newer
+  than our response was committed AFTER our write. Either it already carries our text, making
+  such a rule a no-op, or a later write replaced it — and there, marking the box clean would
+  strand a paragraph the server does not have, silently. Leaving it dirty re-sends it, the
+  same last-write-wins rule the unsaved-draft case follows. And `star`/`project_id`,
   written straight through and never rendered optimistically, stay current for the sheet only
   because every write path adopts the response it already gets back — `createAndAssign`'s own
   `project_id` write included; without that the sheet opens on pre-write values once `busy`
