@@ -47,20 +47,32 @@ const linkCls = 'text-sm underline disabled:opacity-50';
  * written `+00:00` or `Z`; a lexical compare of the whole string would, since `Z` sorts
  * after `+`. */
 /**
- * Could this date's year be one a person meant?
+ * Serialize one field's commits: at most one write in flight, and one trailing run behind it.
  *
- * A date input reports a COMPLETE value the moment every segment parses — which while the
- * year is being TYPED means after its FIRST digit: "12/24/2" arrives as `0002-12-24`. Writing
- * that would be bad on its own, and it does not stop there: the write sets `busy`, which
- * DISABLES this input, so the remaining year digits go nowhere and the truncated date is what
- * gets stored. Measured on the real app at every typing speed from 0 to 300ms per key.
+ * `send` reads LIVE state, so whichever continuation runs first carries everything typed since
+ * and the rest find nothing to do. Queueing on the TAIL rather than on the request in flight is
+ * what keeps a third caller from waking alongside the second and firing a duplicate.
  *
- * A year below 1000 is not a due date anyone means, so it reads as "still typing". The last
- * keystroke of a typed year clears the bar and writes; a date picked from the calendar always
- * arrives complete and writes immediately. (Pre-existing — the truncation predates the due-date
- * cue — but the cue is what invites people to type in this box, so it is fixed here.)
+ * Two fields need this and they need it for the same reason: two writes to one column, in
+ * flight together, land in whichever order the server picks.
  */
-const yearIsPlausible = (iso: string): boolean => Number(iso.slice(0, 4)) >= 1000;
+function useSerialCommit<T>(send: () => Promise<T>): () => Promise<T> {
+  const inFlight = useRef<Promise<T> | null>(null);
+  // A live view of `send`, which closes over the render that created it.
+  const sendRef = useRef(send);
+  useLayoutEffect(() => { sendRef.current = send; });
+  return useCallback((): Promise<T> => {
+    const run = () => sendRef.current();
+    const tail = inFlight.current;
+    const next = tail ? tail.then(run, run) : run();
+    inFlight.current = next;
+    // Let the chain be garbage once it has drained, so an idle field starts a fresh one
+    // rather than accumulating continuations for the life of the session.
+    const release = () => { if (inFlight.current === next) inFlight.current = null; };
+    void next.then(release, release);
+    return next;
+  }, []);
+}
 
 const subMs = (iso: string): number => {
   const frac = /\.(\d+)/.exec(iso);
@@ -218,9 +230,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
     };
   };
 
-  // The notes write in flight, so a second commit queues BEHIND it instead of racing it.
-  const notesInFlight = useRef<Promise<boolean> | null>(null);
-  // Opening the sheet waits on that write, and nothing gates the inbox queue meanwhile —
+  // Opening the sheet waits on the notes write, and nothing gates the inbox queue meanwhile —
   // promoting another row unmounts this card while the flush is still running, and the
   // continuation would then open the sheet on the todo the user just navigated away from.
   const mounted = useRef(true);
@@ -236,60 +246,72 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
    * Commit the notes box if it holds anything new; resolves false only when a write was
    * attempted and failed.
    *
-   * Deliberately does NOT take the card-wide `busy`, for the reason `saveTitle` gives
-   * below: clicking a button is what blurs the textarea, and a shared flag would swallow
-   * that very click. Non-resolving by construction — `onChanged`, never `onProcessed` —
-   * so jotting a note can never file the item.
+   * Deliberately does NOT take the card-wide `busy`, for the reason `saveTitle` gives below:
+   * clicking a button is what blurs the textarea, and a shared flag would swallow that very
+   * click. Non-resolving by construction — `onChanged`, never `onProcessed` — so jotting a
+   * note can never file the item.
    */
-  const flushNotes = (): Promise<boolean> => {
-    const send = (): Promise<boolean> => {
-      const { notesDraft: draft, row: live } = stateRef.current;
-      if (draft === live.notes) return Promise.resolve(true);
-      setError('');
-      return updateTodo(live.id, { notes: draft })
-        .then(saved => {
-          // Just an adoption — the response is the authoritative row, which stops a slow
-          // refetch dispatched by an earlier write from reverting what this card has since
-          // written, and carries any field someone else changed meanwhile.
-          //
-          // Deliberately NO "the write was acknowledged, so trust the text over the version"
-          // rule. `_now()` is stamped under the row's own `FOR UPDATE` lock
-          // (`service._apply_task_update_cur`), so `updated_at` is monotonic PER ROW: a held
-          // row newer than this response was committed AFTER our write. Either it already
-          // carries our text, making such a rule a no-op, or a later write replaced ours —
-          // and there, marking the box clean would strand a paragraph the server does not
-          // have, silently and with no error. Leaving it dirty re-sends it, the same
-          // last-write-wins rule the unsaved-draft case in `adopt` already follows.
-          apply({ type: 'adopt', row: saved });
-          onChanged();
-          return true;
-        })
-        .catch((e: unknown) => {
-          const msg = e instanceof Error ? e.message : 'Update failed';
-          setError(msg);
-          // A toast AS WELL, for the reason `createAndAssign` gives below: this card can
-          // unmount mid-flight — filing swaps the head item and `InboxPage` keys the card
-          // by todo id — and an inline message would land on a dead component and vanish,
-          // taking a paragraph the user typed with it.
-          toast.error(msg);
-          return false;
-        });
-    };
-    // Queue behind the TAIL of the chain, not merely behind the request in flight. Two
-    // writes to the same column, in flight together, land in whichever order the server
-    // picks — and a third caller chaining onto the same raw request as the second would wake
-    // alongside it and fire a duplicate. One trailing run is enough because `send` reads the
-    // LIVE state, so whichever continuation runs first carries everything typed since and
-    // the rest find nothing to do.
-    const tail = notesInFlight.current;
-    const next = tail ? tail.then(send, send) : send();
-    notesInFlight.current = next;
-    // Let the chain be garbage once it has drained, so an idle card starts a fresh one
-    // rather than accumulating continuations for the life of the session.
-    const release = () => { if (notesInFlight.current === next) notesInFlight.current = null; };
-    void next.then(release, release);
-    return next;
-  };
+  const flushNotes = useSerialCommit(async (): Promise<boolean> => {
+    const { notesDraft: draft, row: live } = stateRef.current;
+    if (draft === live.notes) return true;
+    setError('');
+    try {
+      // Just an adoption — the response is the authoritative row, which stops a slow refetch
+      // dispatched by an earlier write from reverting what this card has since written, and
+      // carries any field someone else changed meanwhile.
+      //
+      // Deliberately NO "the write was acknowledged, so trust the text over the version" rule.
+      // `_now()` is stamped under the row's own `FOR UPDATE` lock
+      // (`service._apply_task_update_cur`), so `updated_at` is monotonic PER ROW: a held row
+      // newer than this response was committed AFTER our write. Either it already carries our
+      // text, making such a rule a no-op, or a later write replaced ours — and there, marking
+      // the box clean would strand a paragraph the server does not have, silently and with no
+      // error. Leaving it dirty re-sends it, the same last-write-wins rule `adopt` follows.
+      apply({ type: 'adopt', row: await updateTodo(live.id, { notes: draft }) });
+      onChanged();
+      return true;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Update failed';
+      setError(msg);
+      // A toast AS WELL, for the reason `createAndAssign` gives below: this card can unmount
+      // mid-flight — filing swaps the head item and `InboxPage` keys the card by todo id —
+      // and an inline message would land on a dead component and vanish, taking a paragraph
+      // the user typed with it.
+      toast.error(msg);
+      return false;
+    }
+  });
+
+  /**
+   * Commit the due-date field if it holds something new.
+   *
+   * On BLUR, not on change, and its own write rather than `patch`'s — both for one reason. A
+   * date input reports a COMPLETE value the moment every segment parses, so it emits one on
+   * nearly every keystroke: typing "12/24/2026" into an empty box yields `0002-12-24` after
+   * the year's first digit, and into a populated one yields `2026-01-01` after the month's.
+   * `patch` sets `busy`, which DISABLES this input, so that first write ate every remaining
+   * keystroke and the truncated date was what reached the server — silently, and measured on
+   * the real app at every typing speed from 0 to 300ms per key. Committing on blur means the
+   * field is never disabled while it still has focus. Picking from the calendar commits on the
+   * blur that follows, and a resolving write flushes it first, so filing carries the date.
+   */
+  const commitDue = useSerialCommit(async (): Promise<void> => {
+    const { pendingDue: pending, row: live } = stateRef.current;
+    if (pending === null || pending === live.due_date) return;
+    setError('');
+    try {
+      apply({ type: 'adopt', row: await updateTodo(live.id, { due_date: pending }) });
+      onChanged();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Update failed';
+      setError(msg);
+      toast.error(msg); // same unmount reasoning as the notes save
+    } finally {
+      // Released either way: on success the adopted response carries the date, and on failure
+      // the field must not go on showing one the server never took.
+      apply({ type: 'due', value: null });
+    }
+  });
 
   // An inbox item can already carry a context (quick-add parses "@ctx" while keeping
   // status: inbox), and the shared meta can still be empty while it loads — offer the
@@ -319,6 +341,9 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
     // already said twice, inline and as a toast.
     try {
       const notesOk = resolves ? await flushNotes() : true;
+      // The date too, so filing an item carries a date just picked. Not gated on its result
+      // for the same reason the note is not: filing is this card's one exit.
+      if (resolves) await commitDue();
       if (notesOk) setError('');
       // Adopt the response for the same reason the notes save does. Star and project are
       // written straight through here and never rendered optimistically, so this is the ONLY
@@ -574,37 +599,10 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
               value={dueValue}
               disabled={busy}
               onFocus={() => setDueFocused(true)}
-              onBlur={() => {
-                setDueFocused(false);
-                // A half-typed year was never written, so it must not sit there looking
-                // saved — drop it and let the field fall back to the row. Losing an
-                // abandoned entry beats silently storing `0020-12-24`.
-                const half = stateRef.current.pendingDue;
-                if (half && !yearIsPlausible(half)) apply({ type: 'due', value: null });
-              }}
-              onChange={e => {
-                const picked = e.target.value;
-                // The write below sets `busy`, which DISABLES this input while it runs, and
-                // whether a focused element still fires `blur` when it is disabled is
-                // BROWSER-dependent — historically not in Chromium, yes in Firefox. So
-                // `onBlur` cannot be relied on to clear the flag, and a stranded `true` is
-                // invisible while a date is set, because `dueValue` hides the cue on its
-                // own; it bites the moment the date is cleared, leaving an empty box with
-                // the cue suppressed by a focus that ended long ago. Clearing it here costs
-                // nothing on the browsers that do fire blur. (React-DOM's disabled-target
-                // suppression covers only MOUSE events, so it is not the mechanism here.)
-                setDueFocused(false);
-                // Shown either way, so the field renders what has been typed so far.
-                apply({ type: 'due', value: picked });
-                // …but not WRITTEN until the year could be real. See `yearIsPlausible`.
-                if (picked && !yearIsPlausible(picked)) return;
-                // Released when this write settles, either way — the same rule `saveTitle`
-                // follows. On success `patch` has adopted a response carrying the new date;
-                // on failure nothing was written and the field must not go on showing a date
-                // the server never took.
-                void patch({ due_date: picked }, false)
-                  .then(() => apply({ type: 'due', value: null }));
-              }}
+              onBlur={() => { setDueFocused(false); void commitDue(); }}
+              // Shown immediately, written on blur — `commitDue` says why. Nothing here
+              // disables the input, so the user can finish typing the date.
+              onChange={e => apply({ type: 'due', value: e.target.value })}
               className={`${inputCls} min-w-40`}
               aria-label="Due date"
             />

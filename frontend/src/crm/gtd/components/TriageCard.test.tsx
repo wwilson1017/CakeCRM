@@ -228,8 +228,10 @@ describe('step 2 — the due-date cue', () => {
     expect(cue()).toBeUndefined();
 
     setValue(dueInput(), '2026-09-10');
+    unfocus(dueInput());
     await settle();
     setValue(dueInput(), '');
+    unfocus(dueInput());
     await settle();
 
     expect(updateTodoMock).toHaveBeenLastCalledWith(7, { due_date: '' });
@@ -242,6 +244,7 @@ describe('step 2 — the due-date cue', () => {
     // ignores every later edit, the Edit sheet's own included, for the life of the card.
     render();
     setValue(dueInput(), '2026-09-10');
+    unfocus(dueInput());
     await settle();
     expect(dueInput().value).toBe('2026-09-10');
 
@@ -249,37 +252,69 @@ describe('step 2 — the due-date cue', () => {
     expect(dueInput().value).toBe('2026-10-01');
   });
 
-  it('survives a date typed a keystroke at a time', async () => {
-    // The exact sequence a date input emits while the year is TYPED: it reports a complete
-    // value after the year's first digit, so "12/24/2026" arrives as four values. Writing
-    // the first sets `busy`, which disables the input, and the remaining digits go nowhere —
-    // `0002-12-24` is what reaches the server. Verified against the real app before this fix.
+  it('survives a date typed a keystroke at a time into an empty box', async () => {
+    // The exact sequence a date input emits: it reports a COMPLETE value as soon as every
+    // segment parses, so typing "12242026" arrives as four values, one per year digit.
+    // Writing the first sets `busy`, which disables the input, and the remaining keystrokes
+    // go nowhere — `0002-12-24` is what reaches the server. Measured on the real app.
     render();
     setValue(dueInput(), '0002-12-24');
     setValue(dueInput(), '0020-12-24');
     setValue(dueInput(), '0202-12-24');
     setValue(dueInput(), '2026-12-24');
+    unfocus(dueInput());
     await settle();
 
     expect(updateTodoMock.mock.calls).toEqual([[7, { due_date: '2026-12-24' }]]);
   });
 
-  it('drops a half-typed year rather than leaving it looking saved', async () => {
+  it('survives a date typed over one the todo already had', async () => {
+    // The commoner gesture, and the one a year-shaped guard does not cover: with a date
+    // already set, the FIRST keystroke completes a parseable value (`2026-01-01` after the
+    // month's "1"), so the truncation lands on the very first key and stores a wrong date
+    // rather than none.
+    render({ due_date: '2026-10-01' });
+    setValue(dueInput(), '2026-01-01');
+    setValue(dueInput(), '2026-12-01');
+    setValue(dueInput(), '2026-12-02');
+    setValue(dueInput(), '2026-12-24');
+    unfocus(dueInput());
+    await settle();
+
+    expect(updateTodoMock.mock.calls).toEqual([[7, { due_date: '2026-12-24' }]]);
+  });
+
+  it('writes what the field is showing, whatever that is', async () => {
+    // Blur-committing means the value written is the value on screen. A year left half
+    // typed is saved as it reads — wrong, but visibly wrong, which is the whole difference
+    // from silently truncating one the user finished typing.
     render();
     setValue(dueInput(), '0020-12-24');
     unfocus(dueInput());
     await settle();
 
-    expect(updateTodoMock).not.toHaveBeenCalled();
-    expect(dueInput().value).toBe('');
-    expect(cue()).toBeTruthy();
+    expect(dueInput().value).toBe('0020-12-24');
+    expect(updateTodoMock).toHaveBeenCalledWith(7, { due_date: '0020-12-24' });
   });
 
-  it('still writes a date clear, which has no year to wait for', async () => {
+  it('writes a date clear', async () => {
     render({ due_date: '2026-09-10' });
     setValue(dueInput(), '');
+    unfocus(dueInput());
     await settle();
     expect(updateTodoMock).toHaveBeenCalledWith(7, { due_date: '' });
+  });
+
+  it('carries a date just picked into the write that files the item', async () => {
+    // The click that files the item is what blurs the field, so the commit and the filing
+    // write are the same gesture — and a resolving write flushes the date first.
+    render();
+    setValue(dueInput(), '2026-12-24');
+    setValue(contextPicker(), '0'); // '@calls'
+    await settle();
+
+    expect(updateTodoMock).toHaveBeenNthCalledWith(1, 7, { due_date: '2026-12-24' });
+    expect(updateTodoMock).toHaveBeenNthCalledWith(2, 7, { context: '@calls', status: 'next_action' });
   });
 
   it('is inert to the pointer, so tapping it still opens the picker', () => {
@@ -299,9 +334,11 @@ describe('step 2 — the due-date cue', () => {
   });
 
   it('drops the optimistic date when the write fails', async () => {
+    vi.spyOn(toast, 'error').mockImplementation(() => {});
     updateTodoMock.mockRejectedValueOnce(new Error('offline'));
     render();
     setValue(dueInput(), '2026-09-10');
+    unfocus(dueInput());
     await settle();
     // Nothing was written, so the field must not go on showing a date the server never took.
     expect(dueInput().value).toBe('');

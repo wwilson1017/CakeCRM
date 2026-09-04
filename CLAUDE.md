@@ -1264,14 +1264,18 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   opaque **"Add due date" overlay**, cleared by a value or by focus — and by `onChange`
   too, because the write that follows a pick sets `busy`, React does not dispatch to a
   disabled target, and `onBlur` would therefore never run (the flag is invisible while a
-  date is set and bites the moment it is cleared). A date input also reports a COMPLETE value the
-  moment every segment parses — after the year's FIRST digit while it is being typed, so
-  "12/24/2" arrives as `0002-12-24` — and writing that sets `busy`, which disables the input,
-  so the rest of the year goes nowhere and the truncated date is what gets stored. A typed
-  value is therefore **shown but not written until its year could be real**
-  (`yearIsPlausible`), and a half-typed one is dropped on blur rather than left looking saved.
-  The truncation predates this port; the cue is what invites people to type in the box, so it
-  is fixed alongside it. `pendingDue` mirrors the existing
+  date is set and bites the moment it is cleared). **The date commits on BLUR, not on change**, and
+  through its own write rather than `patch`'s. A date input reports a COMPLETE value the
+  moment every segment parses, so it emits one on nearly every keystroke — `0002-12-24` after
+  the year's first digit on an empty box, `2026-01-01` after the month's on a populated one —
+  and `patch` sets `busy`, which DISABLES the input, so that first write ate every remaining
+  keystroke and the truncated date was what reached the server, silently. Blur-committing
+  means the field is never disabled while it still has focus, so what is written is what is on
+  screen. The truncation predates this port and was found by the evidence run against the real
+  app, which A/B'd it against `main`; the cue is what invites people to type in the box, so it
+  is fixed alongside it. `useSerialCommit` is shared by the notes box and the date for the same
+  reason both need it — two writes to one column, in flight together, land in whichever order
+  the server picks — and a resolving write flushes both, so filing carries them. `pendingDue` mirrors the existing
   `pendingTitle` so the CONTROLLED field does not revert to the prop for the length of the
   refetch, and `current` — what the Edit sheet is handed — carries title, notes and date
   from the card's view, never the lagging prop. **The card renders its own view of the
@@ -1338,10 +1342,9 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   hidden string is worse than an extra option. The one place this stays **simpler than
   the blueprint** is the commit primitive: the blueprint routes notes through a shared
   `useAutoSave` (its `shared/autosave`, reused across several surfaces), where this card has
-  a local `flushNotes` — single-flight with one trailing run, queued on the **tail** of the
-  chain so a third caller cannot wake alongside the second and fire a duplicate, with the
-  baseline moved synchronously in the ref because `setRow` only schedules a render. Porting a
-  shared primitive for one textarea was not worth it. The `updated_at` ordering was: an
+  a local `useSerialCommit` — single-flight with one trailing run, queued on the **tail** of
+  the chain so a third caller cannot wake alongside the second and fire a duplicate. Porting a
+  shared cross-app primitive for two fields on one card was not worth it. The `updated_at` ordering was: an
   earlier cut of this port adopted only from the prop and compared content, and that produced
   the save-rewind, the pinned override and the stale-star defects the paragraph above
   describes.
