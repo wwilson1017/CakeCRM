@@ -281,7 +281,7 @@ function DealRow({ deal, open, onToggle }: {
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 14, color: INK, fontWeight: 600 }}>{deal.title}</span>
             <span style={{
-              ...mono(10), color: stage?.color ?? INK_DIM,
+              ...mono(10), color: stage?.text ?? INK_DIM,
               background: stage?.bg, borderRadius: 4, padding: '2px 6px',
             }}>{deal.stage}</span>
             <span style={{ fontSize: 13, color: INK_MUTE }}>{money(deal.value, deal.currency)}</span>
