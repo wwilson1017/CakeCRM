@@ -36,7 +36,12 @@ function legacyCopy(text: string): boolean {
     area.select();
     area.setSelectionRange(0, text.length);
     return document.execCommand('copy');
-  } catch {
+  } catch (err) {
+    // Logged for the same reason the async path is: this is the path the LAN
+    // install actually runs, so a browser that has finally dropped execCommand
+    // must leave something behind to diagnose rather than a button that does
+    // nothing.
+    console.warn('Legacy clipboard copy failed', err);
     return false;
   } finally {
     area.remove();
@@ -79,10 +84,17 @@ export async function copyToClipboard(text: string): Promise<boolean> {
 export function useCopyToClipboard(resetMs = 1500) {
   const [copied, setCopied] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const mountedRef = useRef(false);
 
   const copy = useCallback(async (text: string) => {
     const ok = await copyToClipboard(text);
     if (!ok) return false;
+    // The write is asynchronous, so the sheet may already be gone by the time it
+    // resolves — tap Copy and close, or clear the title and unmount the button.
+    // Clearing the timer on unmount is not enough on its own: without this check
+    // the resolving promise starts a NEW one, after the cleanup that was meant
+    // to end them.
+    if (!mountedRef.current) return true;
     setCopied(true);
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => setCopied(false), resetMs);
@@ -90,9 +102,15 @@ export function useCopyToClipboard(resetMs = 1500) {
   }, [resetMs]);
 
   // The reset timer outlives the component otherwise: copy, then close the edit
-  // sheet inside `resetMs` and the timeout fires against an unmounted one.
-  useEffect(() => () => {
-    if (timerRef.current) clearTimeout(timerRef.current);
+  // sheet inside `resetMs` and the timeout fires against an unmounted one. The
+  // flag is set in the effect rather than at ref init so a StrictMode remount
+  // (mount, cleanup, mount) leaves it true rather than stuck false.
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
   }, []);
 
   return { copied, copy };
