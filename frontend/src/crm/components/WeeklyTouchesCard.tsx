@@ -8,6 +8,7 @@ import {
   FONT_DISPLAY, mono, labelStyle, inputStyle,
 } from '../../shared/styles';
 import { cardStyle, sectionHeading, btnPrimary, btnSecondary } from '../styles';
+import { RepLabel } from './RepLabel';
 import { TouchDealRow } from './TouchDealRow';
 import { ownerParamOf, touchDetailPath } from '../weeklyTouches';
 
@@ -292,19 +293,6 @@ export function WeeklyTouchesCard(
       )}
       </div>
     </div>
-  );
-}
-
-/** An unassigned bucket renders muted and italic, exactly as `OwnerName` does (#128) —
- *  blank would read as a rendering fault rather than the real, permanent state it is. */
-function RepLabel({ name, unassigned }: { name: string; unassigned: boolean }) {
-  return (
-    <span style={{
-      fontSize: 14,
-      color: unassigned ? INK_DIM : INK,
-      fontStyle: unassigned ? 'italic' : undefined,
-      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-    }}>{name}</span>
   );
 }
 

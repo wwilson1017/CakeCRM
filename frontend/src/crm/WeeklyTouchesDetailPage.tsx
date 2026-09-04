@@ -28,6 +28,7 @@ import { toast } from '../shared/toast';
 import { useIsMobile } from '../shared/useIsMobile';
 import { DealDetailSheet } from './components/DealDetailSheet';
 import { DealForm } from './components/DealForm';
+import { RepLabel } from './components/RepLabel';
 import { TouchDealRow } from './components/TouchDealRow';
 import { parseOwnerParam, touchDetailApiPath } from './weeklyTouches';
 import { stageWriteRequest } from './dealStageWrite';
@@ -140,12 +141,9 @@ export function WeeklyTouchesDetailPage() {
 
       {data && (
         <div style={{ fontSize: 13, color: INK_MUTE, margin: '10px 0 4px' }}>
-          {/* An unassigned bucket RENDERS, muted and italic, exactly as OwnerName does
-              (#128): blank would read as a rendering fault rather than a real state. */}
-          <span style={{
-            color: unassigned ? INK_DIM : INK,
-            fontStyle: unassigned ? 'italic' : undefined,
-          }}>{data.rep.name}</span>
+          {/* Shared with the card's rep rows, so a bucket cannot be spelled or styled
+              two ways depending on which surface you reached it from. */}
+          <RepLabel name={data.rep.name} unassigned={unassigned} />
           {' · '}{data.window.label}
           {' · '}<span style={{ color: INK }}>{data.rep.touches}</span>
           {' of '}{data.rep.open_deals} open deals touched

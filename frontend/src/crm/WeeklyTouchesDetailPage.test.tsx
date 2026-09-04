@@ -28,14 +28,34 @@ const { ApiError } = vi.hoisted(() => {
 
 vi.mock('../core/api/client', () => ({ api, ApiError }));
 vi.mock('../shared/toast', () => ({ toast }));
-// The sheet and the form are wired identically to the dashboard's; this page's job is
-// only to hand them the right deal.
+// The sheet is wired the way the dashboard wires it, and every one of those callbacks
+// is new glue on this page — so the stub exposes them as buttons rather than swallowing
+// them, or a forgotten reload() would ship with the suite green.
 vi.mock('./components/DealDetailSheet', () => ({
-  DealDetailSheet: ({ deal }: { deal: { id: number } }) => (
-    <div data-testid="sheet">{deal.id}</div>
+  DealDetailSheet: ({ deal, onClose, onEdit, onStageChange, onRestored }: {
+    deal: { id: number };
+    onClose: () => void;
+    onEdit: (d: { id: number }) => void;
+    onStageChange: (d: { id: number }, stage: string) => void;
+    onRestored: () => void;
+  }) => (
+    <div data-testid="sheet">
+      {deal.id}
+      <button data-testid="sheet-close" onClick={onClose}>close</button>
+      <button data-testid="sheet-edit" onClick={() => onEdit(deal)}>edit</button>
+      <button data-testid="sheet-stage" onClick={() => onStageChange(deal, 'won')}>stage</button>
+      <button data-testid="sheet-restore" onClick={onRestored}>restore</button>
+    </div>
   ),
 }));
-vi.mock('./components/DealForm', () => ({ DealForm: () => <div data-testid="form" /> }));
+vi.mock('./components/DealForm', () => ({
+  DealForm: ({ deal, onSaved }: { deal: { id: number }; onSaved: () => void }) => (
+    <div data-testid="form">
+      {deal.id}
+      <button data-testid="form-saved" onClick={onSaved}>saved</button>
+    </div>
+  ),
+}));
 
 const { MemoryRouter, Route, Routes, useNavigate } = await import('react-router-dom');
 const { WeeklyTouchesDetailPage } = await import('./WeeklyTouchesDetailPage');
@@ -188,13 +208,80 @@ describe('WeeklyTouchesDetailPage (issue #146)', () => {
     expect(container.textContent).toContain('Dana Reyes');
   });
 
-  it('opens the deal sheet with the fetched deal when a row is clicked', async () => {
+  it('opens the deal sheet with the deal whose row was clicked', async () => {
+    await renderAt('/crm/touches/3');
+    api.mockResolvedValueOnce({ id: 42, title: 'Deal 42', stage: 'proposal' });
+    // The SECOND row, and the fetched id is asserted — clicking the first row against an
+    // argument-independent mock would pass even if the handler always opened deal 41.
+    const rows = container.querySelectorAll('[role="button"]');
+    await act(async () => { (rows[1] as HTMLElement).click(); });
+
+    expect(api).toHaveBeenCalledWith('/api/crm/deals/42');
+    expect(container.querySelector('[data-testid="sheet"]')?.textContent).toContain('42');
+  });
+
+  it('refetches the list after the sheet closes, restores, or changes a stage', async () => {
+    // Each of these is a separate callback on this page; a missing reload() in any one
+    // leaves the user looking at numbers their own action just invalidated.
+    for (const trigger of ['sheet-close', 'sheet-restore']) {
+      api.mockReset();
+      api.mockResolvedValue(detail);
+      await renderAt('/crm/touches/3');
+      api.mockResolvedValueOnce({ id: 41, title: 'Deal 41', stage: 'proposal' });
+      await act(async () => {
+        (container.querySelector('[role="button"]') as HTMLElement).click();
+      });
+      const before = detailCalls().length;
+      await act(async () => {
+        (container.querySelector(`[data-testid="${trigger}"]`) as HTMLElement).click();
+      });
+      expect(detailCalls().length).toBe(before + 1);
+    }
+  });
+
+  it('writes the stage change and then refetches', async () => {
     await renderAt('/crm/touches/3');
     api.mockResolvedValueOnce({ id: 41, title: 'Deal 41', stage: 'proposal' });
-    const row = container.querySelector('[role="button"]') as HTMLElement;
+    await act(async () => {
+      (container.querySelector('[role="button"]') as HTMLElement).click();
+    });
 
-    await act(async () => { row.click(); });
-    expect(container.querySelector('[data-testid="sheet"]')?.textContent).toBe('41');
+    const before = detailCalls().length;
+    await act(async () => {
+      (container.querySelector('[data-testid="sheet-stage"]') as HTMLElement).click();
+    });
+
+    // A non-lost move is `PUT /api/crm/deals/:id` (stageWriteRequest reserves
+    // mark-lost for a close carrying a reason), and the read path is the same URL —
+    // so the METHOD is what separates the write from the fetch that opened the sheet.
+    expect(api.mock.calls.some(
+      c => String(c[0]) === '/api/crm/deals/41'
+        && (c[1] as { method?: string } | undefined)?.method === 'PUT',
+    )).toBe(true);
+    expect(detailCalls().length).toBe(before + 1);
+    expect(container.querySelector('[data-testid="sheet"]')).toBeNull();
+  });
+
+  it('opens the edit form from the sheet and refetches once it saves', async () => {
+    await renderAt('/crm/touches/3');
+    api.mockResolvedValueOnce({ id: 41, title: 'Deal 41', stage: 'proposal' });
+    await act(async () => {
+      (container.querySelector('[role="button"]') as HTMLElement).click();
+    });
+
+    await act(async () => {
+      (container.querySelector('[data-testid="sheet-edit"]') as HTMLElement).click();
+    });
+    // The sheet gives way to the form, carrying the same deal.
+    expect(container.querySelector('[data-testid="sheet"]')).toBeNull();
+    expect(container.querySelector('[data-testid="form"]')?.textContent).toContain('41');
+
+    const before = detailCalls().length;
+    await act(async () => {
+      (container.querySelector('[data-testid="form-saved"]') as HTMLElement).click();
+    });
+    expect(container.querySelector('[data-testid="form"]')).toBeNull();
+    expect(detailCalls().length).toBe(before + 1);
   });
 
   it('never shows one rep\'s rows under another rep\'s URL', async () => {

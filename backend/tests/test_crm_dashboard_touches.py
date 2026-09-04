@@ -216,6 +216,9 @@ def test_parse_touch_owner_maps_the_literal_to_the_null_bucket():
         "٣",          # int() DOES accept this one, so only an ASCII-only regex rejects it
         "2147483648",      # past a 32-bit column — out of range at the database, not here
         "99999999999999999999",
+        "9" * 5000,        # past int()'s own 4300-digit limit, whose ValueError message
+                           # names sys.set_int_max_str_digits and would be handed to the
+                           # caller verbatim as the 400 detail
     ],
 )
 def test_parse_touch_owner_rejects_everything_else(raw):
@@ -421,16 +424,22 @@ def test_unassigned_bucket_is_named_unassigned_and_sinks_last(rec):
 
 
 def test_reps_sort_by_touches_then_open_deals_then_name(rec):
+    """Each tiebreak is exercised by a pair that is tied on everything above it, so no
+    key in the tuple can be deleted without turning this red."""
     rec.fetchall_queue = [
         [
+            # Tied on touches AND open_deals → only the name separates them.
             _rep(1, "Zoe", open_deals=2, touched=1),
             _rep(2, "Ada", open_deals=2, touched=1),
-            _rep(3, "Bob", open_deals=9, touched=5),
+            # Tied on touches with the pair above, but a bigger book → outranks both.
+            _rep(4, "Mo", open_deals=7, touched=1),
+            # Most touches → leads regardless of the smaller book.
+            _rep(3, "Bob", open_deals=1, touched=5),
         ],
         [],
     ]
     out = service.get_weekly_touches()
-    assert [r["name"] for r in out["reps"]] == ["Bob", "Ada", "Zoe"]
+    assert [r["name"] for r in out["reps"]] == ["Bob", "Mo", "Ada", "Zoe"]
 
 
 def test_deal_rows_attach_under_their_owner_in_query_order(rec):

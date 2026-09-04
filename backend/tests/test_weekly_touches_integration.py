@@ -248,6 +248,24 @@ def test_the_cap_is_per_rep_and_ranks_only_touched_deals():
     assert all("untouched" not in d["title"] for d in reps["Ada"]["deals"])
 
 
+def test_the_cap_holds_for_the_unassigned_partition_too():
+    """PARTITION BY treats every NULL owner as ONE partition, so the cap must apply to
+    the unowned bucket exactly as it does to a person's. This is the one claim in the
+    per-rep cap that only a real database can settle — a Recorder returns whatever rows
+    it was queued, whatever the window function says."""
+    from crm import service
+
+    limit = service.WEEKLY_TOUCHES_LIMIT
+    for i in range(limit + 5):
+        _deal(f"Nobody {i}", touch_count=i + 1)
+
+    rep = _reps(service.get_weekly_touches())["Unassigned"]
+
+    assert rep["touches"] == limit + 5          # the headline counts them all
+    assert len(rep["deals"]) == limit           # the rows are capped, not one big partition
+    assert rep["deals"][0]["touch_count"] == limit + 5   # and ranked, not arbitrary
+
+
 def test_computed_deals_counts_every_open_deal_not_just_the_touched_ones():
     """The zero-keys gate must stay window-independent, or a quiet week reads as a
     missing provider and the card disappears from a fully configured install."""

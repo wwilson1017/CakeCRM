@@ -2470,12 +2470,16 @@ def parse_touch_owner(raw: str | None) -> int | None:
     and the unowned bucket is one of them, so "absent" is never a state here.
 
     ASCII digits only — ``str.isdigit()`` accepts superscripts, which ``int()`` then rejects
-    with an unhandled 500 rather than the 400 this is.
+    with an unhandled 500 rather than the 400 this is. The length bound matters for the
+    same reason: past 4300 digits ``int()`` raises its own ValueError about
+    ``sys.set_int_max_str_digits``, which the router would hand back to the caller as the
+    400 detail — a Python implementation detail in place of a domain message. Ten digits
+    covers every 32-bit id; the range check below rejects the rest.
     """
     value = (raw or "").strip()
     if value == TOUCH_OWNER_UNASSIGNED:
         return None
-    if re.fullmatch(r"[0-9]+", value):
+    if re.fullmatch(r"[0-9]{1,10}", value):
         owner_id = int(value)
         if 1 <= owner_id <= _MAX_USER_ID:
             return owner_id
