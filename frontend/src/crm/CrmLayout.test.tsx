@@ -168,3 +168,56 @@ describe('CrmLayout task-mode ownership (issue #102)', () => {
     expect(publishedMode()).toBe('normal');
   });
 });
+
+// #149's route-chunk boundary. CrmLayout wraps <Outlet /> in its own Suspense so a page chunk
+// loading — or the task mode flipping from unknown to 'gtd', which is a plain setState and not
+// a router transition — suspends only the content column.
+//
+// `bootSplit.test.ts` pins that positionally, in source. This pins the BEHAVIOUR, because the
+// two failures are different: source order says where the tags are, this says what a user sees
+// while a chunk is in flight. A boundary hoisted to wrap the whole layout body keeps the Outlet
+// nested inside it and would replace the entire authenticated shell — nav, sign-out, launcher —
+// with one spinner on every first visit to a page.
+describe('CrmLayout route Suspense boundary (#149)', () => {
+  it('keeps the nav mounted while a lazy route chunk is still loading', async () => {
+    api.mockResolvedValue({
+      empty: false, sample_data_loaded: true, show_onboarding: false,
+      ai_key_prompt_dismissed: true, task_mode: 'gtd',
+    });
+
+    // A route element that is genuinely pending: `lazy()` over a promise we resolve by hand,
+    // so the suspended state is observable rather than a race we hope to catch.
+    let release!: (value: { default: () => React.ReactElement }) => void;
+    const pending = new Promise<{ default: () => React.ReactElement }>((resolve) => { release = resolve; });
+    const { lazy } = await import('react');
+    const LazyRoute = lazy(() => pending);
+
+    await act(async () => root.render(
+      <MemoryRouter initialEntries={['/crm']}>
+        <Routes>
+          <Route path="/crm" element={<CrmLayout />}>
+            <Route index element={<LazyRoute />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    ));
+
+    // Suspended: the content column shows the fallback…
+    expect(container.querySelector('[role="status"]')).not.toBeNull();
+    expect(container.textContent).not.toContain('ROUTE CONTENT');
+    // …and the chrome around it is still on screen. This is the assertion a hoisted boundary
+    // fails, and the one the positional guard in bootSplit.test.ts cannot make.
+    expect(container.textContent, 'nav survives a suspended route').toContain('Dashboard');
+    expect(container.textContent, 'sign-out survives a suspended route').toContain('Sign out');
+
+    await act(async () => {
+      release({ default: () => <div>ROUTE CONTENT</div> });
+      await pending;
+    });
+
+    // Resolved: content replaces the fallback, chrome unchanged.
+    expect(container.textContent).toContain('ROUTE CONTENT');
+    expect(container.querySelector('[role="status"]')).toBeNull();
+    expect(container.textContent).toContain('Dashboard');
+  });
+});

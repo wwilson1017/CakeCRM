@@ -76,3 +76,4 @@ Populated by port PRs from here on.
 | Todo-GTD copy buttons + long-title wrapping | `e00e05cde` | #151 | — |
 | Todo GTD triage & edit-sheet parity (due-date cue, inline Notes, real Context picker, legible step headings) | PR #2424 (`e3c06bba`), PR #2539 (`b936ac29`) | #150 | 2026-09-04 |
 | Keyboard-reachable `shared/listview` rows (WCAG 2.1.1) — every collection adopter inherits it, plus the consumer-side convention of a real link in a route-shaped surface's title cell | PR #1979 (39d1033) | #148 | — |
+| Route-level code splitting of the frontend boot path (`Root.tsx` dispatch with both branches lazy, lazy route table + one shared GTD `pages.ts`, lazy assistant drawer, `ChunkErrorBoundary` + `BootFallback`, `bootSplit` source guard + `bootSplitBuild` chunk-graph guard) | PR #2150 (`1c10ccf`) | #149 | 2026-09-04 |
