@@ -6,13 +6,15 @@
  * data fetching and no detail surface: `onRowClick` hands the item straight
  * back, so a consumer passes the SAME handler its kanban card already uses and
  * both views open the identical detail surface — including whatever that
- * surface later becomes — without this module importing it.
+ * surface later becomes — without this module importing it. Since #148 the row
+ * is keyboard-activatable (Enter/Space) whenever that handler is present, and
+ * fully inert when it is not.
  *
  * Sorting is CONTROLLED: the consumer page owns the `SortState` so a search
  * bar's sort dropdown and these column headers stay two
  * affordances over one value rather than two competing mechanisms.
  */
-import { useMemo, useState, type ReactNode } from 'react';
+import { useId, useMemo, useState, type ReactNode } from 'react';
 // `sortRows` adapts these columns onto the ONE shared comparator in `shared/search`, so a
 // list view and the search bar's dropdown over the same page sort state can never order
 // differently (the listview→search direction is the resolution an earlier rebase plan
@@ -43,11 +45,36 @@ export interface ListViewProps<TItem extends { id: number | string }> {
    *  render a non-interactive table. */
   sort?: SortState | null;
   onSortChange?: (next: SortState | null) => void;
-  onRowClick: (item: TItem) => void;
+  /**
+   * Open the row's record. OPTIONAL since #148: omit it and rows render inert —
+   * no pointer cursor, no hover, no tab stop, no key handler — because a focus
+   * stop that does nothing is worse than none. A surface with nothing to open
+   * must be able to say so, and the collection adapter's old
+   * `onRowClick={row => onSelect?.(row.id)}` closure could not: it is always
+   * truthy, so it minted a tab stop per row on a page that wired no handler.
+   *
+   * When present the row is a KEYBOARD stop: Enter and Space activate it, guarded
+   * by `e.target === e.currentTarget` so a keystroke aimed at a control inside a
+   * cell never also opens the row. The row's ARIA role is deliberately left alone
+   * — `role="button"` would flatten interactive cell content out of the
+   * accessibility tree (ARIA presentational children: the collection layer's
+   * selection checkbox, a CRM list column's inline link or button) and would
+   * orphan every cell's implicit `role="cell"`, which needs a `role="row"` parent.
+   * Cells carrying their own interactive controls still stop CLICK propagation —
+   * that contract is unchanged, and it is load-bearing for the KEYBOARD too: activating a
+   * cell's `<button>` with Enter or Space makes the browser dispatch a `click` on it, which
+   * bubbles here. The keydown guard cannot see that click, so a cell control that omits
+   * `onClick={e => e.stopPropagation()}` opens the row on Enter as well as on a mouse click.
+   * `ListView.test.tsx` pins both halves of that contract.
+   */
+  onRowClick?: (item: TItem) => void;
   emptyMessage?: string;
   renderCap?: number;
   /** Extra classes per row — the collection layer strikes voided rows through here
-   *  (`shared/corrections/voidedRowClass`, the standard: struck, never hidden). */
+   *  (`shared/collection/voidedRowClass`, the standard: struck, never hidden). Its
+   *  `voidedTableRowClass` variant is the one to use on THIS surface: since #148 the row
+   *  owns a focus outline, and `opacity` on the `<tr>` would composite that outline down
+   *  with the row. */
   rowClassName?: (item: TItem) => string;
 }
 
@@ -116,6 +143,9 @@ export default function ListView<TItem extends { id: number | string }>({
   rowClassName,
 }: ListViewProps<TItem>) {
   const [showAll, setShowAll] = useState(false);
+  // Per-instance: two ListViews can share a page, and a duplicated id would point both
+  // tables' `aria-describedby` at the first one's hint.
+  const hintId = useId();
 
   // A change in the SIZE of the result set puts the cap back in force — "show
   // all" was a decision about one specific result set, not a permanent mode.
@@ -145,13 +175,63 @@ export default function ListView<TItem extends { id: number | string }>({
   // panel's ‹ › navigation without re-deriving it — see that module's docstring.
   const sorted = useMemo(() => sortRows(columns, items, sort), [columns, items, sort]);
 
+  // simplification: a row that holds focus and is then unmounted — by the cap re-arming above,
+  // or by a re-sort/refetch that drops it out of `rows` — sends focus to `<body>`, the browser
+  // default. Harmless before #148 (nothing here was focusable); reachable now, though it needs a
+  // list change to land while focus is parked on a row, and no CRM surface polls. Left as-is
+  // deliberately: restoring focus needs a roving-tabindex/focus-restoration layer, and a partial
+  // version (guessing a neighbour row) moves focus somewhere the user did not ask for, which is
+  // worse than the documented default. Upgrade path: adopt that layer with `role="grid"` above.
   const rows = showAll ? sorted : sorted.slice(0, renderCap);
   const truncated = sorted.length - rows.length;
 
   return (
     <>
       <div className="overflow-x-auto rounded-xl border border-line bg-cream">
-        <table className="w-full">
+        {/* The rows are focusable but keep their `role="row"` (see `onRowClick`'s doc), so
+            nothing in the accessibility tree announces that a row DOES anything — a residual
+            WCAG 4.1.2 gap the keyboard fix alone does not close. Saying it once, as the table's
+            DESCRIPTION, is the cheap honest fix: a screen reader reads it on entering the table,
+            where a per-row hint would repeat itself up to `renderCap` (300) times.
+
+            Deliberately `aria-describedby` and not a `<caption>`: per HTML-AAM a caption is the
+            table's accessible NAME, so every list in the app would be *named* with this
+            instruction — the same generic sentence in the tables rotor, and no table saying what
+            it holds. An instruction is description material, not a name.
+
+            Rendered only when rows actually open something AND there are rows, so neither an
+            inert table nor an empty state ever claims otherwise.
+
+            Two acknowledged ceilings, not oversights. (1) A table description is announced when a
+            reader ENTERS the table, which a Tab-only user driving focus straight onto a row may
+            not hear; delivering it per row instead would announce the same sentence on every one
+            of up to `renderCap` rows, which is the worse failure. (2) A focusable `role="row"` is
+            outside ARIA's defined table interaction model — the model that would cover it is
+            `role="grid"`, which obliges full 2D arrow-key cell navigation and is a much larger
+            change than this one. (3) Every rendered row is its own tab stop, so a list goes from
+            a handful (the sortable headers) to up to `renderCap` (300) plus those — and on a
+            route-shaped surface, where the title cell also carries a real anchor, to TWICE
+            that, since the row and its link are both stops. The "show all" control below sits
+            behind all of them. That is the standard cost of row-level focus and WCAG prefers
+            it to rows nobody can reach at all, but it is a real cost, and note that ceiling 2's
+            upgrade path is what retires this one: moving the tab stop off the row and onto the
+            anchor halves it, and a roving tabindex then makes the whole table ONE stop with
+            arrow keys moving between rows. `role="button"` is the option that is simply wrong, for the
+            reason in `onRowClick`'s doc. So a reader is told "row", not "opens this record".
+            Upgrade path, and the only one that fully closes 4.1.2: give each column set a
+            designated primary cell rendering a real `<a>`/`<button>` and move the tab stop
+            onto that control, leaving the row itself unfocusable. That is a change to every
+            adopting surface's columns rather than to this file, which is why it is not this
+            fix — this one buys keyboard OPERABILITY for every adopter at once. */}
+        {onRowClick && rows.length > 0 && (
+          <p id={hintId} className="sr-only">
+            Rows are interactive: focus a row and press Enter or Space to open its record.
+          </p>
+        )}
+        <table
+          className="w-full"
+          aria-describedby={onRowClick && rows.length > 0 ? hintId : undefined}
+        >
           <thead>
             <tr className="bg-brand-maroon text-white">
               {columns.map(col => (
@@ -179,8 +259,76 @@ export default function ListView<TItem extends { id: number | string }>({
             {rows.map(item => (
               <tr
                 key={item.id}
-                onClick={() => onRowClick(item)}
-                className={`cursor-pointer border-b border-line-faint hover:bg-sand ${rowClassName?.(item) ?? ''}`}
+                onClick={
+                  onRowClick
+                    ? e => {
+                        // Same reasoning as the key path below, on the input people actually
+                        // use: Cmd/Ctrl-click is "open in a new tab" and Shift-click is "open
+                        // in a new window". A row is not an anchor and can honour neither, so
+                        // acting on them would replace the user's filtered, scrolled list with
+                        // a detail view they did not ask to navigate to. The row's own target
+                        // is deliberately NOT tested here — a mouse click always lands on a
+                        // cell, so that check would swallow every row click; suppressing a
+                        // click from inside a cell stays the cell control's `stopPropagation`.
+                        if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+                        onRowClick(item);
+                      }
+                    : undefined
+                }
+                onKeyDown={
+                  onRowClick
+                    ? e => {
+                        // A keyboard event targets the FOCUSED element, so this guard
+                        // reads "the row itself has focus". A keystroke aimed at a
+                        // control inside a cell — the collection layer's selection
+                        // checkbox, a CRM list column's inline link or button —
+                        // bubbles here carrying its own target and must never also
+                        // open the row (#148). The CLICK path is not guarded this
+                        // way: a mouse click always targets a cell or its content,
+                        // never the `<tr>`, so the same test there would swallow
+                        // every row click. Click suppression stays the cell's own
+                        // `stopPropagation`, exactly as before.
+                        if (e.target !== e.currentTarget) return;
+                        // A modified Enter/Space belongs to the browser or the OS, not to us:
+                        // Shift+Space is page-up, and Ctrl/Alt/Cmd combinations carry browser and
+                        // input-method bindings. Without this the row would both swallow the
+                        // shortcut (`preventDefault` below) and open a record the user never
+                        // asked for. Bailing early is also the honest answer for Cmd+Enter — a
+                        // row is not a link and cannot honour "open in a new tab".
+                        if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+                        if (e.key !== 'Enter' && e.key !== ' ') return;
+                        e.preventDefault(); // Space would otherwise scroll the page.
+                        onRowClick(item);
+                      }
+                    : undefined
+                }
+                tabIndex={onRowClick ? 0 : undefined}
+                // Focus is an OUTLINE, not a `ring`, and the native outline is deliberately
+                // NOT suppressed. Two reasons, both measured against THIS theme (#148):
+                // Tailwind's `ring-*` compiles to `box-shadow`, which WebKit does not paint on
+                // a `display: table-row` element — so the usual `focus:outline-none
+                // focus-visible:ring-…` idiom, correct on a button or a div, renders NOTHING on
+                // a `<tr>` in Safari and every iOS browser, leaving a keyboard user with no
+                // indicator at all. And `ring-brand/40` composites to ~#f4a5ae over `cream`,
+                // 1.93:1, under the 3:1 WCAG 1.4.11 asks of a focus indicator; full-strength
+                // `brand` (= `--color-ck-accent`, #e31d3b, identical in both themes per #54) is
+                // 4.65:1 on the light card and 3.15:1 on the dark one — the same 3.15 figure
+                // `index.css` and `crm/listColumns.tsx` already state for this pair, and
+                // rounding it UP in the one sentence arguing it clears 3:1 would be the wrong
+                // direction to be imprecise in. `outline` paints on table
+                // rows in every engine, and leaving the UA outline in place means even a failure
+                // of these utilities degrades to a visible default rather than to nothing. The
+                // negative offset draws it INSIDE the row so the container's `rounded-xl
+                // overflow-x-auto` cannot clip it on the first or last row. No bare `outline`
+                // class: that utility sets `outline-width: 1px` and, being emitted AFTER
+                // `outline-2` in Tailwind's order, would silently override the 2px this asks
+                // for. `outline-2` alone is sufficient — `--tw-outline-style` is declared with
+                // `initial-value: solid`.
+                className={`border-b border-line-faint ${
+                  onRowClick
+                    ? 'cursor-pointer hover:bg-sand focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-brand '
+                    : ''
+                }${rowClassName?.(item) ?? ''}`}
               >
                 {columns.map(col => (
                   <td

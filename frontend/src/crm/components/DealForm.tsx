@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { api } from '../../core/api/client';
 import { useAuth } from '../../core/auth/AuthContext';
 import { OwnerSelect } from './OwnerSelect';
-import { labelStyle, inputStyle, CORAL, LINE, INK_DIM, mono } from '../../shared/styles';
+import { labelStyle, inputStyle, CORAL_TEXT, LINE, INK_DIM, mono } from '../../shared/styles';
 import { formModalOverlay, formModalContent, formTitle, btnPrimary, btnSecondary } from '../styles';
 import { STAGE_ORDER } from '../constants';
 import { isArchivedDeal } from '../pipelineFilters';
@@ -229,7 +229,7 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
         <h2 style={formTitle}>
           {isEdit ? 'Edit Deal' : 'New Deal'}
         </h2>
-        {error && <p style={{ color: CORAL, fontSize: 12, marginBottom: 12 }}>{error}</p>}
+        {error && <p style={{ color: CORAL_TEXT, fontSize: 12, marginBottom: 12 }}>{error}</p>}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div><label style={labelStyle}>Title *</label><input value={title} onChange={e => setTitle(e.target.value)} style={inputStyle} /></div>
