@@ -95,6 +95,14 @@ class Settings:
     # Railway environment detection
     is_railway: bool = bool(RAILWAY_PUBLIC_DOMAIN)
     jwt_secret_is_auto: bool = _jwt_secret_is_auto
+    # Whether `frontend_url` above fell all the way through to the dev default, i.e.
+    # nobody configured this install's public address (issue #145). Tracked the same way
+    # `jwt_secret_is_auto` is, and for the same reason: the value is always present, so
+    # "was it actually configured?" is a separate question the fallback chain erases.
+    # `crm.links.deal_url` reads it to decide between an absolute and a relative link —
+    # asserting `http://localhost:5173` in a message sent to someone's phone is worse
+    # than handing them a path their browser can resolve.
+    frontend_url_is_default: bool = not (os.getenv("FRONTEND_URL", "") or RAILWAY_PUBLIC_URL)
 
     # ── Heartbeat / notifications (issue #6) ────────────────────────────────
     # The heartbeat AI turn is env-gated: unset → enabled on Railway, disabled
