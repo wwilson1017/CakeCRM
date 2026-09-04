@@ -1271,7 +1271,9 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   record, not the `todo` prop**, which lags: between a write being sent and the parent's
   refetch landing, the prop still describes the record as it was. That view plus the three
   optimistic overrides live in ONE `useReducer` (`CardState`), mirrored into a ref that
-  `apply()` advances with the same pure reducer before dispatching. Both halves are
+  `apply()` advances with the same pure reducer before dispatching. The row IS the notes
+  baseline — dirty is `notesDraft !== row.notes` — because the only thing that moves the row
+  is adopting a newer one, and a newer row is by definition what the server holds. Both halves are
   load-bearing. The reducer is what makes every decision read the state as it is NOW: these
   handlers run from asynchronous callbacks, and a callback closes over the render that
   created it, so a title save resolving after the user started typing notes would compare

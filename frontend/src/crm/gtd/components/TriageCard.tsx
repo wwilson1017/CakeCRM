@@ -82,8 +82,9 @@ const isNewer = (a: string, b: string): boolean => {
 interface CardState {
   /** The record as this card best knows it — never the lagging `todo` prop. */
   row: Todo;
-  /** The notes value known to be on the server. Dirty is `notesDraft !== savedNotes`. */
-  savedNotes: string;
+  /** Dirty is `notesDraft !== row.notes`: the row IS the baseline, because the only thing
+   * that moves it is adopting a newer row, and a newer row is by definition what the server
+   * holds. */
   notesDraft: string;
   /** Optimistic values, shadowing the row until it catches up. null = not overriding. */
   pendingDue: string | null;
@@ -93,8 +94,6 @@ interface CardState {
 type CardAction =
   /** A newer view of the row, from the parent's prop or a write's own response. */
   | { type: 'adopt'; row: Todo }
-  /** Our own notes write was acknowledged, with the row it answered with. */
-  | { type: 'notes-saved'; value: string; row: Todo }
   | { type: 'notes-draft'; value: string }
   | { type: 'due'; value: string | null }
   | { type: 'title'; value: string | null };
@@ -119,25 +118,13 @@ function adopt(s: CardState, r: Todo): CardState {
   return {
     ...s,
     row: r,
-    savedNotes: r.notes,
-    notesDraft: s.notesDraft === s.savedNotes ? r.notes : s.notesDraft,
+    notesDraft: s.notesDraft === s.row.notes ? r.notes : s.notesDraft,
   };
 }
 
 function reduce(s: CardState, a: CardAction): CardState {
   switch (a.type) {
     case 'adopt':
-      return adopt(s, a.row);
-    case 'notes-saved':
-      // Just an adoption. There is deliberately no "the write was acknowledged, so trust the
-      // text over the version" branch: `_now()` is stamped under the row's own `FOR UPDATE`
-      // lock (`service._apply_task_update_cur`), so `updated_at` is monotonic PER ROW, and a
-      // held row newer than this response was therefore committed AFTER our write. Either it
-      // already carries our text — in which case adoption has moved the baseline and the
-      // branch would be a no-op — or a later write replaced our text, in which case marking
-      // the box clean would strand a paragraph the server does not have, silently and with
-      // no error. Leaving it dirty re-sends it, which is the same last-write-wins rule the
-      // unsaved-draft case above already follows.
       return adopt(s, a.row);
     case 'notes-draft':
       return s.notesDraft === a.value ? s : { ...s, notesDraft: a.value };
@@ -150,7 +137,6 @@ function reduce(s: CardState, a: CardAction): CardState {
 
 const initState = (todo: Todo): CardState => ({
   row: todo,
-  savedNotes: todo.notes,
   notesDraft: todo.notes,
   pendingDue: null,
   pendingTitle: null,
@@ -240,16 +226,24 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
    */
   const flushNotes = (): Promise<boolean> => {
     const send = (): Promise<boolean> => {
-      const { notesDraft: draft, savedNotes, row: live } = stateRef.current;
-      if (draft === savedNotes) return Promise.resolve(true);
+      const { notesDraft: draft, row: live } = stateRef.current;
+      if (draft === live.notes) return Promise.resolve(true);
       setError('');
       return updateTodo(live.id, { notes: draft })
         .then(saved => {
-          // One action: adopt the response — the authoritative row, which stops a slow
+          // Just an adoption — the response is the authoritative row, which stops a slow
           // refetch dispatched by an earlier write from reverting what this card has since
-          // written, and carries any field someone else changed meanwhile — AND move the
-          // notes baseline, which our acknowledgement establishes whatever the version says.
-          apply({ type: 'notes-saved', value: draft, row: saved });
+          // written, and carries any field someone else changed meanwhile.
+          //
+          // Deliberately NO "the write was acknowledged, so trust the text over the version"
+          // rule. `_now()` is stamped under the row's own `FOR UPDATE` lock
+          // (`service._apply_task_update_cur`), so `updated_at` is monotonic PER ROW: a held
+          // row newer than this response was committed AFTER our write. Either it already
+          // carries our text, making such a rule a no-op, or a later write replaced ours —
+          // and there, marking the box clean would strand a paragraph the server does not
+          // have, silently and with no error. Leaving it dirty re-sends it, the same
+          // last-write-wins rule the unsaved-draft case in `adopt` already follows.
+          apply({ type: 'adopt', row: saved });
           onChanged();
           return true;
         })
