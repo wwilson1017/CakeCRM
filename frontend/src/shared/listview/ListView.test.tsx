@@ -189,6 +189,23 @@ describe('ListView', () => {
     expect(onRowClick).not.toHaveBeenCalled();
   });
 
+  it('leaves a MODIFIED click to the browser too', () => {
+    // The key path and the click path must agree. Cmd/Ctrl-click is "open in a new tab" and
+    // Shift-click is "open in a new window"; a row can honour neither, so acting on them
+    // would replace the user's filtered, scrolled list with a record they did not ask for.
+    const onRowClick = vi.fn();
+    const el = render(<ListView columns={COLUMNS} items={ROWS} onRowClick={onRowClick} />);
+    const cell = el.querySelectorAll('tbody tr')[0].querySelector('td')!;
+    for (const mod of ['metaKey', 'ctrlKey', 'altKey', 'shiftKey'] as const) {
+      act(() => { cell.dispatchEvent(new MouseEvent('click', { bubbles: true, [mod]: true })); });
+    }
+    expect(onRowClick).not.toHaveBeenCalled();
+
+    // …and a PLAIN click still opens, so the guard cannot have swallowed the whole path.
+    act(() => { cell.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(onRowClick).toHaveBeenCalledWith(ROWS[0]);
+  });
+
   it('ignores a keystroke aimed at a control inside a cell', () => {
     const onRowClick = vi.fn();
     const el = render(<ListView columns={INTERACTIVE_COLUMNS} items={ROWS} onRowClick={onRowClick} />);

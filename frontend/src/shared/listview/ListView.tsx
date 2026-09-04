@@ -208,7 +208,12 @@ export default function ListView<TItem extends { id: number | string }>({
             of up to `renderCap` rows, which is the worse failure. (2) A focusable `role="row"` is
             outside ARIA's defined table interaction model — the model that would cover it is
             `role="grid"`, which obliges full 2D arrow-key cell navigation and is a much larger
-            change than this one. `role="button"` is the option that is simply wrong, for the
+            change than this one. (3) Every rendered row is its own tab stop, so a list goes from
+            a handful (the sortable headers) to up to `renderCap` + a few, and the "show all"
+            control below sits behind all of them. That is the standard cost of row-level
+            focus and WCAG prefers it to rows nobody can reach at all, but it is a real cost
+            and the same upgrade path retires it: a roving tabindex makes the whole table ONE
+            tab stop with arrow keys moving between rows. `role="button"` is the option that is simply wrong, for the
             reason in `onRowClick`'s doc. So a reader is told "row", not "opens this record".
             Upgrade path, and the only one that fully closes 4.1.2: give each column set a
             designated primary cell rendering a real `<a>`/`<button>` and move the tab stop
@@ -251,7 +256,22 @@ export default function ListView<TItem extends { id: number | string }>({
             {rows.map(item => (
               <tr
                 key={item.id}
-                onClick={onRowClick ? () => onRowClick(item) : undefined}
+                onClick={
+                  onRowClick
+                    ? e => {
+                        // Same reasoning as the key path below, on the input people actually
+                        // use: Cmd/Ctrl-click is "open in a new tab" and Shift-click is "open
+                        // in a new window". A row is not an anchor and can honour neither, so
+                        // acting on them would replace the user's filtered, scrolled list with
+                        // a detail view they did not ask to navigate to. The row's own target
+                        // is deliberately NOT tested here — a mouse click always lands on a
+                        // cell, so that check would swallow every row click; suppressing a
+                        // click from inside a cell stays the cell control's `stopPropagation`.
+                        if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+                        onRowClick(item);
+                      }
+                    : undefined
+                }
                 onKeyDown={
                   onRowClick
                     ? e => {
@@ -287,9 +307,12 @@ export default function ListView<TItem extends { id: number | string }>({
                 // focus-visible:ring-…` idiom, correct on a button or a div, renders NOTHING on
                 // a `<tr>` in Safari and every iOS browser, leaving a keyboard user with no
                 // indicator at all. And `ring-brand/40` composites to ~#f4a5ae over `cream`,
-                // ~1.9:1, under the 3:1 WCAG 1.4.11 asks of a focus indicator; full-strength
+                // 1.93:1, under the 3:1 WCAG 1.4.11 asks of a focus indicator; full-strength
                 // `brand` (= `--color-ck-accent`, #e31d3b, identical in both themes per #54) is
-                // 4.7:1 on the light card and 3.2:1 on the dark one. `outline` paints on table
+                // 4.65:1 on the light card and 3.15:1 on the dark one — the same 3.15 figure
+                // `index.css` and `crm/listColumns.tsx` already state for this pair, and
+                // rounding it UP in the one sentence arguing it clears 3:1 would be the wrong
+                // direction to be imprecise in. `outline` paints on table
                 // rows in every engine, and leaving the UA outline in place means even a failure
                 // of these utilities degrades to a visible default rather than to nothing. The
                 // negative offset draws it INSIDE the row so the container's `rounded-xl

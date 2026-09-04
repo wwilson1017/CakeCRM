@@ -40,7 +40,7 @@ let root: Root;
 const latest: { current: CollectionState<Row> | null } = { current: null };
 const onSelect = vi.fn();
 
-function Page({ config }: { config: CollectionConfig<Row> }) {
+function Page({ config, noSelect = false }: { config: CollectionConfig<Row>; noSelect?: boolean }) {
   const state = useCollectionState(config, rows);
   useEffect(() => {
     latest.current = state;
@@ -50,16 +50,16 @@ function Page({ config }: { config: CollectionConfig<Row> }) {
       config={config}
       state={state}
       cards={{ renderBadge: item => <em data-testid="badge">{item.section}</em> }}
-      onSelect={onSelect}
+      onSelect={noSelect ? undefined : onSelect}
     />
   );
 }
 
-function renderPage(config: CollectionConfig<Row>): void {
+function renderPage(config: CollectionConfig<Row>, noSelect = false): void {
   act(() => {
     root.render(
       <StrictMode>
-        <Page config={config} />
+        <Page config={config} noSelect={noSelect} />
       </StrictMode>,
     );
   });
@@ -178,5 +178,30 @@ describe('CardsView', () => {
     act(() => enlarge.click());
     expect(onSelect).toHaveBeenCalledTimes(1);
     expect(onSelect).toHaveBeenCalledWith(2);
+  });
+});
+
+describe('cards with nothing to open (#148)', () => {
+  it('renders an inert card — no button, no hover affordance — when the page wires no onSelect', () => {
+    // The rule the list view adopted in #148, applied to its sibling: a focusable card that
+    // does nothing is worse than no affordance. Rendering the <button> unconditionally is
+    // what made that reachable here.
+    renderPage(makeConfig('cards_inert'), true);
+    const cards = [...document.querySelectorAll('[data-testid="badge"]')].map(
+      b => b.closest('div,button')!.closest('button'),
+    );
+    expect(cards.every(c => c === null)).toBe(true);
+    // The content is still fully rendered — inert means not interactive, not hidden.
+    expect(document.querySelectorAll('[data-testid="badge"]').length).toBeGreaterThan(0);
+    expect(document.body.textContent).toContain('one');
+  });
+
+  it('still renders the interactive card when onSelect IS wired', () => {
+    renderPage(makeConfig('cards_active'));
+    const badge = document.querySelector('[data-testid="badge"]')!;
+    const card = badge.closest('button');
+    expect(card).not.toBeNull();
+    act(() => (card as HTMLElement).click());
+    expect(onSelect).toHaveBeenCalled();
   });
 });
