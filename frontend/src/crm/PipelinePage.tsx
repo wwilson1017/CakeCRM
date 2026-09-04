@@ -929,7 +929,7 @@ function StageHeader({ stage, count, total, columnDealIds = [], selectedIds, onT
   selectedIds?: ReadonlySet<number>;
   onToggleColumn?: (ids: number[], select: boolean) => void;
 }) {
-  const color = STAGE_COLORS[stage]?.color || INK_DIM;
+  const color = STAGE_COLORS[stage]?.fill || INK_DIM;
   const selectedHere = selectedIds ? columnDealIds.filter(id => selectedIds.has(id)).length : 0;
   const allSelected = columnDealIds.length > 0 && selectedHere === columnDealIds.length;
   return (
@@ -966,7 +966,7 @@ function DealBoardCard({ deal, columnStage, onOpen, selectable = false, isSelect
   // Colour from the column the card currently sits in (its bucket) rather than
   // deal.stage — during an optimistic drop the bucket updates before the deal's
   // own stage field does, so this keeps the accent correct instantly.
-  const color = STAGE_COLORS[columnStage]?.color || INK_DIM;
+  const color = STAGE_COLORS[columnStage]?.fill || INK_DIM;
   const bg = STAGE_COLORS[columnStage]?.bg || BG_CARD;
   return (
     <div
@@ -977,9 +977,6 @@ function DealBoardCard({ deal, columnStage, onOpen, selectable = false, isSelect
       style={{
         ...stageCard(bg, color), padding: '10px 12px', cursor: 'pointer',
         ...(isSelected ? { borderColor: ACCENT, boxShadow: `0 0 0 1px ${tint(ACCENT, 40)}` } : {}),
-        // Dimmed rather than struck through: a card is mostly whitespace, so opacity plus
-        // the explicit chip below reads faster than a line through the title would.
-        ...(archived ? { opacity: 0.55 } : {}),
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
@@ -999,10 +996,17 @@ function DealBoardCard({ deal, columnStage, onOpen, selectable = false, isSelect
             {...stopCardInteraction}
           />
         )}
-        <span style={{ fontSize: 13, color: INK, lineHeight: 1.3 }}>{deal.title}</span>
+        {/* De-emphasised by COLOUR, not by `opacity` (issue #119). #83 dimmed the whole
+            card at 0.55, which fades text and backdrop together and drags everything inside
+            it below WCAG AA — worst 2.08:1 on the ScorePill, and no opacity below 1.0 fixes
+            that, because the pill hues are tuned to sit just over 4.5:1 unfaded. Stepping
+            the title to `ink-dim` keeps #83's "dimmed rather than struck through" read
+            (the ARCHIVED chip beside it carries the rest) while every pixel stays legible;
+            `ink-dim` on a stage-washed deal card is a surface inkContrast.test.ts guards. */}
+        <span style={{ fontSize: 13, color: archived ? INK_DIM : INK, lineHeight: 1.3 }}>{deal.title}</span>
         <span style={{
           fontFamily: FONT_DISPLAY,
-          fontSize: 14, color: INK, flexShrink: 0,
+          fontSize: 14, color: archived ? INK_DIM : INK, flexShrink: 0,
         }}>${deal.value.toLocaleString()}</span>
       </div>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 11, color: INK_DIM }}>

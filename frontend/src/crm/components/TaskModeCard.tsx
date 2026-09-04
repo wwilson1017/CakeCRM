@@ -23,7 +23,7 @@ import { useEffect, useState } from 'react';
 
 import { api } from '../../core/api/client';
 import { copyToClipboard } from '../../shared/hooks/useCopyToClipboard';
-import { CORAL, FONT_SANS, INK_MUTE, labelStyle } from '../../shared/styles';
+import { CORAL_TEXT, FONT_SANS, INK_MUTE, labelStyle } from '../../shared/styles';
 import { toast } from '../../shared/toast';
 import { useSetTaskMode, useTaskMode } from '../gtd/TaskModeContext';
 import type { TaskMode } from '../gtd/TaskModeContext';
@@ -147,7 +147,7 @@ export function TaskModeCard({ isMobile }: { isMobile: boolean }) {
               A phone bookmark that drops text straight into your inbox. It cannot read
               anything back.{' '}
               {surfaces.capture_public
-                ? <strong style={{ color: CORAL }}>Anyone who knows this address can add to your inbox — add a secret link to restrict it.</strong>
+                ? <strong style={{ color: CORAL_TEXT }}>Anyone who knows this address can add to your inbox — add a secret link to restrict it.</strong>
                 : 'Only someone with the secret link can post to it.'}
             </p>
             <SurfaceRow
@@ -168,7 +168,7 @@ export function TaskModeCard({ isMobile }: { isMobile: boolean }) {
             <p style={{ fontFamily: FONT_SANS, fontSize: 13, color: INK_MUTE, margin: '0 0 8px' }}>
               The whole todo app, with no login. Off by default.{' '}
               {surfaces.todo_web_enabled && surfaces.web_public && (
-                <strong style={{ color: CORAL }}>
+                <strong style={{ color: CORAL_TEXT }}>
                   Anyone who knows this address can read and edit every todo. Add a secret link.
                 </strong>
               )}

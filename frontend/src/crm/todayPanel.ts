@@ -6,7 +6,7 @@
  * rows the collapsed card shows, and which owner scope it is asking for.
  */
 import type { CrmTodayItem } from '../core/types';
-import { CORAL, GOLD, INK_MUTE } from '../shared/styles';
+import { CORAL_TEXT, GOLD_TEXT, INK_MUTE } from '../shared/styles';
 
 /** Rows the collapsed panel shows before the "+N more today" expander. */
 export const TODAY_COLLAPSED = 5;
@@ -53,9 +53,9 @@ export function collapseToday(items: CrmTodayItem[], expanded: boolean): TodayCo
 export function whyBadge(item: CrmTodayItem): { label: string; color: string } {
   switch (item.why) {
     case 'starred':
-      return { label: 'STARRED', color: GOLD };
+      return { label: 'STARRED', color: GOLD_TEXT };
     case 'overdue':
-      return { label: 'OVERDUE', color: CORAL };
+      return { label: 'OVERDUE', color: CORAL_TEXT };
     case 'reminder':
       return { label: 'REMINDER', color: INK_MUTE };
     default:

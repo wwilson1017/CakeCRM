@@ -12,7 +12,7 @@ import { useSearchParams } from 'react-router-dom';
 import { api } from '../../core/api/client';
 import { toast } from '../../shared/toast';
 import {
-  INK, INK_MUTE, CORAL, SAGE, FONT_SANS, FONT_MONO, LINE_STRONG, labelStyle, inputStyle,
+  INK, INK_MUTE, CORAL_TEXT, SAGE_TEXT, FONT_SANS, FONT_MONO, LINE_STRONG, labelStyle, inputStyle,
   BG_RAISED,
 } from '../../shared/styles';
 import { btnPrimary, btnSecondary, btnDanger } from '../styles';
@@ -160,7 +160,7 @@ export function GmailCard({ isMobile }: { isMobile: boolean }) {
 
   function renderBody() {
     if (loadError) {
-      return <p style={{ ...note, color: CORAL }}>Couldn’t load the Gmail connection. Reload the page.</p>;
+      return <p style={{ ...note, color: CORAL_TEXT }}>Couldn’t load the Gmail connection. Reload the page.</p>;
     }
     if (!status) {
       return <p style={note}>Loading…</p>;
@@ -219,7 +219,7 @@ export function GmailCard({ isMobile }: { isMobile: boolean }) {
       <div>
         <p style={note}>{TRUST_NOTE}</p>
         {status.connection_status === 'broken' && (
-          <p style={{ ...note, color: CORAL }}>Your Gmail connection expired — reconnect below.</p>
+          <p style={{ ...note, color: CORAL_TEXT }}>Your Gmail connection expired — reconnect below.</p>
         )}
         <p style={{ ...note, marginBottom: 16 }}>
           App configured (<code style={{ fontFamily: FONT_MONO, fontSize: 12 }}>{status.client_id}</code>).
@@ -242,7 +242,7 @@ export function GmailCard({ isMobile }: { isMobile: boolean }) {
       title="Gmail"
       // No lead description: each of the three connection states carries its own note.
       badge={status?.connected
-        ? <span style={{ fontFamily: FONT_SANS, fontSize: 12, color: SAGE }}>• connected</span>
+        ? <span style={{ fontFamily: FONT_SANS, fontSize: 12, color: SAGE_TEXT }}>• connected</span>
         : undefined}
       isMobile={isMobile}
     >
