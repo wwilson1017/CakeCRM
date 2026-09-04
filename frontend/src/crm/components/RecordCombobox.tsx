@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { labelStyle, inputStyle, BG_ELEV, BG_RAISED, LINE_STRONG, SHADOW, INK, INK_MUTE, INK_DIM, ACCENT_TEXT, CORAL, HOVER, FONT_SANS } from '../../shared/styles';
+import { labelStyle, inputStyle, BG_ELEV, BG_RAISED, LINE_STRONG, SHADOW, INK, INK_MUTE, INK_DIM, ACCENT_TEXT, CORAL_TEXT, HOVER, FONT_SANS } from '../../shared/styles';
 import { useDebounce } from '../../shared/hooks/useDebounce';
 
 /**
@@ -385,7 +385,7 @@ export function RecordCombobox<T>({
           </button>
         )}
       </div>
-      {error && <p style={{ color: CORAL, fontSize: 11, margin: '4px 0 0' }}>{error}</p>}
+      {error && <p style={{ color: CORAL_TEXT, fontSize: 11, margin: '4px 0 0' }}>{error}</p>}
       {open && (
         <div
           style={{
@@ -435,7 +435,7 @@ export function RecordCombobox<T>({
             )}
           </ul>
           {searchFailed && (
-            <p style={{ margin: 0, padding: '7px 10px', fontSize: 12, color: CORAL }}>
+            <p style={{ margin: 0, padding: '7px 10px', fontSize: 12, color: CORAL_TEXT }}>
               Search failed — results may be incomplete.
             </p>
           )}

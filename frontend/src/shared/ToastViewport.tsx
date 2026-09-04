@@ -7,12 +7,24 @@ import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
 import { subscribeToasts, getToasts, dismissToast } from './toast';
 import type { ToastItem, ToastSeverity } from './toast';
 import { useIsMobile } from './useIsMobile';
-import { BG_ELEV, LINE_STRONG, INK, INK_DIM, CORAL, SAGE, GOLD, FONT_SANS, mono, SHADOW } from './styles';
+import {
+  BG_ELEV, LINE_STRONG, INK, INK_DIM, FONT_SANS, mono, SHADOW,
+  CORAL_FILL, CORAL_TEXT, SAGE_FILL, SAGE_TEXT, GOLD_FILL, GOLD_TEXT,
+} from './styles';
 
-const SEVERITY_COLOR: Record<ToastSeverity, string> = {
-  error: CORAL,
-  success: SAGE,
-  info: GOLD,
+// Two maps rather than one, because a toast paints its severity twice in different roles:
+// the 3px left border is a FILL and the "Error"/"Success" tag above the message is TEXT.
+// A single value cannot serve both — see the FILL vs TEXT block in index.css (issue #119).
+const SEVERITY_FILL: Record<ToastSeverity, string> = {
+  error: CORAL_FILL,
+  success: SAGE_FILL,
+  info: GOLD_FILL,
+};
+
+const SEVERITY_TEXT: Record<ToastSeverity, string> = {
+  error: CORAL_TEXT,
+  success: SAGE_TEXT,
+  info: GOLD_TEXT,
 };
 
 const SEVERITY_TAG: Record<ToastSeverity, string> = {
@@ -52,7 +64,8 @@ export function ToastViewport() {
 }
 
 function ToastCard({ item }: { item: ToastItem }) {
-  const color = SEVERITY_COLOR[item.severity];
+  const fill = SEVERITY_FILL[item.severity];
+  const text = SEVERITY_TEXT[item.severity];
   // Auto-dismiss with hover-pause: track remaining time across pauses.
   const remainingRef = useRef(item.duration);
   const startedAtRef = useRef(0);
@@ -89,7 +102,7 @@ function ToastCard({ item }: { item: ToastItem }) {
         gap: 10,
         background: BG_ELEV,
         border: `1px solid ${LINE_STRONG}`,
-        borderLeft: `3px solid ${color}`,
+        borderLeft: `3px solid ${fill}`,
         borderRadius: 8,
         padding: '10px 12px 10px 14px',
         boxShadow: `0 8px 32px ${SHADOW}`,
@@ -97,7 +110,7 @@ function ToastCard({ item }: { item: ToastItem }) {
       }}
     >
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ ...mono(10, color), marginBottom: 3 }}>{SEVERITY_TAG[item.severity]}</div>
+        <div style={{ ...mono(10, text), marginBottom: 3 }}>{SEVERITY_TAG[item.severity]}</div>
         <div style={{ fontFamily: FONT_SANS, fontSize: 13, color: INK, lineHeight: 1.45, overflowWrap: 'break-word' }}>
           {item.message}
         </div>

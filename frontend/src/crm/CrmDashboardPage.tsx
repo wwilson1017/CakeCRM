@@ -16,7 +16,7 @@ import { LoadError } from '../shared/LoadError';
 import { toast } from '../shared/toast';
 import {
   INK, INK_MUTE, INK_SOFT, INK_DIM, LINE,
-  GOLD, ACCENT, SAGE, CORAL, BG_RAISED, FONT_DISPLAY,
+  GOLD_FILL, GOLD_TEXT, ACCENT, SAGE_FILL, SAGE_TEXT, CORAL_FILL, CORAL_TEXT, BG_RAISED, FONT_DISPLAY,
   mono, formatNumber,
 } from '../shared/styles';
 import { sectionHeading, btnSecondary } from './styles';
@@ -29,8 +29,8 @@ const repNum: React.CSSProperties = { ...repCell, textAlign: 'right' };
 // backend label rename can't silently drop a bucket back to the neutral accent. The
 // two oldest buckets stay OFF ACCENT so "stale" reads as a warning, not a highlight.
 function bucketColor(minDays: number): string {
-  if (minDays >= 91) return CORAL;
-  if (minDays >= 31) return GOLD;
+  if (minDays >= 91) return CORAL_FILL;
+  if (minDays >= 31) return GOLD_FILL;
   return ACCENT;
 }
 
@@ -135,7 +135,7 @@ export function CrmDashboardPage() {
   // the same ratio; when closed > 0 the backend guarantees it's non-null.
   const wonPct = closed > 0 ? Math.round(wl!.win_rate_pct ?? 0) : 0;
   const winRateColor =
-    wl?.win_rate_pct == null ? undefined : wl.win_rate_pct >= 50 ? SAGE : wl.win_rate_pct > 0 ? GOLD : undefined;
+    wl?.win_rate_pct == null ? undefined : wl.win_rate_pct >= 50 ? SAGE_TEXT : wl.win_rate_pct > 0 ? GOLD_TEXT : undefined;
   const agingBuckets = analytics?.aging.buckets ?? [];
   const openDealCount = agingBuckets.reduce((s, b) => s + b.count, 0);
   const maxBucket = Math.max(1, ...agingBuckets.map(b => b.count));
@@ -159,7 +159,7 @@ export function CrmDashboardPage() {
           fontSize: isMobile ? 30 : 48, fontWeight: 400, letterSpacing: '-0.02em',
           lineHeight: 1.1, margin: '10px 0 0', color: INK,
         }}>
-          Pipeline is <span style={{ color: GOLD, fontStyle: 'italic' }}>{totalPipelineValue}</span>
+          Pipeline is <span style={{ color: GOLD_TEXT, fontStyle: 'italic' }}>{totalPipelineValue}</span>
           <br /><span style={{ color: INK_MUTE, fontSize: isMobile ? 16 : 26 }}>across {totalDeals} open deals.</span>
         </h1>
       </div>
@@ -185,7 +185,7 @@ export function CrmDashboardPage() {
             label="Overdue tasks"
             value={`${data.overdue_tasks}`}
             sub={`${data.pending_tasks} pending`}
-            color={data.overdue_tasks > 0 ? CORAL : undefined}
+            color={data.overdue_tasks > 0 ? CORAL_TEXT : undefined}
           />
         </div>
       </div>
@@ -225,8 +225,8 @@ export function CrmDashboardPage() {
           {closed > 0 ? (
             <div style={{ marginTop: 14, maxWidth: 420 }}>
               <div style={{ display: 'flex', height: 6, borderRadius: 3, overflow: 'hidden', background: LINE }}>
-                <div style={{ width: `${wonPct}%`, background: SAGE }} />
-                <div style={{ width: `${100 - wonPct}%`, background: CORAL }} />
+                <div style={{ width: `${wonPct}%`, background: SAGE_FILL }} />
+                <div style={{ width: `${100 - wonPct}%`, background: CORAL_FILL }} />
               </div>
               <div style={{ ...mono(10, INK_DIM), marginTop: 5 }}>
                 {wl.deals_won} won · {wl.deals_lost} lost
@@ -274,7 +274,7 @@ export function CrmDashboardPage() {
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <span style={{
                             width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                            background: STAGE_COLORS[stage.stage]?.color || INK_DIM,
+                            background: STAGE_COLORS[stage.stage]?.fill || INK_DIM,
                           }} />
                           <span style={{
                             fontFamily: FONT_DISPLAY,
@@ -294,7 +294,7 @@ export function CrmDashboardPage() {
                         <div style={{
                           position: 'absolute', inset: 0,
                           right: `${100 - Math.max(pct, 2)}%`,
-                          background: STAGE_COLORS[stage.stage]?.color || ACCENT,
+                          background: STAGE_COLORS[stage.stage]?.fill || ACCENT,
                         }} />
                       </div>
                     </>
@@ -303,7 +303,7 @@ export function CrmDashboardPage() {
                       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                         <span style={{
                           width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                          background: STAGE_COLORS[stage.stage]?.color || INK_DIM,
+                          background: STAGE_COLORS[stage.stage]?.fill || INK_DIM,
                         }} />
                         <span style={{
                           fontFamily: FONT_DISPLAY,
@@ -315,7 +315,7 @@ export function CrmDashboardPage() {
                         <div style={{
                           position: 'absolute', inset: 0,
                           right: `${100 - Math.max(pct, 2)}%`,
-                          background: STAGE_COLORS[stage.stage]?.color || ACCENT,
+                          background: STAGE_COLORS[stage.stage]?.fill || ACCENT,
                         }} />
                       </div>
                       <div style={{
@@ -436,7 +436,7 @@ export function CrmDashboardPage() {
                   display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer',
                   background: STAGE_COLORS[d.stage]?.bg || BG_RAISED,
                   border: `1px solid ${LINE}`,
-                  borderLeft: `3px solid ${STAGE_COLORS[d.stage]?.color || INK_DIM}`,
+                  borderLeft: `3px solid ${STAGE_COLORS[d.stage]?.fill || INK_DIM}`,
                   borderRadius: 6,
                 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -453,7 +453,7 @@ export function CrmDashboardPage() {
                       ${formatNumber(d.value)}
                     </div>
                     <div style={{
-                      ...mono(10, d.days_since_touch >= analytics.stale_days * 2 ? CORAL : GOLD),
+                      ...mono(10, d.days_since_touch >= analytics.stale_days * 2 ? CORAL_TEXT : GOLD_TEXT),
                       marginTop: 2,
                     }}>{d.days_since_touch}d idle</div>
                   </div>
@@ -541,7 +541,7 @@ export function CrmDashboardPage() {
                   cursor: 'pointer',
                   background: STAGE_COLORS[deal.stage]?.bg || BG_RAISED,
                   border: `1px solid ${LINE}`,
-                  borderLeft: `3px solid ${STAGE_COLORS[deal.stage]?.color || LINE}`,
+                  borderLeft: `3px solid ${STAGE_COLORS[deal.stage]?.fill || LINE}`,
                   borderRadius: 6,
                 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -550,7 +550,7 @@ export function CrmDashboardPage() {
                       {!isMobile && <span style={{ color: INK_MUTE }}> · {deal.contact_name || 'No contact'}</span>}
                     </div>
                     <div style={{
-                      ...mono(11, STAGE_COLORS[deal.stage]?.color || INK_DIM),
+                      ...mono(11, STAGE_COLORS[deal.stage]?.text || INK_DIM),
                       marginTop: 3, textTransform: 'uppercase',
                     }}>{deal.stage}{isMobile && deal.contact_name ? ` · ${deal.contact_name}` : ''}</div>
                   </div>

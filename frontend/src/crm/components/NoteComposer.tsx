@@ -11,7 +11,7 @@ import {
   COMPOSER_MIN_HEIGHT_PX, composerKeyAction, MAX_NOTE_LEN, nextComposerHeight,
 } from '../chatterComposer';
 import {
-  ACCENT, ACCENT_INK, ACCENT_TEXT, CORAL, INK, INK_DIM, INK_MUTE, LINE, LINE_STRONG,
+  ACCENT, ACCENT_INK, ACCENT_TEXT, CORAL_FILL, CORAL_TEXT, INK, INK_DIM, INK_MUTE, LINE, LINE_STRONG,
   inputStyle, mono, tint,
 } from '../../shared/styles';
 
@@ -188,17 +188,17 @@ export function NoteComposer({
       {notice && (
         <p style={{
           margin: '0 0 8px', padding: '6px 8px', borderRadius: 4,
-          background: tint(CORAL, 12), color: CORAL, fontSize: 12,
+          background: tint(CORAL_FILL, 12), color: CORAL_TEXT, fontSize: 12,
         }}>
           {notice}
           {hasRetry && (
             <>
               {' '}
-              <button type="button" onClick={onRetry} style={{ ...linkBtn, color: CORAL, fontWeight: 600 }}>
+              <button type="button" onClick={onRetry} style={{ ...linkBtn, color: CORAL_TEXT, fontWeight: 600 }}>
                 Retry {retryFiles?.length} file{retryFiles?.length === 1 ? '' : 's'}
               </button>
               {' · '}
-              <button type="button" onClick={onDiscardRetry} style={{ ...linkBtn, color: CORAL }}>
+              <button type="button" onClick={onDiscardRetry} style={{ ...linkBtn, color: CORAL_TEXT }}>
                 Discard
               </button>
             </>
@@ -258,7 +258,7 @@ export function NoteComposer({
       )}
 
       {errors.length > 0 && (
-        <ul style={{ margin: '6px 0 0', paddingLeft: 16, color: CORAL, fontSize: 11 }}>
+        <ul style={{ margin: '6px 0 0', paddingLeft: 16, color: CORAL_TEXT, fontSize: 11 }}>
           {errors.map((e, i) => <li key={i}>{e}</li>)}
         </ul>
       )}
