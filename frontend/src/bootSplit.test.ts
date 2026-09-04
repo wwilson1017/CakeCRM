@@ -529,8 +529,13 @@ describe('boot split (#149) — the CRM shell', () => {
     // deploy-skew reload still applies; it is only drawn smaller so the nav survives.
     expect(jsxNests(src, 'ChunkErrorBoundary', 'Outlet'),
       'the Outlet sits inside a ChunkErrorBoundary').toBe(true);
-    expect(count(src, '<ChunkErrorBoundary scope="route">'),
+    expect(count(src, '<ChunkErrorBoundary scope="route"'),
       'the route boundary is route-scoped').toBe(1);
+    // …and it is RESET on navigation. A React error boundary never self-resets, and this one
+    // sits outside the Outlet, so unwired it would hold its card across every later navigation:
+    // one render bug freezing the content column for the whole session while the nav around it
+    // keeps working. The prop is the fix; passing it is what makes the fix real.
+    expect(src, 'the route boundary is reset on navigation').toMatch(/resetKey=\{location\.pathname\}/);
   });
 
   it('the assistant drawer loads its chat surface lazily, by leaf path', () => {

@@ -1,5 +1,5 @@
 import { Suspense, useState, useEffect, useCallback } from 'react';
-import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../core/api/client';
 import { useAuth } from '../core/auth/AuthContext';
 import { useBranding } from '../core/branding/BrandingContext';
@@ -176,6 +176,10 @@ interface SetupStatus { ai_ready: boolean; credentials_present: boolean; }
 export function CrmLayout() {
   const isMobile = useIsMobile();
   const navigate = useNavigate();
+  // Feeds the route boundary's resetKey below: a caught error must clear when the user
+  // navigates away from the page that threw, or one crash freezes the content column for the
+  // rest of the session while the nav around it keeps working.
+  const location = useLocation();
   const { logout, isAdmin } = useAuth();
   const { branding, logoVersion } = useBranding();
   const [showMenu, setShowMenu] = useState(false);
@@ -412,7 +416,7 @@ export function CrmLayout() {
                 and take the whole shell down. scope="route" keeps the failure in the content
                 column while still allowing the one-shot deploy-skew reload, because unlike the
                 assistant drawer the user IS blocked: they asked for this page. */}
-            <ChunkErrorBoundary scope="route">
+            <ChunkErrorBoundary scope="route" resetKey={location.pathname}>
               <Suspense fallback={<BootFallback variant="panel" />}>
                 <Outlet />
               </Suspense>

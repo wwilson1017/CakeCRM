@@ -8,7 +8,7 @@
 // pinned: the reload must fire at most ONCE per tab session (an expiring guard becomes a
 // permanent reload cycle when a chunk is genuinely gone), and it must fire ONLY for a
 // chunk-load failure (reloading on a render bug replays the crash and hides it).
-import { act } from 'react';
+import { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -16,7 +16,7 @@ import ChunkErrorBoundary, { RELOAD_GUARD_KEY } from './ChunkErrorBoundary';
 
 const CHUNK_TEXT = 'Couldn’t load this page.';
 const PANEL_CHUNK_TEXT = 'Couldn’t load this panel.';
-const GENERIC_TEXT = 'Something went wrong in this page.';
+const GENERIC_TEXT = 'Something went wrong on this page.';
 
 let host: HTMLDivElement;
 let root: Root | null = null;
@@ -337,5 +337,56 @@ describe('ChunkErrorBoundary (#149)', () => {
     // Contained, but NOT declined: route scope keeps the one-shot recovery.
     expect(reload).toHaveBeenCalledTimes(1);
     expect(store.get(RELOAD_GUARD_KEY)).toBeTruthy();
+  });
+
+  it('clears a caught error when resetKey changes, so a route boundary is not a dead end', async () => {
+    // A route-scoped boundary lives OUTSIDE the Outlet and stays mounted across navigation.
+    // Without this reset, ONE render bug in one page freezes the content column for the rest of
+    // the session — nav highlighting, URL changing, nothing rendering — which is strictly worse
+    // than the full-page card it replaced, whose Reload button at least worked.
+    workingStorage();
+    function Boom(): never { throw new Error("Cannot read properties of undefined (reading 'map')"); }
+    root = createRoot(host);
+
+    await act(async () => {
+      root!.render(
+        <ChunkErrorBoundary scope="route" resetKey="/crm/contacts"><Boom /></ChunkErrorBoundary>,
+      );
+    });
+    expect(host.textContent).toContain(GENERIC_TEXT);
+    expect(reload).not.toHaveBeenCalled();
+
+    // Navigate: same boundary instance, new resetKey, healthy child.
+    await act(async () => {
+      root!.render(
+        <ChunkErrorBoundary scope="route" resetKey="/crm/pipeline"><div>PIPELINE</div></ChunkErrorBoundary>,
+      );
+    });
+    expect(host.textContent).toContain('PIPELINE');
+    expect(host.textContent).not.toContain('Something went wrong');
+  });
+
+  it('does NOT remount healthy children when resetKey changes', async () => {
+    // The reason this is a prop read in getDerivedStateFromProps rather than `key={pathname}` on
+    // the boundary: a key change remounts the subtree, which would destroy #77's property that
+    // `contacts/:id?` keeps ONE route element mounted so its swept corpus survives open → back
+    // without re-fetching. Counting mounts is what tells the two implementations apart.
+    workingStorage();
+    let mounts = 0;
+    function Counted() {
+      useEffect(() => { mounts += 1; }, []);
+      return <div>COUNTED</div>;
+    }
+    root = createRoot(host);
+    await act(async () => {
+      root!.render(<ChunkErrorBoundary scope="route" resetKey="/a"><Counted /></ChunkErrorBoundary>);
+    });
+    expect(mounts).toBe(1);
+
+    await act(async () => {
+      root!.render(<ChunkErrorBoundary scope="route" resetKey="/b"><Counted /></ChunkErrorBoundary>);
+    });
+    expect(host.textContent).toContain('COUNTED');
+    expect(mounts, 'resetKey must not remount a healthy subtree').toBe(1);
   });
 });

@@ -65,8 +65,25 @@ type Props = {
    * warrant reclaiming the page. Adding a fourth scope means answering both questions again.
    */
   scope?: 'app' | 'route' | 'panel';
+  /**
+   * Changing this clears a caught error, so the boundary can be used somewhere the user can
+   * navigate AWAY from the thing that broke.
+   *
+   * React error boundaries never self-reset, and a `route`-scoped boundary lives OUTSIDE the
+   * `<Outlet />` — so without this it stays mounted and stays failed across every subsequent
+   * navigation: one render bug in one page freezes the content column for the rest of the
+   * session while the nav happily highlights and the URL happily changes. That is strictly
+   * worse than the app-scope card it replaced, whose one affordance at least worked, and it
+   * would falsify this scope's entire justification ("the nav survives").
+   *
+   * Deliberately a prop read in `getDerivedStateFromProps`, NOT `key={pathname}` on the
+   * boundary: a key change REMOUNTS the subtree, which would destroy #77's property that
+   * `contacts/:id?` keeps one route element mounted so its swept corpus survives open → back
+   * without re-fetching. This clears the failure flag and leaves the children alone.
+   */
+  resetKey?: string;
 };
-type State = { failed: boolean; chunk: boolean; offline: boolean };
+type State = { failed: boolean; chunk: boolean; offline: boolean; resetKey?: string };
 
 /**
  * Renders a recoverable fallback instead of a blank page when the tree below it throws, and
@@ -114,6 +131,14 @@ export default class ChunkErrorBoundary extends Component<Props, State> {
       chunk: isChunkLoadError(error),
       offline: typeof navigator !== 'undefined' && navigator.onLine === false,
     };
+  }
+
+  /** Clear a caught error when the caller says the context changed — see `resetKey`. */
+  static getDerivedStateFromProps(props: Props, state: State): Partial<State> | null {
+    if (props.resetKey === state.resetKey) return null;
+    return state.failed
+      ? { failed: false, chunk: false, offline: false, resetKey: props.resetKey }
+      : { resetKey: props.resetKey };
   }
 
   private readonly alertRef = createRef<HTMLDivElement>();
@@ -237,6 +262,20 @@ export default class ChunkErrorBoundary extends Component<Props, State> {
   }
 
   /**
+   * What failed, in the caller's words. The app card renders it as its heading, a contained card
+   * as the first half of its one line — same sentence either way, so the two cannot drift into
+   * describing the same failure differently.
+   *
+   * The non-chunk preposition is per-surface rather than templated: something goes wrong ON a
+   * page and IN a panel, and a single `in this ${what}` produced "Something went wrong in this
+   * page."
+   */
+  private headline(chunk: boolean, what: string): string {
+    if (chunk) return `Couldn\u2019t load this ${what}.`;
+    return what === 'page' ? 'Something went wrong on this page.' : `Something went wrong in this ${what}.`;
+  }
+
+  /**
    * One sentence naming the cause, and never a cause we cannot know.
    *
    * THREE cases, because collapsing any two of them tells the user something false:
@@ -247,13 +286,6 @@ export default class ChunkErrorBoundary extends Component<Props, State> {
    *   - anything else: a render bug. Telling that user "the app was updated" is false AND
    *     self-defeating — they reload, hit the same crash, and stop reporting it.
    */
-  /** What failed, in the caller's words. The app card renders it as its heading, a contained
-   *  card as the first half of its one line — same sentence either way, so the two cannot
-   *  drift into describing the same failure differently. */
-  private headline(chunk: boolean, what: string): string {
-    return chunk ? `Couldn\u2019t load this ${what}.` : `Something went wrong in this ${what}.`;
-  }
-
   private explain(chunk: boolean, offline: boolean, what: string): string {
     if (chunk && offline) {
       return `You appear to be offline, so ${what} couldn\u2019t load. Reconnect, then reload.`;
