@@ -47,12 +47,15 @@
  *      column's visible part, which is itself cut to the scroller's, so one intersection covers
  *      both.
  *
- *      **Columns are NOT dropped for being scrolled out of view — only cards are.** The clip
- *      bounds the band piece 2 draws and decides which cards are real, but a lane whose own
- *      cards have scrolled past the top of the board keeps its full-band rect and stays a drop
- *      target, because that is what the board did before it was bounded and losing it would be a
- *      regression: scroll deep into a 40-card lane and a 3-card lane beside it would stop
- *      accepting drops at the very moment you most want to move something into it.
+ *      **The two axes are treated differently, and the split is the whole subtlety of this piece.**
+ *      VERTICALLY, a lane is never dropped — only its cards are. The clip bounds the band piece 2
+ *      draws and decides which cards are real, but a lane whose own cards have scrolled past the
+ *      top of the board keeps its full-band rect and stays a drop target: the lane is still right
+ *      there on screen beside the long one, and losing it would be a regression at the very moment
+ *      you most want it — scroll deep into a 40-card lane and the 3-card lane next to it would stop
+ *      accepting drops. HORIZONTALLY the opposite holds and the lane IS dropped (`clampX`), because
+ *      a lane past the left or right fold is not beside anything: its x-range points at page space
+ *      where none of the board is painted.
  *
  * **Cards beat their own column explicitly.** For two nested rects that both contain the point,
  * every corner of the outer one is at least as far away, so `pointerWithin`'s ranking already
@@ -94,8 +97,8 @@ type Measured = { id: UniqueIdentifier; rect: ClientRect };
  *     a column past the right fold — and every card in it — reports real geometry off to the side
  *     of the visible board. A column's clip is intersected with the scroller's box before its
  *     cards are clipped to the column, so one call per card covers both folds. The clipped COLUMN
- *     rect is used for the band and for its cards; the column itself stays a target either way
- *     (see piece 4).
+ *     rect is used for the band and for its cards; whether the column itself survives is decided
+ *     separately, and only on the x axis, by `clampX` (see piece 4).
  *
  * **Both axes, not just y.** Clipping only the y-axis would leave a card scrolled past the
  * board's RIGHT (or left) fold pointer-hittable from the page gutter beside the board, which
@@ -246,20 +249,29 @@ function measured(rects: Map<UniqueIdentifier, ClientRect>, containers: Droppabl
 }
 
 /**
- * Publish the clipped CARD geometry into the map the strategy actually hit-tests against: a card
- * cut down by a fold gets its visible sliver, and one cut away entirely is REMOVED —
- * `pointerWithin` skips any container with no rect, which is precisely "not a target".
+ * Publish the clipped geometry — cards AND lanes — into the map the strategy actually hit-tests
+ * against. A card cut down by a fold gets its visible sliver, and anything cut away entirely is
+ * REMOVED: `pointerWithin` skips a container with no rect, which is precisely "not a target".
  *
- * `hiddenIds` also carries any LANE with nothing horizontally on screen (see `clampX`), which has
- * to be deleted here rather than merely skipped: the widening below only writes the columns it was
- * given, so a lane left in the map would still be hit at its raw, off-board coordinates. Surviving
- * lanes are not written here — the widening rewrites every one of them next anyway.
+ * `hiddenIds` carries the cards a fold erased plus any LANE with nothing horizontally on screen
+ * (see `clampX`). A hidden lane must be deleted rather than merely skipped, or it stays hittable at
+ * its raw, off-board coordinates.
  *
- * `clampToBox` hands back the very same object when it changed nothing, so the identity
- * check below is what keeps an unclipped board from cloning the map every frame for no reason.
+ * **Surviving lanes are written here rather than left to the widening**, which is not a tidiness
+ * preference: `withFullHeightColumns` is the only other writer of a lane rect, and it has four
+ * documented early returns (no columns, a non-finite band, a degenerate band, columns sharing an
+ * x-range). On any of those the map would keep the lane's RAW x, and a pointer in the off-board
+ * part of a straddling lane would target it — the horizontal clip silently switched off in exactly
+ * the layouts that already failed a precondition. Publishing here makes the clip unconditional and
+ * leaves the widening responsible for the vertical band alone.
+ *
+ * `clampToBox` and `clampX` hand back the very same object when they changed nothing, so the
+ * identity checks below are what keep an unclipped board from cloning the map every frame for no
+ * reason.
  */
-function withVisibleCards(
+function withVisibleGeometry(
   rects: Map<UniqueIdentifier, ClientRect>,
+  columns: Measured[],
   cardsByColumn: Map<string, Measured[]>,
   hiddenIds: UniqueIdentifier[],
 ): Map<UniqueIdentifier, ClientRect> {
@@ -270,6 +282,9 @@ function withVisibleCards(
   };
 
   for (const id of hiddenIds) own().delete(id);
+  for (const { id, rect } of columns) {
+    if (rects.get(id) !== rect) own().set(id, rect);
+  }
   for (const cards of cardsByColumn.values()) {
     for (const { id, rect } of cards) {
       if (rects.get(id) !== rect) own().set(id, rect);
@@ -436,7 +451,7 @@ export const boardCollisionDetection: CollisionDetection = args => {
   // It gets the visible cards WITHOUT the widening, so it keeps ranking by real geometry rather
   // than by rects stretched to the whole board. Identical to `args.droppableRects` when nothing
   // was clipped, so an unfolded board's fallback is unchanged.
-  const visibleRects = withVisibleCards(args.droppableRects, cardsByColumn, hiddenIds);
+  const visibleRects = withVisibleGeometry(args.droppableRects, columns, cardsByColumn, hiddenIds);
   const droppableRects = withClosedCardGaps(
     withFullHeightColumns(visibleRects, columns, bandRects, args.collisionRect),
     cardsByColumn,

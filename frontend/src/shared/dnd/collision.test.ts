@@ -315,6 +315,33 @@ describe('boardCollisionDetection', () => {
     expect(hits.filter(id => belowTheFold.includes(id))).toEqual([]);
   });
 
+  it('clips a straddling lane horizontally even when widening is skipped', () => {
+    // The horizontal clip must not depend on the widening running, because the widening has four
+    // early returns and this is one of them: columns A and B share an x-range (a wrapped or
+    // non-flex layout), so widening is skipped for the whole board. If the clipped lane rect were
+    // published only by the widening, C would keep its RAW x here and a pointer in its off-board
+    // half would target it — the clip switched off in precisely the layouts that already failed a
+    // precondition.
+    const straddling = {
+      active,
+      collisionRect: DRAGGED_RECT,
+      pointerCoordinates: { x: 700, y: 200 }, // inside C's raw 500..800, outside the board's 0..620
+      droppableContainers: [column('A'), column('B'), column('C')],
+      droppableRects: new Map<UniqueIdentifier, ClientRect>([
+        ['column-A', rect(0, 100, 300, 200)], // y 100..300
+        ['column-B', rect(0, 320, 300, 200)], // same x as A, so the board never widens
+        ['column-C', rect(500, 100, 300, 200)], // x 500..800 — straddles the fold at 620
+      ]),
+    };
+    const ids = boardCollisionDetection(inBoardBox(straddling, rect(0, 100, 620, 800)))
+      .map(hit => String(hit.id));
+    // Unclipped, C contains the pointer and `pointerWithin` returns it ALONE.
+    expect(ids).not.toEqual(['column-C']);
+    // Clipped, nothing contains the pointer, so the distance fallback answers — and it ranks every
+    // surviving lane, which is what tells the two paths apart.
+    expect(ids).toContain('column-A');
+  });
+
   it('ignores a display:none column instead of dragging the board band up to y=0', () => {
     // An all-zeros measurement can never trip the x-range guard (its `right` is 0) and would
     // pull the union's top to the viewport origin, widening every column up under the header.
