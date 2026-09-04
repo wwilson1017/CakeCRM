@@ -73,3 +73,4 @@ Populated by port PRs from here on. Empty until the first intake is ported.
 
 | Feature | Source | CakeCRM PR / issue | Date |
 |---|---|---|---|
+| Keyboard-reachable `shared/listview` rows (WCAG 2.1.1) — every collection adopter inherits it | PR #1979 (39d1033) | #148 | — |
