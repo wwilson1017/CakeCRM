@@ -15,7 +15,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ChunkErrorBoundary, { RELOAD_GUARD_KEY } from './ChunkErrorBoundary';
 
 const CHUNK_TEXT = 'Couldn’t load this page.';
-const GENERIC_TEXT = 'Something went wrong on this page.';
+const PANEL_CHUNK_TEXT = 'Couldn’t load this panel.';
+const GENERIC_TEXT = 'Something went wrong in this page.';
 
 let host: HTMLDivElement;
 let root: Root | null = null;
@@ -254,7 +255,7 @@ describe('ChunkErrorBoundary (#149)', () => {
     // Contained: the surrounding page survives…
     expect(host.textContent).toContain('CRM STILL HERE');
     // …the panel says its piece…
-    expect(host.textContent).toContain('Couldn\u2019t load this panel.');
+    expect(host.textContent).toContain(PANEL_CHUNK_TEXT);
     // …and NOTHING reloaded, nor spent the app-scope one-shot guard on a background panel.
     expect(reload).not.toHaveBeenCalled();
     expect(store.get(RELOAD_GUARD_KEY)).toBeUndefined();
@@ -301,5 +302,40 @@ describe('ChunkErrorBoundary (#149)', () => {
 
     expect(host.textContent).toContain(GENERIC_TEXT);
     expect(reload).not.toHaveBeenCalled();
+  });
+
+  it('tells an offline user the truth instead of blaming a deploy', async () => {
+    // The guard already declines to auto-reload here. Saying "CakeCRM was updated, reloading
+    // gets the latest version" would then steer them into exactly the action it just declined
+    // on their behalf — trading a page they can still read for the browser's offline screen.
+    workingStorage();
+    vi.stubGlobal('navigator', { onLine: false });
+    await mount(<ChunkGone />);
+
+    expect(host.textContent).toContain('You appear to be offline');
+    expect(host.textContent).not.toContain('CakeCRM was updated');
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it('a route-scoped boundary contains the failure but STILL recovers from deploy skew', async () => {
+    // The difference from panel scope, and the whole reason there are two: the user asked for
+    // this page, so reloading is the right remedy — it is only drawn small so the nav, the
+    // toast host and an open confirm dialog survive alongside it.
+    const store = workingStorage();
+    root = createRoot(host);
+    await act(async () => {
+      root!.render(
+        <div>
+          <span>NAV STILL HERE</span>
+          <ChunkErrorBoundary scope="route"><ChunkGone /></ChunkErrorBoundary>
+        </div>,
+      );
+    });
+
+    expect(host.textContent).toContain('NAV STILL HERE');
+    expect(host.textContent).toContain('Couldn\u2019t load this page.');
+    // Contained, but NOT declined: route scope keeps the one-shot recovery.
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(store.get(RELOAD_GUARD_KEY)).toBeTruthy();
   });
 });

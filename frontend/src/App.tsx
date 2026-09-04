@@ -56,12 +56,25 @@ export default function App() {
   return (
     <AuthProvider>
       <BrowserRouter>
-        {/* One boundary for the whole table (#149): every route element below is lazy, so
-            each first visit to a page fetches its chunk. React Router v7 wraps navigation in
-            startTransition, so the OLD screen stays up during that fetch and this fallback is
-            only seen on a cold load. The toast and confirm hosts sit OUTSIDE it deliberately —
-            a toast in flight or an open confirm dialog must not be replaced by a loading state
-            while a chunk downloads. */}
+        {/* One boundary for the whole table (#149): every route element below is lazy, so each
+            first visit to a page fetches its chunk.
+
+            WHEN THIS FALLBACK IS ACTUALLY SEEN, stated precisely because the obvious reading is
+            wrong: React Router 7 wraps every navigation in `startTransition` (BrowserRouter's
+            `useTransitions` defaults to true), and React does not re-show an already-revealed
+            Suspense fallback during a transition. So an in-app click to an unvisited route keeps
+            the OLD screen up and shows NOTHING while the chunk downloads — no spinner, and the
+            NavLink active state does not move either, because it reads the deferred location.
+            This fallback is therefore seen on a cold load, not on navigation.
+            That silent wait is the accepted cost of not flashing a spinner on every first visit
+            to a page; the real answer is a navigation progress indicator, which is a design
+            change rather than a rider on a bundling one. `useTransitions={false}` would make the
+            fallbacks render on navigation instead — it is a real prop and it does work — but it
+            buys feedback on slow connections at the price of a flicker on fast ones.
+
+            The toast and confirm hosts sit OUTSIDE this boundary deliberately — a toast in
+            flight or an open confirm dialog must not be replaced by a loading state while a
+            chunk downloads. */}
         <Suspense fallback={<BootFallback />}>
           <Routes>
             <Route path="/login" element={<LoginPage />} />

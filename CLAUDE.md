@@ -1371,8 +1371,26 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   nav, sign-out and launcher must stay OUTSIDE. Hoisting the boundary to wrap the whole layout
   body keeps the Outlet nested and satisfies every positional check while turning each route
   chunk load into a full-shell spinner, which is the failure it exists to prevent — so it is
-  pinned twice, positionally in `bootSplit.test.ts` and behaviourally in `CrmLayout.test.tsx`. React Router 7 wraps navigations in `startTransition`, so in-app
-  navigation keeps the old screen up and the fallbacks are seen on cold loads only.
+  pinned twice, positionally in `bootSplit.test.ts` and behaviourally in `CrmLayout.test.tsx`. React Router 7 wraps navigations in `startTransition`, and
+  React will not re-show an already-revealed fallback during one — so an in-app click to an
+  unvisited route keeps the old screen up and shows **nothing** while the chunk downloads (the
+  NavLink active state does not move either, since it reads the deferred location). The
+  fallbacks are seen on a COLD LOAD, not on navigation. That silent wait is accepted rather
+  than unnoticed: it is the price of not flashing a spinner on every first visit to a page, and
+  the real answer is a navigation progress indicator, which is a design change rather than a
+  rider on a bundling one. (`useTransitions={false}` on `BrowserRouter` is a real prop and does
+  make the fallbacks render on navigation — it trades that flicker back in.)
+  **A route chunk that REJECTS is a different matter, and it is contained.** Suspense catches a
+  PENDING import and never a rejected one, so after a deploy — which replaces `dist` wholesale,
+  404ing all 14 route chunks at once — a rejection would walk past `CrmLayout`'s Suspense, past
+  `App`'s, past the toast and confirm hosts, and take the whole shell down. Hence a
+  **`ChunkErrorBoundary scope="route"`** around that Outlet, and a **`scope="panel"`** around the
+  assistant drawer. The scopes answer two questions, and both matter: how much of the screen the
+  failure owns, and whether the user is BLOCKED by it. A route failure blocks (they asked for
+  that page) so the one-shot reload still applies, drawn small so the nav survives; the drawer
+  does not block — it loads in the background with the drawer shut — so `panel` is the one scope
+  that never auto-reloads, because reloading to recover a panel nobody opened would destroy the
+  half-typed form the containment exists to protect.
   `core/components/ChunkErrorBoundary` wraps `Root`'s Suspense and is the app's **first
   general error boundary**: it catches every render error below it (a themed card with a
   Reload button beats the blank `#root` this app produced until now) but **auto-reloads only

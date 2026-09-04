@@ -46,21 +46,27 @@ type Props = {
   /**
    * How much of the app this boundary speaks for.
    *
-   * `'app'` (default) is the one in `Root`: the tree below it IS the application, so a full-page
-   * card and a one-shot auto-reload are proportionate.
+   * The prop exists because `Suspense` catches a PENDING import and never a REJECTED one, so
+   * every `lazy()` in the app needs SOME boundary above it or a 404'd chunk walks all the way
+   * to the root and takes the whole page down with it. What differs per site is not the error —
+   * it is how much of the screen the failure owns, and whether the user is BLOCKED by it.
    *
-   * `'panel'` wraps a NON-ESSENTIAL subtree — today the assistant drawer — and is the reason
-   * this prop exists rather than a second component. `AssistantPanelBody` mounts as soon as
-   * `aiReady` is true, drawer closed, in the background. A `Suspense` does not catch a REJECTED
-   * import, only a pending one, so without a boundary of its own a chunk that 404s after a
-   * deploy propagates to `Root` and replaces the entire CRM — including a half-typed deal form —
-   * over a panel the user was not even looking at. A panel boundary contains that to the panel
-   * and **never auto-reloads**: reloading to recover a background drawer would destroy exactly
-   * the work this containment is protecting. The user gets a compact message and decides.
+   * - `'app'` (default) — the one in `Root`. The tree below it IS the application, so a
+   *   full-page card and a one-shot auto-reload are both proportionate.
+   * - `'route'` — the CRM's route content. The user is blocked (they asked for that page), so
+   *   the one-shot reload still applies; but the nav, the toast host and the confirm host live
+   *   OUTSIDE it and must survive, so the card is compact and stays in the content column.
+   * - `'panel'` — a NON-ESSENTIAL subtree, today the assistant drawer. `AssistantPanelBody`
+   *   mounts as soon as `aiReady` is true, drawer closed, in the background — so this is the one
+   *   scope that must **never** auto-reload: reloading the page to recover a panel nobody opened
+   *   would destroy exactly the half-typed form this containment exists to protect.
+   *
+   * So the rule is: `app` sizes the card, and `panel` is the only scope where a failure does not
+   * warrant reclaiming the page. Adding a fourth scope means answering both questions again.
    */
-  scope?: 'app' | 'panel';
+  scope?: 'app' | 'route' | 'panel';
 };
-type State = { failed: boolean; chunk: boolean };
+type State = { failed: boolean; chunk: boolean; offline: boolean };
 
 /**
  * Renders a recoverable fallback instead of a blank page when the tree below it throws, and
@@ -91,18 +97,32 @@ type State = { failed: boolean; chunk: boolean };
  * makes the `lazy()` promise reject so this can catch it.
  */
 export default class ChunkErrorBoundary extends Component<Props, State> {
-  state: State = { failed: false, chunk: false };
+  state: State = { failed: false, chunk: false, offline: false };
 
-  /** The card must not assert a cause it cannot know, so the KIND is captured here. */
+  /**
+   * The card must not assert a cause it cannot know, so the KIND is captured here — and so is
+   * whether the browser was offline at the moment of failure.
+   *
+   * Without that second flag the offline user was told "CakeCRM was updated while your tab was
+   * open. Reloading gets the latest version." — false, and it steers them into the exact action
+   * `shouldAutoReload` had just declined to take on their behalf, which replaces a page they can
+   * still read with the browser's offline screen.
+   */
   static getDerivedStateFromError(error: Error): State {
-    return { failed: true, chunk: isChunkLoadError(error) };
+    return {
+      failed: true,
+      chunk: isChunkLoadError(error),
+      offline: typeof navigator !== 'undefined' && navigator.onLine === false,
+    };
   }
 
   private readonly alertRef = createRef<HTMLDivElement>();
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error('Render failed below ChunkErrorBoundary', error, info.componentStack);
-    if (this.props.scope === 'panel') return; // contained: never reload the page for a panel
+    // Only a PANEL declines the page. A route failure blocks the user on the page they asked
+    // for, so deploy-skew recovery still applies there — it is just drawn smaller.
+    if (this.props.scope === 'panel') return;
     if (isChunkLoadError(error) && this.shouldAutoReload() && this.claimReloadAttempt()) {
       window.location.reload();
     }
@@ -170,11 +190,11 @@ export default class ChunkErrorBoundary extends Component<Props, State> {
   render() {
     if (!this.state.failed) return this.props.children;
 
-    // A panel says its piece inside its own box and leaves the page alone. No auto-reload has
-    // run (see componentDidCatch), so the Reload button is the ONLY reload here and the user
-    // chooses it knowing what they have open.
-    if (this.props.scope === 'panel') {
-      const { chunk } = this.state;
+    // A contained scope says its piece inside its own box and leaves the rest of the page —
+    // nav, toasts, an open confirm dialog — standing.
+    const { chunk, offline } = this.state;
+    if (this.props.scope === 'route' || this.props.scope === 'panel') {
+      const what = this.props.scope === 'panel' ? 'panel' : 'page';
       return (
         <div
           ref={this.alertRef}
@@ -183,9 +203,7 @@ export default class ChunkErrorBoundary extends Component<Props, State> {
           className="flex flex-col items-center justify-center gap-3 p-6 text-center text-ck-ink-mute"
         >
           <p className="m-0">
-            {chunk
-              ? 'Couldn’t load this panel. It may have been updated while your tab was open.'
-              : 'Something went wrong in this panel.'}
+            {this.headline(chunk, what)} {this.explain(chunk, offline, `this ${what}`)}
           </p>
           <button
             type="button"
@@ -197,10 +215,7 @@ export default class ChunkErrorBoundary extends Component<Props, State> {
         </div>
       );
     }
-    // A visible retry, not a white screen. Only a chunk failure is explained by a deploy:
-    // telling someone hitting a deterministic render bug that "the app was updated" is false
-    // AND self-defeating — they reload, hit the same crash, and stop reporting it.
-    const { chunk } = this.state;
+    // A visible retry, not a white screen.
     return (
       <div
         ref={this.alertRef}
@@ -208,14 +223,8 @@ export default class ChunkErrorBoundary extends Component<Props, State> {
         tabIndex={-1}
         className="min-h-svh bg-ck-bg flex flex-col items-center justify-center gap-4 p-6 text-center"
       >
-        <h1 className="text-ck-ink font-display text-lg m-0">
-          {chunk ? 'Couldn’t load this page.' : 'Something went wrong on this page.'}
-        </h1>
-        <p className="text-ck-ink-mute max-w-sm m-0">
-          {chunk
-            ? 'This usually means CakeCRM was updated while your tab was open. Reloading gets the latest version.'
-            : 'Reloading may help. If it keeps happening, report it — this one is a bug, not an update.'}
-        </p>
+        <h1 className="text-ck-ink font-display text-lg m-0">{this.headline(chunk, 'page')}</h1>
+        <p className="text-ck-ink-mute max-w-sm m-0">{this.explain(chunk, offline, 'this page')}</p>
         <button
           type="button"
           onClick={() => window.location.reload()}
@@ -225,5 +234,33 @@ export default class ChunkErrorBoundary extends Component<Props, State> {
         </button>
       </div>
     );
+  }
+
+  /**
+   * One sentence naming the cause, and never a cause we cannot know.
+   *
+   * THREE cases, because collapsing any two of them tells the user something false:
+   *   - offline: the browser said so, and it is the only case where reloading makes things
+   *     WORSE — it trades a page they can still read for the browser's offline screen. Say so
+   *     instead of inviting the reload that `shouldAutoReload` just declined on their behalf.
+   *   - a chunk failure while online: deploy skew, and reloading is the actual remedy.
+   *   - anything else: a render bug. Telling that user "the app was updated" is false AND
+   *     self-defeating — they reload, hit the same crash, and stop reporting it.
+   */
+  /** What failed, in the caller's words. The app card renders it as its heading, a contained
+   *  card as the first half of its one line — same sentence either way, so the two cannot
+   *  drift into describing the same failure differently. */
+  private headline(chunk: boolean, what: string): string {
+    return chunk ? `Couldn\u2019t load this ${what}.` : `Something went wrong in this ${what}.`;
+  }
+
+  private explain(chunk: boolean, offline: boolean, what: string): string {
+    if (chunk && offline) {
+      return `You appear to be offline, so ${what} couldn\u2019t load. Reconnect, then reload.`;
+    }
+    if (chunk) {
+      return `This usually means CakeCRM was updated while your tab was open. Reloading gets the latest version.`;
+    }
+    return `Reloading may help. If it keeps happening, report it \u2014 this one is a bug, not an update.`;
   }
 }

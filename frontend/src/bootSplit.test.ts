@@ -172,23 +172,46 @@ function staticClosure(root: string): {
  * as `<computed>` so a glob built at runtime is never silently invisible.
  */
 function importMetaGlobPatterns(source: string): string[] {
+  const file = parse(source);
+
+  // Aliases, resolved the way `lazyCallSites` resolves `lazy` — and for the same measured
+  // reason. `const g = import.meta.glob; const m = g('../components/*.tsx', {eager:true})`
+  // bundles a whole directory statically, and a callee-shape-only matcher records nothing for
+  // it, so `expect(globs).toEqual([])` passes while the CRM rides into the /todo download.
+  const aliases = new Set<string>();
+  const collectAliases = (node: ts.Node) => {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer &&
+      ts.isPropertyAccessExpression(node.initializer) &&
+      node.initializer.name.text === 'glob' &&
+      ts.isMetaProperty(node.initializer.expression)
+    ) {
+      aliases.add(node.name.text);
+    }
+    ts.forEachChild(node, collectAliases);
+  };
+  collectAliases(file);
+
   const patterns: string[] = [];
   const visit = (node: ts.Node) => {
-    if (
+    const isGlobCall =
       ts.isCallExpression(node) &&
-      ts.isPropertyAccessExpression(node.expression) &&
-      node.expression.name.text === 'glob' &&
-      ts.isMetaProperty(node.expression.expression)
-    ) {
+      ((ts.isPropertyAccessExpression(node.expression) &&
+        node.expression.name.text === 'glob' &&
+        ts.isMetaProperty(node.expression.expression)) ||
+        (ts.isIdentifier(node.expression) && aliases.has(node.expression.text)));
+    if (ts.isCallExpression(node) && isGlobCall) {
       const arg = node.arguments[0];
-      if (arg && ts.isStringLiteral(arg)) patterns.push(arg.text);
+      if (arg && ts.isStringLiteralLike(arg)) patterns.push(arg.text);
       else if (arg && ts.isArrayLiteralExpression(arg)) {
-        patterns.push(arg.elements.map((e) => (ts.isStringLiteral(e) ? e.text : '<computed>')).join(' , '));
+        patterns.push(arg.elements.map((e) => (ts.isStringLiteralLike(e) ? e.text : '<computed>')).join(' , '));
       } else patterns.push('<computed>');
     }
     ts.forEachChild(node, visit);
   };
-  visit(parse(source));
+  visit(file);
   return patterns;
 }
 
@@ -499,6 +522,15 @@ describe('boot split (#149) — the CRM shell', () => {
       const swallowed = occurrences.filter((at) => at > open && at < close);
       expect(swallowed, `${marker} renders OUTSIDE the route Suspense, never inside it`).toEqual([]);
     }
+
+    // And the route content has a boundary of its own, for the same reason the drawer does:
+    // after a deploy every route chunk 404s at once, and a rejection walks past Suspense. Route
+    // scope, not panel — the user IS blocked on the page they asked for, so the one-shot
+    // deploy-skew reload still applies; it is only drawn smaller so the nav survives.
+    expect(jsxNests(src, 'ChunkErrorBoundary', 'Outlet'),
+      'the Outlet sits inside a ChunkErrorBoundary').toBe(true);
+    expect(count(src, '<ChunkErrorBoundary scope="route">'),
+      'the route boundary is route-scoped').toBe(1);
   });
 
   it('the assistant drawer loads its chat surface lazily, by leaf path', () => {
@@ -520,6 +552,16 @@ describe('boot split (#149) — the CRM shell', () => {
     expect(gate, 'AssistantLauncher still gates the drawer on `ready`').toBeGreaterThan(-1);
     expect(panel, 'AssistantLauncher still renders AssistantPanelBody').toBeGreaterThan(-1);
     expect(gate).toBeLessThan(panel);
+
+    // The containment, pinned. Suspense catches a PENDING chunk and never a REJECTED one, so
+    // without a boundary of its own a drawer chunk that 404s after a deploy takes the whole CRM
+    // down — over a panel nobody opened. Measured before this assertion existed: deleting the
+    // boundary, AND downgrading it to the app scope (which would auto-RELOAD over that panel,
+    // destroying the work the containment protects), both kept all 810 tests green.
+    expect(jsxNests(src, 'ChunkErrorBoundary', 'AssistantPanelBody'),
+      'the drawer body sits inside a ChunkErrorBoundary').toBe(true);
+    expect(count(src, '<ChunkErrorBoundary scope="panel">'),
+      'the drawer boundary is panel-scoped, so it never reloads the page').toBe(1);
   });
 
   it('every lazy() is declared at module scope, never inside the component', () => {
@@ -734,6 +776,14 @@ describe('boot split (#149) — the scanner itself', () => {
     // A runtime-built pattern is reported, never silently invisible.
     expect(importMetaGlobPatterns(computed)).toEqual(['<computed>']);
     expect(importMetaGlobPatterns(unrelated)).toEqual([]);
+
+    // Aliased, the same evasion `lazyCallSites` already resolves. A callee-shape-only matcher
+    // records nothing here, and "nothing" is what makes `expect(globs).toEqual([])` pass while
+    // a whole directory is bundled statically into the /todo download.
+    const aliased = `const g = import.meta.glob;\nconst m = g('../components/*.tsx', { eager: true });`;
+    expect(importMetaGlobPatterns(aliased)).toEqual(['../components/*.tsx']);
+    // …but an unrelated local function called `g` is not a glob.
+    expect(importMetaGlobPatterns(`const g = other.thing;\nconst m = g('./x');`)).toEqual([]);
   });
 
   it('reads a dynamic import written any way it can be written, and fails closed on the rest', () => {

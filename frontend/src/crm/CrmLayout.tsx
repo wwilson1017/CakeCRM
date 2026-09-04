@@ -4,6 +4,7 @@ import { api } from '../core/api/client';
 import { useAuth } from '../core/auth/AuthContext';
 import { useBranding } from '../core/branding/BrandingContext';
 import BootFallback from '../core/components/BootFallback';
+import ChunkErrorBoundary from '../core/components/ChunkErrorBoundary';
 import { useIsMobile } from '../shared/useIsMobile';
 import { MobileMenuDrawer } from '../shared/MobileMenuDrawer';
 import { confirmDialog } from '../shared/confirm';
@@ -403,10 +404,19 @@ export function CrmLayout() {
                 task mode flipping from unknown to GTD, which is a plain setState and not a
                 router transition — suspends only the content column, so the nav stays put
                 and this layout's demo-status/setup fetches run in parallel with the download
-                instead of after it. */}
-            <Suspense fallback={<BootFallback variant="panel" />}>
-              <Outlet />
-            </Suspense>
+                instead of after it.
+                The boundary is the other half, and it is NOT redundant with Root's: Suspense
+                catches a PENDING chunk, never a REJECTED one, so after a deploy (which replaces
+                dist wholesale — all 14 route chunks 404 at once) a first visit to any page would
+                otherwise throw past this, past App's Suspense, past ConfirmHost/ToastViewport,
+                and take the whole shell down. scope="route" keeps the failure in the content
+                column while still allowing the one-shot deploy-skew reload, because unlike the
+                assistant drawer the user IS blocked: they asked for this page. */}
+            <ChunkErrorBoundary scope="route">
+              <Suspense fallback={<BootFallback variant="panel" />}>
+                <Outlet />
+              </Suspense>
+            </ChunkErrorBoundary>
           </TaskModeSetterContext.Provider>
         </TaskModeContext.Provider>
       </div>
