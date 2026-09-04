@@ -62,11 +62,23 @@ interface Props<T> {
    */
   onBusyChange?: (busy: boolean) => void;
   id?: string;
+  /**
+   * Element id describing this field, forwarded to the input as `aria-describedby`
+   * (issue #126).
+   *
+   * Additive and optional: a caller that omits it renders exactly as before. It exists
+   * because a caller can render explanatory text this component cannot see — ContactForm
+   * puts a contact's unlinked legacy company name there, which for such a contact is the
+   * only stored copy of that name. Adjacent text alone is not enough: a screen reader in
+   * forms mode moves control to control, so an unassociated paragraph is reachable in
+   * principle and skipped in practice.
+   */
+  describedBy?: string;
 }
 
 export function RecordCombobox<T>({
   label, value, valueLabel, emptyLabel, search, create,
-  getId, getLabel, getMatchText, getSublabel, onSelect, onBusyChange, id,
+  getId, getLabel, getMatchText, getSublabel, onSelect, onBusyChange, id, describedBy,
 }: Props<T>) {
   const matchTextOf = getMatchText ?? getLabel;
   const [open, setOpen] = useState(false);
@@ -332,6 +344,7 @@ export function RecordCombobox<T>({
           aria-haspopup="listbox"
           aria-autocomplete="list"
           aria-activedescendant={open && rowCount > 0 ? `${listId}-${active}` : undefined}
+          aria-describedby={describedBy}
           autoComplete="off"
           value={open ? query : (value != null ? valueLabel : '')}
           placeholder={value != null ? valueLabel : emptyLabel}

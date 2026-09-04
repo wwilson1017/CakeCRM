@@ -57,6 +57,10 @@ const companyNameOf = (co: CrmCompany) => co.name;
 const companySublabelOf = (co: CrmCompany) => co.domain || '';
 const recordId = (r: { id: number }) => r.id;
 
+// The hint's own id, so the combobox can point `aria-describedby` at it. Static because
+// this form is a modal — exactly one is mounted at a time.
+const LEGACY_HINT_ID = 'contact-company-legacy-hint';
+
 // The inline "Remove" action on the not-linked hint. Styled as text rather than as one of
 // `crm/styles`' buttons because it sits INSIDE a sentence — a padded button there would read
 // as a second control rather than as part of the explanation.
@@ -219,18 +223,20 @@ export function ContactForm({ contact, onClose, onSaved, onWriteUncertain }: Pro
               getSublabel={companySublabelOf}
               onSelect={pickCompany}
               onBusyChange={setCompanyBusy}
+              // Only while the hint is on screen: pointing at an absent id is a dangling
+              // reference, which assistive tech and every a11y linter treat as an error.
+              describedBy={showLegacy ? LEGACY_HINT_ID : undefined}
             />
             {showLegacy && (
-              <p style={{ fontSize: 11, color: INK_DIM, margin: '4px 0 0' }}>
+              <p id={LEGACY_HINT_ID} style={{ fontSize: 11, color: INK_DIM, margin: '4px 0 0' }}>
                 {/* The name is repeated HERE, in real text, and not left to the input's
                     placeholder alone. A placeholder is not a value: it is not announced as
                     one, it vanishes the moment the user types, and it renders dim. For a
                     company that exists only as this free text, that would make the sole
                     stored copy of the name unreadable to a screen reader and invisible while
-                    searching for its replacement. (Associating this line with the input via
-                    `aria-describedby` would need a new `RecordCombobox` prop; the component
-                    is shared and being widened on another branch, so that is left out of
-                    this change.) */}
+                    searching for its replacement. It is also ASSOCIATED with the input via
+                    `aria-describedby` — adjacent text is not enough, because a screen reader
+                    in forms mode moves control to control and would skip it. */}
                 Saved as free text: “{legacyText}”. Not linked to a company record — pick one
                 or create it to link this contact.{' '}
                 {/* The picker's own × is gated on `value != null`, so an unlinked contact has

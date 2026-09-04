@@ -239,6 +239,25 @@ describe('ContactForm — the legacy free-text column', () => {
     expect(hint?.textContent).toContain('Acme Widgets');
   });
 
+  it('associates that hint with the input, not merely places it nearby', async () => {
+    // A screen reader in forms mode moves control to control, so an unassociated paragraph
+    // is reachable in principle and skipped in practice. The association is what makes the
+    // name part of the field rather than text that happens to sit under it.
+    await render(contact({ company: 'Acme Widgets', company_id: null }));
+
+    const describedBy = combobox().getAttribute('aria-describedby');
+    expect(describedBy).toBeTruthy();
+    expect(document.getElementById(describedBy!)?.textContent).toContain('Acme Widgets');
+  });
+
+  it('leaves no dangling aria-describedby once the hint is gone', async () => {
+    // Pointing at an absent id is a dangling reference — an error to assistive tech and to
+    // every a11y linter — and this hint unmounts as soon as the user speaks for the field.
+    await render(contact());
+
+    expect(combobox().getAttribute('aria-describedby')).toBeNull();
+  });
+
   it('stops advertising that text once the user speaks for the field', async () => {
     // Left in place, the empty label would keep naming a company the user had just cleared.
     mockApi([{ id: 9, name: 'Acme Corp', status: 'active' }]);
