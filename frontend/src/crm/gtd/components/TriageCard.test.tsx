@@ -487,6 +487,80 @@ describe('fields written straight through still reach the sheet', () => {
   });
 });
 
+describe('writes decide against the state as it is NOW', () => {
+  // Every one of these runs a second write while a first is still in flight. A callback
+  // created during one render closes over that render's values, so a handler that compared
+  // against what it captured would be deciding on state that is arbitrarily old — and here
+  // that is data loss, not just staleness.
+  const startTitleSave = (to: string) => {
+    click(container.querySelector('span[role="button"]')!);
+    const editor = container.querySelector<HTMLInputElement>('input[aria-label="Todo title"]')!;
+    setValue(editor, to);
+    unfocus(editor);
+  };
+
+  it('does not discard notes typed while another write was in flight', async () => {
+    // The title save answers with a row whose notes are still the old ones. Comparing
+    // against the draft captured when THAT request began sees an empty box, calls it clean,
+    // and overwrites the paragraph typed since.
+    let release: (v: Todo) => void = () => {};
+    updateTodoMock.mockImplementationOnce(() => new Promise<Todo>(res => { release = res; }));
+    render({ notes: '', title: 'dentist' });
+    startTitleSave('dentist — reschedule');
+    setValue(notesBox(), 'ring first');
+
+    await act(async () => {
+      release({ ...TODO, title: 'dentist — reschedule', notes: '', updated_at: nextStamp() });
+    });
+    await settle();
+
+    expect(notesBox().value).toBe('ring first');
+  });
+
+  it('adopts a row that differs from the last only in microseconds', () => {
+    // Date.parse truncates to milliseconds and the server keeps microseconds, so two commits
+    // inside one millisecond compare equal — and equal means reject, which would drop the
+    // newer row and leave the card on the older one for good.
+    render({ notes: 'first', updated_at: '2026-08-06T12:00:00.123400+00:00' });
+    render({ notes: 'second', updated_at: '2026-08-06T12:00:00.123900+00:00' });
+    expect(notesBox().value).toBe('second');
+  });
+
+  it('stops re-sending once the write is acknowledged, even on a stale response', async () => {
+    // An acknowledgement establishes that the text IS on the server whatever version the
+    // response carries. Leaving the baseline behind because the row was too old to adopt
+    // would leave the box reading dirty, and re-sending, for as long as it is open.
+    render({ notes: 'before', updated_at: '2026-08-06T12:30:00.000000+00:00' });
+    setValue(notesBox(), 'mine');
+    unfocus(notesBox());
+    await settle();
+    expect(updateTodoMock).toHaveBeenCalledTimes(1);
+
+    // The response was stamped BEFORE the row the card already holds, so it was not adopted.
+    unfocus(notesBox());
+    await settle();
+    expect(updateTodoMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens the sheet on a star the flush response brought back', async () => {
+    // The sheet payload has to be read when the sheet actually opens, not when the click
+    // happened: the flush it waits on can answer with fields someone else changed, and
+    // React has not committed that state by the time the continuation runs.
+    let release: (v: Todo) => void = () => {};
+    updateTodoMock.mockImplementationOnce(() => new Promise<Todo>(res => { release = res; }));
+    render({ star: false });
+    setValue(notesBox(), 'jot');
+    click(button('Edit'));
+
+    await act(async () => {
+      release({ ...TODO, notes: 'jot', star: true, updated_at: nextStamp() });
+    });
+    await settle();
+
+    expect(onEdit.mock.calls[0][0].star).toBe(true);
+  });
+});
+
 describe('a note is part of the triage decision', () => {
   it('is on the row before the item leaves the inbox', async () => {
     // The picker takes focus off the textarea, so in the browser the blur commits first.

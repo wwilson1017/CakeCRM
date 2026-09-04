@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { toast } from '../../../shared/toast';
 import { createProject, deleteTodo, updateTodo } from '../api';
 import type { Todo, TodoProject, TodoStatus } from '../types';
@@ -40,14 +40,107 @@ const destCls = 'rounded-lg border px-3 py-2 text-sm font-heading transition-col
 const inputCls = 'rounded-lg border border-line bg-cream px-2 py-1.5 text-sm text-charcoal focus:border-brand focus:outline-none disabled:opacity-50';
 const linkCls = 'text-sm underline disabled:opacity-50';
 
-/** Row timestamps, as a number that can be ordered. A value that will not parse becomes 0,
- * which reads as "no newer than anything" — the freshness check below then never adopts.
- * A deliberate floor rather than a live path: `updated_at` is a Postgres TIMESTAMPTZ
- * rendered by `datetime.isoformat()`, so it always parses. */
-const stamp = (iso: string): number => {
-  const n = Date.parse(iso);
-  return Number.isNaN(n) ? 0 : n;
+/**
+ * Is row version `a` strictly newer than `b`?
+ *
+ * `Date.parse` is the primary comparison but truncates to MILLISECONDS, while the server
+ * renders `updated_at` with `datetime.isoformat()` off a Postgres TIMESTAMPTZ — microseconds.
+ * Two commits inside the same millisecond would compare equal, and equal means "reject", so
+ * the newer row would be dropped and the card left showing the older one for good. The string
+ * comparison breaks that tie: every timestamp comes from the one serializer
+ * (`core/postgres._postprocess_value`), so the values share a canonical shape whose lexical
+ * order IS time order.
+ *
+ * An unparseable value is never newer — a deliberate floor, not a live path.
+ */
+const isNewer = (a: string, b: string): boolean => {
+  const na = Date.parse(a);
+  const nb = Date.parse(b);
+  if (Number.isNaN(na) || Number.isNaN(nb)) return false;
+  return na !== nb ? na > nb : a > b;
 };
+
+/**
+ * Everything about this card that a WRITE can move, in one reducer.
+ *
+ * A reducer rather than a handful of `useState`s because most of it is touched from
+ * asynchronous callbacks. A callback created during one render closes over that render's
+ * values, so state read inside it can be arbitrarily old — and here that is data loss, not
+ * just staleness: a title save resolving after the user has started typing notes would
+ * compare against the empty draft it captured, decide the box was clean, and overwrite what
+ * was typed. Every decision below is made against the state as it is NOW.
+ */
+interface CardState {
+  /** The record as this card best knows it — never the lagging `todo` prop. */
+  row: Todo;
+  /** The notes value known to be on the server. Dirty is `notesDraft !== savedNotes`. */
+  savedNotes: string;
+  notesDraft: string;
+  /** Optimistic values, shadowing the row until it catches up. null = not overriding. */
+  pendingDue: string | null;
+  pendingTitle: string | null;
+}
+
+type CardAction =
+  /** A newer view of the row, from the parent's prop or a write's own response. */
+  | { type: 'adopt'; row: Todo }
+  /** Our own notes write was acknowledged, with the row it answered with. */
+  | { type: 'notes-saved'; value: string; row: Todo }
+  | { type: 'notes-draft'; value: string }
+  | { type: 'due'; value: string | null }
+  | { type: 'title'; value: string | null };
+
+/**
+ * Take a newer view of the row. An older or equal one is ignored: that is this card's own
+ * write echoing back off a read taken before it committed, and adopting it is what would
+ * rewind the notes box the instant a save succeeded.
+ *
+ * Two rules keep it from destroying work. Unsaved text of the user's own is never
+ * overwritten — it stays on screen and stays dirty. And an override is released only when
+ * the adopted row DISAGREES with it: releasing one that already matches would churn state
+ * for nothing, and the value it holds is the one the user is looking at.
+ */
+function adopt(s: CardState, r: Todo): CardState {
+  if (!isNewer(r.updated_at, s.row.updated_at)) return s;
+  return {
+    row: r,
+    savedNotes: r.notes,
+    notesDraft: s.notesDraft === s.savedNotes ? r.notes : s.notesDraft,
+    pendingDue: s.pendingDue !== null && s.pendingDue !== r.due_date ? null : s.pendingDue,
+    pendingTitle: s.pendingTitle !== null && s.pendingTitle !== r.title ? null : s.pendingTitle,
+  };
+}
+
+function reduce(s: CardState, a: CardAction): CardState {
+  switch (a.type) {
+    case 'adopt':
+      return adopt(s, a.row);
+    case 'notes-saved': {
+      const next = adopt(s, a.row);
+      // The write was ACKNOWLEDGED, so this text is on the server whatever the response's
+      // version says — move the baseline even when the row was too old to adopt, or the box
+      // reads dirty, and re-sends, for as long as it is open. Deliberately only the
+      // baseline: writing the sent text into a row that was rejected as older would mint a
+      // version that never existed, and no later copy of the real row could repair it,
+      // because it would carry the same (or an older) timestamp and be rejected in turn.
+      return next.savedNotes === s.savedNotes ? { ...next, savedNotes: a.value } : next;
+    }
+    case 'notes-draft':
+      return s.notesDraft === a.value ? s : { ...s, notesDraft: a.value };
+    case 'due':
+      return s.pendingDue === a.value ? s : { ...s, pendingDue: a.value };
+    case 'title':
+      return s.pendingTitle === a.value ? s : { ...s, pendingTitle: a.value };
+  }
+}
+
+const initState = (todo: Todo): CardState => ({
+  row: todo,
+  savedNotes: todo.notes,
+  notesDraft: todo.notes,
+  pendingDue: null,
+  pendingTitle: null,
+});
 
 /**
  * GTD triage — one inbox item at a time, as three deliberate clarify steps: what kind
@@ -58,11 +151,11 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [destination, setDestination] = useState<TodoStatus>('next_action');
-  // A rename this card just made, until the parent's reload feeds it back in through
-  // `todo`. Blur-then-click means clicking Edit STARTS the rename and opens the sheet
-  // in the same gesture, and the sheet snapshots the title it is handed — so passing
-  // the stale prop would silently revert the rename the user just made.
-  const [pendingTitle, setPendingTitle] = useState<string | null>(null);
+  // `pendingTitle`, `pendingDue` and the notes draft now live in the reducer below — a
+  // rename or a date this card just made, shadowing the row until the parent's reload feeds
+  // it back in. Blur-then-click means clicking Edit STARTS the rename and opens the sheet in
+  // the same gesture, and the sheet writes back every field it is handed, so passing the
+  // stale prop would silently revert what the user just did.
   // null = the picker is showing; a string = the inline create input is.
   const [newContext, setNewContext] = useState<string | null>(null);
   const [newProject, setNewProject] = useState<string | null>(null);
@@ -72,70 +165,50 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
   const [dueFocused, setDueFocused] = useState(false);
   // Opening the sheet waits on the notes flush, which is a round trip on a slow link.
   const [editPending, setEditPending] = useState(false);
-  // The due date this card just wrote, until the parent's reload feeds it back in through
-  // `todo` — the same shape as `pendingTitle` above, and needed for the same reason: the
-  // input is CONTROLLED by the prop, so without it the field reverts to the old value the
-  // moment the write is sent (blanking, with the cue flashing back over it, when there was
-  // no date before) for the whole length of the refetch.
-  const [pendingDue, setPendingDue] = useState<string | null>(null);
-  // What the notes box shows, and the server value it is measured against. Dirty is
-  // `notesDraft !== baseNotes`, and the baseline moves the moment a write is ACKNOWLEDGED
-  // rather than when the parent's reload lands — deferring it would leave the box reading
-  // dirty, and re-sending, for a whole round trip after it was already saved.
-  const [notesDraft, setNotesDraft] = useState(todo.notes);
-  // THE ROW, as this card best knows it — not the `todo` prop.
-  //
-  // The prop LAGS: the parent refetches asynchronously, so between a write being sent and
-  // that refetch landing the prop still describes the row as it was. So the card keeps its
-  // own view and advances it from whichever source is NEWER — a `todo` prop, or the row a
-  // write of ours answered with. Ordering is done on `updated_at`, which is monotonic per
-  // row; content alone cannot tell an outside edit from this card's own write echoing back
-  // off a read taken before it committed.
-  //
-  // Crucially the WHOLE row is adopted, never just its version: a write of ours answers with
-  // the row as the server has it, INCLUDING fields someone else changed in the meantime, and
-  // it is what keeps star and project current for the sheet.
-  const [row, setRow] = useState<Todo>(todo);
+  // Everything a write can move, in one reducer — see `CardState` for why a reducer and not
+  // a handful of `useState`s.
+  const [state, dispatch] = useReducer(reduce, todo, initState);
+  // The SAME state, maintained synchronously. `dispatch` only schedules a render, so an
+  // asynchronous continuation that runs before React commits would otherwise read the state
+  // as it was when the request began. Every write goes through `apply`, which advances this
+  // ref with the identical pure reducer and then dispatches, so the two cannot drift.
+  const stateRef = useRef(state);
+  const apply = useCallback((a: CardAction) => {
+    stateRef.current = reduce(stateRef.current, a);
+    dispatch(a);
+  }, []);
+
+  // The parent's refetch. A layout effect rather than an adjust-state-during-render block:
+  // `apply` writes a ref, and writing a ref during render is the one thing that pattern
+  // cannot do. The cost is a frame — and normally not even that, because the row this card
+  // already holds is usually its OWN write, which is newer than the prop, so `adopt` returns
+  // the same state and React bails out of the re-render entirely. `InboxPage` keys the card
+  // by todo id, so a same-id reload does not remount it: this is the only way a change from
+  // elsewhere (the Edit sheet, most often) gets in.
+  useLayoutEffect(() => { apply({ type: 'adopt', row: todo }); }, [todo, apply]);
+
+  const { row, notesDraft, pendingDue, pendingTitle } = state;
   const dest = DESTINATIONS.find(d => d.status === destination) ?? DESTINATIONS[0];
-
-  /**
-   * Take a newer view of the row — from the parent's prop, or from a write's own response —
-   * and move every optimistic value onto it. An older or equal row is ignored: that is this
-   * card's own write echoing back off a read taken before it committed, and adopting it is
-   * what would rewind the notes box the instant a save succeeded.
-   *
-   * Two rules keep it from destroying work. Unsaved text of the user's own is never
-   * overwritten — it stays on screen and stays dirty. And an override is released only when
-   * the row DISAGREES with it: releasing one that already matches would churn state for
-   * nothing, and the value it holds is the one the user is looking at.
-   */
-  const adopt = (r: Todo) => {
-    if (stamp(r.updated_at) <= stamp(row.updated_at)) return;
-    const clean = notesDraft === row.notes;
-    setRow(r);
-    if (clean) setNotesDraft(r.notes);
-    if (pendingDue !== null && pendingDue !== r.due_date) setPendingDue(null);
-    if (pendingTitle !== null && pendingTitle !== r.title) setPendingTitle(null);
-  };
-
-  // The parent's refetch, adopted during render — deliberately not in an effect, which would
-  // paint the stale value first. React's documented adjust-state-during-render; it converges
-  // in one pass because `row` then IS the prop. `InboxPage` keys the card by todo id, so a
-  // same-id reload does not remount it and this is the only path a change from elsewhere
-  // (the Edit sheet, most often) has in.
-  adopt(todo);
-
   const dueValue = pendingDue ?? row.due_date;
+
+  // What the Edit sheet is handed: this card's best view of the record, never the lagging
+  // prop. Built from `stateRef` at the moment it is needed rather than captured at click
+  // time, because opening waits on the notes flush — a round trip, during which the textarea
+  // stays editable AND the flush's own response can carry a star or project someone else
+  // changed. The sheet writes back every field it is given, so either kind of staleness is a
+  // silent revert.
+  const payload = (): Todo => {
+    const live = stateRef.current;
+    return {
+      ...live.row,
+      title: live.pendingTitle ?? live.row.title,
+      notes: live.notesDraft,
+      due_date: live.pendingDue ?? live.row.due_date,
+    };
+  };
 
   // The notes write in flight, so a second commit queues BEHIND it instead of racing it.
   const notesInFlight = useRef<Promise<boolean> | null>(null);
-  // A live view of the values the queued continuation below needs. It runs after further
-  // renders, so a plain closure would send text the user has since replaced. A layout
-  // effect, so a commit landing right after a render still reads that render's values.
-  const notesRef = useRef({ draft: notesDraft, base: row.notes, id: todo.id });
-  useLayoutEffect(() => {
-    notesRef.current = { draft: notesDraft, base: row.notes, id: todo.id };
-  });
 
   /**
    * Commit the notes box if it holds anything new; resolves false only when a write was
@@ -148,25 +221,16 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
    */
   const flushNotes = (): Promise<boolean> => {
     const send = (): Promise<boolean> => {
-      const { draft, base, id } = notesRef.current;
-      if (draft === base) return Promise.resolve(true);
+      const { notesDraft: draft, savedNotes, row: live } = stateRef.current;
+      if (draft === savedNotes) return Promise.resolve(true);
       setError('');
-      return updateTodo(id, { notes: draft })
+      return updateTodo(live.id, { notes: draft })
         .then(saved => {
-          // Adopt the response: it is the authoritative row, which stops a slow refetch
-          // dispatched by an earlier write from reverting what this card has since written,
-          // and carries any field someone else changed in the meantime.
-          adopt(saved);
-          // …and move the baseline for THIS field whatever the version says. `adopt` ignores
-          // a response no newer than what the card holds — right for content it did not
-          // write, wrong here, because we know what we just sent and leaving the baseline
-          // behind would keep the box dirty, and re-sending, forever.
-          setRow(r => (r.notes === draft ? r : { ...r, notes: draft }));
-          // …and SYNCHRONOUSLY in the ref as well. Both setters only schedule a render, and
-          // the layout effect that refreshes this ref runs after it — so a continuation
-          // already queued behind this one would wake on the next microtask, still read the
-          // pre-write baseline, and send the very same text a second time.
-          notesRef.current = { ...notesRef.current, base: draft };
+          // One action: adopt the response — the authoritative row, which stops a slow
+          // refetch dispatched by an earlier write from reverting what this card has since
+          // written, and carries any field someone else changed meanwhile — AND move the
+          // notes baseline, which our acknowledgement establishes whatever the version says.
+          apply({ type: 'notes-saved', value: draft, row: saved });
           onChanged();
           return true;
         })
@@ -183,19 +247,17 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
     };
     // Queue behind the TAIL of the chain, not merely behind the request in flight. Two
     // writes to the same column, in flight together, land in whichever order the server
-    // picks — and a third caller chaining onto the same raw request as the second would
-    // wake alongside it and fire a duplicate. One trailing run is enough because `send`
-    // reads the LIVE draft, so whichever continuation runs first carries everything typed
-    // since and the rest find nothing to do.
+    // picks — and a third caller chaining onto the same raw request as the second would wake
+    // alongside it and fire a duplicate. One trailing run is enough because `send` reads the
+    // LIVE state, so whichever continuation runs first carries everything typed since and
+    // the rest find nothing to do.
     const tail = notesInFlight.current;
     const next = tail ? tail.then(send, send) : send();
     notesInFlight.current = next;
     // Let the chain be garbage once it has drained, so an idle card starts a fresh one
     // rather than accumulating continuations for the life of the session.
-    void next.then(
-      () => { if (notesInFlight.current === next) notesInFlight.current = null; },
-      () => { if (notesInFlight.current === next) notesInFlight.current = null; },
-    );
+    const release = () => { if (notesInFlight.current === next) notesInFlight.current = null; };
+    void next.then(release, release);
     return next;
   };
 
@@ -229,7 +291,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
       // thing that keeps them current for `current` — without it the Edit sheet can open on
       // the pre-write values once `busy` clears but before the refetch lands, and its
       // full-row save reverts them.
-      adopt(await updateTodo(todo.id, fields));
+      apply({ type: 'adopt', row: await updateTodo(todo.id, fields) });
       if (resolves) {
         // Deliberately STAYS busy — this card is spent. The parent's reload is async
         // and keeps rendering the just-filed todo until it lands; re-enabling in that
@@ -315,14 +377,14 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
   // locks the row, so overlapping them is safe.
   const saveTitle = async (title: string): Promise<boolean> => {
     setError('');
-    setPendingTitle(title);
+    apply({ type: 'title', value: title });
     try {
-      adopt(await updateTodo(todo.id, { title }));
+      apply({ type: 'adopt', row: await updateTodo(todo.id, { title }) });
       onChanged();
       return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Update failed');
-      setPendingTitle(null); // never written — don't let the sheet adopt it
+      apply({ type: 'title', value: null }); // never written — don't let the sheet adopt it
       return false;
     }
   };
@@ -333,18 +395,6 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
   // rename, a date, or a paragraph the user just typed. (Star and project are absent
   // because they are written straight through `patch` and never rendered optimistically,
   // so the prop is the only view of them this card has.)
-  const current: Todo = {
-    ...row,
-    title: pendingTitle ?? row.title,
-    notes: notesDraft,
-    due_date: dueValue,
-  };
-  // …and kept LIVE for the asynchronous open below. Clicking Edit waits on the notes flush,
-  // which is a round trip, and the textarea stays editable throughout — a payload captured
-  // at click time would hand the sheet text the card has since replaced, and the sheet
-  // writes back every field it is given.
-  const currentRef = useRef(current);
-  useLayoutEffect(() => { currentRef.current = current; });
 
   const remove = async () => {
     if (busy) return;
@@ -364,7 +414,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
     <div className="rounded-xl border border-line bg-cream p-4 sm:p-5 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <InlineTitle
-          title={current.title}
+          title={pendingTitle ?? row.title}
           label="Todo title"
           disabled={busy}
           onSave={saveTitle}
@@ -501,10 +551,11 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
                 // moment the date is cleared: an empty box, the cue suppressed by a focus
                 // that ended long ago, and the user back to a bare `mm/dd/yyyy`.
                 setDueFocused(false);
-                setPendingDue(picked);
+                apply({ type: 'due', value: picked });
                 // Reverted on failure, exactly like `pendingTitle`: nothing was written, so
                 // the field must not go on showing a date the server never took.
-                void patch({ due_date: picked }, false).then(ok => { if (!ok) setPendingDue(null); });
+                void patch({ due_date: picked }, false)
+                  .then(ok => { if (!ok) apply({ type: 'due', value: null }); });
               }}
               className={`${inputCls} min-w-40`}
               aria-label="Due date"
@@ -533,7 +584,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
               setEditPending(true);
               void flushNotes().then(() => {
                 setEditPending(false);
-                onEdit(currentRef.current);
+                onEdit(payload());
               });
             }}
             className={`${linkCls} text-muted hover:text-charcoal`}
@@ -556,7 +607,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
         <textarea
           value={notesDraft}
           disabled={busy}
-          onChange={e => setNotesDraft(e.target.value)}
+          onChange={e => apply({ type: 'notes-draft', value: e.target.value })}
           onBlur={() => void flushNotes()}
           placeholder="Notes — links, numbers, anything you'll want when you do it"
           className={`${inputCls} mt-2 block min-h-16 w-full`}
