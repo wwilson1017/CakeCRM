@@ -1328,6 +1328,99 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   heartbeat prompt names `todo_list` instead of `crm_list_tasks`. Telegram gains a
   deterministic `capture …` intercept that runs BEFORE the model — zero AI cost, works
   with no provider configured.
+  **Triage & edit-sheet parity** (#150) fixes four defects daily phone use exposed. A
+  native `<input type="date">` ignores `placeholder`, so the empty due-date box carries an
+  opaque **"Add due date" overlay**, cleared by a value or by focus — and by `onChange`
+  too, because the write that follows a pick sets `busy`, React does not dispatch to a
+  disabled target, and `onBlur` would therefore never run (the flag is invisible while a
+  date is set and bites the moment it is cleared). **The date commits on BLUR, not on change**, and
+  through its own write rather than `patch`'s. A date input reports a COMPLETE value the
+  moment every segment parses, so it emits one on nearly every keystroke — `0002-12-24` after
+  the year's first digit on an empty box, `2026-01-01` after the month's on a populated one —
+  and `patch` sets `busy`, which DISABLES the input, so that first write ate every remaining
+  keystroke and the truncated date was what reached the server, silently. Blur-committing
+  means the field is never disabled while it still has focus, so what is written is what is on
+  screen. The truncation predates this port and was found by the evidence run against the real
+  app, which A/B'd it against `main`; the cue is what invites people to type in the box, so it
+  is fixed alongside it. `useSerialCommit` is shared by the notes box and the date for the same
+  reason both need it — two writes to one column, in flight together, land in whichever order
+  the server picks — and a resolving write flushes both, so filing carries them. The trade-off
+  commit-on-blur brings, measured rather than assumed: an entry that is never blurred is lost
+  on a hard reload. Every path that ends the interaction inside the app — filing, Edit, Delete,
+  promoting another card, Tab, clicking anywhere — blurs and commits, so only closing the tab
+  with focus still in the box loses it. The same trade-off the notes box already makes. `pendingDue` mirrors the existing
+  `pendingTitle` so the CONTROLLED field does not revert to the prop for the length of the
+  refetch, and `current` — what the Edit sheet is handed — carries title, notes and date
+  from the card's view, never the lagging prop. **The card renders its own view of the
+  record, not the `todo` prop**, which lags: between a write being sent and the parent's
+  refetch landing, the prop still describes the record as it was. That view plus the three
+  optimistic overrides live in ONE `useReducer` (`CardState`), mirrored into a ref that
+  `apply()` advances with the same pure reducer before dispatching. The row IS the notes
+  baseline — dirty is `notesDraft !== row.notes` — because the only thing that moves the row
+  is adopting a newer one, and a newer row is by definition what the server holds. Both halves are
+  load-bearing. The reducer is what makes every decision read the state as it is NOW: these
+  handlers run from asynchronous callbacks, and a callback closes over the render that
+  created it, so a title save resolving after the user started typing notes would compare
+  against the empty draft it captured, call the box clean, and **overwrite what was typed**.
+  The synchronous ref is what lets a continuation read the card before React commits — the
+  sheet payload is built from it when the sheet actually opens, never captured at click time,
+  because opening waits on the notes flush and that flush can answer with fields someone else
+  changed. `adopt()` takes whichever row is NEWER, ordered on `updated_at` via `isNewer` — a
+  VERSION comparison, and it has to be: a write's response is newer than the prop the parent
+  still holds, so comparing content would read that lagging prop as an outside change and
+  rewind the notes box the instant a save succeeded, the next blur writing the pre-save text
+  back over it. `isNewer` breaks a millisecond tie on the **fractional
+  seconds**, because `Date.parse` truncates there while every task write stamps `updated_at`
+  from `datetime.now(timezone.utc).isoformat()` — microseconds — and equal means reject.
+  Reading the fraction rather than the whole string is what keeps it independent of how the
+  zone is spelled: `Z` sorts after `+`, so a lexical compare calls the same instant written
+  two ways a newer version and adopts the card's own echo. **An override is released when its OWN write
+  settles**, success or failure — never because an adopted row disagrees with it. A row is not
+  evidence about a write still in flight, and the disagreement rule cannot tell "someone
+  changed this elsewhere" from "this row was committed before my write was": an earlier write
+  of the card's own, answering first, carries exactly that disagreement, so the rule flashed
+  the field back to the value the override exists to hide and handed the Edit sheet the old
+  one, whose full-row save then reverted the change. Releasing on settle also closes the
+  original hole — a successful write pinning its own value for the life of the card, which
+  `pendingTitle` had before this port. There is deliberately **no** "the write was
+  acknowledged, so trust the text over the version" rule for notes: `_now()` is stamped under
+  the row's own `FOR UPDATE` lock, so `updated_at` is monotonic per row and a held row newer
+  than our response was committed AFTER our write. Either it already carries our text, making
+  such a rule a no-op, or a later write replaced it — and there, marking the box clean would
+  strand a paragraph the server does not have, silently. Leaving it dirty re-sends it, the
+  same last-write-wins rule the unsaved-draft case follows. And `star`/`project_id`,
+  written straight through and never rendered optimistically, stay current for the sheet only
+  because every write path adopts the response it already gets back — `createAndAssign`'s own
+  `project_id` write included; without that the sheet opens on pre-write values once `busy`
+  clears and its full-row save reverts them. The known limit of ordering on `updated_at` is
+  that JOINed columns (`project_name`, `deal_title`, `contact_name`) never bump it, so a
+  rename made elsewhere reaches a mounted card only on the next reload — cosmetic, and the
+  alternative is versioning rows this card does not own. Step 2 gains an inline **Notes** textarea
+  committed on blur through `flushNotes`: single-flight with ONE trailing run (two writes
+  to the same column, in flight together, land in whichever order the server picks), and
+  deliberately NOT taking the card-wide `busy` — the click that files the item is what
+  blurs the box, so a shared flag would swallow that very click. Any *resolving* write
+  flushes it first, so the note is on the row before the item leaves the inbox, but is
+  **never gated on the result**: filing is this card's one exit, and a note the server keeps
+  rejecting would otherwise trap the item in the inbox forever. The textarea replaced the
+  read-only preview under the title rather than joining it. Step headings move from
+  `text-xs`/`text-muted` to `text-sm`/`text-charcoal` (`ck-ink`, the primary body ink
+  `core/theme/inkContrast.test.ts` already pins at AA on `ck-card` in both themes). The
+  edit sheet's Context field becomes a `<select>` over the known contexts plus a
+  "+ New context…" hatch, matching the triage card: mobile browsers do not reliably render
+  a `<datalist>` on a POPULATED text input, so the old picker was invisible until the field
+  was cleared. Option values are **indices**, so a context literally named `__new__` stays
+  selectable, and the SELECTED context always gets an option — the shared meta loads async
+  and a refresh can drop a value, and a select matching no option while `save()` submits the
+  hidden string is worse than an extra option. The one place this stays **simpler than
+  the blueprint** is the commit primitive: the blueprint routes notes through a shared
+  `useAutoSave` (its `shared/autosave`, reused across several surfaces), where this card has
+  a local `useSerialCommit` — single-flight with one trailing run, queued on the **tail** of
+  the chain so a third caller cannot wake alongside the second and fire a duplicate. Porting a
+  shared cross-app primitive for two fields on one card was not worth it. The `updated_at` ordering was: an
+  earlier cut of this port adopted only from the prop and compared content, and that produced
+  the save-rewind, the pinned override and the stale-star defects the paragraph above
+  describes.
   **#102 made GTD the default and the fail-safe.** Four readers resolve the mode —
   `service.get_task_mode()` plus thin `_task_mode()` wrappers in `assistant.identity`,
   `heartbeat.service` and `telegram.service` — and all four degrade to `gtd`, because a
@@ -1632,6 +1725,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Dashboard Today panel (one ranked Top-5 of what needs me today: `backend/crm/today_service.py` with the pure `build_today_items` ladder, `core.localtime.local_day_bounds`, `reminders.service.list_pending_between`, `GET /api/crm/dashboard/today`, `frontend/src/crm/{todayPanel.ts,components/TodayPanel.tsx}`; plus the three-site UTC→configured-day sweep) — **landed #130**. See the CRM bullet for the ladder, the one-clock rule, the reserved rank 2 and the reminders-are-scope-invariant decision. **Corrects three premises in the issue**, each verified against the tree rather than the issue text: (1) it says to widen scope via "the existing `OwnerScopeToggle` (#60)" — #77 **deleted** that component, and its replacement is a multi-select list-page facet, so the panel carries its own two-button control instead; (2) it specifies "task → task" click-through — there is **no task-detail URL** anywhere (`/crm/tasks` is mode-routed and both modes keep detail in component state), so task rows go to `/crm/tasks` and the row checkbox covers acting on the specific task; (3) it treats the owner filter as reaching every row — `reminders` has **no owner column at all** and is install-wide by design, so reminders are scope-invariant and count coherence is structural (one array, sliced) rather than a shared WHERE builder. The issue's "Owner filter rides the shared WHERE builders" is honored in spirit — one filter, applied once — but there is no builder to ride: the shared builders are `_contact_search_where`/`_company_search_where`, and neither tasks nor reminders has one | New capability (no blueprint — back-port candidate to CAKE OS) |
 | Assistant tool set + sales behaviors — **Phase 1 landed #22**: 9 new tools (`crm_search_deals`, `crm_mark_deal_won`/`_lost`, `crm_archive_deal`, `crm_merge_deals`, `crm_get_stale_deals`, `crm_get_contact_staleness`, `crm_find_duplicates`, `crm_scan_gaps`) in `backend/crm/analytics_service.py` + `service.py`, parity closes (embedded `custom_fields`, tool-side `limit_per_stage`, `limit` on find/search, company chatter), the genericized static `identity.SALES_GUIDE` prompt block + sales `QuickActions`. **Phases 2 + 3 landed together** once #17/#18/#20 all merged (the three-PR split was dependency ordering, and every dependency cleared at once): **Phase 2** = `crm_get_deal_health` + `crm_get_pipeline_analytics` in `analytics_service.py` (see the CRM bullet above); **Phase 3** = `backend/proactive/` — a daily pipeline digest and stale-deal / untouched-contact nudges on their own `proactive` scheduler job. Both are **keyless-first**: the digest is deterministic SQL and the nudges read Phase 1's pure-SQL detectors, with an optional single `run_background_turn` (read tools + `notify_user`, digest numbers in the USER message) adding at most one extra notification when a provider exists. Every send **claims before it delivers** — the digest via a one-statement rowcount UPDATE on `heartbeat_state` (so two ticks can't both push), each nudge via a conditional upsert on `proactive_nudges` — because a crash that loses one notification beats one that re-sends every tick. `proactive_nudges` is polymorphic and FK-less, so it MUST stay in the `_truncate_all` sweep. NOT ported: `get_rep_performance` (no owner columns), `enrich_field` (no web tools), lead-import tools (own issue) | `cake_os/backend/apps/crm/tools/` + the blueprint sales agent's config |
 | Todo-GTD task mode (one store: widened `tasks` + `task_projects`; `crm/gtd_{common,service,router,tools}.py`, `crm/todo_{capture,web,pwa,tokens}.py`, `core/{ratelimit,localtime}.py`; `frontend/src/crm/gtd/*` + `components/TaskModeCard.tsx`) — **landed #70**. **Source note, because the issue says otherwise:** the `<!-- auto-answer -->` directed "port from chatty, not cake_os" on the premise that cake_os was behind. It is not — cake_os's `todo_gtd/common.py` header states it IS chatty's todo ported to Postgres, extended with `weekdays`/`every:N` repeats, a Today view, quick-add and `auto_star_on_due`. Chatty's is SQLite behind a process-wide write lock. So each half came from whichever tree is genuinely ahead, and the answer's file-level instructions were followed exactly where it gave them: **public capture + web app + rate limiter + PWA manifest from chatty** (`capture.py`/`web.py`/`ratelimit.py`/`pwa.py`, named explicitly in the answer), **GTD core from cake_os** (already Postgres, already on `pg_fetchall`/`row_to_dict`, and the only tree with the three features the issue's own scope list demands). NOT ported: cake_os's owner-scoped GTD *views* — since #60 a task carries `owner_id` and every task write path threads it (including the repeat-spawn, so a recurring task keeps its assignee), but the GTD lists are deliberately unscoped: GTD is one person's working surface, and the no-login capture/web surfaces have no user identity to scope by. The Projects/CRM card-link connector (`tasks` already carries contact_id/deal_id — `RecordChip` is the native replacement), `todo_get_capture_link`/`todo_get_web_link` (links are secrets; they live in Settings, not in a chat transcript), cake_os's `ConcurrencyGate` (chatty's limiter is what the answer named), `always_confirm` (no engine support — all six mutating tools carry `writes:true` instead), and the copy buttons (not in the issue's scope). `ProjectsPage` renders a plain card grid rather than `shared/collection`. #77 adopted the layer on Contacts/Companies/Tasks but deliberately NOT here: the issue scopes exactly those three, this is a GTD surface over GTD's own API, and it was being changed concurrently — so its adoption is a follow-up, not part of #77. | `chatty/backend/core/todo/{capture,web,pwa,ratelimit}.py` + `chatty/frontend/src/todo/publicMode.ts`; `cake_os/backend/apps/todo_gtd/*` + `cake_os/frontend/src/apps/todo-gtd/*` |
+| Todo GTD triage & edit-sheet parity (due-date cue overlay + `pendingDue`, inline Notes textarea with a single-flight blur commit, `<select>` Context picker, `text-sm`/`text-charcoal` step headings) — **landed #150** as `frontend/src/crm/gtd/components/{TriageCard,TodoEditSheet}.tsx` + their two co-located vitest files. NOT ported: the blueprint's `shared/autosave` `useAutoSave` primitive — CakeCRM has no such primitive and one textarea does not pay for one, so the local `flushNotes` (single-flight, one trailing run, queued on the chain's tail) stands in for it. Its `updated_at`-ordered `adopt()` IS ported, and deliberately: an earlier cut of this port adopted only from the prop and compared content, and review found the save-rewind, the pinned override and the stale-star defects that ordering exists to prevent. The upstream Settings-modal scroll-lock fix (cake_os #2554) does not apply: CakeCRM shows the capture/web links on the Settings page's Task mode card, not in a modal | `cake_os/frontend/src/apps/todo-gtd/components/{TriageCard,TodoEditSheet}.tsx` (PR #2424 `e3c06bba`, PR #2539 `b936ac29`) |
 | Bulk deal operations (per-stage Select All + card multi-select, inline bulk bar, atomic set-based backend, `crm_bulk_move_deals` tool) — **landed #55** as `service.bulk_move_deals` + `_classify_deal_update` + `POST /api/crm/deals/bulk-move` + `PipelinePage` selection UI + pure `crm/bulk{Selection,Outcome}.ts` (+ `ApiError` in `core/api/client.ts`). NOT ported, each because the column does not exist here: the `status` dual-write and its multiple-assignment fix (won/lost ARE stages in CakeCRM), the ~60-line `display_order` request-order replay (deals carry no rank column — columns sort by `lead_score`), and the `owner_email` branch (single-user; #60 owns ownership). Also cut: the chatter translation layer (`log_events_bulk`, `lost_reason_note`/`lost_reason_cleared` kinds) because CakeCRM's stage audit IS `deal_stage_events` and a single-deal move writes no chatter either — so bulk writing none is parity, not a gap; client-side chunking (`BULK_CHUNK_SIZE` + the multi-chunk fold) since one request under a 200-cap covers an unpaginated single-user board, though the rejected-vs-unconfirmed distinction it protects survives in the collapsed `bulkOutcome.ts`; `reconcileBulkResult` (the blueprint's own PipelineTab never uses it — it serves the list surfaces, which patch rows in place, where the board always reconciles by refetching); the `BulkUpdateModal` (an inline bar is enough for one action); and bulk mark-won/mark-lost (the issue scopes bulk to stage-move; `crm_mark_deal_lost` stays the reason-capturing close). Two deliberate divergences FROM the blueprint: its bulk fetch takes no row locks, ours takes `ORDER BY id FOR UPDATE`; and its rejected path cannot revert, ours reverts to each deal's server-confirmed stage. | `cake_os/backend/apps/crm/deal_service.bulk_update_deals` + `frontend/src/apps/crm/{bulkSelection,bulkUpdateOutcome}.ts` + the PipelineTab selection/BulkBar |
 | Pipeline facet filtering (client-side: `frontend/src/crm/pipelineFilters.ts` pure predicate + `components/PipelineFilterBar.tsx`, spliced into `PipelinePage`'s useMemo seam as `deals`→`filteredDeals`→`grouped`; facets = keyword/stage/value/close-date/last-activity; sessionStorage `crm_pipeline_filters`) — **landed #21**. Every facet is client-side except #83's `archived`, which also carries `?include_archived=true` (see the CRM bullet). Owner facet dropped (single-tenant); `get_pipeline()` gains a derived `last_activity_at` = MAX(deal `activity_log` rows + un-archived deal `crm_chatter` notes) via one UNION-ALL/GROUP BY join (NULL = no activity), plus `company_name`. Drag stays enabled while filtering (board is stage-only, index-safe). | `cake_os/docs/CRM_FILTER_DESIGN.md` + `cake_os/docs/solutions/architecture-patterns/client-side-facet-filtering.md` |
 | Archived deals reachable from the UI (Archived facet + inert board cards + `POST /api/crm/deals/:id/restore` + the deal sheet's archived banner/Restore; `get_pipeline(include_archived=)`; per-item `shared/dnd` `dragDisabled`) — **landed #83** across `backend/crm/{service,router}.py` + `frontend/src/crm/{pipelineFilters.ts,PipelinePage.tsx,components/{PipelineFilterBar,DealDetailSheet,DealForm}.tsx}` + `frontend/src/shared/dnd/dragDisabled.ts`. **Not a port — this is the first deal-restore capability in either tree**, which corrects the gate decision's "extends the family pattern" framing: cake_os's Status/`archived` facet exists only for Contacts/Companies over a plain `status` enum (Companies restore by editing that select; Contacts have no restore path at all), and its *deals* have neither a facet nor any restore, front or back — `deal_service.archive_deal` there even hard-drops open todos with the comment "un-archiving never resurrects them". Its list endpoints also default to returning archived rows, where CakeCRM's `LIVE_PREDICATE` + explicit `include_archived: bool = False` is the stronger contract. So the in-repo precedents govern: the chatter-note `/archive`+`/unarchive` POST pair for the route shape, `crm_search_deals(include_archived)` for the flag. **Carry-forward for #109 (#74) / #110 (#75)**, which rewrite these exact surfaces and are *siblings*, not a stack (both branch off `main`; they conflict with each other on `PipelinePage.tsx`): the logic is deliberately three small exported units — (1) `pipelineFilters.isArchivedDeal` becomes `getVoided` on #74's `pipelineCollection.ts`, whose header calls the omission load-bearing *because* "the server's LIVE_PREDICATE excludes them", which this PR retires; (2) the wire contract `GET /api/crm/deals?include_archived=true` — deals array only, `stage_summary` always live-only; (3) the sheet's banner + Restore + the archived gate on Mark Won/Lost move into #75's `DealDetailBody`, whose `onBoard`/`stageWritable` split already anticipates archived deals. That port is **not** a free pass-through and needs three pieces of collection-layer work: `KanbanViewConfig.voidedPolicy: 'facet'` (already in #73's layer) so voided items stay on the board, a config-level default of `'hide'` (the layer's `VoidedFilter` `null` means *show all*), and the same `boolean \| (item) => boolean` widening on the layer's own kanban `dragDisabled`, which is still a scalar and so cannot pass a per-card predicate through | New capability (no blueprint — cake_os has no deals archived facet or restore; back-port candidate to CAKE OS) |
