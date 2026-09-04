@@ -209,11 +209,14 @@ export default function ListView<TItem extends { id: number | string }>({
             outside ARIA's defined table interaction model — the model that would cover it is
             `role="grid"`, which obliges full 2D arrow-key cell navigation and is a much larger
             change than this one. (3) Every rendered row is its own tab stop, so a list goes from
-            a handful (the sortable headers) to up to `renderCap` + a few, and the "show all"
-            control below sits behind all of them. That is the standard cost of row-level
-            focus and WCAG prefers it to rows nobody can reach at all, but it is a real cost
-            and the same upgrade path retires it: a roving tabindex makes the whole table ONE
-            tab stop with arrow keys moving between rows. `role="button"` is the option that is simply wrong, for the
+            a handful (the sortable headers) to up to `renderCap` (300) plus those — and on a
+            route-shaped surface, where the title cell also carries a real anchor, to TWICE
+            that, since the row and its link are both stops. The "show all" control below sits
+            behind all of them. That is the standard cost of row-level focus and WCAG prefers
+            it to rows nobody can reach at all, but it is a real cost, and note that ceiling 2's
+            upgrade path is what retires this one: moving the tab stop off the row and onto the
+            anchor halves it, and a roving tabindex then makes the whole table ONE stop with
+            arrow keys moving between rows. `role="button"` is the option that is simply wrong, for the
             reason in `onRowClick`'s doc. So a reader is told "row", not "opens this record".
             Upgrade path, and the only one that fully closes 4.1.2: give each column set a
             designated primary cell rendering a real `<a>`/`<button>` and move the tab stop
