@@ -69,7 +69,8 @@ Note that `chatty` rows are historical only. chatty was **retired as a sync sour
 
 ## Ledger (live — one row per synced upstream change)
 
-Populated by port PRs from here on. Empty until the first intake is ported.
+Populated by port PRs from here on.
 
 | Feature | Source | CakeCRM PR / issue | Date |
 |---|---|---|---|
+| Reports tab — single-page company rollup with a merged notes+activity timeline | `backend/apps/crm/report_service.py` + `frontend/src/apps/crm/{companyRollup.ts,components/{ReportsTab,CompanyRollupReport,CompanyTimeline}.tsx}` @ `74f902684` | #144 | — |
