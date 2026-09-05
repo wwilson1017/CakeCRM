@@ -124,11 +124,17 @@ async def _maybe_compact(provider, conversation_id: str) -> bool:
     threshold = _COMPACT_AT * budget
     last_ct = state.get("last_context_tokens")
 
-    # Fast path: the accurate cache-inclusive meter says we are comfortably below
-    # threshold, so skip without scanning a single message row. None means the
-    # provider reports no usage (today: everything except Anthropic) — fall through
-    # to the chars/4 estimate, which is the only signal there.
-    if last_ct is not None and last_ct < threshold:
+    # Fast path: skip without scanning a single message row. The comparison is against
+    # the TARGET, not the trigger, and the gap between them is the headroom this needs
+    # to be safe: the stored reading describes the PREVIOUS model input, so it counts
+    # neither the user row this turn just saved nor the assistant text that answered
+    # the one before. Comparing against the trigger would let a thread sitting at 69%
+    # skip the check and then overflow. Below the level compaction aims for there is by
+    # definition nothing to shed. None means the provider reports no usage (today:
+    # everything except Anthropic) — fall through to the chars/4 estimate, the only
+    # signal there. Residual, and it self-corrects on the next turn: a single turn that
+    # adds more than the trigger-to-target gap can still slip past.
+    if last_ct is not None and last_ct < _TARGET_FULLNESS * budget:
         return False
 
     conv = await asyncio.to_thread(history.get_conversation, conversation_id)
@@ -165,18 +171,18 @@ async def _maybe_compact(provider, conversation_id: str) -> bool:
     # provider's conversation-prefix cache every turn (see the module docstring).
     gist = delimiters.wrap_conversation_summary(summary[:_MAX_SUMMARY_CHARS].strip())
 
-    # Untrusted content is about to leave the assembled context, so the fact that it
-    # was ever here has to outlive it — see history.is_conversation_tainted.
+    # Backfill/backstop only; the engine records this at ingress. See
+    # _middle_is_tainted and history.mark_untrusted_seen.
     tainted = _middle_is_tainted(middle)
 
     wrote = await asyncio.to_thread(
         history.set_compaction, conversation_id, gist, first_kept_seq, tainted
     )
     if not wrote:
-        # A concurrent turn advanced the boundary further while we were summarizing.
-        # Its middle strictly CONTAINS ours (both start from the same prior boundary),
-        # so its own taint check already covers every row ours saw, and the only cost
-        # is one wasted light-tier call. A CAS is cheaper than a lock for that.
+        # A concurrent turn advanced the boundary further while we were summarizing, so
+        # the only cost is one wasted light-tier call — a CAS is cheaper than a lock for
+        # that. Nothing about the taint is lost by losing here: it is written at
+        # ingress, not by this branch.
         logger.info("compaction for %s superseded by a concurrent turn", conversation_id)
         return False
 
@@ -234,9 +240,10 @@ def _compute_boundary(rows, fullness, budget, prev_seq):
     context would drop to ~``_TARGET_FULLNESS`` of the window.
 
     Walks forward from the current boundary and snaps FORWARD to a user row, so the
-    tail always starts on a clean turn — but never past the most recent user turn,
-    which is the exchange in progress. Returns None when the thread is too short, or
-    when the boundary would not advance (nothing new has aged)."""
+    tail always starts on a clean turn — but never past the ceiling, which is the most
+    recent user turn (the exchange in progress) or the oldest row with unfinished tool
+    work, whichever comes first. Returns None when the thread is too short, when there
+    is no clean user turn to fold onto, or when the boundary would not advance."""
     if len(rows) < _MIN_ROWS_TO_COMPACT:
         return None
 
@@ -250,24 +257,41 @@ def _compute_boundary(rows, fullness, budget, prev_seq):
     if last_user_idx is None or last_user_idx <= HEAD_ROWS:
         return None
 
+    # Never age out a row whose tools have not finished. Two cases, both real: a write
+    # still awaiting the user's approval (which they may give after sending another
+    # message, so it is no longer the newest row), and a row saved with its calls
+    # whose results have not been merged yet — the window a concurrent turn can read
+    # in. Summarizing either produces a gist describing work whose outcome is not in
+    # it, and the results then merge into a row already behind the boundary. Chatty
+    # has no equivalent guard; it does not need one, because it never persists a call
+    # and its result separately.
+    ceiling = last_user_idx
+    unfinished_idx = next((i for i, r in enumerate(rows) if _has_unfinished_tools(r)), None)
+    if unfinished_idx is not None:
+        ceiling = min(ceiling, unfinished_idx)
+    if ceiling <= HEAD_ROWS:
+        return None
+
     # Start shedding at the current boundary; rows before it are already in the gist
     # and `fullness` already reflects that. A first compaction starts after the head.
     start = HEAD_ROWS
     if prev_seq is not None:
         start = next((i for i, r in enumerate(rows) if r["seq"] >= prev_seq), start)
-    if start >= last_user_idx:
+    if start >= ceiling:
         return None
 
     acc = 0
-    boundary_idx = last_user_idx  # fall back to "gist everything but the last turn"
-    for i in range(start, last_user_idx):
+    boundary_idx = ceiling  # fall back to "gist everything up to the ceiling"
+    for i in range(start, ceiling):
         acc += _row_tokens(rows[i])
         if acc >= to_remove:
             boundary_idx = i + 1
             break
 
-    while boundary_idx < last_user_idx and rows[boundary_idx].get("role") != "user":
+    while boundary_idx < ceiling and rows[boundary_idx].get("role") != "user":
         boundary_idx += 1
+    if rows[boundary_idx].get("role") != "user":
+        return None  # the ceiling is not a user row — no clean turn to fold onto
 
     first_kept_seq = rows[boundary_idx]["seq"]
     if first_kept_seq <= rows[HEAD_ROWS - 1]["seq"]:
@@ -275,6 +299,28 @@ def _compute_boundary(rows, fullness, budget, prev_seq):
     if prev_seq is not None and first_kept_seq <= prev_seq:
         return None  # boundary did not advance — nothing new aged
     return first_kept_seq
+
+
+def _has_unfinished_tools(row) -> bool:
+    """True if this row requested tools whose outcome is not settled on it yet.
+
+    Covers a result not merged at all (the row was saved with its calls first) and one
+    merged as ``pending_user_approval`` / ``executing``. Both mean the row is still
+    being written to, so it must stay out of the middle."""
+    calls = row.get("tool_calls") or []
+    if not calls:
+        return False
+    results = {
+        r.get("tool_use_id"): r
+        for r in (row.get("tool_results") or []) if isinstance(r, dict)
+    }
+    for call in calls:
+        if not isinstance(call, dict):
+            continue
+        result = results.get(call.get("tool_use_id"))
+        if result is None or history.is_unsettled_result(result.get("content")):
+            return True
+    return False
 
 
 def _middle_rows(rows, prev_seq, first_kept_seq):
@@ -289,14 +335,15 @@ def _middle_rows(rows, prev_seq, first_kept_seq):
 # ── Taint ──────────────────────────────────────────────────────────────────
 
 def _middle_is_tainted(middle_rows) -> bool:
-    """True if the span about to leave the assembled context carried untrusted
-    content — an uploaded file or an external read such as Gmail.
+    """True if the span about to leave the assembled context carried untrusted content.
 
-    ``engine._context_has_untrusted_upload`` decides the power→normal write downgrade
-    by scanning the ASSEMBLED context for those fences. Compaction removes rows, so
-    without this the first compaction that ages out a Gmail read would silently
-    switch that mitigation off. Scans the same markers, over content AND the stored
-    tool results (which is where an external read's fenced text actually lives)."""
+    NOT the primary writer of that flag — ``history.mark_untrusted_seen`` is, at the
+    moment the content arrives, which is the only ordering that cannot race a
+    half-written tool row. This scan exists for the two cases ingress cannot cover:
+    rows persisted BEFORE this feature shipped (there is no backfill migration; a
+    pre-existing thread earns its flag the first time it compacts), and an ingress
+    write that itself failed. Scans content AND the stored tool results, which is where
+    an external read's fenced text actually lives."""
     for row in middle_rows:
         blob = (row.get("content") or "") + _serialize(row.get("tool_results"))
         if any(marker in blob for marker in delimiters.UNTRUSTED_MARKERS):

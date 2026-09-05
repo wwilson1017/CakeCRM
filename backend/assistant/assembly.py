@@ -46,6 +46,13 @@ _TRUNCATION_MARKER = "\n…[truncated]"
 _UPLOAD_OPEN_RE = re.compile(r'<untrusted_file_content id="([0-9a-f]+)"')
 _EXTERNAL_OPEN_RE = re.compile(r'<untrusted_external_content id="([0-9a-f]+)"')
 _SUMMARY_OPEN_RE = re.compile(r'<conversation_summary id="([0-9a-f]+)"')
+# A complete gist sitting at the very START of a row — the shape _apply_compaction
+# writes. The backreference makes it a matched pair rather than two lookalike tags.
+_SUMMARY_BLOCK_AT_START_RE = re.compile(
+    r'^<conversation_summary id="([0-9a-f]+)"[^>]*>.*?</conversation_summary id="\1">',
+    re.DOTALL,
+)
+_GIST_SEPARATOR = "\n\n"
 
 
 def _reclose_untrusted(cut: str) -> str:
@@ -119,7 +126,7 @@ def _apply_compaction(rows, summary, first_kept_seq):
 
     first = tail[0]
     if first.get("role") == "user":
-        merged = {**first, "content": f"{summary}\n\n{first.get('content') or ''}"}
+        merged = {**first, "content": summary + _GIST_SEPARATOR + (first.get("content") or "")}
         return head + [merged] + tail[1:]
     # Defensive: the boundary did not land on a user row (compaction snaps to one, so
     # this needs a hand-edited or migrated boundary). A standalone gist turn keeps the
@@ -209,15 +216,49 @@ def _truncate_user_content(text, limit):
 
     If a cut would leave an ``<untrusted_file_content id="X">`` (or external) block
     open, append its matching close tag so injected text can't escape the fence.
+
+    A compaction gist is PREPENDED to a retained user row, and when the boundary
+    reaches the current turn that row is the message the user just typed. A plain cut
+    from the end spends the budget on the summary first, so the gist survives and the
+    actual request is what gets truncated — and once the gist alone fills the row,
+    ``engine._last_user_text`` strips it and finds nothing but a truncation marker.
+
+    So the two are budgeted separately, with the request taking priority: the gist may
+    occupy at most half the row, and past that it is dropped WHOLE rather than sliced,
+    leaving the user's text the entire budget. Dropping is right at that point — the
+    gist is a convenience, the request is the turn — and dropping it whole avoids
+    leaving a half-summary that reads as a complete one.
     """
     if not text or len(text) <= limit:
         return text
+    gist, rest = _split_leading_summary(text)
+    # `rest` empty means the row IS the gist — the standalone turn `_apply_compaction`
+    # falls back to. There is nothing to preserve it in favour of, so that drops to the
+    # plain cut below, which truncates and RE-CLOSES the fence rather than emptying the
+    # row. Dropping is a trade against the user's text, never a way to lose the gist.
+    if gist and rest:
+        if len(gist) + len(_GIST_SEPARATOR) <= limit // 2:
+            return gist + _GIST_SEPARATOR + _truncate_user_content(
+                rest, limit - len(gist) - len(_GIST_SEPARATOR)
+            )
+        return _truncate_user_content(rest, limit)
     cut = text[:limit]
     result = cut + _TRUNCATION_MARKER
     reclosed = _reclose_untrusted(cut)
     if reclosed:
         result += "\n" + reclosed
     return result
+
+
+def _split_leading_summary(text):
+    """Split a leading complete compaction gist off the front. ('', text) when absent.
+
+    Only a matched nonce PAIR at the very start counts, so nothing a message merely
+    quotes can claim the protected slot."""
+    m = _SUMMARY_BLOCK_AT_START_RE.match(text)
+    if not m:
+        return "", text
+    return m.group(0), text[m.end():].lstrip("\n")
 
 
 def _truncate_result(result, limit):

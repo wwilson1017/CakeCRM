@@ -209,3 +209,92 @@ def test_claim_pending_tool_returns_none_when_not_pending(fake_conn, monkeypatch
     fake_conn(monkeypatch, history, fetchone_results=[(calls, results)])
     monkeypatch.setattr(history, "row_to_dict", lambda cur, row: {"tool_calls": row[0], "tool_results": row[1]})
     assert history.claim_pending_tool("c1", "t1", msg_id="m1") is None
+
+
+# ── Compaction state (issue #72 Phase 3) ──────────────────────────────────────
+
+def test_set_compaction_only_ever_moves_the_boundary_forward(rec):
+    """A compare-and-set, not a plain write: two turns racing on one conversation must
+    not be able to rewind the boundary or pair a newer summary with an older one."""
+    history.set_compaction("c1", "gist", 42, False)
+    sql = rec.sql_with("compaction_summary =")
+    assert "compaction_first_kept_seq IS NULL OR compaction_first_kept_seq < %s" in sql
+    assert rec.params_with("compaction_summary =") == ["gist", 42, False, "c1", 42]
+
+
+def test_set_compaction_ors_the_taint_rather_than_assigning_it(rec):
+    """The flag records that untrusted content ONCE entered the thread; a later
+    compaction of a clean span must not clear it."""
+    history.set_compaction("c1", "gist", 42, False)
+    assert "untrusted_content_seen = untrusted_content_seen OR %s" in rec.sql_with("untrusted_content_seen")
+
+
+def test_set_compaction_reports_whether_it_won(rec):
+    rec.rowcount = 0
+    assert history.set_compaction("c1", "gist", 42, False) is False
+    rec.rowcount = 1
+    assert history.set_compaction("c1", "gist", 43, False) is True
+
+
+def test_set_compaction_leaves_updated_at_alone(rec):
+    """It orders the conversation list as a record of USER activity, and compaction is
+    internal housekeeping inside a turn whose own message write already bumps it."""
+    history.set_compaction("c1", "gist", 42, False)
+    assert "updated_at" not in rec.sql_with("compaction_summary =")
+
+
+def test_mark_untrusted_seen_sets_the_flag_unconditionally(rec):
+    history.mark_untrusted_seen("c1")
+    assert "untrusted_content_seen = TRUE" in rec.sql_with("untrusted_content_seen")
+
+
+def test_is_conversation_tainted_fails_closed_on_a_read_error(monkeypatch):
+    """An unreadable flag costs a confirmation prompt; answering False on a database
+    blip costs the power->normal mitigation itself."""
+    def _boom(sql, params=()):
+        raise RuntimeError("connection reset")
+    monkeypatch.setattr(history, "pg_fetchone", _boom)
+    assert history.is_conversation_tainted("c1") is True
+
+
+def test_is_conversation_tainted_fails_closed_on_a_missing_conversation(rec):
+    assert history.is_conversation_tainted("ghost") is True
+
+
+def test_is_conversation_tainted_reads_the_stored_flag(rec):
+    rec.fetchone_queue = [{"untrusted_content_seen": False}]
+    assert history.is_conversation_tainted("c1") is False
+    rec.fetchone_queue = [{"untrusted_content_seen": True}]
+    assert history.is_conversation_tainted("c1") is True
+
+
+def test_get_compaction_state_answers_every_question_in_one_read(rec):
+    """The fast path is only affordable because a thread nowhere near the threshold
+    costs one indexed lookup and no message scan."""
+    rec.fetchone_queue = [{"summary": None, "first_kept_seq": None,
+                           "tainted": False, "last_context_tokens": 1234}]
+    state = history.get_compaction_state("c1")
+    assert state["last_context_tokens"] == 1234
+    assert len([c for c in rec.calls if "assistant_conversations" in c[0]]) == 1
+
+
+def test_save_message_records_the_context_reading_on_the_row_it_already_writes(fake_conn, monkeypatch):
+    """Zero extra round trips on the streaming hot path: it rides the UPDATE the write
+    was making anyway. COALESCE, so a provider that reports no usage never blanks a
+    good reading from an earlier turn."""
+    conn = fake_conn(monkeypatch, history, fetchone_results=[("c1",), (0,)])
+    history.save_message("c1", "m1", "assistant", "text", context_tokens=4096)
+    update = next(
+        (s, p) for s, p in conn.executed if "UPDATE assistant_conversations" in s
+    )
+    assert "last_context_tokens = COALESCE(%s, last_context_tokens)" in " ".join(update[0].split())
+    assert update[1][0] == 4096
+    # ONE transaction: the message insert and the reading ride the same connection block.
+    assert conn.entries == 1
+
+
+def test_save_message_without_a_reading_leaves_the_stored_one_alone(fake_conn, monkeypatch):
+    conn = fake_conn(monkeypatch, history, fetchone_results=[("c1",), (0,)])
+    history.save_message("c1", "m1", "user", "hi")
+    update = next((s, p) for s, p in conn.executed if "UPDATE assistant_conversations" in s)
+    assert update[1][0] is None  # COALESCE(NULL, existing) keeps the existing value

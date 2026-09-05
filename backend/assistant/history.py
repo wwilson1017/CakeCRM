@@ -185,7 +185,7 @@ def get_compaction_state(conv_id: str) -> dict | None:
     row = pg_fetchone(
         "SELECT compaction_summary AS summary, "
         "       compaction_first_kept_seq AS first_kept_seq, "
-        "       compaction_tainted AS tainted, "
+        "       untrusted_content_seen AS tainted, "
         "       last_context_tokens "
         "FROM assistant_conversations WHERE id = %s",
         (conv_id,),
@@ -204,7 +204,8 @@ def set_compaction(conv_id: str, summary: str, first_kept_seq: int, tainted: boo
 
     ``tainted`` is OR-ed rather than assigned, because the flag records that
     untrusted content ONCE entered this thread. That never stops being true, and a
-    later compaction of a clean span must not clear it.
+    later compaction of a clean span must not clear it. This is the BACKFILL path for
+    the flag, not the primary one — see ``mark_untrusted_seen``.
 
     ``updated_at`` is deliberately NOT bumped: it orders the conversation list as a
     record of user activity, and compaction is internal housekeeping that always runs
@@ -214,15 +215,33 @@ def set_compaction(conv_id: str, summary: str, first_kept_seq: int, tainted: boo
         "UPDATE assistant_conversations "
         "SET compaction_summary = %s, "
         "    compaction_first_kept_seq = %s, "
-        "    compaction_tainted = compaction_tainted OR %s "
+        "    untrusted_content_seen = untrusted_content_seen OR %s "
         "WHERE id = %s "
         "  AND (compaction_first_kept_seq IS NULL OR compaction_first_kept_seq < %s)",
         (summary, first_kept_seq, bool(tainted), conv_id, first_kept_seq),
     ) > 0
 
 
+def mark_untrusted_seen(conv_id: str) -> None:
+    """Record, durably, that untrusted content has entered this conversation.
+
+    Called at INGRESS — the moment an upload's fenced text is saved, or an external
+    read's result is fenced — rather than later when compaction removes the rows
+    carrying it. That ordering is the point: an assistant row is persisted with its
+    ``tool_calls`` first and its ``tool_results`` merged afterwards, so a compaction
+    pass reading between the two would see a row with no marker on it and record no
+    taint, even though the row is about to hold a fenced email. Writing at ingress
+    cannot lose that race, because the flag is set before the content is anywhere a
+    compaction pass could miss it.
+    """
+    pg_execute(
+        "UPDATE assistant_conversations SET untrusted_content_seen = TRUE WHERE id = %s",
+        (conv_id,),
+    )
+
+
 def is_conversation_tainted(conv_id: str) -> bool:
-    """True once a compacted-away span of this thread carried untrusted content.
+    """True once untrusted content has ever entered this thread.
 
     The engine decides the power→normal write downgrade by scanning the ASSEMBLED
     context for untrusted fences. Compaction REMOVES rows, so without this flag the
@@ -235,14 +254,14 @@ def is_conversation_tainted(conv_id: str) -> bool:
     """
     try:
         row = pg_fetchone(
-            "SELECT compaction_tainted FROM assistant_conversations WHERE id = %s",
+            "SELECT untrusted_content_seen FROM assistant_conversations WHERE id = %s",
             (conv_id,),
         )
     except Exception:
         return True
     if row is None:
         return True
-    return bool(row.get("compaction_tainted"))
+    return bool(row.get("untrusted_content_seen"))
 
 
 # ── Messages ───────────────────────────────────────────────────────────────

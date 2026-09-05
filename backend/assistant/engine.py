@@ -221,6 +221,14 @@ async def _chat_impl(
             await asyncio.to_thread(
                 history.save_message, conversation_id, user_msg_id, "user", user_text
             )
+            # Durable half of the untrusted-content taint (#72 Phase 3). The scan below
+            # reads the ASSEMBLED context, which compaction can empty of this row; the
+            # flag is what keeps the power→normal downgrade firing afterwards. Written
+            # here, unconditionally, rather than beside that scan — which only runs in
+            # power mode, so a file uploaded during a normal-mode turn would otherwise
+            # never be recorded and would go unnoticed after the thread compacts.
+            if delimiters.UNTRUSTED_FILE_MARKER in user_text:
+                await asyncio.to_thread(history.mark_untrusted_seen, conversation_id)
             # Title only from the FIRST message of a brand-new conversation — never
             # rewrite an already-titled thread on every subsequent message.
             if new_conversation:
@@ -470,6 +478,17 @@ async def _chat_impl(
             if name in _UNTRUSTED_SOURCE_TOOLS:
                 turn_has_untrusted_reads = True
                 content = delimiters.wrap_untrusted_external(name, content)
+                # Recorded NOW, not when compaction later removes this row: the row is
+                # saved with its tool_calls and its results merged afterwards, so a
+                # compaction pass reading in between would find no marker and record no
+                # taint. Best-effort — within this turn `turn_has_untrusted_reads`
+                # already covers it, the next turn's in-context scan sees the fence
+                # while the row is still assembled, and compaction's own scan is the
+                # backstop if this write is the thing that failed.
+                try:
+                    await asyncio.to_thread(history.mark_untrusted_seen, conversation_id)
+                except Exception as e:
+                    logger.warning("assistant.chat: failed to record untrusted taint: %s", e)
             # A context-file read hands back a whole document Baker (or the user) wrote
             # earlier, which may quote an email or an upload. Fence it as DATA for the
             # same reason the prompt-injected copy is fenced (issue #72) — but do NOT
@@ -514,6 +533,7 @@ async def _chat_impl(
             # so the turn stays narration-only.
             wrap_text = ""
             wrap_completed = False
+            wrap_context_tokens = None
             async for event in provider.stream_turn(current_messages, provider_tools, system_prompt):
                 etype = event.get("type")
                 if etype == "text":
@@ -526,6 +546,10 @@ async def _chat_impl(
                     wu = context_usage_event(event.get("usage") or {}, getattr(provider, "context_window", None), meter_only=True)
                     if wu:
                         yield _sse(wu)
+                    # This turn's reading is the LARGEST of the whole exchange — it read
+                    # every tool result — so dropping it would leave compaction sizing
+                    # the thread from the pre-tool-call figure.
+                    wrap_context_tokens = cache_inclusive_input_tokens(event.get("usage") or {})
                     wrap_completed = True
                     break
                 # stray tool_start/tool_args ignored — the wrap-up is narration-only
@@ -538,6 +562,7 @@ async def _chat_impl(
                     await asyncio.to_thread(
                         history.save_message, conversation_id, str(uuid.uuid4()),
                         "assistant", wrap_text, None, provider.model,
+                        context_tokens=wrap_context_tokens,
                     )
                 except Exception as e:
                     logger.warning("assistant.chat: failed to persist wrap-up text: %s", e)  # best-effort

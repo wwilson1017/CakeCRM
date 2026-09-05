@@ -16,15 +16,17 @@
 --                             boundary only ever moves FORWARD (CAS in
 --                             history.set_compaction), so two racing turns cannot
 --                             rewind it.
---   compaction_tainted        TRUE once a compacted-away span carried untrusted
---                             content (an uploaded file, or an external read such as
---                             Gmail). The engine decides the power->normal write
+--   untrusted_content_seen    TRUE once untrusted content has EVER entered this
+--                             thread -- an uploaded file, or an external read such as
+--                             Gmail. The engine decides the power->normal write
 --                             downgrade by scanning the ASSEMBLED context for those
---                             fences; compaction removes rows, so without this flag
---                             the first compaction that aged out a Gmail read would
---                             silently switch that mitigation off. The taint is
---                             monotone -- content that entered a thread never becomes
---                             trustworthy -- so this only ever flips FALSE -> TRUE.
+--                             fences; compaction removes rows, so without a durable
+--                             flag the first compaction that aged out a Gmail read
+--                             would silently switch that mitigation off. It is written
+--                             at INGRESS (the turn the content arrives), so it cannot
+--                             race a compaction pass running against a half-written
+--                             tool row. Monotone -- content that entered a thread never
+--                             becomes trustworthy -- so it only flips FALSE -> TRUE.
 --   last_context_tokens       the most recent turn's cache-inclusive input token count
 --                             (input + cache_creation + cache_read), written in the
 --                             same transaction that saves the assistant iteration. It
@@ -36,5 +38,5 @@
 ALTER TABLE assistant_conversations
     ADD COLUMN IF NOT EXISTS compaction_summary        TEXT,
     ADD COLUMN IF NOT EXISTS compaction_first_kept_seq INTEGER,
-    ADD COLUMN IF NOT EXISTS compaction_tainted        BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS untrusted_content_seen    BOOLEAN NOT NULL DEFAULT FALSE,
     ADD COLUMN IF NOT EXISTS last_context_tokens       INTEGER;
