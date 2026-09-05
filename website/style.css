@@ -101,7 +101,8 @@ p { margin: 0; }
 }
 .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 64px; gap: 1rem; }
 .brand { display: inline-flex; align-items: center; gap: 0.5rem; text-decoration: none; color: var(--ink); }
-.brand-mark { font-size: 1.5rem; }
+.brand-mark { width: 28px; height: 28px; }
+.footer-mark { display: inline-block; width: 20px; height: 20px; vertical-align: -4px; margin-right: 2px; }
 .brand-name { font-family: var(--font-display); font-weight: 700; font-size: 1.25rem; }
 .nav-actions { display: flex; gap: 0.5rem; }
 @media (max-width: 560px) { .nav-actions .btn-outline { display: none; } }
