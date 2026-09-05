@@ -287,7 +287,7 @@ def test_save_message_records_the_context_reading_on_the_row_it_already_writes(f
     update = next(
         (s, p) for s, p in conn.executed if "UPDATE assistant_conversations" in s
     )
-    assert "last_context_tokens = COALESCE(%s, last_context_tokens)" in " ".join(update[0].split())
+    assert "GREATEST(%s, COALESCE(last_context_tokens, 0))" in " ".join(update[0].split())
     assert update[1][0] == 4096
     # ONE transaction: the message insert and the reading ride the same connection block.
     assert conn.entries == 1
@@ -297,4 +297,25 @@ def test_save_message_without_a_reading_leaves_the_stored_one_alone(fake_conn, m
     conn = fake_conn(monkeypatch, history, fetchone_results=[("c1",), (0,)])
     history.save_message("c1", "m1", "user", "hi")
     update = next((s, p) for s, p in conn.executed if "UPDATE assistant_conversations" in s)
-    assert update[1][0] is None  # COALESCE(NULL, existing) keeps the existing value
+    sql = " ".join(update[0].split())
+    assert "CASE WHEN %s IS NULL THEN last_context_tokens" in sql
+    assert update[1][0] is None
+
+
+def test_save_message_never_lowers_the_meter_between_compactions(fake_conn, monkeypatch):
+    """Two turns racing on one conversation can finish out of order, and the slow one's
+    context was assembled before the other's rows existed. Landing last, its stale low
+    reading would send the NEXT turn down the fast path and skip compaction — and if the
+    real context is already past the provider's limit every turn fails, none records a
+    corrective reading, and the thread stays stuck."""
+    conn = fake_conn(monkeypatch, history, fetchone_results=[("c1",), (0,)])
+    history.save_message("c1", "m1", "assistant", "text", context_tokens=100)
+    sql = " ".join(next(s for s, _ in conn.executed if "UPDATE assistant_conversations" in s).split())
+    assert "GREATEST" in sql, "a stale low reading must not replace a high one"
+
+
+def test_set_compaction_clears_the_meter(fake_conn, rec):
+    """The one moment a decrease is real — which is what lets save_message otherwise
+    keep the greater of the two. The next turn pays one row scan for a fresh reading."""
+    history.set_compaction("c1", "gist", 42, False)
+    assert "last_context_tokens = NULL" in rec.sql_with("compaction_summary =")

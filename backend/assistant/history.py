@@ -207,6 +207,12 @@ def set_compaction(conv_id: str, summary: str, first_kept_seq: int, tainted: boo
     later compaction of a clean span must not clear it. This is the BACKFILL path for
     the flag, not the primary one — see ``mark_untrusted_seen``.
 
+    It also CLEARS ``last_context_tokens``. That reading describes a context this write
+    has just made smaller, so leaving it would send the next turn down the fast path on a
+    number that no longer describes anything — and it is the one moment a decrease in the
+    meter is legitimate, which is what lets ``save_message`` otherwise keep the greater of
+    the two. The next turn pays one row scan and records a fresh, accurate reading.
+
     ``updated_at`` is deliberately NOT bumped: it orders the conversation list as a
     record of user activity, and compaction is internal housekeeping that always runs
     inside a turn whose own message write bumps it anyway.
@@ -215,6 +221,7 @@ def set_compaction(conv_id: str, summary: str, first_kept_seq: int, tainted: boo
         "UPDATE assistant_conversations "
         "SET compaction_summary = %s, "
         "    compaction_first_kept_seq = %s, "
+        "    last_context_tokens = NULL, "
         "    untrusted_content_seen = untrusted_content_seen OR %s "
         "WHERE id = %s "
         "  AND (compaction_first_kept_seq IS NULL OR compaction_first_kept_seq < %s)",
@@ -284,8 +291,18 @@ def save_message(
     call rather than a write of its own because the transaction already holds the
     conversation row and already updates it — so compaction's fullness meter costs
     zero extra round trips on the streaming hot path. ``None`` leaves the stored value
-    alone (COALESCE), so a turn on a provider that reports no usage never blanks a
-    good reading from an earlier one.
+    alone, so a turn on a provider that reports no usage never blanks a good reading.
+
+    The write takes the GREATER of the two, because between compactions a conversation
+    only grows and two turns racing on it can finish out of order: a slow turn whose
+    context was assembled before the other's rows existed would otherwise land LAST and
+    replace a high reading with its own stale low one. The next turn would then take the
+    fast path on that low number and skip compaction — and if the real context is already
+    past the provider's limit, every turn fails, none of them records a corrective
+    reading, and the thread stays stuck there. GREATEST alone would be wrong if nothing
+    ever lowered the meter, since a post-compaction reading is legitimately smaller;
+    ``set_compaction`` clears it for exactly that reason, which is the only moment a
+    decrease is real.
     """
     with get_connection() as conn:
         cur = conn.cursor()
@@ -319,9 +336,10 @@ def save_message(
         cur.execute(
             "UPDATE assistant_conversations "
             "SET updated_at = now(), "
-            "    last_context_tokens = COALESCE(%s, last_context_tokens) "
+            "    last_context_tokens = CASE WHEN %s IS NULL THEN last_context_tokens "
+            "                               ELSE GREATEST(%s, COALESCE(last_context_tokens, 0)) END "
             "WHERE id = %s",
-            (context_tokens, conversation_id),
+            (context_tokens, context_tokens, conversation_id),
         )
 
 

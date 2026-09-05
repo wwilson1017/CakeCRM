@@ -113,6 +113,32 @@ def test_the_context_reading_round_trips_through_save_message(conv):
     history.save_message(conv, str(uuid.uuid4()), "user", "again")
     assert history.get_compaction_state(conv)["last_context_tokens"] == 4096
 
+    # Nor may a concurrent turn whose context was assembled earlier land last with a
+    # stale LOW reading — between compactions the conversation only grows.
+    history.save_message(conv, str(uuid.uuid4()), "assistant", "slow turn", context_tokens=50)
+    assert history.get_compaction_state(conv)["last_context_tokens"] == 4096
+
+    history.save_message(conv, str(uuid.uuid4()), "assistant", "bigger", context_tokens=9000)
+    assert history.get_compaction_state(conv)["last_context_tokens"] == 9000
+
+
+def test_compacting_clears_the_meter_so_the_next_turn_measures_again(conv):
+    """The one legitimate decrease. Leaving a pre-compaction reading in place would send
+    the next turn down the fast path on a number describing a context that no longer
+    exists."""
+    from assistant import history
+
+    history.save_message(conv, str(uuid.uuid4()), "assistant", "big", context_tokens=150_000)
+    assert history.get_compaction_state(conv)["last_context_tokens"] == 150_000
+
+    assert history.set_compaction(conv, "gist", 4, False) is True
+    assert history.get_compaction_state(conv)["last_context_tokens"] is None
+
+    # A losing CAS writes nothing at all, so it cannot clear another turn's reading.
+    history.save_message(conv, str(uuid.uuid4()), "assistant", "after", context_tokens=80_000)
+    assert history.set_compaction(conv, "older", 2, False) is False
+    assert history.get_compaction_state(conv)["last_context_tokens"] == 80_000
+
 
 def test_get_conversation_carries_the_boundary_the_assembler_reads(conv):
     from assistant import history

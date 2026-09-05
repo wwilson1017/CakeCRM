@@ -380,7 +380,13 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   the gist WHOLE past half the row rather than truncating what the user just typed; and the
   fast path compares the stored reading against the **target**, not the trigger, because
   that reading describes the PREVIOUS model input and counts neither the user row this turn
-  saved nor the assistant text that answered the one before. Only Anthropic reports usage or
+  saved nor the assistant text that answered the one before. That reading is also written
+  as the **GREATER** of old and new, because two turns racing on one conversation finish out
+  of order and the slow one's stale-low number landing last would send the next turn down
+  the fast path and skip compaction — and once the real context is past the provider's
+  limit every turn fails, none records a corrective reading, and the thread stays stuck
+  there. `set_compaction` **clears** the reading, which is the one moment a decrease is
+  real and is what lets the write otherwise keep the greater of the two. Only Anthropic reports usage or
   a context window today, so the other five providers run on the chars/4 estimate against
   `DEFAULT_BUDGET_TOKENS` — bounded, but a real window smaller than that could still refuse
   a request before the trigger fires. Giving them real windows is its own issue.
