@@ -24,7 +24,7 @@ import json
 import logging
 import re
 
-from assistant import history
+from assistant import delimiters, history
 
 logger = logging.getLogger(__name__)
 
@@ -45,11 +45,16 @@ HEAD_ROWS = 2
 _TRUNCATION_MARKER = "\n…[truncated]"
 _UPLOAD_OPEN_RE = re.compile(r'<untrusted_file_content id="([0-9a-f]+)"')
 _EXTERNAL_OPEN_RE = re.compile(r'<untrusted_external_content id="([0-9a-f]+)"')
-_SUMMARY_OPEN_RE = re.compile(r'<conversation_summary id="([0-9a-f]+)"')
+# Built from the tag `delimiters` owns rather than a fourth copy of the literal — that
+# module's own comment calls a second copy a silent bug, because the test keeps passing
+# and just stops matching. (The two untrusted tags above predate this and still spell
+# themselves out; they are left alone rather than widened into this diff.)
+_SUMMARY_TAG = delimiters.CONVERSATION_SUMMARY_TAG
+_SUMMARY_OPEN_RE = re.compile(rf'<{_SUMMARY_TAG} id="([0-9a-f]+)"')
 # A complete gist sitting at the very START of a row — the shape _apply_compaction
 # writes. The backreference makes it a matched pair rather than two lookalike tags.
 _SUMMARY_BLOCK_AT_START_RE = re.compile(
-    r'^<conversation_summary id="([0-9a-f]+)"[^>]*>.*?</conversation_summary id="\1">',
+    rf'^<{_SUMMARY_TAG} id="([0-9a-f]+)"[^>]*>.*?</{_SUMMARY_TAG} id="\1">',
     re.DOTALL,
 )
 _GIST_SEPARATOR = "\n\n"
@@ -65,7 +70,7 @@ def _reclose_untrusted(cut: str) -> str:
         (_EXTERNAL_OPEN_RE, "untrusted_external_content"),
         # A compaction gist (#72 Phase 3) is prepended to a retained user row, so an
         # oversized row can cut it open exactly like an upload block.
-        (_SUMMARY_OPEN_RE, "conversation_summary"),
+        (_SUMMARY_OPEN_RE, _SUMMARY_TAG),
     ):
         for nonce in open_re.findall(cut):
             close = f'</{tag} id="{nonce}">'

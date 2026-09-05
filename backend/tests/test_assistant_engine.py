@@ -860,3 +860,21 @@ def test_last_user_text_skips_a_gist_only_message():
         {"role": "user", "content": gist},
     ])
     assert out == "the real question"
+
+
+@pytest.mark.asyncio
+async def test_the_wrap_up_turn_reading_is_persisted_too(store):
+    """The wrap-up reading is the LARGEST of the whole exchange — that turn read every
+    tool result — so dropping it would leave compaction sizing the thread from the
+    pre-tool-call figure and never triggering on a thread that grew inside one turn."""
+    reg = Registry(writes={"crm_create_contact"})
+    prov = FakeProvider([
+        [_complete([_tc("crm_create_contact", args={"name": "X"})], stop="tool_use")],
+        [
+            {"type": "text", "text": "Shall I?"},
+            {"type": "_turn_complete", "tool_calls": [], "stop_reason": "end_turn",
+             "usage": {"input_tokens": 1000, "cache_read_input_tokens": 140_000}},
+        ],
+    ])
+    await _run(prov, reg, [{"role": "user", "content": "add X"}], tool_mode="normal")
+    assert 141_000 in store.context_tokens

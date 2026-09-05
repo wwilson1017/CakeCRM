@@ -50,6 +50,7 @@ class Store:
         self.convs = {}
         self.merges = []
         self.context_tokens = []
+        self.untrusted_marks = []
         # Compaction (#72 Phase 3) persists this once a compacted-away span carried
         # untrusted content; the engine ORs it into the power->normal downgrade.
         self.tainted = False
@@ -75,6 +76,9 @@ class Store:
 
     def is_conversation_tainted(self, cid):
         return self.tainted
+
+    def mark_untrusted_seen(self, cid):
+        self.untrusted_marks.append(cid)
 
     def merge_tool_result(self, mid, tuid, tname, content):
         self.merges.append({"tuid": tuid, "tool_name": tname, "content": content})
@@ -104,7 +108,7 @@ class Registry:
 def store(monkeypatch):
     s = Store()
     for fn in ("create_conversation", "conversation_exists", "auto_title", "save_message", "merge_tool_result",
-                "is_conversation_tainted"):
+                "is_conversation_tainted", "mark_untrusted_seen"):
         monkeypatch.setattr(history, fn, getattr(s, fn))
     # Compaction is exercised in test_assistant_compaction.py; here it must not reach
     # a database, and every one of these threads is far too short to compact anyway.
@@ -271,3 +275,36 @@ async def test_untrusted_read_persist_failure_fails_closed(store, monkeypatch):
     events = await _run(prov, reg, [{"role": "user", "content": "search"}], tool_mode="power")
     assert events[-1]["type"] == "error"
     assert not any(e["type"] == "done" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_a_gmail_read_records_the_taint_durably(store):
+    """The compaction-safety half of the #8 mitigation, on the path that matters most.
+
+    Within this turn `turn_has_untrusted_reads` already gates writes, and the next turn's
+    in-context scan finds the fence while the row is still assembled — but once the thread
+    compacts and that row is gisted away, the durable flag is the only thing left. It is
+    written HERE, as the result is fenced, rather than when compaction later removes the
+    row: the row is saved with its calls and its results merged afterwards, so a
+    compaction pass reading in between would find no marker at all.
+    """
+    reg = Registry()
+    prov = FakeProvider([
+        [_complete([_tc("gmail_search", "r1", {"query": "invoice"})], stop="tool_use")],
+        [{"type": "text", "text": "found two"}, _complete()],
+    ])
+    await _run(prov, reg, [{"role": "user", "content": "check my mail"}], tool_mode="power")
+    assert store.untrusted_marks, "a Gmail read must taint the conversation durably"
+
+
+@pytest.mark.asyncio
+async def test_a_crm_read_records_no_taint(store):
+    """The control: an ordinary CRM read is not third-party content and must not cost
+    the user power mode for the rest of the conversation."""
+    reg = Registry()
+    prov = FakeProvider([
+        [_complete([_tc("crm_list_deals", "r1", {})], stop="tool_use")],
+        [{"type": "text", "text": "three deals"}, _complete()],
+    ])
+    await _run(prov, reg, [{"role": "user", "content": "how many deals"}], tool_mode="power")
+    assert store.untrusted_marks == []
