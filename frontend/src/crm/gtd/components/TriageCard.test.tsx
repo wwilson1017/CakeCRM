@@ -225,8 +225,20 @@ describe('the step headings are legible', () => {
       expect(b.className).toContain('bg-ck-accent');
       expect(b.className).toContain('text-ck-accent-ink');
     }
-    // The visible heading text no longer repeats the number the badge now carries.
-    for (const h of headings) expect(visibleText(h)).not.toMatch(/^\d/);
+  });
+
+  // The exact counterpart to the accessible-name test: what is PAINTED is only the words,
+  // with the number left to the badge and the "required" marker to the star. It is pinned
+  // as an equality rather than as negatives, because a negative is the weaker claim by a
+  // wide margin — "does not start with a digit" passes happily on a heading rendering
+  // "Step 1: What kind of action?", which is what a broken `sr-only` produces.
+  it('paint only the words, leaving the number to the badge and the marker to the star', () => {
+    render();
+    expect([...container.querySelectorAll('h3')].map(visibleText)).toEqual([
+      'What kind of action?',
+      'Add detail (optional)',
+      'Last step — set context★',
+    ]);
   });
 
   it('mark step 3 required with a star, and only step 3', () => {
