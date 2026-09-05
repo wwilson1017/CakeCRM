@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from assistant import assembly, delimiters, engine, history, identity
+from assistant import assembly, compaction, delimiters, engine, history, identity
 from providers.anthropic_provider import AnthropicProvider
 from providers.google_provider import GoogleProvider
 from providers.openai_provider import OpenAIProvider
@@ -49,6 +49,10 @@ class Store:
     def __init__(self):
         self.convs = {}
         self.merges = []
+        self.context_tokens = []
+        # Compaction (#72 Phase 3) persists this once a compacted-away span carried
+        # untrusted content; the engine ORs it into the power->normal downgrade.
+        self.tainted = False
         self._n = 0
 
     def create_conversation(self):
@@ -63,9 +67,14 @@ class Store:
     def auto_title(self, cid, text):
         return (text or "")[:60]
 
-    def save_message(self, cid, mid, role, content, tool_calls=None, model=""):
+    def save_message(self, cid, mid, role, content, tool_calls=None, model="",
+                     context_tokens=None):
+        self.context_tokens.append(context_tokens)
         self.convs.setdefault(cid, {"id": cid, "messages": []})["messages"].append(
             {"id": mid, "role": role, "content": content, "tool_calls": tool_calls, "tool_results": None})
+
+    def is_conversation_tainted(self, cid):
+        return self.tainted
 
     def merge_tool_result(self, mid, tuid, tname, content):
         self.merges.append({"tuid": tuid, "tool_name": tname, "content": content})
@@ -94,8 +103,14 @@ class Registry:
 @pytest.fixture
 def store(monkeypatch):
     s = Store()
-    for fn in ("create_conversation", "conversation_exists", "auto_title", "save_message", "merge_tool_result"):
+    for fn in ("create_conversation", "conversation_exists", "auto_title", "save_message", "merge_tool_result",
+                "is_conversation_tainted"):
         monkeypatch.setattr(history, fn, getattr(s, fn))
+    # Compaction is exercised in test_assistant_compaction.py; here it must not reach
+    # a database, and every one of these threads is far too short to compact anyway.
+    async def _no_compaction(provider, cid):
+        return False
+    monkeypatch.setattr(compaction, "maybe_compact", _no_compaction)
     monkeypatch.setattr(identity, "get_identity",
                         lambda: {"name": "Baker", "personality": "p", "using_default": True})
     monkeypatch.setattr(assembly, "assemble_messages", lambda provider, cid: [{"role": "user", "content": "hi"}])

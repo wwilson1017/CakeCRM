@@ -137,7 +137,8 @@ def list_conversations(limit: int = 50, offset: int = 0) -> list[dict]:
 def get_conversation(conv_id: str) -> dict | None:
     """A conversation with its messages ordered by seq (JSONB → Python lists)."""
     conv = pg_fetchone(
-        "SELECT id, title, title_edited_by_user, created_at, updated_at "
+        "SELECT id, title, title_edited_by_user, created_at, updated_at, "
+        "       compaction_summary, compaction_first_kept_seq "
         "FROM assistant_conversations WHERE id = %s",
         (conv_id,),
     )
@@ -168,6 +169,82 @@ def rename_conversation(conv_id: str, title: str) -> str | None:
     return clean if updated > 0 else None
 
 
+# ── Compaction state (issue #72 Phase 3) ───────────────────────────────────
+
+def get_compaction_state(conv_id: str) -> dict | None:
+    """The conversation's compaction boundary plus its last fullness reading.
+
+    ONE row read answering every question the compaction pass asks, so the common
+    case — a thread nowhere near the threshold — costs a single indexed lookup and
+    no message scan at all. Returns None when the conversation does not exist.
+
+    Keys: ``summary`` / ``first_kept_seq`` (NULL until a first compaction),
+    ``tainted`` (see ``is_conversation_tainted``), ``last_context_tokens``
+    (NULL when no provider has ever reported usage for this thread).
+    """
+    row = pg_fetchone(
+        "SELECT compaction_summary AS summary, "
+        "       compaction_first_kept_seq AS first_kept_seq, "
+        "       compaction_tainted AS tainted, "
+        "       last_context_tokens "
+        "FROM assistant_conversations WHERE id = %s",
+        (conv_id,),
+    )
+    return row
+
+
+def set_compaction(conv_id: str, summary: str, first_kept_seq: int, tainted: bool) -> bool:
+    """Persist a gist + boundary. Returns True iff this call actually advanced it.
+
+    A compare-and-set, not a plain write: the WHERE clause refuses a boundary that
+    does not move strictly FORWARD. Two turns racing on one conversation (a browser
+    stream and a Telegram message arriving together) can therefore never rewind the
+    boundary or pair a newer summary with an older one — at worst the loser's
+    summary is discarded, which costs one wasted light-tier call and nothing else.
+
+    ``tainted`` is OR-ed rather than assigned, because the flag records that
+    untrusted content ONCE entered this thread. That never stops being true, and a
+    later compaction of a clean span must not clear it.
+
+    ``updated_at`` is deliberately NOT bumped: it orders the conversation list as a
+    record of user activity, and compaction is internal housekeeping that always runs
+    inside a turn whose own message write bumps it anyway.
+    """
+    return pg_execute(
+        "UPDATE assistant_conversations "
+        "SET compaction_summary = %s, "
+        "    compaction_first_kept_seq = %s, "
+        "    compaction_tainted = compaction_tainted OR %s "
+        "WHERE id = %s "
+        "  AND (compaction_first_kept_seq IS NULL OR compaction_first_kept_seq < %s)",
+        (summary, first_kept_seq, bool(tainted), conv_id, first_kept_seq),
+    ) > 0
+
+
+def is_conversation_tainted(conv_id: str) -> bool:
+    """True once a compacted-away span of this thread carried untrusted content.
+
+    The engine decides the power→normal write downgrade by scanning the ASSEMBLED
+    context for untrusted fences. Compaction REMOVES rows, so without this flag the
+    first compaction that aged out an uploaded file or a Gmail read would silently
+    switch that mitigation off — and a later power-mode turn could auto-execute a
+    write the model proposed from injected text.
+
+    **Fails CLOSED.** An unreadable flag answers True, which costs a confirmation
+    prompt; answering False on a database blip would cost the mitigation itself.
+    """
+    try:
+        row = pg_fetchone(
+            "SELECT compaction_tainted FROM assistant_conversations WHERE id = %s",
+            (conv_id,),
+        )
+    except Exception:
+        return True
+    if row is None:
+        return True
+    return bool(row.get("compaction_tainted"))
+
+
 # ── Messages ───────────────────────────────────────────────────────────────
 
 def save_message(
@@ -177,10 +254,19 @@ def save_message(
     content: str,
     tool_calls: list | None = None,
     model: str = "",
+    context_tokens: int | None = None,
 ) -> None:
     """Insert one message, allocating ``seq`` atomically under the conversation lock.
 
     Raises if the conversation does not exist (fail-loud — never silently create).
+
+    ``context_tokens`` is the cache-inclusive input count the model read for THIS
+    iteration (see ``providers.windows.cache_inclusive_input_tokens``). It rides this
+    call rather than a write of its own because the transaction already holds the
+    conversation row and already updates it — so compaction's fullness meter costs
+    zero extra round trips on the streaming hot path. ``None`` leaves the stored value
+    alone (COALESCE), so a turn on a provider that reports no usage never blanks a
+    good reading from an earlier one.
     """
     with get_connection() as conn:
         cur = conn.cursor()
@@ -212,8 +298,11 @@ def save_message(
             ),
         )
         cur.execute(
-            "UPDATE assistant_conversations SET updated_at = now() WHERE id = %s",
-            (conversation_id,),
+            "UPDATE assistant_conversations "
+            "SET updated_at = now(), "
+            "    last_context_tokens = COALESCE(%s, last_context_tokens) "
+            "WHERE id = %s",
+            (context_tokens, conversation_id),
         )
 
 

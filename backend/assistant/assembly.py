@@ -13,8 +13,7 @@ DB row maps independently because persistence is per-iteration faithful:
 OpenAI tool_calls+role:tool / Gemini parts) and re-injects the assistant text
 that ``add_tool_results`` drops.
 
-Ported from Chatty's ``context_assembly.py``, dropping compaction (deferred) and
-all ``json.loads`` (psycopg2 returns JSONB already parsed as Python lists). The
+Ported from Chatty's ``context_assembly.py``, dropping all ``json.loads`` (psycopg2 returns JSONB already parsed as Python lists). The
 oversized-row guard bounds any single row that would blow the live context;
 storage stays full. User-content truncation is delimiter-safe: it re-closes any
 ``<untrusted_file_content>`` block a cut would leave open, so an uploaded
@@ -31,12 +30,22 @@ logger = logging.getLogger(__name__)
 
 # Per-row live-context cap as a fraction of the budget (storage is never capped).
 _OVERSIZED_ROW_FRACTION = 0.25
-_CHARS_PER_TOKEN = 4
-_DEFAULT_BUDGET_TOKENS = 128_000
+# PUBLIC because `assistant.compaction` imports them: the compaction trigger, the
+# boundary it picks and this module's oversized-row guard must all measure a thread
+# the same way, and two copies of "4 chars a token" would drift silently.
+CHARS_PER_TOKEN = 4
+DEFAULT_BUDGET_TOKENS = 128_000
+
+# The opening exchange, kept verbatim across every compaction. It lives HERE rather
+# than in `compaction` so the two modules agree on what "the middle" is, and because
+# the dependency has to run this way round: compaction imports the assembler's
+# measurements, never the reverse.
+HEAD_ROWS = 2
 
 _TRUNCATION_MARKER = "\n…[truncated]"
 _UPLOAD_OPEN_RE = re.compile(r'<untrusted_file_content id="([0-9a-f]+)"')
 _EXTERNAL_OPEN_RE = re.compile(r'<untrusted_external_content id="([0-9a-f]+)"')
+_SUMMARY_OPEN_RE = re.compile(r'<conversation_summary id="([0-9a-f]+)"')
 
 
 def _reclose_untrusted(cut: str) -> str:
@@ -47,6 +56,9 @@ def _reclose_untrusted(cut: str) -> str:
     for open_re, tag in (
         (_UPLOAD_OPEN_RE, "untrusted_file_content"),
         (_EXTERNAL_OPEN_RE, "untrusted_external_content"),
+        # A compaction gist (#72 Phase 3) is prepended to a retained user row, so an
+        # oversized row can cut it open exactly like an upload block.
+        (_SUMMARY_OPEN_RE, "conversation_summary"),
     ):
         for nonce in open_re.findall(cut):
             close = f'</{tag} id="{nonce}">'
@@ -64,16 +76,60 @@ def assemble_messages(provider, conversation_id: str) -> list[dict]:
     conv = history.get_conversation(conversation_id)
     if not conv:
         return []
-    rows = conv.get("messages") or []
+    rows = _apply_compaction(
+        conv.get("messages") or [],
+        conv.get("compaction_summary"),
+        conv.get("compaction_first_kept_seq"),
+    )
 
-    budget = getattr(provider, "context_window", None) or _DEFAULT_BUDGET_TOKENS
-    max_row_chars = int(_OVERSIZED_ROW_FRACTION * budget * _CHARS_PER_TOKEN)
+    budget = getattr(provider, "context_window", None) or DEFAULT_BUDGET_TOKENS
+    max_row_chars = int(_OVERSIZED_ROW_FRACTION * budget * CHARS_PER_TOKEN)
 
     messages: list[dict] = []
     for row in rows:
         messages.extend(_row_to_messages(provider, row, max_row_chars))
     return _coalesce_consecutive(messages)
 
+
+
+def _apply_compaction(rows, summary, first_kept_seq):
+    """Replace the aged middle with a stored gist: HEAD verbatim, gist folded onto the
+    first retained user turn, TAIL verbatim (issue #72 Phase 3).
+
+    Folding onto a REAL user row rather than inserting a synthetic turn is what keeps
+    role alternation valid on every provider — ``assistant.compaction`` snaps its
+    boundary forward to a user row for exactly that reason. ``summary`` arrives already
+    nonce-fenced: the wrapper is minted once at write time, because this function runs
+    every turn and a fresh nonce here would re-key the provider's conversation-prefix
+    cache each time.
+
+    A no-op whenever there is nothing valid to compact, so a conversation with no
+    stored boundary assembles exactly as it always did.
+    """
+    if not summary or first_kept_seq is None or len(rows) <= HEAD_ROWS:
+        return rows
+    head = rows[:HEAD_ROWS]
+    # Guard a boundary that would overlap or precede the head — then there is no real
+    # middle to drop, and folding the gist on would duplicate context we still hold.
+    if first_kept_seq <= head[-1]["seq"]:
+        return rows
+    tail = [r for r in rows if r["seq"] >= first_kept_seq]
+    if not tail:
+        return rows
+
+    first = tail[0]
+    if first.get("role") == "user":
+        merged = {**first, "content": f"{summary}\n\n{first.get('content') or ''}"}
+        return head + [merged] + tail[1:]
+    # Defensive: the boundary did not land on a user row (compaction snaps to one, so
+    # this needs a hand-edited or migrated boundary). A standalone gist turn keeps the
+    # summary in context; `_coalesce_consecutive` merges it with any neighbour that
+    # would otherwise break alternation.
+    synthetic = {
+        "role": "user", "content": summary,
+        "tool_calls": None, "tool_results": None, "seq": first_kept_seq,
+    }
+    return head + [synthetic] + tail
 
 def _row_to_messages(provider, row, max_row_chars):
     """Convert one DB row to provider-native message(s), applying the oversized guard."""

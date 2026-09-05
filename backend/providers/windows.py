@@ -11,6 +11,12 @@ from __future__ import annotations
 
 # model id -> context window in tokens
 MODEL_CONTEXT_WINDOWS: dict[str, int] = {
+    # `claude-opus-4-8` is providers.get_ai_provider's DEFAULT Anthropic model and
+    # tiers.TIER_MODELS' "top" entry, and it was missing here — "claude-opus-4-6" is
+    # not a prefix of it, so get_context_window returned None and the composer's
+    # context meter was hidden on a default install. Found while porting conversation
+    # compaction (#72 Phase 3), which reads this to size its trigger.
+    "claude-opus-4-8":   200_000,
     "claude-opus-4-6":   200_000,
     "claude-sonnet-4-6": 200_000,
     "claude-haiku-4-5":  200_000,
@@ -33,6 +39,34 @@ def get_context_window(model: str) -> int | None:
         if model.startswith(key) and (best_key is None or len(key) > len(best_key)):
             best_key = key
     return MODEL_CONTEXT_WINDOWS[best_key] if best_key else None
+
+
+def cache_inclusive_input_tokens(usage: dict) -> int | None:
+    """Total input tokens the model actually READ this turn, or None if unusable.
+
+    With prompt caching active most of the input lives in cache_read /
+    cache_creation rather than in the plain ``input_tokens`` field, so summing all
+    three is the only honest measure of how full the context is.
+
+    Split out of ``context_usage_event`` because the two callers ask different
+    questions. The meter needs a window to render a percentage and hides itself
+    without one; conversation compaction (#72 Phase 3) needs only the NUMBER, and
+    persists it whether or not the window happens to be known — an accurate count
+    against an assumed budget still beats a chars/4 estimate.
+
+    Returns None for missing/empty usage or a non-positive total, so a caller can
+    tell "no signal" apart from a genuine zero.
+    """
+    if not usage:
+        return None
+    # `or 0` guards a provider that supplies an explicit None for any field
+    # (this helper is provider-generic; Anthropic returns ints today).
+    total = (
+        (usage.get("input_tokens") or 0)
+        + (usage.get("cache_creation_input_tokens") or 0)
+        + (usage.get("cache_read_input_tokens") or 0)
+    )
+    return total if total > 0 else None
 
 
 def context_usage_event(usage: dict, context_window: int | None,
@@ -61,16 +95,10 @@ def context_usage_event(usage: dict, context_window: int | None,
     input-side count — so the caller emits nothing and the meter stays hidden
     rather than rendering a misleading 0% / negative.
     """
-    if not usage or context_window is None:
+    if context_window is None:
         return None
-    # `or 0` guards a provider that supplies an explicit None for any field
-    # (this helper is provider-generic; Anthropic returns ints today).
-    context_tokens = (
-        (usage.get("input_tokens") or 0)
-        + (usage.get("cache_creation_input_tokens") or 0)
-        + (usage.get("cache_read_input_tokens") or 0)
-    )
-    if context_tokens <= 0:
+    context_tokens = cache_inclusive_input_tokens(usage)
+    if context_tokens is None:
         # No usable input-side count (e.g. output-only or malformed usage, or a
         # negative from a buggy provider) — hide the meter instead of showing a
         # bogus 0% / negative reading.
