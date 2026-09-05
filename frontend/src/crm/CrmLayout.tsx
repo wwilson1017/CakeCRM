@@ -387,8 +387,8 @@ export function CrmLayout() {
 
       {/* LAUNCHER_CLEARANCE: the fixed "Ask Baker" pill (52px tall, 24px off the
           bottom) floats over this scroll container, so without reserved space it
-          permanently covers whatever ends up in the bottom-left corner — on the
-          Settings page that was the forms' left-aligned submit buttons. Bottom
+          permanently covers whatever ends up in the bottom-right corner (before it moved
+          right it sat over the Settings forms' left-aligned submit buttons). Bottom
           padding on the scroll container lets every page scroll PAST the pill
           instead (24 + 52 + 12px clearance), keeping the launcher itself always
           visible and reachable. Applied on desktop too: the pill overlaps the

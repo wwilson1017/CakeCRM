@@ -1,6 +1,10 @@
 /**
  * CakeCRM — toast viewport. Mounted once in App.tsx; renders the toast store
- * as a fixed bottom-right stack (full-width above the bottom nav on mobile).
+ * as a fixed bottom-right stack (full-width on mobile), kept clear of the CRM shell's
+ * "Ask Baker" pill: the pill is 52px tall and 24px off the bottom-right corner, so the
+ * stack starts at 88px (24 + 52 + 12 clearance — the same number `CrmLayout`'s
+ * LAUNCHER_CLEARANCE padding uses). Toasts and the pill must never share a corner: a
+ * toast that lands on the launcher hides the one control that is always on screen.
  */
 
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
@@ -52,8 +56,8 @@ export function ToastViewport() {
         flexDirection: 'column',
         gap: 8,
         ...(isMobile
-          ? { left: 12, right: 12, bottom: 68 }
-          : { right: 20, bottom: 16, width: 360 }),
+          ? { left: 12, right: 12, bottom: 88 }
+          : { right: 20, bottom: 88, width: 360 }),
       }}
     >
       {items.map(item => (

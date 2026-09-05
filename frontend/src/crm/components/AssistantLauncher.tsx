@@ -2,12 +2,12 @@
  * AssistantLauncher — the persistent assistant affordance (issue #9).
  *
  * The assistant is a persistent affordance, not the home page: a fixed
- * bottom-LEFT button always present in the CRM shell (bottom-left keeps it clear
- * of the bottom-right toast column). It degrades gracefully with zero AI keys —
- * never an error:
+ * bottom-RIGHT button always present in the CRM shell (the toast column sits ABOVE
+ * it — `ToastViewport` reserves the room, so the two never overlap). It degrades
+ * gracefully with zero AI keys — never an error:
  *   • aiReady === null   → unknown/loading: rendered but inert.
  *   • aiReady === false  → no key: routes to /setup ("hire your assistant").
- *   • aiReady === true   → opens a full-height left slide-over DRAWER whose body
+ *   • aiReady === true   → opens a full-height right slide-over DRAWER whose body
  *                          is the assistant chat surface (AssistantPanelBody,
  *                          issue #4). The drawer is context-aware (issue #14): the
  *                          CRM record open behind it (via RecordContext) is passed
@@ -141,13 +141,13 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
               // Constant z-index (not dropped on close) so the panel stays above the
               // page while it slides out; delayed visibility:hidden then removes it
               // from paint + hit-testing once closed.
-              position: 'fixed', top: 0, bottom: 0, left: 0, zIndex: 59,
+              position: 'fixed', top: 0, bottom: 0, right: 0, zIndex: 59,
               width: 'min(420px, 100vw)',
-              background: BG_CARD, borderRight: `1px solid ${LINE}`,
-              boxShadow: `12px 0 32px ${SHADOW}`,
+              background: BG_CARD, borderLeft: `1px solid ${LINE}`,
+              boxShadow: `-12px 0 32px ${SHADOW}`,
               display: 'flex', flexDirection: 'column', overflow: 'hidden',
               outline: 'none',
-              transform: open ? 'translateX(0)' : 'translateX(-100%)',
+              transform: open ? 'translateX(0)' : 'translateX(100%)',
               visibility: open ? 'visible' : 'hidden',
               // On close, delay `visibility:hidden` until the slide-out finishes so
               // the drawer actually animates off-screen (visibility isn't otherwise
@@ -205,7 +205,7 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
         title={launcherLabel}
         disabled={loading}
         style={{
-          position: 'fixed', left: 24, bottom: 24, zIndex: 40,
+          position: 'fixed', right: 24, bottom: 24, zIndex: 40,
           height: 52, borderRadius: 999,
           padding: '0 20px 0 16px',
           background: ACCENT, color: ACCENT_INK, border: 'none',
