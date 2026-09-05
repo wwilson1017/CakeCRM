@@ -71,7 +71,7 @@ export function ReportsPage() {
   return (
     <div style={pagePadding(isMobile)}>
       <h1 style={pageHeading(isMobile)}>Reports</h1>
-      <p style={{ fontSize: 14, color: INK_MUTE, marginTop: -8, maxWidth: 560 }}>
+      <p style={{ fontSize: 14, color: INK_MUTE, marginTop: 10, maxWidth: 560 }}>
         Everything this CRM knows about one company on a single page — its deals, its
         contacts, and every note and activity across the account.
       </p>
