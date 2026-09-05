@@ -3,16 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>CakeCRM — A CRM that stays out of your way</title>
-  <meta name="description" content="CakeCRM is a free, open-source CRM you run on your own server. Contacts, pipeline, tasks and a built-in AI sales assistant — no per-seat fees, no lock-in, and fully usable with zero AI keys.">
+  <title>CakeCRM — The simple CRM</title>
+  <meta name="description" content="CakeCRM is the simple CRM: contacts, a pipeline, tasks, and an assistant that does the busywork. Free, open source, runs on your own server. No per-seat fees, no lock-in.">
   <meta name="theme-color" content="#f1f1e8">
   <link rel="icon" href="favicon.png" type="image/png">
   <link rel="canonical" href="https://mycakecrm.com/">
-  <meta property="og:title" content="CakeCRM — A CRM that stays out of your way">
-  <meta property="og:description" content="Free, open source, self-hosted. Your team logs a note and moves a deal; Baker, the built-in assistant, does the rest.">
+  <meta property="og:title" content="CakeCRM — The simple CRM">
+  <meta property="og:description" content="Three screens your team will actually use. Free, open source, self-hosted, and it stays out of the way of selling.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://mycakecrm.com/">
-  <meta property="og:image" content="https://mycakecrm.com/img/pipeline.png">
+  <meta property="og:image" content="https://mycakecrm.com/img/logo-hero.png">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -36,22 +36,15 @@
 <!-- Hero -->
 <section id="top" class="hero">
   <div class="container hero-inner">
+    <img class="hero-mark" src="img/logo-hero.png" alt="" width="444" height="336" fetchpriority="high">
     <p class="eyebrow">Free &middot; Open source &middot; Self-hosted</p>
-    <h1>A CRM that stays<br><em>out of your way.</em></h1>
-    <p class="lede">Most CRMs make your team work for the software. CakeCRM flips it: your people log a note and move a deal, and <strong>Baker</strong>, the built-in sales assistant, handles the rest &mdash; the follow-ups, the nudges, the pipeline digest.</p>
+    <h1>The simple CRM.<br><em>It stays out of your way.</em></h1>
+    <p class="lede">Most CRMs make your team work for the software. CakeCRM is three screens your people will actually use &mdash; contacts, a pipeline, today's tasks &mdash; and an assistant that handles the busywork. Nothing to configure, nothing to fight.</p>
     <div class="actions">
       <a href="https://railway.com/deploy/cakecrm?referralCode=HMgK-M" class="btn btn-primary" rel="noopener">Deploy on Railway</a>
       <a href="https://github.com/wwilson1017/CakeCRM" class="btn btn-outline" rel="noopener">View on GitHub</a>
     </div>
-    <p class="hero-note">Runs on your own server or one click in the cloud. Works with no AI key at all.</p>
-  </div>
-  <div class="container">
-    <figure class="frame frame-hero">
-      <picture>
-        <source srcset="img/pipeline.webp" type="image/webp">
-        <img src="img/pipeline.png" width="1440" height="900" alt="The CakeCRM pipeline board: deals as cards in Lead, Qualified, Proposal, Negotiation and Won columns, with values and probabilities on each card." fetchpriority="high">
-      </picture>
-    </figure>
+    <p class="hero-note">One click in the cloud, or on your own hardware. Works with no AI key at all.</p>
   </div>
 </section>
 
@@ -60,14 +53,15 @@
   <div class="container">
     <div class="section-head">
       <p class="eyebrow">The tour</p>
-      <h2>Three screens your team will actually use.</h2>
+      <h2>This is the whole thing.</h2>
+      <p class="section-sub">No modules to buy, no admin console to learn. Four screenshots cover it.</p>
     </div>
 
     <div class="tour-item">
       <div class="tour-text">
         <p class="tour-num">01</p>
-        <h3>Start the day with what needs you.</h3>
-        <p>The dashboard opens on a Today list: the overdue call, the menu that goes out this afternoon, the reminder you set last week. Under it, the pipeline number and the stats that matter, nothing else.</p>
+        <h3>Start with what needs you today.</h3>
+        <p>The dashboard opens on a short Today list: the overdue call, the menu that goes out this afternoon. Under it, one pipeline number and the handful of stats that matter.</p>
       </div>
       <figure class="frame">
         <picture>
@@ -80,13 +74,13 @@
     <div class="tour-item">
       <div class="tour-text">
         <p class="tour-num">02</p>
-        <h3>Every contact, one glance.</h3>
-        <p>Company, last contact, status and a lead score on one row. Search and filter across your whole book without a page reload. Import from CSV or vCard in a minute.</p>
+        <h3>Your pipeline is a board. Drag the card.</h3>
+        <p>Every open deal on one screen, in the stage it is in, with the value and the next date on the card. Moving a deal is a drag. That is the entire workflow.</p>
       </div>
       <figure class="frame">
         <picture>
-          <source srcset="img/contacts.webp" type="image/webp">
-          <img src="img/contacts.png" width="1440" height="900" loading="lazy" alt="The CakeCRM contacts list: name, company, email, phone, last contact, status and lead score columns with search and filters above.">
+          <source srcset="img/pipeline.webp" type="image/webp">
+          <img src="img/pipeline.png" width="1440" height="900" loading="lazy" alt="The CakeCRM pipeline board: deals as cards in Lead, Qualified, Proposal, Negotiation and Won columns, with values and probabilities on each card.">
         </picture>
       </figure>
     </div>
@@ -94,8 +88,22 @@
     <div class="tour-item">
       <div class="tour-text">
         <p class="tour-num">03</p>
-        <h3>Ask Baker. <span class="muted">Optional, and it knows what you're looking at.</span></h3>
-        <p>Add any AI provider key &mdash; Anthropic, OpenAI, Gemini, Together, or a local Ollama model &mdash; and Baker reads the deal you have open, checks its health, and tells you the next step. It can log the call, draft the follow-up email into your Gmail drafts, and nudge you when a deal goes quiet. Every write asks first.</p>
+        <h3>Open a deal. Everything is on one card.</h3>
+        <p>Who, how much, how likely, when. The calls and emails so far, and a box to add a note. No tabs, no sub-pages, nothing hidden behind a settings gear.</p>
+      </div>
+      <figure class="frame">
+        <picture>
+          <source srcset="img/deal.webp" type="image/webp">
+          <img src="img/deal.png" width="1440" height="900" loading="lazy" alt="A deal card open over the CakeCRM pipeline: title, value, stage, contact, probability, lead score and expected close, then the activity history and a note box.">
+        </picture>
+      </figure>
+    </div>
+
+    <div class="tour-item">
+      <div class="tour-text">
+        <p class="tour-num">04</p>
+        <h3>Ask Baker. <span class="muted">Optional.</span></h3>
+        <p>Add any AI provider key and Baker reads the deal you have open, checks its health, and tells you the next step in plain words. It can log the call, put a follow-up draft in your Gmail Drafts, and nudge you when a deal goes quiet. Every write asks first. Skip the key and the CRM is still the whole CRM.</p>
       </div>
       <figure class="frame">
         <picture>
@@ -112,12 +120,13 @@
   <div class="container">
     <div class="section-head">
       <p class="eyebrow">What it is</p>
-      <h2>Built for small teams. Tested by bigger ones.</h2>
+      <h2>Simple on purpose.</h2>
+      <p class="section-sub">Built for small teams. Tested by bigger ones. It stays small because everything it leaves out is a thing your team never has to learn.</p>
     </div>
     <ul class="grid">
       <li>
         <h3>No per-seat fees</h3>
-        <p>AGPL-3.0, free forever. Add your whole team with admin and member roles and pay nothing extra for the tenth seat.</p>
+        <p>AGPL-3.0, free forever. Add your whole team with admin and member roles and pay nothing for the tenth seat.</p>
       </li>
       <li>
         <h3>Your data stays yours</h3>
@@ -125,7 +134,7 @@
       </li>
       <li>
         <h3>Works with zero AI keys</h3>
-        <p>Contacts, companies, pipeline, tasks, analytics, lead scoring and CSV import all run with no AI configured. The assistant is a feature you switch on, not a gate.</p>
+        <p>Contacts, companies, pipeline, tasks and CSV import all run with no AI configured. The assistant is a feature you switch on, not a gate.</p>
       </li>
       <li>
         <h3>Bring any model</h3>
@@ -149,6 +158,7 @@
     <div class="section-head">
       <p class="eyebrow">Get it</p>
       <h2>Running in five minutes.</h2>
+      <p class="section-sub">Three steps. The third one is optional.</p>
     </div>
     <ol class="steps">
       <li><strong>Deploy.</strong> Click the Railway button and set a password. Railway provisions PostgreSQL and starts CakeCRM. Prefer your own hardware? <code>python run.py</code> starts everything locally with Postgres in Docker.</li>
