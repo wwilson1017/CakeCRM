@@ -8,7 +8,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { CrmDeal } from '../core/types';
 import {
-  boardOrder, loadHiddenStages, openPipelineTotals, saveHiddenStages,
+  boardOrder, lastContactLabel, loadHiddenStages, openPipelineTotals, saveHiddenStages,
   stageFromToggleKey, stageLabel, stageToggleKey, visibleStageKeys,
 } from './pipelineBoard';
 
@@ -161,5 +161,30 @@ describe('hidden-stage persistence', () => {
   it('drops unknown stage names so a stale key cannot accumulate', () => {
     sessionStorage.setItem('crm_pipeline_hidden_stages', JSON.stringify(['won', 'nonesuch', 42]));
     expect([...loadHiddenStages()]).toEqual(['won']);
+  });
+});
+
+describe('lastContactLabel', () => {
+  // A fixed clock: the label is a duration, so reading the wall clock would make these tests
+  // depend on when they run.
+  const now = new Date('2026-09-09T12:00:00Z');
+
+  it('names the gap since the last logged note or activity', () => {
+    expect(lastContactLabel('2026-09-04T12:00:00Z', now)).toBe('Last contact 5d ago');
+    expect(lastContactLabel('2026-08-19T12:00:00Z', now)).toBe('Last contact 3w ago');
+    expect(lastContactLabel('2026-06-09T12:00:00Z', now)).toBe('Last contact 3mo ago');
+  });
+
+  it('drops the "ago" inside the first day, where it reads wrong', () => {
+    expect(lastContactLabel('2026-09-09T09:00:00Z', now)).toBe('Last contact today');
+  });
+
+  it('says so outright when nothing has been logged', () => {
+    // Never an empty slot: a won account nobody has followed up on is the single strongest
+    // signal this line exists to surface, so hiding it would invert the feature (#128's rule
+    // that an absent value is a state worth reading).
+    expect(lastContactLabel(null, now)).toBe('No contact logged');
+    expect(lastContactLabel(undefined, now)).toBe('No contact logged');
+    expect(lastContactLabel('', now)).toBe('No contact logged');
   });
 });

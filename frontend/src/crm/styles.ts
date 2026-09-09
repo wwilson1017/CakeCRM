@@ -8,6 +8,14 @@ import {
 
 // ── Layout ───────────────────────────────────────────────────────────────────
 
+/** Space reserved under a page for the fixed "Ask Baker" launcher pill: 24px off the
+ *  bottom + 52px tall + 12px clearance. `CrmLayout` pads its scroll container by it so
+ *  every page can scroll PAST the pill; the pipeline board pads its columns by it too,
+ *  because since #129 that board is bounded to the window and so cannot scroll the page
+ *  past the pill the way every other page does. One number, two consumers. */
+export const LAUNCHER_CLEARANCE_PX = 88;
+
+
 export function pagePadding(isMobile: boolean): CSSProperties {
   return { padding: isMobile ? '20px 16px' : '32px 44px' };
 }

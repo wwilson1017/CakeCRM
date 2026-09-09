@@ -43,12 +43,18 @@ interface PipelineColumn extends Omit<ListColumn<CrmDeal>, 'key' | 'sortValue'> 
  * side. So a date-only string is rebuilt from its calendar parts.
  *
  * `last_activity_at` is a full TIMESTAMPTZ, and it goes through `parseUTC` rather than the bare
- * constructor. Postgres hands back SIX fractional digits (the column is written from
- * `datetime.now(timezone.utc).isoformat()`), and ECMA-262 only defines up to three: V8 tolerates
- * the extra digits, JavaScriptCore does not. So `new Date('2026-09-09T12:00:00.123456+00:00')` is
- * Invalid Date in Safari and every iOS browser, and this column silently rendered "—" for every
- * deal that had any activity at all. `parseUTC` truncates to milliseconds and supplies a `Z` when
- * the string carries no zone, which is also what the GTD surfaces already use.
+ * constructor — but NOT for the reason this change was originally filed under, which the
+ * evidence run disproved and which is worth recording so nobody re-derives it. Postgres returns
+ * SIX fractional digits (the column is written from `datetime.now(timezone.utc).isoformat()`)
+ * where ECMA-262 defines three, and the claim was that JavaScriptCore rejects the extra ones and
+ * so this column showed "—" in Safari. Measured on WebKit 26.5 and the system `jsc`, it does
+ * not: the bare constructor parses that string correctly, and the column was never broken there.
+ *
+ * What IS true, and is why the call stands: more than three digits is implementation-DEFINED
+ * rather than guaranteed, so the bare constructor is a bet on engine behaviour the spec does not
+ * require; and a zone-LESS timestamp is read as LOCAL by the constructor and as UTC by
+ * `parseUTC`, which is a real divergence on every engine. `parseUTC` also matches what the GTD
+ * surfaces already do with the same kind of value.
  */
 function shortDate(value: string | null | undefined): string {
   if (!value) return '—';

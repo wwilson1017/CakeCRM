@@ -601,4 +601,51 @@ describe('boardCollisionDetection', () => {
       boardCollisionDetection(inBoardBox(flat, rect(A_LEFT, COLUMN_TOP, 640, 2000)))[0]?.id,
     ).toBe('column-B');
   });
+  it('clips a lane to the board box VERTICALLY when widening is skipped', () => {
+    // The y-axis mirror of the horizontal case above, and the hole `clampX`'s docstring predicted
+    // would open the moment a consumer bounded a board's own height — which #129 does. On the
+    // normal path a lane never keeps its raw y (the band replaces it), but the widening has four
+    // early returns and this is one of them: A and B share an x-range, so no band is drawn. With
+    // the board's fold at y=400 and B running 320..520, the strip 400..520 is real geometry that
+    // nothing on screen occupies.
+    const stacked = {
+      active,
+      collisionRect: DRAGGED_RECT,
+      pointerCoordinates: { x: 150, y: 450 }, // inside B's raw 320..520, below the board's fold
+      droppableContainers: [column('A'), column('B')],
+      droppableRects: new Map<UniqueIdentifier, ClientRect>([
+        ['column-A', rect(0, 100, 300, 200)], // y 100..300
+        ['column-B', rect(0, 320, 300, 200)], // same x as A, so the board never widens
+      ]),
+    };
+    const ids = boardCollisionDetection(inBoardBox(stacked, rect(0, 100, 620, 300)))
+      .map(hit => String(hit.id));
+    // Unclipped, B contains the pointer and `pointerWithin` returns it ALONE.
+    expect(ids).not.toEqual(['column-B']);
+    // Clipped to 320..400, nothing contains the pointer, so the distance fallback answers — and it
+    // ranks every surviving lane, which is what tells the two paths apart. Asserting on the
+    // FALLBACK is the point: it is handed the same clipped geometry, because `closestCorners`
+    // always names something and would otherwise re-expose the lane this clip just removed.
+    expect(ids).toContain('column-A');
+  });
+
+  it('drops a lane with nothing on screen when widening is skipped, rather than leaving it hittable off-board', () => {
+    // Same stacked layout, but the board's fold is at y=300, so B (320..520) has NOTHING visible.
+    // A lane that cannot be given the band and cannot be clipped to anything is not a target at
+    // all — it must leave the rect map, or `closestCorners` will happily rank it.
+    const stacked = {
+      active,
+      collisionRect: DRAGGED_RECT,
+      pointerCoordinates: { x: 150, y: 400 },
+      droppableContainers: [column('A'), column('B')],
+      droppableRects: new Map<UniqueIdentifier, ClientRect>([
+        ['column-A', rect(0, 100, 300, 200)],
+        ['column-B', rect(0, 320, 300, 200)],
+      ]),
+    };
+    const ids = boardCollisionDetection(inBoardBox(stacked, rect(0, 100, 620, 200)))
+      .map(hit => String(hit.id));
+    expect(ids).not.toContain('column-B');
+    expect(ids).toContain('column-A');
+  });
 });
