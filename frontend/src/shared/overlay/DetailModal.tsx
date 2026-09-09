@@ -48,6 +48,11 @@ import { acquireBodyScrollLock } from '../hooks/useBodyScrollLock';
  *
  * The Tab trap therefore admits ONE element outside the panel in this mode — whatever carries
  * `data-detail-companion` — so the launcher is reachable by keyboard and not only by pointer.
+ * Only in the CENTRED layout, and only while that element is genuinely uncovered: the takeover
+ * renders at `z-50` and covers the launcher, so the hand-off is gated on the `dock:` probe below;
+ * and `AssistantLauncher` withholds the attribute (and drops beneath this panel) whenever it
+ * would NAVIGATE rather than open the drawer, since a navigation unmounts the panel and takes
+ * any draft with it without ever reaching this modal's close guard.
  * Residual, disclosed: once the drawer itself closes and returns focus to that button, a Tab
  * pressed while focus sits outside BOTH surfaces still walks the covered page. That is not a
  * regression (the hand-rolled sheet this replaced had no trap at all), but a full launcher /
