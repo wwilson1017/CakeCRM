@@ -1,4 +1,5 @@
 import { useCallback, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { toast } from '../../../shared/toast';
 import { createProject, deleteTodo, updateTodo } from '../api';
 import type { Todo, TodoProject, TodoStatus } from '../types';
@@ -35,10 +36,48 @@ const NEW_CONTEXT = 'new';
 // collide with a real one however the project is named.
 const NEW_PROJECT = 'new';
 
-const stepCls = 'mb-2 text-sm font-heading font-bold uppercase tracking-wide text-charcoal';
+const stepCls = 'text-sm font-heading font-bold uppercase tracking-wide text-charcoal';
+const badgeCls = 'inline-flex h-5 w-5 shrink-0 items-center justify-center rounded bg-ck-accent font-heading text-[10px] font-bold leading-none text-ck-accent-ink';
 const destCls = 'rounded-lg border px-3 py-2 text-sm font-heading transition-colors disabled:opacity-50';
 const inputCls = 'rounded-lg border border-line bg-cream px-2 py-1.5 text-sm text-charcoal focus:border-brand focus:outline-none disabled:opacity-50';
 const linkCls = 'text-sm underline disabled:opacity-50';
+
+/**
+ * One step heading: the number as a solid accent badge, the text beside it, and — on the
+ * one step that is not optional — a red star in place of the word "(required)".
+ *
+ * Both glyphs are `aria-hidden` and each carries a visually-hidden equivalent INSIDE the
+ * <h3>, so the heading's accessible name still reads exactly as the words they replaced
+ * ("Step 3: Last step — set context (required)"). An `aria-label` on the badge would not do
+ * that job: a bare <span> is role=generic, which does not reliably take a name from the
+ * author — and naming the <h3> itself would hide the heading's own words from any reader
+ * that matches on text.
+ *
+ * The badge is `bg-ck-accent` + `text-ck-accent-ink`, the repo's one solid-accent pairing,
+ * pinned at AA in `core/theme/hueContrast.test.ts`; the star is text, so it routes through
+ * `text-ck-accent-text` per the #119 FILL/TEXT split.
+ */
+function StepHeading({ step, required, children }: {
+  step: number;
+  required?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div className="mb-2 flex items-center gap-2">
+      <span aria-hidden="true" className={badgeCls}>{String(step).padStart(2, '0')}</span>
+      <h3 className={stepCls}>
+        <span className="sr-only">{`Step ${step}: `}</span>
+        {children}
+        {required && (
+          <>
+            <span aria-hidden="true" className="ml-1 text-ck-accent-text">★</span>
+            <span className="sr-only"> (required)</span>
+          </>
+        )}
+      </h3>
+    </div>
+  );
+}
 
 /** The sub-millisecond part of an ISO timestamp, in microseconds within the millisecond.
  * `Date.parse` truncates at the millisecond, and every task write stamps `updated_at` from
@@ -499,7 +538,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
       {/* Step 1 — where it's headed. Selecting is local: the item stays put until
           step 3 gives it a context. */}
       <div className="mt-5">
-        <h3 className={stepCls}>1. What kind of action?</h3>
+        <StepHeading step={1}>What kind of action?</StepHeading>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           {DESTINATIONS.map(d => {
             const on = d.status === destination;
@@ -532,7 +571,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
 
       {/* Step 2 — optional enrichment. Nothing here leaves the inbox. */}
       <div className="mt-5">
-        <h3 className={stepCls}>2. Add detail (optional)</h3>
+        <StepHeading step={2}>Add detail (optional)</StepHeading>
         <div className="flex flex-wrap items-center gap-2">
           {newProject === null ? (
             <select
@@ -669,7 +708,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
 
       {/* Step 3 — the last step. Picking a context files it and clears the inbox. */}
       <div className="mt-5 border-t border-line-faint pt-4">
-        <h3 className={stepCls}>3. Last step — set context (required)</h3>
+        <StepHeading step={3} required>Last step — set context</StepHeading>
         <p className="mb-2 text-sm text-muted">
           Where can you actually do this? Every item needs a context before it leaves the
           inbox. Choosing one files it under{' '}
