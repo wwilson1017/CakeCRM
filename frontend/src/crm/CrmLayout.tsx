@@ -9,7 +9,7 @@ import { useIsMobile } from '../shared/useIsMobile';
 import { MobileMenuDrawer } from '../shared/MobileMenuDrawer';
 import { confirmDialog } from '../shared/confirm';
 import { INK, INK_SOFT, INK_MUTE, LINE, LINE_STRONG, ACCENT, GOLD_FILL, GOLD_TEXT, FONT_DISPLAY, FONT_SANS, CORAL_TEXT, tint } from '../shared/styles';
-import { modalOverlay, modalContent, btnPrimary, btnSecondary } from './styles';
+import { modalOverlay, modalContent, btnPrimary, btnSecondary, LAUNCHER_CLEARANCE_PX } from './styles';
 import { AiKeyNudge } from './components/AiKeyNudge';
 import { AssistantLauncher } from './components/AssistantLauncher';
 import { BrandLogo } from './components/BrandLogo';
@@ -390,10 +390,11 @@ export function CrmLayout() {
           permanently covers whatever ends up in the bottom-left corner — on the
           Settings page that was the forms' left-aligned submit buttons. Bottom
           padding on the scroll container lets every page scroll PAST the pill
-          instead (24 + 52 + 12px clearance), keeping the launcher itself always
+          instead — see LAUNCHER_CLEARANCE_PX for the arithmetic — keeping the
+          launcher itself always
           visible and reachable. Applied on desktop too: the pill overlaps the
           content column there just the same, only with more room around it. */}
-      <div key={refreshKey} style={{ flex: 1, overflow: 'auto', position: 'relative', paddingBottom: 88 }}>
+      <div key={refreshKey} style={{ flex: 1, overflow: 'auto', position: 'relative', paddingBottom: LAUNCHER_CLEARANCE_PX }}>
         {/* The task mode rides the demo-status payload this layout already fetches,
             so /crm/tasks costs no extra request to decide which task system to show.
 
