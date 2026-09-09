@@ -233,6 +233,12 @@ export default function DetailModal({
   children,
 }: DetailModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
+  // Is the CENTRED layout live rather than the full-screen takeover? Answered by a probe element
+  // carrying the `dock:` variant ITSELF, never by a media query in JS: this file's whole premise
+  // is that the takeover/centre decision is `dock:` and nothing else, and a JS copy of that query
+  // is a second definition that drifts. `useIsMobile` is width-only, which is exactly what put a
+  // landscape phone on the wrong branch in the blueprint.
+  const dockProbeRef = useRef<HTMLSpanElement>(null);
   const titleId = useId();
   // Whether the mousedown / mouseup halves of the current gesture each landed on the backdrop
   // itself — BOTH are tracked because the click event alone can prove neither; see the
@@ -424,7 +430,12 @@ export default function DetailModal({
     // therefore native order, which is the honest behaviour for a `role="dialog"` that
     // deliberately does not claim `aria-modal`: this panel does not own the whole screen, and
     // says so.
-    const companion = underLauncher ? visibleCompanion(root) : null;
+    // The hand-off belongs to the CENTRED layout only. On the takeover this panel renders at
+    // `z-50` and COVERS the launcher, so the companion is no longer "the one control this mode
+    // leaves uncovered" — it is behind the modal. `getClientRects()` cannot see occlusion, so it
+    // would still qualify, and Tab past the last control would focus an invisible button.
+    const centred = (dockProbeRef.current?.getClientRects().length ?? 0) > 0;
+    const companion = underLauncher && centred ? visibleCompanion(root) : null;
 
     const focusables = visibleFocusables(root);
     if (focusables.length === 0) {
@@ -495,6 +506,14 @@ export default function DetailModal({
         onBackdropClick();
       }}
     >
+      {/* Zero-size probe for the `dock:` variant, so the Tab hand-off below can tell the centred
+          layout from the takeover without a second copy of that media query in JS. A `<span>`
+          outside the panel: not focusable, so the trap's own focusable scan never sees it, and
+          `aria-hidden` keeps it out of the accessibility tree. `hidden` / `dock:block` are
+          written as complete class names because that is what Tailwind scans for. */}
+      {underLauncher && (
+        <span ref={dockProbeRef} aria-hidden="true" className="hidden dock:block" />
+      )}
       <div
         ref={panelRef}
         role="dialog"

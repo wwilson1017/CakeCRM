@@ -8,12 +8,13 @@
 // EVERY draft the body holds, and the copy-link building its URL from the id rather than the
 // address bar — which is unverifiable by eye, because the parameter is stripped the instant it
 // is read.
-import { act } from 'react';
+import { StrictMode, act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CrmDeal } from '../../core/types';
+import type { DealPatch } from './DealDetailBody';
 import type { DetailCloseGuard, DetailCloseReason, DetailRenderContext } from '../../shared/collection';
 
 const api = vi.hoisted(() => vi.fn());
@@ -128,7 +129,17 @@ function render(props: Partial<BodyProps> & { deal: CrmDeal }) {
     ctx,
     onMarkWon: vi.fn(),
     onMarkLost: vi.fn(),
-    onSaveDeal: vi.fn().mockResolvedValue(undefined),
+    // Resolves with the row a server would return: `_classify_deal_update` derives `probability`
+    // from the stage, so a close writes 100/0 whatever the form sent. A mock resolving
+    // `undefined` would make the body's fold a silent no-op and let every assertion about it
+    // pass for the wrong reason.
+    onClose: vi.fn(),
+    onSaveDeal: vi.fn((d: CrmDeal, patch: DealPatch) => Promise.resolve({
+      ...d,
+      ...patch,
+      ...(patch.stage === 'won' ? { probability: 100 } : {}),
+      ...(patch.stage === 'lost' ? { probability: 0 } : {}),
+    })),
     ...props,
   };
   act(() => {
@@ -411,21 +422,41 @@ describe('the inline save', () => {
   it('re-reads the record after saving an off-board deal', async () => {
     // Off the board the prop is `loadById`'s one-shot result that no host array will ever
     // replace, so without the re-read a save repaints the panel with pre-save values.
+    //
+    // Asserted on a field the SAVE RESPONSE does not carry, because the body also folds that
+    // response into its read channel: checking the saved title alone would be satisfied by the
+    // fold and would pass with `loadDetail()` deleted outright. `lead_score` is derived
+    // server-side, arrives only on the detail read, and is exactly the class of value the
+    // re-read exists for.
     let title = 'Before';
+    let score = 61;
+    let detailReads = 0;
     api.mockImplementation((path: string, options?: { method?: string }) => {
       if ((options?.method ?? 'GET') === 'GET' && /^\/api\/crm\/deals\/\d+$/.test(path)) {
-        return Promise.resolve(detailResponse({ title }));
+        detailReads += 1;
+        return Promise.resolve(detailResponse({ title, lead_score: score }));
       }
       return routeApi()(path, options);
     });
-    render({ deal: makeDeal({ title: 'Before' }), onBoard: false, stageWritable: false });
+    const onSaveDeal = vi.fn((d: CrmDeal, patch: DealPatch) => {
+      // What the PUT answers: the row it wrote, with no recomputed score on it.
+      const written: CrmDeal = { ...d, ...patch };
+      delete written.lead_score;
+      return Promise.resolve(written);
+    });
+    render({ deal: makeDeal({ title: 'Before', lead_score: 61 }), onBoard: false, stageWritable: false, onSaveDeal });
     await settle();
+    expect(detailReads).toBe(1);
     click(buttonByText('Edit'));
     setField('deal-title', 'After');
     title = 'After';
+    score = 88;
     click(buttonByText('Save'));
     await settle();
+
+    expect(detailReads).toBe(2);
     expect(container.textContent).toContain('After');
+    expect(container.textContent).toContain('88');
   });
 });
 
@@ -864,18 +895,26 @@ describe('an ambiguous close reconciles before a retry', () => {
       if (/^\/api\/crm\/deals\/\d+$/.test(path)) return detail;
       return null;
     });
-    // The host resolves WITHOUT dismissing the panel — its failure path…
+    // The host REJECTS — which is what a lost response looks like from here, and what the hosts
+    // now do rather than swallowing a failure. A rejection is also what keeps the panel open: the
+    // body dismisses itself only when the write resolves.
     const onMarkWon = vi.fn(async () => {
       // …while the server did in fact commit the close.
       detail = detailResponse({ stage: 'lost', lost_reason: 'price' });
+      throw new Error('connection lost');
     });
-    render({ deal: makeDeal({ stage: 'lead' }), onMarkWon });
+    const onClose = vi.fn();
+    render({ deal: makeDeal({ stage: 'lead' }), onMarkWon, onClose });
     await settle();
     expect(buttonByText('Mark Lost')).toBeTruthy();
 
     await click(buttonByText('Mark Won'));
     await settle();
 
+    // Not dismissed — the write failed as far as this client knows.
+    expect(onClose).not.toHaveBeenCalled();
+    // …but reconciled: the deal IS closed on the server, so neither button is offered and there
+    // is no way to fire a second `mark_deal_lost`.
     expect(buttonByText('Mark Lost')).toBeNull();
     expect(buttonByText('Mark Won')).toBeNull();
   });
@@ -883,14 +922,29 @@ describe('an ambiguous close reconciles before a retry', () => {
   it('keeps the pair live when the close genuinely did not land', async () => {
     // The other half — a real failure must stay retryable, or the guard traps the user.
     routeDetail(detailResponse({ stage: 'lead' }));
-    const onMarkWon = vi.fn(async () => {});
-    render({ deal: makeDeal({ stage: 'lead' }), onMarkWon });
+    const onMarkWon = vi.fn(async () => { throw new Error('refused'); });
+    const onClose = vi.fn();
+    render({ deal: makeDeal({ stage: 'lead' }), onMarkWon, onClose });
     await settle();
     await click(buttonByText('Mark Won'));
     await settle();
 
+    expect(onClose).not.toHaveBeenCalled();
     expect((buttonByText('Mark Won') as HTMLButtonElement).disabled).toBe(false);
     expect(buttonByText('Mark Lost')).toBeTruthy();
+  });
+
+  it('dismisses only when the write RESOLVES', async () => {
+    // The other side of the same contract, and the reason a host must rethrow rather than
+    // swallow: a resolve is the ONLY thing that tells this body the deal is closed.
+    routeDetail(detailResponse({ stage: 'lead' }));
+    const onClose = vi.fn();
+    render({ deal: makeDeal({ stage: 'lead' }), onClose });
+    await settle();
+    await click(buttonByText('Mark Won'));
+    await settle();
+
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -906,6 +960,364 @@ describe('the owner row', () => {
 
     expect(container.textContent).toContain('Owner');
     expect(container.textContent).toContain('Unassigned');
+  });
+});
+
+// ── Exits and lifecycle authority (the settle review's findings) ─────────────────────────────
+
+describe('every exit asks the same guard', () => {
+  it('confirms before a Restore discards an open edit draft', async () => {
+    // The banner renders OVER the edit form, and every host dismisses the panel on `onRestored`
+    // — so "edit an archived deal, then restore it" is a real way to lose a draft. Restore is a
+    // leave path like the contact link and Mark Won, and goes through the same `canLeave`.
+    routeDetail(
+      detailResponse({ archived_at: '2026-08-20T00:00:00+00:00' }),
+      path => (path === '/api/crm/deals/7/restore'
+        ? detailResponse({ archived_at: null })
+        : undefined),
+    );
+    confirmDialog.mockResolvedValue(false);   // the user says "keep editing"
+    const onRestored = vi.fn();
+    render({ deal: makeDeal({ archived_at: '2026-08-20T00:00:00+00:00' }), onRestored });
+    await settle();
+    click(buttonByText('Edit'));
+    await settle();
+    setField('deal-title', 'Half-typed');
+    await click(buttonByText('Restore'));
+    await settle();
+
+    expect(confirmDialog).toHaveBeenCalled();
+    // Refused, so nothing was written and the draft is still on screen.
+    expect(api).not.toHaveBeenCalledWith('/api/crm/deals/7/restore', { method: 'POST' });
+    expect(onRestored).not.toHaveBeenCalled();
+    expect(container.querySelector<HTMLInputElement>('#deal-title')!.value).toBe('Half-typed');
+  });
+});
+
+describe('the company the user cleared', () => {
+  it('is not resurrected by the next contact pick', async () => {
+    // "Fill only when empty" cannot tell a CLEARED company from an unset one, so the link the
+    // user just removed comes straight back — and gets saved. `DealForm` guards this with a
+    // touched ref for the same reason; the inline editor needs its own.
+    const defaults = api.getMockImplementation()!;
+    api.mockImplementation((path: string, options?: { method?: string }) => {
+      if (path.startsWith('/api/crm/contacts?')) {
+        return Promise.resolve({ contacts: [{ id: 99, name: 'New Lead', company: '', company_name: 'Inherited Co', company_id: 42 }] });
+      }
+      return defaults(path, options);
+    });
+    const props = render({ deal: makeDeal() });   // company_id: 5
+    await settle();
+    click(buttonByText('Edit'));
+    await settle();
+    await act(async () => { clearLink('Clear company')!.click(); });
+    await openPicker('contact');
+    await clickOption(t => t.includes('New Lead'));
+    click(buttonByText('Save'));
+    await settle();
+
+    const [, patch] = (props.onSaveDeal as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(patch).toEqual({ contact_id: 99, company_id: null });
+  });
+});
+
+describe('the lifecycle columns govern the form too, not just the buttons', () => {
+  it('opens the Stage select on the SERVER\'s stage, not the host row\'s', async () => {
+    // After a close whose response was lost, the board row still says `lead` while the server
+    // says `lost`. The close-out pair reads the fetch and disappears — so Edit is the only route
+    // left — and a form seeded from the host row would show `lead`, where choosing `lead` (the
+    // obvious "reopen this") matches its own baseline and sends NO patch at all.
+    routeDetail(detailResponse({ stage: 'lost' }));
+    render({ deal: makeDeal({ stage: 'lead' }) });
+    await settle();
+    click(buttonByText('Edit'));
+    await settle();
+
+    expect((container.querySelector('#deal-stage') as HTMLSelectElement).value).toBe('lost');
+  });
+
+  it('does not flash the pre-save stage after a stage change is written', async () => {
+    // `archivedAt`/`closeStage` read the detail fetch, and `handleSave` refreshes it in the
+    // background — so without folding the patch in first, the heading and the close-out pair
+    // describe the stage the deal has just left until that request lands.
+    // The post-save refetch is HELD for the whole test, which is what makes this about the fold
+    // rather than about the refresh: if the assertion were allowed to wait for that request, it
+    // would pass with the fold deleted.
+    let detailReads = 0;
+    routeDetail(detailResponse({ stage: 'proposal' }), path => {
+      if (!/^\/api\/crm\/deals\/\d+$/.test(path)) return undefined;
+      detailReads += 1;
+      return detailReads === 1 ? undefined : new Promise(() => {});
+    });
+    render({ deal: makeDeal({ stage: 'proposal' }) });
+    await settle();
+    expect(buttonByText('Mark Won')).toBeTruthy();
+
+    click(buttonByText('Edit'));
+    await settle();
+    setField('deal-stage', 'won');
+    click(buttonByText('Save'));
+    await settle();
+
+    // Closed now, so the close-out pair is gone — and the refetch has not answered.
+    expect(detailReads).toBe(2);
+    expect(buttonByText('Mark Won')).toBeNull();
+    expect(buttonByText('Mark Lost')).toBeNull();
+  });
+});
+
+describe('an exit in flight closes the door behind it', () => {
+  it('refuses to open the edit form while a close-out is still writing', async () => {
+    // The host dismisses this panel when the write settles, and by then a draft started
+    // underneath would be discarded WITHOUT the close guard ever seeing it — the guard ran at
+    // click time, before the draft existed, and an unmount cannot be vetoed. The id check that
+    // stops a settling write closing someone else's panel cannot help: it really is this deal.
+    routeDetail(detailResponse());
+    let release!: () => void;
+    const inFlight = new Promise<void>(res => { release = res; });
+    const onMarkWon = vi.fn(() => inFlight);
+    render({ deal: makeDeal(), onMarkWon });
+    await settle();
+
+    await click(buttonByText('Mark Won'));
+    expect((buttonByText('Edit') as HTMLButtonElement).disabled).toBe(true);
+
+    // ...and it comes back once the write settles, for a host that keeps the panel open.
+    await act(async () => { release(); await inFlight; });
+    await settle();
+    expect((buttonByText('Edit') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('refuses it while a restore is writing too', async () => {
+    routeDetail(
+      detailResponse({ archived_at: '2026-08-20T00:00:00+00:00' }),
+      path => (path === '/api/crm/deals/7/restore' ? new Promise(() => {}) : undefined),
+    );
+    render({ deal: makeDeal({ archived_at: '2026-08-20T00:00:00+00:00' }) });
+    await settle();
+    await click(buttonByText('Restore'));
+
+    expect((buttonByText('Edit') as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+describe('whose choice the company field is', () => {
+  it('never overwrites a company the USER picked during this edit', async () => {
+    // The gap the seeded ref alone leaves: on a deal with NO company the ref starts false, so a
+    // company the user then picks themselves is still "untouched" unless the picker says
+    // otherwise — and the next contact silently replaces it.
+    const defaults = api.getMockImplementation()!;
+    api.mockImplementation((path: string, options?: { method?: string }) => {
+      if (path.startsWith('/api/crm/contacts?')) {
+        return Promise.resolve({ contacts: [{ id: 99, name: 'New Lead', company: '', company_name: 'Inherited Co', company_id: 42 }] });
+      }
+      if (path.startsWith('/api/crm/companies?')) {
+        return Promise.resolve({ companies: [{ id: 88, name: 'My Own Co', status: 'active' }] });
+      }
+      return defaults(path, options);
+    });
+    const props = render({ deal: makeDeal({ company_id: null, company_name: undefined }) });
+    await settle();
+    click(buttonByText('Edit'));
+    await settle();
+    await openPicker('company');
+    await clickOption(t => t.includes('My Own Co'));
+    await openPicker('contact');
+    await clickOption(t => t.includes('New Lead'));
+    click(buttonByText('Save'));
+    await settle();
+
+    const [, patch] = (props.onSaveDeal as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(patch).toEqual({ contact_id: 99, company_id: 88 });
+  });
+
+  it('lets an INFERRED company follow its contact to nothing', async () => {
+    // The other half, and the one that goes wrong quietly: filling only when the new contact HAS
+    // a company strands the PREVIOUS contact's company on the deal, linking it to an
+    // organisation neither the user nor the current contact ever named. `DealForm` has always
+    // cleared it; the port dropped that.
+    const defaults = api.getMockImplementation()!;
+    api.mockImplementation((path: string, options?: { method?: string }) => {
+      if (path.startsWith('/api/crm/contacts?')) {
+        return Promise.resolve({ contacts: [
+          { id: 99, name: 'Linked Lead', company: '', company_name: 'Inherited Co', company_id: 42 },
+          { id: 98, name: 'Unlinked Lead', company: '', company_name: '', company_id: null },
+        ] });
+      }
+      return defaults(path, options);
+    });
+    const props = render({ deal: makeDeal({ company_id: null, company_name: undefined }) });
+    await settle();
+    click(buttonByText('Edit'));
+    await settle();
+    await openPicker('contact');
+    await clickOption(t => t.includes('Linked Lead'));
+    await openPicker('contact');
+    await clickOption(t => t.includes('Unlinked Lead'));
+    click(buttonByText('Save'));
+    await settle();
+
+    const [, patch] = (props.onSaveDeal as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(patch).toEqual({ contact_id: 98 });
+  });
+});
+
+describe('the save folds the SERVER row, not the request', () => {
+  it('shows the probability the server derived, not the one the form sent', async () => {
+    // `_classify_deal_update` overrides `probability` to 100/0 inside the transaction that
+    // changes the stage, so the patch that went out is not what was stored. Folding the request
+    // would paint "Won · 50%" until the background re-read lands — and leave it there for good
+    // if that request failed. The re-read is HELD here so the fold is what is being asserted.
+    let detailReads = 0;
+    routeDetail(detailResponse({ stage: 'proposal', probability: 50 }), path => {
+      if (!/^\/api\/crm\/deals\/\d+$/.test(path)) return undefined;
+      detailReads += 1;
+      return detailReads === 1 ? undefined : new Promise(() => {});
+    });
+    // OFF the board, which is where this bites: there the body's own read channel is the WHOLE
+    // record, so a folded request value is what the panel shows for every column, not just the
+    // two lifecycle ones. On the board the host patches its row from the same response.
+    render({ deal: makeDeal({ stage: 'proposal', probability: 50 }), onBoard: false });
+    await settle();
+    click(buttonByText('Edit'));
+    await settle();
+    setField('deal-stage', 'won');
+    click(buttonByText('Save'));
+    await settle();
+
+    expect(detailReads).toBe(2);
+    expect(container.textContent).toContain('100%');
+    expect(container.textContent).not.toContain('50%');
+  });
+});
+
+describe('the quick-log row during an exit', () => {
+  it('accepts no new draft while a close-out is writing', async () => {
+    // The other draft this body owns. The close guard ran at click time, before any of it
+    // existed, and the host dismisses the panel when the write settles — so an activity note
+    // typed underneath disappears with no prompt and no trace.
+    routeDetail(detailResponse());
+    let release!: () => void;
+    const inFlight = new Promise<void>(res => { release = res; });
+    const onMarkWon = vi.fn(() => inFlight);
+    render({ deal: makeDeal(), onMarkWon });
+    await settle();
+
+    const chip = () => [...container.querySelectorAll('button')]
+      .find(b => b.textContent?.trim() === 'call') as HTMLButtonElement;
+    expect(chip().disabled).toBe(false);
+
+    await click(buttonByText('Mark Won'));
+    expect(chip().disabled).toBe(true);
+
+    await act(async () => { release(); await inFlight; });
+    await settle();
+    expect(chip().disabled).toBe(false);
+  });
+});
+
+describe('an exit that outlives its own body', () => {
+  it('patches the host on a restore it can no longer close, but does not close', async () => {
+    // The row must reach the host either way — the board has to stop showing the deal as
+    // archived, and that patch is what makes it correct. The DISMISSAL is the part that must not
+    // happen: this body is gone, so whatever panel is on screen belongs to someone else and may
+    // be holding a draft nobody has asked about.
+    let releaseRestore: (v: unknown) => void = () => {};
+    routeDetail(
+      detailResponse({ archived_at: '2026-08-20T00:00:00+00:00' }),
+      path => (path === '/api/crm/deals/7/restore'
+        ? new Promise(res => { releaseRestore = res; })
+        : undefined),
+    );
+    const onRestored = vi.fn();
+    const onClose = vi.fn();
+    render({ deal: makeDeal({ archived_at: '2026-08-20T00:00:00+00:00' }), onRestored, onClose });
+    await settle();
+    await click(buttonByText('Restore'));
+
+    // The panel is taken away underneath the request — a ‹ › walk, a deep link, or the board
+    // emptying all do this.
+    act(() => root.render(<MemoryRouter><ActiveRecordProvider><span /></ActiveRecordProvider></MemoryRouter>));
+    await act(async () => { releaseRestore(detailResponse({ archived_at: null })); });
+    await settle();
+
+    expect(onRestored).toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('does not close on a stage write whose panel is already gone', async () => {
+    routeDetail(detailResponse());
+    let release!: () => void;
+    const inFlight = new Promise<void>(res => { release = res; });
+    const onMarkWon = vi.fn(() => inFlight);
+    const onClose = vi.fn();
+    render({ deal: makeDeal(), onMarkWon, onClose });
+    await settle();
+    await click(buttonByText('Mark Won'));
+
+    act(() => root.render(<MemoryRouter><ActiveRecordProvider><span /></ActiveRecordProvider></MemoryRouter>));
+    await act(async () => { release(); await inFlight; });
+    await settle();
+
+    expect(onMarkWon).toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+describe('under StrictMode', () => {
+  it('still dismisses on a successful close-out', async () => {
+    // `main.tsx` renders the app inside <StrictMode>, whose development cycle is
+    // setup → cleanup → setup. `mountedRef` gates the dismissal, so a version that clears it in
+    // cleanup without re-arming it in setup leaves it false for the life of the mount — and
+    // Mark Won, Mark Lost and Restore then all silently decline to close the panel, in
+    // development only, which is exactly where it would be met and mistaken for a broken write.
+    routeDetail(detailResponse());
+    const onClose = vi.fn();
+    const props: BodyProps = {
+      deal: makeDeal(),
+      onBoard: true,
+      stageWritable: true,
+      ctx,
+      onMarkWon: vi.fn(),
+      onMarkLost: vi.fn(),
+      onSaveDeal: vi.fn((d: CrmDeal) => Promise.resolve(d)),
+      onClose,
+    };
+    await act(async () => {
+      root.render(
+        <StrictMode>
+          <MemoryRouter initialEntries={['/crm/pipeline']}>
+            <ActiveRecordProvider>
+              <DealDetailBody {...props} />
+            </ActiveRecordProvider>
+          </MemoryRouter>
+        </StrictMode>,
+      );
+    });
+    await settle();
+    await click(buttonByText('Mark Won'));
+    await settle();
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the edit form read-only while an exit is writing', async () => {
+    // The one draft `exiting` could not reach by disabling the ENTRY to editing: a form already
+    // open when Restore is pressed. The user consents to the discard once, and then keeps typing
+    // during the POST — work nobody asked about. The form is frozen rather than discarded,
+    // because the write may still be refused and the panel would then stay.
+    routeDetail(
+      detailResponse({ archived_at: '2026-08-20T00:00:00+00:00' }),
+      path => (path === '/api/crm/deals/7/restore' ? new Promise(() => {}) : undefined),
+    );
+    render({ deal: makeDeal({ archived_at: '2026-08-20T00:00:00+00:00' }) });
+    await settle();
+    click(buttonByText('Edit'));
+    await settle();
+    expect((container.querySelector('fieldset') as HTMLFieldSetElement).disabled).toBe(false);
+
+    await click(buttonByText('Restore'));
+    expect((container.querySelector('fieldset') as HTMLFieldSetElement).disabled).toBe(true);
   });
 });
 

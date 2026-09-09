@@ -32,16 +32,28 @@ vi.mock('../shared/toast', () => ({ toast }));
 // glue on this page — so the stub exposes them as buttons rather than swallowing them, or a
 // forgotten reload() would ship with the suite green. CLOSING is not among them: since #75 the
 // shell owns it, so the tests press the real Close control instead.
+// The stub MIRRORS the real body's exit rule rather than inventing one: it awaits the host's
+// write and calls `onClose` only when that resolves, exactly as `closeOut` does. Wiring the
+// buttons straight to the host's callbacks would test a component that does not exist — the host
+// stopped dismissing on its own precisely because only a mounted body can answer "is the panel in
+// front of me still the one that asked".
 vi.mock('./components/DealDetailBody', () => ({
-  DealDetailBody: ({ deal, onMarkWon, onRestored }: {
+  DealDetailBody: ({ deal, onMarkWon, onRestored, onClose }: {
     deal: { id: number };
-    onMarkWon: (d: { id: number }) => void;
-    onRestored: () => void;
+    onMarkWon: (d: { id: number }) => void | Promise<void>;
+    onRestored: (d: { id: number }) => void;
+    onClose: () => void;
   }) => (
     <div data-testid="sheet">
       {deal.id}
-      <button data-testid="sheet-stage" onClick={() => onMarkWon(deal)}>stage</button>
-      <button data-testid="sheet-restore" onClick={onRestored}>restore</button>
+      <button
+        data-testid="sheet-stage"
+        onClick={() => { void Promise.resolve(onMarkWon(deal)).then(onClose, () => {}); }}
+      >stage</button>
+      <button
+        data-testid="sheet-restore"
+        onClick={() => { onRestored(deal); onClose(); }}
+      >restore</button>
     </div>
   ),
 }));
@@ -303,6 +315,9 @@ describe('WeeklyTouchesDetailPage (issue #146)', () => {
       const before = detailCalls().length;
       await fire();
       expect(detailCalls().length).toBe(before + 1);
+      // ...and the panel is gone either way, which is what makes the refetch the user's next view
+      // rather than a number changing behind an open record.
+      expect(container.querySelector('[data-testid="sheet"]')).toBeNull();
     }
   });
 

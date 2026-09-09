@@ -167,19 +167,27 @@ function DetailView({ apiPath, isMobile }: { apiPath: string; isMobile: boolean 
     try {
       const { path, init } = stageWriteRequest(deal.id, stage, lostReason);
       await api(path, init);
-      setSelectedDealId(null);
+      // No dismissal here: `DealDetailBody` closes itself on a successful write, because only a
+      // MOUNTED body can tell whether the panel in front of it is still the one that asked.
       reload();
-    } catch {
+    } catch (err) {
       toast.error('Failed to move deal.');
+      // Rethrown so the panel's own close-out knows the deal was NOT closed and stays open.
+      throw err;
     }
   }
 
   // Rejects rather than reporting, so the inline form keeps the draft on screen and says why —
   // it is the only copy of what the user typed. Nothing is patched in place here: no row on this
   // page is a deal record, so the reload is the whole reconciliation.
-  async function saveDeal(deal: CrmDeal, patch: DealPatch) {
-    await api<CrmDeal>(`/api/crm/deals/${deal.id}`, { method: 'PUT', body: JSON.stringify(patch) });
+  async function saveDeal(deal: CrmDeal, patch: DealPatch): Promise<CrmDeal> {
+    const updated = await api<CrmDeal>(`/api/crm/deals/${deal.id}`, {
+      method: 'PUT', body: JSON.stringify(patch),
+    });
     reload();
+    // Handed back so the panel folds the SERVER's row rather than the patch it sent — the route
+    // derives `probability` from the stage.
+    return updated;
   }
 
   return (
@@ -278,7 +286,9 @@ function DetailView({ apiPath, isMobile }: { apiPath: string; isMobile: boolean 
               onMarkWon={d => updateDealStage(d, 'won')}
               onMarkLost={(d, lostReason) => updateDealStage(d, 'lost', lostReason)}
               onSaveDeal={saveDeal}
-              onRestored={() => { setSelectedDealId(null); reload(); }}
+              // Patching only — the body dismisses itself, and only while it is still on screen.
+              onRestored={() => reload()}
+              onClose={() => setSelectedDealId(null)}
             />
           ),
           onRequestClose: denyEscapeBackdrop,

@@ -4,7 +4,7 @@
 // collection layer.
 //
 // It lives in its own file for the same hard reason `PipelinePage.archived.test.tsx` does:
-// `vi.mock` is file-scoped, and `PipelinePage.test.tsx` mocks `DealDetailSheet` (its subject
+// `vi.mock` is file-scoped, and `PipelinePage.test.tsx` mocks `DealDetailBody` (its subject
 // is whether the page routes a selection to the sheet, not what the sheet renders), while
 // every assertion here needs the REAL sheet — "the link opened the deal" is exactly the
 // claim that a mocked sheet cannot make. The harness below is the archived file's, which is

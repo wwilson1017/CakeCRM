@@ -72,7 +72,12 @@ export function buildPipelineListColumns(
               padding: '1px 4px', flexShrink: 0,
             }}>ARCHIVED</span>
           )}
-          <span style={{ color: INK, fontWeight: 500, opacity: isArchivedDeal(d) ? 0.65 : 1 }}>{d.title}</span>
+          {/* Dimmed by COLOUR, never by `opacity` — the same substitution the board card
+              makes (issue #119). At 0.65 this measured 4.44:1 on a HOVERED row
+              (`hover:bg-sand`, which the pipeline gets because it wires `onSelect`), under
+              AA; `ink-dim` is 6.17:1 there. Keeping the two views on one treatment is also
+              what the note above asks for. */}
+          <span style={{ color: isArchivedDeal(d) ? INK_DIM : INK, fontWeight: 500 }}>{d.title}</span>
         </span>
       ),
     },

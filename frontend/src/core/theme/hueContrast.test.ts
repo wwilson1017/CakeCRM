@@ -374,7 +374,7 @@ describe.each([
 
   it('keeps a solid status fill legible under ON_STATUS', () => {
     // The three buttons that paint a hue as a SOLID background and put a label on it:
-    // `TasksPage` "Mark Complete", `DealDetailSheet` "Mark Won" (both green) and `ConfirmHost`'s
+    // `TasksPage` "Mark Complete", `DealDetailBody` "Mark Won" (both green) and `ConfirmHost`'s
     // danger confirm (red). They use `--color-ck-on-status`, not `accent-ink`: white is correct
     // on the brand red in both themes but was only 2.49:1 on the green `.dark` lightens for text.
     const on = hexToRgb(resolve(tokens, 'on-status'));
