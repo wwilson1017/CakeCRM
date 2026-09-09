@@ -113,6 +113,65 @@ describe('DealTemperatureIcon', () => {
     expect(onCycle).not.toHaveBeenCalled();
   });
 
+  it('advances on consecutive clicks without waiting for the prop to catch up', async () => {
+    // THE test for the optimistic override. Without it every click after the first steps from
+    // the same unchanged prop, so three clicks produce one move and the control reads as
+    // broken — which is the whole reason a click-to-cycle affordance needs local state.
+    let settle: () => void = () => {};
+    const onCycle = vi.fn(() => new Promise<void>(res => { settle = res; }));
+    render(<DealTemperatureIcon value={null} onCycle={onCycle} />);
+
+    for (const expected of ['hot', 'warm', 'cold', null]) {
+      await act(async () => { button()!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+      expect(onCycle).toHaveBeenLastCalledWith(expected);
+    }
+    // The prop never moved — every step came from what the control was showing.
+    expect(onCycle).toHaveBeenCalledTimes(4);
+    settle();
+  });
+
+  it('keeps the optimistic glyph until its own write settles, then follows the prop', async () => {
+    let settle: () => void = () => {};
+    const onCycle = vi.fn(() => new Promise<void>(res => { settle = res; }));
+    render(<DealTemperatureIcon value={null} onCycle={onCycle} />);
+
+    await act(async () => { button()!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(button()!.getAttribute('aria-label')).toContain('Deal temperature: Hot');
+
+    // Settling with the prop STILL stale is the failure case worth pinning: the host has not
+    // patched yet, so releasing here shows the pre-click value again.
+    await act(async () => { settle(); });
+    expect(button()!.getAttribute('aria-label')).toContain('Deal temperature: not set');
+
+    // ...and once the host does patch, the prop is what shows.
+    render(<DealTemperatureIcon value="hot" onCycle={onCycle} />);
+    expect(button()!.getAttribute('aria-label')).toContain('Deal temperature: Hot');
+  });
+
+  it('a superseded write settling does not flash the glyph back past a newer click', async () => {
+    // #150's lesson, in miniature: an EARLIER write of this control's own, answering after a
+    // later one, is exactly the settle that must not clear the newer override.
+    const settlers: (() => void)[] = [];
+    const onCycle = vi.fn(() => new Promise<void>(res => { settlers.push(res); }));
+    render(<DealTemperatureIcon value={null} onCycle={onCycle} />);
+
+    await act(async () => { button()!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    await act(async () => { button()!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(button()!.getAttribute('aria-label')).toContain('Deal temperature: Warm');
+
+    await act(async () => { settlers[0](); });   // the FIRST write lands second
+    expect(button()!.getAttribute('aria-label')).toContain('Deal temperature: Warm');
+  });
+
+  it('puts the glyph back when its own write fails', async () => {
+    // The revert is silent by design — the caller owns the message, because only it knows
+    // whether the failure is worth a toast or is a bulk-lock the board already explains.
+    const onCycle = vi.fn(() => Promise.reject(new Error('nope')));
+    render(<DealTemperatureIcon value="warm" onCycle={onCycle} />);
+    await act(async () => { button()!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(button()!.getAttribute('aria-label')).toContain('Deal temperature: Warm');
+  });
+
   it('distinguishes every adjacent pair of states by something other than colour', () => {
     // WCAG 1.4.1: colour must not be the only visual means of conveying information. Walking
     // the cycle is the right traversal — these are the pairs a reader actually has to tell

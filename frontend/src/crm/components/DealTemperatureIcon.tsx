@@ -23,6 +23,20 @@
  * The dashed ring for "not set" is doing a second job: it reads as an empty slot, so the
  * control looks like something waiting to be filled in rather than a fourth tier.
  *
+ * IT OWNS ITS OWN OPTIMISM, and that is what makes the cycle usable rather than a nicety.
+ * Without it a click renders nothing until the PUT lands, so three quick clicks all compute
+ * `nextTemperature(<the same unchanged prop>)` and the user gets ONE step instead of three —
+ * the control would simply look broken. Painting here rather than in each host also means the
+ * board, the List and all three deal-sheet hosts behave identically, without every host
+ * learning to patch this column.
+ *
+ * The override rule is #150's, arrived at there the hard way: an override is released when
+ * ITS OWN write settles, success or failure — never because the incoming prop disagrees with
+ * it. A prop is not evidence about a write still in flight, and an EARLIER write of this
+ * card's own answering first carries exactly that disagreement, so releasing on disagreement
+ * flashes the glyph back to the value the override exists to hide. The `op` token is the
+ * other half: a superseded write must not clear the newer override when it settles.
+ *
  * TOKENS. The dots are FILL uses and take fill tokens; the flame is an ICON, so it takes the
  * `-text` token — `shared/styles.ts` states the rule directly ("`_FILL` paints a background,
  * border, dot or bar; `_TEXT` paints a glyph — text or an icon"), and #119 exists because
@@ -30,6 +44,7 @@
  * `core/theme/hueContrast.test.ts` already measures, so nothing new is owed there.
  */
 
+import { useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import { CORAL_TEXT, GOLD_FILL, INK_DIM, LINE_STRONG, tint } from '../../shared/styles';
 import { IconFlame } from '../../shared/icons';
@@ -97,19 +112,29 @@ const boxStyle = {
 export default function DealTemperatureIcon({ value, onCycle, disabled = false }: {
   value: string | null | undefined;
   /** Omit for a read-only rendering (no button, no tab stop) — a surface with no writer must
-   *  not advertise a control that does nothing. */
-  onCycle?: (next: DealTemperature | null) => void;
+   *  not advertise a control that does nothing.
+   *
+   *  May return a promise; when it does, the optimistic glyph is held until that promise
+   *  settles. A caller whose write can FAIL should say so to the user itself (the board
+   *  toasts) — this component only puts the glyph back, which on its own is a silent revert. */
+  onCycle?: (next: DealTemperature | null) => void | Promise<unknown>;
   disabled?: boolean;
 }) {
-  const tier = normalizeTemperature(value);
-  const label = `Deal temperature: ${temperatureLabel(value)}`;
+  // What this control last asked for, held until that request settles. See the override rule
+  // in the header: released on ITS OWN settle, never on a disagreeing prop.
+  const [pending, setPending] = useState<{ tier: DealTemperature | null } | null>(null);
+  const opRef = useRef(0);
+
+  const tier = pending ? pending.tier : normalizeTemperature(value);
+  const shown = pending ? pending.tier : value;
+  const label = `Deal temperature: ${temperatureLabel(shown)}`;
 
   if (!onCycle) {
     // `role="img"` + a label, because the glyph is the only thing carrying the value here.
     return <span role="img" aria-label={label} title={label} style={boxStyle}><TierGlyph tier={tier} /></span>;
   }
 
-  const upcoming = temperatureLabel(nextTemperature(value));
+  const upcoming = temperatureLabel(nextTemperature(shown));
 
   // ONE handler doing both jobs, deliberately not the page's `stopCardInteraction` spread
   // plus a separate `onClick`. That spread carries its own `onClick`, so whichever of the two
@@ -118,14 +143,25 @@ export default function DealTemperatureIcon({ value, onCycle, disabled = false }
   const handleClick = (e: ReactMouseEvent) => {
     e.stopPropagation();
     if (disabled) return;
-    onCycle(nextTemperature(value));
+    // Stepping from what is SHOWN, not from the prop: mid-cycle the prop still holds the
+    // pre-click value, so stepping from it would make every click after the first a no-op.
+    const next = nextTemperature(shown);
+    const op = opRef.current + 1;
+    opRef.current = op;
+    setPending({ tier: next });
+    void Promise.resolve(onCycle(next))
+      .catch(() => {})   // the caller owns reporting; this only decides when to stop painting
+      .finally(() => {
+        // Only if this write is still the latest. A superseded one clearing the override
+        // would flash the glyph back to a value the user has already clicked past.
+        if (opRef.current === op) setPending(null);
+      });
   };
 
-  // Deliberately NO in-flight lock here. The caller patches optimistically, so the next
-  // render already shows the new tier and a further click is the legitimate next step
-  // through the cycle — blocking until the PUT resolved would make cold → warm → hot feel
-  // broken. Repeat clicks on the SAME deal are serialized by `PipelinePage`'s per-deal write
-  // chain, which is where that concern belongs and where the stage write already handles it.
+  // Deliberately NO in-flight lock. Blocking until the PUT resolved would make cold → warm →
+  // hot feel broken, and there is nothing to protect: repeat clicks on the SAME deal are
+  // serialized by the host's per-deal write chain, which is where that concern belongs and
+  // where the stage write already handles it.
 
   return (
     <button
