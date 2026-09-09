@@ -8,12 +8,14 @@
  * the corpus, and a cold deep link never sweeps it at all.
  *
  * The detail deliberately does NOT move into the layer's `CollectionDetail` shell, which
- * the issue suggested. `shared/overlay/DetailModal` renders at `z-50` and the assistant
- * launcher button sits at `z-40` — `DealDetailSheet` drops its own overlay to 39 precisely
- * to stay under it — so a modal contact detail would cover the launcher for exactly the
- * records that publish assistant context (#14). It is also `max-w-2xl`, where this detail
- * is a full-width working surface, and four other surfaces deep-link to `/crm/contacts/:id`.
- * What that costs is the shell's ‹ › record navigation; that is the trade.
+ * the issue suggested — but only ONE of the two reasons for that survives. The z-order
+ * objection does not: #75 gave `DetailModal` an opt-in `underLauncher` (`z-50 dock:z-[39]`)
+ * that `CollectionDetail` passes unconditionally, so a modal detail now ducks under the
+ * assistant launcher rather than covering it, and the records that publish assistant context
+ * (#14) keep it reachable. What still holds is the SHAPE: the shell is `max-w-2xl`, where this
+ * detail is a full-width working surface, and four other surfaces deep-link to
+ * `/crm/contacts/:id`, which a modal has no way to be. The cost of staying routed is the
+ * shell's ‹ › record navigation; that is the trade.
  */
 import { useCallback, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
