@@ -6,12 +6,15 @@ import type { CrmDeal } from '../core/types';
 import { DealForm } from './components/DealForm';
 import { DealDetailBody, type DealPatch } from './components/DealDetailBody';
 import { ScorePill, TouchCountPill } from './components/badges';
+import DealTemperatureIcon from './components/DealTemperatureIcon';
+import { DealTemperatureWriter } from './components/DealTemperatureCell';
 import { STAGE_COLORS, STAGE_ORDER } from './constants';
 import { stageWriteRequest } from './dealStageWrite';
 import { IconPlus } from '../shared/icons';
 import { useIsMobile } from '../shared/useIsMobile';
 import { LoadError } from '../shared/LoadError';
 import { toast } from '../shared/toast';
+import type { DealTemperature } from './dealTemperature';
 import {
   INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, BG_CARD, BG_ELEV, ACCENT, ACCENT_TEXT, SHADOW,
   FONT_DISPLAY, mono, formatNumber, inputStyle, tint,
@@ -727,6 +730,33 @@ export function PipelinePage() {
     [writeDeal],
   );
 
+  // Deal temperature (issue #125) — the rep's hot/warm/cold read, cycled in place from a board
+  // card or a List row. A fields-only patch through the SAME `writeDeal`, so it serialises with a
+  // drag of the same deal on that deal's write chain: both reconcile from `get_deal`'s full row,
+  // and in parallel a stage response would spread a stale `deal_temperature` over the one just
+  // written. `DealTemperatureIcon` owns the optimistic glyph and puts it back on failure, so
+  // nothing is painted here.
+  //
+  // It TOASTS, unlike `saveDeal`, because `writeDeal`'s own toast is stage-only by design (a
+  // fields-only write announced no move, so it announces no failed one) and the form that
+  // normally shows such an error inline does not exist for a one-click control. A `BulkLockError`
+  // carries its own sentence, exactly as `updateDealStage` handles it.
+  //
+  // The board card takes this as a plain prop; the List reaches it through
+  // `DealTemperatureWriter` below, because its columns are built in a `useMemo` that may not
+  // hold a ref-reading callback. That file has the full reason.
+  const cycleDealTemperature = useCallback(
+    async (deal: CrmDeal, next: DealTemperature | null): Promise<void> => {
+      try {
+        await writeDeal(deal, { deal_temperature: next }, deal.stage);
+      } catch (err) {
+        toast.error(err instanceof BulkLockError ? err.message : 'Failed to update deal temperature.');
+        throw err;   // the icon releases its optimistic glyph either way; this only reports
+      }
+    },
+    [writeDeal],
+  );
+
   // A deal was restored from the detail sheet (issue #83). The sheet hands up the row the server
   // RETURNED, which is patched into `data` in place — deliberately not a refetch: `load(true)` is
   // silent and can fail invisibly, which would leave the board still showing the deal as archived
@@ -1322,6 +1352,9 @@ export function PipelinePage() {
         />
       )}
 
+      {/* Supplies the List view's temperature cells with this page's writer. The board card takes
+          the same callback as a plain prop — only the memoized columns need the indirection. */}
+      <DealTemperatureWriter value={cycleDealTemperature}>
       <CollectionView<CrmDeal, StageColumn>
         config={config}
         state={state}
@@ -1441,6 +1474,7 @@ export function PipelinePage() {
                 isSelected={!archived && bulkSelected.has(deal.id)}
                 onToggleSelect={() => toggleSelect(deal.id)}
                 archived={archived}
+                onCycleTemperature={cycleDealTemperature}
               />
             );
           },
@@ -1452,6 +1486,7 @@ export function PipelinePage() {
           ),
         }}
       />
+      </DealTemperatureWriter>
 
       {state.view === 'kanban' && filteredToNothing && <EmptyFilterState onClear={clearAllFilters} />}
 
@@ -1632,11 +1667,13 @@ function StageHeader({ stage, count, total, columnDealIds = [], selectedIds, onT
   );
 }
 
-function DealBoardCard({ deal, columnStage, onOpen, selectable = false, isSelected = false, onToggleSelect, archived = false }: {
+function DealBoardCard({ deal, columnStage, onOpen, selectable = false, isSelected = false, onToggleSelect, archived = false, onCycleTemperature }: {
   deal: CrmDeal; columnStage: string; onOpen: () => void;
   selectable?: boolean; isSelected?: boolean; onToggleSelect?: () => void;
   /** Soft-archived (issue #83): dimmed + labelled, un-draggable, not selectable. */
   archived?: boolean;
+  /** Issue #125. Omitted ⇒ the glyph renders read-only, with no button and no tab stop. */
+  onCycleTemperature?: (deal: CrmDeal, next: DealTemperature | null) => void | Promise<unknown>;
 }) {
   // Colour from the column the card currently sits in (its bucket) rather than
   // deal.stage — during an optimistic drop the bucket updates before the deal's
@@ -1705,6 +1742,14 @@ function DealBoardCard({ deal, columnStage, onOpen, selectable = false, isSelect
         {deal.expected_close_date && <span>{deal.expected_close_date}</span>}
         <ScorePill score={deal.lead_score} compact />
         <TouchCountPill count={deal.ai_touch_count} />
+        {/* The only interactive thing in the metadata row. Inert on an archived deal for the
+            same reason the card cannot be dragged or selected (issue #83): it is on the board
+            to be found and restored, not worked. */}
+        <DealTemperatureIcon
+          value={deal.deal_temperature}
+          disabled={archived}
+          onCycle={onCycleTemperature ? next => onCycleTemperature(deal, next) : undefined}
+        />
       </div>
     </div>
   );

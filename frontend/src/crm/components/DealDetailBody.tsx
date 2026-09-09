@@ -87,6 +87,7 @@ import { CustomFieldsSection } from './CustomFieldsSection';
 import { LostReasonModal } from './LostReasonModal';
 import { RecordCombobox } from './RecordCombobox';
 import { NotesThread } from './NotesThread';
+import DealTemperatureIcon from './DealTemperatureIcon';
 import { OwnerName } from './OwnerName';
 import { OwnerSelect } from './OwnerSelect';
 import { ProvenanceBadge } from './ProvenanceBadge';
@@ -99,7 +100,11 @@ import { ProvenanceBadge } from './ProvenanceBadge';
  */
 export type DealPatch = Partial<Pick<CrmDeal,
   'title' | 'value' | 'contact_id' | 'company_id' | 'owner_id'
-  | 'expected_close_date' | 'probability' | 'notes' | 'stage'>>;
+  | 'expected_close_date' | 'probability' | 'notes' | 'stage'
+  // Issue #125. Not a form field — the temperature is written by its own one-click control,
+  // here and on the board, so it never joins `formFields` or the dirty comparison. It is in
+  // this type because it travels the same `writeDeal` PUT as everything else.
+  | 'deal_temperature'>>;
 
 interface DealFormState {
   title: string;
@@ -891,6 +896,37 @@ export function DealDetailBody({
                 name. A JSX element is never blank, so `Row`'s hide-when-empty rule — which is
                 exactly the shape that bug takes — cannot suppress it. */}
             <Row label="Owner" value={<OwnerName ownerId={view.owner_id} />} />
+            {/* Issue #125, and it renders UNCONDITIONALLY for the same reason the Owner row
+                above does: "not set" is a real state, and a hide-when-blank wrapper is exactly
+                what makes it unreadable as one. A JSX element is never blank, so `Row`'s
+                hide-when-empty rule cannot suppress it.
+                Writing through `onSaveDeal` rather than a fetch of its own puts it on the host's
+                per-deal write chain, so it orders against a drag or an inline save of the same
+                deal instead of racing them. `DealTemperatureIcon` holds the optimistic glyph
+                until this settles. */}
+            <Row
+              label="Temperature"
+              value={
+                <DealTemperatureIcon
+                  value={view.deal_temperature}
+                  // Archived: readable, not workable (issue #83), like Mark Won/Lost below.
+                  disabled={archivedAt != null}
+                  onCycle={async next => {
+                    try {
+                      await onSaveDeal(view, { deal_temperature: next });
+                    } catch {
+                      // The host toasts a stage failure itself but stays silent on a
+                      // fields-only write, and this control has no inline form to show an
+                      // error beside.
+                      toast.error('Failed to update deal temperature.');
+                    }
+                    // Either way: on success for the `lead_score` this just moved, on failure
+                    // to put the row back from server truth.
+                    await loadDetail();
+                  }}
+                />
+              }
+            />
             <Row
               label="Probability"
               value={view.probability > 0 ? `${view.probability}%` : ''}

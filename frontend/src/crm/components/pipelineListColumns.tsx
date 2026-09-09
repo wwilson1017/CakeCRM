@@ -19,8 +19,7 @@ import { STAGE_COLORS } from '../constants';
 import { INK, INK_DIM, LINE_STRONG, mono } from '../../shared/styles';
 import { ScorePill, TouchCountPill } from './badges';
 import { isArchivedDeal } from '../pipelineFilters';
-import DealTemperatureIcon from './DealTemperatureIcon';
-import type { DealTemperature } from '../dealTemperature';
+import { DealTemperatureCell } from './DealTemperatureCell';
 
 /** Every sortable field except the array order, plus the two display-only columns.
  *
@@ -56,9 +55,6 @@ function shortDate(value: string | null | undefined): string {
 
 export function buildPipelineListColumns(
   ownerName: (id: number | null | undefined) => string,
-  /** Omit to render the temperature read-only — the column still appears, so the board and
-   *  the list never disagree about what a deal shows. */
-  onCycleTemperature?: (deal: CrmDeal, next: DealTemperature | null) => void,
 ): ListColumn<CrmDeal>[] {
   const columns: PipelineColumn[] = [
     {
@@ -87,11 +83,12 @@ export function buildPipelineListColumns(
       // span — the same shape as the Tasks list's icon-only Done column in crm/listColumns.tsx.
       header: <span className="sr-only">Temperature</span>,
       // Same control the board card renders — one temperature, one visual language, and one
-      // place the cycle rules live (issue #125).
+      // place the cycle rules live (issue #125). The WRITER arrives by context rather than as
+      // an argument, because this function is called from a `useMemo` that must stay stable and
+      // may not hold a ref-reading callback; see `DealTemperatureCell` for the whole reason.
       render: d => (
-        <DealTemperatureIcon
-          value={d.deal_temperature}
-          onCycle={onCycleTemperature ? next => onCycleTemperature(d, next) : undefined}
+        <DealTemperatureCell
+          deal={d}
           // An archived deal is on the board to be found and restored, not worked — the same
           // reason its card cannot be dragged or bulk-selected (issue #83).
           disabled={isArchivedDeal(d)}
