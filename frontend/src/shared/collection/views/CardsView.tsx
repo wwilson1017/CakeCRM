@@ -12,7 +12,7 @@ import { voidedRowClass } from '../voidedRowClass';
 import { CARDS_SECTION_CAP } from '../useCollectionState';
 import EmptyState from '../EmptyState';
 import { groupCardSections } from './grouping';
-import type { CollectionCardsProps, CollectionConfig, CollectionState } from '../types';
+import type { CollectionCardsProps, CollectionConfig, CollectionState, DragPolicy } from '../types';
 
 export default function CardsView<T>({
   config,
@@ -21,7 +21,7 @@ export default function CardsView<T>({
   selectedId,
   onSelect,
 }: {
-  config: CollectionConfig<T>;
+  config: CollectionConfig<T, DragPolicy>;
   state: CollectionState<T>;
   cards?: CollectionCardsProps<T>;
   selectedId?: string | number | null;

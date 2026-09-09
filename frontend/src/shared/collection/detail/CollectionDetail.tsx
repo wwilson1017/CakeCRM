@@ -46,6 +46,7 @@ import type {
   DetailCloseGuard,
   DetailCloseReason,
   DetailRenderContext,
+  DragPolicy,
 } from '../types';
 
 /**
@@ -87,7 +88,7 @@ export default function CollectionDetail<T>({
   kanbanColumnIds = [],
   navOrder,
 }: {
-  config: CollectionConfig<T>;
+  config: CollectionConfig<T, DragPolicy>;
   state: CollectionState<T>;
   items: readonly T[];
   selectedId: string | number | null;

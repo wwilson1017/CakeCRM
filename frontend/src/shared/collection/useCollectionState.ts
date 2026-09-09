@@ -51,6 +51,7 @@ import {
 import type {
   CollectionConfig,
   CollectionSortConfig,
+  DragPolicy,
   CollectionState,
   CollectionViewKind,
   ControlledToggleProps,
@@ -91,7 +92,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-function enabledViews<T>(config: CollectionConfig<T>): CollectionViewKind[] {
+function enabledViews<T>(config: CollectionConfig<T, DragPolicy>): CollectionViewKind[] {
   const views: CollectionViewKind[] = [];
   if (config.kanban) views.push('kanban');
   if (config.list) views.push('list');
@@ -99,7 +100,7 @@ function enabledViews<T>(config: CollectionConfig<T>): CollectionViewKind[] {
   return views;
 }
 
-function defaultToggles<T>(config: CollectionConfig<T>): Record<string, boolean> {
+function defaultToggles<T>(config: CollectionConfig<T, DragPolicy>): Record<string, boolean> {
   const out: Record<string, boolean> = {};
   for (const t of config.toggles ?? []) out[t.key] = t.default !== false;
   return out;
@@ -112,7 +113,7 @@ export interface UseCollectionStateOptions {
 }
 
 export default function useCollectionState<T>(
-  config: CollectionConfig<T>,
+  config: CollectionConfig<T, DragPolicy>,
   items: readonly T[],
   options: UseCollectionStateOptions = {},
 ): CollectionState<T> {

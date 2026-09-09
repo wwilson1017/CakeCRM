@@ -12,11 +12,11 @@
  * walks the whole filtered/sorted set (the Gmail model), the same way the list order here is
  * page-independent. Only the FILTERED set bounds navigation.
  */
-import type { CollectionConfig, CollectionViewKind } from './types';
+import type { CollectionConfig, CollectionViewKind, DragPolicy } from './types';
 
 export default function visibleOrder<T>(
   view: CollectionViewKind,
-  config: CollectionConfig<T>,
+  config: CollectionConfig<T, DragPolicy>,
   visibleItems: readonly T[],
   kanbanItems: readonly T[],
   /** The app's ordered column ids (its `columns` prop order) — REQUIRED for kanban flattening;

@@ -27,6 +27,7 @@ import CollectionDetail from './detail/CollectionDetail';
 import type {
   CollectionViewKind,
   CollectionViewProps,
+  DragPolicy,
   FacetDef,
   RangeValue,
   VoidedFilter,
@@ -62,7 +63,7 @@ const VOIDED_OPTIONS: FacetOption[] = [
   { value: 'only', label: 'Voided only' },
 ];
 
-export default function CollectionView<T, C = unknown>({
+export default function CollectionView<T, C = unknown, P extends DragPolicy = 'index'>({
   config,
   state,
   items,
@@ -76,7 +77,7 @@ export default function CollectionView<T, C = unknown>({
   searchPlaceholder,
   searchResetNonce,
   loading,
-}: CollectionViewProps<T, C>) {
+}: CollectionViewProps<T, C, P>) {
   const facets = useMemo(() => config.facets ?? [], [config]);
   const noun = config.itemNoun?.plural ?? 'items';
 
