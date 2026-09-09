@@ -272,9 +272,15 @@ export interface CrmWeeklyTouchDetail {
 
 // GET /api/crm/dashboard/today (issue #130). One ranked list of what needs the viewer
 // today, already ordered by the server's priority ladder — the client renders `items`
-// in the order given and never re-sorts. Rank 2 is reserved for hot+stale deals (#125),
-// which is why the task ranks skip it. Its own response types rather than a widened
-// `CrmTask`: a panel row is not a task row, and `CrmTask` declares no `star`.
+// in the order given and never re-sorts. Rank 2 is hot+stale deals (#131), which is why
+// the task ranks skip it. Its own response types rather than a widened `CrmTask`: a panel
+// row is not a task row, and `CrmTask` declares no `star`.
+//
+// A `rank` of `null` means "not on the ladder at all" — a hot deal that was touched
+// recently. Those rows are in the payload but never in the collapsed card: `collapseToday`
+// fills the five visible slots from ranked rows only, so the expander is the one way to
+// them. That is #131's rule, and encoding it as an absent rank rather than a sixth rung is
+// what keeps the browser from carrying a second copy of the ladder's numbering.
 export interface CrmTodayTaskItem {
   kind: 'task';
   id: number;
@@ -294,7 +300,24 @@ export interface CrmTodayReminderItem {
   due_at: string;
 }
 
-export type CrmTodayItem = CrmTodayTaskItem | CrmTodayReminderItem;
+/** A hot deal (#125's `deal_temperature`), on the panel because a human said it matters.
+ *  Rank 2 when it has also gone stale — idle past the same threshold the "Needs a touch"
+ *  panel uses — and null otherwise. `why` describes the DEAL, so a stale deal that
+ *  overflowed rank 2's two slots still says `hot_stale` from the unranked tail. */
+export interface CrmTodayDealItem {
+  kind: 'deal';
+  id: number;
+  rank: 2 | null;
+  why: 'hot_stale' | 'hot';
+  title: string;
+  /** `deals.value` is NOT NULL DEFAULT 0, so this is always a number. */
+  value: number;
+  /** Whole days since the deal's last touch, floored from the server's exact idle time. */
+  days_since_touch: number;
+  owner_id: number | null;
+}
+
+export type CrmTodayItem = CrmTodayTaskItem | CrmTodayReminderItem | CrmTodayDealItem;
 
 export interface CrmToday {
   /** The SERVER's local day (YYYY-MM-DD). Due labels render against this, not the
