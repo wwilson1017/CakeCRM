@@ -5,107 +5,52 @@ import { OwnerSelect } from './OwnerSelect';
 import { labelStyle, inputStyle, CORAL_TEXT, LINE, INK_DIM, mono } from '../../shared/styles';
 import { formModalOverlay, formModalContent, formTitle, btnPrimary, btnSecondary } from '../styles';
 import { STAGE_ORDER } from '../constants';
-import { isArchivedDeal } from '../pipelineFilters';
 import type { CrmDeal, CrmContact, CrmCompany } from '../../core/types';
 import { CustomFieldInputs } from './CustomFieldInputs';
 import { useCustomFieldsForm, putCustomFields } from './useCustomFieldsForm';
 import { RecordCombobox } from './RecordCombobox';
+import {
+  companyLabelOf, companyNameOf, companySublabelOf, contactLabelOf, contactSublabelOf,
+  createCompany, createContact, recordId, searchCompanies, searchContacts,
+} from '../dealLinkPickers';
 
+/**
+ * CREATE only since issue #75 — editing a deal is inline in `DealDetailBody`, inside the shared
+ * detail panel, so this form no longer carries an edit mode. #83's archived stage lock went with
+ * it: a deal being created cannot be archived.
+ */
 interface Props {
-  deal?: CrmDeal;
   contactId?: number;
   onClose: () => void;
   onSaved: () => void;
 }
 
-// How many rows the pickers request per query. Small on purpose: this is a
-// search-as-you-type list a human reads, not a page to browse — the old limit=200 fetch
-// existed only because a <select> had to contain every option it could ever show.
-//
-// Accepted consequence at single-install scale: the combobox suppresses `Create "…"` on an
-// exact name match it can SEE, so a contact whose name matches exactly can in principle be
-// pushed off this page by 20 fresher rows that merely mention the same text in their
-// company or notes (contact search is ILIKE over several columns, ordered updated_at DESC),
-// and the picker would then offer to create a duplicate. Companies are immune by
-// construction — quick-create resolves through uq_companies_name_ci server-side — so this
-// is a contact-only, low-frequency data-quality risk, not a correctness hole. The fix if it
-// ever bites is server-side: rank exact name matches first.
-const PICKER_LIMIT = 20;
-
-// Module-level so their identity is stable across renders: RecordCombobox lists `search`
-// in an effect's dependencies, and an inline arrow would re-fire the query every render.
-const searchContacts = (query: string) =>
-  api<{ contacts: CrmContact[] }>(
-    `/api/crm/contacts?limit=${PICKER_LIMIT}${query ? `&q=${encodeURIComponent(query)}` : ''}`,
-  ).then(d => d.contacts);
-
-const searchCompanies = (query: string) =>
-  api<{ companies: CrmCompany[] }>(
-    `/api/crm/companies?limit=${PICKER_LIMIT}${query ? `&q=${encodeURIComponent(query)}` : ''}`,
-  ).then(d => d.companies);
-
-// Quick-create sends the NAME ONLY. Omitting owner_id is what lets the server assign the
-// caller (_create_payload distinguishes absent from explicit null), which is the same rule
-// the untouched deal create relies on — the client never names an owner it wasn't asked for.
-const createContact = (name: string) =>
-  api<CrmContact>('/api/crm/contacts', { method: 'POST', body: JSON.stringify({ name }) });
-
-// Not POST /companies: that route INSERTs unconditionally and 400s on a name that already
-// exists case/whitespace-insensitively. /resolve is the #35 get-or-create primitive, so
-// typing an existing company's name here links to it instead of failing (issue #123).
-const createCompany = (name: string) =>
-  api<CrmCompany>('/api/crm/companies/resolve', { method: 'POST', body: JSON.stringify({ name }) });
-
-const contactLabelOf = (c: CrmContact) => c.name;
-const contactSublabelOf = (c: CrmContact) => c.company_name || c.company || '';
-// Display carries the archived marker; MATCHING must not, or typing an archived company's
-// real name reports no exact match and the list offers to create the row above it.
-const companyLabelOf = (co: CrmCompany) => (co.status === 'archived' ? `${co.name} (archived)` : co.name);
-const companyNameOf = (co: CrmCompany) => co.name;
-const companySublabelOf = (co: CrmCompany) => co.domain || '';
-const recordId = (r: { id: number }) => r.id;
 
 
-export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
+export function DealForm({ contactId, onClose, onSaved }: Props) {
   const { currentUser } = useAuth();
-  const isEdit = !!deal;
-  // A soft-archived deal (issue #83) can be edited, but not re-staged — see the Stage field.
-  // Shares the board's predicate rather than re-deriving `archived_at != null`, so there is
-  // exactly one definition of "archived" in the app.
-  const isArchived = !!deal && isArchivedDeal(deal);
-  const [title, setTitle] = useState(deal?.title || '');
-  const [stage, setStage] = useState(deal?.stage || 'lead');
-  const [value, setValue] = useState(deal?.value?.toString() || '');
-  const [probability, setProbability] = useState(deal?.probability?.toString() || '');
-  const [expectedClose, setExpectedClose] = useState(deal?.expected_close_date || '');
-  const [notes, setNotes] = useState(deal?.notes || '');
-  const [selectedContact, setSelectedContact] = useState<number | null>(deal?.contact_id ?? contactId ?? null);
-  const [selectedCompany, setSelectedCompany] = useState<number | null>(deal?.company_id ?? null);
+  const [title, setTitle] = useState('');
+  const [stage, setStage] = useState('lead');
+  const [value, setValue] = useState('');
+  const [probability, setProbability] = useState('');
+  const [expectedClose, setExpectedClose] = useState('');
+  const [notes, setNotes] = useState('');
+  const [selectedContact, setSelectedContact] = useState<number | null>(contactId ?? null);
+  const [selectedCompany, setSelectedCompany] = useState<number | null>(null);
   // The linked records' display names. Held here rather than looked up from a fetched
   // list, which is what ends the capped-page hazard the two <select>s used to carry: an
   // out-of-page link had no <option> and rendered blank, reading as "none".
   //
-  // This makes the NAME a wire-format requirement, not a nicety: any query whose rows can
-  // reach this form must join contact_name AND company_name, or the picker renders empty for
-  // a link that exists — reproducing the very bug it replaced. `get_deal`, `get_pipeline` and
-  // (since this issue) `get_dashboard_stats`' top_deals all do; the last one did NOT, and the
-  // dashboard hands its rows straight to the deal sheet and on to this form.
-  const [contactLabel, setContactLabel] = useState(deal?.contact_name || '');
-  // Known gap, deliberately left: an already-linked ARCHIVED company shows undecorated until
-  // the picker is opened, because the deal payload carries `company_name` but not the
-  // company's status. Adding it means widening `get_deal` AND `get_pipeline` — the latter
-  // being the board's once-per-load aggregate — to decorate one closed control. Search
-  // results and any new selection do carry the marker.
-  const [companyLabel, setCompanyLabel] = useState(deal?.company_name || '');
-  // Owner (issue #60). On an EDIT the record's own owner is used verbatim — `null`
-  // means unassigned and must survive, or saving an unrelated field would silently
-  // claim someone else's unowned record. On a CREATE the picker shows you as the
-  // default, but `owner_id` is only SENT if you actually touch it: an untouched
-  // create lets the server assign the caller, which is race-free (currentUser can
-  // still be resolving right after login) and keeps one rule in one place.
-  const [ownerId, setOwnerId] = useState<number | null>(
-    deal ? (deal.owner_id ?? null) : (currentUser?.id ?? null),
-  );
+  // On a CREATE these start blank and are filled by the picker or, for a deal opened from a
+  // contact, by the prefill below. `DealDetailBody`'s inline editor carries the edit-side half of
+  // this contract — that a row reaching a picker must join contact_name AND company_name.
+  const [contactLabel, setContactLabel] = useState('');
+  const [companyLabel, setCompanyLabel] = useState('');
+  // Owner (issue #60). The picker shows you as the default, but `owner_id` is only
+  // SENT if you actually touch it: an untouched create lets the server assign the
+  // caller, which is race-free (currentUser can still be resolving right after login)
+  // and keeps one rule in one place.
+  const [ownerId, setOwnerId] = useState<number | null>(currentUser?.id ?? null);
   const [ownerTouched, setOwnerTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   // A quick-create is in flight in one of the pickers. Closing a picker deliberately does
@@ -118,7 +63,7 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
   const [companyBusy, setCompanyBusy] = useState(false);
   const pickerBusy = contactBusy || companyBusy;
   const [error, setError] = useState('');
-  const cf = useCustomFieldsForm('deal', deal?.id);
+  const cf = useCustomFieldsForm('deal');
 
   // Did the user speak for this link themselves? Tracked per FIELD, and deliberately not as
   // one flag for both: the two are independent, so a single flag lets touching one field
@@ -129,18 +74,15 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
   // cannot tell "never set" from "deliberately cleared", so a cleared company comes back the
   // moment an async prefill lands or another contact is picked. And it cannot tell "the user
   // chose this" from "we auto-filled it", so a company inherited from a previous contact
-  // would outrank the one belonging to the contact now selected. A deal opened on an
-  // existing company starts as spoken-for: that link IS a deliberate choice, just an
-  // earlier one.
+  // would outrank the one belonging to the contact now selected.
   const contactTouched = useRef(false);
-  const companyTouched = useRef(deal?.company_id != null);
+  const companyTouched = useRef(false);
 
   useEffect(() => {
-    // Deal opened from a contact (create mode): default the company to THAT
-    // contact's company so the deal lands in its rollups, and label the picker with
-    // the contact's name. Fetched directly by id — the only way to be sure of a
-    // record the search may never return.
-    if (!deal && contactId != null) {
+    // Deal opened from a contact: default the company to THAT contact's company so the
+    // deal lands in its rollups, and label the picker with the contact's name. Fetched
+    // directly by id — the only way to be sure of a record the search may never return.
+    if (contactId != null) {
       api<CrmContact>(`/api/crm/contacts/${contactId}`)
         .then(c => {
           // The contact half defers to the contact field alone, so touching the COMPANY
@@ -159,7 +101,7 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
         })
         .catch(() => {});
     }
-  }, [deal, contactId]);
+  }, [contactId]);
 
   // Picking a contact fills the company from that contact unless the user has spoken for
   // the company field themselves — deal↔company links are independent, so a deliberate
@@ -196,28 +138,13 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
         probability: parseInt(probability) || 0,
         expected_close_date: expectedClose, notes,
       };
-      // Send `stage` only when it can be user intent. On an archived deal the select is
-      // disabled, so its value is just whatever the row carried when this form opened —
-      // and if the deal moved stage elsewhere since (the assistant, another tab) that
-      // stale value differs from the server's, which refuses a stage change on an archived
-      // deal by rejecting the WHOLE update. Omitting the field leaves it unset, so every
-      // other edit still saves. This is the same data-loss the disabled select exists to
-      // prevent; locking the control alone did not close it.
-      if (!isArchived) body.stage = stage;
+      body.stage = stage;
       body.contact_id = selectedContact;  // always send (null unlinks the contact)
       body.company_id = selectedCompany;  // always send (null unlinks the company)
-      // Omitted on an untouched create so the server assigns the caller; on an
-      // edit always sent, where null unassigns.
-      if (isEdit || ownerTouched) body.owner_id = ownerId;
-      let id: number;
-      if (isEdit) {
-        await api(`/api/crm/deals/${deal.id}`, { method: 'PUT', body: JSON.stringify(body) });
-        id = deal.id;
-      } else {
-        const created = await api<CrmDeal>('/api/crm/deals', { method: 'POST', body: JSON.stringify(body) });
-        id = created.id;
-      }
-      await putCustomFields('deal', id, cf.changedForSave(), isEdit ? 'Deal saved' : 'Deal created');
+      // Omitted on an untouched create so the server assigns the caller.
+      if (ownerTouched) body.owner_id = ownerId;
+      const created = await api<CrmDeal>('/api/crm/deals', { method: 'POST', body: JSON.stringify(body) });
+      await putCustomFields('deal', created.id, cf.changedForSave(), 'Deal created');
       onSaved();
     } catch (err: unknown) { setError(err instanceof Error ? err.message : 'Failed to save'); }
     setSaving(false);
@@ -226,9 +153,7 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
   return (
     <div style={formModalOverlay} onClick={onClose}>
       <form onClick={e => e.stopPropagation()} onSubmit={handleSubmit} style={formModalContent()}>
-        <h2 style={formTitle}>
-          {isEdit ? 'Edit Deal' : 'New Deal'}
-        </h2>
+        <h2 style={formTitle}>New Deal</h2>
         {error && <p style={{ color: CORAL_TEXT, fontSize: 12, marginBottom: 12 }}>{error}</p>}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -278,23 +203,13 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div>
               <label style={labelStyle}>Stage</label>
-              {/* Locked on an archived deal (issue #83). The server refuses a stage change
-                  on one and rejects the WHOLE update, so leaving this editable would throw
-                  away every other field the user had just typed. Every other field stays
-                  editable — only the stage is refused. */}
               <select
                 value={stage}
                 onChange={e => setStage(e.target.value)}
-                disabled={isArchived}
-                style={{ ...inputStyle, textTransform: 'capitalize', opacity: isArchived ? 0.6 : 1 }}
+                style={{ ...inputStyle, textTransform: 'capitalize' }}
               >
                 {STAGE_ORDER.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
-              {isArchived && (
-                <p style={{ fontSize: 11, color: INK_DIM, margin: '4px 0 0' }}>
-                  Restore the deal to change its stage.
-                </p>
-              )}
             </div>
             <div><label style={labelStyle}>Value ($)</label><input type="number" step="any" min="0" value={value} onChange={e => setValue(e.target.value)} style={inputStyle} /></div>
           </div>
@@ -316,7 +231,7 @@ export function DealForm({ deal, contactId, onClose, onSaved }: Props) {
           <button type="button" onClick={onClose} style={{ ...btnSecondary, flex: 1 }}>Cancel</button>
           <button type="submit" disabled={saving || pickerBusy} style={{
             ...btnPrimary, flex: 1, opacity: saving || pickerBusy ? 0.5 : 1,
-          }}>{saving ? 'Saving...' : isEdit ? 'Update' : 'Create'}</button>
+          }}>{saving ? 'Saving...' : 'Create'}</button>
         </div>
       </form>
     </div>

@@ -168,6 +168,19 @@ const startTitleSave = (to: string) => {
 const cue = () =>
   [...container.querySelectorAll('span[aria-hidden="true"]')]
     .find(el => (el.textContent ?? '').trim() === 'Add due date');
+/** What an assistive technology announces: everything the element renders, visually-hidden
+ * text included, minus every `aria-hidden` subtree. */
+const accessibleText = (el: Element) => {
+  const clone = el.cloneNode(true) as Element;
+  for (const hidden of clone.querySelectorAll('[aria-hidden="true"]')) hidden.remove();
+  return (clone.textContent ?? '').replace(/\s+/g, ' ').trim();
+};
+/** What the eye sees: the same text minus every visually-hidden span. */
+const visibleText = (el: Element) => {
+  const clone = el.cloneNode(true) as Element;
+  for (const hidden of clone.querySelectorAll('.sr-only')) hidden.remove();
+  return (clone.textContent ?? '').replace(/\s+/g, ' ').trim();
+};
 
 describe('the step headings are legible', () => {
   // A class assertion, deliberately: the headings were `text-xs`/`text-muted`, which is a
@@ -178,16 +191,67 @@ describe('the step headings are legible', () => {
   it('use the primary ink at body size, not muted fine print', () => {
     render();
     const headings = [...container.querySelectorAll('h3')];
-    expect(headings.map(h => (h.textContent ?? '').trim())).toEqual([
-      '1. What kind of action?',
-      '2. Add detail (optional)',
-      '3. Last step — set context (required)',
-    ]);
+    expect(headings).toHaveLength(3);
     for (const h of headings) {
       expect(h.className).toContain('text-sm');
       expect(h.className).toContain('text-charcoal');
       expect(h.className).not.toContain('text-muted');
     }
+  });
+
+  // The step number and the "required" marker are glyph-only on screen now, so the thing
+  // worth pinning is the ACCESSIBLE name: it must still read as the words the badge and the
+  // star replaced. Asserting raw `textContent` would pass on markup that announces a heading
+  // as "01", or that drops "required" out of the tree altogether.
+  it('keep the step number and the required marker in the accessible name', () => {
+    render();
+    expect([...container.querySelectorAll('h3')].map(accessibleText)).toEqual([
+      'Step 1: What kind of action?',
+      'Step 2: Add detail (optional)',
+      'Step 3: Last step — set context (required)',
+    ]);
+  });
+
+  it('carry the number in a solid accent badge beside the heading, not in its text', () => {
+    render();
+    const headings = [...container.querySelectorAll('h3')];
+    const badges = headings.map(h => h.previousElementSibling!);
+    expect(badges.map(b => (b.textContent ?? '').trim())).toEqual(['01', '02', '03']);
+    for (const b of badges) {
+      // The heading's own visually-hidden "Step N" is what announces the number, so the
+      // glyph must stay out of the tree rather than say it twice.
+      expect(b.getAttribute('aria-hidden')).toBe('true');
+      // The one solid-accent pairing `core/theme/hueContrast.test.ts` pins at AA.
+      expect(b.className).toContain('bg-ck-accent');
+      expect(b.className).toContain('text-ck-accent-ink');
+    }
+  });
+
+  // The exact counterpart to the accessible-name test: what is PAINTED is only the words,
+  // with the number left to the badge and the "required" marker to the star. It is pinned
+  // as an equality rather than as negatives, because a negative is the weaker claim by a
+  // wide margin — "does not start with a digit" passes happily on a heading rendering
+  // "Step 1: What kind of action?", which is what a broken `sr-only` produces.
+  it('paint only the words, leaving the number to the badge and the marker to the star', () => {
+    render();
+    expect([...container.querySelectorAll('h3')].map(visibleText)).toEqual([
+      'What kind of action?',
+      'Add detail (optional)',
+      'Last step — set context★',
+    ]);
+  });
+
+  it('mark step 3 required with a star, and only step 3', () => {
+    render();
+    const headings = [...container.querySelectorAll('h3')];
+    const stars = headings.map(h => [...h.querySelectorAll('span[aria-hidden="true"]')]
+      .find(s => (s.textContent ?? '').trim() === '★'));
+    expect(stars.map(Boolean)).toEqual([false, false, true]);
+    // The star is a glyph, so it routes through the accent TEXT token, never the fill.
+    expect(stars[2]!.className).toContain('text-ck-accent-text');
+    // The word is gone from what is painted, but not from what is announced.
+    expect(visibleText(headings[2])).not.toContain('required');
+    expect(accessibleText(headings[2])).toContain('(required)');
   });
 });
 

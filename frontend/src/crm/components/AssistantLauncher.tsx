@@ -201,11 +201,30 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
         onClick={handleClick}
         aria-label={launcherLabel}
         aria-haspopup="dialog"
+        // Admits this button into an `underLauncher` DetailModal's Tab cycle — rendering above
+        // the panel makes it reachable by pointer, this makes it reachable by keyboard too.
+        //
+        // ONLY when it opens the drawer. See the zIndex note below: the whole exemption is about
+        // the drawer, and a button that navigates instead has no business in a dialog's Tab
+        // cycle — nor, when `loading`, has a disabled one that cannot take focus at all.
+        {...(ready ? { 'data-detail-companion': '' } : {})}
         aria-expanded={ready ? open : undefined}
         title={launcherLabel}
         disabled={loading}
         style={{
-          position: 'fixed', right: 24, bottom: 24, zIndex: 40,
+          // zIndex 40 — above a centred `DetailModal` under `underLauncher` (`dock:z-[39]`) so a
+          // record detail can hand its context to the drawer (#14), and below that modal's
+          // full-screen takeover (`z-50`), where a poked-through button would sit on the panel's
+          // own controls. Keep the three in step.
+          //
+          // 38 WHEN THERE IS NO DRAWER, which is the whole of that exemption's justification. On
+          // a keyless install this button is not a drawer at all — it is a "Hire your assistant"
+          // CTA that NAVIGATES to /setup, and a navigation unmounts whatever detail panel is
+          // open, taking an inline edit draft with it and never reaching that panel's close
+          // guard. Sitting below the panel is what every other control an overlay covers does,
+          // and it is what the separate edit modal this replaced did by being `z-50` itself. The
+          // `loading` state takes the same value: it cannot open a drawer either.
+          position: 'fixed', right: 24, bottom: 24, zIndex: ready ? 40 : 38,
           height: 52, borderRadius: 999,
           padding: '0 20px 0 16px',
           background: ACCENT, color: ACCENT_INK, border: 'none',

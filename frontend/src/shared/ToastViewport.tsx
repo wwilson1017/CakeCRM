@@ -2,8 +2,9 @@
  * CakeCRM — toast viewport. Mounted once in App.tsx; renders the toast store
  * as a fixed bottom-right stack (full-width on mobile), kept clear of the CRM shell's
  * "Ask Baker" pill: the pill is 52px tall and 24px off the bottom-right corner, so the
- * stack starts at 88px (24 + 52 + 12 clearance — the same number `CrmLayout`'s
- * LAUNCHER_CLEARANCE padding uses). Toasts and the pill must never share a corner: a
+ * stack starts at 88px (24 + 52 + 12 clearance — the same number `crm/styles`'
+ * LAUNCHER_CLEARANCE_PX carries, repeated rather than imported because nothing in
+ * `shared/` may depend on `crm/`). Toasts and the pill must never share a corner: a
  * toast that lands on the launcher hides the one control that is always on screen.
  */
 

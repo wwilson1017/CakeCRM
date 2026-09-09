@@ -56,6 +56,11 @@ export function IconChevron(p: IconProps) { return <Ico d="m6 9 6 6 6-6" {...p} 
 export function IconChevronRight(p: IconProps) { return <Ico d="m9 6 6 6-6 6" {...p} />; }
 export function IconChevronLeft(p: IconProps) { return <Ico d="m15 6-6 6 6 6" {...p} />; }
 export function IconDot(p: IconProps) { return <Ico {...p}><circle cx="12" cy="12" r="3" fill="currentColor" /></Ico>; }
+// Filled by default (`fill="currentColor"`), unlike every stroked icon above: it marks a HOT
+// deal (issue #125) beside two plain dots, and a hollow outline would read as one more ring
+// rather than as a different thing. Added here rather than pulling in an icon package — the
+// #73 precedent that added IconChevronLeft.
+export function IconFlame(p: IconProps) { return <Ico d="M12 2c1.2 3 3 4.2 4.4 6A7.5 7.5 0 0 1 18 13a6 6 0 0 1-12 0c0-1.9.9-3.4 1.9-4.6.3 1 .9 1.8 1.8 2.2C10 8.4 10.6 4.9 12 2z" fill="currentColor" strokeWidth={1} {...p} />; }
 export function IconMenu(p: IconProps) { return <Ico d="M4 6h16M4 12h16M4 18h16" {...p} />; }
 export function IconMore(p: IconProps) { return <Ico {...p}><circle cx="5" cy="12" r="1.2" fill="currentColor" /><circle cx="12" cy="12" r="1.2" fill="currentColor" /><circle cx="19" cy="12" r="1.2" fill="currentColor" /></Ico>; }
 export function IconAttach(p: IconProps) { return <Ico d="M21 12.5 12.5 21a5.5 5.5 0 0 1-7.8-7.8l9-9a3.7 3.7 0 0 1 5.2 5.2l-9 9a2 2 0 0 1-2.8-2.8L14.5 9" {...p} />; }

@@ -12,7 +12,9 @@
  *  • **‹ › navigation** over `visibleOrder` — the order the user is LOOKING at in the current
  *    view (render caps deliberately excluded; see visibleOrder's docstring). Arrows disable
  *    at the ends, and entirely when the open record is not in the visible set (filtered out
- *    after opening, voided under 'hide', a deep link) — disabling beats guessing.
+ *    after opening, voided under 'hide', a deep link) — disabling beats guessing. A page that
+ *    renders its own views has no `state` for the layer to read, so it supplies `navOrder`
+ *    instead; with neither, the arrows disable, which is the same answer by the same rule.
  *
  *  • **Record identity.** The body is keyed by `getItemId`, so ‹ › nav REMOUNTS it — per-record
  *    draft state must never leak across records (the blueprint `key={uuid}` lesson). A
@@ -40,11 +42,11 @@ import { IconChevronLeft, IconChevronRight } from '../../icons';
 import DetailModal from '../../overlay/DetailModal';
 import visibleOrder from '../visibleOrder';
 import type {
-  CollectionConfig,
   CollectionDetailProps,
   CollectionState,
   DetailCloseGuard,
   DetailCloseReason,
+  DetailHostConfig,
   DetailRenderContext,
 } from '../types';
 
@@ -87,8 +89,17 @@ export default function CollectionDetail<T>({
   kanbanColumnIds = [],
   navOrder,
 }: {
-  config: CollectionConfig<T>;
-  state: CollectionState<T>;
+  config: DetailHostConfig<T>;
+  /**
+   * The collection state, when the page has one.
+   *
+   * It is read for ONE purpose — computing the default ‹ › order from the view the layer
+   * rendered — so a page that renders its own views (and therefore runs no `useCollectionState`)
+   * omits it and supplies `navOrder` instead. The rule: the layer can derive an order only from
+   * `state`; without it `navOrder` decides; with neither, both arrows disable, which is the same
+   * "disabling beats guessing" answer an unlocatable record already gets.
+   */
+  state?: CollectionState<T>;
   items: readonly T[];
   selectedId: string | number | null;
   onSelect: (id: string | number | null) => void;
@@ -221,9 +232,19 @@ export default function CollectionDetail<T>({
   };
 
   const columnIds = kanbanColumnIds;
+  // Destructured ABOVE the memo on purpose. `useCollectionState` returns a fresh object every
+  // render (it is not memoized), so keying the memo on `state` itself would re-flatten the whole
+  // visible set on every render; and `react-hooks/exhaustive-deps` will not accept `state?.view`
+  // style deps while the body reads `state`. Pulling the three fields out solves both.
+  const view = state?.view;
+  const visibleItems = state?.visibleItems;
+  const kanbanItems = state?.kanbanItems;
   const computedOrder = useMemo(
-    () => visibleOrder(state.view, config, state.visibleItems, state.kanbanItems, columnIds),
-    [state.view, config, state.visibleItems, state.kanbanItems, columnIds],
+    () =>
+      view === undefined || visibleItems === undefined || kanbanItems === undefined
+        ? []
+        : visibleOrder(view, config, visibleItems, kanbanItems, columnIds),
+    [view, config, visibleItems, kanbanItems, columnIds],
   );
   // A page rendering its records outside `CollectionView` owns the order the user sees; the
   // computed one would describe a different set entirely (see the `navOrder` prop docs).
@@ -267,6 +288,10 @@ export default function CollectionDetail<T>({
       onClose={source => void request(source ?? 'button', null)}
       onBackdropClick={() => void request('backdrop', null)}
       headerActions={headerActions}
+      // Unconditional, and that is the point: the launcher relationship is a property of every
+      // collection DETAIL, not of one surface. An opt-in each future consumer had to remember is
+      // how the CRM's list pages came to refuse this layer outright rather than adopt it.
+      underLauncher
     >
       {body}
     </DetailModal>

@@ -9,7 +9,7 @@ import { useIsMobile } from '../shared/useIsMobile';
 import { MobileMenuDrawer } from '../shared/MobileMenuDrawer';
 import { confirmDialog } from '../shared/confirm';
 import { INK, INK_SOFT, INK_MUTE, LINE, LINE_STRONG, ACCENT, GOLD_FILL, GOLD_TEXT, FONT_DISPLAY, FONT_SANS, CORAL_TEXT, tint } from '../shared/styles';
-import { modalOverlay, modalContent, btnPrimary, btnSecondary } from './styles';
+import { modalOverlay, modalContent, btnPrimary, btnSecondary, LAUNCHER_CLEARANCE_PX } from './styles';
 import { AiKeyNudge } from './components/AiKeyNudge';
 import { AssistantLauncher } from './components/AssistantLauncher';
 import { BrandLogo } from './components/BrandLogo';
@@ -285,10 +285,10 @@ export function CrmLayout() {
                   src={`/api/branding/logo?v=${logoVersion}`}
                   alt=""
                   style={{ height: 26, maxWidth: 120, objectFit: 'contain' }}
-                  fallback={<span style={{ fontSize: 22 }}>🍰</span>}
+                  fallback={<img src="/logo-mark.svg" alt="" style={{ height: 26, width: 26 }} />}
                 />
               ) : (
-                <span style={{ fontSize: 22 }}>🍰</span>
+                <img src="/logo-mark.svg" alt="" style={{ height: 26, width: 26 }} />
               )}
               <span style={{
                 fontFamily: FONT_DISPLAY,
@@ -387,13 +387,13 @@ export function CrmLayout() {
 
       {/* LAUNCHER_CLEARANCE: the fixed "Ask Baker" pill (52px tall, 24px off the
           bottom) floats over this scroll container, so without reserved space it
-          permanently covers whatever ends up in the bottom-right corner (before it moved
-          right it sat over the Settings forms' left-aligned submit buttons). Bottom
-          padding on the scroll container lets every page scroll PAST the pill
-          instead (24 + 52 + 12px clearance), keeping the launcher itself always
-          visible and reachable. Applied on desktop too: the pill overlaps the
-          content column there just the same, only with more room around it. */}
-      <div key={refreshKey} style={{ flex: 1, overflow: 'auto', position: 'relative', paddingBottom: 88 }}>
+          permanently covers whatever ends up in the bottom-right corner (before it
+          moved right it sat over the Settings forms' left-aligned submit buttons).
+          Bottom padding on the scroll container lets every page scroll PAST the pill
+          instead — see LAUNCHER_CLEARANCE_PX for the arithmetic — keeping the launcher
+          itself always visible and reachable. Applied on desktop too: the pill overlaps
+          the content column there just the same, only with more room around it. */}
+      <div key={refreshKey} style={{ flex: 1, overflow: 'auto', position: 'relative', paddingBottom: LAUNCHER_CLEARANCE_PX }}>
         {/* The task mode rides the demo-status payload this layout already fetches,
             so /crm/tasks costs no extra request to decide which task system to show.
 

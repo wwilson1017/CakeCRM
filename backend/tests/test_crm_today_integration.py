@@ -123,8 +123,58 @@ def _reminder(message, due_at, status="pending") -> str:
     return rid
 
 
+def _deal(title, *, temperature=None, idle_days=0, owner=None, stage="lead",
+          archived=False, value=0) -> int:
+    """A deal at a chosen idle age.
+
+    `create_deal` writes no `activity_log` row and `score_on_event` never bumps
+    `updated_at` (#18), so backdating that column alone is enough to set the deal's last
+    touch — which is what `LAST_TOUCH_SQL` reads when there is no activity and no note.
+    Written as an interval against the DATABASE's `now()`, never a Python timestamp: the
+    predicate under test compares against the server clock, so a client clock is a second
+    clock and a source of flakes.
+    """
+    from core.postgres import pg_execute
+    from crm import service
+
+    deal_id = service.create_deal(title=title, value=value, stage=stage, owner_id=owner,
+                                  deal_temperature=temperature)["id"]
+    pg_execute("UPDATE deals SET updated_at = now() - make_interval(days => %s) WHERE id = %s",
+               (idle_days, deal_id))
+    if archived:
+        service.archive_deal(deal_id, archived=True)
+        # archive_deal writes the row, so the idle age has to be re-applied after it.
+        pg_execute("UPDATE deals SET updated_at = now() - make_interval(days => %s) WHERE id = %s",
+                   (idle_days, deal_id))
+    return deal_id
+
+
+def _activity(deal_id, *, days_ago=0, activity="call"):
+    from core.postgres import pg_execute
+
+    pg_execute(
+        "INSERT INTO activity_log (deal_id, activity, created_at) "
+        "VALUES (%s, %s, now() - make_interval(days => %s))",
+        (deal_id, activity, days_ago),
+    )
+
+
+def _note(deal_id, *, days_ago=0, archived=False, message="note"):
+    from core.postgres import pg_execute
+
+    pg_execute(
+        "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, archived) "
+        "VALUES ('deal', %s, %s, now() - make_interval(days => %s), %s)",
+        (deal_id, message, days_ago, 1 if archived else 0),
+    )
+
+
 def _titles(payload) -> list[str]:
     return [i["title"] for i in payload["items"]]
+
+
+def _deal_rows(payload) -> list[tuple]:
+    return [(i["title"], i["rank"], i["why"]) for i in payload["items"] if i["kind"] == "deal"]
 
 
 def test_full_ladder_end_to_end(today):
@@ -260,3 +310,123 @@ def test_payload_reports_the_day_and_the_next_boundary(today):
     assert payload["date"] == today
     assert payload["next_refresh_at"] == end.isoformat()
     assert payload["scope"] == {"owner_id": 4}
+
+
+# ── Hot deals (issue #131) ───────────────────────────────────────────────────
+
+def test_only_a_deal_a_human_marked_hot_reaches_the_panel(today):
+    """The issue's rule, and the whole zero-keys story: eligibility is one human-set
+    column. Warm, cold and never-triaged are all simply absent — NULL is a real state,
+    not missing data, so it earns no fallback."""
+    from crm import today_service
+
+    _deal("Hot", temperature="hot", idle_days=30)
+    _deal("Warm", temperature="warm", idle_days=30)
+    _deal("Cold", temperature="cold", idle_days=30)
+    _deal("Never triaged", temperature=None, idle_days=30)
+
+    assert _titles(today_service.get_today()) == ["Hot"]
+
+
+def test_closed_and_archived_hot_deals_stay_out(today):
+    """OPEN_PREDICATE_D and LIVE_PREDICATE_D, imported rather than re-typed — a won deal
+    is finished and an archived one was put away, however hot it once was."""
+    from crm import today_service
+
+    _deal("Open", temperature="hot", idle_days=30)
+    _deal("Won", temperature="hot", idle_days=30, stage="won")
+    _deal("Lost", temperature="hot", idle_days=30, stage="lost")
+    _deal("Archived", temperature="hot", idle_days=30, archived=True)
+
+    assert _titles(today_service.get_today()) == ["Open"]
+
+
+def test_hot_and_stale_takes_rank_two_most_idle_first_and_caps_at_two(today):
+    """The acceptance criteria in one pass: the slot cap, the ordering, and the demotion
+    of the overflow into the unranked tail rather than out of the payload."""
+    from crm import today_service
+
+    _deal("Idle 40d", temperature="hot", idle_days=40)
+    _deal("Idle 60d", temperature="hot", idle_days=60)
+    _deal("Idle 20d", temperature="hot", idle_days=20)
+
+    assert _deal_rows(today_service.get_today()) == [
+        ("Idle 60d", 2, "hot_stale"),
+        ("Idle 40d", 2, "hot_stale"),
+        ("Idle 20d", None, "hot_stale"),
+    ]
+
+
+def test_a_recently_touched_hot_deal_is_present_but_carries_no_rank(today):
+    """"NOT in the Top 5, only in the expanded list" — which the payload says by giving
+    the row no rung at all, and the client honours by filling its five visible slots from
+    ranked rows only."""
+    from crm import today_service
+
+    _deal("Chased yesterday", temperature="hot", idle_days=1)
+
+    assert _deal_rows(today_service.get_today()) == [("Chased yesterday", None, "hot")]
+
+
+def test_the_stale_boundary_is_the_analytics_threshold(today):
+    """Not a threshold of this panel's own: `analytics_service`'s, so the Today panel and
+    the "Needs a touch" list can never call the same deal stale and fresh."""
+    from crm import analytics_service, today_service
+
+    days = analytics_service.DEFAULT_DEAL_STALE_DAYS
+    _deal("Just past", temperature="hot", idle_days=days + 1)
+    _deal("Just inside", temperature="hot", idle_days=days - 1)
+
+    assert _deal_rows(today_service.get_today()) == [
+        ("Just past", 2, "hot_stale"), ("Just inside", None, "hot")
+    ]
+
+
+def test_last_touch_reads_activity_and_live_notes_but_not_archived_ones(today):
+    """LAST_TOUCH_SQL is GREATEST(updated_at, newest activity, newest un-archived note).
+    All three legs matter here: a deal nobody edited is not stale if somebody logged a
+    call or left a note on it — and archiving that note puts it back on the list."""
+    from crm import today_service
+
+    _deal("Edited long ago", temperature="hot", idle_days=40)
+    called = _deal("Called yesterday", temperature="hot", idle_days=40)
+    noted = _deal("Noted yesterday", temperature="hot", idle_days=40)
+    archived_note = _deal("Note archived", temperature="hot", idle_days=40)
+
+    _activity(called, days_ago=1)
+    _note(noted, days_ago=1)
+    _note(archived_note, days_ago=1, archived=True)
+
+    rows = dict((t, (r, w)) for t, r, w in _deal_rows(today_service.get_today()))
+    assert rows["Edited long ago"] == (2, "hot_stale")
+    assert rows["Note archived"] == (2, "hot_stale")
+    assert rows["Called yesterday"] == (None, "hot")
+    assert rows["Noted yesterday"] == (None, "hot")
+    assert set(rows) == {"Edited long ago", "Note archived", "Called yesterday", "Noted yesterday"}
+
+
+def test_owner_scope_admits_unassigned_hot_deals_but_not_a_colleagues(today):
+    """The panel's widened owner rule reaches deals too: unowned work shows up in "my"
+    view because somebody has to catch it."""
+    from crm import today_service
+
+    me, colleague = _user("Cy"), _user("Di")
+    _deal("Mine", temperature="hot", idle_days=30, owner=me)
+    _deal("Unassigned", temperature="hot", idle_days=30, owner=None)
+    _deal("Theirs", temperature="hot", idle_days=30, owner=colleague)
+
+    assert sorted(_titles(today_service.get_today(owner_id=me))) == ["Mine", "Unassigned"]
+    assert sorted(_titles(today_service.get_today())) == ["Mine", "Theirs", "Unassigned"]
+
+
+def test_a_hot_deal_carries_the_evidence_the_row_renders(today):
+    """The badge needs both numbers: idle time says it is slipping, value says whether
+    chasing it is worth the afternoon."""
+    from crm import today_service
+
+    _deal("Acme renewal", temperature="hot", idle_days=21, value=30000)
+
+    (item,) = today_service.get_today()["items"]
+    assert item["value"] == 30000
+    assert item["days_since_touch"] == 21
+    assert "idle_seconds" not in item

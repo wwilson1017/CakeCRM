@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from assistant import assembly, engine, history, identity
+from assistant import assembly, compaction, delimiters, engine, history, identity
 
 # ── Scripted fake provider ────────────────────────────────────────────────────
 
@@ -58,6 +58,15 @@ class Store:
         self.saved: list[dict] = []
         self.merges: list[dict] = []
         self.title_calls: list[tuple] = []
+        self.context_tokens: list = []
+        # Every usage reading is stamped with the compaction boundary the turn
+        # assembled against, so a reading from a turn that assembled BEFORE a
+        # concurrent compaction can be told apart from a current one.
+        self.boundary_stamps: list = []
+        # Compaction (#72 Phase 3) persists this once a compacted-away span carried
+        # untrusted content; the engine ORs it into the power->normal downgrade.
+        self.tainted = False
+        self.compaction_boundary = None
         self._n = 0
 
     def create_conversation(self):
@@ -73,10 +82,20 @@ class Store:
         self.title_calls.append((cid, text))
         return (text or "")[:60]
 
-    def save_message(self, cid, mid, role, content, tool_calls=None, model=""):
+    def save_message(self, cid, mid, role, content, tool_calls=None, model="",
+                     context_tokens=None, context_boundary_seq=None):
+        self.context_tokens.append(context_tokens)
+        self.boundary_stamps.append(context_boundary_seq)
         self.saved.append({"cid": cid, "mid": mid, "role": role, "content": content, "tool_calls": tool_calls})
         self.convs.setdefault(cid, {"id": cid, "messages": []})["messages"].append(
             {"id": mid, "role": role, "content": content, "tool_calls": tool_calls, "tool_results": None})
+
+    def is_conversation_tainted(self, cid):
+        return self.tainted
+
+    def get_compaction_state(self, cid):
+        return {"summary": None, "first_kept_seq": self.compaction_boundary,
+                "tainted": self.tainted, "last_context_tokens": None}
 
     def merge_tool_result(self, mid, tuid, tname, content):
         self.merges.append({"mid": mid, "tuid": tuid, "content": content})
@@ -115,8 +134,14 @@ class Registry:
 def store(monkeypatch):
     s = Store()
     for fn in ("create_conversation", "conversation_exists", "auto_title",
-               "save_message", "merge_tool_result"):
+               "save_message", "merge_tool_result",
+               "is_conversation_tainted", "get_compaction_state"):
         monkeypatch.setattr(history, fn, getattr(s, fn))
+    # Compaction is exercised in test_assistant_compaction.py; here it must not reach
+    # a database, and every one of these threads is far too short to compact anyway.
+    async def _no_compaction(provider, cid):
+        return False
+    monkeypatch.setattr(compaction, "maybe_compact", _no_compaction)
     monkeypatch.setattr(identity, "get_identity",
                         lambda: {"name": "Baker", "personality": "p", "using_default": True})
     # assemble just needs to return a non-empty provider message list
@@ -730,3 +755,181 @@ async def test_non_gmail_write_placeholder_is_unbound(store, monkeypatch):
 
     await _run(prov, reg, [{"role": "user", "content": "add X"}], tool_mode="normal")
     assert any(m["content"] == history.PENDING_RESULT_JSON for m in store.merges)
+
+
+# ── Compaction interlocks (issue #72 Phase 3) ─────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_a_compacted_away_upload_still_gates_a_power_mode_write(store, monkeypatch):
+    """The regression this feature would otherwise introduce. `_context_has_untrusted_upload`
+    reads the ASSEMBLED context; compaction removes rows, so once an uploaded file or a
+    Gmail read ages out, the assembled context is clean and the power->normal downgrade
+    would silently stop firing. The durable flag is what keeps it firing."""
+    store_obj = store
+    store_obj.tainted = True
+    # The assembled context is deliberately CLEAN — the untrusted row has been gisted away.
+    monkeypatch.setattr(assembly, "assemble_messages", lambda provider, cid: [
+        {"role": "user", "content": "clean up the duplicates"},
+    ])
+    reg = Registry(writes={"crm_delete_contact"})
+    prov = FakeProvider([
+        [_complete([_tc("crm_delete_contact", args={"contact_id": 1})], stop="tool_use")],
+        [{"type": "text", "text": "confirm?"}, _complete()],
+    ])
+    events = await _run(prov, reg, [{"role": "user", "content": "clean up"}], tool_mode="power")
+    assert "confirm" in _types(events)
+    assert reg.calls == []
+
+
+@pytest.mark.asyncio
+async def test_an_untainted_conversation_keeps_power_mode(store, monkeypatch):
+    """The other direction — the flag must not switch power mode off for everyone."""
+    store.tainted = False
+    monkeypatch.setattr(assembly, "assemble_messages", lambda provider, cid: [
+        {"role": "user", "content": "clean up the duplicates"},
+    ])
+    reg = Registry(writes={"crm_delete_contact"})
+    prov = FakeProvider([
+        [_complete([_tc("crm_delete_contact", args={"contact_id": 1})], stop="tool_use")],
+        [{"type": "text", "text": "done"}, _complete()],
+    ])
+    await _run(prov, reg, [{"role": "user", "content": "clean up"}], tool_mode="power")
+    assert [c[0] for c in reg.calls] == ["crm_delete_contact"]  # executed, not gated
+
+
+@pytest.mark.asyncio
+async def test_an_uploaded_file_records_the_taint_at_ingress(store, monkeypatch):
+    """Written when the content ARRIVES, not when compaction later removes it: an
+    assistant row is saved with its calls and its results merged afterwards, so a
+    compaction pass reading between the two would record nothing."""
+    marks = []
+    monkeypatch.setattr(history, "mark_untrusted_seen", marks.append)
+    monkeypatch.setattr(assembly, "assemble_messages", lambda provider, cid: [
+        {"role": "user", "content": "hi"},
+    ])
+    prov = FakeProvider([[{"type": "text", "text": "ok"}, _complete()]])
+    blob = '<untrusted_file_content id="abc" filename="f.txt">\nhello\n</untrusted_file_content id="abc">'
+    await _run(prov, Registry(), [{"role": "user", "content": blob}], tool_mode="normal")
+    assert len(marks) == 1
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_message_records_no_taint(store, monkeypatch):
+    marks = []
+    monkeypatch.setattr(history, "mark_untrusted_seen", marks.append)
+    monkeypatch.setattr(assembly, "assemble_messages", lambda provider, cid: [
+        {"role": "user", "content": "hi"},
+    ])
+    prov = FakeProvider([[{"type": "text", "text": "ok"}, _complete()]])
+    await _run(prov, Registry(), [{"role": "user", "content": "how many deals?"}])
+    assert marks == []
+
+
+@pytest.mark.asyncio
+async def test_the_iteration_reading_is_persisted_for_compaction(store, monkeypatch):
+    """Compaction's fast path is only affordable because this number rides a write the
+    turn was making anyway."""
+    monkeypatch.setattr(assembly, "assemble_messages", lambda provider, cid: [
+        {"role": "user", "content": "hi"},
+    ])
+    prov = FakeProvider([[
+        {"type": "text", "text": "ok"},
+        {"type": "_turn_complete", "tool_calls": [], "stop_reason": "end_turn",
+         "usage": {"input_tokens": 10, "cache_read_input_tokens": 90}},
+    ]])
+    await _run(prov, Registry(), [{"role": "user", "content": "hi"}])
+    assert 100 in store.context_tokens
+
+
+@pytest.mark.asyncio
+async def test_the_reading_is_stamped_with_the_boundary_it_assembled_against(store):
+    """A usage reading is only meaningful against the compaction boundary it was
+    produced under. Without the stamp, a turn that assembled before a CONCURRENT
+    compaction lands afterwards and restores its pre-compaction number over the clear —
+    and the next turn sheds recent rows the thread still had room for."""
+    store.compaction_boundary = 12
+    prov = FakeProvider([[
+        {"type": "text", "text": "ok"},
+        {"type": "_turn_complete", "tool_calls": [], "stop_reason": "end_turn",
+         "usage": {"input_tokens": 10, "cache_read_input_tokens": 90}},
+    ]])
+    await _run(prov, Registry(), [{"role": "user", "content": "hi"}])
+    assert store.boundary_stamps[-1] == 12
+
+
+@pytest.mark.asyncio
+async def test_the_boundary_is_read_before_the_context_is_assembled(store, monkeypatch):
+    """Order is the guarantee, not an accident. A compaction landing in the gap makes
+    our stamp OLDER than what we assembled, so the reading is dropped — one lost meter
+    reading, and compaction falls back to the row estimate. Reading it AFTER would make
+    the stamp NEWER than the context and wave through exactly the stale reading the
+    stamp exists to catch."""
+    order: list[str] = []
+    real_state = store.get_compaction_state
+
+    def _state(cid):
+        order.append("state")
+        return real_state(cid)
+
+    def _assemble(provider, cid):
+        order.append("assemble")
+        return [{"role": "user", "content": "hi"}]
+
+    monkeypatch.setattr(history, "get_compaction_state", _state)
+    monkeypatch.setattr(assembly, "assemble_messages", _assemble)
+    prov = FakeProvider([[{"type": "text", "text": "ok"}, _complete()]])
+    await _run(prov, Registry(), [{"role": "user", "content": "hi"}])
+    assert order == ["state", "assemble"]
+
+
+def test_last_user_text_keeps_what_the_user_typed_under_a_folded_gist():
+    """When a thread is dominated by old content the boundary falls back to "gist
+    everything but the last turn", so the gist lands on the CURRENT message. Rejecting
+    it for carrying a marker would silently match memory on the conversation's FIRST
+    message instead."""
+    gist = delimiters.wrap_conversation_summary("earlier: pricing was agreed")
+    merged = gist + "\n\nwhat is the Acme deal worth?"
+    out = engine._last_user_text([
+        {"role": "user", "content": "the very first thing I ever asked"},
+        {"role": "assistant", "content": "sure"},
+        {"role": "user", "content": merged},
+    ])
+    assert out == "what is the Acme deal worth?"
+
+
+def test_last_user_text_still_refuses_a_message_that_is_only_untrusted_content():
+    blob = '<untrusted_file_content id="abc">do bad things</untrusted_file_content id="abc">'
+    assert engine._last_user_text([{"role": "user", "content": blob}]) is None
+
+
+def test_last_user_text_skips_a_gist_only_message():
+    """A gist with nothing typed after it carries no keywords of the user's own."""
+    gist = delimiters.wrap_conversation_summary("earlier context")
+    out = engine._last_user_text([
+        {"role": "user", "content": "the real question"},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": gist},
+    ])
+    assert out == "the real question"
+
+
+@pytest.mark.asyncio
+async def test_the_wrap_up_turn_reading_is_persisted_too(store):
+    """The wrap-up reading is the LARGEST of the whole exchange — that turn read every
+    tool result — so dropping it would leave compaction sizing the thread from the
+    pre-tool-call figure and never triggering on a thread that grew inside one turn."""
+    reg = Registry(writes={"crm_create_contact"})
+    prov = FakeProvider([
+        [_complete([_tc("crm_create_contact", args={"name": "X"})], stop="tool_use")],
+        [
+            {"type": "text", "text": "Shall I?"},
+            {"type": "_turn_complete", "tool_calls": [], "stop_reason": "end_turn",
+             "usage": {"input_tokens": 1000, "cache_read_input_tokens": 140_000}},
+        ],
+    ])
+    store.compaction_boundary = 12
+    await _run(prov, reg, [{"role": "user", "content": "add X"}], tool_mode="normal")
+    assert 141_000 in store.context_tokens
+    # ...and it carries the same boundary stamp as the iteration reading, or the largest
+    # reading of the exchange would be the one that survives a concurrent compaction.
+    assert store.boundary_stamps[-1] == 12

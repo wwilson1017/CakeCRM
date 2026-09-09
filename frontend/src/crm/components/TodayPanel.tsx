@@ -13,17 +13,21 @@ import { useNavigate } from 'react-router-dom';
 
 import { api } from '../../core/api/client';
 import { useAuth } from '../../core/auth/AuthContext';
-import type { CrmToday, CrmTodayItem } from '../../core/types';
+import type {
+  CrmToday, CrmTodayItem, CrmTodayReminderItem, CrmTodayTaskItem,
+} from '../../core/types';
 import { loadPersistedState, savePersistedState } from '../../shared/search/persist';
 import {
   ACCENT, FONT_DISPLAY, INK, INK_DIM, INK_MUTE, LINE, SAGE_TEXT, mono,
 } from '../../shared/styles';
 import { toast } from '../../shared/toast';
+import { dealDeepLink } from '../dealDeepLink';
+import DealTemperatureIcon from './DealTemperatureIcon';
 import { dueLabel, parseUTC } from '../gtd/util';
 import { cardStyle, sectionHeading } from '../styles';
 import {
-  TODAY_MAX_RETRIES, TODAY_SCOPE_KEY, coerceTodayScope, collapseToday, msUntilRefresh,
-  retryDelayMs, whyBadge, type TodayScope,
+  TODAY_MAX_RETRIES, TODAY_SCOPE_KEY, coerceTodayScope, collapseToday, dealEvidence,
+  msUntilRefresh, retryDelayMs, whyBadge, type TodayScope,
 } from '../todayPanel';
 import { UNASSIGNED_LABEL, useUsers } from '../useUsers';
 
@@ -152,6 +156,11 @@ export function TodayPanel({ wrapperStyle, refreshKey, onMutated }: Props) {
   }, [onMutated]);
 
   const open = useCallback((item: CrmTodayItem) => {
+    // A deal DOES have a URL: #145's `?deal=` deep link opens its sheet over the board.
+    // Built through `dealDeepLink` rather than written out here, because that module is
+    // the browser's half of a shape pinned against `backend/crm/links.py` — a second
+    // literal would be a second producer nothing checks.
+    if (item.kind === 'deal') { navigate(dealDeepLink(item.id)); return; }
     // Tasks have no detail URL: /crm/tasks is mode-routed (GTD's Today view by default
     // since #102, the list in normal mode). Both are coherent destinations, and the
     // row's own checkbox is how you act on that specific task without leaving.
@@ -186,7 +195,10 @@ export function TodayPanel({ wrapperStyle, refreshKey, onMutated }: Props) {
             no rows would otherwise keep asserting "Nothing needs you today" — a claim
             about the scope you just left — with no sign a request was in flight. */}
         <div aria-busy={settling || undefined} style={{ opacity: settling ? 0.55 : 1 }}>
-          {data.items.length === 0 ? (
+          {/* Keyed on what is actually on screen, not on the payload's length: a card
+              holding only recently-touched hot deals has rows, but none of them ranked,
+              so it correctly reads "nothing needs you today" above a "+N more" expander. */}
+          {visible.length === 0 ? (
             <p style={{ margin: 0, fontSize: 13, color: INK_DIM }}>Nothing needs you today.</p>
           ) : (
             visible.map(item => (
@@ -196,13 +208,16 @@ export function TodayPanel({ wrapperStyle, refreshKey, onMutated }: Props) {
           )}
         </div>
 
-        {hiddenCount > 0 && (
+        {!expanded && hiddenCount > 0 && (
           <button type="button" onClick={() => setExpanded(true)}
                   style={{ ...mono(10, INK_MUTE), background: 'none', border: 'none', padding: '10px 0 0', cursor: 'pointer' }}>
             +{hiddenCount} more today
           </button>
         )}
-        {expanded && data.items.length > 5 && (
+        {/* `hiddenCount` answers "what would the expander reveal", so it drives both
+            controls. `items.length > 5` cannot: the hidden rows may be unranked rather
+            than merely past the fifth slot, and then there is no Show less to click back. */}
+        {expanded && hiddenCount > 0 && (
           <button type="button" onClick={() => setExpanded(false)}
                   style={{ ...mono(10, INK_MUTE), background: 'none', border: 'none', padding: '10px 0 0', cursor: 'pointer' }}>
             Show less
@@ -230,9 +245,11 @@ interface RowProps {
  * `stopPropagation` fires too late to prevent that.
  */
 function TodayRow({ item, today, showUnassigned, onOpen, onComplete }: RowProps) {
-  const badge = whyBadge(item);
   const due = item.kind === 'task' ? dueLabel(item.due_date, today) : null;
-  const unassigned = item.kind === 'task' && item.owner_id === null && showUnassigned;
+  // Deals carry an owner too (#60), and an unowned hot deal is exactly the row somebody
+  // has to pick up — the same reason the tasks wear this. Reminders are excluded because
+  // they have no owner column at all, so the label would invite an impossible action.
+  const unassigned = item.kind !== 'reminder' && item.owner_id === null && showUnassigned;
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0', borderBottom: `1px solid ${LINE}` }}>
@@ -243,25 +260,41 @@ function TodayRow({ item, today, showUnassigned, onOpen, onComplete }: RowProps)
                          alignItems: 'center', justifyContent: 'center', color: SAGE_TEXT }} />
       ) : (
         // Only tasks can be completed, but the badges still have to line up: without
-        // this spacer a reminder row starts a checkbox-width to the left of every task
-        // row, and the panel reads as misaligned rather than as two kinds of row.
+        // this spacer a reminder or deal row starts a checkbox-width to the left of every
+        // task row, and the panel reads as misaligned rather than as three kinds of row.
         <span aria-hidden="true" style={{ flexShrink: 0, width: 18 }} />
       )}
       <button type="button" onClick={() => onOpen(item)}
               style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, background: 'none',
                        border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left', font: 'inherit' }}>
-        <span style={{ ...mono(9, badge.color), flexShrink: 0 }}>{badge.label}</span>
+        {item.kind === 'deal'
+          // #125's control, rendered READ-ONLY: no `onCycle`, so it emits a labelled
+          // `role="img"` span rather than a button — the panel is a list of what needs you,
+          // not a place to re-triage the pipeline, and a tab stop here would sit inside the
+          // row's own open-the-deal button. The tier is the literal 'hot' because the query
+          // filters on exactly that; nothing else can reach this row.
+          ? <DealTemperatureIcon value="hot" />
+          : <TextBadge item={item} />}
         <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: INK, overflow: 'hidden',
                        textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: FONT_DISPLAY }}>
           {item.title}
         </span>
         {unassigned && <span style={{ ...mono(9, INK_DIM), flexShrink: 0 }}>{UNASSIGNED_LABEL}</span>}
         <span style={{ ...mono(9, INK_MUTE), flexShrink: 0 }}>
-          {item.kind === 'reminder' ? reminderTime(item.due_at) : due?.text}
+          {item.kind === 'reminder' ? reminderTime(item.due_at)
+            : item.kind === 'deal' ? dealEvidence(item.days_since_touch, item.value)
+            : due?.text}
         </span>
       </button>
     </div>
   );
+}
+
+/** The task/reminder badge. Its own component so the row can hand `whyBadge` an item the
+ *  compiler has already narrowed away from deals. */
+function TextBadge({ item }: { item: CrmTodayTaskItem | CrmTodayReminderItem }) {
+  const badge = whyBadge(item);
+  return <span style={{ ...mono(9, badge.color), flexShrink: 0 }}>{badge.label}</span>;
 }
 
 /**

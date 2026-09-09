@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import useCollectionState from './useCollectionState';
 import type { UseCollectionStateOptions } from './useCollectionState';
-import type { CollectionConfig, CollectionState } from './types';
+import type { CollectionConfig, CollectionState, DragPolicy } from './types';
 
 interface Row {
   id: number;
@@ -21,7 +21,7 @@ const items: Row[] = [
   { id: 4, name: 'delta', stage: 2, priority: true, voided: false },
 ];
 
-function makeConfig(key: string, overrides: Partial<CollectionConfig<Row>> = {}): CollectionConfig<Row> {
+function makeConfig(key: string, overrides: Partial<CollectionConfig<Row, DragPolicy>> = {}): CollectionConfig<Row, DragPolicy> {
   return {
     storage: { key, version: 1 },
     defaultView: 'kanban',
@@ -56,7 +56,7 @@ function Probe({
   data,
   options,
 }: {
-  config: CollectionConfig<Row>;
+  config: CollectionConfig<Row, DragPolicy>;
   data: readonly Row[];
   options?: UseCollectionStateOptions;
 }) {
@@ -68,7 +68,7 @@ function Probe({
 }
 
 function renderState(
-  config: CollectionConfig<Row>,
+  config: CollectionConfig<Row, DragPolicy>,
   data: readonly Row[] = items,
   options?: UseCollectionStateOptions,
 ): void {
@@ -347,5 +347,67 @@ describe('searchTuning', () => {
     act(() => state().setQuery('in the'));
     expect(state().isFiltering).toBe(false);
     expect(state().visibleItems).toHaveLength(2);
+  });
+});
+
+describe('dragPolicy — what a drop MEANS decides what can lock it', () => {
+  // The default 'index' policy assumes the app persists the drop position, so a filtered
+  // subset, a non-array sort and a truncated column each make the index unmappable.
+  // A 'column' board discards newIndex entirely, so none of the three can make a drop
+  // ambiguous and the layer must contribute no lock at all.
+  it("'column' keeps drag live under a filter, a non-manual sort AND a truncated column", () => {
+    // columnCap 1 with three stage-1 rows guarantees a truncated column from the start.
+    const config = makeConfig('dp_column', {
+      kanban: { getColumnId: r => r.stage, columnCap: 1, dragPolicy: 'column' },
+    });
+    renderState(config);
+    expect(state().truncatedColumns.size).toBeGreaterThan(0);
+    expect(state().dragLocked).toBe(false);
+
+    act(() => state().setQuery('alp'));
+    expect(state().isFiltering).toBe(true);
+    expect(state().dragLocked).toBe(false);
+
+    act(() => state().setSort({ field: 'name', dir: 'asc' }));
+    expect(state().manualOrder).toBe(false);
+    expect(state().dragLocked).toBe(false);
+  });
+
+  // Each condition gets its own mount: re-rendering the same root with a different config
+  // does NOT re-run the hook's useState initialisers, so a query set earlier would leak in
+  // and make the next assertion pass for the wrong reason.
+  it("an omitted policy behaves as 'index' — a filter locks drag", () => {
+    renderState(makeConfig('dp_default_filter'));
+    expect(state().dragLocked).toBe(false);
+    act(() => state().setQuery('alp'));
+    expect(state().dragLocked).toBe(true);
+  });
+
+  it("an omitted policy behaves as 'index' — a non-manual sort locks drag", () => {
+    renderState(makeConfig('dp_default_sort'));
+    expect(state().dragLocked).toBe(false);
+    act(() => state().setSort({ field: 'name', dir: 'asc' }));
+    expect(state().manualOrder).toBe(false);
+    expect(state().dragLocked).toBe(true);
+  });
+
+  it("an omitted policy behaves as 'index' — a truncated column locks drag alone", () => {
+    // columnCap 1 truncates stage 1 (three rows) with no query and the resting sort, so
+    // truncation is provably the only reason the gate is closed.
+    renderState(makeConfig('dp_default_trunc', {
+      kanban: { getColumnId: r => r.stage, columnCap: 1 },
+    }));
+    expect(state().isFiltering).toBe(false);
+    expect(state().manualOrder).toBe(true);
+    expect(state().truncatedColumns.size).toBeGreaterThan(0);
+    expect(state().dragLocked).toBe(true);
+  });
+
+  it("'index' is the explicit default and matches an omitted policy exactly", () => {
+    renderState(makeConfig('dp_explicit', {
+      kanban: { getColumnId: r => r.stage, columnCap: 2, dragPolicy: 'index' },
+    }));
+    act(() => state().setQuery('alp'));
+    expect(state().dragLocked).toBe(true);
   });
 });

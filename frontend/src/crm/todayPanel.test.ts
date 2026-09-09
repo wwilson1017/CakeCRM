@@ -1,13 +1,20 @@
 import { describe, expect, it } from 'vitest';
 
-import type { CrmTodayItem } from '../core/types';
+import type { CrmTodayDealItem, CrmTodayTaskItem } from '../core/types';
 import {
-  TODAY_COLLAPSED, coerceTodayScope, collapseToday, msUntilRefresh, whyBadge,
+  TODAY_COLLAPSED, coerceTodayScope, collapseToday, dealEvidence, msUntilRefresh, whyBadge,
 } from './todayPanel';
 
-function task(id: number, why: 'starred' | 'overdue' | 'due_today' = 'due_today'): CrmTodayItem {
+function task(id: number, why: 'starred' | 'overdue' | 'due_today' = 'due_today'): CrmTodayTaskItem {
   return { kind: 'task', id, rank: why === 'starred' ? 1 : why === 'overdue' ? 3 : 5, why,
            title: `t${id}`, due_date: '2026-06-05', owner_id: null };
+}
+
+/** An unranked hot deal — the row the issue says belongs behind the expander and nowhere
+ *  else. `rank: 2` is the stale variant, which behaves like any other ranked row. */
+function hotDeal(id: number, rank: 2 | null = null): CrmTodayDealItem {
+  return { kind: 'deal', id, rank, why: rank === 2 ? 'hot_stale' : 'hot',
+           title: `deal ${id}`, value: 1000, days_since_touch: 3, owner_id: null };
 }
 
 describe('collapseToday', () => {
@@ -23,15 +30,62 @@ describe('collapseToday', () => {
     expect(hiddenCount).toBe(2);
   });
 
-  it('reveals everything when expanded', () => {
+  it('reveals everything when expanded, and still reports what the expander holds', () => {
     const items = Array.from({ length: 7 }, (_, i) => task(i));
-    expect(collapseToday(items, true)).toEqual({ visible: items, hiddenCount: 0 });
+    // hiddenCount answers "what would the expander reveal", not "what is hidden right
+    // now" — it is what tells the panel whether to offer Show less.
+    expect(collapseToday(items, true)).toEqual({ visible: items, hiddenCount: 2 });
   });
 
   it('derives both halves from the SAME array, so the count cannot disagree', () => {
     const items = Array.from({ length: 9 }, (_, i) => task(i));
     const { visible, hiddenCount } = collapseToday(items, false);
     expect(visible.length + hiddenCount).toBe(items.length);
+  });
+
+  it('never shows an unranked hot deal in the collapsed card', () => {
+    // The issue's rule, and the case a sixth rank could not have covered: one commitment
+    // beside one recently-touched hot deal, well under the five-row cap.
+    const items = [task(1, 'overdue'), hotDeal(9)];
+    expect(collapseToday(items, false)).toEqual({ visible: [items[0]], hiddenCount: 1 });
+  });
+
+  it('reveals the unranked rows once expanded', () => {
+    const items = [task(1, 'overdue'), hotDeal(9)];
+    expect(collapseToday(items, true)).toEqual({ visible: items, hiddenCount: 1 });
+  });
+
+  it('shows a hot+stale deal in the collapsed card like any other ranked row', () => {
+    const items = [hotDeal(9, 2), task(1, 'overdue')];
+    expect(collapseToday(items, false)).toEqual({ visible: items, hiddenCount: 0 });
+  });
+
+  it('fills all five slots from ranked rows even when unranked ones sit among them', () => {
+    // Slicing the first five ITEMS would spend a slot on the deal and drop task 5.
+    const items = [...Array.from({ length: 5 }, (_, i) => task(i)), hotDeal(9)];
+    const { visible, hiddenCount } = collapseToday(items, false);
+    expect(visible.map(i => i.id)).toEqual([0, 1, 2, 3, 4]);
+    expect(hiddenCount).toBe(1);
+  });
+
+  it('collapses to nothing when every row is unranked', () => {
+    const items = [hotDeal(8), hotDeal(9)];
+    expect(collapseToday(items, false)).toEqual({ visible: [], hiddenCount: 2 });
+  });
+});
+
+describe('dealEvidence', () => {
+  it('reads as the issue spells it: idle days, then value', () => {
+    expect(dealEvidence(12, 30000)).toBe('idle 12d · $30K');
+  });
+
+  it('uses the app-wide compact form for large and small numbers alike', () => {
+    expect(dealEvidence(1, 1_200_000)).toBe('idle 1d · $1.2M');
+    expect(dealEvidence(0, 750)).toBe('idle 0d · $750');
+  });
+
+  it('never renders a negative idle count', () => {
+    expect(dealEvidence(-3, 0)).toBe('idle 0d · $0');
   });
 });
 

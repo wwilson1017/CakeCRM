@@ -15,6 +15,10 @@
  *    Filtering makes a drop index unmappable (subset), a non-manual sort makes it a lie,
  *    and a truncated column makes it ambiguous (the drop lands relative to rows that
  *    are not all rendered). Toggles are EXCLUDED — they remove columns, not cards.
+ *    All three are about the drop INDEX, so a board that declares
+ *    `KanbanViewConfig.dragPolicy: 'column'` (a drop assigns a column and nothing else,
+ *    because no rank column exists to persist a position into) opts out of the gate
+ *    entirely and keeps only its own `kanban.dragDisabled` extras.
  *  • **Resets live in handlers, never effects** — every filter/sort/view mutation also clears
  *    the expansion sets in its own handler, because deriving that reset in an effect is a
  *    setState-in-effect cascade and a build-blocking React Compiler lint error (a sibling
@@ -47,6 +51,7 @@ import {
 import type {
   CollectionConfig,
   CollectionSortConfig,
+  DragPolicy,
   CollectionState,
   CollectionViewKind,
   ControlledToggleProps,
@@ -87,7 +92,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-function enabledViews<T>(config: CollectionConfig<T>): CollectionViewKind[] {
+function enabledViews<T>(config: CollectionConfig<T, DragPolicy>): CollectionViewKind[] {
   const views: CollectionViewKind[] = [];
   if (config.kanban) views.push('kanban');
   if (config.list) views.push('list');
@@ -95,7 +100,7 @@ function enabledViews<T>(config: CollectionConfig<T>): CollectionViewKind[] {
   return views;
 }
 
-function defaultToggles<T>(config: CollectionConfig<T>): Record<string, boolean> {
+function defaultToggles<T>(config: CollectionConfig<T, DragPolicy>): Record<string, boolean> {
   const out: Record<string, boolean> = {};
   for (const t of config.toggles ?? []) out[t.key] = t.default !== false;
   return out;
@@ -108,7 +113,7 @@ export interface UseCollectionStateOptions {
 }
 
 export default function useCollectionState<T>(
-  config: CollectionConfig<T>,
+  config: CollectionConfig<T, DragPolicy>,
   items: readonly T[],
   options: UseCollectionStateOptions = {},
 ): CollectionState<T> {
@@ -279,7 +284,12 @@ export default function useCollectionState<T>(
     return truncated;
   }, [kanbanItems, config, expandedColumns]);
 
-  const dragLocked = isFiltering || !manualOrder || truncatedColumns.size > 0;
+  // Under `dragPolicy: 'column'` a drop assigns only a column and the app discards `newIndex`,
+  // so none of the three ambiguities below can arise — the layer contributes no lock and the
+  // app's own `kanban.dragDisabled` extras become the whole gate. See KanbanViewConfig.
+  const dragPolicy = config.kanban?.dragPolicy ?? 'index';
+  const dragLocked =
+    dragPolicy === 'column' ? false : isFiltering || !manualOrder || truncatedColumns.size > 0;
 
   // ── Handlers — the only mutation paths; each carries its own expansion reset ──
   const resetExpansions = () => {

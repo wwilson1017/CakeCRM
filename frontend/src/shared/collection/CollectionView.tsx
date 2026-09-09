@@ -27,6 +27,7 @@ import CollectionDetail from './detail/CollectionDetail';
 import type {
   CollectionViewKind,
   CollectionViewProps,
+  DragPolicy,
   FacetDef,
   RangeValue,
   VoidedFilter,
@@ -62,7 +63,7 @@ const VOIDED_OPTIONS: FacetOption[] = [
   { value: 'only', label: 'Voided only' },
 ];
 
-export default function CollectionView<T, C = unknown>({
+export default function CollectionView<T, C = unknown, P extends DragPolicy = 'index'>({
   config,
   state,
   items,
@@ -74,8 +75,9 @@ export default function CollectionView<T, C = unknown>({
   detail,
   toolbarExtras,
   searchPlaceholder,
+  searchResetNonce,
   loading,
-}: CollectionViewProps<T, C>) {
+}: CollectionViewProps<T, C, P>) {
   const facets = useMemo(() => config.facets ?? [], [config]);
   const noun = config.itemNoun?.plural ?? 'items';
 
@@ -315,6 +317,7 @@ export default function CollectionView<T, C = unknown>({
         query={state.query}
         onQueryChange={state.setQuery}
         placeholder={searchPlaceholder ?? `Search ${noun}...`}
+        resetNonce={searchResetNonce}
         groups={groups}
         extraFacets={panelExtras.length > 0 ? <>{panelExtras}</> : undefined}
         extraChips={chipExtras.length > 0 ? <>{chipExtras}</> : undefined}
@@ -326,7 +329,14 @@ export default function CollectionView<T, C = unknown>({
                 defaultSort: resting,
                 onChange: state.setSort,
                 active: sortActive,
-                note: state.view === 'kanban' && !state.manualOrder ? '· drag paused' : undefined,
+                // Reads `dragLocked` as well as `manualOrder` so the note cannot lie on a
+                // `dragPolicy: 'column'` board, where a non-manual sort does NOT pause drag.
+                // Under the default 'index' policy `!manualOrder` implies `dragLocked`, so
+                // this is byte-identical there.
+                note:
+                  state.view === 'kanban' && state.dragLocked && !state.manualOrder
+                    ? '· drag paused'
+                    : undefined,
                 ariaLabel: `Sort ${noun}`,
               }
             : undefined

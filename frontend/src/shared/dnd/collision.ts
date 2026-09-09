@@ -82,6 +82,13 @@ import { closestCorners, pointerWithin } from '@dnd-kit/core';
 import type { ClientRect, CollisionDetection, DroppableContainer, UniqueIdentifier } from '@dnd-kit/core';
 
 type Measured = { id: UniqueIdentifier; rect: ClientRect };
+/**
+ * A lane, plus the part of it the board actually SHOWS. `rect` is x-clipped with its full
+ * vertical extent (see `clampX`); `visible` is clipped on both axes, and `null` for a lane with
+ * nothing on screen. The pair exists because the two are wanted on different paths: the band is
+ * built from `visible`, while `rect` is what a lane publishes when the band cannot be drawn.
+ */
+type MeasuredColumn = Measured & { visible: ClientRect | null };
 
 /**
  * Cut a rect down to the part of it that an ancestor scroll box actually shows, on BOTH axes.
@@ -195,7 +202,7 @@ function boardVisibleBox(containers: DroppableContainer[]): ClientRect | null {
 /** Split the containers into the two kinds this board has, keeping only measured ones. */
 function measured(rects: Map<UniqueIdentifier, ClientRect>, containers: DroppableContainer[]) {
   const viewportRect = boardVisibleBox(containers);
-  const columns: Measured[] = [];
+  const columns: MeasuredColumn[] = [];
   /** Only the parts the board SHOWS bound the band — see `withFullHeightColumns`. */
   const bandRects: ClientRect[] = [];
   /** Per column: the part of it the board shows, or `null` for a column scrolled out of view. */
@@ -225,7 +232,7 @@ function measured(rects: Map<UniqueIdentifier, ClientRect>, containers: Droppabl
       columnClipByKey.set(String(data.columnId), null);
       continue;
     }
-    columns.push({ id: container.id, rect: lane });
+    columns.push({ id: container.id, rect: lane, visible });
     if (visible) bandRects.push(visible);
     columnClipByKey.set(String(data.columnId), visible);
   }
@@ -278,7 +285,7 @@ function measured(rects: Map<UniqueIdentifier, ClientRect>, containers: Droppabl
  */
 function withVisibleGeometry(
   rects: Map<UniqueIdentifier, ClientRect>,
-  columns: Measured[],
+  columns: MeasuredColumn[],
   cardsByColumn: Map<string, Measured[]>,
   hiddenIds: UniqueIdentifier[],
 ): Map<UniqueIdentifier, ClientRect> {
@@ -334,10 +341,13 @@ function columnsShareAnXRange(rects: ClientRect[]): boolean {
 }
 
 /**
- * Give every column a rect spanning the board's full vertical band — the union of the VISIBLE part
- * of each column **and the dragged card's own rect**. Horizontal extent is untouched:
- * which column the pointer is over is already correct, and leaving it alone is what keeps the
- * columns distinguishable.
+ * The board's full vertical band — the union of the VISIBLE part of each column **and the dragged
+ * card's own rect** — or `null` when widening every column to it would be unsound or pointless.
+ *
+ * Split out from {@link withFullHeightColumns} so the DECLINE is a value the caller can see. It
+ * has to be: since #129 a lane that is not given the band must instead be clipped to the board
+ * box (see {@link withoutOffBoardLaneHeight}), and both the pointer test and the `closestCorners`
+ * fallback need that same geometry — a decision the widening cannot make on its own behalf.
  *
  * **Including the dragged rect is what stops the board oscillating.** The columns are re-measured
  * mid-drag — dnd-kit rebuilds every droppable rect when the container array changes identity,
@@ -353,17 +363,16 @@ function columnsShareAnXRange(rects: ClientRect[]): boolean {
  * The side effect is deliberate and an improvement: dragging below or above the board keeps the
  * lane under the pointer as the target instead of falling back to a card in the source column.
  *
- * Skipped, leaving the rects as measured, whenever widening would be unsound or pointless: no
- * columns measured yet, columns sharing an x-range, or a band that did not come out finite.
- * `pointerWithin` still runs on the untouched rects in those cases — it just cannot reach into a
- * short column's empty space.
+ * Declined — `null` — whenever widening would be unsound or pointless: no columns measured yet,
+ * columns sharing an x-range, or a band that did not come out finite. `pointerWithin` still runs
+ * in those cases, on lanes clipped to the board box; it just cannot reach into a short column's
+ * empty space.
  */
-function withFullHeightColumns(
-  rects: Map<UniqueIdentifier, ClientRect>,
-  columns: Measured[],
+function boardBand(
+  columns: MeasuredColumn[],
   bandRects: ClientRect[],
   draggedRect: ClientRect,
-): Map<UniqueIdentifier, ClientRect> {
+): { top: number; bottom: number } | null {
   let top = draggedRect.top;
   let bottom = draggedRect.bottom;
   // The columns' VISIBLE parts, not their raw rects: a lane running 2000px past the bottom of a
@@ -383,24 +392,75 @@ function withFullHeightColumns(
   // lane — a board filtered to one stage, or a transient frame with one column measured — and
   // without widening the pointer is inside nothing and falls back to a card further up.
   if (columns.length === 0 || !Number.isFinite(top) || !Number.isFinite(bottom) || bottom <= top) {
-    return rects;
+    return null;
   }
-  if (columnsShareAnXRange(columns.map(c => c.rect))) return rects;
+  if (columnsShareAnXRange(columns.map(c => c.rect))) return null;
 
+  return { top, bottom };
+}
+
+/**
+ * Write {@link boardBand}'s band onto every lane, leaving horizontal extent untouched — which
+ * column the pointer is over is already correct, and leaving x alone is what keeps the columns
+ * distinguishable. Every lane receives it, including one with nothing on screen: that is the rule
+ * that a lane whose own cards have scrolled away stays a drop target.
+ */
+function withFullHeightColumns(
+  rects: Map<UniqueIdentifier, ClientRect>,
+  columns: MeasuredColumn[],
+  band: { top: number; bottom: number },
+): Map<UniqueIdentifier, ClientRect> {
   const widened = new Map(rects);
   for (const { id, rect } of columns) {
     // Built field by field rather than spread: the map's rects come from dnd-kit's own
     // measuring and need not be plain object literals.
     widened.set(id, {
-      top,
-      bottom,
-      height: bottom - top,
+      top: band.top,
+      bottom: band.bottom,
+      height: band.bottom - band.top,
       left: rect.left,
       right: rect.right,
       width: rect.width,
     });
   }
   return widened;
+}
+
+/**
+ * The no-band half of piece 4's vertical rule: publish each lane's VISIBLE rect, and drop a lane
+ * with nothing on screen.
+ *
+ * On the normal path a lane's raw vertical extent never reaches hit-testing — `withFullHeightColumns`
+ * replaces every lane's rect with the band, which is drawn from visible parts (plus the dragged
+ * rect). When {@link boardBand} declines, nothing overwrites it, and `clampX` deliberately left the
+ * y axis alone. That was inert while no board in this repo gave its SCROLLER a vertical fold; issue
+ * #129 bounds the pipeline board's height, so a lane can now run well past the board's bottom edge
+ * and a pointer in that off-board strip would target it — a deal silently changing to a stage the
+ * user cannot see, which is exactly the hole `clampX` closes on x.
+ *
+ * Applied ONLY on the decline paths. On the normal path the rule that a lane whose own cards have
+ * scrolled out of view stays a drop target still holds, and holds through the band — which is why
+ * this must not be hoisted into `measured()` or `withVisibleGeometry()`, where it would delete such
+ * a lane outright.
+ *
+ * `clampToBox` hands back the very same object when it changed nothing, so an unfolded board still
+ * clones no map here.
+ */
+function withoutOffBoardLaneHeight(
+  rects: Map<UniqueIdentifier, ClientRect>,
+  columns: MeasuredColumn[],
+): Map<UniqueIdentifier, ClientRect> {
+  let out = rects;
+  const own = () => {
+    if (out === rects) out = new Map(rects);
+    return out;
+  };
+
+  for (const { id, rect, visible } of columns) {
+    if (visible === null) own().delete(id);
+    else if (visible !== rect) own().set(id, visible);
+  }
+  return out;
 }
 
 /**
@@ -459,13 +519,26 @@ export const boardCollisionDetection: CollisionDetection = args => {
   // than by rects stretched to the whole board. Identical to `args.droppableRects` when nothing
   // was clipped, so an unfolded board's fallback is unchanged.
   const visibleRects = withVisibleGeometry(args.droppableRects, columns, cardsByColumn, hiddenIds);
-  const droppableRects = withClosedCardGaps(
-    withFullHeightColumns(visibleRects, columns, bandRects, args.collisionRect),
-    cardsByColumn,
-  );
+  // Widen every lane to the board's band, or — when that would be unsound — clip each lane to the
+  // board box instead. The second branch is not a no-op fallback: since #129 the pipeline board is
+  // height-bounded, so a lane can extend past its bottom fold, and `clampX` clips only x. Both the
+  // pointer test and the fallback must see the SAME lane geometry there, for the reason stated
+  // just above about cards: `closestCorners` always names something, so a raw lane left in the
+  // fallback map would be hit at its off-board coordinates in exactly the cases `pointerWithin`
+  // could not answer.
+  const band = boardBand(columns, bandRects, args.collisionRect);
+  const laneRects = band
+    ? withFullHeightColumns(visibleRects, columns, band)
+    : withoutOffBoardLaneHeight(visibleRects, columns);
+  const droppableRects = withClosedCardGaps(laneRects, cardsByColumn);
 
   const pointerHits = pointerWithin({ ...args, droppableRects });
-  if (pointerHits.length === 0) return closestCorners({ ...args, droppableRects: visibleRects });
+  // The widened band is deliberately NOT handed to the fallback — it would rank by rects stretched
+  // to the whole board rather than by real geometry — but the lane CLIP must be, so the no-band
+  // branch passes `laneRects`.
+  if (pointerHits.length === 0) {
+    return closestCorners({ ...args, droppableRects: band ? visibleRects : laneRects });
+  }
 
   const cardIds = new Set<UniqueIdentifier>();
   for (const cards of cardsByColumn.values()) for (const { id } of cards) cardIds.add(id);
