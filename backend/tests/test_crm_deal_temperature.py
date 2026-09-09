@@ -17,8 +17,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from crm import scoring_service as ss
-from crm import service, tools
+from crm import scoring_service as ss, service, tools
 from crm.router import DealCreate, DealUpdate
 
 NOW = datetime(2026, 9, 9, 12, 0, 0, tzinfo=timezone.utc)
