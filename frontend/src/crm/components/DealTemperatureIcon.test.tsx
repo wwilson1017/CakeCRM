@@ -113,6 +113,15 @@ describe('DealTemperatureIcon', () => {
     expect(onCycle).not.toHaveBeenCalled();
   });
 
+  it('does not promise a click it will not honour while disabled', () => {
+    // Found by the real-app verification run. AT announces the button as unavailable, so nobody
+    // is actively misled — but "Click to set Warm" on an archived deal is simply untrue, and a
+    // hovering pointer gets the same wrong promise from the tooltip.
+    render(<DealTemperatureIcon value="hot" onCycle={vi.fn()} disabled />);
+    expect(button()!.getAttribute('aria-label')).toBe('Deal temperature: Hot');
+    expect(button()!.getAttribute('title')).toBe('Deal temperature: Hot');
+  });
+
   it('advances on consecutive clicks without waiting for the prop to catch up', async () => {
     // THE test for the optimistic override. Without it every click after the first steps from
     // the same unchanged prop, so three clicks produce one move and the control reads as
