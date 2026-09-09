@@ -363,6 +363,27 @@ describe('TodayPanel hot deals', () => {
     expect(rowButton('Deal 42')).toBeDefined();
   });
 
+  it('swaps the expander for Show less on a panel of fewer than five rows', async () => {
+    // The pre-#131 conditions were `hiddenCount > 0` and `items.length > 5`, and BOTH are
+    // wrong once hidden rows can be unranked rather than merely past the fifth slot: the
+    // first leaves "+N more today" on screen beside "Show less", and the second never
+    // renders "Show less" at all, stranding the reader in the expanded view. Two items
+    // here, so `items.length > 5` is false and the old guard cannot pass this.
+    api.mockResolvedValue(withItems([
+      taskItem(80, { rank: 3, why: 'overdue', title: 'Overdue one', due_date: '2026-06-01' }),
+      dealItem(42),
+    ]));
+    await render(<TodayPanel />);
+
+    await act(async () => { rowButton('+1 more today')!.click(); });
+    expect(rowButton('Show less')).toBeDefined();
+    expect(rowButton('+1 more today')).toBeUndefined();
+
+    await act(async () => { rowButton('Show less')!.click(); });
+    expect(rowButton('+1 more today')).toBeDefined();
+    expect(rowButton('Show less')).toBeUndefined();
+  });
+
   it('says nothing needs you, and still offers the expander, when every row is unranked', async () => {
     api.mockResolvedValue(withItems([dealItem(42), dealItem(43)]));
     await render(<TodayPanel />);
