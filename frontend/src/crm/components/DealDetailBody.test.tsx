@@ -908,3 +908,73 @@ describe('the owner row', () => {
     expect(container.textContent).toContain('Unassigned');
   });
 });
+
+// ── Deal temperature (issue #125) ────────────────────────────────────────────────────────────
+//
+// The row's handler is three decisions that all fail quietly: which patch it sends, that it
+// toasts a failure this body has nowhere else to show (the host's own toast is stage-only, and
+// this control has no inline form beside it), and that it reloads on BOTH paths — on success for
+// the lead score the write just moved, on failure to put the row back from server truth. A
+// plausible future edit ("only reload when it worked") breaks the second half invisibly.
+
+const temperatureButton = () =>
+  [...container.querySelectorAll('button')]
+    .find(b => b.getAttribute('aria-label')?.startsWith('Deal temperature')) ?? null;
+
+describe('the temperature row', () => {
+  it('sends a fields-only patch for the tier a click steps to', async () => {
+    const props = render({ deal: makeDeal({ deal_temperature: 'warm' }) });
+    await settle();
+    click(temperatureButton());
+    await settle();
+    // Warm's next step is Cold, and the patch must carry nothing else — a stage in here would
+    // move the deal as a side effect of judging it.
+    expect(props.onSaveDeal).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 7 }),
+      { deal_temperature: 'cold' },
+    );
+  });
+
+  it('reloads after a successful cycle, so the lead score it moved is refreshed', async () => {
+    render({ deal: makeDeal({ deal_temperature: null }) });
+    await settle();
+    const before = api.mock.calls.filter(c => /^\/api\/crm\/deals\/\d+$/.test(String(c[0]))).length;
+    click(temperatureButton());
+    await settle();
+    const after = api.mock.calls.filter(c => /^\/api\/crm\/deals\/\d+$/.test(String(c[0]))).length;
+    expect(after).toBeGreaterThan(before);
+  });
+
+  it('toasts a failed cycle AND still reloads, rather than leaving a value the server refused', async () => {
+    const onSaveDeal = vi.fn().mockRejectedValue(new Error('nope'));
+    render({ deal: makeDeal({ deal_temperature: 'hot' }), onSaveDeal });
+    await settle();
+    const before = api.mock.calls.filter(c => /^\/api\/crm\/deals\/\d+$/.test(String(c[0]))).length;
+    click(temperatureButton());
+    await settle();
+    expect(toast.error).toHaveBeenCalledWith('Failed to update deal temperature.');
+    const after = api.mock.calls.filter(c => /^\/api\/crm\/deals\/\d+$/.test(String(c[0]))).length;
+    expect(after).toBeGreaterThan(before);
+  });
+
+  it('renders the row for an untriaged deal instead of hiding it', async () => {
+    // The #128 Owner-row rule: "not set" is a real state, and hiding the row is what makes it
+    // unreadable as one.
+    render({ deal: makeDeal({ deal_temperature: null }) });
+    await settle();
+    expect(container.textContent).toContain('Temperature');
+    expect(temperatureButton()!.getAttribute('aria-label')).toContain('not set');
+  });
+
+  it('is inert on an archived deal, like Mark Won/Lost', async () => {
+    // Archived-ness is read from the RE-FETCHED row, not the prop the host froze — the deal can
+    // be archived elsewhere between the board's load and the sheet opening (issue #83).
+    routeDetail(detailResponse({ archived_at: '2026-09-01T00:00:00+00:00' }));
+    const props = render({ deal: makeDeal({ archived_at: null }) });
+    await settle();
+    expect(temperatureButton()!.disabled).toBe(true);
+    click(temperatureButton());
+    await settle();
+    expect(props.onSaveDeal).not.toHaveBeenCalled();
+  });
+});
