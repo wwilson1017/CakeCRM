@@ -170,6 +170,36 @@ const setField = (id: string, value: string) => {
 const dealGets = () =>
   api.mock.calls.filter(([p, o]) => /^\/api\/crm\/deals\/\d+$/.test(p) && (o?.method ?? 'GET') === 'GET');
 
+// ── RecordCombobox helpers ───────────────────────────────────────────────────────────────────
+//
+// The inline editor's two link fields are `RecordCombobox`es (#123), not `<select>`s, so they are
+// driven the way a user drives them: focus opens the list, the 250ms debounce and its fetch have
+// to settle, and a row is chosen by clicking its option. Real timers — this file uses no fake
+// ones, and mixing the two around `act()` is more fragile than waiting.
+const picker = (which: 'contact' | 'company') =>
+  container.querySelector(`#deal-${which}`) as HTMLInputElement;
+
+async function settleSearch() {
+  await act(async () => { await new Promise(r => setTimeout(r, 600)); });
+}
+
+async function openPicker(which: 'contact' | 'company') {
+  await act(async () => {
+    picker(which).dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+  await settleSearch();
+}
+
+async function clickOption(match: (text: string) => boolean) {
+  const option = [...container.querySelectorAll('[role="option"]')]
+    .find(o => match(o.textContent || ''));
+  if (!option) throw new Error('no matching option rendered');
+  await act(async () => { option.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+}
+
+const clearLink = (label: string) =>
+  container.querySelector(`button[aria-label="${label}"]`) as HTMLButtonElement | null;
+
 // ── Record context (#14) ─────────────────────────────────────────────────────────────────────
 
 describe('record context', () => {
@@ -357,7 +387,8 @@ describe('the inline save', () => {
     const props = render({ deal: makeDeal() });
     await settle();
     click(buttonByText('Edit'));
-    setField('deal-contact', '');
+    await settle();
+    await act(async () => { clearLink('Clear contact')!.click(); });
     click(buttonByText('Save'));
     await settle();
     const [, patch] = (props.onSaveDeal as ReturnType<typeof vi.fn>).mock.calls[0];
@@ -415,6 +446,9 @@ describe('board-position writes', () => {
   });
 
   it('hides the close buttons on a deal that is already closed', async () => {
+    // The detail fetch has to agree: the close-out gate reads the SERVER's stage, not the host
+    // row's, so that an ambiguous close reconciles rather than re-offering Mark Lost.
+    api.mockImplementation(routeApi(detailResponse({ stage: 'won' })));
     render({ deal: makeDeal({ stage: 'won' }) });
     await settle();
     expect(buttonByText('Mark Won')).toBeNull();
@@ -434,38 +468,58 @@ describe('board-position writes', () => {
 // ── Pickers ──────────────────────────────────────────────────────────────────────────────────
 
 describe('the entity pickers', () => {
-  it('keeps a linked record selectable when it falls outside the fetched page', async () => {
-    // #35 auto-creates a company per distinct imported name, so a link can easily sit past the
-    // capped 200 rows — and a blank <select> reads as "no company", not as "not on this page".
+  it('shows a linked record the search never returns', async () => {
+    // The hazard #123 removed: a capped page had no `<option>` for an out-of-page link, so the
+    // control rendered BLANK and read as "none". The label is a prop now, taken from the row's
+    // own joined names — which is what makes any deal-carrying query owe both of them.
     render({ deal: makeDeal() });
     await settle();
     click(buttonByText('Edit'));
     await settle();
-    expect((input('deal-contact') as HTMLSelectElement).value).toBe('3');
-    expect((input('deal-company') as HTMLSelectElement).value).toBe('5');
-    expect(container.textContent).toContain('Dana Reyes');
-    expect(container.textContent).toContain('Northwind');
+
+    expect(picker('contact').value).toBe('Dana Reyes');
+    expect(picker('company').value).toBe('Northwind');
   });
 
-  it('reports a failed picker fetch rather than presenting the fallback as the whole list', async () => {
-    // Both pickers degrade to a list holding only this deal's own link, which on screen is
-    // indistinguishable from "this install has no other contacts" — so a network blip reads as
-    // data. ONE message for the pair: they fail together far more often than separately.
+  it('searches the server rather than scanning a capped page', async () => {
+    // The edit path used to fetch `?limit=200` once and filter in the browser, so a company past
+    // the alphabetical first 200 was unreachable from here at all.
+    render({ deal: makeDeal() });
+    await settle();
+    click(buttonByText('Edit'));
+    await settle();
+    await openPicker('contact');
+
+    const links = api.mock.calls
+      .map(([p]) => String(p))
+      .filter(p => p.startsWith('/api/crm/contacts?') || p.startsWith('/api/crm/companies?'));
+    expect(links.length).toBeGreaterThan(0);
+    expect(links.every(p => p.includes('limit=20') && !p.includes('limit=200'))).toBe(true);
+  });
+
+  it('leaves both links intact when the search itself fails', async () => {
+    // A failed search must not silently UNLINK. The widget turns the field into a query box
+    // while it is open, so the visible text is not the assertion to make here — what matters is
+    // that saving afterwards writes no link change at all.
     const defaults = api.getMockImplementation()!;
     api.mockImplementation((path: string, options?: { method?: string }) =>
-      path.startsWith('/api/crm/contacts') || path.startsWith('/api/crm/companies')
+      path.startsWith('/api/crm/contacts?') || path.startsWith('/api/crm/companies?')
         ? Promise.reject(new Error('offline'))
         : defaults(path, options));
 
-    render({ deal: makeDeal() });
+    const props = render({ deal: makeDeal() });
     await settle();
     click(buttonByText('Edit'));
     await settle();
+    await openPicker('contact');
+    // Change something else, so a patch is produced at all: an empty one short-circuits before
+    // `onSaveDeal`, and "never called" would pass for the wrong reason.
+    setField('deal-title', 'Renamed');
+    click(buttonByText('Save'));
+    await settle();
 
-    expect(toast.error).toHaveBeenCalledTimes(1);
-    // The fallback still stands — reporting the failure must not also empty the selects.
-    expect((input('deal-contact') as HTMLSelectElement).value).toBe('3');
-    expect((input('deal-company') as HTMLSelectElement).value).toBe('5');
+    const [, patch] = (props.onSaveDeal as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(patch).toEqual({ title: 'Renamed' });
   });
 });
 
@@ -474,18 +528,19 @@ describe('the contact→company inference', () => {
     // `DealForm` has always done this, and losing it in the move to an inline editor would
     // quietly leave newly-linked deals out of their company's rollups — invisible until someone
     // wonders why a company page is short a deal.
+    const defaults = api.getMockImplementation()!;
     api.mockImplementation((path: string, options?: { method?: string }) => {
-      if (path.startsWith('/api/crm/contacts')) {
-        return Promise.resolve({ contacts: [{ id: 99, name: 'New Lead', company: '', company_name: '', company_id: 42 }] });
+      if (path.startsWith('/api/crm/contacts?')) {
+        return Promise.resolve({ contacts: [{ id: 99, name: 'New Lead', company: '', company_name: 'Inherited Co', company_id: 42 }] });
       }
-      return routeApi()(path, options);
+      return defaults(path, options);
     });
     const props = render({ deal: makeDeal({ contact_id: null, contact_name: undefined, company_id: null, company_name: undefined }) });
     await settle();
     click(buttonByText('Edit'));
     await settle();
-
-    setField('deal-contact', '99');
+    await openPicker('contact');
+    await clickOption(t => t.includes('New Lead'));
     click(buttonByText('Save'));
     await settle();
 
@@ -493,21 +548,23 @@ describe('the contact→company inference', () => {
     expect(patch).toEqual({ contact_id: 99, company_id: 42 });
   });
 
-  it('never overwrites a company the user already chose', async () => {
+  it('never overwrites a company the deal already has', async () => {
     // Deal↔company links are independent. Changing the contact must not drag the deal out of the
-    // company someone deliberately put it in.
+    // company someone deliberately put it in — a company already on the deal is a deliberate
+    // choice too, just an earlier one.
+    const defaults = api.getMockImplementation()!;
     api.mockImplementation((path: string, options?: { method?: string }) => {
-      if (path.startsWith('/api/crm/contacts')) {
-        return Promise.resolve({ contacts: [{ id: 99, name: 'New Lead', company: '', company_name: '', company_id: 42 }] });
+      if (path.startsWith('/api/crm/contacts?')) {
+        return Promise.resolve({ contacts: [{ id: 99, name: 'New Lead', company: '', company_name: 'Inherited Co', company_id: 42 }] });
       }
-      return routeApi()(path, options);
+      return defaults(path, options);
     });
     const props = render({ deal: makeDeal() });   // company_id: 5 already set
     await settle();
     click(buttonByText('Edit'));
     await settle();
-
-    setField('deal-contact', '99');
+    await openPicker('contact');
+    await clickOption(t => t.includes('New Lead'));
     click(buttonByText('Save'));
     await settle();
 
@@ -561,5 +618,293 @@ describe('the quick-log row', () => {
     await settle();
     await expect(guard!('button' as DetailCloseReason)).resolves.toBe(true);
     expect(confirmDialog).not.toHaveBeenCalled();
+  });
+});
+
+// ── Archived deals (#83) ─────────────────────────────────────────────────────────────────────
+//
+// Re-homed from `DealDetailSheet.test.tsx` when #75 replaced that component. What is pinned is
+// the contract, not the markup: a live deal shows no banner and keeps its close-out actions; an
+// archived one shows the banner and DROPS Mark Won/Lost, which the server would refuse outright;
+// the inline editor drops its Stage field for the same reason; Restore POSTs to the right route
+// and hands the SERVER's row up rather than trusting a refetch; and a failed restore leaves the
+// panel usable so the user can try again.
+
+/** Route every child's fetch to an inert payload, with the deal detail under test on top. */
+function routeDetail(detail: CrmDeal, over: (path: string) => unknown = () => undefined) {
+  api.mockImplementation(async (path: string) => {
+    const custom = over(path);
+    if (custom !== undefined) return custom;
+    if (path.startsWith('/api/crm/provenance/')) return { provenance: [] };
+    if (path.startsWith('/api/crm/chatter/')) return { notes: [] };
+    if (/\/fields$/.test(path)) return [];
+    if (path.startsWith('/api/users')) return { users: [] };
+    if (/^\/api\/crm\/deals\/\d+$/.test(path)) return detail;
+    return null;
+  });
+}
+
+describe('archived deals', () => {
+  it('shows no banner on a live deal and keeps the close-out actions', async () => {
+    routeDetail(detailResponse());
+    render({ deal: makeDeal() });
+    await settle();
+
+    expect(container.textContent).not.toContain('ARCHIVED');
+    expect(buttonByText('Mark Won')).toBeTruthy();
+    expect(buttonByText('Restore')).toBeNull();
+  });
+
+  it('banners an archived deal and drops Mark Won/Lost, which the server would refuse', async () => {
+    const archived = detailResponse({ archived_at: '2026-08-20T00:00:00+00:00' });
+    routeDetail(archived);
+    render({ deal: makeDeal({ archived_at: '2026-08-20T00:00:00+00:00' }) });
+    await settle();
+
+    expect(container.textContent).toContain('ARCHIVED');
+    expect(buttonByText('Restore')).toBeTruthy();
+    expect(buttonByText('Mark Won')).toBeNull();
+    expect(buttonByText('Mark Lost')).toBeNull();
+    // Editing an archived deal's OTHER fields is still legal — the server refuses only the stage.
+    expect(buttonByText('Edit')).toBeTruthy();
+  });
+
+  it('banners a deal archived AFTER the host row was loaded, using the fetched detail', async () => {
+    // The board hands over a frozen row. If the assistant archived the deal in between, only the
+    // re-fetched detail knows — and `get_deal` deliberately resolves an archived deal, so it
+    // does. This is why `archivedAt` bypasses the canonical-host-row merge.
+    routeDetail(detailResponse({ archived_at: '2026-08-25T00:00:00+00:00' }));
+    render({ deal: makeDeal({ archived_at: null }) });
+    await settle();
+
+    expect(container.textContent).toContain('ARCHIVED');
+    expect(buttonByText('Restore')).toBeTruthy();
+  });
+
+  it('drops the Stage field from the inline editor on a deal archived after the row loaded', async () => {
+    // The same drift, one step further. The server refuses a stage change on an archived deal by
+    // rejecting the WHOLE update, so an editable Stage here would let the user compose a save
+    // that comes back rejected in full — losing every other field they had just typed.
+    routeDetail(detailResponse({ archived_at: '2026-08-25T00:00:00+00:00' }));
+    render({ deal: makeDeal({ archived_at: null }) });
+    await settle();
+    await click(buttonByText('Edit'));
+    await settle();
+
+    expect(container.querySelector('#deal-stage')).toBeNull();
+    // …while every other field is still there to correct.
+    expect(container.querySelector('#deal-title')).toBeTruthy();
+  });
+
+  it('restores through POST /restore and hands the SERVER row up to the host', async () => {
+    const restored = detailResponse({ archived_at: null, stage: 'qualified' });
+    routeDetail(
+      detailResponse({ archived_at: '2026-08-20T00:00:00+00:00' }),
+      path => (path === '/api/crm/deals/7/restore' ? restored : undefined),
+    );
+    const onRestored = vi.fn();
+    render({ deal: makeDeal({ archived_at: '2026-08-20T00:00:00+00:00' }), onRestored });
+    await settle();
+    await click(buttonByText('Restore'));
+    await settle();
+
+    expect(api).toHaveBeenCalledWith('/api/crm/deals/7/restore', { method: 'POST' });
+    // The authoritative row, not a re-fetch: a silent refresh can fail invisibly and leave the
+    // host still showing the deal as archived after a restore the server actually performed.
+    expect(onRestored).toHaveBeenCalledWith(restored);
+  });
+
+  it('clears its OWN banner on a restore, not just the host\'s row', async () => {
+    // `archivedAt` reads the detail fetch when there is one, so a host that keeps the panel open
+    // would otherwise show an ARCHIVED banner over a deal that is no longer archived.
+    routeDetail(
+      detailResponse({ archived_at: '2026-08-20T00:00:00+00:00' }),
+      path => (path === '/api/crm/deals/7/restore'
+        ? detailResponse({ archived_at: null })
+        : undefined),
+    );
+    render({ deal: makeDeal({ archived_at: '2026-08-20T00:00:00+00:00' }) });
+    await settle();
+    await click(buttonByText('Restore'));
+    await settle();
+
+    expect(container.textContent).not.toContain('ARCHIVED');
+    expect(buttonByText('Mark Won')).toBeTruthy();
+  });
+
+  it('keeps the panel usable and says so when a restore fails', async () => {
+    routeDetail(detailResponse({ archived_at: '2026-08-20T00:00:00+00:00' }), path => {
+      if (path === '/api/crm/deals/7/restore') throw new Error('boom');
+      return undefined;
+    });
+    const onRestored = vi.fn();
+    render({ deal: makeDeal({ archived_at: '2026-08-20T00:00:00+00:00' }), onRestored });
+    await settle();
+    await click(buttonByText('Restore'));
+    await settle();
+
+    expect(onRestored).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith('Failed to restore deal.');
+    // Re-enabled, so the user can retry rather than being stuck on "Restoring…".
+    expect((buttonByText('Restore') as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+// ── Mark Lost captures a reason (#128) ───────────────────────────────────────────────────────
+
+const dialogButton = (label: string) =>
+  [...document.body.querySelectorAll('button')]
+    .find(b => b.textContent?.trim() === label && !container.contains(b)) ?? null;
+
+describe('Mark Lost captures a reason', () => {
+  it('opens the reason dialog instead of closing the deal immediately', async () => {
+    routeDetail(detailResponse());
+    const props = render({ deal: makeDeal() });
+    await settle();
+
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+    await click(buttonByText('Mark Lost'));
+    await settle();
+
+    expect(document.body.querySelector('[role="dialog"]')).toBeTruthy();
+    // The whole point: nothing is written until a reason has been asked for.
+    expect(props.onMarkLost).not.toHaveBeenCalled();
+  });
+
+  it('hands the typed reason up as a SECOND argument, which is what selects the endpoint', async () => {
+    routeDetail(detailResponse());
+    const props = render({ deal: makeDeal() });
+    await settle();
+    await click(buttonByText('Mark Lost'));
+    await settle();
+
+    // Scoped to the dialog on purpose: this body's own NotesThread composer is also a textarea
+    // and comes first in document order.
+    const field = document.body.querySelector<HTMLTextAreaElement>('[role="dialog"] textarea')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!
+        .set!.call(field, 'Lost on price');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await click(dialogButton('Mark Lost'));
+    await settle();
+
+    expect(props.onMarkLost).toHaveBeenCalledWith(expect.objectContaining({ id: 7 }), 'Lost on price');
+  });
+
+  it('writes nothing when the dialog is cancelled', async () => {
+    routeDetail(detailResponse());
+    const props = render({ deal: makeDeal() });
+    await settle();
+    await click(buttonByText('Mark Lost'));
+    await settle();
+    await click(dialogButton('Cancel'));
+    await settle();
+
+    expect(props.onMarkLost).not.toHaveBeenCalled();
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it('leaves Mark Won a direct, dialog-free stage change', async () => {
+    routeDetail(detailResponse());
+    const props = render({ deal: makeDeal() });
+    await settle();
+    await click(buttonByText('Mark Won'));
+    await settle();
+
+    // No reason argument at all, which is precisely what routes the write to the plain stage PUT
+    // rather than the mark-lost verb — a won deal has no reason to record.
+    expect(props.onMarkWon).toHaveBeenCalledWith(expect.objectContaining({ id: 7 }));
+  });
+
+  it('disables the close-out pair while a slow write is in flight', async () => {
+    // A host that awaits the write and keeps the panel open on failure would otherwise let a
+    // second Mark Lost land before the first settles — and `mark_deal_lost` appends its
+    // "Deal lost —" note on EVERY call that finds the deal, a no-op write included. The dialog's
+    // own latch cannot cover it: that modal unmounts on the first confirm.
+    routeDetail(detailResponse());
+    let release!: () => void;
+    const inFlight = new Promise<void>(res => { release = res; });
+    const onMarkWon = vi.fn(() => inFlight);
+    render({ deal: makeDeal(), onMarkWon });
+    await settle();
+
+    await click(buttonByText('Mark Won'));
+    expect(onMarkWon).toHaveBeenCalledTimes(1);
+    expect((buttonByText('Mark Won') as HTMLButtonElement).disabled).toBe(true);
+    expect((buttonByText('Mark Lost') as HTMLButtonElement).disabled).toBe(true);
+
+    // A second click during the request must not reach the host. `disabled` is what enforces
+    // that, which is also why it is asserted above rather than trusted.
+    await click(buttonByText('Mark Won'));
+    expect(onMarkWon).toHaveBeenCalledTimes(1);
+
+    // …and they come back once it settles, so a host that keeps the panel open after a FAILED
+    // write still lets the user retry.
+    await act(async () => { release(); await inFlight; });
+    await settle();
+    expect((buttonByText('Mark Won') as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+// ── An ambiguous close reconciles before a retry (#128) ──────────────────────────────────────
+
+describe('an ambiguous close reconciles before a retry', () => {
+  it('re-reads the deal when the host leaves the panel open, and drops the close-out pair if the close landed', async () => {
+    // The dangerous case: the POST commits, then the response is lost (a dropped connection, or
+    // a 5xx after commit). A host that swallows the error keeps this panel open so the user can
+    // retry — but the deal is ALREADY lost, and `mark_deal_lost` appends its note on every call
+    // that finds the deal. Retrying would file a duplicate. Reconciling first prevents it.
+    let detail = detailResponse({ stage: 'lead' });
+    api.mockImplementation(async (path: string) => {
+      if (path.startsWith('/api/crm/provenance/')) return { provenance: [] };
+      if (path.startsWith('/api/crm/chatter/')) return { notes: [] };
+      if (/\/fields$/.test(path)) return [];
+      if (path.startsWith('/api/users')) return { users: [] };
+      if (/^\/api\/crm\/deals\/\d+$/.test(path)) return detail;
+      return null;
+    });
+    // The host resolves WITHOUT dismissing the panel — its failure path…
+    const onMarkWon = vi.fn(async () => {
+      // …while the server did in fact commit the close.
+      detail = detailResponse({ stage: 'lost', lost_reason: 'price' });
+    });
+    render({ deal: makeDeal({ stage: 'lead' }), onMarkWon });
+    await settle();
+    expect(buttonByText('Mark Lost')).toBeTruthy();
+
+    await click(buttonByText('Mark Won'));
+    await settle();
+
+    expect(buttonByText('Mark Lost')).toBeNull();
+    expect(buttonByText('Mark Won')).toBeNull();
+  });
+
+  it('keeps the pair live when the close genuinely did not land', async () => {
+    // The other half — a real failure must stay retryable, or the guard traps the user.
+    routeDetail(detailResponse({ stage: 'lead' }));
+    const onMarkWon = vi.fn(async () => {});
+    render({ deal: makeDeal({ stage: 'lead' }), onMarkWon });
+    await settle();
+    await click(buttonByText('Mark Won'));
+    await settle();
+
+    expect((buttonByText('Mark Won') as HTMLButtonElement).disabled).toBe(false);
+    expect(buttonByText('Mark Lost')).toBeTruthy();
+  });
+});
+
+// ── The owner is visible (#128) ──────────────────────────────────────────────────────────────
+
+describe('the owner row', () => {
+  it('reads "Unassigned" on an unowned deal rather than disappearing', async () => {
+    // Unconditional, unlike its neighbouring rows: hiding it is what made "unassigned"
+    // indistinguishable from "not displayed".
+    routeDetail(detailResponse({ owner_id: null }));
+    render({ deal: makeDeal({ owner_id: null }) });
+    await settle();
+
+    expect(container.textContent).toContain('Owner');
+    expect(container.textContent).toContain('Unassigned');
   });
 });
