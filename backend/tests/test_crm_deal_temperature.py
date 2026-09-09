@@ -13,8 +13,10 @@ seeds it, so a custom-field temperature would leave the scoring factor dead on e
 until an admin hand-created a definition under exactly the right key.
 """
 
+import os
 from datetime import datetime, timezone
 
+import psycopg2
 import pytest
 
 from crm import scoring_service as ss, service, tools
@@ -247,9 +249,64 @@ def test_rest_models_carry_the_field_and_can_express_a_clear():
 
 
 # ── Integration: the column itself ───────────────────────────────────────────
+#
+# A throwaway database per module, the house pattern (`test_crm_today_integration.py`).
+# There is deliberately no shared `pg` fixture in conftest — each integration module owns its
+# own, so a default no-DB run collects them and deselects them without importing psycopg2
+# machinery it cannot use.
+
+ADMIN_DSN = os.getenv("TEST_ADMIN_DSN", "postgresql://cake:cake_dev@localhost:5432/cake")
+
+
+@pytest.fixture(scope="module")
+def pg_db():
+    from core import postgres
+
+    dbname = f"cakecrm_temp_{os.getpid()}"
+    admin = psycopg2.connect(ADMIN_DSN)
+    admin.autocommit = True
+    with admin.cursor() as cur:
+        cur.execute(f'DROP DATABASE IF EXISTS "{dbname}"')
+        cur.execute(f'CREATE DATABASE "{dbname}"')
+    admin.close()
+
+    dsn = ADMIN_DSN.rsplit("/", 1)[0] + f"/{dbname}"
+    prev = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = dsn
+    postgres.close_pool()
+    postgres.init_pool()
+    postgres.run_migrations()
+    yield dsn
+
+    postgres.close_pool()
+    if prev is not None:
+        os.environ["DATABASE_URL"] = prev
+    else:
+        os.environ.pop("DATABASE_URL", None)
+    admin = psycopg2.connect(ADMIN_DSN)
+    admin.autocommit = True
+    with admin.cursor() as cur:
+        cur.execute(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+            "WHERE datname = %s AND pid <> pg_backend_pid()",
+            (dbname,),
+        )
+        cur.execute(f'DROP DATABASE IF EXISTS "{dbname}"')
+    admin.close()
+
+
+@pytest.fixture
+def _clean(pg_db):
+    from core.postgres import get_connection
+    from crm import service
+
+    with get_connection() as conn:
+        service._truncate_all(conn.cursor(), include_definitions=True)
+    yield
+
 
 @pytest.mark.integration
-def test_column_exists_with_its_check(pg):
+def test_column_exists_with_its_check(pg_db, _clean):
     from core.postgres import pg_fetchone
 
     col = pg_fetchone(
@@ -262,7 +319,7 @@ def test_column_exists_with_its_check(pg):
 
 
 @pytest.mark.integration
-def test_the_database_refuses_a_tier_the_normalizer_would_have_caught(pg):
+def test_the_database_refuses_a_tier_the_normalizer_would_have_caught(pg_db, _clean):
     """Defence in depth: the CHECK is what makes an invalid tier unrepresentable rather than
     merely unreachable through the two validated paths."""
     import psycopg2
@@ -275,7 +332,7 @@ def test_the_database_refuses_a_tier_the_normalizer_would_have_caught(pg):
 
 
 @pytest.mark.integration
-def test_a_same_value_write_is_a_no_op_and_does_not_bump_updated_at(pg):
+def test_a_same_value_write_is_a_no_op_and_does_not_bump_updated_at(pg_db, _clean):
     """#96's rule, inherited for free by routing through `_write_deal_update`.
 
     This is the property the custom-field route could not have given us:
