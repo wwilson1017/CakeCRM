@@ -686,6 +686,21 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   compiles, throws nothing, and simply reads `undefined` off the wrapper, answering
   "draggable" for every card. There the layer's own `dragLocked` is checked FIRST and
   collapses to a literal `true` rather than being OR-ed in, for the truthiness reason above.
+  **The LIST view owes that same ceiling and did not pay it until #74's settle**: it is the
+  shared layer's own table, not the page's markup, so the board's `selectable={!archived}`
+  had no counterpart there and every archived row rendered a checkbox. Fixed with
+  `CollectionSelectionProps.isSelectable` — id-keyed, so the interface stays non-generic and
+  every consumer keeps passing `selection` as an inline literal — which withholds the
+  checkbox ENTIRELY on an ineligible row (not a disabled one, not an unchecked one) and
+  narrows select-all to the selectable rows. Both halves were live bugs, and the second is
+  the one a reviewer misses: the page prunes archived ids out of `selectedIds` so the bulk
+  count and the bulk payload describe one set, which made a row checkbox a control that
+  stored an id on every click and never ticked — and with one archived row on screen "every
+  visible row is selected" is unreachable, so the header box could neither tick nor, its
+  clear branch being gated on that same flag, clear. The payload was never at risk
+  (`applyBulkMove` recomputes from `liveVisibleItems`); what was broken was two dead
+  controls. Same shape of rule as `dragDisabled`, for the same reason — one class of row is
+  inert while the surface around it stays live.
   `POST /api/crm/deals/{id}/restore` (member-accessible, sync
   `def`, calls the already-bidirectional `archive_deal(archived=False)` — no new service
   logic) backs the deal sheet's archived banner; the banner reads the **re-fetched**
