@@ -11,7 +11,7 @@
 /**
  * The selected ids that are also visible, in SELECTION order.
  *
- * `visible` is the pipeline's `filteredDeals`, which already embeds #21's facet predicate —
+ * `visible` is the pipeline's `state.visibleItems`, which already embeds #21's facet predicate —
  * including the stage facet that hides whole columns — so intersecting with it is exactly
  * "respecting the filters currently on screen". Deals selected before a filter narrowed the
  * board stay in the Set (so clearing the filter brings them back) but drop out of this

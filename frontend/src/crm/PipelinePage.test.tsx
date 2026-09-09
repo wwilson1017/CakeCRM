@@ -1,238 +1,108 @@
 // @vitest-environment jsdom
 //
-// The client half of issue #83's load-bearing invariant: an archived deal must be
-// FINDABLE, must never be MONEY, and must never be ACTIONABLE.
-//
-// The server half already has tests (`get_pipeline` keeps `LIVE_PREDICATE` on
-// `stage_summary` even when `include_archived=true` widens the deals query). The split is
-// deliberate and asymmetric — cards and totals describe different sets on purpose — so the
-// board is the only place the two halves are reconciled, and a regression here would be
-// silent: an archived deal quietly re-entering the open-pipeline number, or picking up a
-// bulk checkbox that lets an operator send a stage move the server will refuse.
-//
-// What is pinned below, in the order the invariant states it:
-//   • money      — column $ and the open-pipeline header count LIVE deals only, while the
-//                  archived card is right there in the same column.
-//   • findable   — the archived card renders, labelled ARCHIVED.
-//   • inert      — no per-card checkbox, and an all-archived column offers no select-all.
-//   • the fetch  — the Archived facet is the ONE facet that widens the request, because a
-//                  client predicate cannot filter rows the server never sent.
-//   • restore    — the sheet's row is patched into the board IN PLACE, which is why POST
-//                  /restore returns the deal instead of {"ok": true}: the patch is what
-//                  makes the board correct, and it does not wait on the refresh that
-//                  follows it (that GET is silent and can fail invisibly). The patch
-//                  MERGES (the detail projection is narrower than the board's), no board
-//                  GET already in flight may land after it and undo a committed server
-//                  write, and it drops the id from the bulk selection, where it can have
-//                  been sitting since before the deal was archived.
-//   • failure    — a failed non-silent load toasts, because under "Archived only" a
-//                  swallowed failure renders an empty board that reads as "none archived".
-//   • deferral   — the facet made a load a USER ACTION, so the "don't clobber an optimistic
-//                  drag" rule stopped being a silent-load rule. A deferred load re-fires
-//                  WIDENED rather than reverting to the facet it was created under; it
-//                  still REPORTS its failure rather than laundering it into a silent
-//                  refresh, while deliberately not taking the page back to do so; and it
-//                  re-fires ITSELF when the write that invalidated it had already settled,
-//                  leaving nobody else to.
-//   • selection  — the prune intersects with the payload's LIVE ids, so a deal that is
-//                  archived OR gone loses its selection and a later restore cannot re-arm it.
-//
-// NOT tested here, and deliberately not faked: that an archived card cannot be DRAGGED.
-// `KanbanCard` withholds dnd-kit's `listeners` (React props, not DOM attributes) when the
-// card is disabled, so there is nothing to assert in the DOM, and a real pointer-drag
-// gesture needs layout rects and pointer capture that jsdom does not provide. The policy
-// itself is unit-tested in `shared/dnd/dragDisabled.test.ts`. Note this is about the
-// PROHIBITION: the `shared/dnd` mock below can complete a PERMITTED move by calling the
-// board's `onMove`, which proves nothing about what dnd-kit would have refused to start.
-//
-// Also NOT tested, for a sharper reason: `load`'s spinner generation. Its whole subject is
-// two overlapping NON-SILENT loads, and no such pair is reachable — `if (loading)` returns
-// the spinner INSTEAD OF the board, so from the moment a non-silent load starts there is no
-// filter bar, no card, no sheet and no form left in the DOM to start a second load of any
-// kind from. (Verified, not assumed: with a non-silent load held in flight,
-// `container.querySelectorAll('button')` is empty and the DOM is the spinner div alone.) So
-// a test would have to reach past the component's surface to fire the second load itself,
-// which would pin the harness rather than the component. The generation is kept because it
-// is the rule that stays correct if that surface ever changes — a board rendered ALONGSIDE
-// the spinner, or any second non-silent trigger, makes it load-bearing immediately.
-import { act, useEffect } from 'react';
+// A mount-level smoke test for the rewritten board (#74). It is deliberately about the seams
+// the type checker cannot see: that the page mounts at all against the real collection layer,
+// that the render-phase deep-link reset settles instead of looping, that stage visibility
+// removes a column AND its deals from every derived number, and that Board/List both render.
+// The pure modules have their own suites; this one exists because a full rewrite of a page
+// with no test at all is how a render-phase loop or a bad config reaches production green.
+import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
+import { ActiveRecordProvider } from './RecordContext';
 
 import type { CrmDeal } from '../core/types';
 
 const api = vi.hoisted(() => vi.fn());
-// `importOriginal` rather than a hand-written stub: PipelinePage imports `ApiError` from
-// this module too (it reads `.status` off a thrown bulk-move error), and a second class
-// with the same name would break `instanceof` in a way no assertion here would notice.
-vi.mock('../core/api/client', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../core/api/client')>()),
+vi.mock('../core/api/client', () => ({
   api,
+  ApiError: class ApiError extends Error {
+    status?: number;
+    detail?: string;
+  },
 }));
-const toast = vi.hoisted(() => ({ error: vi.fn(), info: vi.fn(), success: vi.fn() }));
-vi.mock('../shared/toast', () => ({ toast }));
 
-// The one gesture jsdom cannot produce. `KanbanBoard` recognises a drag through dnd-kit —
-// pointer capture, ResizeObserver, live layout rects — none of which exist here, and there
-// is no keyboard sensor to fall back on (`shared/dnd/sensors.ts` registers Pointer + Touch
-// only). It matters because DRAG IS THE ONLY WRITE ON THIS PAGE THAT DOES NOT ALSO SCHEDULE
-// A REFRESH: `updateDealStage` and `applyBulkMove` both call `load` themselves, so the
-// write-completes-inside-a-GET race below is unreachable through any other control.
-//
-// So the real board renders UNCHANGED and one extra button is added beside it, calling the
-// very prop dnd-kit calls — `onMove`, with a real `MoveEvent`. Nothing of PipelinePage is
-// stubbed; only the gesture recogniser is bypassed. It deliberately does NOT consult
-// `dragDisabled`, so it can never be used to claim a card IS draggable — the drag POLICY is
-// pinned in `shared/dnd/dragDisabled.test.ts`, and the one test that presses this button
-// drags a live deal that is allowed to move.
-const dragIntent = vi.hoisted(() => ({ current: null as { id: number; to: string } | null }));
-vi.mock('../shared/dnd', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../shared/dnd')>();
-  const RealBoard = actual.KanbanBoard;
-  function DraggableBoard(props: Parameters<typeof RealBoard>[0]) {
-    const fire = () => {
-      const intent = dragIntent.current;
-      if (!intent) throw new Error('drag fired with no dragIntent set');
-      for (const [columnId, items] of Object.entries(props.items)) {
-        const item = items.find(i => i.id === intent.id);
-        if (item) {
-          void props.onMove({ item, fromColumnId: columnId, toColumnId: intent.to, newIndex: 0 });
-          return;
-        }
-      }
-      throw new Error(`drag fired for deal ${intent.id}, which is not on the board`);
-    };
-    return (
-      <>
-        <button aria-label="fire drag" onClick={fire}>fire drag</button>
-        <RealBoard {...props} />
-      </>
-    );
-  }
-  return { ...actual, KanbanBoard: DraggableBoard };
-});
+// The board is desktop-only for selection; pin it so the bulk affordances render.
+vi.mock('../shared/useIsMobile', () => ({ useIsMobile: () => false }));
+
+// The deal sheet is stubbed: what these tests are about is whether the PAGE routes a
+// selection to it, not what it renders. The real one pulls in the record context, the
+// activity timeline, chatter, custom fields and the touch-count drill-down — a dependency
+// tree with its own suites, and mocking all of it would test the mocks.
+vi.mock('./components/DealDetailSheet', () => ({
+  DealDetailSheet: ({ deal }: { deal: { id: number; title: string } }) => (
+    <div data-testid="deal-sheet" data-deal-id={deal.id}>{deal.title}</div>
+  ),
+}));
 
 const { PipelinePage } = await import('./PipelinePage');
-const { ActiveRecordProvider } = await import('./RecordContext');
-// PipelinePage reads `?stage=` through useSearchParams, and the deal sheet publishes the
-// open record — both are ambient app scaffolding the test supplies rather than the
-// component being reshaped to avoid them.
-const { MemoryRouter, useLocation, useNavigate } = await import('react-router-dom');
 
-function deal(over: Partial<CrmDeal> = {}): CrmDeal {
+function deal(over: Partial<CrmDeal> & { id: number }): CrmDeal {
   return {
-    id: 1, title: 'Untitled', stage: 'lead', value: 0, probability: 20,
-    expected_close_date: '', notes: '', contact_id: null, company_id: null, currency: 'USD',
-    archived_at: null,
-    created_at: '2026-08-01T00:00:00+00:00', updated_at: '2026-08-01T00:00:00+00:00',
+    contact_id: null, company_id: null, title: `Deal ${over.id}`, stage: 'lead',
+    value: 100, notes: '', expected_close_date: '', probability: 50, currency: 'USD',
+    created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
     ...over,
   };
 }
 
-/** One live deal and one archived deal, same open stage — the pair the money assertion
- *  needs: both on the board, only one of them pipeline. */
-const LIVE = deal({ id: 1, title: 'Acme renewal', stage: 'lead', value: 100 });
-const ARCHIVED = deal({
-  id: 2, title: 'Zebra rebuild', stage: 'lead', value: 99_999,
-  archived_at: '2026-08-20T00:00:00+00:00',
-});
-const RESTORED = deal({ id: 2, title: 'Zebra rebuild', stage: 'lead', value: 99_999, archived_at: null });
-
-// #59: the board sweeps keyset pages instead of issuing one bare GET. Every fixture here
-// is well under one page, so each load is exactly one request — at these page-0 URLs.
-const LIVE_PATH = '/api/crm/deals?sort=id&limit=501';
-const ARCHIVED_PATH = '/api/crm/deals?sort=id&limit=501&include_archived=true';
-
-interface RouteOptions {
-  /** Board payload for the plain (live-only) request the server answers unasked. */
-  live?: CrmDeal[];
-  /** Board payload for `?include_archived=true`. */
-  withArchived?: CrmDeal[];
-  /** Per-request override; return `undefined` to fall through to the defaults. The request
-   *  init comes through because one path serves two verbs — the detail sheet GETs
-   *  `/api/crm/deals/:id` and a stage move PUTs it — and only the PUT is ever held. */
-  over?: (path: string, init?: RequestInit) => unknown;
-}
-
-/** Deals the fake server has restored during this test. `POST /restore` is the only write
- *  these tests make that the server REMEMBERS, and a restore now fires a follow-up board
- *  GET — so a fixture that kept answering "archived" would be asserting its own opinion
- *  over the component's behaviour. Reset per test. */
-const restoredIds = new Set<number>();
-
-/** A board row as the server would now serve it. */
-function asServed(d: CrmDeal): CrmDeal {
-  return restoredIds.has(d.id) ? { ...d, archived_at: null } : d;
-}
-
-/** What `POST /restore` answers: `get_deal`'s projection — the row, live, WITHOUT the
- *  board-only fields `get_pipeline` derives. Narrower than a board row on purpose; that
- *  difference is the entire subject of the MERGE test. */
-function detailProjection(d: CrmDeal): CrmDeal {
-  const row: CrmDeal = { ...d, archived_at: null };
-  delete row.last_activity_at;
-  return row;
-}
-
-/** Route the whole component tree's fetches. The two board paths answer DIFFERENT payloads
- *  on purpose — that is the server contract the facet exists to reach, and routing them
- *  identically would make the fetch-widening assertion meaningless. */
-function routeApi(opts: RouteOptions = {}) {
-  const live = opts.live ?? [LIVE];
-  const withArchived = opts.withArchived ?? [LIVE, ARCHIVED];
-  api.mockImplementation(async (path: string, init?: RequestInit) => {
-    const custom = opts.over?.(path, init);
-    if (custom !== undefined) return custom;
-    const restoring = /^\/api\/crm\/deals\/(\d+)\/restore$/.exec(path);
-    if (restoring) {
-      const id = Number(restoring[1]);
-      const row = [...withArchived, ...live].find(d => d.id === id);
-      if (!row) throw new Error(`restore called for deal ${id}, which no payload contains`);
-      restoredIds.add(id);
-      return detailProjection(row);
-    }
-    if (path === LIVE_PATH) return { deals: live.map(asServed) };
-    if (path === ARCHIVED_PATH) return { deals: withArchived.map(asServed) };
-    if (path === '/api/users') return { users: [] };
-    if (path === `/api/crm/deals/${ARCHIVED.id}`) return ARCHIVED;
-    if (path === `/api/crm/deals/${LIVE.id}`) return LIVE;
-    if (path.includes('/provenance')) return { provenance: [] };
-    if (path.includes('/chatter/')) return { notes: [] };
-    if (path.includes('/fields')) return [];
-    if (path.includes('/touch-count/')) return null;
-    return null;
-  });
-}
+const DEALS: CrmDeal[] = [
+  deal({ id: 1, title: 'Alpha contract', stage: 'lead', value: 1000, lead_score: 80 }),
+  deal({ id: 2, title: 'Beta renewal', stage: 'qualified', value: 2000, lead_score: 40 }),
+  deal({ id: 3, title: 'Gamma expansion', stage: 'won', value: 5000 }),
+];
 
 let container: HTMLDivElement;
 let root: Root;
 
+function route(path: string) {
+  // The deal sheet publishes itself as the active record (#14), so opening one — which the
+  // list-row test does — needs the provider the real app mounts above the CRM routes.
+  return (
+    <MemoryRouter initialEntries={[path]}>
+      <ActiveRecordProvider>
+        <PipelinePage />
+      </ActiveRecordProvider>
+    </MemoryRouter>
+  );
+}
+
+/** Mount and flush the queueMicrotask-scheduled initial load. */
+async function mount(path = '/crm/pipeline'): Promise<void> {
+  await act(async () => {
+    root.render(route(path));
+  });
+  await act(async () => { await Promise.resolve(); });
+}
+
+const text = () => document.body.textContent ?? '';
+const buttonByText = (label: string) =>
+  [...document.querySelectorAll('button')].find(b => (b.textContent ?? '').trim() === label);
+
 beforeEach(() => {
-  // jsdom implements no CSS media queries at all, so `window.matchMedia` is simply absent
-  // and `useIsMobile` throws on mount. Stub the desktop answer — this is a missing jsdom
-  // API, not a shim around our own code. Desktop matters: bulk checkboxes are hidden on
-  // mobile, so a mobile stub would make every "inert" assertion pass vacuously.
-  window.matchMedia = ((query: string) => ({
-    matches: false,
-    media: query,
-    onchange: null,
-    addEventListener: () => {},
-    removeEventListener: () => {},
-    addListener: () => {},
-    removeListener: () => {},
-    dispatchEvent: () => false,
-  })) as unknown as typeof window.matchMedia;
-  // jsdom implements no layout, so `Element.scrollIntoView` is simply absent and the
-  // ?stage= deep link throws on mount. A missing platform API, stubbed like `matchMedia`
-  // above — not a shim around our own code.
-  Element.prototype.scrollIntoView = () => {};
-  // The filter envelope is persisted to sessionStorage, so a facet left on by one test
-  // would silently arm the next one.
   sessionStorage.clear();
-  restoredIds.clear();
+  // jsdom implements no layout, so Element.scrollIntoView does not exist — the deep-link
+  // and chip-bar paths both call it. Stubbing it keeps the test about the page's logic
+  // rather than about jsdom's gaps.
+  Element.prototype.scrollIntoView = vi.fn();
   api.mockReset();
-  toast.error.mockReset();
-  toast.info.mockReset();
+  api.mockImplementation((url: string, init: { body: string }) => {
+    if (url === '/api/users') return Promise.resolve({ users: [] });
+    // #59 turned the board's one GET into a keyset sweep, so the URL carries the page-0
+    // cursor params. Every fixture here is well under one page, so a load is still
+    // exactly one request — matching on the prefix keeps this suite about the PAGE
+    // rather than about pipelineAssembly's wire format, which has its own tests.
+    if (url.startsWith('/api/crm/deals?sort=id')) return Promise.resolve({ deals: DEALS });
+    // A bulk move must answer in the real envelope: `{}` reads as ok:false, which
+    // classifyBulkMove correctly calls a REFUSAL — a silently wrong premise for any test
+    // asserting on what happens after a successful move.
+    if (url === '/api/crm/deals/bulk-move') {
+      const ids = JSON.parse(init.body).deal_ids as number[];
+      return Promise.resolve({ ok: true, updated: ids.length, updated_ids: ids, errors: [] });
+    }
+    return Promise.resolve({});
+  });
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -243,1147 +113,262 @@ afterEach(() => {
   container.remove();
 });
 
-async function render(url = '/crm/pipeline') {
-  await act(async () => {
-    root.render(
-      <MemoryRouter initialEntries={[url]}>
-        <ActiveRecordProvider><PipelinePage /></ActiveRecordProvider>
-      </MemoryRouter>,
-    );
-  });
-  // `load` is dispatched through queueMicrotask, and the board only renders once its
-  // payload has resolved through it — drain that chain before asserting.
-  await flush();
-}
-
-/** Navigate a MOUNTED page to a new URL — the deep-link case that matters most, since the
- *  assistant's drawer is a slide-over: clicking a link it produced changes the search
- *  params of a page that is already showing a board, without remounting anything. A plain
- *  `render()` cannot express that; it would always look like a cold load. */
-function Navigator({ to }: { to: string | null }) {
-  const navigate = useNavigate();
-  useEffect(() => { if (to) navigate(to); }, [navigate, to]);
-  return null;
-}
-
-/** The router's live search string. `window.location` is useless under MemoryRouter, which
- *  keeps its history in memory — an assertion against it passes whatever the page does. */
-const seenSearch = { current: '' };
-
-function LocationProbe() {
-  const loc = useLocation();
-  // In an effect, not during render: this repo's react-hooks ruleset forbids writing to a
-  // value defined outside the component while rendering.
-  useEffect(() => { seenSearch.current = loc.search; }, [loc.search]);
-  return null;
-}
-
-async function renderWithLocationProbe(url: string) {
-  seenSearch.current = '';
-  await act(async () => {
-    root.render(
-      <MemoryRouter initialEntries={[url]}>
-        <ActiveRecordProvider><PipelinePage /><LocationProbe /></ActiveRecordProvider>
-      </MemoryRouter>,
-    );
-  });
-  await flush();
-  await flush();
-}
-
-async function renderThenNavigate(to: string) {
-  await act(async () => {
-    root.render(
-      <MemoryRouter initialEntries={['/crm/pipeline']}>
-        <ActiveRecordProvider><PipelinePage /></ActiveRecordProvider>
-      </MemoryRouter>,
-    );
-  });
-  await flush();
-  await act(async () => {
-    root.render(
-      <MemoryRouter initialEntries={['/crm/pipeline']}>
-        <ActiveRecordProvider><PipelinePage /><Navigator to={to} /></ActiveRecordProvider>
-      </MemoryRouter>,
-    );
-  });
-  await flush();
-  await flush();
-}
-
-async function flush() {
-  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-}
-
-async function click(el: Element | null | undefined, what: string) {
-  if (!el) throw new Error(`nothing to click: ${what}`);
-  await act(async () => { (el as HTMLElement).click(); });
-  await flush();
-}
-
-function button(label: string): HTMLButtonElement | undefined {
-  return [...container.querySelectorAll('button')]
-    .find(b => b.textContent?.trim() === label) as HTMLButtonElement | undefined;
-}
-
-/** Open the Archived facet popover and pick one of its two options. */
-async function pickArchivedFacet(option: 'Include archived' | 'Archived only') {
-  await click(button('Archived'), 'Archived facet');
-  await click(button(option), option);
-}
-
-/** Take an active facet back off through its pill — the way back to the live-only board,
- *  and the only one that stays clickable once the facet button carries the chosen label. */
-async function removePill(label: string) {
-  await click(
-    container.querySelector(`button[aria-label="Remove ${label} filter"]`),
-    `remove ${label} pill`,
-  );
-}
-
-/** Open a card's detail sheet and close it again — the reachable way to fire a SILENT board
- *  refresh, which is how a fresh payload lands without a facet change. */
-async function reopenAndClose(title: string) {
-  await click(card(title), `${title} card`);
-  await click(button('Close'), 'Close');
-}
-
-/** Complete a stage drag the way dnd-kit does — by calling the board's `onMove`. See the
- *  `shared/dnd` mock at the top for why this is a button press and not a gesture. */
-async function fireDrag(dealId: number, toStage: string) {
-  dragIntent.current = { id: dealId, to: toStage };
-  await click(container.querySelector('button[aria-label="fire drag"]'), 'drag');
-}
-
-/** Open the Deal-activity facet popover and pick one of its buckets. The facet button is
- *  labelled 'Deal activity' until something is chosen, which is all these tests need. */
-async function pickActivityFacet(option: 'No activity logged') {
-  await click(button('Deal activity'), 'Deal activity facet');
-  await click(button(option), option);
-}
-
-/** A promise whose resolution the test controls, so one board GET can be pinned in flight
- *  across other interactions and landed afterwards. Ordering is the whole subject of the
- *  in-flight-load test below, and `await`ing the mock cannot express it. */
-function deferred<T>() {
-  let settle!: (value: T) => void;
-  let fail!: (reason: unknown) => void;
-  const promise = new Promise<T>((resolve, reject) => { settle = resolve; fail = reject; });
-  // The rejection path matters as much as the resolution one: a request that FAILS
-  // instantly is over before any assertion can look at what the page did while it was in
-  // flight, which is exactly how a mid-flight guard goes quietly vacuous.
-  promise.catch(() => {}); // pre-attach, so holding an unrejected promise is never "unhandled"
-  return { promise, resolve: settle, reject: fail };
-}
-
-function stageColumn(stage: string): HTMLElement {
-  const el = container.querySelector(`[data-stage="${stage}"]`);
-  if (!el) throw new Error(`no rendered column for stage "${stage}"`);
-  return el as HTMLElement;
-}
-
-/** The `$N` a stage column's header reports. Structural (the header is the column's first
- *  child, the total its last span) — a layout change makes this throw or mismatch rather
- *  than quietly matching a substring of a wrong number. */
-function columnTotal(stage: string): string {
-  const header = stageColumn(stage).firstElementChild;
-  return header?.lastElementChild?.textContent ?? '';
-}
-
-function card(title: string): HTMLElement | undefined {
-  return [...container.querySelectorAll('[role="button"]')]
-    .find(el => el.textContent?.includes(title)) as HTMLElement | undefined;
-}
-
-function cardCheckbox(title: string): HTMLInputElement | null {
-  return container.querySelector(`input[aria-label="Select ${title}"]`);
-}
-
-function selectAllCheckbox(stage: string): HTMLInputElement | null {
-  return container.querySelector(`input[aria-label="Select all ${stage} deals"]`);
-}
-
-/** Every BOARD request made so far, in order. Child components fetch too, so filtering to
- *  the two board paths is what makes "the facet drives the fetch" a statement about the
- *  board rather than about traffic in general. */
-function boardRequests(): string[] {
-  return api.mock.calls
-    .map(c => String(c[0]))
-    .filter(p => p === LIVE_PATH || p === ARCHIVED_PATH);
-}
-
-describe('PipelinePage — archived deals', () => {
-  it('counts only LIVE deals as money while showing the archived card beside them', async () => {
-    routeApi();
-    await render();
-    await pickArchivedFacet('Include archived');
-
-    // Both cards are on the board...
-    expect(card('Acme renewal')).toBeTruthy();
-    expect(card('Zebra rebuild')).toBeTruthy();
-    // ...and exactly one of them is pipeline. 100, never 100,099.
-    expect(columnTotal('lead')).toBe('$100');
-    // formatNumber renders 100099 as "100K", so a regression here is unmistakable.
-    expect(container.textContent).toContain('$100 open · 1 open deal');
+describe('mounting', () => {
+  it('renders the board with every deal and an open-pipeline total', async () => {
+    await mount();
+    expect(text()).toContain('Pipeline');
+    expect(text()).toContain('Alpha contract');
+    expect(text()).toContain('Beta renewal');
+    expect(text()).toContain('Gamma expansion');
+    // Open stages only: 1000 + 2000, with the won deal's 5000 excluded.
+    expect(text()).toContain('$3.0K open'); // formatNumber abbreviates thousands
+    expect(text()).toContain('2 open deals');
   });
 
-  it('renders the archived card as findable but inert — labelled, with no checkbox', async () => {
-    routeApi();
-    await render();
-    await pickArchivedFacet('Include archived');
-
-    expect(card('Zebra rebuild')?.textContent).toContain('ARCHIVED');
-    // Not selectable: the server refuses a stage change on an archived deal, so a bulk
-    // checkbox could only ever offer a move that comes back as a per-deal error.
-    expect(cardCheckbox('Zebra rebuild')).toBeNull();
-    // The live card in the same column proves the absence is about `archived`, not about
-    // checkboxes being switched off wholesale (mobile, a bulk move in flight).
-    expect(cardCheckbox('Acme renewal')).not.toBeNull();
+  it('exposes both views through the switcher', async () => {
+    await mount();
+    expect(buttonByText('Board')).toBeDefined();
+    expect(buttonByText('List')).toBeDefined();
   });
 
-  it('select-all in a mixed column selects the live deal only', async () => {
-    routeApi();
-    await render();
-    await pickArchivedFacet('Include archived');
-    await click(selectAllCheckbox('lead'), 'select-all for lead');
-
-    expect(container.textContent).toContain('1 deal selected');
-    expect(container.textContent).not.toContain('2 deals selected');
-  });
-
-  it('offers no select-all at all in an all-archived column', async () => {
-    // The column-level half of the same rule, and the half that is falsifiable on its own:
-    // with archived ids filtered out, this column contributes none, so the header checkbox
-    // has nothing to offer and does not render.
-    routeApi({ live: [], withArchived: [ARCHIVED] });
-    await render();
-    await pickArchivedFacet('Include archived');
-
-    expect(card('Zebra rebuild')).toBeTruthy();
-    expect(selectAllCheckbox('lead')).toBeNull();
-  });
-
-  it('drops a deal from the bulk payload once it comes back archived', async () => {
-    // The reachable version of "selected, then archived elsewhere" (the assistant, a
-    // merge): the deal is selected while live, and the next board payload says it is
-    // archived. The selection Set still holds its id, so the intersection with the LIVE
-    // subset is the only thing standing between the operator and a bulk move the server
-    // would refuse deal-by-deal.
-    const archivedLater = { ...LIVE, archived_at: '2026-08-24T00:00:00+00:00' };
-    routeApi({ live: [LIVE], withArchived: [archivedLater] });
-    await render();
-    await click(cardCheckbox('Acme renewal'), 'Acme renewal checkbox');
-    expect(container.textContent).toContain('1 deal selected');
-
-    await pickArchivedFacet('Include archived');
-    expect(card('Acme renewal')?.textContent).toContain('ARCHIVED');
-    expect(container.textContent).not.toContain('deal selected');
-  });
-
-  it('widens the FETCH when the facet turns on, and not before', async () => {
-    routeApi();
-    await render();
-    // Archived rows are swept out server-side, so the default request must stay narrow.
-    expect(boardRequests()).toEqual([LIVE_PATH]);
-
-    await pickArchivedFacet('Include archived');
-    expect(boardRequests()).toEqual([LIVE_PATH, ARCHIVED_PATH]);
-  });
-
-  it('applies a restore IMMEDIATELY, and only then refreshes behind it', async () => {
-    // The board must be right the instant `POST /restore` returns, not once a follow-up GET
-    // lands: that GET is silent and can fail invisibly, which would leave the board calling
-    // a deal archived after a restore the server actually performed. So the patch is the
-    // correctness mechanism and the refresh is additive — it exists because a restore closes
-    // the sheet exactly as Close does, and that path refreshes so an in-sheet note reaches
-    // the board's derived `last_activity_at`.
-    //
-    // The refresh is therefore held open across the assertions. That is not an artificial
-    // pause: it is precisely the case the patch was designed for — a refresh that is slow,
-    // fails, or never arrives — with the board still expected to be correct.
-    const refresh = deferred<{ deals: CrmDeal[] }>();
-    let archivedLoads = 0;
-    routeApi({
-      over: path => (path === ARCHIVED_PATH && ++archivedLoads === 2 ? refresh.promise : undefined),
-    });
-    await render();
-    await pickArchivedFacet('Include archived');
-    const before = boardRequests().length;
-
-    await click(card('Zebra rebuild'), 'archived card');
-    await click(button('Restore'), 'Restore');
-
-    // The row the server returned is now the board's row: it is money again...
-    expect(columnTotal('lead')).toBe('$100,099');
-    // ...it has lost the ARCHIVED label and gained a bulk checkbox...
-    expect(card('Zebra rebuild')?.textContent).not.toContain('ARCHIVED');
-    expect(cardCheckbox('Zebra rebuild')).not.toBeNull();
-    // ...all of it with the refresh still in the air. The refresh WAS issued — the sheet's
-    // own Close fires one too — it simply has no say in whether the board above is right.
-    expect(boardRequests()).toHaveLength(before + 1);
-
-    // And when it does land it agrees, rather than undoing anything.
-    await act(async () => { refresh.resolve({ deals: [LIVE, RESTORED] }); });
-    await flush();
-    expect(columnTotal('lead')).toBe('$100,099');
-    expect(card('Zebra rebuild')?.textContent).not.toContain('ARCHIVED');
-  });
-
-  it('discards a board load that was already in flight when the restore landed', async () => {
-    // The restore is the only write on this page the server commits WITHOUT the board
-    // starting it, so it is the only one a stale GET can silently undo. The reachable
-    // ordering: closing the sheet fires a silent refresh, the user reopens the archived
-    // deal and restores it, and only then does that GET come back — carrying a payload
-    // requested BEFORE the restore, which still calls the deal archived. Applying it would
-    // put the deal back in a state the server no longer holds, with nothing on screen to
-    // say so. `writeGen` doesn't cover this: it guards a refresh against a racing *write*,
-    // and a restore never touches the drag bookkeeping it counts.
-    const held = deferred<{ deals: CrmDeal[] }>();
-    let archivedLoads = 0;
-    routeApi({
-      // The SECOND board GET is the one the sheet's Close fires; hold it open. The THIRD is
-      // the restore's own follow-up refresh, which is left to resolve normally against a
-      // server that now reports the deal live.
-      over: path => (path === ARCHIVED_PATH && ++archivedLoads === 2 ? held.promise : undefined),
-    });
-    await render();
-    await pickArchivedFacet('Include archived');
-
-    await click(card('Zebra rebuild'), 'archived card');
-    await click(button('Close'), 'Close');
-    await click(card('Zebra rebuild'), 'archived card again');
-    await click(button('Restore'), 'Restore');
-    await flush();
-    expect(card('Zebra rebuild')?.textContent).not.toContain('ARCHIVED');
-
-    // ...and only NOW does the payload that was already in the air land, still describing
-    // the deal as archived. Resolving it LAST is what makes this a test of the discard and
-    // not of the refresh: nothing follows it that could quietly put the board right again,
-    // so if it were applied the board would end the test showing the deal archived.
-    await act(async () => { held.resolve({ deals: [LIVE, ARCHIVED] }); });
-    await flush();
-
-    expect(card('Zebra rebuild')?.textContent).not.toContain('ARCHIVED');
-    expect(columnTotal('lead')).toBe('$100,099');
-  });
-
-  it('MERGES the restored row into the board rather than replacing it', async () => {
-    // Two different projections of one deal: `POST /restore` answers with `get_deal`'s,
-    // while the board's rows come from `get_pipeline`, which additionally derives
-    // `last_activity_at`. Swapping the row wholesale drops that field — and a dropped
-    // field is not a blank cell here, it is a wrong answer: the deal falls into the
-    // Deal-activity facet's "No activity logged" bucket, so a deal with a fortnight of
-    // logged calls on it reads as never touched the moment it is restored.
-    const touched = deal({
-      id: 2, title: 'Zebra rebuild', stage: 'lead', value: 99_999,
-      archived_at: '2026-08-20T00:00:00+00:00',
-      last_activity_at: new Date().toISOString(),
-    });
-    // RESTORED carries no `last_activity_at` KEY at all (not the key set to undefined),
-    // which is exactly what the detail projection sends — and what makes a merge preserve
-    // the board's copy rather than blank it.
-    const refresh = deferred<{ deals: CrmDeal[] }>();
-    let archivedLoads = 0;
-    routeApi({
-      live: [LIVE], withArchived: [LIVE, touched],
-      over: path => {
-        if (path === '/api/crm/deals/2') return touched;
-        // Hold the restore's follow-up refresh open for good. The server would re-supply
-        // `last_activity_at` on that GET and paper straight over a patch that dropped it —
-        // which is the whole failure this test exists to catch, and would make it vacuous.
-        // The board's guarantee is that the PATCH is right on its own.
-        if (path === ARCHIVED_PATH && ++archivedLoads === 2) return refresh.promise;
-        return undefined;
-      },
-    });
-    await render();
-    await pickArchivedFacet('Include archived');
-    await click(card('Zebra rebuild'), 'archived card');
-    await click(button('Restore'), 'Restore');
-
-    await pickActivityFacet('No activity logged');
-    // Acme has genuinely never been touched, so the bucket is non-empty either way and the
-    // board keeps rendering — the only question the assertion asks is whether the restored
-    // deal joined it.
-    expect(card('Acme renewal')).toBeTruthy();
-    expect(card('Zebra rebuild')).toBeUndefined();
-  });
-
-  it('drops a restored deal from the bulk selection instead of silently re-arming it', async () => {
-    // The mirror of the archived-while-selected test above — and deliberately the case that
-    // one does NOT cover. There, a board payload reports the deal archived, and `load`'s own
-    // intersection drops the id before any restore happens. Here NO payload ever does: the
-    // deal is archived elsewhere AFTER the board loaded, so the board's row still says live
-    // and the only thing that knows better is the sheet's re-fetched `archived_at` — which
-    // is exactly why the sheet re-fetches it. So the id is still in the Set at the moment
-    // the user restores, and restoring is a recovery gesture, not a selection one: it must
-    // not hand the deal to the next bulk move. The follow-up refresh cannot clean up after
-    // it either — that payload reports the deal LIVE, so an id that survives the restore
-    // survives the refresh too.
-    const zebraLive = deal({ id: 2, title: 'Zebra rebuild', stage: 'lead', value: 99_999 });
-    const zebraArchived = { ...zebraLive, archived_at: '2026-08-24T00:00:00+00:00' };
-    routeApi({
-      live: [LIVE, zebraLive],
-      over: path => (path === '/api/crm/deals/2' ? zebraArchived : undefined),
-    });
-    await render();
-    await click(cardCheckbox('Zebra rebuild'), 'Zebra rebuild checkbox');
-    expect(container.textContent).toContain('1 deal selected');
-
-    // The board still shows it as an ordinary live card; the sheet is where it turns out to
-    // be archived, and where the way back is offered.
-    await click(card('Zebra rebuild'), 'Zebra rebuild card');
-    await click(button('Restore'), 'Restore');
-    await flush();
-
-    expect(cardCheckbox('Zebra rebuild')?.checked).toBe(false);
-    expect(container.textContent).not.toContain('deal selected');
-  });
-
-  it('says so when a non-silent load fails instead of rendering a misleading board', async () => {
-    // Once `data` exists a failed load is invisible — the previous payload keeps
-    // rendering, and under an archived facet that reads as "you have no archived deals".
-    routeApi({
-      over: path => {
-        if (path === ARCHIVED_PATH) throw new Error('network down');
-        return undefined;
-      },
-    });
-    await render();
-    expect(toast.error).not.toHaveBeenCalled();
-
-    await pickArchivedFacet('Archived only');
-    expect(toast.error).toHaveBeenCalledWith('Failed to load deals.');
-  });
-
-  it('defers a facet load while a stage write is in flight, then re-fires it WIDENED', async () => {
-    // Deferring around an in-flight write used to be a SILENT-load rule, which was safe
-    // while every load was a refresh of the same content set. The Archived facet made a load
-    // a user-initiated action, and this is the sequence that breaks: Mark Won moves the card
-    // optimistically, its PUT is still in the air, and the user reaches for the facet. That
-    // GET was requested against the PRE-write server state, so applying it slides the card
-    // back out of the column the user just watched it land in — while the write is still on
-    // its way to succeeding, so nothing on screen ever explains the jump.
-    //
-    // Deferring is not dropping, and the second half of the test is the half that says so:
-    // the load re-fires once writes settle, and reads the CURRENT facet from the ref, so the
-    // user's widening survives the wait.
-    const put = deferred<CrmDeal>();
-    routeApi({
-      // The widened payload stays the PRE-write board (the deal still in `lead`) for every
-      // call — so the card sitting in `won` below can only be the optimistic write, never a
-      // payload that happened to agree with it.
-      withArchived: [LIVE, ARCHIVED],
-      over: (path, init) => (
-        path === `/api/crm/deals/${LIVE.id}` && init?.method === 'PUT' ? put.promise : undefined
-      ),
-    });
-    await render();
-
-    await click(card('Acme renewal'), 'live card');
-    await click(button('Mark Won'), 'Mark Won');
-    expect(stageColumn('won').textContent).toContain('Acme renewal');
-
-    await pickArchivedFacet('Include archived');
-    // The harm first: the card has not slid back to the column the server last knew about.
-    expect(stageColumn('won').textContent).toContain('Acme renewal');
-    expect(stageColumn('lead').textContent).not.toContain('Acme renewal');
-    // ...then the mechanism: not fetched at all. Deferred BEFORE the GET, not filtered
-    // after it — a payload that never arrives cannot be applied by a later refactor either.
-    expect(boardRequests()).toEqual([LIVE_PATH]);
-
-    // The PUT lands. The deferred load now runs — and asks for the archived rows the user
-    // requested while it was waiting, not the live-only board it was created under.
-    await act(async () => { put.resolve({ ...LIVE, stage: 'won' }); });
-    await flush();
-    await flush();
-    expect(boardRequests()).toEqual([LIVE_PATH, ARCHIVED_PATH]);
-  });
-
-  it('drops a selected id the moment a payload reports it archived, not just from the view', async () => {
-    // Masking is not dropping, and the difference only becomes visible later. While the deal
-    // stays archived the id is filtered out of the bar and the payload, so the two behave
-    // identically; the moment the deal comes BACK — restored by the assistant, another tab,
-    // a merge undone — a surviving id rejoins the next bulk move on a deal the operator
-    // selected before any of that happened. The board is the only place that can notice:
-    // nothing else sees both the selection and the fresh row.
-    const zebraLive = deal({ id: 2, title: 'Zebra rebuild', stage: 'lead', value: 99_999 });
-    const zebraArchived = { ...zebraLive, archived_at: '2026-08-24T00:00:00+00:00' };
-    routeApi({ live: [LIVE, zebraLive], withArchived: [LIVE, zebraArchived] });
-    await render();
-    await click(cardCheckbox('Zebra rebuild'), 'Zebra rebuild checkbox');
-    expect(container.textContent).toContain('1 deal selected');
-
-    // Archived elsewhere. This payload — not the click, not the sheet — is what prunes.
-    await pickArchivedFacet('Include archived');
-    expect(card('Zebra rebuild')?.textContent).toContain('ARCHIVED');
-
-    // ...and restored elsewhere. Narrowing back to the live board brings the row back, and
-    // it must not bring the selection back with it.
-    await removePill('Include archived');
-    expect(card('Zebra rebuild')?.textContent).not.toContain('ARCHIVED');
-    expect(cardCheckbox('Zebra rebuild')?.checked).toBe(false);
-    expect(container.textContent).not.toContain('deal selected');
-  });
-
-  it('drops a selection when the deal goes ABSENT from a payload, and does not resurrect it', async () => {
-    // The other half of the same rule. An earlier revision kept the selection here, on the
-    // theory that "absent" might only mean "filtered out" — it cannot. This payload is
-    // `get_pipeline`: unpaginated, and carrying no server-side filter the board ever sets.
-    // So on a live-only fetch, absent means archived or deleted, and the archive-then-
-    // restore-elsewhere sequence below is precisely the resurrection to prevent: the deal
-    // comes back on screen, and it must come back UNSELECTED, because the operator never
-    // selected the thing that returned.
-    const zebraLive = deal({ id: 2, title: 'Zebra rebuild', stage: 'lead', value: 99_999 });
-    let liveCalls = 0;
-    routeApi({
-      over: path => {
-        if (path !== LIVE_PATH) return undefined;
-        // 1: both deals. 2: zebra archived elsewhere, so the sweep drops it from the narrow
-        // board. 3: restored elsewhere, so it is back — still live, still not re-selected
-        // by anything the user did.
-        liveCalls++;
-        return { deals: liveCalls === 2 ? [LIVE] : [LIVE, zebraLive] };
-      },
-    });
-    await render();
-    await click(cardCheckbox('Zebra rebuild'), 'Zebra rebuild checkbox');
-    expect(container.textContent).toContain('1 deal selected');
-
-    // Two silent refreshes, fired the way a closing detail sheet fires them.
-    await reopenAndClose('Acme renewal');
-    expect(card('Zebra rebuild')).toBeUndefined();
-    expect(container.textContent).not.toContain('deal selected');
-
-    await reopenAndClose('Acme renewal');
-    expect(cardCheckbox('Zebra rebuild')?.checked).toBe(false);
-    expect(container.textContent).not.toContain('deal selected');
-  });
-
-  it('reports a deferred facet load\'s failure without taking the page to do it', async () => {
-    // Deferral must not launder a user-initiated load into a background one — but the two
-    // halves of "user-initiated" part company here, and only one of them survives the
-    // replay. Error REPORTING is carried across (`reportErrors`): a swallowed failure
-    // leaves the previous payload on screen, which under "Archived only" is an empty board
-    // — the exact false answer "you have no archived deals" to a question the server never
-    // answered. The SPINNER is deliberately not carried across, because `loading` returns
-    // the spinner INSTEAD of the page, and a replay fires whenever a write happens to
-    // settle: taking the page at that moment blanks an open form mid-edit and loses what
-    // the user typed. So: the toast fires, and the board stays put.
-    const put = deferred<CrmDeal>();
-    // The replayed GET is HELD, not failed outright. That is the whole point: a replay that
-    // takes the page does so only WHILE its request is in flight, so a mock that rejects
-    // immediately puts the page back before any assertion can see it — and the spinner half
-    // of this test passes against the bug it exists to catch. Verified: with an
-    // instantly-failing mock, reverting a replay site to loud left all 16 tests green.
-    const replayed = deferred<{ deals: CrmDeal[] }>();
-    routeApi({
-      over: (path, init) => {
-        if (path === `/api/crm/deals/${LIVE.id}` && init?.method === 'PUT') return put.promise;
-        // The ONLY widened GET this test ever issues is the replayed one, because the facet
-        // flip below is deferred before it can fetch.
-        if (path === ARCHIVED_PATH) return replayed.promise;
-        return undefined;
-      },
-    });
-    await render();
-
-    await click(card('Acme renewal'), 'live card');
-    await click(button('Mark Won'), 'Mark Won');
-    await pickArchivedFacet('Archived only');
-    // Nothing has been fetched yet, so nothing has failed yet — this pins that the toast
-    // below comes from the REPLAY and not from the original load.
-    expect(toast.error).not.toHaveBeenCalled();
-
-    // The write settles, so the deferred load replays — and its GET is now in flight.
-    await act(async () => { put.resolve({ ...LIVE, stage: 'won' }); });
-    await flush();
-
-    // THE HALF THAT MATTERS, asserted while the replay is still running. When `loading` is
-    // true this container holds the spinner and NOTHING else — no heading, no filter bar,
-    // no open form. So the heading still being here says the replay did not take the
-    // screen out from under whatever the user was doing when the write happened to settle.
-    expect(container.textContent).toContain('Pipeline');
-    expect(container.querySelector('.animate-spin')).toBeNull();
-
-    // ...and now it fails, and the failure is still REPORTED despite having been demoted
-    // to a background request — the other half of the split.
-    await act(async () => { replayed.reject(new Error('network down')); });
-    await flush();
-    expect(toast.error).toHaveBeenCalledWith('Failed to load deals.');
-  });
-
-  it('re-fires a load that the settling write left nobody to replay', async () => {
-    // Deferral has two halves: refuse the stale payload, and make sure someone asks again.
-    // Normally the settling write's `finally` is that someone — but the write can START AND
-    // FINISH entirely inside the GET's flight, in which case its finally already ran and
-    // saw nothing pending. The load is then dropped outright and NOBODY asks again, so the
-    // board keeps rendering a payload from before the write until the user happens to do
-    // something else. A drag during the sheet's closing refresh is exactly that timing, and
-    // it is reachable only through a drag — every other write on this page calls `load`
-    // itself and so leaves a deferral behind for its finally to replay.
-    const held = deferred<{ deals: CrmDeal[] }>();
-    // On the board only after the re-fire: nothing else can put this card on screen, so it
-    // is proof a THIRD request was made and applied, not merely issued.
-    const GLOBEX = deal({ id: 3, title: 'Globex expansion', stage: 'qualified', value: 500 });
-    const WON = { ...LIVE, stage: 'won' };
-    let liveCalls = 0;
-    routeApi({
-      over: (path, init) => {
-        if (path === `/api/crm/deals/${LIVE.id}` && init?.method === 'PUT') return WON;
-        if (path !== LIVE_PATH) return undefined;
-        liveCalls++;
-        // 1: mount. 2: the sheet's closing refresh, held open across the drag below.
-        // 3: the request the dropped load has to make for itself.
-        if (liveCalls === 2) return held.promise;
-        return { deals: liveCalls === 1 ? [LIVE] : [WON, GLOBEX] };
-      },
-    });
-    await render();
-
-    // A silent refresh is now in the air. It leaves the board interactive, which is what
-    // makes the next line reachable at all — a non-silent load would have replaced the
-    // whole board with the spinner.
-    await reopenAndClose('Acme renewal');
-    expect(boardRequests()).toHaveLength(2);
-
-    // The drag starts and finishes inside that GET's flight. It never called `load`, so its
-    // `finally` finds nothing deferred and replays nothing.
-    await fireDrag(LIVE.id, 'won');
-    await flush();
-    expect(stageColumn('won').textContent).toContain('Acme renewal');
-
-    // Now the held payload lands, describing the board as it was before the drag. Dropping
-    // it is right; stopping there is not.
-    await act(async () => { held.resolve({ deals: [LIVE] }); });
-    await flush();
-    await flush();
-
-    // The board caught up with the server on its own...
-    expect(card('Globex expansion')).toBeTruthy();
-    // ...by making exactly one more request, not by being lucky.
-    expect(boardRequests()).toHaveLength(3);
+  it('renders the list view with its columns when switched', async () => {
+    await mount();
+    const list = buttonByText('List');
+    expect(list).toBeDefined();
+    await act(async () => { list!.click(); });
+    // Column headers from pipelineListColumns.
+    expect(text()).toContain('Deal');
+    expect(text()).toContain('Stage');
+    expect(text()).toContain('Value');
+    expect(text()).toContain('Alpha contract');
   });
 });
 
-
-// ── Deal deep links (issue #145) ────────────────────────────────────────────────────
-//
-// The assistant attaches `/crm/pipeline?deal=N` to every deal it names, including in
-// Telegram messages and notifications that leave the app entirely. A link that silently
-// does nothing is the dead end #145 was filed to close — and a link that WRONGLY says the
-// deal was deleted is worse than the dead end, which is what the refresh below is for.
-//
-// Resolution happens during render (this repo's react-hooks ruleset makes a synchronous
-// setState inside an effect a build error), so "does it settle instead of looping?" is a
-// real question about this code and not a hypothetical — every test here would time out
-// rather than fail if it did not.
-
-/** The dead-link notice's text, or null when it is not on screen. */
-function deadLinkNotice(): string | null {
-  const el = [...container.querySelectorAll('span')]
-    .find(n => n.textContent?.includes("isn't on this board"));
-  return el?.textContent?.replace(/\s+/g, ' ').trim() ?? null;
-}
-
-describe('PipelinePage — deal deep links', () => {
-  it('opens the named deal on a cold load', async () => {
-    routeApi();
-    await render(`/crm/pipeline?deal=${LIVE.id}`);
-
-    // The detail sheet is open on that deal, not merely scrolled to its card.
-    expect(button('Close')).toBeTruthy();
-    expect(container.textContent).toContain('Acme renewal');
-    expect(deadLinkNotice()).toBeNull();
+describe('the ?stage= deep link resets filters during render without looping', () => {
+  it('settles on a single mount and still shows the board', async () => {
+    // A restored filter envelope that would otherwise hide the target column entirely.
+    sessionStorage.setItem(
+      'collection_crm_pipeline_v1',
+      JSON.stringify({ query: 'zzz-no-match', facets: { stage: ['lead'] }, voided: null, toggles: {} }),
+    );
+    await mount('/crm/pipeline?stage=won');
+    // If the render-phase reset looped, React would have thrown "Too many re-renders"
+    // and this mount would never have completed.
+    expect(text()).toContain('Pipeline');
+    // The reset cleared the query and the stage facet, so the won column is back.
+    expect(text()).toContain('Gamma expansion');
   });
 
-  it('says nothing at all about a deal id that is not a deal id', async () => {
-    routeApi();
-    await render('/crm/pipeline?deal=abc');
+  it('un-hides a stage the user had put away, since the link explicitly asks for it', async () => {
+    sessionStorage.setItem('crm_pipeline_hidden_stages', JSON.stringify(['won']));
+    await mount('/crm/pipeline?stage=won');
+    expect(text()).toContain('Gamma expansion');
+  });
+});
 
-    // A malformed link is not a deleted deal. Accusing anyone of deleting "abc" would be
-    // the same wrong answer the notice exists to avoid, just with worse wording.
-    expect(deadLinkNotice()).toBeNull();
-    expect(button('Close')).toBeFalsy();
+describe('stage visibility removes the column AND its deals from every number', () => {
+  it('a hidden stage drops out of the board and the header total', async () => {
+    // Hiding `qualified` must take Beta's 2000 out of the open total, not just its column.
+    sessionStorage.setItem('crm_pipeline_hidden_stages', JSON.stringify(['qualified']));
+    await mount();
+    expect(text()).not.toContain('Beta renewal');
+    expect(text()).toContain('$1.0K open');
+    expect(text()).toContain('1 open deal');
+    expect(text()).toContain('1 stage hidden');
   });
 
-  it('warns that a deal missing from the board may be archived or deleted', async () => {
-    routeApi();
-    await render('/crm/pipeline?deal=404');
+  it('a hidden stage is also absent from the list view', async () => {
+    sessionStorage.setItem('crm_pipeline_hidden_stages', JSON.stringify(['qualified']));
+    await mount();
+    const list = buttonByText('List');
+    await act(async () => { list!.click(); });
+    expect(text()).toContain('Alpha contract');
+    expect(text()).not.toContain('Beta renewal');
+  });
+});
 
-    const notice = deadLinkNotice();
-    expect(notice).toContain('#404');
-    expect(notice).toContain('archived or deleted');
+describe('failure handling', () => {
+  it('shows the load error rather than an empty board when the fetch fails', async () => {
+    api.mockImplementation((url: string) => {
+      if (url === '/api/users') return Promise.resolve({ users: [] });
+      return Promise.reject(new Error('boom'));
+    });
+    await mount();
+    expect(text()).toContain("Couldn't load pipeline");
+  });
+});
+
+describe('the bulk bar count and the bulk-move payload cannot disagree', () => {
+  const checkbox = (label: string) =>
+    document.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`);
+  const bulkMoveCall = (): [string, { body: string }] | undefined =>
+    api.mock.calls.find(c => c[0] === '/api/crm/deals/bulk-move') as
+      | [string, { body: string }]
+      | undefined;
+
+  it('sends exactly the deals the bar said were selected', async () => {
+    await mount();
+    // Select two deals in different stages.
+    await act(async () => { checkbox('Select Alpha contract')!.click(); });
+    await act(async () => { checkbox('Select Beta renewal')!.click(); });
+    expect(text()).toContain('2 deals selected');
+
+    const select = document.querySelector<HTMLSelectElement>(
+      'select[aria-label="Move selected deals to stage"]',
+    )!;
+    await act(async () => {
+      select.value = 'proposal';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await act(async () => { buttonByText('Apply')!.click(); });
+    await act(async () => { await Promise.resolve(); });
+
+    const call = bulkMoveCall();
+    expect(call).toBeDefined();
+    const body = JSON.parse(call![1].body);
+    expect(new Set(body.deal_ids)).toEqual(new Set([1, 2]));
+    expect(body.stage).toBe('proposal');
   });
 
-  it('opens an archived deal from a link when the Archived facet is showing it', async () => {
-    // The notice tells the user to turn the facet on, so following that advice has to
-    // work: with archived rows in the payload the link resolves like any other.
-    routeApi();
-    await render(`/crm/pipeline?deal=${ARCHIVED.id}`);
-    expect(deadLinkNotice()).toContain(`#${ARCHIVED.id}`);
+  it('drops a selected deal whose stage was hidden after selecting it — bar and payload both', async () => {
+    await mount();
+    await act(async () => { checkbox('Select Alpha contract')!.click(); });
+    await act(async () => { checkbox('Select Beta renewal')!.click(); });
+    expect(text()).toContain('2 deals selected');
 
-    await pickArchivedFacet('Include archived');
-    expect(deadLinkNotice()).toBeNull();
-    expect(button('Close')).toBeTruthy();
-    expect(container.textContent).toContain('Zebra rebuild');
+    // Put Beta's column away. Beta leaves `items` entirely, so it must leave both the
+    // count the operator is shown AND the payload the server is sent.
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button[aria-label="Hide Qualified column"]')!.click();
+    });
+    expect(text()).toContain('1 deal selected');
+
+    const select = document.querySelector<HTMLSelectElement>(
+      'select[aria-label="Move selected deals to stage"]',
+    )!;
+    await act(async () => {
+      select.value = 'proposal';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await act(async () => { buttonByText('Apply')!.click(); });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(JSON.parse(bulkMoveCall()![1].body).deal_ids).toEqual([1]);
+  });
+});
+
+describe('stage visibility is reachable and reversible through the UI', () => {
+  it('the column Hide button removes the column and persists the preference', async () => {
+    await mount();
+    expect(text()).toContain('Beta renewal');
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button[aria-label="Hide Qualified column"]')!.click();
+    });
+    expect(text()).not.toContain('Beta renewal');
+    expect(JSON.parse(sessionStorage.getItem('crm_pipeline_hidden_stages')!)).toEqual(['qualified']);
   });
 
-  it('refreshes before accusing when the board on screen predates the link', async () => {
-    // THE false-accusation case, and the most reachable one: the assistant creates a deal
-    // and hands back its link while its drawer sits over an already-loaded board. That
-    // board is silent about the new deal, not evidence against it.
-    const NEW_DEAL = deal({ id: 77, title: 'Fresh signing', stage: 'lead', value: 500 });
-    let served: CrmDeal[] = [LIVE];
-    routeApi({ over: (path) => (path === LIVE_PATH ? { deals: served } : undefined) });
+  it('"Show all" restores every hidden stage — including when ALL of them are hidden', async () => {
+    // The dead end this guards: hiding every stage empties `items`, and the collection layer
+    // answers an empty `items` with a bare empty state rendered BEFORE its toolbar — so the
+    // visibility checkboxes that would undo it are gone. The header's Show all must survive.
+    sessionStorage.setItem(
+      'crm_pipeline_hidden_stages',
+      JSON.stringify(['lead', 'qualified', 'proposal', 'negotiation', 'won', 'lost']),
+    );
+    await mount();
+    expect(text()).toContain('6 stages hidden');
+    const showAll = buttonByText('Show all');
+    expect(showAll).toBeDefined();
+    await act(async () => { showAll!.click(); });
+    expect(text()).toContain('Alpha contract');
+    expect(text()).toContain('Beta renewal');
+    expect(sessionStorage.getItem('crm_pipeline_hidden_stages')).toBe('[]');
+  });
+});
+
+describe('a list row opens the deal, like a board card does', () => {
+  it('clicking a row selects that deal', async () => {
+    await mount();
+    await act(async () => { buttonByText('List')!.click(); });
+
+    // The row advertises a click (ListView gives every row a pointer cursor); it must land.
+    const row = [...document.querySelectorAll('tbody tr')]
+      .find(tr => (tr.textContent ?? '').includes('Beta renewal'));
+    expect(row).toBeDefined();
+    await act(async () => { (row as HTMLElement).click(); });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(document.querySelector('[data-testid="deal-sheet"]')?.getAttribute('data-deal-id'))
+      .toBe('2');
+  });
+});
+
+describe('moving a deal into a hidden stage reveals that column', () => {
+  it('a bulk move to a hidden stage un-hides it rather than vanishing the deals', async () => {
+    sessionStorage.setItem('crm_pipeline_hidden_stages', JSON.stringify(['proposal']));
+    await mount();
+
+    const check = document.querySelector<HTMLInputElement>('input[aria-label="Select Alpha contract"]')!;
+    await act(async () => { check.click(); });
+    const select = document.querySelector<HTMLSelectElement>(
+      'select[aria-label="Move selected deals to stage"]',
+    )!;
+    await act(async () => {
+      select.value = 'proposal';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await act(async () => { buttonByText('Apply')!.click(); });
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await Promise.resolve(); });
+
+    // Proposal is visible again, so the moved deal has somewhere to land in view.
+    expect(JSON.parse(sessionStorage.getItem('crm_pipeline_hidden_stages')!)).toEqual([]);
+    expect(text()).not.toContain('1 stage hidden');
+  });
+});
+
+describe('an empty board shows ONE explanation, not two', () => {
+  it('does not stack the filter message on the layer\'s own empty state', async () => {
+    api.mockImplementation((url: string) => {
+      if (url === '/api/users') return Promise.resolve({ users: [] });
+      if (url.startsWith('/api/crm/deals?sort=id')) return Promise.resolve({ deals: [] });
+      return Promise.resolve({});
+    });
+    // A persisted query from a previous session, on an install that has no deals yet.
+    sessionStorage.setItem(
+      'collection_crm_pipeline_v1',
+      JSON.stringify({ query: 'anything', facets: {}, voided: null, toggles: {} }),
+    );
+    await mount();
+    expect(text()).toContain('No deals to show.');
+    expect(text()).not.toContain('No deals match your filters.');
+  });
+});
+
+describe('a selected card is styled without mixing border shorthand and longhand', () => {
+  it('sets the border shorthand on selection, never the borderColor longhand', async () => {
+    await mount();
+    const card = [...document.querySelectorAll('[role="button"]')]
+      .find(el => (el.textContent ?? '').includes('Alpha contract')) as HTMLElement;
+    expect(card).toBeDefined();
 
     await act(async () => {
-      root.render(
-        <MemoryRouter initialEntries={['/crm/pipeline']}>
-          <ActiveRecordProvider><PipelinePage /></ActiveRecordProvider>
-        </MemoryRouter>,
-      );
-    });
-    await flush();
-    expect(boardRequests()).toHaveLength(1);
-    expect(card('Fresh signing')).toBeFalsy();
-
-    // The deal is created behind the board's back, then the link arrives.
-    served = [LIVE, NEW_DEAL];
-    await renderThenNavigate('/crm/pipeline?deal=77');
-
-    // It refetched rather than declaring the deal gone, and then opened it.
-    expect(deadLinkNotice()).toBeNull();
-    expect(container.textContent).toContain('Fresh signing');
-  });
-
-  it('refreshes SILENTLY, which is what proves the page was never remounted', async () => {
-    // The anti-vacuity test for every "already-loaded board" case in this block. A remount
-    // would reload from scratch and find whatever the server now says — visibly identical
-    // to a stale-board refresh, and it would make those tests assert nothing. The two are
-    // told apart by HOW the load is taken: a mount load is non-silent, and `loading`
-    // returns the spinner INSTEAD OF the board, so the board would be gone from the DOM.
-    const held = deferred<{ deals: CrmDeal[] }>();
-    let boardCalls = 0;
-    routeApi({
-      over: (path) => {
-        if (path !== LIVE_PATH) return undefined;
-        boardCalls += 1;
-        return boardCalls === 1 ? { deals: [LIVE] } : held.promise;
-      },
+      document.querySelector<HTMLInputElement>('input[aria-label="Select Alpha contract"]')!.click();
     });
 
-    await renderThenNavigate('/crm/pipeline?deal=404');
-
-    expect(boardCalls).toBe(2);                  // the link really did trigger a refetch
-    expect(card('Acme renewal')).toBeTruthy();   // ...and the board never left the screen
-    expect(deadLinkNotice()).toBeNull();         // ...and it accused nobody while waiting
-
-    await act(async () => { held.resolve({ deals: [LIVE] }); });
-    await flush();
-    expect(deadLinkNotice()).toContain('#404');
-  });
-
-  it('is not fooled into accusing by an optimistic update landing mid-refresh', async () => {
-    // Found in review, and it was a real false accusation. "Has the board caught up?" used
-    // to be `data !== <the object on screen when the link arrived>` — but `data`'s identity
-    // is bumped by every optimistic update on this page (a drag's stage patch, its
-    // rollback, the same-column reorder, a bulk reconcile), none of which asked the server
-    // anything. Dragging an unrelated card while the deep link's own refresh was still in
-    // flight therefore read as "the server has spoken" and the page declared a live,
-    // just-created deal archived or deleted. Dragging is the most routine gesture on this
-    // page, so this was reachable constantly.
-    const NEW_DEAL = deal({ id: 77, title: 'Fresh signing', stage: 'lead', value: 500 });
-    const held = deferred<{ deals: CrmDeal[] }>();
-    let boardCalls = 0;
-    routeApi({
-      over: (path, init) => {
-        if (init?.method === 'PUT') return { ...LIVE, stage: 'lead' };
-        if (path !== LIVE_PATH) return undefined;
-        boardCalls += 1;
-        return boardCalls === 1 ? { deals: [LIVE] } : held.promise;
-      },
-    });
-
-    await renderThenNavigate('/crm/pipeline?deal=77');
-    expect(boardCalls).toBe(2);          // the catch-up refresh is in flight...
-    expect(deadLinkNotice()).toBeNull(); // ...and nothing has been decided yet
-
-    // A same-column drop: pure optimistic bookkeeping, no server answer about deal 77.
-    await fireDrag(LIVE.id, 'lead');
-    expect(deadLinkNotice()).toBeNull();
-
-    // Only the real payload may settle it — and here it does, correctly.
-    await act(async () => { held.resolve({ deals: [LIVE, NEW_DEAL] }); });
-    await flush();
-    expect(deadLinkNotice()).toBeNull();
-    expect(container.textContent).toContain('Fresh signing');
-  });
-
-  it('asks for fresh data exactly once, then accuses only if the deal is still missing', async () => {
-    // The other half of the same rule: the refresh must be bounded, or a genuinely deleted
-    // deal would refetch the board forever instead of saying so.
-    routeApi();
-    await renderThenNavigate('/crm/pipeline?deal=404');
-    const afterFirst = boardRequests().length;
-
-    expect(deadLinkNotice()).toContain('#404');
-    // Settle repeatedly: a render-phase resolution that failed to converge would keep
-    // firing loads here rather than sitting still.
-    await flush();
-    await flush();
-    expect(boardRequests()).toHaveLength(afterFirst);
-  });
-
-  it('says nothing when the refresh it asked for fails', async () => {
-    // A failed load applies no payload, so the board never becomes authoritative about the
-    // link. Saying nothing loses a correct notice about a genuinely deleted deal; saying
-    // "archived or deleted" would tell the user their live deal was gone because a request
-    // failed. The trade is deliberate.
-    let boardCalls = 0;
-    routeApi({
-      over: (path) => {
-        if (path !== LIVE_PATH) return undefined;
-        boardCalls += 1;
-        return boardCalls === 1 ? { deals: [LIVE] } : Promise.reject(new Error('network'));
-      },
-    });
-
-    await renderThenNavigate('/crm/pipeline?deal=404');
-    await flush();
-
-    expect(boardCalls).toBeGreaterThan(1);   // it really did try
-    expect(deadLinkNotice()).toBeNull();     // and it really did stay quiet
-  });
-
-  it('ignores a load that was already in flight when the link arrived', async () => {
-    // A load that STARTED before the link cannot know about a deal created after it, so its
-    // landing must not settle the link. This pins the OBSERVABLE guarantee — no false
-    // notice — through the nastiest arrangement reachable from the page's own controls: a
-    // board refresh in flight, a stage write pending (so the link's own refresh is deferred
-    // rather than sent), and the older payload landing into that.
-    //
-    // Honest about what it isolates: three guards hold here at once — `load`'s newest-wins
-    // `loadGen` check, its pending-write defer, and the generation comparison in the
-    // deep-link resolution — and this test cannot tell which one saved it. Removing the
-    // generation comparison alone still passes. It is kept as defence in depth, and this
-    // test is kept because the BEHAVIOUR is what must never regress, whichever guard is
-    // carrying it.
-    const NEW_DEAL = deal({ id: 77, title: 'Fresh signing', stage: 'lead', value: 500 });
-    const stale = deferred<{ deals: CrmDeal[] }>();
-    const write = deferred<CrmDeal>();
-    let boardCalls = 0;
-    routeApi({
-      over: (path, init) => {
-        if (init?.method === 'PUT') return write.promise;
-        if (path !== LIVE_PATH) return undefined;
-        boardCalls += 1;
-        if (boardCalls === 1) return { deals: [LIVE] };
-        if (boardCalls === 2) return stale.promise;   // started BEFORE the link
-        return { deals: [LIVE, NEW_DEAL] };
-      },
-    });
-
-    // A board refresh goes out (open and close a card) and is held...
-    await render('/crm/pipeline');
-    await click(card('Acme renewal'), 'card');
-    await click(button('Close'), 'Close');
-    expect(boardCalls).toBe(2);
-
-    // ...then a drag starts, so any further load defers rather than clobbering it.
-    await fireDrag(LIVE.id, 'won');
-
-    await renderThenNavigate('/crm/pipeline?deal=77');
-    expect(boardCalls).toBe(2);   // the link's own refresh was deferred, not sent
-
-    // So the OLDER load is the only one that lands. It knows nothing about deal 77 and
-    // must not be read as the server having answered about it.
-    await act(async () => { stale.resolve({ deals: [LIVE] }); });
-    await flush();
-    expect(deadLinkNotice()).toBeNull();
-
-    // The write settles, the deferred refresh replays, and THAT one settles the link.
-    await act(async () => { write.resolve({ ...LIVE, stage: 'won' }); });
-    await flush();
-    await flush();
-    expect(deadLinkNotice()).toBeNull();
-    expect(container.textContent).toContain('Fresh signing');
-  });
-
-  it('follows the same link again after the first visit is closed', async () => {
-    // Resolution keys off the NAVIGATION, which is what makes this work: with the id alone,
-    // a second click on the same link changed nothing, so after closing the sheet that link
-    // was dead for the rest of the session — and a chat transcript is exactly where the same
-    // link gets clicked twice.
-    routeApi();
-    await render(`/crm/pipeline?deal=${LIVE.id}`);
-    expect(button('Close')).toBeTruthy();
-    await click(button('Close'), 'Close');
-    expect(button('Close')).toBeFalsy();
-
-    await renderThenNavigate(`/crm/pipeline?deal=${LIVE.id}`);
-    expect(button('Close')).toBeTruthy();
-  });
-
-  it('replaces the previous link\'s sheet when a newer link resolves dead', async () => {
-    // Otherwise the old deal's sheet sits there through the new link's refresh and after its
-    // verdict, reading as though the new link had opened the wrong record.
-    routeApi();
-    await render(`/crm/pipeline?deal=${LIVE.id}`);
-    expect(container.textContent).toContain('Acme renewal');
-    expect(button('Close')).toBeTruthy();
-
-    await renderThenNavigate('/crm/pipeline?deal=404');
-    expect(button('Close')).toBeFalsy();
-    expect(deadLinkNotice()).toContain('#404');
-  });
-
-  it('takes back the notice when the user follows its advice and the deal appears', async () => {
-    // The notice tells the user to turn on the Archived filter. Doing so refetches and the
-    // deal arrives — at which point the notice's claim is false, and opening the deal is
-    // what following the link asked for in the first place.
-    routeApi();
-    await render(`/crm/pipeline?deal=${ARCHIVED.id}`);
-    expect(deadLinkNotice()).toContain(`#${ARCHIVED.id}`);
-
-    await pickArchivedFacet('Include archived');
-    expect(deadLinkNotice()).toBeNull();
-    expect(button('Close')).toBeTruthy();
-    expect(container.textContent).toContain('Zebra rebuild');
-  });
-
-  it('resolves a second link that arrives while the first is still refreshing', async () => {
-    // Both links sit at the `refresh` verdict, so an effect keyed only on the verdict never
-    // re-runs for the second one — which would then ride the first link's request, whose
-    // generation predates it and therefore can never settle it. The second link would hang
-    // unresolved forever.
-    const DEAL_B = deal({ id: 88, title: 'Second signing', stage: 'lead', value: 900 });
-    const first = deferred<{ deals: CrmDeal[] }>();
-    let boardCalls = 0;
-    routeApi({
-      over: (path) => {
-        if (path !== LIVE_PATH) return undefined;
-        boardCalls += 1;
-        if (boardCalls === 1) return { deals: [LIVE] };
-        if (boardCalls === 2) return first.promise;   // link A's refresh, held
-        return { deals: [LIVE, DEAL_B] };             // link B's own refresh
-      },
-    });
-
-    await render('/crm/pipeline');
-    await renderThenNavigate('/crm/pipeline?deal=77');
-    expect(boardCalls).toBe(2);   // A asked, and is waiting
-
-    await renderThenNavigate('/crm/pipeline?deal=88');
-    expect(boardCalls).toBe(3);   // B asked for its OWN load rather than riding A's
-    expect(container.textContent).toContain('Second signing');
-    expect(deadLinkNotice()).toBeNull();
-
-    // A's stale answer arriving late must not now accuse B.
-    await act(async () => { first.resolve({ deals: [LIVE] }); });
-    await flush();
-    expect(deadLinkNotice()).toBeNull();
-  });
-
-  it('retries the same link after its refresh failed', async () => {
-    // A failed refresh resolves nothing, so the parameter is never consumed — which used to
-    // make the retry indistinguishable from no click at all, and the link dead for the rest
-    // of the session precisely when the user has most reason to try it again.
-    const NEW_DEAL = deal({ id: 77, title: 'Fresh signing', stage: 'lead', value: 500 });
-    let boardCalls = 0;
-    routeApi({
-      over: (path) => {
-        if (path !== LIVE_PATH) return undefined;
-        boardCalls += 1;
-        if (boardCalls === 1) return { deals: [LIVE] };
-        if (boardCalls === 2) return Promise.reject(new Error('network'));
-        return { deals: [LIVE, NEW_DEAL] };
-      },
-    });
-
-    await render('/crm/pipeline');
-    await renderThenNavigate('/crm/pipeline?deal=77');
-    await flush();
-    expect(boardCalls).toBe(2);
-    expect(deadLinkNotice()).toBeNull();     // it stayed quiet rather than accusing
-
-    // The same link, clicked again once the network is back.
-    await renderThenNavigate('/crm/pipeline?deal=77');
-    await flush();
-    expect(boardCalls).toBe(3);
-    expect(container.textContent).toContain('Fresh signing');
-  });
-
-  it('leaves a sheet the user opened by hand alone when a later link resolves dead', async () => {
-    // A link once opened deal 1; the user then closed it and opened that same card
-    // themselves. Tracking only "which id a link opened" would close their sheet on the next
-    // link — the sheet has to remember that the USER put it there.
-    routeApi();
-    await render(`/crm/pipeline?deal=${LIVE.id}`);
-    await click(button('Close'), 'Close');
-    await click(card('Acme renewal'), 'card opened by hand');
-    expect(button('Close')).toBeTruthy();
-
-    await renderThenNavigate('/crm/pipeline?deal=404');
-    expect(button('Close')).toBeTruthy();          // still theirs
-    expect(deadLinkNotice()).toContain('#404');    // and the new link still reports
-  });
-
-  it('keeps the deal in the URL, and lets ?stage= be consumed beside it', async () => {
-    // The parameter is deliberately kept, so a reload reopens the deal and the address bar
-    // is a real copy source. ?stage= beside it is still a one-shot intent and is consumed —
-    // the two must not interfere, which they would if both rewrote the same params object.
-    //
-    // Asserted through the ROUTER's location, not `window.location`: MemoryRouter keeps its
-    // history in memory and never touches the document URL, so reading `window.location`
-    // here would pass no matter what the page did.
-    routeApi();
-    await renderWithLocationProbe(`/crm/pipeline?stage=lead&deal=${LIVE.id}`);
-
-    expect(button('Close')).toBeTruthy();
-    const params = new URLSearchParams(seenSearch.current);
-    expect(params.get('deal')).toBe(String(LIVE.id));
-    expect(params.get('stage')).toBeNull();
-  });
-
-  it('retires a link whose refresh failed instead of leaving it armed', async () => {
-    // A failed refresh leaves the verdict at `refresh` and the effect does not run again.
-    // Left armed, the link would sit there until some unrelated load minutes later — closing
-    // another card's sheet, a facet flip — happened to satisfy it, and a sheet would open
-    // with no gesture toward it. Retiring keeps the page silent, which is the documented
-    // trade, and following the link again still retries.
-    const NEW_DEAL = deal({ id: 77, title: 'Fresh signing', stage: 'lead', value: 500 });
-    let boardCalls = 0;
-    routeApi({
-      over: (path) => {
-        if (path !== LIVE_PATH) return undefined;
-        boardCalls += 1;
-        if (boardCalls === 1) return { deals: [LIVE] };
-        if (boardCalls === 2) return Promise.reject(new Error('network'));
-        return { deals: [LIVE, NEW_DEAL] };
-      },
-    });
-
-    await render('/crm/pipeline');
-    await renderThenNavigate('/crm/pipeline?deal=77');
-    await flush();
-    expect(boardCalls).toBe(2);
-    expect(deadLinkNotice()).toBeNull();
-
-    // An unrelated later load succeeds and brings the deal in. The link is retired, so
-    // nothing opens by itself.
-    await reopenAndClose('Acme renewal');
-    await flush();
-    expect(boardCalls).toBe(3);
-    expect(card('Fresh signing')).toBeTruthy();   // it really is on the board now
-    expect(button('Close')).toBeFalsy();          // ...and no sheet opened on its own
-  });
-
-  it('drops the notice when the user navigates away from the link', async () => {
-    // Found by the independent verifier. Clicking the app's own Pipeline nav item from
-    // `/crm/pipeline?deal=404` keeps this page mounted, so a notice about a link that is no
-    // longer in the URL used to sit there until dismissed by hand.
-    routeApi();
-    await render('/crm/pipeline?deal=404');
-    expect(deadLinkNotice()).toContain('#404');
-
-    await renderThenNavigate('/crm/pipeline');
-    expect(deadLinkNotice()).toBeNull();
-  });
-
-  it('does not retire a link whose refresh was merely superseded', async () => {
-    // Found by the PR reviewer. `load` returns false for three different reasons, and only
-    // one of them is a failure: it also returns false when DEFERRED behind a write and when
-    // SUPERSEDED by a newer load. Following the same link again starts a newer load and
-    // supersedes the first — retiring on that marked the SECOND navigation handled, so its
-    // successful payload arrived and opened nothing at all.
-    // ORDER IS THE WHOLE TEST: the superseded attempt has to settle BEFORE the newer
-    // payload arrives. If the newer one lands first it has already opened the deal, and a
-    // late retirement changes nothing visible — which is exactly how a first cut of this
-    // test passed against the bug.
-    const NEW_DEAL = deal({ id: 77, title: 'Fresh signing', stage: 'lead', value: 500 });
-    const firstAttempt = deferred<{ deals: CrmDeal[] }>();
-    const secondAttempt = deferred<{ deals: CrmDeal[] }>();
-    let boardCalls = 0;
-    routeApi({
-      over: (path) => {
-        if (path !== LIVE_PATH) return undefined;
-        boardCalls += 1;
-        if (boardCalls === 1) return { deals: [LIVE] };
-        if (boardCalls === 2) return firstAttempt.promise;    // held, then superseded
-        return secondAttempt.promise;                         // held, the real answer
-      },
-    });
-
-    await render('/crm/pipeline');
-    await renderThenNavigate('/crm/pipeline?deal=77');
-    expect(boardCalls).toBe(2);
-
-    // The same link again: a newer navigation starting a newer load, which supersedes the
-    // first — `load` will hand the first one back `applied === false`.
-    await renderThenNavigate('/crm/pipeline?deal=77');
-    expect(boardCalls).toBe(3);
-
-    // The superseded attempt settles FIRST. Retiring on it marks the second navigation
-    // handled, and its answer below then opens nothing at all.
-    await act(async () => { firstAttempt.resolve({ deals: [LIVE] }); });
-    await flush();
-    expect(deadLinkNotice()).toBeNull();
-
-    // The second navigation's own answer, carrying the deal.
-    await act(async () => { secondAttempt.resolve({ deals: [LIVE, NEW_DEAL] }); });
-    await flush();
-
-    expect(container.textContent).toContain('Fresh signing');
-    expect(button('Close')).toBeTruthy();
-    expect(deadLinkNotice()).toBeNull();
-  });
-
-  it('lets the user dismiss the notice, and does not re-raise it on its own', async () => {
-    routeApi();
-    await render('/crm/pipeline?deal=404');
-    expect(deadLinkNotice()).toBeTruthy();
-
-    await click(button('Dismiss'), 'Dismiss');
-    expect(deadLinkNotice()).toBeNull();
-
-    // A board refresh is the event most likely to re-raise a dismissed notice, since it is
-    // what re-runs the whole resolution. Dismissal is per-target, so it must survive one.
-    await reopenAndClose('Acme renewal');
-    expect(deadLinkNotice()).toBeNull();
-  });
-
-  it('does not reopen the sheet after the user closes it, though the link is still in the URL', async () => {
-    // The parameter is deliberately kept — it makes reload reopen the deal and the address
-    // bar a real copy source — so "resolve once per target" has to be what stops the sheet
-    // from springing back the moment it is closed.
-    routeApi();
-    await render(`/crm/pipeline?deal=${LIVE.id}`);
-    expect(button('Close')).toBeTruthy();
-
-    await click(button('Close'), 'Close');
-    expect(button('Close')).toBeFalsy();
-  });
-
-  it('opens a deal a filter is hiding, rather than calling it deleted', async () => {
-    // Membership is asked of the whole payload, never of the filtered view: a session facet
-    // says nothing about whether a deal exists, and the sheet opens over the board however
-    // few cards the columns are showing.
-    // `last_activity_at` is what makes the facet BITE: the 'No activity logged' preset
-    // keeps deals with none, so a deal without it (the shared factory's default) is never
-    // excluded and this test would pass against a regressed lookup too.
-    const HIDDEN = deal({
-      id: 9, title: 'Globex expansion', stage: 'won',
-      last_activity_at: '2026-08-30T00:00:00+00:00',
-    });
-    routeApi({ live: [LIVE, HIDDEN] });
-    await render('/crm/pipeline');
-    await pickActivityFacet('No activity logged');
-    // The facet really is hiding it — without this line the rest asserts nothing.
-    expect(card('Globex expansion')).toBeFalsy();
-
-    await renderThenNavigate('/crm/pipeline?deal=9');
-    expect(deadLinkNotice()).toBeNull();
-    expect(button('Close')).toBeTruthy();
+    // React warns on every selection toggle when a longhand lands in an object that already
+    // carries the shorthand, and which wins becomes order-dependent. The selected card must
+    // therefore restate `border`/`border-left`, and leave `border-color` alone.
+    // Asserting on the raw attribute, and only on the part jsdom can actually represent:
+    // its CSS parser drops a `border` SHORTHAND whose value contains `var()`, so the
+    // shorthand is invisible here even though a browser applies it. What survives — and what
+    // the React warning was actually about — is whether a `border-color` LONGHAND appears
+    // alongside it. It must not.
+    const style = card.getAttribute('style') ?? '';
+    expect(style).not.toContain('border-color');
+    // ...and the selected styling really did apply (accent left edge + ring).
+    expect(style).toContain('border-left: 3px solid var(--color-ck-accent)');
+    expect(style).toContain('box-shadow');
   });
 });
