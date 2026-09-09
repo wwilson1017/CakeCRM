@@ -275,9 +275,13 @@ async function click(el: Element | null | undefined, what: string) {
   await flush();
 }
 
+/** Find a button by its visible text OR its `aria-label`. Since #75 the detail panel is the
+ *  collection layer's shell, whose Close is an icon button carrying only the accessible name —
+ *  so matching on text alone finds nothing where the deleted sheet had a worded button. */
 function button(label: string): HTMLButtonElement | undefined {
   return [...container.querySelectorAll('button')]
-    .find(b => b.textContent?.trim() === label) as HTMLButtonElement | undefined;
+    .find(b => b.textContent?.trim() === label || b.getAttribute('aria-label') === label) as
+      HTMLButtonElement | undefined;
 }
 
 /** Open the collection toolbar's facet panel if it is not already open. Every facet moved

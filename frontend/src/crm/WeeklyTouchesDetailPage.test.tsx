@@ -4,7 +4,7 @@
 // navigation between reps, which failures are permanent, and that a row opens the deal
 // sheet. The rendering of a row itself belongs to TouchDealRow and is covered through
 // the card.
-import { StrictMode, act, useEffect } from 'react';
+import { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -28,31 +28,20 @@ const { ApiError } = vi.hoisted(() => {
 
 vi.mock('../core/api/client', () => ({ api, ApiError }));
 vi.mock('../shared/toast', () => ({ toast }));
-// The sheet is wired the way the dashboard wires it, and every one of those callbacks
-// is new glue on this page — so the stub exposes them as buttons rather than swallowing
-// them, or a forgotten reload() would ship with the suite green.
-vi.mock('./components/DealDetailSheet', () => ({
-  DealDetailSheet: ({ deal, onClose, onEdit, onStageChange, onRestored }: {
+// The detail BODY is wired the way the dashboard wires it, and each of those callbacks is new
+// glue on this page — so the stub exposes them as buttons rather than swallowing them, or a
+// forgotten reload() would ship with the suite green. CLOSING is not among them: since #75 the
+// shell owns it, so the tests press the real Close control instead.
+vi.mock('./components/DealDetailBody', () => ({
+  DealDetailBody: ({ deal, onMarkWon, onRestored }: {
     deal: { id: number };
-    onClose: () => void;
-    onEdit: (d: { id: number }) => void;
-    onStageChange: (d: { id: number }, stage: string) => void;
+    onMarkWon: (d: { id: number }) => void;
     onRestored: () => void;
   }) => (
     <div data-testid="sheet">
       {deal.id}
-      <button data-testid="sheet-close" onClick={onClose}>close</button>
-      <button data-testid="sheet-edit" onClick={() => onEdit(deal)}>edit</button>
-      <button data-testid="sheet-stage" onClick={() => onStageChange(deal, 'won')}>stage</button>
+      <button data-testid="sheet-stage" onClick={() => onMarkWon(deal)}>stage</button>
       <button data-testid="sheet-restore" onClick={onRestored}>restore</button>
-    </div>
-  ),
-}));
-vi.mock('./components/DealForm', () => ({
-  DealForm: ({ deal, onSaved }: { deal: { id: number }; onSaved: () => void }) => (
-    <div data-testid="form">
-      {deal.id}
-      <button data-testid="form-saved" onClick={onSaved}>saved</button>
     </div>
   ),
 }));
@@ -129,6 +118,11 @@ async function renderAt(url: string) {
 
 const detailCalls = () =>
   api.mock.calls.map(c => String(c[0])).filter(u => u.includes('weekly-touches/detail'));
+
+/** The shell's own close control — since #75 the panel, not the body, owns closing. */
+const closeSheet = () => act(async () => {
+  (container.querySelector('button[aria-label="Close"]') as HTMLElement).click();
+});
 
 describe('WeeklyTouchesDetailPage (issue #146)', () => {
   it('forwards a custom range verbatim and does no date arithmetic of its own', async () => {
@@ -241,69 +235,13 @@ describe('WeeklyTouchesDetailPage (issue #146)', () => {
     expect(container.textContent).toContain('Dana Reyes');
   });
 
-  it('does not resurrect the edit form either', async () => {
-    await renderAt('/crm/touches/3');
-    api.mockResolvedValueOnce({ id: 41, title: 'Deal 41', stage: 'proposal' });
-    await act(async () => {
-      (container.querySelector('[role="button"]') as HTMLElement).click();
-    });
-    await act(async () => {
-      (container.querySelector('[data-testid="sheet-edit"]') as HTMLElement).click();
-    });
-    expect(container.querySelector('[data-testid="form"]')).not.toBeNull();
-
-    await act(async () => { nav.go('/crm/touches/4'); });
-    await act(async () => { nav.go('/crm/touches/3'); });
-
-    expect(container.querySelector('[data-testid="form"]')).toBeNull();
-  });
-
-  it('still opens deals under StrictMode\'s double effect cycle', async () => {
-    // `main.tsx` renders the app inside <StrictMode>, whose development cycle is
-    // setup → cleanup → setup. A liveness flag cleared only in cleanup stays false
-    // afterwards and swallows every deal the user clicks — in dev only, which is exactly
-    // where it would be met and mistaken for a broken endpoint.
-    await act(async () => root.render(<StrictMode>{page('/crm/touches/3')}</StrictMode>));
-    api.mockResolvedValueOnce({ id: 41, title: 'Deal 41', stage: 'proposal' });
-    await act(async () => {
-      (container.querySelector('[role="button"]') as HTMLElement).click();
-    });
-
-    expect(container.querySelector('[data-testid="sheet"]')?.textContent).toContain('41');
-  });
-
-  it('opens the deal that was clicked LAST when two fetches race', async () => {
-    // Two deal requests race on one unchanged URL, so the list's path key cannot decide
-    // between them — only request order can. Clicking A then B must show B even when A
-    // answers second.
-    await renderAt('/crm/touches/3');
-    let resolveA: (v: unknown) => void = () => {};
-    api.mockReturnValueOnce(new Promise(res => { resolveA = res; }));
-    const rows = container.querySelectorAll('[role="button"]');
-    await act(async () => { (rows[0] as HTMLElement).click(); });
-
-    api.mockResolvedValueOnce({ id: 42, title: 'Deal 42', stage: 'proposal' });
-    await act(async () => { (rows[1] as HTMLElement).click(); });
-    expect(container.querySelector('[data-testid="sheet"]')?.textContent).toContain('42');
-
-    await act(async () => { resolveA({ id: 41, title: 'Deal 41', stage: 'proposal' }); });
-    expect(container.querySelector('[data-testid="sheet"]')?.textContent).toContain('42');
-  });
-
-  it('does not toast about a deal the user has already navigated away from', async () => {
-    await renderAt('/crm/touches/3');
-    let rejectA: (e: unknown) => void = () => {};
-    api.mockReturnValueOnce(new Promise((_res, rej) => { rejectA = rej; }));
-    await act(async () => {
-      (container.querySelector('[role="button"]') as HTMLElement).click();
-    });
-
-    api.mockResolvedValue({ ...detail, rep: { ...detail.rep, user_id: 4, name: 'Sam' } });
-    await act(async () => { nav.go('/crm/touches/4'); });
-    await act(async () => { rejectA(new ApiError('gone', 404)); });
-
-    expect(toast.error).not.toHaveBeenCalled();
-  });
+  // NOT tested here any more, and deliberately not faked: that a slow per-deal fetch opens the
+  // deal clicked LAST, that a liveness flag survives StrictMode's setup -> cleanup -> setup cycle,
+  // and that a fetch which rejects after the user navigates away raises no toast. #75 deleted the
+  // machinery all three drove — `CollectionDetail` owns the `loadById` request now, guards it with
+  // an effect-cleanup `stale` flag plus an id/nonce check on the settled result, and renders its
+  // own "Record unavailable / Retry" panel instead of a toast. Driving those from this page would
+  // be testing the layer through one of its consumers.
 
   it('treats a 404 as permanent — no Retry', async () => {
     api.mockRejectedValue(new ApiError('nf', 404, 'User not found'));
@@ -348,7 +286,13 @@ describe('WeeklyTouchesDetailPage (issue #146)', () => {
   it('refetches the list after the sheet closes, restores, or changes a stage', async () => {
     // Each of these is a separate callback on this page; a missing reload() in any one
     // leaves the user looking at numbers their own action just invalidated.
-    for (const trigger of ['sheet-close', 'sheet-restore']) {
+    const triggers: Array<() => Promise<void>> = [
+      closeSheet,
+      () => act(async () => {
+        (container.querySelector('[data-testid="sheet-restore"]') as HTMLElement).click();
+      }),
+    ];
+    for (const fire of triggers) {
       api.mockReset();
       api.mockResolvedValue(detail);
       await renderAt('/crm/touches/3');
@@ -357,9 +301,7 @@ describe('WeeklyTouchesDetailPage (issue #146)', () => {
         (container.querySelector('[role="button"]') as HTMLElement).click();
       });
       const before = detailCalls().length;
-      await act(async () => {
-        (container.querySelector(`[data-testid="${trigger}"]`) as HTMLElement).click();
-      });
+      await fire();
       expect(detailCalls().length).toBe(before + 1);
     }
   });
@@ -387,27 +329,8 @@ describe('WeeklyTouchesDetailPage (issue #146)', () => {
     expect(container.querySelector('[data-testid="sheet"]')).toBeNull();
   });
 
-  it('opens the edit form from the sheet and refetches once it saves', async () => {
-    await renderAt('/crm/touches/3');
-    api.mockResolvedValueOnce({ id: 41, title: 'Deal 41', stage: 'proposal' });
-    await act(async () => {
-      (container.querySelector('[role="button"]') as HTMLElement).click();
-    });
-
-    await act(async () => {
-      (container.querySelector('[data-testid="sheet-edit"]') as HTMLElement).click();
-    });
-    // The sheet gives way to the form, carrying the same deal.
-    expect(container.querySelector('[data-testid="sheet"]')).toBeNull();
-    expect(container.querySelector('[data-testid="form"]')?.textContent).toContain('41');
-
-    const before = detailCalls().length;
-    await act(async () => {
-      (container.querySelector('[data-testid="form-saved"]') as HTMLElement).click();
-    });
-    expect(container.querySelector('[data-testid="form"]')).toBeNull();
-    expect(detailCalls().length).toBe(before + 1);
-  });
+  // The edit form is gone from this page: `DealForm` is CREATE-only since #75, and editing a deal
+  // happens inline inside the detail panel, which owns its own draft and its own close guard.
 
   it('never shows one rep\'s rows under another rep\'s URL', async () => {
     // React Router reuses this component instance across /crm/touches/3 → /4, so state
@@ -441,9 +364,7 @@ describe('WeeklyTouchesDetailPage (issue #146)', () => {
     });
     let resolveStale: (v: unknown) => void = () => {};
     api.mockReturnValueOnce(new Promise(res => { resolveStale = res; }));
-    await act(async () => {
-      (container.querySelector('[data-testid="sheet-close"]') as HTMLElement).click();
-    });
+    await closeSheet();
 
     // Reload #3, same url, resolves FIRST with new numbers.
     api.mockResolvedValueOnce({ id: 41, title: 'Deal 41', stage: 'proposal' });
@@ -453,9 +374,7 @@ describe('WeeklyTouchesDetailPage (issue #146)', () => {
     api.mockResolvedValueOnce({
       ...detail, rep: { ...detail.rep, touches: 9, open_deals: 9 },
     });
-    await act(async () => {
-      (container.querySelector('[data-testid="sheet-close"]') as HTMLElement).click();
-    });
+    await closeSheet();
     expect(container.textContent).toContain('9 of 9 open deals touched');
 
     // Reload #2 finally answers, with the older payload and the same path.

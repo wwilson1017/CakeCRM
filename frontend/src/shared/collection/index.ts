@@ -8,7 +8,8 @@
  * export no one imports is dead surface that reads as proven API). The individual views
  * (KanbanView/CollectionListView/CardsView) stay internal — `CollectionView` is the surface;
  * `CollectionDetail` is exported because a bespoke page may orchestrate its own views yet
- * still want the shared detail contract.
+ * still want the shared detail contract. Such a page supplies a `DetailHostConfig` and its own
+ * `navOrder`; `state` exists only for the order the layer would otherwise derive itself.
  */
 export { default as CollectionView } from './CollectionView';
 export { default as CollectionDetail } from './detail/CollectionDetail';
@@ -42,6 +43,7 @@ export type {
   KanbanViewConfig,
   CardsViewConfig,
   DetailConfig,
+  DetailHostConfig,
   CollectionViewProps,
   CollectionKanbanProps,
   CollectionCardsProps,

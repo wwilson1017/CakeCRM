@@ -1,20 +1,17 @@
 // @vitest-environment jsdom
 //
-// Why the Stage lock on an archived deal (issue #83) is worth a test of its own: the
-// server refuses a stage change on an archived deal by raising out of
-// `_classify_deal_update`, and that rejects the WHOLE update. So if this guard regressed,
-// a user editing an archived deal would not merely fail to re-stage it — they would lose
-// the title, value, notes and every other field they had just typed, to an error message
-// that names none of that.
-//
-// The lock is also deliberately narrow: an archived deal stays editable in every other
-// respect, so the test pins both halves. Otherwise a future "just disable the form" fix
-// would look like a pass.
+// `DealForm` is CREATE-only since issue #75 — editing a deal is inline in `DealDetailBody`.
+// Every edit-side assertion this file used to carry moved WITH that surface rather than being
+// dropped: the archived Stage lock (#83), the out-of-page linked record, unlinking on an
+// existing deal and "a company already on the deal wins" are all pinned in
+// `DealDetailBody.test.tsx` now. What stays here is what only the create path can answer —
+// which endpoint each quick-create hits (#123), that the ids reach the deal POST, and the
+// contact -> company auto-fill.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { CrmContact, CrmDeal } from '../../core/types';
+import type { CrmContact } from '../../core/types';
 
 const api = vi.hoisted(() => vi.fn());
 vi.mock('../../core/api/client', async (importOriginal) => ({
@@ -29,17 +26,6 @@ const { DealForm } = await import('./DealForm');
 // than mocked: with no token in sessionStorage the provider settles without a request.
 const { AuthProvider } = await import('../../core/auth/AuthContext');
 
-function deal(over: Partial<CrmDeal> = {}): CrmDeal {
-  return {
-    id: 7, title: 'Wholesale order', stage: 'qualified', value: 1000, probability: 20,
-    expected_close_date: '', notes: '', contact_id: null, company_id: null, currency: 'USD',
-    archived_at: null,
-    created_at: '2026-08-01T00:00:00+00:00', updated_at: '2026-08-01T00:00:00+00:00',
-    ...over,
-  };
-}
-
-const STAGE_HINT = 'Restore the deal to change its stage.';
 
 let container: HTMLDivElement;
 let root: Root;
@@ -66,23 +52,13 @@ afterEach(() => {
   container.remove();
 });
 
-async function render(d?: CrmDeal, contactId?: number) {
+async function render(contactId?: number) {
   await act(async () => {
     root.render(
-      <AuthProvider><DealForm deal={d} contactId={contactId} onClose={() => {}} onSaved={() => {}} /></AuthProvider>,
+      <AuthProvider><DealForm contactId={contactId} onClose={() => {}} onSaved={() => {}} /></AuthProvider>,
     );
   });
   await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-}
-
-/** The Stage control, located through its own label rather than by index — the form has
- *  four `<select>`s and their order is not a contract. */
-function stageSelect(): HTMLSelectElement {
-  const label = [...container.querySelectorAll('label')]
-    .find(l => l.textContent?.trim() === 'Stage');
-  const select = label?.parentElement?.querySelector('select');
-  if (!select) throw new Error('no Stage select rendered');
-  return select as HTMLSelectElement;
 }
 
 function titleInput(): HTMLInputElement {
@@ -102,65 +78,6 @@ function typeInto(el: HTMLInputElement, value: string) {
   setter?.call(el, value);
   el.dispatchEvent(new Event('input', { bubbles: true }));
 }
-
-describe('DealForm — archived deals', () => {
-  it('locks the Stage select on an archived deal and says why', async () => {
-    await render(deal({ archived_at: '2026-08-20T00:00:00+00:00' }));
-
-    expect(stageSelect().disabled).toBe(true);
-    expect(container.textContent).toContain(STAGE_HINT);
-  });
-
-  it('leaves every OTHER field editable on an archived deal', async () => {
-    // The server rejects only the stage change, so locking more than the stage would be a
-    // regression of its own — an archived deal is still a record you can correct.
-    await render(deal({ archived_at: '2026-08-20T00:00:00+00:00' }));
-
-    expect(titleInput().disabled).toBe(false);
-  });
-
-  it('leaves the Stage select editable on a live deal', async () => {
-    await render(deal());
-
-    expect(stageSelect().disabled).toBe(false);
-    expect(container.textContent).not.toContain(STAGE_HINT);
-  });
-
-  it('OMITS stage from an archived deal\'s update, so a stale value cannot sink the save', async () => {
-    // Locking the control is not enough on its own. The form still sent `stage` from the
-    // row it opened with, and that row can be stale: if the deal moved stage elsewhere
-    // (the assistant, another tab) after the board loaded, the value behind the disabled
-    // select no longer matches the server's — and the server refuses a stage CHANGE on an
-    // archived deal by rejecting the whole update. The user would lose every field they
-    // just typed, behind a control the UI had disabled and captioned as safe.
-    //
-    // A disabled select's value is by definition not user intent, so the field is simply
-    // not sent. Omitted, not "sent unchanged": only omission is immune to the drift.
-    await render(deal({ stage: 'lead', archived_at: '2026-08-20T00:00:00+00:00' }));
-    await act(async () => { typeInto(titleInput(), 'Corrected title'); });
-    await act(async () => {
-      container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-    });
-
-    const put = api.mock.calls.find(([p, init]) => p === '/api/crm/deals/7' && init?.method === 'PUT');
-    expect(put).toBeTruthy();
-    const body = JSON.parse(put![1].body as string) as Record<string, unknown>;
-    expect(body).not.toHaveProperty('stage');
-    // ...while the edit the user actually made still goes.
-    expect(body.title).toBe('Corrected title');
-  });
-
-  it('still sends stage for a LIVE deal, where the select IS user intent', async () => {
-    await render(deal({ stage: 'qualified' }));
-    await act(async () => {
-      container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-    });
-
-    const put = api.mock.calls.find(([p, init]) => p === '/api/crm/deals/7' && init?.method === 'PUT');
-    const body = JSON.parse(put![1].body as string) as Record<string, unknown>;
-    expect(body.stage).toBe('qualified');
-  });
-});
 
 // ── Inline quick-create (issue #123) ─────────────────────────────────────────
 //
@@ -339,33 +256,17 @@ describe('DealForm — contact→company auto-fill', () => {
   });
 });
 
-describe('DealForm — the linked record on an edit', () => {
-  it('shows a linked contact and company the search never returns', async () => {
-    // The capped-page hazard: the old <select> had no <option> for an out-of-page link, so
-    // it rendered BLANK and read as "no contact". DealForm hand-patched that for the deal's
-    // own company and never did for its contact; both are now structural.
-    mockApi();
-    await render(deal({
-      contact_id: 4242, contact_name: 'Very Old Contact',
-      company_id: 9999, company_name: 'Very Old Company Ltd',
-    }));
-
-    expect(combobox('contact').value).toBe('Very Old Contact');
-    expect(combobox('company').value).toBe('Very Old Company Ltd');
-  });
-});
-
 describe('DealForm — unlinking', () => {
   it('sends null for both links when they are cleared', async () => {
     // The old <select>'s "No contact" / "No company" option is now the picker's × button.
-    // Unlinking is long-standing behaviour that changed its mechanism in this diff, so it
-    // needs a test at THIS level: RecordCombobox's own test only proves the widget calls
-    // onSelect(null), not that DealForm turns that into a null in the request body.
-    mockApi();
-    await render(deal({
-      contact_id: 4, contact_name: 'Linked Person',
-      company_id: 8, company_name: 'Linked Co',
-    }));
+    // Unlinking needs a test at THIS level: RecordCombobox's own test only proves the widget
+    // calls onSelect(null), not that DealForm turns that into a null in the request body —
+    // and `body.contact_id = selectedContact` is "always send", not "send when set".
+    mockApi([contact({ id: 3, name: 'Acme Person', company_id: 9, company_name: 'Acme Corp' })]);
+    await render();
+    await act(async () => { typeInto(titleInput(), 'New order'); });
+    await openPicker('contact');
+    await clickOption(t => t.includes('Acme Person'));
 
     for (const label of ['Clear contact', 'Clear company']) {
       const button = container.querySelector(`button[aria-label="${label}"]`) as HTMLButtonElement;
@@ -373,10 +274,8 @@ describe('DealForm — unlinking', () => {
     }
     await submit();
 
-    const put = api.mock.calls.find(([p, i]) => p === '/api/crm/deals/7' && i?.method === 'PUT');
-    const body = JSON.parse(put![1].body as string) as Record<string, unknown>;
-    expect(body.contact_id).toBeNull();
-    expect(body.company_id).toBeNull();
+    expect(dealPost().contact_id).toBeNull();
+    expect(dealPost().company_id).toBeNull();
   });
 });
 
@@ -394,7 +293,7 @@ describe('DealForm — New Deal opened from a contact', () => {
       if (path.includes('/fields')) return [];
       return null;
     });
-    await render(undefined, 77);
+    await render(77);
 
     expect(combobox('contact').value).toBe('Sourced Person');
     expect(combobox('company').value).toBe('Sourced Co');
@@ -414,7 +313,7 @@ describe('DealForm — New Deal opened from a contact', () => {
       if (path.includes('/fields')) return [];
       return null;
     });
-    await render(undefined, 77);
+    await render(77);
     await act(async () => { typeInto(titleInput(), 'Cleared on purpose'); });
 
     // The contact id is seeded synchronously from the prop, so its × is live immediately.
@@ -476,7 +375,7 @@ describe('DealForm — whose choice wins', () => {
       if (path.includes('/fields')) return [];
       return null;
     });
-    await render(undefined, 77);
+    await render(77);
     await openPicker('company');
     await typeInPicker('company', 'My Own Co');
     await clickOption(t => t.startsWith('Create '));
@@ -490,9 +389,14 @@ describe('DealForm — whose choice wins', () => {
 
   it('does not resurrect a company the user cleared when the contact changes', async () => {
     // "Fill only when empty" cannot tell a CLEARED company from an unset one, so the company
-    // would silently come back on the next contact pick.
+    // would silently come back on the next contact pick. `companyTouched` is what tells them
+    // apart, and clearing has to set it — which is invisible at the call site.
     mockApi([contact({ id: 3, name: 'Acme Person', company_id: 9, company_name: 'Acme Corp' })]);
-    await render(deal({ company_id: 8, company_name: 'Linked Co' }));
+    await render();
+    await act(async () => { typeInto(titleInput(), 'New order'); });
+    await openPicker('company');
+    await typeInPicker('company', 'My Own Co');
+    await clickOption(t => t.startsWith('Create '));
 
     const clear = container.querySelector('button[aria-label="Clear company"]') as HTMLButtonElement;
     await act(async () => { clear.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
@@ -500,22 +404,7 @@ describe('DealForm — whose choice wins', () => {
     await clickOption(t => t.includes('Acme Person'));
     await submit();
 
-    const put = api.mock.calls.find(([p, i]) => p === '/api/crm/deals/7' && i?.method === 'PUT');
-    const body = JSON.parse(put![1].body as string) as Record<string, unknown>;
-    expect(body.company_id).toBeNull();
-  });
-
-  it('does not overwrite an EDITED deal\'s own company when the contact changes', async () => {
-    // A company already on the deal is a deliberate choice too — just an earlier one.
-    mockApi([contact({ id: 3, name: 'Acme Person', company_id: 9, company_name: 'Acme Corp' })]);
-    await render(deal({ company_id: 8, company_name: 'Linked Co' }));
-    await openPicker('contact');
-    await clickOption(t => t.includes('Acme Person'));
-    await submit();
-
-    const put = api.mock.calls.find(([p, i]) => p === '/api/crm/deals/7' && i?.method === 'PUT');
-    const body = JSON.parse(put![1].body as string) as Record<string, unknown>;
-    expect(body.company_id).toBe(8);
+    expect(dealPost().company_id).toBeNull();
   });
 
   it('does not offer Create for an archived company typed by its real name', async () => {
