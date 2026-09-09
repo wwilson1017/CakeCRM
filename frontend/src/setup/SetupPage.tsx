@@ -11,7 +11,7 @@ export function SetupPage() {
     <div className="min-h-screen bg-ck-bg">
       <header className="flex items-center justify-between px-6 py-4 border-b border-ck-line bg-ck-card">
         <Link to="/" className="flex items-center gap-2.5 no-underline">
-          <span className="text-2xl">🍰</span>
+          <img src="/logo-mark.svg" alt="" className="h-8 w-8" />
           <span className="font-display text-xl text-ck-ink">CakeCRM</span>
         </Link>
         <Link

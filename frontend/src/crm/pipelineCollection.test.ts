@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import type { CrmDeal } from '../core/types';
 import type { FacetDef, MultiFacetDef, SingleFacetDef, BooleanFacetDef, RangeFacetDef } from '../shared/collection';
 import type { CrmUser } from './useUsers';
+import { DEAL_DETAIL_CONFIG } from './dealDetailConfig';
 import { archivedSelectionIncludesArchived, makePipelineCollectionConfig } from './pipelineCollection';
 import { isManualSort } from '../shared/search';
 import { PIPELINE_DEFAULT_SORT, pipelineSortFields } from './pipelineSort';
@@ -42,8 +43,13 @@ describe('load-bearing absences', () => {
     expect(build().getVoided).toBeUndefined();
   });
 
-  it('declares NO detail — the deal sheet stays a page-owned modal until #75', () => {
-    expect(build().detail).toBeUndefined();
+  // Inverted by #75: the deal detail is the layer's now. `CollectionView` mounts
+  // `CollectionDetail` only when `detail && config.detail` are BOTH present, so this half of the
+  // gate is what makes the panel exist at all — and it must be the SHARED object, or the pipeline
+  // and the dashboard drift about the title, the subtitle and the `loadById` route.
+  it('declares the SHARED deal detail config, so the three hosts cannot drift', () => {
+    expect(build().detail).toBe(DEAL_DETAIL_CONFIG.detail);
+    expect(build().detail?.getTitle(deal({ id: 1, title: 'Rebuild' }))).toBe('Rebuild');
   });
 });
 

@@ -30,23 +30,24 @@ import time
 import uuid
 from collections.abc import AsyncGenerator
 
-from assistant import assembly, delimiters, history, identity
+from assistant import assembly, compaction, delimiters, history, identity
 from assistant.write_budget import WRITE_BUDGET_PER_TURN, BudgetAction, BudgetState
 from context_files import prompt as context_prompt, tools as context_file_tools
 from memory import context as memory_context
 from providers.base import AIProvider, _sse
-from providers.windows import context_usage_event
+from providers.windows import cache_inclusive_input_tokens, context_usage_event
 
 logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 20
 _VALID_MODES = {"read-only", "normal", "power"}
-_UNTRUSTED_MARKER = "<untrusted_file_content"
+_UNTRUSTED_MARKER = delimiters.UNTRUSTED_FILE_MARKER
 # Tool results from untrusted EXTERNAL sources (e.g. Gmail — issue #8) are wrapped
 # with this marker when recorded, so a later turn's power→normal downgrade fires on
-# them exactly like uploaded-file content does.
-_UNTRUSTED_EXTERNAL_MARKER = "<untrusted_external_content"
-_UNTRUSTED_MARKERS = (_UNTRUSTED_MARKER, _UNTRUSTED_EXTERNAL_MARKER)
+# them exactly like uploaded-file content does. Both literals moved to `delimiters`
+# with #72 Phase 3, which needs the same test one layer down.
+_UNTRUSTED_EXTERNAL_MARKER = delimiters.UNTRUSTED_EXTERNAL_MARKER
+_UNTRUSTED_MARKERS = delimiters.UNTRUSTED_MARKERS
 # Baker's own recorded knowledge (issue #72), fenced when a context-file read is handed
 # back to the model. Deliberately NOT in _UNTRUSTED_MARKERS: that tuple drives the
 # power→normal downgrade and encodes THIRD-PARTY origin (email, uploads). Context files
@@ -78,28 +79,47 @@ def _last_user_text(messages: list[dict]) -> str | None:
     text never chooses which facts surface; memory matching only ever uses
     genuinely-typed text.
     """
-    def _usable(text) -> bool:
-        return (
-            isinstance(text, str)
-            and text.strip()
+    def _typed(text):
+        """The genuinely-typed remainder of a user message, or None.
+
+        A compaction gist (#72 Phase 3) is folded ONTO a retained user turn, and when a
+        thread is dominated by old content that turn is the CURRENT one — so the newest
+        user message can arrive as "gist + what they actually typed". Rejecting it for
+        carrying a marker would silently fall back to the conversation's FIRST message
+        and match memory on the wrong words, so the gist block is removed and the rest
+        kept. Everything else still disqualifies the whole message.
+        """
+        if not isinstance(text, str):
+            return None
+        text = delimiters.strip_conversation_summary(text)
+        usable = (
+            text.strip()
             and text != _CONTINUATION_ACK
             and not any(mark in text for mark in _NON_USER_MARKERS)
         )
+        return text if usable else None
+
+    def _usable(text) -> bool:
+        return _typed(text) is not None
 
     for m in reversed(messages):
         if m.get("role") != "user":
             continue
         content = m.get("content")
         if isinstance(content, str):
-            if _usable(content):
-                return content
+            typed = _typed(content)
+            if typed is not None:
+                return typed
         elif isinstance(content, list):
             # Provider block-list content: when assembly coalesces a freshly-typed user
             # message onto a trailing tool_result turn (abandoned confirmation / budget
             # terminate), the new text is a `{"type":"text"}` block here, not a str.
             for block in reversed(content):
-                if isinstance(block, dict) and block.get("type") == "text" and _usable(block.get("text")):
-                    return block["text"]
+                if not isinstance(block, dict) or block.get("type") != "text":
+                    continue
+                typed = _typed(block.get("text"))
+                if typed is not None:
+                    return typed
     return None
 
 
@@ -201,6 +221,14 @@ async def _chat_impl(
             await asyncio.to_thread(
                 history.save_message, conversation_id, user_msg_id, "user", user_text
             )
+            # Durable half of the untrusted-content taint (#72 Phase 3). The scan below
+            # reads the ASSEMBLED context, which compaction can empty of this row; the
+            # flag is what keeps the power→normal downgrade firing afterwards. Written
+            # here, unconditionally, rather than beside that scan — which only runs in
+            # power mode, so a file uploaded during a normal-mode turn would otherwise
+            # never be recorded and would go unnoticed after the thread compacts.
+            if delimiters.UNTRUSTED_FILE_MARKER in user_text:
+                await asyncio.to_thread(history.mark_untrusted_seen, conversation_id)
             # Title only from the FIRST message of a brand-new conversation — never
             # rewrite an already-titled thread on every subsequent message.
             if new_conversation:
@@ -214,6 +242,25 @@ async def _chat_impl(
 
     yield _sse({"type": "conversation_id", "id": conversation_id})
 
+    # Bound the thread BEFORE assembling it: a long conversation used to grow until the
+    # provider rejected the whole request. Never raises, and on any failure (no light
+    # tier, a timeout, a summarizer that answers nothing) it returns False and the turn
+    # assembles uncompacted, exactly as it did before #72 Phase 3.
+    await compaction.maybe_compact(provider, conversation_id)
+
+    # The compaction boundary this turn assembles against. Every usage reading reported
+    # below is stamped with it, so a reading produced under an OLDER boundary — this
+    # turn finishing after a CONCURRENT turn compacted the same thread — is rejected
+    # rather than taken as the current fullness (history.save_message).
+    #
+    # Read BEFORE assembling, deliberately. A compaction landing in the gap then makes
+    # our stamp older than what we actually assembled, and the reading is dropped: one
+    # lost meter reading, and compaction falls back to the row estimate. Reading it
+    # AFTER would make the stamp newer than the context and let exactly the stale
+    # reading this exists to catch pass as current.
+    comp_state = await asyncio.to_thread(history.get_compaction_state, conversation_id)
+    context_boundary_seq = (comp_state or {}).get("first_kept_seq")
+
     current_messages = await asyncio.to_thread(assembly.assemble_messages, provider, conversation_id)
     if not current_messages:
         yield _sse({"type": "error", "error": "No conversation content to send."})
@@ -226,7 +273,15 @@ async def _chat_impl(
     # from injected instructions. Enforce it here for EVERY turn: if the assembled
     # context carries untrusted upload content, writes route through confirmation
     # regardless of the client-selected mode.
-    if tool_mode == "power" and _context_has_untrusted_upload(current_messages):
+    # The second half is what keeps this true after compaction: the scan above reads the
+    # ASSEMBLED context, and compaction REMOVES rows, so a thread that aged out a Gmail
+    # read or an uploaded file would otherwise quietly stop downgrading. The flag is
+    # monotone and fails closed, and the read only happens in power mode when the
+    # in-context scan already came up clean.
+    if tool_mode == "power" and (
+        _context_has_untrusted_upload(current_messages)
+        or await asyncio.to_thread(history.is_conversation_tainted, conversation_id)
+    ):
         logger.info("assistant.chat: untrusted upload content present — forcing normal mode")
         tool_mode = "normal"
 
@@ -319,6 +374,9 @@ async def _chat_impl(
         ue = context_usage_event(usage, getattr(provider, "context_window", None))
         if ue:
             yield _sse(ue)
+        # Read independently of `ue`, which is None whenever the window is unknown:
+        # compaction wants the NUMBER even when the meter cannot render a percentage.
+        context_tokens = cache_inclusive_input_tokens(usage)
 
         # Persist this iteration. Fail CLOSED when it carries tool calls — never
         # execute or confirm a tool we couldn't record (the confirm flow keys off
@@ -333,6 +391,8 @@ async def _chat_impl(
                 await asyncio.to_thread(
                     history.save_message, conversation_id, iter_msg_id, "assistant",
                     turn_text, persisted_calls, provider.model,
+                    context_tokens=context_tokens,
+                    context_boundary_seq=context_boundary_seq,
                 )
             except Exception as e:
                 if persisted_calls:
@@ -432,6 +492,17 @@ async def _chat_impl(
             if name in _UNTRUSTED_SOURCE_TOOLS:
                 turn_has_untrusted_reads = True
                 content = delimiters.wrap_untrusted_external(name, content)
+                # Recorded NOW, not when compaction later removes this row: the row is
+                # saved with its tool_calls and its results merged afterwards, so a
+                # compaction pass reading in between would find no marker and record no
+                # taint. Best-effort — within this turn `turn_has_untrusted_reads`
+                # already covers it, the next turn's in-context scan sees the fence
+                # while the row is still assembled, and compaction's own scan is the
+                # backstop if this write is the thing that failed.
+                try:
+                    await asyncio.to_thread(history.mark_untrusted_seen, conversation_id)
+                except Exception as e:
+                    logger.warning("assistant.chat: failed to record untrusted taint: %s", e)
             # A context-file read hands back a whole document Baker (or the user) wrote
             # earlier, which may quote an email or an upload. Fence it as DATA for the
             # same reason the prompt-injected copy is fenced (issue #72) — but do NOT
@@ -476,6 +547,7 @@ async def _chat_impl(
             # so the turn stays narration-only.
             wrap_text = ""
             wrap_completed = False
+            wrap_context_tokens = None
             async for event in provider.stream_turn(current_messages, provider_tools, system_prompt):
                 etype = event.get("type")
                 if etype == "text":
@@ -488,6 +560,10 @@ async def _chat_impl(
                     wu = context_usage_event(event.get("usage") or {}, getattr(provider, "context_window", None), meter_only=True)
                     if wu:
                         yield _sse(wu)
+                    # This turn's reading is the LARGEST of the whole exchange — it read
+                    # every tool result — so dropping it would leave compaction sizing
+                    # the thread from the pre-tool-call figure.
+                    wrap_context_tokens = cache_inclusive_input_tokens(event.get("usage") or {})
                     wrap_completed = True
                     break
                 # stray tool_start/tool_args ignored — the wrap-up is narration-only
@@ -500,6 +576,8 @@ async def _chat_impl(
                     await asyncio.to_thread(
                         history.save_message, conversation_id, str(uuid.uuid4()),
                         "assistant", wrap_text, None, provider.model,
+                        context_tokens=wrap_context_tokens,
+                        context_boundary_seq=context_boundary_seq,
                     )
                 except Exception as e:
                     logger.warning("assistant.chat: failed to persist wrap-up text: %s", e)  # best-effort

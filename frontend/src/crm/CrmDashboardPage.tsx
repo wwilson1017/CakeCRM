@@ -3,8 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../core/api/client';
 import type { CrmDashboard, CrmDeal, CrmAnalytics } from '../core/types';
 import { ActivityTimeline } from './components/ActivityTimeline';
-import { DealForm } from './components/DealForm';
-import { DealDetailSheet } from './components/DealDetailSheet';
+import { DealDetailBody, type DealPatch } from './components/DealDetailBody';
+import { CollectionDetail, denyEscapeBackdrop } from '../shared/collection';
+import { DEAL_DETAIL_CONFIG } from './dealDetailConfig';
 import { StatCard } from './components/StatCard';
 import { TodayPanel } from './components/TodayPanel';
 import { WeeklyTouchesCard } from './components/WeeklyTouchesCard';
@@ -39,16 +40,20 @@ function fmtDay(iso: string): string {
   return new Date(`${iso}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
+// The `CollectionDetail` host config is shared with `PipelinePage` — see `dealDetailConfig.ts`.
+// This page leans hardest on its `loadById`: it opens deals from three different queries and only
+// the top-deals rows are ever in `items`, so every other row resolves through that fetch.
+
 export function CrmDashboardPage() {
   const { users } = useUsers();
   const [data, setData] = useState<CrmDashboard | null>(null);
   const [analytics, setAnalytics] = useState<CrmAnalytics | null>(null);
   const [loading, setLoading] = useState(true);
-  const [selectedDeal, setSelectedDeal] = useState<CrmDeal | null>(null);
-  const [editDeal, setEditDeal] = useState<CrmDeal | null>(null);
+  const [selectedDealId, setSelectedDealId] = useState<number | null>(null);
   // Bumped by reload() to refetch the self-fetching cards alongside the rest.
   // Two consumers now: WeeklyTouchesCard (#76) and TodayPanel (#130).
   const [cardRefreshKey, setCardRefreshKey] = useState(0);
+
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   // Monotonic id so a slow in-flight analytics request can't overwrite a newer
@@ -75,14 +80,12 @@ export function CrmDashboardPage() {
     setCardRefreshKey(k => k + 1);
   }
 
+  // The panel resolves the id itself: rows outside `top_deals` (stale deals, weekly touches)
+  // carry only a summary, so `DEAL_DETAIL_CONFIG.loadById` fetches them. A deal that has since
+  // been deleted now gets the layer's own "Record unavailable · Retry" panel — better feedback
+  // than the toast this used to raise, and the stale list refreshes on close either way.
   function openDeal(id: number) {
-    // stale-deal rows carry only a summary; fetch the full deal for the sheet.
-    // Analytics can be stale (deal deleted in another tab / by the assistant), so
-    // on failure give feedback — a silent dead click reads as a broken UI, and
-    // every other user action here toasts — and refresh the now-stale list.
-    api<CrmDeal>(`/api/crm/deals/${id}`)
-      .then(setSelectedDeal)
-      .catch(() => { toast.error('Could not open that deal — it may have been deleted.'); loadAnalytics(); });
+    setSelectedDealId(id);
   }
 
   async function updateDealStage(deal: CrmDeal, stage: string, lostReason?: string) {
@@ -91,12 +94,40 @@ export function CrmDashboardPage() {
       // which routes to the mark-lost verb instead of the plain stage PUT (issue #128).
       const { path, init } = stageWriteRequest(deal.id, stage, lostReason);
       await api(path, init);
-      setSelectedDeal(null);
+      // No dismissal here: `DealDetailBody` closes itself on a successful write, because only a
+      // MOUNTED body can tell whether the panel in front of it is still the one that asked.
       reload();
     } catch (err) {
       console.error('Failed to update deal stage:', err);
       toast.error('Failed to move deal.');
+      // Rethrown so the panel's own close-out knows the deal was NOT closed and stays open.
+      throw err;
     }
+  }
+
+  // The inline form's ONE save — stage and columns in the same PUT (see `DealPatch`). It rethrows
+  // so the body can keep the user's draft on screen.
+  //
+  // The canonical row is patched from the PUT's own response BEFORE the broader reload starts,
+  // and that is not belt-and-braces: `DealDetailBody`'s `view` deliberately lets the HOST row win
+  // over its own detail fetch for any deal the host holds canonically, and a `top_deals` row is
+  // exactly that. Leaving the stale row in place therefore shows pre-save values the moment edit
+  // mode closes — and keeps showing them for good if the reload never lands. `reload()` is still
+  // the reconciliation for everything else on the page (there is no board to patch a row into).
+  async function saveDeal(deal: CrmDeal, patch: DealPatch): Promise<CrmDeal> {
+    const updated = await api<CrmDeal>(`/api/crm/deals/${deal.id}`, {
+      method: 'PUT', body: JSON.stringify(patch),
+    });
+    setData(prev => prev ? {
+      // Merged, not replaced: the PUT response and the dashboard's `top_deals` query select
+      // different columns. A deal that is not in the list is left alone.
+      ...prev,
+      top_deals: prev.top_deals.map(d => d.id === deal.id ? { ...d, ...updated } : d),
+    } : prev);
+    reload();
+    // Handed back so the panel can fold the SERVER's row into its own read channel — the route
+    // derives `probability` from the stage, so the patch alone is not what was stored.
+    return updated;
   }
 
   // Doesn't set loading itself (the set-state-in-effect rule forbids sync
@@ -535,7 +566,7 @@ export function CrmDashboardPage() {
               <p style={{ color: INK_DIM, fontSize: 15, padding: '16px 0' }}>No deals yet.</p>
             ) : (
               data.top_deals.map(deal => (
-                <div key={deal.id} onClick={() => setSelectedDeal(deal)} style={{
+                <div key={deal.id} onClick={() => setSelectedDealId(deal.id)} style={{
                   padding: '14px 16px', marginBottom: 6,
                   display: 'flex', alignItems: 'center', gap: 14,
                   cursor: 'pointer',
@@ -591,23 +622,46 @@ export function CrmDashboardPage() {
         ))}
       </div>
 
-      {editDeal && <DealForm deal={editDeal} onClose={() => setEditDeal(null)} onSaved={() => { setEditDeal(null); setSelectedDeal(null); reload(); }} />}
-
-      {selectedDeal && (
-        <DealDetailSheet
-          key={selectedDeal.id}
-          deal={selectedDeal}
-          isMobile={isMobile}
-          onClose={() => { setSelectedDeal(null); reload(); }}
-          onEdit={(d) => { setSelectedDeal(null); setEditDeal(d); }}
-          onStageChange={updateDealStage}
-          // The archived banner and its Restore button render on ANY host (issue #83): the
-          // sheet reads `archived_at` from its own detail fetch, so a deal archived after
-          // this page loaded shows them here too. Without this the restore would succeed
-          // server-side while the sheet stayed open over stale dashboard numbers.
-          onRestored={() => { setSelectedDeal(null); reload(); }}
-        />
-      )}
+      <CollectionDetail<CrmDeal>
+        config={DEAL_DETAIL_CONFIG}
+        items={data.top_deals}
+        selectedId={selectedDealId}
+        onSelect={id => {
+          if (id === null) { setSelectedDealId(null); reload(); }
+          else setSelectedDealId(Number(id));
+        }}
+        // Nothing to navigate, deliberately. This page opens deals from three unrelated queries
+        // (top deals, stale deals, weekly touches), so walking any one of them would page the
+        // user through records they did not open from — and the layer's own rule is that
+        // disabling beats guessing. `[]` is that answer; omitting the prop would mean something
+        // different (derive an order), which there is no collection state here to derive from.
+        navOrder={[]}
+        detail={{
+          render: (deal, ctx) => (
+            <DealDetailBody
+              deal={deal}
+              onBoard={data.top_deals.some(d => d.id === deal.id)}
+              // Always writable here, unlike the pipeline: there is no board for a deal to be
+              // off, every list on this page is already filtered to live deals, and the "Needs a
+              // touch" panel is a real place to close one from. An ARCHIVED deal is still gated,
+              // but by the body itself — it reads `archived_at` from its own detail fetch, which
+              // is the only thing that knows, since these rows carry no board state.
+              stageWritable
+              ctx={ctx}
+              onMarkWon={d => updateDealStage(d, 'won')}
+              onMarkLost={(d, lostReason) => updateDealStage(d, 'lost', lostReason)}
+              onSaveDeal={saveDeal}
+              // The archived banner and its Restore render on ANY host (issue #83). Without this
+              // the restore would succeed server-side while the panel stayed open over stale
+              // dashboard numbers.
+              // Patching only — the body dismisses itself, and only while it is still on screen.
+              onRestored={() => reload()}
+              onClose={() => setSelectedDealId(null)}
+            />
+          ),
+          onRequestClose: denyEscapeBackdrop,
+        }}
+      />
     </div>
   );
 }

@@ -29,7 +29,8 @@ def manifest_response(*, name: str, description: str, base_path: str) -> Respons
         "display": "standalone",
         "background_color": "#fffffa",
         "theme_color": "#e31d3b",
-        # The app's existing icons; no new assets are introduced by #70.
+        # Maskable PWA icons: the brand mark at 70% on the card colour, so the safe zone
+        # of a masked launcher never clips it (frontend/public/icon-*.png, from #163).
         "icons": [
             {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png",
              "purpose": "any maskable"},

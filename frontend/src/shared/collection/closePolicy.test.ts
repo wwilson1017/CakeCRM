@@ -1,8 +1,3 @@
-// @vitest-environment jsdom
-//
-// (jsdom only for `window.confirm` — the policy itself is pure. Opted in per file, as the repo
-// requires, so the node-env suites keep their speed.)
-//
 // CRM's detail close POLICY.
 //
 // This is where the deleted `DetailPanelShell.test.tsx` went. That suite pinned four things; two
@@ -18,8 +13,29 @@
 // `onRequestClose` receives the true reason for every leave path and that its verdict decides).
 // What is left for CRM to own is the VERDICT, which is this pure function. App policy × layer
 // mechanism reconstructs the old coverage.
-import { describe, expect, it, vi } from 'vitest';
-import { CRM_CLOSING_REASONS, confirmDiscardOn, denyEscapeBackdrop } from './closePolicy';
+//
+// Node env, not jsdom: the file used to opt into jsdom solely for `window.confirm`, and the
+// prompt now goes through the app's own `confirmDialog` — which is mocked here, so there is no
+// DOM left to need.
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+interface ConfirmOptions {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  danger?: boolean;
+}
+const confirmDialog = vi.hoisted(() =>
+  vi.fn<(options: ConfirmOptions) => Promise<boolean>>());
+vi.mock('../confirm', () => ({ confirmDialog }));
+
+const { CRM_CLOSING_REASONS, confirmDiscardOn, denyEscapeBackdrop } = await import('./closePolicy');
+
+beforeEach(() => {
+  confirmDialog.mockReset();
+  confirmDialog.mockResolvedValue(true);
+});
 
 describe('denyEscapeBackdrop', () => {
   it('refuses Escape and a backdrop click, allows the × button and ‹ › navigation', () => {
@@ -38,34 +54,41 @@ describe('denyEscapeBackdrop', () => {
 });
 
 describe('confirmDiscardOn', () => {
-  it('does not prompt for a reason the app guard will refuse anyway', () => {
+  it('does not prompt for a reason the app guard will refuse anyway', async () => {
     // The ordering this defends: CollectionDetail consults the BODY guard first, so an
     // unconditional confirm would put "Discard unsaved changes?" on screen for an Escape keypress
     // and then decline to close whatever the user answered.
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
-    try {
-      expect(confirmDiscardOn('escape', () => true)).toBe(true);
-      expect(confirmDiscardOn('backdrop', () => true)).toBe(true);
-      expect(confirm).not.toHaveBeenCalled();
-    } finally {
-      confirm.mockRestore();
-    }
+    await expect(confirmDiscardOn('escape', () => true)).resolves.toBe(true);
+    await expect(confirmDiscardOn('backdrop', () => true)).resolves.toBe(true);
+    expect(confirmDialog).not.toHaveBeenCalled();
   });
 
-  it('prompts on a real close only while dirty, and honours the answer', () => {
-    const confirm = vi.spyOn(window, 'confirm');
-    try {
-      confirm.mockClear();
-      expect(confirmDiscardOn('button', () => false)).toBe(true);
-      expect(confirm).not.toHaveBeenCalled();
+  it('prompts on a real close only while dirty, and honours the answer', async () => {
+    await expect(confirmDiscardOn('button', () => false)).resolves.toBe(true);
+    expect(confirmDialog).not.toHaveBeenCalled();
 
-      confirm.mockReturnValue(false);
-      expect(confirmDiscardOn('button', () => true)).toBe(false);
-      confirm.mockReturnValue(true);
-      expect(confirmDiscardOn('nav', () => true)).toBe(true);
-      expect(confirm).toHaveBeenCalledTimes(2);
-    } finally {
-      confirm.mockRestore();
-    }
+    confirmDialog.mockResolvedValue(false);
+    await expect(confirmDiscardOn('button', () => true)).resolves.toBe(false);
+
+    confirmDialog.mockResolvedValue(true);
+    await expect(confirmDiscardOn('nav', () => true)).resolves.toBe(true);
+    expect(confirmDialog).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns a promise for every branch, so a caller may always await it', () => {
+    // `DetailCloseGuard` permits `boolean | Promise<boolean>`, and `CollectionDetail.request`
+    // awaits — but a body that composes this into its own guard must be able to await it too,
+    // including on the short-circuit paths that never touch the dialog.
+    expect(confirmDiscardOn('escape', () => true)).toBeInstanceOf(Promise);
+    expect(confirmDiscardOn('button', () => false)).toBeInstanceOf(Promise);
+    expect(confirmDiscardOn('button', () => true)).toBeInstanceOf(Promise);
+  });
+
+  it('asks with entity-neutral copy — this module is shared by every collection detail', () => {
+    // Naming one record type here would ship the wrong sentence to the others; the deals detail
+    // was the first consumer and is deliberately not mentioned.
+    void confirmDiscardOn('button', () => true);
+    const options: ConfirmOptions = confirmDialog.mock.calls[0][0];
+    expect(`${options.title} ${options.message}`.toLowerCase()).not.toMatch(/deal|contact|task|company/);
   });
 });

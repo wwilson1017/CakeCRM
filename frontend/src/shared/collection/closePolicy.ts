@@ -1,3 +1,4 @@
+import { confirmDialog } from '../confirm';
 import type { DetailCloseReason } from './types';
 
 /**
@@ -31,14 +32,35 @@ export const denyEscapeBackdrop = (reason: DetailCloseReason): boolean =>
   CRM_CLOSING_REASONS.includes(reason);
 
 /**
- * The body half of the contract, for a detail body holding an unsaved edit form.
+ * The body half of the contract, for a detail body holding unsaved work.
  *
  * It must NOT prompt for a reason the app guard is going to refuse anyway. `CollectionDetail`
- * asks the BODY guard first and only then the app guard, so an unconditional `window.confirm`
- * would put "Discard unsaved changes?" on screen for an Escape keypress and then decline to close
- * whatever the user answered — a dialog whose answer is ignored.
+ * asks the BODY guard first and only then the app guard, so an unconditional prompt would put
+ * "Discard unsaved changes?" on screen for an Escape keypress and then decline to close whatever
+ * the user answered — a dialog whose answer is ignored.
+ *
+ * It resolves through the app's own `confirmDialog` rather than `window.confirm`: the same detail
+ * bodies already use it to confirm an activity delete, `DetailCloseGuard` accepts a promise, and
+ * `CollectionDetail.request` already awaits the body guard under its one-in-flight lock, so a
+ * second dismissal cannot queue up behind the open dialog. `ConfirmHost` renders above every
+ * detail, takeover or centred.
+ *
+ * A body composes ALL of its dirty sources into the ONE `isDirty` this takes — `registerCloseGuard`
+ * replaces rather than stacks, so a second registration would silently discard the first.
+ *
+ * The copy is deliberately entity-neutral: this module is shared by every collection detail, so
+ * naming one record type here would ship the wrong sentence to the others.
  */
-export function confirmDiscardOn(reason: DetailCloseReason, isDirty: () => boolean): boolean {
+export async function confirmDiscardOn(
+  reason: DetailCloseReason,
+  isDirty: () => boolean,
+): Promise<boolean> {
   if (!CRM_CLOSING_REASONS.includes(reason)) return true;
-  return !isDirty() || window.confirm('Discard unsaved changes?');
+  if (!isDirty()) return true;
+  return confirmDialog({
+    title: 'Discard unsaved changes?',
+    message: 'Your unsaved changes will be lost.',
+    confirmLabel: 'Discard',
+    danger: true,
+  });
 }
