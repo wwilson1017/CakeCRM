@@ -36,6 +36,7 @@ vi.mock('../shared/toast', () => ({ toast }));
 
 const { CrmDashboardPage } = await import('./CrmDashboardPage');
 const { ActiveRecordProvider } = await import('./RecordContext');
+const { AuthProvider } = await import('../core/auth/AuthContext');
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────────────────────
 
@@ -144,9 +145,14 @@ function render() {
   act(() => {
     root.render(
       <MemoryRouter initialEntries={['/crm']}>
-        <ActiveRecordProvider>
-          <CrmDashboardPage />
-        </ActiveRecordProvider>
+        {/* #130's Today panel reads the signed-in account for its Mine/Everyone scope. Provided
+            rather than mocked: with no token in sessionStorage the provider settles without a
+            request, and the panel renders its Everyone view. */}
+        <AuthProvider>
+          <ActiveRecordProvider>
+            <CrmDashboardPage />
+          </ActiveRecordProvider>
+        </AuthProvider>
       </MemoryRouter>,
     );
   });

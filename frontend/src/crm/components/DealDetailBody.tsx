@@ -124,8 +124,11 @@ interface DealFormState {
  *  would report a spurious edit for a deal whose `company_name` the server later joins
  *  differently. */
 function formFields(f: DealFormState) {
-  const { contact_label: _c, company_label: _co, ...rest } = f;
-  return rest;
+  return {
+    title: f.title, stage: f.stage, value: f.value, probability: f.probability,
+    expected_close_date: f.expected_close_date, notes: f.notes,
+    contact_id: f.contact_id, company_id: f.company_id, owner_id: f.owner_id,
+  };
 }
 
 /** Snapshot a record into form state, normalising every blank to `''`.

@@ -321,11 +321,16 @@ export function PipelinePage() {
   // original request's error REPORTING across, so a user-initiated load that got deferred does
   // not have its failure swallowed. No-ops when nothing is pending, so callers only have to
   // know that writes have settled.
+  //
+  // The counter is read across an `await` by `updateDealStage`, which is the one caller whose own
+  // refresh a replay can make redundant — see there for why a second load is not merely wasteful.
+  const replayCount = useRef(0);
   const replayDeferredLoad = useCallback(() => {
     if (!pendingRefresh.current) return;
     pendingRefresh.current = false;
     const reportErrors = pendingRefreshReportErrors.current;
     pendingRefreshReportErrors.current = false;
+    replayCount.current++;
     void loadRef.current(true, { reportErrors });
   }, []);
 
@@ -680,6 +685,14 @@ export function PipelinePage() {
   // `lostReason` is present only for a Mark Lost taken through the reason dialog (#128); it rides
   // through to `writeDeal`, which is where the endpoint is chosen.
   const updateDealStage = useCallback(async (deal: CrmDeal, stage: string, lostReason?: string) => {
+    // Read BEFORE the await. If a load is deferred behind this very write — the user reaching for
+    // the Archived facet while the PUT is in the air — the write's own `finally` replays it, and
+    // that replay is issued AFTER the server answered, so it already carries everything the
+    // refresh below would ask for. Issuing a second one would not merely be redundant: `load`
+    // bumps `loadGen`, so the later request DISCARDS the replay, and with it the failure report a
+    // user-initiated facet load is owed. Under "Archived only" that swallowed failure renders an
+    // empty board reading as "you have no archived deals" — the exact false answer #83 fixed.
+    const replaysBefore = replayCount.current;
     if (deal.stage !== stage) {
       try {
         await writeDeal(deal, { stage }, deal.stage, lostReason);
@@ -696,7 +709,7 @@ export function PipelinePage() {
       revealStage(stage);
     }
     setSelectedDealId(null);
-    load(true);
+    if (replayCount.current === replaysBefore) load(true);
   }, [writeDeal, load, revealStage]);
 
   // These RETURN the promise rather than `void` it: `DealDetailBody` awaits them to keep its
