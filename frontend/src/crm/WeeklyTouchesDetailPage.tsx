@@ -167,7 +167,9 @@ function DetailView({ apiPath, isMobile }: { apiPath: string; isMobile: boolean 
     try {
       const { path, init } = stageWriteRequest(deal.id, stage, lostReason);
       await api(path, init);
-      setSelectedDealId(null);
+      // Dismiss ONLY if this deal is still the one on screen — the ‹ › arrows stay live while
+      // the write is in flight, and a slow one must not close a deal the user walked to.
+      setSelectedDealId(prev => (prev === deal.id ? null : prev));
       reload();
     } catch {
       toast.error('Failed to move deal.');
@@ -278,7 +280,10 @@ function DetailView({ apiPath, isMobile }: { apiPath: string; isMobile: boolean 
               onMarkWon={d => updateDealStage(d, 'won')}
               onMarkLost={(d, lostReason) => updateDealStage(d, 'lost', lostReason)}
               onSaveDeal={saveDeal}
-              onRestored={() => { setSelectedDealId(null); reload(); }}
+              onRestored={restored => {
+                setSelectedDealId(prev => (prev === restored.id ? null : prev));
+                reload();
+              }}
             />
           ),
           onRequestClose: denyEscapeBackdrop,

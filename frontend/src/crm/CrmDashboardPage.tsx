@@ -93,7 +93,10 @@ export function CrmDashboardPage() {
       // which routes to the mark-lost verb instead of the plain stage PUT (issue #128).
       const { path, init } = stageWriteRequest(deal.id, stage, lostReason);
       await api(path, init);
-      setSelectedDealId(null);
+      // Dismiss ONLY if this deal is still the one on screen. The panel's ‹ › arrows stay live
+      // while the write is in flight, so a slow one could otherwise close a different deal the
+      // user had walked to — taking its unsaved draft, and without asking its close guard.
+      setSelectedDealId(prev => (prev === deal.id ? null : prev));
       reload();
     } catch (err) {
       console.error('Failed to update deal stage:', err);
@@ -647,7 +650,10 @@ export function CrmDashboardPage() {
               // The archived banner and its Restore render on ANY host (issue #83). Without this
               // the restore would succeed server-side while the panel stayed open over stale
               // dashboard numbers.
-              onRestored={() => { setSelectedDealId(null); reload(); }}
+              onRestored={restored => {
+                setSelectedDealId(prev => (prev === restored.id ? null : prev));
+                reload();
+              }}
             />
           ),
           onRequestClose: denyEscapeBackdrop,

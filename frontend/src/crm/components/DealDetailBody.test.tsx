@@ -908,3 +908,106 @@ describe('the owner row', () => {
     expect(container.textContent).toContain('Unassigned');
   });
 });
+
+// ── Exits and lifecycle authority (the settle review's findings) ─────────────────────────────
+
+describe('every exit asks the same guard', () => {
+  it('confirms before a Restore discards an open edit draft', async () => {
+    // The banner renders OVER the edit form, and every host dismisses the panel on `onRestored`
+    // — so "edit an archived deal, then restore it" is a real way to lose a draft. Restore is a
+    // leave path like the contact link and Mark Won, and goes through the same `canLeave`.
+    routeDetail(
+      detailResponse({ archived_at: '2026-08-20T00:00:00+00:00' }),
+      path => (path === '/api/crm/deals/7/restore'
+        ? detailResponse({ archived_at: null })
+        : undefined),
+    );
+    confirmDialog.mockResolvedValue(false);   // the user says "keep editing"
+    const onRestored = vi.fn();
+    render({ deal: makeDeal({ archived_at: '2026-08-20T00:00:00+00:00' }), onRestored });
+    await settle();
+    click(buttonByText('Edit'));
+    await settle();
+    setField('deal-title', 'Half-typed');
+    await click(buttonByText('Restore'));
+    await settle();
+
+    expect(confirmDialog).toHaveBeenCalled();
+    // Refused, so nothing was written and the draft is still on screen.
+    expect(api).not.toHaveBeenCalledWith('/api/crm/deals/7/restore', { method: 'POST' });
+    expect(onRestored).not.toHaveBeenCalled();
+    expect(container.querySelector<HTMLInputElement>('#deal-title')!.value).toBe('Half-typed');
+  });
+});
+
+describe('the company the user cleared', () => {
+  it('is not resurrected by the next contact pick', async () => {
+    // "Fill only when empty" cannot tell a CLEARED company from an unset one, so the link the
+    // user just removed comes straight back — and gets saved. `DealForm` guards this with a
+    // touched ref for the same reason; the inline editor needs its own.
+    const defaults = api.getMockImplementation()!;
+    api.mockImplementation((path: string, options?: { method?: string }) => {
+      if (path.startsWith('/api/crm/contacts?')) {
+        return Promise.resolve({ contacts: [{ id: 99, name: 'New Lead', company: '', company_name: 'Inherited Co', company_id: 42 }] });
+      }
+      return defaults(path, options);
+    });
+    const props = render({ deal: makeDeal() });   // company_id: 5
+    await settle();
+    click(buttonByText('Edit'));
+    await settle();
+    await act(async () => { clearLink('Clear company')!.click(); });
+    await openPicker('contact');
+    await clickOption(t => t.includes('New Lead'));
+    click(buttonByText('Save'));
+    await settle();
+
+    const [, patch] = (props.onSaveDeal as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(patch).toEqual({ contact_id: 99, company_id: null });
+  });
+});
+
+describe('the lifecycle columns govern the form too, not just the buttons', () => {
+  it('opens the Stage select on the SERVER\'s stage, not the host row\'s', async () => {
+    // After a close whose response was lost, the board row still says `lead` while the server
+    // says `lost`. The close-out pair reads the fetch and disappears — so Edit is the only route
+    // left — and a form seeded from the host row would show `lead`, where choosing `lead` (the
+    // obvious "reopen this") matches its own baseline and sends NO patch at all.
+    routeDetail(detailResponse({ stage: 'lost' }));
+    render({ deal: makeDeal({ stage: 'lead' }) });
+    await settle();
+    click(buttonByText('Edit'));
+    await settle();
+
+    expect((container.querySelector('#deal-stage') as HTMLSelectElement).value).toBe('lost');
+  });
+
+  it('does not flash the pre-save stage after a stage change is written', async () => {
+    // `archivedAt`/`closeStage` read the detail fetch, and `handleSave` refreshes it in the
+    // background — so without folding the patch in first, the heading and the close-out pair
+    // describe the stage the deal has just left until that request lands.
+    // The post-save refetch is HELD for the whole test, which is what makes this about the fold
+    // rather than about the refresh: if the assertion were allowed to wait for that request, it
+    // would pass with the fold deleted.
+    let detailReads = 0;
+    routeDetail(detailResponse({ stage: 'proposal' }), path => {
+      if (!/^\/api\/crm\/deals\/\d+$/.test(path)) return undefined;
+      detailReads += 1;
+      return detailReads === 1 ? undefined : new Promise(() => {});
+    });
+    render({ deal: makeDeal({ stage: 'proposal' }) });
+    await settle();
+    expect(buttonByText('Mark Won')).toBeTruthy();
+
+    click(buttonByText('Edit'));
+    await settle();
+    setField('deal-stage', 'won');
+    click(buttonByText('Save'));
+    await settle();
+
+    // Closed now, so the close-out pair is gone — and the refetch has not answered.
+    expect(detailReads).toBe(2);
+    expect(buttonByText('Mark Won')).toBeNull();
+    expect(buttonByText('Mark Lost')).toBeNull();
+  });
+});

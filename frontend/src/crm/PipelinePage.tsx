@@ -708,7 +708,11 @@ export function PipelinePage() {
       // without this the card vanishes with nothing on screen to say where it went.
       revealStage(stage);
     }
-    setSelectedDealId(null);
+    // Dismiss ONLY if this deal is still the one on screen. The panel's ‹ › arrows stay live
+    // while a close-out is in flight (the body disables its own buttons, not the shell's), so a
+    // slow write could otherwise close a DIFFERENT deal the user had since walked to — taking
+    // its unsaved draft with it, and without ever asking that record's close guard.
+    setSelectedDealId(prev => (prev === deal.id ? null : prev));
     if (replayCount.current === replaysBefore) load(true);
   }, [writeDeal, load, revealStage]);
 
@@ -758,7 +762,7 @@ export function PipelinePage() {
       next.delete(restored.id);
       return next;
     });
-    setSelectedDealId(null);
+    setSelectedDealId(prev => (prev === restored.id ? null : prev));
     // Then refresh in the background. The patch above is what makes the board CORRECT — it
     // deliberately does not depend on this landing — but a restore closes the sheet the same way
     // `onClose` does, and that path refreshes so an in-sheet note reaches the board's derived
@@ -1367,22 +1371,33 @@ export function PipelinePage() {
         }}
         detail={{
           render: (deal, ctx) => {
-            // Membership is asked of the WHOLE payload, never of `items`. `items` drops the
-            // stages the user has put away, and a put-away COLUMN is a view preference — it says
-            // nothing about whether the deal is on this board or whether its stage may be
-            // written. (The layer still resolves such a deal through `loadById` rather than from
-            // `items`; that costs one GET and changes no answer.)
-            const onBoard = deals.some(d => d.id === deal.id);
+            // The two flags answer two DIFFERENT questions, so each reads the array that answers
+            // its own — conflating them is a bug in whichever direction you pick.
+            //
+            // `onBoard` is "did this row come from the host's canonical array, so a write patches
+            // it in place?". That array is `items`, which is what the layer resolved `selectedId`
+            // against — and `items` drops the stages the user has put away, so such a deal came
+            // from `loadById` and is a ONE-SHOT snapshot nothing will ever replace. Answering
+            // this from `deals` would tell the body the prop is authoritative when it is frozen,
+            // and its canonical-wins merge would then repaint pre-save values over its own
+            // refreshed detail after every save.
+            const onBoard = items.some(d => d.id === deal.id);
             return (
               <DealDetailBody
                 deal={deal}
                 onBoard={onBoard}
-                // Off the board there is no board position to write: the stage move, Won and Lost
-                // would all put the deal somewhere this board is not showing. An ARCHIVED deal is
-                // excluded for a harder reason — the server refuses a stage change on one
-                // (`_classify_deal_update` raises → 400), so the controls could only ever be a
-                // dead end. Restore first; the panel's banner is the way.
-                stageWritable={onBoard && !isArchivedDeal(deal)}
+                // `stageWritable` is "is there a board position to write?", which IS a question
+                // about the whole payload: a put-away column is a view preference and says
+                // nothing about whether the deal is on this board. Off the payload entirely, the
+                // stage move, Won and Lost would all put the deal somewhere this board is not
+                // showing.
+                //
+                // ARCHIVED is deliberately NOT tested here. The body gates on it too, from its
+                // OWN detail fetch — the only reader that knows, since a deal archived after the
+                // board loaded carries `archived_at: null` in this row. A second check on the
+                // stale row could only ever be wrong in one direction: denying a restored deal
+                // its stage controls with no way back.
+                stageWritable={deals.some(d => d.id === deal.id)}
                 ctx={ctx}
                 onMarkWon={markWon}
                 onMarkLost={markLost}

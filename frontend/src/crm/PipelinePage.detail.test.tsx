@@ -520,3 +520,99 @@ describe('‹ › record navigation', () => {
     expect(byLabel<HTMLButtonElement>('Next record')!.disabled).toBe(true);
   });
 });
+
+// ── Which deal a settling write is allowed to dismiss ────────────────────────────────────────
+
+describe('a close-out dismisses only the deal it closed', () => {
+  it('leaves a deal the user walked to while the write was in flight alone', async () => {
+    // `updateDealStage` awaits the write and then clears the selection. The panel's ‹ › arrows
+    // are the SHELL's and stay live throughout — the body disables its own close-out pair, not
+    // those — so a slow write could close a DIFFERENT record, taking any draft with it and
+    // without ever asking that record's close guard.
+    let releasePut: (v: unknown) => void = () => {};
+    api.mockImplementation((path: string, options?: ApiCallOptions) =>
+      options?.method === 'PUT'
+        ? new Promise(res => { releasePut = res; })
+        : defaultRoutes(path) ?? Promise.resolve({}));
+
+    renderAt('/crm/pipeline?deal=5');
+    await settle();
+    expect(panelTitle()).toBe('Wholesale order');
+
+    click(buttonByText('Mark Won'));
+    await settle();
+    // Walk to the other deal while deal 5's PUT is still in the air. The arrows are the SHELL's
+    // and are not disabled by the body's own close-out latch — which is exactly the exposure.
+    // Backwards, because the optimistic restage has already moved deal 5 to the Won column and
+    // the walk order is column-major, so it is now the last record rather than the first.
+    expect(byLabel<HTMLButtonElement>('Previous record')!.disabled).toBe(false);
+    click(byLabel('Previous record'));
+    await settle();
+    expect(panelTitle()).toBe('Retail order');
+
+    await act(async () => { releasePut({ ...deal(5, { title: 'Wholesale order', stage: 'won' }) }); });
+    await settle();
+
+    // Deal 5's write settled; deal 6's panel is untouched.
+    expect(panelTitle()).toBe('Retail order');
+  });
+});
+
+// ── A deal whose column the user has put away ────────────────────────────────────────────────
+
+describe('a deal in a HIDDEN stage', () => {
+  it('keeps its close-out actions, and its own read channel', async () => {
+    // Two questions, two arrays. `onBoard` asks whether the HOST holds this row canonically, and
+    // for a hidden-stage deal it does not — the layer resolved it through `loadById`, a one-shot
+    // snapshot nothing replaces — so the body must own its read channel or a save repaints
+    // pre-save values from a frozen prop. `stageWritable` asks whether the deal is on the board
+    // at all, which a put-away COLUMN says nothing about: hiding one is a view preference.
+    const twoStages = [
+      deal(5, { title: 'Wholesale order', stage: 'lead' }),
+      deal(6, { title: 'Retail order', stage: 'qualified' }),
+    ];
+    let savedTitle = 'Wholesale order';
+    api.mockImplementation((path: string, options?: ApiCallOptions) => {
+      if (path.startsWith(BOARD_PATH)) return Promise.resolve({ deals: twoStages });
+      if (options?.method === 'PUT') {
+        savedTitle = 'Renamed';
+        return Promise.resolve({ ...deal(5, { title: 'Renamed', stage: 'lead' }) });
+      }
+      // A fake server that REMEMBERS the write, so the post-save re-read answers with the new
+      // title. Without that this test could not tell "the body read its own refreshed detail"
+      // from "the body never refreshed at all".
+      if (path === '/api/crm/deals/5') {
+        return Promise.resolve({ ...deal(5, { title: savedTitle, stage: 'lead' }), activity: [] });
+      }
+      return defaultRoutes(path) ?? Promise.resolve({});
+    });
+
+    renderAt('/crm/pipeline');
+    await settle();
+    click(byLabel('Hide Lead column'));
+    await settle();
+    expect(stageColumn('lead')).toBeNull();
+
+    // The deal is still on the board's payload, so a link to it still opens.
+    act(() => probe.go('/crm/pipeline?deal=5'));
+    await settle();
+    expect(panelTitle()).toBe('Wholesale order');
+    // Still workable: a put-away column is not a statement about the deal.
+    expect(buttonByText('Mark Won')).toBeTruthy();
+
+    click(buttonByText('Edit'));
+    await settle();
+    setField('deal-title', 'Renamed');
+    click(buttonByText('Save'));
+    await settle();
+
+    // The saved value stands INSIDE the body. If `onBoard` had been answered from the whole
+    // payload, the body would treat the frozen `loadById` snapshot as canonical and repaint the
+    // old title over its own refreshed detail.
+    //
+    // Asserted on the body's own heading, not on the panel's, because the shell's title comes
+    // from the record the LAYER resolved and is a documented residual: renaming a deal the host
+    // array does not hold leaves that header stale until the panel is reopened.
+    expect(container.querySelector('[role="dialog"] h3')?.textContent).toBe('Renamed');
+  });
+});
