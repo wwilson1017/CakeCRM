@@ -52,6 +52,53 @@ CONTACT_STATUSES = ["active", "inactive", "archived"]
 TASK_PRIORITIES = ["low", "medium", "high"]
 COMPANY_STATUSES = ["active", "archived"]
 
+# Deal temperature (issue #125) — the rep's own read on a deal, and an input to #18's lead
+# score. A tuple rather than a list because it is membership-tested, published verbatim as
+# the agent tools' schema `enum`, and mirrored by the migration's CHECK constraint; a test
+# pins those three in agreement.
+#
+# NULL is a fourth, unnamed state and is NOT in here: it means nobody has triaged the deal,
+# the same call owner_id and lead_score make. It is deliberately not spelled 'cold' — Cold
+# is a judgment someone made, and only a judgment moves the score.
+DEAL_TEMPERATURES = ("hot", "warm", "cold")
+
+
+def normalize_deal_temperature(value) -> str | None:
+    """Coerce a caller-supplied temperature to a stored value, or raise.
+
+    Returns None for "clear it" — None itself, or the empty string a `<select>`'s blank
+    option submits. Otherwise a trimmed, lower-cased member of ``DEAL_TEMPERATURES``.
+
+    RAISES ``ValueError`` on anything else rather than silently dropping or coercing it,
+    for the reason ``_write_deal_update``'s undeclared-column guard exists: the callers are
+    ``PUT /api/crm/deals/{id}`` (whose body reaches here as-is) and ``crm_update_deal``,
+    which forwards the model's raw kwargs with nothing validating them. Both turn a
+    ValueError into a message the caller can act on — a 400, and a tool error naming the
+    problem — where letting a bad value through would hit the migration's CHECK as an
+    opaque 500, and swallowing it would report success on a write that never happened.
+
+    A non-string is rejected here too, deliberately. `deal_temperature=3` from a model
+    would otherwise reach `.strip()` and raise AttributeError, which the assistant registry
+    reports as the generic "the tool failed, please try again" — true but useless, where
+    this says which values exist.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(
+            f"deal_temperature must be one of {', '.join(DEAL_TEMPERATURES)} (or null to "
+            f"clear it), not {type(value).__name__}"
+        )
+    cleaned = value.strip().lower()
+    if not cleaned:
+        return None
+    if cleaned not in DEAL_TEMPERATURES:
+        raise ValueError(
+            f"Invalid deal_temperature '{value}' — expected one of "
+            f"{', '.join(DEAL_TEMPERATURES)}, or null to clear it"
+        )
+    return cleaned
+
 # Soft-archive predicate for deals (issue #22). `deals.archived_at IS NULL` means the
 # deal is live; an archived deal (archived_at set by archive_deal, or by merge_deals on
 # the merged-away source) must disappear from EVERY list, board, rollup, count and
@@ -863,7 +910,7 @@ def create_deal(
     title: str, contact_id: int | None = None, stage: str = "lead",
     value: float = 0, notes: str = "", expected_close_date: str = "",
     probability: int = 0, currency: str = "USD", company_id: int | None = None,
-    owner_id: int | None = None,
+    owner_id: int | None = None, deal_temperature: str | None = None,
 ) -> dict:
     # Coerce an unknown stage to 'lead' (mirrors update_deal's validation): a
     # deal with a stage outside DEAL_STAGES would be summed into the pipeline
@@ -876,12 +923,17 @@ def create_deal(
     # path, not a theoretical one. (_write_deal_update covers the other three.)
     if stage in ("won", "lost"):
         probability = 100 if stage == "won" else 0
+    # An explicit param rather than **kwargs, matching every other column here — and needed
+    # rather than optional, because `crm_create_deal` forwards the model's raw kwargs into
+    # this signature, so a temperature the model learned from `crm_update_deal`'s schema
+    # would otherwise be a TypeError. Raises on a bad tier, like update_deal. Issue #125.
+    deal_temperature = normalize_deal_temperature(deal_temperature)
     # company_id appended last (see create_contact); a bad FK -> ForeignKeyViolation.
     row = pg_fetchone(
-        """INSERT INTO deals (title, contact_id, stage, value, notes, expected_close_date, probability, currency, company_id, owner_id)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+        """INSERT INTO deals (title, contact_id, stage, value, notes, expected_close_date, probability, currency, company_id, owner_id, deal_temperature)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
         (title, contact_id, stage, value, notes, expected_close_date, probability, currency,
-         company_id, owner_id),
+         company_id, owner_id, deal_temperature),
     )
     scoring_service.score_on_event(deal_ids=(row["id"],), contact_ids=(contact_id,))  # #18
     return get_deal(row["id"])
@@ -1196,7 +1248,7 @@ def list_deals(stage: str | None = None, contact_id: int | None = None, limit: i
 # land in the same generic handler — so there is no behavioral difference.)
 _DEAL_COLUMN_TYPES = {
     "title": "text", "stage": "text", "notes": "text", "currency": "text",
-    "expected_close_date": "text", "lost_reason": "text",
+    "expected_close_date": "text", "lost_reason": "text", "deal_temperature": "text",
     "value": "float8",
     "probability": "int", "contact_id": "int", "company_id": "int", "owner_id": "int",
 }
@@ -1210,6 +1262,10 @@ _DEAL_COLUMN_TYPES = {
 _DEAL_USER_WRITABLE = frozenset({
     "title", "stage", "value", "notes", "expected_close_date", "probability", "currency",
     "contact_id", "company_id", "owner_id",
+    # issue #125. An INPUT, exactly like probability: a human (or the assistant on a human's
+    # instruction) says how a deal feels, and #18's scoring reads it. `lead_score` itself
+    # stays absent from this set, as it must.
+    "deal_temperature",
 })
 
 
@@ -1494,6 +1550,11 @@ def update_deal(deal_id: int, **fields) -> dict | None:
         return None
     if "probability" in filtered and filtered["probability"] is not None:
         filtered["probability"] = max(0, min(100, filtered["probability"]))
+    # Raises ValueError on a bad tier rather than returning None like the stage check above:
+    # the route turns that into a 400 naming the problem, where the `return None` path is a
+    # 404 saying the deal does not exist. Issue #125.
+    if "deal_temperature" in filtered:
+        filtered["deal_temperature"] = normalize_deal_temperature(filtered["deal_temperature"])
     if not filtered:
         return get_deal(deal_id)
     if not _write_deal_update(deal_id, filtered):

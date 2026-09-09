@@ -1,0 +1,37 @@
+-- Deal temperature (issue #125) — the rep's own read on a deal, and an input to #18's
+-- pure-algorithmic lead score.
+--
+-- A DEDICATED COLUMN, not a #19 custom field, which is where the blueprint keeps it.
+-- scoring_service.py's own module docstring records that this factor was dropped from the
+-- #18 port "because CakeCRM ships zero custom-field definitions" — and storing it as a
+-- custom field does not retire that reason. crm_field_definitions ships EMPTY by deliberate
+-- design (see 20260724190810_crm_custom_fields.sql: the blueprint's pre-seeded definitions
+-- are one operator's business data and are "deliberately NOT ported"), and nothing seeds a
+-- definition at install time. As a custom field the scoring factor would be dead code on
+-- every install until an admin hand-created a definition under exactly the right field_key.
+-- Three more reasons, in the PR body: field_service.set_field_values never touches the
+-- parent row and never calls score_on_event, so the EAV route would need new rescore wiring
+-- instead of riding _write_deal_update; every deal-returning read in crm/service.py is
+-- `SELECT d.*`, so a column reaches the board, the list, the sheet, the dashboard, both
+-- rollups and the Reports timeline with no query edits; and an EAV TEXT value cannot carry
+-- the CHECK below.
+--
+-- NULL = nobody has triaged this deal. That is a REAL STATE, the same call owner_id (#60)
+-- and lead_score (#18) make, not missing data — and it is load-bearing for the scoring
+-- change that ships with it: an unset temperature applies NO factor (multiplier 1.0), where
+-- the blueprint defaults an unset field to Cold and its 0.4x. Porting that literally would
+-- have multiplied EVERY existing deal's lead score by 0.4 at the next daily refresh — an
+-- install-wide silent change to a number people sort by, caused by a deploy rather than by
+-- anything a user did. Only an explicit human judgment moves the score, so applying this
+-- migration changes no existing score and needs no backfill.
+--
+-- Values are lowercase, matching `stage` and `contacts.status`. Three tiers, not the
+-- blueprint's four: issue #125's title and body both specify Hot/Warm/Cold, and a shorter
+-- ladder matters for a control whose whole affordance is clicking through it.
+--
+-- No index: `deal_temperature = 'hot'` is only ever read alongside the deal's own row on a
+-- table that is small in a self-hosted CRM. A partial index on the hot rows is the upgrade
+-- path if #131's Today-panel scan ever needs one.
+
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS deal_temperature TEXT
+    CHECK (deal_temperature IS NULL OR deal_temperature IN ('hot', 'warm', 'cold'));

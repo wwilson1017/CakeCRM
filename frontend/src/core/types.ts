@@ -63,6 +63,12 @@ export interface CrmDeal {
   last_activity_at?: string | null;
   lead_score?: number | null;           // computed lead score 0-100 (issue #18); null = never scored
   lead_score_at?: string | null;
+  // The rep's own read on the deal (issue #125): 'hot' | 'warm' | 'cold', or null when
+  // nobody has triaged it. NULL is NOT the same as 'cold' — cold is a judgment someone
+  // made, and only a judgment moves the lead score. Typed `string | null` rather than a
+  // union because it arrives off the wire; `crm/dealTemperature.normalizeTemperature` is
+  // the one place that narrows it.
+  deal_temperature?: string | null;
   activity?: CrmActivity[];
 }
 
