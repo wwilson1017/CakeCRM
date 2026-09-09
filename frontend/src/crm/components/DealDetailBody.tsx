@@ -405,12 +405,29 @@ interface Props {
   onSaveDeal: (deal: CrmDeal, patch: DealPatch) => Promise<CrmDeal>;
   /** A deal was un-archived here (issue #83). Receives the row the SERVER returned so the host can
    *  patch it in place — a silent refetch can fail invisibly, which would leave the host still
-   *  showing the deal as archived after a restore that actually happened. */
+   *  showing the deal as archived after a restore that actually happened.
+   *
+   *  PATCHING ONLY. Dismissal is `onClose`'s, for the reason stated there. */
   onRestored?: (deal: CrmDeal) => void;
+  /**
+   * Take this panel away — the deal's work here is done (closed out, or restored).
+   *
+   * THE BODY decides this, never the host, and that is the whole point. A close-out is awaited,
+   * so between the click and the answer the user can walk to another record with `‹ ›`, follow a
+   * deep link, or be remounted by the board emptying underneath them. A host dismissing on its
+   * own has to guess whether the panel in front of it is still the one that asked — and every way
+   * of guessing has a hole: the deal id repeats on A → B → A, and a session counter has to be
+   * bumped by every path that ends a session, of which there are more than anyone enumerates.
+   *
+   * Called only while this body is still MOUNTED, which answers the question exactly: a mounted
+   * body IS the open panel, so "close the open panel" and "close mine" cannot differ. A body that
+   * was replaced simply never calls it, and its successor keeps whatever draft it holds.
+   */
+  onClose: () => void;
 }
 
 export function DealDetailBody({
-  deal, onBoard, stageWritable, ctx, onMarkWon, onMarkLost, onSaveDeal, onRestored,
+  deal, onBoard, stageWritable, ctx, onMarkWon, onMarkLost, onSaveDeal, onRestored, onClose,
 }: Props) {
   const navigate = useNavigate();
 
@@ -737,6 +754,9 @@ export function DealDetailBody({
     try {
       if (toStage === 'won') await onMarkWon(record);
       else await onMarkLost(record, lostReason);
+      // Written. The deal is closed, so the panel goes — see `onClose` for why that decision is
+      // made HERE. A refused or failed write rejects instead, and the host has already said so.
+      if (mountedRef.current) onClose();
     } finally {
       setClosing(false);
       // Still mounted means the host did NOT dismiss us — its failure path. The outcome of that
@@ -764,7 +784,11 @@ export function DealDetailBody({
       // there is one, so without this the banner would survive its own restore on any host that
       // keeps the panel open.
       setFetched(prev => (prev ? { ...prev, ...restored } : restored));
+      // The row goes up UNCONDITIONALLY — the board must show the deal as live whether or not
+      // this panel is still on screen, and that patch is what makes it correct. Only the
+      // DISMISSAL is conditional, and for the reason `onClose` gives.
       onRestored?.(restored);
+      if (mountedRef.current) onClose();
     } catch {
       toast.error('Failed to restore deal.');
     } finally {

@@ -53,16 +53,6 @@ export function CrmDashboardPage() {
   // Bumped by reload() to refetch the self-fetching cards alongside the rest.
   // Two consumers now: WeeklyTouchesCard (#76) and TodayPanel (#130).
   const [cardRefreshKey, setCardRefreshKey] = useState(0);
-  // A monotonic count of SELECTION SESSIONS, bumped by every gesture that opens or closes the
-  // panel. Read across the await in `updateDealStage`, so a settling write can tell "still the
-  // panel I was closing" from "the user walked away and came back" — the deal id alone cannot,
-  // since A -> B -> A reads as unchanged while the panel has remounted with a freshly editable
-  // body underneath. See `PipelinePage` for why this is a funnel rather than an effect.
-  const selectionEpoch = useRef(0);
-  function selectDeal(id: number | null) {
-    selectionEpoch.current++;
-    setSelectedDealId(id);
-  }
 
   const navigate = useNavigate();
   const isMobile = useIsMobile();
@@ -95,23 +85,23 @@ export function CrmDashboardPage() {
   // been deleted now gets the layer's own "Record unavailable · Retry" panel — better feedback
   // than the toast this used to raise, and the stale list refreshes on close either way.
   function openDeal(id: number) {
-    selectDeal(id);
+    setSelectedDealId(id);
   }
 
   async function updateDealStage(deal: CrmDeal, stage: string, lostReason?: string) {
-    const sessionBefore = selectionEpoch.current;
     try {
       // `lostReason` is present only for a Mark Lost taken through the reason dialog,
       // which routes to the mark-lost verb instead of the plain stage PUT (issue #128).
       const { path, init } = stageWriteRequest(deal.id, stage, lostReason);
       await api(path, init);
-      // Dismiss ONLY if this is still the same selection SESSION — see PipelinePage for why the
-      // epoch rather than the deal id.
-      if (selectionEpoch.current === sessionBefore) setSelectedDealId(null);
+      // No dismissal here: `DealDetailBody` closes itself on a successful write, because only a
+      // MOUNTED body can tell whether the panel in front of it is still the one that asked.
       reload();
     } catch (err) {
       console.error('Failed to update deal stage:', err);
       toast.error('Failed to move deal.');
+      // Rethrown so the panel's own close-out knows the deal was NOT closed and stays open.
+      throw err;
     }
   }
 
@@ -576,7 +566,7 @@ export function CrmDashboardPage() {
               <p style={{ color: INK_DIM, fontSize: 15, padding: '16px 0' }}>No deals yet.</p>
             ) : (
               data.top_deals.map(deal => (
-                <div key={deal.id} onClick={() => selectDeal(deal.id)} style={{
+                <div key={deal.id} onClick={() => setSelectedDealId(deal.id)} style={{
                   padding: '14px 16px', marginBottom: 6,
                   display: 'flex', alignItems: 'center', gap: 14,
                   cursor: 'pointer',
@@ -637,8 +627,8 @@ export function CrmDashboardPage() {
         items={data.top_deals}
         selectedId={selectedDealId}
         onSelect={id => {
-          if (id === null) { selectDeal(null); reload(); }
-          else selectDeal(Number(id));
+          if (id === null) { setSelectedDealId(null); reload(); }
+          else setSelectedDealId(Number(id));
         }}
         // Nothing to navigate, deliberately. This page opens deals from three unrelated queries
         // (top deals, stale deals, weekly touches), so walking any one of them would page the
@@ -664,10 +654,9 @@ export function CrmDashboardPage() {
               // The archived banner and its Restore render on ANY host (issue #83). Without this
               // the restore would succeed server-side while the panel stayed open over stale
               // dashboard numbers.
-              onRestored={restored => {
-                setSelectedDealId(prev => (prev === restored.id ? null : prev));
-                reload();
-              }}
+              // Patching only — the body dismisses itself, and only while it is still on screen.
+              onRestored={() => reload()}
+              onClose={() => setSelectedDealId(null)}
             />
           ),
           onRequestClose: denyEscapeBackdrop,

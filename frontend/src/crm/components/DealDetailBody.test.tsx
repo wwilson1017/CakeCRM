@@ -133,6 +133,7 @@ function render(props: Partial<BodyProps> & { deal: CrmDeal }) {
     // from the stage, so a close writes 100/0 whatever the form sent. A mock resolving
     // `undefined` would make the body's fold a silent no-op and let every assertion about it
     // pass for the wrong reason.
+    onClose: vi.fn(),
     onSaveDeal: vi.fn((d: CrmDeal, patch: DealPatch) => Promise.resolve({
       ...d,
       ...patch,
@@ -1189,5 +1190,53 @@ describe('the quick-log row during an exit', () => {
     await act(async () => { release(); await inFlight; });
     await settle();
     expect(chip().disabled).toBe(false);
+  });
+});
+
+describe('an exit that outlives its own body', () => {
+  it('patches the host on a restore it can no longer close, but does not close', async () => {
+    // The row must reach the host either way — the board has to stop showing the deal as
+    // archived, and that patch is what makes it correct. The DISMISSAL is the part that must not
+    // happen: this body is gone, so whatever panel is on screen belongs to someone else and may
+    // be holding a draft nobody has asked about.
+    let releaseRestore: (v: unknown) => void = () => {};
+    routeDetail(
+      detailResponse({ archived_at: '2026-08-20T00:00:00+00:00' }),
+      path => (path === '/api/crm/deals/7/restore'
+        ? new Promise(res => { releaseRestore = res; })
+        : undefined),
+    );
+    const onRestored = vi.fn();
+    const onClose = vi.fn();
+    render({ deal: makeDeal({ archived_at: '2026-08-20T00:00:00+00:00' }), onRestored, onClose });
+    await settle();
+    await click(buttonByText('Restore'));
+
+    // The panel is taken away underneath the request — a ‹ › walk, a deep link, or the board
+    // emptying all do this.
+    act(() => root.render(<MemoryRouter><ActiveRecordProvider><span /></ActiveRecordProvider></MemoryRouter>));
+    await act(async () => { releaseRestore(detailResponse({ archived_at: null })); });
+    await settle();
+
+    expect(onRestored).toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('does not close on a stage write whose panel is already gone', async () => {
+    routeDetail(detailResponse());
+    let release!: () => void;
+    const inFlight = new Promise<void>(res => { release = res; });
+    const onMarkWon = vi.fn(() => inFlight);
+    const onClose = vi.fn();
+    render({ deal: makeDeal(), onMarkWon, onClose });
+    await settle();
+    await click(buttonByText('Mark Won'));
+
+    act(() => root.render(<MemoryRouter><ActiveRecordProvider><span /></ActiveRecordProvider></MemoryRouter>));
+    await act(async () => { release(); await inFlight; });
+    await settle();
+
+    expect(onMarkWon).toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

@@ -304,25 +304,6 @@ export function PipelinePage() {
   // refresh against a racing WRITE; this one guards a load against a newer LOAD, which the
   // Archived facet made reachable by changing the request itself.
   const loadGen = useRef(0);
-  // A monotonic count of SELECTION SESSIONS, bumped by every gesture that opens or closes the
-  // panel. Read across the await in `updateDealStage`, so a settling write can tell "still the
-  // panel I was closing" from "the user walked away and came back". The deal id alone cannot:
-  // A -> B -> A reads as unchanged, while the panel has remounted in between with fresh state and
-  // possibly a fresh draft — which the dismissal would then discard without the close guard ever
-  // seeing it.
-  //
-  // Bumped HERE rather than in an effect on `selectedDealId`: `react-hooks/immutability` refuses
-  // a ref write inside a hook argument, and reading the counter after an await is exactly what a
-  // state value cannot do. One funnel for every user-driven selection change instead — the
-  // shell's ‹ › and its Close both call `onSelect`, and the board card calls this directly — so
-  // the writers that DON'T bump it are precisely the ones that should not: a deep link resolving,
-  // the dead-link notice taking itself back, and a settling write's own dismissal.
-  const selectionEpoch = useRef(0);
-  function selectDeal(id: number | null) {
-    selectionEpoch.current++;
-    setSelectedDealId(id);
-  }
-
   // A generation for NON-SILENT loads only. Owns the spinner; see `load`.
   const spinnerGen = useRef(0);
   // Whether the CURRENT request should ask for archived deals. Synced from the facet in the
@@ -716,7 +697,6 @@ export function PipelinePage() {
     // user-initiated facet load is owed. Under "Archived only" that swallowed failure renders an
     // empty board reading as "you have no archived deals" — the exact false answer #83 fixed.
     const replaysBefore = replayCount.current;
-    const sessionBefore = selectionEpoch.current;
     if (deal.stage !== stage) {
       try {
         await writeDeal(deal, { stage }, deal.stage, lostReason);
@@ -725,20 +705,20 @@ export function PipelinePage() {
         // server and failed has already raised its own toast in there; toasting again here would
         // say the same thing twice.
         if (err instanceof BulkLockError) toast.error(err.message);
-        return;
+        // RETHROWN, not swallowed: the panel's own close-out is awaiting this, and a resolve is
+        // what tells it the deal is closed and it may go. Reporting is still ours — `writeDeal`
+        // toasts a failed stage PUT itself, so only the lock refusal is added above.
+        throw err;
       }
       // Un-hide the destination, but only once the write is known to have gone out. Mark Won/Lost
       // is one of the two paths that can move a deal into a stage the user has put away, and
       // without this the card vanishes with nothing on screen to say where it went.
       revealStage(stage);
     }
-    // Dismiss ONLY if this is still the same selection SESSION. The panel's ‹ › arrows stay live
-    // while a close-out is in flight (the body disables its own controls, not the shell's), so a
-    // slow write could otherwise close a panel the user had since walked to — taking an unsaved
-    // draft with it, and without ever asking that record's close guard. The epoch rather than the
-    // id, because walking away and back lands on the same id with a remounted, freshly editable
-    // body underneath.
-    if (selectionEpoch.current === sessionBefore) setSelectedDealId(null);
+    // No dismissal here. `DealDetailBody` closes itself on a successful write, because only a
+    // MOUNTED body can answer "is the panel in front of me still the one that asked" — see its
+    // `onClose` prop. This function's remaining job is the board's: reveal the destination stage
+    // and refresh.
     if (replayCount.current === replaysBefore) load(true);
   }, [writeDeal, load, revealStage]);
 
@@ -788,7 +768,7 @@ export function PipelinePage() {
       next.delete(restored.id);
       return next;
     });
-    setSelectedDealId(prev => (prev === restored.id ? null : prev));
+    // Not dismissed here either — the body does that, and only while it is still on screen.
     // Then refresh in the background. The patch above is what makes the board CORRECT — it
     // deliberately does not depend on this landing — but a restore closes the sheet the same way
     // `onClose` does, and that path refreshes so an in-sheet note reaches the board's derived
@@ -1382,7 +1362,7 @@ export function PipelinePage() {
         selectedId={selectedDealId}
         onSelect={id => {
           if (id === null) {
-            selectDeal(null);
+            setSelectedDealId(null);
             // Closing by hand releases whatever link owned the panel, so a second click on the
             // same link is still a distinguishable event rather than a no-op.
             setLinkOpenedDeal(null);
@@ -1391,7 +1371,7 @@ export function PipelinePage() {
             // closes the "filter stale deals → log a touch → it leaves the stale bucket" loop.
             load(true);
           } else {
-            selectDeal(Number(id));
+            setSelectedDealId(Number(id));
             setLinkOpenedDeal(null);
           }
         }}
@@ -1429,6 +1409,7 @@ export function PipelinePage() {
                 onMarkLost={markLost}
                 onSaveDeal={saveDeal}
                 onRestored={restoreDeal}
+                onClose={() => { setSelectedDealId(null); setLinkOpenedDeal(null); }}
               />
             );
           },
@@ -1493,7 +1474,7 @@ export function PipelinePage() {
                 deal={deal} columnStage={String(columnId)}
                 // Opening a card by hand takes the sheet away from whatever link last owned
                 // it, so a later link supersedes only what a link actually put there.
-                onOpen={() => { selectDeal(deal.id); setLinkOpenedDeal(null); }}
+                onOpen={() => { setSelectedDealId(deal.id); setLinkOpenedDeal(null); }}
                 selectable={!isMobile && !archived}
                 isSelected={!archived && bulkSelected.has(deal.id)}
                 onToggleSelect={() => toggleSelect(deal.id)}

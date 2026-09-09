@@ -573,12 +573,13 @@ describe('‹ › record navigation', () => {
 
 // ── Which deal a settling write is allowed to dismiss ────────────────────────────────────────
 
-describe('a close-out dismisses only the deal it closed', () => {
+describe('a close-out dismisses only the panel that asked for it', () => {
   it('leaves a deal the user walked to while the write was in flight alone', async () => {
-    // `updateDealStage` awaits the write and then clears the selection. The panel's ‹ › arrows
-    // are the SHELL's and stay live throughout — the body disables its own close-out pair, not
-    // those — so a slow write could close a DIFFERENT record, taking any draft with it and
-    // without ever asking that record's close guard.
+    // The write is awaited, and the panel's ‹ › arrows are the SHELL's — they stay live while the
+    // body disables its own close-out pair — so between the click and the answer the open record
+    // can change. The host no longer decides the dismissal at all: the BODY closes itself, and
+    // only while it is still mounted, so the record the user walked to keeps its panel and any
+    // draft in it.
     let releasePut: (v: unknown) => void = () => {};
     api.mockImplementation((path: string, options?: ApiCallOptions) =>
       options?.method === 'PUT'
@@ -669,10 +670,11 @@ describe('a deal in a HIDDEN stage', () => {
 
 describe('a close-out that outlived its own panel', () => {
   it('does not dismiss the panel the user walked away from and back to', async () => {
-    // The deal id alone cannot answer this: A → B → A lands on the SAME id, while the panel has
-    // remounted in between with fresh state — `closing` reset, Edit enabled again — so a draft
-    // started there would be discarded by the original write's dismissal, with the close guard
-    // never having seen it. The selection EPOCH is what tells the two apart.
+    // The hard case for anything the HOST could check: A → B → A lands on the same deal id, and
+    // a session counter would have to be bumped by every path that ends a session — the deep-link
+    // resolution, the dead-link notice, a remount forced by the board emptying — of which there
+    // are more than anyone enumerates. The body answers it exactly instead: this panel is a NEW
+    // mount, so the write started by the old one never calls its `onClose`.
     let releasePut: (v: unknown) => void = () => {};
     api.mockImplementation((path: string, options?: ApiCallOptions) =>
       options?.method === 'PUT'
@@ -691,13 +693,14 @@ describe('a close-out that outlived its own panel', () => {
     click(byLabel('Next record'));
     await settle();
     expect(panelTitle()).toBe('Wholesale order');
-    // The remount cleared the body's own latch, so a new draft really is startable here.
+    // The remount cleared the body's own latch, so a new draft really is startable here — which
+    // is exactly why the old write must not be allowed to take this panel away.
     expect((buttonByText('Edit') as HTMLButtonElement).disabled).toBe(false);
 
     await act(async () => { releasePut({ ...deal(5, { title: 'Wholesale order', stage: 'won' }) }); });
     await settle();
 
-    // Still open: that write belonged to a selection session the user has already left.
+    // Still open: that write was started by a body this panel replaced.
     expect(panelTitle()).toBe('Wholesale order');
   });
 });
