@@ -12,11 +12,11 @@
  * walks the whole filtered/sorted set (the Gmail model), the same way the list order here is
  * page-independent. Only the FILTERED set bounds navigation.
  */
-import type { CollectionConfig, CollectionViewKind } from './types';
+import type { CollectionConfig, CollectionViewKind, DragPolicy } from './types';
 
 /** Exactly the config this module reads — it never touches `detail`, so it asks for less than
  *  `DetailHostConfig`. A full `CollectionConfig` satisfies it structurally. */
-type VisibleOrderConfig<T> = Pick<CollectionConfig<T>, 'getItemId' | 'kanban' | 'cards'>;
+type VisibleOrderConfig<T> = Pick<CollectionConfig<T, DragPolicy>, 'getItemId' | 'kanban' | 'cards'>;
 
 export default function visibleOrder<T>(
   view: CollectionViewKind,

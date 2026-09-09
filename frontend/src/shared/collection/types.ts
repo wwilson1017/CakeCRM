@@ -180,7 +180,15 @@ export interface ListViewConfig<T> {
   renderCap?: number;
 }
 
-export interface KanbanViewConfig<T> {
+/**
+ * What a drop MEANS on a board — see `KanbanViewConfig.dragPolicy`, which is where the two
+ * values are documented. It is a TYPE PARAMETER of the config, not merely a field on it: that
+ * is what carries the declaration through `CollectionViewProps` to `CollectionKanbanProps.onMove`,
+ * so a board cannot claim `'column'` and still be handed a drop index (issue #112).
+ */
+export type DragPolicy = 'index' | 'column';
+
+export interface KanbanViewConfig<T, P extends DragPolicy = 'index'> {
   /** Which column an item belongs to — matched against `CollectionViewProps.kanban.columns`. */
   getColumnId: (item: T) => string | number;
   /** Cards rendered per column before "Show N more". A truncated column locks drag — a drop
@@ -204,10 +212,29 @@ export interface KanbanViewConfig<T> {
    *    `CollectionKanbanProps.dragDisabled` extras (mobile, a bulk write in flight) apply.
    *    Declaring this while still persisting `newIndex` would silently save a position derived
    *    from a partial list, so it is a claim about the app's `onMove`, not a styling choice.
-   *    The type cannot enforce that yet — making `newIndex` structurally unavailable under
-   *    `'column'` is tracked in issue #112.
+   *
+   * Since #112 the type ENFORCES that claim rather than merely stating it. The policy is the
+   * config's second type parameter, so `CollectionViewProps` infers it from `config` and hands
+   * `onMove` a `CollectionMoveEvent<T, P>` — which under `'column'` has no `newIndex` member at
+   * all. Two consequences are the mechanism, not side effects:
+   *  • A `'column'` config must be ANNOTATED `CollectionConfig<T, 'column'>`. Writing
+   *    `dragPolicy: 'column'` under a plain `CollectionConfig<T>` is itself an error, because
+   *    the default parameter is `'index'` — an omitted `dragPolicy` offers nothing to infer
+   *    from, so only that default keeps every existing board receiving its index unchanged.
+   *  • A handler that names the index — by destructuring `newIndex` or by annotating its
+   *    parameter as the index event — no longer compiles on such a board.
+   * Layer-internal signatures that merely HOLD a config of either policy say
+   * `CollectionConfig<T, DragPolicy>`, which both variants satisfy.
+   *
+   * The guarantee is precisely about TYPED access: the runtime event `KanbanView` forwards is
+   * still the superset, because a narrower object is not assignable to the deferred
+   * `CollectionMoveEventByPolicy<T>[P]` and a type parameter cannot be narrowed by a runtime
+   * branch — stripping it would take a type assertion in the one file whose job is type
+   * honesty. So a `'column'` consumer that forwards the whole event opaquely (`JSON.stringify`,
+   * a spread into a loosely-typed payload) can still transmit an index it cannot name. The
+   * upgrade path, if that ever has a producer, is that assertion behind one tested helper.
    */
-  dragPolicy?: 'index' | 'column';
+  dragPolicy?: P;
 }
 
 export interface CardsViewConfig<T> {
@@ -232,7 +259,7 @@ export interface DetailConfig<T> {
 // ---------------------------------------------------------------------------------------------
 // The config
 
-export interface CollectionConfig<T> {
+export interface CollectionConfig<T, P extends DragPolicy = 'index'> {
   // ── REQUIRED — guard-enforced; each is consumed inside shared/collection ──
   storage: CollectionStorage;
   /** Must name a view whose config block is present — `useCollectionState` fails fast
@@ -259,7 +286,7 @@ export interface CollectionConfig<T> {
    *  data loss (a sibling surface's rationale); CRM opts in to keep its persisted search. */
   persistSearch?: boolean;
   list?: ListViewConfig<T>;
-  kanban?: KanbanViewConfig<T>;
+  kanban?: KanbanViewConfig<T, P>;
   cards?: CardsViewConfig<T>;
   detail?: DetailConfig<T>;
   /** item => voided. Presence enables the tri-state facet + strikethrough rendering. */
@@ -294,7 +321,9 @@ export interface CollectionState<T> {
   manualOrder: boolean;
   /** THE central drag gate: isFiltering || !manualOrder || hasTruncatedColumn — or a constant
    *  false under `KanbanViewConfig.dragPolicy: 'column'`, where a drop carries no index to be
-   *  made ambiguous. App extras (isMobile, bulkPending) OR into
+   *  made ambiguous. Since #112 that premise is CHECKED rather than claimed: such a board's
+   *  `onMove` receives an event with no `newIndex` member, so the three ambiguities this gate
+   *  folds have nothing left to be ambiguous about. App extras (isMobile, bulkPending) OR into
    *  `CollectionViewProps.kanban.dragDisabled`. */
   dragLocked: boolean;
   /** Per-column truncation under `columnCap` — also what "Show N more" expands. */
@@ -386,7 +415,7 @@ export interface DetailRenderContext {
  * `CollectionView` and every existing caller are unaffected.
  */
 export type DetailHostConfig<T> = Pick<
-  CollectionConfig<T>,
+  CollectionConfig<T, DragPolicy>,
   'getItemId' | 'detail' | 'kanban' | 'cards'
 >;
 
@@ -406,14 +435,42 @@ export interface CollectionDetailProps<T> {
 // ---------------------------------------------------------------------------------------------
 // View props
 
-export interface CollectionMoveEvent<T> {
+/**
+ * A drop under `dragPolicy: 'column'` — the whole event, because a column assignment IS the
+ * whole event. The index variant below is literally this plus one field, which is what makes
+ * a `'column'` handler usable where the layer emits the superset.
+ */
+interface CollectionColumnMoveEvent<T> {
   item: T;
   fromColumnId: string | number;
   toColumnId: string | number;
+}
+
+/** A drop under `dragPolicy: 'index'` — carries the position the app is expected to persist. */
+interface CollectionIndexMoveEvent<T> extends CollectionColumnMoveEvent<T> {
   newIndex: number;
 }
 
-export interface CollectionKanbanProps<T, C = unknown> {
+/**
+ * The two shapes, keyed by policy. A lookup table rather than a conditional type deliberately:
+ * `CollectionMoveEventByPolicy<T>[P]` leaves `KanbanView`'s forwarding call verifiable under a
+ * generic `P` (assigning the index superset into it type-checks), so the layer needs no cast.
+ * Neither arm is exported — a consumer names the policy, never the shape, and the barrel's rule
+ * is that an export nobody imports reads as proven API.
+ */
+interface CollectionMoveEventByPolicy<T> {
+  index: CollectionIndexMoveEvent<T>;
+  column: CollectionColumnMoveEvent<T>;
+}
+
+/**
+ * What `onMove` receives, decided by the board's declared `KanbanViewConfig.dragPolicy`.
+ * Under `'column'` there is no `newIndex` member to read, which is the #112 contract; under
+ * `'index'` (the default) it is the unchanged four-field event.
+ */
+export type CollectionMoveEvent<T, P extends DragPolicy = 'index'> = CollectionMoveEventByPolicy<T>[P];
+
+export interface CollectionKanbanProps<T, C = unknown, P extends DragPolicy = 'index'> {
   /** Ordered column defs — the board's column order AND the ‹ › nav's column-major order. */
   columns: KanbanColumnDef<C>[];
   /**
@@ -428,7 +485,7 @@ export interface CollectionKanbanProps<T, C = unknown> {
    * records the same exemption from the other side. Such an `onMove` must return a resolved
    * promise on EVERY path, including failure; one that can reject must obey the rule above.
    */
-  onMove: (event: CollectionMoveEvent<T>) => Promise<void>;
+  onMove: (event: CollectionMoveEvent<T, P>) => Promise<void>;
   canDrop?: (item: T, targetColumnId: string | number) => boolean;
   renderColumn: (column: KanbanColumnDef<C>, children: ReactNode) => ReactNode;
   renderCard: (item: T, columnId: string | number, isDragging: boolean) => ReactNode;
@@ -485,15 +542,15 @@ export interface CollectionLoadingProps {
   retry: () => void;
 }
 
-export interface CollectionViewProps<T, C = unknown> {
-  config: CollectionConfig<T>;
+export interface CollectionViewProps<T, C = unknown, P extends DragPolicy = 'index'> {
+  config: CollectionConfig<T, P>;
   state: CollectionState<T>;
   /** The canonical array — the app owns mutation; the layer never mutates. */
   items: readonly T[];
   selectedId?: string | number | null;
   onSelect?: (id: string | number | null) => void;
   selection?: CollectionSelectionProps;
-  kanban?: CollectionKanbanProps<T, C>;
+  kanban?: CollectionKanbanProps<T, C, P>;
   cards?: CollectionCardsProps<T>;
   detail?: CollectionDetailProps<T>;
   /** Actions ONLY, never filters — a filter outside the bar is invisible to active-count,

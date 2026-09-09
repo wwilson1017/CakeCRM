@@ -35,6 +35,7 @@ import type {
   CollectionConfig,
   CollectionSelectionProps,
   CollectionState,
+  DragPolicy,
 } from '../types';
 
 interface Row<T> {
@@ -48,7 +49,7 @@ export default function CollectionListView<T>({
   selection,
   onSelect,
 }: {
-  config: CollectionConfig<T>;
+  config: CollectionConfig<T, DragPolicy>;
   state: CollectionState<T>;
   selection?: CollectionSelectionProps;
   onSelect?: (id: string | number | null) => void;

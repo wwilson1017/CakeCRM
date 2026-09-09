@@ -91,7 +91,7 @@ export interface PipelineConfigDeps {
   listColumns: ListColumn<CrmDeal>[];
 }
 
-export function makePipelineCollectionConfig(deps: PipelineConfigDeps): CollectionConfig<CrmDeal> {
+export function makePipelineCollectionConfig(deps: PipelineConfigDeps): CollectionConfig<CrmDeal, 'column'> {
   const facets: FacetDef<CrmDeal>[] = [
     {
       kind: 'multi',

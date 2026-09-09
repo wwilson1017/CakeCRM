@@ -676,7 +676,7 @@ export function PipelinePage() {
   // rejecting — so the exemption the type's docstring names applies, and `useKanbanState`'s
   // `commitMove` records the same thing from the other side. Any edit that lets this reject
   // must also stop patching `data` first.
-  const handleKanbanMove = useCallback((event: CollectionMoveEvent<CrmDeal>): Promise<void> => {
+  const handleKanbanMove = useCallback((event: CollectionMoveEvent<CrmDeal, 'column'>): Promise<void> => {
     const from = String(event.fromColumnId);
     const to = String(event.toColumnId);
     if (from === to) {
@@ -1453,7 +1453,7 @@ export function PipelinePage() {
       {/* Supplies the List view's temperature cells with this page's writer. The board card takes
           the same callback as a plain prop — only the memoized columns need the indirection. */}
       <DealTemperatureWriter value={cycleDealTemperature}>
-      <CollectionView<CrmDeal, StageColumn>
+      <CollectionView<CrmDeal, StageColumn, 'column'>
         config={config}
         state={state}
         items={items}

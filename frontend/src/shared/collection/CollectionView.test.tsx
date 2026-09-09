@@ -15,6 +15,7 @@ import type {
   CollectionConfig,
   CollectionLoadingProps,
   CollectionState,
+  DragPolicy,
 } from './types';
 
 interface Row {
@@ -32,7 +33,7 @@ const rows: Row[] = [
   { id: 3, name: 'gamma', stage: 'New', priority: false, value: null, voided: true },
 ];
 
-function makeConfig(key: string, overrides: Partial<CollectionConfig<Row>> = {}): CollectionConfig<Row> {
+function makeConfig(key: string, overrides: Partial<CollectionConfig<Row, DragPolicy>> = {}): CollectionConfig<Row, DragPolicy> {
   return {
     storage: { key, version: 1 },
     defaultView: 'list',
@@ -69,7 +70,7 @@ function Page({
   noSelect = false,
   unselectableIds,
 }: {
-  config: CollectionConfig<Row>;
+  config: CollectionConfig<Row, DragPolicy>;
   data?: readonly Row[];
   withSelection?: boolean;
   loading?: CollectionLoadingProps;
@@ -85,7 +86,7 @@ function Page({
     latest.current = state;
   });
   return (
-    <CollectionView<Row>
+    <CollectionView<Row, unknown, DragPolicy>
       config={config}
       state={state}
       items={data}
@@ -352,7 +353,7 @@ describe('loading / empty', () => {
       });
       const state = useCollectionState(config, []);
       return (
-        <CollectionView<Row>
+        <CollectionView<Row, unknown, DragPolicy>
           config={config}
           state={state}
           items={[]}
@@ -394,7 +395,7 @@ describe('loading / empty', () => {
         });
         const state = useCollectionState(config, []);
         return (
-          <CollectionView<Row>
+          <CollectionView<Row, unknown, DragPolicy>
             config={config}
             state={state}
             items={[]}
@@ -448,7 +449,7 @@ describe('the "drag paused" note tells the truth under each drag policy', () => 
     { value: 'name', label: 'Name', get: (r: Row) => r.name },
   ];
 
-  function boardConfig(key: string, dragPolicy?: 'index' | 'column'): CollectionConfig<Row> {
+  function boardConfig(key: string, dragPolicy?: DragPolicy): CollectionConfig<Row, DragPolicy> {
     return makeConfig(key, {
       defaultView: 'kanban',
       sort: { fields: sortFields },

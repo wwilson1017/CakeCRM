@@ -15,6 +15,14 @@
  *    central gate OR'd with app extras (isMobile, bulkPending), never replaced by them. The
  *    app extra may be a PER-CARD predicate (issue #83), which is unwrapped here like every
  *    other item-shaped slot; a board-wide `dragLocked` still collapses it to `true`.
+ *
+ * The move forwarded below is always the full four-field event, and that is deliberate: this
+ * component is the event's PRODUCER, so it emits the superset, while
+ * `CollectionKanbanProps<T, C, P>` decides what the CONSUMER may name — under
+ * `dragPolicy: 'column'` its `onMove` parameter has no `newIndex` member at all (issue #112).
+ * The two meet by parameter contravariance and nothing here needs a cast; the prop type below
+ * records why it is spelled the way it is, and `KanbanViewConfig.dragPolicy` records what the
+ * runtime superset does and does not guarantee.
  */
 import { useMemo, type ReactNode } from 'react';
 import { KanbanBoard } from '../../dnd';
@@ -22,16 +30,45 @@ import type { KanbanColumnDef, MoveEvent } from '../../dnd';
 import { KANBAN_COLUMN_CAP } from '../useCollectionState';
 import { groupKanbanItems } from './grouping';
 import type { WrappedItem as Wrapped } from './grouping';
-import type { CollectionConfig, CollectionKanbanProps, CollectionState } from '../types';
+import type {
+  CollectionConfig,
+  CollectionKanbanProps,
+  CollectionMoveEvent,
+  CollectionState,
+  DragPolicy,
+} from '../types';
+
+/**
+ * This component is INTERNAL and deliberately not generic in the drag policy: the policy
+ * contract belongs to the consumer-facing seam (`CollectionViewProps`), and this component is
+ * the event's PRODUCER, so it holds both props at their widest. `config` reads only
+ * `getColumnId`/`columnCap` and so takes either policy; `onMove` is declared at the `'index'`
+ * superset this component emits, which any `CollectionKanbanProps<T, C, P>` satisfies by
+ * ordinary parameter contravariance.
+ *
+ * Two shapes were tried first and are recorded so they are not re-tried:
+ *  • Generic `<T, C, P>` does not work. `P` occurs only inside
+ *    `CollectionMoveEventByPolicy<T>[P]`, and TypeScript cannot infer a type argument back out
+ *    of an indexed access, so `P` silently falls back to its constraint and rejects every
+ *    well-typed board.
+ *  • Naming the whole prop `CollectionKanbanProps<T, C, 'index'>` does not work either, for a
+ *    subtler reason: `P` is contravariant-only in that interface, so TypeScript compares two
+ *    references to it by VARIANCE rather than structurally, and asks for `'index'` assignable
+ *    to a generic `P`. Restating `onMove` beside an `Omit` of the rest forces the structural
+ *    comparison, which succeeds — the same assignment a plain function-typed variable accepts.
+ */
+type KanbanViewOwnProps<T, C> = Omit<CollectionKanbanProps<T, C, DragPolicy>, 'onMove'> & {
+  onMove: (event: CollectionMoveEvent<T, 'index'>) => Promise<void>;
+};
 
 export default function KanbanView<T, C>({
   config,
   state,
   kanban,
 }: {
-  config: CollectionConfig<T>;
+  config: CollectionConfig<T, DragPolicy>;
   state: CollectionState<T>;
-  kanban: CollectionKanbanProps<T, C>;
+  kanban: KanbanViewOwnProps<T, C>;
 }) {
   const kanbanConfig = config.kanban;
   const cap = kanbanConfig?.columnCap ?? KANBAN_COLUMN_CAP;

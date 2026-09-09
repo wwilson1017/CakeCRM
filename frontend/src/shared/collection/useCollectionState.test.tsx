@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import useCollectionState from './useCollectionState';
 import type { UseCollectionStateOptions } from './useCollectionState';
-import type { CollectionConfig, CollectionState } from './types';
+import type { CollectionConfig, CollectionState, DragPolicy } from './types';
 
 interface Row {
   id: number;
@@ -21,7 +21,7 @@ const items: Row[] = [
   { id: 4, name: 'delta', stage: 2, priority: true, voided: false },
 ];
 
-function makeConfig(key: string, overrides: Partial<CollectionConfig<Row>> = {}): CollectionConfig<Row> {
+function makeConfig(key: string, overrides: Partial<CollectionConfig<Row, DragPolicy>> = {}): CollectionConfig<Row, DragPolicy> {
   return {
     storage: { key, version: 1 },
     defaultView: 'kanban',
@@ -56,7 +56,7 @@ function Probe({
   data,
   options,
 }: {
-  config: CollectionConfig<Row>;
+  config: CollectionConfig<Row, DragPolicy>;
   data: readonly Row[];
   options?: UseCollectionStateOptions;
 }) {
@@ -68,7 +68,7 @@ function Probe({
 }
 
 function renderState(
-  config: CollectionConfig<Row>,
+  config: CollectionConfig<Row, DragPolicy>,
   data: readonly Row[] = items,
   options?: UseCollectionStateOptions,
 ): void {
