@@ -22,7 +22,7 @@
 export type SettingsSectionId = 'personal' | 'assistant' | 'workspace' | 'integrations';
 
 export type SettingsCardId =
-  | 'notifications' | 'change_password'
+  | 'notifications' | 'change_password' | 'pipeline_board'
   | 'memory' | 'task_mode'
   | 'branding' | 'team' | 'custom_fields'
   | 'telegram' | 'gmail';
@@ -46,6 +46,10 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
     cards: [
       { id: 'notifications', adminOnly: false },
       { id: 'change_password', adminOnly: false },
+      // #124. Personal, and member-visible with no second gate: it writes localStorage on this
+      // device and calls no route, so unlike Notifications' digest half there is nothing here
+      // that could only 403 for a member.
+      { id: 'pipeline_board', adminOnly: false },
     ],
   },
   {

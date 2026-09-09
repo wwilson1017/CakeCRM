@@ -876,6 +876,10 @@ describe('PipelinePage — archived deals', () => {
     // is proof a THIRD request was made and applied, not merely issued.
     const GLOBEX = deal({ id: 3, title: 'Globex expansion', stage: 'qualified', value: 500 });
     const WON = { ...LIVE, stage: 'won' };
+    // #124 hides `won` by default, and this test asserts on that column. The drag below is a
+    // synthetic drop event, so it would "succeed" onto a column the real UI cannot offer —
+    // showing the stage first is what keeps the scenario one a person could actually perform.
+    sessionStorage.setItem('crm_pipeline_hidden_stages', '[]');
     let liveCalls = 0;
     routeApi({
       over: (path, init) => {

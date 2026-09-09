@@ -39,6 +39,7 @@ import { CustomFieldSettings } from './components/CustomFieldSettings';
 import { GmailCard } from './components/GmailCard';
 import { MemoryCard } from './components/MemoryCard';
 import { NotificationSettings } from './components/NotificationSettings';
+import { PipelineBoardCard } from './components/PipelineBoardCard';
 import { TaskModeCard } from './components/TaskModeCard';
 import { TeamSettings } from './components/TeamSettings';
 import { TelegramSettings } from './components/TelegramSettings';
@@ -48,6 +49,7 @@ import { TelegramSettings } from './components/TelegramSettings';
 const CARD_COMPONENTS: Record<SettingsCardId, ComponentType<{ isMobile: boolean }>> = {
   notifications: NotificationSettings,
   change_password: ChangePasswordCard,
+  pipeline_board: PipelineBoardCard,
   memory: MemoryCard,
   task_mode: TaskModeCard,
   branding: BrandingCard,

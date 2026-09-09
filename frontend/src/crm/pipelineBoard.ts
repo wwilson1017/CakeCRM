@@ -13,15 +13,27 @@
  * exactly is the *arrangement*: a hidden stage's deals are removed BEFORE the collection layer
  * sees them, so the totals, the list view, search, sort and the bulk intersection all exclude
  * them by construction rather than by a second filter each would have to remember to apply.
+ *
+ * Since #124 that visibility has TWO keys, and they answer different questions. The
+ * sessionStorage set (`crm_pipeline_hidden_stages`) is "which columns have I put away IN THIS
+ * TAB right now" — transient, edited from the board. The localStorage boolean
+ * (`cakecrm_pipeline_show_closed`) is "should a board START with `won`/`lost` showing" —
+ * durable per device, edited from Settings, and FALSE by default, which is the whole of #124's
+ * requirement. `loadHiddenStages` reads the second only when the first has nothing usable, so a
+ * tab-local reveal outranks the default without overwriting it. One store could not express
+ * both: collapsing them makes every board-side hide durable and every reveal permanent.
  */
 
 import type { CrmDeal } from '../core/types';
-import { OPEN_STAGES, STAGE_ORDER } from './constants';
+import { CLOSED_STAGES, OPEN_STAGES, STAGE_ORDER } from './constants';
 import { formatAge } from './gtd/util';
 
 const STAGE_RANK = new Map(STAGE_ORDER.map((s, i) => [s, i]));
 
 const HIDDEN_STAGES_KEY = 'crm_pipeline_hidden_stages';
+
+/** The durable half — see the module docstring. Edited from Settings, read on every board mount. */
+const SHOW_CLOSED_KEY = 'cakecrm_pipeline_show_closed';
 
 /** Toggle key for one stage column, as declared in `CollectionConfig.toggles`. */
 export function stageToggleKey(stage: string): string {
@@ -97,20 +109,74 @@ export function openPipelineTotals(deals: readonly CrmDeal[]): {
 }
 
 /**
- * Restore the hidden-stage preference. Tolerant of junk for the same reason
+ * Should a board START with the closed stages showing (#124)? Default FALSE — `won` and `lost`
+ * are hidden — so an absent key, a first visit and blocked storage all degrade to the behaviour
+ * the issue asks for rather than to the pre-#124 one.
+ *
+ * localStorage, not a server column: there is no per-user preferences store in this repo, and
+ * `cakecrm_theme` is the sanctioned precedent for a personal display preference (including the
+ * `cakecrm_` prefix — the sessionStorage keys on this page use `crm_`). Per device is accepted.
+ */
+export function loadShowClosedStages(): boolean {
+  try {
+    return localStorage.getItem(SHOW_CLOSED_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Write the preference AND bring the current tab's stored set into line.
+ *
+ * The reconciliation is not tidiness, it is the feature. `PipelinePage` persists its hidden set
+ * on the first render, so by the time anyone walks from the board to Settings their tab ALWAYS
+ * has a stored set — and `loadHiddenStages` honours a stored set over this preference, which is
+ * exactly what makes a tab-local reveal possible. Writing only the preference would therefore
+ * leave the setting looking INERT to the one person most likely to check it: the one who just
+ * came from the board.
+ *
+ * Narrow on purpose. It touches `CLOSED_STAGES` and nothing else, so a manually hidden open
+ * stage survives; and it applies the `show` ARGUMENT rather than re-reading the preference, so
+ * the toggle still works for this tab when the localStorage write was refused.
+ */
+export function saveShowClosedStages(show: boolean): void {
+  try {
+    localStorage.setItem(SHOW_CLOSED_KEY, String(show));
+  } catch {
+    /* private mode / quota — this tab still follows the click, it just won't be remembered */
+  }
+  const next = new Set(loadHiddenStages());
+  for (const stage of CLOSED_STAGES) {
+    if (show) next.delete(stage);
+    else next.add(stage);
+  }
+  saveHiddenStages(next);
+}
+
+/** What a tab with no usable stored set starts from — the durable preference, resolved. */
+function defaultHiddenStages(): Set<string> {
+  return loadShowClosedStages() ? new Set() : new Set(CLOSED_STAGES);
+}
+
+/**
+ * Restore the hidden-stage preference for THIS TAB. Tolerant of junk for the same reason
  * `pipelineFilters.loadFilterState` was: a corrupt key must not blank the board. Unknown stage
  * names are dropped — they could only hide nothing, but keeping them would let a stale key
  * accumulate forever.
+ *
+ * With nothing usable stored the board falls back to the durable per-device default (#124).
+ * A stored value is honoured verbatim, INCLUDING an empty array: that is a real state — "Show
+ * all" was pressed — and re-seeding it would undo that button on the very next mount.
  */
 export function loadHiddenStages(): Set<string> {
   try {
     const raw = sessionStorage.getItem(HIDDEN_STAGES_KEY);
-    if (!raw) return new Set();
+    if (!raw) return defaultHiddenStages();
     const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return new Set();
+    if (!Array.isArray(parsed)) return defaultHiddenStages();
     return new Set(parsed.filter((s): s is string => typeof s === 'string' && STAGE_ORDER.includes(s)));
   } catch {
-    return new Set();
+    return defaultHiddenStages();
   }
 }
 

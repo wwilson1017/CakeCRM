@@ -5,12 +5,22 @@
 // Node 26 exposes `sessionStorage` as a global, while CI's Node does not — so the suite was
 // green on a global it never declared, and went red the first time it ran on a different
 // runtime. Everything else here is pure and indifferent to the environment.
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CrmDeal } from '../core/types';
+import { installLocalStorage } from './testStorage';
 import {
-  boardOrder, lastContactLabel, loadHiddenStages, openPipelineTotals, saveHiddenStages,
-  stageFromToggleKey, stageLabel, stageToggleKey, visibleStageKeys,
+  boardOrder, lastContactLabel, loadHiddenStages, loadShowClosedStages, openPipelineTotals,
+  saveHiddenStages, saveShowClosedStages, stageFromToggleKey, stageLabel, stageToggleKey,
+  visibleStageKeys,
 } from './pipelineBoard';
+
+let restoreLocalStorage: () => void = () => {};
+
+// A fresh, empty store for EVERY test. This cannot be left to the host: the two runners this
+// suite meets disagree about whether `localStorage` exists at all, and that decides both what
+// these assertions measure and whether one case seeds the next. See `testStorage.ts`.
+beforeEach(() => { restoreLocalStorage = installLocalStorage(); });
+afterEach(() => { restoreLocalStorage(); });
 
 function deal(over: Partial<CrmDeal> & { id: number }): CrmDeal {
   return {
@@ -144,23 +154,115 @@ describe('hidden-stage persistence', () => {
     expect([...loadHiddenStages()].sort()).toEqual(['lost', 'won']);
   });
 
-  it('returns an empty set when nothing is stored', () => {
-    expect(loadHiddenStages().size).toBe(0);
+  it('falls back to the closed stages when nothing is stored (#124)', () => {
+    // The default IS the feature: a fresh tab starts with won/lost put away.
+    expect([...loadHiddenStages()].sort()).toEqual(['lost', 'won']);
   });
 
   it('tolerates malformed JSON rather than blanking the board', () => {
     sessionStorage.setItem('crm_pipeline_hidden_stages', '{not json');
-    expect(loadHiddenStages().size).toBe(0);
+    expect([...loadHiddenStages()].sort()).toEqual(['lost', 'won']);
   });
 
   it('tolerates a non-array payload', () => {
     sessionStorage.setItem('crm_pipeline_hidden_stages', JSON.stringify({ won: true }));
+    expect([...loadHiddenStages()].sort()).toEqual(['lost', 'won']);
+  });
+
+  it('honours a stored EMPTY array rather than re-seeding the default', () => {
+    // '[]' is what the header's "Show all" writes. Treating it as "nothing stored" would
+    // undo that button on the very next mount — the board would put won/lost straight back.
+    sessionStorage.setItem('crm_pipeline_hidden_stages', '[]');
     expect(loadHiddenStages().size).toBe(0);
   });
 
   it('drops unknown stage names so a stale key cannot accumulate', () => {
     sessionStorage.setItem('crm_pipeline_hidden_stages', JSON.stringify(['won', 'nonesuch', 42]));
     expect([...loadHiddenStages()]).toEqual(['won']);
+  });
+});
+
+describe('the durable show-closed preference (#124)', () => {
+  beforeEach(() => sessionStorage.clear());
+
+  it('is measuring a REAL store, so none of the cases below is vacuous', () => {
+    // `loadShowClosedStages` swallows its own error and answers `false`, so with no working
+    // localStorage most of this block would pass while proving nothing — which is what a dev
+    // machine without one actually did. Assert the store round-trips before trusting the rest.
+    saveShowClosedStages(true);
+    expect(localStorage.getItem('cakecrm_pipeline_show_closed')).toBe('true');
+    expect(loadShowClosedStages()).toBe(true);
+  });
+
+  it('defaults to false — closed stages hidden — with nothing stored', () => {
+    // Doubles as the leak check: the case above turned the preference ON, and this reads
+    // false only because every test gets its own store.
+    expect(loadShowClosedStages()).toBe(false);
+  });
+
+  it('round-trips through localStorage', () => {
+    saveShowClosedStages(true);
+    expect(loadShowClosedStages()).toBe(true);
+    saveShowClosedStages(false);
+    expect(loadShowClosedStages()).toBe(false);
+  });
+
+  it('reads only the exact string, so junk means the default', () => {
+    localStorage.setItem('cakecrm_pipeline_show_closed', 'yes');
+    expect(loadShowClosedStages()).toBe(false);
+  });
+
+  it('seeds a fresh tab from the preference', () => {
+    saveShowClosedStages(true);
+    sessionStorage.clear(); // a NEW tab: durable preference, no session state
+    expect(loadHiddenStages().size).toBe(0);
+  });
+
+  it('is outranked by a stored per-tab set, in both directions', () => {
+    // The whole reason there are two keys: a tab-local reveal (or hide) is the stronger,
+    // more recent statement, and must not be overwritten by the standing default.
+    saveShowClosedStages(false);
+    sessionStorage.setItem('crm_pipeline_hidden_stages', '[]');
+    expect(loadHiddenStages().size).toBe(0);
+
+    saveShowClosedStages(true);
+    sessionStorage.setItem('crm_pipeline_hidden_stages', JSON.stringify(['won']));
+    expect([...loadHiddenStages()]).toEqual(['won']);
+  });
+
+  it('reconciles THIS tab, or the Settings toggle would look inert', () => {
+    // PipelinePage persists its hidden set on first render, so anyone arriving at Settings
+    // from the board already has one — and a stored set outranks the preference. Without
+    // this reconciliation, flipping the toggle would change nothing on the way back.
+    sessionStorage.setItem('crm_pipeline_hidden_stages', JSON.stringify(['won', 'lost']));
+
+    saveShowClosedStages(true);
+    expect(loadHiddenStages().size).toBe(0);
+
+    saveShowClosedStages(false);
+    expect([...loadHiddenStages()].sort()).toEqual(['lost', 'won']);
+  });
+
+  it('reconciles ONLY the closed stages, leaving a manual hide alone', () => {
+    sessionStorage.setItem('crm_pipeline_hidden_stages', JSON.stringify(['won', 'lost', 'proposal']));
+    saveShowClosedStages(true);
+    expect([...loadHiddenStages()]).toEqual(['proposal']);
+
+    saveShowClosedStages(false);
+    expect([...loadHiddenStages()].sort()).toEqual(['lost', 'proposal', 'won']);
+  });
+
+  it('still follows the click for this tab when localStorage is refused', () => {
+    // Private mode / quota. The preference cannot be REMEMBERED, but the toggle must not
+    // become a dead control for the session the person is actually in — the same degradation
+    // `useTheme` documents ("theme still applies for this session").
+    restoreLocalStorage();
+    restoreLocalStorage = installLocalStorage(true);
+
+    sessionStorage.setItem('crm_pipeline_hidden_stages', JSON.stringify(['won', 'lost']));
+    saveShowClosedStages(true);
+    expect(loadHiddenStages().size).toBe(0);
+    expect(loadShowClosedStages()).toBe(false); // not remembered, as expected
   });
 });
 
