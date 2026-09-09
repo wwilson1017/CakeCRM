@@ -8,7 +8,7 @@
 // EVERY draft the body holds, and the copy-link building its URL from the id rather than the
 // address bar — which is unverifiable by eye, because the parameter is stripped the instant it
 // is read.
-import { act } from 'react';
+import { StrictMode, act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -895,18 +895,26 @@ describe('an ambiguous close reconciles before a retry', () => {
       if (/^\/api\/crm\/deals\/\d+$/.test(path)) return detail;
       return null;
     });
-    // The host resolves WITHOUT dismissing the panel — its failure path…
+    // The host REJECTS — which is what a lost response looks like from here, and what the hosts
+    // now do rather than swallowing a failure. A rejection is also what keeps the panel open: the
+    // body dismisses itself only when the write resolves.
     const onMarkWon = vi.fn(async () => {
       // …while the server did in fact commit the close.
       detail = detailResponse({ stage: 'lost', lost_reason: 'price' });
+      throw new Error('connection lost');
     });
-    render({ deal: makeDeal({ stage: 'lead' }), onMarkWon });
+    const onClose = vi.fn();
+    render({ deal: makeDeal({ stage: 'lead' }), onMarkWon, onClose });
     await settle();
     expect(buttonByText('Mark Lost')).toBeTruthy();
 
     await click(buttonByText('Mark Won'));
     await settle();
 
+    // Not dismissed — the write failed as far as this client knows.
+    expect(onClose).not.toHaveBeenCalled();
+    // …but reconciled: the deal IS closed on the server, so neither button is offered and there
+    // is no way to fire a second `mark_deal_lost`.
     expect(buttonByText('Mark Lost')).toBeNull();
     expect(buttonByText('Mark Won')).toBeNull();
   });
@@ -914,14 +922,29 @@ describe('an ambiguous close reconciles before a retry', () => {
   it('keeps the pair live when the close genuinely did not land', async () => {
     // The other half — a real failure must stay retryable, or the guard traps the user.
     routeDetail(detailResponse({ stage: 'lead' }));
-    const onMarkWon = vi.fn(async () => {});
-    render({ deal: makeDeal({ stage: 'lead' }), onMarkWon });
+    const onMarkWon = vi.fn(async () => { throw new Error('refused'); });
+    const onClose = vi.fn();
+    render({ deal: makeDeal({ stage: 'lead' }), onMarkWon, onClose });
     await settle();
     await click(buttonByText('Mark Won'));
     await settle();
 
+    expect(onClose).not.toHaveBeenCalled();
     expect((buttonByText('Mark Won') as HTMLButtonElement).disabled).toBe(false);
     expect(buttonByText('Mark Lost')).toBeTruthy();
+  });
+
+  it('dismisses only when the write RESOLVES', async () => {
+    // The other side of the same contract, and the reason a host must rethrow rather than
+    // swallow: a resolve is the ONLY thing that tells this body the deal is closed.
+    routeDetail(detailResponse({ stage: 'lead' }));
+    const onClose = vi.fn();
+    render({ deal: makeDeal({ stage: 'lead' }), onClose });
+    await settle();
+    await click(buttonByText('Mark Won'));
+    await settle();
+
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -1238,5 +1261,62 @@ describe('an exit that outlives its own body', () => {
 
     expect(onMarkWon).toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+describe('under StrictMode', () => {
+  it('still dismisses on a successful close-out', async () => {
+    // `main.tsx` renders the app inside <StrictMode>, whose development cycle is
+    // setup → cleanup → setup. `mountedRef` gates the dismissal, so a version that clears it in
+    // cleanup without re-arming it in setup leaves it false for the life of the mount — and
+    // Mark Won, Mark Lost and Restore then all silently decline to close the panel, in
+    // development only, which is exactly where it would be met and mistaken for a broken write.
+    routeDetail(detailResponse());
+    const onClose = vi.fn();
+    const props: BodyProps = {
+      deal: makeDeal(),
+      onBoard: true,
+      stageWritable: true,
+      ctx,
+      onMarkWon: vi.fn(),
+      onMarkLost: vi.fn(),
+      onSaveDeal: vi.fn((d: CrmDeal) => Promise.resolve(d)),
+      onClose,
+    };
+    await act(async () => {
+      root.render(
+        <StrictMode>
+          <MemoryRouter initialEntries={['/crm/pipeline']}>
+            <ActiveRecordProvider>
+              <DealDetailBody {...props} />
+            </ActiveRecordProvider>
+          </MemoryRouter>
+        </StrictMode>,
+      );
+    });
+    await settle();
+    await click(buttonByText('Mark Won'));
+    await settle();
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the edit form read-only while an exit is writing', async () => {
+    // The one draft `exiting` could not reach by disabling the ENTRY to editing: a form already
+    // open when Restore is pressed. The user consents to the discard once, and then keeps typing
+    // during the POST — work nobody asked about. The form is frozen rather than discarded,
+    // because the write may still be refused and the panel would then stay.
+    routeDetail(
+      detailResponse({ archived_at: '2026-08-20T00:00:00+00:00' }),
+      path => (path === '/api/crm/deals/7/restore' ? new Promise(() => {}) : undefined),
+    );
+    render({ deal: makeDeal({ archived_at: '2026-08-20T00:00:00+00:00' }) });
+    await settle();
+    click(buttonByText('Edit'));
+    await settle();
+    expect((container.querySelector('fieldset') as HTMLFieldSetElement).disabled).toBe(false);
+
+    await click(buttonByText('Restore'));
+    expect((container.querySelector('fieldset') as HTMLFieldSetElement).disabled).toBe(true);
   });
 });

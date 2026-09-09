@@ -209,7 +209,7 @@ const actionButtonStyle = {
  */
 function DealEditForm({
   form, onChange, onPickContact, onPickCompany, stageWritable, onContactBusy, onCompanyBusy,
-  saving, error, onSave, onCancel,
+  saving, exiting, error, onSave, onCancel,
 }: {
   form: DealFormState;
   onChange: (patch: Partial<DealFormState>) => void;
@@ -219,15 +219,29 @@ function DealEditForm({
   onContactBusy: (busy: boolean) => void;
   onCompanyBusy: (busy: boolean) => void;
   saving: boolean;
+  /** An exit is in flight, so the whole form goes read-only. NOT discarded: the write may still
+   *  be refused, in which case the panel stays and so must the draft — throwing it away on the
+   *  strength of a consent given for a leave that then did not happen would be worse than the
+   *  silent loss this prevents. */
+  exiting: boolean;
   error: string;
   onSave: () => void;
   onCancel: () => void;
 }) {
   return (
-    <form
-      onSubmit={e => { e.preventDefault(); onSave(); }}
-      style={{ display: 'flex', flexDirection: 'column', gap: 14 }}
-    >
+    <form onSubmit={e => { e.preventDefault(); onSave(); }}>
+      {/* A native `<fieldset disabled>` rather than nine `disabled=` props: it covers every
+          control inside, the two comboboxes and their × buttons included, and a field added later
+          cannot forget it. */}
+      <fieldset
+        disabled={exiting}
+        style={{
+          display: 'flex', flexDirection: 'column', gap: 14,
+          // A fieldset's UA styling would otherwise draw a box around the form; `minWidth: 0` is
+          // the well-known fix for its refusal to shrink inside a flex parent.
+          border: 'none', padding: 0, margin: 0, minWidth: 0,
+        }}
+      >
       {error && <p style={{ color: CORAL_TEXT, fontSize: 12, margin: 0 }}>{error}</p>}
       <div>
         <label style={labelStyle} htmlFor="deal-title">Title *</label>
@@ -315,6 +329,7 @@ function DealEditForm({
           {saving ? 'Saving...' : 'Save'}
         </button>
       </div>
+      </fieldset>
     </form>
   );
 }
@@ -576,8 +591,18 @@ export function DealDetailBody({
   const stageEditable = stageWritable && !archivedAt;
 
   // Whether this panel is still on screen when an awaited write settles — see `closeOut`.
+  //
+  // Re-ARMED in setup, not merely cleared in cleanup. `main.tsx` renders under <StrictMode>,
+  // whose development cycle is setup → cleanup → setup, so a cleanup-only version leaves this
+  // false for the life of the mount — and every close-out and restore then silently declines to
+  // dismiss the panel, in development only, which is exactly where it would be met and mistaken
+  // for a broken endpoint. `WeeklyTouchesDetailPage` carried this same trap and its own note
+  // about it before #75 retired that code.
   const mountedRef = useRef(true);
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const formDirty = editing && JSON.stringify(formFields(form)) !== JSON.stringify(formFields(baseline));
   const logDirty = logActivity !== '' || logNote.trim() !== '';
@@ -757,6 +782,12 @@ export function DealDetailBody({
       // Written. The deal is closed, so the panel goes — see `onClose` for why that decision is
       // made HERE. A refused or failed write rejects instead, and the host has already said so.
       if (mountedRef.current) onClose();
+    } catch {
+      // Swallowed DELIBERATELY, and it is the only thing this branch does. Both buttons fire
+      // this without awaiting it, so a host rejection escaping here is an unhandled rejection —
+      // and the report is not ours to make twice: `writeDeal` toasts a failed stage PUT itself
+      // and the host adds the bulk-lock refusal. What matters to this body is only that the
+      // panel stays open, which is what NOT calling `onClose` above already accomplishes.
     } finally {
       setClosing(false);
       // Still mounted means the host did NOT dismiss us — its failure path. The outcome of that
@@ -908,6 +939,7 @@ export function DealDetailBody({
           onContactBusy={setContactBusy}
           onCompanyBusy={setCompanyBusy}
           saving={saving || contactBusy || companyBusy}
+          exiting={exiting}
           error={formError}
           onSave={() => void handleSave()}
           onCancel={() => setEditing(false)}
