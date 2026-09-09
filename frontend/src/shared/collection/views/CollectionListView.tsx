@@ -99,7 +99,13 @@ export default function CollectionListView<T>({
     return [
       {
         key: '__select',
-        header: (
+        // NO header control when nothing on screen can be selected — an Archived-only list is
+        // the live case. The `selectableRows.length > 0` guard on `allSelected` already means
+        // such a checkbox can never tick, and its clear branch is gated on that same flag, so
+        // rendering it offers a control with no reachable effect in either direction: the exact
+        // dead-both-halves failure the comment above describes, arrived at from the other end.
+        // The COLUMN stays (the cells below render empty), so the table keeps its shape.
+        header: selectableRows.length === 0 ? null : (
           <input
             type="checkbox"
             aria-label="Select all visible"
