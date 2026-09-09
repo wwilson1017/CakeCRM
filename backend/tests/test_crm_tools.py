@@ -622,7 +622,10 @@ def test_pipeline_and_search_tools_project_the_payload(monkeypatch):
 
     for payload in (tools.crm_get_pipeline()["deals"][0],
                     tools.crm_search_deals()["deals"][0]):
-        assert set(payload) <= set(tools._DEAL_SUMMARY_FIELDS) | {"custom_fields"}
+        # `url` joins the allowed set as of #145 — the deep link is derived from the id
+        # the projection already carries, so it adds ~45 bytes rather than reopening the
+        # 27k-token question this projection exists to answer.
+        assert set(payload) <= set(tools._DEAL_SUMMARY_FIELDS) | {"custom_fields", "url"}
         assert "notes" not in payload and "ai_touch_count" not in payload
         assert payload["title"] == "T"   # the useful fields survive
 

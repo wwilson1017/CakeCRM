@@ -17,7 +17,7 @@ import { useEffect, useState } from 'react';
 
 import { api } from '../../core/api/client';
 import { useAuth } from '../../core/auth/AuthContext';
-import { CORAL, FONT_SANS, INK_MUTE, labelStyle, inputStyle } from '../../shared/styles';
+import { CORAL_TEXT, FONT_SANS, INK_MUTE, labelStyle, inputStyle } from '../../shared/styles';
 import { toast } from '../../shared/toast';
 import { btnPrimary } from '../styles';
 import { SettingsCard } from './SettingsCard';
@@ -98,7 +98,7 @@ export function ChangePasswordCard({ isMobile }: { isMobile: boolean }) {
         // The form stays disabled: submitting without knowing whether 2FA is on would
         // fail server-side anyway, and silently assuming it's off is the riskier guess.
         <p style={{
-          fontFamily: FONT_SANS, fontSize: 13, color: CORAL, lineHeight: 1.5,
+          fontFamily: FONT_SANS, fontSize: 13, color: CORAL_TEXT, lineHeight: 1.5,
           margin: '0 0 20px', maxWidth: 460,
         }}>
           Couldn't check your two-factor status, so changing your password is
@@ -146,7 +146,7 @@ export function ChangePasswordCard({ isMobile }: { isMobile: boolean }) {
             onChange={e => setConfirm(e.target.value)}
           />
           {mismatch && (
-            <p style={{ fontFamily: FONT_SANS, fontSize: 12, color: CORAL, margin: '8px 0 0' }}>
+            <p style={{ fontFamily: FONT_SANS, fontSize: 12, color: CORAL_TEXT, margin: '8px 0 0' }}>
               Passwords don't match.
             </p>
           )}
@@ -174,7 +174,7 @@ export function ChangePasswordCard({ isMobile }: { isMobile: boolean }) {
 
         {error && (
           <p role="alert" style={{
-            fontFamily: FONT_SANS, fontSize: 13, color: CORAL, lineHeight: 1.5,
+            fontFamily: FONT_SANS, fontSize: 13, color: CORAL_TEXT, lineHeight: 1.5,
             margin: '0 0 20px', maxWidth: 460,
           }}>
             {error}

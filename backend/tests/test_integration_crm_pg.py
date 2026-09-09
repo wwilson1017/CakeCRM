@@ -1633,3 +1633,199 @@ def test_pipeline_pages_and_window_match_the_unbounded_board(pg_db):
             break
         cursor = page["deals"][-1]["id"]
     assert ids[0] in wide_swept
+
+
+# ── Reports company rollup (#144) ────────────────────────────────────────────────────
+
+
+def test_report_rollup_attributes_a_multi_parent_activity_exactly_once(pg_db):
+    """The bug the first draft shipped, proven against real SQL rather than query text.
+
+    An activity naming BOTH a contact and one of this company's deals must render under the
+    deal and nowhere else. When that deal is archived and archived history is switched off,
+    the row must disappear entirely rather than reappearing under the contact — which is what
+    a "not one of the deals we are displaying" predicate silently does.
+    """
+    from crm import report_service, service
+
+    co = service.create_company("Acme")
+    contact = service.create_contact("Ada", company_id=co["id"])
+    live = service.create_deal("Live", contact_id=contact["id"], company_id=co["id"])
+    archived = service.create_deal("Old", contact_id=contact["id"], company_id=co["id"])
+    service.log_activity("call", note="on the live deal",
+                         contact_id=contact["id"], deal_id=live["id"])
+    service.log_activity("call", note="on the old deal",
+                         contact_id=contact["id"], deal_id=archived["id"])
+    service.archive_deal(archived["id"])
+
+    rollup = report_service.get_company_rollup(co["id"])
+    assert [d["title"] for d in rollup["deals"]] == ["Live"]
+    # Rendered once, under the deal — not also under the contact.
+    assert [a["note"] for a in rollup["deals"][0]["activities"]] == ["on the live deal"]
+    assert rollup["contacts"][0]["activities"] == []
+
+    wide = report_service.get_company_rollup(co["id"], include_archived=True)
+    by_title = {d["title"]: d for d in wide["deals"]}
+    assert [a["note"] for a in by_title["Old"]["activities"]] == ["on the old deal"]
+    assert wide["contacts"][0]["activities"] == []
+
+
+def test_report_timeline_orders_two_id_spaces_without_duplicates_or_gaps(pg_db):
+    """The `source` term, proven in behaviour against real Postgres.
+
+    Both tables are seeded so their ids COLLIDE (1..3 in each), and every row shares one
+    `now()` — the exact tie a bare `(created_at, id)` cannot break.
+
+    Two things had to be got right for this to be a guard rather than decoration, and both
+    were found by running the mutation rather than by reasoning about it. Uniqueness across
+    pages alone does NOT prove the term is present — with `source` removed, Postgres still
+    returned each row once for this plan. And the seeds each run in their OWN transaction,
+    so `now()` differs per row and time alone would order them, leaving `source` never
+    consulted; flattening the timestamps is what creates the tie the term exists to break.
+    With both fixed, dropping `source` fails this test.
+
+    The deterministic guard is still the hermetic `test_timeline_order_is_total_across_both_sources`,
+    which pins the term list itself. This is its behavioural companion.
+    """
+    from core.postgres import pg_execute
+    from crm import chatter_service, report_service, service
+
+    co = service.create_company("Acme")
+    contact = service.create_contact("Ada", company_id=co["id"])
+    for i in range(3):
+        chatter_service.add_note("contact", contact["id"], f"note {i}")
+        service.log_activity("call", note=f"activity {i}", contact_id=contact["id"])
+
+    # Each seed above ran in its OWN transaction, so `now()` differs per row and time alone
+    # would order them. Flatten every timestamp to one value to create the tie this test is
+    # about — the situation a CSV import or a merge produces for real, where one transaction
+    # stamps every row identically.
+    same = "2026-03-02T15:00:00+00:00"
+    pg_execute("UPDATE crm_chatter SET created_at = %s", (same,))
+    pg_execute("UPDATE activity_log SET created_at = %s", (same,))
+
+    note_ids = {r["id"] for r in chatter_service.get_chatter("contact", contact["id"])}
+    activity_ids = {a["id"] for a in service.get_activity_log(contact_id=contact["id"])}
+    assert note_ids & activity_ids, "the ids must collide or this proves nothing"
+
+    seen, offset = [], 0
+    while True:
+        page = report_service.get_company_timeline(co["id"], limit=2, offset=offset)
+        seen.extend((e["source"], e["id"]) for e in page["entries"])
+        if not page["has_more"]:
+            break
+        offset += len(page["entries"])
+
+    assert len(seen) == 6
+    assert len(set(seen)) == 6, f"a row was paged twice: {seen}"
+
+    whole = report_service.get_company_timeline(co["id"], limit=100)
+    assert [(e["source"], e["id"]) for e in whole["entries"]] == seen
+
+    # The order `source DESC` actually produces: every note, then every activity, each
+    # newest-id first. Asserting the exact sequence rather than just uniqueness is what
+    # makes the `source` term observable in behaviour and not only in the query text.
+    assert seen == [
+        ("note", 3), ("note", 2), ("note", 1),
+        ("activity", 3), ("activity", 2), ("activity", 1),
+    ]
+
+
+def test_report_attributes_a_cross_company_activity_to_its_deals_company(pg_db):
+    """Where an activity lands when its contact and its deal belong to DIFFERENT companies.
+
+    The rule is absolute (`deal_id IS NULL` for the contact bucket), so a deal wins globally
+    rather than only among the deals on screen: the row belongs to the deal's company and
+    appears there exactly once, on neither surface of the contact's company. That is a
+    deliberate improvement on the blueprint, whose per-company predicates dropped such a row
+    from BOTH companies — every activity now has exactly one home. Pinned because the code's
+    documentation once claimed the blueprint's behaviour while doing this.
+    """
+    from crm import report_service, service
+
+    a = service.create_company("Acme")
+    b = service.create_company("Beta")
+    contact = service.create_contact("Ada", company_id=a["id"])
+    deal = service.create_deal("Beta deal", contact_id=contact["id"], company_id=b["id"])
+    service.log_activity("call", note="cross-company",
+                         contact_id=contact["id"], deal_id=deal["id"])
+
+    a_rollup = report_service.get_company_rollup(a["id"])
+    assert a_rollup["contacts"][0]["activities"] == []
+    assert a_rollup["deals"] == []
+    assert report_service.get_company_timeline(a["id"])["entries"] == []
+
+    b_rollup = report_service.get_company_rollup(b["id"])
+    assert [x["note"] for x in b_rollup["deals"][0]["activities"]] == ["cross-company"]
+    b_feed = report_service.get_company_timeline(b["id"])["entries"]
+    assert [(e["source"], e["message"]) for e in b_feed] == [("activity", "cross-company")]
+
+
+def test_report_summary_reports_a_currency_only_when_open_deals_agree(pg_db):
+    from crm import report_service, service
+
+    co = service.create_company("Acme")
+    service.create_deal("USD one", company_id=co["id"], stage="lead", value=100)
+    assert report_service.get_company_rollup(co["id"])["summary"]["open_deal_currency"] == "USD"
+
+    mixed = service.create_deal("Other", company_id=co["id"], stage="lead", value=100)
+    service.update_deal(mixed["id"], currency="EUR")
+    assert report_service.get_company_rollup(co["id"])["summary"]["open_deal_currency"] is None
+
+
+def test_report_rollup_and_timeline_survive_a_company_with_no_children(pg_db):
+    """The empty-`ANY()` and empty-subquery paths, which SQL text alone cannot prove."""
+    from crm import report_service, service
+
+    co = service.create_company("Empty")
+    rollup = report_service.get_company_rollup(co["id"])
+    assert rollup["contacts"] == [] and rollup["deals"] == []
+    assert rollup["summary"] == {
+        "open_deal_count": 0, "open_deal_value": 0,
+        "open_deal_currency": None, "contact_count": 0,
+    }
+    assert report_service.get_company_timeline(co["id"]) == {"entries": [], "has_more": False}
+
+
+def test_report_summary_is_unmoved_by_the_archived_toggle(pg_db):
+    """Reducing the capped child lists instead would let MORE history lower the open count."""
+    from crm import report_service, service
+
+    co = service.create_company("Acme")
+    service.create_deal("Open one", company_id=co["id"], stage="proposal", value=1000)
+    service.create_deal("Won", company_id=co["id"], stage="won", value=5000)
+    gone = service.create_deal("Archived", company_id=co["id"], stage="lead", value=9000)
+    service.archive_deal(gone["id"])
+    service.create_contact("Ada", company_id=co["id"])
+    service.create_contact("Bob", company_id=co["id"], status="archived")
+    # The third status. "Active contacts" must exclude it too, or the chip's label is a lie
+    # — `status <> 'archived'` and `status = 'active'` differ by exactly this row.
+    service.create_contact("Cy", company_id=co["id"], status="inactive")
+
+    narrow = report_service.get_company_rollup(co["id"])["summary"]
+    wide = report_service.get_company_rollup(co["id"], include_archived=True)["summary"]
+    assert narrow == wide
+    assert narrow["open_deal_count"] == 1
+    assert narrow["open_deal_value"] == 1000
+    assert narrow["contact_count"] == 1
+    # ...while the LIST is unfiltered: all three contacts are this company's history.
+    assert len(report_service.get_company_rollup(co["id"])["contacts"]) == 3
+
+
+def test_report_rollup_caps_activities_per_record_not_globally(pg_db, monkeypatch):
+    """A busy deal must not starve a quiet sibling of its history."""
+    from crm import report_service, service
+
+    monkeypatch.setattr(report_service, "ACTIVITY_PER_RECORD_CAP", 2)
+    co = service.create_company("Acme")
+    busy = service.create_deal("Busy", company_id=co["id"])
+    quiet = service.create_deal("Quiet", company_id=co["id"])
+    for i in range(4):
+        service.log_activity("call", note=f"busy {i}", deal_id=busy["id"])
+    service.log_activity("call", note="quiet one", deal_id=quiet["id"])
+
+    by_title = {d["title"]: d for d in report_service.get_company_rollup(co["id"])["deals"]}
+    assert len(by_title["Busy"]["activities"]) == 2
+    assert by_title["Busy"]["activities_truncated"] is True
+    assert len(by_title["Quiet"]["activities"]) == 1
+    assert by_title["Quiet"]["activities_truncated"] is False

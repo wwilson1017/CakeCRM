@@ -76,6 +76,8 @@ Other:
   GET    /api/crm/dashboard             — summary stats
   GET    /api/crm/dashboard/today       — ranked "what needs me today" list (?owner_id)
   GET    /api/crm/dashboard/weekly-touches — open deals touched in a window (?start, ?end)
+  GET    /api/crm/dashboard/weekly-touches/detail — one rep's touched deals, in full
+         (?owner=<id|unassigned>, ?start, ?end)
   GET    /api/crm/analytics             — win/loss, activity volume, deal aging (?days, ?stale_days)
   GET    /api/crm/demo-status           — first-run onboarding / sample-data state
   POST   /api/crm/load-sample-data      — seed fictional demo data (first run)
@@ -114,6 +116,7 @@ from crm import (
     field_service,
     gtd_common,
     provenance_service,
+    report_service,
     scoring_service,
     service as crm,
     today_service,
@@ -863,6 +866,38 @@ async def weekly_touches(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.get("/dashboard/weekly-touches/detail")
+async def weekly_touches_detail(
+    owner: str = Query(..., description="A user id, or the literal 'unassigned'"),
+    start: str | None = Query(None),
+    end: str | None = Query(None),
+    user=Depends(get_current_user),
+):
+    """One rep's touched open deals — the whole list, not the card's ten (issue #146).
+
+    `owner` is REQUIRED and carries a literal `unassigned` for the NULL bucket, unlike
+    `/dashboard/today`'s absent-means-everyone `owner_id`: this drill-down is always
+    exactly one bucket, and the unowned deals are one of them.
+
+    `start`/`end` are the SAME UTC calendar days the card takes, so a custom range picked
+    on the dashboard is asked here as the same question; omitting both is the rolling
+    default, re-resolved at this request rather than inherited as frozen instants (see
+    `get_weekly_touch_detail` for why freezing is not merely unnecessary but wrong).
+
+    Not admin-gated: ownership is an assignment, not access control (#60), so every member
+    sees every rep's row.
+    """
+    try:
+        result = crm.get_weekly_touch_detail(
+            owner_id=crm.parse_touch_owner(owner), start=start, end=end
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if result is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return result
+
+
 @router.get("/analytics")
 async def analytics(
     days: int = Query(30, ge=7, le=365),
@@ -1491,6 +1526,53 @@ async def list_companies(
 async def get_company(company_id: int, user=Depends(get_current_user)):
     result = crm.get_company_detail(company_id)
     if not result:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return result
+
+
+@router.get("/companies/{company_id}/report")
+async def company_report(
+    company_id: int,
+    include_archived: bool = False,
+    user=Depends(get_current_user),
+):
+    """The Reports page's one-company rollup (issue #144).
+
+    Deliberately not ``get_company_detail``: that reader serves the Companies detail panel
+    (20 activities, no notes, no truncation flags). This one is the report — every contact,
+    every live deal, each child's newest activities with per-record truncation flags.
+
+    ``include_archived`` widens BOTH archived axes at once (deals by ``archived_at``, notes
+    by ``crm_chatter.archived``) so the page and its timeline never disagree about which
+    records exist. Contacts are always included and rendered marked — ``contacts.status`` is
+    not a sweep, and an archived contact is still this company's history.
+
+    Keyless and behind ``get_current_user``: any member may read any record (#60 — ownership
+    is an assignment, not access control).
+    """
+    result = report_service.get_company_rollup(company_id, include_archived=include_archived)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return result
+
+
+@router.get("/companies/{company_id}/timeline")
+async def company_timeline(
+    company_id: int,
+    limit: int = Query(100, ge=1, le=report_service.TIMELINE_MAX_LIMIT),
+    offset: int = Query(0, ge=0),
+    include_archived: bool = False,
+    user=Depends(get_current_user),
+):
+    """The rollup's merged notes + activities feed, newest first (issue #144).
+
+    LIMIT/OFFSET paged with a ``limit + 1`` probe driving ``has_more`` — never a second
+    COUNT, which would go stale beside the page it describes.
+    """
+    result = report_service.get_company_timeline(
+        company_id, limit=limit, offset=offset, include_archived=include_archived
+    )
+    if result is None:
         raise HTTPException(status_code=404, detail="Company not found")
     return result
 

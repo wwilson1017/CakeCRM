@@ -87,7 +87,7 @@ export function buildPipelineListColumns(
               height: 8,
               borderRadius: '50%',
               flexShrink: 0,
-              background: STAGE_COLORS[d.stage]?.color || INK_DIM,
+              background: STAGE_COLORS[d.stage]?.fill || INK_DIM,
             }}
           />
           {stageLabel(d.stage)}

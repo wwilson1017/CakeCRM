@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { labelStyle, inputStyle, BG_ELEV, BG_RAISED, LINE_STRONG, SHADOW, INK, INK_MUTE, INK_DIM, ACCENT_TEXT, CORAL, HOVER, FONT_SANS } from '../../shared/styles';
+import { labelStyle, inputStyle, BG_ELEV, BG_RAISED, LINE_STRONG, SHADOW, INK, INK_MUTE, INK_DIM, ACCENT_TEXT, CORAL_TEXT, HOVER, FONT_SANS } from '../../shared/styles';
 import { useDebounce } from '../../shared/hooks/useDebounce';
 
 /**
@@ -38,8 +38,15 @@ interface Props<T> {
   emptyLabel: string;
   /** Query the server. Called with the TRIMMED query; "" means "first page, unfiltered". */
   search: (query: string) => Promise<T[]>;
-  /** Create a record from a typed name and return it. Called with the TRIMMED name. */
-  create: (name: string) => Promise<T>;
+  /**
+   * Create a record from a typed name and return it. Called with the TRIMMED name.
+   *
+   * OMIT it for a read-only picker (the Reports page, issue #144): no Create row is ever
+   * offered and Enter on an empty result list does nothing. The gate is `canCreate`, which
+   * every other create path is derived from — `showCreate`, the Enter handler and
+   * `quickCreate` itself — so there is one place to get this right rather than four.
+   */
+  create?: (name: string) => Promise<T>;
   getId: (record: T) => number;
   getLabel: (record: T) => string;
   /**
@@ -62,11 +69,23 @@ interface Props<T> {
    */
   onBusyChange?: (busy: boolean) => void;
   id?: string;
+  /**
+   * Element id describing this field, forwarded to the input as `aria-describedby`
+   * (issue #126).
+   *
+   * Additive and optional: a caller that omits it renders exactly as before. It exists
+   * because a caller can render explanatory text this component cannot see — ContactForm
+   * puts a contact's unlinked legacy company name there, which for such a contact is the
+   * only stored copy of that name. Adjacent text alone is not enough: a screen reader in
+   * forms mode moves control to control, so an unassociated paragraph is reachable in
+   * principle and skipped in practice.
+   */
+  describedBy?: string;
 }
 
 export function RecordCombobox<T>({
   label, value, valueLabel, emptyLabel, search, create,
-  getId, getLabel, getMatchText, getSublabel, onSelect, onBusyChange, id,
+  getId, getLabel, getMatchText, getSublabel, onSelect, onBusyChange, id, describedBy,
 }: Props<T>) {
   const matchTextOf = getMatchText ?? getLabel;
   const [open, setOpen] = useState(false);
@@ -122,7 +141,7 @@ export function RecordCombobox<T>({
   // Create stays available: refusing it would strand a user whose search backend is down.
   const searchFailed = fresh && settled.failed;
   const exactMatch = results.some(r => matchTextOf(r).trim().toLowerCase() === trimmed.toLowerCase());
-  const canCreate = trimmed !== '' && !loading && !exactMatch;
+  const canCreate = create !== undefined && trimmed !== '' && !loading && !exactMatch;
   // The row also stays up while a create is in flight, even when `canCreate` has gone false
   // because the user kept typing (a new query is `loading`, which suppresses it). Otherwise
   // the one piece of feedback that a record IS being written vanishes mid-request.
@@ -205,6 +224,15 @@ export function RecordCombobox<T>({
   /** Close AND abandon an in-flight create — an explicit "never mind". */
   function cancel() {
     intentRef.current++;
+    // Stop reporting BUSY too, which the intent bump alone does not do. `creatingName` was
+    // otherwise cleared only when the request settled, so a hung resolver left the
+    // surrounding form locked — Save disabled, and in ContactForm the legacy-name Remove
+    // with it — long after the user had said never mind. Releasing it here is safe
+    // precisely because the bump above already invalidated the result: whatever lands can
+    // no longer select itself, so submitting now cannot lose a link that is about to
+    // exist. That is exactly the distinction `dismiss` does NOT get — a click-away leaves
+    // the create wanted, so it stays busy.
+    setCreatingName(null);
     setOpen(false);
   }
 
@@ -232,7 +260,7 @@ export function RecordCombobox<T>({
   }
 
   async function quickCreate() {
-    if (!trimmed || creating) return;
+    if (!create || !trimmed || creating) return;
     // The search's request-id guard does not cover creates. Without this, a slow create
     // still calls `choose` after the user has dismissed the list, cleared the field or
     // picked an existing row — silently replacing the choice they actually made.
@@ -332,6 +360,7 @@ export function RecordCombobox<T>({
           aria-haspopup="listbox"
           aria-autocomplete="list"
           aria-activedescendant={open && rowCount > 0 ? `${listId}-${active}` : undefined}
+          aria-describedby={describedBy}
           autoComplete="off"
           value={open ? query : (value != null ? valueLabel : '')}
           placeholder={value != null ? valueLabel : emptyLabel}
@@ -363,7 +392,7 @@ export function RecordCombobox<T>({
           </button>
         )}
       </div>
-      {error && <p style={{ color: CORAL, fontSize: 11, margin: '4px 0 0' }}>{error}</p>}
+      {error && <p style={{ color: CORAL_TEXT, fontSize: 11, margin: '4px 0 0' }}>{error}</p>}
       {open && (
         <div
           style={{
@@ -413,7 +442,7 @@ export function RecordCombobox<T>({
             )}
           </ul>
           {searchFailed && (
-            <p style={{ margin: 0, padding: '7px 10px', fontSize: 12, color: CORAL }}>
+            <p style={{ margin: 0, padding: '7px 10px', fontSize: 12, color: CORAL_TEXT }}>
               Search failed — results may be incomplete.
             </p>
           )}

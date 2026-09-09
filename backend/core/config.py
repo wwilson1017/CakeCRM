@@ -38,6 +38,18 @@ def _positive_int_env(name: str, default: int) -> int:
     return value if value >= 1 else default
 
 
+def _configured_base_url() -> str:
+    """This install's public base URL as an OPERATOR set it — ``""`` when nobody did.
+
+    Separate from ``Settings.frontend_url``, which falls back to a dev default and so can
+    never answer "was this configured?". Both readings come from here so they cannot
+    disagree: a link builder that thinks the address is known while the URL is the
+    localhost default would paste that hostname into a message sent to someone's phone
+    (issue #145).
+    """
+    return os.getenv("FRONTEND_URL", "") or RAILWAY_PUBLIC_URL
+
+
 def _hour_env(name: str, default: int) -> int:
     """Read an hour-of-day env var (0-23). Separate from ``_positive_int_env`` because
     0 is a legitimate hour (midnight) but not a legitimate interval — reusing that
@@ -89,12 +101,20 @@ class Settings:
     ] + ([RAILWAY_PUBLIC_URL] if RAILWAY_PUBLIC_URL else [])
 
     # URLs — auto-detect from Railway if not explicitly set
-    frontend_url: str = os.getenv("FRONTEND_URL", "") or RAILWAY_PUBLIC_URL or "http://localhost:5173"
+    frontend_url: str = _configured_base_url() or "http://localhost:5173"
     backend_url: str = os.getenv("BACKEND_URL", "") or RAILWAY_PUBLIC_URL or "http://localhost:8000"
 
     # Railway environment detection
     is_railway: bool = bool(RAILWAY_PUBLIC_DOMAIN)
     jwt_secret_is_auto: bool = _jwt_secret_is_auto
+    # Whether `frontend_url` above fell all the way through to the dev default, i.e.
+    # nobody configured this install's public address (issue #145). Tracked the same way
+    # `jwt_secret_is_auto` is, and for the same reason: the value is always present, so
+    # "was it actually configured?" is a separate question the fallback chain erases.
+    # `crm.links.deal_url` reads it to decide between an absolute and a relative link —
+    # asserting `http://localhost:5173` in a message sent to someone's phone is worse
+    # than handing them a path their browser can resolve.
+    frontend_url_is_default: bool = not _configured_base_url()
 
     # ── Heartbeat / notifications (issue #6) ────────────────────────────────
     # The heartbeat AI turn is env-gated: unset → enabled on Railway, disabled

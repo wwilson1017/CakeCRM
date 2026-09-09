@@ -53,6 +53,9 @@ export interface CrmDeal {
   updated_at: string;
   ai_touch_count?: number | null;       // AI-estimated touch count (issue #16); null = uncomputed
   ai_touch_count_at?: string | null;
+  // How many evidence lines #56 judged to produce that count. It rides every `SELECT d.*`
+  // response and was simply never declared; the Reports rollup (#144) is its first reader.
+  ai_touch_evidence_count?: number | null;
   lost_reason?: string;                 // why a lost deal was lost (issue #22); '' when unset
   archived_at?: string | null;          // soft-archive (issue #22); null = live
   // Pipeline board only (issue #21): MAX of the deal's activity_log rows + un-archived
@@ -211,27 +214,54 @@ export interface CrmDashboard {
   top_deals: CrmDeal[];
 }
 
-// GET /api/crm/dashboard/weekly-touches (issue #76). Open deals touched in a
-// window, keyed off #16's AI touch counts. Single-user, so the blueprint's per-rep
-// rows are per-deal here. `computed_deals` is the zero-keys gate: 0 means no touch
-// count has ever been computed (no AI provider), and the card renders nothing.
+// GET /api/crm/dashboard/weekly-touches (issue #76; grouped per deal owner since #146).
+// Window MEMBERSHIP is keyless and event-grained (edits, activities, live notes); the
+// per-deal NUMBER is #16's AI estimate. `computed_deals` is the zero-keys gate: 0 means no
+// touch count has ever been computed (no AI provider), and the card renders nothing.
 export interface CrmWeeklyTouchDeal {
   id: number;
   title: string;
   value: number;
   stage: string;
+  /** The bucket this row belongs to; null is the Unassigned bucket (a real state, #60). */
+  owner_id: number | null;
   touch_count: number | null;
   touched_at: string | null;
   contact_name: string | null;
   company_name: string | null;
 }
 
+export interface CrmWeeklyTouchRep {
+  /** null = the Unassigned bucket. It is a bucket rather than an exclusion, which is what
+   *  makes the totals below the sums of these rows. */
+  user_id: number | null;
+  /** Server-resolved: name → email → "User N", or "Unassigned" for the null bucket. */
+  name: string;
+  open_deals: number;
+  touches: number;
+  /** Capped PER REP by the server. `touches > deals.length` means this rep is truncated,
+   *  which is what the card's "See all" link is for. */
+  deals: CrmWeeklyTouchDeal[];
+}
+
 export interface CrmWeeklyTouches {
   window: { start: string; end: string; label: string; custom: boolean };
-  deals: CrmWeeklyTouchDeal[];
+  reps: CrmWeeklyTouchRep[];
   total_touches: number;
   total_open_deals: number;
   computed_deals: number;
+}
+
+// GET /api/crm/dashboard/weekly-touches/detail (issue #146): ONE bucket, uncapped. No
+// `custom` flag on this window — on the card it means "the user picked a range", and
+// forwarded rolling bounds would set it while the card said "Last 7 days".
+export interface CrmWeeklyTouchDetail {
+  window: { start: string; end: string; label: string };
+  rep: Omit<CrmWeeklyTouchRep, 'deals'>;
+  deals: CrmWeeklyTouchDeal[];
+  /** The server bounds even this list. True means `deals` is a prefix — the page says so
+   *  rather than presenting a partial list as the full one. */
+  truncated: boolean;
 }
 
 // GET /api/crm/dashboard/today (issue #130). One ranked list of what needs the viewer
@@ -352,4 +382,88 @@ export interface AiTouchEvidenceResponse {
   evaluated: number;
   truncated: boolean;
   events: AiTouchEvidenceEvent[];
+}
+
+// GET /api/crm/companies/:id/report (issue #144) — the Reports page's one-company rollup.
+// The child lists are capped server-side and say so; the headline numbers in `summary` are
+// their own aggregate over the full tables, so no cap and no archive toggle can move them.
+// Every expanded row renders entirely from this payload — custom fields and open tasks ride
+// it, batched — so opening a row costs no request.
+
+/** One custom field on a rolled-up record: EVERY definition, whether or not it is filled in. */
+export interface CrmRollupField {
+  field_key: string;
+  name: string;
+  field_type: string;
+  value: string | null;
+}
+
+export interface CrmRollupChild {
+  activities: CrmActivity[];
+  activities_truncated: boolean;
+  custom_fields: CrmRollupField[];
+}
+
+export interface CrmRollupSummary {
+  open_deal_count: number;
+  open_deal_value: number;
+  /**
+   * The one currency every open deal agrees on, or null when they disagree (and when
+   * there are no open deals). `deals.currency` is user-writable, so a sum across
+   * currencies is a false number — null means "do not render this as one figure".
+   */
+  open_deal_currency: string | null;
+  /** `status = 'active'` only: BOTH inactive and archived are excluded, because the chip
+   *  this feeds says "Active contacts". The contacts LIST below is unfiltered. */
+  contact_count: number;
+}
+
+export interface CrmCompanyRollup {
+  company: CrmCompany;
+  company_custom_fields: CrmRollupField[];
+  summary: CrmRollupSummary;
+  contacts: (CrmContact & CrmRollupChild)[];
+  deals: (CrmDeal & CrmRollupChild & {
+    last_activity_at: string | null;
+    tasks: CrmTask[];
+    tasks_truncated: boolean;
+  })[];
+  contacts_truncated: boolean;
+  deals_truncated: boolean;
+}
+
+/**
+ * One row of the merged company feed (GET /api/crm/companies/:id/timeline).
+ *
+ * `source` says which table the row came from. It is not decoration: notes live in
+ * `crm_chatter` and activities in `activity_log`, two tables with INDEPENDENT id sequences,
+ * so `id` alone repeats across the feed. `(created_at, source, id)` is the server's total
+ * order, and `${source}:${id}` is the only safe React key or dedupe key.
+ */
+export interface CrmTimelineEntry {
+  source: 'note' | 'activity';
+  id: number;
+  entity_type: 'company' | 'contact' | 'deal';
+  entity_id: number;
+  /** The activity kind ("call", "email", …). Null for a note. */
+  activity: string | null;
+  /** A note's text, or an activity's note ('' when it carries none). */
+  message: string;
+  created_at: string;
+  /** Notes only: set on edit, null when never edited. Always null for an activity. */
+  updated_at: string | null;
+  /** 0/1 for notes; always 0 for activities, which have no archived concept. */
+  archived: number;
+  /** Note author / activity actor. Null = unattributed (the assistant's own writes). */
+  actor_id: number | null;
+  /** The parent record's display name, hydrated per page. */
+  source_name: string;
+  source_archived: boolean;
+  /** Notes only. */
+  attachments?: CrmAttachment[];
+}
+
+export interface CrmTimelinePage {
+  entries: CrmTimelineEntry[];
+  has_more: boolean;
 }

@@ -97,7 +97,7 @@ export default function StageChipBar({
                 height: 7,
                 borderRadius: '50%',
                 flexShrink: 0,
-                background: active ? ACCENT_INK : STAGE_COLORS[stage]?.color || INK_DIM,
+                background: active ? ACCENT_INK : STAGE_COLORS[stage]?.fill || INK_DIM,
               }}
             />
             {stageLabel(stage)}

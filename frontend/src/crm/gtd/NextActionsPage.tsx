@@ -98,7 +98,7 @@ export function NextActionsPage() {
       <div className="space-y-6">
         {starred.length > 0 && (
           <section>
-            <h2 className="mb-2 text-xs font-heading font-bold uppercase tracking-wide text-amber-600 dark:text-amber-400">
+            <h2 className="mb-2 text-xs font-heading font-bold uppercase tracking-wide text-ck-amber-text">
               ★ Starred
             </h2>
             {rows(starred)}

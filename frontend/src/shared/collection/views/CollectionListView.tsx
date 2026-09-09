@@ -20,11 +20,16 @@
  *  • **Selection.** The optional checkbox column (leading), select-all over the VISIBLE
  *    (filtered, not merely rendered) set, and per-row toggles that stop propagation so a
  *    checkbox click is never also a row-open.
+ *
+ * **Row interactivity follows `onSelect`** (#148): the adapter forwards `onRowClick` only when
+ * the page actually wires a select handler, never a closure that swallows the call. A surface
+ * with nothing to open therefore renders inert rows instead of a pointer cursor that lies and —
+ * now that rows are keyboard stops — a tab stop per row that does nothing.
  */
 import { useMemo } from 'react';
 import { ListView } from '../../listview';
 import type { ListColumn, SortState as ListSortState } from '../../listview';
-import { voidedRowClass } from '../voidedRowClass';
+import { voidedTableRowClass } from '../voidedRowClass';
 import { restingSort } from '../useCollectionState';
 import type {
   CollectionConfig,
@@ -161,10 +166,12 @@ export default function CollectionListView<T>({
       onSortChange={next =>
         state.setSort(next ? { field: next.key, dir: next.dir } : resting)
       }
-      onRowClick={row => onSelect?.(row.id)}
+      onRowClick={onSelect ? row => onSelect(row.id) : undefined}
       emptyMessage={config.emptyState?.message}
       renderCap={list.renderCap}
-      rowClassName={getVoided ? row => voidedRowClass(getVoided(row.item)) : undefined}
+      // The TABLE-ROW variant: it dims the cells rather than the row, because `opacity` on the
+      // `<tr>` would composite the row's focus outline down with it (#148).
+      rowClassName={getVoided ? row => voidedTableRowClass(getVoided(row.item)) : undefined}
     />
   );
 }

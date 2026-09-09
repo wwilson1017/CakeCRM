@@ -100,7 +100,7 @@ export function makePipelineCollectionConfig(deps: PipelineConfigDeps): Collecti
       options: STAGE_ORDER.map(s => ({
         value: s,
         label: stageLabel(s),
-        color: STAGE_COLORS[s]?.color ?? null,
+        color: STAGE_COLORS[s]?.fill ?? null,
       })),
       hint: 'Selecting stages also hides the other columns.',
     },

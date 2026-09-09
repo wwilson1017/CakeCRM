@@ -16,7 +16,7 @@ import { useBranding } from '../../core/branding/BrandingContext';
 import type { BrandingConfig } from '../../core/branding/brandingConfig';
 import { toast } from '../../shared/toast';
 import { IconX } from '../../shared/icons';
-import { INK_MUTE, CORAL, FONT_SANS, labelStyle, inputStyle } from '../../shared/styles';
+import { INK_MUTE, CORAL_TEXT, FONT_SANS, labelStyle, inputStyle } from '../../shared/styles';
 import { btnPrimary, btnSecondary, btnDanger } from '../styles';
 import { BrandLogo } from './BrandLogo';
 import { SettingsCard } from './SettingsCard';
@@ -110,7 +110,7 @@ export function BrandingCard({ isMobile }: { isMobile: boolean }) {
     >
       {loadError && (
         <p style={{
-          fontFamily: FONT_SANS, fontSize: 13, color: CORAL, lineHeight: 1.5,
+          fontFamily: FONT_SANS, fontSize: 13, color: CORAL_TEXT, lineHeight: 1.5,
           margin: '0 0 20px',
         }}>
           Couldn't load your current branding. Reload the page before editing —
