@@ -1313,8 +1313,23 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   owed there; the dots are fills and owe nothing either. The List column is **display-only**
   like `stage` — a lexical sort over `'cold' | 'hot' | 'warm'` orders the tiers wrongly while
   looking like it works, so sorting by temperature needs a real sort field with an explicit
-  rank, as its own change. Rank 2 of #130's Today ladder is reserved for the hot+stale follow-up
-  (#131), which reads `deal_temperature = 'hot'` in plain SQL beside `LAST_TOUCH_SQL`.
+  rank, as its own change.
+  All three surfaces write through #74/#75's `writeDeal` as a **fields-only patch**, which is
+  what serialises a temperature cycle against a drag of the same deal on that deal's write
+  chain — both reconcile from `get_deal`'s full row, so in parallel a stage response would
+  spread a stale `deal_temperature` over the one just written. **The board card takes the writer
+  as a plain prop; the List reaches it through a context** (`components/DealTemperatureCell.tsx`),
+  and that asymmetry is forced rather than chosen: the List's columns are built inside a
+  `useMemo` that must stay stable (config identity keys every memo in the collection layer), and
+  this repo's `react-hooks` v7 ruleset rejects even *referencing* a ref-reading function from a
+  memo body — `writeDeal` reads five refs. Passing the callback, a latest-ref indirection and
+  `useEffectEvent` were each tried and each rejected, the last with "cannot be assigned to a
+  variable or passed down". An absent provider means read-only, so a future host that lists deals
+  without a writer cannot advertise editing it cannot do. `deal_temperature` joins `DealPatch`
+  but never `formFields`: it has its own one-click control, so it stays out of the sheet's dirty
+  comparison, and the sheet's row renders **unconditionally** for the same reason #128's Owner
+  row does. Rank 2 of #130's Today ladder is reserved for the hot+stale follow-up (#131), which
+  reads `deal_temperature = 'hot'` in plain SQL beside `LAST_TOUCH_SQL`.
 - **The three list pages run on the #73 collection layer** (#77 — Contacts, Companies,
   Tasks; the pipeline board keeps #21's own bar). The layer filters an **in-memory** array
   and has no server-search hook, so a facet over a server-paginated slice would silently
