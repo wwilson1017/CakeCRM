@@ -409,7 +409,8 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   visible iff one of its cards is — so an all-admin group (Workspace, Integrations)
   can never render as an empty section or a dead tab for a member. Team also keeps
   its internal `return null` as defence in depth. Members see exactly Notifications,
-  Change password and Assistant memory. **Task mode is admin-only since #102**:
+  Change password, Pipeline board (#124) and Assistant memory. **Task mode is admin-only
+  since #102**:
   `task_mode` is a `crm_meta` singleton, so one member flipping it changes everyone's
   task surface, and the card's no-login section can mint an unauthenticated read+write
   link to the whole todo store whose lifetime is **not** tied to the account that
