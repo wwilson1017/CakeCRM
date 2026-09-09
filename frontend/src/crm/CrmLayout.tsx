@@ -285,10 +285,10 @@ export function CrmLayout() {
                   src={`/api/branding/logo?v=${logoVersion}`}
                   alt=""
                   style={{ height: 26, maxWidth: 120, objectFit: 'contain' }}
-                  fallback={<span style={{ fontSize: 22 }}>🍰</span>}
+                  fallback={<img src="/logo-mark.svg" alt="" style={{ height: 26, width: 26 }} />}
                 />
               ) : (
-                <span style={{ fontSize: 22 }}>🍰</span>
+                <img src="/logo-mark.svg" alt="" style={{ height: 26, width: 26 }} />
               )}
               <span style={{
                 fontFamily: FONT_DISPLAY,
