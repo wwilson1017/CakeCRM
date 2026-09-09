@@ -8,7 +8,9 @@
  *
  * Fonts are self-hosted woff2 files from the @fontsource packages the app itself
  * uses (Montserrat headings, Open Sans body; both SIL OFL 1.1), so the page makes
- * no third-party request.
+ * no third-party request. Self-hosting is redistribution, and the woff2 files carry
+ * no license text of their own, so the copyright notices and the full OFL 1.1 text
+ * ship beside them in fonts/OFL.txt -- add a family here, add its notice there.
  */
 
 @font-face { font-family: 'Montserrat'; font-weight: 600; font-display: swap; src: url(fonts/montserrat-latin-600-normal.woff2) format('woff2'); }
