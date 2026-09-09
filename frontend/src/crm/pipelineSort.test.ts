@@ -83,8 +83,11 @@ describe('list columns and sort fields cannot drift', () => {
   it('every sortable column key names a real sort field', () => {
     const fieldValues = new Set(fields.map(f => f.value));
     const keys = buildPipelineListColumns(() => 'x').map(c => c.key);
-    // `stage` is display-only by design — the list is stage-major already.
-    for (const key of keys.filter(k => k !== 'stage')) {
+    // Two columns are display-only by design and so name no sort field: `stage` (the list is
+    // stage-major already) and `temperature` (#125 — a lexical sort over
+    // 'cold' | 'hot' | 'warm' orders the tiers wrongly while looking like it works, so
+    // sorting by it needs a real field with an explicit rank, as its own change).
+    for (const key of keys.filter(k => k !== 'stage' && k !== 'temperature')) {
       expect(fieldValues.has(key)).toBe(true);
     }
   });
@@ -98,7 +101,7 @@ describe('list columns and sort fields cannot drift', () => {
   it('the columns cover the fields a rep sorts by', () => {
     const keys = buildPipelineListColumns(() => 'x').map(c => c.key);
     expect(keys).toEqual([
-      'title', 'company', 'stage', 'value', 'probability', 'score', 'touches',
+      'title', 'temperature', 'company', 'stage', 'value', 'probability', 'score', 'touches',
       'closeDate', 'lastActivity', 'owner',
     ]);
   });

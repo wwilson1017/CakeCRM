@@ -19,9 +19,16 @@ import { STAGE_COLORS } from '../constants';
 import { INK, INK_DIM, LINE_STRONG, mono } from '../../shared/styles';
 import { ScorePill, TouchCountPill } from './badges';
 import { isArchivedDeal } from '../pipelineFilters';
+import DealTemperatureIcon from './DealTemperatureIcon';
+import type { DealTemperature } from '../dealTemperature';
 
-/** Every sortable field except the array order, plus the display-only stage column. */
-type PipelineColumnKey = Exclude<PipelineSortField, 'boardOrder'> | 'stage';
+/** Every sortable field except the array order, plus the two display-only columns.
+ *
+ *  `temperature` is display-only for the same reason `stage` is: neither names a
+ *  `pipelineSort.ts` field, so `CollectionListView` renders it without a sort getter. Making
+ *  it sortable would mean a new sort field, and a lexical sort over 'cold' | 'hot' | 'warm'
+ *  orders the tiers wrongly while looking like it works — its own change, if it is wanted. */
+type PipelineColumnKey = Exclude<PipelineSortField, 'boardOrder'> | 'stage' | 'temperature';
 
 interface PipelineColumn extends Omit<ListColumn<CrmDeal>, 'key' | 'sortValue'> {
   key: PipelineColumnKey;
@@ -49,6 +56,9 @@ function shortDate(value: string | null | undefined): string {
 
 export function buildPipelineListColumns(
   ownerName: (id: number | null | undefined) => string,
+  /** Omit to render the temperature read-only — the column still appears, so the board and
+   *  the list never disagree about what a deal shows. */
+  onCycleTemperature?: (deal: CrmDeal, next: DealTemperature | null) => void,
 ): ListColumn<CrmDeal>[] {
   const columns: PipelineColumn[] = [
     {
@@ -68,6 +78,24 @@ export function buildPipelineListColumns(
           )}
           <span style={{ color: INK, fontWeight: 500, opacity: isArchivedDeal(d) ? 0.65 : 1 }}>{d.title}</span>
         </span>
+      ),
+    },
+    {
+      key: 'temperature',
+      // A one-glyph column: a word header would be three times the width of its own content.
+      // `ListColumn.header` types as ReactNode, so the accessible name rides an off-screen
+      // span — the same shape as the Tasks list's icon-only Done column in crm/listColumns.tsx.
+      header: <span className="sr-only">Temperature</span>,
+      // Same control the board card renders — one temperature, one visual language, and one
+      // place the cycle rules live (issue #125).
+      render: d => (
+        <DealTemperatureIcon
+          value={d.deal_temperature}
+          onCycle={onCycleTemperature ? next => onCycleTemperature(d, next) : undefined}
+          // An archived deal is on the board to be found and restored, not worked — the same
+          // reason its card cannot be dragged or bulk-selected (issue #83).
+          disabled={isArchivedDeal(d)}
+        />
       ),
     },
     {
