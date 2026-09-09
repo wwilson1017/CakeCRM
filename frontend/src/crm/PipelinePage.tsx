@@ -1222,20 +1222,23 @@ export function PipelinePage() {
   }, [deepLinkState, deepLink.dealId, deepLink.key, load]);
 
 
-  // ONE return, with the loading and error branches INSIDE it rather than returning early.
-  // `CollectionView` mounts `CollectionDetail` above its own loading branch precisely so a
-  // shared `?deal=` link opens the record instead of a spinner — but an early return here would
-  // put that whole subtree at a different position in the element tree per branch, so React
-  // unmounts and remounts it on every transition. The very first transition (loading → loaded)
-  // is one a `?deal=` link hits every time, throwing away the record the layer had already
-  // fetched, its one-record memory, and any draft the body held.
-  const board = loading ? (
-    <div style={{ display: 'flex', justifyContent: 'center', padding: '80px 0' }}>
-      <div className="w-6 h-6 border-2 border-ck-accent border-t-transparent rounded-full animate-spin" />
-    </div>
-  ) : !data ? (
-    <LoadError label="Couldn't load pipeline" onRetry={() => load()} />
-  ) : (
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', padding: '80px 0' }}>
+        <div className="w-6 h-6 border-2 border-ck-accent border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (!data) return <LoadError label="Couldn't load pipeline" onRetry={() => load()} />;
+
+  // The detail panel is NOT hoisted above these returns, deliberately — an earlier revision of
+  // #75 did that, when the panel was a page-owned sibling. It buys nothing here: the panel is
+  // mounted by `CollectionView`, which only exists in this branch, so an early return and a
+  // ternary unmount it identically. And nothing can be selected before the board lands anyway —
+  // `deepLinkVerdict` answers `idle` until a payload has been applied, precisely so a network
+  // blip is never read as "that deal is gone".
+  return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, padding: isMobile ? '20px 16px' : '32px 44px' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: isMobile ? 16 : 24 }}>
         <div>
@@ -1459,8 +1462,6 @@ export function PipelinePage() {
       {showCreate && <DealForm onClose={() => setShowCreate(false)} onSaved={() => { setShowCreate(false); load(); }} />}
     </div>
   );
-
-  return board;
 }
 
 // The two page-header escape hatches share one look: a plain underlined text link in the

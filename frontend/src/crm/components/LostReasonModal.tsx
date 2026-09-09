@@ -14,13 +14,14 @@
  *  - The blueprint's field is unbounded; this one carries `maxLength` because
  *    `service.mark_deal_lost` truncates at MAX_LOST_REASON and the route rejects past it.
  *
- * It renders through a PORTAL, which is not decoration: `DealDetailSheet`'s root sets
- * `zIndex: 39` (desktop) so the assistant launcher can sit above it, and that establishes a
- * stacking context — a descendant at any z-index stays trapped beneath the launcher. The
- * portal lifts the overlay to `document.body` at `ConfirmHost`'s z-index instead. It stays a
- * React CHILD of the sheet, because React propagates events along the React tree rather than
- * the DOM tree, and the sheet's inner `onClick={e => e.stopPropagation()}` is what keeps a
- * click in here from reaching the backdrop that closes the sheet.
+ * It renders through a PORTAL, which is not decoration: the surface it opens over is deliberately
+ * BELOW the assistant launcher — `DealDetailSheet`'s root set `zIndex: 39`, and since #75 its
+ * replacement is `DetailModal` in `underLauncher` mode (`z-50 dock:z-[39]`) — and either one
+ * establishes a stacking context a descendant cannot escape at any z-index. The portal lifts the
+ * overlay to `document.body` at `ConfirmHost`'s z-index instead. It stays a React CHILD of the
+ * panel, because React propagates events along the React tree rather than the DOM tree, and the
+ * panel's inner `onClick={e => e.stopPropagation()}` is what keeps a click in here from reaching
+ * the backdrop behind it.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -72,11 +73,12 @@ export function LostReasonModal({ dealTitle, onConfirm, onCancel }: LostReasonMo
     textareaRef.current?.focus();
 
     // Capture phase, like ConfirmHost: Escape closes THIS dialog and nothing underneath.
-    // (DealDetailSheet has no Escape handling of its own today, so this is purely
-    // additive — but stopping propagation is what keeps it that way if one is added.)
+    // Since #75 the panel underneath DOES have its own Escape handling — `DetailModal` traps
+    // Tab and `closePolicy` refuses an Escape close outright — so stopping propagation here is
+    // what keeps one keypress from being read by two dialogs.
     //
     // Tab is trapped for the same reason ConfirmHost traps it, and here it is more than an
-    // a11y nicety: `aria-modal` promises the background is inert, but the sheet underneath
+    // a11y nicety: `aria-modal` promises the background is inert, but the panel underneath
     // is a live DOM subtree, so a Shift+Tab out of this dialog lands on its Mark Won button
     // — one keystroke from closing the deal the OPPOSITE way while the Lost dialog is still
     // open. ConfirmHost can toggle between two known buttons; this dialog has a textarea
