@@ -314,6 +314,29 @@ def test_save_message_never_lowers_the_meter_between_compactions(fake_conn, monk
     assert "GREATEST" in sql, "a stale low reading must not replace a high one"
 
 
+def test_save_message_drops_a_reading_produced_under_an_older_boundary(fake_conn, monkeypatch):
+    """Clearing the meter settles the stored value but cannot reach a turn already in
+    flight. Turn A assembles a 150k context, turn B compacts and NULLs the meter, then A
+    lands and GREATEST restores 150k — a number describing rows that are no longer
+    assembled. Each reading therefore carries the boundary it was produced under, and
+    `compaction_first_kept_seq` is that version: set_compaction only ever moves it
+    forward, so it needs no column of its own.
+
+    Shape only — that this really rejects the stale write is proved against real
+    Postgres in test_integration_compaction_pg.py."""
+    conn = fake_conn(monkeypatch, history, fetchone_results=[("c1",), (0,)])
+    history.save_message("c1", "m1", "assistant", "t",
+                         context_tokens=150_000, context_boundary_seq=4)
+    sql, params = next(
+        (s, p) for s, p in conn.executed if "UPDATE assistant_conversations" in s
+    )
+    flat = " ".join(sql.split())
+    assert "WHEN compaction_first_kept_seq IS DISTINCT FROM %s THEN last_context_tokens" in flat
+    # IS DISTINCT FROM, not `=`: a caller still reporting None once a boundary exists is
+    # by definition working from the older view, and `= NULL` is never true.
+    assert tuple(params[:2]) == (150_000, 4)
+
+
 def test_set_compaction_clears_the_meter(fake_conn, rec):
     """The one moment a decrease is real — which is what lets save_message otherwise
     keep the greater of the two. The next turn pays one row scan for a fresh reading."""

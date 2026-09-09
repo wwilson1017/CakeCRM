@@ -373,10 +373,21 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   back to "gist everything but the last turn", so the gist lands on the CURRENT message.
   Rejecting it would silently match memory on the conversation's FIRST message, so the
   nonce-delimited block is stripped and the typed remainder kept.
-  Three smaller rules, each a real defect first: a row whose tool work is **unfinished**
+  Four smaller rules, each a real defect first: a row whose tool work is **unfinished**
   (results not merged, or a write awaiting approval) is never gisted, because summarizing it
   produces a gist describing work whose outcome is not in it while the results land behind
-  the boundary; an oversized row budgets the gist and the request **separately**, dropping
+  the boundary — and that scan starts at the CURRENT boundary, never at row 0, because the
+  preserved head and the already-gisted span cannot enter the middle anyway, so scanning
+  from 0 pinned the ceiling inside the head whenever the opening exchange held an abandoned
+  approval and, since that row never changes, disabled compaction for the life of the
+  thread; the middle transcript is capped **per ROW as well as in total**
+  (`_MAX_ROW_CHARS` <= `_MAX_MIDDLE_CHARS`, which is the inequality that lets the newest row
+  obey the cap like every other rather than being waved through on an empty budget) —
+  a chat message has no length limit and an upload row carries several capped files, so one
+  row could put the summarizer prompt past the LIGHT tier's own window, and a summarizer
+  that refuses writes nothing, so every later turn rebuilt the identical oversized request
+  while the thread grew; every clip lands on RAW text before wrapping, so no cut can sever a
+  fence; an oversized row budgets the gist and the request **separately**, dropping
   the gist WHOLE past half the row rather than truncating what the user just typed; and the
   fast path compares the stored reading against the **target**, not the trigger, because
   that reading describes the PREVIOUS model input and counts neither the user row this turn
@@ -386,7 +397,20 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   the fast path and skip compaction — and once the real context is past the provider's
   limit every turn fails, none records a corrective reading, and the thread stays stuck
   there. `set_compaction` **clears** the reading, which is the one moment a decrease is
-  real and is what lets the write otherwise keep the greater of the two. Only Anthropic reports usage or
+  real and is what lets the write otherwise keep the greater of the two. **That clear is
+  necessary and NOT sufficient**, which is worth stating because it reads as if it were: it
+  settles the stored value but cannot reach a turn already in flight. Turn A assembles a
+  150k context, turn B compacts and NULLs the meter, then A finishes and `GREATEST` restores
+  150k — a number describing rows that are no longer assembled, which the next turn takes as
+  current fullness and sheds, gisting recent rows the thread still had room for. So every
+  reading is **versioned by the boundary it was assembled against**
+  (`save_message(context_boundary_seq=)`), and one produced under an older boundary is
+  dropped rather than defended. No new column: `compaction_first_kept_seq` only ever moves
+  forward (`set_compaction` is a compare-and-set), so it already IS the generation counter.
+  The engine reads that boundary **before** assembling, deliberately — a compaction landing
+  in the gap then makes the stamp OLDER than the context and costs one meter reading, where
+  reading it after would make the stamp NEWER and wave through exactly the stale reading the
+  stamp exists to catch. Only Anthropic reports usage or
   a context window today, so the other five providers run on the chars/4 estimate against
   `DEFAULT_BUDGET_TOKENS` — bounded, but a real window smaller than that could still refuse
   a request before the trigger fires. Giving them real windows is its own issue.

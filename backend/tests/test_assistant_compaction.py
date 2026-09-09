@@ -12,6 +12,7 @@ the power->normal write downgrade silently stops firing).
 """
 
 import asyncio
+import re
 
 import pytest
 
@@ -236,6 +237,73 @@ def test_transcript_keeps_the_newest_rows_when_it_truncates():
     assert "MSG0-" not in out      # oldest dropped
 
 
+def test_a_single_oversized_row_is_capped_rather_than_waved_through():
+    """`chunks` being empty used to let the newest row through whole. A chat message has
+    no length limit and an upload row carries several capped files, so one row could put
+    the summarizer prompt past the LIGHT tier's own window — and a summarizer that
+    refuses writes nothing, so every later turn rebuilt the identical oversized request
+    while the thread kept growing."""
+    rows = [_row(0, "assistant", content="", tool_calls=[
+        {"tool": "gmail_read_thread", "tool_use_id": "t0", "args": {}},
+    ], tool_results=[{"tool_use_id": "t0", "content": "z" * 500_000}])]
+    out = compaction._build_middle_transcript(rows)
+    assert 0 < len(out) <= compaction._MAX_MIDDLE_CHARS
+    assert out.count('<untrusted_external_content id="') == 1
+
+
+def test_an_oversized_lone_user_row_is_capped_too():
+    """The same hole from the other side: a row with no tool calls at all."""
+    out = compaction._build_middle_transcript([_row(0, "user", content="M-" + "q" * 500_000)])
+    assert out.startswith("USER: M-")
+    assert 0 < len(out) <= compaction._MAX_ROW_CHARS
+
+
+def test_every_row_shape_stays_under_the_row_cap():
+    """The bound is applied per PIECE on raw text, so it holds however a row is shaped —
+    long prose, one enormous result, or many calls each carrying one."""
+    huge = "z" * 200_000
+    shapes = {
+        "user prose": _row(0, "user", content=huge),
+        "assistant prose": _row(1, "assistant", content=huge),
+        "prose + one huge result": _row(2, "assistant", content=huge, tool_calls=[
+            {"tool": "gmail_read_thread", "tool_use_id": "t1", "args": {"q": huge}},
+        ], tool_results=[{"tool_use_id": "t1", "content": huge}]),
+        "many huge results": _row(3, "assistant", content="", tool_calls=[
+            {"tool": f"tool_{i}", "tool_use_id": f"t{i}", "args": {}} for i in range(40)
+        ], tool_results=[{"tool_use_id": f"t{i}", "content": huge} for i in range(40)]),
+    }
+    for label, row in shapes.items():
+        assert len(compaction._render_row(row)) <= compaction._MAX_ROW_CHARS, label
+
+
+def test_clipping_a_row_never_severs_a_fence():
+    """Every cut lands on raw text BEFORE wrapping, so each opening nonce still has its
+    own matching close — the property that makes the fence unforgeable."""
+    row = _row(0, "assistant", content="", tool_calls=[
+        {"tool": "gmail_read_thread", "tool_use_id": f"t{i}", "args": {}} for i in range(5)
+    ], tool_results=[{"tool_use_id": f"t{i}", "content": "z" * 50_000} for i in range(5)])
+    out = compaction._render_row(row)
+    nonces = re.findall(r'<untrusted_external_content id="([0-9a-f]+)"', out)
+    assert nonces
+    for nonce in nonces:
+        assert f'</untrusted_external_content id="{nonce}">' in out
+    assert out.count('<untrusted_external_content id="') == out.count("</untrusted_external_content id=")
+
+
+def test_the_row_cap_fits_inside_the_middle_cap():
+    """This inequality is what retires the "let the first row through" escape hatch: an
+    empty budget can always take one row, so no row has to bypass the cap to be seen."""
+    assert compaction._MAX_ROW_CHARS <= compaction._MAX_MIDDLE_CHARS
+
+
+def test_clip_counts_its_own_marker_against_the_limit():
+    """A clip that returned `limit` characters PLUS a marker would put every caller a
+    few characters over its own ceiling, and a row's calls compound that."""
+    assert compaction._clip("abc", 10) == "abc"
+    for limit in (0, 1, 5, len(compaction._TRUNCATION_MARK), 40, 100):
+        assert len(compaction._clip("z" * 500, limit)) <= limit
+
+
 # ── Summarizer ─────────────────────────────────────────────────────────────
 
 async def test_summary_stream_caps_a_runaway_reply():
@@ -417,6 +485,32 @@ def test_a_write_still_awaiting_approval_is_never_gisted():
                    tool_results=[{"tool_use_id": "t1", "content": history.PENDING_RESULT_JSON}])
     boundary = compaction._compute_boundary(rows, 900, 1000, None)
     assert boundary is None or boundary <= 5
+
+
+def test_an_abandoned_approval_inside_the_head_never_disables_compaction():
+    """The head is preserved verbatim forever, so an unfinished tool call there can
+    never be gisted and must not bound the ceiling. Scanning from row 0 pinned
+    `ceiling` inside the head — the very first assistant reply proposing a write the
+    user walked away from — and because that row never changes, EVERY later compaction
+    returned None and the thread grew until the provider refused it. A head row is also
+    the one place unfinished work is harmless: it stays assembled, so a result merged
+    later still reaches the model."""
+    rows = _thread(8)
+    rows[1] = _row(1, "assistant",
+                   tool_calls=[{"tool": "crm_create_deal", "tool_use_id": "t1"}],
+                   tool_results=[{"tool_use_id": "t1", "content": history.PENDING_RESULT_JSON}])
+    assert compaction._compute_boundary(rows, 800, 1000, None) == 6
+
+
+def test_an_unfinished_row_already_inside_the_gist_does_not_bound_the_ceiling():
+    """Same rule one span further on: rows before the current boundary are already
+    summarized, so `_middle_rows` cannot select one and its state is not this
+    boundary's business."""
+    rows = _thread(8)
+    rows[2] = _row(2, "assistant",
+                   tool_calls=[{"tool": "crm_get_deal", "tool_use_id": "t1"}],
+                   tool_results=None)
+    assert compaction._compute_boundary(rows, 800, 1000, 4) == 6
 
 
 def test_a_settled_tool_row_is_still_eligible():

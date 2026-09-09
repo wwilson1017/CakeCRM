@@ -248,6 +248,19 @@ async def _chat_impl(
     # assembles uncompacted, exactly as it did before #72 Phase 3.
     await compaction.maybe_compact(provider, conversation_id)
 
+    # The compaction boundary this turn assembles against. Every usage reading reported
+    # below is stamped with it, so a reading produced under an OLDER boundary — this
+    # turn finishing after a CONCURRENT turn compacted the same thread — is rejected
+    # rather than taken as the current fullness (history.save_message).
+    #
+    # Read BEFORE assembling, deliberately. A compaction landing in the gap then makes
+    # our stamp older than what we actually assembled, and the reading is dropped: one
+    # lost meter reading, and compaction falls back to the row estimate. Reading it
+    # AFTER would make the stamp newer than the context and let exactly the stale
+    # reading this exists to catch pass as current.
+    comp_state = await asyncio.to_thread(history.get_compaction_state, conversation_id)
+    context_boundary_seq = (comp_state or {}).get("first_kept_seq")
+
     current_messages = await asyncio.to_thread(assembly.assemble_messages, provider, conversation_id)
     if not current_messages:
         yield _sse({"type": "error", "error": "No conversation content to send."})
@@ -379,6 +392,7 @@ async def _chat_impl(
                     history.save_message, conversation_id, iter_msg_id, "assistant",
                     turn_text, persisted_calls, provider.model,
                     context_tokens=context_tokens,
+                    context_boundary_seq=context_boundary_seq,
                 )
             except Exception as e:
                 if persisted_calls:
@@ -563,6 +577,7 @@ async def _chat_impl(
                         history.save_message, conversation_id, str(uuid.uuid4()),
                         "assistant", wrap_text, None, provider.model,
                         context_tokens=wrap_context_tokens,
+                        context_boundary_seq=context_boundary_seq,
                     )
                 except Exception as e:
                     logger.warning("assistant.chat: failed to persist wrap-up text: %s", e)  # best-effort

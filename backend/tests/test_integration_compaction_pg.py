@@ -135,9 +135,43 @@ def test_compacting_clears_the_meter_so_the_next_turn_measures_again(conv):
     assert history.get_compaction_state(conv)["last_context_tokens"] is None
 
     # A losing CAS writes nothing at all, so it cannot clear another turn's reading.
-    history.save_message(conv, str(uuid.uuid4()), "assistant", "after", context_tokens=80_000)
+    # This reading comes from a turn that assembled AFTER the compaction, so it stamps
+    # the boundary now in force — see the stale-reading test below.
+    history.save_message(conv, str(uuid.uuid4()), "assistant", "after",
+                         context_tokens=80_000, context_boundary_seq=4)
     assert history.set_compaction(conv, "older", 2, False) is False
     assert history.get_compaction_state(conv)["last_context_tokens"] == 80_000
+
+
+def test_a_reading_assembled_before_a_compaction_is_rejected(conv):
+    """The half the clear cannot cover. Clearing `last_context_tokens` settles the stored
+    value; it cannot reach a turn already streaming, whose own reading lands afterwards
+    and restores a pre-compaction number that GREATEST then defends. The next turn reads
+    it as current fullness, sheds the difference, and gists recent rows the thread still
+    had room for."""
+    from assistant import history
+
+    # Turn A assembled while the thread had never compacted, and is still streaming.
+    # Turn B compacts underneath it.
+    assert history.set_compaction(conv, "gist", 4, False) is True
+    assert history.get_compaction_state(conv)["last_context_tokens"] is None
+
+    # Turn A now lands, stamped with the boundary it actually assembled against (none).
+    history.save_message(conv, str(uuid.uuid4()), "assistant", "slow turn",
+                         context_tokens=150_000, context_boundary_seq=None)
+    assert history.get_compaction_state(conv)["last_context_tokens"] is None
+
+    # A turn that assembled AFTER the compaction is on the current boundary, so its
+    # reading is authoritative and IS kept.
+    history.save_message(conv, str(uuid.uuid4()), "assistant", "fresh",
+                         context_tokens=60_000, context_boundary_seq=4)
+    assert history.get_compaction_state(conv)["last_context_tokens"] == 60_000
+
+    # And the same reading is stale in its turn once the boundary advances again.
+    assert history.set_compaction(conv, "gist2", 9, False) is True
+    history.save_message(conv, str(uuid.uuid4()), "assistant", "now old",
+                         context_tokens=140_000, context_boundary_seq=4)
+    assert history.get_compaction_state(conv)["last_context_tokens"] is None
 
 
 def test_get_conversation_carries_the_boundary_the_assembler_reads(conv):

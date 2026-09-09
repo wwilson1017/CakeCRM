@@ -213,6 +213,12 @@ def set_compaction(conv_id: str, summary: str, first_kept_seq: int, tainted: boo
     meter is legitimate, which is what lets ``save_message`` otherwise keep the greater of
     the two. The next turn pays one row scan and records a fresh, accurate reading.
 
+    The clear is necessary and NOT sufficient, which is worth stating because it reads
+    as if it were: it settles the stored value but cannot reach a turn already in flight,
+    whose own reading lands afterwards and restores a pre-compaction number. That half is
+    ``save_message``'s ``context_boundary_seq``, which versions each reading against the
+    boundary it was produced under — and this write is what advances that version.
+
     ``updated_at`` is deliberately NOT bumped: it orders the conversation list as a
     record of user activity, and compaction is internal housekeeping that always runs
     inside a turn whose own message write bumps it anyway.
@@ -281,6 +287,7 @@ def save_message(
     tool_calls: list | None = None,
     model: str = "",
     context_tokens: int | None = None,
+    context_boundary_seq: int | None = None,
 ) -> None:
     """Insert one message, allocating ``seq`` atomically under the conversation lock.
 
@@ -303,6 +310,25 @@ def save_message(
     ever lowered the meter, since a post-compaction reading is legitimately smaller;
     ``set_compaction`` clears it for exactly that reason, which is the only moment a
     decrease is real.
+
+    ``context_boundary_seq`` is the compaction boundary the caller ASSEMBLED against,
+    and it versions the reading: a reading is applied only while the conversation is
+    still on that boundary. Clearing the column is not enough on its own, because the
+    clear cannot reach a turn that is already in flight. Two turns run on one thread (a
+    browser stream and a Telegram message); turn A assembles a 150k context, turn B
+    compacts and NULLs the meter, then turn A finishes and its `GREATEST` restores 150k
+    — a number describing rows that are no longer assembled. The next turn reads it as
+    current fullness, sheds the difference, and gists recent rows the thread still has
+    room for. Passing the boundary makes that reading identifiable as stale, so it is
+    dropped instead. No new column: `compaction_first_kept_seq` only ever moves forward
+    (`set_compaction` is a compare-and-set), so it already IS the generation counter.
+
+    ``None`` means "assembled before this thread had ever compacted", which is why the
+    test is `IS DISTINCT FROM` rather than `=`: once a boundary exists, a caller still
+    reporting None is by definition working from the older view. A caller that reports
+    `context_tokens` but omits the boundary on a compacted thread therefore has its
+    reading dropped — the safe direction (compaction falls back to the row estimate),
+    never a stale number treated as authoritative.
     """
     with get_connection() as conn:
         cur = conn.cursor()
@@ -336,10 +362,12 @@ def save_message(
         cur.execute(
             "UPDATE assistant_conversations "
             "SET updated_at = now(), "
-            "    last_context_tokens = CASE WHEN %s IS NULL THEN last_context_tokens "
-            "                               ELSE GREATEST(%s, COALESCE(last_context_tokens, 0)) END "
+            "    last_context_tokens = CASE "
+            "        WHEN %s IS NULL THEN last_context_tokens "
+            "        WHEN compaction_first_kept_seq IS DISTINCT FROM %s THEN last_context_tokens "
+            "        ELSE GREATEST(%s, COALESCE(last_context_tokens, 0)) END "
             "WHERE id = %s",
-            (context_tokens, context_tokens, conversation_id),
+            (context_tokens, context_boundary_seq, context_tokens, conversation_id),
         )
 
 

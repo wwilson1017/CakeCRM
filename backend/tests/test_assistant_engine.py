@@ -59,9 +59,14 @@ class Store:
         self.merges: list[dict] = []
         self.title_calls: list[tuple] = []
         self.context_tokens: list = []
+        # Every usage reading is stamped with the compaction boundary the turn
+        # assembled against, so a reading from a turn that assembled BEFORE a
+        # concurrent compaction can be told apart from a current one.
+        self.boundary_stamps: list = []
         # Compaction (#72 Phase 3) persists this once a compacted-away span carried
         # untrusted content; the engine ORs it into the power->normal downgrade.
         self.tainted = False
+        self.compaction_boundary = None
         self._n = 0
 
     def create_conversation(self):
@@ -78,14 +83,19 @@ class Store:
         return (text or "")[:60]
 
     def save_message(self, cid, mid, role, content, tool_calls=None, model="",
-                     context_tokens=None):
+                     context_tokens=None, context_boundary_seq=None):
         self.context_tokens.append(context_tokens)
+        self.boundary_stamps.append(context_boundary_seq)
         self.saved.append({"cid": cid, "mid": mid, "role": role, "content": content, "tool_calls": tool_calls})
         self.convs.setdefault(cid, {"id": cid, "messages": []})["messages"].append(
             {"id": mid, "role": role, "content": content, "tool_calls": tool_calls, "tool_results": None})
 
     def is_conversation_tainted(self, cid):
         return self.tainted
+
+    def get_compaction_state(self, cid):
+        return {"summary": None, "first_kept_seq": self.compaction_boundary,
+                "tainted": self.tainted, "last_context_tokens": None}
 
     def merge_tool_result(self, mid, tuid, tname, content):
         self.merges.append({"mid": mid, "tuid": tuid, "content": content})
@@ -125,7 +135,7 @@ def store(monkeypatch):
     s = Store()
     for fn in ("create_conversation", "conversation_exists", "auto_title",
                "save_message", "merge_tool_result",
-               "is_conversation_tainted"):
+               "is_conversation_tainted", "get_compaction_state"):
         monkeypatch.setattr(history, fn, getattr(s, fn))
     # Compaction is exercised in test_assistant_compaction.py; here it must not reach
     # a database, and every one of these threads is far too short to compact anyway.
@@ -831,6 +841,47 @@ async def test_the_iteration_reading_is_persisted_for_compaction(store, monkeypa
     assert 100 in store.context_tokens
 
 
+@pytest.mark.asyncio
+async def test_the_reading_is_stamped_with_the_boundary_it_assembled_against(store):
+    """A usage reading is only meaningful against the compaction boundary it was
+    produced under. Without the stamp, a turn that assembled before a CONCURRENT
+    compaction lands afterwards and restores its pre-compaction number over the clear —
+    and the next turn sheds recent rows the thread still had room for."""
+    store.compaction_boundary = 12
+    prov = FakeProvider([[
+        {"type": "text", "text": "ok"},
+        {"type": "_turn_complete", "tool_calls": [], "stop_reason": "end_turn",
+         "usage": {"input_tokens": 10, "cache_read_input_tokens": 90}},
+    ]])
+    await _run(prov, Registry(), [{"role": "user", "content": "hi"}])
+    assert store.boundary_stamps[-1] == 12
+
+
+@pytest.mark.asyncio
+async def test_the_boundary_is_read_before_the_context_is_assembled(store, monkeypatch):
+    """Order is the guarantee, not an accident. A compaction landing in the gap makes
+    our stamp OLDER than what we assembled, so the reading is dropped — one lost meter
+    reading, and compaction falls back to the row estimate. Reading it AFTER would make
+    the stamp NEWER than the context and wave through exactly the stale reading the
+    stamp exists to catch."""
+    order: list[str] = []
+    real_state = store.get_compaction_state
+
+    def _state(cid):
+        order.append("state")
+        return real_state(cid)
+
+    def _assemble(provider, cid):
+        order.append("assemble")
+        return [{"role": "user", "content": "hi"}]
+
+    monkeypatch.setattr(history, "get_compaction_state", _state)
+    monkeypatch.setattr(assembly, "assemble_messages", _assemble)
+    prov = FakeProvider([[{"type": "text", "text": "ok"}, _complete()]])
+    await _run(prov, Registry(), [{"role": "user", "content": "hi"}])
+    assert order == ["state", "assemble"]
+
+
 def test_last_user_text_keeps_what_the_user_typed_under_a_folded_gist():
     """When a thread is dominated by old content the boundary falls back to "gist
     everything but the last turn", so the gist lands on the CURRENT message. Rejecting
@@ -876,5 +927,9 @@ async def test_the_wrap_up_turn_reading_is_persisted_too(store):
              "usage": {"input_tokens": 1000, "cache_read_input_tokens": 140_000}},
         ],
     ])
+    store.compaction_boundary = 12
     await _run(prov, reg, [{"role": "user", "content": "add X"}], tool_mode="normal")
     assert 141_000 in store.context_tokens
+    # ...and it carries the same boundary stamp as the iteration reading, or the largest
+    # reading of the exchange would be the one that survives a concurrent compaction.
+    assert store.boundary_stamps[-1] == 12

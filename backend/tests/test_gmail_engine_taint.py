@@ -69,13 +69,19 @@ class Store:
         return (text or "")[:60]
 
     def save_message(self, cid, mid, role, content, tool_calls=None, model="",
-                     context_tokens=None):
+                     context_tokens=None, context_boundary_seq=None):
         self.context_tokens.append(context_tokens)
         self.convs.setdefault(cid, {"id": cid, "messages": []})["messages"].append(
             {"id": mid, "role": role, "content": content, "tool_calls": tool_calls, "tool_results": None})
 
     def is_conversation_tainted(self, cid):
         return self.tainted
+
+    def get_compaction_state(self, cid):
+        # The engine reads the boundary each turn to version its usage readings; here
+        # nothing compacts, so it is always the never-compacted state.
+        return {"summary": None, "first_kept_seq": None,
+                "tainted": self.tainted, "last_context_tokens": None}
 
     def mark_untrusted_seen(self, cid):
         self.untrusted_marks.append(cid)
@@ -108,7 +114,7 @@ class Registry:
 def store(monkeypatch):
     s = Store()
     for fn in ("create_conversation", "conversation_exists", "auto_title", "save_message", "merge_tool_result",
-                "is_conversation_tainted", "mark_untrusted_seen"):
+                "is_conversation_tainted", "mark_untrusted_seen", "get_compaction_state"):
         monkeypatch.setattr(history, fn, getattr(s, fn))
     # Compaction is exercised in test_assistant_compaction.py; here it must not reach
     # a database, and every one of these threads is far too short to compact anyway.
