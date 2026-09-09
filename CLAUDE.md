@@ -1907,19 +1907,24 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   fail CI on all of them (#149). Add a module-scope `lazy()` const instead, never one inside
   a component body (that mints a new component type per render and remounts the subtree).
 - **Never build a `Date` from a TIMESTAMPTZ with the bare constructor** — use
-  `crm/gtd/util.parseUTC` (#125). Every such column is written from
-  `datetime.now(timezone.utc).isoformat()`, so it reaches the client with **six** fractional
-  digits where ECMA-262 defines three: V8 accepts the extra ones and JavaScriptCore does not, so
-  `new Date(...)` is Invalid Date in Safari and every iOS browser while every test runner here
-  stays green. `parseUTC` truncates to milliseconds and supplies a `Z` when the string carries no
-  zone. The same rule covers SORTING: a TIMESTAMPTZ is not lexicographically ordered, because the
-  zone may be spelled `Z` or `+00:00` and `Z` sorts after `+`, so one instant written two ways
-  compares unequal — sort on the parsed instant, with unparseable input yielding `null` so it
-  sinks under the null convention rather than poisoning comparisons with NaN. A date-ONLY
-  `YYYY-MM-DD` is the exception and keeps the local-parts constructor: it is a calendar date, and
-  reading it as UTC midnight renders a day early west of Greenwich. **A test for this needs the
-  zone-LESS case to be falsifiable** — under V8 a microsecond string parses either way, so the
-  obvious test passes against the bug.
+  `crm/gtd/util.parseUTC` (#125). Two reasons, and the one this was originally filed under is
+  **false**, recorded here so nobody re-derives it: every such column is written from
+  `datetime.now(timezone.utc).isoformat()` and so carries **six** fractional digits where
+  ECMA-262 defines three, and the claim was that JavaScriptCore rejects the extra ones, leaving
+  a column showing "—" in Safari. Measured against WebKit 26.5 and the system `jsc` during #125's
+  evidence run, it does not — the bare constructor parses that string correctly, and no column
+  was ever broken there. What survives is that more than three digits is implementation-DEFINED
+  rather than guaranteed, so the bare constructor bets on behaviour the spec does not require;
+  and that a zone-LESS timestamp is read as LOCAL by the constructor and as UTC by `parseUTC`,
+  a real divergence on every engine. The rule also covers SORTING, where the reason is
+  engine-independent: a TIMESTAMPTZ is not lexicographically ordered, because the zone may be
+  spelled `Z` or `+00:00` and `Z` sorts after `+`, so one instant written two ways compares
+  unequal — sort on the parsed instant, with unparseable input yielding `null` so it sinks under
+  the null convention rather than poisoning comparisons with NaN. A date-ONLY `YYYY-MM-DD` is
+  the exception and keeps the local-parts constructor: it is a calendar date, and reading it as
+  UTC midnight renders a day early west of Greenwich. **A test here must pin the zone-LESS case
+  to be falsifiable at all** — every engine parses a microsecond string either way, so the
+  obvious test passes against the code it is meant to reject.
 - Never add a route to `crm/gtd_router.build_router` that should stay private: that
   factory is mounted TWICE, and its second mount is the no-login public web app.
   Authenticated-only routes belong on the module-level `router` instead.
