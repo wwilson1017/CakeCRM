@@ -848,8 +848,12 @@ async def dashboard_today(
     unassigned tasks, because someone has to catch them. Reminders carry no owner
     column at all and appear in every scope.
 
-    Pure SQL, so the ranking is identical with zero AI providers configured. Rank 2 of
-    the ladder is reserved for the hot-deals follow-up (#125) and is never emitted yet.
+    Pure SQL, so the ranking is identical with zero AI providers configured — rank 2's
+    hot deals (#131) included: the temperature is a human's own judgment, written through
+    `deal_temperature`, and staleness is an interval comparison.
+
+    Items carry a `rank` of 1-5 or **null**. Null means "not on the ladder": a hot deal
+    that was touched recently, which the panel reveals only behind its expander.
     """
     return today_service.get_today(owner_id=owner_id)
 
