@@ -328,6 +328,22 @@ export interface CollectionSelectionProps {
    * invariant). `count` is that safe set's size.
    */
   renderBulkBar: (visibleSelectedIds: ReadonlySet<string | number>, count: number) => ReactNode;
+  /**
+   * Which rows may be selected at all. Absent ⇒ every row may.
+   *
+   * A row this rejects gets NO checkbox — not a disabled one, and not an unchecked one that
+   * silently refuses to tick. The distinction matters because a page may prune ids out of
+   * `selectedIds` for its own invariants (the CRM pipeline drops ARCHIVED deals, so the bulk
+   * count and the bulk payload describe one set), and a checkbox on such a row is then a dead
+   * control: every click stores the id and the next render throws it away.
+   *
+   * Keyed by ID rather than item so this interface stays non-generic — the page already knows
+   * which ids are ineligible, and every consumer passes `selection` as an inline literal.
+   *
+   * Same shape of rule as `dragDisabled` on the kanban side, and for the same reason: one
+   * class of row is inert while the surface around it stays live.
+   */
+  isSelectable?: (id: string | number) => boolean;
 }
 
 /** Controlled column-visibility for server-persisted state (CRM stage hiding). When present

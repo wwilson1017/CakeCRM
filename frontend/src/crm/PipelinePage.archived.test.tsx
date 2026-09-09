@@ -645,6 +645,29 @@ describe('PipelinePage — archived deals', () => {
     expect(toast.error).toHaveBeenCalledWith('Failed to load deals.');
   });
 
+  it('offers no selection checkbox on an archived row in LIST view either', async () => {
+    // The board withholds the checkbox via `selectable={!isMobile && !archived}`; the LIST is
+    // the shared layer's own table and had no such gate, so it rendered one. Clicking it stored
+    // the id, `liveSelectedIds` pruned it straight back out, and the box never ticked — a dead
+    // control on the one view where the rows are hardest to tell apart. Both views render the
+    // same records and owe the same answer.
+    routeApi();
+    await render();
+    await pickArchivedFacet('Include archived');
+
+    await click(button('List'), 'List view');
+
+    // The payload is one live deal and one archived, so exactly one checkbox.
+    const boxes = [...container.querySelectorAll('input[aria-label="Select row"]')];
+    expect(boxes).toHaveLength(1);
+    expect(container.textContent).toContain('Zebra rebuild');   // the archived row IS listed
+    expect(container.textContent).toContain('ARCHIVED');
+
+    // And the one box that exists selects the LIVE deal.
+    await click(boxes[0], 'the only row checkbox');
+    expect(container.textContent).toContain('1 deal selected');
+  });
+
   it('drops archived cards from the board when the narrowing load FAILS', async () => {
     // `pruneArchivedFromBoard` is the collection-layer replacement for #117's null branch in
     // the filter predicate: the layer skips an INACTIVE facet's predicate entirely, so

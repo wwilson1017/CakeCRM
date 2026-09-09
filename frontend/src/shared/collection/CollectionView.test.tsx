@@ -67,6 +67,7 @@ function Page({
   loading,
   onSelect = () => {},
   noSelect = false,
+  unselectableIds,
 }: {
   config: CollectionConfig<Row>;
   data?: readonly Row[];
@@ -75,6 +76,8 @@ function Page({
   onSelect?: (id: string | number | null) => void;
   /** A page that wires no `onSelect` at all — the surface with nothing to open (#148). */
   noSelect?: boolean;
+  /** Rows the page declares ineligible for selection (the CRM's archived deals). */
+  unselectableIds?: readonly number[];
 }) {
   const state = useCollectionState(config, data);
   const [selected, setSelected] = useState<ReadonlySet<string | number>>(new Set());
@@ -93,6 +96,9 @@ function Page({
           ? {
               selectedIds: selected,
               onChange: next => setSelected(next),
+              ...(unselectableIds
+                ? { isSelectable: (id: string | number) => !unselectableIds.includes(Number(id)) }
+                : {}),
               renderBulkBar: (visibleSelectedIds, count) => (
                 <div data-testid="bulk">
                   {[...visibleSelectedIds].sort().join(',')}|{count}
@@ -225,6 +231,37 @@ describe('selection', () => {
     act(() => state().setQuery('beta'));
     expect(state().visibleItems.map(r => r.id)).toEqual([2]);
     expect(document.querySelector('[data-testid="bulk"]')?.textContent).toBe('2|1');
+  });
+
+  it('gives an unselectable row no checkbox at all', () => {
+    // Not a disabled checkbox and not an unchecked one. A page may prune ids out of
+    // `selectedIds` for its own invariants — the pipeline drops archived deals so the bulk
+    // count and the bulk payload describe one set — and a checkbox on such a row is then a
+    // control that stores an id on every click and never ticks.
+    renderPage({ config: makeConfig('unsel'), withSelection: true, unselectableIds: [2] });
+    const rowBoxes = [...document.querySelectorAll('input[aria-label="Select row"]')];
+    expect(rowBoxes).toHaveLength(2);
+
+    click(rowBoxes[0]);
+    click(rowBoxes[1]);
+    // ids 1 and 3 — never 2, which has no control to click.
+    expect(document.querySelector('[data-testid="bulk"]')?.textContent).toBe('1,3|2');
+  });
+
+  it('select-all ignores unselectable rows, so it can still tick AND clear', () => {
+    // The second-order defect: with an unselectable row on screen, "every visible row is
+    // selected" is unreachable, so the header box never ticks — and because its clear branch
+    // is gated on that same flag, it never clears either. One archived row killed both halves.
+    renderPage({ config: makeConfig('unselall'), withSelection: true, unselectableIds: [2] });
+    const all = () => document.querySelector('input[aria-label="Select all visible"]') as HTMLInputElement;
+
+    click(all());
+    expect(document.querySelector('[data-testid="bulk"]')?.textContent).toBe('1,3|2');
+    expect(all().checked).toBe(true);
+
+    click(all());
+    expect(document.querySelector('[data-testid="bulk"]')).toBeNull();
+    expect(all().checked).toBe(false);
   });
 
   it('select-all covers the VISIBLE (filtered) set', () => {
