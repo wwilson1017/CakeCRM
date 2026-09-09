@@ -1,4 +1,4 @@
-# 🍰 CakeCRM
+# <img src="frontend/public/logo-mark.svg" alt="" height="32" align="absmiddle"> CakeCRM
 
 **A free, open-source, self-hostable CRM with an AI sales assistant built in.**
 
