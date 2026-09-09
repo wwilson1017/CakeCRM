@@ -83,8 +83,11 @@ describe('list columns and sort fields cannot drift', () => {
   it('every sortable column key names a real sort field', () => {
     const fieldValues = new Set(fields.map(f => f.value));
     const keys = buildPipelineListColumns(() => 'x').map(c => c.key);
-    // `stage` is display-only by design — the list is stage-major already.
-    for (const key of keys.filter(k => k !== 'stage')) {
+    // Two columns are display-only by design and so name no sort field: `stage` (the list is
+    // stage-major already) and `temperature` (#125 — a lexical sort over
+    // 'cold' | 'hot' | 'warm' orders the tiers wrongly while looking like it works, so
+    // sorting by it needs a real field with an explicit rank, as its own change).
+    for (const key of keys.filter(k => k !== 'stage' && k !== 'temperature')) {
       expect(fieldValues.has(key)).toBe(true);
     }
   });
@@ -98,7 +101,7 @@ describe('list columns and sort fields cannot drift', () => {
   it('the columns cover the fields a rep sorts by', () => {
     const keys = buildPipelineListColumns(() => 'x').map(c => c.key);
     expect(keys).toEqual([
-      'title', 'company', 'stage', 'value', 'probability', 'score', 'touches',
+      'title', 'temperature', 'company', 'stage', 'value', 'probability', 'score', 'touches',
       'closeDate', 'lastActivity', 'owner',
     ]);
   });
@@ -126,5 +129,61 @@ describe('date columns are parsed by KIND, not uniformly', () => {
   it('renders an em dash for an absent date rather than "Invalid Date"', () => {
     expect(cell('closeDate', deal({ id: 1, expected_close_date: '' }))).toBe('—');
     expect(cell('lastActivity', deal({ id: 1, last_activity_at: null }))).toBe('—');
+  });
+});
+
+// ── TIMESTAMPTZ parsing (found by Codex on #109's column) ────────────────────────────────────
+//
+// `last_activity_at` carries SIX fractional digits where ECMA-262 defines three. The finding
+// claimed JavaScriptCore rejects the extra ones, so the column showed "—" in Safari; measured on
+// WebKit 26.5 that is NOT true and never was. What stands: >3 digits is implementation-defined
+// rather than guaranteed, and a zone-LESS string is read as LOCAL by the bare constructor and as
+// UTC by `parseUTC` — which is the difference these tests can actually observe, and the reason
+// the first one below is written against a zone-less input.
+//
+// The suite runs under TZ=America/Chicago, so a UTC instant late in the day is the previous local
+// calendar day — which is exactly what makes this assert the conversion rather than the string.
+describe('a six-fraction-digit timestamp', () => {
+  const MICROS = '2026-05-15T02:30:00.123456+00:00';
+
+  it('renders the Last activity column through parseUTC, not the bare constructor', () => {
+    // ASSERTED ON THE ZONE-LESS CASE ON PURPOSE. Every current engine accepts six fractional
+    // digits, so a microsecond string alone renders identically with or without the fix and the
+    // obvious test would pass against the code it is meant to reject. What the constructor and
+    // `parseUTC` DO disagree about is a timestamp carrying no zone: the constructor reads it as
+    // LOCAL, `parseUTC` appends `Z` and reads it as UTC. Pinning that is what proves this column
+    // goes through `parseUTC` at all.
+    const col = buildPipelineListColumns(() => 'x').find(c => c.key === 'lastActivity')!;
+    const rendered = col.render(deal({ id: 1, last_activity_at: '2026-05-15T02:30:00.123456' })) as string;
+    // 02:30 UTC is the evening of the 14th in Chicago; read as local it would still be the 15th.
+    expect(rendered).toBe(new Date(2026, 4, 14).toLocaleDateString());
+  });
+
+  it('still renders the exact string shape Postgres returns', () => {
+    // Cannot fail on any current engine — kept as documentation of the real input, with the
+    // falsifiable half above. It would catch a future `parseUTC` that broke on microseconds.
+    const col = buildPipelineListColumns(() => 'x').find(c => c.key === 'lastActivity')!;
+    expect(col.render(deal({ id: 1, last_activity_at: MICROS })) as string).not.toBe('—');
+  });
+
+  it('sorts on the instant, so it is not treated as an absent value', () => {
+    const field = pipelineSortFields(() => 'x').find(f => f.value === 'lastActivity')!;
+    const older = field.get!(deal({ id: 1, last_activity_at: '2026-05-15T02:00:00.000001+00:00' }));
+    const newer = field.get!(deal({ id: 2, last_activity_at: MICROS }));
+    expect(older).not.toBeNull();
+    expect(newer).not.toBeNull();
+    expect(Number(newer)).toBeGreaterThan(Number(older));
+  });
+
+  it('orders the same instant identically however its zone is punctuated', () => {
+    // `Z` sorts after `+` lexically, so the old string comparison called these two unequal.
+    const field = pipelineSortFields(() => 'x').find(f => f.value === 'lastActivity')!;
+    expect(field.get!(deal({ id: 1, last_activity_at: '2026-05-15T02:30:00.123Z' })))
+      .toBe(field.get!(deal({ id: 2, last_activity_at: '2026-05-15T02:30:00.123+00:00' })));
+  });
+
+  it('sinks an unparseable timestamp rather than poisoning the comparison with NaN', () => {
+    const field = pipelineSortFields(() => 'x').find(f => f.value === 'lastActivity')!;
+    expect(field.get!(deal({ id: 1, last_activity_at: 'not a date' }))).toBeNull();
   });
 });

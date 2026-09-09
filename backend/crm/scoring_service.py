@@ -26,10 +26,16 @@ Design notes
   over a newer one. A daily heartbeat refresh keeps the time-decay factors fresh, and a
   manual backfill endpoint/tool repairs drift.
 * **Deliberate omissions:** no standalone contact "age" factor (recency subsumes it); the
-  blueprint's ``deal_temperature`` / ``last_contact_date`` / ``number_of_units`` custom-field
-  factors are dropped (CakeCRM ships zero custom-field definitions) — ``last_contact_date``
-  is re-sourced natively as the newest chatter/activity timestamp. ``update_note`` /
-  ``update_activity`` are non-triggers (content-only edits don't change counts or timestamps).
+  blueprint's ``last_contact_date`` / ``number_of_units`` custom-field factors are dropped
+  (CakeCRM ships zero custom-field definitions) — ``last_contact_date`` is re-sourced
+  natively as the newest chatter/activity timestamp. ``update_note`` / ``update_activity``
+  are non-triggers (content-only edits don't change counts or timestamps).
+* ``deal_temperature`` **was** on that dropped list for the same reason, and issue #125 took
+  it off by removing the reason rather than working around it: it is a real ``deals`` column
+  here, not a custom field, so the factor exists on every install instead of only on one
+  where an admin happened to create a definition with the right key. Its multipliers and its
+  neutral-when-unset default diverge from the blueprint deliberately —
+  see ``_temperature_multiplier``.
 """
 
 from __future__ import annotations
@@ -182,6 +188,45 @@ def _age_multiplier(days: float | None) -> float:
     return 0.6
 
 
+# Deal temperature (issue #125) — the rep's own read on a deal, and the ONLY factor in this
+# module a human sets directly. `deals.deal_temperature` is a dedicated column; see its
+# migration header for why it is not the blueprint's custom field.
+#
+# TWO DELIBERATE DIVERGENCES FROM THE BLUEPRINT, both worth stating because a future reader
+# comparing the two files will notice the numbers do not match.
+#
+# 1. UNSET IS NEUTRAL (1.0), where the blueprint defaults an unset field to Cold and its
+#    0.4x. NULL here means nobody has triaged the deal — it is not a judgment, and only a
+#    judgment should move a score. Porting the Cold default literally would have multiplied
+#    EVERY existing deal's score by 0.4 at the next daily refresh: an install-wide silent
+#    change to a number people sort by, caused by a deploy rather than by any user action.
+#    (The blueprint is not even self-consistent here: it reads the EAV row with a bare
+#    `field_vals.get(key, "Cold")`, so a never-scored deal gets 0.4x while a deal explicitly
+#    CLEARED back to unset stores '' and falls through to its unmatched-key default instead.)
+#
+# 2. RESCALED to this module's range. The blueprint's Hot is 2.5x, where the widest spread
+#    among the five factors above is engagement's 0.6-1.25. At 2.5x the score saturates
+#    across the ordinary middle of the range: with typical secondary factors (~1.27 combined)
+#    a hot `proposal` deal computes 101 and a hot `negotiation` 143 — both clamp to 99, so
+#    the two become indistinguishable. At 1.6x the same deals land at 65 and 91. Temperature
+#    is still the single strongest factor here, which is the point of the feature; a deal
+#    strong on EVERY factor does still reach the clamp, which is correct.
+_TEMPERATURE_MULTIPLIERS = {"hot": 1.6, "warm": 1.1, "cold": 0.5}
+
+
+def _temperature_multiplier(value: str | None) -> float:
+    """Multiplier for a stored temperature. 1.0 for unset AND for anything unrecognised.
+
+    Failing an unknown value toward NEUTRAL is the safe direction: the migration's CHECK
+    makes one unrepresentable, so reaching this branch means the column drifted from this
+    table, and a score that silently halves is worse than one that ignores a value it
+    cannot read.
+    """
+    if not value:
+        return 1.0
+    return _TEMPERATURE_MULTIPLIERS.get(value.strip().lower(), 1.0)
+
+
 # --- contact factor multipliers ---
 
 _CONTACT_STATUS_BASE = {"active": 30, "inactive": 15, "archived": 5}
@@ -274,8 +319,10 @@ def _compose_deal(deal: dict, chatter_count: int, last_touch, now: datetime) -> 
     m_rel = _relationship_multiplier(bool(deal.get("contact_id")), bool(deal.get("company_id")))
     m_rec = _recency_multiplier(recency_days)
     m_age = _age_multiplier(age_days)
+    temperature = deal.get("deal_temperature")
+    m_temp = _temperature_multiplier(temperature)
 
-    score = _clamp(baseline * m_eng * m_val * m_rel * m_rec * m_age)
+    score = _clamp(baseline * m_eng * m_val * m_rel * m_rec * m_age * m_temp)
     return {
         "score": score,
         "factors": {
@@ -288,6 +335,10 @@ def _compose_deal(deal: dict, chatter_count: int, last_touch, now: datetime) -> 
             },
             "recency": {"value": None if recency_days is None else round(recency_days, 1), "multiplier": m_rec},
             "age": {"value": None if age_days is None else round(age_days, 1), "multiplier": m_age},
+            # Emitted even when unset, with value None and multiplier 1.0, so a breakdown
+            # says "nobody has triaged this" rather than staying silent about a factor that
+            # exists. Issue #125.
+            "temperature": {"value": temperature, "multiplier": m_temp},
         },
     }
 

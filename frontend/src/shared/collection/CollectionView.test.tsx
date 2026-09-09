@@ -264,6 +264,21 @@ describe('selection', () => {
     expect(all().checked).toBe(false);
   });
 
+  it('renders NO select-all header when nothing on screen can be selected', () => {
+    // The Archived-only list, which #83's facet makes an ordinary view rather than a corner: with
+    // every visible row ineligible, `allSelected` is pinned false by its own `length > 0` guard
+    // and the clear branch is gated on that same flag — so the header box could neither tick nor
+    // clear. That is the identical dead-both-halves failure the test above fixes from the other
+    // direction, and the honest answer here is no control at all. The COLUMN stays, so the table
+    // keeps its shape and the rows keep their empty cells.
+    renderPage({ config: makeConfig('allunsel'), withSelection: true, unselectableIds: [1, 2, 3] });
+    expect(document.querySelector('input[aria-label="Select all visible"]')).toBeNull();
+    expect(document.querySelectorAll('input[aria-label="Select row"]')).toHaveLength(0);
+    // The header cell itself is still there — this suppresses a control, not a column.
+    expect(document.querySelectorAll('thead th').length)
+      .toBe(document.querySelectorAll('tbody tr:first-child td').length);
+  });
+
   it('select-all covers the VISIBLE (filtered) set', () => {
     renderPage({ config: makeConfig('selall'), withSelection: true });
     act(() => state().setVoided('hide'));

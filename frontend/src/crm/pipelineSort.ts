@@ -17,9 +17,15 @@
 
 import type { SortFieldDef, SortState } from '../shared/search';
 import type { CrmDeal } from '../core/types';
+import { parseUTC } from './gtd/util';
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const text = (v: string | null | undefined): string | null => (v ? v.toLowerCase() : null);
+// Epoch ms for a TIMESTAMPTZ, via the same `parseUTC` the columns render through. (The original
+// rationale — that JavaScriptCore rejects Postgres's six fractional digits — was measured false
+// on WebKit 26.5; see the note in `pipelineListColumns.shortDate`. The reasons below stand.)
+const instant = (v: string | null | undefined): number | null =>
+  (v ? num(parseUTC(v).getTime()) : null);
 
 const STATIC_SORT_FIELDS = [
   { value: 'boardOrder', label: 'Board order', arrayOrder: true },
@@ -29,10 +35,17 @@ const STATIC_SORT_FIELDS = [
   { value: 'probability', label: '% Closed', get: (d: CrmDeal) => num(d.probability) },
   { value: 'score', label: 'Lead score', get: (d: CrmDeal) => num(d.lead_score) },
   { value: 'touches', label: 'Touches', get: (d: CrmDeal) => num(d.ai_touch_count) },
-  // ISO-8601 strings compare correctly with < / >, which is what sort.ts uses — deliberately
-  // not localeCompare, whose ICU collation mis-orders timestamp ties.
+  // A date-ONLY `YYYY-MM-DD` compares correctly with < / >, which is what sort.ts uses —
+  // deliberately not localeCompare, whose ICU collation mis-orders ties.
   { value: 'closeDate', label: 'Close date', get: (d: CrmDeal) => d.expected_close_date || null },
-  { value: 'lastActivity', label: 'Last activity', get: (d: CrmDeal) => d.last_activity_at || null },
+  // `last_activity_at` does NOT get that treatment, and this reason is engine-independent: a
+  // TIMESTAMPTZ is not lexicographically ordered, because the zone may be spelled `Z` or
+  // `+00:00` and `Z` sorts after `+` — so the same instant written two ways compares unequal and
+  // two rows can order by how their suffix happens to be punctuated. Sorting on the parsed
+  // instant removes the question. Invalid input yields null rather than NaN, so it sinks to the
+  // bottom in both directions under the null convention above instead of poisoning every
+  // comparison it takes part in.
+  { value: 'lastActivity', label: 'Last activity', get: (d: CrmDeal) => instant(d.last_activity_at) },
 ] as const satisfies readonly SortFieldDef<CrmDeal>[];
 
 /**

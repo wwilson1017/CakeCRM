@@ -1384,6 +1384,78 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   user/tool/assistant-writable. Deals sort by score client-side (within kanban column);
   contacts keep a server-sorted `lead_score` column (`DESC NULLS LAST`) for the REST/tool
   path, but since #77 the Contacts page sorts client-side over its assembled corpus.
+  **#125 gave it its first human INPUT: `deals.deal_temperature`** — `'hot' | 'warm' | 'cold'`,
+  or NULL when nobody has triaged the deal. `lead_score` stays unwritable; the temperature is
+  an input like `probability`, so it sits in `_DEAL_USER_WRITABLE` + `_DEAL_COLUMN_TYPES`,
+  writes through `_write_deal_update` (inheriting #96's SQL no-op test and the `score_on_event`
+  rescore) and is exposed on `crm_update_deal` / `crm_create_deal`.
+  **A dedicated column, not the blueprint's #19 custom field, and the reason is this module's
+  own docstring**: it recorded that this exact factor was dropped from the #18 port "because
+  CakeCRM ships zero custom-field definitions". Storing it as a custom field does not retire
+  that — `crm_field_definitions` ships EMPTY by deliberate design (its migration says the
+  blueprint's pre-seeded definitions are one operator's business data) and nothing seeds one,
+  so the factor would be dead code until an admin hand-created a definition under exactly the
+  right key. Three more: `field_service.set_field_values` touches neither the parent row nor
+  the score, so the EAV route would need NEW rescore wiring instead of riding the chokepoint;
+  every deal-returning read in `crm/service.py` is `SELECT d.*`, so a column reaches the board,
+  the list, the sheet, the dashboard, both rollups and the Reports timeline with no query edits;
+  and a CHECK constraint makes an invalid tier unrepresentable where an EAV `TEXT` value cannot.
+  **`SELECT d.*` is not the whole story, though** — `tools._DEAL_SUMMARY_FIELDS` is an explicit
+  projection, so a new deal column stays invisible to `crm_get_pipeline` and `crm_search_deals`
+  until it is named there. Two other readers keep explicit column lists too
+  (`analytics_service.get_stale_deals` / `get_deal_health`); temperature is deliberately absent
+  from both, since exposing the value is a different question from adding a health flag.
+  **Three divergences from the blueprint, each deliberate.** (1) **Three tiers, not four** — it
+  carries a `Cool` between warm and cold; #125's title and body both say Hot/Warm/Cold, and a
+  shorter ladder matters for a click-to-cycle control. (2) **Unset is NEUTRAL (1.0), not Cold's
+  0.4x.** NULL means nobody judged the deal, and only a judgment should move a score; porting
+  the Cold default literally would have multiplied EVERY existing deal's score by 0.4 at the
+  next daily refresh — an install-wide silent change to a sorted number, caused by a deploy
+  rather than by any user action. (The blueprint is not self-consistent here either: it reads
+  the EAV row with a bare `.get(key, "Cold")`, so a never-scored deal gets 0.4x while one
+  explicitly CLEARED stores `''` and falls through to a different default.) (3) **Rescaled to
+  1.6 / 1.1 / 0.5.** At the blueprint's 2.5x a hot `proposal` computes ~101 and a hot
+  `negotiation` ~143 *with typical secondary factors* — both clamp to 99, so two deals a rep
+  ranks very differently render identically. The clamp is still reachable for a deal strong on
+  every factor, which is correct; what must not happen is the ordinary middle of the range
+  collapsing. Temperature is still the strongest single factor (widest existing spread is
+  engagement's 0.6-1.25), which is the point of the feature — a rep's read beats every inferred
+  signal. An unrecognised stored value also reads as 1.0, failing toward neutral because the
+  CHECK makes one unrepresentable, so reaching that branch means the column drifted.
+  On the client, `crm/dealTemperature.ts` holds the pure rules and
+  `components/DealTemperatureIcon.tsx` is the one control, used by the board card, the List
+  column and the deal sheet. **The cycle is `not set → hot → warm → cold → not set`**: one
+  click from rest flags a hot deal (the blueprint's call, and right), and it RETURNS to unset,
+  which the blueprint's does not — there, clearing needs its custom-fields dropdown, and this
+  repo has no second surface for a column, so a one-way cycle would make a mis-click permanent
+  from the card. **Every state has its own SHAPE**, not just its own hue — dashed ring (not
+  set), flame (hot), filled dot (warm), solid ring (cold) — because distinguishing tiers by
+  colour alone fails WCAG 1.4.1 and a `title` helps assistive tech, not someone looking at the
+  screen. The first cut gave warm and cold one filled dot in two colours; `dealTemperatureRenderKind`
+  now exports the mapping and the test walks the click cycle asserting no two ADJACENT states
+  share a kind, verified red against that regression. The flame takes `CORAL_TEXT`, not a fill
+  token: `shared/styles.ts` says `_TEXT` paints a glyph, "text **or an icon**" (#119), and that
+  pairing on a stage-washed card is already measured by `hueContrast.test.ts`, so nothing new is
+  owed there; the dots are fills and owe nothing either. The List column is **display-only**
+  like `stage` — a lexical sort over `'cold' | 'hot' | 'warm'` orders the tiers wrongly while
+  looking like it works, so sorting by temperature needs a real sort field with an explicit
+  rank, as its own change.
+  All three surfaces write through #74/#75's `writeDeal` as a **fields-only patch**, which is
+  what serialises a temperature cycle against a drag of the same deal on that deal's write
+  chain — both reconcile from `get_deal`'s full row, so in parallel a stage response would
+  spread a stale `deal_temperature` over the one just written. **The board card takes the writer
+  as a plain prop; the List reaches it through a context** (`components/DealTemperatureCell.tsx`),
+  and that asymmetry is forced rather than chosen: the List's columns are built inside a
+  `useMemo` that must stay stable (config identity keys every memo in the collection layer), and
+  this repo's `react-hooks` v7 ruleset rejects even *referencing* a ref-reading function from a
+  memo body — `writeDeal` reads five refs. Passing the callback, a latest-ref indirection and
+  `useEffectEvent` were each tried and each rejected, the last with "cannot be assigned to a
+  variable or passed down". An absent provider means read-only, so a future host that lists deals
+  without a writer cannot advertise editing it cannot do. `deal_temperature` joins `DealPatch`
+  but never `formFields`: it has its own one-click control, so it stays out of the sheet's dirty
+  comparison, and the sheet's row renders **unconditionally** for the same reason #128's Owner
+  row does. Rank 2 of #130's Today ladder is reserved for the hot+stale follow-up (#131), which
+  reads `deal_temperature = 'hot'` in plain SQL beside `LAST_TOUCH_SQL`.
 - **The three list pages run on the #73 collection layer** (#77 — Contacts, Companies,
   Tasks; the pipeline board keeps #21's own bar). The layer filters an **in-memory** array
   and has no server-search hook, so a facet over a server-paginated slice would silently
@@ -1944,6 +2016,25 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   back in front of every visitor, and `src/bootSplit.test.ts` + `src/bootSplitBuild.test.ts`
   fail CI on all of them (#149). Add a module-scope `lazy()` const instead, never one inside
   a component body (that mints a new component type per render and remounts the subtree).
+- **Never build a `Date` from a TIMESTAMPTZ with the bare constructor** — use
+  `crm/gtd/util.parseUTC` (#125). Two reasons, and the one this was originally filed under is
+  **false**, recorded here so nobody re-derives it: every such column is written from
+  `datetime.now(timezone.utc).isoformat()` and so carries **six** fractional digits where
+  ECMA-262 defines three, and the claim was that JavaScriptCore rejects the extra ones, leaving
+  a column showing "—" in Safari. Measured against WebKit 26.5 and the system `jsc` during #125's
+  evidence run, it does not — the bare constructor parses that string correctly, and no column
+  was ever broken there. What survives is that more than three digits is implementation-DEFINED
+  rather than guaranteed, so the bare constructor bets on behaviour the spec does not require;
+  and that a zone-LESS timestamp is read as LOCAL by the constructor and as UTC by `parseUTC`,
+  a real divergence on every engine. The rule also covers SORTING, where the reason is
+  engine-independent: a TIMESTAMPTZ is not lexicographically ordered, because the zone may be
+  spelled `Z` or `+00:00` and `Z` sorts after `+`, so one instant written two ways compares
+  unequal — sort on the parsed instant, with unparseable input yielding `null` so it sinks under
+  the null convention rather than poisoning comparisons with NaN. A date-ONLY `YYYY-MM-DD` is
+  the exception and keeps the local-parts constructor: it is a calendar date, and reading it as
+  UTC midnight renders a day early west of Greenwich. **A test here must pin the zone-LESS case
+  to be falsifiable at all** — every engine parses a microsecond string either way, so the
+  obvious test passes against the code it is meant to reject.
 - Never add a route to `crm/gtd_router.build_router` that should stay private: that
   factory is mounted TWICE, and its second mount is the no-login public web app.
   Authenticated-only routes belong on the module-level `router` instead.
@@ -2139,6 +2230,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Custom fields (EAV `crm_field_definitions`/`crm_field_values`, Settings editor, entity-form + detail-page value inputs, 6 `crm_*_fields` tools) — **landed #19** as `backend/crm/field_service.py` + `frontend/src/crm/components/{CustomFieldSettings,CustomFieldsSection,CustomFieldInputs}.tsx` | `cake_os/backend/apps/crm/field_service.py` |
 | Touch counts + field provenance (`deals.ai_touch_*` cols + in-process recompute worker; `crm_field_provenance` + `AiBadge`/`ProvenanceBadge`/`TouchCountPill`) — **landed #16** as `backend/crm/touch_count_service.py` + `provenance_service.py`. **Per-event verdict detail view landed #56**: the `deal_ai_touch_evidence` JSONB snapshot (FK-less, one row per deal, written in the count's own transaction and rowcount-gated), `touch_count_service.get_touch_evidence` + `GET /api/crm/deals/:id/touch-count/evidence`, and `frontend/src/crm/{touchEvidence.ts,components/AiTouchDetail.tsx}` — at which point `ai_touch_count` became the **derived sum of per-line verdicts** so the pill and its explanation cannot disagree (see the CRM bullet for the window shrink and the `verdict_state` reconciliation) | `cake_os/backend/apps/crm/touch_count_service.py`, `provenance_service.py` (the detail view + its evidence table are ported from the blueprint CRM's touch-count evidence feature) |
 | Lead scoring (pure-algorithmic `lead_score` 0-100 on deals+contacts; event-triggered inline recompute serialized by a per-entity advisory lock + a bounded daily heartbeat refresh + backfill endpoint/tools `crm_get_lead_score`/`crm_recompute_lead_scores`; sortable contact list + `ScorePill`) — **landed #18** as `backend/crm/scoring_service.py`. Since the #22 merge the write-event chokepoint for deal-column writes is `service._write_deal_update` (one hook covers the #22 lifecycle verbs too), with `archive_deal`/`merge_deals` hooked separately; archived deals are excluded from the contact deal-linkage aggregate | `cake_os/backend/apps/crm/scoring_service.py` |
+| Deal temperature (`deals.deal_temperature` hot/warm/cold + NULL; `_temperature_multiplier` as #18's first human-set factor; `normalize_deal_temperature` as the one validator both untrusted callers share; `crm/dealTemperature.ts` + `components/DealTemperatureIcon.tsx`; a display-only List column and a click-to-cycle icon on the board card and deal sheet) — **landed #125** across `backend/crm/{service,scoring_service,router,tools}.py` + `20260909063009_deal_temperature.sql` + `frontend/src/crm/*` + `shared/icons.tsx` (`IconFlame` added, the #73 `IconChevronLeft` precedent). **Corrects the issue's own framing of the blueprint twice.** It describes upstream as "Hot/Warm/Cold, default Cold"; upstream actually has FOUR tiers (a `Cool` between warm and cold), and its Cold default fires only for a truly absent EAV row — a deal explicitly cleared stores `''` and falls through to a different multiplier, an inconsistency rather than a design. And it presents the storage choice as open with custom-field parity as the default; the parity option is the one that does NOT work here, because `scoring_service`'s docstring already recorded this factor being dropped from #18 for want of custom-field definitions, which ship empty by design with no seed path. **DIVERGES on three points**, each in the CRM bullet above: three tiers not four, unset is neutral rather than Cold (so deploying changes no existing score), and the multipliers are rescaled to 1.6/1.1/0.5 because 2.5x saturates the 99 clamp across the ordinary middle of the range. NOT ported: upstream's `020_dimm_seed_data.sql` field-definition seed (no such table here, and #19's ships empty deliberately), its Odoo `priority` import mapping (no importer), its `get_hot_deals_for_today` INNER-join scan (that is #131's, and reads a column here rather than two EAV tables), its one-way cycle with no route back to unset, and its `validate_field_value` empty-string repair (a custom-field fix with nothing to fix on a column) | `cake_os/backend/apps/crm/scoring_service.py` + `frontend/src/apps/crm/{dealTemperature.ts,components/DealTemperatureIcon.tsx}` @ `1699acf92` (cake_os #2293 / PR #2301) |
 | Scoring, analytics — analytics **landed #20** as `service.get_analytics()`/`summarize_analytics()` + `GET /api/crm/analytics` + `crm_analytics` tool + enriched `CrmDashboardPage` (win/loss, activity volume, read-time deal aging from existing timestamps — no migration; stage-duration metrics dropped, no stage-change audit trail; scoring landed separately in #18 above) | `cake_os/backend/apps/crm/*_service.py` |
 | Dashboard parity (stat row + Weekly Touches) — **landed #76** as `service.get_weekly_touches()` + `GET /api/crm/dashboard/weekly-touches` + `frontend/src/crm/components/WeeklyTouchesCard.tsx`, plus `total_companies` on `get_dashboard_stats()` and a four-tile stat row on `CrmDashboardPage`. Ported for CONTENT parity, **additively** — the blueprint component is written against Tailwind classes (`bg-cream`/`text-charcoal`/`font-heading`) that #54 removed, and a literal replacement would have deleted #20's analytics sections. The blueprint's PER-REP grouping collapsed to per-DEAL here (no owner columns, single-user then), with the envelope keeping `window`/`total_touches`/`total_open_deals` and `deals` standing where it had `reps` — **and #146 is the re-grouping that anticipated**, so `reps` is what ships today (see that row). **Two separate signals, deliberately:** window MEMBERSHIP is `LAST_TOUCH_SQL` — the same keyless GREATEST(edit, newest activity, newest live note) expression `analytics_service.get_stale_deals` uses, so the card and the "Needs a touch" panel on the same page can never disagree about what a touch is — while the per-deal NUMBER is #16's `ai_touch_count`, which is what supplies the zero-keys gate (no provider ⇒ every count NULL ⇒ `computed_deals == 0` ⇒ the card renders `null`; it owns its own wrapper padding, so hiding leaves no gap). Membership is emphatically NOT `deals.ai_touch_count_at`: that column is #16's stale-write-guard watermark (it only advances when a provider answered and the CAS accepted, and falls back to the deal's `created_at`), so keying a window off it made every provider timeout silently drop a deal from an accountability number — and left numerator and denominator with different coverage on a half-backfilled install. Because membership is keyless, both sides of the ratio are coverage-independent. The touch-count colour ramp moved to `crm/constants.ts` and is shared with `TouchCountPill` (one number, one colour, app-wide). Window math mirrors the blueprint but on UTC calendar days — no CT convention here, so the inclusive end-day bound is a plain +1 day, guarded against the `datetime.max` OverflowError that is not a `ValueError`; the filter is labelled UTC rather than converting per viewer. It **stays** UTC after #130 moved this module's "today" decisions onto the configured timezone (that bullet has the reasoning): a labelled absolute window the caller names explicitly is a different question from "is this task overdue right now". Drill-down landed with #56: each row opens the deal sheet via `onOpenDeal`, whose evidence section explains that deal's number event by event. | `cake_os/frontend/src/apps/crm/components/DashboardTab.tsx` + `WeeklyTouchesCard.tsx` + `backend/apps/crm/dashboard_service.py` |
 | Weekly Touches per rep + the per-rep drill-down page — **landed #146** as `service.get_weekly_touches` (one `GROUP BY d.owner_id` aggregate + one `ROW_NUMBER() OVER (PARTITION BY d.owner_id)` rows query, both shared with `get_weekly_touch_detail`), the pure `_shape_touch_reps`, the shared-snapshot reader `_touch_snapshot_reads`, `GET /api/crm/dashboard/weekly-touches/detail?owner=<id|unassigned>`, and `frontend/src/crm/{weeklyTouches.ts,WeeklyTouchesDetailPage.tsx,components/TouchDealRow.tsx}` at `/crm/touches/:owner`. Membership, the per-deal number and the zero-keys gate are all unchanged from #76. **The rep universe is every owner of an open deal INCLUDING the NULL bucket** — named "Unassigned" (the OWNERSHIP word; `_shape_per_rep`'s "Unattributed" is about authorship) and sorted last — so a rep who touched nothing still gets a row, which is the point of a weekly accountability pull, and the totals are the bucket sums **by construction** rather than a separately-computed number that could drift. The cap is PER REP (a global `LIMIT` would leave rep rows showing a count with no rows beneath them), and the window filter sits inside the ranked subquery so the cap ranks only deals that count. The **single-rep case renders flat** — the pre-#146 card — but still shows its owner, and its Details link on the same `touches > 0` gate every other rep row uses: dropping the header entirely would break #128's unassigned-renders rule and, with no `NAV_ITEMS` entry, leave the new page reachable only by typed URL on a single-seat install. The drill-down **RE-RESOLVES the window** (it takes the same `start`/`end` calendar days the card takes, and nothing at all on the rolling default) rather than inheriting the card's exact instants, and that is a correction the final review forced after an earlier revision did forward them. Freezing the bounds looks like it guarantees the page lists what the clicked number counted; it cannot, because membership under `LAST_TOUCH_SQL` is "this deal's CURRENT most recent touch falls in the window" — a statement about now, not a historical fact. A touch made after the card rendered therefore moves that deal PAST a frozen upper bound and deletes it from the page, **including a touch the user makes from the page itself**: log a call and the deal you just worked vanishes from the list of deals you touched. Reproduced on Postgres and now pinned by two integration tests. Re-resolving asks the card's question at open time, so the page is always internally consistent and always current; the cost is that a dashboard left open for an hour links to a page an hour fresher than its own number, which is the honest form of the same disagreement. `owner` is a REQUIRED param spelling NULL as a literal, deliberately unlike `/dashboard/today`'s absent-means-everyone `owner_id`, which cannot address the unowned bucket; it is range-checked to a 32-bit id, since a larger one reaches Postgres as an out-of-range comparison and 500s. **Both surfaces read on ONE snapshot**, via `_touch_snapshot_reads` — `get_connection` + `SET TRANSACTION ISOLATION LEVEL REPEATABLE READ` + `row_to_dict`, the sanctioned own-your-cursor path. Each puts a count and the rows behind it on one screen, so two snapshots are a way to render a contradiction: "6 of 5 open deals touched", a rep row with more deals under it than its own number admits, or every row dropped because the bucket vanished between the reads. That makes `_shape_touch_reps`' orphan branch unreachable in production; it stays because the shaper is a pure function over whatever rows it is handed. The drill-down is also BOUNDED (`WEEKLY_TOUCHES_DETAIL_MAX`, probed one past) and reports `truncated`, because a page promising the full list must not quietly serve a prefix. NOT ported: the blueprint's owner-authored-chatter touch definition and its most-recent-note column (CakeCRM's per-event explanation is #56's evidence view inside the deal sheet), its Central-time window logic, its `?label=` free-text forward (the server owns the label), and its EXCLUSION of unowned deals. A "mine" scope was considered and deferred: Weekly Touches is a comparison view, and if it is ever wanted it is a client-side filter of `reps` by the current user, never a backend param whose absent/NULL semantics would collide with the Unassigned bucket. | `cake_os/backend/apps/crm/dashboard_service.py` (`get_weekly_touches`/`get_touch_detail`/`_resolve_detail_window`) + `frontend/src/apps/crm/components/{WeeklyTouchesCard,WeeklyTouchesDetailPage}.tsx` @ `8e4d202f9` (cake_os #602) |
