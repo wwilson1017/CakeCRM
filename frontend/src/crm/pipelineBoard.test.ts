@@ -7,58 +7,17 @@
 // runtime. Everything else here is pure and indifferent to the environment.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CrmDeal } from '../core/types';
+import { installLocalStorage } from './testStorage';
 import {
   boardOrder, loadHiddenStages, loadShowClosedStages, openPipelineTotals, saveHiddenStages,
   saveShowClosedStages, stageFromToggleKey, stageLabel, stageToggleKey, visibleStageKeys,
 } from './pipelineBoard';
 
-/**
- * A localStorage shim, installed because the RUNNER has none — not because the code wants one.
- *
- * Node's own `localStorage` global is a getter that stays `undefined` without
- * `--localstorage-file`, and it SHADOWS the one jsdom would otherwise install: under this
- * environment `window.localStorage` is the very same undefined. `sessionStorage` is a Node
- * global too but a working one, which is why nothing in this file needed a shim before #124.
- *
- * It is the environment, never the subject. Every assertion below drives the real
- * `loadShowClosedStages`/`saveShowClosedStages` against it, and `refuseWrites` reproduces
- * private mode by throwing exactly where a browser would.
- */
-function installLocalStorage(refuseWrites = false): () => void {
-  const store = new Map<string, string>();
-  const shim = {
-    getItem: (k: string) => store.get(k) ?? null,
-    setItem: (k: string, v: string) => {
-      if (refuseWrites) throw new Error('QuotaExceededError');
-      store.set(k, String(v));
-    },
-    removeItem: (k: string) => { store.delete(k); },
-    clear: () => { store.clear(); },
-    key: (i: number) => [...store.keys()][i] ?? null,
-    get length() { return store.size; },
-  };
-  const prev = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
-  Object.defineProperty(globalThis, 'localStorage', { value: shim, configurable: true, writable: true });
-  return () => {
-    if (prev) Object.defineProperty(globalThis, 'localStorage', prev);
-    else delete (globalThis as { localStorage?: unknown }).localStorage;
-  };
-}
-
-// Sampled at MODULE LOAD, before any hook has installed the shim — the only moment the
-// pristine runner is observable. The shim would be pointless if the runner already had a real
-// localStorage, and a future runtime or vitest version could supply one; this file's assertions
-// must not silently start measuring THAT instead. Pinned rather than assumed.
-const RUNNER_LOCAL_STORAGE = typeof (globalThis as { localStorage?: unknown }).localStorage;
-
-describe('the test environment this file compensates for', () => {
-  it('has no localStorage of its own, which is why the shim exists', () => {
-    expect(RUNNER_LOCAL_STORAGE).toBe('undefined');
-  });
-});
-
 let restoreLocalStorage: () => void = () => {};
 
+// A fresh, empty store for EVERY test. This cannot be left to the host: the two runners this
+// suite meets disagree about whether `localStorage` exists at all, and that decides both what
+// these assertions measure and whether one case seeds the next. See `testStorage.ts`.
 beforeEach(() => { restoreLocalStorage = installLocalStorage(); });
 afterEach(() => { restoreLocalStorage(); });
 
@@ -225,7 +184,18 @@ describe('hidden-stage persistence', () => {
 describe('the durable show-closed preference (#124)', () => {
   beforeEach(() => sessionStorage.clear());
 
+  it('is measuring a REAL store, so none of the cases below is vacuous', () => {
+    // `loadShowClosedStages` swallows its own error and answers `false`, so with no working
+    // localStorage most of this block would pass while proving nothing — which is what a dev
+    // machine without one actually did. Assert the store round-trips before trusting the rest.
+    saveShowClosedStages(true);
+    expect(localStorage.getItem('cakecrm_pipeline_show_closed')).toBe('true');
+    expect(loadShowClosedStages()).toBe(true);
+  });
+
   it('defaults to false — closed stages hidden — with nothing stored', () => {
+    // Doubles as the leak check: the case above turned the preference ON, and this reads
+    // false only because every test gets its own store.
     expect(loadShowClosedStages()).toBe(false);
   });
 

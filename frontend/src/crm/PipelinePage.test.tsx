@@ -13,6 +13,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { ActiveRecordProvider } from './RecordContext';
 
 import type { CrmDeal } from '../core/types';
+import { installLocalStorage } from './testStorage';
 
 const api = vi.hoisted(() => vi.fn());
 vi.mock('../core/api/client', () => ({
@@ -81,8 +82,16 @@ const text = () => document.body.textContent ?? '';
 const buttonByText = (label: string) =>
   [...document.querySelectorAll('button')].find(b => (b.textContent ?? '').trim() === label);
 
+let restoreLocalStorage: () => void = () => {};
+
 beforeEach(() => {
   sessionStorage.clear();
+  // A fresh localStorage per test, and it is load-bearing rather than hygiene. Left to the
+  // HOST the two runners disagree: with none, `saveShowClosedStages`' write is swallowed and
+  // the preference case below proves only half of what it claims; with one, that same case
+  // seeds every later test in this file and the hide-a-column test reads the wrong stored set.
+  // Both were live at once — green locally, red on CI. See `testStorage.ts`.
+  restoreLocalStorage = installLocalStorage();
   // jsdom implements no layout, so Element.scrollIntoView does not exist — the deep-link
   // and chip-bar paths both call it. Stubbing it keeps the test about the page's logic
   // rather than about jsdom's gaps.
@@ -112,6 +121,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  restoreLocalStorage();
 });
 
 describe('mounting', () => {

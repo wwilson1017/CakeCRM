@@ -13,35 +13,18 @@
 //      card actually calls it.
 //   3. It renders as a real Settings card under its own registry id.
 //
-// The localStorage shim is the same one `pipelineBoard.test.ts` documents: Node's global
-// `localStorage` getter stays undefined without `--localstorage-file` and shadows the one jsdom
-// would install, so `window.localStorage` is that same undefined. `sessionStorage` is a working
-// Node global, which is why only half the storage needs help. The shim is the environment,
-// never the subject — every assertion drives the real card and the real storage functions.
+// `installLocalStorage` gives every test its own empty store, because the runner's own
+// `localStorage` is not the same thing on every machine — absent locally, present on CI — and
+// leaving it to the host decides both what these assertions measure and whether one case seeds
+// the next. `testStorage.ts` has the detail. It is the environment, never the subject: every
+// assertion drives the real card and the real `pipelineBoard` functions against it.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { PipelineBoardCard } from './PipelineBoardCard';
 import { loadHiddenStages, loadShowClosedStages } from '../pipelineBoard';
-
-function installLocalStorage(): () => void {
-  const store = new Map<string, string>();
-  const shim = {
-    getItem: (k: string) => store.get(k) ?? null,
-    setItem: (k: string, v: string) => { store.set(k, String(v)); },
-    removeItem: (k: string) => { store.delete(k); },
-    clear: () => { store.clear(); },
-    key: (i: number) => [...store.keys()][i] ?? null,
-    get length() { return store.size; },
-  };
-  const prev = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
-  Object.defineProperty(globalThis, 'localStorage', { value: shim, configurable: true, writable: true });
-  return () => {
-    if (prev) Object.defineProperty(globalThis, 'localStorage', prev);
-    else delete (globalThis as { localStorage?: unknown }).localStorage;
-  };
-}
+import { installLocalStorage } from '../testStorage';
 
 let container: HTMLDivElement;
 let root: Root;
