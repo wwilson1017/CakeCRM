@@ -101,7 +101,12 @@ export default function StageChipBar({
               }}
             />
             {stageLabel(stage)}
-            <span style={{ opacity: 0.7 }}>{count}</span>
+            {/* De-emphasised by COLOUR, never by `opacity` (issue #119). The active chip is
+                ACCENT_INK on the brand red at 4.66:1 — essentially no headroom — so a 0.7
+                fade drops the count to 2.86:1. Neither token below is faded: ACCENT_INK on
+                ACCENT keeps the label's own ratio, and INK_DIM on BG_CARD is a surface
+                `inkContrast.test.ts` already guards. */}
+            <span style={{ color: active ? ACCENT_INK : INK_DIM }}>{count}</span>
           </button>
         );
       })}

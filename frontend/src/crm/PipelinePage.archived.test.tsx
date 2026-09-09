@@ -645,6 +645,39 @@ describe('PipelinePage — archived deals', () => {
     expect(toast.error).toHaveBeenCalledWith('Failed to load deals.');
   });
 
+  it('drops archived cards from the board when the narrowing load FAILS', async () => {
+    // `pruneArchivedFromBoard` is the collection-layer replacement for #117's null branch in
+    // the filter predicate: the layer skips an INACTIVE facet's predicate entirely, so
+    // turning Archived OFF cannot filter the rows already in `data` — the prune has to
+    // happen on the data. Every other test here exercises the WIDENING direction, which
+    // never reaches it; without this one, stubbing the whole function out leaves the suite
+    // green.
+    //
+    // The failure path is the one that matters, because it is not transient: a deferred load
+    // eventually replays, but a failed one leaves archived cards sitting on a board whose
+    // facet reads live-only until the next successful load.
+    let failLive = false;
+    routeApi({
+      over: path => {
+        if (path === LIVE_PATH && failLive) throw new Error('network down');
+        return undefined;
+      },
+    });
+    await render();
+
+    await pickArchivedFacet('Include archived');
+    expect(card('Zebra rebuild')?.textContent).toContain('ARCHIVED');
+
+    // Narrow back with the live-only fetch failing. The board cannot be refilled, so the
+    // archived row has to be dropped rather than left contradicting the facet.
+    failLive = true;
+    await clearArchivedFacet('Include archived');
+
+    expect(toast.error).toHaveBeenCalledWith('Failed to load deals.');
+    expect(card('Zebra rebuild')).toBeFalsy();
+    expect(card('Acme renewal')).toBeTruthy();
+  });
+
   it('defers a facet load while a stage write is in flight, then re-fires it WIDENED', async () => {
     // Deferring around an in-flight write used to be a SILENT-load rule, which was safe
     // while every load was a refresh of the same content set. The Archived facet made a load
