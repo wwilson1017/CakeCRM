@@ -134,6 +134,16 @@ function DetailView({ apiPath, isMobile }: { apiPath: string; isMobile: boolean 
   // open goes through that fetch.
   const [selectedDealId, setSelectedDealId] = useState<number | null>(null);
   const reqId = useRef(0);
+  // A monotonic count of SELECTION SESSIONS, bumped by every gesture that opens or closes the
+  // panel. Read across the await in `updateDealStage`, so a settling write can tell "still the
+  // panel I was closing" from "the user walked away and came back" — the deal id alone cannot,
+  // since A -> B -> A reads as unchanged while the panel has remounted with a freshly editable
+  // body underneath. See `PipelinePage` for why this is a funnel rather than an effect.
+  const selectionEpoch = useRef(0);
+  function selectDeal(id: number | null) {
+    selectionEpoch.current++;
+    setSelectedDealId(id);
+  }
 
   useEffect(() => {
     // Still needed within a mount: `reloadTick` refetches the same path, so two responses
@@ -164,12 +174,13 @@ function DetailView({ apiPath, isMobile }: { apiPath: string; isMobile: boolean 
   }
 
   async function updateDealStage(deal: CrmDeal, stage: string, lostReason?: string) {
+    const sessionBefore = selectionEpoch.current;
     try {
       const { path, init } = stageWriteRequest(deal.id, stage, lostReason);
       await api(path, init);
-      // Dismiss ONLY if this deal is still the one on screen — the ‹ › arrows stay live while
-      // the write is in flight, and a slow one must not close a deal the user walked to.
-      setSelectedDealId(prev => (prev === deal.id ? null : prev));
+      // Dismiss ONLY if this is still the same selection SESSION — see PipelinePage for why the
+      // epoch rather than the deal id.
+      if (selectionEpoch.current === sessionBefore) setSelectedDealId(null);
       reload();
     } catch {
       toast.error('Failed to move deal.');
@@ -240,7 +251,7 @@ function DetailView({ apiPath, isMobile }: { apiPath: string; isMobile: boolean 
                   <TouchDealRow
                     key={deal.id}
                     deal={deal}
-                    onOpen={setSelectedDealId}
+                    onOpen={selectDeal}
                     trailing={touchDate(deal.touched_at)}
                   />
                 ))}
@@ -265,8 +276,8 @@ function DetailView({ apiPath, isMobile }: { apiPath: string; isMobile: boolean 
         items={EMPTY_DEALS}
         selectedId={selectedDealId}
         onSelect={id => {
-          if (id === null) { setSelectedDealId(null); reload(); }
-          else setSelectedDealId(Number(id));
+          if (id === null) { selectDeal(null); reload(); }
+          else selectDeal(Number(id));
         }}
         // Nothing to navigate: this list is grouped by rep and capped per rep, so ‹ › would walk
         // a set the user did not open from. `[]` is that answer, as on the dashboard.

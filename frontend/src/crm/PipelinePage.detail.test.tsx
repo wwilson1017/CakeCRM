@@ -666,3 +666,38 @@ describe('a deal in a HIDDEN stage', () => {
     expect(container.querySelector('[role="dialog"] h3')?.textContent).toBe('Renamed');
   });
 });
+
+describe('a close-out that outlived its own panel', () => {
+  it('does not dismiss the panel the user walked away from and back to', async () => {
+    // The deal id alone cannot answer this: A → B → A lands on the SAME id, while the panel has
+    // remounted in between with fresh state — `closing` reset, Edit enabled again — so a draft
+    // started there would be discarded by the original write's dismissal, with the close guard
+    // never having seen it. The selection EPOCH is what tells the two apart.
+    let releasePut: (v: unknown) => void = () => {};
+    api.mockImplementation((path: string, options?: ApiCallOptions) =>
+      options?.method === 'PUT'
+        ? new Promise(res => { releasePut = res; })
+        : defaultRoutes(path) ?? Promise.resolve({}));
+
+    renderAt('/crm/pipeline?deal=5');
+    await settle();
+    click(buttonByText('Mark Won'));
+    await settle();
+
+    // Away and back, inside the one request.
+    click(byLabel('Previous record'));
+    await settle();
+    expect(panelTitle()).toBe('Retail order');
+    click(byLabel('Next record'));
+    await settle();
+    expect(panelTitle()).toBe('Wholesale order');
+    // The remount cleared the body's own latch, so a new draft really is startable here.
+    expect((buttonByText('Edit') as HTMLButtonElement).disabled).toBe(false);
+
+    await act(async () => { releasePut({ ...deal(5, { title: 'Wholesale order', stage: 'won' }) }); });
+    await settle();
+
+    // Still open: that write belonged to a selection session the user has already left.
+    expect(panelTitle()).toBe('Wholesale order');
+  });
+});

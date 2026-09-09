@@ -331,11 +331,15 @@ const LOG_TYPES = ['call', 'email', 'meeting', 'note'] as const;
  * have that problem. Its own draft is one of the sources the body's close guard composes.
  */
 function LogActivityRow({
-  selected, note, busy, onSelect, onNote, onLog, onClear,
+  selected, note, busy, exiting, onSelect, onNote, onLog, onClear,
 }: {
   selected: string;
   note: string;
   busy: boolean;
+  /** An exit is in flight, so this row accepts no NEW draft — the host dismisses the panel when
+   *  the write settles, and by then a draft started here would be discarded with the close guard
+   *  never having seen it (it ran at click time, before the draft existed). */
+  exiting: boolean;
   onSelect: (type: string) => void;
   onNote: (note: string) => void;
   onLog: () => void;
@@ -346,12 +350,13 @@ function LogActivityRow({
       <span style={{ ...mono(10, INK_DIM), display: 'block', marginBottom: 12 }}>Log Activity</span>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         {LOG_TYPES.map(type => (
-          <button key={type} type="button" onClick={() => onSelect(type)} style={{
+          <button key={type} type="button" onClick={() => onSelect(type)} disabled={exiting} style={{
             padding: '5px 12px', borderRadius: 4, fontSize: 12, textTransform: 'capitalize',
             background: selected === type ? ACCENT : 'transparent',
             color: selected === type ? ACCENT_INK : INK_MUTE,
             border: selected === type ? 'none' : `1px solid ${LINE_STRONG}`,
-            cursor: 'pointer',
+            cursor: exiting ? 'default' : 'pointer',
+            opacity: exiting ? 0.5 : 1,
           }}>{type}</button>
         ))}
         {/* Without this, picking a chip by accident leaves the body permanently dirty with no
@@ -365,9 +370,9 @@ function LogActivityRow({
       {selected && (
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
           <input id="deal-log-note" aria-label="Activity note" placeholder="Add a note..."
-            value={note} onChange={e => onNote(e.target.value)}
+            value={note} onChange={e => onNote(e.target.value)} disabled={exiting}
             style={{ ...inputStyle, flex: 1, width: undefined, fontSize: 13 }} />
-          <button type="button" onClick={onLog} disabled={busy}
+          <button type="button" onClick={onLog} disabled={busy || exiting}
             style={{ ...btnPrimary, padding: '8px 16px', fontSize: 13, opacity: busy ? 0.5 : 1 }}>
             {busy ? 'Saving...' : 'Log'}
           </button>
@@ -776,6 +781,11 @@ export function DealDetailBody({
   // underneath, and Mark Won sitting one stray Tab away from an open Mark Lost dialog is a wrong
   // write, not just an a11y lapse.
   const closeOutDisabled = closing || askingLostReason;
+  // An exit this body started is in flight. While it is, the body accepts NO new draft: the host
+  // dismisses the panel when the write settles, and the close guard already ran — at click time,
+  // before any such draft existed — so anything typed underneath would be discarded in silence.
+  // One rule, three controls: Edit, the quick-log chips and its note.
+  const exiting = closeOutDisabled || restoring;
 
   return (
     <div style={{ padding: 20 }}>
@@ -789,11 +799,11 @@ export function DealDetailBody({
           <button
             type="button"
             onClick={startEditing}
-            disabled={closeOutDisabled || restoring}
+            disabled={exiting}
             style={{
               ...actionButtonStyle,
-              cursor: closeOutDisabled || restoring ? 'default' : 'pointer',
-              opacity: closeOutDisabled || restoring ? 0.5 : 1,
+              cursor: exiting ? 'default' : 'pointer',
+              opacity: exiting ? 0.5 : 1,
             }}
           >Edit</button>
         )}
@@ -985,6 +995,7 @@ export function DealDetailBody({
         selected={logActivity}
         note={logNote}
         busy={logging}
+        exiting={exiting}
         onSelect={setLogActivity}
         onNote={setLogNote}
         onLog={() => void handleLog()}

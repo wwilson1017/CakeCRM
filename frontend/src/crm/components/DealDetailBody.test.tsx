@@ -421,21 +421,41 @@ describe('the inline save', () => {
   it('re-reads the record after saving an off-board deal', async () => {
     // Off the board the prop is `loadById`'s one-shot result that no host array will ever
     // replace, so without the re-read a save repaints the panel with pre-save values.
+    //
+    // Asserted on a field the SAVE RESPONSE does not carry, because the body also folds that
+    // response into its read channel: checking the saved title alone would be satisfied by the
+    // fold and would pass with `loadDetail()` deleted outright. `lead_score` is derived
+    // server-side, arrives only on the detail read, and is exactly the class of value the
+    // re-read exists for.
     let title = 'Before';
+    let score = 61;
+    let detailReads = 0;
     api.mockImplementation((path: string, options?: { method?: string }) => {
       if ((options?.method ?? 'GET') === 'GET' && /^\/api\/crm\/deals\/\d+$/.test(path)) {
-        return Promise.resolve(detailResponse({ title }));
+        detailReads += 1;
+        return Promise.resolve(detailResponse({ title, lead_score: score }));
       }
       return routeApi()(path, options);
     });
-    render({ deal: makeDeal({ title: 'Before' }), onBoard: false, stageWritable: false });
+    const onSaveDeal = vi.fn((d: CrmDeal, patch: DealPatch) => {
+      // What the PUT answers: the row it wrote, with no recomputed score on it.
+      const written: CrmDeal = { ...d, ...patch };
+      delete written.lead_score;
+      return Promise.resolve(written);
+    });
+    render({ deal: makeDeal({ title: 'Before', lead_score: 61 }), onBoard: false, stageWritable: false, onSaveDeal });
     await settle();
+    expect(detailReads).toBe(1);
     click(buttonByText('Edit'));
     setField('deal-title', 'After');
     title = 'After';
+    score = 88;
     click(buttonByText('Save'));
     await settle();
+
+    expect(detailReads).toBe(2);
     expect(container.textContent).toContain('After');
+    expect(container.textContent).toContain('88');
   });
 });
 
@@ -1144,5 +1164,30 @@ describe('the save folds the SERVER row, not the request', () => {
     expect(detailReads).toBe(2);
     expect(container.textContent).toContain('100%');
     expect(container.textContent).not.toContain('50%');
+  });
+});
+
+describe('the quick-log row during an exit', () => {
+  it('accepts no new draft while a close-out is writing', async () => {
+    // The other draft this body owns. The close guard ran at click time, before any of it
+    // existed, and the host dismisses the panel when the write settles — so an activity note
+    // typed underneath disappears with no prompt and no trace.
+    routeDetail(detailResponse());
+    let release!: () => void;
+    const inFlight = new Promise<void>(res => { release = res; });
+    const onMarkWon = vi.fn(() => inFlight);
+    render({ deal: makeDeal(), onMarkWon });
+    await settle();
+
+    const chip = () => [...container.querySelectorAll('button')]
+      .find(b => b.textContent?.trim() === 'call') as HTMLButtonElement;
+    expect(chip().disabled).toBe(false);
+
+    await click(buttonByText('Mark Won'));
+    expect(chip().disabled).toBe(true);
+
+    await act(async () => { release(); await inFlight; });
+    await settle();
+    expect(chip().disabled).toBe(false);
   });
 });
