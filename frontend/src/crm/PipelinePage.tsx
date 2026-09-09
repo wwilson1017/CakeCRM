@@ -535,7 +535,7 @@ export function PipelinePage() {
   // endpoints return the same `get_deal` projection, so the reconcile merge is unchanged.
   const writeDeal = useCallback((
     deal: CrmDeal, patch: DealPatch, fromStage?: string, lostReason?: string,
-  ): Promise<void> => {
+  ): Promise<CrmDeal> => {
     // A bulk move in flight owns the board until its reconcile refetch lands. A single-deal
     // write started now could reconcile (or roll back) against the stage the bulk request is
     // in the middle of changing, clobbering server truth we're about to fetch. It REJECTS rather
@@ -561,9 +561,13 @@ export function PipelinePage() {
     pendingWrites.current++; // an unconfirmed optimistic write now exists (see `load`'s silent guard)
     writeGen.current++;      // ...and bump the generation so a silent GET spanning it is invalidated
     const prior = dealWriteChain.current.get(dealId) ?? Promise.resolve();
-    let settle: () => void = () => {};
+    // The outcome carries the SERVER's row, not just success: the detail panel folds it into its
+    // own read channel so a save that changed the stage shows the probability the server derived
+    // (100/0) rather than the one the form sent. Resolved before the supersession check below, so
+    // a superseded write still answers its caller.
+    let settle: (updated: CrmDeal) => void = () => {};
     let fail: (err: unknown) => void = () => {};
-    const outcome = new Promise<void>((resolve, reject) => { settle = resolve; fail = reject; });
+    const outcome = new Promise<CrmDeal>((resolve, reject) => { settle = resolve; fail = reject; });
     const run = prior.then(async () => {
       try {
         // `POST /mark-lost` is the ONE write here that is not the patch PUT (#128): it zeroes
@@ -582,7 +586,7 @@ export function PipelinePage() {
         // optimistic intermediate. Use the response's stage, not toStage, so the
         // ground truth is whatever the server actually stored.
         dealConfirmedStage.current.set(dealId, updated.stage);
-        settle();
+        settle(updated);
         if (dealOpSeq.current.get(dealId)?.seq !== seq) return; // a newer move superseded this one
         setData(prev => prev ? {
           ...prev,

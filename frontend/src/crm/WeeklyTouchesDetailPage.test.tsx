@@ -36,12 +36,16 @@ vi.mock('./components/DealDetailBody', () => ({
   DealDetailBody: ({ deal, onMarkWon, onRestored }: {
     deal: { id: number };
     onMarkWon: (d: { id: number }) => void;
-    onRestored: () => void;
+    onRestored: (d: { id: number }) => void;
   }) => (
     <div data-testid="sheet">
       {deal.id}
       <button data-testid="sheet-stage" onClick={() => onMarkWon(deal)}>stage</button>
-      <button data-testid="sheet-restore" onClick={onRestored}>restore</button>
+      {/* The RESTORED ROW, not the click event. The host dismisses only when the row it is
+          handed is the one on screen, so wiring `onRestored` straight to `onClick` hands it a
+          React event whose `id` is undefined — the panel then never closes and a reload-only
+          assertion passes anyway. */}
+      <button data-testid="sheet-restore" onClick={() => onRestored(deal)}>restore</button>
     </div>
   ),
 }));
@@ -303,6 +307,9 @@ describe('WeeklyTouchesDetailPage (issue #146)', () => {
       const before = detailCalls().length;
       await fire();
       expect(detailCalls().length).toBe(before + 1);
+      // ...and the panel is gone either way, which is what makes the refetch the user's next view
+      // rather than a number changing behind an open record.
+      expect(container.querySelector('[data-testid="sheet"]')).toBeNull();
     }
   });
 

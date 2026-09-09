@@ -208,12 +208,13 @@ const actionButtonStyle = {
  * jump to the end of the field on each keystroke.
  */
 function DealEditForm({
-  form, onChange, onPickContact, stageWritable, onContactBusy, onCompanyBusy,
+  form, onChange, onPickContact, onPickCompany, stageWritable, onContactBusy, onCompanyBusy,
   saving, error, onSave, onCancel,
 }: {
   form: DealFormState;
   onChange: (patch: Partial<DealFormState>) => void;
   onPickContact: (record: CrmContact | null) => void;
+  onPickCompany: (record: CrmCompany | null) => void;
   stageWritable: boolean;
   onContactBusy: (busy: boolean) => void;
   onCompanyBusy: (busy: boolean) => void;
@@ -262,11 +263,7 @@ function DealEditForm({
         getLabel={companyLabelOf}
         getMatchText={companyNameOf}
         getSublabel={companySublabelOf}
-        onSelect={co => onChange({
-          company_id: co?.id ?? null,
-          // The DECORATED label, so the archived marker survives selection.
-          company_label: co ? companyLabelOf(co) : '',
-        })}
+        onSelect={onPickCompany}
         onBusyChange={onCompanyBusy}
       />
       <OwnerSelect value={form.owner_id} onChange={v => onChange({ owner_id: v })} id="deal-owner" />
@@ -396,8 +393,11 @@ interface Props {
    *  possibly empty. Every other close leaves it undefined, which is what tells the host to use
    *  the plain stage PUT rather than the mark-lost verb (see `crm/dealStageWrite.ts`). */
   onMarkLost: (deal: CrmDeal, lostReason?: string) => void | Promise<void>;
-  /** ONE save for stage and columns together — see `DealPatch`. Rejects so the form can stay open. */
-  onSaveDeal: (deal: CrmDeal, patch: DealPatch) => Promise<void>;
+  /** ONE save for stage and columns together — see `DealPatch`. Rejects so the form can stay open.
+   *  RESOLVES WITH THE SERVER'S ROW: the route derives `probability` from the stage (100/0), so
+   *  the patch that went out is not what was stored, and this body folds the answer into its own
+   *  read channel rather than guessing. */
+  onSaveDeal: (deal: CrmDeal, patch: DealPatch) => Promise<CrmDeal>;
   /** A deal was un-archived here (issue #83). Receives the row the SERVER returned so the host can
    *  patch it in place — a silent refetch can fail invisibly, which would leave the host still
    *  showing the deal as archived after a restore that actually happened. */
@@ -605,15 +605,34 @@ export function DealDetailBody({
   function pickContact(c: CrmContact | null) {
     setForm(prev => {
       if (c === null) return { ...prev, contact_id: null, contact_label: '' };
-      const inherit = !companyTouched.current && c.company_id != null;
+      if (companyTouched.current) {
+        return { ...prev, contact_id: c.id, contact_label: c.name };
+      }
+      // An auto-derived company FOLLOWS the contact it was derived from — INCLUDING to nothing.
+      // Filling only when the new contact HAS one would strand the previous contact's company on
+      // the deal, silently linking it to an organisation neither the user nor the current
+      // contact ever named. Clearing the contact outright is left alone above: there is no new
+      // contact to derive from, and the company may be all the user has.
       return {
         ...prev,
         contact_id: c.id,
         contact_label: c.name,
-        company_id: inherit ? c.company_id : prev.company_id,
-        company_label: inherit ? (c.company_name || c.company || '') : prev.company_label,
+        company_id: c.company_id ?? null,
+        company_label: c.company_id != null ? (c.company_name || c.company || '') : '',
       };
     });
+  }
+
+  /** The user speaking for the company field — a pick, a create, or the × clear. Sets the ref,
+   *  which is the only thing that tells a CLEARED company from an unset one. */
+  function pickCompany(co: CrmCompany | null) {
+    companyTouched.current = true;
+    setForm(prev => ({
+      ...prev,
+      company_id: co?.id ?? null,
+      // The DECORATED label, so an archived company keeps its marker in the closed control.
+      company_label: co ? companyLabelOf(co) : '',
+    }));
   }
 
   // No list fetch here any more: both pickers search the server as the user types, so opening a
@@ -641,12 +660,15 @@ export function DealDetailBody({
     setSaving(true);
     setFormError('');
     try {
-      await onSaveDeal(record, patch);
+      const updated = await onSaveDeal(record, patch);
       setEditing(false);
-      // Fold the patch into `fetched` before the refetch. `archivedAt`/`closeStage` read from
-      // there, so a save that changes the stage would otherwise show the PRE-save value — and
-      // hide or offer the close-out pair on it — until the request below lands.
-      setFetched(prev => (prev ? { ...prev, ...patch } : prev));
+      // Fold the SERVER's row into `fetched` before the refetch. `archivedAt`/`closeStage` read
+      // from there, so a save that changes the stage would otherwise show the PRE-save value —
+      // and hide or offer the close-out pair on it — until the request below lands. The row, not
+      // the patch: `_classify_deal_update` overrides `probability` to 100/0 inside the same
+      // transaction, so folding what was SENT would paint "Won · 50%" until the refetch, and
+      // leave it there for good if the refetch failed.
+      setFetched(prev => (prev ? { ...prev, ...updated } : prev));
       void loadDetail();          // score, activity, and the off-board row itself
       void refreshProvenance();   // a human edit retires the badge the assistant left
     } catch (err: unknown) {
@@ -759,7 +781,22 @@ export function DealDetailBody({
     <div style={{ padding: 20 }}>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end', marginBottom: 12 }}>
         <button type="button" onClick={() => void copyLink()} style={actionButtonStyle}>Copy link</button>
-        {!editing && <button type="button" onClick={startEditing} style={actionButtonStyle}>Edit</button>}
+        {/* Refused while an exit is in flight. The host dismisses this panel when the write
+            settles, and by then a draft started underneath would be discarded without the close
+            guard ever seeing it — the id check that stops a settling write closing SOMEONE
+            ELSE's panel cannot help here, because it really is this deal. */}
+        {!editing && (
+          <button
+            type="button"
+            onClick={startEditing}
+            disabled={closeOutDisabled || restoring}
+            style={{
+              ...actionButtonStyle,
+              cursor: closeOutDisabled || restoring ? 'default' : 'pointer',
+              opacity: closeOutDisabled || restoring ? 0.5 : 1,
+            }}
+          >Edit</button>
+        )}
         {!editing && closable && (
           <>
             <button
@@ -832,6 +869,7 @@ export function DealDetailBody({
           form={form}
           onChange={patch => setForm(prev => ({ ...prev, ...patch }))}
           onPickContact={pickContact}
+          onPickCompany={pickCompany}
           stageWritable={stageEditable}
           onContactBusy={setContactBusy}
           onCompanyBusy={setCompanyBusy}

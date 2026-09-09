@@ -113,7 +113,7 @@ export function CrmDashboardPage() {
   // exactly that. Leaving the stale row in place therefore shows pre-save values the moment edit
   // mode closes — and keeps showing them for good if the reload never lands. `reload()` is still
   // the reconciliation for everything else on the page (there is no board to patch a row into).
-  async function saveDeal(deal: CrmDeal, patch: DealPatch) {
+  async function saveDeal(deal: CrmDeal, patch: DealPatch): Promise<CrmDeal> {
     const updated = await api<CrmDeal>(`/api/crm/deals/${deal.id}`, {
       method: 'PUT', body: JSON.stringify(patch),
     });
@@ -124,6 +124,9 @@ export function CrmDashboardPage() {
       top_deals: prev.top_deals.map(d => d.id === deal.id ? { ...d, ...updated } : d),
     } : prev);
     reload();
+    // Handed back so the panel can fold the SERVER's row into its own read channel — the route
+    // derives `probability` from the stage, so the patch alone is not what was stored.
+    return updated;
   }
 
   // Doesn't set loading itself (the set-state-in-effect rule forbids sync

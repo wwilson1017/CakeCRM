@@ -41,6 +41,43 @@ vi.mock('../core/api/client', async (importOriginal) => ({
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), info: vi.fn() }));
 vi.mock('../shared/toast', () => ({ toast }));
 
+// The one gesture jsdom cannot produce. `KanbanBoard` recognises a drag through dnd-kit —
+// pointer capture, ResizeObserver, live layout rects — none of which exist here. It matters
+// because a drag is the ONLY stage write that leaves the detail panel closed, which is what
+// makes "a fields-only save queued behind a stage write on the same deal" reachable at all:
+// from the panel, Edit is refused while a close-out is in flight.
+//
+// The real board renders UNCHANGED and one extra button is added beside it, calling the very
+// prop dnd-kit calls. Nothing of PipelinePage is stubbed; only the gesture recogniser is
+// bypassed. Same shape as `PipelinePage.archived.test.tsx`'s, including the `{id, item}` wrapper
+// the collection layer hands `shared/dnd`.
+const dragIntent = vi.hoisted(() => ({ current: null as { id: number; to: string } | null }));
+vi.mock('../shared/dnd', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../shared/dnd')>();
+  const RealBoard = actual.KanbanBoard;
+  function DraggableBoard(props: Parameters<typeof RealBoard>[0]) {
+    const fire = () => {
+      const intent = dragIntent.current;
+      if (!intent) throw new Error('drag fired with no dragIntent set');
+      for (const [columnId, items] of Object.entries(props.items)) {
+        const item = items.find(i => i.id === intent.id);
+        if (item) {
+          void props.onMove({ item, fromColumnId: columnId, toColumnId: intent.to, newIndex: 0 });
+          return;
+        }
+      }
+      throw new Error(`drag fired for deal ${intent.id}, which is not on the board`);
+    };
+    return (
+      <>
+        <button aria-label="fire drag" onClick={fire}>fire drag</button>
+        <RealBoard {...props} />
+      </>
+    );
+  }
+  return { ...actual, KanbanBoard: DraggableBoard };
+});
+
 const { PipelinePage } = await import('./PipelinePage');
 const { ActiveRecordProvider } = await import('./RecordContext');
 const { MemoryRouter, useLocation, useNavigate } = await import('react-router-dom');
@@ -181,6 +218,12 @@ function setValue(el: HTMLInputElement | HTMLSelectElement | null, value: string
 const setField = (id: string, value: string) =>
   setValue(container.querySelector<HTMLInputElement>(`#${id}`), value);
 
+/** Complete a stage drag the way dnd-kit does — by calling the board's own `onMove`. */
+function fireDrag(dealId: number, toStage: string) {
+  dragIntent.current = { id: dealId, to: toStage };
+  click(byLabel('fire drag'));
+}
+
 const callsWithMethod = (method: string) =>
   (api.mock.calls as [string, ApiCallOptions | undefined][])
     .filter(([, options]) => options?.method === method);
@@ -297,13 +340,17 @@ describe('writeDeal: a chain where BOTH writes fail', () => {
         ? new Promise((resolve, reject) => { pendingPuts.push({ resolve, reject }); })
         : defaultRoutes(path) ?? Promise.resolve({}));
 
-    renderAt('/crm/pipeline?deal=5');
+    renderAt('/crm/pipeline');
     await settle();
 
-    click(buttonByText('Mark Won'));
+    // seq 1 — a stage write from a DRAG, so the panel is not open and no exit is in flight.
+    fireDrag(5, 'won');
     await settle();
     expect(stageColumn('won')!.textContent).toContain('Wholesale order');
 
+    // seq 2 — a fields-only save from the panel, queued behind it on the same per-deal chain.
+    click(cardTitled('Wholesale order'));
+    await settle();
     click(buttonByText('Edit'));
     await settle();
     setField('deal-title', 'Renamed');
@@ -341,17 +388,20 @@ describe('writeDeal: a chain where BOTH writes fail', () => {
         ? new Promise((_resolve, reject) => { pendingPuts.push({ reject }); })
         : defaultRoutes(path) ?? Promise.resolve({}));
 
-    renderAt('/crm/pipeline?deal=5');
+    renderAt('/crm/pipeline');
     await settle();
     expect(stageColumn('lead')!.textContent).toContain('Wholesale order');
 
-    // seq 1 — a stage write, painted optimistically and left in flight.
-    click(buttonByText('Mark Won'));
+    // seq 1 — a stage write from a DRAG, painted optimistically and left in flight. A drag is the
+    // only stage write that leaves the panel closed, which is what makes seq 2 reachable.
+    fireDrag(5, 'won');
     await settle();
     expect(stageColumn('won')!.textContent).toContain('Wholesale order');
     expect(pendingPuts).toHaveLength(1);
 
     // seq 2 — a fields-only save, queued BEHIND seq 1 (its PUT has not been issued yet).
+    click(cardTitled('Wholesale order'));
+    await settle();
     click(buttonByText('Edit'));
     await settle();
     setField('deal-title', 'Renamed');

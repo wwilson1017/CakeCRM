@@ -179,9 +179,14 @@ function DetailView({ apiPath, isMobile }: { apiPath: string; isMobile: boolean 
   // Rejects rather than reporting, so the inline form keeps the draft on screen and says why —
   // it is the only copy of what the user typed. Nothing is patched in place here: no row on this
   // page is a deal record, so the reload is the whole reconciliation.
-  async function saveDeal(deal: CrmDeal, patch: DealPatch) {
-    await api<CrmDeal>(`/api/crm/deals/${deal.id}`, { method: 'PUT', body: JSON.stringify(patch) });
+  async function saveDeal(deal: CrmDeal, patch: DealPatch): Promise<CrmDeal> {
+    const updated = await api<CrmDeal>(`/api/crm/deals/${deal.id}`, {
+      method: 'PUT', body: JSON.stringify(patch),
+    });
     reload();
+    // Handed back so the panel folds the SERVER's row rather than the patch it sent — the route
+    // derives `probability` from the stage.
+    return updated;
   }
 
   return (

@@ -14,6 +14,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CrmDeal } from '../../core/types';
+import type { DealPatch } from './DealDetailBody';
 import type { DetailCloseGuard, DetailCloseReason, DetailRenderContext } from '../../shared/collection';
 
 const api = vi.hoisted(() => vi.fn());
@@ -128,7 +129,16 @@ function render(props: Partial<BodyProps> & { deal: CrmDeal }) {
     ctx,
     onMarkWon: vi.fn(),
     onMarkLost: vi.fn(),
-    onSaveDeal: vi.fn().mockResolvedValue(undefined),
+    // Resolves with the row a server would return: `_classify_deal_update` derives `probability`
+    // from the stage, so a close writes 100/0 whatever the form sent. A mock resolving
+    // `undefined` would make the body's fold a silent no-op and let every assertion about it
+    // pass for the wrong reason.
+    onSaveDeal: vi.fn((d: CrmDeal, patch: DealPatch) => Promise.resolve({
+      ...d,
+      ...patch,
+      ...(patch.stage === 'won' ? { probability: 100 } : {}),
+      ...(patch.stage === 'lost' ? { probability: 0 } : {}),
+    })),
     ...props,
   };
   act(() => {
@@ -1009,5 +1019,130 @@ describe('the lifecycle columns govern the form too, not just the buttons', () =
     expect(detailReads).toBe(2);
     expect(buttonByText('Mark Won')).toBeNull();
     expect(buttonByText('Mark Lost')).toBeNull();
+  });
+});
+
+describe('an exit in flight closes the door behind it', () => {
+  it('refuses to open the edit form while a close-out is still writing', async () => {
+    // The host dismisses this panel when the write settles, and by then a draft started
+    // underneath would be discarded WITHOUT the close guard ever seeing it — the guard ran at
+    // click time, before the draft existed, and an unmount cannot be vetoed. The id check that
+    // stops a settling write closing someone else's panel cannot help: it really is this deal.
+    routeDetail(detailResponse());
+    let release!: () => void;
+    const inFlight = new Promise<void>(res => { release = res; });
+    const onMarkWon = vi.fn(() => inFlight);
+    render({ deal: makeDeal(), onMarkWon });
+    await settle();
+
+    await click(buttonByText('Mark Won'));
+    expect((buttonByText('Edit') as HTMLButtonElement).disabled).toBe(true);
+
+    // ...and it comes back once the write settles, for a host that keeps the panel open.
+    await act(async () => { release(); await inFlight; });
+    await settle();
+    expect((buttonByText('Edit') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('refuses it while a restore is writing too', async () => {
+    routeDetail(
+      detailResponse({ archived_at: '2026-08-20T00:00:00+00:00' }),
+      path => (path === '/api/crm/deals/7/restore' ? new Promise(() => {}) : undefined),
+    );
+    render({ deal: makeDeal({ archived_at: '2026-08-20T00:00:00+00:00' }) });
+    await settle();
+    await click(buttonByText('Restore'));
+
+    expect((buttonByText('Edit') as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+describe('whose choice the company field is', () => {
+  it('never overwrites a company the USER picked during this edit', async () => {
+    // The gap the seeded ref alone leaves: on a deal with NO company the ref starts false, so a
+    // company the user then picks themselves is still "untouched" unless the picker says
+    // otherwise — and the next contact silently replaces it.
+    const defaults = api.getMockImplementation()!;
+    api.mockImplementation((path: string, options?: { method?: string }) => {
+      if (path.startsWith('/api/crm/contacts?')) {
+        return Promise.resolve({ contacts: [{ id: 99, name: 'New Lead', company: '', company_name: 'Inherited Co', company_id: 42 }] });
+      }
+      if (path.startsWith('/api/crm/companies?')) {
+        return Promise.resolve({ companies: [{ id: 88, name: 'My Own Co', status: 'active' }] });
+      }
+      return defaults(path, options);
+    });
+    const props = render({ deal: makeDeal({ company_id: null, company_name: undefined }) });
+    await settle();
+    click(buttonByText('Edit'));
+    await settle();
+    await openPicker('company');
+    await clickOption(t => t.includes('My Own Co'));
+    await openPicker('contact');
+    await clickOption(t => t.includes('New Lead'));
+    click(buttonByText('Save'));
+    await settle();
+
+    const [, patch] = (props.onSaveDeal as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(patch).toEqual({ contact_id: 99, company_id: 88 });
+  });
+
+  it('lets an INFERRED company follow its contact to nothing', async () => {
+    // The other half, and the one that goes wrong quietly: filling only when the new contact HAS
+    // a company strands the PREVIOUS contact's company on the deal, linking it to an
+    // organisation neither the user nor the current contact ever named. `DealForm` has always
+    // cleared it; the port dropped that.
+    const defaults = api.getMockImplementation()!;
+    api.mockImplementation((path: string, options?: { method?: string }) => {
+      if (path.startsWith('/api/crm/contacts?')) {
+        return Promise.resolve({ contacts: [
+          { id: 99, name: 'Linked Lead', company: '', company_name: 'Inherited Co', company_id: 42 },
+          { id: 98, name: 'Unlinked Lead', company: '', company_name: '', company_id: null },
+        ] });
+      }
+      return defaults(path, options);
+    });
+    const props = render({ deal: makeDeal({ company_id: null, company_name: undefined }) });
+    await settle();
+    click(buttonByText('Edit'));
+    await settle();
+    await openPicker('contact');
+    await clickOption(t => t.includes('Linked Lead'));
+    await openPicker('contact');
+    await clickOption(t => t.includes('Unlinked Lead'));
+    click(buttonByText('Save'));
+    await settle();
+
+    const [, patch] = (props.onSaveDeal as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(patch).toEqual({ contact_id: 98 });
+  });
+});
+
+describe('the save folds the SERVER row, not the request', () => {
+  it('shows the probability the server derived, not the one the form sent', async () => {
+    // `_classify_deal_update` overrides `probability` to 100/0 inside the transaction that
+    // changes the stage, so the patch that went out is not what was stored. Folding the request
+    // would paint "Won · 50%" until the background re-read lands — and leave it there for good
+    // if that request failed. The re-read is HELD here so the fold is what is being asserted.
+    let detailReads = 0;
+    routeDetail(detailResponse({ stage: 'proposal', probability: 50 }), path => {
+      if (!/^\/api\/crm\/deals\/\d+$/.test(path)) return undefined;
+      detailReads += 1;
+      return detailReads === 1 ? undefined : new Promise(() => {});
+    });
+    // OFF the board, which is where this bites: there the body's own read channel is the WHOLE
+    // record, so a folded request value is what the panel shows for every column, not just the
+    // two lifecycle ones. On the board the host patches its row from the same response.
+    render({ deal: makeDeal({ stage: 'proposal', probability: 50 }), onBoard: false });
+    await settle();
+    click(buttonByText('Edit'));
+    await settle();
+    setField('deal-stage', 'won');
+    click(buttonByText('Save'));
+    await settle();
+
+    expect(detailReads).toBe(2);
+    expect(container.textContent).toContain('100%');
+    expect(container.textContent).not.toContain('50%');
   });
 });
