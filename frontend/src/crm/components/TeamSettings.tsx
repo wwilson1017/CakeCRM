@@ -16,10 +16,11 @@ import { useState } from 'react';
 
 import { api } from '../../core/api/client';
 import { useAuth } from '../../core/auth/AuthContext';
-import { CORAL, FONT_SANS, INK_MUTE, INK_SOFT, LINE, labelStyle, inputStyle } from '../../shared/styles';
+import { CORAL_TEXT, FONT_SANS, INK_MUTE, INK_SOFT, LINE, labelStyle, inputStyle } from '../../shared/styles';
 import { toast } from '../../shared/toast';
 import { useUsers, invalidateUsers, type CrmUser } from '../useUsers';
-import { cardStyle, sectionHeading, btnPrimary, btnSecondary, btnSmall } from '../styles';
+import { btnPrimary, btnSecondary, btnSmall } from '../styles';
+import { SettingsCard } from './SettingsCard';
 
 // Mirrors MIN_PASSWORD_LENGTH in backend/core/auth.py — the server stays authoritative.
 const MIN_PASSWORD_LENGTH = 8;
@@ -111,13 +112,12 @@ export function TeamSettings({ isMobile }: { isMobile: boolean }) {
   };
 
   return (
-    <div style={cardStyle}>
-      <div style={sectionHeading()}>Team</div>
-      <p style={{ color: INK_MUTE, fontSize: 13, fontFamily: FONT_SANS, marginTop: 0 }}>
-        Everyone here shares one CRM. Records carry an owner so you can filter to your
-        own, but ownership is not a permission — any member can see and edit anything.
-      </p>
-
+    <SettingsCard
+      id="team"
+      title="Team"
+      description="Everyone here shares one CRM. Records carry an owner so you can filter to your own, but ownership is not a permission — any member can see and edit anything."
+      isMobile={isMobile}
+    >
       {loading ? (
         <p style={{ color: INK_SOFT, fontSize: 13, fontFamily: FONT_SANS }}>Loading…</p>
       ) : (
@@ -249,7 +249,7 @@ export function TeamSettings({ isMobile }: { isMobile: boolean }) {
             <option value="member">Member — full CRM access</option>
             <option value="admin">Admin — also manages users, keys and integrations</option>
           </select>
-          {error && <p style={{ color: CORAL, fontSize: 13, marginTop: 0 }}>{error}</p>}
+          {error && <p style={{ color: CORAL_TEXT, fontSize: 13, marginTop: 0 }}>{error}</p>}
           <button
             type="button" style={btnPrimary} disabled={saving || !email || !password}
             onClick={createUser}
@@ -272,6 +272,6 @@ export function TeamSettings({ isMobile }: { isMobile: boolean }) {
           Add user
         </button>
       )}
-    </div>
+    </SettingsCard>
   );
 }

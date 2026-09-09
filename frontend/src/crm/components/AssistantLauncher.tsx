@@ -17,15 +17,24 @@
  *                          state survives open/close.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AssistantPanelBody } from '../../assistant';
+import BootFallback from '../../core/components/BootFallback';
+import ChunkErrorBoundary from '../../core/components/ChunkErrorBoundary';
 import { IconBot, IconX } from '../../shared/icons';
 import {
   INK, INK_MUTE, LINE, BG_CARD, ACCENT, ACCENT_TEXT, ACCENT_INK, FONT_DISPLAY,
   SCRIM, SHADOW,
 } from '../../shared/styles';
 import { useActiveRecord } from '../RecordContext';
+
+// The chat surface is the heaviest thing in the CRM (react-markdown + highlight.js), and it
+// is only ever needed once a provider is configured — so it is lazy (#149), imported by its
+// LEAF path (not the `assistant` barrel) and mounted the moment `aiReady` is true. That keeps
+// the drawer's contract below intact: it still mounts once and stays mounted, so chat state
+// survives open/close; the chunk simply arrives in the background before the first open.
+// With zero AI keys the chunk is never requested at all.
+const AssistantPanelBody = lazy(() => import('../../assistant/AssistantPanelBody'));
 
 export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
   const navigate = useNavigate();
@@ -36,6 +45,14 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
 
   const loading = aiReady === null;
   const ready = aiReady === true;
+
+  // Baker is the permanent product brand (#71) — a static label, no identity fetch.
+  // "Baker" alone (loading) just names the assistant; "Ask Baker" (ready) is the
+  // call-to-action once we know it can actually respond. Keyless (aiReady === false)
+  // deliberately does NOT say "Ask"/"Baker" at all: there's no assistant hired yet,
+  // so the copy matches AiKeyNudge's existing "Hire your assistant" wording and keeps
+  // the /setup routing self-explanatory.
+  const launcherLabel = ready ? 'Ask Baker' : loading ? 'Baker' : 'Hire your assistant';
 
   // Dialog dismissal: Escape (returns focus to the button) and outside-click (a
   // scrim click is "outside" the panel/button, so it closes via the same handler).
@@ -117,7 +134,7 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
             ref={panelRef}
             role="dialog"
             aria-modal="true"
-            aria-label="Assistant"
+            aria-label="Baker"
             aria-hidden={!open}
             tabIndex={-1}
             style={{
@@ -148,7 +165,7 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
                 display: 'flex', alignItems: 'center', gap: 8,
                 fontFamily: FONT_DISPLAY, fontSize: 16, color: INK,
               }}>
-                <IconBot size={17} style={{ color: ACCENT_TEXT }} /> Assistant
+                <IconBot size={17} style={{ color: ACCENT_TEXT }} /> Baker
               </span>
               <button
                 onClick={() => { setOpen(false); btnRef.current?.focus(); }}
@@ -163,7 +180,17 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
             {/* ASSISTANT-PANEL-BODY: the chat surface (issue #4). Fills the drawer;
                 recordContext makes it aware of the CRM record open behind it (#14). */}
             <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-              <AssistantPanelBody recordContext={record} />
+              {/* The drawer's chunk is fetched in the BACKGROUND, as soon as `aiReady` flips —
+                  the user is usually looking at something else entirely. Suspense catches a
+                  PENDING import, not a REJECTED one, so without this boundary a chunk that
+                  404s after a deploy would propagate to Root and replace the whole CRM (a
+                  half-typed deal form included) over a panel nobody had opened. `scope="panel"`
+                  contains it here and never auto-reloads (#149). */}
+              <ChunkErrorBoundary scope="panel">
+                <Suspense fallback={<BootFallback variant="panel" />}>
+                  <AssistantPanelBody recordContext={record} />
+                </Suspense>
+              </ChunkErrorBoundary>
             </div>
           </div>
         </>
@@ -172,13 +199,13 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
       <button
         ref={btnRef}
         onClick={handleClick}
-        aria-label="Assistant"
+        aria-label={launcherLabel}
         aria-haspopup="dialog"
         // Admits this button into an `underLauncher` DetailModal's Tab cycle — rendering above
         // the panel makes it reachable by pointer, this makes it reachable by keyboard too.
         data-detail-companion=""
         aria-expanded={ready ? open : undefined}
-        title={ready ? 'Assistant' : loading ? 'Assistant' : 'Hire your assistant'}
+        title={launcherLabel}
         disabled={loading}
         style={{
           // zIndex 40 — above a centred `DetailModal` under `underLauncher` (`dock:z-[39]`) so a
@@ -186,15 +213,18 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
           // full-screen takeover (`z-50`), where a poked-through button would sit on the panel's
           // own controls. Keep the three in step.
           position: 'fixed', left: 24, bottom: 24, zIndex: 40,
-          width: 52, height: 52, borderRadius: '50%',
+          height: 52, borderRadius: 999,
+          padding: '0 20px 0 16px',
           background: ACCENT, color: ACCENT_INK, border: 'none',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          display: 'flex', alignItems: 'center', gap: 10,
+          fontFamily: FONT_DISPLAY, fontSize: 15, fontWeight: 600, whiteSpace: 'nowrap',
           boxShadow: `0 6px 18px ${SHADOW}`,
           cursor: loading ? 'default' : 'pointer',
           opacity: loading ? 0.55 : 1,
         }}
       >
-        <IconBot size={24} strokeWidth={1.9} />
+        <IconBot size={22} strokeWidth={1.9} />
+        {launcherLabel}
       </button>
     </>
   );

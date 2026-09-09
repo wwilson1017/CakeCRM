@@ -77,11 +77,19 @@ def test_every_def_has_executor_and_alias_is_the_extra():
     assert set(TOOL_EXECUTORS) == def_names | {"crm_log_note"}
 
 
-def test_get_crm_tools_returns_full_set_unconditionally():
+def test_get_crm_tools_has_no_enable_gate(task_mode):
+    """The CRM tools are always on — there is no per-integration enable flag.
+
+    The mode is pinned explicitly because #70 made the def list conditional on ONE
+    thing (GTD hides the five task tools) and #102 made GTD the fail-safe answer with
+    no database. Before that this test read the full list by accident of the old
+    'normal' fallback; asking for normal mode is what it always meant.
+    """
+    task_mode("normal")
     defs, execs = get_crm_tools()
     assert defs is CRM_TOOL_DEFS
     assert execs is TOOL_EXECUTORS
-    # No enable gate: the accessor takes no required args and never filters.
+    # No enable gate: the accessor takes no required args.
     sig = inspect.signature(get_crm_tools)
     assert not [p for p in sig.parameters.values()
                 if p.default is inspect.Parameter.empty and p.kind in
@@ -370,26 +378,50 @@ def test_intelligence_reads_are_available_to_the_background_turn():
     assert not ({n for n, w in _LIFECYCLE_TOOLS.items() if w} & allowed)
 
 
-def test_get_pipeline_tool_caps_the_list_but_not_the_totals(monkeypatch):
-    deals = [{"id": i, "stage": "lead"} for i in range(10)]
-    deals += [{"id": 100 + i, "stage": "won"} for i in range(3)]
-    monkeypatch.setattr(service, "get_pipeline", lambda stage=None: {
-        "deals": deals,
-        "stage_summary": [{"stage": "lead", "count": 10, "total_value": 999}],
-        "total_pipeline_value": 999,
-    })
+def test_get_pipeline_tool_pushes_the_cap_into_the_service(monkeypatch):
+    """#59 moved the per-stage cap from a Python trim here into a SQL window in the
+    service, so the tool must PASS the cap down rather than fetch the whole board and
+    slice it. The service's own capping is covered in test_crm_service.py."""
+    seen: dict = {}
+
+    def fake(stage=None, limit_per_stage=None):
+        seen.update(stage=stage, limit_per_stage=limit_per_stage)
+        return {
+            "deals": [{"id": 1, "stage": "lead", "title": "T", "notes": "x" * 5000}],
+            "stage_summary": [{"stage": "lead", "count": 10, "total_value": 999}],
+            "total_pipeline_value": 999,
+            "deals_truncated": True,
+        }
+    monkeypatch.setattr(service, "get_pipeline", fake)
+    monkeypatch.setattr(field_service, "list_field_definitions", lambda et: [])
+
     out = tools.crm_get_pipeline(limit_per_stage=2)
-    assert [d["id"] for d in out["deals"]] == [0, 1, 100, 101]  # 2 per stage
-    assert out["deals_truncated"] is True
-    # Counts and value are computed over EVERY deal — trimming the list must not lie.
+    assert seen == {"stage": None, "limit_per_stage": 2}
+    # Counts and value are computed over EVERY deal — trimming the list must not lie —
+    # and the service's exact truncation flag rides through untouched.
     assert out["stage_summary"][0]["count"] == 10
     assert out["total_pipeline_value"] == 999
+    assert out["deals_truncated"] is True
+    assert out["limit_per_stage"] == 2
+    # The context-cost projection still applies on the way out.
+    assert "notes" not in out["deals"][0] and out["deals"][0]["title"] == "T"
 
 
-def test_get_pipeline_tool_reports_no_truncation_when_it_fits(monkeypatch):
-    monkeypatch.setattr(service, "get_pipeline", lambda stage=None: {
-        "deals": [{"id": 1, "stage": "lead"}], "stage_summary": [], "total_pipeline_value": 0,
-    })
+def test_get_pipeline_tool_clamps_the_model_supplied_cap(monkeypatch):
+    """_bounded_limit was always the guard on a model-chosen number; since #59 that
+    number reaches SQL, so the clamp is load-bearing rather than cosmetic."""
+    seen: dict = {}
+
+    def fake(stage=None, limit_per_stage=None):
+        seen["limit_per_stage"] = limit_per_stage
+        return {"deals": [], "stage_summary": [], "total_pipeline_value": 0,
+                "deals_truncated": False}
+    monkeypatch.setattr(service, "get_pipeline", fake)
+
+    tools.crm_get_pipeline(limit_per_stage=9999)
+    assert seen["limit_per_stage"] == 100
+    tools.crm_get_pipeline(limit_per_stage="junk")
+    assert seen["limit_per_stage"] == 25
     assert tools.crm_get_pipeline()["deals_truncated"] is False
 
 
@@ -430,7 +462,7 @@ def test_won_and_lost_record_provenance(monkeypatch):
 def _refuse_service(monkeypatch):
     """Make the service a tripwire: these guards must answer before any DB work."""
     def explode(*a, **k):
-        raise AssertionError("the executor reached the service with invalid deal_ids")
+        raise AssertionError("the executor reached the service with a refused argument")
     monkeypatch.setattr(service, "bulk_move_deals", explode)
 
 
@@ -582,14 +614,18 @@ def test_pipeline_and_search_tools_project_the_payload(monkeypatch):
         "ai_touch_count": 3, "ai_touch_count_at": "t", "ai_touch_evidence_count": 2,
         "lost_reason": "",
     }
-    monkeypatch.setattr(service, "get_pipeline", lambda stage=None: {
-        "deals": [dict(fat)], "stage_summary": [], "total_pipeline_value": 0})
+    monkeypatch.setattr(service, "get_pipeline", lambda stage=None, limit_per_stage=None: {
+        "deals": [dict(fat)], "stage_summary": [], "total_pipeline_value": 0,
+        "deals_truncated": False})
     monkeypatch.setattr(service, "search_deals", lambda **kw: [dict(fat)])
     monkeypatch.setattr(field_service, "list_field_definitions", lambda et: [])
 
     for payload in (tools.crm_get_pipeline()["deals"][0],
                     tools.crm_search_deals()["deals"][0]):
-        assert set(payload) <= set(tools._DEAL_SUMMARY_FIELDS) | {"custom_fields"}
+        # `url` joins the allowed set as of #145 — the deep link is derived from the id
+        # the projection already carries, so it adds ~45 bytes rather than reopening the
+        # 27k-token question this projection exists to answer.
+        assert set(payload) <= set(tools._DEAL_SUMMARY_FIELDS) | {"custom_fields", "url"}
         assert "notes" not in payload and "ai_touch_count" not in payload
         assert payload["title"] == "T"   # the useful fields survive
 
@@ -624,9 +660,124 @@ def test_stage_tool_no_longer_advertises_closing():
     tokens earlier — this one used to say 'quick way to close a deal', steering the
     model past the lifecycle verbs that capture the reason."""
     by_name = {d["name"]: d for d in CRM_TOOL_DEFS}
-    stage_tool = by_name["crm_update_deal_stage"]
-    assert "crm_mark_deal_won" in stage_tool["description"]
-    assert "won" not in stage_tool["input_schema"]["properties"]["stage"]["description"]
+    for name in ("crm_update_deal_stage", "crm_bulk_move_deals"):
+        stage_tool = by_name[name]
+        assert "crm_mark_deal_won" in stage_tool["description"], name
+        assert "won" not in stage_tool["input_schema"]["properties"]["stage"]["description"], name
+
+
+# ── Open-stage-only promise (#99) ─────────────────────────────────────────────
+#
+# Two tools promise "OPEN pipeline stages only" in their descriptions. The schema
+# enum steers the model; the executor guard is what actually enforces, because the
+# assistant registry does not validate tool arguments against the schema. The
+# service and the REST route stay permissive on purpose — pinned by their own tests
+# in test_crm_bulk_move.py / test_crm_router.py, which this section must not disturb.
+
+
+def test_closed_stages_are_won_and_lost():
+    """Pin the REQUIREMENT independently of the constant, so the guard tests below
+    cannot pass vacuously if CLOSED_STAGES is ever emptied or mistyped ('loss')."""
+    assert service.CLOSED_STAGES == ("won", "lost")
+    # Non-tautological despite OPEN_STAGES being the complement: a closed stage that
+    # is not a real stage (a typo) puts a name in the union that DEAL_STAGES lacks.
+    assert set(service.OPEN_STAGES) | set(service.CLOSED_STAGES) == set(service.DEAL_STAGES)
+
+
+def test_bulk_move_refuses_closed_stages(monkeypatch):
+    """The blast radius this guard exists for: one call closing up to BULK_MOVE_MAX
+    deals with no loss reason. The tripwire proves the executor answers first."""
+    _refuse_service(monkeypatch)
+    for stage in ("won", "lost"):
+        out = tools.crm_bulk_move_deals([1, 2], stage)
+        assert "crm_mark_deal_won" in out["error"], stage
+        assert "crm_mark_deal_lost" in out["error"], stage
+
+
+def test_update_deal_stage_refuses_closed_stages(monkeypatch):
+    """The single-deal sibling makes the identical promise, so it gets the identical
+    guard — enforcing only bulk would leave the same broken contract one tool over."""
+    def explode(*a, **k):
+        raise AssertionError("the executor reached the service with a closed stage")
+    monkeypatch.setattr(service, "update_deal_stage", explode)
+    for stage in ("won", "lost"):
+        out = tools.crm_update_deal_stage(7, stage)
+        assert "crm_mark_deal_won" in out["error"], stage
+        assert "crm_mark_deal_lost" in out["error"], stage
+
+
+def test_both_stage_tool_schemas_advertise_exactly_the_open_stages():
+    """Schema-only (it never calls an executor): the enum and the human-readable list
+    are both generated from OPEN_STAGES, so a tool cannot advertise a stage its
+    executor refuses — the drift that let these descriptions promise one thing while
+    the schema allowed another."""
+    by_name = {d["name"]: d for d in CRM_TOOL_DEFS}
+    for name in ("crm_update_deal_stage", "crm_bulk_move_deals"):
+        prop = by_name[name]["input_schema"]["properties"]["stage"]
+        assert prop["enum"] == list(service.OPEN_STAGES), name
+        assert all(s in prop["description"] for s in service.OPEN_STAGES), name
+
+
+def test_every_open_stage_still_reaches_the_service(monkeypatch):
+    """Positive path (NOT guard coverage — this passes with the guards deleted): the
+    guard tests only the TARGET stage, so every open stage must still forward."""
+    from crm import provenance_service
+    seen = []
+
+    def fake_bulk(ids, stage):
+        seen.append(("bulk", stage))
+        return {"ok": True, "updated": 0, "updated_ids": [], "errors": []}
+
+    def fake_single(deal_id, stage):
+        seen.append(("single", stage))
+        return {"id": deal_id, "stage": stage}
+
+    monkeypatch.setattr(service, "bulk_move_deals", fake_bulk)
+    monkeypatch.setattr(service, "update_deal_stage", fake_single)
+    monkeypatch.setattr(provenance_service, "record_fields", lambda *a, **k: None)
+    for stage in service.OPEN_STAGES:
+        tools.crm_bulk_move_deals([1], stage)
+        tools.crm_update_deal_stage(1, stage)
+    assert seen == [(kind, s) for s in service.OPEN_STAGES for kind in ("bulk", "single")]
+
+
+def test_the_guard_refuses_ONLY_closed_stages_not_every_invalid_one(monkeypatch):
+    """The guard is `stage in CLOSED_STAGES`, not `stage not in OPEN_STAGES` — a typo
+    must still get the service's own invalid-stage answer, not advice to close the
+    deal. Widening the guard to the complement would break exactly this."""
+    reached = []
+
+    def fake_single(deal_id, stage):
+        reached.append(("single", stage))
+        return None  # the service's own "invalid stage" answer
+
+    def fake_bulk(ids, stage):
+        reached.append(("bulk", stage))
+        return {"ok": False, "updated": 0, "updated_ids": [], "errors": [f"Invalid stage: {stage}"]}
+
+    monkeypatch.setattr(service, "update_deal_stage", fake_single)
+    monkeypatch.setattr(service, "bulk_move_deals", fake_bulk)
+    for bad in ("banana", "Won", " lost"):
+        single = tools.crm_update_deal_stage(7, bad)
+        assert "crm_mark_deal_won" not in single["error"], bad
+        bulk = tools.crm_bulk_move_deals([1], bad)
+        assert bulk["errors"] == [f"Invalid stage: {bad}"], bad
+    # Delegation, not just wording: the guard let every one of these through to the
+    # service. Asserting only on the message would pass if the guard swallowed them.
+    assert reached == [(kind, s) for s in ("banana", "Won", " lost")
+                       for kind in ("single", "bulk")]
+
+
+def test_open_predicate_sql_agrees_with_the_closed_stages_tuple():
+    """OPEN_PREDICATE is the SQL spelling of CLOSED_STAGES and stays a hand-written
+    literal (every deal-reading query embeds it). This is what keeps the two in step."""
+    for stage in service.CLOSED_STAGES:
+        assert f"'{stage}'" in service.OPEN_PREDICATE
+        assert f"'{stage}'" in service.OPEN_PREDICATE_D
+    for stage in service.OPEN_STAGES:
+        assert f"'{stage}'" not in service.OPEN_PREDICATE
+    assert service.OPEN_PREDICATE == "stage NOT IN ('won', 'lost')"
+    assert service.OPEN_PREDICATE_D == "d.stage NOT IN ('won', 'lost')"
 
 
 def test_lifecycle_tools_surface_a_refusal_instead_of_raising(monkeypatch):
@@ -639,7 +790,9 @@ def test_lifecycle_tools_surface_a_refusal_instead_of_raising(monkeypatch):
     for name, call in (
         ("mark_deal_won", lambda: tools.crm_mark_deal_won(7)),
         ("mark_deal_lost", lambda: tools.crm_mark_deal_lost(7, lost_reason="x")),
-        ("update_deal_stage", lambda: tools.crm_update_deal_stage(7, "won")),
+        # An OPEN stage: since #99 this executor refuses won/lost before it reaches the
+        # service, and this test's subject is the ValueError→{"error"} passthrough.
+        ("update_deal_stage", lambda: tools.crm_update_deal_stage(7, "qualified")),
         ("update_deal", lambda: tools.crm_update_deal(7, stage="won")),
     ):
         monkeypatch.setattr(service, name, refuse)

@@ -68,8 +68,9 @@ def _clean(pg_db):
     from core.postgres import pg_execute
     pg_execute(
         "TRUNCATE companies, contacts, deals, activity_log, tasks, task_projects, "
-        "crm_chatter, crm_field_definitions, crm_field_values, crm_field_provenance, "
-        "deal_stage_events, proactive_nudges RESTART IDENTITY"
+        "crm_chatter, crm_chatter_attachments, crm_field_definitions, "
+        "crm_field_values, crm_field_provenance, deal_stage_events, "
+        "proactive_nudges RESTART IDENTITY"
     )
     yield
 

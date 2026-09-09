@@ -1,299 +1,245 @@
-import { useState, useEffect, useCallback } from 'react';
+/**
+ * Tasks (normal mode), on the shared collection layer (issue #77).
+ *
+ * Designed rather than ported: the issue names a `TasksTab.tsx` in the blueprint, but no
+ * such file exists — that CRM has four tabs (Dashboard/Contacts/Companies/Pipeline) and
+ * keeps tasks in a separate todo app that never adopted this layer. So the wiring follows
+ * ContactsTab and the domain is this repo's own.
+ *
+ * This page gains free-text search, which it has never had, and loses the 100-row silent
+ * truncation. Unlike Contacts and Companies it DOES use the layer's `CollectionDetail`
+ * shell: a task has no route to preserve, and its detail was already a modal covering the
+ * assistant launcher, so the z-index objection that kept those two on routed pages does
+ * not apply here.
+ *
+ * GTD mode is unaffected — `TasksModeRouter` still chooses between this page and the GTD
+ * surfaces, and this export's name is unchanged.
+ */
+import { useCallback, useMemo, useState } from 'react';
 import { api } from '../core/api/client';
-import { useAuth } from '../core/auth/AuthContext';
-import { OwnerScopeToggle, useOwnerScope } from './components/OwnerScopeToggle';
 import type { CrmTask } from '../core/types';
 import { TaskForm } from './components/TaskForm';
 import { PriorityBadge } from './components/badges';
-import { IconPlus, IconCheck } from '../shared/icons';
+import { RefreshButton } from './components/RefreshButton';
+import { useOwnerOptions } from './useOwnerOptions';
+import { CollectionView, useCollectionState } from '../shared/collection';
+import type { FacetOption } from '../shared/search';
+import { IconPlus } from '../shared/icons';
 import { useIsMobile } from '../shared/useIsMobile';
-import { LoadError } from '../shared/LoadError';
 import { toast } from '../shared/toast';
 import {
-  INK, INK_MUTE, INK_SOFT, INK_DIM, LINE, LINE_STRONG,
-  CORAL, SAGE, ACCENT_INK,
-  FONT_DISPLAY, mono,
-  HOVER, tint,
+  INK, INK_MUTE, INK_DIM, LINE_STRONG, CORAL_TEXT, SAGE_FILL, ON_STATUS, HOVER, mono,
 } from '../shared/styles';
-import {
-  pageHeading, filterBar, filterTab,
-  btnPrimary, cardStyle,
-  modalOverlay, modalContent, mobileDragHandle,
-  btnSecondary,
-} from './styles';
+import { pageHeading, btnPrimary, btnSecondary, btnSmall } from './styles';
+import { makeTasksCollectionConfig } from './collectionConfig';
+import { buildTaskColumns, buildDoneFacetRenderers } from './listColumns';
+import { useCrmCorpus, rowIsGone, writeMayHaveLanded, type CrmCorpus } from './usePatchableAssembly';
+import { useLocalDay } from './useLocalDay';
 
-type Filter = 'all' | 'pending' | 'due_today' | 'overdue' | 'completed';
+import { dueLabel } from './gtd/util';
+
+const NO_ROWS: CrmTask[] = [];
+const DONE_FACET = buildDoneFacetRenderers();
 
 export function TasksPage() {
-  const [tasks, setTasks] = useState<CrmTask[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadFailed, setLoadFailed] = useState(false);
-  const [filter, setFilter] = useState<Filter>('pending');
-  const [showCreate, setShowCreate] = useState(false);
-  const [selectedTask, setSelectedTask] = useState<CrmTask | null>(null);
-  const [editTask, setEditTask] = useState<CrmTask | null>(null);
-  const { currentUser } = useAuth();
-  // On a task, 'Mine' means assigned to me.
-  const [mineOnly, setMineOnly] = useOwnerScope('crm_tasks_mine');
   const isMobile = useIsMobile();
+  const [showCreate, setShowCreate] = useState(false);
+  const [editTask, setEditTask] = useState<CrmTask | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const { options: owners, loading: usersLoading } = useOwnerOptions();
+  const { today, now } = useLocalDay();
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const params = new URLSearchParams();
-    const today = new Date().toISOString().split('T')[0];
-    if (filter === 'pending') params.set('completed', 'false');
-    else if (filter === 'completed') params.set('completed', 'true');
-    else if (filter === 'due_today') { params.set('completed', 'false'); params.set('due_before', today); }
-    else if (filter === 'overdue') { params.set('completed', 'false'); params.set('due_before', today); }
-    if (mineOnly && currentUser) params.set('owner_id', String(currentUser.id));
-    params.set('limit', '100');
+  const corpus = useCrmCorpus<CrmTask>(
+    useCallback(async (params, signal) => {
+      // No `completed=` filter: the corpus is every live, non-dropped task, and which of
+      // them to show is the Done facet's business, client-side.
+      const res = await api<{ tasks: CrmTask[] }>(`/api/crm/tasks?${params}`, { signal });
+      return res.tasks;
+    }, []),
+  );
+  const { upsert, remove, retry } = corpus;
+
+  const toggleComplete = useCallback(async (task: CrmTask) => {
+    let saved: CrmTask;
     try {
-      const data = await api<{ tasks: CrmTask[] }>(`/api/crm/tasks?${params}`);
-      let filtered = data.tasks;
-      if (filter === 'due_today') filtered = filtered.filter(t => t.due_date === today);
-      else if (filter === 'overdue') filtered = filtered.filter(t => t.due_date && t.due_date < today);
-      setTasks(filtered);
-      setLoadFailed(false);
-    } catch {
-      setLoadFailed(true);
-    }
-    setLoading(false);
-  }, [filter, mineOnly, currentUser]);
-
-  useEffect(() => { queueMicrotask(load); }, [load]);
-
-  async function toggleComplete(task: CrmTask) {
-    try {
-      if (task.completed) {
-        await api(`/api/crm/tasks/${task.id}`, { method: 'PUT', body: JSON.stringify({ completed: 0 }) });
-      } else {
-        await api(`/api/crm/tasks/${task.id}/complete`, { method: 'PUT' });
-      }
-    } catch {
+      saved = task.completed
+        ? await api<CrmTask>(`/api/crm/tasks/${task.id}`, { method: 'PUT', body: JSON.stringify({ completed: 0 }) })
+        : await api<CrmTask>(`/api/crm/tasks/${task.id}/complete`, { method: 'PUT' });
+    } catch (err) {
       toast.error('Failed to update task.');
+      // A 404 says someone else already deleted it, so drop the ghost rather than keep
+      // failing on it. Any other 4xx wrote nothing and the list is still right; anything
+      // else may have committed and lost the response, so re-sweep.
+      if (rowIsGone(err)) remove(task.id);
+      else if (writeMayHaveLanded(err)) retry();
       return;
     }
-    load();
-  }
+    // Completing a REPEATING task spawns its next occurrence server-side (#70) — a row no
+    // local patch can invent. Decided from the SERVER's copy, not the pre-write one: the
+    // response reflects the state it actually used to decide whether to spawn.
+    if (!task.completed && saved.repeat) retry();
+    else upsert(saved);
+  }, [upsert, remove, retry]);
 
-  const today = new Date().toISOString().split('T')[0];
-
-  const FILTER_TABS: { key: Filter; label: string }[] = [
-    { key: 'all', label: 'All' },
-    { key: 'pending', label: 'Pending' },
-    { key: 'due_today', label: 'Due Today' },
-    { key: 'overdue', label: 'Overdue' },
-    { key: 'completed', label: 'Done' },
-  ];
-
+  const columns = useMemo(() => buildTaskColumns(toggleComplete, today), [toggleComplete, today]);
   return (
     <div style={{ padding: isMobile ? '20px 16px' : '32px 44px', maxWidth: 900 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: isMobile ? 16 : 24 }}>
         <h1 style={pageHeading(isMobile)}>Tasks</h1>
-        <button onClick={() => setShowCreate(true)} style={{
-          ...btnPrimary,
-          padding: '7px 14px', fontSize: 13,
-        }}>
-          <IconPlus size={13} strokeWidth={2.25} /> {isMobile ? 'Add' : 'Add Task'}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <RefreshButton onClick={retry} label="Reload tasks" />
+          <button onClick={() => setShowCreate(true)} style={{ ...btnPrimary, ...btnSmall }}>
+            <IconPlus size={13} strokeWidth={2.25} /> {isMobile ? 'Add' : 'Add Task'}
+          </button>
+        </div>
+      </div>
+
+      {usersLoading
+        ? <p style={{ ...mono(12), color: INK_DIM }}>Loading…</p>
+        : (
+          <TasksCollection
+            corpus={corpus}
+            columns={columns}
+            owners={owners}
+            now={now}
+            today={today}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+            onEdit={task => { setSelectedId(null); setEditTask(task); }}
+            onToggleComplete={async task => { await toggleComplete(task); setSelectedId(null); }}
+          />
+        )}
+
+      {showCreate && (
+        <TaskForm
+          onClose={() => setShowCreate(false)}
+          onSaved={saved => { setShowCreate(false); upsert(saved); }}
+          onWriteUncertain={retry}
+        />
+      )}
+      {editTask && (
+        <TaskForm
+          task={editTask}
+          onClose={() => setEditTask(null)}
+          onSaved={saved => { setEditTask(null); upsert(saved); }}
+          onWriteUncertain={retry}
+        />
+      )}
+    </div>
+  );
+}
+
+interface CollectionProps {
+  corpus: CrmCorpus<CrmTask>;
+  columns: ReturnType<typeof buildTaskColumns>;
+  owners: FacetOption[] | null;
+  now: Date;
+  today: string;
+  selectedId: number | null;
+  onSelect: (id: number | null) => void;
+  onEdit: (task: CrmTask) => void;
+  onToggleComplete: (task: CrmTask) => void | Promise<void>;
+}
+
+function TasksCollection(
+  { corpus, columns, owners, now, today, selectedId, onSelect, onEdit, onToggleComplete }: CollectionProps,
+) {
+  const config = useMemo(
+    () => makeTasksCollectionConfig({ columns, owners, doneFacet: DONE_FACET, now }),
+    [columns, owners, now],
+  );
+  const rows = corpus.items ?? NO_ROWS;
+  const state = useCollectionState(config, rows);
+  return (
+    <CollectionView<CrmTask>
+      config={config}
+      state={state}
+      items={rows}
+      selectedId={selectedId}
+      onSelect={id => onSelect(id === null ? null : Number(id))}
+      searchPlaceholder="Search tasks..."
+      loading={{
+        loading: corpus.loading,
+        error: corpus.error,
+        itemsLoaded: corpus.itemsLoaded,
+        retry: corpus.retry,
+      }}
+      detail={{
+        render: task => (
+          <TaskDetailBody
+            task={task}
+            onEdit={() => onEdit(task)}
+            onToggleComplete={() => onToggleComplete(task)}
+            today={today}
+          />
+        ),
+        // Escape and backdrop are allowed to close, unlike the CRM's routed panels. That
+        // policy exists to protect nested modals with no Escape handling of their own;
+        // this body opens TaskForm only AFTER closing itself, so none can be orphaned.
+        onRequestClose: () => true,
+      }}
+    />
+  );
+}
+
+/** The task detail — title and subtitle come from `config.detail`, so this is the body only. */
+function TaskDetailBody(
+  { task, onEdit, onToggleComplete, today }:
+  { task: CrmTask; onEdit: () => void; onToggleComplete: () => void | Promise<void>; today: string },
+) {
+  const due = task.due_date ? dueLabel(task.due_date, today) : null;
+  const late = !!due?.overdue && !task.completed;
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+        <PriorityBadge priority={task.priority} />
+      </div>
+
+      {task.description && (
+        <p style={{ fontSize: 14, color: INK_MUTE, marginBottom: 16, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+          {task.description}
+        </p>
+      )}
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
+        {task.contact_name && <DetailRow label="Contact" value={task.contact_name} />}
+        {task.deal_title && <DetailRow label="Deal" value={task.deal_title} />}
+        {due && (
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ ...mono(10), color: INK_DIM }}>Due</span>
+            <span style={{ fontSize: 13, color: late ? CORAL_TEXT : INK, fontWeight: late ? 600 : 400 }}>
+              {due.text}
+            </span>
+          </div>
+        )}
+        {!!task.completed && <DetailRow label="Status" value="Completed" />}
+      </div>
+
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button onClick={onEdit} style={{ ...btnSecondary, padding: '10px 16px', borderRadius: 6, fontSize: 13, border: `1px solid ${LINE_STRONG}`, color: INK }}>
+          Edit
+        </button>
+        <button
+          onClick={() => { void onToggleComplete(); }}
+          style={{
+            flex: 1, padding: '10px 16px', borderRadius: 6,
+            background: task.completed ? HOVER : SAGE_FILL,
+            color: task.completed ? INK : ON_STATUS,
+            border: 'none', fontWeight: 500, fontSize: 13, cursor: 'pointer',
+          }}
+        >
+          {task.completed ? 'Mark Incomplete' : 'Mark Complete'}
         </button>
       </div>
+    </div>
+  );
+}
 
-      {/* Filter tabs */}
-      <div style={filterBar(isMobile)}>
-        {FILTER_TABS.map(tab => {
-          const isActive = filter === tab.key;
-          return (
-            <button key={tab.key} onClick={() => setFilter(tab.key)} style={filterTab(isMobile, isActive)}>{tab.label}</button>
-          );
-        })}
-        <OwnerScopeToggle mineOnly={mineOnly} onChange={setMineOnly} />
-      </div>
-
-      {loading ? (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '48px 0' }}>
-          <div className="w-6 h-6 border-2 border-ck-accent border-t-transparent rounded-full animate-spin" />
-        </div>
-      ) : loadFailed && tasks.length === 0 ? (
-        <LoadError label="Couldn't load tasks" onRetry={load} />
-      ) : tasks.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '64px 0' }}>
-          <p style={{ color: INK_DIM, fontSize: 14 }}>
-            {filter === 'all' ? 'No tasks yet.' : `No ${filter.replace('_', ' ')} tasks.`}
-          </p>
-        </div>
-      ) : (
-        isMobile ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {tasks.map(task => (
-              <div key={task.id}
-                onClick={() => setSelectedTask(task)}
-                style={{
-                  padding: '12px 14px', cursor: 'pointer',
-                  ...cardStyle,
-                  opacity: task.completed ? 0.5 : 1,
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                  <span style={{
-                    fontSize: 16, color: task.completed ? INK_DIM : INK,
-                    textDecoration: task.completed ? 'line-through' : 'none',
-                  }}>{task.title}</span>
-                  <PriorityBadge priority={task.priority} />
-                </div>
-                <div style={{ display: 'flex', gap: 12, fontSize: 14, color: INK_SOFT, flexWrap: 'wrap' }}>
-                  {task.contact_name && <span>{task.contact_name}</span>}
-                  {task.due_date && (
-                    <span style={{
-                      color: !task.completed && task.due_date < today ? CORAL : undefined,
-                      fontWeight: !task.completed && task.due_date < today ? 600 : undefined,
-                    }}>{task.due_date}</span>
-                  )}
-                  {task.completed && <span style={{ color: SAGE }}>Completed</span>}
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div style={{ borderTop: `1px solid ${LINE}` }}>
-            {tasks.map(task => (
-              <div key={task.id} onClick={() => setSelectedTask(task)} style={{
-                display: 'flex', alignItems: 'center', gap: 12,
-                padding: '12px 16px', cursor: 'pointer',
-                borderBottom: `1px solid ${LINE}`,
-                opacity: task.completed ? 0.5 : 1,
-              }}
-                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = HOVER; }}
-                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-              >
-                <button onClick={e => { e.stopPropagation(); toggleComplete(task); }} style={{
-                  width: 20, height: 20, borderRadius: 4, flexShrink: 0,
-                  border: `1.5px solid ${task.completed ? SAGE : LINE_STRONG}`,
-                  background: task.completed ? tint(SAGE, 20) : 'transparent',
-                  cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  color: SAGE,
-                }}>
-                  {task.completed && <IconCheck size={12} strokeWidth={2.5} />}
-                </button>
-
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <p style={{
-                    fontSize: 16, margin: 0,
-                    color: task.completed ? INK_DIM : INK,
-                    textDecoration: task.completed ? 'line-through' : 'none',
-                  }}>{task.title}</p>
-                  <div style={{ display: 'flex', gap: 12, marginTop: 3 }}>
-                    {task.contact_name && <span style={{ fontSize: 14, color: INK_SOFT }}>{task.contact_name}</span>}
-                    {task.deal_title && <span style={{ fontSize: 14, color: INK_SOFT }}>{task.deal_title}</span>}
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
-                  <PriorityBadge priority={task.priority} />
-                  {task.due_date && (
-                    <span style={{
-                      ...mono(12, !task.completed && task.due_date < today ? CORAL : INK_SOFT),
-                      fontWeight: !task.completed && task.due_date < today ? 600 : 400,
-                    }}>{task.due_date}</span>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )
-      )}
-
-      {showCreate && <TaskForm onClose={() => setShowCreate(false)} onSaved={() => { setShowCreate(false); load(); }} />}
-      {editTask && <TaskForm task={editTask} onClose={() => setEditTask(null)} onSaved={() => { setEditTask(null); setSelectedTask(null); load(); }} />}
-
-      {/* Task detail sheet */}
-      {selectedTask && (
-        <div
-          onClick={() => setSelectedTask(null)}
-          style={modalOverlay(isMobile)}
-        >
-          <div
-            onClick={e => e.stopPropagation()}
-            style={modalContent(isMobile)}
-          >
-            {/* Drag handle (mobile) */}
-            {isMobile && (
-              <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 16 }}>
-                <div style={mobileDragHandle} />
-              </div>
-            )}
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
-              <h3 style={{
-                fontFamily: FONT_DISPLAY,
-                fontSize: 20, fontWeight: 400, letterSpacing: '-0.01em',
-                color: INK, margin: 0, flex: 1,
-              }}>{selectedTask.title}</h3>
-              <PriorityBadge priority={selectedTask.priority} />
-            </div>
-
-            {selectedTask.description && (
-              <p style={{ fontSize: 14, color: INK_MUTE, marginBottom: 16, lineHeight: 1.5 }}>
-                {selectedTask.description}
-              </p>
-            )}
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
-              {selectedTask.contact_name && (
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ ...mono(10), color: INK_DIM }}>Contact</span>
-                  <span style={{ fontSize: 13, color: INK }}>{selectedTask.contact_name}</span>
-                </div>
-              )}
-              {selectedTask.deal_title && (
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ ...mono(10), color: INK_DIM }}>Deal</span>
-                  <span style={{ fontSize: 13, color: INK }}>{selectedTask.deal_title}</span>
-                </div>
-              )}
-              {selectedTask.due_date && (
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ ...mono(10), color: INK_DIM }}>Due</span>
-                  <span style={{
-                    fontSize: 13,
-                    color: !selectedTask.completed && selectedTask.due_date < today ? CORAL : INK,
-                    fontWeight: !selectedTask.completed && selectedTask.due_date < today ? 600 : 400,
-                  }}>{selectedTask.due_date}</span>
-                </div>
-              )}
-            </div>
-
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button
-                onClick={() => setSelectedTask(null)}
-                style={{
-                  ...btnSecondary,
-                  padding: '10px 16px', borderRadius: 6, fontSize: 13,
-                }}
-              >Close</button>
-              <button
-                onClick={() => { setSelectedTask(null); setEditTask(selectedTask); }}
-                style={{
-                  padding: '10px 16px', borderRadius: 6,
-                  border: `1px solid ${LINE_STRONG}`, background: 'transparent',
-                  color: INK, fontSize: 13, cursor: 'pointer',
-                }}
-              >Edit</button>
-              <button
-                onClick={async () => {
-                  await toggleComplete(selectedTask);
-                  setSelectedTask(null);
-                }}
-                style={{
-                  flex: 1, padding: '10px 16px', borderRadius: 6,
-                  background: selectedTask.completed ? HOVER : SAGE,
-                  color: selectedTask.completed ? INK : ACCENT_INK,
-                  border: 'none', fontWeight: 500, fontSize: 13, cursor: 'pointer',
-                }}
-              >{selectedTask.completed ? 'Mark Incomplete' : 'Mark Complete'}</button>
-            </div>
-          </div>
-        </div>
-      )}
+function DetailRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+      <span style={{ ...mono(10), color: INK_DIM }}>{label}</span>
+      <span style={{ fontSize: 13, color: INK }}>{value}</span>
     </div>
   );
 }

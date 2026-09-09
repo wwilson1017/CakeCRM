@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../core/api/client';
+import { rowIsGone, writeMayHaveLanded } from './usePatchableAssembly';
 import type { CrmContact } from '../core/types';
 import { ContactForm } from './components/ContactForm';
 import { DealForm } from './components/DealForm';
@@ -11,6 +12,7 @@ import { CustomFieldsSection } from './components/CustomFieldsSection';
 import { usePublishActiveRecord } from './RecordContext';
 import { PriorityBadge, ScorePill } from './components/badges';
 import { ProvenanceBadge } from './components/ProvenanceBadge';
+import { OwnerName } from './components/OwnerName';
 import { useProvenance } from './useProvenance';
 import { STAGE_COLORS } from './constants';
 import { IconArrowLeft } from '../shared/icons';
@@ -18,7 +20,7 @@ import { useIsMobile } from '../shared/useIsMobile';
 import { confirmDialog } from '../shared/confirm';
 import { toast } from '../shared/toast';
 import {
-  INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, CORAL, SAGE,
+  INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, CORAL_FILL, CORAL_TEXT, SAGE_FILL,
   ACCENT, ACCENT_TEXT, ACCENT_INK,
   FONT_DISPLAY, FONT_MONO,
   mono, inputStyle,
@@ -29,7 +31,17 @@ import {
   btnSecondary, btnDanger, btnPrimary, btnSmall,
 } from './styles';
 
-export function ContactDetailPage() {
+/** Optional hooks for the host list page (#77): it keeps a client-loaded corpus and patches
+ *  its row from what this page loads, rather than re-sweeping after every edit. */
+interface ContactDetailPageProps {
+  onChanged?: (contact: CrmContact) => void;
+  onDeleted?: (id: number) => void;
+  /** A write here whose outcome is unknown — the host re-sweeps, since only the server
+   *  can now say what this record looks like, or whether it still exists (#77). */
+  onWriteUncertain?: () => void;
+}
+
+export function ContactDetailPage({ onChanged, onDeleted, onWriteUncertain }: ContactDetailPageProps = {}) {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
@@ -71,12 +83,19 @@ export function ContactDetailPage() {
       const data = await api<CrmContact>(`/api/crm/contacts/${id}`);
       if (reqId !== loadIdRef.current) return;
       setContact(data);
-    } catch {
+      // Every path that changes this contact — the edit form, a logged activity, a note —
+      // already ends in load(), so notifying here covers them all with one call. The body
+      // carries the derived last_contact_at, so the list's column stays truthful too.
+      onChanged?.(data);
+    } catch (err) {
       if (reqId !== loadIdRef.current) return;
       setContact(null);
+      // Opened from a swept list whose copy is stale: a 404 means the record is gone, so
+      // the host should drop its row rather than keep offering a dead link.
+      if (rowIsGone(err)) onDeleted?.(Number(id));
     }
     if (reqId === loadIdRef.current) setLoading(false);
-  }, [id]);
+  }, [id, onChanged, onDeleted]);
 
   useEffect(() => { queueMicrotask(load); }, [load]);
 
@@ -91,8 +110,12 @@ export function ContactDetailPage() {
       setLogActivity('');
       setLogNote('');
       load();
-    } catch {
+    } catch (err) {
       toast.error('Failed to log activity.');
+      // An activity row is one of the two signals behind last_contact_at, so a write that
+      // may have committed has to be reconciled — load() re-reads the derived value and
+      // hands it to the list through onChanged (#77).
+      if (writeMayHaveLanded(err)) load();
     } finally {
       setLogging(false);
     }
@@ -108,10 +131,14 @@ export function ContactDetailPage() {
     if (!ok) return;
     try {
       await api(`/api/crm/contacts/${id}`, { method: 'DELETE' });
-    } catch {
+    } catch (err) {
       toast.error('Failed to delete contact.');
+      // The DELETE may have committed before the response was lost, in which case the
+      // list is still showing a row that no longer exists.
+      if (writeMayHaveLanded(err)) onWriteUncertain?.();
       return;
     }
+    onDeleted?.(Number(id));
     navigate('/crm/contacts');
   }
 
@@ -177,6 +204,12 @@ export function ContactDetailPage() {
         <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? 4 : 16, marginTop: 8, fontSize: 13, color: INK_MUTE }}>
           {contact.email && <span>{contact.email} {badge('email')}</span>}
           {contact.phone && <span>{contact.phone} {badge('phone')}</span>}
+          {/* Unconditional, unlike its neighbours (issue #128): an unassigned contact is a
+              real state, and a hidden row is what makes it unreadable as one. */}
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ ...mono(10), color: INK_DIM }}>Owner</span>
+            <OwnerName ownerId={contact.owner_id} />
+          </span>
         </div>
         {contact.tags && (
           <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -225,7 +258,7 @@ export function ContactDetailPage() {
                 <div key={d.id} style={{
                   ...stageCard(
                     STAGE_COLORS[d.stage]?.bg || BG_RAISED,
-                    STAGE_COLORS[d.stage]?.color || LINE,
+                    STAGE_COLORS[d.stage]?.fill || LINE,
                   ),
                   padding: '12px 14px', marginBottom: 6,
                   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -234,7 +267,7 @@ export function ContactDetailPage() {
                     <p style={{ fontSize: 14, color: INK, margin: 0 }}>{d.title}</p>
                     <span style={{
                       ...mono(10), textTransform: 'capitalize', marginTop: 2, display: 'inline-block',
-                      color: STAGE_COLORS[d.stage]?.color || INK_DIM,
+                      color: STAGE_COLORS[d.stage]?.text || INK_DIM,
                     }}>{d.stage}</span>
                   </div>
                   <span style={{
@@ -264,11 +297,14 @@ export function ContactDetailPage() {
                 <div key={t.id} style={{
                   padding: '10px 0', borderBottom: `1px solid ${LINE}`,
                   display: 'flex', alignItems: 'center', gap: 10,
-                  opacity: t.completed ? 0.5 : 1,
+                  // No `opacity` here (issue #119): it faded the PriorityBadge inside this
+                  // row along with everything else, and a badge tuned to just over 4.5:1
+                  // cannot survive any fade. The row already reads as done — `ink-dim`
+                  // title, line-through, a filled dot — so the opacity was redundant.
                 }}>
                   <span style={{
                     width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
-                    background: t.completed ? SAGE : isOverdue(t.due_date) ? CORAL : INK_DIM,
+                    background: t.completed ? SAGE_FILL : isOverdue(t.due_date) ? CORAL_FILL : INK_DIM,
                   }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <p style={{
@@ -279,7 +315,7 @@ export function ContactDetailPage() {
                     {t.due_date && (
                       <p style={{
                         fontSize: 11, marginTop: 2,
-                        color: isOverdue(t.due_date) && !t.completed ? CORAL : INK_DIM,
+                        color: isOverdue(t.due_date) && !t.completed ? CORAL_TEXT : INK_DIM,
                       }}>{t.due_date}</p>
                     )}
                   </div>
@@ -327,7 +363,7 @@ export function ContactDetailPage() {
       {/* Activity history */}
       <div style={{ marginTop: 24, borderTop: `1px solid ${LINE}`, paddingTop: 24 }}>
         <span style={{ ...mono(10, INK_DIM), display: 'block', marginBottom: 12 }}>Activity History</span>
-        <ActivityTimeline activities={contact.activity || []} onUpdate={load} />
+        <ActivityTimeline onUncertainWrite={load} activities={contact.activity || []} onUpdate={load} />
       </div>
 
       {/* Custom fields — renders nothing when no contact fields are defined */}
@@ -336,10 +372,13 @@ export function ContactDetailPage() {
       {/* Chatter — editable notes thread */}
       <div style={{ marginTop: 24, borderTop: `1px solid ${LINE}`, paddingTop: 24 }}>
         <span style={{ ...mono(10, INK_DIM), display: 'block', marginBottom: 12 }}>Chatter</span>
-        <NotesThread key={`contact-${contact.id}`} entityType="contact" entityId={contact.id} />
+        <NotesThread key={`contact-${contact.id}`} entityType="contact" entityId={contact.id}
+          // A note is one of the two signals behind last_contact_at, so reload the
+          // contact — which is also what tells a host list page to patch its row (#77).
+          onChanged={load} />
       </div>
 
-      {showEdit && <ContactForm contact={contact} onClose={() => setShowEdit(false)} onSaved={() => { setShowEdit(false); load(); setCfVersion(v => v + 1); refreshProvenance(); }} />}
+      {showEdit && <ContactForm contact={contact} onWriteUncertain={onWriteUncertain} onClose={() => setShowEdit(false)} onSaved={() => { setShowEdit(false); load(); setCfVersion(v => v + 1); refreshProvenance(); }} />}
       {showAddDeal && <DealForm contactId={contact.id} onClose={() => setShowAddDeal(false)} onSaved={() => { setShowAddDeal(false); load(); }} />}
       {showAddTask && <TaskForm contactId={contact.id} onClose={() => setShowAddTask(false)} onSaved={() => { setShowAddTask(false); load(); }} />}
     </div>

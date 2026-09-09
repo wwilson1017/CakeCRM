@@ -38,13 +38,22 @@ def create_alert(title: str, message: str, source: str = "heartbeat",
 
 
 def list_alerts(status: str = "active", limit: int = 50) -> list[dict]:
+    """Alerts newest-first, capped.
+
+    `created_at` defaults to `now()`, which is TRANSACTION-start time — so every alert
+    raised inside one transaction carries a byte-identical timestamp and the sort ties.
+    Under a LIMIT, a tie Postgres is free to break differently on each execution makes
+    rows repeat or vanish between reads, so the id (a uuid4 TEXT PK — arbitrary but
+    unique, and there is no insertion-sequence column) closes the order (issue #58).
+    """
     limit = max(1, min(int(limit or 50), 200))
     if status and status != "all":
         return pg_fetchall(
-            "SELECT * FROM alerts WHERE status = %s ORDER BY created_at DESC LIMIT %s",
+            "SELECT * FROM alerts WHERE status = %s ORDER BY created_at DESC, id DESC LIMIT %s",
             (status, limit),
         )
-    return pg_fetchall("SELECT * FROM alerts ORDER BY created_at DESC LIMIT %s", (limit,))
+    return pg_fetchall(
+        "SELECT * FROM alerts ORDER BY created_at DESC, id DESC LIMIT %s", (limit,))
 
 
 def get_active_count() -> int:

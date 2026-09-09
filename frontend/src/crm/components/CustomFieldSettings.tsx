@@ -1,14 +1,14 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '../../core/api/client';
 import type { CrmFieldDefinition } from '../../core/types';
-import { useIsMobile } from '../../shared/useIsMobile';
 import { confirmDialog } from '../../shared/confirm';
 import { toast } from '../../shared/toast';
 import {
-  INK, INK_MUTE, INK_DIM, CORAL, ACCENT, ACCENT_TEXT, FONT_SANS, mono, labelStyle, inputStyle,
+  INK, INK_MUTE, INK_DIM, CORAL_TEXT, ACCENT, ACCENT_TEXT, mono, labelStyle, inputStyle,
   LINE,
 } from '../../shared/styles';
-import { cardStyle, sectionHeading, btnPrimary, btnSecondary, filterTab } from '../styles';
+import { btnPrimary, btnSecondary, filterTab } from '../styles';
+import { SettingsCard } from './SettingsCard';
 
 type EntityType = 'contact' | 'company' | 'deal';
 const ENTITY_TABS: { key: EntityType; label: string }[] = [
@@ -28,8 +28,7 @@ const slugify = (name: string) => name.toLowerCase().replace(/\s+/g, '_').replac
  * elsewhere (entity forms + detail pages). Ported in behavior from cake_os's
  * FieldSettingsPanel, restyled with CakeCRM tokens.
  */
-export function CustomFieldSettings() {
-  const isMobile = useIsMobile();
+export function CustomFieldSettings({ isMobile }: { isMobile: boolean }) {
   const [activeType, setActiveType] = useState<EntityType>('contact');
   const [defs, setDefs] = useState<CrmFieldDefinition[]>([]);
   const [loadError, setLoadError] = useState(false);
@@ -113,20 +112,20 @@ export function CustomFieldSettings() {
   const activeLabel = ENTITY_TABS.find(t => t.key === activeType)!.label;
 
   return (
-    <div style={{ ...cardStyle, padding: isMobile ? 20 : 28, marginTop: 24, maxWidth: 620 }}>
-      <div style={sectionHeading()}>Custom Fields</div>
-      <p style={{
-        fontFamily: FONT_SANS, fontSize: 13, color: INK_MUTE, lineHeight: 1.6,
-        margin: '0 0 20px', maxWidth: 460,
-      }}>
-        Define your own fields for contacts, companies, and deals. They appear on the
-        create/edit forms and detail pages, and are available to the assistant.
-      </p>
-
-      {/* Entity tabs */}
-      <div style={{ display: 'flex', marginBottom: 20 }}>
+    <SettingsCard
+      id="custom_fields"
+      title="Custom Fields"
+      description="Define your own fields for contacts, companies, and deals. They appear on the create/edit forms and detail pages, and are available to the assistant."
+      isMobile={isMobile}
+    >
+      {/* Entity filter. Deliberately a toggle GROUP, not a nav: it re-filters this card's
+          list, where the strip above the page navigates. The different roles (and the
+          different visual family — filled segments vs. underline links) are what keep the
+          two from reading as the same control nested in itself. */}
+      <div role="group" aria-label="Entity type" style={{ display: 'flex', marginBottom: 20 }}>
         {ENTITY_TABS.map(t => (
           <button key={t.key} onClick={() => { setActiveType(t.key); resetForm(); }}
+            aria-pressed={activeType === t.key}
             style={filterTab(isMobile, activeType === t.key)}>
             {t.label}
           </button>
@@ -134,7 +133,7 @@ export function CustomFieldSettings() {
       </div>
 
       {loadError ? (
-        <p style={{ color: CORAL, fontSize: 13 }}>Couldn't load custom fields.</p>
+        <p style={{ color: CORAL_TEXT, fontSize: 13 }}>Couldn't load custom fields.</p>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {defs.length === 0 ? (
@@ -158,7 +157,7 @@ export function CustomFieldSettings() {
                 ) : null}
               </div>
               <button onClick={() => removeField(f)} style={{
-                background: 'none', border: 'none', color: CORAL, fontSize: 12,
+                background: 'none', border: 'none', color: CORAL_TEXT, fontSize: 12,
                 cursor: 'pointer', padding: 0, flexShrink: 0,
               }}>Delete</button>
             </div>
@@ -211,6 +210,6 @@ export function CustomFieldSettings() {
           cursor: 'pointer', padding: 0, marginTop: 16,
         }}>+ Add custom field</button>
       )}
-    </div>
+    </SettingsCard>
   );
 }

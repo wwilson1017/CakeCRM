@@ -533,11 +533,17 @@ def test_rendered_issue_carries_no_company_identifier():
 
     An early draft hyperlinked the upstream PR, which meant hardcoding the private
     GitHub org that hosts cake_os -- a token `test_prompt_genericization.py` already
-    denylists -- and rendering it into every issue this bot would ever file. That
-    test only scans the assistant's model-facing payload, so nothing covered this
-    path. Reuse its token list rather than copying one: two denylists would drift.
+    denylists -- and rendering it into every issue this bot would ever file. Reuse
+    its token list rather than copying one: two denylists would drift.
+
+    `_REPO_FORBIDDEN` is exactly the right list, and naming the CLASS is what keeps
+    this honest. It is the company + vertical tokens with the blueprint names left
+    out -- `cake_os` is the blueprint repo's own name, used throughout this repo's
+    docs, and an intake issue has to say which upstream it is reporting on. This
+    used to be spelled as `pattern != r"cake[_\\s]os\\b"`, a hand-copied regex that
+    silently stopped excluding anything the moment #90 widened that pattern.
     """
-    from test_prompt_genericization import _FORBIDDEN
+    from test_prompt_genericization import _REPO_FORBIDDEN
 
     _, title, body = _build(
         [
@@ -548,26 +554,28 @@ def test_rendered_issue_carries_no_company_identifier():
         ]
     )
     haystack = f"{title}\n{body}"
-    # `cake_os` itself is exempt: it is the blueprint repo's own name, already used
-    # throughout CLAUDE.md and this repo's docs, and the intake has to say which
-    # upstream it is reporting on. The company identifiers are what must not appear.
     offenders = [
         label
-        for pattern, label in _FORBIDDEN
-        if pattern != r"cake[_\s]os\b" and re.search(pattern, haystack, re.IGNORECASE)
+        for pattern, label in _REPO_FORBIDDEN
+        if re.search(pattern, haystack, re.IGNORECASE)
     ]
     assert not offenders, f"rendered intake issue leaks company identifiers: {offenders}"
 
 
 def test_script_source_carries_no_company_identifier():
-    """The constant that leaked was in source, not just in output."""
-    from test_prompt_genericization import _FORBIDDEN
+    """The constant that leaked was in source, not just in output.
+
+    Since #90 the repo-wide scan covers `scripts/` too, so this is now a second,
+    narrower net over the same file rather than the only one -- kept because it
+    pins the rendered OUTPUT as well, which no file scan can see.
+    """
+    from test_prompt_genericization import _REPO_FORBIDDEN
 
     source = (REPO / "scripts" / "sync_intake.py").read_text(encoding="utf-8")
     offenders = [
         label
-        for pattern, label in _FORBIDDEN
-        if pattern != r"cake[_\s]os\b" and re.search(pattern, source, re.IGNORECASE)
+        for pattern, label in _REPO_FORBIDDEN
+        if re.search(pattern, source, re.IGNORECASE)
     ]
     assert not offenders, f"scripts/sync_intake.py leaks company identifiers: {offenders}"
 

@@ -39,10 +39,41 @@
   --color-ck-raised: #e8e8dd;
   --color-ck-line: #e5e7eb;
   --color-ck-line-strong: #d1d5db;
+
+  /* The neutral INK RAMP is contrast-bound, not taste-bound (issue #68).
+     All four steps are body-text colours — `ink-dim` alone paints every form label
+     (`shared/styles.labelStyle`), every uppercase section heading (`crm/styles.sectionHeading`)
+     and most empty states — so every step must clear WCAG AA 4.5:1 on every surface it can
+     land on, in BOTH themes. That is the same rule `--color-ck-accent-text` follows below,
+     applied to the neutral half of the palette.
+
+     "Every surface" is more than bg/card/raised: `tint()` chips and row hovers composite an
+     ink wash over those three (`StatusBadge inactive` = ink 5%, `PriorityBadge low` /
+     `ScorePill cool` / `AiTouchDetail` = ink 6%, and a chip inside a hovered row stacks two),
+     and pipeline deal cards sit on a 12% stage-hue wash. The binding surface is therefore
+     never a raw token. `core/theme/inkContrast.test.ts` checks 43 such surfaces — reading that
+     hover alpha out of `--color-ck-hover` rather than assuming it — and fails CI on any pair
+     under 4.5:1, so this ramp cannot silently drift. Its FLOOR is deliberately tighter than
+     what renders, and the test says which is which: light bottoms out at 4.72:1 on a real
+     surface (a 6% ink chip on a 12% lost-stage deal card over the page bg), while dark's
+     4.56:1 sits on a chip-inside-an-ink-hovered-row over `card` that has no producer today and
+     is kept as headroom — dark's worst RENDERED pairing is 5.09:1.
+
+     The consequence, accepted deliberately on issue #68: the ramp is COMPRESSED. A 4-step
+     neutral ramp cannot clear 4.5:1 everywhere and keep its old spread — the lightest light
+     value that clears it is #5c5c5c (4.50:1), already darker than the old `ink-mute`
+     (#666666), which is why Will's gate chose to re-space the ramp rather than migrate call
+     sites. Both `ink-dim` values sit just inside their edge rather than on it: light
+     #595959 is 4.72:1 (edge #5c5c5c), dark #adaba5 is 4.56:1 (edge #acaaa4, 4.51:1). The three
+     secondary steps sit ABOVE the new `ink-dim` at even CIE L* increments (~6 L* light,
+     ~7 L* dark — the old LIGHT ramp's own mute→soft step was only 6 L*, so the three stay as
+     distinct from each other as they ever were). What actually shrank is the gap between
+     primary `ink` and the secondary tier: 27 L* → 9 in light, 31 → 10 in dark. Call sites
+     were NOT migrated off `ink-dim`. */
   --color-ck-ink: #292929;
-  --color-ck-ink-mute: #666666;
-  --color-ck-ink-soft: #757575;
-  --color-ck-ink-dim: #8f8f8f;
+  --color-ck-ink-mute: #3c3c3c;
+  --color-ck-ink-soft: #4a4a4a;
+  --color-ck-ink-dim: #595959;
 
   /* Brand ramp — identical in both themes. Issue #54 names these four ramp steps
      explicitly as fixed design tokens; only `accent` has a consumer today, so they
@@ -55,11 +86,39 @@
   --color-ck-accent-wine: #710606;
   --color-ck-accent-ink: #ffffff;
   --color-ck-accent-soft: color-mix(in srgb, var(--color-ck-accent) 9%, transparent);
-  /* Accent used as TEXT or an icon rather than as a fill. Identical to `accent` in
-     light; the .dark block lightens it, because the fixed brand red is only 3.15:1
-     on the dark card and fails WCAG AA as body text. Fills (buttons, bars, borders,
-     focus rings) keep `accent` so the brand red stays identical in both themes. */
-  --color-ck-accent-text: var(--color-ck-accent);
+  /* Accent used as TEXT or an icon rather than as a fill — see the FILL vs TEXT rule
+     below, which every hue in this palette now follows. Both themes carry a literal:
+     the fixed brand red is 3.15:1 on the dark card and 3.16:1 on a light accent wash,
+     so it fails WCAG AA as body text in BOTH directions. Fills (buttons, bars, borders,
+     focus rings) keep `accent`, so the brand red itself is unchanged, and ~50 call sites
+     already route text through this token — nothing had to move for light to be fixed. */
+  --color-ck-accent-text: #ba002a;
+
+  /* ── FILL vs TEXT, the rule for every hue below (issue #119) ────────────────
+     Each status and stage hue is TWO tokens, and which one a component reaches for is
+     decided by the ROLE, not the component:
+
+       fill  →  --color-ck-<hue>          background, border, dot, bar, progress track
+       text  →  --color-ck-<hue>-text     anything painted as a glyph: text or an icon
+
+     #54 lightened these hues under `.dark` so they stay legible on a dark surface but
+     never wrote the mirror rule for light, so in light mode all eleven failed AA 4.5:1
+     as text — worst `ScorePill` warm at 2.45:1 on a stage-washed deal card.
+
+     Splitting the token is not a stylistic preference, it is the only thing that works:
+     a chip's background IS `tint(<the same token>, 12)`, so darkening one token to fix
+     its text darkens the wash beneath it — clawing back most of the gain AND pushing the
+     neutral ramp under the floor #68 tuned it to (`ink-dim` on a stage-washed deal card
+     has 0.22 to spare). The wash has to hold still while the glyph moves. That is exactly
+     what `--color-ck-accent-text` above has always done; this generalises it.
+
+     Values are DERIVED, not chosen: each is the smallest OKLCH lightness step (hue angle
+     and chroma held; chroma reduced only where sRGB forces it) that clears 4.5:1 on every
+     surface the app really paints it on, with a little headroom (~4.55). Amber moves
+     furthest by a wide margin — a mid-gold simply cannot clear AA on a 12% gold wash
+     without landing in ochre. `core/theme/hueContrast.test.ts` re-derives the whole sweep
+     from THIS file and fails CI on any pairing under 4.5:1, so retuning one value is a
+     one-line edit that gets checked. */
 
   /* Status */
   --color-ck-green: #2e7d4f;
@@ -68,6 +127,17 @@
   /* Assistant-authored badges (provenance / AI touch counts) */
   --color-ck-ai: #3a6cb0;
 
+  --color-ck-green-text: #10663a;
+  --color-ck-amber-text: #7e5200;
+  --color-ck-red-text: #aa292e;
+  --color-ck-ai-text: #27599b;
+
+  /* Foreground for a status hue used as a SOLID action fill ("Mark Won", "Mark
+     Complete", the danger confirm). Not `accent-ink`: that is white in both themes,
+     which is right on the brand red (4.66:1 either way) but only 2.49:1 on the green
+     the `.dark` block lightened for text. So this one flips per theme instead. */
+  --color-ck-on-status: #ffffff;
+
   /* Pipeline stage hues (consumed by crm/constants.ts) */
   --color-ck-stage-lead: #3b6ea5;
   --color-ck-stage-qualified: #64748b;
@@ -75,6 +145,13 @@
   --color-ck-stage-negotiation: #c26b3c;
   --color-ck-stage-won: #2e7d4f;
   --color-ck-stage-lost: #c24141;
+
+  --color-ck-stage-lead-text: #2d6096;
+  --color-ck-stage-qualified-text: #505f76;
+  --color-ck-stage-proposal-text: #845600;
+  --color-ck-stage-negotiation-text: #9b4713;
+  --color-ck-stage-won-text: #186b3f;
+  --color-ck-stage-lost-text: #ad2d30;
 
   /* Chrome — hover is an ink tint, so it must be declared per theme (a light
      tint over a dark surface, not a dark tint that would vanish there). */
@@ -92,10 +169,13 @@
      Those modules are a port and style themselves with utility classes built on the blueprint's
      token names. Rather than hand-rewriting every className — which would fork them from the
      blueprint and silently drift on the next port — the names are aliased onto the `ck-*` tokens
-     above. The two palettes were compared value-by-value and agree exactly (cream #fffffa =
-     ck-card, sand #f1f1e8 = ck-bg, charcoal #292929 = ck-ink, muted #666666 = ck-ink-mute,
-     line #d1d5db = ck-line-strong, line-faint #e5e7eb = ck-line, brand #e31d3b = ck-accent), so
-     these are renames, not new colours.
+     above. The two palettes were compared value-by-value and agreed exactly at port time
+     (cream #fffffa = ck-card, sand #f1f1e8 = ck-bg, charcoal #292929 = ck-ink, muted #666666 =
+     ck-ink-mute, line #d1d5db = ck-line-strong, line-faint #e5e7eb = ck-line, brand #e31d3b =
+     ck-accent), so these are renames, not new colours. One has since diverged on purpose:
+     issue #68 darkened `ck-ink-mute` to #3c3c3c for WCAG AA, so `muted` no longer equals the
+     blueprint's #666666. The alias is still the right wiring — it is what makes the ported
+     layer inherit our accessible ramp instead of freezing the blueprint's failing one.
 
      They are declared as `var(...)` rather than copied hex ON PURPOSE: the `.dark` block
      overrides the `ck-*` properties on the same element `:root` matches, so an alias re-resolves
@@ -134,13 +214,21 @@
   --color-ck-line: #3d3b38;
   --color-ck-line-strong: #4a4845;
   --color-ck-ink: #f0efe8;
-  --color-ck-ink-mute: #9c9a93;
-  --color-ck-ink-soft: #7e7c76;
-  --color-ck-ink-dim: #6b6963;
+  /* Same contrast-bound ramp as the light block above (issue #68), mirrored: each step
+     LIGHTENS until it clears 4.5:1 on the lightest surface the guard checks — a chip inside an
+     ink-hovered row over `card`, not `card` itself. That stack is headroom rather than a
+     rendered pixel (see the test), which is why these values have more real margin than the
+     4.56:1 floor suggests. Warm-gray character is kept (g two and b eight or nine points under
+     r, as the pre-#68 values had). */
+  --color-ck-ink-mute: #d4d2cc;
+  --color-ck-ink-soft: #c0beb8;
+  --color-ck-ink-dim: #adaba5;
 
   --color-ck-accent-soft: color-mix(in srgb, var(--color-ck-accent) 20%, transparent);
   /* Same rule the status hues below follow: lighten so it stays legible on a dark
-     surface. 5.19:1 on card, 4.51:1 on an accent-soft chip. */
+     surface. 5.19:1 on card, 4.52:1 on an accent-soft chip. Left exactly where #54 put
+     it: it is a brand value another issue tuned on purpose, it clears AA, and moving it
+     0.3 L* to match #119's slightly wider headroom would be churn. */
   --color-ck-accent-text: #f0727f;
 
   --color-ck-green: #5fb585;
@@ -148,12 +236,34 @@
   --color-ck-red: #e8736b;
   --color-ck-ai: #7fa8dd;
 
+  /* Dark's hues were already tuned as TEXT by #54, so most `-text` tokens simply point
+     back at the fill and follow it if it is ever retuned — the passthrough is the point,
+     not laziness. Two carry a literal because #54 swept SAME-hue pairings only and these
+     two fail a CROSS-hue one the app really renders: `red` is the dashboard's "Nd idle"
+     label, which sits on whatever stage wash its row has (3.97:1 over a proposal row),
+     and `stage-lost` is 4.17:1 on its own 12% wash over `card`. */
+  --color-ck-green-text: var(--color-ck-green);
+  --color-ck-amber-text: var(--color-ck-amber);
+  --color-ck-red-text: #f57f76;
+  --color-ck-ai-text: var(--color-ck-ai);
+
+  /* Dark-mode reverse of the light value: near-black ON the lightened status hue.
+     6.91:1 on green, 5.82:1 on red — where white was 2.49:1 and 2.96:1. */
+  --color-ck-on-status: #1c1b19;
+
   --color-ck-stage-lead: #7aa8d8;
   --color-ck-stage-qualified: #9aa5b6;
   --color-ck-stage-proposal: #d9a441;
   --color-ck-stage-negotiation: #e0916a;
   --color-ck-stage-won: #5fb585;
   --color-ck-stage-lost: #e8736b;
+
+  --color-ck-stage-lead-text: var(--color-ck-stage-lead);
+  --color-ck-stage-qualified-text: var(--color-ck-stage-qualified);
+  --color-ck-stage-proposal-text: var(--color-ck-stage-proposal);
+  --color-ck-stage-negotiation-text: var(--color-ck-stage-negotiation);
+  --color-ck-stage-won-text: var(--color-ck-stage-won);
+  --color-ck-stage-lost-text: #f07b72;
 
   --color-ck-hover: rgba(240, 239, 232, 0.06);
   --color-ck-scrim: rgba(0, 0, 0, 0.7);
@@ -197,9 +307,19 @@ input:focus, textarea:focus, select:focus {
 /* Dark-mode syntax highlighting for assistant code blocks.
    `highlight.js/styles/github.css` (imported by assistant/MarkdownContent) is a fixed
    LIGHT theme — without this, a fenced code block paints a white slab inside the dark
-   drawer. It is emitted after this file in the bundle, so these rules win on
-   specificity, not order: `.dark .hljs` is (0,2,0) against its (0,1,0). Hues are
-   github-dark's, all >= 4.5:1 on --color-ck-raised. */
+   drawer. These rules win on SPECIFICITY, never on order: `.dark .hljs-x` is (0,2,0)
+   against its (0,1,0). That distinction became load-bearing with #149, which moved
+   github.css out of this stylesheet's bundle into the lazy assistant chunk — so the two
+   files no longer have a fixed emission order at all, and an order-dependent override
+   would now be a coin flip. Hues are github-dark's, all >= 4.5:1 on --color-ck-raised.
+
+   EVERY selector github.css colours needs a colour here, not just a font-style: a parent
+   `.dark .hljs { color }` cannot override an explicit colour on a CHILD element, whatever
+   the specificity of the parent's selector. `.hljs-emphasis` and `.hljs-strong` are the
+   two that set one (`color: #24292e`, near-black), so markdown *italic* and **bold**
+   inside a fenced block rendered near-black on the dark surface until they were given
+   hues here. Adding a rule below that sets only `font-style`/`font-weight` reintroduces
+   that bug for whatever selector it names. */
 .dark .hljs {
   color: var(--color-ck-ink);
   background: transparent;
@@ -216,15 +336,22 @@ input:focus, textarea:focus, select:focus {
 .dark .hljs-regexp, .dark .hljs-string,
 .dark .hljs-meta .hljs-string { color: #a5d6ff; }
 .dark .hljs-built_in, .dark .hljs-symbol { color: #ffa657; }
+/* `ink-dim`, not `ink-mute`: #68's ramp lightened `ink-mute` to within 10 L* of `ink`, which
+   would have rendered comments at almost the weight of the code around them. `ink-dim` keeps
+   roughly the de-emphasis the pre-#68 `ink-mute` gave here (24 L* below `ink`, was 30) and
+   still clears 4.5:1 on --color-ck-raised, like every other hue in this block. */
 .dark .hljs-comment, .dark .hljs-code,
-.dark .hljs-formula { color: var(--color-ck-ink-mute); }
+.dark .hljs-formula { color: var(--color-ck-ink-dim); }
 .dark .hljs-name, .dark .hljs-quote, .dark .hljs-selector-tag,
 .dark .hljs-selector-pseudo { color: #7ee787; }
 .dark .hljs-subst { color: var(--color-ck-ink); }
 .dark .hljs-section { color: #79c0ff; font-weight: bold; }
 .dark .hljs-bullet { color: #d9a441; }
-.dark .hljs-emphasis { font-style: italic; }
-.dark .hljs-strong { font-weight: bold; }
+/* github.css sets an explicit near-black `color` on both of these, which no parent rule can
+   override — hence the colour, not just the face. `ck-ink` matches `.dark .hljs`'s own body
+   colour, so emphasis reads as emphasis rather than as a different token type. */
+.dark .hljs-emphasis { color: var(--color-ck-ink); font-style: italic; }
+.dark .hljs-strong { color: var(--color-ck-ink); font-weight: bold; }
 .dark .hljs-addition { color: #7ee787; background-color: #0f5323; }
 .dark .hljs-deletion { color: #ffa198; background-color: #67060c; }
 

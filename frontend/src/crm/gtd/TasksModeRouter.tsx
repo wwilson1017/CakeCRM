@@ -1,6 +1,11 @@
+import { lazy } from 'react';
 import { Navigate } from 'react-router-dom';
-import { TasksPage } from '../TasksPage';
 import { useTaskMode } from './TaskModeContext';
+
+// Lazy at MODULE scope (#149): TasksPage drags the whole collection layer and @dnd-kit with
+// it, and this module is imported eagerly by App.tsx — a static import here would put all of
+// that into the shell chunk every CRM visitor downloads, the login page included.
+const TasksPage = lazy(() => import('../TasksPage').then((m) => ({ default: m.TasksPage })));
 
 interface Props {
   /** The GTD page for this route. */
@@ -19,7 +24,10 @@ interface Props {
  * behind both, a second surface would only show what the first already does.
  *
  * Renders nothing until the mode is known, rather than defaulting to normal: guessing
- * would flash the wrong task system on every load of a GTD-mode install.
+ * would flash the wrong task system on every load of a GTD-mode install. Both page
+ * elements are lazy components; neither suspends until it is actually rendered, and the
+ * Suspense boundary that catches it is `CrmLayout`'s, around the content column — so the
+ * nav stays put while a task chunk loads.
  */
 export function TasksModeRouter({ gtd, normal = 'tasks' }: Props) {
   const mode = useTaskMode();

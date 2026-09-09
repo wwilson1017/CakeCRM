@@ -15,15 +15,19 @@ Contacts:
 Companies:
   GET    /api/crm/companies             — paginated list / search (?q=)
   GET    /api/crm/companies/:id         — full detail (rolled-up contacts/deals/activity)
-  POST   /api/crm/companies             — create
+  POST   /api/crm/companies             — create (400s on a case/whitespace duplicate)
+  POST   /api/crm/companies/resolve     — get-or-create by name (the #35 resolver over REST)
   PUT    /api/crm/companies/:id         — update
   DELETE /api/crm/companies/:id         — delete (contacts/deals unlink, not deleted)
 
 Deals:
-  GET    /api/crm/deals                 — pipeline list / filtered
+  GET    /api/crm/deals                 — pipeline list / filtered (?include_archived= on the
+                                          board; ?sort=id&limit=&after_id= for its keyset page)
   GET    /api/crm/deals/:id             — detail
   POST   /api/crm/deals                 — create
   PUT    /api/crm/deals/:id             — update
+  POST   /api/crm/deals/:id/restore     — un-archive a soft-archived deal
+  POST   /api/crm/deals/:id/mark-lost   — close as lost, recording a written reason
   POST   /api/crm/deals/bulk-move       — move many deals to one stage (one transaction)
   POST   /api/crm/deals/touch-count/backfill        — recompute AI touch counts (?scope=null|all&force=)
   GET    /api/crm/deals/touch-count/backfill/status — backfill progress
@@ -48,6 +52,10 @@ Chatter (notes threads on a deal or contact):
   PATCH  /api/crm/chatter/note/:id      — edit a note
   POST   /api/crm/chatter/note/:id/archive      — soft-archive a note
   POST   /api/crm/chatter/note/:id/unarchive    — restore an archived note
+  POST   /api/crm/chatter/note/:id/attachments  — attach one file to a note (multipart)
+  GET    /api/crm/chatter/attachments/:id/thumb — server-generated thumbnail (auth)
+  GET    /api/crm/chatter/attachments/:id/file  — original bytes (auth)
+  DELETE /api/crm/chatter/attachments/:id       — remove an attachment
 
 Custom fields (user-defined fields on contacts/companies/deals):
   GET    /api/crm/fields                — list definitions (?entity_type=)
@@ -66,7 +74,10 @@ Lead scores (issue #18):
 
 Other:
   GET    /api/crm/dashboard             — summary stats
+  GET    /api/crm/dashboard/today       — ranked "what needs me today" list (?owner_id)
   GET    /api/crm/dashboard/weekly-touches — open deals touched in a window (?start, ?end)
+  GET    /api/crm/dashboard/weekly-touches/detail — one rep's touched deals, in full
+         (?owner=<id|unassigned>, ?start, ?end)
   GET    /api/crm/analytics             — win/loss, activity volume, deal aging (?days, ?stale_days)
   GET    /api/crm/demo-status           — first-run onboarding / sample-data state
   POST   /api/crm/load-sample-data      — seed fictional demo data (first run)
@@ -82,20 +93,33 @@ Other:
 import csv
 import io
 import logging
+from urllib.parse import quote
 
 import psycopg2
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Header,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+)
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, StrictInt, field_validator
 
 from core.auth import get_current_user, require_admin
 from crm import (
+    attachment_service,
     chatter_service,
     field_service,
     gtd_common,
     provenance_service,
+    report_service,
     scoring_service,
     service as crm,
+    today_service,
     todo_tokens,
     touch_count_service,
 )
@@ -183,6 +207,15 @@ class DealUpdate(BaseModel):
     owner_id: int | None = None
 
 
+class DealMarkLost(BaseModel):
+    # A Pydantic cap HERE, unlike BulkDealMove below, and the difference is what the
+    # service does when the limit is exceeded: bulk_move_deals REFUSES with a sentence
+    # worth surfacing, while mark_deal_lost silently TRUNCATES at MAX_LOST_REASON. A
+    # rep's typed prose losing its tail with no feedback is data loss, so the REST
+    # boundary rejects instead. The service cap stays for the agent-tool path.
+    lost_reason: str = Field("", max_length=crm.MAX_LOST_REASON)
+
+
 class BulkDealMove(BaseModel):
     # StrictInt, not int: Pydantic's lax mode coerces JSON `true` to 1, `1.0` to 1 and
     # "3" to 3, so a malformed body would silently move deal #1. Only the model can catch
@@ -205,6 +238,10 @@ class CompanyCreate(BaseModel):
     source: str = ""
     status: str = "active"
     owner_id: int | None = None
+
+
+class CompanyResolve(BaseModel):
+    name: str
 
 
 class CompanyUpdate(BaseModel):
@@ -309,7 +346,7 @@ class FieldValuesUpdate(BaseModel):
 async def list_contacts(
     q: str = "", status: str = "", tags: str = "", sort: str = "",
     limit: int = Query(50, ge=1, le=1000), offset: int = Query(0, ge=0),
-    owner_id: int | None = None,
+    owner_id: int | None = None, after_id: int | None = Query(None, ge=0, le=2_147_483_647),
     user=Depends(get_current_user),
 ):
     # owner_id absent = everyone, so an install that never assigns owners behaves
@@ -317,8 +354,15 @@ async def list_contacts(
     # separate flag, no magic value.
     # #18: sort is allowlisted in the service layer (unknown -> updated_at); applied to
     # BOTH the search (?q=) and browse branches so the UI's active sort is never ignored.
+    # #77: after_id is the list page's keyset cursor and is only valid with sort=id (the
+    # service refuses any other pairing rather than paginating wrong).
     sort = sort or "updated_at"
     if q:
+        # search_contacts has no cursor, so honouring `after_id` here is impossible —
+        # and silently dropping it looks exactly like a client stuck re-reading page one,
+        # which is the failure _check_assembly_cursor exists to prevent. Refuse instead.
+        if after_id is not None:
+            raise HTTPException(status_code=400, detail="after_id cannot be combined with q")
         contacts = crm.search_contacts(
             q, status=status or None, tags=tags or None, limit=limit, offset=offset, sort=sort,
             owner_id=owner_id,
@@ -327,10 +371,13 @@ async def list_contacts(
             q, status=status or None, tags=tags or None, owner_id=owner_id
         )
         return {"contacts": contacts, "total": total}
-    return crm.list_contacts(
-        offset=offset, limit=limit,
-        status=status or None, tags=tags or None, sort=sort, owner_id=owner_id,
-    )
+    try:
+        return crm.list_contacts(
+            offset=offset, limit=limit, status=status or None, tags=tags or None,
+            sort=sort, owner_id=owner_id, after_id=after_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
 
 
 @router.get("/tags")
@@ -411,12 +458,63 @@ async def delete_contact(contact_id: int, user=Depends(get_current_user)):
 @router.get("/deals")
 async def list_deals(
     stage: str = "", contact_id: int | None = None,
+    include_archived: bool = False,
+    sort: str = "",
+    limit: int | None = Query(None, ge=1, le=1000),
+    after_id: int | None = Query(None, ge=0, le=2_147_483_647),
     user=Depends(get_current_user),
 ):
-    if stage or contact_id:
+    """Pipeline board payload, or a filtered deal list when stage/contact_id is given.
+
+    `include_archived` (issue #83) applies to the BOARD payload only — it is the one
+    opt-in hole in the archived-deal sweep that lets the UI find and restore an
+    accidentally archived deal. It is refused rather than ignored alongside
+    stage/contact_id: that branch is a different service function which keeps the sweep,
+    and silently dropping an advertised flag is worse than saying no.
+
+    `limit`/`after_id` (issue #59) are the board's OPT-IN keyset page. Omitting them
+    returns the whole board exactly as before. The frontend sweeps every page and
+    reassembles the complete corpus before rendering, so paging is transport only and
+    the client-side facet model is unchanged.
+
+    On a CONTINUATION page (`after_id` set) `stage_summary` and `total_pipeline_value`
+    come back as `null`: the sweep pays for that whole-table aggregate once, on its first
+    page, instead of on every one of up to 200 pages.
+    """
+    # `contact_id is not None`, not a truthiness test: `?contact_id=0` is falsy, so a
+    # truthiness test would drop it through to the board branch — returning the whole
+    # pipeline for a request that asked to filter, and slipping past the refusal below.
+    if stage or contact_id is not None:
+        if include_archived:
+            raise HTTPException(
+                status_code=400,
+                detail="include_archived is not supported with stage or contact_id",
+            )
+        # Same reasoning as include_archived: `list_deals` has no cursor, and silently
+        # dropping an advertised paginator looks exactly like a client stuck re-reading
+        # page one — the failure the #77 cursor rules exist to prevent. Refuse instead.
+        if limit is not None or after_id is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="limit and after_id are not supported with stage or contact_id",
+            )
         deals = crm.list_deals(stage=stage or None, contact_id=contact_id)
         return {"deals": deals, "count": len(deals)}
-    return crm.get_pipeline()
+    # The shared assembly wire format (assemblyPage.ts) always sends `sort=id`, and that
+    # parameter is what makes the cursor meaningful. Accepting `sort=updated_at` here
+    # while still returning id order would be a silently-ignored pagination input, so a
+    # paginated request must say `id` or say nothing. Unpaginated callers are unaffected.
+    if (limit is not None or after_id is not None) and sort not in ("", "id"):
+        raise HTTPException(
+            status_code=400,
+            detail="pipeline pages are ordered by id; pass sort=id or omit it",
+        )
+    try:
+        return crm.get_pipeline(
+            include_archived=include_archived, limit=limit, after_id=after_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
 
 
 @router.get("/deals/{deal_id}")
@@ -478,6 +576,66 @@ async def bulk_move_deals(body: BulkDealMove, user=Depends(get_current_user)):
     updated deal and linked contact, bounded by BULK_MOVE_MAX.
     """
     return await run_in_threadpool(crm.bulk_move_deals, body.deal_ids, body.stage)
+
+
+# Restore is the recoverability half of issue #83: archiving a deal was reachable only
+# through the assistant, so on a keyless install an accidental archive (or `merge_deals`'
+# source-archival) was permanent. ARCHIVE deliberately gets no route here — the gate scope
+# is view + restore only; a UI archive affordance lands with the deal-detail parity port.
+#
+# Sync `def` on purpose, which makes this the one non-async handler in the file: the work
+# is blocking psycopg2 plus a lead-score recompute, and FastAPI runs a sync endpoint in a
+# threadpool instead of on the event loop. Its `async def` neighbours do the same blocking
+# work directly on the loop — that is pre-existing and out of scope here, not a convention
+# worth propagating (bulk-move already opts out via run_in_threadpool for the same reason).
+# No path collision — /deals/touch-count/backfill shares the segment count but differs in
+# its terminal segment.
+#
+# Restoring is idempotent (restoring a live deal is a no-op NULL write) and
+# member-accessible: ownership is not access control here, and this is ordinary record
+# CRUD, the same tier as PUT /deals/{id}. Note that restoring a deal that was archived by
+# a MERGE is not an undo — the merge already repointed activity/tasks, copied notes and
+# gap-filled custom fields onto the target; restore only makes the source visible again.
+@router.post("/deals/{deal_id}/restore")
+def restore_deal(deal_id: int, user=Depends(get_current_user)):
+    result = crm.archive_deal(deal_id, archived=False)
+    if not result:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    return result
+
+
+# Closing a deal WITH a reason (issue #128). Before this, `lost_reason` had no human
+# writer at all: the field renders on the deal sheet but `_DEAL_USER_WRITABLE` excludes
+# it (mark_deal_lost is its single writer), so on a keyless install a rep could read a
+# lost reason and never type one.
+#
+# This delegates to that same lifecycle verb rather than widening _DEAL_USER_WRITABLE,
+# which is what preserves the invariant it was excluded for — a reason can still only
+# arrive WITH the close, never be pasted onto a deal that isn't lost. It also zeroes
+# probability and appends the timeline note, which `PUT /deals/{id}` with {stage: lost}
+# does not, so the explicit Mark Lost action takes this route even when the reason is
+# blank; drag and bulk-move keep using PUT.
+#
+# Sync `def` like restore_deal above: blocking psycopg2 plus a chatter write and a
+# lead-score recompute, which FastAPI runs in a threadpool for a sync endpoint.
+#
+# No path collision — /deals/touch-count/backfill shares the segment count but differs
+# in its terminal segment, the same reasoning restore_deal already documents.
+@router.post("/deals/{deal_id}/mark-lost")
+def mark_deal_lost(deal_id: int, body: DealMarkLost, user=Depends(get_current_user)):
+    try:
+        # author_id credits the note to whoever typed the reason (#60: authorship is not
+        # ownership). The assistant tool leaves it NULL; a human route must not.
+        result = crm.mark_deal_lost(
+            deal_id, lost_reason=body.lost_reason, author_id=user["id"]
+        )
+    except ValueError as e:
+        # _write_deal_update refuses a stage change on an archived deal — a refusal the
+        # caller can act on, not a server fault. Same mapping as PUT /deals/{id}.
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    if not result:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    return result
 
 
 # ── AI touch counts (issue #16) ───────────────────────────────────────────────
@@ -551,14 +709,22 @@ async def list_tasks(
     contact_id: int | None = None, deal_id: int | None = None,
     completed: bool | None = None, due_before: str = "",
     priority: str = "", limit: int = Query(50, ge=1, le=1000),
-    owner_id: int | None = None,
+    owner_id: int | None = None, after_id: int | None = Query(None, ge=0, le=2_147_483_647),
+    sort: str = "",
     user=Depends(get_current_user),
 ):
-    tasks = crm.list_tasks(
-        contact_id=contact_id, deal_id=deal_id,
-        completed=completed, due_before=due_before or None,
-        priority=priority or None, limit=limit, owner_id=owner_id,
-    )
+    # #77: `sort=id` + `after_id` is the list page's keyset sweep. Every existing caller
+    # omits both and keeps the historical due order (now with an id tie-breaker, so a
+    # LIMIT window is deterministic among tasks sharing a due date).
+    try:
+        tasks = crm.list_tasks(
+            contact_id=contact_id, deal_id=deal_id,
+            completed=completed, due_before=due_before or None,
+            priority=priority or None, limit=limit, owner_id=owner_id,
+            after_id=after_id, sort=sort or "due",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
     return {"tasks": tasks, "count": len(tasks)}
 
 
@@ -660,6 +826,24 @@ async def dashboard(user=Depends(get_current_user)):
     return crm.get_dashboard_stats()
 
 
+@router.get("/dashboard/today")
+async def dashboard_today(
+    owner_id: int | None = Query(None),
+    user=Depends(get_current_user),
+):
+    """The Today panel (issue #130): one ranked list of what needs attention today.
+
+    `owner_id` absent means everyone (the `list_tasks` idiom — no separate flag or
+    magic value); present means that person's view, which deliberately INCLUDES
+    unassigned tasks, because someone has to catch them. Reminders carry no owner
+    column at all and appear in every scope.
+
+    Pure SQL, so the ranking is identical with zero AI providers configured. Rank 2 of
+    the ladder is reserved for the hot-deals follow-up (#125) and is never emitted yet.
+    """
+    return today_service.get_today(owner_id=owner_id)
+
+
 @router.get("/dashboard/weekly-touches")
 async def weekly_touches(
     start: str | None = Query(None),
@@ -680,6 +864,38 @@ async def weekly_touches(
     except ValueError as e:
         # Malformed / half-specified range — the caller's input, not a server fault.
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/dashboard/weekly-touches/detail")
+async def weekly_touches_detail(
+    owner: str = Query(..., description="A user id, or the literal 'unassigned'"),
+    start: str | None = Query(None),
+    end: str | None = Query(None),
+    user=Depends(get_current_user),
+):
+    """One rep's touched open deals — the whole list, not the card's ten (issue #146).
+
+    `owner` is REQUIRED and carries a literal `unassigned` for the NULL bucket, unlike
+    `/dashboard/today`'s absent-means-everyone `owner_id`: this drill-down is always
+    exactly one bucket, and the unowned deals are one of them.
+
+    `start`/`end` are the SAME UTC calendar days the card takes, so a custom range picked
+    on the dashboard is asked here as the same question; omitting both is the rolling
+    default, re-resolved at this request rather than inherited as frozen instants (see
+    `get_weekly_touch_detail` for why freezing is not merely unnecessary but wrong).
+
+    Not admin-gated: ownership is an assignment, not access control (#60), so every member
+    sees every rep's row.
+    """
+    try:
+        result = crm.get_weekly_touch_detail(
+            owner_id=crm.parse_touch_owner(owner), start=start, end=end
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if result is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return result
 
 
 @router.get("/analytics")
@@ -727,11 +943,16 @@ class TaskModeBody(BaseModel):
 
 
 @router.post("/task-mode")
-async def set_task_mode(body: TaskModeBody, user=Depends(get_current_user)):
+async def set_task_mode(body: TaskModeBody, user=Depends(require_admin)):
     """Switch between normal tasks and Todo-GTD mode.
 
     Switching migrates nothing — GTD is a view over the same task rows — so this is
     instant and reversible in both directions.
+
+    Admin-only since #102, on the same rule as `/api/assistant/identity`: `task_mode`
+    lives on the `crm_meta` singleton, so one member flipping it changes the task
+    experience for EVERYONE on the install. #102 made this reachable in practice by
+    turning GTD on everywhere, which is what surfaced the gap.
     """
     try:
         return crm.set_task_mode(body.mode)
@@ -754,18 +975,27 @@ class TodoSurfacesBody(BaseModel):
 
 
 @router.get("/todo-surfaces")
-async def get_todo_surfaces(user=Depends(get_current_user)):
+async def get_todo_surfaces(user=Depends(require_admin)):
     """Current state of the two no-login todo surfaces, including their live URLs.
 
     Returns the tokens themselves: they ARE the credential, and the settings page has
-    to render a copyable link. This endpoint is authenticated.
+    to render a copyable link — which is exactly why this is **admin-only** since #102
+    (it was merely authenticated before, and the `mode === 'gtd'` UI gate was the only
+    thing keeping it off a normal-mode member's screen).
     """
     return _todo_surfaces_payload()
 
 
 @router.post("/todo-surfaces")
-async def update_todo_surfaces(body: TodoSurfacesBody, user=Depends(get_current_user)):
-    """Enable/disable the public todo app and set or rotate either token."""
+async def update_todo_surfaces(body: TodoSurfacesBody, user=Depends(require_admin)):
+    """Enable/disable the public todo app and set or rotate either token.
+
+    Admin-only since #102. Enabling the web app mints an unauthenticated URL granting
+    read+write over the whole todo store, and that token has NO lifecycle tie to the
+    account that created it — deactivating that user does not revoke the link, the way
+    `token_epoch`/`is_active` revoke their JWT. A credential that outlives its creator's
+    account belongs behind the install-configuration gate.
+    """
     capture_token = body.capture_token
     web_token = body.web_token
     if body.regenerate_capture:
@@ -1006,6 +1236,174 @@ async def smart_import_confirm(body: SmartImportConfirm, user=Depends(get_curren
 # timeline. Validation (entity type/existence, non-empty message) lives in
 # chatter_service and surfaces here as ValueError → 400.
 
+# ── Note attachments (issue #57) ──────────────────────────────────────────────
+# Registered BEFORE /chatter/{entity_type}/{entity_id} deliberately. DELETE
+# /chatter/attachments/{id} has the same three-segment shape as that GET, and while the
+# methods differ today, a literal-prefix route one refactor away from being shadowed by a
+# wildcard is not a thing to leave to luck. All four carry get_current_user — these bytes
+# are private CRM content, and the frontend fetches them with the Bearer token rather than
+# pointing a bare <img src> at an open URL (there is no cookie auth to make that work,
+# and an unauthenticated media URL is exactly what the issue rules out).
+#
+# All four are sync `def`: they do blocking psycopg2 work, and the upload additionally runs
+# Pillow. FastAPI runs a sync handler in its threadpool, so nothing here occupies the event
+# loop — the same reason core.auth.get_current_user and the login handlers are sync. The
+# neighbouring chatter routes are `async def` because they only hand off to a service.
+
+# The routes below serve stored bytes back to a browser, so both headers are load-bearing:
+# nosniff stops a mislabelled body being re-interpreted as markup, and an attachment
+# disposition stops direct navigation rendering anything in the app's origin at all. The UI
+# never navigates to these URLs — it fetches them and renders object URLs — so the
+# disposition costs nothing.
+_MEDIA_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    # NOT `immutable`, and not a long max-age: `TRUNCATE ... RESTART IDENTITY` reuses
+    # attachment ids, so a cached /attachments/1/file could otherwise be served for a
+    # DIFFERENT attachment after a CRM reset — and a fresh immutable response is never
+    # revalidated, so a hard-deleted attachment would stay viewable in that browser.
+    # `no-cache` still stores the response; it just makes every reuse revalidate, which is
+    # what turns the ETag below into a real bandwidth win without the staleness.
+    "Cache-Control": "private, no-cache",
+    # The response varies by who asked, so a shared cache must never cross-serve it.
+    "Vary": "Authorization",
+}
+
+
+def _etag_matches(if_none_match: str | None, etag: str) -> bool:
+    """RFC 9110 If-None-Match: `*`, a comma-separated list, and weak validators.
+
+    Raw string equality would miss every one of those forms and silently disable the 304
+    path — the fast path is the whole point, so it has to actually fire.
+    """
+    if not if_none_match:
+        return False
+    for raw in if_none_match.split(","):
+        candidate = raw.strip()
+        if not candidate:
+            continue
+        if candidate == "*":
+            return True
+        # A weak validator compares equal to its strong twin here: the bytes behind an id
+        # never change, so there is no semantic distinction left to preserve.
+        if candidate.startswith("W/"):
+            candidate = candidate[2:]
+        if candidate == etag:
+            return True
+    return False
+
+
+def _content_disposition(filename: str) -> str:
+    """`attachment` disposition with both the ASCII fallback and the RFC 5987 form.
+
+    quote() must be called with safe="" — its default leaves `/` unescaped, which is not
+    the RFC 5987 encoding. The service has already normalized the name, so it carries no
+    quotes, backslashes, control characters or path segments.
+    """
+    ascii_name = filename.encode("ascii", "ignore").decode("ascii").strip()
+    # A name that is entirely non-ASCII strips down to nothing, or to a bare extension
+    # ("写真.png" -> ".png") — which a legacy client would save as a hidden dotfile. Give
+    # the fallback a real basename; clients that understand filename* never see it.
+    #
+    # Gated on the name having actually LOST characters, not merely on the fallback
+    # starting with a dot: a file genuinely named ".htaccess" survives normalization intact
+    # and must keep its name, where an earlier version rewrote it to "attachment.htaccess".
+    if ascii_name != filename and (not ascii_name or ascii_name.startswith(".")):
+        ascii_name = f"attachment{ascii_name}"
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename, safe='')}"
+
+
+@router.post("/chatter/note/{note_id}/attachments")
+def add_note_attachment(
+    note_id: int,
+    file: UploadFile = File(...),
+    user=Depends(get_current_user),
+):
+    """Attach one file to an existing note (multipart, field `file`)."""
+    # Bounded read: take cap+1 bytes and reject if it came back over, rather than trusting
+    # Content-Length. The repo-wide idiom (assistant/router.py, the CSV import above).
+    file.file.seek(0)
+    data = file.file.read(attachment_service.MAX_ATTACHMENT_BYTES + 1)
+    if len(data) > attachment_service.MAX_ATTACHMENT_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Attachments are limited to "
+                   f"{attachment_service.MAX_ATTACHMENT_BYTES // (1024 * 1024)} MB.",
+        )
+    try:
+        return attachment_service.create_attachment(
+            note_id, data=data, filename=file.filename, uploaded_by=user["id"],
+        )
+    except attachment_service.AttachmentError as e:
+        raise HTTPException(status_code=_ATTACHMENT_STATUS[e.code], detail=str(e)) from None
+
+
+# Code → status in one table, so reworded copy can never move a status by accident.
+_ATTACHMENT_STATUS = {
+    "note_not_found": 404,
+    "note_archived": 404,
+    "limit_exceeded": 400,
+    "file_too_large": 413,
+    "file_empty": 400,
+}
+
+
+@router.get("/chatter/attachments/{attachment_id}/thumb")
+def get_note_attachment_thumb(
+    attachment_id: int,
+    if_none_match: str | None = Header(None, alias="If-None-Match"),
+    user=Depends(get_current_user),
+):
+    """The server-generated thumbnail — the ONLY image bytes a list view ever fetches."""
+    # Metadata first so a revalidation never reads the blob. The thumb ETag is distinct
+    # from the file's so the two resources can't cross-satisfy each other.
+    meta = attachment_service.get_meta(attachment_id)
+    if meta is None or not meta["has_thumb"]:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    etag = f'"{meta["sha256"]}-thumb"'
+    if _etag_matches(if_none_match, etag):
+        return Response(status_code=304, headers={**_MEDIA_HEADERS, "ETag": etag})
+    row = attachment_service.get_thumb(attachment_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    return Response(
+        content=row["thumb_data"],
+        media_type=row["thumb_mime"],
+        headers={**_MEDIA_HEADERS, "ETag": etag,
+                 "Content-Disposition": _content_disposition(meta["filename"])},
+    )
+
+
+@router.get("/chatter/attachments/{attachment_id}/file")
+def get_note_attachment_file(
+    attachment_id: int,
+    if_none_match: str | None = Header(None, alias="If-None-Match"),
+    user=Depends(get_current_user),
+):
+    """The original bytes. Fetched only on an explicit open/download, never in a list."""
+    meta = attachment_service.get_meta(attachment_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    etag = f'"{meta["sha256"]}"'
+    if _etag_matches(if_none_match, etag):
+        return Response(status_code=304, headers={**_MEDIA_HEADERS, "ETag": etag})
+    row = attachment_service.get_file(attachment_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    return Response(
+        content=row["data"],
+        media_type=row["mime_type"],
+        headers={**_MEDIA_HEADERS, "ETag": etag,
+                 "Content-Disposition": _content_disposition(row["filename"])},
+    )
+
+
+@router.delete("/chatter/attachments/{attachment_id}")
+def delete_note_attachment(attachment_id: int, user=Depends(get_current_user)):
+    if not attachment_service.delete_attachment(attachment_id):
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    return {"ok": True}
+
+
 @router.get("/chatter/{entity_type}/{entity_id}")
 async def get_chatter(
     entity_type: str,
@@ -1103,24 +1501,78 @@ async def confirm_provenance(
 async def list_companies(
     q: str = "", status: str = "", sort: str = "name",
     limit: int = Query(50, ge=1, le=1000), offset: int = Query(0, ge=0),
-    owner_id: int | None = None,
+    owner_id: int | None = None, after_id: int | None = Query(None, ge=0, le=2_147_483_647),
     user=Depends(get_current_user),
 ):
     if q:
+        # See list_contacts: the search branch cannot honour a cursor, so it says so.
+        if after_id is not None:
+            raise HTTPException(status_code=400, detail="after_id cannot be combined with q")
         companies = crm.search_companies(
             q, status=status or None, limit=limit, offset=offset, owner_id=owner_id
         )
         total = crm.count_search_companies(q, status=status or None, owner_id=owner_id)
         return {"companies": companies, "total": total}
-    return crm.list_companies(
-        offset=offset, limit=limit, status=status or None, sort=sort, owner_id=owner_id
-    )
+    try:
+        return crm.list_companies(
+            offset=offset, limit=limit, status=status or None, sort=sort,
+            owner_id=owner_id, after_id=after_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
 
 
 @router.get("/companies/{company_id}")
 async def get_company(company_id: int, user=Depends(get_current_user)):
     result = crm.get_company_detail(company_id)
     if not result:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return result
+
+
+@router.get("/companies/{company_id}/report")
+async def company_report(
+    company_id: int,
+    include_archived: bool = False,
+    user=Depends(get_current_user),
+):
+    """The Reports page's one-company rollup (issue #144).
+
+    Deliberately not ``get_company_detail``: that reader serves the Companies detail panel
+    (20 activities, no notes, no truncation flags). This one is the report — every contact,
+    every live deal, each child's newest activities with per-record truncation flags.
+
+    ``include_archived`` widens BOTH archived axes at once (deals by ``archived_at``, notes
+    by ``crm_chatter.archived``) so the page and its timeline never disagree about which
+    records exist. Contacts are always included and rendered marked — ``contacts.status`` is
+    not a sweep, and an archived contact is still this company's history.
+
+    Keyless and behind ``get_current_user``: any member may read any record (#60 — ownership
+    is an assignment, not access control).
+    """
+    result = report_service.get_company_rollup(company_id, include_archived=include_archived)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return result
+
+
+@router.get("/companies/{company_id}/timeline")
+async def company_timeline(
+    company_id: int,
+    limit: int = Query(100, ge=1, le=report_service.TIMELINE_MAX_LIMIT),
+    offset: int = Query(0, ge=0),
+    include_archived: bool = False,
+    user=Depends(get_current_user),
+):
+    """The rollup's merged notes + activities feed, newest first (issue #144).
+
+    LIMIT/OFFSET paged with a ``limit + 1`` probe driving ``has_more`` — never a second
+    COUNT, which would go stale beside the page it describes.
+    """
+    result = report_service.get_company_timeline(
+        company_id, limit=limit, offset=offset, include_archived=include_archived
+    )
+    if result is None:
         raise HTTPException(status_code=404, detail="Company not found")
     return result
 
@@ -1133,6 +1585,46 @@ async def create_company(body: CompanyCreate, user=Depends(get_current_user)):
         return crm.create_company(**_create_payload(body, user))
     except psycopg2.errors.UniqueViolation:
         raise HTTPException(status_code=400, detail="A company with that name already exists") from None
+
+
+@router.post("/companies/resolve")
+async def resolve_company(body: CompanyResolve, user=Depends(get_current_user)):
+    """Get-or-create a company by name — the #35 resolver exposed over REST (issue #123).
+
+    The deal form's inline quick-create needs get-or-create keyed on the
+    ``uq_companies_name_ci`` normalization, which ``POST /companies`` deliberately does
+    NOT provide: that route INSERTs unconditionally and surfaces a case/whitespace
+    duplicate as a 400. That is the right answer for the full "New Company" form, where
+    you asked to create a company that already exists, and the wrong one for a picker
+    whose entire job is to land you on the existing record.
+
+    Delegates to ``resolve_or_create_company_ids`` verbatim rather than matching the name
+    here. The normalization is an index expression, and the primitive's docstring warns
+    that Python's case-folding can disagree with the database's ``LOWER()`` — a second
+    spelling of that rule in this file (or a third in the frontend) is exactly how a
+    company we just created gets stranded and a duplicate appears anyway. It is also
+    race-safe by construction, which a SELECT-then-INSERT here would not be.
+
+    The raw name is passed through untrimmed: the primitive's contract is
+    ``{raw spelling exactly as passed: id}``, so looking the result up by the same string
+    keeps trimming a single rule owned by SQL. The blank guard mirrors ``create_company``
+    above rather than inventing its own.
+
+    A company created here is left UNASSIGNED, which is the primitive's deliberate rule
+    (pinned by ``test_auto_created_companies_are_left_unassigned``), not an oversight in
+    this route. The quick-created CONTACT does get the caller as owner, because it goes
+    through ``POST /contacts``, where ``_create_payload`` applies the usual default.
+    """
+    if not body.name.strip():
+        raise HTTPException(status_code=400, detail="Name is required")
+    company_id = crm.resolve_or_create_company_ids([body.name]).get(body.name)
+    company = crm.get_company(company_id) if company_id is not None else None
+    if not company:
+        # The primitive yields no id only in its documented single-user race: the row was
+        # deleted between its INSERT and its read-back. Nothing was linked, so refuse
+        # rather than hand back a half-answer the form would store as a company_id.
+        raise HTTPException(status_code=409, detail="Could not resolve that company — please try again")
+    return company
 
 
 @router.put("/companies/{company_id}")

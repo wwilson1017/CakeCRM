@@ -1,7 +1,7 @@
 /**
  * TelegramSettings — connect a Telegram bot and link your phone to the assistant (#7).
  *
- * Self-contained settings card (rendered by SettingsPage after Branding). Mirrors the
+ * Rendered in the Integrations section of Settings. Mirrors the
  * repo's load→edit→save + `null = unknown` idiom: status is null until the first fetch
  * resolves, so nothing renders assumptively. While connected-but-unlinked it polls
  * status every few seconds so the card notices when `/start <code>` links the account.
@@ -15,7 +15,8 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../../core/api/client';
 import { FONT_SANS, INK, INK_MUTE, ACCENT_TEXT, labelStyle, inputStyle } from '../../shared/styles';
 import { toast } from '../../shared/toast';
-import { cardStyle, sectionHeading, btnPrimary, btnSecondary, btnDanger } from '../styles';
+import { btnPrimary, btnSecondary, btnDanger } from '../styles';
+import { SettingsCard } from './SettingsCard';
 
 interface TelegramStatus {
   connected: boolean;
@@ -30,7 +31,7 @@ interface SetupStatus {
   ai_ready: boolean;
 }
 
-export function TelegramSettings() {
+export function TelegramSettings({ isMobile }: { isMobile: boolean }) {
   const [status, setStatus] = useState<TelegramStatus | null>(null);
   const [aiReady, setAiReady] = useState<boolean | null>(null);
   const [tokenInput, setTokenInput] = useState('');
@@ -106,17 +107,15 @@ export function TelegramSettings() {
   }
 
   const loaded = status !== null;
-  const desc: React.CSSProperties = { fontFamily: FONT_SANS, fontSize: 13, color: INK_MUTE, lineHeight: 1.6, margin: '0 0 20px', maxWidth: 460 };
   const fieldWrap: React.CSSProperties = { marginBottom: 20, maxWidth: 420 };
 
   return (
-    <div style={{ ...cardStyle, padding: 28, marginTop: 24, maxWidth: 620 }}>
-      <div style={sectionHeading()}>Telegram</div>
-      <p style={desc}>
-        Chat with your CakeCRM assistant from Telegram — ask about contacts, deals, and
-        tasks, and approve any changes right from your phone.
-      </p>
-
+    <SettingsCard
+      id="telegram"
+      title="Telegram"
+      description="Chat with your CakeCRM assistant from Telegram — ask about contacts, deals, and tasks, and approve any changes right from your phone."
+      isMobile={isMobile}
+    >
       {aiReady === false && (
         <p style={{ fontFamily: FONT_SANS, fontSize: 12.5, color: INK_MUTE, lineHeight: 1.5, margin: '0 0 18px' }}>
           Add an AI provider in Settings to enable assistant replies — you can connect the
@@ -197,6 +196,6 @@ export function TelegramSettings() {
           </button>
         </div>
       )}
-    </div>
+    </SettingsCard>
   );
 }

@@ -2,9 +2,16 @@
  * TaskModeCard — pick the task experience, and manage the two no-login todo
  * surfaces (#70).
  *
+ * Todo-GTD is the DEFAULT since #102, so this card frames it first and presents the
+ * flat list as the simpler opt-out — including for the installs #102's migration
+ * flipped, whose owners arrive here looking for exactly that.
+ *
  * Switching modes migrates nothing: GTD is a view over the same task rows, so the
  * change is instant and losslessly reversible. The card says so plainly, because
  * "switch task system" otherwise reads like a destructive operation.
+ *
+ * The mode itself is NOT local state (#102): CrmLayout owns it for the whole CRM, and
+ * a second copy here meant a switch did not reach /crm/tasks until a page reload.
  *
  * The public-surface half is deliberately blunt about what each link exposes. A
  * tokenless capture URL is a write-only inbox drop that anyone with the address can
@@ -15,11 +22,16 @@
 import { useEffect, useState } from 'react';
 
 import { api } from '../../core/api/client';
-import { CORAL, FONT_SANS, INK_MUTE, labelStyle } from '../../shared/styles';
+import { copyToClipboard } from '../../shared/hooks/useCopyToClipboard';
+import { CORAL_TEXT, FONT_SANS, INK_MUTE, labelStyle } from '../../shared/styles';
 import { toast } from '../../shared/toast';
-import { btnPrimary, btnSecondary, cardStyle, sectionHeading } from '../styles';
-
-type TaskMode = 'normal' | 'gtd';
+import { useSetTaskMode, useTaskMode } from '../gtd/TaskModeContext';
+import type { TaskMode } from '../gtd/TaskModeContext';
+// #102's body + #103's shell: the card chrome and heading helpers are gone because
+// SettingsCard owns both now (settingsSections.test.ts pins that no settings card
+// imports them).
+import { btnPrimary, btnSecondary, settingsSubheading } from '../styles';
+import { SettingsCard } from './SettingsCard';
 
 interface Surfaces {
   todo_capture_token: string;
@@ -31,17 +43,15 @@ interface Surfaces {
   web_public: boolean;
 }
 
-interface DemoStatus { task_mode?: TaskMode }
-
 export function TaskModeCard({ isMobile }: { isMobile: boolean }) {
-  const [mode, setMode] = useState<TaskMode | null>(null);
+  // Read AND write the mode through the layout that owns it — no local copy (#102).
+  // `null` = not known yet, which disables the buttons below.
+  const mode = useTaskMode();
+  const setMode = useSetTaskMode();
   const [surfaces, setSurfaces] = useState<Surfaces | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    api<DemoStatus>('/api/crm/demo-status')
-      .then(s => setMode(s.task_mode ?? 'normal'))
-      .catch(() => setMode('normal'));
     api<Surfaces>('/api/crm/todo-surfaces').then(setSurfaces).catch(() => { /* keep unknown */ });
   }, []);
 
@@ -54,7 +64,7 @@ export function TaskModeCard({ isMobile }: { isMobile: boolean }) {
       toast.success(
         next === 'gtd'
           ? 'Todo-GTD mode on. Your existing tasks are all still there, as next actions.'
-          : 'Back to normal tasks. Nothing was lost.',
+          : 'Switched to the simple task list. Nothing was lost — your todos are all still there.',
       );
     } catch {
       toast.error('Failed to switch task mode.');
@@ -80,12 +90,12 @@ export function TaskModeCard({ isMobile }: { isMobile: boolean }) {
   const linkFor = (path: string) => `${window.location.origin}${path}`;
 
   async function copy(path: string) {
-    try {
-      await navigator.clipboard.writeText(linkFor(path));
-      toast.success('Link copied.');
-    } catch {
-      toast.error('Could not copy — select the link and copy it manually.');
-    }
+    // Through the shared helper for its non-secure-context fallback: these links
+    // exist to be opened on a LAN over plain http, which is exactly where
+    // `navigator.clipboard` is undefined — so the bare async API failed on the
+    // one deployment this button serves.
+    if (await copyToClipboard(linkFor(path))) toast.success('Link copied.');
+    else toast.error('Could not copy — select the link and copy it manually.');
   }
 
   const modeButton = (value: TaskMode, label: string, hint: string) => (
@@ -106,20 +116,30 @@ export function TaskModeCard({ isMobile }: { isMobile: boolean }) {
   );
 
   return (
-    <div style={cardStyle}>
-      <h2 style={sectionHeading()}>Tasks</h2>
-      <p style={{ ...labelStyle, fontFamily: FONT_SANS, color: INK_MUTE, marginBottom: 12 }}>
-        Switching is safe and reversible — both modes read the same tasks. Nothing is
-        migrated, copied or deleted.
-      </p>
+    <SettingsCard
+      id="task_mode"
+      title="Task mode"
+      description="Switching is safe and reversible — both modes read the same tasks. Nothing is migrated, copied or deleted."
+      isMobile={isMobile}
+    >
       <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 10 }}>
-        {modeButton('normal', 'Normal tasks', 'A simple list with due dates and priorities.')}
-        {modeButton('gtd', 'Todo-GTD', 'Inbox, contexts, projects, repeats and a weekly review.')}
+        {modeButton('gtd', 'Todo-GTD (default)', 'Inbox, contexts, projects, repeats and a weekly review.')}
+        {modeButton('normal', 'Simple list', 'Just tasks with due dates and priorities — no inbox or contexts.')}
       </div>
 
-      {mode === 'gtd' && surfaces && (
+      {/* #102: shown in BOTH modes, because neither surface depends on the task mode.
+          They are mounted unconditionally and gated only on their own settings, and
+          switching mode does not turn either off (set_task_mode writes task_mode and
+          nothing else) — so gating this section on `mode === 'gtd'` hid the controls for
+          endpoints that kept serving. Two ways that bit, both made routine by #102
+          making "Simple list" the opt-out every flipped install is invited to take: an
+          admin who enabled the public read+write todo app could no longer see it was
+          live, rotate its token or switch it off; and tokenless `/capture` — publicly
+          writable on EVERY install by default — offered no way to add a token and
+          restrict it. A reachable surface must never lose its off switch. */}
+      {surfaces && (
         <div style={{ marginTop: 20, borderTop: '1px solid var(--color-ck-line)', paddingTop: 16 }}>
-          <h3 style={{ ...sectionHeading(), fontSize: 15 }}>No-login links</h3>
+          <h3 style={settingsSubheading}>No-login links</h3>
 
           <div style={{ marginTop: 12 }}>
             <p style={{ ...labelStyle, marginBottom: 4 }}>Quick capture (write-only)</p>
@@ -127,7 +147,7 @@ export function TaskModeCard({ isMobile }: { isMobile: boolean }) {
               A phone bookmark that drops text straight into your inbox. It cannot read
               anything back.{' '}
               {surfaces.capture_public
-                ? <strong style={{ color: CORAL }}>Anyone who knows this address can add to your inbox — add a secret link to restrict it.</strong>
+                ? <strong style={{ color: CORAL_TEXT }}>Anyone who knows this address can add to your inbox — add a secret link to restrict it.</strong>
                 : 'Only someone with the secret link can post to it.'}
             </p>
             <SurfaceRow
@@ -148,7 +168,7 @@ export function TaskModeCard({ isMobile }: { isMobile: boolean }) {
             <p style={{ fontFamily: FONT_SANS, fontSize: 13, color: INK_MUTE, margin: '0 0 8px' }}>
               The whole todo app, with no login. Off by default.{' '}
               {surfaces.todo_web_enabled && surfaces.web_public && (
-                <strong style={{ color: CORAL }}>
+                <strong style={{ color: CORAL_TEXT }}>
                   Anyone who knows this address can read and edit every todo. Add a secret link.
                 </strong>
               )}
@@ -186,7 +206,7 @@ export function TaskModeCard({ isMobile }: { isMobile: boolean }) {
           </div>
         </div>
       )}
-    </div>
+    </SettingsCard>
   );
 }
 

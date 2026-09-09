@@ -1,12 +1,14 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { Suspense, useState, useEffect, useCallback } from 'react';
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../core/api/client';
 import { useAuth } from '../core/auth/AuthContext';
 import { useBranding } from '../core/branding/BrandingContext';
+import BootFallback from '../core/components/BootFallback';
+import ChunkErrorBoundary from '../core/components/ChunkErrorBoundary';
 import { useIsMobile } from '../shared/useIsMobile';
 import { MobileMenuDrawer } from '../shared/MobileMenuDrawer';
 import { confirmDialog } from '../shared/confirm';
-import { INK, INK_SOFT, INK_MUTE, LINE, LINE_STRONG, ACCENT, GOLD, FONT_DISPLAY, FONT_SANS, CORAL, tint } from '../shared/styles';
+import { INK, INK_SOFT, INK_MUTE, LINE, LINE_STRONG, ACCENT, GOLD_FILL, GOLD_TEXT, FONT_DISPLAY, FONT_SANS, CORAL_TEXT, tint } from '../shared/styles';
 import { modalOverlay, modalContent, btnPrimary, btnSecondary } from './styles';
 import { AiKeyNudge } from './components/AiKeyNudge';
 import { AssistantLauncher } from './components/AssistantLauncher';
@@ -14,7 +16,7 @@ import { BrandLogo } from './components/BrandLogo';
 import { NotificationsBell } from './components/NotificationsBell';
 import { ThemeToggle } from './components/ThemeToggle';
 import { ActiveRecordProvider } from './RecordContext';
-import { TaskModeContext } from './gtd/TaskModeContext';
+import { TaskModeContext, TaskModeSetterContext } from './gtd/TaskModeContext';
 import type { TaskMode } from './gtd/TaskModeContext';
 
 const NAV_ITEMS = [
@@ -24,6 +26,7 @@ const NAV_ITEMS = [
   { to: '/crm/companies', label: 'Companies' },
   { to: '/crm/tasks', label: 'Tasks' },
   { to: '/crm/reminders', label: 'Reminders' },
+  { to: '/crm/reports', label: 'Reports' },
 ];
 
 interface DemoStatus {
@@ -31,7 +34,10 @@ interface DemoStatus {
   sample_data_loaded: boolean;
   show_onboarding: boolean;
   ai_key_prompt_dismissed: boolean;
-  /** #70. Absent on an older backend, which reads as normal mode. */
+  /**
+   * #70. Absent on an older backend — see the `?? 'normal'` at the provider below,
+   * which is deliberately NOT the same fallback as a failed fetch.
+   */
   task_mode?: TaskMode;
 }
 
@@ -69,7 +75,7 @@ function OnboardingDialog({ onLoad, onDismiss }: {
           how CakeCRM works. You can clear it anytime, or start with an empty CRM.
         </p>
         {error && (
-          <p style={{ fontFamily: FONT_SANS, fontSize: 13, color: CORAL, margin: '12px 0 0' }}>
+          <p style={{ fontFamily: FONT_SANS, fontSize: 13, color: CORAL_TEXT, margin: '12px 0 0' }}>
             Couldn't load sample data. Please try again.
           </p>
         )}
@@ -114,8 +120,8 @@ function DemoBanner({ onClear, isMobile }: {
 
   return (
     <div style={{
-      background: tint(GOLD, 8),
-      borderBottom: `1px solid ${tint(GOLD, 15)}`,
+      background: tint(GOLD_FILL, 8),
+      borderBottom: `1px solid ${tint(GOLD_FILL, 15)}`,
       padding: isMobile ? '10px 16px' : '8px 28px',
       display: 'flex',
       flexDirection: isMobile ? 'column' : 'row',
@@ -124,7 +130,7 @@ function DemoBanner({ onClear, isMobile }: {
       gap: isMobile ? 8 : 16,
     }}>
       <span style={{
-        fontFamily: FONT_SANS, fontSize: 13, color: error ? CORAL : GOLD, lineHeight: 1.4,
+        fontFamily: FONT_SANS, fontSize: 13, color: error ? CORAL_TEXT : GOLD_TEXT, lineHeight: 1.4,
       }}>
         {error
           ? 'Failed to clear example data. Please try again.'
@@ -134,8 +140,8 @@ function DemoBanner({ onClear, isMobile }: {
         onClick={handleClear}
         disabled={clearing}
         style={{
-          background: tint(GOLD, 12), color: GOLD,
-          border: `1px solid ${tint(GOLD, 20)}`, borderRadius: 4,
+          background: tint(GOLD_FILL, 12), color: GOLD_TEXT,
+          border: `1px solid ${tint(GOLD_FILL, 20)}`, borderRadius: 4,
           padding: '4px 14px', fontSize: 12, fontFamily: FONT_SANS,
           fontWeight: 500, cursor: clearing ? 'wait' : 'pointer',
           opacity: clearing ? 0.6 : 1, whiteSpace: 'nowrap',
@@ -155,8 +161,15 @@ const actionLink: React.CSSProperties = {
 const DEMO_STATUS_UNKNOWN: DemoStatus = {
   empty: false, sample_data_loaded: false, show_onboarding: false, ai_key_prompt_dismissed: true,
   // A failed fetch must not strand /crm/tasks on a blank screen, so fall back to the
-  // default mode rather than leaving it unknown forever.
-  task_mode: 'normal',
+  // default mode rather than leaving it unknown forever. GTD since #102.
+  //
+  // Note this is NOT the same event as the backend's fail-safe, and the reason matters:
+  // get_task_mode() falls back when THE SERVER cannot read crm_meta, whereas this .catch
+  // fires on a network blip or a 5xx, where the server may be perfectly healthy and
+  // would have said 'normal' on a normal-mode install. So this is not mirroring the
+  // backend — it is guessing the product default, which post-#102 is what nearly every
+  // install is actually on, and is therefore right far more often than 'normal' was.
+  task_mode: 'gtd',
 };
 
 interface SetupStatus { ai_ready: boolean; credentials_present: boolean; }
@@ -164,6 +177,10 @@ interface SetupStatus { ai_ready: boolean; credentials_present: boolean; }
 export function CrmLayout() {
   const isMobile = useIsMobile();
   const navigate = useNavigate();
+  // Feeds the route boundary's resetKey below: a caught error must clear when the user
+  // navigates away from the page that threw, or one crash freezes the content column for the
+  // rest of the session while the nav around it keeps working.
+  const location = useLocation();
   const { logout, isAdmin } = useAuth();
   const { branding, logoVersion } = useBranding();
   const [showMenu, setShowMenu] = useState(false);
@@ -188,6 +205,17 @@ export function CrmLayout() {
     api<SetupStatus>('/api/setup/status')
       .then(setSetup)
       .catch(() => { /* keep unknown */ });
+  }, []);
+
+  // #102: the Settings card switches the mode, but this layout owns it for the whole
+  // CRM and does not refetch on navigation — so the card pushes the new value up here
+  // instead of keeping its own copy. Without this, switching mode in Settings left
+  // /crm/tasks rendering the old task system until a full page reload.
+  //
+  // Dropping the update while `status` is still null is correct: the card disables its
+  // buttons until the mode is known, so there is nothing to lose.
+  const handleSetTaskMode = useCallback((mode: TaskMode) => {
+    setStatus(s => (s ? { ...s, task_mode: mode } : s));
   }, []);
 
   const handleLoadSample = useCallback(async () => {
@@ -357,11 +385,44 @@ export function CrmLayout() {
         <AiKeyNudge onDismiss={handleDismissAiPrompt} isMobile={isMobile} />
       )}
 
-      <div key={refreshKey} style={{ flex: 1, overflow: 'auto', position: 'relative' }}>
+      {/* LAUNCHER_CLEARANCE: the fixed "Ask Baker" pill (52px tall, 24px off the
+          bottom) floats over this scroll container, so without reserved space it
+          permanently covers whatever ends up in the bottom-left corner — on the
+          Settings page that was the forms' left-aligned submit buttons. Bottom
+          padding on the scroll container lets every page scroll PAST the pill
+          instead (24 + 52 + 12px clearance), keeping the launcher itself always
+          visible and reachable. Applied on desktop too: the pill overlaps the
+          content column there just the same, only with more room around it. */}
+      <div key={refreshKey} style={{ flex: 1, overflow: 'auto', position: 'relative', paddingBottom: 88 }}>
         {/* The task mode rides the demo-status payload this layout already fetches,
-            so /crm/tasks costs no extra request to decide which task system to show. */}
+            so /crm/tasks costs no extra request to decide which task system to show.
+
+            `?? 'normal'` is deliberately NOT the 'gtd' fallback used for a FAILED fetch
+            (DEMO_STATUS_UNKNOWN above). These answer different questions: a failed
+            fetch means the mode is unknown, so mirror the product default; an ABSENT
+            field on a SUCCESSFUL response means a backend that predates #70 and has no
+            GTD endpoints at all, where normal is the only mode that renders a working
+            page — 'gtd' would render a shell whose every request 404s. */}
         <TaskModeContext.Provider value={status ? (status.task_mode ?? 'normal') : null}>
-          <Outlet />
+          <TaskModeSetterContext.Provider value={handleSetTaskMode}>
+            {/* Route chunks load here (#149), INSIDE the chrome: a page's first visit — or the
+                task mode flipping from unknown to GTD, which is a plain setState and not a
+                router transition — suspends only the content column, so the nav stays put
+                and this layout's demo-status/setup fetches run in parallel with the download
+                instead of after it.
+                The boundary is the other half, and it is NOT redundant with Root's: Suspense
+                catches a PENDING chunk, never a REJECTED one, so after a deploy (which replaces
+                dist wholesale — all 14 route chunks 404 at once) a first visit to any page would
+                otherwise throw past this, past App's Suspense, past ConfirmHost/ToastViewport,
+                and take the whole shell down. scope="route" keeps the failure in the content
+                column while still allowing the one-shot deploy-skew reload, because unlike the
+                assistant drawer the user IS blocked: they asked for this page. */}
+            <ChunkErrorBoundary scope="route" resetKey={location.pathname}>
+              <Suspense fallback={<BootFallback variant="panel" />}>
+                <Outlet />
+              </Suspense>
+            </ChunkErrorBoundary>
+          </TaskModeSetterContext.Provider>
         </TaskModeContext.Provider>
       </div>
 

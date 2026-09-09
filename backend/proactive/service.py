@@ -127,6 +127,7 @@ def _maybe_send_digest(now: datetime) -> dict:
 
 def collect_digest() -> dict:
     """The deterministic, keyless digest payload. Pure SQL — no AI, no provider."""
+    from crm import gtd_common
     from crm.service import (
         LIVE_PREDICATE,
         LIVE_PREDICATE_D,
@@ -136,7 +137,10 @@ def collect_digest() -> dict:
         OPEN_PREDICATE_D,
     )
 
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    # The CONFIGURED-TIMEZONE day since #130, not the UTC one. This digest answers
+    # "what is due today" in prose a person reads: on a UTC day, a 6pm Central run
+    # reported TOMORROW's tasks as due today and understated the overdue count.
+    today = gtd_common.today_local_str()
     pipeline = pg_fetchone(
         f"""SELECT COUNT(*) AS open_deals, COALESCE(SUM(value), 0) AS open_value
               FROM deals WHERE {OPEN_PREDICATE} AND {LIVE_PREDICATE}"""
@@ -228,8 +232,9 @@ def _maybe_enhance_digest(summary: dict) -> bool:
 
 def _digest_prompt() -> tuple[str, str]:
     from assistant import identity
-    ident = identity.get_identity()
-    name = ident.get("name") or "the assistant"
+    # The brand is a constant, so this reads it directly rather than paying a DB
+    # round-trip per tick to fetch a dict whose only used key is now fixed (#71).
+    name = identity.NAME
     static = (
         f"You are {name}. The user has just received an automatic daily pipeline "
         "digest with the raw numbers. Your job is to add ONE piece of judgement they "

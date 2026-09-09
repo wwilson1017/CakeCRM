@@ -12,10 +12,12 @@ import { useSearchParams } from 'react-router-dom';
 import { api } from '../../core/api/client';
 import { toast } from '../../shared/toast';
 import {
-  INK, INK_MUTE, CORAL, SAGE, FONT_SANS, FONT_MONO, LINE_STRONG, labelStyle, inputStyle,
+  INK, INK_MUTE, CORAL_TEXT, SAGE_TEXT, FONT_SANS, FONT_MONO, LINE_STRONG, labelStyle, inputStyle,
   BG_RAISED,
 } from '../../shared/styles';
-import { sectionHeading, cardStyle, btnPrimary, btnSecondary, btnDanger } from '../styles';
+import { btnPrimary, btnSecondary, btnDanger } from '../styles';
+import { GMAIL_SECTION } from '../settingsSections';
+import { SettingsCard } from './SettingsCard';
 
 interface GmailStatus {
   connected: boolean;
@@ -73,6 +75,12 @@ export function GmailCard({ isMobile }: { isMobile: boolean }) {
   // Callback landing: the OAuth redirect reloads the page fresh, so the initial
   // fetch above already reflects the connected state — here we only toast the
   // result once and strip the params so a later render can't re-toast.
+  //
+  // The strip also writes `section` (#103). Google redirects to /crm/settings?gmail=…
+  // with no section, so SettingsPage reads a bare `gmail` as "show Integrations" in
+  // order for this card to mount at all. Removing `gmail` without naming the section
+  // would drop the URL back to the default section while Integrations is on screen —
+  // so we name it, and the URL stays honest about what is being shown.
   useEffect(() => {
     const result = params.get('gmail');
     if (!result) return;
@@ -85,6 +93,7 @@ export function GmailCard({ isMobile }: { isMobile: boolean }) {
     const next = new URLSearchParams(params);
     next.delete('gmail');
     next.delete('reason');
+    next.set('section', GMAIL_SECTION);
     setParams(next, { replace: true });
   }, [params, setParams]);
 
@@ -151,7 +160,7 @@ export function GmailCard({ isMobile }: { isMobile: boolean }) {
 
   function renderBody() {
     if (loadError) {
-      return <p style={{ ...note, color: CORAL }}>Couldn’t load the Gmail connection. Reload the page.</p>;
+      return <p style={{ ...note, color: CORAL_TEXT }}>Couldn’t load the Gmail connection. Reload the page.</p>;
     }
     if (!status) {
       return <p style={note}>Loading…</p>;
@@ -210,7 +219,7 @@ export function GmailCard({ isMobile }: { isMobile: boolean }) {
       <div>
         <p style={note}>{TRUST_NOTE}</p>
         {status.connection_status === 'broken' && (
-          <p style={{ ...note, color: CORAL }}>Your Gmail connection expired — reconnect below.</p>
+          <p style={{ ...note, color: CORAL_TEXT }}>Your Gmail connection expired — reconnect below.</p>
         )}
         <p style={{ ...note, marginBottom: 16 }}>
           App configured (<code style={{ fontFamily: FONT_MONO, fontSize: 12 }}>{status.client_id}</code>).
@@ -228,12 +237,16 @@ export function GmailCard({ isMobile }: { isMobile: boolean }) {
   }
 
   return (
-    <div style={{ ...cardStyle, padding: isMobile ? 20 : 28, marginTop: 24, maxWidth: 620 }}>
-      <div style={{ ...sectionHeading(), display: 'flex', alignItems: 'center', gap: 8 }}>
-        Gmail
-        {status?.connected && <span style={{ fontFamily: FONT_SANS, fontSize: 12, color: SAGE }}>• connected</span>}
-      </div>
+    <SettingsCard
+      id="gmail"
+      title="Gmail"
+      // No lead description: each of the three connection states carries its own note.
+      badge={status?.connected
+        ? <span style={{ fontFamily: FONT_SANS, fontSize: 12, color: SAGE_TEXT }}>• connected</span>
+        : undefined}
+      isMobile={isMobile}
+    >
       {renderBody()}
-    </div>
+    </SettingsCard>
   );
 }

@@ -107,9 +107,22 @@ class FakeCursor:
         cols = self._conn.description
         return None if cols is None else [(c,) for c in cols]
 
+    @property
+    def rowcount(self):
+        """Rows affected by the LAST statement, for code that branches on it."""
+        return self._conn.rowcount
+
     def execute(self, sql, params=()):
-        self._conn.executed.append((" ".join(sql.split()), params))
+        normalized = " ".join(sql.split())
+        self._conn.executed.append((normalized, params))
         self._conn.executed_by.append(self.cursor_id)
+        # Matched on the STATEMENT, deliberately not on its position in the transaction.
+        # A positional queue would silently re-target the moment a query is added,
+        # removed or reordered inside the flow under test — the failure then reads as a
+        # logic regression when it is really a fixture that drifted out of step.
+        self._conn.rowcount = next(
+            (v for k, v in self._conn.rowcounts.items() if k in normalized), 1
+        )
 
     def executemany(self, sql, seq_of_params):
         self._conn.executed.append((" ".join(sql.split()), list(seq_of_params)))
@@ -123,10 +136,18 @@ class FakeCursor:
 
 
 class FakeConn:
-    def __init__(self, fetchone_results=None, fetchall_results=None, description=None):
+    def __init__(self, fetchone_results=None, fetchall_results=None, description=None,
+                 rowcounts=None):
         self.executed = []
         self.fetchone_results = list(fetchone_results or [])
         self.fetchall_results = list(fetchall_results or [])
+        # cursor.rowcount answers as {sql_substring: rowcount}; anything unmatched
+        # reports 1, which is what every test written before conditional writes existed
+        # assumes ("the write matched a row"). A conditional UPDATE (see
+        # crm.service._write_deal_update, #96) branches on this, so
+        # `rowcounts={"UPDATE deals SET": 0}` is how a test drives the no-op branch.
+        self.rowcounts = dict(rowcounts or {})
+        self.rowcount = 1
         # Transaction-shape bookkeeping. `entries` counts `with get_connection()` blocks and
         # `executed_by` records which cursor ran each statement, so a test can assert "these
         # two writes rode ONE transaction" — an atomicity claim that is otherwise unfalsifiable
@@ -158,11 +179,12 @@ def fake_conn():
     fetchone_results=[...], fetchall_results=[...])``."""
 
     def _install(monkeypatch, module, *, fetchone_results=None, fetchall_results=None,
-                 description=None):
+                 description=None, rowcounts=None):
         conn = FakeConn(
             fetchone_results=fetchone_results,
             fetchall_results=fetchall_results,
             description=description,
+            rowcounts=rowcounts,
         )
         monkeypatch.setattr(module, "get_connection", _make_get_connection(conn))
         return conn
@@ -206,3 +228,20 @@ def fake_admin() -> dict:
 def fake_member() -> dict:
     """Dependency override returning a non-admin member."""
     return dict(FAKE_MEMBER)
+
+
+@pytest.fixture
+def task_mode(monkeypatch):
+    """Pin the #70 task mode for one test.
+
+    The hermetic suite runs with no database, so `crm.service.get_task_mode()` answers
+    from its fail-safe — which #102 flipped from 'normal' to 'gtd'. Any test that
+    builds a tool registry or a system prompt therefore has an opinion about the mode
+    whether it states one or not, and three tests were silently relying on the old
+    fail-safe. Depend on this fixture and say which mode you mean.
+    """
+    def _set(value: str) -> None:
+        from crm import gtd_tools, tools
+        monkeypatch.setattr(gtd_tools.service, "get_task_mode", lambda: value)
+        monkeypatch.setattr(tools.crm, "get_task_mode", lambda: value)
+    return _set

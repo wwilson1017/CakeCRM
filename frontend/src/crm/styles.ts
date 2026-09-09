@@ -1,9 +1,9 @@
 import type { CSSProperties } from 'react';
 import {
   INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG,
-  BG_ELEV, BG_CARD, ACCENT, ACCENT_INK, ACCENT_SOFT, CORAL,
+  BG_ELEV, BG_CARD, ACCENT, ACCENT_INK, ACCENT_SOFT, CORAL_FILL, CORAL_TEXT,
   HOVER, SCRIM, SHADOW, tint,
-  FONT_DISPLAY, mono,
+  FONT_DISPLAY, FONT_SANS, mono,
 } from '../shared/styles';
 
 // ── Layout ───────────────────────────────────────────────────────────────────
@@ -38,6 +38,22 @@ export function stageCard(bg: string, color: string): CSSProperties {
     borderRadius: 6,
   };
 }
+
+// ── Settings ─────────────────────────────────────────────────────────────────
+//
+// The lead paragraph and the in-card sub-heading every Settings card used to
+// hand-roll. Both are consumed through `components/SettingsCard.tsx` (#103) so the
+// nine cards share one look instead of nine near-identical copies.
+
+export const settingsDescription: CSSProperties = {
+  fontFamily: FONT_SANS, fontSize: 13, color: INK_MUTE, lineHeight: 1.6,
+  margin: '0 0 20px', maxWidth: 460,
+};
+
+export const settingsSubheading: CSSProperties = {
+  fontFamily: FONT_SANS, fontSize: 14, fontWeight: 600, color: INK,
+  margin: '0 0 6px',
+};
 
 // ── Modals ────────────────────────────────────────────────────────────────────
 
@@ -102,8 +118,8 @@ export const btnSecondary: CSSProperties = {
 };
 
 export const btnDanger: CSSProperties = {
-  background: tint(CORAL, 10), color: CORAL,
-  border: `1px solid ${tint(CORAL, 20)}`,
+  background: tint(CORAL_FILL, 10), color: CORAL_TEXT,
+  border: `1px solid ${tint(CORAL_FILL, 20)}`,
   padding: '10px 20px', borderRadius: 4,
   fontSize: 15, cursor: 'pointer',
   fontFamily: FONT_DISPLAY,

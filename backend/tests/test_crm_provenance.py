@@ -281,7 +281,9 @@ def test_tool_provenance_failure_does_not_break_the_write(monkeypatch):
     monkeypatch.setattr(crm_service, "update_deal", lambda did, **kw: {"id": did, "stage": "won"})
     monkeypatch.setattr(prov, "record_fields", boom)
     out = tools.crm_update_deal(3, stage="won")                   # must still succeed
-    assert out == {"id": 3, "stage": "won"}
+    # A deal `url` rides along since #145. Purely additive, so assert the write's own
+    # payload survived rather than exact equality with the pre-#145 shape.
+    assert {k: out[k] for k in ("id", "stage")} == {"id": 3, "stage": "won"}
 
 
 def test_update_deal_stage_tool_records_stage(monkeypatch):

@@ -28,6 +28,7 @@ from crm import (
     scoring_service,
     service as crm,
 )
+from crm.links import with_deal_url
 
 logger = logging.getLogger(__name__)
 
@@ -305,7 +306,11 @@ CRM_TOOL_DEFS = [
             "type": "object",
             "properties": {
                 "deal_id": {"type": "integer"},
-                "stage": {"type": "string", "description": "New stage: lead, qualified, proposal, negotiation"},
+                "stage": {
+                    "type": "string",
+                    "enum": list(crm.OPEN_STAGES),
+                    "description": f"New stage: {', '.join(crm.OPEN_STAGES)}",
+                },
             },
             "required": ["deal_id", "stage"],
         },
@@ -330,7 +335,11 @@ CRM_TOOL_DEFS = [
                     "items": {"type": "integer"},
                     "description": "Deal IDs to move (maximum 200 per call).",
                 },
-                "stage": {"type": "string", "description": "Target stage: lead, qualified, proposal, negotiation"},
+                "stage": {
+                    "type": "string",
+                    "enum": list(crm.OPEN_STAGES),
+                    "description": f"Target stage: {', '.join(crm.OPEN_STAGES)}",
+                },
             },
             "required": ["deal_ids", "stage"],
         },
@@ -1054,6 +1063,102 @@ CRM_TOOL_DEFS = [
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Deal deep links (issue #145)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+#: Appended to the description of every tool whose payload carries a deal ``url``.
+#:
+#: Single-sourced rather than restated per tool: a dozen-plus near-identical sentences is
+#: exactly the shape that drifts, and #145 exists because the link format was
+#: discoverable nowhere. The model has to know the field exists AND that sharing it is
+#: the point — a ``url`` nothing is told to use is still no link, which was the reported
+#: state. It also has to be told NOT to build one, because the deal id is right there in
+#: the same payload and a guessed path is a broken link.
+CRM_DEAL_URL_GUIDANCE = (
+    " Every deal in the result carries a `url` — a direct link that opens that deal in "
+    "the CRM. When you name one or a few specific deals to the user, give them each "
+    "deal's `url` too, so they can open it instead of searching for it by name. (For a "
+    "long list or a whole-pipeline summary, a link on every row is noise — link the ones "
+    "you are actually drawing attention to.) Never construct this link yourself: use the "
+    "`url` exactly as returned, and if a deal has none, say so rather than inventing one."
+)
+
+#: The tools whose payload carries a deal ``url``, and which therefore must carry
+#: ``CRM_DEAL_URL_GUIDANCE``. Kept as one set, one name per line, next to the text it
+#: gates — that is what makes an omission visible. Its SIZE is deliberately not written
+#: down in any comment: this set is the count, and the prose tally that used to sit here
+#: was wrong within one review round of being written.
+#:
+#: This file already has a second mechanism for appending shared text to a description:
+#: ``_COMPANY_NAME_NOTE``, concatenated inline at each of its three definitions. Both are
+#: kept, and the difference is the count. Three inline concatenations are readable at a
+#: glance and a missing one is visible; this many scattered over the definition table is
+#: exactly the shape whose omissions nobody can see — which is not hypothetical, it is
+#: what the blueprint shipped twice. The blueprint's first pass appended
+#: the guidance by hand at six definitions scattered over two hundred lines and silently
+#: missed four; nobody could see the gap, and the test guarding it listed the same six
+#: the code did, so it passed.
+#:
+#: ``tests/test_crm_deal_links.py`` derives the true set from the executors' own source
+#: and fails if this set disagrees, so adding a deal-returning tool without registering
+#: it here breaks CI rather than shipping a silent ``url``.
+#:
+#: **Membership is decided by tracing what a tool's SERVICE returns, never by its name.**
+#: Three of these read as something other than deal tools and all three hand the user
+#: specific deals: ``crm_get_contact`` embeds the contact's deal rows, ``crm_dashboard``
+#: returns five under ``top_deals``, and ``crm_analytics`` returns a ``stale_deals`` list
+#: beside its scalars.
+CRM_DEAL_URL_TOOLS = frozenset({
+    # Deal reads.
+    "crm_get_pipeline",
+    "crm_search_deals",
+    "crm_get_deal",
+    # Write confirmations. These matter as much as the reads: "moved it to negotiation —
+    # here's the deal" is exactly the moment the assistant narrates an outcome and the
+    # user wants to look at it.
+    "crm_create_deal",
+    "crm_update_deal",
+    "crm_update_deal_stage",
+    "crm_mark_deal_won",
+    "crm_mark_deal_lost",
+    "crm_archive_deal",
+    "crm_merge_deals",
+    # Sales intelligence — the lists the assistant reads out when asked what needs
+    # attention. find_duplicates and scan_gaps name deals one level deeper (a duplicate
+    # group's `records`, a gap row); resolving either means opening the deal.
+    "crm_get_deal_health",
+    "crm_get_stale_deals",
+    "crm_find_duplicates",
+    "crm_scan_gaps",
+    # Not deal tools by name; all four hand back deal records anyway.
+    "crm_get_contact",
+    "crm_get_company",
+    "crm_dashboard",
+    "crm_analytics",
+})
+
+
+def _apply_deal_url_guidance() -> None:
+    """Append ``CRM_DEAL_URL_GUIDANCE`` to every registered tool's description, once.
+
+    ONE pass over the registry rather than an edit at each definition, so the guidance
+    cannot be present on some deal tools and missing on others.
+
+    Applied at import against the module-level ``CRM_TOOL_DEFS`` rather than inside
+    ``get_crm_tools()``: that function is called per turn and returns the shared list, so
+    appending there would grow every description without bound. The ``not in`` guard
+    keeps it idempotent if the module is ever reloaded (importlib, or a second sys.path
+    entry) — re-running it must be a no-op, not a second paragraph.
+    """
+    for tool in CRM_TOOL_DEFS:
+        if tool["name"] in CRM_DEAL_URL_TOOLS and CRM_DEAL_URL_GUIDANCE not in tool["description"]:
+            tool["description"] += CRM_DEAL_URL_GUIDANCE
+
+
+_apply_deal_url_guidance()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Tool Executor Functions
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1130,6 +1235,12 @@ def crm_get_contact(contact_id: int) -> dict:
     result = crm.get_contact_detail(contact_id)
     if not result:
         return {"error": f"Contact {contact_id} not found"}
+    # Not a deal tool by name, but get_contact_detail embeds the contact's full deal
+    # rows — and "what's going on with Bob at Acme?" is one of the most common ways a
+    # user asks about deals at all. Without links here the assistant names deals and,
+    # because the guidance forbids inventing one, hands over nothing.
+    for deal in result.get("deals") or []:
+        with_deal_url(deal)
     return result
 
 
@@ -1173,25 +1284,20 @@ def _summarize_deal(deal: dict) -> dict:
 def crm_get_pipeline(stage: str | None = None, limit_per_stage: int = 25) -> dict:
     """Pipeline board, with the per-stage deal LIST capped for the model's context.
 
-    The cap is applied here rather than in the service so the Kanban board (which
-    needs every card to render) is untouched. stage_summary is computed over all
-    deals, so the counts and values stay true even when the list is trimmed —
-    `deals_truncated` tells the model when it is looking at a partial list.
+    Since issue #59 the cap is a SQL window in the service, not a Python trim over a
+    fully-fetched board: answering "25 per stage" no longer BUILDS every deal row into
+    this process (Postgres still ranks the whole partition — the win is rows transferred
+    and held, not a smaller scan). The board's own read is untouched — it asks for no
+    cap, because it needs every card. stage_summary is
+    still computed over all deals, so the counts and values stay true even when the list
+    is trimmed, and `deals_truncated` tells the model when it is looking at a partial
+    list (the service derives it from a one-rank-per-stage over-fetch, so it is exact).
     """
     limit_per_stage = _bounded_limit(limit_per_stage, default=25)
-    result = crm.get_pipeline(stage=stage)
-    deals = result.get("deals") or []
-    per_stage: dict[str, int] = {}
-    trimmed = []
-    for deal in deals:  # already ordered updated_at DESC — newest per stage survives
-        key = deal.get("stage") or ""
-        if per_stage.get(key, 0) >= limit_per_stage:
-            continue
-        per_stage[key] = per_stage.get(key, 0) + 1
-        trimmed.append(_summarize_deal(deal))
-    return {**result, "deals": trimmed,
-            "limit_per_stage": limit_per_stage,
-            "deals_truncated": len(trimmed) < len(deals)}
+    result = crm.get_pipeline(stage=stage, limit_per_stage=limit_per_stage)
+    return {**result,
+            "deals": [with_deal_url(_summarize_deal(d)) for d in result.get("deals") or []],
+            "limit_per_stage": limit_per_stage}
 
 
 def crm_search_deals(
@@ -1222,7 +1328,7 @@ def crm_search_deals(
         custom_field_filters=custom_field_filters, limit=limit,
         include_archived=archived,
     )
-    result = {"deals": [_summarize_deal(d) for d in deals], "count": len(deals)}
+    result = {"deals": [with_deal_url(_summarize_deal(d)) for d in deals], "count": len(deals)}
     if unknown:
         result["unknown_field_keys"] = unknown
     return result
@@ -1236,7 +1342,7 @@ def crm_create_deal(title: str, **kwargs) -> dict:
     if not result:
         return {"error": "Deal could not be created"}
     _record_provenance("deal", result.get("id"), {"title": title, **kwargs}, result)
-    return result
+    return with_deal_url(result)
 
 
 def crm_update_deal(deal_id: int, **kwargs) -> dict:
@@ -1252,10 +1358,22 @@ def crm_update_deal(deal_id: int, **kwargs) -> dict:
     if not result:
         return {"error": f"Deal {deal_id} not found or invalid stage"}
     _record_provenance("deal", deal_id, kwargs, result)
-    return result
+    return with_deal_url(result)
 
 
 def crm_update_deal_stage(deal_id: int, stage: str) -> dict:
+    # Keep this tool's own open-stage-only promise (#99). The schema enum above only
+    # steers — nothing validates tool arguments server-side — so the executor is the
+    # enforcement point, exactly like the deal_ids guard in crm_bulk_move_deals below.
+    # The service, the REST route and crm_update_deal stay permissive by design; the
+    # contract being kept here is this tool's description, not a data-integrity rule.
+    if stage in crm.CLOSED_STAGES:
+        return {"error": (
+            f"crm_update_deal_stage moves a deal between open pipeline stages only — "
+            f"refusing to move deal {deal_id} to '{stage}'. To close it, use "
+            f"crm_mark_deal_won or crm_mark_deal_lost; crm_mark_deal_lost can record "
+            f"the lost reason, which a stage move cannot."
+        )}
     try:
         deal = crm.update_deal_stage(deal_id, stage)
     except ValueError as e:
@@ -1263,7 +1381,7 @@ def crm_update_deal_stage(deal_id: int, stage: str) -> dict:
     if not deal:
         return {"error": f"Deal not found or invalid stage: {stage}"}
     _record_provenance("deal", deal_id, {"stage": stage}, deal)
-    return deal
+    return with_deal_url(deal)
 
 
 def crm_bulk_move_deals(deal_ids: list | None = None, stage: str = "") -> dict:
@@ -1277,6 +1395,18 @@ def crm_bulk_move_deals(deal_ids: list | None = None, stage: str = "") -> dict:
     # through as deal id 1.
     if any(isinstance(i, bool) or not isinstance(i, int) or i <= 0 for i in ids):
         return {"error": "deal_ids must be positive integers"}
+    # Keep the open-stage-only promise (#99), and keep it here rather than in the
+    # service: the REST route's contract is deliberately generic and pinned permissive
+    # by its own tests, so the promise being enforced is this tool's. This is also the
+    # one surface where a single call could close up to BULK_MOVE_MAX deals with no
+    # loss reasons — and in power mode there is no confirmation in front of it.
+    if stage in crm.CLOSED_STAGES:
+        return {"error": (
+            f"crm_bulk_move_deals moves deals between open pipeline stages only — "
+            f"refusing to move {len(ids)} deal(s) to '{stage}'. To close deals, call "
+            f"crm_mark_deal_won or crm_mark_deal_lost for each one; crm_mark_deal_lost "
+            f"can record the lost reason, which a bulk move cannot."
+        )}
     result = crm.bulk_move_deals(ids, stage)
     if result.get("ok"):
         # Badge every deal this call actually moved, mirroring crm_update_deal_stage —
@@ -1293,7 +1423,7 @@ def crm_get_deal(deal_id: int) -> dict:
     result = crm.get_deal_detail(deal_id)
     if not result:
         return {"error": f"Deal {deal_id} not found"}
-    return result
+    return with_deal_url(result)
 
 
 def crm_mark_deal_won(deal_id: int) -> dict:
@@ -1304,7 +1434,7 @@ def crm_mark_deal_won(deal_id: int) -> dict:
     if not deal:
         return {"error": f"Deal {deal_id} not found"}
     _record_provenance("deal", deal_id, {"stage": "won", "probability": 100}, deal)
-    return deal
+    return with_deal_url(deal)
 
 
 def crm_mark_deal_lost(deal_id: int, lost_reason: str = "") -> dict:
@@ -1318,7 +1448,7 @@ def crm_mark_deal_lost(deal_id: int, lost_reason: str = "") -> dict:
         "deal", deal_id,
         {"stage": "lost", "probability": 0, "lost_reason": lost_reason}, deal,
     )
-    return deal
+    return with_deal_url(deal)
 
 
 # Models do send `"false"` where a boolean is asked for, and `bool("false")` is True —
@@ -1351,7 +1481,9 @@ def crm_archive_deal(deal_id: int, archived: bool = True) -> dict:
     deal = crm.archive_deal(deal_id, archived=flag)
     if not deal:
         return {"error": f"Deal {deal_id} not found"}
-    return {"ok": True, "archived": flag, "deal": deal}
+    # An archived deal still gets its link: the board carries it under the Archived
+    # facet, and reaching it is how the user restores one they archived by mistake.
+    return {"ok": True, "archived": flag, "deal": with_deal_url(deal)}
 
 
 def crm_merge_deals(target_deal_id: int, source_deal_id: int) -> dict:
@@ -1359,7 +1491,10 @@ def crm_merge_deals(target_deal_id: int, source_deal_id: int) -> dict:
         deal = crm.merge_deals(target_deal_id, source_deal_id)
     except ValueError as e:
         return {"error": str(e)}
-    return {"ok": True, "merged_from": source_deal_id, "deal": deal}
+    # The merge confirmation is the natural follow-up to crm_find_duplicates, which
+    # links both candidates — dropping it here breaks the trail exactly where the user
+    # wants to open the surviving deal.
+    return {"ok": True, "merged_from": source_deal_id, "deal": with_deal_url(deal)}
 
 
 # ── Activities ────────────────────────────────────────────────────────────────
@@ -1424,6 +1559,12 @@ def crm_get_company(company_id: int) -> dict:
     result = crm.get_company_detail(company_id)
     if not result:
         return {"error": f"Company {company_id} not found"}
+    # The company rollup embeds its deals as full rows, exactly as the contact one does —
+    # "how are we doing with Acme?" is a deal question wearing a company's name. Missing
+    # this is the blueprint's own recorded failure repeated: the tool is named for a
+    # company, so nobody looked at what its service returns.
+    for deal in result.get("deals") or []:
+        with_deal_url(deal)
     return result
 
 
@@ -1457,12 +1598,24 @@ def crm_update_company(company_id: int, **kwargs) -> dict:
 # ── Analytics ─────────────────────────────────────────────────────────────────
 
 def crm_dashboard() -> dict:
-    return crm.get_dashboard_stats()
+    result = crm.get_dashboard_stats()
+    # `top_deals` is five FULL deal rows, not a rollup — "how's the pipeline looking?"
+    # is a top-frequency question and those five are among the deals the assistant names
+    # most often. Reasoning from this tool's name is exactly how the blueprint twice
+    # documented it as "an aggregate" and twice shipped it unlinked.
+    for deal in result.get("top_deals") or []:
+        with_deal_url(deal)
+    return result
 
 
 def crm_analytics(stale_days: int = 14) -> dict:
     # get_analytics clamps stale_days server-side, so an absurd LLM value is bounded.
-    return crm.summarize_analytics(crm.get_analytics(stale_days=stale_days))
+    result = crm.summarize_analytics(crm.get_analytics(stale_days=stale_days))
+    # summarize_analytics carries a named `stale_deals` list alongside its scalars — the
+    # one part of this payload that points at specific deals rather than counting them.
+    for deal in result.get("stale_deals") or []:
+        with_deal_url(deal)
+    return result
 
 
 # ── Sales intelligence (issue #22) ────────────────────────────────────────────
@@ -1473,6 +1626,11 @@ def crm_get_deal_health(deal_id: int, stale_days: int = 14) -> dict:
     health = analytics_service.get_deal_health(deal_id=deal_id, stale_days=stale_days)
     if health is None:
         return {"error": f"Deal {deal_id} not found"}
+    # Link the DB row's own id, never the raw `deal_id` argument: nothing validates tool
+    # arguments server-side (the schema's "type": "integer" only steers), so the argument
+    # is the one value here not yet proven to be an int. The row came back from the
+    # database, so its id has been.
+    with_deal_url(health.get("deal"))
     return health
 
 
@@ -1481,7 +1639,14 @@ def crm_get_pipeline_analytics(window_days: int = 90) -> dict:
 
 
 def crm_get_stale_deals(stale_days: int = 14, limit: int = 20) -> dict:
-    return analytics_service.get_stale_deals(stale_days=stale_days, limit=limit)
+    result = analytics_service.get_stale_deals(stale_days=stale_days, limit=limit)
+    # THE "deals you should chase" list — the one the assistant reads out to the user,
+    # so the one that most needs a clickable link. Mapped here rather than in the
+    # service: analytics_service is shared with the REST surface, and a link is derived
+    # presentation, not analysis.
+    for deal in result.get("deals") or []:
+        with_deal_url(deal)
+    return result
 
 
 def crm_get_contact_staleness(stale_days: int = 30, limit: int = 20) -> dict:
@@ -1489,11 +1654,26 @@ def crm_get_contact_staleness(stale_days: int = 30, limit: int = 20) -> dict:
 
 
 def crm_find_duplicates(entity_type: str = "all", limit: int = 20) -> dict:
-    return analytics_service.find_duplicates(entity_type=entity_type, limit=limit)
+    result = analytics_service.find_duplicates(entity_type=entity_type, limit=limit)
+    # The deal groups name real deals, just nested one level deeper as `records` — and
+    # deciding whether two same-titled cards are a duplicate means opening both. Only
+    # the deal groups get links: `contacts` and `companies` come out of the same shaper
+    # but have no server-side link shape here (crm/links.py says why).
+    for group in result.get("deals") or []:
+        for record in group.get("records") or []:
+            with_deal_url(record)
+    return result
 
 
 def crm_scan_gaps(entity_type: str = "all", limit: int = 20) -> dict:
-    return analytics_service.scan_gaps(entity_type=entity_type, limit=limit)
+    result = analytics_service.scan_gaps(entity_type=entity_type, limit=limit)
+    # Each deal row here IS a specific deal ("Q1 renewal is missing a close date"), and
+    # the whole point of the scan is to go and fill the hole — which means opening it.
+    # `unverified_fields` is deliberately left alone: it is polymorphic across entity
+    # types and keyed entity_id/entity_type, not a deal record.
+    for deal in result.get("deals") or []:
+        with_deal_url(deal)
+    return result
 
 
 # ── Chatter / notes ───────────────────────────────────────────────────────────

@@ -22,7 +22,7 @@ never reused except by ``TRUNCATE ... RESTART IDENTITY``, which also wipes
 from datetime import datetime, timezone
 
 from core.postgres import get_connection, pg_fetchall, pg_fetchone, row_to_dict
-from crm import scoring_service, touch_count_service
+from crm import attachment_service, scoring_service, touch_count_service
 
 # Companies joined in issue #22 (Casey parity): entity_type is free TEXT with no CHECK
 # constraint, exactly so this is a zero-migration add. Widening the tuple widens the
@@ -133,18 +133,30 @@ def get_chatter(
     offset: int = 0,
     include_archived: bool = False,
 ) -> list[dict]:
-    """Notes for one entity, newest first. Deterministic order (created_at, id)."""
+    """Notes for one entity, newest first. Deterministic order (created_at, id).
+
+    Each note carries its ``attachments`` (#57) — METADATA only, never bytes — fetched in
+    ONE batched query for the whole page. Embedding here rather than adding a separate
+    lookup endpoint means the REST route and the ``crm_get_chatter`` agent tool inherit
+    attachments together and cannot drift. Note this widens what a background turn can
+    see by exactly one field of user-typed text (filenames), on the same terms as #22's
+    reads: the ceiling is still one ``notify_user``.
+    """
     _check_entity_type(entity_type)
     limit = _bounded_limit(limit)
     offset = _bounded_offset(offset)
     archived_filter = "" if include_archived else " AND archived = 0"
-    return pg_fetchall(
+    notes = pg_fetchall(
         f"""SELECT * FROM crm_chatter
             WHERE entity_type = %s AND entity_id = %s{archived_filter}
             ORDER BY created_at DESC, id DESC
             LIMIT %s OFFSET %s""",
         (entity_type, entity_id, limit, offset),
     )
+    attachments = attachment_service.list_for_notes([n["id"] for n in notes])
+    for note in notes:
+        note["attachments"] = attachments.get(note["id"], [])
+    return notes
 
 
 def update_note(note_id: int, message: str) -> dict | None:

@@ -19,10 +19,9 @@ archived deal is not "going stale", it is put away.
 """
 
 import logging
-from datetime import datetime, timezone
 
 from core.postgres import pg_fetchall, pg_fetchone
-from crm import provenance_service, scoring_service
+from crm import gtd_common, provenance_service, scoring_service
 from crm.service import (
     LAST_TOUCH_SQL,
     LIVE_PREDICATE,
@@ -30,6 +29,7 @@ from crm.service import (
     NOT_DROPPED_TASK_T,
     OPEN_PREDICATE,
     OPEN_PREDICATE_D,
+    OPEN_STAGES,
 )
 
 logger = logging.getLogger(__name__)
@@ -124,6 +124,12 @@ def get_contact_staleness(
     been contacted is included with ``days_since_contact: null`` and sorts first —
     "never" is the most urgent case, not a missing value to skip.
 
+    Provenance housekeeping notes are excluded (#77): the assistant confirming an
+    AI-populated field writes a ``crm_chatter`` row, and counting it as contact meant a
+    record could stop looking stale without anyone having talked to the person.
+    ``scoring_service`` already excluded them from engagement; the Contacts list's derived
+    ``last_contact_at`` uses the same predicate, so all three now agree.
+
     Archived/inactive contacts are excluded: deliberately parked, not neglected.
 
     Scale note: the CTE derives a last-touch date for EVERY active contact before
@@ -144,7 +150,8 @@ def get_contact_staleness(
                   WHERE a.contact_id = ct.id),
                 (SELECT MAX(ch.created_at) FROM crm_chatter ch
                   WHERE ch.entity_type = 'contact' AND ch.entity_id = ct.id
-                    AND ch.archived = 0)
+                    AND ch.archived = 0
+                    AND ch.message NOT LIKE %s)
             ) AS touched_at
               FROM contacts ct
         )
@@ -164,7 +171,8 @@ def get_contact_staleness(
          ORDER BY lt.touched_at ASC NULLS FIRST, ct.id ASC
          LIMIT %s
         """,
-        (stale_days, limit),
+        # The housekeeping pattern binds inside the CTE, so it precedes both WHERE params.
+        (scoring_service.HOUSEKEEPING_NOTE_LIKE, stale_days, limit),
     )
     return {"stale_days": stale_days, "contacts": rows, "count": len(rows)}
 
@@ -257,7 +265,11 @@ def find_duplicate_deals(limit: int = DEFAULT_LIMIT) -> list[dict]:
          WHERE btrim(title) <> '' AND contact_id IS NOT NULL AND {LIVE_PREDICATE}
          GROUP BY lower(btrim(title)), contact_id
         HAVING COUNT(*) > 1
-         ORDER BY COUNT(*) DESC, lower(btrim(title)) ASC
+         -- The group key is the PAIR, so ordering by title alone leaves groups tied
+         -- whenever two contacts each double-entered the same deal title — and under
+         -- the LIMIT that decides arbitrarily which of them the user is shown.
+         -- contact_id completes the key, making the order total (issue #58).
+         ORDER BY COUNT(*) DESC, lower(btrim(title)) ASC, contact_id ASC
          LIMIT %s
         """,
         (limit,),
@@ -384,7 +396,10 @@ def scan_gaps(entity_type: str = "all", limit: int = DEFAULT_LIMIT) -> dict:
                AND (p.entity_type <> 'deal' OR EXISTS (
                      SELECT 1 FROM deals d
                       WHERE d.id = p.entity_id AND {LIVE_PREDICATE_D}))
-             ORDER BY p.populated_at DESC
+             -- One assistant tool call stamps every field it wrote with the same
+             -- transaction `now()`, so p.id is what keeps this over-fetched window
+             -- (and therefore the [:limit] slice below) stable across reads (#58).
+             ORDER BY p.populated_at DESC, p.id DESC
              LIMIT %s""",
         (provenance_types, limit * 3),
     )
@@ -441,7 +456,9 @@ def get_deal_health(deal_id: int, stale_days: int = DEFAULT_DEAL_STALE_DAYS) -> 
     stale_days = _bounded(stale_days, DEFAULT_DEAL_STALE_DAYS, 1, 365)
     # Date-only TEXT comparison for overdue, matching get_dashboard_stats: a task due
     # today is not overdue, and a malformed row can never cast-error the way ::date can.
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    # That day is the CONFIGURED-TIMEZONE one since #130 — it moved here in the same
+    # sweep, because "is this task overdue" must not depend on which report asked.
+    today = gtd_common.today_local_str()
     row = pg_fetchone(
         f"""
         SELECT d.id, d.title, d.stage, d.value, d.currency, d.probability,
@@ -506,7 +523,6 @@ def get_deal_health(deal_id: int, stale_days: int = DEFAULT_DEAL_STALE_DAYS) -> 
 #    assistant explains them instead of reporting a misleading zero.
 
 DEFAULT_ANALYTICS_WINDOW_DAYS = 90
-_OPEN_STAGES = ("lead", "qualified", "proposal", "negotiation")
 
 
 def _median(values: list[float]) -> float | None:
@@ -528,7 +544,7 @@ def _shape_stage_durations(rows: list[dict]) -> list[dict]:
             continue
         by_stage.setdefault(r.get("stage") or "", []).append(float(days))
     out = []
-    for stage in _OPEN_STAGES:
+    for stage in OPEN_STAGES:
         vals = by_stage.get(stage, [])
         out.append({
             "stage": stage,
@@ -547,7 +563,7 @@ def _shape_conversion(rows: list[dict]) -> list[dict]:
     """
     buckets: dict[str, dict] = {
         s: {"stage": s, "entered": 0, "still_here": 0, "advanced": 0, "won": 0, "lost": 0}
-        for s in _OPEN_STAGES
+        for s in OPEN_STAGES
     }
     for r in rows:
         stage = r.get("stage") or ""
@@ -565,7 +581,7 @@ def _shape_conversion(rows: list[dict]) -> list[dict]:
         else:
             b["advanced"] += 1
     out = []
-    for stage in _OPEN_STAGES:
+    for stage in OPEN_STAGES:
         b = buckets[stage]
         entered = b["entered"]
         # Progression = got out of this stage in the right direction (moved on OR won).

@@ -2,15 +2,16 @@ import { useState, useCallback, useMemo } from 'react';
 import {
   DndContext,
   DragOverlay,
-  closestCorners,
   type DragStartEvent,
   type DragOverEvent,
   type DragEndEvent,
 } from '@dnd-kit/core';
 import type { KanbanItem, KanbanBoardProps } from './types';
+import { boardDragDisabled } from './dragDisabled';
 import KanbanColumn from './KanbanColumn';
 import useKanbanState from './useKanbanState';
 import { useDndSensors } from './sensors';
+import { boardCollisionDetection } from './collision';
 
 export default function KanbanBoard<TItem extends KanbanItem, TColumn>({
   columns,
@@ -133,14 +134,20 @@ export default function KanbanBoard<TItem extends KanbanItem, TColumn>({
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={closestCorners}
+      collisionDetection={boardCollisionDetection}
       onDragStart={handleDragStart}
       onDragOver={handleDragOver}
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
       autoScroll={{ enabled: true }}
     >
-      <div className={className} ref={scrollerRef}>
+      {/* Cards and columns are hit-tested only where the board actually SHOWS them, and this
+          element is the fold: `collision.ts` finds it by walking up from a droppable's own node
+          and matching this attribute. A data attribute rather than a class because it is a
+          machine contract — a class is free for anyone to restyle or rename, and the failure
+          mode here is silent (cards hit-testable in space the board does not occupy).
+          `KanbanBoard.test.tsx` pins the pair. */}
+      <div className={className} ref={scrollerRef} data-kanban-scroller="">
         {columns.map(col => {
           const colItems = items[String(col.id)] || [];
           return renderColumn(col, (
@@ -156,7 +163,11 @@ export default function KanbanBoard<TItem extends KanbanItem, TColumn>({
         })}
       </div>
 
-      {!dragDisabled && (
+      {/* `boardDragDisabled`, not `!dragDisabled`: since issue #83 this prop may be a
+          per-card predicate, and a function is truthy — a bare truthiness test would
+          unmount the overlay for EVERY card (live ones included) the moment any per-item
+          policy was supplied, so a live drag would carry no lifted card. */}
+      {!boardDragDisabled(dragDisabled) && (
         <DragOverlay dropAnimation={{ duration: 200, easing: 'ease' }}>
           {activeItem ? (
             <div className="shadow-lg rotate-[2deg] scale-105">

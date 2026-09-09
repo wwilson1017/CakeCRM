@@ -12,7 +12,9 @@
  *    truncated-column drag lock honest (a drop against a partially rendered column is
  *    ambiguous).
  *  • **The drag gate.** `dragDisabled = state.dragLocked || props.dragDisabled` — the layer's
- *    central gate OR'd with app extras (isMobile, bulkPending), never replaced by them.
+ *    central gate OR'd with app extras (isMobile, bulkPending), never replaced by them. The
+ *    app extra may be a PER-CARD predicate (issue #83), which is unwrapped here like every
+ *    other item-shaped slot; a board-wide `dragLocked` still collapses it to `true`.
  */
 import { useMemo, type ReactNode } from 'react';
 import { KanbanBoard } from '../../dnd';
@@ -92,7 +94,18 @@ export default function KanbanView<T, C>({
       renderColumn={renderColumn}
       renderCard={(wrapped, columnId, isDragging) => kanban.renderCard(wrapped.item, columnId, isDragging)}
       renderEmptyColumn={kanban.renderEmptyColumn}
-      dragDisabled={state.dragLocked || kanban.dragDisabled === true}
+      // Unwrapped like `canDrop` and `renderCard`: the app's predicate is written against `T`,
+      // but `shared/dnd` calls it with the `{id, item}` wrapper. `dragLocked` is checked FIRST
+      // and collapses to a literal `true` — it is a board-wide claim, and `||`-ing it into a
+      // predicate would produce a function, which `boardDragDisabled` (correctly) does not read
+      // as board-wide, leaving the drag overlay mounted for a board that cannot drag at all.
+      dragDisabled={
+        state.dragLocked || kanban.dragDisabled === true
+          ? true
+          : typeof kanban.dragDisabled === 'function'
+            ? (wrapped: Wrapped<T>) => (kanban.dragDisabled as (item: T) => boolean)(wrapped.item)
+            : false
+      }
       className={kanban.className}
       columnClassName={kanban.columnClassName}
       scrollerRef={kanban.scrollerRef}

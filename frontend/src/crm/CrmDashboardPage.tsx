@@ -7,15 +7,17 @@ import { DealDetailBody, type DealPatch } from './components/DealDetailBody';
 import { CollectionDetail, denyEscapeBackdrop } from '../shared/collection';
 import { DEAL_DETAIL_CONFIG } from './dealDetailConfig';
 import { StatCard } from './components/StatCard';
+import { TodayPanel } from './components/TodayPanel';
 import { WeeklyTouchesCard } from './components/WeeklyTouchesCard';
 import { STAGE_COLORS, STAGE_ORDER } from './constants';
+import { stageWriteRequest } from './dealStageWrite';
 import { WarmHalo } from '../shared/WarmHalo';
 import { useIsMobile } from '../shared/useIsMobile';
 import { LoadError } from '../shared/LoadError';
 import { toast } from '../shared/toast';
 import {
   INK, INK_MUTE, INK_SOFT, INK_DIM, LINE,
-  GOLD, ACCENT, SAGE, CORAL, BG_RAISED, FONT_DISPLAY,
+  GOLD_FILL, GOLD_TEXT, ACCENT, SAGE_FILL, SAGE_TEXT, CORAL_FILL, CORAL_TEXT, BG_RAISED, FONT_DISPLAY,
   mono, formatNumber,
 } from '../shared/styles';
 import { sectionHeading, btnSecondary } from './styles';
@@ -28,8 +30,8 @@ const repNum: React.CSSProperties = { ...repCell, textAlign: 'right' };
 // backend label rename can't silently drop a bucket back to the neutral accent. The
 // two oldest buckets stay OFF ACCENT so "stale" reads as a warning, not a highlight.
 function bucketColor(minDays: number): string {
-  if (minDays >= 91) return CORAL;
-  if (minDays >= 31) return GOLD;
+  if (minDays >= 91) return CORAL_FILL;
+  if (minDays >= 31) return GOLD_FILL;
   return ACCENT;
 }
 
@@ -48,8 +50,9 @@ export function CrmDashboardPage() {
   const [analytics, setAnalytics] = useState<CrmAnalytics | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedDealId, setSelectedDealId] = useState<number | null>(null);
-  // Bumped by reload() to refetch the weekly-touches card alongside the rest.
-  const [touchesKey, setTouchesKey] = useState(0);
+  // Bumped by reload() to refetch the self-fetching cards alongside the rest.
+  // Two consumers now: WeeklyTouchesCard (#76) and TodayPanel (#130).
+  const [cardRefreshKey, setCardRefreshKey] = useState(0);
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   // Monotonic id so a slow in-flight analytics request can't overwrite a newer
@@ -68,11 +71,12 @@ export function CrmDashboardPage() {
   function reload() {
     // refresh after a mutation; stale data beats a blank page. Refetches BOTH
     // dashboard and analytics so win/loss, activity, and staleness stay current,
-    // and bumps touchesKey so the weekly-touches card refetches with them —
-    // otherwise logging an activity here updates every panel except that one.
+    // and bumps cardRefreshKey so the cards that fetch their own data — Weekly
+    // Touches and the Today panel — refetch with them; otherwise logging an
+    // activity here would update every panel except those two.
     api<CrmDashboard>('/api/crm/dashboard').then(setData).catch(() => {});
     loadAnalytics();
-    setTouchesKey(k => k + 1);
+    setCardRefreshKey(k => k + 1);
   }
 
   // The panel resolves the id itself: rows outside `top_deals` (stale deals, weekly touches)
@@ -83,11 +87,12 @@ export function CrmDashboardPage() {
     setSelectedDealId(id);
   }
 
-  async function updateDealStage(deal: CrmDeal, stage: string) {
+  async function updateDealStage(deal: CrmDeal, stage: string, lostReason?: string) {
     try {
-      await api(`/api/crm/deals/${deal.id}`, {
-        method: 'PUT', body: JSON.stringify({ stage }),
-      });
+      // `lostReason` is present only for a Mark Lost taken through the reason dialog,
+      // which routes to the mark-lost verb instead of the plain stage PUT (issue #128).
+      const { path, init } = stageWriteRequest(deal.id, stage, lostReason);
+      await api(path, init);
       setSelectedDealId(null);
       reload();
     } catch (err) {
@@ -154,7 +159,7 @@ export function CrmDashboardPage() {
   // the same ratio; when closed > 0 the backend guarantees it's non-null.
   const wonPct = closed > 0 ? Math.round(wl!.win_rate_pct ?? 0) : 0;
   const winRateColor =
-    wl?.win_rate_pct == null ? undefined : wl.win_rate_pct >= 50 ? SAGE : wl.win_rate_pct > 0 ? GOLD : undefined;
+    wl?.win_rate_pct == null ? undefined : wl.win_rate_pct >= 50 ? SAGE_TEXT : wl.win_rate_pct > 0 ? GOLD_TEXT : undefined;
   const agingBuckets = analytics?.aging.buckets ?? [];
   const openDealCount = agingBuckets.reduce((s, b) => s + b.count, 0);
   const maxBucket = Math.max(1, ...agingBuckets.map(b => b.count));
@@ -178,10 +183,18 @@ export function CrmDashboardPage() {
           fontSize: isMobile ? 30 : 48, fontWeight: 400, letterSpacing: '-0.02em',
           lineHeight: 1.1, margin: '10px 0 0', color: INK,
         }}>
-          Pipeline is <span style={{ color: GOLD, fontStyle: 'italic' }}>{totalPipelineValue}</span>
+          Pipeline is <span style={{ color: GOLD_TEXT, fontStyle: 'italic' }}>{totalPipelineValue}</span>
           <br /><span style={{ color: INK_MUTE, fontSize: isMobile ? 16 : 26 }}>across {totalDeals} open deals.</span>
         </h1>
       </div>
+
+      {/* What needs you today (issue #130), above the stat row: the page's one
+          "do this now" surface. Keyless, and self-hiding while it has nothing to say. */}
+      <TodayPanel
+        refreshKey={cardRefreshKey}
+        wrapperStyle={{ padding: `0 ${px} 18px`, position: 'relative', zIndex: 2 }}
+        onMutated={reload}
+      />
 
       {/* Parity stat row (issue #76 — cake_os DashboardTab's four cards). Built from
           the dashboard payload ALONE, so it survives an analytics fetch failure; the
@@ -196,7 +209,7 @@ export function CrmDashboardPage() {
             label="Overdue tasks"
             value={`${data.overdue_tasks}`}
             sub={`${data.pending_tasks} pending`}
-            color={data.overdue_tasks > 0 ? CORAL : undefined}
+            color={data.overdue_tasks > 0 ? CORAL_TEXT : undefined}
           />
         </div>
       </div>
@@ -236,8 +249,8 @@ export function CrmDashboardPage() {
           {closed > 0 ? (
             <div style={{ marginTop: 14, maxWidth: 420 }}>
               <div style={{ display: 'flex', height: 6, borderRadius: 3, overflow: 'hidden', background: LINE }}>
-                <div style={{ width: `${wonPct}%`, background: SAGE }} />
-                <div style={{ width: `${100 - wonPct}%`, background: CORAL }} />
+                <div style={{ width: `${wonPct}%`, background: SAGE_FILL }} />
+                <div style={{ width: `${100 - wonPct}%`, background: CORAL_FILL }} />
               </div>
               <div style={{ ...mono(10, INK_DIM), marginTop: 5 }}>
                 {wl.deals_won} won · {wl.deals_lost} lost
@@ -253,7 +266,7 @@ export function CrmDashboardPage() {
           own padding — an empty wrapper here would leave a mystery gap on the page
           it is supposed to be invisible from. */}
       <WeeklyTouchesCard
-        refreshKey={touchesKey}
+        refreshKey={cardRefreshKey}
         wrapperStyle={{ padding: `6px ${px} 22px`, position: 'relative', zIndex: 2 }}
         // issue #56: the sheet carries the per-event evidence behind each touch count,
         // which is the drill-down #76 deferred to this issue.
@@ -285,7 +298,7 @@ export function CrmDashboardPage() {
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <span style={{
                             width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                            background: STAGE_COLORS[stage.stage]?.color || INK_DIM,
+                            background: STAGE_COLORS[stage.stage]?.fill || INK_DIM,
                           }} />
                           <span style={{
                             fontFamily: FONT_DISPLAY,
@@ -305,7 +318,7 @@ export function CrmDashboardPage() {
                         <div style={{
                           position: 'absolute', inset: 0,
                           right: `${100 - Math.max(pct, 2)}%`,
-                          background: STAGE_COLORS[stage.stage]?.color || ACCENT,
+                          background: STAGE_COLORS[stage.stage]?.fill || ACCENT,
                         }} />
                       </div>
                     </>
@@ -314,7 +327,7 @@ export function CrmDashboardPage() {
                       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                         <span style={{
                           width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                          background: STAGE_COLORS[stage.stage]?.color || INK_DIM,
+                          background: STAGE_COLORS[stage.stage]?.fill || INK_DIM,
                         }} />
                         <span style={{
                           fontFamily: FONT_DISPLAY,
@@ -326,7 +339,7 @@ export function CrmDashboardPage() {
                         <div style={{
                           position: 'absolute', inset: 0,
                           right: `${100 - Math.max(pct, 2)}%`,
-                          background: STAGE_COLORS[stage.stage]?.color || ACCENT,
+                          background: STAGE_COLORS[stage.stage]?.fill || ACCENT,
                         }} />
                       </div>
                       <div style={{
@@ -447,7 +460,7 @@ export function CrmDashboardPage() {
                   display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer',
                   background: STAGE_COLORS[d.stage]?.bg || BG_RAISED,
                   border: `1px solid ${LINE}`,
-                  borderLeft: `3px solid ${STAGE_COLORS[d.stage]?.color || INK_DIM}`,
+                  borderLeft: `3px solid ${STAGE_COLORS[d.stage]?.fill || INK_DIM}`,
                   borderRadius: 6,
                 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -464,7 +477,7 @@ export function CrmDashboardPage() {
                       ${formatNumber(d.value)}
                     </div>
                     <div style={{
-                      ...mono(10, d.days_since_touch >= analytics.stale_days * 2 ? CORAL : GOLD),
+                      ...mono(10, d.days_since_touch >= analytics.stale_days * 2 ? CORAL_TEXT : GOLD_TEXT),
                       marginTop: 2,
                     }}>{d.days_since_touch}d idle</div>
                   </div>
@@ -552,7 +565,7 @@ export function CrmDashboardPage() {
                   cursor: 'pointer',
                   background: STAGE_COLORS[deal.stage]?.bg || BG_RAISED,
                   border: `1px solid ${LINE}`,
-                  borderLeft: `3px solid ${STAGE_COLORS[deal.stage]?.color || LINE}`,
+                  borderLeft: `3px solid ${STAGE_COLORS[deal.stage]?.fill || LINE}`,
                   borderRadius: 6,
                 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -561,7 +574,7 @@ export function CrmDashboardPage() {
                       {!isMobile && <span style={{ color: INK_MUTE }}> · {deal.contact_name || 'No contact'}</span>}
                     </div>
                     <div style={{
-                      ...mono(11, STAGE_COLORS[deal.stage]?.color || INK_DIM),
+                      ...mono(11, STAGE_COLORS[deal.stage]?.text || INK_DIM),
                       marginTop: 3, textTransform: 'uppercase',
                     }}>{deal.stage}{isMobile && deal.contact_name ? ` · ${deal.contact_name}` : ''}</div>
                   </div>
@@ -623,12 +636,18 @@ export function CrmDashboardPage() {
               onBoard={data.top_deals.some(d => d.id === deal.id)}
               // Always writable here, unlike the pipeline: there is no board for a deal to be
               // off, every list on this page is already filtered to live deals, and the "Needs a
-              // touch" panel is a real place to close one from.
+              // touch" panel is a real place to close one from. An ARCHIVED deal is still gated,
+              // but by the body itself — it reads `archived_at` from its own detail fetch, which
+              // is the only thing that knows, since these rows carry no board state.
               stageWritable
               ctx={ctx}
-              onMarkWon={d => void updateDealStage(d, 'won')}
-              onMarkLost={d => void updateDealStage(d, 'lost')}
+              onMarkWon={d => updateDealStage(d, 'won')}
+              onMarkLost={(d, lostReason) => updateDealStage(d, 'lost', lostReason)}
               onSaveDeal={saveDeal}
+              // The archived banner and its Restore render on ANY host (issue #83). Without this
+              // the restore would succeed server-side while the panel stayed open over stale
+              // dashboard numbers.
+              onRestored={() => { setSelectedDealId(null); reload(); }}
             />
           ),
           onRequestClose: denyEscapeBackdrop,

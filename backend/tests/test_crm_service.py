@@ -8,7 +8,7 @@ writes go through ``get_connection`` and use the shared ``fake_conn`` fixture.
 
 import pytest
 
-from crm import service
+from crm import scoring_service, service
 
 
 class Recorder:
@@ -143,12 +143,19 @@ def test_search_contacts_ilike_and_tag_boundary(rec):
     sql = rec.sql_containing("FROM contacts ct")
     # name/email/company/co.name/notes + tag clauses (issue #35 added the join term)
     assert sql.count("ILIKE") >= 5
-    assert "LIKE %s" not in sql.replace("ILIKE %s", "")  # no case-sensitive LIKE
+    # No case-sensitive LIKE among the SEARCH terms. The #77 last-contact join adds one
+    # deliberate `NOT LIKE`, which is not a search matcher: it excludes provenance
+    # housekeeping notes by an exact prefix our own code writes, so case-sensitivity is
+    # correct there. Stripped by its exact shape, so any OTHER bare LIKE still fails.
+    assert "LIKE %s" not in sql.replace("ILIKE %s", "").replace("NOT LIKE %s", "")
     assert "ct.status = %s" in sql
     assert "LEFT JOIN companies co ON ct.company_id = co.id" in sql
     assert "co.name ILIKE %s" in sql  # linked contacts findable by company name
     params = rec.params_for("FROM contacts ct")
-    assert params[:5] == ["%acme%"] * 5
+    # The last-contact LATERAL sits in the FROM clause, so its pattern binds ahead of
+    # every WHERE parameter (#77).
+    assert params[0] == scoring_service.HOUSEKEEPING_NOTE_LIKE
+    assert params[1:6] == ["%acme%"] * 5
     assert "active" in params
     assert "%,vip,%" in params and "%,lead,%" in params
     assert params[-2:] == [15, 0]  # LIMIT %s OFFSET %s (default offset 0)
@@ -310,10 +317,14 @@ def test_clear_demo_data_truncates_when_sample_loaded(monkeypatch, fake_conn):
     # cascades it, and a stale cooldown would silence nudges on the reseeded data.
     # deal_ai_touch_evidence (#56) trails it for the same FK-less reason — a reused deal
     # id would otherwise inherit a deleted deal's per-event explanation.
+    # crm_chatter_attachments (#57) sits right after crm_chatter and is MANDATORY, not
+    # tidy: it holds a real FK to crm_chatter, and Postgres refuses to truncate a
+    # referenced table without its child in the same statement — dropping it here makes
+    # every CRM reset raise.
     assert any(
         "TRUNCATE companies, contacts, deals, activity_log, tasks, task_projects, "
-        "crm_chatter, crm_field_values, crm_field_provenance, deal_stage_events, "
-        "proactive_nudges, deal_ai_touch_evidence RESTART IDENTITY"
+        "crm_chatter, crm_chatter_attachments, crm_field_values, crm_field_provenance, "
+        "deal_stage_events, proactive_nudges, deal_ai_touch_evidence RESTART IDENTITY"
         in s for s in stmts
     )
     assert not any("crm_field_definitions" in s for s in stmts)
@@ -349,8 +360,9 @@ def test_clear_all_truncates_and_resets_flag(monkeypatch, fake_conn):
     # defs→values); crm_field_provenance trails both.
     assert any(
         "TRUNCATE companies, contacts, deals, activity_log, tasks, task_projects, "
-        "crm_chatter, crm_field_definitions, crm_field_values, crm_field_provenance, "
-        "deal_stage_events, proactive_nudges, deal_ai_touch_evidence RESTART IDENTITY"
+        "crm_chatter, crm_chatter_attachments, crm_field_definitions, crm_field_values, "
+        "crm_field_provenance, deal_stage_events, proactive_nudges, "
+        "deal_ai_touch_evidence RESTART IDENTITY"
         in s for s in stmts
     )
     assert any("sample_data_loaded = FALSE" in s for s in stmts)
@@ -681,8 +693,10 @@ def test_list_contacts_company_sort_uses_effective_name(rec):
     rec.fetchone_queue = [{"cnt": 0}]
     rec.fetchall_queue = [[]]
     service.list_contacts(sort="company")
-    # sorts by what the UI renders (link first, legacy text as fallback)
-    assert "ORDER BY COALESCE(co.name, ct.company) DESC" in rec.sql_containing("ORDER BY")
+    # Sorts by what the UI renders (link first, legacy text as fallback), ASCENDING —
+    # a name sort means A→Z, which is what ?sort=company advertises and what
+    # list_companies has always done. It answered Z→A until #77.
+    assert "ORDER BY COALESCE(co.name, ct.company) ASC, ct.id ASC" in rec.sql_containing("ORDER BY")
 
 
 def test_update_deal_accepts_company_id(monkeypatch, rec, fake_conn):
@@ -751,6 +765,111 @@ def test_get_pipeline_stage_branch_carries_new_fields(rec):
     assert "WHERE d.archived_at IS NULL AND d.stage = %s" in sql
     assert "la.last_at AS last_activity_at" in sql and "co.name AS company_name" in sql
     assert rec.params_for("last_activity_at") == ["lead"]
+
+
+# ── Pipeline board: the three bounding modes (issue #59) ──────────────────────
+
+def test_get_pipeline_keyset_first_page(rec):
+    rec.fetchall_queue = [[], []]
+    out = service.get_pipeline(limit=501)
+
+    sql = rec.sql_containing("ORDER BY d.id ASC")
+    assert "LIMIT %s" in sql
+    # A page must use the per-deal LATERAL, never the whole-table grouped aggregate:
+    # the grouped form would scan all of activity_log on every page of a sweep.
+    assert "LEFT JOIN LATERAL" in sql and "GROUP BY deal_id" not in sql
+    # ...while still carrying every column the unbounded board carries.
+    assert "la.last_at AS last_activity_at" in sql and "co.name AS company_name" in sql
+    assert "d.id > %s" not in sql, "a first page has no cursor"
+    assert rec.params_for("ORDER BY d.id ASC") == [501]
+    # A FIRST page still pays for — and returns — the envelope.
+    assert out["stage_summary"] == [] and out["total_pipeline_value"] == 0
+    # ...and never advertises a truncation flag: that answers a per-stage-cap question
+    # this mode was not asked. The sweep derives hasMore from an over-fetched ROW.
+    assert "deals_truncated" not in out
+
+
+def test_get_pipeline_cursor_page_skips_the_aggregate(rec):
+    rec.fetchall_queue = [[]]
+    out = service.get_pipeline(limit=501, after_id=1207)
+
+    assert rec.params_for("d.id > %s") == [1207, 501]
+    assert len(rec.calls) == 1, "a continuation page must not run the stage_summary aggregate"
+    assert out["stage_summary"] is None and out["total_pipeline_value"] is None
+
+
+def test_get_pipeline_keyset_respects_include_archived_and_stage(rec):
+    rec.fetchall_queue = [[]]
+    service.get_pipeline(limit=10, after_id=5, include_archived=True)
+    assert "archived_at IS NULL" not in rec.sql_containing("ORDER BY d.id ASC")
+
+    rec.calls.clear()
+    rec.fetchall_queue = [[], []]
+    service.get_pipeline(stage="lead", limit=10)
+    sql = rec.sql_containing("ORDER BY d.id ASC")
+    assert "d.stage = %s" in sql
+    # The stage filter leads the params, the cap trails them — one shared condition list.
+    assert rec.params_for("ORDER BY d.id ASC") == ["lead", 10]
+
+
+def test_get_pipeline_window_caps_per_stage_in_sql(rec):
+    # Three lead deals ranked 1..3 and one won deal, for a cap of 2: the rank-3 row is the
+    # over-fetch probe and must be dropped, leaving the truncation flag set.
+    rec.fetchall_queue = [
+        [{"id": 3, "stage": "lead", "rn": 1}, {"id": 2, "stage": "lead", "rn": 2},
+         {"id": 9, "stage": "won", "rn": 1}, {"id": 1, "stage": "lead", "rn": 3}],
+        [{"stage": "lead", "count": 10, "total_value": 999}],
+    ]
+    out = service.get_pipeline(limit_per_stage=2)
+
+    sql = rec.sql_containing("ROW_NUMBER")
+    assert "PARTITION BY d.stage" in sql
+    assert "ORDER BY d.updated_at DESC, d.id DESC" in sql
+    # The window reads the whole corpus in one statement, so it keeps the grouped join.
+    assert "GROUP BY deal_id" in sql and "LEFT JOIN LATERAL" not in sql
+    assert rec.params_for("ROW_NUMBER") == [3], "asks for cap + 1, the truncation probe"
+
+    assert [d["id"] for d in out["deals"]] == [3, 2, 9]
+    assert all("rn" not in d for d in out["deals"]), "the rank must never leave the service"
+    assert out["deals_truncated"] is True
+    # Counts and value still cover EVERY deal — trimming the list must not lie.
+    assert out["stage_summary"][0]["count"] == 10
+
+
+def test_get_pipeline_window_reports_no_truncation_when_it_fits(rec):
+    rec.fetchall_queue = [[{"id": 1, "stage": "lead", "rn": 1}], []]
+    assert service.get_pipeline(limit_per_stage=2)["deals_truncated"] is False
+
+    # The default board has no cap, so it must not advertise a truncation flag at all.
+    rec.fetchall_queue = [[{"id": 1, "stage": "lead"}], []]
+    assert "deals_truncated" not in service.get_pipeline()
+
+
+def test_list_deals_treats_contact_id_zero_as_a_filter(rec):
+    """The ROUTE deliberately routes `?contact_id=0` here rather than to the board (see
+    test_contact_id_zero_is_a_filter_not_a_fallthrough), so a truthiness test in the
+    service answered that filtered request with the WHOLE deal list."""
+    rec.fetchall_queue = [[]]
+    service.list_deals(contact_id=0)
+    assert "d.contact_id = %s" in rec.sql_containing("FROM deals d")
+    assert rec.params_for("d.contact_id = %s") == [0, 50]
+
+    # An omitted contact_id still means "no filter" — the fix must not invent one.
+    # (The needle is the WHERE predicate, not `d.contact_id`, which is also the JOIN key.)
+    rec.calls.clear()
+    rec.fetchall_queue = [[]]
+    service.list_deals()
+    assert "d.contact_id = %s" not in rec.sql_containing("FROM deals d")
+    assert rec.params_for("FROM deals d") == [50]
+
+
+def test_get_pipeline_refuses_meaningless_combinations(rec):
+    for kwargs in ({"after_id": 5},
+                   {"limit": 5, "limit_per_stage": 5},
+                   {"after_id": 5, "limit": 5, "limit_per_stage": 5}):
+        with pytest.raises(ValueError):
+            service.get_pipeline(**kwargs)
+    assert rec.calls == [], "a refused call must not reach Postgres"
 
 
 def test_search_companies_status_filter(rec):
@@ -901,3 +1020,204 @@ def test_list_contacts_unknown_sort_falls_back_to_updated_at(rec):
 def test_search_contacts_honors_lead_score_sort(rec):
     service.search_contacts("acme", sort="lead_score")
     assert "lead_score DESC NULLS LAST" in rec.sql_containing("FROM contacts ct")
+
+
+# ── #77: the list pages' keyset assembly, and the reads it needs ──────────────
+
+
+def test_list_tasks_default_order_gains_an_id_tiebreaker(rec):
+    """The historical due order, made deterministic.
+
+    Every pre-#77 caller (the crm_list_tasks tool, the heartbeat, the rollups) still gets
+    `completed ASC, due_date ASC` — but ties among tasks sharing a due date used to be
+    resolved arbitrarily by Postgres, so a LIMIT window could omit one task and repeat
+    another between two identical requests.
+    """
+    service.list_tasks()
+    sql = rec.sql_containing("FROM tasks t")
+    assert "ORDER BY t.completed ASC, t.due_date ASC, t.id ASC LIMIT %s" in sql
+    assert "OFFSET" not in sql  # this endpoint never had one and still does not
+    assert rec.params_for("FROM tasks t")[-1] == 50
+
+
+def test_list_tasks_id_sort_is_the_assembly_key(rec):
+    service.list_tasks(sort="id", after_id=500, limit=501)
+    sql = rec.sql_containing("FROM tasks t")
+    assert "ORDER BY t.id ASC LIMIT %s" in sql
+    assert "t.id > %s" in sql
+    params = rec.params_for("FROM tasks t")
+    assert params[-2:] == [500, 501]  # cursor binds in the WHERE, limit last
+
+
+def test_list_tasks_unknown_sort_falls_back_to_the_due_order(rec):
+    service.list_tasks(sort="bogus")
+    assert "ORDER BY t.completed ASC, t.due_date ASC, t.id ASC" in rec.sql_containing("FROM tasks t")
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: service.list_contacts(after_id=5, sort="updated_at"),
+        lambda: service.list_contacts(after_id=5),  # the DEFAULT sort is not id either
+        lambda: service.list_companies(after_id=5, sort="name"),
+        lambda: service.list_tasks(after_id=5, sort="due"),
+        lambda: service.list_tasks(after_id=5),
+    ],
+)
+def test_a_cursor_against_a_mutable_order_is_refused(rec, call):
+    """Fail loudly rather than paginate wrong.
+
+    `after_id` means "the rows after this one in the current order"; under updated_at or
+    name that is not well defined (not unique, not stable), so the window would silently
+    skip and repeat rows. Silently IGNORING the parameter would be worse still — it looks
+    exactly like a client stuck re-reading page one.
+    """
+    rec.fetchone_queue = [{"cnt": 0}]
+    with pytest.raises(ValueError):
+        call()
+
+
+def test_contact_name_and_company_sorts_ascend(rec):
+    rec.fetchone_queue = [{"cnt": 0}]
+    service.list_contacts(sort="name")
+    assert "ORDER BY ct.name ASC, ct.id ASC" in rec.sql_containing("ORDER BY")
+
+
+def test_contact_and_company_id_sorts_are_plain_ascending_keys(rec):
+    rec.fetchone_queue = [{"cnt": 0}]
+    service.list_contacts(sort="id", after_id=7)
+    contact_sql = rec.sql_containing("FROM contacts ct LEFT JOIN")
+    assert "ORDER BY ct.id ASC LIMIT" in contact_sql
+    assert "ct.id > %s" in contact_sql
+
+    rec.calls.clear()
+    rec.fetchone_queue = [{"cnt": 0}]
+    service.list_companies(sort="id", after_id=7)
+    company_sql = rec.sql_containing("FROM companies WHERE")
+    # Its own tie-breaker — emitting "id ASC, id ASC" would be redundant SQL.
+    assert "ORDER BY id ASC LIMIT" in company_sql
+    assert "id ASC, id ASC" not in company_sql
+    assert "id > %s" in company_sql
+
+
+def test_an_ordinary_list_still_counts_the_whole_filtered_set(rec):
+    """A cursor is the WINDOW, not a filter.
+
+    The repo rule that a filter must reach the COUNT and the page query together exists so
+    a total cannot disagree with the rows. A real filter (status, owner) therefore does
+    reach the COUNT; the cursor never does.
+    """
+    rec.fetchone_queue = [{"cnt": 4200}]
+    result = service.list_contacts(status="active")
+    count_sql = rec.sql_containing("COUNT(*)")
+    assert "ct.status = %s" in count_sql  # a real filter DOES reach it
+    assert result["total"] == 4200
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: service.list_contacts(sort="id", after_id=900),
+        lambda: service.list_companies(sort="id", after_id=900),
+    ],
+)
+def test_a_cursor_page_skips_the_count_entirely(rec, call):
+    """Not a micro-optimisation: a corpus sweep is up to MAX_PAGES requests and never reads
+    `total`, so counting on each would add a scan of the whole filtered set to the heaviest
+    read path in the app. `total` is None there rather than a stale or wrong integer."""
+    result = call()
+    assert result["total"] is None
+    assert not any("COUNT(*)" in sql for sql, _ in rec.calls)
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: service.list_contacts(sort="id", offset=50),
+        lambda: service.list_companies(sort="id", offset=50),
+    ],
+)
+def test_plain_offset_pagination_on_the_id_order_still_gets_a_total(rec, call):
+    """`sort=id` alone is ordinary offset pagination, not a sweep.
+
+    Keying the skip on the SORT would strip `total` from a caller paging with
+    `?sort=id&offset=N`, who needs it to know how many pages remain — and the sweep's own
+    first page is indistinguishable from that request anyway, so it pays one COUNT.
+    """
+    rec.fetchone_queue = [{"cnt": 4200}]
+    assert call()["total"] == 4200
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: service.list_contacts(sort="id", after_id=5, offset=10),
+        lambda: service.list_companies(sort="id", after_id=5, offset=10),
+    ],
+)
+def test_a_cursor_combined_with_an_offset_is_refused(rec, call):
+    """Two competing ways to say where the window starts. Applying both silently skips
+    exactly `offset` eligible rows — the same class of quiet wrongness the sort pairing
+    check exists to prevent, so it fails the same way."""
+    with pytest.raises(ValueError):
+        call()
+
+
+def test_contact_list_search_and_detail_all_derive_last_contact_at(rec):
+    """One definition of "when did we last talk to this person", used by three reads."""
+    for prime, call in (
+        ([{"cnt": 0}], lambda: service.list_contacts()),
+        ([], lambda: service.search_contacts("acme")),
+        ([{"id": 1}, None, None], lambda: service.get_contact_detail(1)),
+    ):
+        rec.calls.clear()
+        rec.fetchone_queue = list(prime)
+        rec.fetchall_queue = [[], [], [], []]
+        call()
+        sql = rec.sql_containing("last_contact_at")
+        assert "lt.last_at AS last_contact_at" in sql
+        # Both signals, and the archived + housekeeping exclusions.
+        assert "FROM activity_log a WHERE a.contact_id = ct.id" in sql
+        assert "ch.entity_type = 'contact'" in sql
+        assert "ch.archived = 0" in sql
+        assert "ch.message NOT LIKE %s" in sql
+        assert rec.params_for("last_contact_at")[0] == scoring_service.HOUSEKEEPING_NOTE_LIKE
+
+
+def test_the_contact_count_query_stays_join_free(rec):
+    """The COUNT must not pay for the derived touch — it does not select it."""
+    rec.fetchone_queue = [{"cnt": 0}]
+    service.list_contacts()
+    count_sql = rec.sql_containing("COUNT(*)")
+    assert "LEFT JOIN" not in count_sql
+    assert "crm_chatter" not in count_sql
+
+
+def test_get_task_returns_a_list_shaped_row(rec):
+    """Task writes return get_task, and the list patches itself from those bodies (#77).
+
+    Without the joins a saved task loses its contact/deal label in the list — and a task
+    re-linked to another contact would keep showing the old name.
+    """
+    service.get_task(1)
+    sql = rec.sql_containing("FROM tasks t")
+    assert "c.name AS contact_name" in sql
+    assert "d.title AS deal_title" in sql
+
+
+# ── Link labels must ride every row that can reach the deal form (issue #123) ─
+
+def test_top_deals_joins_the_company_name(rec):
+    """The dashboard hands `top_deals` rows straight to the deal sheet and on to DealForm,
+    whose link pickers render the NAME the row arrives with. A row carrying a company_id and
+    no company_name renders an EMPTY company box on a deal that has one — reading as "no
+    company", which is the exact hazard those pickers replaced a capped <select> to end.
+    """
+    rec.fetchone_queue = [{"cnt": 0}] * 12
+    service.get_dashboard_stats()
+
+    sql = rec.sql_containing("ORDER BY d.value DESC, d.id DESC LIMIT 5")
+    assert "co.name AS company_name" in sql
+    assert "LEFT JOIN companies co ON d.company_id = co.id" in sql
+    # ...alongside the contact name it already carried, not instead of it.
+    assert "c.name AS contact_name" in sql

@@ -1,44 +1,99 @@
-// The deal deep link's two halves must agree, and the parser must be strict.
-//
-// The round-trip case is the real contract: `DealDetailBody` writes the link and `PipelinePage`
-// reads it, and because the parameter is stripped the instant it is read, nothing else ever
-// reconstructs the shape. If the two drifted apart the failure would be a shared link that
-// silently opens nothing — no error, no console, just a board.
 import { describe, expect, it } from 'vitest';
-import { DEAL_PARAM, dealDeepLink, parseDealParam } from './dealDeepLink';
+
+import {
+  DEAL_DEEP_LINK_PARAM, dealDeepLink, deepLinkVerdict, parseDealDeepLinkId,
+  type DeepLinkVerdictInput,
+} from './dealDeepLink';
 
 describe('dealDeepLink', () => {
-  it('round-trips an id through a real URL', () => {
-    const url = new URL(dealDeepLink(42), 'https://crm.example');
-    expect(url.pathname).toBe('/crm/pipeline');
-    expect(parseDealParam(url.searchParams.get(DEAL_PARAM))).toBe(42);
+  it('emits the shape PipelinePage parses', () => {
+    expect(dealDeepLink(42)).toBe('/crm/pipeline?deal=42');
   });
 
-  it('survives being appended to an origin, which is how the button builds it', () => {
-    expect(`https://crm.example${dealDeepLink(7)}`).toBe('https://crm.example/crm/pipeline?deal=7');
+  it('names the parameter PipelinePage reads', () => {
+    // The producer and the reader must agree on the key, and only one of them spells it
+    // out — a rename here that misses the constant emits links nothing opens.
+    expect(new URL(dealDeepLink(42), 'http://x').searchParams.get(DEAL_DEEP_LINK_PARAM))
+      .toBe('42');
   });
 });
 
-describe('parseDealParam', () => {
-  it('accepts a plain positive integer', () => {
-    expect(parseDealParam('1')).toBe(1);
-    expect(parseDealParam('2147483647')).toBe(2147483647);
+describe('parseDealDeepLinkId', () => {
+  it('reads a plain positive integer', () => {
+    expect(parseDealDeepLinkId('42')).toBe(42);
   });
 
   it.each([
-    ['a missing parameter', null],
+    ['a missing param', null],
+    ['an undefined param', undefined],
     ['an empty string', ''],
+    // `Number('')` is 0 and `Number(' 42 ')` is 42 — both would sail through a bare
+    // `Number()` parse, and 0 is not a deal id.
+    ['whitespace padding', ' 42 '],
+    ['a zero id', '0'],
+    ['a negative id', '-7'],
+    ['a decimal', '4.5'],
+    ['exponent notation', '1e3'],
+    ['hex notation', '0x2a'],
     ['a word', 'abc'],
-    ['zero', '0'],
-    ['a negative id', '-3'],
-    ['a decimal', '1.5'],
-    ['padded whitespace', ' 3 '],
-    ['a hex-ish value', '0x10'],
-    ['past the int4 ceiling', '2147483648'],
-    ['an id with a trailing comma', '3,4'],
+    // Beyond Number.MAX_SAFE_INTEGER two distinct ids compare equal, so a lookup could
+    // match the wrong deal — refuse rather than guess.
+    ['an unsafe integer', '9007199254740993'],
+    // The backend's PKs are int4, so anything larger names no deal that could exist.
+    ['a number past int4', '2147483648'],
   ])('rejects %s', (_label, raw) => {
-    // Deliberately NOT `Number()`: it coerces '' to 0, ' 3 ' to 3 and '0x10' to 16, and a URL a
-    // stranger can hand you should not get to choose which record opens.
-    expect(parseDealParam(raw)).toBeNull();
+    expect(parseDealDeepLinkId(raw as string | null | undefined)).toBeNull();
+  });
+});
+
+describe('deepLinkVerdict', () => {
+  const base: DeepLinkVerdictInput = {
+    dealId: 42,
+    boardLoaded: true,
+    dealOnBoard: true,
+    boardRefreshedSinceLink: true,
+  };
+
+  it('does nothing when the URL names no deal', () => {
+    expect(deepLinkVerdict({ ...base, dealId: null })).toBe('idle');
+  });
+
+  it('does nothing before a board payload has been applied', () => {
+    // The gate is "a board is on screen", never `!loading` or `!error`. Deciding a deal
+    // is gone on the strength of a failed or in-flight load is an accusation about the
+    // network, not about the deal.
+    expect(deepLinkVerdict({ ...base, boardLoaded: false, dealOnBoard: false })).toBe('idle');
+  });
+
+  it('opens the deal when the loaded board has it', () => {
+    expect(deepLinkVerdict(base)).toBe('open');
+  });
+
+  it('declares a miss dead once the board was fetched after the link arrived', () => {
+    expect(deepLinkVerdict({ ...base, dealOnBoard: false })).toBe('dead');
+  });
+
+  it('refreshes rather than accusing when the board predates the link', () => {
+    // The assistant hands out links to deals it just created, and the pipeline stays
+    // mounted while its drawer is open. A board older than the link is silent about the
+    // deal, not evidence against it.
+    expect(deepLinkVerdict({ ...base, dealOnBoard: false, boardRefreshedSinceLink: false }))
+      .toBe('refresh');
+  });
+
+  it('never reaches dead while the board is older than the link, however often it is asked', () => {
+    // This is what bounds the refresh to one attempt and keeps a failed refresh silent.
+    // A failed load applies no payload, so this input is unchanged and the verdict is
+    // stable — the caller's effect, keyed on the verdict, does not re-run. Saying nothing
+    // loses a correct notice about a genuinely deleted deal; saying "dead" here would tell
+    // a rep their live deal was deleted because the network blipped.
+    const missOnStaleBoard = { ...base, dealOnBoard: false, boardRefreshedSinceLink: false };
+    expect(deepLinkVerdict(missOnStaleBoard)).toBe('refresh');
+    expect(deepLinkVerdict(missOnStaleBoard)).toBe('refresh');
+  });
+
+  it('opens a deal the board holds even on a stale board', () => {
+    // Presence is proof; only ABSENCE is ambiguous on a board older than the link.
+    expect(deepLinkVerdict({ ...base, boardRefreshedSinceLink: false })).toBe('open');
   });
 });

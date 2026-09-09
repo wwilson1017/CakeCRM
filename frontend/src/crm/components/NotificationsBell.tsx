@@ -10,7 +10,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../../core/api/client';
-import { INK, INK_MUTE, INK_SOFT, LINE, LINE_STRONG, BG_CARD, ACCENT, ACCENT_TEXT, CORAL, FONT_SANS, ACCENT_INK, SHADOW } from '../../shared/styles';
+import { INK, INK_MUTE, INK_SOFT, LINE, LINE_STRONG, BG_CARD, ACCENT, ACCENT_TEXT, CORAL_TEXT, FONT_SANS, ACCENT_INK, SHADOW } from '../../shared/styles';
 
 interface NotificationRow {
   id: string; title: string; message: string; created_at: string; channels_sent: string[];
@@ -123,7 +123,7 @@ export function NotificationsBell() {
         style={{
           position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center',
           width: 34, height: 32, border: `1px solid ${LINE_STRONG}`, borderRadius: 6,
-          background: 'transparent', color: alertCount > 0 ? CORAL : INK_MUTE, cursor: 'pointer',
+          background: 'transparent', color: alertCount > 0 ? CORAL_TEXT : INK_MUTE, cursor: 'pointer',
         }}
       >
         <BellIcon />
@@ -146,7 +146,7 @@ export function NotificationsBell() {
           {alerts.length > 0 && (
             <div style={{ borderBottom: `1px solid ${LINE}` }}>
               <div style={{ padding: '10px 14px 4px', fontFamily: FONT_SANS, fontSize: 11,
-                fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: CORAL }}>
+                fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: CORAL_TEXT }}>
                 Alerts
               </div>
               {alerts.map(a => (

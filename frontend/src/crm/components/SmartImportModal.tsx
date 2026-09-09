@@ -3,7 +3,7 @@ import { api } from '../../core/api/client';
 import { useIsMobile } from '../../shared/useIsMobile';
 import {
   INK, INK_MUTE, INK_SOFT, LINE, LINE_STRONG, BG_RAISED,
-  GOLD, SAGE, CORAL, FONT_DISPLAY, FONT_SANS,
+  GOLD_TEXT, SAGE_TEXT, CORAL_TEXT, FONT_DISPLAY, FONT_SANS,
 } from '../../shared/styles';
 import { modalOverlay, modalContent, btnPrimary, btnSecondary } from '../styles';
 
@@ -146,7 +146,7 @@ export function SmartImportModal({ onClose, onImported }: Props) {
           letterSpacing: '-0.02em', color: INK, margin: '0 0 8px',
         }}>Import Contacts</h2>
 
-        {error && <p style={{ color: CORAL, fontSize: 12, margin: '0 0 12px', fontFamily: FONT_SANS }}>{error}</p>}
+        {error && <p style={{ color: CORAL_TEXT, fontSize: 12, margin: '0 0 12px', fontFamily: FONT_SANS }}>{error}</p>}
 
         {step === 'upload' && (
           <>
@@ -195,12 +195,12 @@ export function SmartImportModal({ onClose, onImported }: Props) {
         {step === 'preview' && parseResult && (
           <>
             {parseResult.ai_used && (
-              <p style={{ color: GOLD, fontSize: 12, margin: '0 0 6px', fontFamily: FONT_SANS }}>
+              <p style={{ color: GOLD_TEXT, fontSize: 12, margin: '0 0 6px', fontFamily: FONT_SANS }}>
                 Parsed with AI — please verify the results before importing.
               </p>
             )}
             {parseResult.warnings.map((w, i) => (
-              <p key={i} style={{ color: GOLD, fontSize: 12, margin: '0 0 4px', fontFamily: FONT_SANS }}>{w}</p>
+              <p key={i} style={{ color: GOLD_TEXT, fontSize: 12, margin: '0 0 4px', fontFamily: FONT_SANS }}>{w}</p>
             ))}
 
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '12px 0 8px' }}>
@@ -259,7 +259,7 @@ export function SmartImportModal({ onClose, onImported }: Props) {
         {step === 'result' && importResult && (
           <>
             <div style={{ background: BG_RAISED, borderRadius: 10, padding: 16, marginBottom: 16 }}>
-              <p style={{ color: SAGE, fontSize: 14, fontWeight: 500, margin: 0, fontFamily: FONT_SANS }}>
+              <p style={{ color: SAGE_TEXT, fontSize: 14, fontWeight: 500, margin: 0, fontFamily: FONT_SANS }}>
                 {importResult.imported} contacts imported
               </p>
               {importResult.skipped > 0 && (
@@ -269,7 +269,7 @@ export function SmartImportModal({ onClose, onImported }: Props) {
               )}
               {importResult.errors.length > 0 && (
                 <div style={{ marginTop: 8 }}>
-                  <p style={{ color: CORAL, fontSize: 12, margin: 0, fontFamily: FONT_SANS }}>{importResult.errors.length} errors:</p>
+                  <p style={{ color: CORAL_TEXT, fontSize: 12, margin: 0, fontFamily: FONT_SANS }}>{importResult.errors.length} errors:</p>
                   {importResult.errors.slice(0, 5).map((e, i) => (
                     <p key={i} style={{ color: INK_SOFT, fontSize: 12, margin: '2px 0 0', fontFamily: FONT_SANS }}>{e}</p>
                   ))}

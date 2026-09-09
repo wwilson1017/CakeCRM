@@ -98,6 +98,12 @@ interface Props {
 
   /** Controls rendered at the end of the top row (CRM's owner segmented control). */
   trailing?: ReactNode;
+
+  /** Bump to empty the search box on a clear the OWNER initiated (as opposed to this bar's
+   *  own Clear button, which is handled internally). Folded into the same nonce, because the
+   *  need is identical: `SearchInput` adopts an external value only when it changes, so
+   *  clearing while `query` is already '' would otherwise leave unsettled typed text. */
+  resetNonce?: number;
 }
 
 export default function SearchFilterBar({
@@ -116,11 +122,14 @@ export default function SearchFilterBar({
   activeFacetCount,
   onClear,
   trailing,
+  resetNonce: externalResetNonce = 0,
 }: Props) {
   const [showFacets, setShowFacets] = useState(false);
   // Bumped on Clear so the search box empties even when the page's settled query was already
-  // '' — see `SearchInput`'s `resetNonce`.
-  const [resetNonce, setResetNonce] = useState(0);
+  // '' — see `SearchInput`'s `resetNonce`. Summed with the owner's nonce so either source
+  // fires the reset and neither can cancel the other out.
+  const [ownResetNonce, setOwnResetNonce] = useState(0);
+  const resetNonce = ownResetNonce + externalResetNonce;
   const hasPanel = groups.length > 0 || !!extraFacets;
   const showCount = visibleCount !== undefined && totalCount !== undefined;
 
@@ -174,7 +183,7 @@ export default function SearchFilterBar({
         {active && (
           <button
             type="button"
-            onClick={() => { setResetNonce(n => n + 1); onClear(); }}
+            onClick={() => { setOwnResetNonce(n => n + 1); onClear(); }}
             className="text-xs text-muted hover:text-charcoal underline shrink-0"
           >
             Clear filters

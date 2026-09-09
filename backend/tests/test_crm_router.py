@@ -15,7 +15,13 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from core.auth import get_current_user
-from crm import provenance_service, scoring_service, service, touch_count_service
+from crm import (
+    provenance_service,
+    report_service,
+    scoring_service,
+    service,
+    touch_count_service,
+)
 from crm.router import router as crm_router
 
 
@@ -417,6 +423,72 @@ def test_company_create_duplicate_name_400(client, monkeypatch):
     assert "already exists" in resp.json()["detail"]
 
 
+# ── POST /companies/resolve — get-or-create for the inline picker (issue #123) ─
+
+def test_company_resolve_delegates_to_the_shared_resolver(client, monkeypatch):
+    """The whole point of the route: it must not match the name itself.
+
+    The normalization is the uq_companies_name_ci index expression, and the primitive's
+    own docstring warns that Python's case-folding can disagree with the database's
+    LOWER() — so a second spelling of the rule in the router is how a company we just
+    created gets stranded and a duplicate appears anyway.
+    """
+    seen = {}
+    monkeypatch.setattr(service, "resolve_or_create_company_ids",
+                        lambda names: seen.update(names=names) or {names[0]: 7})
+    monkeypatch.setattr(service, "get_company", lambda cid: {"id": cid, "name": "Acme"})
+
+    resp = client.post("/api/crm/companies/resolve", json={"name": "acme"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {"id": 7, "name": "Acme"}
+    assert seen["names"] == ["acme"]
+
+
+def test_company_resolve_passes_the_name_through_untrimmed(client, monkeypatch):
+    """The primitive's contract is {raw spelling exactly as passed: id}, so the route
+    looks the result up by the same string it sent. Trimming here would be a second
+    owner of a rule that belongs to SQL — and would break the lookup if the two
+    disagreed about what counts as whitespace."""
+    seen = {}
+    monkeypatch.setattr(service, "resolve_or_create_company_ids",
+                        lambda names: seen.update(names=names) or {names[0]: 3})
+    monkeypatch.setattr(service, "get_company", lambda cid: {"id": cid, "name": "Acme"})
+
+    assert client.post("/api/crm/companies/resolve", json={"name": "  Acme  "}).status_code == 200
+    assert seen["names"] == ["  Acme  "]
+
+
+def test_company_resolve_blank_name_400(client, monkeypatch):
+    """Mirrors POST /companies' guard rather than inventing its own."""
+    def unreached(names):
+        raise AssertionError("the resolver must not be called for a blank name")
+    monkeypatch.setattr(service, "resolve_or_create_company_ids", unreached)
+
+    for name in ("", "   ", "\t\n"):
+        resp = client.post("/api/crm/companies/resolve", json={"name": name})
+        assert resp.status_code == 400, name
+        assert "required" in resp.json()["detail"].lower()
+
+
+def test_company_resolve_unresolvable_is_409_not_a_half_answer(client, monkeypatch):
+    """The primitive yields no id only in its documented race (the row was deleted
+    between its two statements). Nothing was linked, so the route must refuse rather
+    than return something the form would store as a company_id."""
+    monkeypatch.setattr(service, "resolve_or_create_company_ids", lambda names: {})
+    monkeypatch.setattr(service, "get_company", lambda cid: None)
+
+    assert client.post("/api/crm/companies/resolve", json={"name": "Acme"}).status_code == 409
+
+
+def test_company_resolve_missing_row_is_409(client, monkeypatch):
+    """Same refusal when the id resolves but the read-back finds nothing."""
+    monkeypatch.setattr(service, "resolve_or_create_company_ids", lambda names: {names[0]: 9})
+    monkeypatch.setattr(service, "get_company", lambda cid: None)
+
+    assert client.post("/api/crm/companies/resolve", json={"name": "Acme"}).status_code == 409
+
+
 def test_company_update_duplicate_name_400(client, monkeypatch):
     def raise_unique(cid, **kw):
         raise psycopg2.errors.UniqueViolation()
@@ -690,3 +762,407 @@ def test_bulk_move_path_is_not_shadowed_by_the_deal_detail_route(client, monkeyp
                         lambda ids, stage: {"ok": True, "updated": 1, "updated_ids": [3], "errors": []})
     r = client.post("/api/crm/deals/bulk-move", json={"deal_ids": [3], "stage": "lead"})
     assert r.status_code == 200 and r.json()["updated_ids"] == [3]
+
+
+# ── archived-deal reachability (issue #83) ────────────────────────────────────
+
+def test_deals_board_defaults_to_live_only(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(service, "get_pipeline", lambda **kw: seen.update(kw) or {"deals": []})
+    assert client.get("/api/crm/deals").status_code == 200
+    # #59 added limit/after_id; a caller that omits them must reach the service asking for
+    # the WHOLE board, not for a page of it.
+    assert seen == {"include_archived": False, "limit": None, "after_id": None}
+
+
+def test_deals_board_passes_include_archived_through(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(service, "get_pipeline", lambda **kw: seen.update(kw) or {"deals": []})
+    assert client.get("/api/crm/deals?include_archived=true").status_code == 200
+    assert seen == {"include_archived": True, "limit": None, "after_id": None}
+
+
+def test_include_archived_is_refused_not_ignored_with_other_filters(client, monkeypatch):
+    """`list_deals` is a different service function and keeps the sweep, so honoring the
+    flag there would be a second hole. Silently dropping an advertised flag is worse than
+    a 400 — the caller would believe it had asked for archived deals and got none."""
+    def explode(*a, **k):
+        raise AssertionError("the filtered branch ran with include_archived set")
+    monkeypatch.setattr(service, "list_deals", explode)
+    assert client.get("/api/crm/deals?stage=lead&include_archived=true").status_code == 400
+    assert client.get("/api/crm/deals?contact_id=4&include_archived=true").status_code == 400
+
+
+def test_filtered_deal_list_still_works_without_the_flag(client, monkeypatch):
+    monkeypatch.setattr(service, "list_deals", lambda **kw: [{"id": 1}])
+    r = client.get("/api/crm/deals?stage=lead")
+    assert r.status_code == 200 and r.json()["count"] == 1
+
+
+def test_restore_deal_unarchives_and_returns_the_fresh_row(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(
+        service, "archive_deal",
+        lambda did, **kw: seen.update(deal_id=did, **kw) or {"id": did, "archived_at": None},
+    )
+    r = client.post("/api/crm/deals/7/restore")
+    assert r.status_code == 200
+    # The route must un-archive, never archive — the flag is the whole contract.
+    assert seen == {"deal_id": 7, "archived": False}
+    # The board patches this row in place instead of trusting a refetch that can fail.
+    assert r.json() == {"id": 7, "archived_at": None}
+
+
+def test_restore_missing_deal_404(client, monkeypatch):
+    monkeypatch.setattr(service, "archive_deal", lambda did, **kw: None)
+    assert client.post("/api/crm/deals/999/restore").status_code == 404
+
+
+def test_restore_path_is_not_shadowed_by_the_touch_count_routes(client, monkeypatch):
+    """/deals/{id}/restore and /deals/touch-count/backfill have the same segment count."""
+    monkeypatch.setattr(service, "archive_deal", lambda did, **kw: {"id": did})
+    assert client.post("/api/crm/deals/3/restore").json()["id"] == 3
+
+
+def test_there_is_no_archive_route(client):
+    """Scope ceiling: view + restore only. Archiving stays an assistant verb until a UI
+    affordance for it is designed — an unreachable write route is risk for nothing."""
+    assert client.post("/api/crm/deals/3/archive").status_code == 404
+
+
+def test_contact_id_zero_is_a_filter_not_a_fallthrough(client, monkeypatch):
+    """`?contact_id=0` is falsy, so a truthiness test would route it to the BOARD branch —
+    returning the whole pipeline for a request that asked to filter, and slipping the
+    include_archived refusal at the same time."""
+    def explode(**kw):
+        raise AssertionError("contact_id=0 reached the board branch")
+    monkeypatch.setattr(service, "get_pipeline", explode)
+    monkeypatch.setattr(service, "list_deals", lambda **kw: [])
+    assert client.get("/api/crm/deals?contact_id=0").status_code == 200
+    assert client.get("/api/crm/deals?contact_id=0&include_archived=true").status_code == 400
+
+
+# ── #59: the board's keyset page parameters ──────────────────────────────────
+
+def test_board_keyset_params_reach_the_service(client, monkeypatch):
+    seen: dict = {}
+    monkeypatch.setattr(service, "get_pipeline", lambda **kw: seen.update(kw) or {"deals": []})
+
+    assert client.get("/api/crm/deals?sort=id&limit=501&after_id=7").status_code == 200
+    assert seen == {"include_archived": False, "limit": 501, "after_id": 7}
+
+    seen.clear()
+    assert client.get("/api/crm/deals?sort=id&limit=501").status_code == 200
+    assert seen["limit"] == 501 and seen["after_id"] is None
+
+    # The archived facet widens the CORPUS, so it must ride every page of the sweep —
+    # all three params reaching the service together is what makes that possible.
+    seen.clear()
+    assert client.get(
+        "/api/crm/deals?sort=id&limit=5&after_id=3&include_archived=true").status_code == 200
+    assert seen == {"include_archived": True, "limit": 5, "after_id": 3}
+
+
+def test_board_pagination_refused_with_stage_or_contact_filter(client, monkeypatch):
+    """`list_deals` has no cursor, so honouring a page there is impossible — and dropping
+    it silently looks exactly like a client stuck re-reading page one."""
+    def explode(**kw):
+        raise AssertionError("a paginated filter request reached a service function")
+    monkeypatch.setattr(service, "get_pipeline", explode)
+    monkeypatch.setattr(service, "list_deals", explode)
+
+    assert client.get("/api/crm/deals?stage=lead&limit=5").status_code == 400
+    assert client.get("/api/crm/deals?contact_id=4&limit=5&after_id=2").status_code == 400
+    # contact_id=0 is falsy but IS a filter — it must refuse like any other filter.
+    assert client.get("/api/crm/deals?contact_id=0&limit=5").status_code == 400
+
+
+def test_after_id_without_limit_is_400(client):
+    """No monkeypatch on purpose: the real service refuses before it touches Postgres, so
+    a clean 400 here is also the proof that validation precedes I/O."""
+    r = client.get("/api/crm/deals?after_id=7")
+    assert r.status_code == 400
+    assert r.json()["detail"] == "after_id requires limit"
+
+
+def test_board_refuses_a_sort_it_would_not_honour(client, monkeypatch):
+    """The shared wire format always sends `sort=id`, and that is what makes the cursor
+    meaningful. Accepting `sort=updated_at` and returning id order anyway would be exactly
+    the silently-ignored pagination input the cursor rules exist to prevent."""
+    seen: dict = {}
+    monkeypatch.setattr(service, "get_pipeline", lambda **kw: seen.update(kw) or {"deals": []})
+
+    assert client.get("/api/crm/deals?sort=updated_at&limit=5").status_code == 400
+    assert client.get("/api/crm/deals?sort=updated_at&after_id=1&limit=5").status_code == 400
+    assert seen == {}, "a refused request must not reach the service"
+    # Unpaginated callers are unaffected — `sort` stays accepted-and-ignored there.
+    assert client.get("/api/crm/deals?sort=updated_at").status_code == 200
+
+
+def test_board_limit_and_cursor_bounds_are_enforced_by_the_route(client, monkeypatch):
+    monkeypatch.setattr(service, "get_pipeline", lambda **kw: {"deals": []})
+    assert client.get("/api/crm/deals?limit=0").status_code == 422
+    assert client.get("/api/crm/deals?limit=1001").status_code == 422
+    assert client.get("/api/crm/deals?limit=5&after_id=-1").status_code == 422
+    # The upper bound matters as much as the lower one: `deals.id` is a 32-bit SERIAL, so
+    # a cursor past its range can only be a malformed or hostile client.
+    assert client.get("/api/crm/deals?limit=5&after_id=2147483648").status_code == 422
+
+
+def test_after_id_zero_is_a_cursor_page(client, monkeypatch):
+    """SERIAL ids start at 1, so `after_id=0` selects the same rows as a first page — but
+    it IS a cursor, so the summary is suppressed like any continuation. Our own client
+    never sends it (assemblyPageParams omits after_id on page 0); pinned so the edge is
+    defined rather than discovered."""
+    seen: dict = {}
+    monkeypatch.setattr(service, "get_pipeline", lambda **kw: seen.update(kw) or {"deals": []})
+    assert client.get("/api/crm/deals?limit=5&after_id=0").status_code == 200
+    assert seen["after_id"] == 0
+
+
+# ── #77: the list pages' keyset assembly parameters ──────────────────────────
+
+def test_list_params_reach_the_service_with_backward_compatible_defaults(client, monkeypatch):
+    """`after_id`/`sort` are forwarded, and an omitting caller sees the old behaviour."""
+    seen: dict = {}
+
+    def fake_tasks(**kw):
+        seen.update(kw)
+        return []
+
+    monkeypatch.setattr(service, "list_tasks", fake_tasks)
+
+    assert client.get("/api/crm/tasks?after_id=500&sort=id&limit=501").status_code == 200
+    assert (seen["after_id"], seen["sort"], seen["limit"]) == (500, "id", 501)
+
+    seen.clear()
+    assert client.get("/api/crm/tasks").status_code == 200
+    # Every pre-#77 caller keeps the historical order and no cursor.
+    assert seen["after_id"] is None and seen["sort"] == "due"
+
+
+def test_contacts_and_companies_forward_the_cursor(client, monkeypatch):
+    seen: dict = {}
+    monkeypatch.setattr(service, "list_contacts", lambda **kw: seen.update(kw) or {"contacts": [], "total": 0})
+    monkeypatch.setattr(service, "list_companies", lambda **kw: seen.update(kw) or {"companies": [], "total": 0})
+
+    assert client.get("/api/crm/contacts?after_id=42&sort=id").status_code == 200
+    assert (seen["after_id"], seen["sort"]) == (42, "id")
+
+    seen.clear()
+    assert client.get("/api/crm/companies?after_id=42&sort=id").status_code == 200
+    assert (seen["after_id"], seen["sort"]) == (42, "id")
+
+
+def test_a_cursor_against_a_mutable_order_is_a_400_not_a_500(client, monkeypatch):
+    """The service refuses the pairing; the route must surface it as a client error.
+
+    Left unhandled this is a ValueError → 500, which reads as "the server is broken"
+    rather than "that request does not mean anything".
+    """
+    def boom(**kw):
+        raise ValueError("after_id is only valid with sort='id'")
+
+    for name, path in (
+        ("list_tasks", "/api/crm/tasks?after_id=5&sort=due"),
+        ("list_contacts", "/api/crm/contacts?after_id=5&sort=name"),
+        ("list_companies", "/api/crm/companies?after_id=5&sort=name"),
+    ):
+        monkeypatch.setattr(service, name, boom)
+        res = client.get(path)
+        assert res.status_code == 400, path
+        assert "sort='id'" in res.json()["detail"]
+
+
+def test_a_negative_cursor_is_rejected_by_validation(client):
+    assert client.get("/api/crm/tasks?after_id=-1").status_code == 422
+
+
+def test_a_cursor_is_refused_on_the_search_branch(client, monkeypatch):
+    """search_* has no cursor, so accepting one would silently return page one forever.
+
+    That is the same failure `_check_assembly_cursor` exists to prevent, and it looks
+    identical to a client stuck in a loop — so the route refuses instead of ignoring.
+    """
+    monkeypatch.setattr(service, "search_contacts", lambda *a, **k: [])
+    monkeypatch.setattr(service, "count_search_contacts", lambda *a, **k: 0)
+    monkeypatch.setattr(service, "search_companies", lambda *a, **k: [])
+    monkeypatch.setattr(service, "count_search_companies", lambda *a, **k: 0)
+
+    for path in ("/api/crm/contacts", "/api/crm/companies"):
+        res = client.get(f"{path}?q=acme&after_id=5&sort=id")
+        assert res.status_code == 400, path
+        assert "after_id" in res.json()["detail"]
+        # …and a plain search still works.
+        assert client.get(f"{path}?q=acme").status_code == 200, path
+
+
+def test_an_out_of_range_cursor_is_a_422_not_a_500(client):
+    """id columns are int4. Without an upper bound Postgres raises a range error that is
+    NOT a ValueError, so it would escape the route's handler as an unhandled 500."""
+    too_big = 2_147_483_648
+    for path in ("/api/crm/tasks", "/api/crm/contacts", "/api/crm/companies"):
+        assert client.get(f"{path}?after_id={too_big}&sort=id").status_code == 422, path
+
+
+# ── POST /deals/:id/mark-lost (issue #128) ────────────────────────────────────
+# The only human writer of `lost_reason`. `_DEAL_USER_WRITABLE` excludes the column
+# on purpose, so these pin that the route reaches the lifecycle verb (and carries the
+# author) rather than the general update path.
+
+def test_mark_lost_passes_reason_and_author(client, monkeypatch):
+    seen = {}
+
+    def fake(deal_id, lost_reason="", author_id=None):
+        seen.update(deal_id=deal_id, lost_reason=lost_reason, author_id=author_id)
+        return {"id": deal_id, "stage": "lost", "lost_reason": lost_reason}
+
+    monkeypatch.setattr(service, "mark_deal_lost", fake)
+    res = client.post(
+        "/api/crm/deals/7/mark-lost",
+        json={"lost_reason": "Chose a competitor.\nPrice was the deciding factor."},
+    )
+
+    assert res.status_code == 200
+    assert seen["deal_id"] == 7
+    # Newlines survive the round trip — the whole point of a multi-line reason.
+    assert "\n" in seen["lost_reason"]
+    # Authorship, not ownership (#60): a reason a rep typed must credit that rep, or
+    # per-rep activity undercounts them. FAKE_ADMIN's id.
+    assert seen["author_id"] == 1
+
+
+def test_mark_lost_with_a_blank_reason_still_uses_the_lifecycle_verb(client, monkeypatch):
+    """An explicit Mark Lost with no prose is still a close, not a plain stage edit.
+
+    PUT /deals/:id with {stage: 'lost'} would leave `probability` untouched; only this
+    verb zeroes it. So the endpoint is chosen by the ACTION, never by whether the user
+    happened to type something.
+    """
+    calls = []
+    monkeypatch.setattr(
+        service, "mark_deal_lost",
+        lambda deal_id, lost_reason="", author_id=None: (
+            calls.append(lost_reason) or {"id": deal_id, "stage": "lost"}
+        ),
+    )
+    assert client.post("/api/crm/deals/7/mark-lost", json={}).status_code == 200
+    assert calls == [""]
+
+
+def test_mark_lost_archived_deal_is_400_not_500(client, monkeypatch):
+    """_write_deal_update raises on a stage change to an archived deal — a refusal the
+    caller can act on, mapped like PUT /deals/:id does."""
+    def boom(deal_id, lost_reason="", author_id=None):
+        raise ValueError("Cannot change the stage of an archived deal")
+
+    monkeypatch.setattr(service, "mark_deal_lost", boom)
+    res = client.post("/api/crm/deals/7/mark-lost", json={"lost_reason": "x"})
+    assert res.status_code == 400
+    assert "archived" in res.json()["detail"]
+
+
+def test_mark_lost_missing_deal_404(client, monkeypatch):
+    monkeypatch.setattr(
+        service, "mark_deal_lost", lambda deal_id, lost_reason="", author_id=None: None
+    )
+    assert client.post("/api/crm/deals/999/mark-lost", json={}).status_code == 404
+
+
+def test_mark_lost_rejects_an_oversized_reason_instead_of_truncating(client, monkeypatch):
+    """The service TRUNCATES at MAX_LOST_REASON. Silently dropping the tail of a rep's
+    typed prose is data loss, so the REST boundary refuses and the service is never
+    reached — the browser caps at the same length, so only a raw client can hit this."""
+    called = []
+    monkeypatch.setattr(
+        service, "mark_deal_lost",
+        lambda deal_id, lost_reason="", author_id=None: called.append(1),
+    )
+    over = "x" * (service.MAX_LOST_REASON + 1)
+    assert client.post(
+        "/api/crm/deals/7/mark-lost", json={"lost_reason": over}
+    ).status_code == 422
+    assert called == []
+    # …and exactly at the cap is still accepted.
+    monkeypatch.setattr(
+        service, "mark_deal_lost",
+        lambda deal_id, lost_reason="", author_id=None: {"id": deal_id, "stage": "lost"},
+    )
+    at_cap = "x" * service.MAX_LOST_REASON
+    assert client.post(
+        "/api/crm/deals/7/mark-lost", json={"lost_reason": at_cap}
+    ).status_code == 200
+
+
+def test_the_frontend_lost_reason_cap_matches_the_server():
+    """The composer's cap is a hand-copied mirror of MAX_LOST_REASON, so it can drift.
+
+    Drift is not symmetric: a frontend cap ABOVE the server's turns a 422 into the user's
+    problem after they have written the reason, which is exactly what the Pydantic bound
+    exists to prevent them from hitting. Read the shipped constant rather than restating
+    the number, the way inkContrast.test.ts parses the shipped CSS.
+    """
+    import re
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[2]
+           / "frontend" / "src" / "crm" / "constants.ts").read_text(encoding="utf-8")
+    match = re.search(r"export const MAX_LOST_REASON\s*=\s*(\d+)", src)
+    assert match, "MAX_LOST_REASON is gone from frontend/src/crm/constants.ts"
+    assert int(match.group(1)) == service.MAX_LOST_REASON
+
+
+# ── Reports rollup routes (#144) ──────────────────────────────────────────────
+
+def test_report_routes_404_when_the_company_is_missing(client, monkeypatch):
+    """The service signals a missing company with None; the routes must turn that into 404."""
+    monkeypatch.setattr(report_service, "get_company_rollup", lambda cid, include_archived=False: None)
+    monkeypatch.setattr(
+        report_service, "get_company_timeline",
+        lambda cid, limit=100, offset=0, include_archived=False: None,
+    )
+    assert client.get("/api/crm/companies/999/report").status_code == 404
+    assert client.get("/api/crm/companies/999/timeline").status_code == 404
+
+
+def test_report_route_forwards_include_archived(client, monkeypatch):
+    seen = {}
+
+    def fake(company_id, include_archived=False):
+        seen["args"] = (company_id, include_archived)
+        return {"company": {"id": company_id}}
+
+    monkeypatch.setattr(report_service, "get_company_rollup", fake)
+    assert client.get("/api/crm/companies/7/report").status_code == 200
+    assert seen["args"] == (7, False)
+    client.get("/api/crm/companies/7/report?include_archived=true")
+    assert seen["args"] == (7, True)
+
+
+def test_timeline_route_forwards_paging_and_the_archived_flag(client, monkeypatch):
+    seen = {}
+
+    def fake(company_id, limit=100, offset=0, include_archived=False):
+        seen["args"] = (company_id, limit, offset, include_archived)
+        return {"entries": [], "has_more": False}
+
+    monkeypatch.setattr(report_service, "get_company_timeline", fake)
+    assert client.get("/api/crm/companies/7/timeline").status_code == 200
+    assert seen["args"] == (7, 100, 0, False)
+    client.get("/api/crm/companies/7/timeline?limit=25&offset=50&include_archived=true")
+    assert seen["args"] == (7, 25, 50, True)
+
+
+def test_timeline_route_refuses_an_out_of_range_page(client, monkeypatch):
+    """FastAPI must reject before the handler runs — the service is never reached."""
+    called = []
+    monkeypatch.setattr(
+        report_service, "get_company_timeline",
+        lambda *a, **k: called.append(1) or {"entries": [], "has_more": False},
+    )
+    assert client.get("/api/crm/companies/7/timeline?limit=0").status_code == 422
+    assert client.get(
+        f"/api/crm/companies/7/timeline?limit={report_service.TIMELINE_MAX_LIMIT + 1}"
+    ).status_code == 422
+    assert client.get("/api/crm/companies/7/timeline?offset=-1").status_code == 422
+    assert called == []

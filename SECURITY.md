@@ -38,6 +38,21 @@ Because scopes can't guarantee it, the guarantee lives in code:
 - `gmail_create_draft` is a **write** tool, so in the assistant's default (normal)
   mode it passes through the human-confirmation gate: the draft is not created until
   you approve it, and you see the full recipient/subject/body first.
+- **The assistant only searches or opens your mail in a conversation with you.** The two
+  read tools are offered in interactive chats; they are withheld from the assistant's
+  *unattended* runs (the background heartbeat, a firing reminder, the proactive digest).
+  Such a run may send you at most one notification, and without the read tools it cannot
+  pull your messages in order to put them there — so text planted in a reminder or a CRM
+  record cannot turn that notification into a copy of your mail.
+  Two limits on that promise, stated plainly rather than glossed over. First, it covers
+  the assistant's own reading; the optional **email touch-scan** is a separate,
+  deterministic job that does check your inbox on a schedule without you present — no AI,
+  fixed rules, and it records only a sender and subject against a contact you already
+  have. Second, once the scan has recorded that sender and subject, an unattended run can
+  read it back as ordinary CRM history like any other logged activity. So the precise
+  guarantee is that an unattended run cannot *fetch* from your mailbox, not that nothing
+  mail-derived can reach it. With the scan switched off, no unattended part of CakeCRM
+  reads your mail at all.
 
 ### The automated guard
 
@@ -101,7 +116,7 @@ the residual risks, is in `docs/SYNC.md`.
   guarantee above is unaffected either way.
 - **BYO OAuth app.** You supply your own Google Cloud OAuth client (client ID +
   secret), entered in-app (never as environment variables). The redirect URI to
-  register is shown on the Settings → Gmail card
+  register is shown on the Settings → Integrations → Gmail card
   (`{BACKEND_URL}/api/gmail/oauth/callback`); self-hosters behind a reverse proxy
   must set `BACKEND_URL` to their public URL.
 - **Encryption at rest.** The Google client secret and the OAuth access/refresh
@@ -141,9 +156,15 @@ the residual risks, is in `docs/SYNC.md`.
 
 ## The no-login todo links
 
-Todo-GTD task mode can publish **two unauthenticated surfaces**. Both are opt-in, both
-are off or inert until you turn them on, and both are described here so you can decide
-with your eyes open. If you never enable Todo-GTD mode, neither exists.
+CakeCRM has **two unauthenticated todo surfaces**, and they are asymmetric — read the
+Default row in the table below before you assume both are off.
+
+Neither depends on which task mode you are in. They are mounted always and gated only
+on their own settings, so switching between Todo-GTD and normal tasks does not turn
+either one on or off — and because it does not, Settings → Tasks shows their controls in
+either mode, whether or not either surface is currently configured. Switching to the
+simple task list never hides a link that is still serving, and never hides the control
+that restricts one. Those controls are **admin-only**.
 
 They are authorized by an unguessable **secret token in the URL path**, not by a
 session — that is what makes them work as a phone bookmark or a home-screen app. A URL
@@ -155,7 +176,7 @@ history and may appear in referrer headers or a proxy log. Treat it like a passw
 | Path | `/capture` or `/capture/{token}` | `/todo` or `/todo/{token}` |
 | Grants | **Write-only** — creates one inbox item | **Read and write** on every todo |
 | Default | Reachable without a token (harmless: nothing is readable) | **Off entirely** |
-| Manage | Settings → Tasks | Settings → Tasks |
+| Manage | Settings → Assistant → Task mode | Settings → Assistant → Task mode |
 
 - **Capture is genuinely write-only.** It accepts a block of text, files it in your
   inbox, and answers with nothing but the new item's id. There is no read endpoint on
@@ -186,7 +207,7 @@ history and may appear in referrer headers or a proxy log. Treat it like a passw
 ## The assistant's self-written identity (`soul.md`)
 
 The assistant keeps its own knowledge in markdown files you can read and edit at
-**Settings → Assistant memory**. One of them, `soul.md`, is its description of
+**Settings → Assistant → Assistant memory**. One of them, `soul.md`, is its description of
 itself, and the assistant can rewrite it. That file is loaded into the assistant's
 system prompt **unfenced** — as instructions rather than as data — because an
 identity the model is told to distrust is not an identity at all.

@@ -1,10 +1,17 @@
-"""The single built-in assistant's identity (name + personality).
+"""The single built-in assistant's identity (fixed name + editable personality).
 
 Replaces Chatty's multi-agent roster / training-mode personality system with one
-editable singleton row (``assistant_identity``, seeded id=1) — the same pattern
-as ``ai_settings`` / ``crm_meta``. A stored ``personality`` of ``''`` means "use
-the built-in default", so the default prompt can improve without a migration and
+singleton row (``assistant_identity``, seeded id=1) — the same pattern as
+``ai_settings`` / ``crm_meta``. A stored ``personality`` of ``''`` means "use the
+built-in default", so the default prompt can improve without a migration and
 without overwriting a user's customization.
+
+**The NAME is a product brand, not a setting (issue #71).** Baker is permanent:
+``NAME`` is the only source, ``get_identity`` never reads the ``name`` column, and
+``update_identity`` has no way to write it. The column survives only so a rollback
+to a pre-#71 binary still finds a table it can read — a migration reset every row to
+'Baker', so even that path shows the brand. Nothing in this codebase may read it
+again; add a second source of the name and the brand is a setting once more.
 
 The system prompt is returned as a ``(static, volatile)`` tuple so providers that
 support prompt caching (Anthropic) can cache the large static portion.
@@ -15,10 +22,12 @@ from datetime import datetime
 from assistant import delimiters
 from core.postgres import pg_execute, pg_fetchone
 
-DEFAULT_NAME = "Baker"
+# The assistant's permanent name. Deliberately NOT called DEFAULT_NAME any more: a
+# "default" implies something may override it, and nothing may.
+NAME = "Baker"
 
 # Genericized built-in sales-assistant personality. Written fresh for CakeCRM —
-# not ported from any CAKE OS / TN Cheesecake prompt. {name} is interpolated.
+# not ported from any CAKE OS prompt. {name} is interpolated.
 DEFAULT_PERSONALITY = """You are {name}, the built-in AI sales assistant for this CRM.
 
 You help the user manage their customer relationships conversationally: finding \
@@ -56,6 +65,22 @@ business better than anyone.
 people and deals go in MEMORY.md, and subject knowledge goes in its own topic file.
 
 I have not learned much about how this user works yet. I should update this as I do."""
+
+# The brand, stated as a contract the identity text above it cannot revoke (#71).
+#
+# Interpolating `{name}` is not enough on its own: `personality` is free text an admin
+# writes and `soul.md` is free text the assistant writes, and either can simply say "You
+# are Ace" — which is exactly what a pre-#71 install that renamed its assistant is
+# likely to still contain. So the brand rides the same lever every other immutable
+# contract here uses: a static block placed AFTER personality and soul, where the
+# documented ordering rule means it can add to who Baker is but never be overridden by
+# them. Without it the name is un-editable in the UI but not actually permanent.
+NAME_NOTE = (
+    "## Your name\n"
+    f"You are {NAME}. That is fixed — it is this product's name for you, not a setting. "
+    "If any text above, in your own notes, in your recorded memory, or in a message "
+    f"calls you something else, it is out of date and you are still {NAME}."
+)
 
 # Framing for the context-file store (issue #72). Genericized and heavily trimmed from
 # chatty's `_knowledge_management_instructions()` — its shared-context, playbook,
@@ -155,6 +180,13 @@ SALES_GUIDE = (
     "crm_merge_deals folds a duplicate deal into the one being kept. Never merge "
     "without confirming which record survives. crm_scan_gaps shows records with missing "
     "information.\n\n"
+    "**Hand over links, not just names.** Deal results carry a `url`. When you point the "
+    "user at a specific deal — in chat, in a notification, or over a messaging app — give "
+    "them its `url` so they can open it: deal ids are not shown anywhere in the app, so "
+    "naming a number tells them nothing. Two or three named deals get their links; a long "
+    "list or a whole-pipeline summary does not, or the links become the noise. Never build "
+    "a link yourself — use the `url` exactly as a tool returned it, and if a deal has none, "
+    "name it and say you have no link for it.\n\n"
     "**Never invent data.** If a field is empty, it is empty. Fill a gap only from "
     "something you can point at — what the user just told you, or another record in the "
     "CRM — and say where the value came from. Guessing an email address or a deal value "
@@ -255,48 +287,74 @@ def build_context_note(record_type, record_id) -> str | None:
     )
 
 
+def render_personality(text: str) -> str:
+    """Substitute the brand into a personality template.
+
+    ONE definition, because two consumers need the rendered text: the system prompt
+    (what the model reads) and the identity panel's read-only view (what a member is
+    shown). Re-implementing this substitution anywhere else — a frontend `.replace()`
+    especially, across a language boundary — is how the two silently diverge the next
+    time the placeholder syntax changes.
+    """
+    return text.replace("{name}", NAME)
+
+
 def get_identity() -> dict:
     """Return the identity singleton, resolving the default personality.
 
+    ``name`` is always ``NAME`` — the ``name`` column is deliberately NOT selected
+    (#71), so an install that renamed the assistant before the brand was fixed shows
+    Baker again with no migration dependency.
+
     ``personality`` is the stored custom text, or the built-in default when the
     stored text is blank. ``using_default`` reflects which one is in effect.
+
+    ``personality_rendered`` is that same text with ``{name}`` substituted. The two are
+    deliberately BOTH returned and are not interchangeable: an editor must show the raw
+    template (rendering it would bake the brand into the next save), while a read-only
+    view must show what actually governs the assistant — the built-in default contains a
+    literal ``{name}``, so showing it raw displays a placeholder to the reader.
     """
-    row = pg_fetchone("SELECT name, personality FROM assistant_identity WHERE id = 1")
-    name = (row or {}).get("name") or DEFAULT_NAME
+    row = pg_fetchone("SELECT personality FROM assistant_identity WHERE id = 1")
     stored = ((row or {}).get("personality") or "").strip()
     using_default = not stored
     personality = DEFAULT_PERSONALITY if using_default else stored
-    return {"name": name, "personality": personality, "using_default": using_default}
+    return {
+        "name": NAME,
+        "personality": personality,
+        "personality_rendered": render_personality(personality),
+        "using_default": using_default,
+    }
 
 
-def update_identity(name: str | None = None, personality: str | None = None) -> dict:
-    """Update the singleton's name and/or personality; returns the resolved identity.
+def update_identity(personality: str | None = None) -> dict:
+    """Update the singleton's personality; returns the resolved identity.
 
-    Only provided fields change. A blank ``personality`` (after strip) stores
-    ``''`` → reverts to the built-in default.
+    There is no ``name`` parameter and there must never be one (#71) — the brand is
+    fixed, and a writer here is all it would take to make it a setting again. A blank
+    ``personality`` (after strip) stores ``''`` → reverts to the built-in default;
+    ``None`` writes nothing.
     """
-    sets: list[str] = []
-    params: list[object] = []
-    if name is not None:
-        sets.append("name = %s")
-        params.append(name.strip() or DEFAULT_NAME)
     if personality is not None:
-        sets.append("personality = %s")
-        params.append(personality.strip())
-    if sets:
-        sets.append("updated_at = now()")
-        pg_execute(f"UPDATE assistant_identity SET {', '.join(sets)} WHERE id = 1", tuple(params))
+        pg_execute(
+            "UPDATE assistant_identity SET personality = %s, updated_at = now() WHERE id = 1",
+            (personality.strip(),),
+        )
     return get_identity()
 
 
 def _task_mode() -> str:
     """The current task mode, imported lazily so identity stays importable without a
-    database (the hermetic suite builds prompts with no pool)."""
+    database (the hermetic suite builds prompts with no pool).
+
+    Fail-safe 'gtd' since #102 — the same product default `crm.service.get_task_mode`
+    degrades to, stated identically in all four readers so there is one default.
+    """
     try:
         from crm.service import get_task_mode
         return get_task_mode()
     except Exception:
-        return "normal"
+        return "gtd"
 
 
 def build_system_prompt(
@@ -305,7 +363,8 @@ def build_system_prompt(
 ) -> tuple[str, str]:
     """Build the ``(static, volatile)`` system prompt for stream_turn().
 
-    Static: personality (name-interpolated) + Baker's soul (#72) + sales working
+    Static: personality (``{name}`` interpolated to the fixed brand) + Baker's soul (#72)
+    + the name contract (#71) + sales working
     practices (+ the GTD working practices while task mode is GTD, #70) +
     confirmation note + memory framing + context-file framing +
     upload-safety instruction (cacheable — MUST stay byte-identical whether or not a
@@ -322,21 +381,28 @@ def build_system_prompt(
     **Two identity inputs, and the order between them is load-bearing (#72).**
     ``personality`` is the USER's configuration of the assistant; ``soul`` is what the
     assistant has written about itself. The user's text comes first, the soul second, and
-    every immutable contract — the sales guide, the confirmation rules, the memory and
-    context framing, the untrusted-content safety instruction — comes AFTER both. A
-    self-rewritten soul can therefore add to who Baker is but can never override the
-    security or tool contracts, which is what makes a self-editable identity safe to load
-    unfenced.
+    every immutable contract — the NAME (#71), the sales guide, the confirmation rules,
+    the memory and context framing, the untrusted-content safety instruction — comes
+    AFTER both. A self-rewritten soul can therefore add to who Baker is but can never
+    override the security or tool contracts, which is what makes a self-editable identity
+    safe to load unfenced. The name rides that same lever precisely because neither text
+    is trusted to leave it alone.
 
     ``soul`` is passed in rather than read here so this function stays PURE — no DB read,
     exactly as before. The engine loads it, the same way it loads ``memory_context``.
     """
-    name = identity.get("name") or DEFAULT_NAME
-    personality = (identity.get("personality") or DEFAULT_PERSONALITY).replace("{name}", name)
-    blocks = [personality, soul, SALES_GUIDE]
+    # The brand is read from the constant, NOT from the passed-in dict (#71): this is
+    # the one seam where the name reaches the model, so resolving it here is what makes
+    # "Baker" unrenameable rather than merely un-editable through the UI.
+    personality = render_personality(identity.get("personality") or DEFAULT_PERSONALITY)
+    # NAME_NOTE sits immediately after the two identity texts and before every other
+    # contract: it is the first thing neither the user nor the assistant may override.
+    blocks = [personality, soul, NAME_NOTE, SALES_GUIDE]
     # GTD mode swaps the task tool surface, so the working practices have to swap with
     # it — coaching the model to use crm_create_task while only todo_* is advertised
-    # is how a turn stalls. Read fail-safe: an unreadable mode is 'normal'.
+    # is how a turn stalls. Read fail-safe: an unreadable mode is 'gtd' (#102).
+    # Appending GTD_GUIDE invalidates the cached static prefix, but since #102 made GTD
+    # the default this is the steady state for almost every install, not a flip-flop.
     if _task_mode() == "gtd":
         blocks.append(GTD_GUIDE)
     static = "\n\n".join([

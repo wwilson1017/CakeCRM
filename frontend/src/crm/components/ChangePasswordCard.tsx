@@ -17,9 +17,10 @@ import { useEffect, useState } from 'react';
 
 import { api } from '../../core/api/client';
 import { useAuth } from '../../core/auth/AuthContext';
-import { CORAL, FONT_SANS, INK_MUTE, labelStyle, inputStyle } from '../../shared/styles';
+import { CORAL_TEXT, FONT_SANS, INK_MUTE, labelStyle, inputStyle } from '../../shared/styles';
 import { toast } from '../../shared/toast';
-import { cardStyle, sectionHeading, btnPrimary } from '../styles';
+import { btnPrimary } from '../styles';
+import { SettingsCard } from './SettingsCard';
 
 // Mirrors MIN_PASSWORD_LENGTH in backend/core/auth.py — the server stays authoritative.
 const MIN_PASSWORD_LENGTH = 8;
@@ -87,20 +88,17 @@ export function ChangePasswordCard({ isMobile }: { isMobile: boolean }) {
   const fieldWrap: React.CSSProperties = { marginBottom: 20, maxWidth: 420 };
 
   return (
-    <div style={{ ...cardStyle, padding: isMobile ? 20 : 28, marginTop: 24, maxWidth: 620 }}>
-      <div style={sectionHeading()}>Change password</div>
-      <p style={{
-        fontFamily: FONT_SANS, fontSize: 13, color: INK_MUTE, lineHeight: 1.6,
-        margin: '0 0 24px', maxWidth: 460,
-      }}>
-        Update the password you use to sign in. Must be at least {MIN_PASSWORD_LENGTH} characters.
-      </p>
-
+    <SettingsCard
+      id="change_password"
+      title="Change password"
+      description={`Update the password you use to sign in. Must be at least ${MIN_PASSWORD_LENGTH} characters.`}
+      isMobile={isMobile}
+    >
       {loadError && (
         // The form stays disabled: submitting without knowing whether 2FA is on would
         // fail server-side anyway, and silently assuming it's off is the riskier guess.
         <p style={{
-          fontFamily: FONT_SANS, fontSize: 13, color: CORAL, lineHeight: 1.5,
+          fontFamily: FONT_SANS, fontSize: 13, color: CORAL_TEXT, lineHeight: 1.5,
           margin: '0 0 20px', maxWidth: 460,
         }}>
           Couldn't check your two-factor status, so changing your password is
@@ -148,7 +146,7 @@ export function ChangePasswordCard({ isMobile }: { isMobile: boolean }) {
             onChange={e => setConfirm(e.target.value)}
           />
           {mismatch && (
-            <p style={{ fontFamily: FONT_SANS, fontSize: 12, color: CORAL, margin: '8px 0 0' }}>
+            <p style={{ fontFamily: FONT_SANS, fontSize: 12, color: CORAL_TEXT, margin: '8px 0 0' }}>
               Passwords don't match.
             </p>
           )}
@@ -176,7 +174,7 @@ export function ChangePasswordCard({ isMobile }: { isMobile: boolean }) {
 
         {error && (
           <p role="alert" style={{
-            fontFamily: FONT_SANS, fontSize: 13, color: CORAL, lineHeight: 1.5,
+            fontFamily: FONT_SANS, fontSize: 13, color: CORAL_TEXT, lineHeight: 1.5,
             margin: '0 0 20px', maxWidth: 460,
           }}>
             {error}
@@ -189,6 +187,6 @@ export function ChangePasswordCard({ isMobile }: { isMobile: boolean }) {
           style={{ ...btnPrimary, opacity: canSubmit ? 1 : 0.6, cursor: canSubmit ? 'pointer' : 'default' }}
         >{saving ? 'Changing…' : 'Change password'}</button>
       </form>
-    </div>
+    </SettingsCard>
   );
 }

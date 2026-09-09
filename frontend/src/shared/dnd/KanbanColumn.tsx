@@ -3,6 +3,7 @@ import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { useMemo } from 'react';
 import type { ReactNode } from 'react';
 import type { KanbanItem, KanbanColumnDef } from './types';
+import { resolveDragDisabled, type DragDisabled } from './dragDisabled';
 import KanbanCard from './KanbanCard';
 
 interface KanbanColumnProps<TItem extends KanbanItem, TColumn> {
@@ -11,7 +12,7 @@ interface KanbanColumnProps<TItem extends KanbanItem, TColumn> {
   renderCard: (item: TItem, columnId: string | number, isDragging: boolean) => ReactNode;
   renderEmptyColumn?: (column: KanbanColumnDef<TColumn>) => ReactNode;
   className?: string;
-  dragDisabled?: boolean;
+  dragDisabled?: DragDisabled<TItem>;
 }
 
 export default function KanbanColumn<TItem extends KanbanItem, TColumn>({
@@ -29,7 +30,10 @@ export default function KanbanColumn<TItem extends KanbanItem, TColumn>({
       <SortableContext items={itemIds} strategy={verticalListSortingStrategy}>
         {items.length === 0 && renderEmptyColumn?.(column)}
         {items.map(item => (
-          <KanbanCard key={item.id} item={item} columnId={column.id} renderCard={renderCard} dragDisabled={dragDisabled} />
+          <KanbanCard
+            key={item.id} item={item} columnId={column.id} renderCard={renderCard}
+            dragDisabled={resolveDragDisabled(dragDisabled, item)}
+          />
         ))}
       </SortableContext>
     </div>

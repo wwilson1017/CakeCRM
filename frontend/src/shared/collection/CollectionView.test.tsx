@@ -50,6 +50,11 @@ function makeConfig(key: string, overrides: Partial<CollectionConfig<Row>> = {})
   };
 }
 
+// Every other DOM test in the repo sets this (see `shared/listview/ListView.test.tsx`); without
+// it React warns on every act() call and its flush guarantees are not the ones the assertions
+// below rely on. This file had been missing it.
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
 let container: HTMLDivElement;
 let root: Root;
 // House hook-capture idiom: mutate a property inside an effect, never a module var in render.
@@ -60,11 +65,16 @@ function Page({
   data = rows,
   withSelection = false,
   loading,
+  onSelect = () => {},
+  noSelect = false,
 }: {
   config: CollectionConfig<Row>;
   data?: readonly Row[];
   withSelection?: boolean;
   loading?: CollectionLoadingProps;
+  onSelect?: (id: string | number | null) => void;
+  /** A page that wires no `onSelect` at all — the surface with nothing to open (#148). */
+  noSelect?: boolean;
 }) {
   const state = useCollectionState(config, data);
   const [selected, setSelected] = useState<ReadonlySet<string | number>>(new Set());
@@ -76,7 +86,7 @@ function Page({
       config={config}
       state={state}
       items={data}
-      onSelect={() => {}}
+      onSelect={noSelect ? undefined : onSelect}
       loading={loading}
       selection={
         withSelection
@@ -377,5 +387,60 @@ describe('loading / empty', () => {
     click(buttons().find(b => b.textContent?.startsWith('Filters')) as Element);
     const numberInputs = [...document.querySelectorAll('input[type="number"]')] as HTMLInputElement[];
     expect(numberInputs.map(i => i.value)).toEqual(['1000', '50000']);
+  });
+});
+
+describe('the "drag paused" note tells the truth under each drag policy', () => {
+  const sortFields = [
+    { value: 'manual', label: 'Board order', arrayOrder: true as const },
+    { value: 'name', label: 'Name', get: (r: Row) => r.name },
+  ];
+
+  function boardConfig(key: string, dragPolicy?: 'index' | 'column'): CollectionConfig<Row> {
+    return makeConfig(key, {
+      defaultView: 'kanban',
+      sort: { fields: sortFields },
+      kanban: { getColumnId: r => r.stage, ...(dragPolicy ? { dragPolicy } : {}) },
+      // A kanban board needs no getVoided here; leaving the base one is fine.
+    });
+  }
+
+  it('shows the note on a default board once the sort stops being manual', () => {
+    renderPage({ config: boardConfig('note_index'), data: rows });
+    expect(document.body.textContent).not.toContain('drag paused');
+    act(() => state().setSort({ field: 'name', dir: 'asc' }));
+    expect(state().dragLocked).toBe(true);
+    expect(document.body.textContent).toContain('drag paused');
+  });
+
+  it("does NOT show the note on a 'column' board, where a non-manual sort does not pause drag", () => {
+    renderPage({ config: boardConfig('note_column', 'column'), data: rows });
+    act(() => state().setSort({ field: 'name', dir: 'asc' }));
+    expect(state().manualOrder).toBe(false);
+    expect(state().dragLocked).toBe(false);
+    // The old condition keyed on manualOrder alone and would have claimed drag was paused.
+    expect(document.body.textContent).not.toContain('drag paused');
+  });
+});
+
+describe('list rows (#148)', () => {
+  // The a11y fix lands in `shared/listview`, but the ADAPTER decision lands here: a page that
+  // wires no `onSelect` must get rows with no handler at all, rather than a closure that
+  // swallows the call — otherwise every such row becomes a tab stop that does nothing, which
+  // is worse than no tab stop.
+  it('rows are keyboard-focusable and Enter-openable exactly when the page wires onSelect', () => {
+    const spy = vi.fn();
+    renderPage({ config: makeConfig('a11y_rows_on'), onSelect: spy });
+    const row = document.querySelector('tbody tr') as HTMLElement;
+    expect(row.getAttribute('tabindex')).toBe('0');
+    act(() => { row.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); });
+    expect(spy).toHaveBeenCalledWith(1);
+  });
+
+  it('rows are inert when the page wires no onSelect', () => {
+    renderPage({ config: makeConfig('a11y_rows_off'), noSelect: true });
+    const row = document.querySelector('tbody tr') as HTMLElement;
+    expect(row.getAttribute('tabindex')).toBeNull();
+    expect(row.className).not.toContain('cursor-pointer');
   });
 });

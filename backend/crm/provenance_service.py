@@ -171,10 +171,13 @@ def get_provenance(
     matches the live value). By default returns only the live badge state: unconfirmed AND
     not stale. Pass include_confirmed/include_stale for history."""
     _check_entity_type(entity_type)
+    # Uncapped, so nothing can be dropped — but one assistant write-tool call records
+    # provenance for every field it touched in ONE transaction, so those rows share a
+    # `populated_at` exactly and the badge order flips between reads. `id` pins it (#58).
     rows = pg_fetchall(
         """SELECT * FROM crm_field_provenance
            WHERE entity_type = %s AND entity_id = %s
-           ORDER BY populated_at DESC""",
+           ORDER BY populated_at DESC, id DESC""",
         (entity_type, entity_id),
     )
     if not rows:

@@ -90,7 +90,13 @@ def test_fetch_uses_approved_op_and_window(monkeypatch, connected):
     monkeypatch.setattr(gs, "call_gmail", fake_call)
     out = gs.run_scan_if_due()
     assert captured["op"] is gs.ops.list_messages_op        # ONLY the allow-listed op
-    assert captured["kwargs"] == {"query": "in:inbox newer_than:2d", "max_results": 50}
+    assert captured["kwargs"] == {
+        "query": "in:inbox newer_than:2d",
+        "max_results": 50,
+        # The scan hands call_gmail its OWN transport budget (#64) rather than taking
+        # the interactive default, so the worker gives up before t.join() does.
+        "budget_seconds": gs._SCAN_CALL_BUDGET,
+    }
     assert out["status"] == "ok" and out["seen"] == 0
 
 
@@ -278,11 +284,13 @@ def test_scan_abandons_pass_when_gmail_hangs(monkeypatch, connected):
 
 
 def test_second_pass_reuses_single_in_flight_worker(monkeypatch):
-    # Codex P2: t.join(timeout) can't kill a hung request (gmail/client.py has no transport
-    # timeout), so a fresh worker per timed-out pass would leak one thread+socket per interval.
-    # The guard keeps a SINGLE in-flight worker: a second pass must REUSE it, never spawn a
-    # second. Block the worker on an Event (not sleep) so the liveness check is deterministic;
-    # assert on identity (immune to other tests' leaked daemons), not a live-thread count.
+    # Codex P2: t.join(timeout) can't kill a worker, so a fresh one per timed-out pass would
+    # leak a thread+socket per interval. Since #64 the transport bounds itself and the
+    # ordinary hang no longer reaches this branch (see the budget test below) — but a cause
+    # the transport can't bound (DNS, starvation) still can, so the guard stays: a second
+    # pass must REUSE the worker, never spawn another. Block the worker on an Event (not
+    # sleep) so the liveness check is deterministic; assert on identity (immune to other
+    # tests' leaked daemons), not a live-thread count.
     monkeypatch.setattr(gs, "_SCAN_HTTP_DEADLINE", 0.05)
     release = threading.Event()
     monkeypatch.setattr(gs, "call_gmail", lambda *a, **k: release.wait() or [])
@@ -298,6 +306,28 @@ def test_second_pass_reuses_single_in_flight_worker(monkeypatch):
         release.set()                               # let the worker exit promptly
         if gs._inflight is not None:
             gs._inflight.join(timeout=1)
+
+
+# ── #64: the transport budget must fire before the job-layer join deadline ────
+
+def test_scan_budget_stays_inside_join_deadline():
+    """The scan hands call_gmail a budget small enough that a transport hang makes the
+    worker give up on its OWN before t.join() stops waiting on it — which is what keeps
+    the abandoned-worker leak out of reach for that failure class.
+
+    Deliberately reads the real client constant rather than restating a number: the
+    coupling this pins is between two modules, so raising _SCAN_CALL_BUDGET or
+    _HTTP_TIMEOUT_SECONDS, or lowering _SCAN_HTTP_DEADLINE, has to confront it. The
+    lifecycle test below proves the consequence actually holds at runtime."""
+    from gmail import client as gmail_client
+
+    assert gs._SCAN_CALL_BUDGET + gmail_client._HTTP_TIMEOUT_SECONDS < gs._SCAN_HTTP_DEADLINE
+
+
+# The runtime counterpart — the scan driving the REAL call_gmail and the REAL budget gate
+# from inside its worker thread — lives in test_gmail_transport.py, where the fake-wire
+# helpers are. It is deliberately not here: a version of it that mocked call_gmail would
+# pass even with budget_seconds dropped from the call site, proving nothing.
 
 
 def test_per_message_error_is_isolated(monkeypatch, connected):

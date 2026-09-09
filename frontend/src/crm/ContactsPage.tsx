@@ -1,321 +1,136 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+/**
+ * Contacts, on the shared collection layer (issue #77).
+ *
+ * The route is the selection. `/crm/contacts` and `/crm/contacts/:id` are ONE route
+ * rendering this component, which shows the detail page when the segment is present and
+ * the collection otherwise. That is why `usePageAssembly` lives HERE, above the branch:
+ * the route element never changes, so opening a contact and coming back does not re-sweep
+ * the corpus, and a cold deep link never sweeps it at all.
+ *
+ * The detail deliberately does NOT move into the layer's `CollectionDetail` shell, which
+ * the issue suggested. `shared/overlay/DetailModal` renders at `z-50` and the assistant
+ * launcher button sits at `z-40` — `DealDetailSheet` drops its own overlay to 39 precisely
+ * to stay under it — so a modal contact detail would cover the launcher for exactly the
+ * records that publish assistant context (#14). It is also `max-w-2xl`, where this detail
+ * is a full-width working surface, and four other surfaces deep-link to `/crm/contacts/:id`.
+ * What that costs is the shell's ‹ › record navigation; that is the trade.
+ */
+import { useCallback, useMemo, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../core/api/client';
-import { useAuth } from '../core/auth/AuthContext';
-import { OwnerScopeToggle, useOwnerScope } from './components/OwnerScopeToggle';
 import type { CrmContact } from '../core/types';
+import { ContactDetailPage } from './ContactDetailPage';
 import { ContactForm } from './components/ContactForm';
 import { SmartImportModal } from './components/SmartImportModal';
-import { ScorePill, StatusBadge } from './components/badges';
-import { IconPlus, IconSearch } from '../shared/icons';
+import { useOwnerOptions } from './useOwnerOptions';
+import { CollectionView, useCollectionState } from '../shared/collection';
+import type { FacetOption } from '../shared/search';
+import { IconPlus } from '../shared/icons';
 import { useIsMobile } from '../shared/useIsMobile';
-import { LoadError } from '../shared/LoadError';
-import { toast } from '../shared/toast';
-import { INK, INK_MUTE, INK_DIM, LINE, BG_RAISED, ACCENT, ACCENT_TEXT, FONT_SANS, mono, ACCENT_SOFT, HOVER, SHADOW } from '../shared/styles';
-import {
-  pageHeading, cardStyle, filterTab,
-  tableHeader, tableRow, btnPrimary, btnSecondary, btnSmall,
-} from './styles';
+import { INK_DIM, mono } from '../shared/styles';
+import { pageHeading, btnPrimary, btnSecondary, btnSmall } from './styles';
+import { makeContactsCollectionConfig } from './collectionConfig';
+import { buildContactColumns } from './listColumns';
+import { useCrmCorpus, type CrmCorpus } from './usePatchableAssembly';
+import { useLocalDay } from './useLocalDay';
+import { RefreshButton } from './components/RefreshButton';
 
-const STATUS_TABS = ['all', 'active', 'inactive', 'archived'] as const;
-
-const COLS = '2fr 1.5fr 2fr 1.2fr 80px 72px';
-const PAGE_SIZE = 50;
+// Module scope: the columns take no runtime deps, and the config they feed must be
+// referentially stable or the layer re-derives every search doc on each keystroke.
+const CONTACT_COLUMNS = buildContactColumns();
+const NO_ROWS: CrmContact[] = [];
 
 export function ContactsPage() {
-  const { currentUser } = useAuth();
-  const [mineOnly, setMineOnly] = useOwnerScope('crm_contacts_mine');
-  const [contacts, setContacts] = useState<CrmContact[]>([]);
-  const [total, setTotal] = useState(0);
-  const [search, setSearch] = useState('');
-  const [status, setStatus] = useState<string>('all');
-  const [tagFilter, setTagFilter] = useState<string[]>([]);
-  const [sort, setSort] = useState<string>('updated_at');  // #18: 'lead_score' when sorting by score
-  const [availableTags, setAvailableTags] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [loadFailed, setLoadFailed] = useState(false);
+  const { id } = useParams<{ id: string }>();
+  const isMobile = useIsMobile();
   const [showCreate, setShowCreate] = useState(false);
   const [showImport, setShowImport] = useState(false);
-  const [tagDropdownOpen, setTagDropdownOpen] = useState(false);
-  const tagDropdownRef = useRef<HTMLDivElement>(null);
-  const navigate = useNavigate();
-  const isMobile = useIsMobile();
-  const sentinelRef = useRef<HTMLDivElement | null>(null);
-  // Track current request so a stale response (filter change mid-flight) can't overwrite fresh data
-  const loadIdRef = useRef(0);
+  const { options: owners, loading: usersLoading } = useOwnerOptions();
 
-  useEffect(() => {
-    if (!tagDropdownOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (tagDropdownRef.current && !tagDropdownRef.current.contains(e.target as Node))
-        setTagDropdownOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [tagDropdownOpen]);
+  const corpus = useCrmCorpus<CrmContact>(
+    useCallback(async (params, signal) => {
+      const res = await api<{ contacts: CrmContact[] }>(`/api/crm/contacts?${params}`, { signal });
+      return res.contacts;
+    }, []),
+    // Gate: a cold deep link to /crm/contacts/42 must not pull the whole corpus. The gate
+    // latches, so open → back never re-sweeps.
+    id === undefined,
+  );
+  const { upsert, remove, retry } = corpus;
 
-  const fetchPage = useCallback(async (offset: number) => {
-    const params = new URLSearchParams();
-    if (search) params.set('q', search);
-    if (status !== 'all') params.set('status', status);
-    if (tagFilter.length) params.set('tags', tagFilter.join(','));
-    if (sort !== 'updated_at') params.set('sort', sort);  // #18
-    // 'Mine' is just owner_id=<me>; omitting it means everyone (issue #60).
-    if (mineOnly && currentUser) params.set('owner_id', String(currentUser.id));
-    params.set('limit', String(PAGE_SIZE));
-    params.set('offset', String(offset));
-    return api<{ contacts: CrmContact[]; total: number }>(`/api/crm/contacts?${params}`);
-  }, [search, status, tagFilter, sort, mineOnly, currentUser]);
-
-  const reload = useCallback(async () => {
-    const id = ++loadIdRef.current;
-    setLoading(true);
-    setLoadingMore(false);  // a fresh load supersedes any in-flight loadMore, whose
-                            // guarded finally won't clear this flag (stale id)
-    setLoadFailed(false);
-    try {
-      const [data, tagData] = await Promise.all([
-        fetchPage(0),
-        // best-effort: tags only feed the filter dropdown
-        api<{ tags: string[] }>('/api/crm/tags').catch(() => null),
-      ]);
-      if (id !== loadIdRef.current) return;
-      setContacts(data.contacts);
-      setTotal(data.total);
-      if (tagData) setAvailableTags(tagData.tags);
-    } catch {
-      if (id !== loadIdRef.current) return;
-      // Clear so the error state actually renders (it keys off contacts.length===0)
-      // and a later loadMore can't append new-filter rows onto stale ones.
-      setContacts([]);
-      setTotal(0);
-      setLoadFailed(true);
-    } finally {
-      // Guarded: a stale request must not clear the loading flag set by a newer one.
-      if (id === loadIdRef.current) setLoading(false);
-    }
-  }, [fetchPage]);
-
-  const loadMore = useCallback(async () => {
-    if (loading || loadingMore) return;
-    const id = loadIdRef.current;
-    setLoadingMore(true);
-    try {
-      const data = await fetchPage(contacts.length);
-      if (id !== loadIdRef.current) return;
-      setContacts(prev => [...prev, ...data.contacts]);
-      setTotal(data.total);
-    } catch {
-      if (id !== loadIdRef.current) return;
-      toast.error('Failed to load more contacts.');
-    } finally {
-      if (id === loadIdRef.current) setLoadingMore(false);
-    }
-  }, [fetchPage, contacts.length, loading, loadingMore]);
-
-  useEffect(() => {
-    const t = setTimeout(reload, search ? 300 : 0);
-    return () => clearTimeout(t);
-  }, [reload, search]);
-
-  useEffect(() => {
-    if (loading) return;
-    if (contacts.length >= total) return;
-    const el = sentinelRef.current;
-    if (!el) return;
-    const observer = new IntersectionObserver(
-      entries => { if (entries[0].isIntersecting) loadMore(); },
-      { rootMargin: '200px' },
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [loading, loadingMore, contacts.length, total, loadMore]);
+  if (id !== undefined) {
+    return <ContactDetailPage onChanged={upsert} onDeleted={remove} onWriteUncertain={retry} />;
+  }
 
   return (
     <div style={{ padding: isMobile ? '20px 16px' : '32px 44px', maxWidth: 1000 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: isMobile ? 16 : 24 }}>
         <h1 style={pageHeading(isMobile)}>Contacts</h1>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={() => setShowImport(true)} style={{
-            ...btnSecondary, ...btnSmall,
-          }}>{isMobile ? 'Import' : 'Import Contacts'}</button>
-          <button onClick={() => setShowCreate(true)} style={{
-            ...btnPrimary, ...btnSmall,
-          }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <RefreshButton onClick={retry} label="Reload contacts" />
+          <button onClick={() => setShowImport(true)} style={{ ...btnSecondary, ...btnSmall }}>
+            {isMobile ? 'Import' : 'Import Contacts'}
+          </button>
+          <button onClick={() => setShowCreate(true)} style={{ ...btnPrimary, ...btnSmall }}>
             <IconPlus size={13} strokeWidth={2.25} /> {isMobile ? 'Add' : 'Add Contact'}
           </button>
         </div>
       </div>
 
-      {/* Search + filter */}
-      <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 12, marginBottom: isMobile ? 16 : 24 }}>
-        <div style={{
-          flex: 1, display: 'flex', alignItems: 'center', gap: 8,
-          background: BG_RAISED, border: `1px solid ${LINE}`,
-          borderRadius: 4, padding: '0 12px',
-        }}>
-          <IconSearch size={14} strokeWidth={1.85} style={{ color: INK_DIM }} />
-          <input type="text" placeholder="Search contacts..." value={search} onChange={e => setSearch(e.target.value)}
-            style={{
-              flex: 1, background: 'transparent', border: 'none', color: INK,
-              padding: '9px 0', fontSize: 13, outline: 'none',
-              fontFamily: FONT_SANS,
-            }}
-          />
-        </div>
-        <div style={{
-          display: 'flex', gap: 0, flexShrink: 0,
-        }}>
-          {STATUS_TABS.map(tab => {
-            const isActive = status === tab;
-            return (
-              <button key={tab} onClick={() => setStatus(tab)} style={filterTab(isMobile, isActive)}>{tab}</button>
-            );
-          })}
-        </div>
-        <OwnerScopeToggle mineOnly={mineOnly} onChange={setMineOnly} />
-        {availableTags.length > 0 && (
-          <div ref={tagDropdownRef} style={{ position: 'relative', flexShrink: 0 }}>
-            <button onClick={() => setTagDropdownOpen(v => !v)} style={{
-              background: tagFilter.length ? ACCENT_SOFT : HOVER,
-              border: `1px solid ${tagFilter.length ? ACCENT : LINE}`,
-              color: tagFilter.length ? ACCENT_TEXT : INK_MUTE,
-              borderRadius: 4, padding: isMobile ? '10px 30px 10px 12px' : '12px 32px 12px 16px',
-              fontSize: 14, fontWeight: 500,
-              fontFamily: FONT_SANS, cursor: 'pointer', outline: 'none',
-              minWidth: isMobile ? '100%' : 140, textAlign: 'left',
-              position: 'relative',
-            }}>
-              {tagFilter.length ? `Tags (${tagFilter.length})` : 'Tags'}
-              <span style={{
-                position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)',
-                fontSize: 10, color: INK_DIM, pointerEvents: 'none',
-              }}>{tagDropdownOpen ? '\u25B2' : '\u25BC'}</span>
-            </button>
-            {tagDropdownOpen && (
-              <div style={{
-                position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 50,
-                background: BG_RAISED, border: `1px solid ${LINE}`, borderRadius: 6,
-                minWidth: 180, maxHeight: 260, overflowY: 'auto',
-                boxShadow: `0 8px 24px ${SHADOW}`,
-              }}>
-                {tagFilter.length > 0 && (
-                  <button onClick={() => setTagFilter([])} style={{
-                    width: '100%', padding: '7px 12px', fontSize: 12,
-                    fontFamily: FONT_SANS, border: 'none', borderBottom: `1px solid ${LINE}`,
-                    background: 'transparent', color: INK_DIM, cursor: 'pointer',
-                    textAlign: 'left',
-                  }}>Clear all</button>
-                )}
-                {availableTags.map(t => {
-                  const checked = tagFilter.includes(t);
-                  return (
-                    <label key={t} style={{
-                      display: 'flex', alignItems: 'center', gap: 8,
-                      padding: '7px 12px', cursor: 'pointer', fontSize: 13,
-                      fontFamily: FONT_SANS, color: checked ? INK : INK_MUTE,
-                    }}
-                      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = HOVER; }}
-                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-                    >
-                      <input type="checkbox" checked={checked} onChange={() => setTagFilter(prev =>
-                        checked ? prev.filter(x => x !== t) : [...prev, t]
-                      )} style={{ accentColor: ACCENT }} />
-                      {t}
-                    </label>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+      {/* The roster decides whether an Owner facet exists at all, and the layer persists
+          facet selections by config identity — so mount the collection only once it is
+          known, rather than letting the facet appear a beat later. */}
+      {usersLoading
+        ? <p style={{ ...mono(12), color: INK_DIM }}>Loading…</p>
+        : <ContactsCollection corpus={corpus} owners={owners} />}
 
-      {loading ? (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '48px 0' }}>
-          <div className="w-6 h-6 border-2 border-ck-accent border-t-transparent rounded-full animate-spin" />
-        </div>
-      ) : loadFailed && contacts.length === 0 ? (
-        <LoadError label="Couldn't load contacts" onRetry={reload} />
-      ) : contacts.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '64px 0' }}>
-          <p style={{ color: INK_DIM, fontSize: 14 }}>
-            {search ? 'No contacts match your search.' : 'No contacts yet. Add your first one!'}
-          </p>
-        </div>
-      ) : (
-        <>
-          <p style={{ ...mono(12), marginBottom: 12 }}>{total} contact{total !== 1 ? 's' : ''}</p>
-          {isMobile ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {contacts.map(c => (
-                <div key={c.id} onClick={() => navigate(`/crm/contacts/${c.id}`)}
-                  style={{
-                    padding: '12px 14px', cursor: 'pointer',
-                    ...cardStyle,
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                    <span style={{ fontSize: 16, color: INK }}>{c.name}</span>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                      <ScorePill score={c.lead_score} compact />
-                      <StatusBadge status={c.status} />
-                    </span>
-                  </div>
-                  {(c.company_name || c.company) && <div style={{ fontSize: 14, color: INK_MUTE, marginBottom: 2 }}>{c.company_name || c.company}</div>}
-                  {c.email && <div style={{ fontSize: 14, color: INK_DIM }}>{c.email}</div>}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div style={{ borderTop: `1px solid ${LINE}` }}>
-              <div style={tableHeader(COLS)}>
-                <span>Name</span><span>Company</span><span>Email</span><span>Phone</span><span>Status</span>
-                {/* #18: sortable Score column — native button for keyboard + button semantics */}
-                <button
-                  type="button"
-                  aria-pressed={sort === 'lead_score'}
-                  onClick={() => setSort(s => (s === 'lead_score' ? 'updated_at' : 'lead_score'))}
-                  style={{
-                    background: 'none', border: 'none', padding: 0, margin: 0, cursor: 'pointer',
-                    font: 'inherit', color: sort === 'lead_score' ? INK : 'inherit',
-                    letterSpacing: 'inherit', textTransform: 'inherit', textAlign: 'left',
-                  }}
-                  title="Sort by lead score (highest first)"
-                >
-                  Score{sort === 'lead_score' ? ' ↓' : ''}
-                </button>
-              </div>
-              {contacts.map(c => (
-                <div key={c.id} onClick={() => navigate(`/crm/contacts/${c.id}`)}
-                  style={tableRow(COLS)}
-                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = HOVER; }}
-                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-                >
-                  <div>
-                    <p style={{ fontSize: 16, color: INK, margin: 0 }}>{c.name}</p>
-                    {c.title && <p style={{ fontSize: 13, color: INK_DIM, marginTop: 2 }}>{c.title}</p>}
-                  </div>
-                  <span style={{ fontSize: 15, color: INK_MUTE, alignSelf: 'center' }}>{c.company_name || c.company || '\u2014'}</span>
-                  <span style={{ fontSize: 15, color: INK_MUTE, alignSelf: 'center' }}>{c.email || '\u2014'}</span>
-                  <span style={{ fontSize: 15, color: INK_MUTE, alignSelf: 'center' }}>{c.phone || '\u2014'}</span>
-                  <span style={{ alignSelf: 'center' }}><StatusBadge status={c.status} /></span>
-                  <span style={{ alignSelf: 'center' }}>{c.lead_score != null ? <ScorePill score={c.lead_score} compact /> : '\u2014'}</span>
-                </div>
-              ))}
-            </div>
-          )}
-          {contacts.length < total && (
-            <div ref={sentinelRef} style={{ display: 'flex', justifyContent: 'center', padding: '20px 0', ...mono(12), color: INK_DIM }}>
-              {loadingMore ? 'Loading more…' : `${total - contacts.length} more`}
-            </div>
-          )}
-        </>
+      {showCreate && (
+        <ContactForm
+          onClose={() => setShowCreate(false)}
+          onSaved={saved => { setShowCreate(false); upsert(saved); }}
+          // A save whose outcome is unknown may have committed — re-sweep rather
+          // than keep rendering a corpus we can no longer vouch for.
+          onWriteUncertain={retry}
+        />
       )}
-
-      {showCreate && <ContactForm onClose={() => setShowCreate(false)} onSaved={() => { setShowCreate(false); reload(); }} />}
-      {showImport && <SmartImportModal onClose={() => setShowImport(false)} onImported={() => { setShowImport(false); reload(); }} />}
+      {showImport && (
+        <SmartImportModal
+          onClose={() => setShowImport(false)}
+          // An import writes an unknown number of rows server-side, so re-sweep rather
+          // than guess.
+          onImported={() => { setShowImport(false); retry(); }}
+        />
+      )}
     </div>
+  );
+}
+
+function ContactsCollection(
+  { corpus, owners }: { corpus: CrmCorpus<CrmContact>; owners: FacetOption[] | null },
+) {
+  const navigate = useNavigate();
+  // `now` changes once a day, which is what re-runs the Last-contact facet against the
+  // new boundary — a predicate alone never would, since nothing re-renders at midnight.
+  const { now } = useLocalDay();
+  const config = useMemo(
+    () => makeContactsCollectionConfig({ columns: CONTACT_COLUMNS, owners, now }),
+    [owners, now],
+  );
+  const rows = corpus.items ?? NO_ROWS;
+  const state = useCollectionState(config, rows);
+  return (
+    <CollectionView<CrmContact>
+      config={config}
+      state={state}
+      items={rows}
+      onSelect={selected => { if (selected !== null) navigate(`/crm/contacts/${selected}`); }}
+      searchPlaceholder="Search contacts..."
+      loading={{
+        loading: corpus.loading,
+        error: corpus.error,
+        itemsLoaded: corpus.itemsLoaded,
+        retry: corpus.retry,
+      }}
+    />
   );
 }

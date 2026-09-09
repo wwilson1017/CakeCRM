@@ -31,8 +31,6 @@ def mocks(monkeypatch):
                         lambda **k: state["alerts"].append(k))
     monkeypatch.setattr(service.alerts, "resolve_by_source",
                         lambda s, sid: state["resolved"].append((s, sid)) or 0)
-    # Prompt builders read the identity singleton — mock it so no DB is touched.
-    monkeypatch.setattr(service.identity, "get_identity", lambda: {"name": "Baker"})
     return state
 
 
@@ -226,6 +224,48 @@ def test_turn_runs_ok_resolves_alert(monkeypatch, mocks):
     out = service.maybe_run_heartbeat_turn(force=True)
     assert out["status"] == "ok"
     assert mocks["resolved"] == [("heartbeat", "heartbeat")]
+
+
+def test_heartbeat_turn_runs_under_the_background_allowlist(monkeypatch, mocks):
+    """Both unattended heartbeat surfaces must route through the SHARED builder, which is
+    where the #114 exclusion lives. test_proactive_service pins the third call site the
+    same way; these two were unpinned, so an ad-hoc allowlist assembled here would have
+    re-opened live Gmail reads with every existing heartbeat test still green."""
+    import assistant.background as background
+
+    monkeypatch.setattr(service.settings, "heartbeat_enabled", True)
+    monkeypatch.setattr(service, "get_ai_provider", lambda *a, **k: object())
+    monkeypatch.setattr(service, "pg_execute", lambda *a, **k: 1)    # claimed
+    monkeypatch.setattr(service, "pg_fetchone", lambda *a, **k: {"consecutive_errors": 0})
+    captured = {}
+
+    def fake_turn(prompt, user_message, *, allowed_tools, registry, model_tier, timeout):
+        captured["allowed"] = allowed_tools
+        return BackgroundResult(text="HEARTBEAT_OK", error=False)
+
+    monkeypatch.setattr(background, "run_background_turn", fake_turn)
+    monkeypatch.setattr(background, "background_allowlist", lambda reg: {"crm_dashboard", "notify_user"})
+    assert service.maybe_run_heartbeat_turn(force=True)["status"] == "ok"
+    assert captured["allowed"] == {"crm_dashboard", "notify_user"}
+
+
+def test_reminder_enhancement_runs_under_the_background_allowlist(monkeypatch, mocks):
+    """The reminder-firing turn is the other unattended surface — same pin, and the one
+    whose input (reminder text) is the injection vector #114 is written against."""
+    import assistant.background as background
+
+    monkeypatch.setattr(service.reminders_service, "get_due_reminders", lambda n: [_reminder()])
+    monkeypatch.setattr(service.reminders_service, "claim_reminder", lambda r: r)
+    captured = {}
+
+    def fake_turn(prompt, user_message, *, allowed_tools, registry, model_tier, timeout):
+        captured["allowed"] = allowed_tools
+        return BackgroundResult(text="did something", error=False)
+
+    monkeypatch.setattr(background, "run_background_turn", fake_turn)
+    monkeypatch.setattr(background, "background_allowlist", lambda reg: {"crm_dashboard", "notify_user"})
+    assert service.process_due_reminders(run_ai_enhancement=True)[0]["status"] == "processed"
+    assert captured["allowed"] == {"crm_dashboard", "notify_user"}
 
 
 def test_failure_alert_fires_at_threshold(monkeypatch, mocks):

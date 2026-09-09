@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { defineConfig } from 'vitest/config'
 
 /**
@@ -15,10 +16,28 @@ import { defineConfig } from 'vitest/config'
  * `mergeConfig(viteConfig, defineConfig({ test: { … } }))` from 'vitest/config' rather than
  * hand-copying them.
  *
- * Every option below MUST stay nested under `test` — vitest silently ignores these keys at the
- * top level, which would turn each guard into a no-op that still looks configured.
+ * Every TEST-RUNNER option below MUST stay nested under `test` — vitest silently ignores those
+ * keys at the top level, which would turn each guard into a no-op that still looks configured.
+ * The rule is about `test.*` keys specifically, NOT about the file: Vite-level keys such as
+ * `define` (added below for the WCAG guard) are legitimately top-level siblings of `test`, and
+ * moving one INTO `test` is the same silent no-op in the other direction — `test.define` is not
+ * a vitest field, so the substitution would simply never happen.
  */
 export default defineConfig({
+  // The literal text of the shipped stylesheet, for `core/theme/inkContrast.test.ts` — the WCAG
+  // guard has to measure the palette that actually ships, and a second copy of it in the test
+  // would drift silently, which is the exact bug that guard exists to prevent.
+  //
+  // Injected here rather than imported in the test, because neither obvious route works:
+  //   • `import css from '../../index.css?raw'` resolves to an EMPTY STRING under vitest —
+  //     `test.css` defaults to false, which stubs every CSS import, `?raw` included.
+  //   • `node:fs` inside the test would need `"node"` in `tsconfig.app.json`'s `types`, which
+  //     pins `["vite/client"]` on purpose; widening it would let browser code reference Node
+  //     globals with tsc's blessing, app-wide, to serve one test.
+  // This file is not in any tsconfig's `include`, so the Node import here costs nothing.
+  define: {
+    __INDEX_CSS__: JSON.stringify(readFileSync(new URL('./src/index.css', import.meta.url), 'utf8')),
+  },
   test: {
     // `node` is the default because most targets are pure functions, and node-env tests are
     // faster and better isolated. DOM tests opt in per-file with a `// @vitest-environment jsdom`

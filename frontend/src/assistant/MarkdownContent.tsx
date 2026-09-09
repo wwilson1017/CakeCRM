@@ -7,17 +7,52 @@ import 'highlight.js/styles/github.css';
 
 import type { ComponentPropsWithoutRef } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
+import { Link } from 'react-router-dom';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
 
 import { ACCENT_TEXT, BG_RAISED, INK, INK_MUTE, LINE } from '../shared/styles';
 
+const linkStyle = { color: ACCENT_TEXT, textDecoration: 'underline' };
+
+/**
+ * The in-app destination a link points at, or null when it leaves this origin (#145).
+ *
+ * Parsed with `URL` rather than a `startsWith('/')` test on purpose: `//evil.com/x` also
+ * starts with a slash and is a protocol-relative link to somewhere else entirely, and an
+ * assistant message can carry a prompt-injected href. Comparing resolved origins is the
+ * only check that cannot be talked around. A `javascript:` URL resolves to a null origin
+ * and so is never internal (react-markdown's own url transform already drops those).
+ */
+function inAppPath(href: string | undefined): string | null {
+  if (!href) return null;
+  try {
+    const url = new URL(href, window.location.origin);
+    return url.origin === window.location.origin ? url.pathname + url.search + url.hash : null;
+  } catch {
+    return null;
+  }
+}
+
 const components: Components = {
-  a: ({ href, children }: ComponentPropsWithoutRef<'a'>) => (
-    <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: ACCENT_TEXT, textDecoration: 'underline' }}>
-      {children}
-    </a>
-  ),
+  // An in-app link navigates IN THIS TAB; everything else keeps opening in a new one with
+  // `noopener noreferrer`.
+  //
+  // The tab matters, and it is the whole reason this is not one branch of an `<a>`: the
+  // session token lives in sessionStorage, which is per-tab and which a `noopener` tab does
+  // not inherit. So a deal link the assistant hands over in the drawer — the feature's
+  // primary surface, added in #145 — used to open a tab with no session, bounce through
+  // /login, and land on the dashboard with the deal id thrown away.
+  a: ({ href, children }: ComponentPropsWithoutRef<'a'>) => {
+    const internal = inAppPath(href);
+    return internal !== null ? (
+      <Link to={internal} style={linkStyle}>{children}</Link>
+    ) : (
+      <a href={href} target="_blank" rel="noopener noreferrer" style={linkStyle}>
+        {children}
+      </a>
+    );
+  },
   // Never fetch remote images: the browser would request the URL on render, which
   // a prompt-injected upload could use to exfiltrate CRM data in the query string
   // with zero clicks. Render the alt text instead (CRM tool results have no images).

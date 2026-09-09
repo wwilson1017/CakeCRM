@@ -80,6 +80,142 @@ def test_write_on_a_missing_deal_returns_none_without_updating(monkeypatch, rec,
     assert not any("UPDATE deals SET" in s for s, _ in conn.executed)
 
 
+# ── No-op writes leave the staleness clock alone (issue #96) ─────────────────
+#
+# LAST_TOUCH_SQL reads deals.updated_at as a touch, so a write that changes nothing must
+# not happen at all. The decision is made by Postgres (an IS DISTINCT FROM test on the
+# very columns being SET), so these assert the SQL shape and the branching; the real
+# semantics are exercised against Postgres in test_integration_crm_lifecycle_pg.py.
+#
+# `rowcounts={"UPDATE deals SET": 0}` makes the conditional UPDATE report "matched no
+# row" — i.e. Postgres found nothing to change. It is keyed on the statement rather than
+# its position, so adding a query to the flow can't silently re-target it.
+
+def test_the_update_only_fires_when_a_column_would_actually_change(monkeypatch, rec, fake_conn):
+    """Without the IS DISTINCT FROM test, a redundant call bumps updated_at and silently
+    drops the deal out of get_stale_deals and the heartbeat nudges for a whole window."""
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("lead", None, None)])
+    rec.fetchone_queue = [{"id": 1}]
+    service.update_deal(1, value=500)
+    sql, params = next((s, p) for s, p in conn.executed if "UPDATE deals SET" in s)
+    assert "value IS DISTINCT FROM %s" in sql
+    # Bound twice: once to SET the column, once to compare it. updated_at is SET only —
+    # the question the WHERE asks is whether anything ELSE changed.
+    assert params[0] == 500 and params[-1] == 500
+    assert "updated_at IS DISTINCT FROM" not in sql
+
+
+def test_every_written_column_is_compared_and_cast(monkeypatch, rec, fake_conn):
+    """Two ways to re-open #96 in one assertion. A column that is SET but never compared
+    makes any write carrying it a guaranteed match (the PUT path sends the whole form, so
+    one gap is enough). A comparison left UNCAST is just as bad: assignment and comparison
+    contexts disagree, so an uncast INTEGER silently bumps on a fractional no-op and an
+    uncast TEXT raises outright."""
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("lead", None, None)])
+    rec.fetchone_queue = [{"id": 1}]
+    service.update_deal(1, title="T", value=5, notes="n", probability=20,
+                        expected_close_date="2026-09-01", currency="USD",
+                        contact_id=None, company_id=3, owner_id=None)
+    sql, _ = next((s, p) for s, p in conn.executed if "UPDATE deals SET" in s)
+    written = {c.split(" = ")[0] for c in sql.split(" SET ")[1].split(" WHERE ")[0].split(", ")}
+    assert written - {"updated_at"}, "the test wrote no deal columns"
+    for col in written - {"updated_at"}:
+        cast = service._DEAL_COLUMN_TYPES[col]
+        assert f"{col} IS DISTINCT FROM %s::{cast}" in sql, f"{col} SET but not compared-and-cast"
+
+
+def test_every_user_writable_column_has_a_declared_type():
+    """The coupling between the two column lists, pinned in the direction that is SAFE.
+
+    `_DEAL_USER_WRITABLE` is the security boundary — what `crm_update_deal`'s raw model
+    kwargs and `PUT /api/crm/deals/{id}`'s body may write — and it is hand-maintained and
+    default-closed. `_DEAL_COLUMN_TYPES` is the wider set the write chokepoint can be asked
+    to write, internal-only columns included. Deriving the boundary FROM the map (as this
+    briefly did) is default-OPEN: declaring a type for a new internal column would silently
+    make it writable by unvalidated input in the same commit.
+
+    So the guarantee runs one way only — every user-writable column must have a declared
+    type — and it is asserted here, in the hermetic suite that CI actually runs, rather
+    than in the integration suite that is deselected by default.
+    """
+    undeclared = service._DEAL_USER_WRITABLE - service._DEAL_COLUMN_TYPES.keys()
+    assert not undeclared, f"user-writable but no declared type: {sorted(undeclared)}"
+
+
+def test_update_deal_refuses_the_columns_unvalidated_input_must_never_reach(
+    monkeypatch, rec, fake_conn):
+    """Asserted through `update_deal` rather than against the constant, because the hazard
+    is HOW the allowlist is computed, not what the frozenset happens to contain: a later
+    change deriving `allowed` from `_DEAL_COLUMN_TYPES` again would widen the boundary
+    while leaving the frozenset untouched. `crm_update_deal` forwards the model's raw
+    kwargs here, so these are reachable from an unvalidated caller.
+
+    `lead_score` is never user/tool/assistant-writable (#18) and `archived_at` is owned by
+    `archive_deal`; `lost_reason` has its own test above.
+    """
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("lead", None, None)])
+    rec.fetchone_queue = [{"id": 1}]
+    service.update_deal(1, lead_score=99, archived_at="2026-01-01T00:00:00+00:00")
+    assert not any("UPDATE deals SET" in s for s, _ in conn.executed)
+    assert not any("lead_score" in s or "archived_at" in s for s, _ in conn.executed)
+
+
+def test_a_same_stage_move_cannot_match_its_own_row(monkeypatch, rec, fake_conn):
+    """crm_update_deal_stage re-asserting a deal's current stage — the assistant
+    redundancy #96 was filed for. The UPDATE is still ISSUED (Postgres does the
+    deciding), so what has to hold hermetically is that its WHERE compares `stage`
+    against the value already stored, which no row can satisfy."""
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("qualified", None, None)],
+                     rowcounts={"UPDATE deals SET": 0})
+    rec.fetchone_queue = [{"id": 1, "stage": "qualified"}]
+    service.update_deal_stage(1, "qualified")
+    sql, params = next((s, p) for s, p in conn.executed if "UPDATE deals SET" in s)
+    assert "stage IS DISTINCT FROM %s" in sql
+    assert params[-1] == "qualified"     # compared against the stage the deal already has
+    assert not any("deal_stage_events" in s for s, _ in conn.executed)
+
+
+def test_no_stage_event_is_logged_when_the_update_matched_no_row(monkeypatch, rec, fake_conn):
+    """Belt-and-braces on the audit log. A real stage change always differs, so the
+    UPDATE always fires — gating the INSERT on rowcount too makes "no write, no history"
+    structural rather than something you have to re-derive from the classifier."""
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("lead", None, None)],
+                     rowcounts={"UPDATE deals SET": 0})
+    rec.fetchone_queue = [{"id": 1}]
+    service.update_deal_stage(1, "won")
+    assert any("UPDATE deals SET" in s for s, _ in conn.executed)
+    assert not any("deal_stage_events" in s for s, _ in conn.executed)
+
+
+# The next two do NOT guard the #96 fix — both invariants predate it and survive a
+# revert. They guard the two plausible ways someone EXTENDS `changed` too far now that
+# the flag exists, which is a live hazard precisely because the flag is new.
+
+def test_the_changed_flag_must_not_reach_the_return_value(monkeypatch, rec, fake_conn):
+    """False from _write_deal_update means "no such deal" and every caller turns it into
+    None — a 404 / a tool error. Wiring the new `changed` flag into the return would make
+    a harmless redundant call start reporting the deal missing."""
+    fake_conn(monkeypatch, service, fetchone_results=[("won", None, None)],
+              rowcounts={"UPDATE deals SET": 0})
+    rec.fetchone_queue = [{"id": 1, "stage": "won"}]
+    assert service.mark_deal_won(1) == {"id": 1, "stage": "won"}
+
+
+def test_the_changed_flag_must_not_gate_the_rescore(monkeypatch, rec, fake_conn):
+    """The rescore is deliberately unconditional. score_on_event is swallowed on failure
+    and the daily refresh skips terminal deals that already carry a score, so re-calling
+    mark_deal_won is the only repair route for a won deal whose rescore failed — gating
+    it on `changed` would close that route."""
+    from crm import scoring_service
+    calls = []
+    monkeypatch.setattr(scoring_service, "score_on_event", lambda **kw: calls.append(kw))
+    fake_conn(monkeypatch, service, fetchone_results=[("won", None, None)],
+              rowcounts={"UPDATE deals SET": 0})
+    rec.fetchone_queue = [{"id": 1, "stage": "won"}]
+    service.mark_deal_won(1)
+    assert calls == [{"deal_ids": (1,), "contact_ids": (None, None)}]
+
+
 def test_update_deal_ignores_a_model_supplied_lost_reason(monkeypatch, rec, fake_conn):
     """mark_deal_lost is lost_reason's only writer, so the reason always arrives with
     the close (and its timeline note) and can't be set on a deal that isn't lost."""
@@ -104,18 +240,37 @@ def test_mark_deal_lost_records_reason_and_a_timeline_note(monkeypatch, rec, fak
     rec.fetchone_queue = [{"id": 1, "stage": "lost"}]
     notes = []
     monkeypatch.setattr(chatter_service, "add_note",
-                        lambda t, i, m: notes.append((t, i, m)))
+                        lambda t, i, m, author_id=None: notes.append((t, i, m, author_id)))
     service.mark_deal_lost(1, lost_reason="chose a competitor")
     _, params = next((s, p) for s, p in conn.executed if "UPDATE deals SET" in s)
     assert "lost" in params and 0 in params and "chose a competitor" in params
-    assert notes == [("deal", 1, "Deal lost — chose a competitor")]
+    # NULL author: the assistant tool is this default's caller, and Phase A does not thread
+    # identity into tool executors, so "unattributed" is the honest record there.
+    assert notes == [("deal", 1, "Deal lost — chose a competitor", None)]
+
+
+def test_mark_deal_lost_credits_the_author_when_one_is_given(monkeypatch, rec, fake_conn):
+    """A reason a REP typed must credit that rep (issue #128).
+
+    `mark_deal_lost` swallows chatter failures by design, so a signature mismatch here
+    degrades to a silently missing note rather than an error — which is exactly how this
+    would rot unnoticed if nothing asserted the author reaches `add_note`.
+    """
+    fake_conn(monkeypatch, service, fetchone_results=[("proposal", None, None)])
+    rec.fetchone_queue = [{"id": 1, "stage": "lost"}]
+    notes = []
+    monkeypatch.setattr(chatter_service, "add_note",
+                        lambda t, i, m, author_id=None: notes.append((t, i, m, author_id)))
+    service.mark_deal_lost(1, lost_reason="price", author_id=42)
+    assert notes == [("deal", 1, "Deal lost — price", 42)]
 
 
 def test_mark_deal_lost_without_a_reason_writes_no_note(monkeypatch, rec, fake_conn):
     fake_conn(monkeypatch, service, fetchone_results=[("proposal", None, None)])
     rec.fetchone_queue = [{"id": 1}]
     called = []
-    monkeypatch.setattr(chatter_service, "add_note", lambda *a: called.append(a))
+    monkeypatch.setattr(chatter_service, "add_note",
+                        lambda *a, **kw: called.append(a))
     service.mark_deal_lost(1)
     assert called == []
 
@@ -126,7 +281,10 @@ def test_mark_deal_lost_survives_a_note_failure(monkeypatch, rec, fake_conn):
     fake_conn(monkeypatch, service, fetchone_results=[("proposal", None, None)])
     rec.fetchone_queue = [{"id": 1, "stage": "lost"}]
 
-    def boom(*a):
+    # **kw, not just *a: mark_deal_lost passes author_id as a KEYWORD, and its blanket
+    # `except Exception` would swallow the resulting TypeError — the RuntimeError below
+    # would never be reached and this test would keep passing while proving nothing.
+    def boom(*a, **kw):
         raise RuntimeError("chatter down")
     monkeypatch.setattr(chatter_service, "add_note", boom)
     assert service.mark_deal_lost(1, lost_reason="price")["stage"] == "lost"
@@ -135,7 +293,7 @@ def test_mark_deal_lost_survives_a_note_failure(monkeypatch, rec, fake_conn):
 def test_lost_reason_is_length_bounded(monkeypatch, rec, fake_conn):
     conn = fake_conn(monkeypatch, service, fetchone_results=[("proposal", None, None)])
     rec.fetchone_queue = [{"id": 1}]
-    monkeypatch.setattr(chatter_service, "add_note", lambda *a: None)
+    monkeypatch.setattr(chatter_service, "add_note", lambda *a, **kw: None)
     service.mark_deal_lost(1, lost_reason="x" * 5000)
     _, params = next((s, p) for s, p in conn.executed if "UPDATE deals SET" in s)
     assert any(isinstance(v, str) and len(v) == service.MAX_LOST_REASON for v in params)
@@ -289,6 +447,35 @@ def test_pipeline_excludes_archived_deals(rec):
     service.get_pipeline()
     assert "d.archived_at IS NULL" in rec.sql_containing("last_activity_at")
     assert "archived_at IS NULL" in rec.sql_containing("GROUP BY stage")
+
+
+def test_pipeline_include_archived_opens_only_the_deals_query(rec):
+    """Issue #83's opt-in hole is exactly one query wide. The board may SHOW an archived
+    deal (or an accidental archive is unrecoverable without an AI provider), but
+    stage_summary must never COUNT one — won + archived would book revenue no report can
+    see. A regression here is silent: the board looks right and the totals lie."""
+    rec.fetchall_queue = [[], []]
+    service.get_pipeline(include_archived=True)
+    assert "archived_at IS NULL" not in rec.sql_containing("last_activity_at")
+    assert "archived_at IS NULL" in rec.sql_containing("GROUP BY stage")
+
+
+def test_pipeline_include_archived_still_binds_the_stage_filter(rec):
+    """Dropping the predicate rebuilt the WHERE clause — the stage param must survive it."""
+    rec.fetchall_queue = [[], []]
+    service.get_pipeline(stage="lead", include_archived=True)
+    sql = rec.sql_containing("last_activity_at")
+    assert "d.stage = %s" in sql
+    assert "archived_at IS NULL" not in sql
+    assert list(rec.calls[0][1]) == ["lead"]
+
+
+def test_pipeline_stage_filter_alone_keeps_the_sweep(rec):
+    """The rebuilt WHERE must AND both conditions when only `stage` is given."""
+    rec.fetchall_queue = [[], []]
+    service.get_pipeline(stage="lead")
+    sql = rec.sql_containing("last_activity_at")
+    assert "d.archived_at IS NULL" in sql and "d.stage = %s" in sql
 
 
 def test_list_deals_excludes_archived(rec):
@@ -462,8 +649,9 @@ def test_close_date_sort_puts_undated_deals_last(rec, no_field_embed):
 
 
 def test_search_can_surface_archived_deals_on_request(rec, no_field_embed):
-    """The only read that can find an archived deal — without it, restore is
-    unreachable through the product."""
+    """The assistant's read that can find an archived deal. Since issue #83 it is no
+    longer the ONLY one — get_pipeline(include_archived=True) is the keyless route back —
+    but it is still the only way to find one by keyword."""
     rec.fetchall_queue = [[], []]
     service.search_deals(search="junk")
     assert "d.archived_at IS NULL" in rec.calls[-1][0]

@@ -3,7 +3,7 @@ import { cardStyle } from '../styles';
 
 /** A small metric tile for the dashboard Snapshot row (issue #20). Presentational
  *  only — the parent passes already-formatted strings. `color` tints the value
- *  (e.g. SAGE/GOLD/CORAL for a win-rate or overdue signal); defaults to INK. */
+ *  (e.g. SAGE_TEXT/GOLD_TEXT/CORAL_TEXT for a win-rate or overdue signal); defaults to INK. */
 export function StatCard({ label, value, sub, color }: {
   label: string;
   value: string;

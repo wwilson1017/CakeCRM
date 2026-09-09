@@ -7,7 +7,7 @@ const matches = (fields: (string | null | undefined)[], query: string) =>
 describe('normalize', () => {
   it('lowercases, collapses punctuation to spaces, and pads with single spaces', () => {
     expect(normalize('ACM-1234')).toBe(' acm 1234 ');
-    expect(normalize('  Oven   #3  ')).toBe(' oven 3 ');
+    expect(normalize('  Unit   #3  ')).toBe(' unit 3 ');
   });
 
   it('returns empty string for absent values rather than a bare pad', () => {
@@ -146,22 +146,22 @@ describe('opt-in tuning knobs — defaults unchanged, options reproduce those tu
     expect(isAnchored('12')).toBe(true);
     expect(isAnchored('123')).toBe(false);
     expect(isAnchored('ab')).toBe(false);
-    expect(isAnchored('ove')).toBe(false);
+    expect(isAnchored('uni')).toBe(false);
   });
 
   it('docMatchesTokens without options substring-matches short tokens (default)', () => {
-    const doc = buildDoc(['Serial A1B2', 'Oven 12']);
+    const doc = buildDoc(['Serial A1B2', 'Unit 12']);
     expect(docMatchesTokens(doc, ['1'])).toBe(true); // substring inside A1B2 / 12
   });
 
   it('docMatchesTokens with { anchorShortTokens } matches a short token as a whole word only', () => {
     const doc = buildDoc(['Serial A1B2']); // → ' serial a1b2 ' — no standalone ' 1 '
     expect(docMatchesTokens(doc, ['1'], { anchorShortTokens: true })).toBe(false);
-    const doc2 = buildDoc(['Oven 1']); // → ' oven 1 ' — standalone ' 1 '
+    const doc2 = buildDoc(['Unit 1']); // → ' unit 1 ' — standalone ' 1 '
     expect(docMatchesTokens(doc2, ['1'], { anchorShortTokens: true })).toBe(true);
   });
 
   it('docMatchesTokens with { anchorShortTokens } still substring-matches a normal token', () => {
-    expect(docMatchesTokens(buildDoc(['Oven']), ['ove'], { anchorShortTokens: true })).toBe(true);
+    expect(docMatchesTokens(buildDoc(['Unit']), ['uni'], { anchorShortTokens: true })).toBe(true);
   });
 })

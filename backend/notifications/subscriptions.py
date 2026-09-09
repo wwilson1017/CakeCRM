@@ -32,6 +32,9 @@ def remove_subscription(endpoint: str) -> bool:
 
 
 def list_subscriptions() -> list[dict]:
+    # Uncapped, so no row can be skipped — but `created_at` is `now()` (transaction
+    # start), so subscriptions registered together tie and the fan-out order flips
+    # between reads. `id` pins it (issue #58).
     return pg_fetchall(
         "SELECT endpoint, p256dh, auth, user_agent FROM push_subscriptions "
-        "ORDER BY created_at ASC")
+        "ORDER BY created_at ASC, id ASC")

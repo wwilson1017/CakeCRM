@@ -26,7 +26,7 @@
 import type { ReactNode, Ref } from 'react';
 import type { FacetOption, SortFieldDef, SortState } from '../search';
 import type { ListColumn } from '../listview';
-import type { KanbanColumnDef } from '../dnd';
+import type { DragDisabled, KanbanColumnDef } from '../dnd';
 
 // ---------------------------------------------------------------------------------------------
 // Identity & persistence
@@ -193,6 +193,21 @@ export interface KanbanViewConfig<T> {
    * a board is an operational surface, a list doubles as history.
    */
   voidedPolicy?: 'hide' | 'facet';
+  /**
+   * What a drop MEANS, and therefore what can make one ambiguous.
+   *  • `'index'` (default) — a drop assigns a column AND a position, and the app persists that
+   *    position (a rank column). A filtered subset, a non-array sort and a truncated column each
+   *    make the drop index unmappable, so `dragLocked` covers all three.
+   *  • `'column'` — a drop assigns ONLY a column; the app discards `newIndex` because no rank
+   *    column exists to write it to. No rendered subset can make a column assignment ambiguous,
+   *    so the layer contributes NO lock and `dragLocked` is always false — only the app's own
+   *    `CollectionKanbanProps.dragDisabled` extras (mobile, a bulk write in flight) apply.
+   *    Declaring this while still persisting `newIndex` would silently save a position derived
+   *    from a partial list, so it is a claim about the app's `onMove`, not a styling choice.
+   *    The type cannot enforce that yet — making `newIndex` structurally unavailable under
+   *    `'column'` is tracked in issue #112.
+   */
+  dragPolicy?: 'index' | 'column';
 }
 
 export interface CardsViewConfig<T> {
@@ -277,8 +292,10 @@ export interface CollectionState<T> {
   isFiltering: boolean;
   activeFacetCount: number;
   manualOrder: boolean;
-  /** THE central drag gate: isFiltering || !manualOrder || hasTruncatedColumn. App extras
-   *  (isMobile, bulkPending) OR into `CollectionViewProps.kanban.dragDisabled`. */
+  /** THE central drag gate: isFiltering || !manualOrder || hasTruncatedColumn — or a constant
+   *  false under `KanbanViewConfig.dragPolicy: 'column'`, where a drop carries no index to be
+   *  made ambiguous. App extras (isMobile, bulkPending) OR into
+   *  `CollectionViewProps.kanban.dragDisabled`. */
   dragLocked: boolean;
   /** Per-column truncation under `columnCap` — also what "Show N more" expands. */
   truncatedColumns: ReadonlySet<string | number>;
@@ -387,14 +404,29 @@ export interface CollectionKanbanProps<T, C = unknown> {
    * Resolve the move server-side, then patch the canonical `items` array (full-array patch).
    * Do NOT patch before this resolves — `shared/dnd` shows the optimistic move and rolls back
    * on reject, so a pre-resolve canonical write double-applies on failure.
+   *
+   * ONE sanctioned exception, and it is load-bearing rather than a loophole: a board whose
+   * `onMove` can never reject (it persists in the background and reverts through its own
+   * canonical data, as the CRM pipeline does) may patch first and resolve immediately, because
+   * the rollback branch that would double-apply is then unreachable — `useKanbanState.commitMove`
+   * records the same exemption from the other side. Such an `onMove` must return a resolved
+   * promise on EVERY path, including failure; one that can reject must obey the rule above.
    */
   onMove: (event: CollectionMoveEvent<T>) => Promise<void>;
   canDrop?: (item: T, targetColumnId: string | number) => boolean;
   renderColumn: (column: KanbanColumnDef<C>, children: ReactNode) => ReactNode;
   renderCard: (item: T, columnId: string | number, isDragging: boolean) => ReactNode;
   renderEmptyColumn?: (column: KanbanColumnDef<C>) => ReactNode;
-  /** App extras (isMobile, bulkPending) — OR'd with the layer's `dragLocked`. */
-  dragDisabled?: boolean;
+  /**
+   * App extras (isMobile, bulkPending) — OR'd with the layer's `dragLocked`.
+   *
+   * `true` disables the whole board; a PREDICATE answers per card, which is what a board
+   * carrying rows that are visible but not workable needs (issue #83's archived deals: on the
+   * board so they can be found and restored, but the server refuses a stage change on one).
+   * The layer's own `dragLocked` still wins — it is a board-wide claim, so it collapses a
+   * predicate to `true` rather than being OR'd into it.
+   */
+  dragDisabled?: DragDisabled<T>;
   /** Pass-throughs to `shared/dnd`'s board/column containers (scroller layout, column
    *  spacing) — presentation the app owns, like its renderColumn chrome. */
   className?: string;
@@ -452,5 +484,20 @@ export interface CollectionViewProps<T, C = unknown> {
    *  clear-all and the drag gate. */
   toolbarExtras?: ReactNode;
   searchPlaceholder?: string;
+  /**
+   * Bump to empty the search box on a PROGRAMMATIC clear. Needed because `SearchInput` adopts
+   * an external value only when it CHANGES: a page that clears while `state.query` is already
+   * `''` leaves locally-typed text whose debounce has not settled, which then re-filters a
+   * moment after the clear. The bar owns the same mechanism for its own Clear button; this
+   * routes a page-initiated clear (a deep link, an app-level "reset filters") to it, instead
+   * of the caller re-keying the whole subtree and losing the disclosure panel, the list's
+   * show-all and the board's scroll position with it.
+   *
+   * MUST only ever INCREASE. It is summed with the bar's own internal counter, and both are
+   * compared with `!==`, so a monotone value can never be cancelled out by the other source;
+   * a caller that decremented could land on a sum the box has already seen and swallow a
+   * reset. Bump it (`n => n + 1`), never assign it.
+   */
+  searchResetNonce?: number;
   loading?: CollectionLoadingProps;
 }

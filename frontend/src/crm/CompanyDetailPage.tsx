@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../core/api/client';
+import { rowIsGone, writeMayHaveLanded } from './usePatchableAssembly';
 import type { CrmCompany } from '../core/types';
 import { CompanyForm } from './components/CompanyForm';
 import { ActivityTimeline } from './components/ActivityTimeline';
@@ -13,6 +14,7 @@ import { IconArrowLeft } from '../shared/icons';
 import { useIsMobile } from '../shared/useIsMobile';
 import { confirmDialog } from '../shared/confirm';
 import { toast } from '../shared/toast';
+import { OwnerName } from './components/OwnerName';
 import {
   INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG,
   FONT_DISPLAY,
@@ -24,7 +26,16 @@ import {
   btnSecondary, btnDanger, btnSmall,
 } from './styles';
 
-export function CompanyDetailPage() {
+/** Optional hooks for the host list page (#77) — see ContactDetailPageProps. */
+interface CompanyDetailPageProps {
+  onChanged?: (company: CrmCompany) => void;
+  onDeleted?: (id: number) => void;
+  /** A write here whose outcome is unknown — the host re-sweeps, since only the server
+   *  can now say what this record looks like, or whether it still exists (#77). */
+  onWriteUncertain?: () => void;
+}
+
+export function CompanyDetailPage({ onChanged, onDeleted, onWriteUncertain }: CompanyDetailPageProps = {}) {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
@@ -49,12 +60,15 @@ export function CompanyDetailPage() {
       const data = await api<CrmCompany>(`/api/crm/companies/${id}`);
       if (reqId !== loadIdRef.current) return;
       setCompany(data);
-    } catch {
+      onChanged?.(data);
+    } catch (err) {
       if (reqId !== loadIdRef.current) return;
       setCompany(null);
+      // See ContactDetailPage: a 404 from a stale list row is a ghost, not an error.
+      if (rowIsGone(err)) onDeleted?.(Number(id));
     }
     if (reqId === loadIdRef.current) setLoading(false);
-  }, [id]);
+  }, [id, onChanged, onDeleted]);
 
   useEffect(() => { queueMicrotask(load); }, [load]);
 
@@ -68,10 +82,14 @@ export function CompanyDetailPage() {
     if (!ok) return;
     try {
       await api(`/api/crm/companies/${id}`, { method: 'DELETE' });
-    } catch {
+    } catch (err) {
       toast.error('Failed to delete company.');
+      // The DELETE may have committed before the response was lost, in which case the
+      // list is still showing a row that no longer exists.
+      if (writeMayHaveLanded(err)) onWriteUncertain?.();
       return;
     }
+    onDeleted?.(Number(id));
     navigate('/crm/companies');
   }
 
@@ -116,6 +134,15 @@ export function CompanyDetailPage() {
           </div>
         </div>
         {subline && <p style={{ fontSize: 14, color: INK_MUTE, marginTop: 6 }}>{subline}</p>}
+        {/* Its OWN line rather than another `subline` term (issue #128): that string is
+            built by dropping blank fields, so an unassigned owner would vanish from it —
+            which is precisely the state this needs to show. */}
+        <p style={{
+          display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, marginBottom: 0,
+        }}>
+          <span style={{ ...mono(10), color: INK_DIM }}>Owner</span>
+          <OwnerName ownerId={company.owner_id} />
+        </p>
       </div>
 
       {/* Notes */}
@@ -167,7 +194,7 @@ export function CompanyDetailPage() {
                 <div key={d.id} style={{
                   ...stageCard(
                     STAGE_COLORS[d.stage]?.bg || BG_RAISED,
-                    STAGE_COLORS[d.stage]?.color || LINE,
+                    STAGE_COLORS[d.stage]?.fill || LINE,
                   ),
                   padding: '12px 14px', marginBottom: 6,
                   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -176,7 +203,7 @@ export function CompanyDetailPage() {
                     <p style={{ fontSize: 14, color: INK, margin: 0 }}>{d.title}</p>
                     <span style={{
                       ...mono(10), textTransform: 'capitalize', marginTop: 2, display: 'inline-block',
-                      color: STAGE_COLORS[d.stage]?.color || INK_DIM,
+                      color: STAGE_COLORS[d.stage]?.text || INK_DIM,
                     }}>{d.stage}{d.contact_name ? ` · ${d.contact_name}` : ''}</span>
                   </div>
                   <span style={{
@@ -210,7 +237,7 @@ export function CompanyDetailPage() {
         sectionStyle={{ marginTop: 24, borderTop: `1px solid ${LINE_STRONG}`, paddingTop: 24 }}
       />
 
-      {showEdit && <CompanyForm company={company} onClose={() => setShowEdit(false)} onSaved={() => { setShowEdit(false); load(); setCfVersion(v => v + 1); }} />}
+      {showEdit && <CompanyForm company={company} onWriteUncertain={onWriteUncertain} onClose={() => setShowEdit(false)} onSaved={() => { setShowEdit(false); load(); setCfVersion(v => v + 1); }} />}
     </div>
   );
 }

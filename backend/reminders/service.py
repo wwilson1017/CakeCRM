@@ -110,19 +110,26 @@ def list_reminders(status: str | None = "pending", limit: int = 50) -> list[dict
     """List reminders. ``status=None``/``'all'`` returns every status.
 
     Pending sorts by soonest-due; other views sort newest-first.
+
+    Every sort key here is non-unique — a recurring series fires on the same due_at
+    minute, and `created_at` is `now()` (transaction start), so occurrences spawned
+    together are byte-identical. `id` closes the order so the capped window doesn't
+    repeat or drop reminders between reads (issue #58).
     """
     limit = max(1, min(int(limit or 50), 200))
     if status and status != "all":
         rows = pg_fetchall(
             "SELECT * FROM reminders WHERE status = %s ORDER BY "
-            "CASE WHEN status = 'pending' THEN due_at END ASC, created_at DESC LIMIT %s",
+            "CASE WHEN status = 'pending' THEN due_at END ASC, created_at DESC, id DESC "
+            "LIMIT %s",
             (status, limit),
         )
     else:
         rows = pg_fetchall(
             "SELECT * FROM reminders ORDER BY "
             "CASE WHEN status = 'pending' THEN 0 ELSE 1 END, "
-            "CASE WHEN status = 'pending' THEN due_at END ASC, created_at DESC LIMIT %s",
+            "CASE WHEN status = 'pending' THEN due_at END ASC, created_at DESC, id DESC "
+            "LIMIT %s",
             (limit,),
         )
     return [_transform(r) for r in rows]
@@ -221,10 +228,38 @@ def delete_reminder(reminder_id: str) -> dict:
 # ── firing (heartbeat-facing) ──────────────────────────────────────────────
 
 def get_due_reminders(limit: int = 50) -> list[dict]:
-    """Pending reminders whose due_at has passed, soonest first."""
+    """Pending reminders whose due_at has passed, soonest first.
+
+    `id` breaks due_at ties (issue #58), which a recurring series produces on every
+    occurrence. It fixes WHICH tied reminders a tick fires first, not whether they all
+    fire: ``claim_reminder`` moves each row out of ``pending``, so a backlog larger than
+    ``limit`` drains either way and no reminder can be starved.
+    """
     return [_transform(r) for r in pg_fetchall(
         "SELECT * FROM reminders WHERE status = 'pending' AND due_at <= now() "
-        "ORDER BY due_at ASC LIMIT %s", (max(1, int(limit)),),
+        "ORDER BY due_at ASC, id ASC LIMIT %s", (max(1, int(limit)),),
+    )]
+
+
+def list_pending_between(start, end) -> list[dict]:
+    """Pending reminders due inside ``[start, end)`` — the #130 Today panel's window.
+
+    Distinct from ``get_due_reminders`` on both bounds: that one asks "what has come
+    due" (everything up to now, for firing), this one asks "what falls on this
+    calendar day" — including the hours still ahead, which is the whole point of a
+    panel that tells you what today holds.
+
+    Pending only, deliberately: a fired reminder was already delivered (the
+    notifications bell holds it) and a cancelled one was revoked, so neither still
+    needs you. Uncapped because one local day of pending reminders is already a
+    bounded set. ``id`` breaks due_at ties (issue #58) as everywhere else here.
+
+    Callers pass aware instants — ``core.localtime.local_day_bounds`` builds the pair
+    for a local calendar day.
+    """
+    return [_transform(r) for r in pg_fetchall(
+        "SELECT * FROM reminders WHERE status = 'pending' AND due_at >= %s AND due_at < %s "
+        "ORDER BY due_at ASC, id ASC", (start, end),
     )]
 
 
