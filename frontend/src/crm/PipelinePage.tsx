@@ -238,6 +238,23 @@ export function PipelinePage() {
   if (deepLinkIsCurrent && deepLinkState === 'open' && deepLinkedDeal
       && handledDeepLink !== deepLink.dealId) {
     setHandledDeepLink(deepLink.dealId);
+    // Un-hide the deal's stage, exactly as `?stage=` does for the column it names. A facet and a
+    // hidden STAGE are not the same thing here, and that difference is the whole reason this line
+    // exists: facets are applied by `useCollectionState` DOWNSTREAM of `items`, so a facet-hidden
+    // deal is still a record `CollectionDetail` can resolve — but a hidden stage is filtered out
+    // of `items` itself (#74's rule, so the List view and the board agree about what is on the
+    // board), and `items` is the array `CollectionDetail` resolves `selectedId` against. Without
+    // this, a linked deal in a hidden stage falls to the layer's `loadById` path: an avoidable
+    // second fetch on the happy path, and a panel with no card behind it on the board.
+    //
+    // Since #124 hides `won` and `lost` by DEFAULT, that is every link to a closed deal on a
+    // default install — and the assistant attaches one to every deal it names, `crm_mark_deal_won`
+    // included. So this is the ordinary path, not an edge.
+    //
+    // The verdict above is unchanged and stays filter-blind: membership is still asked of the
+    // WHOLE payload, so the dead-link notice cannot misfire. This acts on 'open', it does not
+    // decide it.
+    revealStage(deepLinkedDeal.stage);
     setSelectedDealId(deepLinkedDeal.id);
     setLinkOpenedDeal(deepLink.dealId);
   } else if (deepLinkIsCurrent && deepLinkState === 'dead'
@@ -713,6 +730,19 @@ export function PipelinePage() {
     // empty board reading as "you have no archived deals" — the exact false answer #83 fixed.
     const replaysBefore = replayCount.current;
     if (deal.stage !== stage) {
+      // Un-hide the destination BEFORE the write, not after it. `writeDeal` moves the card
+      // optimistically, so the move and the reveal have to be ONE gesture: with the reveal after
+      // the await, a Mark Won into a stage the user has put away makes the card disappear for the
+      // whole duration of the PUT, with nothing on screen to say where it went — and since #124
+      // `won` and `lost` are put away by DEFAULT, so that is the ordinary case rather than a rare
+      // one. That vanishing is the exact failure this reveal exists to prevent; Mark Won/Lost is
+      // one of the two paths that can reach a hidden stage (drag cannot, and the bulk bar reveals
+      // for the same reason).
+      //
+      // The other ordering is not free either, and this is the cheaper cost: a failed write
+      // reverts the stage, so a revealed column can end up holding no card. An empty column the
+      // user can see and put away again is harmless; a card that vanishes mid-write is not.
+      revealStage(stage);
       try {
         await writeDeal(deal, { stage }, deal.stage, lostReason);
       } catch (err) {
@@ -725,15 +755,11 @@ export function PipelinePage() {
         // toasts a failed stage PUT itself, so only the lock refusal is added above.
         throw err;
       }
-      // Un-hide the destination, but only once the write is known to have gone out. Mark Won/Lost
-      // is one of the two paths that can move a deal into a stage the user has put away, and
-      // without this the card vanishes with nothing on screen to say where it went.
-      revealStage(stage);
     }
     // No dismissal here. `DealDetailBody` closes itself on a successful write, because only a
     // MOUNTED body can answer "is the panel in front of me still the one that asked" — see its
-    // `onClose` prop. This function's remaining job is the board's: reveal the destination stage
-    // and refresh.
+    // `onClose` prop. This function's remaining job is the board's: the destination stage is
+    // already revealed above, so what is left is the refresh.
     if (replayCount.current === replaysBefore) load(true);
   }, [writeDeal, load, revealStage]);
 

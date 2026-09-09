@@ -317,6 +317,14 @@ function card(title: string): HTMLElement | undefined {
     .find(el => el.textContent?.includes(title)) as HTMLElement | undefined;
 }
 
+/** A stage column, or undefined when that stage is not on the board at all. Deliberately
+ *  NOT the archived file's throwing variant: "there is no `won` column" is a precondition
+ *  the hidden-stage test below asserts, not a broken fixture. */
+function stageColumn(stage: string): HTMLElement | undefined {
+  return (container.querySelector(`[data-stage="${stage}"]`) ?? undefined) as
+    HTMLElement | undefined;
+}
+
 
 
 /** Every BOARD request made so far, in order. Child components fetch too, so filtering to
@@ -913,6 +921,11 @@ describe('PipelinePage — deal deep links', () => {
       id: 9, title: 'Globex expansion', stage: 'won',
       last_activity_at: '2026-08-30T00:00:00+00:00',
     });
+    // #124 hides `won` by default, and this test's subject is the FACET. Showing the stage
+    // keeps the card's absence attributable to the facet alone — otherwise the precondition
+    // below would hold for two reasons and this would silently become a second copy of the
+    // hidden-stage test that follows it.
+    sessionStorage.setItem('crm_pipeline_hidden_stages', '[]');
     routeApi({ live: [LIVE, HIDDEN] });
     await render('/crm/pipeline');
     await pickActivityFacet('No activity logged');
@@ -922,5 +935,42 @@ describe('PipelinePage — deal deep links', () => {
     await renderThenNavigate('/crm/pipeline?deal=9');
     expect(deadLinkNotice()).toBeNull();
     expect(button('Close')).toBeTruthy();
+  });
+
+  it('un-hides the stage a linked deal sits in, and opens it from the board', async () => {
+    // A hidden STAGE is not a facet, and the difference decides whether this works: facets
+    // are applied downstream of `items`, while a hidden stage is filtered out of `items`
+    // itself (#74) — and `items` is the array `CollectionDetail` resolves `selectedId`
+    // against. So a linked deal in a hidden stage has no record to render from the board.
+    //
+    // This is the ORDINARY path, not an edge: #124 hides `won` and `lost` by default, and
+    // the assistant attaches a link to every deal it names, `crm_mark_deal_won` included.
+    // `?stage=` has always un-hidden the column it names; `?deal=` now does the same.
+    const CLOSED = deal({ id: 9, title: 'Globex expansion', stage: 'won', value: 700 });
+    // Answer the detail GET with the real row. `CollectionDetail` falls back to `loadById`
+    // for an id `items` does not hold, and leaving that unrouted would make this test fail
+    // on the fixture's null rather than on the behaviour — the panel would still be broken,
+    // but for a reason production never produces.
+    routeApi({
+      live: [LIVE, CLOSED],
+      over: path => (path === `/api/crm/deals/${CLOSED.id}` ? CLOSED : undefined),
+    });
+    await render('/crm/pipeline');
+    // The precondition, and it is a real one: the default really does hide the column, so
+    // the assertions below cannot pass by the stage having been visible all along.
+    expect(stageColumn('won')).toBeUndefined();
+    expect(card('Globex expansion')).toBeFalsy();
+
+    await renderThenNavigate('/crm/pipeline?deal=9');
+
+    // The link opened the deal rather than accusing it of being deleted...
+    expect(deadLinkNotice()).toBeNull();
+    expect(button('Close')).toBeTruthy();
+    // ...and the column came back with it, so the deal is in `items` and there is a card
+    // behind the panel. These two are the assertions that carry the test: without the
+    // reveal the panel still OPENS — `loadById` fetches the row `items` is missing — so the
+    // two above pass on their own and only these fail.
+    expect(stageColumn('won')).toBeTruthy();
+    expect(card('Globex expansion')).toBeTruthy();
   });
 });

@@ -333,6 +333,10 @@ describe('writeDeal: a chain where BOTH writes fail', () => {
     // "Superseded — leave the newer state" was written when only another stage write could
     // supersede one. A fields-only save expresses no stage intent at all, so it cannot stand in
     // for the report.
+    // #124 hides `won` by default, and this test asserts on that column. The drag below is a
+    // synthetic drop event, so it would "succeed" onto a column the real UI cannot offer —
+    // showing the stage first is what keeps the scenario one a person could actually perform.
+    sessionStorage.setItem('crm_pipeline_hidden_stages', '[]');
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
     const pendingPuts: { resolve: (v: unknown) => void; reject: (err: unknown) => void }[] = [];
     api.mockImplementation((path: string, options?: ApiCallOptions) =>
@@ -381,6 +385,10 @@ describe('writeDeal: a chain where BOTH writes fail', () => {
     //
     // The rule that replaces it: the last writer to fail owns the reconciliation, whatever it
     // was writing.
+    // #124 hides `won` by default, and this test asserts on that column. The drag below is a
+    // synthetic drop event, so it would "succeed" onto a column the real UI cannot offer —
+    // showing the stage first is what keeps the scenario one a person could actually perform.
+    sessionStorage.setItem('crm_pipeline_hidden_stages', '[]');
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
     const pendingPuts: { reject: (err: unknown) => void }[] = [];
     api.mockImplementation((path: string, options?: ApiCallOptions) =>
