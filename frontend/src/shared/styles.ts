@@ -18,6 +18,10 @@ export const LINE_STRONG = 'var(--color-ck-line-strong)';
 export const BG_ELEV = 'var(--color-ck-card)';
 export const BG_CARD = 'var(--color-ck-card)';
 export const BG_RAISED = 'var(--color-ck-raised)';
+// The PAGE ground (what sits behind cards), as opposed to BG_CARD/BG_RAISED which are
+// surfaces on top of it. Its first inline consumer is the pipeline board's sticky stage
+// header (#129), which needs an opaque backdrop for cards to pass UNDER rather than through.
+export const BG_PAGE = 'var(--color-ck-bg)';
 export const ACCENT = 'var(--color-ck-accent)';
 export const ACCENT_INK = 'var(--color-ck-accent-ink)';
 export const ACCENT_SOFT = 'var(--color-ck-accent-soft)';

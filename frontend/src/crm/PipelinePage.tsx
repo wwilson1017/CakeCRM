@@ -11,21 +11,24 @@ import { stageWriteRequest } from './dealStageWrite';
 import { IconPlus } from '../shared/icons';
 import { useIsMobile } from '../shared/useIsMobile';
 import { LoadError } from '../shared/LoadError';
+import { formatDate } from '../shared/formatDate';
 import { toast } from '../shared/toast';
 import {
-  INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, BG_CARD, BG_ELEV, ACCENT, ACCENT_TEXT, SHADOW,
+  INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, BG_CARD, BG_ELEV, BG_PAGE, ACCENT, ACCENT_TEXT, SHADOW,
   FONT_DISPLAY, mono, formatNumber, inputStyle, tint,
 } from '../shared/styles';
-import { pageHeading, btnPrimary, btnSecondary, btnSmall, stageCard } from './styles';
+import { pageHeading, btnPrimary, btnSecondary, btnSmall, stageCard, LAUNCHER_CLEARANCE_PX } from './styles';
 import type { KanbanColumnDef } from '../shared/dnd';
+import { useBoardScroller } from '../shared/dnd';
 import { CollectionView, denyEscapeBackdrop, useCollectionState } from '../shared/collection';
 import type { CollectionMoveEvent, CollectionSelectionProps } from '../shared/collection';
 import { useUsers } from './useUsers';
 import {
-  boardOrder, loadHiddenStages, openPipelineTotals, saveHiddenStages,
+  boardOrder, lastContactLabel, loadHiddenStages, openPipelineTotals, saveHiddenStages,
   stageFromToggleKey, stageLabel, stageToggleKey, visibleStageKeys,
 } from './pipelineBoard';
 import { isArchivedDeal } from './pipelineFilters';
+import { CORPUS_MAX_AGE_MS } from './usePatchableAssembly';
 import { archivedSelectionIncludesArchived, makePipelineCollectionConfig } from './pipelineCollection';
 import { buildPipelineListColumns } from './components/pipelineListColumns';
 import StageChipBar from './components/StageChipBar';
@@ -290,10 +293,19 @@ export function PipelinePage() {
   // everything the user had typed. Reporting is what the user needs; the spinner belongs to the
   // interaction that asked for it, and that interaction is over.
   const pendingRefreshReportErrors = useRef(false);
-  // Whether a payload has ever rendered. A failed load with no data yet already reports itself
-  // through `LoadError`; toasting as well just stacks a second message on top of the error
-  // screen, once per retry click.
-  const hasLoadedOnce = useRef(false);
+  // WHEN a payload was last applied (ms since epoch), 0 until the first one. Two readers, and
+  // the second is why this is a timestamp rather than the boolean it used to be:
+  //   • the toast gate in `load`'s catch — a failed load with no data yet already reports itself
+  //     through `LoadError`, and toasting as well just stacks a second message on the error
+  //     screen, once per retry click;
+  //   • the return-to-tab staleness bound (issue #129), which needs the age, not the fact.
+  const appliedAt = useRef(0);
+  // Set when the FIRST load was skipped because the tab was hidden — a route can be opened into a
+  // background tab (a Cmd-click, a session restore), and sweeping the whole deal corpus for a
+  // board nobody is looking at is work with no reader. The visibility listener below fires it on
+  // the first return. A ref, not state: nothing renders differently for it (the page is already
+  // showing its spinner) and it is only ever read inside effects and handlers.
+  const deferredMountLoad = useRef(false);
   // `load` referenced by the deferral path below, which has to re-fire it. A ref because the
   // callback cannot name itself, and assigned in an effect because a ref write during render is
   // a build-blocking lint error under this repo's react-hooks ruleset.
@@ -444,7 +456,7 @@ export function PipelinePage() {
       // reader can ask whether the answer post-dates something rather than merely that an
       // answer arrived (issue #145). `Math.max` because loads can settle out of order.
       setBoardLoads(b => (myLoad > b.applied ? { ...b, applied: myLoad } : b));
-      hasLoadedOnce.current = true;
+      appliedAt.current = Date.now();
       dealConfirmedStage.current = new Map(d.deals.map(deal => [deal.id, deal.stage]));
       // Intersect the selection with the deals this payload says are LIVE. Masking an archived
       // deal in the bulk payload and on its card is not enough: the id stays in the Set, so once
@@ -475,7 +487,7 @@ export function PipelinePage() {
       // previous payload keeps rendering, and under "Archived only" that means an empty board —
       // indistinguishable from "you have no archived deals". Say so. (Silent refreshes stay
       // quiet; being unobtrusive is their whole contract.)
-      if (reportErrors && loadGen.current === myLoad && hasLoadedOnce.current) {
+      if (reportErrors && loadGen.current === myLoad && appliedAt.current !== 0) {
         toast.error('Failed to load deals.');
       }
       // A NARROWING load that failed still has to honour the facet the user just cleared.
@@ -837,8 +849,58 @@ export function PipelinePage() {
   // set on screen looking authoritative.
   useEffect(() => {
     includeArchivedRef.current = includeArchived;
+    // Issue #129: a route can mount into a tab nobody is looking at — a Cmd-click onto the board,
+    // a browser restoring its session — and this load is a keyset sweep of the whole deal corpus.
+    // Defer it until the tab is first shown. The page is honest while deferred: `loading` starts
+    // true, so it renders its spinner rather than an empty board, and the `?deal=` verdict stays
+    // `idle` because no payload has landed, so a gated board can never accuse a live deal of
+    // being gone.
+    //
+    // The FIRST load only. A facet change is a user action performed on a visible tab, and it
+    // replaces the board's whole content set — deferring that would leave the previous set on
+    // screen looking authoritative.
+    if (appliedAt.current === 0 && document.visibilityState === 'hidden') {
+      deferredMountLoad.current = true;
+      return;
+    }
     queueMicrotask(load);
   }, [includeArchived, load]);
+
+  // Returning to a backgrounded tab: run the deferred first load, or re-sweep a corpus that has
+  // gone stale (issue #129).
+  //
+  // This is the list pages' idiom — `useCrmCorpus`'s `visibilitychange` + `CORPUS_MAX_AGE_MS`
+  // (`usePatchableAssembly.ts`) — extended to the one swept corpus that had no staleness bound at
+  // all. Deliberately the SAME constant and the same mechanism, not a second timer model: the
+  // board has exactly the writers the list pages do (the assistant's CRM tools, Telegram, the
+  // Gmail touch scan, another seat, another tab), and a board left open overnight was filtering
+  // and dragging yesterday's deals with nothing on screen saying so.
+  //
+  // The staleness re-sweep is SILENT on purpose — a returning user must not get a spinner that
+  // wipes an open sheet — and it needs no bookkeeping of its own: `load` already defers behind
+  // in-flight writes, drops a payload a newer load superseded, and prunes archived rows. The
+  // deferred FIRST load is not silent, because it owns the spinner the page is currently showing.
+  //
+  // Note what is deliberately NOT gated: the refetches that settle a WRITE — `applyBulkMove`'s
+  // reconcile and `replayDeferredLoad`. Those can indeed run while the tab is hidden, but they
+  // are the second half of an action the user just took, not background polling, and
+  // `applyBulkMove` holds `bulkPendingRef` (which disables drag and refresh) until its reconcile
+  // lands. Gating them would wedge the board behind a lock until the user came back.
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (deferredMountLoad.current) {
+        deferredMountLoad.current = false;
+        void loadRef.current();
+        return;
+      }
+      if (appliedAt.current === 0) return;
+      if (Date.now() - appliedAt.current < CORPUS_MAX_AGE_MS) return;
+      void loadRef.current(true);
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, []);
 
   // The live half of the visible set. Archived deals are shown as CARDS (that is the whole point
   // of the facet) but are excluded from everything that means money or action: the open-pipeline
@@ -1117,11 +1179,18 @@ export function PipelinePage() {
   }), [liveSelectedIds, archivedIds, handleSelectionChange, bulkStage, bulkPending, applyBulkMove, clearSelection]);
 
   // ── Mobile: which board column is currently snapped into view ──────────────
-  const scrollerRef = useRef<HTMLDivElement>(null);
+  // The board's scroll region. Two consumers, one node: on desktop `useBoardScroller` bounds its
+  // height so its scrollbars land inside the window (issue #129), and on mobile the chip bar
+  // below observes it to track which stage is snapped into view.
+  //
+  // Not bounded when the facets match nothing: the board then renders zero columns and
+  // `EmptyFilterState` explains why, so a 320px floor would park a blank band above the
+  // explanation. Not bounded on mobile either — see the hook.
+  const { ref: boardScrollerRef, node: boardScrollerNode } = useBoardScroller(!isMobile && !filteredToNothing);
   const [activeStage, setActiveStage] = useState<string | null>(null);
   useEffect(() => {
     if (!isMobile || state.view !== 'kanban') return;
-    const root = scrollerRef.current;
+    const root = boardScrollerNode.current;
     if (!root) return;
     const observer = new IntersectionObserver(
       entries => {
@@ -1140,7 +1209,10 @@ export function PipelinePage() {
     // observer watching detached column nodes through a stale scroller root — the active chip
     // would silently stop following swipes. (`resetSeq` no longer belongs here: it is routed
     // to the search box as a nonce now and remounts nothing.)
-  }, [isMobile, state.view, columns]);
+    //
+    // `boardScrollerNode` is a `useRef` object and so never changes identity — it is listed only
+    // because it crosses a custom-hook boundary, where exhaustive-deps cannot see that.
+  }, [isMobile, state.view, columns, boardScrollerNode]);
 
   const scrollToStage = useCallback((stage: string) => {
     columnRefs.current.get(stage)?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
@@ -1434,12 +1506,29 @@ export function PipelinePage() {
           // could only ever animate and revert. `isArchivedDeal` is module-level, so this is a
           // stable identity rather than a per-render closure.
           dragDisabled: isMobile || bulkPending ? true : isArchivedDeal,
-          scrollerRef,
+          scrollerRef: boardScrollerRef,
           // The ported KanbanBoard/KanbanColumn expose only className hooks (no style
           // prop), so board-scroller and column-body layout use Tailwind here; the
           // card and header visuals below use the CRM's inline design tokens.
-          className: `flex gap-4 overflow-x-auto pb-3 pt-1${isMobile ? ' snap-x snap-mandatory' : ''}`,
-          columnClassName: 'flex flex-col gap-2 overflow-y-auto max-h-[70vh] min-h-[80px] pr-1',
+          //
+          // DESKTOP (issue #129): ONE scroll region, both axes. `useBoardScroller` above gives
+          // this element an explicit height ending at the bottom of the window, so `overflow-auto`
+          // puts BOTH scrollbars on screen — where `overflow-x-auto` on an in-flow block put the
+          // horizontal one at the bottom of the tallest column, off screen on any busy board.
+          // `items-start` is what lets a stage header's `sticky top-0` travel at all: flex's
+          // default `stretch` sizes every column wrapper to the CONTAINER, and a sticky element
+          // cannot leave its containing block, so headers came unstuck after about one viewport.
+          //
+          // MOBILE is byte-for-byte what it was: an in-flow board of `85vw` snap columns, each
+          // with its own `max-h-[70vh]` scrollport. There is no persistent scrollbar to reach on
+          // a touch platform, sideways movement is a swipe, and the chrome above the board can be
+          // a third of the viewport — bounding it would only shrink it.
+          className: isMobile
+            ? 'flex gap-4 overflow-x-auto pb-3 pt-1 snap-x snap-mandatory'
+            : 'flex items-start gap-4 overflow-auto pb-3 pt-1',
+          columnClassName: isMobile
+            ? 'flex flex-col gap-2 overflow-y-auto max-h-[70vh] min-h-[80px] pr-1'
+            : 'flex flex-col gap-2 min-h-[80px] pr-1',
           renderColumn: (col, children) => (
             <div
               key={col.id}
@@ -1449,9 +1538,16 @@ export function PipelinePage() {
                 flexShrink: 0,
                 width: isMobile ? '85vw' : 288,
                 scrollSnapAlign: isMobile ? 'center' : undefined,
+                // The fixed "Ask Baker" pill floats over the bottom-left of the viewport. Every
+                // other page scrolls out from under it using CrmLayout's own bottom padding; a
+                // board bounded to the window cannot, so the last card of the leftmost column
+                // would sit permanently beneath the pill. Same clearance, applied where this
+                // board's scrolling actually happens.
+                paddingBottom: isMobile ? undefined : LAUNCHER_CLEARANCE_PX,
               }}
             >
               <StageHeader
+                sticky={!isMobile}
                 stage={col.data.stage} count={col.data.count} total={col.data.total}
                 // Select-all operates on this column's FILTERED ids, so it can never pick
                 // up a deal the current facets are hiding.
@@ -1572,12 +1668,14 @@ const stopCardInteraction = {
 
 const checkboxStyle = { accentColor: ACCENT, width: 14, height: 14, cursor: 'pointer', flexShrink: 0 };
 
-function StageHeader({ stage, count, total, columnDealIds = [], selectedIds, onToggleColumn, onHide }: {
+function StageHeader({ stage, count, total, columnDealIds = [], selectedIds, onToggleColumn, onHide, sticky = false }: {
   stage: string; count: number; total: number;
   columnDealIds?: number[];
   selectedIds?: ReadonlySet<number>;
   onToggleColumn?: (ids: number[], select: boolean) => void;
   onHide?: () => void;
+  /** Pin the header while the BOARD scrolls vertically (issue #129, desktop only). */
+  sticky?: boolean;
 }) {
   const color = STAGE_COLORS[stage]?.fill || INK_DIM;
   const selectedHere = selectedIds ? columnDealIds.filter(id => selectedIds.has(id)).length : 0;
@@ -1594,7 +1692,24 @@ function StageHeader({ stage, count, total, columnDealIds = [], selectedIds, onT
   }, [showCriteria]);
 
   return (
-    <div style={{ marginBottom: 10, padding: '0 2px' }}>
+    // Sticky since #129, because the desktop board scrolls vertically and this header sits above
+    // the column body rather than inside it — so it would otherwise scroll away and take the
+    // stage name, the total and the select-all checkbox with it.
+    //
+    // Three details are load-bearing. The background must be OPAQUE (`BG_PAGE`, the page ground
+    // this board sits on) so cards pass underneath rather than through. The 10px gap below moves
+    // from `marginBottom` to `padding`, because a margin under a sticky element is transparent
+    // and cards would show in the strip. And `zIndex: 1` beats the sortable cards, which are
+    // transformed but keep `z-index: auto`.
+    //
+    // Known limit, and it is upstream's too: with `items-start` each column wrapper is only as
+    // tall as its own content, and a sticky element cannot leave its containing block — so a
+    // SHORT column's header unpins once its own cards have scrolled past. Keeping every header
+    // pinned needs a scrollport/header-row split (one sticky row above one scrolling body), which
+    // is a restructure of `renderColumn`'s contract rather than a rider on this issue.
+    <div style={sticky
+      ? { position: 'sticky', top: 0, zIndex: 1, background: BG_PAGE, padding: '0 2px 10px' }
+      : { marginBottom: 10, padding: '0 2px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         {columnDealIds.length > 0 && onToggleColumn && (
           <input
@@ -1739,8 +1854,29 @@ function DealBoardCard({ deal, columnStage, onOpen, selectable = false, isSelect
         {deal.contact_name && <span>{deal.contact_name}</span>}
         {deal.probability > 0 && <span>{deal.probability}%</span>}
         {deal.expected_close_date && <span>{deal.expected_close_date}</span>}
-        <ScorePill score={deal.lead_score} compact />
-        <TouchCountPill count={deal.ai_touch_count} />
+        {/* Won cards trade the two open-deal nudges for a last-contact line (issue #129).
+            The score answers "is this still alive" and the touch count answers "are we working
+            it enough to close" — neither question survives the close, and post-sale the board is
+            read for a different one: which accounts have gone quiet.
+
+            Keyed off the COLUMN, not `deal.stage`, exactly as the card's own colour is a few
+            lines above: a card mid-drop into Won reads right immediately, before the PUT settles.
+
+            Plain text in the row's existing ink — no chip, no `tint()` background and no
+            `opacity`, so nothing here owes an entry in `inkContrast.test.ts`'s surface registry
+            (#68) or has to clear `hueContrast`'s 4.5:1 (#119). */}
+        {columnStage === 'won' ? (
+          <span title={deal.last_activity_at
+            ? `Most recent logged note or activity: ${formatDate(deal.last_activity_at)}`
+            : 'No note or activity has been logged on this deal'}>
+            {lastContactLabel(deal.last_activity_at)}
+          </span>
+        ) : (
+          <>
+            <ScorePill score={deal.lead_score} compact />
+            <TouchCountPill count={deal.ai_touch_count} />
+          </>
+        )}
       </div>
     </div>
   );
