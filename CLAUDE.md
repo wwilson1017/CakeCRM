@@ -336,7 +336,85 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   confirms before a file switch discards an unsaved draft.
   `memory.service.delete_fact()` is a **human-only** hard purge with no agent tool — the
   assistant retires a fact with `invalidate_fact`, which preserves the temporal record.
-  Phases 3 (compaction), 4 (observer/extractor/commitments-as-tasks/file-dreaming) and 5
+  **Conversation compaction is #72 Phase 3** (`backend/assistant/compaction.py`), and it
+  closes the one place the assembler was unbounded: it capped each ROW and nothing capped
+  the TOTAL, so a long thread grew until the provider refused the whole request. Past ~70%
+  of the window the aged MIDDLE is replaced by a light-tier gist and a boundary `seq` is
+  stored; the assembler keeps the opening exchange verbatim, folds the gist onto the first
+  RETAINED user turn, and keeps the tail verbatim. Folding onto a real user row rather than
+  inserting a synthetic turn is what keeps role alternation valid on every provider.
+  Rows are **never deleted** — compaction changes only what is ASSEMBLED, so the history UI
+  still shows everything and clearing two columns restores full context. Keyless is not a
+  degradation path but an unreachable one: chat is gated on `ai_ready`, so a keyless install
+  never reaches compaction; any other failure (no light tier, a timeout, an empty answer)
+  returns False and the turn assembles exactly as it did before.
+  **The fence is minted ONCE, at write time, and stored wrapped — this is load-bearing, not
+  a style choice.** `anthropic_provider` applies `cache_control` to the last user message
+  for CONVERSATION-PREFIX caching, and the gist rides an EARLY user turn, so re-wrapping per
+  assembly would mint a fresh nonce and re-key that cache every single turn — the same
+  defect the Phase 1 review caught for the static system prompt, one layer down. Capping
+  therefore happens on the raw text BEFORE wrapping (truncating a wrapped block severs its
+  closing tag), and `test_the_assembled_gist_is_byte_identical_across_turns` pins it.
+  Chatty regex-scrubs a fixed `</conversation_summary>` instead; this repo already replaced
+  that approach once, so the gist is nonce-fenced like everything else and so is every tool
+  result the summarizer READS.
+  **Two engine invariants read the assembled messages, and compaction removes rows, so both
+  needed work — this is the part to preserve.** (1) `_context_has_untrusted_upload` decides
+  the power→normal write downgrade by scanning the assembled context for untrusted fences;
+  once a Gmail read or an upload ages out, that scan comes up clean and the mitigation would
+  silently stop firing. So `assistant_conversations.untrusted_content_seen` records it
+  durably, written at **INGRESS** — the moment the content arrives — because an assistant
+  row is saved with its `tool_calls` and its `tool_results` merged afterwards, and a
+  compaction pass reading between the two would see no marker and record nothing.
+  Compaction's own scan stays as the backfill path for rows written before this shipped and
+  as a backstop if the ingress write failed; `is_conversation_tainted` **fails closed**.
+  (2) `_last_user_text` picks the memory-retrieval keywords and refuses any message carrying
+  an untrusted marker — but when a thread is dominated by old content the boundary falls
+  back to "gist everything but the last turn", so the gist lands on the CURRENT message.
+  Rejecting it would silently match memory on the conversation's FIRST message, so the
+  nonce-delimited block is stripped and the typed remainder kept.
+  Four smaller rules, each a real defect first: a row whose tool work is **unfinished**
+  (results not merged, or a write awaiting approval) is never gisted, because summarizing it
+  produces a gist describing work whose outcome is not in it while the results land behind
+  the boundary — and that scan starts at the CURRENT boundary, never at row 0, because the
+  preserved head and the already-gisted span cannot enter the middle anyway, so scanning
+  from 0 pinned the ceiling inside the head whenever the opening exchange held an abandoned
+  approval and, since that row never changes, disabled compaction for the life of the
+  thread; the middle transcript is capped **per ROW as well as in total**
+  (`_MAX_ROW_CHARS` <= `_MAX_MIDDLE_CHARS`, which is the inequality that lets the newest row
+  obey the cap like every other rather than being waved through on an empty budget) —
+  a chat message has no length limit and an upload row carries several capped files, so one
+  row could put the summarizer prompt past the LIGHT tier's own window, and a summarizer
+  that refuses writes nothing, so every later turn rebuilt the identical oversized request
+  while the thread grew; every clip lands on RAW text before wrapping, so no cut can sever a
+  fence; an oversized row budgets the gist and the request **separately**, dropping
+  the gist WHOLE past half the row rather than truncating what the user just typed; and the
+  fast path compares the stored reading against the **target**, not the trigger, because
+  that reading describes the PREVIOUS model input and counts neither the user row this turn
+  saved nor the assistant text that answered the one before. That reading is also written
+  as the **GREATER** of old and new, because two turns racing on one conversation finish out
+  of order and the slow one's stale-low number landing last would send the next turn down
+  the fast path and skip compaction — and once the real context is past the provider's
+  limit every turn fails, none records a corrective reading, and the thread stays stuck
+  there. `set_compaction` **clears** the reading, which is the one moment a decrease is
+  real and is what lets the write otherwise keep the greater of the two. **That clear is
+  necessary and NOT sufficient**, which is worth stating because it reads as if it were: it
+  settles the stored value but cannot reach a turn already in flight. Turn A assembles a
+  150k context, turn B compacts and NULLs the meter, then A finishes and `GREATEST` restores
+  150k — a number describing rows that are no longer assembled, which the next turn takes as
+  current fullness and sheds, gisting recent rows the thread still had room for. So every
+  reading is **versioned by the boundary it was assembled against**
+  (`save_message(context_boundary_seq=)`), and one produced under an older boundary is
+  dropped rather than defended. No new column: `compaction_first_kept_seq` only ever moves
+  forward (`set_compaction` is a compare-and-set), so it already IS the generation counter.
+  The engine reads that boundary **before** assembling, deliberately — a compaction landing
+  in the gap then makes the stamp OLDER than the context and costs one meter reading, where
+  reading it after would make the stamp NEWER and wave through exactly the stale reading the
+  stamp exists to catch. Only Anthropic reports usage or
+  a context window today, so the other five providers run on the chars/4 estimate against
+  `DEFAULT_BUDGET_TOKENS` — bounded, but a real window smaller than that could still refuse
+  a request before the trigger fires. Giving them real windows is its own issue.
+  Phases 4 (observer/extractor/commitments-as-tasks/file-dreaming) and 5
   (optional embeddings re-ranker) are follow-ups; #72 stays open as the tracker.
   Assistant chat history and memory are still install-wide — Phase B of #60.
 - **Accounts, roles and record ownership** (#60 Phase A) — the install has real
@@ -2003,6 +2081,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | CRM core (schema, router, tools, smart import) — **landed #3** as `backend/crm/` + `frontend/src/crm/` + `frontend/src/shared/` | `chatty/backend/integrations/crm_lite/`, `chatty/frontend/src/crm/` |
 | Assistant engine — **chat loop, tool registry, confirmations, uploads landed #4** as `backend/assistant/` + `frontend/src/assistant/`; **memory (facts + FTS) + dreaming (pure-algorithmic usage scoring + fact soft-archival) landed #5** as `backend/memory/` + `backend/dreaming/` (dreaming's archival unit is the fact row, not context files — CakeCRM has no file store; driven by #6's reminder tick) | `chatty/backend/core/agents/` |
 | Context files + Memory UI (`assistant_context_files` with GENERATED `kind`/`is_protected`; soul unfenced in static, knowledge nonce-fenced in volatile; 7 keyless tools; always-confirm on protected files; `/api/context-files` + `/api/memory`; `MemoryPage`) — **landed #72 Phase 1+2** as `backend/context_files/` + `backend/memory/router.py` + `frontend/src/crm/MemoryPage.tsx`. Chatty's `_load-order.json`, GCS sync, `atomic_write`, meetings/transcripts and `relevance_prefetch` do not translate and were not ported; its flat namespace became `topics/`+`daily/` prefixes to fit one table; its regex `sanitize_memory_content` was dropped in favour of this repo's nonce fencing (forge-proof where a blocklist is not). Fencing `MEMORY.md` is deliberately STRICTER than chatty, which loads it raw, because ours becomes extractor-fed in Phase 4 | `chatty/backend/core/agents/context_manager.py` + `tools/context_tools.py` + `ai_service._knowledge_management_instructions()` |
+| Conversation compaction (`backend/assistant/compaction.py` + `assembly._apply_compaction` + four `assistant_conversations` columns + `history.{get_compaction_state,set_compaction,mark_untrusted_seen,is_conversation_tainted}` + `delimiters.wrap_conversation_summary`) — **landed #72 Phase 3**. Four deliberate departures from the blueprint, each because CakeCRM differs: the summarizer goes through the `AIProvider` ABC on the light tier (chatty hardcodes a Haiku id and calls the SDK directly, which this repo forbids), so the gist is bounded by CHARACTERS — `stream_turn` exposes no `max_tokens` knob; the gist is nonce-fenced rather than regex-scrubbed, and the fence is minted ONCE at write time because our provider caches the conversation PREFIX; a row whose tool work is unfinished is never gisted (chatty needs no such guard — it never persists a call and its result separately); and the transcript truncates at ROW granularity rather than slicing the rendered character stream, which can sever a fence. Row granularity also deletes a whole class of chatty's care: one row carries an iteration's calls AND its results, so a boundary can never SPLIT a `tool_use` from its `tool_result`. NOT ported: chatty's `sanitize_memory_content` (dropped in Phase 1 for nonce fencing) and its `_fetch_anthropic_key` fallback (no provider-specific key path here). Fixed in passing: `claude-opus-4-8`, `get_ai_provider`'s DEFAULT Anthropic model, had no `MODEL_CONTEXT_WINDOWS` entry, so the composer's context meter was hidden on a default install | `chatty/backend/core/agents/compaction/service.py` + `context_assembly._apply_compaction` |
 | Assistant brand + identity-panel role gate (`identity.NAME` fixed as "Baker": no `name` column read, no `name` write path, prompt interpolation from the constant, and `NAME_NOTE` between soul and `SALES_GUIDE` so free identity text cannot rename it either; one-shot `UPDATE assistant_identity SET name='Baker'` migration with the column kept for rollback safety; `IdentitySettings.tsx` renders the name read-only and gates the personality editor on `useAuth().isAdmin`, members read-only) — **landed #71 (bundling #106)** as `backend/assistant/{identity,router}.py` + `20260826010825_assistant_name_is_a_brand.sql` + `frontend/src/assistant/IdentitySettings.tsx` (+ co-located vitest). Personality stays user-editable; only the name became permanent | New capability (product decision on issue #71 — no blueprint) |
 | Heartbeat + background AI turn — **landed #6** as `backend/heartbeat/` (60s APScheduler tick) + `backend/assistant/background.py` (non-SSE `run_background_turn`: auto-approved writes under a server-enforced tool allowlist + `WRITE_BUDGET_BACKGROUND`). The scheduler now runs **four** jobs, split by one rule the code states explicitly: **local SQL rides `reminder_tick`** (#5 dreaming, #18's score refresh), **network- or AI-bound work gets its OWN `add_job`** (`heartbeat_turn`, #17's `gmail_scan`, #22 Phase 3's `proactive`) so a hung request can never delay reminder delivery | `chatty/backend/core/agents/background_runner.py` + `main.py` scheduler wiring |
 | Reminders (own table, recurrence math, agent tools + **net-new full CRUD REST/UI**) — **landed #6** as `backend/reminders/` + `frontend/src/crm/RemindersPage.tsx` | `chatty/backend/core/agents/reminders/` |

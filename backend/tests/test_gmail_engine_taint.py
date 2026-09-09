@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from assistant import assembly, delimiters, engine, history, identity
+from assistant import assembly, compaction, delimiters, engine, history, identity
 from providers.anthropic_provider import AnthropicProvider
 from providers.google_provider import GoogleProvider
 from providers.openai_provider import OpenAIProvider
@@ -49,6 +49,11 @@ class Store:
     def __init__(self):
         self.convs = {}
         self.merges = []
+        self.context_tokens = []
+        self.untrusted_marks = []
+        # Compaction (#72 Phase 3) persists this once a compacted-away span carried
+        # untrusted content; the engine ORs it into the power->normal downgrade.
+        self.tainted = False
         self._n = 0
 
     def create_conversation(self):
@@ -63,9 +68,23 @@ class Store:
     def auto_title(self, cid, text):
         return (text or "")[:60]
 
-    def save_message(self, cid, mid, role, content, tool_calls=None, model=""):
+    def save_message(self, cid, mid, role, content, tool_calls=None, model="",
+                     context_tokens=None, context_boundary_seq=None):
+        self.context_tokens.append(context_tokens)
         self.convs.setdefault(cid, {"id": cid, "messages": []})["messages"].append(
             {"id": mid, "role": role, "content": content, "tool_calls": tool_calls, "tool_results": None})
+
+    def is_conversation_tainted(self, cid):
+        return self.tainted
+
+    def get_compaction_state(self, cid):
+        # The engine reads the boundary each turn to version its usage readings; here
+        # nothing compacts, so it is always the never-compacted state.
+        return {"summary": None, "first_kept_seq": None,
+                "tainted": self.tainted, "last_context_tokens": None}
+
+    def mark_untrusted_seen(self, cid):
+        self.untrusted_marks.append(cid)
 
     def merge_tool_result(self, mid, tuid, tname, content):
         self.merges.append({"tuid": tuid, "tool_name": tname, "content": content})
@@ -94,8 +113,14 @@ class Registry:
 @pytest.fixture
 def store(monkeypatch):
     s = Store()
-    for fn in ("create_conversation", "conversation_exists", "auto_title", "save_message", "merge_tool_result"):
+    for fn in ("create_conversation", "conversation_exists", "auto_title", "save_message", "merge_tool_result",
+                "is_conversation_tainted", "mark_untrusted_seen", "get_compaction_state"):
         monkeypatch.setattr(history, fn, getattr(s, fn))
+    # Compaction is exercised in test_assistant_compaction.py; here it must not reach
+    # a database, and every one of these threads is far too short to compact anyway.
+    async def _no_compaction(provider, cid):
+        return False
+    monkeypatch.setattr(compaction, "maybe_compact", _no_compaction)
     monkeypatch.setattr(identity, "get_identity",
                         lambda: {"name": "Baker", "personality": "p", "using_default": True})
     monkeypatch.setattr(assembly, "assemble_messages", lambda provider, cid: [{"role": "user", "content": "hi"}])
@@ -256,3 +281,36 @@ async def test_untrusted_read_persist_failure_fails_closed(store, monkeypatch):
     events = await _run(prov, reg, [{"role": "user", "content": "search"}], tool_mode="power")
     assert events[-1]["type"] == "error"
     assert not any(e["type"] == "done" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_a_gmail_read_records_the_taint_durably(store):
+    """The compaction-safety half of the #8 mitigation, on the path that matters most.
+
+    Within this turn `turn_has_untrusted_reads` already gates writes, and the next turn's
+    in-context scan finds the fence while the row is still assembled — but once the thread
+    compacts and that row is gisted away, the durable flag is the only thing left. It is
+    written HERE, as the result is fenced, rather than when compaction later removes the
+    row: the row is saved with its calls and its results merged afterwards, so a
+    compaction pass reading in between would find no marker at all.
+    """
+    reg = Registry()
+    prov = FakeProvider([
+        [_complete([_tc("gmail_search", "r1", {"query": "invoice"})], stop="tool_use")],
+        [{"type": "text", "text": "found two"}, _complete()],
+    ])
+    await _run(prov, reg, [{"role": "user", "content": "check my mail"}], tool_mode="power")
+    assert store.untrusted_marks, "a Gmail read must taint the conversation durably"
+
+
+@pytest.mark.asyncio
+async def test_a_crm_read_records_no_taint(store):
+    """The control: an ordinary CRM read is not third-party content and must not cost
+    the user power mode for the rest of the conversation."""
+    reg = Registry()
+    prov = FakeProvider([
+        [_complete([_tc("crm_list_deals", "r1", {})], stop="tool_use")],
+        [{"type": "text", "text": "three deals"}, _complete()],
+    ])
+    await _run(prov, reg, [{"role": "user", "content": "how many deals"}], tool_mode="power")
+    assert store.untrusted_marks == []
