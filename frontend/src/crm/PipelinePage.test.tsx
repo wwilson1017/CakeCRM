@@ -37,6 +37,7 @@ vi.mock('./components/DealDetailSheet', () => ({
 }));
 
 const { PipelinePage } = await import('./PipelinePage');
+const { saveShowClosedStages } = await import('./pipelineBoard');
 
 function deal(over: Partial<CrmDeal> & { id: number }): CrmDeal {
   return {
@@ -114,15 +115,28 @@ afterEach(() => {
 });
 
 describe('mounting', () => {
-  it('renders the board with every deal and an open-pipeline total', async () => {
+  it('renders the open deals and an open-pipeline total, with Won put away (#124)', async () => {
     await mount();
     expect(text()).toContain('Pipeline');
     expect(text()).toContain('Alpha contract');
     expect(text()).toContain('Beta renewal');
-    expect(text()).toContain('Gamma expansion');
-    // Open stages only: 1000 + 2000, with the won deal's 5000 excluded.
+    // Gamma is `won`, and #124 makes the closed stages hidden by DEFAULT.
+    expect(text()).not.toContain('Gamma expansion');
+    expect(text()).toContain('2 stages hidden');
+    // Unchanged by the hide, and that is why it is asserted here: `openPipelineTotals` filters
+    // to OPEN_STAGES, so the won deal's 5000 was never in this figure. A default that moved the
+    // headline number would be a reporting change rather than a display one.
     expect(text()).toContain('$3.0K open'); // formatNumber abbreviates thousands
     expect(text()).toContain('2 open deals');
+  });
+
+  it('shows the closed stages when the personal preference is on (#124)', async () => {
+    // The Settings card's write, replayed: `saveShowClosedStages` is exactly what the
+    // PipelineBoardCard checkbox calls.
+    saveShowClosedStages(true);
+    await mount();
+    expect(text()).toContain('Gamma expansion');
+    expect(text()).not.toContain('stages hidden');
   });
 
   it('exposes both views through the switcher', async () => {
@@ -265,7 +279,33 @@ describe('stage visibility is reachable and reversible through the UI', () => {
       document.querySelector<HTMLButtonElement>('button[aria-label="Hide Qualified column"]')!.click();
     });
     expect(text()).not.toContain('Beta renewal');
-    expect(JSON.parse(sessionStorage.getItem('crm_pipeline_hidden_stages')!)).toEqual(['qualified']);
+    // Sorted, because the write ADDS to whatever this tab already held — and since #124 a
+    // fresh tab starts holding the two closed stages.
+    expect(JSON.parse(sessionStorage.getItem('crm_pipeline_hidden_stages')!).sort())
+      .toEqual(['lost', 'qualified', 'won']);
+  });
+
+  it('board → Settings → board: the preference lands, a manual hide survives it', async () => {
+    // The end-to-end shape of #124, and the trap it exists to avoid. The board persists its
+    // hidden set on the first render, so by the time anyone reaches Settings their tab already
+    // HAS a stored set — and a stored set outranks the preference. Without the reconciliation
+    // inside `saveShowClosedStages` the toggle would look inert to the one person most likely
+    // to check it. The manual hide is the other half of that contract: reconciliation touches
+    // the closed stages and nothing else.
+    await mount();
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button[aria-label="Hide Qualified column"]')!.click();
+    });
+    expect(text()).not.toContain('Beta renewal');
+
+    act(() => root.unmount());     // navigating away to /crm/settings
+    saveShowClosedStages(true);    // what PipelineBoardCard's checkbox calls
+    root = createRoot(container);  // and back again
+    await mount();
+
+    expect(text()).toContain('Gamma expansion');  // the closed stage came back...
+    expect(text()).not.toContain('Beta renewal'); // ...and the manual hide did not
+    expect(text()).toContain('1 stage hidden');
   });
 
   it('"Show all" restores every hidden stage — including when ALL of them are hidden', async () => {

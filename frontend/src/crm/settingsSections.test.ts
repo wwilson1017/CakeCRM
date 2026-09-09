@@ -22,7 +22,7 @@ import {
   type SettingsCardId,
 } from './settingsSections';
 
-const MEMBER_CARDS: SettingsCardId[] = ['notifications', 'change_password', 'memory'];
+const MEMBER_CARDS: SettingsCardId[] = ['notifications', 'change_password', 'pipeline_board', 'memory'];
 const ADMIN_ONLY_CARDS: SettingsCardId[] = [
   'branding', 'team', 'custom_fields', 'telegram', 'gmail',
   // #102 made the task-mode + todo-surface routes require_admin.
@@ -38,10 +38,10 @@ describe('settingsSections — the member/admin partition', () => {
     expect(visibleCardIds(false).sort()).toEqual([...MEMBER_CARDS].sort());
   });
 
-  it('shows an admin all nine cards, each exactly once', () => {
+  it('shows an admin all ten cards, each exactly once', () => {
     const ids = visibleCardIds(true);
-    expect(ids).toHaveLength(9);
-    expect(new Set(ids).size).toBe(9);
+    expect(ids).toHaveLength(10);
+    expect(new Set(ids).size).toBe(10);
     expect(ids.sort()).toEqual([...MEMBER_CARDS, ...ADMIN_ONLY_CARDS].sort());
   });
 
@@ -131,7 +131,7 @@ describe('settingsSections — every card has a home', () => {
   it('declares each card id exactly once across all sections', () => {
     const ids = SETTINGS_SECTIONS.flatMap(s => s.cards).map(c => c.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(9);
+    expect(ids).toHaveLength(10);
   });
 
   it('gives every section a non-empty label', () => {
@@ -145,7 +145,7 @@ describe('SettingsCard is the only owner of card chrome', () => {
   // The shell can only guarantee "no double padding, no unpadded card" if each card
   // REPLACED its outer wrapper instead of nesting inside the shell. `cardStyle` is the
   // fingerprint of that wrapper, and it has legitimate consumers elsewhere in the app —
-  // so this is scoped to the nine settings cards by name.
+  // so this is scoped to the settings cards by name.
   //
   // Read through Vite's `?raw` glob rather than `node:fs` because `tsconfig.app.json`
   // sets `types: ["vite/client"]`, so a node builtin would not type-check under `tsc -b`.
@@ -163,6 +163,7 @@ describe('SettingsCard is the only owner of card chrome', () => {
     'GmailCard.tsx': 'gmail',
     'MemoryCard.tsx': 'memory',
     'NotificationSettings.tsx': 'notifications',
+    'PipelineBoardCard.tsx': 'pipeline_board',
     'TaskModeCard.tsx': 'task_mode',
     'TeamSettings.tsx': 'team',
     'TelegramSettings.tsx': 'telegram',
@@ -201,7 +202,7 @@ describe('SettingsCard is the only owner of card chrome', () => {
   });
 
   it.each(SETTINGS_CARD_FILES)('%s renders under its own registry id', (file) => {
-    // `SettingsCardId` constrains the `id` prop to ONE OF the nine, never to the one this
+    // `SettingsCardId` constrains the `id` prop to ONE OF the registered ids, never to the one this
     // component is registered as — so a copy-pasted `id` type-checks, renders, and mints a
     // duplicate DOM id plus an ambiguous `aria-labelledby` target. Bind it here.
     expect(sourceOf(file)).toMatch(new RegExp(`id="${CARD_FILE_IDS[file]}"`));

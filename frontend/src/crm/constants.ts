@@ -6,6 +6,12 @@ export const STAGE_ORDER = ['lead', 'qualified', 'proposal', 'negotiation', 'won
 // the pipeline header's open-pipeline total and the Overdue close-date facet.
 export const OPEN_STAGES = STAGE_ORDER.filter(s => s !== 'won' && s !== 'lost');
 
+// The complement: the terminal stages. DERIVED rather than a second `['won', 'lost']` literal,
+// so a stage added to STAGE_ORDER can never leave the two lists disagreeing about what "closed"
+// means — the same reason OPEN_STAGES is derived. Mirrors the backend's `crm.service.CLOSED_STAGES`
+// (#99). Read by #124's default board visibility.
+export const CLOSED_STAGES = STAGE_ORDER.filter(s => !OPEN_STAGES.includes(s));
+
 // Mirrors `crm.service.MAX_LOST_REASON` (issue #128), the same way
 // `chatterComposer.MAX_NOTE_LEN` mirrors `chatter_service.MAX_MESSAGE_LEN`. The composer
 // caps input so a long reason is stopped while it is being typed, rather than round-
