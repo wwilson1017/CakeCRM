@@ -31,6 +31,33 @@ import { acquireBodyScrollLock } from '../hooks/useBodyScrollLock';
  * state or double-mount the signature canvas. Move the scrollport and that bar stops
  * riding the bottom edge.
  *
+ * **Stacking, and the assistant launcher (`underLauncher`).** The CRM floats one persistent
+ * launcher button (`crm/components/AssistantLauncher.tsx`, `zIndex: 40`) on every page, and it is
+ * the only control that must stay reachable OVER an open record detail: it opens the assistant
+ * drawer carrying that record's context (#14), which is the one moment such context exists. So a
+ * caller may pass `underLauncher` to render the CENTRED modal at `dock:z-[39]`, beneath the
+ * button, while the full-screen takeover stays at `z-50` above it — a takeover cannot share the
+ * corner with a floating button, and on a phone a poked-through launcher would sit on the panel's
+ * own bottom-left controls and steal taps. The drawer itself (z-59, scrim 58), `ConfirmHost`
+ * (z-150) and the toast viewport (z-200) stay above both branches either way.
+ *
+ * It is a PROP and not the default because "beneath the launcher" is a fact about record
+ * details, not about every overlay: a form modal or a confirm SHOULD occlude the button. It is
+ * also not a per-surface opt-in in practice — `CollectionDetail` passes it unconditionally, so
+ * every collection detail inherits the rule with nothing to remember.
+ *
+ * The Tab trap therefore admits ONE element outside the panel in this mode — whatever carries
+ * `data-detail-companion` — so the launcher is reachable by keyboard and not only by pointer.
+ * Only in the CENTRED layout, and only while that element is genuinely uncovered: the takeover
+ * renders at `z-50` and covers the launcher, so the hand-off is gated on the `dock:` probe below;
+ * and `AssistantLauncher` withholds the attribute (and drops beneath this panel) whenever it
+ * would NAVIGATE rather than open the drawer, since a navigation unmounts the panel and takes
+ * any draft with it without ever reaching this modal's close guard.
+ * Residual, disclosed: once the drawer itself closes and returns focus to that button, a Tab
+ * pressed while focus sits outside BOTH surfaces still walks the covered page. That is not a
+ * regression (the hand-rolled sheet this replaced had no trap at all), but a full launcher /
+ * detail / drawer focus contract is its own piece of work.
+ *
  * **`role="dialog"` WITHOUT `aria-modal`, on purpose.** `aria-modal="true"` promises assistive
  * tech that everything outside is unavailable, which is only true with a portal AND a really
  * `inert` background — and making `#root` inert would take the platform alert banner
@@ -69,6 +96,14 @@ interface DetailModalProps {
    * surfaces have no dirty-close confirm pass `false` rather than shipping silent data loss.
    */
   closeOnEscape?: boolean;
+  /**
+   * Stack the CENTRED modal beneath the assistant launcher. Default `false` (plain `z-50`).
+   *
+   * `shared/collection`'s `CollectionDetail` passes it unconditionally and is its only caller —
+   * see the "Stacking" note above for why the rule belongs to record details rather than to
+   * every overlay.
+   */
+  underLauncher?: boolean;
   children: ReactNode;
 }
 
@@ -173,6 +208,25 @@ function visibleFocusables(root: HTMLElement): HTMLElement[] {
     .filter(el => el.getClientRects().length > 0);
 }
 
+/**
+ * The ONE control an `underLauncher` modal deliberately does not cover, marked so the Tab trap
+ * can let keyboard users reach it.
+ *
+ * Rendering the launcher above the panel makes it reachable by POINTER; without this the trap
+ * still cycles strictly among the panel's own descendants, so a keyboard-only user could not
+ * reach it at all — worse than the untrapped sheet this replaced, and it would hollow out the
+ * whole point of the mode. An attribute rather than a ref keeps the shared file free of any
+ * knowledge of which app control it is.
+ */
+const COMPANION_SELECTOR = '[data-detail-companion]';
+
+function visibleCompanion(root: HTMLElement): HTMLElement | null {
+  for (const el of document.querySelectorAll<HTMLElement>(COMPANION_SELECTOR)) {
+    if (!root.contains(el) && el.getClientRects().length > 0) return el;
+  }
+  return null;
+}
+
 export default function DetailModal({
   title,
   subtitle,
@@ -180,9 +234,16 @@ export default function DetailModal({
   headerActions,
   onBackdropClick,
   closeOnEscape = true,
+  underLauncher = false,
   children,
 }: DetailModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
+  // Is the CENTRED layout live rather than the full-screen takeover? Answered by a probe element
+  // carrying the `dock:` variant ITSELF, never by a media query in JS: this file's whole premise
+  // is that the takeover/centre decision is `dock:` and nothing else, and a JS copy of that query
+  // is a second definition that drifts. `useIsMobile` is width-only, which is exactly what put a
+  // landscape phone on the wrong branch in the blueprint.
+  const dockProbeRef = useRef<HTMLSpanElement>(null);
   const titleId = useId();
   // Whether the mousedown / mouseup halves of the current gesture each landed on the backdrop
   // itself — BOTH are tracked because the click event alone can prove neither; see the
@@ -360,7 +421,26 @@ export default function DetailModal({
     // panel without anything having claimed it. A future nested overlay may satisfy only one.
     if (e.defaultPrevented) return;
     const root = panelRef.current;
-    if (!root || !root.contains(document.activeElement)) return;
+    if (!root) return;
+
+    if (!root.contains(document.activeElement)) return;
+
+    // In `underLauncher` mode the wrap at either END hands off to the companion instead of
+    // cycling, so the one control this mode deliberately leaves uncovered is reachable by
+    // keyboard and not only by pointer.
+    //
+    // Only the OUTBOUND direction is ours to implement: this trap is a React `onKeyDown` on the
+    // panel, so it fires only for keys whose target is inside the panel's subtree — a Tab pressed
+    // while focus sits ON the companion never reaches this handler at all. Getting back is
+    // therefore native order, which is the honest behaviour for a `role="dialog"` that
+    // deliberately does not claim `aria-modal`: this panel does not own the whole screen, and
+    // says so.
+    // The hand-off belongs to the CENTRED layout only. On the takeover this panel renders at
+    // `z-50` and COVERS the launcher, so the companion is no longer "the one control this mode
+    // leaves uncovered" — it is behind the modal. `getClientRects()` cannot see occlusion, so it
+    // would still qualify, and Tab past the last control would focus an invisible button.
+    const centred = (dockProbeRef.current?.getClientRects().length ?? 0) > 0;
+    const companion = underLauncher && centred ? visibleCompanion(root) : null;
 
     const focusables = visibleFocusables(root);
     if (focusables.length === 0) {
@@ -379,6 +459,11 @@ export default function DetailModal({
       (e.shiftKey ? last : first).focus();
       return;
     }
+    if (companion && ((e.shiftKey && document.activeElement === first) || (!e.shiftKey && document.activeElement === last))) {
+      e.preventDefault();
+      companion.focus();
+      return;
+    }
     if (e.shiftKey && document.activeElement === first) {
       e.preventDefault();
       last.focus();
@@ -393,7 +478,14 @@ export default function DetailModal({
     // there is room to centre. When `onBackdropClick` is undefined the click simply does
     // nothing — the element still absorbs it, which is the point.
     <div
-      className="fixed inset-0 z-50 dock:flex dock:items-center dock:justify-center dock:bg-black/50 dock:p-4"
+      // Both class strings are written out in full rather than composed from a shared prefix:
+      // Tailwind scans source text for complete class names, and a concatenated `z-50 ${…}`
+      // would leave `dock:z-[39]` ungenerated.
+      className={
+        underLauncher
+          ? 'fixed inset-0 z-50 dock:z-[39] dock:flex dock:items-center dock:justify-center dock:bg-black/50 dock:p-4'
+          : 'fixed inset-0 z-50 dock:flex dock:items-center dock:justify-center dock:bg-black/50 dock:p-4'
+      }
       // A backdrop dismissal must be a CLICK ON THE BACKDROP, not merely a click event that
       // reached it. When mousedown and mouseup land on different elements the browser fires
       // `click` on their nearest common ancestor — and this wrapper is the panel's PARENT, so
@@ -419,6 +511,14 @@ export default function DetailModal({
         onBackdropClick();
       }}
     >
+      {/* Zero-size probe for the `dock:` variant, so the Tab hand-off below can tell the centred
+          layout from the takeover without a second copy of that media query in JS. A `<span>`
+          outside the panel: not focusable, so the trap's own focusable scan never sees it, and
+          `aria-hidden` keeps it out of the accessibility tree. `hidden` / `dock:block` are
+          written as complete class names because that is what Tailwind scans for. */}
+      {underLauncher && (
+        <span ref={dockProbeRef} aria-hidden="true" className="hidden dock:block" />
+      )}
       <div
         ref={panelRef}
         role="dialog"

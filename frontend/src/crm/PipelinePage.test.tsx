@@ -27,12 +27,14 @@ vi.mock('../core/api/client', () => ({
 // The board is desktop-only for selection; pin it so the bulk affordances render.
 vi.mock('../shared/useIsMobile', () => ({ useIsMobile: () => false }));
 
-// The deal sheet is stubbed: what these tests are about is whether the PAGE routes a
-// selection to it, not what it renders. The real one pulls in the record context, the
-// activity timeline, chatter, custom fields and the touch-count drill-down — a dependency
-// tree with its own suites, and mocking all of it would test the mocks.
-vi.mock('./components/DealDetailSheet', () => ({
-  DealDetailSheet: ({ deal }: { deal: { id: number; title: string } }) => (
+// The detail BODY is stubbed: what these tests are about is whether the PAGE routes a
+// selection into the collection layer's detail panel, not what the body renders. The real one
+// pulls in the record context, the activity timeline, chatter, custom fields and the
+// touch-count drill-down — a dependency tree with its own suites, and mocking all of it would
+// test the mocks. `PipelinePage.detail.test.tsx` is the sibling that drives the real body;
+// `vi.mock` is file-scoped, which is why they cannot share a file.
+vi.mock('./components/DealDetailBody', () => ({
+  DealDetailBody: ({ deal }: { deal: { id: number; title: string } }) => (
     <div data-testid="deal-sheet" data-deal-id={deal.id}>{deal.title}</div>
   ),
 }));

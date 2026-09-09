@@ -3,7 +3,8 @@
  *
  * The card is a KPI and caps each rep's rows; this page is the full list, so a rep who
  * touched thirty deals can be checked rather than sampled. Each row opens the same
- * `DealDetailSheet` the dashboard opens, whose #56 evidence section explains that deal's
+ * `DealDetailBody` the dashboard opens, inside the shared `CollectionDetail` shell — its #56
+ * evidence section explains that deal's
  * count event by event — so the chain from "3 touched" to "why 3" stays unbroken.
  *
  * Every window decision belongs to the server. This page forwards the card's `start`/`end`
@@ -24,7 +25,7 @@
  * renders "—" exactly as the card's rows already do.
  */
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 
 import { ApiError, api } from '../core/api/client';
@@ -33,8 +34,9 @@ import { LoadError } from '../shared/LoadError';
 import { INK, INK_DIM, INK_MUTE, LINE, mono } from '../shared/styles';
 import { toast } from '../shared/toast';
 import { useIsMobile } from '../shared/useIsMobile';
-import { DealDetailSheet } from './components/DealDetailSheet';
-import { DealForm } from './components/DealForm';
+import { CollectionDetail, denyEscapeBackdrop } from '../shared/collection';
+import { DealDetailBody, type DealPatch } from './components/DealDetailBody';
+import { DEAL_DETAIL_CONFIG } from './dealDetailConfig';
 import { RepLabel } from './components/RepLabel';
 import { TouchDealRow } from './components/TouchDealRow';
 import { parseOwnerParam, touchDetailApiPath } from './weeklyTouches';
@@ -116,31 +118,22 @@ function NoSuchRep() {
   );
 }
 
+// Module scope so their identity is stable: the layer memoizes off these props.
+const EMPTY_DEALS: CrmDeal[] = [];
+const EMPTY_NAV: number[] = [];
+
 function DetailView({ apiPath, isMobile }: { apiPath: string; isMobile: boolean }) {
   const [state, setState] = useState<PageState | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
-  const [selectedDeal, setSelectedDeal] = useState<CrmDeal | null>(null);
-  const [editDeal, setEditDeal] = useState<CrmDeal | null>(null);
+  // The open deal is an ID: `CollectionDetail` resolves it through `DEAL_DETAIL_CONFIG.loadById`
+  // and owns the request, its race guard and its failure UI. That replaced this page's own
+  // fetch-then-store pair — with it went a second monotonic request id, an alive ref re-armed
+  // under StrictMode, and a "could not open that deal" toast; a deleted deal now gets the layer's
+  // "Record unavailable · Retry" panel instead, which says the same thing where the user is
+  // looking. NONE of these rows is ever in `items`: this page lists per-rep summaries, so every
+  // open goes through that fetch.
+  const [selectedDealId, setSelectedDealId] = useState<number | null>(null);
   const reqId = useRef(0);
-  // A SECOND monotonic id, for the per-deal fetches. The list's guard cannot serve here:
-  // two deal requests race each other within ONE mount, so clicking A then B has to be
-  // decided by request order.
-  const dealReqId = useRef(0);
-  // Navigating to another rep UNMOUNTS this view (the parent re-keys), and a deal fetch
-  // left in flight still settles afterwards. Its `setState` is a harmless no-op, but its
-  // rejection would raise a toast about a deal on a page the user has already left.
-  //
-  // The flag is re-ARMED in setup, not merely cleared in cleanup: `main.tsx` renders under
-  // <StrictMode>, whose development cycle is setup → cleanup → setup, so a cleanup-only
-  // version leaves it false for the life of the mount and silently swallows every deal the
-  // user then clicks — in development only, which is precisely where it would be met and
-  // mistaken for a broken endpoint. `useLayoutEffect` so the re-arm lands before a click
-  // can be handled.
-  const alive = useRef(true);
-  useLayoutEffect(() => {
-    alive.current = true;
-    return () => { alive.current = false; };
-  }, []);
 
   useEffect(() => {
     // Still needed within a mount: `reloadTick` refetches the same path, so two responses
@@ -166,45 +159,35 @@ function DetailView({ apiPath, isMobile }: { apiPath: string; isMobile: boolean 
   const error = state?.error ?? null;
   const loading = state === null;
 
-  // The dashboard's own wiring, copied rather than hoisted into a hook: PipelinePage and
-  // CrmDashboardPage already each carry their own copy, and a shared hook for a third
-  // consumer that differs in its reload function is not yet worth the indirection.
-  function openDeal(id: number) {
-    const req = ++dealReqId.current;
-    api<CrmDeal>(`/api/crm/deals/${id}`)
-      .then(deal => {
-        if (alive.current && req === dealReqId.current) setSelectedDeal(deal);
-      })
-      // The guard covers the error path too: a failed fetch for a deal the user has
-      // already dismissed — or navigated away from — must not raise a toast about it.
-      .catch(() => {
-        if (alive.current && req === dealReqId.current) {
-          toast.error('Could not open that deal — it may have been deleted.');
-        }
-      });
-  }
-
   function reload() {
     setReloadTick(t => t + 1);
-  }
-
-  /** Also invalidates any deal fetch still in flight, so a slow one cannot reopen the
-   *  sheet the user just dismissed. */
-  function closeModals() {
-    dealReqId.current += 1;
-    setSelectedDeal(null);
-    setEditDeal(null);
   }
 
   async function updateDealStage(deal: CrmDeal, stage: string, lostReason?: string) {
     try {
       const { path, init } = stageWriteRequest(deal.id, stage, lostReason);
       await api(path, init);
-      closeModals();
+      // No dismissal here: `DealDetailBody` closes itself on a successful write, because only a
+      // MOUNTED body can tell whether the panel in front of it is still the one that asked.
       reload();
-    } catch {
+    } catch (err) {
       toast.error('Failed to move deal.');
+      // Rethrown so the panel's own close-out knows the deal was NOT closed and stays open.
+      throw err;
     }
+  }
+
+  // Rejects rather than reporting, so the inline form keeps the draft on screen and says why —
+  // it is the only copy of what the user typed. Nothing is patched in place here: no row on this
+  // page is a deal record, so the reload is the whole reconciliation.
+  async function saveDeal(deal: CrmDeal, patch: DealPatch): Promise<CrmDeal> {
+    const updated = await api<CrmDeal>(`/api/crm/deals/${deal.id}`, {
+      method: 'PUT', body: JSON.stringify(patch),
+    });
+    reload();
+    // Handed back so the panel folds the SERVER's row rather than the patch it sent — the route
+    // derives `probability` from the stage.
+    return updated;
   }
 
   return (
@@ -258,7 +241,7 @@ function DetailView({ apiPath, isMobile }: { apiPath: string; isMobile: boolean 
                   <TouchDealRow
                     key={deal.id}
                     deal={deal}
-                    onOpen={openDeal}
+                    onOpen={setSelectedDealId}
                     trailing={touchDate(deal.touched_at)}
                   />
                 ))}
@@ -276,29 +259,41 @@ function DetailView({ apiPath, isMobile }: { apiPath: string; isMobile: boolean 
         )
       )}
 
-      {selectedDeal && (
-        <DealDetailSheet
-          key={selectedDeal.id}
-          deal={selectedDeal}
-          isMobile={isMobile}
-          onClose={() => { closeModals(); reload(); }}
-          onEdit={(d) => {
-            dealReqId.current += 1;
-            setSelectedDeal(null);
-            setEditDeal(d);
-          }}
-          onStageChange={updateDealStage}
-          onRestored={() => { closeModals(); reload(); }}
-        />
-      )}
-
-      {editDeal && (
-        <DealForm
-          deal={editDeal}
-          onClose={() => setEditDeal(null)}
-          onSaved={() => { closeModals(); reload(); }}
-        />
-      )}
+      <CollectionDetail<CrmDeal>
+        config={DEAL_DETAIL_CONFIG}
+        // Nothing on this page is a deal ROW — every entry is a per-rep touch summary — so the
+        // canonical array is empty and every open resolves through `loadById`.
+        items={EMPTY_DEALS}
+        selectedId={selectedDealId}
+        onSelect={id => {
+          if (id === null) { setSelectedDealId(null); reload(); }
+          else setSelectedDealId(Number(id));
+        }}
+        // Nothing to navigate: this list is grouped by rep and capped per rep, so ‹ › would walk
+        // a set the user did not open from. `[]` is that answer, as on the dashboard.
+        navOrder={EMPTY_NAV}
+        detail={{
+          render: (deal, ctx) => (
+            <DealDetailBody
+              deal={deal}
+              // Always false: see `items` above.
+              onBoard={false}
+              // No board for a deal to be off, so the close-out actions are on offer. An ARCHIVED
+              // deal is still gated — by the body's own detail fetch, the only thing here that
+              // knows.
+              stageWritable
+              ctx={ctx}
+              onMarkWon={d => updateDealStage(d, 'won')}
+              onMarkLost={(d, lostReason) => updateDealStage(d, 'lost', lostReason)}
+              onSaveDeal={saveDeal}
+              // Patching only — the body dismisses itself, and only while it is still on screen.
+              onRestored={() => reload()}
+              onClose={() => setSelectedDealId(null)}
+            />
+          ),
+          onRequestClose: denyEscapeBackdrop,
+        }}
+      />
     </Frame>
   );
 }

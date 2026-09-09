@@ -15,6 +15,7 @@ import type {
   CollectionConfig,
   CollectionLoadingProps,
   CollectionState,
+  DragPolicy,
 } from './types';
 
 interface Row {
@@ -32,7 +33,7 @@ const rows: Row[] = [
   { id: 3, name: 'gamma', stage: 'New', priority: false, value: null, voided: true },
 ];
 
-function makeConfig(key: string, overrides: Partial<CollectionConfig<Row>> = {}): CollectionConfig<Row> {
+function makeConfig(key: string, overrides: Partial<CollectionConfig<Row, DragPolicy>> = {}): CollectionConfig<Row, DragPolicy> {
   return {
     storage: { key, version: 1 },
     defaultView: 'list',
@@ -69,7 +70,7 @@ function Page({
   noSelect = false,
   unselectableIds,
 }: {
-  config: CollectionConfig<Row>;
+  config: CollectionConfig<Row, DragPolicy>;
   data?: readonly Row[];
   withSelection?: boolean;
   loading?: CollectionLoadingProps;
@@ -85,7 +86,7 @@ function Page({
     latest.current = state;
   });
   return (
-    <CollectionView<Row>
+    <CollectionView<Row, unknown, DragPolicy>
       config={config}
       state={state}
       items={data}
@@ -264,6 +265,21 @@ describe('selection', () => {
     expect(all().checked).toBe(false);
   });
 
+  it('renders NO select-all header when nothing on screen can be selected', () => {
+    // The Archived-only list, which #83's facet makes an ordinary view rather than a corner: with
+    // every visible row ineligible, `allSelected` is pinned false by its own `length > 0` guard
+    // and the clear branch is gated on that same flag — so the header box could neither tick nor
+    // clear. That is the identical dead-both-halves failure the test above fixes from the other
+    // direction, and the honest answer here is no control at all. The COLUMN stays, so the table
+    // keeps its shape and the rows keep their empty cells.
+    renderPage({ config: makeConfig('allunsel'), withSelection: true, unselectableIds: [1, 2, 3] });
+    expect(document.querySelector('input[aria-label="Select all visible"]')).toBeNull();
+    expect(document.querySelectorAll('input[aria-label="Select row"]')).toHaveLength(0);
+    // The header cell itself is still there — this suppresses a control, not a column.
+    expect(document.querySelectorAll('thead th').length)
+      .toBe(document.querySelectorAll('tbody tr:first-child td').length);
+  });
+
   it('select-all covers the VISIBLE (filtered) set', () => {
     renderPage({ config: makeConfig('selall'), withSelection: true });
     act(() => state().setVoided('hide'));
@@ -337,7 +353,7 @@ describe('loading / empty', () => {
       });
       const state = useCollectionState(config, []);
       return (
-        <CollectionView<Row>
+        <CollectionView<Row, unknown, DragPolicy>
           config={config}
           state={state}
           items={[]}
@@ -379,7 +395,7 @@ describe('loading / empty', () => {
         });
         const state = useCollectionState(config, []);
         return (
-          <CollectionView<Row>
+          <CollectionView<Row, unknown, DragPolicy>
             config={config}
             state={state}
             items={[]}
@@ -433,7 +449,7 @@ describe('the "drag paused" note tells the truth under each drag policy', () => 
     { value: 'name', label: 'Name', get: (r: Row) => r.name },
   ];
 
-  function boardConfig(key: string, dragPolicy?: 'index' | 'column'): CollectionConfig<Row> {
+  function boardConfig(key: string, dragPolicy?: DragPolicy): CollectionConfig<Row, DragPolicy> {
     return makeConfig(key, {
       defaultView: 'kanban',
       sort: { fields: sortFields },

@@ -13,8 +13,7 @@ DB row maps independently because persistence is per-iteration faithful:
 OpenAI tool_calls+role:tool / Gemini parts) and re-injects the assistant text
 that ``add_tool_results`` drops.
 
-Ported from Chatty's ``context_assembly.py``, dropping compaction (deferred) and
-all ``json.loads`` (psycopg2 returns JSONB already parsed as Python lists). The
+Ported from Chatty's ``context_assembly.py``, dropping all ``json.loads`` (psycopg2 returns JSONB already parsed as Python lists). The
 oversized-row guard bounds any single row that would blow the live context;
 storage stays full. User-content truncation is delimiter-safe: it re-closes any
 ``<untrusted_file_content>`` block a cut would leave open, so an uploaded
@@ -25,18 +24,40 @@ import json
 import logging
 import re
 
-from assistant import history
+from assistant import delimiters, history
 
 logger = logging.getLogger(__name__)
 
 # Per-row live-context cap as a fraction of the budget (storage is never capped).
 _OVERSIZED_ROW_FRACTION = 0.25
-_CHARS_PER_TOKEN = 4
-_DEFAULT_BUDGET_TOKENS = 128_000
+# PUBLIC because `assistant.compaction` imports them: the compaction trigger, the
+# boundary it picks and this module's oversized-row guard must all measure a thread
+# the same way, and two copies of "4 chars a token" would drift silently.
+CHARS_PER_TOKEN = 4
+DEFAULT_BUDGET_TOKENS = 128_000
+
+# The opening exchange, kept verbatim across every compaction. It lives HERE rather
+# than in `compaction` so the two modules agree on what "the middle" is, and because
+# the dependency has to run this way round: compaction imports the assembler's
+# measurements, never the reverse.
+HEAD_ROWS = 2
 
 _TRUNCATION_MARKER = "\n…[truncated]"
 _UPLOAD_OPEN_RE = re.compile(r'<untrusted_file_content id="([0-9a-f]+)"')
 _EXTERNAL_OPEN_RE = re.compile(r'<untrusted_external_content id="([0-9a-f]+)"')
+# Built from the tag `delimiters` owns rather than a fourth copy of the literal — that
+# module's own comment calls a second copy a silent bug, because the test keeps passing
+# and just stops matching. (The two untrusted tags above predate this and still spell
+# themselves out; they are left alone rather than widened into this diff.)
+_SUMMARY_TAG = delimiters.CONVERSATION_SUMMARY_TAG
+_SUMMARY_OPEN_RE = re.compile(rf'<{_SUMMARY_TAG} id="([0-9a-f]+)"')
+# A complete gist sitting at the very START of a row — the shape _apply_compaction
+# writes. The backreference makes it a matched pair rather than two lookalike tags.
+_SUMMARY_BLOCK_AT_START_RE = re.compile(
+    rf'^<{_SUMMARY_TAG} id="([0-9a-f]+)"[^>]*>.*?</{_SUMMARY_TAG} id="\1">',
+    re.DOTALL,
+)
+_GIST_SEPARATOR = "\n\n"
 
 
 def _reclose_untrusted(cut: str) -> str:
@@ -47,6 +68,9 @@ def _reclose_untrusted(cut: str) -> str:
     for open_re, tag in (
         (_UPLOAD_OPEN_RE, "untrusted_file_content"),
         (_EXTERNAL_OPEN_RE, "untrusted_external_content"),
+        # A compaction gist (#72 Phase 3) is prepended to a retained user row, so an
+        # oversized row can cut it open exactly like an upload block.
+        (_SUMMARY_OPEN_RE, _SUMMARY_TAG),
     ):
         for nonce in open_re.findall(cut):
             close = f'</{tag} id="{nonce}">'
@@ -64,16 +88,60 @@ def assemble_messages(provider, conversation_id: str) -> list[dict]:
     conv = history.get_conversation(conversation_id)
     if not conv:
         return []
-    rows = conv.get("messages") or []
+    rows = _apply_compaction(
+        conv.get("messages") or [],
+        conv.get("compaction_summary"),
+        conv.get("compaction_first_kept_seq"),
+    )
 
-    budget = getattr(provider, "context_window", None) or _DEFAULT_BUDGET_TOKENS
-    max_row_chars = int(_OVERSIZED_ROW_FRACTION * budget * _CHARS_PER_TOKEN)
+    budget = getattr(provider, "context_window", None) or DEFAULT_BUDGET_TOKENS
+    max_row_chars = int(_OVERSIZED_ROW_FRACTION * budget * CHARS_PER_TOKEN)
 
     messages: list[dict] = []
     for row in rows:
         messages.extend(_row_to_messages(provider, row, max_row_chars))
     return _coalesce_consecutive(messages)
 
+
+
+def _apply_compaction(rows, summary, first_kept_seq):
+    """Replace the aged middle with a stored gist: HEAD verbatim, gist folded onto the
+    first retained user turn, TAIL verbatim (issue #72 Phase 3).
+
+    Folding onto a REAL user row rather than inserting a synthetic turn is what keeps
+    role alternation valid on every provider — ``assistant.compaction`` snaps its
+    boundary forward to a user row for exactly that reason. ``summary`` arrives already
+    nonce-fenced: the wrapper is minted once at write time, because this function runs
+    every turn and a fresh nonce here would re-key the provider's conversation-prefix
+    cache each time.
+
+    A no-op whenever there is nothing valid to compact, so a conversation with no
+    stored boundary assembles exactly as it always did.
+    """
+    if not summary or first_kept_seq is None or len(rows) <= HEAD_ROWS:
+        return rows
+    head = rows[:HEAD_ROWS]
+    # Guard a boundary that would overlap or precede the head — then there is no real
+    # middle to drop, and folding the gist on would duplicate context we still hold.
+    if first_kept_seq <= head[-1]["seq"]:
+        return rows
+    tail = [r for r in rows if r["seq"] >= first_kept_seq]
+    if not tail:
+        return rows
+
+    first = tail[0]
+    if first.get("role") == "user":
+        merged = {**first, "content": summary + _GIST_SEPARATOR + (first.get("content") or "")}
+        return head + [merged] + tail[1:]
+    # Defensive: the boundary did not land on a user row (compaction snaps to one, so
+    # this needs a hand-edited or migrated boundary). A standalone gist turn keeps the
+    # summary in context; `_coalesce_consecutive` merges it with any neighbour that
+    # would otherwise break alternation.
+    synthetic = {
+        "role": "user", "content": summary,
+        "tool_calls": None, "tool_results": None, "seq": first_kept_seq,
+    }
+    return head + [synthetic] + tail
 
 def _row_to_messages(provider, row, max_row_chars):
     """Convert one DB row to provider-native message(s), applying the oversized guard."""
@@ -153,15 +221,49 @@ def _truncate_user_content(text, limit):
 
     If a cut would leave an ``<untrusted_file_content id="X">`` (or external) block
     open, append its matching close tag so injected text can't escape the fence.
+
+    A compaction gist is PREPENDED to a retained user row, and when the boundary
+    reaches the current turn that row is the message the user just typed. A plain cut
+    from the end spends the budget on the summary first, so the gist survives and the
+    actual request is what gets truncated — and once the gist alone fills the row,
+    ``engine._last_user_text`` strips it and finds nothing but a truncation marker.
+
+    So the two are budgeted separately, with the request taking priority: the gist may
+    occupy at most half the row, and past that it is dropped WHOLE rather than sliced,
+    leaving the user's text the entire budget. Dropping is right at that point — the
+    gist is a convenience, the request is the turn — and dropping it whole avoids
+    leaving a half-summary that reads as a complete one.
     """
     if not text or len(text) <= limit:
         return text
+    gist, rest = _split_leading_summary(text)
+    # `rest` empty means the row IS the gist — the standalone turn `_apply_compaction`
+    # falls back to. There is nothing to preserve it in favour of, so that drops to the
+    # plain cut below, which truncates and RE-CLOSES the fence rather than emptying the
+    # row. Dropping is a trade against the user's text, never a way to lose the gist.
+    if gist and rest:
+        if len(gist) + len(_GIST_SEPARATOR) <= limit // 2:
+            return gist + _GIST_SEPARATOR + _truncate_user_content(
+                rest, limit - len(gist) - len(_GIST_SEPARATOR)
+            )
+        return _truncate_user_content(rest, limit)
     cut = text[:limit]
     result = cut + _TRUNCATION_MARKER
     reclosed = _reclose_untrusted(cut)
     if reclosed:
         result += "\n" + reclosed
     return result
+
+
+def _split_leading_summary(text):
+    """Split a leading complete compaction gist off the front. ('', text) when absent.
+
+    Only a matched nonce PAIR at the very start counts, so nothing a message merely
+    quotes can claim the protected slot."""
+    m = _SUMMARY_BLOCK_AT_START_RE.match(text)
+    if not m:
+        return "", text
+    return m.group(0), text[m.end():].lstrip("\n")
 
 
 def _truncate_result(result, limit):

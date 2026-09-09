@@ -4,9 +4,9 @@
 // FINDABLE, must never be MONEY, and must never be ACTIONABLE.
 //
 // It lives in its own file rather than in `PipelinePage.test.tsx` for one hard reason:
-// that suite MOCKS `DealDetailSheet` (its subject is whether the page routes a selection
-// to the sheet, not what the sheet renders), and half the assertions here go through the
-// sheet's real Restore button. `vi.mock` is file-scoped, so the two harnesses cannot share
+// that suite MOCKS `DealDetailBody` (its subject is whether the page routes a selection
+// into the layer's detail panel, not what the panel renders), and half the assertions here go
+// through the real Restore button #75 moved onto `DealDetailBody`. `vi.mock` is file-scoped, so the two harnesses cannot share
 // a file. Everything below is #83's suite, carried across #74's rewrite of the page onto
 // the shared collection layer; only the three helpers that press UI have moved with it,
 // because the bespoke filter bar those tests clicked is the component #74 deletes.
@@ -275,9 +275,13 @@ async function click(el: Element | null | undefined, what: string) {
   await flush();
 }
 
+/** Find a button by its visible text OR its `aria-label`. Since #75 the detail panel is the
+ *  collection layer's shell, whose Close is an icon button carrying only the accessible name —
+ *  so matching on text alone finds nothing where the deleted sheet had a worded button. */
 function button(label: string): HTMLButtonElement | undefined {
   return [...container.querySelectorAll('button')]
-    .find(b => b.textContent?.trim() === label) as HTMLButtonElement | undefined;
+    .find(b => b.textContent?.trim() === label || b.getAttribute('aria-label') === label) as
+      HTMLButtonElement | undefined;
 }
 
 /** Open the collection toolbar's facet panel if it is not already open. Every facet moved

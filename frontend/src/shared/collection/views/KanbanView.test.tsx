@@ -9,7 +9,12 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import useCollectionState from '../useCollectionState';
 import KanbanView from './KanbanView';
-import type { CollectionConfig, CollectionKanbanProps, CollectionState } from '../types';
+import type {
+  CollectionConfig,
+  CollectionKanbanProps,
+  CollectionState,
+  DragPolicy,
+} from '../types';
 
 interface Row {
   id: number;
@@ -115,7 +120,7 @@ describe("dragPolicy 'column' — the cards stay draggable, not just the boolean
   // that actually matters: shared/dnd's KanbanCard strips its drag listeners when disabled,
   // so a live board's cards carry them and a locked board's do not.
   function ColumnPolicyPage() {
-    const config: CollectionConfig<Row> = {
+    const config: CollectionConfig<Row, 'column'> = {
       storage: { key: 'kv_policy', version: 1 },
       defaultView: 'kanban',
       getItemId: r => r.id,
@@ -176,8 +181,8 @@ describe('a PER-CARD dragDisabled predicate (issue #83 archived deals)', () => {
   // card, which is the archived deal quietly becoming workable again.
   function PredicatePage({
     seen, policy,
-  }: { seen: Row[]; policy?: 'index' | 'column' }) {
-    const config: CollectionConfig<Row> = {
+  }: { seen: Row[]; policy?: DragPolicy }) {
+    const config: CollectionConfig<Row, DragPolicy> = {
       storage: { key: `kv_pred_${policy ?? 'index'}`, version: 1 },
       defaultView: 'kanban',
       getItemId: r => r.id,

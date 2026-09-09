@@ -1,0 +1,97 @@
+// @vitest-environment jsdom
+//
+// The launcher's relationship with an open detail panel, which is the ONE place it is allowed to
+// sit above an overlay — and the one place that permission can lose a user's work.
+//
+// `DetailModal`'s `underLauncher` mode renders the centred panel at `dock:z-[39]`, BELOW this
+// button, so a record detail can hand its context to the assistant drawer (#14). That exemption
+// is about the drawer. On a keyless install there is no drawer: the button reads "Hire your
+// assistant" and NAVIGATES to /setup, which unmounts the open panel and any inline edit draft in
+// it without ever reaching that panel's close guard. So the exemption — both halves of it, the
+// z-order and the Tab-cycle hand-off — is granted only when clicking really does open a drawer.
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const api = vi.hoisted(() => vi.fn());
+vi.mock('../../core/api/client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../core/api/client')>()),
+  api,
+}));
+
+const { AssistantLauncher } = await import('./AssistantLauncher');
+const { MemoryRouter } = await import('react-router-dom');
+const { ActiveRecordProvider } = await import('../RecordContext');
+
+/** The centred `underLauncher` panel's z-index — the number this button must straddle. */
+const PANEL_Z = 39;
+
+let container: HTMLDivElement;
+let root: Root;
+
+beforeEach(() => {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }),
+  });
+  api.mockReset();
+  api.mockResolvedValue({});
+  container = document.createElement('div');
+  document.body.appendChild(container);
+  root = createRoot(container);
+});
+
+afterEach(() => {
+  act(() => root.unmount());
+  container.remove();
+});
+
+function render(aiReady: boolean | null) {
+  act(() => {
+    root.render(
+      <MemoryRouter>
+        <ActiveRecordProvider>
+          <AssistantLauncher aiReady={aiReady} />
+        </ActiveRecordProvider>
+      </MemoryRouter>,
+    );
+  });
+}
+
+/** The launcher itself, found by role rather than by the attribute under test. */
+const launcher = () =>
+  [...container.querySelectorAll('button')]
+    .find(b => b.getAttribute('aria-haspopup') === 'dialog') as HTMLButtonElement;
+
+const zOf = (el: HTMLElement) => Number(el.style.zIndex);
+
+describe('the launcher over an open detail panel', () => {
+  it('sits ABOVE the panel and joins its Tab cycle when it opens the drawer', () => {
+    render(true);
+
+    expect(zOf(launcher())).toBeGreaterThan(PANEL_Z);
+    expect(launcher().hasAttribute('data-detail-companion')).toBe(true);
+  });
+
+  it('sits BELOW the panel and stays out of its Tab cycle when it only navigates', () => {
+    // Keyless: the button is a "Hire your assistant" CTA that routes to /setup. A navigation
+    // unmounts the panel, so leaving it clickable over one discards an inline edit draft with no
+    // prompt — the exact loss the panel's close guard exists to prevent, reached around it.
+    render(false);
+
+    expect(launcher().textContent).toContain('Hire your assistant');
+    expect(zOf(launcher())).toBeLessThan(PANEL_Z);
+    expect(launcher().hasAttribute('data-detail-companion')).toBe(false);
+  });
+
+  it('stays below while the AI state is still unknown', () => {
+    // `aiReady === null` renders the button disabled, so it can open no drawer and can take no
+    // focus — handing a dialog's Tab cycle to it would end the cycle on a control that cannot
+    // accept it.
+    render(null);
+
+    expect(launcher().disabled).toBe(true);
+    expect(zOf(launcher())).toBeLessThan(PANEL_Z);
+    expect(launcher().hasAttribute('data-detail-companion')).toBe(false);
+  });
+});

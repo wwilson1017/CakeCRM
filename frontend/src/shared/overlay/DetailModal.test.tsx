@@ -137,6 +137,31 @@ describe('DetailModal takeover vs centred modal', () => {
     expect(p.some(c => /^(max-w-|rounded-|border$|left-auto|right-0|top-)/.test(c))).toBe(false);
   });
 
+  // The assistant launcher floats at zIndex 40 on every CRM page, and it is the one control that
+  // must stay reachable over a record detail — it opens the drawer carrying that record's context
+  // (#14). So `underLauncher` drops the CENTRED modal beneath it while the takeover stays above.
+  // Both halves are pinned, because either one alone is the bug: leave the takeover low and a
+  // phone gets a button sitting on the panel's own controls; leave the centred one high and the
+  // drawer becomes unreachable for exactly the records that publish context to it.
+  it('stacks at a plain z-50 by default, occluding the launcher like any other overlay', () => {
+    render(modal());
+    const w = tokens(wrapperEl());
+    expect(w).toContain('z-50');
+    expect(w.filter(c => c.startsWith('dock:z-'))).toEqual([]);
+  });
+
+  it('drops only the CENTRED modal beneath the launcher when underLauncher is set', () => {
+    render(modal({ underLauncher: true }));
+    const w = tokens(wrapperEl());
+    expect(w).toContain('z-50');            // takeover: above the button
+    expect(w).toContain('dock:z-[39]');     // centred: beneath it
+    // Exactly those two — a stray third z token would make the winner depend on source order.
+    expect(w.filter(c => /(^|:)z-/.test(c)).sort()).toEqual(['dock:z-[39]', 'z-50']);
+    // The panel never carries its own z: it would open a stacking context and the wrapper's
+    // number would stop deciding anything.
+    expect(tokens(panelEl()).filter(c => /(^|:)z-/.test(c))).toEqual([]);
+  });
+
   it("keeps the header's VERTICAL padding on dock: and its horizontal padding on md:", () => {
     render(modal());
     const header = tokens(panelEl().firstElementChild as HTMLElement);
@@ -191,6 +216,94 @@ describe('DetailModal takeover vs centred modal', () => {
 });
 
 // ---------------------------------------------------------------------------------------------
+describe('DetailModal underLauncher focus hand-off', () => {
+  // Rendering the launcher ABOVE the panel makes it reachable by pointer. Without handing focus
+  // to it at the panel's ends, a keyboard-only user could not reach it AT ALL — worse than the
+  // untrapped sheet this replaced, and it would hollow out the whole point of the mode.
+  //
+  // Only the outbound direction is asserted, because only the outbound direction is ours: the
+  // trap is a React onKeyDown on the panel, so a Tab pressed while focus is ON the companion
+  // never reaches it. Getting back is native order — honest for a dialog that deliberately does
+  // not claim aria-modal.
+  let companion: HTMLButtonElement;
+  let rendered: ReturnType<typeof allControlsRendered>;
+
+  beforeEach(() => {
+    companion = document.createElement('button');
+    companion.setAttribute('data-detail-companion', '');
+    companion.textContent = 'Assistant';
+    document.body.appendChild(companion);
+    rendered = allControlsRendered();
+  });
+
+  afterEach(() => {
+    rendered.mockRestore();
+    companion.remove();
+  });
+
+  const panelButtons = () => [...panelEl().querySelectorAll('button')];
+  const tabFrom = (from: HTMLElement, shift = false) => {
+    from.focus();
+    act(() => {
+      from.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: shift, bubbles: true }));
+    });
+  };
+
+  it('hands focus to the companion off the LAST control instead of wrapping', () => {
+    render(modal({ underLauncher: true }));
+    const buttons = panelButtons();
+    tabFrom(buttons[buttons.length - 1]);
+    expect(document.activeElement).toBe(companion);
+  });
+
+  it('hands focus to the companion off the FIRST control on Shift+Tab', () => {
+    render(modal({ underLauncher: true }));
+    tabFrom(panelButtons()[0], true);
+    expect(document.activeElement).toBe(companion);
+  });
+
+  it('keeps the default mode wrapping strictly inside the panel', () => {
+    // The hand-off is a courtesy of `underLauncher`, not of every modal: an ordinary detail
+    // covers the whole screen and must keep focus in, companion present or not.
+    render(modal());
+    const buttons = panelButtons();
+    tabFrom(buttons[buttons.length - 1]);
+    expect(document.activeElement).toBe(buttons[0]);
+  });
+
+  it('wraps normally when no companion is on the page, even under underLauncher', () => {
+    companion.remove();
+    render(modal({ underLauncher: true }));
+    const buttons = panelButtons();
+    tabFrom(buttons[buttons.length - 1]);
+    expect(document.activeElement).toBe(buttons[0]);
+  });
+
+  it('keeps focus IN on the full-screen takeover, where the panel covers the companion', () => {
+    // The hand-off is a courtesy of the CENTRED layout, which is the only one that leaves the
+    // launcher uncovered. On the takeover this panel is `z-50` and sits OVER it — and
+    // `getClientRects()` reports geometry, not occlusion, so the companion still looks visible.
+    // Handing focus there parks the caret on a button nobody can see.
+    //
+    // The layout is read from a probe carrying the `dock:` variant, so hiding the probe is
+    // exactly what the takeover viewport does. Every other element stays "rendered", which is
+    // what keeps this test about the layout gate rather than about the visibility filter.
+    rendered.mockRestore();
+    const probe = () => document.querySelector('[aria-hidden="true"].hidden');
+    rendered = vi.spyOn(Element.prototype, 'getClientRects')
+      .mockImplementation(function (this: Element) {
+        return (this === probe() ? [] : [{ width: 10, height: 10 }]) as unknown as DOMRectList;
+      });
+
+    render(modal({ underLauncher: true }));
+    const buttons = panelButtons();
+    tabFrom(buttons[buttons.length - 1]);
+
+    expect(document.activeElement).not.toBe(companion);
+    expect(document.activeElement).toBe(buttons[0]);
+  });
+});
+
 describe('DetailModal body scroll lock', () => {
   it('locks while a visible modal is open, and releases on close', () => {
     const root = render(modal());

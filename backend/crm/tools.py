@@ -265,6 +265,16 @@ CRM_TOOL_DEFS = [
                 "probability": {"type": "integer", "description": "Win probability 0-100%", "default": 0},
                 "currency": {"type": "string", "default": "USD"},
                 "company_id": {"type": "integer", "description": "ID of a linked company (optional)."},
+                "deal_temperature": {
+                    "type": ["string", "null"],
+                    "enum": [*crm.DEAL_TEMPERATURES, None],
+                    "description": (
+                        "The rep's read on this deal: 'hot', 'warm' or 'cold'. Null means "
+                        "nobody has judged it yet, which is NOT the same as cold — pass null "
+                        "only to clear a value. Never infer this from stage or activity; set "
+                        "it only when the user says how the deal feels. It feeds the lead score."
+                    ),
+                },
             },
             "required": ["title"],
         },
@@ -289,6 +299,16 @@ CRM_TOOL_DEFS = [
                 "currency": {"type": "string"},
                 "contact_id": {"type": "integer"},
                 "company_id": {"type": ["integer", "null"], "description": "ID of a linked company; pass null to unlink this deal from its company."},
+                "deal_temperature": {
+                    "type": ["string", "null"],
+                    "enum": [*crm.DEAL_TEMPERATURES, None],
+                    "description": (
+                        "The rep's read on this deal: 'hot', 'warm' or 'cold'. Null means "
+                        "nobody has judged it yet, which is NOT the same as cold — pass null "
+                        "only to clear a value. Never infer this from stage or activity; set "
+                        "it only when the user says how the deal feels. It feeds the lead score."
+                    ),
+                },
             },
             "required": ["deal_id"],
         },
@@ -1270,6 +1290,11 @@ _DEAL_SUMMARY_FIELDS = (
     # is computed by get_pipeline only. Dropping either made the projection lossy for
     # the exact queries these tools exist to answer.
     "lost_reason", "updated_at",
+    # A `SELECT d.*` upstream is NOT enough — `_summarize_deal` keeps only what is named
+    # here, so a new deal column stays invisible to `crm_get_pipeline` and
+    # `crm_search_deals` until it is added. Temperature is the rep's own judgment (#125),
+    # which is exactly what a pipeline review needs to see.
+    "deal_temperature",
 )
 
 
@@ -1339,6 +1364,11 @@ def crm_create_deal(title: str, **kwargs) -> dict:
         result = crm.create_deal(title=title, **kwargs)
     except psycopg2.errors.ForeignKeyViolation:
         return {"error": "Referenced contact or company does not exist"}
+    except ValueError as e:
+        # e.g. an invalid deal_temperature (issue #125). Without this the registry answers
+        # with its generic "the tool failed, please try again", which tells the model
+        # nothing it can act on; this names the valid values so it can retry correctly.
+        return {"error": str(e)}
     if not result:
         return {"error": "Deal could not be created"}
     _record_provenance("deal", result.get("id"), {"title": title, **kwargs}, result)

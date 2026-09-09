@@ -26,6 +26,7 @@
 
 import type { CrmDeal } from '../core/types';
 import { CLOSED_STAGES, OPEN_STAGES, STAGE_ORDER } from './constants';
+import { formatAge } from './gtd/util';
 
 const STAGE_RANK = new Map(STAGE_ORDER.map((s, i) => [s, i]));
 
@@ -185,4 +186,34 @@ export function saveHiddenStages(hidden: ReadonlySet<string>): void {
   } catch {
     /* private mode / quota — the preference is a convenience, never a correctness input */
   }
+}
+
+/**
+ * The Won card's "last contact" line (issue #129).
+ *
+ * Before the close, a deal card carries nudges about whether it is still ALIVE — the lead score
+ * and the AI touch count. After it, neither question is live any more and the board is read for a
+ * different one: which accounts have gone quiet since we won them. So a Won card trades those two
+ * for this.
+ *
+ * `last_activity_at` is #21's `MAX` over the deal's logged activities and its un-archived notes —
+ * the same derivation the Contacts list already labels "Last contact", so the two surfaces cannot
+ * tell different stories about the same word. Nothing new is queried: `get_pipeline()` has
+ * returned this column since #21.
+ *
+ * A deal with nothing logged says so outright rather than rendering an empty slot. That follows
+ * #128's rule that an absent value is a state worth reading, and here it is the strongest signal
+ * on the board: a won account nobody has followed up on is exactly what this line exists to
+ * surface, so hiding it would invert the feature.
+ *
+ * `now` is injectable so the label can be tested without the wall clock.
+ */
+export function lastContactLabel(
+  lastActivityAt: string | null | undefined,
+  now: Date = new Date(),
+): string {
+  if (!lastActivityAt) return 'No contact logged';
+  const age = formatAge(lastActivityAt, now);
+  // `formatAge` answers "today" for anything under a day, which reads wrong with "ago".
+  return age === 'today' ? 'Last contact today' : `Last contact ${age} ago`;
 }
