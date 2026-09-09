@@ -4,28 +4,34 @@ import { useLocation, useSearchParams } from 'react-router-dom';
 import { api, ApiError } from '../core/api/client';
 import type { CrmDeal } from '../core/types';
 import { DealForm } from './components/DealForm';
-import { DealDetailSheet } from './components/DealDetailSheet';
+import { DealDetailBody, type DealPatch } from './components/DealDetailBody';
 import { ScorePill, TouchCountPill } from './components/badges';
+import DealTemperatureIcon from './components/DealTemperatureIcon';
+import { DealTemperatureWriter } from './components/DealTemperatureCell';
 import { STAGE_COLORS, STAGE_ORDER } from './constants';
 import { stageWriteRequest } from './dealStageWrite';
 import { IconPlus } from '../shared/icons';
 import { useIsMobile } from '../shared/useIsMobile';
 import { LoadError } from '../shared/LoadError';
+import { formatDate } from '../shared/formatDate';
 import { toast } from '../shared/toast';
+import type { DealTemperature } from './dealTemperature';
 import {
-  INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, BG_CARD, BG_ELEV, ACCENT, ACCENT_TEXT, SHADOW,
+  INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, BG_CARD, BG_ELEV, BG_PAGE, ACCENT, ACCENT_TEXT, SHADOW,
   FONT_DISPLAY, mono, formatNumber, inputStyle, tint,
 } from '../shared/styles';
-import { pageHeading, btnPrimary, btnSecondary, btnSmall, stageCard } from './styles';
+import { pageHeading, btnPrimary, btnSecondary, btnSmall, stageCard, LAUNCHER_CLEARANCE_PX } from './styles';
 import type { KanbanColumnDef } from '../shared/dnd';
-import { CollectionView, useCollectionState } from '../shared/collection';
+import { useBoardScroller } from '../shared/dnd';
+import { CollectionView, denyEscapeBackdrop, useCollectionState } from '../shared/collection';
 import type { CollectionMoveEvent, CollectionSelectionProps } from '../shared/collection';
 import { useUsers } from './useUsers';
 import {
-  boardOrder, loadHiddenStages, openPipelineTotals, saveHiddenStages,
+  boardOrder, lastContactLabel, loadHiddenStages, openPipelineTotals, saveHiddenStages,
   stageFromToggleKey, stageLabel, stageToggleKey, visibleStageKeys,
 } from './pipelineBoard';
 import { isArchivedDeal } from './pipelineFilters';
+import { CORPUS_MAX_AGE_MS } from './usePatchableAssembly';
 import { archivedSelectionIncludesArchived, makePipelineCollectionConfig } from './pipelineCollection';
 import { buildPipelineListColumns } from './components/pipelineListColumns';
 import StageChipBar from './components/StageChipBar';
@@ -56,6 +62,22 @@ interface StageColumn {
   dealIds: number[];
 }
 
+/**
+ * The refusal `writeDeal` raises while a bulk move owns the board — its own type, not a bare
+ * `Error`, so a caller can tell "we never sent this" apart from "the server rejected it".
+ *
+ * That distinction is what keeps the toasts honest. `writeDeal` already reports a failed stage
+ * PUT itself, so a caller that reported every rejection would double-toast a genuine server
+ * failure; one that reported none would let a bulk-lock refusal — which `writeDeal` cannot
+ * toast, since it rejects before doing any work — vanish silently.
+ */
+class BulkLockError extends Error {
+  constructor() {
+    super('A bulk update is in progress — try again in a moment.');
+    this.name = 'BulkLockError';
+  }
+}
+
 export function PipelinePage() {
   const [data, setData] = useState<PipelineData | null>(null);
   // Board load generations: the newest load STARTED, and the newest whose payload was
@@ -76,11 +98,10 @@ export function PipelinePage() {
   const [boardLoads, setBoardLoads] = useState({ started: 0, applied: 0 });
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
-  const [editDeal, setEditDeal] = useState<CrmDeal | null>(null);
-  // Id, not the record: the open deal is looked up from `data` each render, so a sheet left
-  // open across a refresh (or an optimistic move) shows the current row rather than a frozen
-  // copy — and #75 can swap the sheet for the collection layer's detail panel by changing one
-  // render site instead of a state shape.
+  // Id, not the record: the open deal is resolved against the CURRENT board array each render,
+  // so a save, an optimistic move or a silent refresh reaches the panel rather than leaving it
+  // on a frozen copy — and an id is also what a deep link carries. #75 swapped the sheet for
+  // the collection layer's detail panel by changing one render site, not this state shape.
   const [selectedDealId, setSelectedDealId] = useState<number | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   // Every navigation gets a fresh key, including one to the URL already showing. That is
@@ -243,7 +264,7 @@ export function PipelinePage() {
   const scrolledStage = useRef<string | null>(null);
   // Per-deal operation counter so out-of-order responses from rapid moves of the
   // SAME deal can't clobber each other — only the latest op reconciles/reverts.
-  const dealOpSeq = useRef<Map<number, number>>(new Map());
+  const dealOpSeq = useRef<Map<number, { seq: number; hasStage: boolean }>>(new Map());
   // Per-deal write chain: each deal's PUT is queued behind its prior in-flight
   // write so the SERVER applies moves in the user's action order (ending at the
   // latest intent), never racing two concurrent writes for the same deal.
@@ -275,10 +296,19 @@ export function PipelinePage() {
   // everything the user had typed. Reporting is what the user needs; the spinner belongs to the
   // interaction that asked for it, and that interaction is over.
   const pendingRefreshReportErrors = useRef(false);
-  // Whether a payload has ever rendered. A failed load with no data yet already reports itself
-  // through `LoadError`; toasting as well just stacks a second message on top of the error
-  // screen, once per retry click.
-  const hasLoadedOnce = useRef(false);
+  // WHEN a payload was last applied (ms since epoch), 0 until the first one. Two readers, and
+  // the second is why this is a timestamp rather than the boolean it used to be:
+  //   • the toast gate in `load`'s catch — a failed load with no data yet already reports itself
+  //     through `LoadError`, and toasting as well just stacks a second message on the error
+  //     screen, once per retry click;
+  //   • the return-to-tab staleness bound (issue #129), which needs the age, not the fact.
+  const appliedAt = useRef(0);
+  // Set when the FIRST load was skipped because the tab was hidden — a route can be opened into a
+  // background tab (a Cmd-click, a session restore), and sweeping the whole deal corpus for a
+  // board nobody is looking at is work with no reader. The visibility listener below fires it on
+  // the first return. A ref, not state: nothing renders differently for it (the page is already
+  // showing its spinner) and it is only ever read inside effects and handlers.
+  const deferredMountLoad = useRef(false);
   // `load` referenced by the deferral path below, which has to re-fire it. A ref because the
   // callback cannot name itself, and assigned in an effect because a ref write during render is
   // a build-blocking lint error under this repo's react-hooks ruleset.
@@ -306,11 +336,16 @@ export function PipelinePage() {
   // original request's error REPORTING across, so a user-initiated load that got deferred does
   // not have its failure swallowed. No-ops when nothing is pending, so callers only have to
   // know that writes have settled.
+  //
+  // The counter is read across an `await` by `updateDealStage`, which is the one caller whose own
+  // refresh a replay can make redundant — see there for why a second load is not merely wasteful.
+  const replayCount = useRef(0);
   const replayDeferredLoad = useCallback(() => {
     if (!pendingRefresh.current) return;
     pendingRefresh.current = false;
     const reportErrors = pendingRefreshReportErrors.current;
     pendingRefreshReportErrors.current = false;
+    replayCount.current++;
     void loadRef.current(true, { reportErrors });
   }, []);
 
@@ -424,7 +459,7 @@ export function PipelinePage() {
       // reader can ask whether the answer post-dates something rather than merely that an
       // answer arrived (issue #145). `Math.max` because loads can settle out of order.
       setBoardLoads(b => (myLoad > b.applied ? { ...b, applied: myLoad } : b));
-      hasLoadedOnce.current = true;
+      appliedAt.current = Date.now();
       dealConfirmedStage.current = new Map(d.deals.map(deal => [deal.id, deal.stage]));
       // Intersect the selection with the deals this payload says are LIVE. Masking an archived
       // deal in the bulk payload and on its card is not enough: the id stays in the Set, so once
@@ -455,7 +490,7 @@ export function PipelinePage() {
       // previous payload keeps rendering, and under "Archived only" that means an empty board —
       // indistinguishable from "you have no archived deals". Say so. (Silent refreshes stay
       // quiet; being unobtrusive is their whole contract.)
-      if (reportErrors && loadGen.current === myLoad && hasLoadedOnce.current) {
+      if (reportErrors && loadGen.current === myLoad && appliedAt.current !== 0) {
         toast.error('Failed to load deals.');
       }
       // A NARROWING load that failed still has to honour the facet the user just cleared.
@@ -499,58 +534,123 @@ export function PipelinePage() {
   // the board rolls back to the true server stage instead of an intermediate stage
   // that never persisted.
   //
+  // The detail panel's inline Save comes through here too, carrying its changed columns in the
+  // SAME patch as any stage change — one PUT, because the server settles `probability` to 100/0
+  // inside the transaction that moves the stage, so a stage write and a probability write split
+  // across two requests is a race whose loser silently wins. What a fields-only write does NOT do
+  // is therefore conditional on the patch carrying a stage — it paints nothing, records no
+  // confirmed stage, and announces no failed move — while still taking a sequence number and
+  // riding this deal's chain, so it is ordered against a concurrent drag rather than racing it.
+  // The REVERT is the one step that is unconditional; see the catch block for why.
+  //
   // `lostReason` (issue #128) only changes WHICH request this op issues — it is captured
   // per operation alongside `seq`, inside the same per-deal promise chain, so every
   // invariant above is untouched: the chain still serializes, the sequence check still
   // discards a superseded response, and rollback still reads the confirmed stage. Both
   // endpoints return the same `get_deal` projection, so the reconcile merge is unchanged.
-  const moveDealStage = useCallback((
-    deal: CrmDeal, toStage: string, fromStage: string, lostReason?: string,
-  ) => {
+  const writeDeal = useCallback((
+    deal: CrmDeal, patch: DealPatch, fromStage?: string, lostReason?: string,
+  ): Promise<CrmDeal> => {
     // A bulk move in flight owns the board until its reconcile refetch lands. A single-deal
     // write started now could reconcile (or roll back) against the stage the bulk request is
-    // in the middle of changing, clobbering server truth we're about to fetch.
-    if (bulkPendingRef.current) return;
+    // in the middle of changing, clobbering server truth we're about to fetch. It REJECTS rather
+    // than returning quietly: dropping a redundant drag is invisible and fine, but dropping the
+    // field edit someone just typed is not — the caller surfaces it and keeps the form open.
+    if (bulkPendingRef.current) {
+      return Promise.reject(new BulkLockError());
+    }
     const dealId = deal.id;
-    const seq = (dealOpSeq.current.get(dealId) ?? 0) + 1;
-    dealOpSeq.current.set(dealId, seq);
+    const toStage = patch.stage;
+    const seq = (dealOpSeq.current.get(dealId)?.seq ?? 0) + 1;
+    dealOpSeq.current.set(dealId, { seq, hasStage: toStage !== undefined });
     // Optimistic: restage the CURRENT record (not the captured drag snapshot, which
-    // could be missing fields edited meanwhile), keeping its list position.
-    setData(prev => prev ? {
-      ...prev,
-      deals: prev.deals.map(d => d.id === dealId ? { ...d, stage: toStage } : d),
-    } : prev);
+    // could be missing fields edited meanwhile), keeping its list position. Only the stage is
+    // painted ahead of the server — a field edit has no drag gesture to keep up with, and its
+    // response reconciles the row a moment later anyway.
+    if (toStage !== undefined) {
+      setData(prev => prev ? {
+        ...prev,
+        deals: prev.deals.map(d => d.id === dealId ? { ...d, stage: toStage } : d),
+      } : prev);
+    }
     pendingWrites.current++; // an unconfirmed optimistic write now exists (see `load`'s silent guard)
     writeGen.current++;      // ...and bump the generation so a silent GET spanning it is invalidated
     const prior = dealWriteChain.current.get(dealId) ?? Promise.resolve();
+    // The outcome carries the SERVER's row, not just success: the detail panel folds it into its
+    // own read channel so a save that changed the stage shows the probability the server derived
+    // (100/0) rather than the one the form sent. Resolved before the supersession check below, so
+    // a superseded write still answers its caller.
+    let settle: (updated: CrmDeal) => void = () => {};
+    let fail: (err: unknown) => void = () => {};
+    const outcome = new Promise<CrmDeal>((resolve, reject) => { settle = resolve; fail = reject; });
     const run = prior.then(async () => {
       try {
-        const { path, init } = stageWriteRequest(dealId, toStage, lostReason);
+        // `POST /mark-lost` is the ONE write here that is not the patch PUT (#128): it zeroes
+        // `probability` and appends the reason to the notes thread inside the transaction that
+        // closes the deal, neither of which `PUT {stage:'lost'}` does. `stageWriteRequest` owns
+        // that choice for every host and keys on `lostReason !== undefined` — the ACTION, not the
+        // text — so an explicit close with the box left blank still takes the verb. No patch is
+        // ever stranded by the narrower body: the reason dialog is the only caller that supplies
+        // a reason, and it sends the stage alone.
+        const { path, init } = patch.stage === 'lost' && lostReason !== undefined
+          ? stageWriteRequest(dealId, patch.stage, lostReason)
+          : { path: `/api/crm/deals/${dealId}`, init: { method: 'PUT', body: JSON.stringify(patch) } };
         const updated = await api<CrmDeal>(path, init);
         // Record server truth for THIS write regardless of supersession — a later
         // failed move in the same chain reverts to a real confirmed stage, not an
         // optimistic intermediate. Use the response's stage, not toStage, so the
         // ground truth is whatever the server actually stored.
         dealConfirmedStage.current.set(dealId, updated.stage);
-        if (dealOpSeq.current.get(dealId) !== seq) return; // a newer move superseded this one
+        settle(updated);
+        if (dealOpSeq.current.get(dealId)?.seq !== seq) return; // a newer move superseded this one
         setData(prev => prev ? {
           ...prev,
           deals: prev.deals.map(d => d.id === dealId ? { ...d, ...updated } : d),
         } : prev);
       } catch (err) {
-        if (dealOpSeq.current.get(dealId) !== seq) return; // superseded — leave the newer state
-        console.error('Failed to move deal:', err);
-        toast.error('Failed to move deal.');
-        // Revert to the last server-confirmed stage, not this op's optimistic
-        // fromStage: if an earlier chained write for this deal also failed, fromStage
-        // is an intermediate the server never stored, so it would leave the board out
-        // of sync until the next load. `?? fromStage` covers a deal with no confirmed
-        // entry yet (a first move, where fromStage IS the confirmed stage).
-        const confirmed = dealConfirmedStage.current.get(dealId) ?? fromStage;
+        // The caller always learns the outcome, superseded or not — the detail form has to keep
+        // the user's draft on screen either way, and only the drag path can afford to shrug.
+        fail(err);
+        const latest = dealOpSeq.current.get(dealId);
+        if (latest?.seq !== seq) {
+          // Superseded — leave the newer state, which will reconcile the board itself. But say so
+          // if this op wrote a STAGE and the op replacing it does not: "leave the newer state" was
+          // written when only another stage write could supersede one, and a newer stage intent
+          // genuinely subsumes an older one. A fields-only save expresses no stage intent, so when
+          // it succeeds its response quietly puts the card back where it started — the rep's drag
+          // undone with nothing on screen to say it failed. The revert is still the superseder's
+          // job; only the report is ours.
+          if (toStage !== undefined && latest && !latest.hasStage) {
+            console.error('Failed to write deal:', err);
+            toast.error('Failed to move deal.');
+          }
+          return;
+        }
+        console.error('Failed to write deal:', err);
+        // THE LAST WRITER TO FAIL OWNS THE RECONCILIATION, whatever it happened to be writing.
+        // A superseded stage write returns above without reverting (correctly — the op that
+        // replaced it owns the board now), so the optimistic stage it left behind is cleaned up by
+        // whichever op for this deal ends up being the latest — and since the detail form shares
+        // this chain, that op may well be a fields-only save carrying no stage of its own. Gating
+        // the revert on `toStage` therefore stranded a stage nobody stored: drag to won (seq 1),
+        // save a field (seq 2), both fail, board keeps showing won until the next full load.
+        //
+        // So restore from server truth unconditionally. Where no optimistic paint is outstanding
+        // this writes back the value already on screen (a harmless no-op); where one IS, this is
+        // exactly the repair. Server-confirmed rather than this op's `fromStage`, because an
+        // earlier failed write in the chain makes `fromStage` an intermediate that never
+        // persisted; `?? fromStage` covers a deal with no confirmed entry yet (a first move,
+        // where fromStage IS the confirmed stage).
+        const confirmed = dealConfirmedStage.current.get(dealId) ?? fromStage ?? deal.stage;
         setData(prev => prev ? {
           ...prev,
           deals: prev.deals.map(d => d.id === dealId ? { ...d, stage: confirmed } : d),
         } : prev);
+        // The TOAST stays stage-only, unlike the revert. A fields-only write announced no move,
+        // so announcing a failed one would report a board change nobody asked for — its form
+        // shows the error inline, next to the draft it is asking the user to retry. (A superseded
+        // stage write is reported by the branch above instead, on its own terms.)
+        if (toStage !== undefined) toast.error('Failed to move deal.');
       } finally {
         pendingWrites.current--; // write settled (reconciled or reverted)
         // Once ALL writes have settled, fire any refresh that was deferred while a write was
@@ -562,16 +662,17 @@ export function PipelinePage() {
       }
     });
     dealWriteChain.current.set(dealId, run);
+    return outcome;
   }, [replayDeferredLoad]);
 
   // Drag handler. Resolves immediately so the Kanban hook ends its gesture and
   // re-syncs from `data` right away; persistence + rollback are data-driven (via
-  // moveDealStage), never snapshot-driven, so this never needs to throw.
+  // writeDeal), never snapshot-driven, so this never needs to throw.
   //
   // `CollectionKanbanProps.onMove` documents "do not patch before this resolves", whose stated
   // reason is that `shared/dnd` rolls back on reject and a pre-resolve canonical write would
   // then double-apply. That branch is unreachable here: this function returns a RESOLVED promise
-  // on every path — a failed PUT is handled inside `moveDealStage` against `data`, never by
+  // on every path — a failed PUT is handled inside `writeDeal` against `data`, never by
   // rejecting — so the exemption the type's docstring names applies, and `useKanbanState`'s
   // `commitMove` records the same thing from the other side. Any edit that lets this reject
   // must also stop patching `data` first.
@@ -585,21 +686,98 @@ export function PipelinePage() {
       setData(prev => prev ? { ...prev, deals: prev.deals.slice() } : prev);
       return Promise.resolve();
     }
-    moveDealStage(event.item, to, from);
+    // The gesture is over either way — a failed move reverts the board from `data`, and a bulk
+    // lock rejection is the "drag ignored while bulk is in flight" case that was always silent.
+    void writeDeal(event.item, { stage: to }, from).catch(() => {});
     return Promise.resolve();
-  }, [moveDealStage]);
+  }, [writeDeal]);
 
-  // Detail-sheet handler (Mark Won / Lost) — optimistic move + close the sheet. Also refresh
-  // the board (like onClose) so an in-sheet note/activity logged before this dismissal lands
-  // its last_activity_at; if a stage move fired, the refresh defers until that PUT settles.
-  const updateDealStage = useCallback((deal: CrmDeal, stage: string, lostReason?: string) => {
+  // Detail-panel handler (Mark Won / Lost) — optimistic move, then close the panel ON SUCCESS
+  // ONLY. Closing is this page's way of saying "that deal is closed now", so it has to wait for
+  // the write: `writeDeal` REJECTS outright under the bulk lock, before any toast of its own, and
+  // a fire-and-forget close there dismissed the panel as though the deal had been closed when
+  // nothing was even sent. On rejection the panel stays open with the reason on screen, which is
+  // also the honest answer for a server refusal (an archived deal cannot change stage).
+  // The refresh on the way out is the close path's, so a note/activity logged in the panel before
+  // this dismissal lands its last_activity_at; it defers until the stage PUT settles.
+  //
+  // `lostReason` is present only for a Mark Lost taken through the reason dialog (#128); it rides
+  // through to `writeDeal`, which is where the endpoint is chosen.
+  const updateDealStage = useCallback(async (deal: CrmDeal, stage: string, lostReason?: string) => {
+    // Read BEFORE the await. If a load is deferred behind this very write — the user reaching for
+    // the Archived facet while the PUT is in the air — the write's own `finally` replays it, and
+    // that replay is issued AFTER the server answered, so it already carries everything the
+    // refresh below would ask for. Issuing a second one would not merely be redundant: `load`
+    // bumps `loadGen`, so the later request DISCARDS the replay, and with it the failure report a
+    // user-initiated facet load is owed. Under "Archived only" that swallowed failure renders an
+    // empty board reading as "you have no archived deals" — the exact false answer #83 fixed.
+    const replaysBefore = replayCount.current;
     if (deal.stage !== stage) {
-      moveDealStage(deal, stage, deal.stage, lostReason);
+      try {
+        await writeDeal(deal, { stage }, deal.stage, lostReason);
+      } catch (err) {
+        // Report ONLY the refusal `writeDeal` cannot report itself. A stage PUT that reached the
+        // server and failed has already raised its own toast in there; toasting again here would
+        // say the same thing twice.
+        if (err instanceof BulkLockError) toast.error(err.message);
+        // RETHROWN, not swallowed: the panel's own close-out is awaiting this, and a resolve is
+        // what tells it the deal is closed and it may go. Reporting is still ours — `writeDeal`
+        // toasts a failed stage PUT itself, so only the lock refusal is added above.
+        throw err;
+      }
+      // Un-hide the destination, but only once the write is known to have gone out. Mark Won/Lost
+      // is one of the two paths that can move a deal into a stage the user has put away, and
+      // without this the card vanishes with nothing on screen to say where it went.
       revealStage(stage);
     }
-    setSelectedDealId(null);
-    load(true);
-  }, [moveDealStage, load, revealStage]);
+    // No dismissal here. `DealDetailBody` closes itself on a successful write, because only a
+    // MOUNTED body can answer "is the panel in front of me still the one that asked" — see its
+    // `onClose` prop. This function's remaining job is the board's: reveal the destination stage
+    // and refresh.
+    if (replayCount.current === replaysBefore) load(true);
+  }, [writeDeal, load, revealStage]);
+
+  // These RETURN the promise rather than `void` it: `DealDetailBody` awaits them to keep its
+  // close-out buttons `disabled` for the whole write (#128) — that attribute IS the re-entry
+  // guard, and a second Mark Lost appends a second "Deal lost —" note. `updateDealStage` reports
+  // its own failures and never rejects, so awaiting it here can only ever settle.
+  const markWon = useCallback((deal: CrmDeal) => updateDealStage(deal, 'won'), [updateDealStage]);
+  const markLost = useCallback(
+    (deal: CrmDeal, lostReason?: string) => updateDealStage(deal, 'lost', lostReason),
+    [updateDealStage],
+  );
+  // The inline form's ONE save. The patch may carry `stage`; `writeDeal` handles that itself.
+  const saveDeal = useCallback(
+    (deal: CrmDeal, patch: DealPatch) => writeDeal(deal, patch, deal.stage),
+    [writeDeal],
+  );
+
+  // Deal temperature (issue #125) — the rep's hot/warm/cold read, cycled in place from a board
+  // card or a List row. A fields-only patch through the SAME `writeDeal`, so it serialises with a
+  // drag of the same deal on that deal's write chain: both reconcile from `get_deal`'s full row,
+  // and in parallel a stage response would spread a stale `deal_temperature` over the one just
+  // written. `DealTemperatureIcon` owns the optimistic glyph and puts it back on failure, so
+  // nothing is painted here.
+  //
+  // It TOASTS, unlike `saveDeal`, because `writeDeal`'s own toast is stage-only by design (a
+  // fields-only write announced no move, so it announces no failed one) and the form that
+  // normally shows such an error inline does not exist for a one-click control. A `BulkLockError`
+  // carries its own sentence, exactly as `updateDealStage` handles it.
+  //
+  // The board card takes this as a plain prop; the List reaches it through
+  // `DealTemperatureWriter` below, because its columns are built in a `useMemo` that may not
+  // hold a ref-reading callback. That file has the full reason.
+  const cycleDealTemperature = useCallback(
+    async (deal: CrmDeal, next: DealTemperature | null): Promise<void> => {
+      try {
+        await writeDeal(deal, { deal_temperature: next }, deal.stage);
+      } catch (err) {
+        toast.error(err instanceof BulkLockError ? err.message : 'Failed to update deal temperature.');
+        throw err;   // the icon releases its optimistic glyph either way; this only reports
+      }
+    },
+    [writeDeal],
+  );
 
   // A deal was restored from the detail sheet (issue #83). The sheet hands up the row the server
   // RETURNED, which is patched into `data` in place — deliberately not a refetch: `load(true)` is
@@ -632,7 +810,7 @@ export function PipelinePage() {
       next.delete(restored.id);
       return next;
     });
-    setSelectedDealId(null);
+    // Not dismissed here either — the body does that, and only while it is still on screen.
     // Then refresh in the background. The patch above is what makes the board CORRECT — it
     // deliberately does not depend on this landing — but a restore closes the sheet the same way
     // `onClose` does, and that path refreshes so an in-sheet note reaches the board's derived
@@ -701,8 +879,58 @@ export function PipelinePage() {
   // set on screen looking authoritative.
   useEffect(() => {
     includeArchivedRef.current = includeArchived;
+    // Issue #129: a route can mount into a tab nobody is looking at — a Cmd-click onto the board,
+    // a browser restoring its session — and this load is a keyset sweep of the whole deal corpus.
+    // Defer it until the tab is first shown. The page is honest while deferred: `loading` starts
+    // true, so it renders its spinner rather than an empty board, and the `?deal=` verdict stays
+    // `idle` because no payload has landed, so a gated board can never accuse a live deal of
+    // being gone.
+    //
+    // The FIRST load only. A facet change is a user action performed on a visible tab, and it
+    // replaces the board's whole content set — deferring that would leave the previous set on
+    // screen looking authoritative.
+    if (appliedAt.current === 0 && document.visibilityState === 'hidden') {
+      deferredMountLoad.current = true;
+      return;
+    }
     queueMicrotask(load);
   }, [includeArchived, load]);
+
+  // Returning to a backgrounded tab: run the deferred first load, or re-sweep a corpus that has
+  // gone stale (issue #129).
+  //
+  // This is the list pages' idiom — `useCrmCorpus`'s `visibilitychange` + `CORPUS_MAX_AGE_MS`
+  // (`usePatchableAssembly.ts`) — extended to the one swept corpus that had no staleness bound at
+  // all. Deliberately the SAME constant and the same mechanism, not a second timer model: the
+  // board has exactly the writers the list pages do (the assistant's CRM tools, Telegram, the
+  // Gmail touch scan, another seat, another tab), and a board left open overnight was filtering
+  // and dragging yesterday's deals with nothing on screen saying so.
+  //
+  // The staleness re-sweep is SILENT on purpose — a returning user must not get a spinner that
+  // wipes an open sheet — and it needs no bookkeeping of its own: `load` already defers behind
+  // in-flight writes, drops a payload a newer load superseded, and prunes archived rows. The
+  // deferred FIRST load is not silent, because it owns the spinner the page is currently showing.
+  //
+  // Note what is deliberately NOT gated: the refetches that settle a WRITE — `applyBulkMove`'s
+  // reconcile and `replayDeferredLoad`. Those can indeed run while the tab is hidden, but they
+  // are the second half of an action the user just took, not background polling, and
+  // `applyBulkMove` holds `bulkPendingRef` (which disables drag and refresh) until its reconcile
+  // lands. Gating them would wedge the board behind a lock until the user came back.
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (deferredMountLoad.current) {
+        deferredMountLoad.current = false;
+        void loadRef.current();
+        return;
+      }
+      if (appliedAt.current === 0) return;
+      if (Date.now() - appliedAt.current < CORPUS_MAX_AGE_MS) return;
+      void loadRef.current(true);
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, []);
 
   // The live half of the visible set. Archived deals are shown as CARDS (that is the whole point
   // of the facet) but are excluded from everything that means money or action: the open-pipeline
@@ -723,13 +951,20 @@ export function PipelinePage() {
   // is recomputed here — so both sides have to be given the same set or they report different
   // numbers for one click. `load` prunes the state itself on the next payload; this covers the
   // window until then. Reference-stable when nothing was pruned.
+  // ONE archived-id set behind both halves of the selection contract: the prune below, and
+  // the layer's `isSelectable`. Two derivations of "which deals are archived" could disagree
+  // for a render and put a checkbox on a row whose id is being thrown away.
+  const archivedIds = useMemo(
+    () => new Set<string | number>(deals.filter(isArchivedDeal).map(d => d.id)),
+    [deals],
+  );
+
   const liveSelectedIds = useMemo(() => {
     if (bulkSelected.size === 0) return bulkSelected;
-    const archived = new Set(deals.filter(isArchivedDeal).map(d => d.id));
-    if (archived.size === 0) return bulkSelected;
-    const next = new Set([...bulkSelected].filter(id => !archived.has(id)));
+    if (archivedIds.size === 0) return bulkSelected;
+    const next = new Set([...bulkSelected].filter(id => !archivedIds.has(id)));
     return next.size === bulkSelected.size ? bulkSelected : next;
-  }, [bulkSelected, deals]);
+  }, [bulkSelected, archivedIds]);
 
   // Bumped whenever the page clears the filters programmatically, and used as the
   // CollectionView key. A remount is what actually empties the search box: SearchInput adopts
@@ -942,10 +1177,6 @@ export function PipelinePage() {
     [liveVisibleItems],
   );
 
-  const selectedDeal = useMemo(
-    () => (selectedDealId === null ? null : deals.find(d => d.id === selectedDealId) ?? null),
-    [deals, selectedDealId],
-  );
 
   const handleSelectionChange = useCallback((next: Set<string | number>) => {
     // Same synchronous bail as toggleSelect/toggleColumn: a bulk move in flight owns the board.
@@ -956,6 +1187,12 @@ export function PipelinePage() {
   const selection = useMemo<CollectionSelectionProps>(() => ({
     selectedIds: liveSelectedIds,
     onChange: handleSelectionChange,
+    // The LIST view's counterpart to the board's `selectable={!isMobile && !archived}`. Both
+    // views render the same records, so both owe the same answer: an archived deal is
+    // findable, never money, and never actionable. Without this the list offered a checkbox
+    // that `liveSelectedIds` pruned straight back out — a control that could be clicked
+    // forever and never tick.
+    isSelectable: id => !archivedIds.has(id),
     // The layer passes only ids that are BOTH selected and in the current view, and renders
     // this at all only when that set is non-empty — so the count shown and the payload
     // `applyBulkMove` recomputes describe the same deals (see the note there).
@@ -969,14 +1206,21 @@ export function PipelinePage() {
         onClear={clearSelection}
       />
     ),
-  }), [liveSelectedIds, handleSelectionChange, bulkStage, bulkPending, applyBulkMove, clearSelection]);
+  }), [liveSelectedIds, archivedIds, handleSelectionChange, bulkStage, bulkPending, applyBulkMove, clearSelection]);
 
   // ── Mobile: which board column is currently snapped into view ──────────────
-  const scrollerRef = useRef<HTMLDivElement>(null);
+  // The board's scroll region. Two consumers, one node: on desktop `useBoardScroller` bounds its
+  // height so its scrollbars land inside the window (issue #129), and on mobile the chip bar
+  // below observes it to track which stage is snapped into view.
+  //
+  // Not bounded when the facets match nothing: the board then renders zero columns and
+  // `EmptyFilterState` explains why, so a 320px floor would park a blank band above the
+  // explanation. Not bounded on mobile either — see the hook.
+  const { ref: boardScrollerRef, node: boardScrollerNode } = useBoardScroller(!isMobile && !filteredToNothing);
   const [activeStage, setActiveStage] = useState<string | null>(null);
   useEffect(() => {
     if (!isMobile || state.view !== 'kanban') return;
-    const root = scrollerRef.current;
+    const root = boardScrollerNode.current;
     if (!root) return;
     const observer = new IntersectionObserver(
       entries => {
@@ -995,7 +1239,10 @@ export function PipelinePage() {
     // observer watching detached column nodes through a stale scroller root — the active chip
     // would silently stop following swipes. (`resetSeq` no longer belongs here: it is routed
     // to the search box as a nonce now and remounts nothing.)
-  }, [isMobile, state.view, columns]);
+    //
+    // `boardScrollerNode` is a `useRef` object and so never changes identity — it is listed only
+    // because it crosses a custom-hook boundary, where exhaustive-deps cannot see that.
+  }, [isMobile, state.view, columns, boardScrollerNode]);
 
   const scrollToStage = useCallback((stage: string) => {
     columnRefs.current.get(stage)?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
@@ -1023,17 +1270,32 @@ export function PipelinePage() {
   }
 
   // Once `data` has rendered the columns (refs populated), scroll the requested column into
-  // view, then clear the `stage` param (preserving any others). Reactive per target —
-  // `scrolledStage` guards a re-scroll for the same stage.
+  // view, then clear the `stage` param (preserving any others — `?deal=` in particular, which
+  // #145 keeps on purpose). Reactive per target.
+  //
+  // `scrolledStage` gates the SCROLL only. Gating the DELETE with it too left the parameter
+  // stuck in the address bar forever the second time the same stage was linked, because the
+  // guard returned before the delete could run.
+  //
+  // A stage that is not in STAGE_ORDER (a typo, a renamed stage, an empty `?stage=`) is deleted
+  // immediately and regardless of `data`: waiting for the board is only meaningful for a value
+  // something will eventually scroll to, and nothing ever scrolls to a column that cannot exist —
+  // so the old `data && valid` gate left a bad parameter up forever.
   useEffect(() => {
-    if (!data) return;
-    const s = searchParams.get('stage');
-    if (!s || !STAGE_ORDER.includes(s) || scrolledStage.current === s) return;
-    scrolledStage.current = s;
-    columnRefs.current.get(s)?.scrollIntoView({ behavior: 'smooth', inline: 'start', block: 'nearest' });
     const next = new URLSearchParams(searchParams);
-    next.delete('stage');
-    setSearchParams(next, { replace: true });
+    const s = searchParams.get('stage');
+    if (s === null) {
+      scrolledStage.current = null; // re-arm, so a later link to the same stage scrolls again
+    } else if (!STAGE_ORDER.includes(s)) {
+      next.delete('stage');
+    } else if (data) {
+      if (scrolledStage.current !== s) {
+        scrolledStage.current = s;
+        columnRefs.current.get(s)?.scrollIntoView({ behavior: 'smooth', inline: 'start', block: 'nearest' });
+      }
+      next.delete('stage');
+    }
+    if (next.toString() !== searchParams.toString()) setSearchParams(next, { replace: true });
   }, [data, searchParams, setSearchParams]);
 
   // The only side effect the deep link needs: the board on screen predates the link, so
@@ -1084,6 +1346,7 @@ export function PipelinePage() {
     });
   }, [deepLinkState, deepLink.dealId, deepLink.key, load]);
 
+
   if (loading) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', padding: '80px 0' }}>
@@ -1094,6 +1357,12 @@ export function PipelinePage() {
 
   if (!data) return <LoadError label="Couldn't load pipeline" onRetry={() => load()} />;
 
+  // The detail panel is NOT hoisted above these returns, deliberately — an earlier revision of
+  // #75 did that, when the panel was a page-owned sibling. It buys nothing here: the panel is
+  // mounted by `CollectionView`, which only exists in this branch, so an early return and a
+  // ternary unmount it identically. And nothing can be selected before the board lands anyway —
+  // `deepLinkVerdict` answers `idle` until a payload has been applied, precisely so a network
+  // blip is never read as "that deal is gone".
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, padding: isMobile ? '20px 16px' : '32px 44px' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: isMobile ? 16 : 24 }}>
@@ -1181,6 +1450,9 @@ export function PipelinePage() {
         />
       )}
 
+      {/* Supplies the List view's temperature cells with this page's writer. The board card takes
+          the same callback as a plain prop — only the memoized columns need the indirection. */}
+      <DealTemperatureWriter value={cycleDealTemperature}>
       <CollectionView<CrmDeal, StageColumn, 'column'>
         config={config}
         state={state}
@@ -1189,10 +1461,65 @@ export function PipelinePage() {
         // What opens a deal from the LIST view: `CollectionListView` wires every row to
         // `onSelect`, and `ListView` gives each row a pointer cursor and a hover highlight
         // unconditionally — so without this the rows advertise a click and swallow it.
-        // This mounts no `CollectionDetail`: the layer gates that on `detail && config.detail`,
-        // and the pipeline declares neither until #75. The board card has its own onOpen.
+        // Since #75 this also drives the detail panel: the layer mounts `CollectionDetail`
+        // itself off `detail` + `config.detail`, ABOVE its own loading branch, so a shared
+        // `?deal=` link opens the record rather than a spinner. The board card has its own onOpen.
         selectedId={selectedDealId}
-        onSelect={id => setSelectedDealId(id === null ? null : Number(id))}
+        onSelect={id => {
+          if (id === null) {
+            setSelectedDealId(null);
+            // Closing by hand releases whatever link owned the panel, so a second click on the
+            // same link is still a distinguishable event rather than a no-op.
+            setLinkOpenedDeal(null);
+            // Silent-refresh on close so a note or activity logged in the panel updates the
+            // deal's last_activity_at (and touch count) without a spinner flash — this is what
+            // closes the "filter stale deals → log a touch → it leaves the stale bucket" loop.
+            load(true);
+          } else {
+            setSelectedDealId(Number(id));
+            setLinkOpenedDeal(null);
+          }
+        }}
+        detail={{
+          render: (deal, ctx) => {
+            // The two flags answer two DIFFERENT questions, so each reads the array that answers
+            // its own — conflating them is a bug in whichever direction you pick.
+            //
+            // `onBoard` is "did this row come from the host's canonical array, so a write patches
+            // it in place?". That array is `items`, which is what the layer resolved `selectedId`
+            // against — and `items` drops the stages the user has put away, so such a deal came
+            // from `loadById` and is a ONE-SHOT snapshot nothing will ever replace. Answering
+            // this from `deals` would tell the body the prop is authoritative when it is frozen,
+            // and its canonical-wins merge would then repaint pre-save values over its own
+            // refreshed detail after every save.
+            const onBoard = items.some(d => d.id === deal.id);
+            return (
+              <DealDetailBody
+                deal={deal}
+                onBoard={onBoard}
+                // `stageWritable` is "is there a board position to write?", which IS a question
+                // about the whole payload: a put-away column is a view preference and says
+                // nothing about whether the deal is on this board. Off the payload entirely, the
+                // stage move, Won and Lost would all put the deal somewhere this board is not
+                // showing.
+                //
+                // ARCHIVED is deliberately NOT tested here. The body gates on it too, from its
+                // OWN detail fetch — the only reader that knows, since a deal archived after the
+                // board loaded carries `archived_at: null` in this row. A second check on the
+                // stale row could only ever be wrong in one direction: denying a restored deal
+                // its stage controls with no way back.
+                stageWritable={deals.some(d => d.id === deal.id)}
+                ctx={ctx}
+                onMarkWon={markWon}
+                onMarkLost={markLost}
+                onSaveDeal={saveDeal}
+                onRestored={restoreDeal}
+                onClose={() => { setSelectedDealId(null); setLinkOpenedDeal(null); }}
+              />
+            );
+          },
+          onRequestClose: denyEscapeBackdrop,
+        }}
         searchResetNonce={resetSeq}
         // Desktop only: card checkboxes and the bulk bar have always been a pointer-and-keyboard
         // affordance here, and passing `selection` unconditionally would put a bulk bar on
@@ -1212,12 +1539,29 @@ export function PipelinePage() {
           // could only ever animate and revert. `isArchivedDeal` is module-level, so this is a
           // stable identity rather than a per-render closure.
           dragDisabled: isMobile || bulkPending ? true : isArchivedDeal,
-          scrollerRef,
+          scrollerRef: boardScrollerRef,
           // The ported KanbanBoard/KanbanColumn expose only className hooks (no style
           // prop), so board-scroller and column-body layout use Tailwind here; the
           // card and header visuals below use the CRM's inline design tokens.
-          className: `flex gap-4 overflow-x-auto pb-3 pt-1${isMobile ? ' snap-x snap-mandatory' : ''}`,
-          columnClassName: 'flex flex-col gap-2 overflow-y-auto max-h-[70vh] min-h-[80px] pr-1',
+          //
+          // DESKTOP (issue #129): ONE scroll region, both axes. `useBoardScroller` above gives
+          // this element an explicit height ending at the bottom of the window, so `overflow-auto`
+          // puts BOTH scrollbars on screen — where `overflow-x-auto` on an in-flow block put the
+          // horizontal one at the bottom of the tallest column, off screen on any busy board.
+          // `items-start` is what lets a stage header's `sticky top-0` travel at all: flex's
+          // default `stretch` sizes every column wrapper to the CONTAINER, and a sticky element
+          // cannot leave its containing block, so headers came unstuck after about one viewport.
+          //
+          // MOBILE is byte-for-byte what it was: an in-flow board of `85vw` snap columns, each
+          // with its own `max-h-[70vh]` scrollport. There is no persistent scrollbar to reach on
+          // a touch platform, sideways movement is a swipe, and the chrome above the board can be
+          // a third of the viewport — bounding it would only shrink it.
+          className: isMobile
+            ? 'flex gap-4 overflow-x-auto pb-3 pt-1 snap-x snap-mandatory'
+            : 'flex items-start gap-4 overflow-auto pb-3 pt-1',
+          columnClassName: isMobile
+            ? 'flex flex-col gap-2 overflow-y-auto max-h-[70vh] min-h-[80px] pr-1'
+            : 'flex flex-col gap-2 min-h-[80px] pr-1',
           renderColumn: (col, children) => (
             <div
               key={col.id}
@@ -1227,9 +1571,16 @@ export function PipelinePage() {
                 flexShrink: 0,
                 width: isMobile ? '85vw' : 288,
                 scrollSnapAlign: isMobile ? 'center' : undefined,
+                // The fixed "Ask Baker" pill floats over the bottom-left of the viewport. Every
+                // other page scrolls out from under it using CrmLayout's own bottom padding; a
+                // board bounded to the window cannot, so the last card of the leftmost column
+                // would sit permanently beneath the pill. Same clearance, applied where this
+                // board's scrolling actually happens.
+                paddingBottom: isMobile ? undefined : LAUNCHER_CLEARANCE_PX,
               }}
             >
               <StageHeader
+                sticky={!isMobile}
                 stage={col.data.stage} count={col.data.count} total={col.data.total}
                 // Select-all operates on this column's FILTERED ids, so it can never pick
                 // up a deal the current facets are hiding.
@@ -1257,6 +1608,7 @@ export function PipelinePage() {
                 isSelected={!archived && bulkSelected.has(deal.id)}
                 onToggleSelect={() => toggleSelect(deal.id)}
                 archived={archived}
+                onCycleTemperature={cycleDealTemperature}
               />
             );
           },
@@ -1268,36 +1620,12 @@ export function PipelinePage() {
           ),
         }}
       />
+      </DealTemperatureWriter>
 
       {state.view === 'kanban' && filteredToNothing && <EmptyFilterState onClear={clearAllFilters} />}
 
+      {/* Create only — editing a deal is inline in the detail panel now. */}
       {showCreate && <DealForm onClose={() => setShowCreate(false)} onSaved={() => { setShowCreate(false); load(); }} />}
-      {editDeal && <DealForm deal={editDeal} onClose={() => setEditDeal(null)} onSaved={() => { setEditDeal(null); setSelectedDealId(null); load(); }} />}
-
-      {/* ── THE DEAL-DETAIL SEAM ────────────────────────────────────────────────
-          Issue #75 replaces exactly this block, in three steps: add
-          `detail: { getTitle, loadById }` to the config in `pipelineCollection.ts`; pass the
-          `detail` prop to CollectionView above (`selectedId` and `onSelect` are ALREADY
-          passed — they drive list-row selection today, so that half needs no edit); then
-          delete these lines. `DealDetailBody` renders inside `CollectionDetail`'s render
-          prop, never here — the page keeps owning only WHICH deal is open, by id, which is
-          what makes this a one-file swap. `kanbanColumnIds` already flows
-          CollectionView → CollectionDetail off `kanban.columns`, so ‹ › walks the board
-          column-major with no extra wiring. ──────────────────────────────────────────── */}
-      {selectedDeal && (
-        <DealDetailSheet
-          key={selectedDeal.id}
-          deal={selectedDeal}
-          isMobile={isMobile}
-          // Silent-refresh the board on close so an in-sheet note/activity log updates the
-          // deal's last_activity_at (and touch count) without a spinner flash — closes the
-          // "filter stale deals → log a touch → it leaves the stale bucket" loop.
-          onClose={() => { setSelectedDealId(null); setLinkOpenedDeal(null); load(true); }}
-          onEdit={(d) => { setSelectedDealId(null); setEditDeal(d); }}
-          onStageChange={updateDealStage}
-          onRestored={restoreDeal}
-        />
-      )}
     </div>
   );
 }
@@ -1375,12 +1703,14 @@ const stopCardInteraction = {
 
 const checkboxStyle = { accentColor: ACCENT, width: 14, height: 14, cursor: 'pointer', flexShrink: 0 };
 
-function StageHeader({ stage, count, total, columnDealIds = [], selectedIds, onToggleColumn, onHide }: {
+function StageHeader({ stage, count, total, columnDealIds = [], selectedIds, onToggleColumn, onHide, sticky = false }: {
   stage: string; count: number; total: number;
   columnDealIds?: number[];
   selectedIds?: ReadonlySet<number>;
   onToggleColumn?: (ids: number[], select: boolean) => void;
   onHide?: () => void;
+  /** Pin the header while the BOARD scrolls vertically (issue #129, desktop only). */
+  sticky?: boolean;
 }) {
   const color = STAGE_COLORS[stage]?.fill || INK_DIM;
   const selectedHere = selectedIds ? columnDealIds.filter(id => selectedIds.has(id)).length : 0;
@@ -1397,7 +1727,24 @@ function StageHeader({ stage, count, total, columnDealIds = [], selectedIds, onT
   }, [showCriteria]);
 
   return (
-    <div style={{ marginBottom: 10, padding: '0 2px' }}>
+    // Sticky since #129, because the desktop board scrolls vertically and this header sits above
+    // the column body rather than inside it — so it would otherwise scroll away and take the
+    // stage name, the total and the select-all checkbox with it.
+    //
+    // Three details are load-bearing. The background must be OPAQUE (`BG_PAGE`, the page ground
+    // this board sits on) so cards pass underneath rather than through. The 10px gap below moves
+    // from `marginBottom` to `padding`, because a margin under a sticky element is transparent
+    // and cards would show in the strip. And `zIndex: 1` beats the sortable cards, which are
+    // transformed but keep `z-index: auto`.
+    //
+    // Known limit, and it is upstream's too: with `items-start` each column wrapper is only as
+    // tall as its own content, and a sticky element cannot leave its containing block — so a
+    // SHORT column's header unpins once its own cards have scrolled past. Keeping every header
+    // pinned needs a scrollport/header-row split (one sticky row above one scrolling body), which
+    // is a restructure of `renderColumn`'s contract rather than a rider on this issue.
+    <div style={sticky
+      ? { position: 'sticky', top: 0, zIndex: 1, background: BG_PAGE, padding: '0 2px 10px' }
+      : { marginBottom: 10, padding: '0 2px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         {columnDealIds.length > 0 && onToggleColumn && (
           <input
@@ -1471,11 +1818,13 @@ function StageHeader({ stage, count, total, columnDealIds = [], selectedIds, onT
   );
 }
 
-function DealBoardCard({ deal, columnStage, onOpen, selectable = false, isSelected = false, onToggleSelect, archived = false }: {
+function DealBoardCard({ deal, columnStage, onOpen, selectable = false, isSelected = false, onToggleSelect, archived = false, onCycleTemperature }: {
   deal: CrmDeal; columnStage: string; onOpen: () => void;
   selectable?: boolean; isSelected?: boolean; onToggleSelect?: () => void;
   /** Soft-archived (issue #83): dimmed + labelled, un-draggable, not selectable. */
   archived?: boolean;
+  /** Issue #125. Omitted ⇒ the glyph renders read-only, with no button and no tab stop. */
+  onCycleTemperature?: (deal: CrmDeal, next: DealTemperature | null) => void | Promise<unknown>;
 }) {
   // Colour from the column the card currently sits in (its bucket) rather than
   // deal.stage — during an optimistic drop the bucket updates before the deal's
@@ -1542,8 +1891,37 @@ function DealBoardCard({ deal, columnStage, onOpen, selectable = false, isSelect
         {deal.contact_name && <span>{deal.contact_name}</span>}
         {deal.probability > 0 && <span>{deal.probability}%</span>}
         {deal.expected_close_date && <span>{deal.expected_close_date}</span>}
-        <ScorePill score={deal.lead_score} compact />
-        <TouchCountPill count={deal.ai_touch_count} />
+        {/* Won cards trade the two open-deal nudges for a last-contact line (issue #129).
+            The score answers "is this still alive" and the touch count answers "are we working
+            it enough to close" — neither question survives the close, and post-sale the board is
+            read for a different one: which accounts have gone quiet.
+
+            Keyed off the COLUMN, not `deal.stage`, exactly as the card's own colour is a few
+            lines above: a card mid-drop into Won reads right immediately, before the PUT settles.
+
+            Plain text in the row's existing ink — no chip, no `tint()` background and no
+            `opacity`, so nothing here owes an entry in `inkContrast.test.ts`'s surface registry
+            (#68) or has to clear `hueContrast`'s 4.5:1 (#119). */}
+        {columnStage === 'won' ? (
+          <span title={deal.last_activity_at
+            ? `Most recent logged note or activity: ${formatDate(deal.last_activity_at)}`
+            : 'No note or activity has been logged on this deal'}>
+            {lastContactLabel(deal.last_activity_at)}
+          </span>
+        ) : (
+          <>
+            <ScorePill score={deal.lead_score} compact />
+            <TouchCountPill count={deal.ai_touch_count} />
+          </>
+        )}
+        {/* The only interactive thing in the metadata row. Inert on an archived deal for the
+            same reason the card cannot be dragged or selected (issue #83): it is on the board
+            to be found and restored, not worked. */}
+        <DealTemperatureIcon
+          value={deal.deal_temperature}
+          disabled={archived}
+          onCycle={onCycleTemperature ? next => onCycleTemperature(deal, next) : undefined}
+        />
       </div>
     </div>
   );

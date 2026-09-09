@@ -213,6 +213,10 @@ DEAL_RETURNING_SERVICES = (
     # only the REST weekly-touches surface calls it today, for the same reason as
     # `list_deals` above: the first tool to reach it must decide about links.
     "_touched_deal_rows",
+    # #131's Today-panel reader. It hands back deal records — id, title, value, owner_id,
+    # idle time — for the dashboard only; no tool reaches it today, and it is listed rather
+    # than waived so the first one that does has to decide about links.
+    "_fetch_hot_deals",
 )
 
 #: Service functions that read the deals table but hand back no deal RECORD, each checked
@@ -298,10 +302,13 @@ def _services_that_read_the_deals_table() -> set[str]:
     ``DEAL_RETURNING_SERVICES``. A converse guard whose input is a hand-written list can
     only ever catch what someone already thought of.
     """
-    from crm import analytics_service, service as crm_service
+    from crm import analytics_service, service as crm_service, today_service
 
     names = set()
-    for module in (crm_service, analytics_service):
+    # Every module that reads the deals table, not just the two that started out doing
+    # so — a scan whose input is a hand-picked module list has the same blind spot as a
+    # hand-picked function list, and #131 put a deal reader in `today_service`.
+    for module in (crm_service, analytics_service, today_service):
         for name, fn in vars(module).items():
             if not callable(fn) or not getattr(fn, "__module__", "").startswith("crm."):
                 continue
@@ -335,6 +342,12 @@ def test_the_derived_service_scan_actually_finds_things():
     found = _services_that_read_the_deals_table()
     assert len(found) >= 10, f"the deals-table scan found only {sorted(found)}"
     assert "get_company_detail" in found, "the scan misses the service that motivated it"
+    # One name per scanned MODULE, because dropping a module from the tuple above is
+    # otherwise silent: the classification test only flags names it FOUND and left
+    # unclassified, so a module that stops being scanned takes its readers out of the
+    # guard while every assertion stays green.
+    assert "get_stale_deals" in found, "the scan misses crm.analytics_service"
+    assert "_fetch_hot_deals" in found, "the scan misses crm.today_service"
 
 
 def test_every_waiver_still_names_a_real_tool():

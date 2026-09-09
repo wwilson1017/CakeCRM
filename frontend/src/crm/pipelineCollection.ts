@@ -38,6 +38,7 @@ import type { CollectionConfig, FacetDef } from '../shared/collection';
 import type { FacetOption } from '../shared/search';
 import type { ListColumn } from '../shared/listview';
 import type { CrmDeal } from '../core/types';
+import { DEAL_DETAIL_CONFIG } from './dealDetailConfig';
 import type { CrmUser } from './useUsers';
 import { UNASSIGNED_LABEL } from './useUsers';
 import { STAGE_COLORS, STAGE_ORDER } from './constants';
@@ -198,7 +199,11 @@ export function makePipelineCollectionConfig(deps: PipelineConfigDeps): Collecti
     list: { columns: deps.listColumns },
     itemNoun: { singular: 'deal', plural: 'deals' },
     emptyState: { message: 'No deals to show.' },
-    // No `detail` (the deal sheet stays a page-owned modal until #75 moves it into the layer)
-    // and no `getVoided` — see the header note, both are load-bearing absences.
+    // The deal detail moved into the layer with #75. `DEAL_DETAIL_CONFIG` is the SAME object
+    // `CrmDashboardPage` and `WeeklyTouchesDetailPage` hand `CollectionDetail`, so the three
+    // hosts cannot drift about the title, the subtitle, or the `loadById` route that resolves an
+    // off-board or archived deal for a shared `?deal=` link.
+    detail: DEAL_DETAIL_CONFIG.detail,
+    // Still no `getVoided` — see the header note, that absence is load-bearing.
   };
 }

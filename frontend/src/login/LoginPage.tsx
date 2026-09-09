@@ -74,7 +74,7 @@ export function LoginPage() {
     <div className="min-h-screen bg-ck-bg flex items-center justify-center px-7">
       <div className="w-full max-w-sm">
         <div className="mb-10 text-center">
-          <div className="text-4xl mb-3">🍰</div>
+          <img src="/logo-mark.svg" alt="" className="h-14 w-14 mx-auto mb-3" />
           <h1 className="font-display text-3xl font-normal text-ck-ink m-0">CakeCRM</h1>
           <p className="text-sm text-ck-ink-mute mt-2">
             Your pipeline, a piece of cake.

@@ -192,6 +192,11 @@ class DealCreate(BaseModel):
     currency: str = "USD"
     company_id: int | None = None
     owner_id: int | None = None
+    # Issue #125. Left as a plain `str | None` rather than a Literal so a bad value is
+    # answered by service.normalize_deal_temperature's sentence naming the valid tiers,
+    # not by Pydantic's generic enum error — and so the REST boundary and the agent tool
+    # (whose args nothing validates) fail the same way, through one normalizer.
+    deal_temperature: str | None = None
 
 
 class DealUpdate(BaseModel):
@@ -205,6 +210,7 @@ class DealUpdate(BaseModel):
     currency: str | None = None
     company_id: int | None = None
     owner_id: int | None = None
+    deal_temperature: str | None = None  # issue #125; explicit null clears it (see below)
 
 
 class DealMarkLost(BaseModel):
@@ -533,6 +539,10 @@ async def create_deal(body: DealCreate, user=Depends(get_current_user)):
         return crm.create_deal(**_create_payload(body, user))
     except psycopg2.errors.ForeignKeyViolation:
         raise HTTPException(status_code=400, detail="Referenced contact or company does not exist") from None
+    except ValueError as e:
+        # e.g. an invalid deal_temperature (issue #125) — a refusal the caller can act on,
+        # matching PUT /deals/{deal_id} rather than surfacing as a 500.
+        raise HTTPException(status_code=400, detail=str(e)) from None
 
 
 @router.put("/deals/{deal_id}")
@@ -542,7 +552,7 @@ async def update_deal(deal_id: int, body: DealUpdate, user=Depends(get_current_u
     # can be unlinked. Other columns are NOT NULL — dropping their nulls.
     updates = {
         k: v for k, v in body.model_dump(exclude_unset=True).items()
-        if v is not None or k in ("contact_id", "company_id", "owner_id")
+        if v is not None or k in ("contact_id", "company_id", "owner_id", "deal_temperature")
     }
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
@@ -838,8 +848,12 @@ async def dashboard_today(
     unassigned tasks, because someone has to catch them. Reminders carry no owner
     column at all and appear in every scope.
 
-    Pure SQL, so the ranking is identical with zero AI providers configured. Rank 2 of
-    the ladder is reserved for the hot-deals follow-up (#125) and is never emitted yet.
+    Pure SQL, so the ranking is identical with zero AI providers configured — rank 2's
+    hot deals (#131) included: the temperature is a human's own judgment, written through
+    `deal_temperature`, and staleness is an interval comparison.
+
+    Items carry a `rank` of 1-5 or **null**. Null means "not on the ladder": a hot deal
+    that was touched recently, which the panel reveals only behind its expander.
     """
     return today_service.get_today(owner_id=owner_id)
 

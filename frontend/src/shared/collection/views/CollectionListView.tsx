@@ -59,7 +59,6 @@ export default function CollectionListView<T>({
     () => state.visibleItems.map(item => ({ id: config.getItemId(item), item })),
     [state.visibleItems, config],
   );
-  const visibleIds = useMemo(() => new Set(rows.map(r => r.id)), [rows]);
 
   // Destructured so the `columns` memo below depends on the two FIELDS it reads, never on the
   // `selection` object. Every consumer passes that object as an inline literal (it carries a
@@ -69,6 +68,7 @@ export default function CollectionListView<T>({
   // rows; not at CRM's assembled thousands.
   const selectedIds = selection?.selectedIds;
   const onSelectionChange = selection?.onChange;
+  const isSelectable = selection?.isSelectable;
 
   const columns = useMemo<ListColumn<Row<T>>[]>(() => {
     const fieldByKey = new Map(
@@ -90,26 +90,42 @@ export default function CollectionListView<T>({
     if (!selectedIds || !onSelectionChange) return wrapped;
 
     const onChange = onSelectionChange;
-    const allSelected = rows.length > 0 && rows.every(r => selectedIds.has(r.id));
+    // Select-all reasons over the SELECTABLE rows only. Including an unselectable one makes
+    // "all visible are selected" unreachable — the page prunes that id straight back out — so
+    // the header checkbox would never tick, and because its clear branch is gated on
+    // `allSelected` it would never clear either: both halves of the control dead, from one
+    // archived row being on screen.
+    const selectableRows = isSelectable ? rows.filter(r => isSelectable(r.id)) : rows;
+    const allSelected = selectableRows.length > 0 && selectableRows.every(r => selectedIds.has(r.id));
     return [
       {
         key: '__select',
-        header: (
+        // NO header control when nothing on screen can be selected — an Archived-only list is
+        // the live case. The `selectableRows.length > 0` guard on `allSelected` already means
+        // such a checkbox can never tick, and its clear branch is gated on that same flag, so
+        // rendering it offers a control with no reachable effect in either direction: the exact
+        // dead-both-halves failure the comment above describes, arrived at from the other end.
+        // The COLUMN stays (the cells below render empty), so the table keeps its shape.
+        header: selectableRows.length === 0 ? null : (
           <input
             type="checkbox"
             aria-label="Select all visible"
             checked={allSelected}
             onChange={() => {
               const next = new Set(selectedIds);
-              if (allSelected) for (const id of visibleIds) next.delete(id);
-              else for (const id of visibleIds) next.add(id);
+              for (const r of selectableRows) {
+                if (allSelected) next.delete(r.id);
+                else next.add(r.id);
+              }
               onChange(next);
             }}
             className="accent-brand"
           />
         ),
         className: 'w-8',
-        render: row => (
+        // No checkbox at all on an unselectable row — an empty cell keeps the column's width
+        // and the table's shape without offering a control that cannot work.
+        render: row => (isSelectable && !isSelectable(row.id) ? null : (
           <input
             type="checkbox"
             aria-label="Select row"
@@ -124,11 +140,11 @@ export default function CollectionListView<T>({
             }}
             className="accent-brand"
           />
-        ),
+        )),
       },
       ...wrapped,
     ];
-  }, [list, config, selectedIds, onSelectionChange, rows, visibleIds]);
+  }, [list, config, selectedIds, onSelectionChange, isSelectable, rows]);
 
   if (!list) return null;
 

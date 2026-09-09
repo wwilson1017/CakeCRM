@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { CrmToday, CrmTodayItem } from '../../core/types';
+import type { CrmToday, CrmTodayDealItem, CrmTodayItem } from '../../core/types';
 import { TODAY_MAX_RETRIES } from '../todayPanel';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -293,5 +293,124 @@ describe('TodayPanel', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// ── Hot deal rows (issue #131) ───────────────────────────────────────────────
+
+function dealItem(id: number, over: Partial<CrmTodayDealItem> = {}): CrmTodayDealItem {
+  return { kind: 'deal', id, rank: null, why: 'hot', title: `Deal ${id}`,
+           value: 30000, days_since_touch: 12, owner_id: 3, ...over };
+}
+
+function withItems(items: CrmTodayItem[]): CrmToday {
+  return { ...PAYLOAD, items };
+}
+
+function rowButton(text: string): HTMLButtonElement | undefined {
+  return [...container.querySelectorAll('button')]
+    .find(b => b.textContent?.includes(text)) as HTMLButtonElement | undefined;
+}
+
+describe('TodayPanel hot deals', () => {
+  it('opens a deal on the board through the shared deep-link shape', async () => {
+    api.mockResolvedValue(withItems([dealItem(42, { rank: 2, why: 'hot_stale' })]));
+    await render(<TodayPanel />);
+
+    await act(async () => { rowButton('Deal 42')!.click(); });
+    // The one string both languages agree on, built by `dealDeepLink` rather than written
+    // out here — `test_crm_deal_links.py` reads that module and pins it against Python.
+    expect(navigate).toHaveBeenCalledWith('/crm/pipeline?deal=42');
+  });
+
+  it('offers no complete checkbox on a deal row', async () => {
+    api.mockResolvedValue(withItems([dealItem(42, { rank: 2, why: 'hot_stale' })]));
+    await render(<TodayPanel />);
+    expect(container.querySelector('button[aria-label^="Complete"]')).toBeNull();
+  });
+
+  it('wears the temperature as a labelled glyph, not a colour alone', async () => {
+    api.mockResolvedValue(withItems([dealItem(42, { rank: 2, why: 'hot_stale' })]));
+    await render(<TodayPanel />);
+
+    const glyph = container.querySelector('[role="img"]');
+    expect(glyph?.getAttribute('aria-label')).toBe('Deal temperature: Hot');
+    // Read-only: #125's control renders a <button> only when handed an onCycle, and this
+    // panel deliberately hands it none — a tab stop here would sit inside the row's own
+    // open-the-deal button.
+    expect(glyph?.tagName).toBe('SPAN');
+  });
+
+  it('shows the idle days and the value the issue asks for', async () => {
+    api.mockResolvedValue(withItems([dealItem(42, { rank: 2, why: 'hot_stale' })]));
+    await render(<TodayPanel />);
+    expect(rowButton('Deal 42')!.textContent).toContain('idle 12d · $30K');
+  });
+
+  it('keeps a recently touched hot deal out of the collapsed card entirely', async () => {
+    // One commitment and one unranked deal — well under five rows, which is exactly the
+    // case a sixth rank could not have kept apart.
+    api.mockResolvedValue(withItems([
+      taskItem(80, { rank: 3, why: 'overdue', title: 'Overdue one', due_date: '2026-06-01' }),
+      dealItem(42),
+    ]));
+    await render(<TodayPanel />);
+
+    expect(rowButton('Deal 42')).toBeUndefined();
+    expect(rowButton('Overdue one')).toBeDefined();
+
+    await act(async () => { rowButton('+1 more today')!.click(); });
+    expect(rowButton('Deal 42')).toBeDefined();
+  });
+
+  it('swaps the expander for Show less on a panel of fewer than five rows', async () => {
+    // The pre-#131 conditions were `hiddenCount > 0` and `items.length > 5`, and BOTH are
+    // wrong once hidden rows can be unranked rather than merely past the fifth slot: the
+    // first leaves "+N more today" on screen beside "Show less", and the second never
+    // renders "Show less" at all, stranding the reader in the expanded view. Two items
+    // here, so `items.length > 5` is false and the old guard cannot pass this.
+    api.mockResolvedValue(withItems([
+      taskItem(80, { rank: 3, why: 'overdue', title: 'Overdue one', due_date: '2026-06-01' }),
+      dealItem(42),
+    ]));
+    await render(<TodayPanel />);
+
+    await act(async () => { rowButton('+1 more today')!.click(); });
+    expect(rowButton('Show less')).toBeDefined();
+    expect(rowButton('+1 more today')).toBeUndefined();
+
+    await act(async () => { rowButton('Show less')!.click(); });
+    expect(rowButton('+1 more today')).toBeDefined();
+    expect(rowButton('Show less')).toBeUndefined();
+  });
+
+  it('says nothing needs you, and still offers the expander, when every row is unranked', async () => {
+    api.mockResolvedValue(withItems([dealItem(42), dealItem(43)]));
+    await render(<TodayPanel />);
+
+    expect(container.textContent).toContain('Nothing needs you today.');
+    expect(rowButton('+2 more today')).toBeDefined();
+
+    await act(async () => { rowButton('+2 more today')!.click(); });
+    expect(container.textContent).not.toContain('Nothing needs you today.');
+    expect(rowButton('Deal 42')).toBeDefined();
+  });
+
+  it('badges an unassigned deal, the same as an unassigned task', async () => {
+    api.mockResolvedValue(withItems([
+      dealItem(42, { rank: 2, why: 'hot_stale', owner_id: null }),
+      dealItem(43, { rank: 2, why: 'hot_stale', owner_id: 3 }),
+    ]));
+    await render(<TodayPanel />);
+
+    expect(rowButton('Deal 42')!.textContent).toContain('Unassigned');
+    expect(rowButton('Deal 43')!.textContent).not.toContain('Unassigned');
+  });
+
+  it('hides the unassigned badge on a single-seat install', async () => {
+    users.list = [{ id: 3 }];
+    api.mockResolvedValue(withItems([dealItem(42, { rank: 2, why: 'hot_stale', owner_id: null })]));
+    await render(<TodayPanel />);
+    expect(rowButton('Deal 42')!.textContent).not.toContain('Unassigned');
   });
 });

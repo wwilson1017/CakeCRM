@@ -4,7 +4,7 @@
 // collection layer.
 //
 // It lives in its own file for the same hard reason `PipelinePage.archived.test.tsx` does:
-// `vi.mock` is file-scoped, and `PipelinePage.test.tsx` mocks `DealDetailSheet` (its subject
+// `vi.mock` is file-scoped, and `PipelinePage.test.tsx` mocks `DealDetailBody` (its subject
 // is whether the page routes a selection to the sheet, not what the sheet renders), while
 // every assertion here needs the REAL sheet — "the link opened the deal" is exactly the
 // claim that a mocked sheet cannot make. The harness below is the archived file's, which is
@@ -229,9 +229,13 @@ async function click(el: Element | null | undefined, what: string) {
   await flush();
 }
 
+/** Find a button by its visible text OR its `aria-label`. Since #75 the detail panel is the
+ *  collection layer's shell, whose Close is an icon button carrying only the accessible name —
+ *  so matching on text alone finds nothing where the deleted sheet had a worded button. */
 function button(label: string): HTMLButtonElement | undefined {
   return [...container.querySelectorAll('button')]
-    .find(b => b.textContent?.trim() === label) as HTMLButtonElement | undefined;
+    .find(b => b.textContent?.trim() === label || b.getAttribute('aria-label') === label) as
+      HTMLButtonElement | undefined;
 }
 
 /** Open the collection toolbar's facet panel if it is not already open. Every facet moved
