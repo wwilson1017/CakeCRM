@@ -4,9 +4,9 @@
 // FINDABLE, must never be MONEY, and must never be ACTIONABLE.
 //
 // It lives in its own file rather than in `PipelinePage.test.tsx` for one hard reason:
-// that suite MOCKS `DealDetailSheet` (its subject is whether the page routes a selection
-// to the sheet, not what the sheet renders), and half the assertions here go through the
-// sheet's real Restore button. `vi.mock` is file-scoped, so the two harnesses cannot share
+// that suite MOCKS `DealDetailBody` (its subject is whether the page routes a selection
+// into the layer's detail panel, not what the panel renders), and half the assertions here go
+// through the real Restore button #75 moved onto `DealDetailBody`. `vi.mock` is file-scoped, so the two harnesses cannot share
 // a file. Everything below is #83's suite, carried across #74's rewrite of the page onto
 // the shared collection layer; only the three helpers that press UI have moved with it,
 // because the bespoke filter bar those tests clicked is the component #74 deletes.
@@ -647,6 +647,62 @@ describe('PipelinePage — archived deals', () => {
 
     await pickArchivedFacet('Archived only');
     expect(toast.error).toHaveBeenCalledWith('Failed to load deals.');
+  });
+
+  it('offers no selection checkbox on an archived row in LIST view either', async () => {
+    // The board withholds the checkbox via `selectable={!isMobile && !archived}`; the LIST is
+    // the shared layer's own table and had no such gate, so it rendered one. Clicking it stored
+    // the id, `liveSelectedIds` pruned it straight back out, and the box never ticked — a dead
+    // control on the one view where the rows are hardest to tell apart. Both views render the
+    // same records and owe the same answer.
+    routeApi();
+    await render();
+    await pickArchivedFacet('Include archived');
+
+    await click(button('List'), 'List view');
+
+    // The payload is one live deal and one archived, so exactly one checkbox.
+    const boxes = [...container.querySelectorAll('input[aria-label="Select row"]')];
+    expect(boxes).toHaveLength(1);
+    expect(container.textContent).toContain('Zebra rebuild');   // the archived row IS listed
+    expect(container.textContent).toContain('ARCHIVED');
+
+    // And the one box that exists selects the LIVE deal.
+    await click(boxes[0], 'the only row checkbox');
+    expect(container.textContent).toContain('1 deal selected');
+  });
+
+  it('drops archived cards from the board when the narrowing load FAILS', async () => {
+    // `pruneArchivedFromBoard` is the collection-layer replacement for #117's null branch in
+    // the filter predicate: the layer skips an INACTIVE facet's predicate entirely, so
+    // turning Archived OFF cannot filter the rows already in `data` — the prune has to
+    // happen on the data. Every other test here exercises the WIDENING direction, which
+    // never reaches it; without this one, stubbing the whole function out leaves the suite
+    // green.
+    //
+    // The failure path is the one that matters, because it is not transient: a deferred load
+    // eventually replays, but a failed one leaves archived cards sitting on a board whose
+    // facet reads live-only until the next successful load.
+    let failLive = false;
+    routeApi({
+      over: path => {
+        if (path === LIVE_PATH && failLive) throw new Error('network down');
+        return undefined;
+      },
+    });
+    await render();
+
+    await pickArchivedFacet('Include archived');
+    expect(card('Zebra rebuild')?.textContent).toContain('ARCHIVED');
+
+    // Narrow back with the live-only fetch failing. The board cannot be refilled, so the
+    // archived row has to be dropped rather than left contradicting the facet.
+    failLive = true;
+    await clearArchivedFacet('Include archived');
+
+    expect(toast.error).toHaveBeenCalledWith('Failed to load deals.');
+    expect(card('Zebra rebuild')).toBeFalsy();
+    expect(card('Acme renewal')).toBeTruthy();
   });
 
   it('defers a facet load while a stage write is in flight, then re-fires it WIDENED', async () => {

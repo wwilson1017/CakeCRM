@@ -173,8 +173,12 @@ export default function DealTemperatureIcon({ value, onCycle, disabled = false }
       // also reaching the card's own Enter/Space "open the deal" handler.
       onKeyDown={e => e.stopPropagation()}
       onPointerDown={e => e.stopPropagation()}
-      title={`${label} — click to set ${upcoming}`}
-      aria-label={`${label}. Click to set ${upcoming}.`}
+      // A disabled control names the tier and stops there. Keeping "click to set …" on an
+      // archived deal describes an action that cannot happen — AT does announce the button as
+      // unavailable alongside it, so nobody is actively misled, but the sentence is simply
+      // untrue and a hovering pointer gets the same wrong promise from `title`.
+      title={disabled ? label : `${label} — click to set ${upcoming}`}
+      aria-label={disabled ? label : `${label}. Click to set ${upcoming}.`}
       style={{
         ...boxStyle,
         background: 'none',

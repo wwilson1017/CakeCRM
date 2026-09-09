@@ -278,6 +278,30 @@ describe('DetailModal underLauncher focus hand-off', () => {
     tabFrom(buttons[buttons.length - 1]);
     expect(document.activeElement).toBe(buttons[0]);
   });
+
+  it('keeps focus IN on the full-screen takeover, where the panel covers the companion', () => {
+    // The hand-off is a courtesy of the CENTRED layout, which is the only one that leaves the
+    // launcher uncovered. On the takeover this panel is `z-50` and sits OVER it — and
+    // `getClientRects()` reports geometry, not occlusion, so the companion still looks visible.
+    // Handing focus there parks the caret on a button nobody can see.
+    //
+    // The layout is read from a probe carrying the `dock:` variant, so hiding the probe is
+    // exactly what the takeover viewport does. Every other element stays "rendered", which is
+    // what keeps this test about the layout gate rather than about the visibility filter.
+    rendered.mockRestore();
+    const probe = () => document.querySelector('[aria-hidden="true"].hidden');
+    rendered = vi.spyOn(Element.prototype, 'getClientRects')
+      .mockImplementation(function (this: Element) {
+        return (this === probe() ? [] : [{ width: 10, height: 10 }]) as unknown as DOMRectList;
+      });
+
+    render(modal({ underLauncher: true }));
+    const buttons = panelButtons();
+    tabFrom(buttons[buttons.length - 1]);
+
+    expect(document.activeElement).not.toBe(companion);
+    expect(document.activeElement).toBe(buttons[0]);
+  });
 });
 
 describe('DetailModal body scroll lock', () => {

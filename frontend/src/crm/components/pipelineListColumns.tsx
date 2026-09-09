@@ -20,6 +20,7 @@ import { INK, INK_DIM, LINE_STRONG, mono } from '../../shared/styles';
 import { ScorePill, TouchCountPill } from './badges';
 import { isArchivedDeal } from '../pipelineFilters';
 import { DealTemperatureCell } from './DealTemperatureCell';
+import { parseUTC } from '../gtd/util';
 
 /** Every sortable field except the array order, plus the two display-only columns.
  *
@@ -41,15 +42,20 @@ interface PipelineColumn extends Omit<ListColumn<CrmDeal>, 'key' | 'sortValue'> 
  * west of UTC — the same off-by-a-day `pipelineFilters.ymd` exists to avoid on the filtering
  * side. So a date-only string is rebuilt from its calendar parts.
  *
- * `last_activity_at` is a full TIMESTAMPTZ, where ordinary parsing (and conversion to the
- * viewer's zone) is exactly right.
+ * `last_activity_at` is a full TIMESTAMPTZ, and it goes through `parseUTC` rather than the bare
+ * constructor. Postgres hands back SIX fractional digits (the column is written from
+ * `datetime.now(timezone.utc).isoformat()`), and ECMA-262 only defines up to three: V8 tolerates
+ * the extra digits, JavaScriptCore does not. So `new Date('2026-09-09T12:00:00.123456+00:00')` is
+ * Invalid Date in Safari and every iOS browser, and this column silently rendered "—" for every
+ * deal that had any activity at all. `parseUTC` truncates to milliseconds and supplies a `Z` when
+ * the string carries no zone, which is also what the GTD surfaces already use.
  */
 function shortDate(value: string | null | undefined): string {
   if (!value) return '—';
   const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   const d = dateOnly
     ? new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]))
-    : new Date(value);
+    : parseUTC(value);
   return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString();
 }
 
@@ -72,7 +78,12 @@ export function buildPipelineListColumns(
               padding: '1px 4px', flexShrink: 0,
             }}>ARCHIVED</span>
           )}
-          <span style={{ color: INK, fontWeight: 500, opacity: isArchivedDeal(d) ? 0.65 : 1 }}>{d.title}</span>
+          {/* Dimmed by COLOUR, never by `opacity` — the same substitution the board card
+              makes (issue #119). At 0.65 this measured 4.44:1 on a HOVERED row
+              (`hover:bg-sand`, which the pipeline gets because it wires `onSelect`), under
+              AA; `ink-dim` is 6.17:1 there. Keeping the two views on one treatment is also
+              what the note above asks for. */}
+          <span style={{ color: isArchivedDeal(d) ? INK_DIM : INK, fontWeight: 500 }}>{d.title}</span>
         </span>
       ),
     },

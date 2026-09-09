@@ -213,25 +213,40 @@ const actionButtonStyle = {
  * jump to the end of the field on each keystroke.
  */
 function DealEditForm({
-  form, onChange, onPickContact, stageWritable, onContactBusy, onCompanyBusy,
-  saving, error, onSave, onCancel,
+  form, onChange, onPickContact, onPickCompany, stageWritable, onContactBusy, onCompanyBusy,
+  saving, exiting, error, onSave, onCancel,
 }: {
   form: DealFormState;
   onChange: (patch: Partial<DealFormState>) => void;
   onPickContact: (record: CrmContact | null) => void;
+  onPickCompany: (record: CrmCompany | null) => void;
   stageWritable: boolean;
   onContactBusy: (busy: boolean) => void;
   onCompanyBusy: (busy: boolean) => void;
   saving: boolean;
+  /** An exit is in flight, so the whole form goes read-only. NOT discarded: the write may still
+   *  be refused, in which case the panel stays and so must the draft — throwing it away on the
+   *  strength of a consent given for a leave that then did not happen would be worse than the
+   *  silent loss this prevents. */
+  exiting: boolean;
   error: string;
   onSave: () => void;
   onCancel: () => void;
 }) {
   return (
-    <form
-      onSubmit={e => { e.preventDefault(); onSave(); }}
-      style={{ display: 'flex', flexDirection: 'column', gap: 14 }}
-    >
+    <form onSubmit={e => { e.preventDefault(); onSave(); }}>
+      {/* A native `<fieldset disabled>` rather than nine `disabled=` props: it covers every
+          control inside, the two comboboxes and their × buttons included, and a field added later
+          cannot forget it. */}
+      <fieldset
+        disabled={exiting}
+        style={{
+          display: 'flex', flexDirection: 'column', gap: 14,
+          // A fieldset's UA styling would otherwise draw a box around the form; `minWidth: 0` is
+          // the well-known fix for its refusal to shrink inside a flex parent.
+          border: 'none', padding: 0, margin: 0, minWidth: 0,
+        }}
+      >
       {error && <p style={{ color: CORAL_TEXT, fontSize: 12, margin: 0 }}>{error}</p>}
       <div>
         <label style={labelStyle} htmlFor="deal-title">Title *</label>
@@ -267,11 +282,7 @@ function DealEditForm({
         getLabel={companyLabelOf}
         getMatchText={companyNameOf}
         getSublabel={companySublabelOf}
-        onSelect={co => onChange({
-          company_id: co?.id ?? null,
-          // The DECORATED label, so the archived marker survives selection.
-          company_label: co ? companyLabelOf(co) : '',
-        })}
+        onSelect={onPickCompany}
         onBusyChange={onCompanyBusy}
       />
       <OwnerSelect value={form.owner_id} onChange={v => onChange({ owner_id: v })} id="deal-owner" />
@@ -323,6 +334,7 @@ function DealEditForm({
           {saving ? 'Saving...' : 'Save'}
         </button>
       </div>
+      </fieldset>
     </form>
   );
 }
@@ -339,11 +351,15 @@ const LOG_TYPES = ['call', 'email', 'meeting', 'note'] as const;
  * have that problem. Its own draft is one of the sources the body's close guard composes.
  */
 function LogActivityRow({
-  selected, note, busy, onSelect, onNote, onLog, onClear,
+  selected, note, busy, exiting, onSelect, onNote, onLog, onClear,
 }: {
   selected: string;
   note: string;
   busy: boolean;
+  /** An exit is in flight, so this row accepts no NEW draft — the host dismisses the panel when
+   *  the write settles, and by then a draft started here would be discarded with the close guard
+   *  never having seen it (it ran at click time, before the draft existed). */
+  exiting: boolean;
   onSelect: (type: string) => void;
   onNote: (note: string) => void;
   onLog: () => void;
@@ -354,12 +370,13 @@ function LogActivityRow({
       <span style={{ ...mono(10, INK_DIM), display: 'block', marginBottom: 12 }}>Log Activity</span>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         {LOG_TYPES.map(type => (
-          <button key={type} type="button" onClick={() => onSelect(type)} style={{
+          <button key={type} type="button" onClick={() => onSelect(type)} disabled={exiting} style={{
             padding: '5px 12px', borderRadius: 4, fontSize: 12, textTransform: 'capitalize',
             background: selected === type ? ACCENT : 'transparent',
             color: selected === type ? ACCENT_INK : INK_MUTE,
             border: selected === type ? 'none' : `1px solid ${LINE_STRONG}`,
-            cursor: 'pointer',
+            cursor: exiting ? 'default' : 'pointer',
+            opacity: exiting ? 0.5 : 1,
           }}>{type}</button>
         ))}
         {/* Without this, picking a chip by accident leaves the body permanently dirty with no
@@ -373,9 +390,9 @@ function LogActivityRow({
       {selected && (
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
           <input id="deal-log-note" aria-label="Activity note" placeholder="Add a note..."
-            value={note} onChange={e => onNote(e.target.value)}
+            value={note} onChange={e => onNote(e.target.value)} disabled={exiting}
             style={{ ...inputStyle, flex: 1, width: undefined, fontSize: 13 }} />
-          <button type="button" onClick={onLog} disabled={busy}
+          <button type="button" onClick={onLog} disabled={busy || exiting}
             style={{ ...btnPrimary, padding: '8px 16px', fontSize: 13, opacity: busy ? 0.5 : 1 }}>
             {busy ? 'Saving...' : 'Log'}
           </button>
@@ -401,16 +418,36 @@ interface Props {
    *  possibly empty. Every other close leaves it undefined, which is what tells the host to use
    *  the plain stage PUT rather than the mark-lost verb (see `crm/dealStageWrite.ts`). */
   onMarkLost: (deal: CrmDeal, lostReason?: string) => void | Promise<void>;
-  /** ONE save for stage and columns together — see `DealPatch`. Rejects so the form can stay open. */
-  onSaveDeal: (deal: CrmDeal, patch: DealPatch) => Promise<void>;
+  /** ONE save for stage and columns together — see `DealPatch`. Rejects so the form can stay open.
+   *  RESOLVES WITH THE SERVER'S ROW: the route derives `probability` from the stage (100/0), so
+   *  the patch that went out is not what was stored, and this body folds the answer into its own
+   *  read channel rather than guessing. */
+  onSaveDeal: (deal: CrmDeal, patch: DealPatch) => Promise<CrmDeal>;
   /** A deal was un-archived here (issue #83). Receives the row the SERVER returned so the host can
    *  patch it in place — a silent refetch can fail invisibly, which would leave the host still
-   *  showing the deal as archived after a restore that actually happened. */
+   *  showing the deal as archived after a restore that actually happened.
+   *
+   *  PATCHING ONLY. Dismissal is `onClose`'s, for the reason stated there. */
   onRestored?: (deal: CrmDeal) => void;
+  /**
+   * Take this panel away — the deal's work here is done (closed out, or restored).
+   *
+   * THE BODY decides this, never the host, and that is the whole point. A close-out is awaited,
+   * so between the click and the answer the user can walk to another record with `‹ ›`, follow a
+   * deep link, or be remounted by the board emptying underneath them. A host dismissing on its
+   * own has to guess whether the panel in front of it is still the one that asked — and every way
+   * of guessing has a hole: the deal id repeats on A → B → A, and a session counter has to be
+   * bumped by every path that ends a session, of which there are more than anyone enumerates.
+   *
+   * Called only while this body is still MOUNTED, which answers the question exactly: a mounted
+   * body IS the open panel, so "close the open panel" and "close mine" cannot differ. A body that
+   * was replaced simply never calls it, and its successor keeps whatever draft it holds.
+   */
+  onClose: () => void;
 }
 
 export function DealDetailBody({
-  deal, onBoard, stageWritable, ctx, onMarkWon, onMarkLost, onSaveDeal, onRestored,
+  deal, onBoard, stageWritable, ctx, onMarkWon, onMarkLost, onSaveDeal, onRestored, onClose,
 }: Props) {
   const navigate = useNavigate();
 
@@ -445,6 +482,12 @@ export function DealDetailBody({
   // as the first confirm lands.
   const [closing, setClosing] = useState(false);
   const [restoring, setRestoring] = useState(false);
+  // Has the user spoken for the company field during THIS edit session? An emptiness test cannot
+  // answer that: it reads a company the user just CLEARED as one that was never set, so the next
+  // contact pick silently puts the link back. `DealForm` carries the same ref for the same
+  // reason. Seeded per session in `startEditing` — a company already on the deal IS a deliberate
+  // choice, just an earlier one.
+  const companyTouched = useRef(false);
 
   // Canonical values win for every key the host actually carries, so a row patched after a write
   // is authoritative — but keys the host's query never SELECTED (the dashboard's top-deals rows
@@ -470,11 +513,43 @@ export function DealDetailBody({
     return merged;
   }, [onBoard, fetched, deal]);
 
+  // The two LIFECYCLE columns are read from the detail fetch when there is one, and from the prop
+  // only until then — deliberately NOT through `view`, where the host row wins.
+  //
+  // Both are about this panel's OWN actions, and the fetch is by construction the latest statement
+  // about them: `loadDetail` runs on mount, after an inline save, and after a close whose outcome
+  // was ambiguous. Two cases need it. A deal archived AFTER the board loaded carries
+  // `archived_at: null` in the host row, so a `view`-based banner would never appear and the panel
+  // would keep offering close-out actions the server refuses outright. And a close whose response
+  // was LOST may already have committed — re-offering Mark Lost there appends a second
+  // "Deal lost —" note on the retry.
+  //
+  // The host row cannot be dragged out from under an OPEN panel (the panel is a modal over the
+  // board), so the only writer that can move these behind our back is another seat or the
+  // assistant, arriving on a board refresh. That case reads stale here until the panel is
+  // reopened — the same trade `DealDetailSheet` made, stated rather than inherited silently.
+  // A `??` chain would be wrong in the other direction: `null` is the value a restore WRITES.
+  const archivedAt = fetched ? fetched.archived_at : deal.archived_at;
+  const closeStage = fetched ? fetched.stage : deal.stage;
+
+  // The record this body RENDERS and snapshots into its edit form: `view`, with those two
+  // columns swapped in. Without it the panel contradicts itself — the close-out pair would
+  // vanish on a fetched 'lost' while the heading, the stage chip and the form's Stage select all
+  // still read the host row's 'lead', and picking 'lead' there would produce NO patch because it
+  // matches a baseline the server never held. Identity-stable when the two agree, which is every
+  // render but the ones this exists for.
+  const record: CrmDeal = useMemo(
+    () => (view.archived_at === archivedAt && view.stage === closeStage
+      ? view
+      : { ...view, archived_at: archivedAt, stage: closeStage }),
+    [view, archivedAt, closeStage],
+  );
+
   // Publish the open deal for the assistant drawer (#14). Unconditional and first: deals have no
   // route, so this IS the deal open/close signal, and the drawer goes context-blind without it.
-  usePublishActiveRecord('deal', view.id, view.title);
+  usePublishActiveRecord('deal', record.id, record.title);
 
-  const { byField, confirm, confirming, refresh: refreshProvenance } = useProvenance('deal', view.id);
+  const { byField, confirm, confirming, refresh: refreshProvenance } = useProvenance('deal', record.id);
   const badge = (f: string) => (
     <ProvenanceBadge prov={byField[f]} onConfirm={() => confirm(f)} confirming={confirming === f} />
   );
@@ -513,32 +588,26 @@ export function DealDetailBody({
   const touchCount = fetched?.ai_touch_count ?? deal.ai_touch_count;
   const leadScore = fetched?.lead_score ?? deal.lead_score;
 
-  // The two LIFECYCLE columns are read from the detail fetch when there is one, and from the prop
-  // only until then — deliberately NOT through `view`, where the host row wins.
-  //
-  // Both are about this panel's OWN actions, and the fetch is by construction the latest statement
-  // about them: `loadDetail` runs on mount, after an inline save, and after a close whose outcome
-  // was ambiguous. Two cases need it. A deal archived AFTER the board loaded carries
-  // `archived_at: null` in the host row, so a `view`-based banner would never appear and the panel
-  // would keep offering close-out actions the server refuses outright. And a close whose response
-  // was LOST may already have committed — re-offering Mark Lost there appends a second
-  // "Deal lost —" note on the retry.
-  //
-  // The host row cannot be dragged out from under an OPEN panel (the panel is a modal over the
-  // board), so the only writer that can move these behind our back is another seat or the
-  // assistant, arriving on a board refresh. That case reads stale here until the panel is
-  // reopened — the same trade `DealDetailSheet` made, stated rather than inherited silently.
-  // A `??` chain would be wrong in the other direction: `null` is the value a restore WRITES.
-  const archivedAt = fetched ? fetched.archived_at : deal.archived_at;
-  const closeStage = fetched ? fetched.stage : deal.stage;
+
+
   // Stage is not writable on an archived deal at all: the server refuses the change
   // (`_classify_deal_update` raises → 400) and rejects the WHOLE update with it, so an editable
   // Stage field would discard every other column the user had just typed.
   const stageEditable = stageWritable && !archivedAt;
 
   // Whether this panel is still on screen when an awaited write settles — see `closeOut`.
+  //
+  // Re-ARMED in setup, not merely cleared in cleanup. `main.tsx` renders under <StrictMode>,
+  // whose development cycle is setup → cleanup → setup, so a cleanup-only version leaves this
+  // false for the life of the mount — and every close-out and restore then silently declines to
+  // dismiss the panel, in development only, which is exactly where it would be met and mistaken
+  // for a broken endpoint. `WeeklyTouchesDetailPage` carried this same trap and its own note
+  // about it before #75 retired that code.
   const mountedRef = useRef(true);
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const formDirty = editing && JSON.stringify(formFields(form)) !== JSON.stringify(formFields(baseline));
   const logDirty = logActivity !== '' || logNote.trim() !== '';
@@ -581,31 +650,51 @@ export function DealDetailBody({
   // the old lookup into a capped list is gone — and with it the case where an out-of-page contact
   // silently skipped the auto-fill.
   //
-  // The company is filled from that contact ONLY when none is set yet — the rule `DealForm` has
-  // always applied. Unlike the create form there is no `companyTouched` ref here: this form opens
-  // over an EXISTING deal, so "already set" is a value the user (or an earlier ingestion) chose
-  // deliberately, which is exactly what the emptiness test is asking. Deal↔company links are
-  // independent, so a company already on the deal is never overwritten or nulled by a contact
-  // change.
+  // The company is filled from that contact ONLY when the user has not spoken for the company
+  // field — the rule `DealForm` has always applied, guarded the way `DealForm` guards it. Deal↔
+  // company links are independent, so neither a company already on the deal nor one the user
+  // just cleared is overwritten by a contact change.
   function pickContact(c: CrmContact | null) {
     setForm(prev => {
       if (c === null) return { ...prev, contact_id: null, contact_label: '' };
-      const inherit = prev.company_id === null && c.company_id != null;
+      if (companyTouched.current) {
+        return { ...prev, contact_id: c.id, contact_label: c.name };
+      }
+      // An auto-derived company FOLLOWS the contact it was derived from — INCLUDING to nothing.
+      // Filling only when the new contact HAS one would strand the previous contact's company on
+      // the deal, silently linking it to an organisation neither the user nor the current
+      // contact ever named. Clearing the contact outright is left alone above: there is no new
+      // contact to derive from, and the company may be all the user has.
       return {
         ...prev,
         contact_id: c.id,
         contact_label: c.name,
-        company_id: inherit ? c.company_id : prev.company_id,
-        company_label: inherit ? (c.company_name || c.company || '') : prev.company_label,
+        company_id: c.company_id ?? null,
+        company_label: c.company_id != null ? (c.company_name || c.company || '') : '',
       };
     });
+  }
+
+  /** The user speaking for the company field — a pick, a create, or the × clear. Sets the ref,
+   *  which is the only thing that tells a CLEARED company from an unset one. */
+  function pickCompany(co: CrmCompany | null) {
+    companyTouched.current = true;
+    setForm(prev => ({
+      ...prev,
+      company_id: co?.id ?? null,
+      // The DECORATED label, so an archived company keeps its marker in the closed control.
+      company_label: co ? companyLabelOf(co) : '',
+    }));
   }
 
   // No list fetch here any more: both pickers search the server as the user types, so opening a
   // deal to read it still costs no extra requests and editing one is no longer limited to the
   // first 200 rows.
   function startEditing() {
-    const snapshot = toDealForm(view);
+    // A company already on the deal counts as spoken for; clearing it in `DealEditForm` sets the
+    // flag too, which is the case an emptiness test gets wrong.
+    companyTouched.current = record.company_id != null;
+    const snapshot = toDealForm(record);
     setForm(snapshot);
     setBaseline(snapshot);
     setFormError('');
@@ -623,8 +712,15 @@ export function DealDetailBody({
     setSaving(true);
     setFormError('');
     try {
-      await onSaveDeal(view, patch);
+      const updated = await onSaveDeal(record, patch);
       setEditing(false);
+      // Fold the SERVER's row into `fetched` before the refetch. `archivedAt`/`closeStage` read
+      // from there, so a save that changes the stage would otherwise show the PRE-save value —
+      // and hide or offer the close-out pair on it — until the request below lands. The row, not
+      // the patch: `_classify_deal_update` overrides `probability` to 100/0 inside the same
+      // transaction, so folding what was SENT would paint "Won · 50%" until the refetch, and
+      // leave it there for good if the refetch failed.
+      setFetched(prev => (prev ? { ...prev, ...updated } : prev));
       void loadDetail();          // score, activity, and the off-board row itself
       void refreshProvenance();   // a human edit retires the badge the assistant left
     } catch (err: unknown) {
@@ -649,8 +745,8 @@ export function DealDetailBody({
         body: JSON.stringify({
           activity: logActivity,
           note: logNote,
-          contact_id: view.contact_id ?? null,
-          deal_id: view.id,
+          contact_id: record.contact_id ?? null,
+          deal_id: record.id,
         }),
       });
       clearLog();
@@ -664,7 +760,7 @@ export function DealDetailBody({
 
   async function copyLink() {
     try {
-      await navigator.clipboard.writeText(`${window.location.origin}${dealDeepLink(view.id)}`);
+      await navigator.clipboard.writeText(`${window.location.origin}${dealDeepLink(record.id)}`);
       toast.success('Link copied.');
     } catch {
       // No "select it manually" fallback offered, because there is nothing on screen to select:
@@ -686,8 +782,17 @@ export function DealDetailBody({
   async function closeOut(toStage: 'won' | 'lost', lostReason?: string) {
     setClosing(true);
     try {
-      if (toStage === 'won') await onMarkWon(view);
-      else await onMarkLost(view, lostReason);
+      if (toStage === 'won') await onMarkWon(record);
+      else await onMarkLost(record, lostReason);
+      // Written. The deal is closed, so the panel goes — see `onClose` for why that decision is
+      // made HERE. A refused or failed write rejects instead, and the host has already said so.
+      if (mountedRef.current) onClose();
+    } catch {
+      // Swallowed DELIBERATELY, and it is the only thing this branch does. Both buttons fire
+      // this without awaiting it, so a host rejection escaping here is an unhandled rejection —
+      // and the report is not ours to make twice: `writeDeal` toasts a failed stage PUT itself
+      // and the host adds the bulk-lock refusal. What matters to this body is only that the
+      // panel stays open, which is what NOT calling `onClose` above already accomplishes.
     } finally {
       setClosing(false);
       // Still mounted means the host did NOT dismiss us — its failure path. The outcome of that
@@ -710,12 +815,16 @@ export function DealDetailBody({
   async function restoreDeal() {
     setRestoring(true);
     try {
-      const restored = await api<CrmDeal>(`/api/crm/deals/${view.id}/restore`, { method: 'POST' });
+      const restored = await api<CrmDeal>(`/api/crm/deals/${record.id}/restore`, { method: 'POST' });
       // Patch our OWN read channel too, not just the host's. `archivedAt` reads the fetch when
       // there is one, so without this the banner would survive its own restore on any host that
       // keeps the panel open.
       setFetched(prev => (prev ? { ...prev, ...restored } : restored));
+      // The row goes up UNCONDITIONALLY — the board must show the deal as live whether or not
+      // this panel is still on screen, and that patch is what makes it correct. Only the
+      // DISMISSAL is conditional, and for the reason `onClose` gives.
       onRestored?.(restored);
+      if (mountedRef.current) onClose();
     } catch {
       toast.error('Failed to restore deal.');
     } finally {
@@ -732,12 +841,32 @@ export function DealDetailBody({
   // underneath, and Mark Won sitting one stray Tab away from an open Mark Lost dialog is a wrong
   // write, not just an a11y lapse.
   const closeOutDisabled = closing || askingLostReason;
+  // An exit this body started is in flight. While it is, the body accepts NO new draft: the host
+  // dismisses the panel when the write settles, and the close guard already ran — at click time,
+  // before any such draft existed — so anything typed underneath would be discarded in silence.
+  // One rule, three controls: Edit, the quick-log chips and its note.
+  const exiting = closeOutDisabled || restoring;
 
   return (
     <div style={{ padding: 20 }}>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end', marginBottom: 12 }}>
         <button type="button" onClick={() => void copyLink()} style={actionButtonStyle}>Copy link</button>
-        {!editing && <button type="button" onClick={startEditing} style={actionButtonStyle}>Edit</button>}
+        {/* Refused while an exit is in flight. The host dismisses this panel when the write
+            settles, and by then a draft started underneath would be discarded without the close
+            guard ever seeing it — the id check that stops a settling write closing SOMEONE
+            ELSE's panel cannot help here, because it really is this deal. */}
+        {!editing && (
+          <button
+            type="button"
+            onClick={startEditing}
+            disabled={exiting}
+            style={{
+              ...actionButtonStyle,
+              cursor: exiting ? 'default' : 'pointer',
+              opacity: exiting ? 0.5 : 1,
+            }}
+          >Edit</button>
+        )}
         {!editing && closable && (
           <>
             <button
@@ -791,7 +920,10 @@ export function DealDetailBody({
           </span>
           <button
             type="button"
-            onClick={() => void restoreDeal()}
+            // Through the SAME guard as every other exit this body owns. Every host dismisses the
+            // panel on `onRestored`, and the banner renders over the open edit form — so without
+            // this, "edit an archived deal, then restore it" discarded the draft silently.
+            onClick={() => void leaveVia(() => { void restoreDeal(); })}
             disabled={restoring}
             style={{
               padding: '8px 14px', borderRadius: 6, border: `1px solid ${LINE_STRONG}`,
@@ -807,10 +939,12 @@ export function DealDetailBody({
           form={form}
           onChange={patch => setForm(prev => ({ ...prev, ...patch }))}
           onPickContact={pickContact}
+          onPickCompany={pickCompany}
           stageWritable={stageEditable}
           onContactBusy={setContactBusy}
           onCompanyBusy={setCompanyBusy}
           saving={saving || contactBusy || companyBusy}
+          exiting={exiting}
           error={formError}
           onSave={() => void handleSave()}
           onCancel={() => setEditing(false)}
@@ -821,10 +955,10 @@ export function DealDetailBody({
             <h3 style={{
               fontFamily: FONT_DISPLAY, fontSize: 20, fontWeight: 400,
               letterSpacing: '-0.01em', color: INK, margin: 0, flex: 1,
-            }}>{view.title}</h3>
+            }}>{record.title}</h3>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexShrink: 0, marginLeft: 12 }}>
               <span style={{ fontFamily: FONT_DISPLAY, fontSize: 20, color: GOLD_TEXT }}>
-                ${(view.value ?? 0).toLocaleString()}
+                ${(record.value ?? 0).toLocaleString()}
               </span>
               {badge('value')}
             </span>
@@ -835,23 +969,23 @@ export function DealDetailBody({
             fontSize: 12, color: INK_MUTE, marginBottom: 16,
           }}>
             <span style={{ textTransform: 'capitalize' }}>
-              Stage: <span style={{ color: STAGE_COLORS[view.stage]?.text || INK }}>{view.stage}</span>
+              Stage: <span style={{ color: STAGE_COLORS[record.stage]?.text || INK }}>{record.stage}</span>
             </span>
             {badge('stage')}
           </div>
 
           {/* The touch count and, on demand, every event behind it. Renders nothing when the count
               is NULL, so a keyless install sees no affordance at all. */}
-          <AiTouchDetail dealId={view.id} count={touchCount} />
+          <AiTouchDetail dealId={record.id} count={touchCount} />
 
           {/* `pre-wrap` because the notes field is a multi-line textarea: collapsing its newlines
               here delivers half of what the user typed. */}
-          {view.notes && (
+          {record.notes && (
             <p style={{
               fontSize: 14, color: INK_MUTE, marginBottom: 16, lineHeight: 1.5,
               whiteSpace: 'pre-wrap',
             }}>
-              {view.notes} {badge('notes')}
+              {record.notes} {badge('notes')}
             </p>
           )}
 
@@ -859,43 +993,43 @@ export function DealDetailBody({
               currently-lost deal. */}
           {/* `pre-wrap` for the same reason, and it matters more here: #128 made the reason
               multi-line and this is the ONLY surface that shows it. */}
-          {view.lost_reason && (
+          {record.lost_reason && (
             <p style={{
               fontSize: 13, color: INK_MUTE, marginBottom: 16, lineHeight: 1.5,
               whiteSpace: 'pre-wrap',
             }}>
               <span style={{ ...mono(10), color: INK_DIM, marginRight: 6 }}>LOST REASON</span>
-              {view.lost_reason} {badge('lost_reason')}
+              {record.lost_reason} {badge('lost_reason')}
             </p>
           )}
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
-            <Row label="Deal ID" value={`#${view.id}`} />
+            <Row label="Deal ID" value={`#${record.id}`} />
             <Row
               label="Contact"
-              value={view.contact_id != null && view.contact_name ? (
+              value={record.contact_id != null && record.contact_name ? (
                 // A button, not an <a>: leaving the panel is a leave path like any other, and a
                 // link would take a dirty draft with it without asking.
                 <button type="button" style={linkButtonStyle}
-                  onClick={() => void leaveVia(() => navigate(`/crm/contacts/${view.contact_id}`))}>
-                  {view.contact_name}
+                  onClick={() => void leaveVia(() => navigate(`/crm/contacts/${record.contact_id}`))}>
+                  {record.contact_name}
                 </button>
-              ) : view.contact_name}
+              ) : record.contact_name}
             />
             <Row
               label="Company"
-              value={view.company_id != null && view.company_name ? (
+              value={record.company_id != null && record.company_name ? (
                 <button type="button" style={linkButtonStyle}
-                  onClick={() => void leaveVia(() => navigate(`/crm/companies/${view.company_id}`))}>
-                  {view.company_name}
+                  onClick={() => void leaveVia(() => navigate(`/crm/companies/${record.company_id}`))}>
+                  {record.company_name}
                 </button>
-              ) : view.company_name}
+              ) : record.company_name}
             />
             {/* `OwnerName`, not a bare name string: an UNASSIGNED owner is a real state (#60) and
                 the muted italic is what keeps the word "Unassigned" from reading as somebody's
                 name. A JSX element is never blank, so `Row`'s hide-when-empty rule — which is
                 exactly the shape that bug takes — cannot suppress it. */}
-            <Row label="Owner" value={<OwnerName ownerId={view.owner_id} />} />
+            <Row label="Owner" value={<OwnerName ownerId={record.owner_id} />} />
             {/* Issue #125, and it renders UNCONDITIONALLY for the same reason the Owner row
                 above does: "not set" is a real state, and a hide-when-blank wrapper is exactly
                 what makes it unreadable as one. A JSX element is never blank, so `Row`'s
@@ -908,12 +1042,12 @@ export function DealDetailBody({
               label="Temperature"
               value={
                 <DealTemperatureIcon
-                  value={view.deal_temperature}
+                  value={record.deal_temperature}
                   // Archived: readable, not workable (issue #83), like Mark Won/Lost below.
                   disabled={archivedAt != null}
                   onCycle={async next => {
                     try {
-                      await onSaveDeal(view, { deal_temperature: next });
+                      await onSaveDeal(record, { deal_temperature: next });
                     } catch {
                       // The host toasts a stage failure itself but stays silent on a
                       // fields-only write, and this control has no inline form to show an
@@ -929,7 +1063,7 @@ export function DealDetailBody({
             />
             <Row
               label="Probability"
-              value={view.probability > 0 ? `${view.probability}%` : ''}
+              value={record.probability > 0 ? `${record.probability}%` : ''}
               badge={badge('probability')}
             />
             {leadScore != null && (
@@ -940,7 +1074,7 @@ export function DealDetailBody({
             )}
             <Row
               label="Expected Close"
-              value={view.expected_close_date}
+              value={record.expected_close_date}
               badge={badge('expected_close_date')}
             />
           </div>
@@ -953,6 +1087,7 @@ export function DealDetailBody({
         selected={logActivity}
         note={logNote}
         busy={logging}
+        exiting={exiting}
         onSelect={setLogActivity}
         onNote={setLogNote}
         onLog={() => void handleLog()}
@@ -963,7 +1098,7 @@ export function DealDetailBody({
           body by record id, so ‹ › nav already remounts this. */}
       <CustomFieldsSection
         entityType="deal"
-        entityId={view.id}
+        entityId={record.id}
         sectionStyle={{ borderTop: `1px solid ${LINE}`, paddingTop: 16, marginBottom: 20 }}
       />
 
@@ -974,7 +1109,7 @@ export function DealDetailBody({
 
       <div style={{ borderTop: `1px solid ${LINE}`, paddingTop: 16 }}>
         <span style={{ ...mono(10, INK_DIM), display: 'block', marginBottom: 12 }}>Chatter</span>
-        <NotesThread entityType="deal" entityId={view.id} />
+        <NotesThread entityType="deal" entityId={record.id} />
       </div>
 
       {/* Rendered through a PORTAL by the modal itself, but kept a React CHILD of this body: React
@@ -984,7 +1119,7 @@ export function DealDetailBody({
           own, which is why the dialog needs one. */}
       {askingLostReason && (
         <LostReasonModal
-          dealTitle={view.title}
+          dealTitle={record.title}
           onCancel={() => setAskingLostReason(false)}
           onConfirm={reason => {
             setAskingLostReason(false);

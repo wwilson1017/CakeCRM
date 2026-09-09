@@ -538,7 +538,7 @@ export function PipelinePage() {
   // endpoints return the same `get_deal` projection, so the reconcile merge is unchanged.
   const writeDeal = useCallback((
     deal: CrmDeal, patch: DealPatch, fromStage?: string, lostReason?: string,
-  ): Promise<void> => {
+  ): Promise<CrmDeal> => {
     // A bulk move in flight owns the board until its reconcile refetch lands. A single-deal
     // write started now could reconcile (or roll back) against the stage the bulk request is
     // in the middle of changing, clobbering server truth we're about to fetch. It REJECTS rather
@@ -564,9 +564,13 @@ export function PipelinePage() {
     pendingWrites.current++; // an unconfirmed optimistic write now exists (see `load`'s silent guard)
     writeGen.current++;      // ...and bump the generation so a silent GET spanning it is invalidated
     const prior = dealWriteChain.current.get(dealId) ?? Promise.resolve();
-    let settle: () => void = () => {};
+    // The outcome carries the SERVER's row, not just success: the detail panel folds it into its
+    // own read channel so a save that changed the stage shows the probability the server derived
+    // (100/0) rather than the one the form sent. Resolved before the supersession check below, so
+    // a superseded write still answers its caller.
+    let settle: (updated: CrmDeal) => void = () => {};
     let fail: (err: unknown) => void = () => {};
-    const outcome = new Promise<void>((resolve, reject) => { settle = resolve; fail = reject; });
+    const outcome = new Promise<CrmDeal>((resolve, reject) => { settle = resolve; fail = reject; });
     const run = prior.then(async () => {
       try {
         // `POST /mark-lost` is the ONE write here that is not the patch PUT (#128): it zeroes
@@ -585,7 +589,7 @@ export function PipelinePage() {
         // optimistic intermediate. Use the response's stage, not toStage, so the
         // ground truth is whatever the server actually stored.
         dealConfirmedStage.current.set(dealId, updated.stage);
-        settle();
+        settle(updated);
         if (dealOpSeq.current.get(dealId)?.seq !== seq) return; // a newer move superseded this one
         setData(prev => prev ? {
           ...prev,
@@ -704,14 +708,20 @@ export function PipelinePage() {
         // server and failed has already raised its own toast in there; toasting again here would
         // say the same thing twice.
         if (err instanceof BulkLockError) toast.error(err.message);
-        return;
+        // RETHROWN, not swallowed: the panel's own close-out is awaiting this, and a resolve is
+        // what tells it the deal is closed and it may go. Reporting is still ours — `writeDeal`
+        // toasts a failed stage PUT itself, so only the lock refusal is added above.
+        throw err;
       }
       // Un-hide the destination, but only once the write is known to have gone out. Mark Won/Lost
       // is one of the two paths that can move a deal into a stage the user has put away, and
       // without this the card vanishes with nothing on screen to say where it went.
       revealStage(stage);
     }
-    setSelectedDealId(null);
+    // No dismissal here. `DealDetailBody` closes itself on a successful write, because only a
+    // MOUNTED body can answer "is the panel in front of me still the one that asked" — see its
+    // `onClose` prop. This function's remaining job is the board's: reveal the destination stage
+    // and refresh.
     if (replayCount.current === replaysBefore) load(true);
   }, [writeDeal, load, revealStage]);
 
@@ -788,7 +798,7 @@ export function PipelinePage() {
       next.delete(restored.id);
       return next;
     });
-    setSelectedDealId(null);
+    // Not dismissed here either — the body does that, and only while it is still on screen.
     // Then refresh in the background. The patch above is what makes the board CORRECT — it
     // deliberately does not depend on this landing — but a restore closes the sheet the same way
     // `onClose` does, and that path refreshes so an in-sheet note reaches the board's derived
@@ -879,13 +889,20 @@ export function PipelinePage() {
   // is recomputed here — so both sides have to be given the same set or they report different
   // numbers for one click. `load` prunes the state itself on the next payload; this covers the
   // window until then. Reference-stable when nothing was pruned.
+  // ONE archived-id set behind both halves of the selection contract: the prune below, and
+  // the layer's `isSelectable`. Two derivations of "which deals are archived" could disagree
+  // for a render and put a checkbox on a row whose id is being thrown away.
+  const archivedIds = useMemo(
+    () => new Set<string | number>(deals.filter(isArchivedDeal).map(d => d.id)),
+    [deals],
+  );
+
   const liveSelectedIds = useMemo(() => {
     if (bulkSelected.size === 0) return bulkSelected;
-    const archived = new Set(deals.filter(isArchivedDeal).map(d => d.id));
-    if (archived.size === 0) return bulkSelected;
-    const next = new Set([...bulkSelected].filter(id => !archived.has(id)));
+    if (archivedIds.size === 0) return bulkSelected;
+    const next = new Set([...bulkSelected].filter(id => !archivedIds.has(id)));
     return next.size === bulkSelected.size ? bulkSelected : next;
-  }, [bulkSelected, deals]);
+  }, [bulkSelected, archivedIds]);
 
   // Bumped whenever the page clears the filters programmatically, and used as the
   // CollectionView key. A remount is what actually empties the search box: SearchInput adopts
@@ -1108,6 +1125,12 @@ export function PipelinePage() {
   const selection = useMemo<CollectionSelectionProps>(() => ({
     selectedIds: liveSelectedIds,
     onChange: handleSelectionChange,
+    // The LIST view's counterpart to the board's `selectable={!isMobile && !archived}`. Both
+    // views render the same records, so both owe the same answer: an archived deal is
+    // findable, never money, and never actionable. Without this the list offered a checkbox
+    // that `liveSelectedIds` pruned straight back out — a control that could be clicked
+    // forever and never tick.
+    isSelectable: id => !archivedIds.has(id),
     // The layer passes only ids that are BOTH selected and in the current view, and renders
     // this at all only when that set is non-empty — so the count shown and the payload
     // `applyBulkMove` recomputes describe the same deals (see the note there).
@@ -1121,7 +1144,7 @@ export function PipelinePage() {
         onClear={clearSelection}
       />
     ),
-  }), [liveSelectedIds, handleSelectionChange, bulkStage, bulkPending, applyBulkMove, clearSelection]);
+  }), [liveSelectedIds, archivedIds, handleSelectionChange, bulkStage, bulkPending, applyBulkMove, clearSelection]);
 
   // ── Mobile: which board column is currently snapped into view ──────────────
   const scrollerRef = useRef<HTMLDivElement>(null);
@@ -1252,20 +1275,23 @@ export function PipelinePage() {
   }, [deepLinkState, deepLink.dealId, deepLink.key, load]);
 
 
-  // ONE return, with the loading and error branches INSIDE it rather than returning early.
-  // `CollectionView` mounts `CollectionDetail` above its own loading branch precisely so a
-  // shared `?deal=` link opens the record instead of a spinner — but an early return here would
-  // put that whole subtree at a different position in the element tree per branch, so React
-  // unmounts and remounts it on every transition. The very first transition (loading → loaded)
-  // is one a `?deal=` link hits every time, throwing away the record the layer had already
-  // fetched, its one-record memory, and any draft the body held.
-  const board = loading ? (
-    <div style={{ display: 'flex', justifyContent: 'center', padding: '80px 0' }}>
-      <div className="w-6 h-6 border-2 border-ck-accent border-t-transparent rounded-full animate-spin" />
-    </div>
-  ) : !data ? (
-    <LoadError label="Couldn't load pipeline" onRetry={() => load()} />
-  ) : (
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', padding: '80px 0' }}>
+        <div className="w-6 h-6 border-2 border-ck-accent border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (!data) return <LoadError label="Couldn't load pipeline" onRetry={() => load()} />;
+
+  // The detail panel is NOT hoisted above these returns, deliberately — an earlier revision of
+  // #75 did that, when the panel was a page-owned sibling. It buys nothing here: the panel is
+  // mounted by `CollectionView`, which only exists in this branch, so an early return and a
+  // ternary unmount it identically. And nothing can be selected before the board lands anyway —
+  // `deepLinkVerdict` answers `idle` until a payload has been applied, precisely so a network
+  // blip is never read as "that deal is gone".
+  return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, padding: isMobile ? '20px 16px' : '32px 44px' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: isMobile ? 16 : 24 }}>
         <div>
@@ -1384,27 +1410,39 @@ export function PipelinePage() {
         }}
         detail={{
           render: (deal, ctx) => {
-            // Membership is asked of the WHOLE payload, never of `items`. `items` drops the
-            // stages the user has put away, and a put-away COLUMN is a view preference — it says
-            // nothing about whether the deal is on this board or whether its stage may be
-            // written. (The layer still resolves such a deal through `loadById` rather than from
-            // `items`; that costs one GET and changes no answer.)
-            const onBoard = deals.some(d => d.id === deal.id);
+            // The two flags answer two DIFFERENT questions, so each reads the array that answers
+            // its own — conflating them is a bug in whichever direction you pick.
+            //
+            // `onBoard` is "did this row come from the host's canonical array, so a write patches
+            // it in place?". That array is `items`, which is what the layer resolved `selectedId`
+            // against — and `items` drops the stages the user has put away, so such a deal came
+            // from `loadById` and is a ONE-SHOT snapshot nothing will ever replace. Answering
+            // this from `deals` would tell the body the prop is authoritative when it is frozen,
+            // and its canonical-wins merge would then repaint pre-save values over its own
+            // refreshed detail after every save.
+            const onBoard = items.some(d => d.id === deal.id);
             return (
               <DealDetailBody
                 deal={deal}
                 onBoard={onBoard}
-                // Off the board there is no board position to write: the stage move, Won and Lost
-                // would all put the deal somewhere this board is not showing. An ARCHIVED deal is
-                // excluded for a harder reason — the server refuses a stage change on one
-                // (`_classify_deal_update` raises → 400), so the controls could only ever be a
-                // dead end. Restore first; the panel's banner is the way.
-                stageWritable={onBoard && !isArchivedDeal(deal)}
+                // `stageWritable` is "is there a board position to write?", which IS a question
+                // about the whole payload: a put-away column is a view preference and says
+                // nothing about whether the deal is on this board. Off the payload entirely, the
+                // stage move, Won and Lost would all put the deal somewhere this board is not
+                // showing.
+                //
+                // ARCHIVED is deliberately NOT tested here. The body gates on it too, from its
+                // OWN detail fetch — the only reader that knows, since a deal archived after the
+                // board loaded carries `archived_at: null` in this row. A second check on the
+                // stale row could only ever be wrong in one direction: denying a restored deal
+                // its stage controls with no way back.
+                stageWritable={deals.some(d => d.id === deal.id)}
                 ctx={ctx}
                 onMarkWon={markWon}
                 onMarkLost={markLost}
                 onSaveDeal={saveDeal}
                 onRestored={restoreDeal}
+                onClose={() => { setSelectedDealId(null); setLinkOpenedDeal(null); }}
               />
             );
           },
@@ -1494,8 +1532,6 @@ export function PipelinePage() {
       {showCreate && <DealForm onClose={() => setShowCreate(false)} onSaved={() => { setShowCreate(false); load(); }} />}
     </div>
   );
-
-  return board;
 }
 
 // The two page-header escape hatches share one look: a plain underlined text link in the

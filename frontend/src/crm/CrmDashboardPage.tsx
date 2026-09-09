@@ -53,6 +53,7 @@ export function CrmDashboardPage() {
   // Bumped by reload() to refetch the self-fetching cards alongside the rest.
   // Two consumers now: WeeklyTouchesCard (#76) and TodayPanel (#130).
   const [cardRefreshKey, setCardRefreshKey] = useState(0);
+
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   // Monotonic id so a slow in-flight analytics request can't overwrite a newer
@@ -93,11 +94,14 @@ export function CrmDashboardPage() {
       // which routes to the mark-lost verb instead of the plain stage PUT (issue #128).
       const { path, init } = stageWriteRequest(deal.id, stage, lostReason);
       await api(path, init);
-      setSelectedDealId(null);
+      // No dismissal here: `DealDetailBody` closes itself on a successful write, because only a
+      // MOUNTED body can tell whether the panel in front of it is still the one that asked.
       reload();
     } catch (err) {
       console.error('Failed to update deal stage:', err);
       toast.error('Failed to move deal.');
+      // Rethrown so the panel's own close-out knows the deal was NOT closed and stays open.
+      throw err;
     }
   }
 
@@ -110,7 +114,7 @@ export function CrmDashboardPage() {
   // exactly that. Leaving the stale row in place therefore shows pre-save values the moment edit
   // mode closes — and keeps showing them for good if the reload never lands. `reload()` is still
   // the reconciliation for everything else on the page (there is no board to patch a row into).
-  async function saveDeal(deal: CrmDeal, patch: DealPatch) {
+  async function saveDeal(deal: CrmDeal, patch: DealPatch): Promise<CrmDeal> {
     const updated = await api<CrmDeal>(`/api/crm/deals/${deal.id}`, {
       method: 'PUT', body: JSON.stringify(patch),
     });
@@ -121,6 +125,9 @@ export function CrmDashboardPage() {
       top_deals: prev.top_deals.map(d => d.id === deal.id ? { ...d, ...updated } : d),
     } : prev);
     reload();
+    // Handed back so the panel can fold the SERVER's row into its own read channel — the route
+    // derives `probability` from the stage, so the patch alone is not what was stored.
+    return updated;
   }
 
   // Doesn't set loading itself (the set-state-in-effect rule forbids sync
@@ -647,7 +654,9 @@ export function CrmDashboardPage() {
               // The archived banner and its Restore render on ANY host (issue #83). Without this
               // the restore would succeed server-side while the panel stayed open over stale
               // dashboard numbers.
-              onRestored={() => { setSelectedDealId(null); reload(); }}
+              // Patching only — the body dismisses itself, and only while it is still on screen.
+              onRestored={() => reload()}
+              onClose={() => setSelectedDealId(null)}
             />
           ),
           onRequestClose: denyEscapeBackdrop,

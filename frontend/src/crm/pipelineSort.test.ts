@@ -131,3 +131,59 @@ describe('date columns are parsed by KIND, not uniformly', () => {
     expect(cell('lastActivity', deal({ id: 1, last_activity_at: null }))).toBe('—');
   });
 });
+
+// ── Postgres microseconds vs JavaScriptCore (found by Codex on #109's column) ────────────────
+//
+// `last_activity_at` is written from `datetime.now(timezone.utc).isoformat()`, so it carries SIX
+// fractional digits. ECMA-262 defines three. V8 tolerates the extra ones and JavaScriptCore does
+// not, so the bare `new Date(...)` was Invalid Date in Safari and every iOS browser — the column
+// rendered "—" for every deal that had any activity, and the sort saw them all as absent. Both
+// now go through `parseUTC`, which truncates to milliseconds.
+//
+// The suite runs under TZ=America/Chicago, so a UTC instant late in the day is the previous local
+// calendar day — which is exactly what makes this assert the conversion rather than the string.
+describe('a six-fraction-digit timestamp', () => {
+  const MICROS = '2026-05-15T02:30:00.123456+00:00';
+
+  it('renders the Last activity column through parseUTC, not the bare constructor', () => {
+    // ASSERTED ON THE ZONE-LESS CASE ON PURPOSE. This runner is V8, which accepts six fractional
+    // digits, so a microsecond string alone renders identically with or without the fix and the
+    // obvious test would pass against the bug. What V8 and `parseUTC` DO disagree about is a
+    // timestamp carrying no zone: the bare constructor reads it as LOCAL, `parseUTC` appends `Z`
+    // and reads it as UTC. Pinning that is what proves this column goes through `parseUTC` at
+    // all, which is the thing Safari needs. The microsecond truncation rides the same call.
+    const col = buildPipelineListColumns(() => 'x').find(c => c.key === 'lastActivity')!;
+    const rendered = col.render(deal({ id: 1, last_activity_at: '2026-05-15T02:30:00.123456' })) as string;
+    // 02:30 UTC is the evening of the 14th in Chicago; read as local it would still be the 15th.
+    expect(rendered).toBe(new Date(2026, 4, 14).toLocaleDateString());
+  });
+
+  it('still renders a zoned microsecond timestamp rather than an em dash', () => {
+    // Cannot fail under V8 — it is here because it is the exact string Postgres returns and the
+    // literal symptom Safari showed ("—" on every deal with activity). Kept as documentation of
+    // the input, with the falsifiable half above.
+    const col = buildPipelineListColumns(() => 'x').find(c => c.key === 'lastActivity')!;
+    expect(col.render(deal({ id: 1, last_activity_at: MICROS })) as string).not.toBe('—');
+  });
+
+  it('sorts on the instant, so it is not treated as an absent value', () => {
+    const field = pipelineSortFields(() => 'x').find(f => f.value === 'lastActivity')!;
+    const older = field.get!(deal({ id: 1, last_activity_at: '2026-05-15T02:00:00.000001+00:00' }));
+    const newer = field.get!(deal({ id: 2, last_activity_at: MICROS }));
+    expect(older).not.toBeNull();
+    expect(newer).not.toBeNull();
+    expect(Number(newer)).toBeGreaterThan(Number(older));
+  });
+
+  it('orders the same instant identically however its zone is punctuated', () => {
+    // `Z` sorts after `+` lexically, so the old string comparison called these two unequal.
+    const field = pipelineSortFields(() => 'x').find(f => f.value === 'lastActivity')!;
+    expect(field.get!(deal({ id: 1, last_activity_at: '2026-05-15T02:30:00.123Z' })))
+      .toBe(field.get!(deal({ id: 2, last_activity_at: '2026-05-15T02:30:00.123+00:00' })));
+  });
+
+  it('sinks an unparseable timestamp rather than poisoning the comparison with NaN', () => {
+    const field = pipelineSortFields(() => 'x').find(f => f.value === 'lastActivity')!;
+    expect(field.get!(deal({ id: 1, last_activity_at: 'not a date' }))).toBeNull();
+  });
+});
