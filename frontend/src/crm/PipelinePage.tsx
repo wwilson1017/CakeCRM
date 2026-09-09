@@ -785,13 +785,20 @@ export function PipelinePage() {
   // is recomputed here — so both sides have to be given the same set or they report different
   // numbers for one click. `load` prunes the state itself on the next payload; this covers the
   // window until then. Reference-stable when nothing was pruned.
+  // ONE archived-id set behind both halves of the selection contract: the prune below, and
+  // the layer's `isSelectable`. Two derivations of "which deals are archived" could disagree
+  // for a render and put a checkbox on a row whose id is being thrown away.
+  const archivedIds = useMemo(
+    () => new Set<string | number>(deals.filter(isArchivedDeal).map(d => d.id)),
+    [deals],
+  );
+
   const liveSelectedIds = useMemo(() => {
     if (bulkSelected.size === 0) return bulkSelected;
-    const archived = new Set(deals.filter(isArchivedDeal).map(d => d.id));
-    if (archived.size === 0) return bulkSelected;
-    const next = new Set([...bulkSelected].filter(id => !archived.has(id)));
+    if (archivedIds.size === 0) return bulkSelected;
+    const next = new Set([...bulkSelected].filter(id => !archivedIds.has(id)));
     return next.size === bulkSelected.size ? bulkSelected : next;
-  }, [bulkSelected, deals]);
+  }, [bulkSelected, archivedIds]);
 
   // Bumped whenever the page clears the filters programmatically, and used as the
   // CollectionView key. A remount is what actually empties the search box: SearchInput adopts
@@ -1018,6 +1025,12 @@ export function PipelinePage() {
   const selection = useMemo<CollectionSelectionProps>(() => ({
     selectedIds: liveSelectedIds,
     onChange: handleSelectionChange,
+    // The LIST view's counterpart to the board's `selectable={!isMobile && !archived}`. Both
+    // views render the same records, so both owe the same answer: an archived deal is
+    // findable, never money, and never actionable. Without this the list offered a checkbox
+    // that `liveSelectedIds` pruned straight back out — a control that could be clicked
+    // forever and never tick.
+    isSelectable: id => !archivedIds.has(id),
     // The layer passes only ids that are BOTH selected and in the current view, and renders
     // this at all only when that set is non-empty — so the count shown and the payload
     // `applyBulkMove` recomputes describe the same deals (see the note there).
@@ -1031,7 +1044,7 @@ export function PipelinePage() {
         onClear={clearSelection}
       />
     ),
-  }), [liveSelectedIds, handleSelectionChange, bulkStage, bulkPending, applyBulkMove, clearSelection]);
+  }), [liveSelectedIds, archivedIds, handleSelectionChange, bulkStage, bulkPending, applyBulkMove, clearSelection]);
 
   // ── Mobile: which board column is currently snapped into view ──────────────
   // The board's scroll region. Two consumers, one node: on desktop `useBoardScroller` bounds its
