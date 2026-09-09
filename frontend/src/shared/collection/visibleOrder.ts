@@ -14,9 +14,13 @@
  */
 import type { CollectionConfig, CollectionViewKind } from './types';
 
+/** Exactly the config this module reads — it never touches `detail`, so it asks for less than
+ *  `DetailHostConfig`. A full `CollectionConfig` satisfies it structurally. */
+type VisibleOrderConfig<T> = Pick<CollectionConfig<T>, 'getItemId' | 'kanban' | 'cards'>;
+
 export default function visibleOrder<T>(
   view: CollectionViewKind,
-  config: CollectionConfig<T>,
+  config: VisibleOrderConfig<T>,
   visibleItems: readonly T[],
   kanbanItems: readonly T[],
   /** The app's ordered column ids (its `columns` prop order) — REQUIRED for kanban flattening;

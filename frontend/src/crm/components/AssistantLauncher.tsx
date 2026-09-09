@@ -201,10 +201,17 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
         onClick={handleClick}
         aria-label={launcherLabel}
         aria-haspopup="dialog"
+        // Admits this button into an `underLauncher` DetailModal's Tab cycle — rendering above
+        // the panel makes it reachable by pointer, this makes it reachable by keyboard too.
+        data-detail-companion=""
         aria-expanded={ready ? open : undefined}
         title={launcherLabel}
         disabled={loading}
         style={{
+          // zIndex 40 — above a centred `DetailModal` under `underLauncher` (`dock:z-[39]`) so a
+          // record detail can hand its context to the drawer (#14), and below that modal's
+          // full-screen takeover (`z-50`), where a poked-through button would sit on the panel's
+          // own controls. Keep the three in step.
           position: 'fixed', left: 24, bottom: 24, zIndex: 40,
           height: 52, borderRadius: 999,
           padding: '0 20px 0 16px',
