@@ -1,4 +1,4 @@
-"""THE enforcement test for the genericization rule (issue #22, CLAUDE.md "Don't Do
+"""THE enforcement test for the genericization rule (issue #22, AGENTS.md "Don't Do
 This"): CakeCRM's sales prompting and tool descriptions are ported from the CAKE OS
 sales agent, whose text is saturated with one company's customers, staff, products,
 and industry jargon. This repo goes public and its history is permanent, so a single
@@ -147,9 +147,9 @@ _GUARD = Path(__file__).resolve().relative_to(ROOT).as_posix()
 #
 # The allowance is per PATTERN and is a CEILING, not an on/off switch. Exempting a whole
 # file for a whole token class would repeat a mistake this repo has already written down
-# once: CLAUDE.md's own gitleaks guidance rejects an allowlist keyed on file alone
+# once: AGENTS.md's own gitleaks guidance rejects an allowlist keyed on file alone
 # because "the latter exempts every finding in that file in that commit, including a
-# real one". CLAUDE.md is also the most-edited file here — every landed feature appends
+# real one". AGENTS.md is also the most-edited file here — every landed feature appends
 # a paragraph — so an unbounded exemption on it would be the likeliest hole of all.
 #
 # Every entry so far is a place the repo must talk ABOUT the denylist, which is the one
@@ -165,7 +165,7 @@ _GUARD = Path(__file__).resolve().relative_to(ROOT).as_posix()
 # also matches inside the narrower one. That catches out everyone editing an allowed
 # line for the first time, hence this note.
 _REPO_ALLOW = {
-    "CLAUDE.md": (
+    "AGENTS.md": (
         {r"tn[\s_.-]+cheesecake": 1, _L + r"tnc" + _R: 1, r"cheesecake": 1},
         "the 'Don't Do This' rule has to name what it forbids — one bullet, one mention each",
     ),
@@ -471,7 +471,7 @@ def test_the_repo_scan_reads_the_whole_repo():
     rels = {rel for rel, _ in _committed_files()}
     assert len(rels) > 200, f"only {len(rels)} files enumerated — the repo scan is not running"
     for expected in (
-        "CLAUDE.md",  # root markdown
+        "AGENTS.md",  # root markdown
         "README.md",
         "SECURITY.md",
         "docs/SYNC.md",  # docs/
@@ -507,7 +507,7 @@ def test_the_allowance_is_a_ceiling_not_a_switch():
     """The whole point of a per-pattern budget: an exempted file may keep its ONE known
     mention and still fail on a second. A file-wide exemption would make the repo's
     most-edited file permanently blind to the tokens it is exempt for."""
-    rel, (budget, _) = "CLAUDE.md", _REPO_ALLOW["CLAUDE.md"]
+    rel, (budget, _) = "AGENTS.md", _REPO_ALLOW["AGENTS.md"]
     pattern = next(iter(budget))
     token = re.search(pattern, "tn cheesecake tnc", re.IGNORECASE)
     assert token, "the fixture below must contain a real match for the pattern under test"

@@ -19,14 +19,14 @@ vocabulary), so you can start a backlog with one and finish with the other:
 > `.github/workflows/pr-review.yml` workflow, and `scripts/seed-labels.sh` are the
 > repo-side wiring the loop expects.
 
-## Conventions (source of truth: `CLAUDE.md`)
+## Conventions (source of truth: `AGENTS.md`)
 
 Issue eligibility, branch naming, PR target, and the human-merge rule are defined once in
-**`CLAUDE.md` → "Issue Loop Conventions"**. In brief: work starts from a GitHub issue;
+**`AGENTS.md` → "Issue Loop Conventions"**. In brief: work starts from a GitHub issue;
 branch `feature/issue-N-<slug>` off `main`; PR back to `main`; human merge only;
 eligibility is *open, unassigned, no `no-auto` label, and human-approved via the
 `greenlit` label* (default-deny — an un-`greenlit` issue never enters the loop); respect
-`Blocked by: #N` lines. See `CLAUDE.md` for the authoritative wording — it is not
+`Blocked by: #N` lines. See `AGENTS.md` for the authoritative wording — it is not
 duplicated here.
 
 ## Label vocabulary

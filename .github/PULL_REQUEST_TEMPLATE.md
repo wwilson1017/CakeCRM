@@ -18,4 +18,4 @@ Keep the PR focused — one logical change per PR.
 
 - [ ] I signed off all my commits (`git commit -s`) per the [DCO](https://github.com/wwilson1017/CakeCRM/blob/main/CONTRIBUTING.md#developer-certificate-of-origin-dco).
 - [ ] No secrets, API keys, or real customer data are included in this PR.
-- [ ] I did not add an email-send tool or widen Gmail scopes beyond read + create-draft (see [CLAUDE.md](https://github.com/wwilson1017/CakeCRM/blob/main/CLAUDE.md)).
+- [ ] I did not add an email-send tool or widen Gmail scopes beyond read + create-draft (see [AGENTS.md](https://github.com/wwilson1017/CakeCRM/blob/main/AGENTS.md)).

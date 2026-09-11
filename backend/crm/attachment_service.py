@@ -4,7 +4,7 @@ Ported from ``cake_os/backend/apps/chatter/`` and collapsed to CakeCRM's shape. 
 blueprint is a four-app platform: a ``Surface`` registry over four chatter tables, a
 mid-flight migration onto a shared "rail", a cross-app ``can_view`` authorization
 registry, and GCS object storage behind V4 signed URLs. CakeCRM has ONE chatter table,
-no per-object ACLs (CLAUDE.md: ownership is not access control) and no object store, so
+no per-object ACLs (AGENTS.md: ownership is not access control) and no object store, so
 all of that collapses to: one table, one FK, bytes in Postgres, and an authenticated
 endpoint that hands the browser the bytes.
 

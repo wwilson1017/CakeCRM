@@ -120,7 +120,7 @@ intentionally fake).
 ## Scope & product rules
 
 CakeCRM has a deliberately tight scope. Before proposing a feature, note these rules
-(see [CLAUDE.md](CLAUDE.md) for the full list):
+(see [AGENTS.md](AGENTS.md) for the full list):
 
 - **The assistant is a feature of the CRM, not the product.** There is one built-in
   assistant — no multi-agent roster.

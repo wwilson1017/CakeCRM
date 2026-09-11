@@ -8,7 +8,7 @@ email, and logs an ``'email'`` touch to ``activity_log`` so #16's touch counts s
 exchanges nobody logged. Recurring senders with no matching contact surface as a
 deduplicated "create contact?" alert.
 
-TRUST GUARANTEE (absolute, see SECURITY.md / CLAUDE.md). This is READ ONLY. It calls
+TRUST GUARANTEE (absolute, see SECURITY.md / AGENTS.md). This is READ ONLY. It calls
 only the already-approved ``list_messages_op`` (no new Gmail op, no scope change) and
 creates NOTHING in Gmail. There is no way to reach a draft/send surface from here.
 

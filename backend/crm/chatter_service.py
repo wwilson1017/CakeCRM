@@ -12,7 +12,7 @@ non-empty bounded message, and bounded list windows. Invalid input raises ``Valu
 Storage is polymorphic ``(entity_type, entity_id)`` with no FK, so orphan safety is
 enforced structurally: ``add_note`` checks the target exists and inserts in ONE
 transaction (``SELECT ... FOR UPDATE`` on the target row, per the check-then-write
-rule in CLAUDE.md), and ``service.py`` clears chatter in ``delete_contact`` /
+rule in AGENTS.md), and ``service.py`` clears chatter in ``delete_contact`` /
 ``delete_company`` (both of which also lock the target ``FOR UPDATE``) and every
 CRM-truncate path. A SERIAL id is
 never reused except by ``TRUNCATE ... RESTART IDENTITY``, which also wipes
@@ -96,7 +96,7 @@ def add_note(entity_type: str, entity_id: int, message: str,
     not thread identity into tool executors, so it undercounts rather than guessing.
 
     The existence check and the INSERT run in one transaction with the target row
-    locked FOR UPDATE (CLAUDE.md: check-then-write spans reads and updates → one
+    locked FOR UPDATE (AGENTS.md: check-then-write spans reads and updates → one
     transaction). This serializes against delete_contact (which also locks the row
     first), so a note can never be inserted against a concurrently-deleted target.
     """
