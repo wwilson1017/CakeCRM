@@ -1295,7 +1295,18 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `ai_ready`. First-run offers to load fictional sample data (prompt tracked on the
   `crm_meta` singleton, not a per-integration flag). The **CRM-first shell** (#9) leads
   nav with Dashboard/Pipeline/Contacts/Tasks, surfaces the assistant as a persistent
-  launcher (never the home page), and shows a **dismissible** "add an AI key" nudge —
+  launcher (never the home page) — **bottom-RIGHT, and it FOLDS**: on load the pill reads
+  its full label for `LAUNCHER_INTRO_MS`, then folds to a bare icon circle, unfolding while
+  the pointer is within `LAUNCHER_REACH_PX` of it or it holds focus (the intro restarts on a
+  LABEL change, since `aiReady` resolves after mount). Proximity is one document
+  `pointermove` measuring distance to the button's box, never an invisible padded wrapper,
+  which would swallow clicks meant for page content beside it; touch pointers are ignored.
+  `aria-label` carries the name throughout, the transition lives in `.ck-launcher*` in
+  `index.css` so reduced-motion can turn it off, and the fill is its own token,
+  `--color-ck-accent-launcher` (a hair darker and warmer than `accent`, `accent-ink` on it
+  pinned at AA by `hueContrast.test.ts`; it has no `-text` twin because nothing paints it as
+  a glyph). `ToastViewport` starts its stack at 88px so a toast never lands on the pill —
+  and shows a **dismissible** "add an AI key" nudge —
   never a gate, gated on `!credentials_present`, dismissal tracked on
   `crm_meta.ai_key_prompt_dismissed`. Branding (company name / logo) is edited at
   `/crm/settings`, consuming the existing `/api/branding`.

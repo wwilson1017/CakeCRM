@@ -38,7 +38,7 @@ import { acquireBodyScrollLock } from '../hooks/useBodyScrollLock';
  * caller may pass `underLauncher` to render the CENTRED modal at `dock:z-[39]`, beneath the
  * button, while the full-screen takeover stays at `z-50` above it — a takeover cannot share the
  * corner with a floating button, and on a phone a poked-through launcher would sit on the panel's
- * own bottom-left controls and steal taps. The drawer itself (z-59, scrim 58), `ConfirmHost`
+ * own bottom controls and steal taps. The drawer itself (z-59, scrim 58), `ConfirmHost`
  * (z-150) and the toast viewport (z-200) stay above both branches either way.
  *
  * It is a PROP and not the default because "beneath the launcher" is a fact about record

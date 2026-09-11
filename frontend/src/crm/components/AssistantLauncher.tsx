@@ -2,12 +2,12 @@
  * AssistantLauncher — the persistent assistant affordance (issue #9).
  *
  * The assistant is a persistent affordance, not the home page: a fixed
- * bottom-LEFT button always present in the CRM shell (bottom-left keeps it clear
- * of the bottom-right toast column). It degrades gracefully with zero AI keys —
- * never an error:
+ * bottom-RIGHT button always present in the CRM shell (the toast column sits ABOVE
+ * it — `ToastViewport` reserves the room, so the two never overlap). It degrades
+ * gracefully with zero AI keys — never an error:
  *   • aiReady === null   → unknown/loading: rendered but inert.
  *   • aiReady === false  → no key: routes to /setup ("hire your assistant").
- *   • aiReady === true   → opens a full-height left slide-over DRAWER whose body
+ *   • aiReady === true   → opens a full-height right slide-over DRAWER whose body
  *                          is the assistant chat surface (AssistantPanelBody,
  *                          issue #4). The drawer is context-aware (issue #14): the
  *                          CRM record open behind it (via RecordContext) is passed
@@ -15,6 +15,17 @@
  *                          per-turn context injection. It stays mounted whenever AI
  *                          is ready (hidden via transform when closed) so live chat
  *                          state survives open/close.
+ *
+ * The pill FOLDS. On load it reads its full label ("Ask Baker") for `LAUNCHER_INTRO_MS`,
+ * then folds to a bare icon bubble so it stops sitting on the corner of every page; it
+ * unfolds again while the pointer is within `LAUNCHER_REACH_PX` of it (so the label is
+ * back before the cursor arrives, not after) and while it holds keyboard focus. The intro
+ * restarts whenever the LABEL changes — `aiReady` resolves a moment after mount, so
+ * keying it on mount alone would spend most of the intro on the placeholder "Baker". The
+ * accessible name is `aria-label` throughout, so folding hides nothing from AT; the
+ * fold animates via `.ck-launcher*` in index.css, which is where reduced-motion turns the
+ * transition off. Its fill is `--color-ck-accent-launcher`, a hair darker and warmer than
+ * the brand red, tuned for one floating control rather than for chips and links.
  */
 
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
@@ -23,7 +34,7 @@ import BootFallback from '../../core/components/BootFallback';
 import ChunkErrorBoundary from '../../core/components/ChunkErrorBoundary';
 import { IconBot, IconX } from '../../shared/icons';
 import {
-  INK, INK_MUTE, LINE, BG_CARD, ACCENT, ACCENT_TEXT, ACCENT_INK, FONT_DISPLAY,
+  INK, INK_MUTE, LINE, BG_CARD, ACCENT_LAUNCHER, ACCENT_TEXT, ACCENT_INK, FONT_DISPLAY,
   SCRIM, SHADOW,
 } from '../../shared/styles';
 import { useActiveRecord } from '../RecordContext';
@@ -35,6 +46,11 @@ import { useActiveRecord } from '../RecordContext';
 // survives open/close; the chunk simply arrives in the background before the first open.
 // With zero AI keys the chunk is never requested at all.
 const AssistantPanelBody = lazy(() => import('../../assistant/AssistantPanelBody'));
+
+/** How long the pill shows its full label after a (re)label before folding to the icon. */
+export const LAUNCHER_INTRO_MS = 3000;
+/** Pointer distance (px) from the folded bubble at which it unfolds. */
+export const LAUNCHER_REACH_PX = 56;
 
 export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
   const navigate = useNavigate();
@@ -53,6 +69,51 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
   // so the copy matches AiKeyNudge's existing "Hire your assistant" wording and keeps
   // the /setup routing self-explanatory.
   const launcherLabel = ready ? 'Ask Baker' : loading ? 'Baker' : 'Hire your assistant';
+
+  // Fold state. `introFor` names the label whose intro is running (null once it has folded);
+  // a label change restarts it via the render-compare pattern rather than an effect, since
+  // this repo's react-hooks ruleset refuses a synchronous setState inside an effect.
+  const [introFor, setIntroFor] = useState<string | null>(launcherLabel);
+  const [seenLabel, setSeenLabel] = useState(launcherLabel);
+  if (seenLabel !== launcherLabel) {
+    setSeenLabel(launcherLabel);
+    setIntroFor(launcherLabel);
+  }
+  const [near, setNear] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const expanded = introFor !== null || near || focused;
+
+  useEffect(() => {
+    if (introFor === null) return;
+    const t = window.setTimeout(() => setIntroFor(null), LAUNCHER_INTRO_MS);
+    return () => window.clearTimeout(t);
+  }, [introFor]);
+
+  // Proximity: one document-level pointermove for the life of the shell, measuring the
+  // pointer's distance to the button's box. Deliberately NOT an invisible padded wrapper —
+  // that would swallow clicks meant for page content beside the pill. Touch pointers are
+  // ignored: a tap has no approach, and the last tap's position would pin the pill open.
+  useEffect(() => {
+    function onMove(e: PointerEvent) {
+      if (e.pointerType === 'touch') return;
+      const r = btnRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const dx = Math.max(r.left - e.clientX, 0, e.clientX - r.right);
+      const dy = Math.max(r.top - e.clientY, 0, e.clientY - r.bottom);
+      setNear(Math.hypot(dx, dy) <= LAUNCHER_REACH_PX);
+    }
+    // Pointer left the window (no relatedTarget): fold, or it stays open while the cursor
+    // is off in another app.
+    function onOut(e: PointerEvent) {
+      if (e.relatedTarget === null) setNear(false);
+    }
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerout', onOut);
+    return () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerout', onOut);
+    };
+  }, []);
 
   // Dialog dismissal: Escape (returns focus to the button) and outside-click (a
   // scrim click is "outside" the panel/button, so it closes via the same handler).
@@ -141,13 +202,13 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
               // Constant z-index (not dropped on close) so the panel stays above the
               // page while it slides out; delayed visibility:hidden then removes it
               // from paint + hit-testing once closed.
-              position: 'fixed', top: 0, bottom: 0, left: 0, zIndex: 59,
+              position: 'fixed', top: 0, bottom: 0, right: 0, zIndex: 59,
               width: 'min(420px, 100vw)',
-              background: BG_CARD, borderRight: `1px solid ${LINE}`,
-              boxShadow: `12px 0 32px ${SHADOW}`,
+              background: BG_CARD, borderLeft: `1px solid ${LINE}`,
+              boxShadow: `-12px 0 32px ${SHADOW}`,
               display: 'flex', flexDirection: 'column', overflow: 'hidden',
               outline: 'none',
-              transform: open ? 'translateX(0)' : 'translateX(-100%)',
+              transform: open ? 'translateX(0)' : 'translateX(100%)',
               visibility: open ? 'visible' : 'hidden',
               // On close, delay `visibility:hidden` until the slide-out finishes so
               // the drawer actually animates off-screen (visibility isn't otherwise
@@ -211,6 +272,10 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
         aria-expanded={ready ? open : undefined}
         title={launcherLabel}
         disabled={loading}
+        className="ck-launcher"
+        data-expanded={expanded ? 'true' : 'false'}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
         style={{
           // zIndex 40 — above a centred `DetailModal` under `underLauncher` (`dock:z-[39]`) so a
           // record detail can hand its context to the drawer (#14), and below that modal's
@@ -224,19 +289,33 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
           // guard. Sitting below the panel is what every other control an overlay covers does,
           // and it is what the separate edit modal this replaced did by being `z-50` itself. The
           // `loading` state takes the same value: it cannot open a drawer either.
-          position: 'fixed', left: 24, bottom: 24, zIndex: ready ? 40 : 38,
+          position: 'fixed', right: 24, bottom: 24, zIndex: ready ? 40 : 38,
           height: 52, borderRadius: 999,
-          padding: '0 20px 0 16px',
-          background: ACCENT, color: ACCENT_INK, border: 'none',
-          display: 'flex', alignItems: 'center', gap: 10,
+          // Folded: 15 + 22 (icon) + 15 = 52 → a circle the height of the pill.
+          padding: expanded ? '0 20px 0 16px' : '0 15px',
+          background: ACCENT_LAUNCHER, color: ACCENT_INK, border: 'none',
+          display: 'flex', alignItems: 'center',
           fontFamily: FONT_DISPLAY, fontSize: 15, fontWeight: 600, whiteSpace: 'nowrap',
           boxShadow: `0 6px 18px ${SHADOW}`,
           cursor: loading ? 'default' : 'pointer',
           opacity: loading ? 0.55 : 1,
         }}
       >
-        <IconBot size={22} strokeWidth={1.9} />
-        {launcherLabel}
+        <IconBot size={22} strokeWidth={1.9} style={{ flexShrink: 0 }} />
+        {/* The label folds by max-width (the gap rides on it as margin, so a folded pill
+            has no phantom gap). Presentational only: `aria-label` carries the name. */}
+        <span
+          aria-hidden
+          className="ck-launcher-label"
+          style={{
+            overflow: 'hidden',
+            maxWidth: expanded ? 200 : 0,
+            marginLeft: expanded ? 10 : 0,
+            opacity: expanded ? 1 : 0,
+          }}
+        >
+          {launcherLabel}
+        </span>
       </button>
     </>
   );
