@@ -169,10 +169,6 @@ _REPO_ALLOW = {
         {r"tn[\s_.-]+cheesecake": 1, _L + r"tnc" + _R: 1, r"cheesecake": 1},
         "the 'Don't Do This' rule has to name what it forbids — one bullet, one mention each",
     ),
-    ".claude/coach-lessons.md": (
-        {_L + r"ovens?" + _R: 1},
-        "a lesson about this guard quotes the very token the guard was missing",
-    ),
     "frontend/src/crm/stageCriteria.test.ts": (
         {r"cheesecake": 1},
         "sibling guard (#74/PR #109): one denylist literal for the stage-criteria copy",
@@ -189,7 +185,7 @@ _REPO_ALLOW = {
             r"cheesecake": 10,
             _L + r"iddba" + _R: 3,
             _L + r"cuisines?" + _R: 2,
-            _L + r"ovens?" + _R: 4,
+            _L + r"ovens?" + _R: 3,
         },
         "the denylist patterns themselves, plus the prose that explains them",
     ),
@@ -481,7 +477,6 @@ def test_the_repo_scan_reads_the_whole_repo():
         "docs/SYNC.md",  # docs/
         "scripts/sync_intake.py",  # scripts/
         ".github/workflows/ci.yml",  # workflows
-        ".claude/coach-lessons.md",  # operational notes — in scope, see #90
         "backend/crm/service.py",  # backend source
         "backend/migrations/20260723221920_crm_core.sql",  # migrations, append-only
     ):

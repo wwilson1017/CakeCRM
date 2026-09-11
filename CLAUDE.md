@@ -2388,8 +2388,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   Contributing" already records — it "exempts every finding in that file, including a
   real one" — and CLAUDE.md is the most-edited file in the repo, so an unbounded
   exemption *here* would be the widest hole of all. Entries exist ONLY for text that
-  must talk *about* the denylist: this rule, a coach lesson quoting a token the guard
-  was missing, a sibling guard's own literals. A count that stops matching reality
+  must talk *about* the denylist: this rule and a sibling guard's own literals. A count that stops matching reality
   fails CI **in both directions** — a stale or inflated allowance is caught as surely
   as a new occurrence — so turning the guard down takes a visible edit to that list
   rather than a bumped number. Scrub the file instead whenever scrubbing is possible.

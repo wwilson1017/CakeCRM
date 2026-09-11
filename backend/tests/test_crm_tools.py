@@ -15,7 +15,7 @@ from crm.tools import CRM_TOOL_DEFS, TOOL_EXECUTORS, get_crm_tools
 
 
 def test_def_and_executor_counts():
-    # Absolute counts. ⚠ TOOL-COUNT SUM RULE (coach #67): concurrent sibling issues
+    # Absolute counts. ⚠ TOOL-COUNT SUM RULE (#67): concurrent sibling issues
     # may add crm_* tools in the same auto-issues run. If so, this is 24 (base) +
     # 6 (#19 custom fields) + 2 (#18 lead scores) + 1 (#20 crm_analytics) + 9 (#22
     # Casey parity: search_deals, mark_deal_won/lost, archive_deal, merge_deals,
