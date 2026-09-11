@@ -85,6 +85,13 @@
   --color-ck-accent-maroon: #6f1f1f;
   --color-ck-accent-wine: #710606;
   --color-ck-accent-ink: #ffffff;
+  /* The floating "Ask Baker" pill's own fill (crm/components/AssistantLauncher): the brand
+     red at OKLCH L 0.557 / hue 26 instead of 0.587 / 21.6 — a hair darker and a little
+     warmer, because a solid 52px button on every page reads brighter than the same red
+     does on a chip or a link. One consumer; not part of the fill/text hue family (its
+     glyph is `accent-ink`, white in both themes — 5.24:1 here, pinned by
+     hueContrast.test.ts). Declared in :root only, so dark inherits it. */
+  --color-ck-accent-launcher: #d32028;
   --color-ck-accent-soft: color-mix(in srgb, var(--color-ck-accent) 9%, transparent);
   /* Accent used as TEXT or an icon rather than as a fill — see the FILL vs TEXT rule
      below, which every hue in this palette now follows. Both themes carry a literal:
@@ -359,6 +366,16 @@ input:focus, textarea:focus, select:focus {
 @keyframes ck-toast-in {
   from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Assistant launcher pill fold (crm/components/AssistantLauncher): the label folds by
+   max-width/margin/opacity and the pill's padding closes to a circle. The class carries
+   only the TRANSITION — every value is inline in the component — so reduced-motion can
+   switch the motion off here without the component knowing. */
+.ck-launcher { transition: padding 0.22s ease-out; }
+.ck-launcher-label { transition: max-width 0.22s ease-out, margin-left 0.22s ease-out, opacity 0.16s ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .ck-launcher, .ck-launcher-label { transition: none; }
 }
 
 /* Assistant drawer scrim fade-in (crm/components/AssistantLauncher, issue #14).
