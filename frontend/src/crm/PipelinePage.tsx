@@ -27,9 +27,10 @@ import { CollectionView, denyEscapeBackdrop, useCollectionState } from '../share
 import type { CollectionMoveEvent, CollectionSelectionProps } from '../shared/collection';
 import { useUsers } from './useUsers';
 import {
-  boardOrder, lastContactLabel, loadHiddenStages, openPipelineTotals, saveHiddenStages,
-  stageFromToggleKey, stageLabel, stageToggleKey, visibleStageKeys,
+  boardColumnLayout, boardOrder, lastContactLabel, loadHiddenStages, openPipelineTotals,
+  saveHiddenStages, stageFromToggleKey, stageLabel, stageToggleKey, visibleStageKeys,
 } from './pipelineBoard';
+import type { BoardDensity } from './pipelineBoard';
 import { isArchivedDeal } from './pipelineFilters';
 import { CORPUS_MAX_AGE_MS } from './usePatchableAssembly';
 import { archivedSelectionIncludesArchived, makePipelineCollectionConfig } from './pipelineCollection';
@@ -1187,6 +1188,16 @@ export function PipelinePage() {
     });
   }, [state.kanbanItems, hiddenStages, stageFacet]);
 
+  // How wide a column gets and how much its cards say, from the ONE number that says how
+  // focused this board is: how many stage columns are actually rendering (issue #182). Hiding
+  // stages is the gesture — via #124's default, the per-tab hide, or the stage facet — and all
+  // three arrive here already resolved, because `columns` is built from `visibleStageKeys`.
+  //
+  // Depends on the LENGTH, not the array: the memo above rebuilds on every deal edit (counts and
+  // totals change), and re-deriving a tier that cannot have moved would re-render every card for
+  // nothing. The tier only changes when a column appears or disappears.
+  const boardLayout = useMemo(() => boardColumnLayout(columns.length), [columns.length]);
+
   // Filters active but nothing matched: show one explanation instead of a row of empty
   // columns reading as "there are no deals at all".
   // `items.length > 0` matters: when the board holds nothing at all, the collection layer
@@ -1594,9 +1605,25 @@ export function PipelinePage() {
               data-stage={col.data.stage}
               ref={el => { if (el) columnRefs.current.set(col.data.stage, el); else columnRefs.current.delete(col.data.stage); }}
               style={{
-                flexShrink: 0,
-                width: isMobile ? '85vw' : 288,
-                scrollSnapAlign: isMobile ? 'center' : undefined,
+                // MOBILE is untouched by #182: a fixed `85vw` snap column. Flexing it would
+                // fight the snap-scroll, and there is no freed width to reclaim on a phone —
+                // the board shows one column at a time by design.
+                //
+                // DESKTOP (issue #182) flexes to fill the row instead of sitting at a fixed
+                // 288px. `flex-basis: 0` makes every column an equal share of the scrollport,
+                // floored at `minWidth` and capped at `maxWidth` — both from the density tier.
+                // The floor is the old fixed width, so a full 5-or-6-stage board still lays out
+                // exactly as it did, and once the floors overflow, `min-width` stops the shrink
+                // and #129's single scroll region takes over sideways.
+                //
+                // The two branches are written as whole objects rather than as per-property
+                // ternaries so no render ever carries both the `flex` shorthand and a
+                // conflicting `flexShrink`/`width` longhand — React warns about exactly that
+                // mix, and which one wins is then order-dependent (the same trap `DealBoardCard`
+                // documents on its border).
+                ...(isMobile
+                  ? { flexShrink: 0, width: '85vw', scrollSnapAlign: 'center' as const }
+                  : { flex: '1 1 0', minWidth: boardLayout.minWidth, maxWidth: boardLayout.maxWidth }),
                 // The fixed "Ask Baker" pill floats over the bottom-left of the viewport. Every
                 // other page scrolls out from under it using CrmLayout's own bottom padding; a
                 // board bounded to the window cannot, so the last card of the leftmost column
@@ -1635,6 +1662,11 @@ export function PipelinePage() {
                 onToggleSelect={() => toggleSelect(deal.id)}
                 archived={archived}
                 onCycleTemperature={cycleDealTemperature}
+                // Issue #182: the card says more as the board narrows, and the column it sits
+                // in is wider by the same tier. `nameFor` is the resolver the LIST view's Owner
+                // column already uses, so the two views cannot name the same owner differently.
+                density={boardLayout.density}
+                ownerName={nameFor}
               />
             );
           },
@@ -1844,14 +1876,37 @@ function StageHeader({ stage, count, total, columnDealIds = [], selectedIds, onT
   );
 }
 
-function DealBoardCard({ deal, columnStage, onOpen, selectable = false, isSelected = false, onToggleSelect, archived = false, onCycleTemperature }: {
+function DealBoardCard({ deal, columnStage, onOpen, selectable = false, isSelected = false, onToggleSelect, archived = false, onCycleTemperature, density, ownerName }: {
   deal: CrmDeal; columnStage: string; onOpen: () => void;
   selectable?: boolean; isSelected?: boolean; onToggleSelect?: () => void;
   /** Soft-archived (issue #83): dimmed + labelled, un-draggable, not selectable. */
   archived?: boolean;
   /** Issue #125. Omitted ⇒ the glyph renders read-only, with no button and no tab stop. */
   onCycleTemperature?: (deal: CrmDeal, next: DealTemperature | null) => void | Promise<unknown>;
+  /**
+   * How much room this card has, from the number of stage columns on screen (issue #182).
+   * `compact` is the pre-#182 field set exactly; each wider tier only ADDS. Nothing is ever
+   * taken away as the board narrows, so a field a rep learned to look for cannot disappear
+   * because they hid one more column.
+   */
+  density: BoardDensity;
+  /** Resolves `owner_id` to a display name — the LIST view's own resolver, so the two agree. */
+  ownerName: (ownerId: number | null | undefined) => string;
 }) {
+  // Both wider tiers show these; only the widest adds the owner. Named rather than inlined
+  // three times so the tier boundaries read as one decision instead of three coincidences.
+  const roomy = density !== 'compact';
+
+  // Built once and rendered from EITHER branch below — the Won card's #129 swap, or an open
+  // card at a wider tier. One expression, so the two surfaces cannot drift on the label, the
+  // tooltip or the no-activity wording.
+  const lastContact = (
+    <span title={deal.last_activity_at
+      ? `Most recent logged note or activity: ${formatDate(deal.last_activity_at)}`
+      : 'No note or activity has been logged on this deal'}>
+      {lastContactLabel(deal.last_activity_at)}
+    </span>
+  );
   // Colour from the column the card currently sits in (its bucket) rather than
   // deal.stage — during an optimistic drop the bucket updates before the deal's
   // own stage field does, so this keeps the accent correct instantly.
@@ -1916,7 +1971,17 @@ function DealBoardCard({ deal, columnStage, onOpen, selectable = false, isSelect
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 11, color: INK_DIM }}>
         {deal.contact_name && <span>{deal.contact_name}</span>}
         {deal.probability > 0 && <span>{deal.probability}%</span>}
-        {deal.expected_close_date && <span>{deal.expected_close_date}</span>}
+        {/* Close date is conditional at `compact` (it was always conditional) and PROMOTED to
+            always-visible once there is room (issue #182). The promotion is the point: on a
+            focused board an absent close date is a state worth reading — the same rule the
+            Won card's "No contact logged" follows (#128) — where on a six-column board an
+            extra line on every undated card is just noise. */}
+        {(deal.expected_close_date || roomy) && (
+          <span>{deal.expected_close_date || 'No close date'}</span>
+        )}
+        {/* The widest tier only (1-2 stages visible). `ownerName` resolves NULL to
+            "Unassigned", which is a real state and renders unconditionally — #128's rule. */}
+        {density === 'wide' && <span>{ownerName(deal.owner_id)}</span>}
         {/* Won cards trade the two open-deal nudges for a last-contact line (issue #129).
             The score answers "is this still alive" and the touch count answers "are we working
             it enough to close" — neither question survives the close, and post-sale the board is
@@ -1929,15 +1994,18 @@ function DealBoardCard({ deal, columnStage, onOpen, selectable = false, isSelect
             `opacity`, so nothing here owes an entry in `inkContrast.test.ts`'s surface registry
             (#68) or has to clear `hueContrast`'s 4.5:1 (#119). */}
         {columnStage === 'won' ? (
-          <span title={deal.last_activity_at
-            ? `Most recent logged note or activity: ${formatDate(deal.last_activity_at)}`
-            : 'No note or activity has been logged on this deal'}>
-            {lastContactLabel(deal.last_activity_at)}
-          </span>
+          lastContact
         ) : (
           <>
             <ScorePill score={deal.lead_score} compact />
             <TouchCountPill count={deal.ai_touch_count} />
+            {/* An OPEN card gets the same line ALONGSIDE its two nudges once there is room
+                (issue #182), which is not a walk-back of #129's trade. That trade is about a
+                CLOSED deal, where the two nudges answer questions the close retired; here
+                nothing is retired and nothing is swapped out — the line is simply added,
+                because "when did we last talk to them" is worth a slot on a focused board and
+                is not worth one on a six-column board. */}
+            {roomy && lastContact}
           </>
         )}
         {/* The only interactive thing in the metadata row. Inert on an archived deal for the
