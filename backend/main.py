@@ -49,6 +49,7 @@ from memory.router import router as memory_router
 from notifications.router import router as notifications_router
 from providers.router import router as providers_router, setup_router as ai_setup_router
 from reminders.router import router as reminders_router
+from saved_views.router import router as saved_views_router
 from telegram import poller as telegram_poller
 from telegram.router import router as telegram_router
 from users.router import router as users_router
@@ -316,6 +317,7 @@ app.include_router(assistant_router, prefix="/api/assistant", tags=["assistant"]
 app.include_router(telegram_router, prefix="/api/telegram", tags=["telegram"])
 app.include_router(gmail_router, prefix="/api/gmail", tags=["gmail"])
 app.include_router(reminders_router, prefix="/api/reminders", tags=["reminders"])
+app.include_router(saved_views_router, prefix="/api/saved-views", tags=["saved-views"])
 app.include_router(notifications_router, prefix="/api/notifications", tags=["notifications"])
 app.include_router(alerts_router, prefix="/api/alerts", tags=["alerts"])
 app.include_router(heartbeat_router, prefix="/api/heartbeat", tags=["heartbeat"])
