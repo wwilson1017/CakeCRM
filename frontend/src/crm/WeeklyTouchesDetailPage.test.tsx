@@ -163,6 +163,14 @@ describe('WeeklyTouchesDetailPage (issue #146)', () => {
     ]);
   });
 
+  it('keeps the body copy readable — no words fused across an <em>', async () => {
+    // The card's twin of this sentence regressed exactly this way in #179; pin both so
+    // the two surfaces cannot drift apart on a sentence they otherwise share.
+    await renderAt('/crm/touches/3');
+    expect(container.textContent).toContain('lifetime touch count');
+    expect(container.textContent).not.toContain('lifetimetouch');
+  });
+
   it('renders the rep, the window label and the two counts', async () => {
     await renderAt('/crm/touches/3');
     expect(container.textContent).toContain('Dana Reyes');

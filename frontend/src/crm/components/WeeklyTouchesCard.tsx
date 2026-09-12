@@ -157,8 +157,8 @@ export function WeeklyTouchesCard(
       <p style={{ fontSize: 12, color: INK_MUTE, margin: '8px 0 14px', maxWidth: 560 }}>
         Deals edited, noted, or logged against in this window while open — through the
         move to Won, and never after. However many times, each deal counts once. Creating
-        a deal doesn't count. The number beside each deal is its AI-estimated<em> lifetime
-        </em>touch count, not this window's.
+        a deal doesn't count. The number beside each deal is its AI-estimated<em> lifetime</em>
+        {' '}touch count, not this window's.
         {!single && ' Grouped by deal owner.'}
       </p>
 
