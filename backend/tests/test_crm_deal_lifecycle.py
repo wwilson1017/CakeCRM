@@ -66,6 +66,25 @@ def test_leaving_lost_clears_the_lost_reason(monkeypatch, rec, fake_conn):
     assert "" in params
 
 
+def test_entering_and_leaving_won_each_write_a_stage_event(monkeypatch, rec, fake_conn):
+    """Weekly Touches (#179) derives a deal's win instant from deal_stage_events rather
+    than from a closed_at column, so the journal must see every move INTO 'won' and every
+    move back OUT of it. _classify_deal_update has no directional rule today; this pins
+    that it never grows one. The neighbouring stage-event test moves lead to qualified,
+    so it stays green under exactly the mutation this one catches."""
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("negotiation", None, None)])
+    rec.fetchone_queue = [{"id": 1}]
+    service.mark_deal_won(1)
+    entering = next(p for s, p in conn.executed if "INSERT INTO deal_stage_events" in s)
+    assert entering == (1, "negotiation", "won")
+
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("won", None, None)])
+    rec.fetchone_queue = [{"id": 1}]
+    service.update_deal_stage(1, "negotiation")
+    leaving = next(p for s, p in conn.executed if "INSERT INTO deal_stage_events" in s)
+    assert leaving == (1, "won", "negotiation")
+
+
 def test_staying_lost_keeps_the_lost_reason(monkeypatch, rec, fake_conn):
     conn = fake_conn(monkeypatch, service, fetchone_results=[("lost", None, None)])
     rec.fetchone_queue = [{"id": 1}]
