@@ -2,7 +2,7 @@ import type { KeyboardEvent } from 'react';
 
 import type { CrmWeeklyTouchDeal } from '../../core/types';
 import { INK, INK_MUTE, INK_DIM, LINE, FONT_DISPLAY, mono, formatNumber } from '../../shared/styles';
-import { touchCountColor } from '../constants';
+import { STAGE_COLORS, touchCountColor } from '../constants';
 
 /**
  * One touched-deal row, shared by the Weekly Touches card and its per-rep detail page
@@ -15,6 +15,11 @@ import { touchCountColor } from '../constants';
  * The whole row is the activator when `onOpen` is given — it has no interactive child — so
  * the `role="button"` + Enter/Space handling here is the only keyboard path, which is why
  * it lives with the markup instead of at each call site.
+ *
+ * Since #179 the row may be a WON deal: a touch counts up to and including the move into
+ * Won, so a deal closed inside the window sits here beside open ones. It carries a
+ * one-word cue for that, because this PR is what puts it in the list — an unmarked won
+ * deal among open ones reads as still being worked.
  */
 export function TouchDealRow(
   { deal, onOpen, indent = false, trailing }: {
@@ -53,6 +58,12 @@ export function TouchDealRow(
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>{deal.title}</div>
         <div style={{ ...mono(10, INK_MUTE), marginTop: 3 }}>
+          {/* Only 'won' is called out: this list is about touches, not pipeline position,
+              and 'lost' can never appear here (the through-Won rule is deliberately
+              asymmetric — a bulk move to Lost would otherwise mint a touch per deal). */}
+          {deal.stage === 'won' && (
+            <span style={{ color: STAGE_COLORS.won?.text }}>won · </span>
+          )}
           {deal.company_name || deal.contact_name || 'No contact'}
           {trailing ? ` · ${trailing}` : ''}
         </div>

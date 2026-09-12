@@ -13,15 +13,21 @@ import { TouchDealRow } from './TouchDealRow';
 import { ownerParamOf, touchDetailPath } from '../weeklyTouches';
 
 /**
- * Weekly Touches KPI (issue #76) — how many open deals got touched in a window.
+ * Weekly Touches KPI (issue #76) — how many deals got touched in a window, counting a
+ * deal while it is open and up to and including its move to Won (#179).
  *
  * Grouped per DEAL OWNER since #146. #76 shipped it per deal because CakeCRM was
  * single-user and there were no owner columns; #60 landed `deals.owner_id`, so the rows
  * are now the reps the blueprint always had, each expanding to their own top deals. Every
  * owner of an open deal gets a row — including the ones who touched nothing, which is the
- * point of a weekly accountability pull — and the unowned deals are a bucket named
- * "Unassigned" rather than an exclusion, which is what makes the headline the sum of the
- * rows beneath it.
+ * point of a weekly accountability pull — and so does anyone who won a deal inside the
+ * window, so a rep whose only deal closed this week is credited rather than erased. The
+ * unowned deals are a bucket named "Unassigned" rather than an exclusion, which is what
+ * makes the headline the sum of the rows beneath it.
+ *
+ * `touches` and `open_deals` are two facts, never a ratio: a deal won this week was
+ * touched but is no longer open, so touches can exceed open deals and both are rendered
+ * side by side.
  *
  * The per-deal number is what #16 exists for: the 12-touches idea says deals close between
  * touch 5 and 12 and reps quit at 1-4, hence the colour ramp on each count (shared with
@@ -149,9 +155,10 @@ export function WeeklyTouchesCard(
         <span style={mono(10, INK_DIM)}>{data.window.label}</span>
       </div>
       <p style={{ fontSize: 12, color: INK_MUTE, margin: '8px 0 14px', maxWidth: 560 }}>
-        Open deals edited, noted, or logged against in this window — however many times,
-        each deal counts once. Creating a deal doesn't count. The number beside each deal
-        is its AI-estimated<em> lifetime</em> touch count, not this window's.
+        Deals edited, noted, or logged against in this window while open — through the
+        move to Won, and never after. However many times, each deal counts once. Creating
+        a deal doesn't count. The number beside each deal is its AI-estimated<em> lifetime
+        </em>touch count, not this window's.
         {!single && ' Grouped by deal owner.'}
       </p>
 
@@ -212,14 +219,14 @@ export function WeeklyTouchesCard(
         <span style={{ fontFamily: FONT_DISPLAY, fontSize: 20, color: INK }}>
           {data.total_touches}
         </span>
-        {' '}of{' '}
+        {' deals touched · '}
         <span style={{ color: INK }}>{data.total_open_deals}</span>
-        {' '}open deals touched
+        {' open'}
       </div>
 
       {data.reps.length === 0 ? (
         <p style={{ fontSize: 13, color: INK_DIM, margin: 0 }}>
-          No open deals touched in this window.
+          No deals touched in this window.
         </p>
       ) : (
         <div style={{ borderTop: `1px solid ${LINE}` }}>
@@ -281,7 +288,7 @@ export function WeeklyTouchesCard(
                     fontSize: 13, color: INK_DIM, margin: 0,
                     padding: '10px 0', paddingLeft: single ? 0 : 18,
                   }}>
-                    No open deals touched in this window.
+                    No deals touched in this window.
                   </p>
                 ) : (
                   <>
@@ -321,7 +328,7 @@ function RepCount({ touches, openDeals }: { touches: number; openDeals: number }
   return (
     <span style={{ fontSize: 13, color: INK_MUTE, flexShrink: 0 }}>
       <span style={{ fontFamily: FONT_DISPLAY, fontSize: 17, color: INK }}>{touches}</span>
-      {' of '}{openDeals} touched
+      {' touched · '}{openDeals} open
     </span>
   );
 }

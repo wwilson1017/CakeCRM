@@ -224,6 +224,8 @@ export interface CrmDashboard {
 // Window MEMBERSHIP is keyless and event-grained (edits, activities, live notes); the
 // per-deal NUMBER is #16's AI estimate. `computed_deals` is the zero-keys gate: 0 means no
 // touch count has ever been computed (no AI provider), and the card renders nothing.
+// A touch counts while the deal is open, up to and including the move into Won and never
+// after (#179), so a row here may be a won deal and `touches` may exceed `open_deals`.
 export interface CrmWeeklyTouchDeal {
   id: number;
   title: string;
@@ -243,6 +245,8 @@ export interface CrmWeeklyTouchRep {
   user_id: number | null;
   /** Server-resolved: name → email → "User N", or "Unassigned" for the null bucket. */
   name: string;
+  /** Currently OPEN deals. NOT a denominator — see #179: a deal won inside the window
+   *  is touched but no longer open, so `touches` can exceed this. */
   open_deals: number;
   touches: number;
   /** Capped PER REP by the server. `touches > deals.length` means this rep is truncated,
