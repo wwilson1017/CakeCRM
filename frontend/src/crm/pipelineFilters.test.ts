@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { CrmDeal } from '../core/types';
-import { EMPTY_ADVANCED, dealMatchesAdvanced, isArchivedDeal, matchesActivityPreset, ymd, type AdvancedFilters } from './pipelineFilters';
+import { EMPTY_ADVANCED, dealMatchesAdvanced, isArchivedDeal, localDayOf, matchesActivityPreset, matchesCreatedPreset, ymd, type AdvancedFilters } from './pipelineFilters';
 
 function deal(over: Partial<CrmDeal> = {}): CrmDeal {
   return {
@@ -186,5 +186,97 @@ describe('isArchivedDeal', () => {
     expect(isArchivedDeal(deal({ archived_at: '2026-08-20T00:00:00+00:00' }))).toBe(true);
     expect(isArchivedDeal(deal({ archived_at: null }))).toBe(false);
     expect(isArchivedDeal(deal())).toBe(false);
+  });
+});
+
+describe('localDayOf — the exported TIMESTAMPTZ → local calendar day helper (#181)', () => {
+  it('reads the VIEWER\'s local day, where a slice(0,10) would take the UTC one', () => {
+    // 03:30 UTC on the 16th is 21:30 on the 15th in America/Chicago.
+    expect(localDayOf('2026-01-16T03:30:00Z')).toBe('2026-01-15');
+  });
+
+  it('parses the backend\'s six fractional digits, which bare Date does not guarantee', () => {
+    expect(localDayOf('2026-01-15T18:00:00.123456+00:00')).toBe('2026-01-15');
+  });
+
+  it('returns an empty day for absent or unparseable input', () => {
+    expect(localDayOf(null)).toBe('');
+    expect(localDayOf(undefined)).toBe('');
+    expect(localDayOf('')).toBe('');
+    expect(localDayOf('not a date')).toBe('');
+  });
+});
+
+describe('matchesCreatedPreset (#181)', () => {
+  // Noon avoids any question of which day a boundary lands on.
+  const may15 = new Date(2026, 4, 15, 12, 0, 0);
+  const jan15 = new Date(2026, 0, 15, 12, 0, 0);
+  const at = (day: string) => `${day}T18:00:00Z`;
+
+  it('last7 spans today and the seven preceding dates — the same boundary as le7', () => {
+    expect(matchesCreatedPreset(at('2026-05-15'), 'last7', may15)).toBe(true);
+    expect(matchesCreatedPreset(at('2026-05-08'), 'last7', may15)).toBe(true);
+    expect(matchesCreatedPreset(at('2026-05-07'), 'last7', may15)).toBe(false);
+  });
+
+  it('last30 spans today and the thirty preceding dates', () => {
+    expect(matchesCreatedPreset(at('2026-04-15'), 'last30', may15)).toBe(true);
+    expect(matchesCreatedPreset(at('2026-04-14'), 'last30', may15)).toBe(false);
+  });
+
+  it('thisMonth keeps the calendar month only', () => {
+    expect(matchesCreatedPreset(at('2026-05-01'), 'thisMonth', may15)).toBe(true);
+    expect(matchesCreatedPreset(at('2026-05-31'), 'thisMonth', may15)).toBe(true);
+    expect(matchesCreatedPreset(at('2026-04-30'), 'thisMonth', may15)).toBe(false);
+  });
+
+  it('thisQuarter starts at the first day of the containing quarter', () => {
+    expect(matchesCreatedPreset(at('2026-04-01'), 'thisQuarter', may15)).toBe(true);
+    expect(matchesCreatedPreset(at('2026-03-31'), 'thisQuarter', may15)).toBe(false);
+  });
+
+  it('lastQuarter is the whole previous quarter and excludes the current one', () => {
+    expect(matchesCreatedPreset(at('2026-01-01'), 'lastQuarter', may15)).toBe(true);
+    expect(matchesCreatedPreset(at('2026-03-31'), 'lastQuarter', may15)).toBe(true);
+    expect(matchesCreatedPreset(at('2026-04-01'), 'lastQuarter', may15)).toBe(false);
+    expect(matchesCreatedPreset(at('2025-12-31'), 'lastQuarter', may15)).toBe(false);
+  });
+
+  it('normalises lastQuarter across the year boundary without a branch', () => {
+    // Q1 of 2026 → Q4 of 2025, via a negative month the Date constructor rolls over.
+    expect(matchesCreatedPreset(at('2025-10-01'), 'lastQuarter', jan15)).toBe(true);
+    expect(matchesCreatedPreset(at('2025-12-31'), 'lastQuarter', jan15)).toBe(true);
+    expect(matchesCreatedPreset(at('2025-09-30'), 'lastQuarter', jan15)).toBe(false);
+    expect(matchesCreatedPreset(at('2026-01-01'), 'lastQuarter', jan15)).toBe(false);
+    expect(matchesCreatedPreset(at('2026-01-01'), 'thisQuarter', jan15)).toBe(true);
+  });
+
+  it('never matches an absent or unparseable creation timestamp', () => {
+    expect(matchesCreatedPreset(null, 'last7', may15)).toBe(false);
+    expect(matchesCreatedPreset('rubbish', 'thisQuarter', may15)).toBe(false);
+  });
+});
+
+describe('dealMatchesAdvanced with the created bucket', () => {
+  const may15 = new Date(2026, 4, 15, 12, 0, 0);
+
+  it('still matches everything under EMPTY_ADVANCED, now that a third key exists', () => {
+    expect(dealMatchesAdvanced(deal(), EMPTY_ADVANCED, may15)).toBe(true);
+  });
+
+  it('ANDs the created bucket with the other two', () => {
+    const d = deal({
+      created_at: '2026-05-10T12:00:00Z',
+      expected_close_date: '2026-05-20',
+      last_activity_at: '2026-05-14T12:00:00Z',
+    });
+    expect(dealMatchesAdvanced(d, adv({ createdDate: 'last7', closeDate: 'thisMonth' }), may15)).toBe(true);
+    // Same deal, a created bucket it falls outside — the AND fails even though close still matches.
+    expect(dealMatchesAdvanced(d, adv({ createdDate: 'lastQuarter', closeDate: 'thisMonth' }), may15)).toBe(false);
+  });
+
+  it('leaves the close-date and activity rules untouched', () => {
+    const won = deal({ stage: 'won', expected_close_date: '2020-01-01' });
+    expect(dealMatchesAdvanced(won, adv({ closeDate: 'overdue' }), may15)).toBe(false);
   });
 });

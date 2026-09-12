@@ -53,7 +53,10 @@ export function isStaleView(view: SavedView, storage: CollectionStorage): boolea
 export function listSavedViews(surface: string): Promise<SavedView[]> {
   return api<{ views: SavedView[] }>(
     `${SAVED_VIEWS_PATH}?surface=${encodeURIComponent(surface)}`,
-  ).then(r => r.views);
+    // A response body that is not the envelope this asks for yields an empty list rather than
+    // `undefined` — the layer's rule that no payload off the wire may white-screen a page
+    // applies to the response shape too, not only to a saved view's contents.
+  ).then(r => (Array.isArray(r?.views) ? r.views : []));
 }
 
 export function createSavedView(body: {
