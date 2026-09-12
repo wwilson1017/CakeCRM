@@ -217,3 +217,46 @@ export function lastContactLabel(
   // `formatAge` answers "today" for anything under a day, which reads wrong with "ago".
   return age === 'today' ? 'Last contact today' : `Last contact ${age} ago`;
 }
+
+/**
+ * How much room a board column gets, and how much a card in it says (issue #182).
+ *
+ * Three tiers off ONE input: how many stage columns the board is actually rendering. That is
+ * `visibleStageKeys` above, and it is deliberately not a measured pixel width. A rep on a 5K
+ * display and a rep on a laptop who have both narrowed the board to Proposal and Negotiation
+ * are doing the same thing, and should see the same card — density keyed off measurement would
+ * make it a property of their monitor instead of a property of their focus. It also keeps this
+ * function pure, so the tier boundaries are unit-testable with no DOM and no ResizeObserver.
+ *
+ * `minWidth` is 288 at EVERY tier — today's fixed desktop column — so nothing ever gets narrower
+ * than it is now and the 5-and-6-column default board is byte-identical to before. Only the
+ * ceiling moves. The board's single scroll region (#129) still scrolls sideways once the mins
+ * overflow, because `min-width` floors flex shrinking.
+ *
+ * The ceiling exists because "fill the row" and "readable" diverge past a point: two columns on
+ * a wide monitor would otherwise be 700px each, which is a worse card than a 560px one beside
+ * empty space. It rises with the tier because the tier is also adding fields — width and density
+ * are one behaviour, not two that happen to correlate.
+ *
+ * A count of 0 (every stage hidden, or a facet matching none) lands in the widest tier and is
+ * harmless: the board renders no columns at all, and `PipelinePage` shows `EmptyFilterState`
+ * instead.
+ */
+export type BoardDensity = 'compact' | 'roomy' | 'wide';
+
+export interface BoardColumnLayout {
+  density: BoardDensity;
+  /** Flex floor, px. Never below today's fixed column, so no tier is a narrowing. */
+  minWidth: number;
+  /** Flex ceiling, px. */
+  maxWidth: number;
+}
+
+/** Today's fixed desktop column width, and the floor for every tier. */
+const COLUMN_MIN_WIDTH_PX = 288;
+
+export function boardColumnLayout(visibleStageCount: number): BoardColumnLayout {
+  if (visibleStageCount <= 2) return { density: 'wide', minWidth: COLUMN_MIN_WIDTH_PX, maxWidth: 560 };
+  if (visibleStageCount <= 4) return { density: 'roomy', minWidth: COLUMN_MIN_WIDTH_PX, maxWidth: 440 };
+  return { density: 'compact', minWidth: COLUMN_MIN_WIDTH_PX, maxWidth: 360 };
+}
