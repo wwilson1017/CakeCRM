@@ -75,7 +75,8 @@ Lead scores (issue #18):
 Other:
   GET    /api/crm/dashboard             — summary stats
   GET    /api/crm/dashboard/today       — ranked "what needs me today" list (?owner_id)
-  GET    /api/crm/dashboard/weekly-touches — open deals touched in a window (?start, ?end)
+  GET    /api/crm/dashboard/weekly-touches — deals touched in a window, through the
+         move to Won (?start, ?end)
   GET    /api/crm/dashboard/weekly-touches/detail — one rep's touched deals, in full
          (?owner=<id|unassigned>, ?start, ?end)
   GET    /api/crm/analytics             — win/loss, activity volume, deal aging (?days, ?stale_days)
@@ -864,7 +865,11 @@ async def weekly_touches(
     end: str | None = Query(None),
     user=Depends(get_current_user),
 ):
-    """Open deals touched in the window, from #16's AI touch counts (issue #76).
+    """Deals touched in the window, from #16's AI touch counts (issue #76).
+
+    A touch counts while the deal is open, up to and including the move to Won, and never
+    after (issue #179) — so `touches` may exceed `open_deals`, which still means currently
+    open. The two are separate facts, not a ratio.
 
     Omit both params for the rolling last-7-days window; pass BOTH start and end
     (YYYY-MM-DD, UTC calendar days, end inclusive) for a custom range.
@@ -887,7 +892,7 @@ async def weekly_touches_detail(
     end: str | None = Query(None),
     user=Depends(get_current_user),
 ):
-    """One rep's touched open deals — the whole list, not the card's ten (issue #146).
+    """One rep's touched deals — the whole list, not the card's ten (issue #146).
 
     `owner` is REQUIRED and carries a literal `unassigned` for the NULL bucket, unlike
     `/dashboard/today`'s absent-means-everyone `owner_id`: this drill-down is always

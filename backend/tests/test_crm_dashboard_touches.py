@@ -242,13 +242,62 @@ def test_payload_shape_and_window_bounds_are_passed_to_both_queries(rec):
     assert rec.params_for("LEFT JOIN companies")[2] == service.WEEKLY_TOUCHES_LIMIT
 
 
-def test_counts_only_live_open_deals(rec):
-    """Archived (#22) and closed deals must not inflate either side of the ratio."""
+def test_the_row_set_is_live_and_open_or_won_in_the_window(rec):
+    """Archived and LOST deals never count on either side. WON deals count iff their
+    journaled win falls in the window (#179) — and both builders compose AROUND
+    OPEN_PREDICATE_D rather than retyping the literal, which is what keeps the one
+    spelling of "open" in test_crm_tools honest."""
     service.get_weekly_touches()
 
     for sql in (rec.sql_containing("FILTER"), rec.sql_containing("LEFT JOIN companies")):
         assert service.LIVE_PREDICATE_D in sql
         assert service.OPEN_PREDICATE_D in sql
+        assert "d.stage = \'won\'" in sql
+        assert "deal_stage_events" in sql
+        # Lost is deliberately NOT mirrored: bulk_move_deals can mark a whole column
+        # lost in one click, and a symmetric rule would mint that many touches.
+        assert "d.stage = \'lost\'" not in sql
+
+    totals_sql = rec.sql_containing("FILTER")
+    # open_deals keeps meaning "currently open" now that the row set is wider than that.
+    assert f"COUNT(*) FILTER (WHERE {service.OPEN_PREDICATE_D}) AS open_deals" in totals_sql
+    # The roster's won branch carries the window, so a win outside it can never leave a
+    # rep on the roster as a permanent zero row.
+    assert "(d.stage = \'won\' AND w.in_window)" in totals_sql
+
+
+def test_a_won_deal_is_dated_by_its_win_and_never_by_LEAST(rec):
+    """A won deal's instant is its newest journaled win, expressed as a CASE.
+
+    Deliberately NOT the issue's LEAST(last_touch, won_at): Postgres LEAST ignores NULL
+    operands, so a deal sitting in 'won' with no journaled win — created straight into
+    'won', the demo seed, or won before the journal existed — would fall back to its
+    updated_at and be credited. That is the one deal that must count for nothing.
+    """
+    service.get_weekly_touches()
+
+    for sql in (rec.sql_containing("FILTER"), rec.sql_containing("LEFT JOIN companies")):
+        assert "CASE WHEN d.stage = \'won\'" in sql
+        assert "MAX(e.changed_at)" in sql and "e.new_stage = \'won\'" in sql
+        assert "GREATEST" in sql          # an open deal still reads LAST_TOUCH_SQL
+        assert "LEAST" not in sql
+
+
+def test_the_window_predicate_is_written_once_for_the_roster_and_the_count(rec):
+    """The rep query reads the window twice — the roster clause and the touched FILTER —
+    so it is written ONCE in its own LATERAL and read by name. Two textual copies of a
+    predicate that must agree are exactly what this module refuses elsewhere. The
+    bound-parameter list is unchanged from #146: the binds simply moved into the FROM
+    clause, which positionally precedes both readers."""
+    service.get_weekly_touches(start="2026-06-16", end="2026-06-20")
+
+    totals_sql = rec.sql_containing("FILTER")
+    assert totals_sql.count("t.touch_at >= %s") == 1
+    assert "FILTER (WHERE w.in_window) AS touched_deals" in totals_sql
+    assert rec.params_for("GROUP BY d.owner_id") == [
+        datetime(2026, 6, 16, tzinfo=timezone.utc),
+        datetime(2026, 6, 21, tzinfo=timezone.utc),
+    ]
 
 
 def test_window_membership_uses_last_touch_not_the_ai_watermark(rec):
@@ -287,7 +336,11 @@ def test_computed_deals_is_not_scoped_to_the_window(rec):
     out = service.get_weekly_touches()
 
     totals_sql = rec.sql_containing("FILTER")
-    assert totals_sql.index("computed_deals") < totals_sql.index("FILTER")
+    # A BARE count over the whole row set — no FILTER of its own. Scoping it to the
+    # window breaks the gate as the docstring says; scoping it to OPEN deals only
+    # (#179) breaks it the other way, hiding the card from a rep who just won their
+    # only deal — the very win the card exists to credit.
+    assert "COUNT(d.ai_touch_count) AS computed_deals" in totals_sql
     # Summed across every bucket, so a shaper that read only the first row would fail here.
     assert out["computed_deals"] == 2
 
@@ -370,7 +423,7 @@ def test_deal_cap_is_per_rep_and_applied_after_the_window_filter(rec):
     assert " LIMIT " not in sql
     # Structural, not merely "both substrings exist": the window filter is inside the
     # ranked subquery and the cap is outside it.
-    assert sql.index("t.last_touch >= %s") < sql.index(") ranked")
+    assert sql.index("t.touch_at >= %s") < sql.index(") ranked")
     assert sql.index(") ranked") < sql.index("rn <= %s")
 
 
