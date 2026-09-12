@@ -85,6 +85,32 @@ def test_create_forwards_every_field_and_the_actor(client, calls):
     assert args[4]["role"] == "admin"
 
 
+@pytest.mark.parametrize("version", [True, False, "1", 1.0, 1.5, "abc", None])
+def test_create_rejects_a_non_integer_version_before_the_service(client, calls, version):
+    # Pydantic's DEFAULT coercion would turn true into 1, false into 0 and "1"/1.0 into 1,
+    # laundering a boolean into a version number and making the service's own type check
+    # unreachable over HTTP. StrictInt is what keeps the two layers agreeing.
+    calls("create_view", VIEW)
+    body = {"surface": "crm_pipeline", "name": "Q3", "version": version, "payload": {}}
+    assert client.post("/api/saved-views", json=body).status_code == 422
+    assert calls.recorded == []
+
+
+@pytest.mark.parametrize("version", [True, False, "2", 2.0])
+def test_update_rejects_a_non_integer_version_before_the_service(client, calls, version):
+    calls("update_view", VIEW)
+    body = {"payload": {}, "version": version}
+    assert client.put("/api/saved-views/1", json=body).status_code == 422
+    assert calls.recorded == []
+
+
+def test_create_accepts_a_real_integer_version(client, calls):
+    calls("create_view", VIEW)
+    body = {"surface": "crm_pipeline", "name": "Q3", "version": 0, "payload": {}}
+    assert client.post("/api/saved-views", json=body).status_code == 200
+    assert calls.recorded[0][1][2] == 0
+
+
 def test_create_conflict_maps_409(client, calls):
     calls("create_view", {"error": "duplicate", "code": "conflict"})
     body = {"surface": "crm_pipeline", "name": "Q3", "version": 1, "payload": {}}

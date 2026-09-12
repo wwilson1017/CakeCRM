@@ -18,7 +18,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictInt
 
 from core.auth import get_current_user
 from saved_views import service
@@ -27,16 +27,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+# `StrictInt`, not `int`: Pydantic's default coercion turns `true` into 1, `false` into 0 and
+# "1"/1.0 into 1 BEFORE the service's own type check can see them, so a plain `int` would
+# silently launder a boolean into a version number on the one field whose entire job is an
+# exact-equality compatibility token. Strict validation makes the API reject what
+# `saved_views.service._check_version` already documents as invalid, instead of quietly
+# disagreeing with it.
 class SavedViewCreateRequest(BaseModel):
     surface: str
     name: str
-    version: int
+    version: StrictInt
     payload: dict
 
 
 class SavedViewUpdateRequest(BaseModel):
     name: str | None = None
-    version: int | None = None
+    version: StrictInt | None = None
     payload: dict | None = None
 
 
