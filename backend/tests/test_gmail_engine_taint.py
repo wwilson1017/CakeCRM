@@ -91,13 +91,17 @@ class Store:
 
 
 class Registry:
-    def __init__(self, writes=frozenset()):
+    def __init__(self, writes=frozenset(), routine=frozenset()):
         self._writes = set(writes)
+        self._routine = set(routine)
         self.descriptions = {}
         self.calls = []
 
     def is_write(self, name):
         return name in self._writes
+
+    def is_routine_write(self, name):
+        return name in self._routine
 
     def provider_tools(self, tool_mode):
         return [{"name": "gmail_search"}, {"name": "gmail_create_draft"}]
@@ -314,3 +318,34 @@ async def test_a_crm_read_records_no_taint(store):
     ])
     await _run(prov, reg, [{"role": "user", "content": "how many deals"}], tool_mode="power")
     assert store.untrusted_marks == []
+
+
+@pytest.mark.asyncio
+async def test_a_gmail_read_binds_a_routine_crm_write_in_normal_mode(store):
+    """#180's hardest case: normal mode no longer confirms every write, so the #8
+    binding has to hold in normal mode too — otherwise a routine CRM write proposed
+    from injected email text would auto-execute with no card at all."""
+    reg = Registry(writes={"crm_log_activity"}, routine={"crm_log_activity"})
+    prov = FakeProvider([
+        [_complete([_tc("gmail_search", "r1", {"query": "invoice"})], stop="tool_use")],
+        [_complete([_tc("crm_log_activity", "w1", {"contact_id": 7})], stop="tool_use")],
+        [{"type": "text", "text": "confirm?"}, _complete()],
+    ])
+    events = await _run(prov, reg, [{"role": "user", "content": "check mail then log it"}],
+                        tool_mode="normal")
+    assert "confirm" in [e["type"] for e in events]
+    assert reg.calls == [("gmail_search", {"query": "invoice"})], "the CRM write must not run"
+
+
+@pytest.mark.asyncio
+async def test_without_a_gmail_read_the_same_routine_write_runs(store):
+    """Positive control: it is the untrusted read that binds, not the turn shape."""
+    reg = Registry(writes={"crm_log_activity"}, routine={"crm_log_activity"})
+    prov = FakeProvider([
+        [_complete([_tc("crm_list_deals", "r1", {})], stop="tool_use")],
+        [_complete([_tc("crm_log_activity", "w1", {"contact_id": 7})], stop="tool_use")],
+        [{"type": "text", "text": "logged"}, _complete()],
+    ])
+    events = await _run(prov, reg, [{"role": "user", "content": "log a call"}], tool_mode="normal")
+    assert "confirm" not in [e["type"] for e in events]
+    assert reg.calls == [("crm_list_deals", {}), ("crm_log_activity", {"contact_id": 7})]

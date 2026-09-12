@@ -2,7 +2,8 @@
 
 Each feature exposes a ``get_*_tools() -> (defs, executors)`` pair (same shape as
 ``crm.tools.get_crm_tools()``); the registry concatenates an ORDERED list of them
-and is the SINGLE SOURCE OF TRUTH for which tools are writes — the streaming
+and is the SINGLE SOURCE OF TRUTH for which tools are writes — and, since
+issue #180, for which of those writes are ROUTINE (``is_routine_write``) — the streaming
 loop's confirmation gate, the ``/confirm`` endpoint, and the background runner all
 read ``is_write`` from here, so they can never diverge.
 
@@ -33,6 +34,7 @@ import asyncio
 import logging
 from collections.abc import Callable
 
+from assistant.confirm_tier import ROUTINE
 from context_files.tools import get_context_file_tools
 from crm.gtd_tools import get_gtd_tools
 from crm.tools import get_crm_tools
@@ -44,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 # Internal bookkeeping keys stripped before tool defs reach a provider (providers
 # only understand name/description/input_schema).
-_INTERNAL_KEYS = {"kind", "writes"}
+_INTERNAL_KEYS = {"kind", "writes", "confirm_tier"}
 
 
 class ToolRegistry:
@@ -77,6 +79,20 @@ class ToolRegistry:
                     raise ValueError(f"duplicate tool name across sources: {name!r}")
                 if not isinstance(d.get("writes"), bool):
                     raise ValueError(f"tool {name!r} must carry a boolean 'writes' flag")
+                if "confirm_tier" in d:
+                    # Fail loud on a typo instead of silently reading it as "not routine".
+                    # Absence already denies, so a mistyped tier can only cost a needless
+                    # Approve card — but it would be an invisible cost, and the same
+                    # sloppiness applied to a value that DOES exempt is how a hole lands.
+                    if d["confirm_tier"] != ROUTINE:
+                        raise ValueError(
+                            f"tool {name!r}: confirm_tier must be {ROUTINE!r} or absent, "
+                            f"got {d['confirm_tier']!r}"
+                        )
+                    if d["writes"] is not True:
+                        raise ValueError(
+                            f"tool {name!r}: confirm_tier is only valid on a write (writes: True)"
+                        )
                 if name not in executors:
                     raise ValueError(f"tool {name!r} has a def but no executor")
                 self.tool_defs.append(d)
@@ -90,9 +106,21 @@ class ToolRegistry:
 
         self.writes_map = {t["name"]: bool(t.get("writes", False)) for t in self.tool_defs}
         self.descriptions = {t["name"]: t.get("description", "") for t in self.tool_defs}
+        # Derived once from the VALIDATED defs, so membership is the whole predicate.
+        self.routine_writes: frozenset[str] = frozenset(
+            t["name"] for t in self.tool_defs if t.get("confirm_tier") == ROUTINE
+        )
 
     def is_write(self, name: str) -> bool:
         return self.writes_map.get(name, False)
+
+    def is_routine_write(self, name: str) -> bool:
+        """True only for a DECLARED write whose def carries ``confirm_tier`` ROUTINE (#180).
+
+        Absence is the deny state: an unknown name, a read, and every write nobody
+        classified all answer False — the same fail-closed shape as ``is_write``.
+        """
+        return name in self.routine_writes
 
     def provider_tools(self, tool_mode: str, allow: set[str] | None = None) -> list[dict]:
         """Tool defs to send the provider, internal keys stripped.
