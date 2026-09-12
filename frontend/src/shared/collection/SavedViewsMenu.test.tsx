@@ -319,6 +319,26 @@ describe('editing is gated on the server’s can_edit', () => {
     expect(del![0]).toBe('/api/saved-views/1');
   });
 
+  it('leaves another row’s open rename form alone when a delete succeeds', async () => {
+    // `mode` and `formError` are single pieces of state shared by every row. A write that
+    // opens no form must not reset them, or confirming a delete on one row silently discards
+    // the name already typed into a rename form open on another.
+    routeApi([view(), view({ id: 2, name: 'Other' })], { ok: true });
+    render();
+    await open();
+    await click(byText('Rename'));
+    const field = document.querySelector<HTMLInputElement>('input[aria-label="View name"]')!;
+    setInputValue(field, 'Half-typed name');
+
+    confirmMock.mockResolvedValue(true);
+    const deletes = buttons().filter(b => b.textContent?.trim() === 'Delete');
+    await click(deletes[deletes.length - 1]);
+
+    const stillOpen = document.querySelector<HTMLInputElement>('input[aria-label="View name"]');
+    expect(stillOpen).not.toBeNull();
+    expect(stillOpen!.value).toBe('Half-typed name');
+  });
+
   it('toasts a non-conflict failure instead of trapping it in a form', async () => {
     apiMock.mockResolvedValue({ views: [view()] });
     render();

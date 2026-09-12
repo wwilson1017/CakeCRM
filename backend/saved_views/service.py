@@ -39,6 +39,13 @@ logger = logging.getLogger(__name__)
 MAX_NAME_CHARS = 80
 MAX_SURFACE_CHARS = 64
 MAX_PAYLOAD_BYTES = 65536
+# A ceiling, not a quota. Any member may create views, this table is deliberately outside
+# every CRM reset path, and nothing else would ever delete a row — so without a bound one
+# scripted client can grow it without limit and no operator action short of manual SQL
+# reclaims the space. It is also far past the point where the popover's list stops being
+# usable. Checked inside the insert transaction; two racing inserts at the boundary can
+# both pass, which a ceiling can afford and a quota could not.
+MAX_VIEWS_PER_SURFACE = 100
 
 # Every CollectionStorage.key in the frontend is lower snake_case (crm_pipeline, crm_contacts,
 # crm_companies, crm_tasks). Pinning the shape keeps a surface key from becoming a free-text
@@ -160,6 +167,13 @@ def create_view(surface, name, version, payload, actor: dict) -> dict:
     try:
         with get_connection() as conn:
             cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM saved_views WHERE surface = %s", (key,))
+            if cur.fetchone()[0] >= MAX_VIEWS_PER_SURFACE:
+                return _err(
+                    f"This page already has {MAX_VIEWS_PER_SURFACE} saved views. "
+                    "Delete one before saving another.",
+                    "conflict",
+                )
             cur.execute(
                 """INSERT INTO saved_views (surface, name, version, payload, created_by)
                    VALUES (%s, %s, %s, %s, %s) RETURNING id""",

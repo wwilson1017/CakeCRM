@@ -165,20 +165,33 @@ export default function SavedViewsMenu({
     setOpen(false);
   };
 
-  /** Every write shares one shape: guard on `busy`, refresh the list, toast the failure. */
-  const run = (work: () => Promise<unknown>, done: string, fallback: string) => {
+  /**
+   * Every write shares one shape: guard on `busy`, refresh the list, toast the failure.
+   *
+   * `owns` says whether this write is the one the open form belongs to. `mode` and
+   * `formError` are single pieces of state shared by every row, so a write that opens no
+   * form — Update to current view, Delete — must not touch them: otherwise confirming a
+   * delete on one row would close a rename form open on another and silently discard the
+   * name already typed into it, and would wipe a name-conflict message the user is reading.
+   */
+  const run = (
+    work: () => Promise<unknown>,
+    done: string,
+    fallback: string,
+    owns: boolean,
+  ) => {
     if (busy) return;
     setBusy(true);
-    setFormError(null);
+    if (owns) setFormError(null);
     work()
       .then(() => {
         toast.success(done);
-        setMode({ kind: 'idle' });
+        if (owns) setMode({ kind: 'idle' });
         load();
       })
       .catch(err => {
         const text = message(err, fallback);
-        if (err instanceof ApiError && err.status === 409) setFormError(text);
+        if (owns && err instanceof ApiError && err.status === 409) setFormError(text);
         else toast.error(text);
       })
       .finally(() => setBusy(false));
@@ -195,10 +208,11 @@ export default function SavedViewsMenu({
         }),
       'View saved.',
       'Couldn’t save this view.',
+      true,
     );
 
   const rename = (id: number, name: string) =>
-    run(() => updateSavedView(id, { name }), 'View renamed.', 'Couldn’t rename this view.');
+    run(() => updateSavedView(id, { name }), 'View renamed.', 'Couldn’t rename this view.', true);
 
   const overwrite = async (view: SavedView) => {
     const ok = await confirmDialog({
@@ -215,6 +229,7 @@ export default function SavedViewsMenu({
         }),
       'View updated.',
       'Couldn’t update this view.',
+      false,
     );
   };
 
@@ -226,7 +241,7 @@ export default function SavedViewsMenu({
       danger: true,
     });
     if (!ok) return;
-    run(() => deleteSavedView(view.id), 'View deleted.', 'Couldn’t delete this view.');
+    run(() => deleteSavedView(view.id), 'View deleted.', 'Couldn’t delete this view.', false);
   };
 
   const actionClass = 'rounded px-1.5 py-0.5 text-xs text-muted hover:bg-sand hover:text-charcoal disabled:opacity-50';

@@ -122,13 +122,13 @@ def test_payload_size_is_measured_unescaped(conn):
     """
     text = "é" * 20_000                       # 40,000 UTF-8 bytes — storable
     assert len(json.dumps({"q": text})) > service.MAX_PAYLOAD_BYTES   # escaped: 120,000+
-    cur = conn([(1,), _row()])
+    cur = conn([(0,), (1,), _row()])
     assert service.create_view("crm_pipeline", "n", 1, {"q": text}, FAKE_ADMIN)["id"] == 1
     assert "INSERT INTO saved_views" in cur.sql
 
 
 def test_create_accepts_a_payload_just_under_the_ceiling(conn):
-    cur = conn([(1,), _row()])
+    cur = conn([(0,), (1,), _row()])
     payload = {"q": "a" * (service.MAX_PAYLOAD_BYTES - 100)}
     assert service.create_view("crm_pipeline", "n", 1, payload, FAKE_ADMIN)["id"] == 1
     assert "INSERT INTO saved_views" in cur.sql
@@ -145,10 +145,9 @@ def test_create_rejects_non_integer_or_negative_version(conn, version):
 # ── create ─────────────────────────────────────────────────────────────────
 
 def test_create_normalizes_the_name_and_stores_json_and_the_actor(conn):
-    cur = conn([(1,), _row()])
+    cur = conn([(0,), (1,), _row()])
     service.create_view(" crm_pipeline ", "  Q3 pipeline \n", 1, {"query": "acme"}, CREATOR)
-    insert_sql, params = cur.executed[0]
-    assert "INSERT INTO saved_views" in insert_sql
+    insert_sql, params = next(c for c in cur.executed if c[0].strip().startswith("INSERT"))
     assert params[0] == "crm_pipeline"
     assert params[1] == "Q3 pipeline"
     assert params[2] == 1
@@ -157,17 +156,43 @@ def test_create_normalizes_the_name_and_stores_json_and_the_actor(conn):
 
 
 def test_create_reads_the_row_back_in_the_same_transaction(conn):
-    # One connection, two statements: the INSERT and its decorated re-read. A post-commit
-    # re-read through a second connection could observe someone else's concurrent write.
-    cur = conn([(1,), _row()])
+    # One connection, three statements in order: the ceiling COUNT, the INSERT, and the
+    # decorated re-read. A post-commit re-read through a second connection could observe
+    # someone else's concurrent write instead of this caller's own row.
+    cur = conn([(0,), (1,), _row()])
     service.create_view("crm_pipeline", "n", 1, {}, CREATOR)
-    assert len(cur.executed) == 2
-    assert "INSERT INTO saved_views" in cur.executed[0][0]
-    assert "FROM saved_views v" in cur.executed[1][0]
+    assert len(cur.executed) == 3
+    assert "SELECT COUNT(*) FROM saved_views" in cur.executed[0][0]
+    assert "INSERT INTO saved_views" in cur.executed[1][0]
+    assert "FROM saved_views v" in cur.executed[2][0]
+
+
+def test_create_refuses_once_the_surface_is_full(conn):
+    # Nothing else ever deletes a saved view, so an unbounded table has no reclaim path
+    # short of manual SQL. The COUNT rides the insert transaction.
+    cur = conn([(service.MAX_VIEWS_PER_SURFACE,)])
+    result = service.create_view("crm_pipeline", "one more", 1, {}, CREATOR)
+    assert result["code"] == "conflict"
+    assert str(service.MAX_VIEWS_PER_SURFACE) in result["error"]
+    assert "INSERT INTO saved_views" not in cur.sql
+
+
+def test_create_allows_the_last_slot_on_a_surface(conn):
+    cur = conn([(service.MAX_VIEWS_PER_SURFACE - 1,), (1,), _row()])
+    assert service.create_view("crm_pipeline", "one more", 1, {}, CREATOR)["id"] == 1
+    assert "INSERT INTO saved_views" in cur.sql
+
+
+def test_the_ceiling_counts_only_the_target_surface(conn):
+    cur = conn([(0,), (1,), _row()])
+    service.create_view("crm_tasks", "n", 1, {}, CREATOR)
+    count_sql, params = cur.executed[0]
+    assert "SELECT COUNT(*) FROM saved_views WHERE surface = %s" in count_sql
+    assert params == ("crm_tasks",)
 
 
 def test_create_maps_a_duplicate_name_to_conflict(conn):
-    conn([(1,), _row()], raise_unique_on="INSERT INTO saved_views")
+    conn([(0,), (1,), _row()], raise_unique_on="INSERT INTO saved_views")
     result = service.create_view("crm_pipeline", "Q3 pipeline", 1, {}, CREATOR)
     assert result["code"] == "conflict"
     assert "Q3 pipeline" in result["error"]

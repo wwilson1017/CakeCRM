@@ -1525,8 +1525,15 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   **Saved views** are the repo's FIRST server-side preference store — one table
   (`saved_views`) behind one REST surface (`/api/saved-views`) in its own `backend/
   saved_views/` package, because a view belongs to a *surface*, not a CRM record. It is
-  deliberately OUTSIDE `crm.service._truncate_all`: a saved view is workspace configuration
-  a teammate authored, not demo data, and it holds no FK to anything the reset sweeps. It is
+  deliberately outside BOTH branches of `crm.service._truncate_all` — one step further than
+  `crm_field_definitions`, which survives demo-clear but is wiped by `clear_all`. The two
+  differ in what they reference: a field definition describes the SHAPE of CRM data, so
+  surviving a full reset would leave schema describing rows that no longer exist, whereas a
+  saved view describes a QUERY over stage keys, date bounds, user ids and search text, none of
+  which a CRM reset erases (it never touches `users`). A view stays valid afterwards, so
+  losing every teammate's views to reseed demo data would be the surprising outcome. It holds
+  no FK to anything the reset sweeps, and `MAX_VIEWS_PER_SURFACE` bounds a table nothing else
+  ever deletes from. It is
   also the repo's FIRST **per-row** authorization rule — every member reads and applies every
   view; only the creator or an admin may rename, overwrite or delete one — decided in the
   service inside the write transaction after a `SELECT … FOR UPDATE` pre-read, returning 403

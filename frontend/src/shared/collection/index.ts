@@ -41,7 +41,6 @@ export type {
   FacetSelections,
   RangeValue,
   DateRangeValue,
-  CollectionSnapshot,
   VoidedFilter,
   ToggleDef,
   ListViewConfig,

@@ -5,9 +5,16 @@
 -- This is the first server-side preference store in the repo (#124 shipped a per-device
 -- localStorage toggle and explicitly declined to build one). It is deliberately ONE table
 -- behind ONE REST surface, /api/saved-views, in backend/saved_views/ rather than backend/crm/:
--- a view belongs to a SURFACE, not to a CRM record. It is therefore NOT in
--- crm.service._truncate_all — a demo-clear or a full CRM reset leaves saved views intact,
--- because they are workspace configuration a teammate authored, not seed data.
+-- a view belongs to a SURFACE, not to a CRM record. It is therefore in NEITHER branch of
+-- crm.service._truncate_all — a demo-clear and a full clear_all both leave saved views intact.
+--
+-- That is deliberately one step further than crm_field_definitions, the nearest precedent,
+-- which survives demo-clear but IS wiped by clear_all. The two differ in what they reference.
+-- A field definition describes the SHAPE of CRM data, so surviving a full reset would leave
+-- schema describing rows that no longer exist. A saved view describes a QUERY over stage keys,
+-- date bounds, user ids and search text — none of which a CRM reset erases (it does not touch
+-- the users table), so a view is still valid and still worth keeping afterwards. Losing every
+-- teammate's views to reseed the demo data would be the surprising outcome, not the safe one.
 --
 -- `payload` is opaque to the server: the client coerces it on the way in exactly as it coerces
 -- a restored sessionStorage envelope, so junk can never throw. It MAY reference record ids
