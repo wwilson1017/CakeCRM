@@ -196,8 +196,10 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   untrusted content was replaced by a `context_is_untrusted` boolean that reaches the
   gate directly (demoting INTO a mode that auto-approves would have switched the
   mitigation off silently), and the same-turn Gmail binding was generalized from the
-  power arm to every mode — both cost normal-mode turns one extra indexed taint read,
-  deliberately. `crm.tools.archives_record()` is the argument-level carve-out: contacts
+  power arm to every mode. Only the first costs anything: normal-mode turns now pay the
+  one indexed `is_conversation_tainted` read that power mode always paid, deliberately.
+  The Gmail generalization is free — it widens where an already-set in-memory flag is
+  consulted. `crm.tools.archives_record()` is the argument-level carve-out: contacts
   and companies archive through a `status` argument, so that one call keeps its card
   while the tool stays routine. GTD task mode (the default) hides three of the sixteen;
   the `todo_*` family is deliberately unclassified.

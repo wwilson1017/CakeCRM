@@ -13,10 +13,12 @@ A tool may declare it only when ALL of these hold (the classification rule from 
   4. it is not a bulk write;
   5. nothing leaves the install (no Gmail, no outbound HTTP).
 
-A leaf with no imports, on purpose: ``crm.tools`` DECLARES the tier and
-``assistant.registry`` VALIDATES it, and the registry already imports ``crm.tools`` — so
-the constant can live in neither without a cycle. ``assistant.delimiters`` is the
-precedent for an assistant leaf imported from another package.
+A leaf with no imports, on purpose. ``assistant.registry`` — where the sibling
+``writes`` validation lives — cannot host it: ``crm.tools`` would have to import the
+constant back, and the registry already imports ``crm.tools``, so that is a cycle.
+``crm.tools`` could host it, but then a reminder, memory or Gmail tool source wanting a
+tier would import CRM vocabulary to spell an assistant-layer word. So: a small topical
+leaf, the shape ``assistant.delimiters`` and ``assistant.write_budget`` already use.
 """
 
 ROUTINE = "routine"
