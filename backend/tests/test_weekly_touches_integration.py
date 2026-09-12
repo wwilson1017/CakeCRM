@@ -302,9 +302,12 @@ def test_a_won_deal_with_no_journaled_win_contributes_nothing():
     into 'won' (create_deal has no old stage to transition from, so it writes no event),
     the demo seed's raw-INSERTed won row, and anything won before the journal existed.
 
-    The planted deal is TOUCHED, so its updated_at sits inside the window — which is what
-    makes this the mutation detector for LEAST(last_touch, won_at): Postgres LEAST ignores
-    NULL operands, so that shape would credit this deal with its updated_at.
+    The planted deal is TOUCHED, and that is load-bearing rather than incidental: its
+    updated_at then sits inside the window, which is what makes this the mutation detector
+    for LEAST(last_touch, won_at) — Postgres LEAST ignores NULL operands, so that shape
+    would credit this deal with its updated_at. Verified both ways: with `touched=False`
+    the deal's updated_at equals its created_at, the creation guard excludes it anyway, and
+    the LEAST mutation goes UNDETECTED. Do not "tidy" that argument away.
     """
     from crm import service
 
