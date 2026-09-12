@@ -34,6 +34,7 @@
  *     needs beyond the facet, it reads from `isArchivedDeal` directly.
  */
 
+import { dateRangeFacet } from '../shared/collection';
 import type { CollectionConfig, FacetDef } from '../shared/collection';
 import type { FacetOption } from '../shared/search';
 import type { ListColumn } from '../shared/listview';
@@ -44,10 +45,13 @@ import { UNASSIGNED_LABEL } from './useUsers';
 import { STAGE_COLORS, STAGE_ORDER } from './constants';
 import {
   EMPTY_ADVANCED,
+  closeDatePart,
   dealMatchesAdvanced,
   isArchivedDeal,
+  localDayOf,
   type ActivityPreset,
   type ClosePreset,
+  type CreatedPreset,
 } from './pipelineFilters';
 import { stageLabel, stageToggleKey } from './pipelineBoard';
 import { PIPELINE_DEFAULT_SORT, pipelineSortFields } from './pipelineSort';
@@ -58,6 +62,16 @@ export const CLOSE_OPTIONS: FacetOption[] = [
   { value: 'next7', label: 'Next 7 days' },
   { value: 'thisMonth', label: 'This month' },
   { value: 'noDate', label: 'No close date' },
+];
+
+/** Creation buckets (#181). Recency windows matching the activity facet's boundaries, plus the
+ *  two quarter buckets the issue's "deals created last quarter" use case names. */
+export const CREATED_OPTIONS: FacetOption[] = [
+  { value: 'last7', label: 'Last 7 days' },
+  { value: 'last30', label: 'Last 30 days' },
+  { value: 'thisMonth', label: 'This month' },
+  { value: 'thisQuarter', label: 'This quarter' },
+  { value: 'lastQuarter', label: 'Last quarter' },
 ];
 
 export const ACTIVITY_OPTIONS: FacetOption[] = [
@@ -141,6 +155,29 @@ export function makePipelineCollectionConfig(deps: PipelineConfigDeps): Collecti
       predicate: (d, v) =>
         dealMatchesAdvanced(d, { ...EMPTY_ADVANCED, closeDate: v as ClosePreset }, new Date()),
     },
+    // The three absolute ranges (#181) sit BESIDE their presets rather than merging into them:
+    // the layer ANDs across active facets, so "closing between two dates" composes for free and
+    // every preset predicate above and below stays byte-identical. Each reads its day through
+    // the same helper the matching preset uses, so the two can never disagree about which
+    // calendar day a timestamp falls on.
+    dateRangeFacet<CrmDeal>({
+      key: 'closeDateRange',
+      label: 'Close date range',
+      getDay: d => closeDatePart(d.expected_close_date),
+    }),
+    {
+      kind: 'single',
+      key: 'createdDate',
+      label: 'Created',
+      options: CREATED_OPTIONS,
+      predicate: (d, v) =>
+        dealMatchesAdvanced(d, { ...EMPTY_ADVANCED, createdDate: v as CreatedPreset }, new Date()),
+    },
+    dateRangeFacet<CrmDeal>({
+      key: 'createdDateRange',
+      label: 'Created range',
+      getDay: d => localDayOf(d.created_at),
+    }),
     {
       kind: 'single',
       key: 'lastActivity',
@@ -149,6 +186,11 @@ export function makePipelineCollectionConfig(deps: PipelineConfigDeps): Collecti
       predicate: (d, v) =>
         dealMatchesAdvanced(d, { ...EMPTY_ADVANCED, lastActivity: v as ActivityPreset }, new Date()),
     },
+    dateRangeFacet<CrmDeal>({
+      key: 'lastActivityRange',
+      label: 'Activity range',
+      getDay: d => localDayOf(d.last_activity_at),
+    }),
     {
       kind: 'single',
       key: 'archived',
@@ -169,6 +211,10 @@ export function makePipelineCollectionConfig(deps: PipelineConfigDeps): Collecti
   ];
 
   return {
+    // Still version 1 after #181's four new facets: `coerceSelections` walks the DECLARED
+    // facets and defaults any key a persisted envelope lacks, so ADDING a facet is not a shape
+    // change. The number pins facet KEYS and their value shapes — and saved views are stamped
+    // with it — so renaming or repurposing one of these keys is what must bump it.
     storage: { key: 'crm_pipeline', version: 1 },
     defaultView: 'kanban',
     getItemId: d => d.id,
