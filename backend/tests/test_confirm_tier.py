@@ -289,16 +289,26 @@ def test_the_constant_is_accepted(monkeypatch):
     assert ToolRegistry().is_routine_write("synthetic_tool") is True
 
 
-# ── The argument-level archive carve-out ──────────────────────────────────────
+# ── The argument-level "removes from view" carve-out ──────────────────────────
 
 @pytest.mark.parametrize("name, args, expected", [
     ("crm_update_contact", {"status": "archived"}, True),
     ("crm_update_contact", {"status": "ARCHIVED "}, True),
     ("crm_update_company", {"status": "archived"}, True),
+    # `status` is undeclared on crm_update_task's schema, but arguments are not
+    # validated against the schema at runtime and the executor forwards **kwargs into
+    # service.update_task, whose allow-list accepts `status`. A dropped task is
+    # filtered out of list_tasks unconditionally, so this is a soft delete.
+    ("crm_update_task", {"status": "dropped"}, True),
+    ("crm_update_task", {"status": "Dropped "}, True),
     ("crm_update_contact", {"status": "active"}, False),
     ("crm_update_contact", {"name": "New Name"}, False),
     ("crm_update_company", {}, False),
-    # Rule 3 does not reach tools that cannot archive through an argument.
+    # Completion is not removal from view — crm_complete_task is routine by design.
+    ("crm_update_task", {"status": "done"}, False),
+    ("crm_update_task", {"completed": True}, False),
+    # Rule 3 does not reach tools that cannot hide a record through an argument.
+    # Deals archive via `archived_at`, which _DEAL_USER_WRITABLE excludes.
     ("crm_update_deal", {"status": "archived"}, False),
     ("crm_create_contact", {"status": "archived"}, False),
     # Fails closed on argument shapes a provider can decode from malformed JSON.
@@ -306,16 +316,27 @@ def test_the_constant_is_accepted(monkeypatch):
     ("crm_update_contact", ["archived"], True),
     ("crm_update_contact", "archived", True),
     ("crm_update_contact", {"status": 7}, True),
+    ("crm_update_task", None, True),
 ])
-def test_archives_record(name, args, expected):
+def test_removes_from_view(name, args, expected):
     from crm import tools as crm_tools
-    assert crm_tools.archives_record(name, args) is expected
+    assert crm_tools.removes_from_view(name, args) is expected
 
 
-def test_only_routine_tools_need_the_archive_carve_out(task_mode):
+def test_the_hiding_statuses_are_real_values_the_services_accept():
+    """A carve-out keyed on a value nothing can store would silently protect nothing."""
+    from crm import gtd_common, service as crm_service, tools as crm_tools
+    assert crm_tools._HIDING_STATUS["crm_update_contact"] <= set(crm_service.CONTACT_STATUSES)
+    assert crm_tools._HIDING_STATUS["crm_update_company"] <= set(crm_service.COMPANY_STATUSES)
+    assert crm_tools._HIDING_STATUS["crm_update_task"] <= set(gtd_common.TODO_STATUSES)
+    # And `status` really does reach the column for the task case.
+    assert "status" in crm_service._TASK_UPDATE_FIELDS
+
+
+def test_only_routine_tools_need_the_carve_out(task_mode):
     """The carve-out exists to narrow the tier, so it must sit on tools IN the tier."""
     from crm import tools as crm_tools
     task_mode("normal")
     reg = ToolRegistry()
-    for name in crm_tools._STATUS_ARCHIVE_TOOLS:
+    for name in crm_tools._HIDING_STATUS:
         assert reg.is_routine_write(name) is True, name

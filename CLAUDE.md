@@ -199,9 +199,10 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   power arm to every mode. Only the first costs anything: normal-mode turns now pay the
   one indexed `is_conversation_tainted` read that power mode always paid, deliberately.
   The Gmail generalization is free — it widens where an already-set in-memory flag is
-  consulted. `crm.tools.archives_record()` is the argument-level carve-out: contacts
-  and companies archive through a `status` argument, so that one call keeps its card
-  while the tool stays routine. GTD task mode (the default) hides three of the sixteen;
+  consulted. `crm.tools.removes_from_view()` is the argument-level carve-out: contacts
+  and companies archive, and tasks drop, through a `status` argument — including one
+  the def does not advertise, since nothing validates tool arguments against the
+  schema at runtime — so that one call keeps its card while the tool stays routine. GTD task mode (the default) hides three of the sixteen;
   the `todo_*` family is deliberately unclassified.
   **The assistant is named Baker and that name is a brand, not a setting** (#71):
   `identity.NAME` is the only source (the old `DEFAULT_NAME` spelling is gone — a

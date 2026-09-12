@@ -476,9 +476,9 @@ async def _chat_impl(
             # Persist the pending placeholder BEFORE emitting confirm (so /confirm can
             # find it), then wait for approval.
             always_confirms = context_file_tools.requires_confirmation(name, args)
-            # Routine by name, minus the one call shape that archives (see
-            # crm.tools.archives_record) — normal mode only; power is untouched.
-            routine_exempt = registry.is_routine_write(name) and not crm_tools.archives_record(name, args)
+            # Routine by name, minus the call shapes that take a record out of view
+            # (see crm.tools.removes_from_view) — normal mode only; power is untouched.
+            routine_exempt = registry.is_routine_write(name) and not crm_tools.removes_from_view(name, args)
             if is_write and (
                 always_confirms
                 or context_is_untrusted

@@ -182,8 +182,9 @@ completing a task; and setting custom-field values on a contact, company or deal
 tool nobody has classified confirms, so a capability added later is never silently
 exempt. Deletes, archives, merges, bulk moves, lead-score recomputation, Gmail drafts,
 notifications, reminders, memory facts, and any write to `soul.md` or `MEMORY.md` all
-keep their Approve card. Two of the sixteen can archive a record by setting its `status`
-to `archived`; that particular call keeps its card even though the tool is routine.
+keep their Approve card. Three of the sixteen can take a record out of your lists by
+setting its `status` — archiving a contact or a company, or dropping a task; that
+particular call keeps its card even though the tool is routine.
 
 Three rules override the tier entirely, in every mode:
 
