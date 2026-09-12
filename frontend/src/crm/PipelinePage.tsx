@@ -1610,7 +1610,7 @@ export function PipelinePage() {
                 // the board shows one column at a time by design.
                 //
                 // DESKTOP (issue #182) flexes to fill the row instead of sitting at a fixed
-                // 288px. `flex-basis: 0` makes every column an equal share of the scrollport,
+                // 288px. `flex: 1` is `1 1 0%`, so every column is an equal share of the scrollport,
                 // floored at `minWidth` and capped at `maxWidth` — both from the density tier.
                 // The floor is the old fixed width, so a full 5-or-6-stage board still lays out
                 // exactly as it did, and once the floors overflow, `min-width` stops the shrink
@@ -1623,7 +1623,7 @@ export function PipelinePage() {
                 // documents on its border).
                 ...(isMobile
                   ? { flexShrink: 0, width: '85vw', scrollSnapAlign: 'center' as const }
-                  : { flex: '1 1 0', minWidth: boardLayout.minWidth, maxWidth: boardLayout.maxWidth }),
+                  : { flex: 1, minWidth: boardLayout.minWidth, maxWidth: boardLayout.maxWidth }),
                 // The fixed "Ask Baker" pill floats over the bottom-left of the viewport. Every
                 // other page scrolls out from under it using CrmLayout's own bottom padding; a
                 // board bounded to the window cannot, so the last card of the leftmost column
@@ -1962,7 +1962,17 @@ function DealBoardCard({ deal, columnStage, onOpen, selectable = false, isSelect
             the title to `ink-dim` keeps #83's "dimmed rather than struck through" read
             (the ARCHIVED chip beside it carries the rest) while every pixel stays legible;
             `ink-dim` on a stage-washed deal card is a surface inkContrast.test.ts guards. */}
-        <span style={{ fontSize: 13, color: archived ? INK_DIM : INK, lineHeight: 1.3 }}>{deal.title}</span>
+        {/* `flex: 1` so the title OWNS the row's free space instead of being centred in it.
+            The row is `space-between` over up to four children, which distributes leftover
+            width BETWEEN them — so a short title on a wide card drifted into the middle of
+            the card with a gap on either side. Invisible at the old fixed 288px, where the
+            title and the value very nearly filled the row; obvious the moment #182 let a
+            column grow to 560. `minWidth: 0` lets a long unbroken title wrap rather than
+            push the value off the card, which a `flex-basis: 0` item does not do by default. */}
+        <span style={{
+          flex: 1, minWidth: 0,
+          fontSize: 13, color: archived ? INK_DIM : INK, lineHeight: 1.3,
+        }}>{deal.title}</span>
         <span style={{
           fontFamily: FONT_DISPLAY,
           fontSize: 14, color: archived ? INK_DIM : INK, flexShrink: 0,

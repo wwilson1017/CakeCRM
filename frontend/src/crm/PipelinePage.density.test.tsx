@@ -231,13 +231,30 @@ describe('board columns flex to fill the row', () => {
     expect(column('negotiation').style.minWidth).toBe('288px');
   });
 
-  it('keeps a mobile snap column out of the desktop band entirely', async () => {
-    // Guard against the branches being merged into per-property ternaries: the desktop object
-    // must never carry `width`/`flexShrink`, and the mobile one must never carry `flex`. This
-    // harness is desktop, so the desktop half is what is observable here — and `flexShrink`
-    // leaking back is exactly what would silently re-pin every column at its basis.
+  it('lets the card title own the row, rather than centring it in the extra width', async () => {
+    await mount(FOCUSED);
+    // The title row is `space-between` over several children, so leftover width is shared
+    // BETWEEN them — a short title on a 560px card drifts to the middle unless it takes the
+    // slack itself. Barely visible at the old fixed 288px; obvious once a column can grow.
+    const title = [...card('Alpha contract').querySelectorAll('span')]
+      .find(s => s.textContent === 'Alpha contract');
+    // `flex: 1` is `1 1 0%` expanded — grow into the slack, shrink, no intrinsic basis.
+    expect(title?.style.flex).toBe('1 1 0%');
+    // A long unbroken title must wrap rather than shove the value off the card, which a
+    // `flex-basis: 0` item will not do without this.
+    expect(title?.style.minWidth).toBe('0px');
+  });
+
+  it('keeps the mobile-only properties off a desktop column', async () => {
+    // Guards the branches against being merged back into per-property ternaries. Both of
+    // these are mobile-only, and either one leaking into the desktop object re-pins the
+    // column: `width` restores the fixed size the flex band replaced, and `scrollSnapAlign`
+    // brings snap-scroll to a board that is not swiped.
     await mount(ALL_SIX);
-    expect(column('negotiation').style.flexShrink).toBe('');
+    expect(column('negotiation').style.width).toBe('');
     expect(column('negotiation').style.scrollSnapAlign).toBe('');
+    // The band itself. Asserted here rather than only through min/max, because those two
+    // alone are satisfied by a column that never grows at all.
+    expect(column('negotiation').style.flex).toBe('1 1 0%');
   });
 });
