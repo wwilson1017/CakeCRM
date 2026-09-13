@@ -120,6 +120,7 @@ p { margin: 0; }
   color: var(--ink-dim);
 }
 .lede { font-size: clamp(1.1rem, 2vw, 1.3rem); color: var(--ink-mute); }
+.tagline { color: var(--ink); font-weight: 600; font-size: clamp(1.2rem, 2.4vw, 1.5rem); }
 .hero-note { font-size: 0.95rem; color: var(--ink-dim); }
 
 /* Screenshot frame: the CSS card that replaces fake browser chrome */
