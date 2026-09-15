@@ -160,11 +160,33 @@ def test_the_ghost_tool_guard_reaches_every_topic_and_finds_real_tools():
 
 def test_the_known_tool_set_covers_the_real_registry():
     """The exhaustive set above is hand-composed from module constants, so pin it against
-    what the registry really builds — in both the interactive and background shapes."""
+    what the registry really builds — in both the interactive and background shapes.
+
+    This direction alone is NOT sufficient, which is why the test below exists: a
+    connection-gated family is absent from a hermetically constructed registry, so
+    dropping it from the hand-composed tuple would leave this set difference empty and
+    this test green.
+    """
     known = _registered_tool_names()
     for reg in (ToolRegistry(), ToolRegistry(background=True)):
         missing = set(reg.writes_map) - known
         assert not missing, f"tools the help guard would call ghosts: {sorted(missing)}"
+
+
+def test_the_known_tool_set_covers_the_connection_gated_families_too():
+    """Gmail's tools are advertised only once a mailbox is connected, so the registry in a
+    hermetic test never carries them. Pin them against their own module constant instead,
+    or dropping that source from `_registered_tool_names` would turn every Gmail tool the
+    manual names into a false 'ghost' — and the test above would not notice."""
+    from gmail.tools import GMAIL_TOOL_DEFS
+
+    known = _registered_tool_names()
+    gmail_names = {d["name"] for d in GMAIL_TOOL_DEFS}
+    assert gmail_names and gmail_names <= known, sorted(gmail_names - known)
+    assert not ({d["name"] for d in GMAIL_TOOL_DEFS} & set(ToolRegistry().writes_map)), (
+        "Gmail tools are advertised without a connection now — this test's premise is "
+        "stale, and the one above can cover them directly"
+    )
 
 
 # ── 2. shape: slugs, front matter, bounds, determinism ──────────────────────────────
@@ -234,6 +256,53 @@ def test_a_file_with_no_front_matter_is_rejected(tmp_path):
         lib.load_library(tmp_path)
 
 
+@pytest.mark.parametrize("rel", [
+    "settings/" + "a" * (lib.MAX_SLUG_CHARS + 1) + ".md",
+    "a" * (lib.MAX_SLUG_CHARS + 1) + ".md",
+])
+def test_an_overlong_slug_is_rejected(tmp_path, rel):
+    """MAX_SLUG_CHARS is checked before the grammar, so an otherwise legal name that is
+    simply enormous still has to fail — the bounds comment claims every ceiling is pinned,
+    and three of them were not until this and the test below existed."""
+    _write(tmp_path, rel)
+    with pytest.raises(lib.HelpLibraryError):
+        lib.load_library(tmp_path)
+
+
+@pytest.mark.parametrize("aliases", [
+    ", ".join(f"alias{i}" for i in range(lib.MAX_ALIASES + 1)),  # too many
+    "x" * (lib.MAX_ALIAS_CHARS + 1),                             # one too long
+])
+def test_alias_bounds_are_enforced(tmp_path, aliases):
+    _write(tmp_path, "topic.md", aliases=aliases)
+    with pytest.raises(lib.HelpLibraryError):
+        lib.load_library(tmp_path)
+
+
+def test_aliases_within_the_bounds_load(tmp_path):
+    """Control: a detector that rejected every alias list would pass the test above."""
+    _write(tmp_path, "topic.md", aliases="one, two, three")
+    assert lib.load_library(tmp_path).topics[0].aliases == ("one", "two", "three")
+
+
+@pytest.mark.parametrize("front, message", [
+    ("title: T\ndescription: D\nthis line has no colon", "not 'key: value'"),
+    ("title: T\ntitle: Second\ndescription: D", "duplicate front-matter key"),
+])
+def test_malformed_front_matter_lines_are_rejected(tmp_path, front, message):
+    """Both rejections are deliberate per the parser's docstring — a typo in a key must be
+    a hard error, not a silently dropped field — so both are forced to fire.
+
+    The expected MESSAGE is pinned, not merely the exception type. Without it the first
+    case proves nothing: a line with no colon would go on to fail the unknown-key check
+    anyway, so the branch under test could be deleted and the test would stay green on a
+    different error.
+    """
+    (tmp_path / "topic.md").write_text(f"---\n{front}\n---\nBody.\n", encoding="utf-8")
+    with pytest.raises(lib.HelpLibraryError, match=message):
+        lib.load_library(tmp_path)
+
+
 def test_a_missing_required_key_is_rejected(tmp_path):
     (tmp_path / "topic.md").write_text("---\ntitle: T\n---\nBody.\n", encoding="utf-8")
     with pytest.raises(lib.HelpLibraryError):
@@ -298,6 +367,17 @@ def test_search_answers_the_questions_it_exists_for(query, expected):
     assert hits[0].topic.slug == expected, (
         f"{query!r} ranked {[h.topic.slug for h in hits]}, wanted {expected} first"
     )
+
+
+def test_nearest_always_answers_even_when_nothing_scores():
+    """`nearest` backs help_read_topic's fail-closed miss, and its promise is that a
+    genuinely nonsense topic name still gets suggestions. The real-hit branch is exercised
+    by the miss test below; this drives the fallback, which otherwise could regress to an
+    empty list with nothing failing."""
+    library = lib.get_library()
+    assert not help_search.search(library, "zzzqxx wwvvyy", 3), "the probe must score nothing"
+    fallback = help_search.nearest(library, "zzzqxx wwvvyy", 3)
+    assert fallback == list(library.topics[:3])
 
 
 def test_a_query_that_matches_nothing_returns_the_shape_of_the_library():
@@ -366,6 +446,15 @@ def test_non_string_arguments_are_refused_rather_than_crashing(name):
     arg = {"help_search": "query", "help_read_topic": "topic", "help_list_topics": "folder"}[name]
     for bad in (42, ["a"], {"a": 1}, True):
         assert "error" in HELP_TOOL_EXECUTORS[name](**{arg: bad})
+
+
+@pytest.mark.parametrize("limit", ["abc", None, [1, 2], {}, 3.7, -5, 10**9])
+def test_a_malformed_limit_degrades_instead_of_crashing(limit):
+    """`limit` is model-supplied like every other argument, so a provider that decodes it
+    to a string, a list or nothing at all must not take the turn down with it."""
+    result = HELP_TOOL_EXECUTORS["help_search"](query="deal", limit=limit)
+    assert "error" not in result, result
+    assert 1 <= len(result["results"]) <= help_search.MAX_RESULTS
 
 
 def test_search_results_and_snippets_are_bounded():
