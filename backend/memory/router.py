@@ -87,7 +87,7 @@ async def delete_fact(fact_id: int, _user: dict = Depends(get_current_user)):
 async def dreaming_runs(
     limit: int = Query(20, ge=1, le=100), _user: dict = Depends(get_current_user),
 ):
-    """Recent dreaming cycles — how many facts were scored and archived, and when.
+    """Recent dreaming cycles — how many facts and files were scored and archived, and when.
 
     Read directly rather than through a service call: ``dreaming`` exposes no list API,
     and inventing one for a single read-only table would be more code than the query.
@@ -95,12 +95,14 @@ async def dreaming_runs(
     Columns are listed explicitly, NOT ``SELECT *``. ``dreaming_runs.details`` embeds the
     top-scoring facts' ids and subjects, so returning it would let a fact the user
     hard-deleted for being wrong or private stay readable in an audit row — which would
-    quietly contradict what DELETE /facts/{id} promises.
+    quietly contradict what DELETE /facts/{id} promises. Since Phase 4 it also embeds
+    archived FILENAMES, which are the same kind of leak, so ``details`` stays out for the
+    same reason and only the aggregate counts are exposed.
     """
     runs = await run_in_threadpool(
         pg_fetchall,
         "SELECT id, started_at, finished_at, status, facts_scored, facts_archived, "
-        "       duration_ms, error "
+        "       files_scored, files_archived, duration_ms, error "
         "FROM dreaming_runs ORDER BY id DESC LIMIT %s",
         (limit,),
     )

@@ -98,3 +98,76 @@ def test_accepts_decimal_inputs():
     r = scorer.score_fact(Decimal("1.5"), Decimal("3"), Decimal("30.2"), Decimal("0.9"))
     assert isinstance(r["score"], float)
     assert 0.0 <= r["score"] <= 1.0
+
+
+# ── score_file (#72 Phase 4) ────────────────────────────────────────────────────
+
+def test_file_weights_sum_to_one():
+    total = (scorer.WEIGHT_FILE_READ_RECENCY + scorer.WEIGHT_FILE_READ_FREQUENCY
+             + scorer.WEIGHT_FILE_WRITE_RECENCY + scorer.WEIGHT_FILE_AGE)
+    assert round(total, 10) == 1.0
+
+
+def test_file_written_yesterday_is_active_even_though_never_read():
+    # A brand-new topic file the assistant has not re-read yet must be nowhere near
+    # archival — otherwise writing a file and moving on would put it away.
+    r = scorer.score_file(None, 0, 1.0, 1.0)
+    assert r["classification"] == "active"
+    assert r["signals"]["read_recency"] == 0.0
+
+
+def test_file_untouched_for_45_days_is_stale_but_kept():
+    r = scorer.score_file(None, 0, 45.0, 45.0)
+    assert r["classification"] == "stale"
+    assert r["score"] >= scorer.ARCHIVE_THRESHOLD
+
+
+def test_file_untouched_for_90_days_is_dormant():
+    r = scorer.score_file(None, 0, 90.0, 90.0)
+    assert r["classification"] == "dormant"
+    assert r["score"] < scorer.ARCHIVE_THRESHOLD
+
+
+def test_file_read_frequency_is_recency_gated():
+    # THE property that makes file-dreaming work: an old file read 50 times but not for
+    # 60 days must still go dormant. An un-gated read_count would floor it forever —
+    # the exact defect the module docstring names in chatty's scorer.
+    hot_but_stale = scorer.score_file(60.0, 50, 200.0, 200.0)
+    assert hot_but_stale["classification"] == "dormant"
+    # ... while the same file read 5 days ago is kept.
+    recently_read = scorer.score_file(5.0, 3, 200.0, 200.0)
+    assert recently_read["classification"] != "dormant"
+
+
+def test_file_read_recency_alone_cannot_be_outvoted_by_nothing_else():
+    # A 200-day-old, never-rewritten file read TODAY scores on read signals only; it
+    # must stay above ARCHIVE_THRESHOLD or on-demand reads would count for nothing.
+    r = scorer.score_file(0.0, 1, 200.0, 200.0)
+    assert r["signals"]["write_recency"] < 0.01 and r["signals"]["age"] == 0.0
+    assert r["classification"] != "dormant"
+
+
+def test_file_score_is_rounded_before_classification():
+    r = scorer.score_file(None, 0, 90.0, 90.0)
+    assert r["score"] == round(r["score"], 3)
+    assert (r["classification"] == "dormant") == (r["score"] < scorer.ARCHIVE_THRESHOLD)
+
+
+def test_file_negative_day_deltas_are_clamped():
+    r = scorer.score_file(-5.0, 0, -10.0, -10.0)
+    assert r["signals"]["read_recency"] == 1.0
+    assert r["signals"]["write_recency"] == 1.0
+    assert r["signals"]["age"] == 1.0
+
+
+def test_file_accepts_decimal_inputs():
+    r = scorer.score_file(Decimal("1.5"), Decimal("3"), Decimal("30.2"), Decimal("30.2"))
+    assert isinstance(r["score"], float)
+    assert 0.0 <= r["score"] <= 1.0
+
+
+def test_file_never_read_is_not_treated_as_read_today():
+    never = scorer.score_file(None, 0, 200.0, 200.0)
+    today = scorer.score_file(0.0, 0, 200.0, 200.0)
+    assert never["score"] < today["score"]
+    assert never["signals"]["read_recency"] == 0.0 and today["signals"]["read_recency"] == 1.0

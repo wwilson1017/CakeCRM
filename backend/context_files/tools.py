@@ -156,6 +156,8 @@ def _read_context_file(filename: str) -> dict:
     truncated = len(content) > service.MAX_READ_CHARS
     if truncated:
         content = content[: service.MAX_READ_CHARS]
+    # An on-demand read the assistant CHOSE to make — the only kind file-dreaming counts.
+    service.track_read_for([row["filename"]])
     return {
         "filename": row["filename"],
         "kind": row["kind"],
@@ -222,11 +224,19 @@ def _read_daily_note(date: str | None = None) -> dict:
     day = date or service.today_str()
     if not text:
         return {"date": day, "content": "", "exists": False}
+    # Daily notes are not SCORED (Decision C — they are a dated log reached by name), but
+    # recording the signal costs one line and means flipping that decision later needs no
+    # change here. `read_daily_note` returns a body, not a row, so derive the key the same
+    # way it did.
+    service.track_read_for([service.daily_filename(date)])
     return {"date": day, "content": text[: service.MAX_READ_CHARS], "exists": True}
 
 
 def _search_context_files(query: str, limit: int = 20) -> dict:
     results = service.search_files(query, limit=limit)
+    # The surfaced subset ONLY — what the search actually handed back, never the whole
+    # corpus it scanned. Same rule memory/context.py applies to FTS matches vs backfill.
+    service.track_read_for([r["filename"] for r in results])
     return {
         "results": [
             {

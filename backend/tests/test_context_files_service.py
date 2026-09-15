@@ -265,3 +265,47 @@ def test_search_returns_empty_without_hitting_db_on_noise(monkeypatch):
     monkeypatch.setattr(service, "pg_fetchall", explode)
     assert service.search_files("") == []
     assert service.search_files("   ") == []
+
+
+# ── track_read_for — file-dreaming's usage signal (#72 Phase 4) ───────────────────
+
+def _capture_execute(monkeypatch):
+    calls = []
+    monkeypatch.setattr(service, "pg_execute", lambda sql, params: calls.append((" ".join(sql.split()), params)) or 1)
+    return calls
+
+
+def test_track_read_for_emits_the_throttled_locked_live_update(monkeypatch):
+    calls = _capture_execute(monkeypatch)
+    service.track_read_for(["topics/a.md", "topics/b.md"])
+    sql, params = calls[0]
+    assert "read_count = read_count + 1" in sql
+    assert "last_read_at = now()" in sql
+    assert "interval '1 hour'" in sql              # once-per-hour throttle
+    assert "archived_at IS NULL" in sql            # a read must not resurrect
+    assert "ORDER BY id FOR UPDATE SKIP LOCKED" in sql   # lock order + never block
+    assert params == (["topics/a.md", "topics/b.md"],)
+
+
+def test_track_read_for_never_touches_updated_at(monkeypatch):
+    """updated_at is BOTH score_file's write-recency signal and the Memory editor's
+    optimistic-concurrency token. Bumping it here would inflate every read file's score
+    and 409 an open editor."""
+    calls = _capture_execute(monkeypatch)
+    service.track_read_for(["topics/a.md"])
+    assert "updated_at" not in calls[0][0]
+
+
+@pytest.mark.parametrize("names", [[], None, ["", None]])
+def test_track_read_for_is_a_no_op_without_usable_names(monkeypatch, names):
+    calls = _capture_execute(monkeypatch)
+    service.track_read_for(names)
+    assert calls == []
+
+
+def test_track_read_for_never_raises(monkeypatch):
+    """Fire-and-forget: a tracking failure must not break the tool call that triggered it."""
+    def explode(*a, **k):
+        raise RuntimeError("db down")
+    monkeypatch.setattr(service, "pg_execute", explode)
+    service.track_read_for(["topics/a.md"])   # must not raise

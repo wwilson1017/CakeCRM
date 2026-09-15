@@ -1,10 +1,29 @@
-"""Dreaming processor — score live facts and soft-archive the dormant ones.
+"""Dreaming processor — score live facts and topic files, soft-archive the dormant ones.
 
 Pure-algorithmic (no AI, no provider SDKs). The whole cycle runs in ONE transaction
 on ONE connection (the repo's check-then-write rule): SELECT ... FOR UPDATE the live
 facts, score them in Python, ``UPDATE ... RETURNING`` the ones to archive, then INSERT
 the audit row — commit once. Deriving the archived set from ``RETURNING`` (not the
 candidate list) keeps the audit honest under races.
+
+Since issue #72 Phase 4 the cycle has a SECOND unit: live ``topic`` context files, scored
+by ``scorer.score_file`` from the read signal ``context_files.service.track_read_for``
+records. It runs inside this same transaction, inheriting the advisory lock, the 03:00
+slot guard, the ``SET LOCAL`` timeouts and the audit row — no new job, no new lock, no
+second due-guard. Two deliberate divergences from the fact pass:
+
+- The file UPDATE does **not** touch ``updated_at``. That column is both the
+  write-recency signal ``score_file`` reads and the optimistic-concurrency token the
+  Memory editor and confirmed tool writes send back, so bumping it here would inflate
+  every archived file's score and 409 an editor that happens to be open.
+- The exemptions (``kind``, ``is_protected``) are re-asserted from the GENERATED columns
+  rather than from a Python set, because that is exactly what those columns were created
+  for. Daily notes are excluded for the same reason chatty's scorer never saw them: a
+  daily note is a dated log reachable by name, and archiving one would only remove it
+  from ``search_context_files`` while saving nothing in the prompt.
+
+Archival is soft and reversible either way: ``read_file`` still returns archived rows and
+any ``write_file``/``append_daily_note`` un-archives the name.
 
 Two entrypoints:
 - ``run_dreaming_cycle()`` — run one cycle unconditionally (manual/tests).
@@ -47,6 +66,36 @@ _SELECT_LIVE = """
     FOR UPDATE
 """
 
+# Topic files only (Decision C). Protected files (soul.md / MEMORY.md) and daily notes
+# are excluded by the GENERATED columns, not by a Python list. NULL last_read_at
+# (never read by a read tool) must stay NULL -> recency 0, the same NULL-preservation
+# the fact SELECT does for last_retrieved_at.
+_SELECT_LIVE_FILES = """
+    SELECT id, filename, read_count,
+           CASE WHEN last_read_at IS NULL THEN NULL
+                ELSE (GREATEST(0, EXTRACT(EPOCH FROM (now() - last_read_at)) / 86400.0))::double precision
+           END AS days_since_read,
+           (GREATEST(0, EXTRACT(EPOCH FROM (now() - updated_at)) / 86400.0))::double precision AS days_since_written,
+           (GREATEST(0, EXTRACT(EPOCH FROM (now() - created_at)) / 86400.0))::double precision AS days_old
+    FROM assistant_context_files
+    WHERE archived_at IS NULL AND kind = 'topic' AND is_protected = FALSE
+    ORDER BY id
+    FOR UPDATE
+"""
+
+# No `updated_at = now()` here — see the module docstring. The exemptions and the
+# minimum age are re-asserted in SQL so a scorer bug can never archive a protected
+# file, a daily note or a file created days ago.
+_ARCHIVE_FILES = """
+    UPDATE assistant_context_files
+    SET archived_at = now()
+    WHERE id = ANY(%s)
+      AND archived_at IS NULL
+      AND kind = 'topic' AND is_protected = FALSE
+      AND created_at <= now() - make_interval(days => %s)
+    RETURNING id, filename
+"""
+
 _ARCHIVE = """
     UPDATE memory_facts
     SET archived_at = now(), updated_at = now()
@@ -61,8 +110,9 @@ _ARCHIVE = """
 # transaction START time) — a cycle that begins at 02:59 and commits after 03:00 must
 # record finished_at > 03:00 so the slot-based due-guard sees it ran for the new slot.
 _INSERT_RUN = """
-    INSERT INTO dreaming_runs (finished_at, status, facts_scored, facts_archived, details, duration_ms)
-    VALUES (clock_timestamp(), 'ok', %s, %s, %s::jsonb, %s)
+    INSERT INTO dreaming_runs (finished_at, status, facts_scored, facts_archived,
+                               files_scored, files_archived, details, duration_ms)
+    VALUES (clock_timestamp(), 'ok', %s, %s, %s, %s, %s::jsonb, %s)
 """
 
 
@@ -106,22 +156,71 @@ def _run_cycle(conn) -> dict:
         cur.execute(_ARCHIVE, (candidate_ids, sorted(TIER_1_ALWAYS_KEEP), MIN_AGE_DAYS_FOR_ARCHIVE))
         archived_ids = [r[0] for r in cur.fetchall()]
 
+    file_scored, archived_files = _score_files(cur)
+
     scored.sort(key=lambda x: x["score"], reverse=True)
+    file_scored.sort(key=lambda x: x["score"], reverse=True)
     duration_ms = int((time.monotonic() - start) * 1000)
-    details = json.dumps({"scores": scored[:10], "archived": archived_ids})
-    cur.execute(_INSERT_RUN, (len(scored), len(archived_ids), details, duration_ms))
+    details = json.dumps({
+        "scores": scored[:10],
+        "archived": archived_ids,
+        "file_scores": file_scored[:10],
+        "archived_files": archived_files,
+    })
+    cur.execute(_INSERT_RUN, (len(scored), len(archived_ids),
+                              len(file_scored), len(archived_files), details, duration_ms))
 
     summary = {
         "facts_scored": len(scored),
         "facts_archived": len(archived_ids),
         "archived": archived_ids,
+        "files_scored": len(file_scored),
+        "files_archived": len(archived_files),
+        "archived_files": archived_files,
         "duration_ms": duration_ms,
     }
     logger.info(
-        "dreaming: scored=%d archived=%d (%dms)",
-        summary["facts_scored"], summary["facts_archived"], duration_ms,
+        "dreaming: facts scored=%d archived=%d · files scored=%d archived=%d (%dms)",
+        summary["facts_scored"], summary["facts_archived"],
+        summary["files_scored"], summary["files_archived"], duration_ms,
     )
     return summary
+
+
+def _score_files(cur) -> tuple[list[dict], list[str]]:
+    """The topic-file pass, inside the caller's transaction and cursor.
+
+    Returns ``(scored, archived_filenames)``. Like the fact pass, the archived set comes
+    from ``RETURNING`` rather than the candidate list, so a row another transaction
+    un-archived (a write lands between the SELECT and the UPDATE) is never claimed in the
+    audit. Raising here rolls the WHOLE cycle back, facts included — deliberate: one
+    transaction means one outcome, and a half-recorded cycle would make the audit lie.
+    """
+    cur.execute(_SELECT_LIVE_FILES)
+    rows = cur.fetchall()
+
+    scored: list[dict] = []
+    candidate_ids: list[int] = []
+    for (fid, filename, read_count, days_since_read, days_since_written, days_old) in rows:
+        result = scorer.score_file(days_since_read, read_count, days_since_written, days_old)
+        scored.append({
+            "id": fid,
+            "filename": filename,
+            "score": result["score"],
+            "classification": result["classification"],
+            "signals": result["signals"],
+        })
+        if (
+            result["classification"] == "dormant"
+            and float(days_old or 0.0) >= MIN_AGE_DAYS_FOR_ARCHIVE
+        ):
+            candidate_ids.append(fid)
+
+    archived_files: list[str] = []
+    if candidate_ids:
+        cur.execute(_ARCHIVE_FILES, (candidate_ids, MIN_AGE_DAYS_FOR_ARCHIVE))
+        archived_files = [r[1] for r in cur.fetchall()]
+    return scored, archived_files
 
 
 def _record_error(message: str) -> None:
