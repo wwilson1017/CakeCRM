@@ -25,7 +25,7 @@ export function MobileMenuDrawer({ onClose, navigate, onSignOut, children }: Mob
     { icon: IconUsers, label: 'Contacts', action: go('/crm/contacts') },
     { icon: IconBuilding, label: 'Companies', action: go('/crm/companies') },
     { icon: IconCheck, label: 'Tasks', action: go('/crm/tasks') },
-      { icon: IconFile, label: 'Reports', action: go('/crm/reports') },
+    { icon: IconFile, label: 'Reports', action: go('/crm/reports') },
     { icon: IconSettings, label: 'Settings', action: go('/crm/settings') },
   ];
   // AI provider setup is admin-only since #60, so a member is not offered the
