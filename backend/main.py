@@ -107,6 +107,13 @@ async def lifespan(app: FastAPI):
     from crm import touch_count_service
     touch_count_service.capture_event_loop(asyncio.get_running_loop())
 
+    # ── Help library (issue #143) ────────────────────────────────────────────
+    # Loaded here rather than at import so a bad topic file can never break the CI
+    # import check (which runs with no database). warm() cannot raise; a library that
+    # fails here still loads lazily on the first help tool call.
+    from help.library import warm as warm_help_library
+    warm_help_library()
+
     # ── Railway environment logging ─────────────────────────────────────────
     if settings.is_railway:
         from core.config import RAILWAY_PUBLIC_URL
