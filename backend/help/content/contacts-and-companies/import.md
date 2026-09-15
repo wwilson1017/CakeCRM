@@ -27,8 +27,14 @@ Headers are matched case-insensitively against a list of common spellings, so a 
 headed Full Name, Contact Name or just Name all resolve to the contact's name, and the same
 applies to email, phone, company, title, source, tags and notes.
 
-**A name column is required.** Without one the import is refused with a message. A row whose
-name is blank is skipped and counted, not treated as an error.
+**On the deterministic CSV route a name column is required.** Without one the import is
+refused with a message, and a row whose name is blank is skipped and counted rather than
+treated as an error.
+
+**The assisted route is more forgiving, so do not state the rule as universal.** It falls
+back to the email address or the phone number as the contact's name, so an entry carrying
+only an address still imports. The same is true of a vCard entry with no name. Only an entry
+with none of the three is dropped.
 
 ## What happens to each row
 
