@@ -463,7 +463,13 @@ def open_task_with_title_exists(title: str) -> bool:
     clean = " ".join((title or "").split())
     if not clean:
         return False
-    return pg_fetchone(
-        f"SELECT 1 AS ok FROM tasks WHERE {_OPEN_TASK} AND lower(title) = lower(%s) LIMIT 1",
+    # EXISTS rather than `SELECT 1 ... LIMIT 1`: the question is whether ANY row matches,
+    # so there is no ordering to define and no cap to make non-deterministic. (The LIMIT
+    # form also reads to the issue #58 pagination guard as a capped reader whose ORDER BY
+    # it cannot resolve, which it is right to object to — a capped read with no total
+    # order is exactly the shape that guard exists to catch.)
+    row = pg_fetchone(
+        f"SELECT EXISTS (SELECT 1 FROM tasks WHERE {_OPEN_TASK} AND lower(title) = lower(%s)) AS found",
         (clean,),
-    ) is not None
+    )
+    return bool(row and row["found"])
