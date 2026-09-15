@@ -48,7 +48,6 @@ from heartbeat.router import router as heartbeat_router
 from memory.router import router as memory_router
 from notifications.router import router as notifications_router
 from providers.router import router as providers_router, setup_router as ai_setup_router
-from reminders.router import router as reminders_router
 from saved_views.router import router as saved_views_router
 from telegram import poller as telegram_poller
 from telegram.router import router as telegram_router
@@ -157,7 +156,7 @@ async def lifespan(app: FastAPI):
     from assistant import background as _background
     _background.set_main_loop(_asyncio.get_running_loop())
 
-    # Started after migrations so the tick's tables exist. The reminder tick
+    # Started after migrations so the tick's tables exist. The maintenance tick
     # always runs (keyless); only the heartbeat AI turn is env-gated.
     from heartbeat.scheduler import start_scheduler
     start_scheduler()
@@ -168,7 +167,7 @@ async def lifespan(app: FastAPI):
     # until a bot token is connected, so it is safe to start unconditionally here.
     telegram_poller.start()
 
-    # Dreaming (issue #5) needs no wiring here: #6's reminder_tick calls
+    # Dreaming (issue #5) needs no wiring here: #6's maintenance_tick calls
     # dreaming.processor.run_dreaming_if_due() every 60s through its own guarded seam
     # (heartbeat.service._maybe_run_dreaming). #5's interim lifespan scheduler was
     # always meant to be absorbed the moment #6 landed — this is that deletion.
@@ -323,7 +322,6 @@ app.include_router(crm_router, prefix="/api/crm", tags=["crm"])
 app.include_router(assistant_router, prefix="/api/assistant", tags=["assistant"])
 app.include_router(telegram_router, prefix="/api/telegram", tags=["telegram"])
 app.include_router(gmail_router, prefix="/api/gmail", tags=["gmail"])
-app.include_router(reminders_router, prefix="/api/reminders", tags=["reminders"])
 app.include_router(saved_views_router, prefix="/api/saved-views", tags=["saved-views"])
 app.include_router(notifications_router, prefix="/api/notifications", tags=["notifications"])
 app.include_router(alerts_router, prefix="/api/alerts", tags=["alerts"])

@@ -45,8 +45,8 @@ def today_local() -> date:
 def local_day_bounds(day: date | None = None) -> tuple[datetime, datetime]:
     """``[start, next_start)`` for one local calendar day, as aware instants.
 
-    For querying a TIMESTAMPTZ column by local calendar day (issue #130's Today
-    panel reads ``reminders.due_at`` this way). Computed in Python rather than with
+    For bounding one local calendar day as instants (issue #130's Today panel arms
+    its reload on this day's end). Computed in Python rather than with
     SQL's ``AT TIME ZONE`` so ``zoneinfo`` stays the single timezone authority:
     Postgres ships its own tz database, and two copies of the same rule are exactly
     how a boundary drifts apart.

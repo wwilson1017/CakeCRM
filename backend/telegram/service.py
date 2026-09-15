@@ -46,7 +46,7 @@ def notify_linked_user(text: str) -> bool:
     """Send a plain-text message to the linked Telegram user. Pure sync, safe anywhere.
 
     Returns False when Telegram isn't connected/linked or the send fails — never raises.
-    This is the notification delivery channel #6 (heartbeat/reminders/notifications)
+    This is the notification delivery channel #6 (heartbeat/notifications)
     consumes; the signature is frozen by team agreement (do not change name/path/shape).
     """
     if not text:

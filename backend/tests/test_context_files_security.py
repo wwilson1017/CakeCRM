@@ -44,7 +44,7 @@ def test_every_def_declares_a_boolean_writes_flag():
 def test_context_writes_are_excluded_from_the_background_allowlist():
     """Holds today only because background_allowlist() derives from writes_map. Asserted
     explicitly so it cannot quietly stop holding: a background turn that could rewrite
-    soul.md would turn one injected reminder into a permanent identity change."""
+    soul.md would turn one injected CRM note into a permanent identity change."""
     allow = set(background_allowlist(ToolRegistry(background=True)))
     leaked = _WRITE_TOOLS & allow
     assert not leaked, f"context write tools reachable from a background turn: {leaked}"

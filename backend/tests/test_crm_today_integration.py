@@ -1,10 +1,9 @@
 """Real-Postgres integration for the dashboard Today panel (issue #130).
 
 These are the claims a Recorder cannot check, because it agrees with whatever SQL it is
-handed: that the TEXT date comparison really selects the right tasks, that the
-timestamptz window really brackets one local day of reminders, that the owner condition
-really admits unassigned rows, and that the sweeps (`NOT_DROPPED_TASK`, the live-deal
-predicate, `status = 'pending'`) really exclude what they claim to.
+handed: that the TEXT date comparison really selects the right tasks, that the owner
+condition really admits unassigned rows, and that the sweeps (`NOT_DROPPED_TASK`, the
+live-deal predicate) really exclude what they claim to.
 
 Marked ``integration`` and excluded from the default no-DB run. Fixture data is fresh and
 fictional.
@@ -12,7 +11,7 @@ fictional.
 
 import os
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 import psycopg2
 import pytest
@@ -61,12 +60,11 @@ def pg_db():
 
 @pytest.fixture(autouse=True)
 def _clean(pg_db):
-    from core.postgres import get_connection, pg_execute
+    from core.postgres import get_connection
     from crm import service
 
     with get_connection() as conn:
         service._truncate_all(conn.cursor(), include_definitions=True)
-    pg_execute("DELETE FROM reminders")
     yield
 
 
@@ -110,17 +108,6 @@ def _task(title, *, due="", star=False, owner=None, status="next_action", deal_i
         "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
         (title, due, star, owner, status, 1 if status == "done" else 0, deal_id),
     )["id"]
-
-
-def _reminder(message, due_at, status="pending") -> str:
-    from core.postgres import pg_execute
-
-    rid = str(uuid.uuid4())
-    pg_execute(
-        "INSERT INTO reminders (id, message, due_at, status) VALUES (%s, %s, %s, %s)",
-        (rid, message, due_at, status),
-    )
-    return rid
 
 
 def _deal(title, *, temperature=None, idle_days=0, owner=None, stage="lead",
@@ -179,28 +166,23 @@ def _deal_rows(payload) -> list[tuple]:
 
 def test_full_ladder_end_to_end(today):
     """Every rung, in order, against real SQL — the acceptance criterion's interleave."""
-    from core.localtime import local_day_bounds
     from crm import today_service
 
-    start, _ = local_day_bounds(datetime.strptime(today, "%Y-%m-%d").date())
     _task("Starred", star=True, due=_shift(today, -3))
     _task("Overdue older", due=_shift(today, -9))
     _task("Overdue newer", due=_shift(today, -1))
     _task("Due today", due=today)
-    _reminder("Ring back", start + timedelta(hours=14))
 
     assert _titles(today_service.get_today()) == [
-        "Starred", "Overdue older", "Overdue newer", "Ring back", "Due today",
+        "Starred", "Overdue older", "Overdue newer", "Due today",
     ]
 
 
 def test_sweeps_exclude_what_they_claim_to(today):
-    """Dropped todos, done todos, tasks on archived deals, and non-pending or
-    wrong-day reminders must all stay out."""
-    from core.localtime import local_day_bounds
+    """Dropped todos, done todos, tasks on archived deals and undated tasks must all
+    stay out."""
     from crm import service, today_service
 
-    start, end = local_day_bounds(datetime.strptime(today, "%Y-%m-%d").date())
     deal = service.create_deal(title="Archived deal", value=10)["id"]
     service.archive_deal(deal, archived=True)
 
@@ -209,9 +191,6 @@ def test_sweeps_exclude_what_they_claim_to(today):
     _task("On an archived deal", due=today, deal_id=deal)
     _task("Due tomorrow", due=_shift(today, 1))
     _task("No due date", due="")
-    _reminder("Fired already", start + timedelta(hours=2), status="fired")
-    _reminder("Tomorrow", end + timedelta(hours=2))
-    _reminder("Yesterday", start - timedelta(hours=2))
 
     assert _titles(today_service.get_today()) == ["Visible"]
 
@@ -229,42 +208,12 @@ def test_owner_scope_admits_unassigned_but_not_a_colleagues(today):
     assert sorted(_titles(today_service.get_today())) == ["A colleague's", "Mine", "Unassigned"]
 
 
-def test_reminders_survive_the_owner_scope(today):
-    """They have no owner column — narrowing the scope must not hide today's reminders
-    from the one person looking."""
-    from core.localtime import local_day_bounds
-    from crm import today_service
-
-    start, _ = local_day_bounds(datetime.strptime(today, "%Y-%m-%d").date())
-    _reminder("Install-wide ping", start + timedelta(hours=10))
-    _task("A colleague's", due=today, owner=_user("Bo"))
-
-    assert _titles(today_service.get_today(owner_id=_user("Ada"))) == ["Install-wide ping"]
-
-
 def test_starred_overdue_task_appears_once_at_rank_one(today):
     from crm import today_service
 
     _task("Both starred and overdue", star=True, due=_shift(today, -5))
     items = today_service.get_today()["items"]
     assert [(i["title"], i["rank"]) for i in items] == [("Both starred and overdue", 1)]
-
-
-def test_reminder_window_is_the_local_day_not_a_utc_one(today, monkeypatch):
-    """The bug this endpoint's day math exists to prevent: on a UTC window, an evening
-    reminder west of Greenwich falls on the wrong calendar day."""
-    from core.localtime import local_day_bounds
-    from crm import today_service
-
-    monkeypatch.setenv("TIMEZONE", "America/Chicago")
-    start, end = local_day_bounds(datetime.strptime(today, "%Y-%m-%d").date())
-    # 23:30 local — inside the local day, but already TOMORROW in UTC.
-    late = start + timedelta(hours=23, minutes=30)
-    assert late.astimezone(timezone.utc).date() != late.date()
-    _reminder("Late tonight", late)
-    _reminder("Just after midnight", end + timedelta(minutes=1))
-
-    assert _titles(today_service.get_today()) == ["Late tonight"]
 
 
 def test_task_membership_matches_the_gtd_today_view_exactly(today):

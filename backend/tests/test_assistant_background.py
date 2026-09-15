@@ -162,9 +162,8 @@ def test_allowlist_is_reads_plus_notify_only():
     # NO CRM writes at all — not deletes, not creates, not logging.
     assert "crm_delete_contact" not in allowed
     assert "crm_create_task" not in allowed
-    # heartbeat_allowlist / reminder_allowlist are aliases of the same boundary.
+    # heartbeat_allowlist is an alias of the same boundary.
     assert background.heartbeat_allowlist(reg) == allowed
-    assert background.reminder_allowlist(reg) == allowed
 
 
 # ── #114: live external-source reads never reach an unattended turn ──────────────

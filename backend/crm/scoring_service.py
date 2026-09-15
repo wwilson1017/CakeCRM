@@ -56,17 +56,18 @@ logger = logging.getLogger(__name__)
 # --- advisory lock keys (registered in core/postgres.py's registry comment) ---
 # Per-entity recompute uses the two-int form pg_advisory_xact_lock(namespace, id);
 # deals.id / contacts.id are SERIAL (int4) so they fit. The daily refresh is lock-free
-# (see run_score_refresh_if_due): reminder_tick is max_instances=1 and these per-entity
+# (see run_score_refresh_if_due): maintenance_tick is max_instances=1 and these per-entity
 # locks are the only serialization it needs.
 _DEAL_LOCK_NS = 1801
 _CONTACT_LOCK_NS = 1802
 
 _REFRESH_INTERVAL = timedelta(hours=24)
-# Per-tick cap for the time-decay refresh. reminder_tick is a shared, fast-and-bounded
+# Per-tick cap for the time-decay refresh. maintenance_tick is a shared, fast-and-bounded
 # (T1) slot, so the refresh MUST NOT sweep the whole table on the tick it fires — it
 # processes at most this many stale entities per pass and self-resumes on later ticks.
 # Kept small (each entity is ~4 indexed round trips) so even on a high-latency remote
-# Postgres a single drain tick stays well within the 60s interval and never delays reminders.
+# Postgres a single drain tick stays well within the 60s interval and never delays the
+# tick's other passes.
 _REFRESH_BATCH = 100
 
 # Housekeeping notes that provenance_service.confirm inserts directly into crm_chatter
@@ -586,7 +587,7 @@ def _stale_ids(table: str, cutoff: datetime, limit: int, extra: str = "") -> lis
 def run_score_refresh_if_due(now: datetime | None = None) -> dict | None:
     """Refresh the STALEST scores whose time-decay factors (recency/age) have drifted — rows
     not recomputed within _REFRESH_INTERVAL (or never scored). Three properties keep it cheap,
-    bounded, and correct inside reminder_tick's shared slot (T1):
+    bounded, and correct inside maintenance_tick's shared slot (T1):
 
     * a **coarse due-gate** on ``crm_meta.scores_refreshed_at`` (like dreaming) — on ~every tick
       the window is closed and this returns None WITHOUT scanning either table;

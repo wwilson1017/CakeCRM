@@ -6,8 +6,7 @@ human-in-the-loop confirmation state machine — unusable for autonomous work (i
 provide). ``run_background_turn`` is the counterpart: it drives ``provider.stream_turn``
 directly, executes tools through the same ``ToolRegistry`` (so ``writes``/budget
 semantics live in one place), and returns a ``BackgroundResult`` — no SSE, no
-conversation rows (outcomes land on ``reminders.result`` / ``heartbeat_state`` /
-the ``notifications`` log).
+conversation rows (outcomes land on ``heartbeat_state`` / the ``notifications`` log).
 
 Two safety rules make the autonomous turn acceptable (the confirmation gate is
 never involved here):
@@ -90,7 +89,7 @@ NO_PROVIDER_TEXT = "No AI provider configured"
 # and its one permitted external action (notify_user → web push + Telegram) would carry
 # whatever the read returned. So the documented "worst case is one notification" ceiling
 # held mechanically while still being an email-exfiltration channel: hostile text in a
-# reminder or CRM record could steer the turn gmail_search → gmail_read_thread → private
+# CRM record could steer the turn gmail_search → gmail_read_thread → private
 # mail in the notification body (issue #114).
 #
 # Sourced from delimiters.UNTRUSTED_SOURCE_TOOLS rather than re-listed, so the rule is
@@ -121,7 +120,7 @@ def background_allowlist(registry) -> set[str]:
 
     No CRM write tools at all. The turn observes the user's data and, if warranted,
     calls notify_user once (its only externally-visible action, budgeted). This is
-    a hard boundary against prompt injection via reminder/CRM text: even if the
+    a hard boundary against prompt injection via CRM text: even if the
     model were steered by injected content, the worst it can do is send one
     notification — it can never create/log/update/delete CRM records, and (since
     #114) it cannot fetch live mailbox content to put in that notification. Stated
@@ -132,9 +131,8 @@ def background_allowlist(registry) -> set[str]:
     return (read_tool_names(registry) - BACKGROUND_EXCLUDED_TOOLS) | {"notify_user"}
 
 
-# Heartbeat and reminder turns share the same (read + notify_user) boundary.
+# The heartbeat turn and the proactive digest share the same (read + notify_user) boundary.
 heartbeat_allowlist = background_allowlist
-reminder_allowlist = background_allowlist
 
 
 def _short(value, limit: int) -> str:
@@ -243,8 +241,8 @@ def _with_fence_safety(system_prompt):
     """Append the untrusted-content contract to a background turn's STATIC prompt.
 
     Fencing the results (see ``_run_turn``) only helps if the model has been told what a
-    fence means. Each caller's prompt frames its own input — the reminder prompt covers
-    reminder text, the heartbeat prompt covers CRM record text — but the background
+    fence means. Each caller's prompt frames its own input — the heartbeat prompt covers
+    CRM record text — but the background
     allowlist also reaches Baker's context files, and nothing explained those tags.
     Applied HERE rather than in each caller so a future background job cannot ship
     without it. (It still describes the external-content fence too: Gmail tools are

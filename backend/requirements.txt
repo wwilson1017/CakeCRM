@@ -24,8 +24,8 @@ pdfplumber==0.11.9
 python-docx==1.2.0
 openpyxl==3.1.5
 
-# Heartbeat / reminders / notifications (issue #6). apscheduler + croniter drive
-# the tick + recurrence; pywebpush does Web Push (VAPID). Imported LAZILY inside
+# Heartbeat / notifications (issue #6). apscheduler drives the tick; pywebpush
+# does Web Push (VAPID). Imported LAZILY inside
 # functions per repo convention so the module graph imports cleanly without them —
 # but note the scheduler IS started in main.py's lifespan, so these ARE required
 # at startup (CI installs them). py-vapid is pinned explicitly to 1.9.4: pywebpush
@@ -33,7 +33,6 @@ openpyxl==3.1.5
 # signing pass the EC curve CLASS (not an instance) and crash on cryptography 46
 # (`TypeError: curve must be an EllipticCurve instance`). 1.9.4 fixes both paths.
 apscheduler==3.11.2
-croniter==6.2.2
 pywebpush==2.3.0
 py-vapid==1.9.4
 

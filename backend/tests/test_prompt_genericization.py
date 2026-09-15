@@ -333,12 +333,11 @@ def _all_tool_defs() -> list[dict]:
     from help.tools import HELP_TOOL_DEFS
     from memory.tools import get_memory_tools
     from notifications.tools import get_notification_tools
-    from reminders.tools import get_reminder_tools
 
     # GTD_TOOL_DEFS is read directly, not through get_gtd_tools(): that returns ([], {})
     # unless GTD mode is active, so calling it here would silently scan nothing (#70).
     defs = list(CRM_TOOL_DEFS) + list(GTD_TOOL_DEFS) + list(GMAIL_TOOL_DEFS)
-    defs += list(get_memory_tools()[0]) + list(get_reminder_tools()[0])
+    defs += list(get_memory_tools()[0])
     defs += list(get_context_file_tools()[0])
     defs += list(HELP_TOOL_DEFS)
     defs += list(get_notification_tools(ToolRegistry())[0])
@@ -383,9 +382,6 @@ def model_facing(monkeypatch):
     monkeypatch.setattr(heartbeat_service, "_task_mode", lambda: "normal")
     static, volatile = identity.build_system_prompt({"name": "Baker", "personality": ""})
     hb_static, hb_volatile = heartbeat_service._heartbeat_prompt()
-    rm_static, rm_volatile = heartbeat_service._reminder_prompt(
-        {"id": 1, "message": "", "context": ""}
-    )
 
     # GTD mode appends GTD_GUIDE to the static half and renames the heartbeat's task
     # tool, so both prompts are assembled a SECOND time under that mode — otherwise
@@ -403,7 +399,6 @@ def model_facing(monkeypatch):
         # engine supplies from the DB.
         ("default soul", identity.DEFAULT_SOUL),
         ("heartbeat prompt", f"{hb_static}\n{hb_volatile}"),
-        ("reminder prompt", f"{rm_static}\n{rm_volatile}"),
         ("quick-action starters", _TS_COMMENTS.sub("", QUICK_ACTIONS.read_text(encoding="utf-8"))),
         # The touch-count worker (#16) is a second provider caller with its own system
         # prompt, and it was never scanned here until #56 rewrote it for per-line verdicts.

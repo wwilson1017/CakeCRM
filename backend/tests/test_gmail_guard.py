@@ -124,9 +124,9 @@ def test_gmail_reads_are_not_background_callable(monkeypatch):
     """End-to-end pin for #114, on a REAL registry with Gmail connected.
 
     The Gmail reads carry writes:False, so the background allowlist — derived from that
-    flag alone — used to admit them into every unattended turn (heartbeat, reminder
-    firing, the proactive digest). The one notification such a turn may send then became
-    an exfiltration channel: injected text in a reminder or CRM record could steer it
+    flag alone — used to admit them into every unattended turn (heartbeat, the
+    proactive digest). The one notification such a turn may send then became
+    an exfiltration channel: injected text in a CRM record could steer it
     gmail_search → gmail_read_thread → private mail in the notification body.
 
     Only the READ tools are asserted: gmail_create_draft is already excluded as a write,
