@@ -279,3 +279,19 @@ def test_runs_on_captured_main_loop(monkeypatch):
 def test_result_dataclass_defaults():
     r = BackgroundResult(text="hi")
     assert r.tool_log == [] and r.input_tokens == 0 and not r.error
+
+
+def test_no_routine_write_ever_enters_the_background_allowlist(task_mode):
+    """#180 exempted sixteen CRM writes from the normal-mode Approve card. The
+    unattended runner has no human to card in the first place, so its boundary must
+    stay reads + notify_user — the routine tier must not become a back door into it.
+
+    Uses the REAL registry, not the fake: the point is the actual classified set.
+    """
+    from assistant.registry import ToolRegistry
+
+    task_mode("normal")
+    reg = ToolRegistry(background=True)
+    assert reg.routine_writes, "vacuity guard — nothing is classified routine"
+    allowed = background.background_allowlist(reg)
+    assert reg.routine_writes.isdisjoint(allowed), sorted(reg.routine_writes & allowed)

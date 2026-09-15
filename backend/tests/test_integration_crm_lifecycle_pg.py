@@ -139,6 +139,54 @@ def test_mark_lost_records_reason_and_note_then_reopening_clears_it(pg_db):
     assert won["stage"] == "won" and won["probability"] == 100 and won["lost_reason"] == ""
 
 
+def test_every_move_into_and_out_of_won_is_journaled_on_both_write_paths(pg_db):
+    """The invariant Weekly Touches (#179) derives a win instant from: a deal whose stage
+    is 'won' got there through _write_deal_update or bulk_move_deals, and both journal the
+    transition in the same transaction, in both directions. create_deal is the known
+    exception — it has no old stage to leave — and is exactly why a deal created straight
+    into 'won' has no win instant and contributes nothing to the weekly numbers."""
+    from core.postgres import pg_fetchall, pg_fetchone
+    from crm import service
+
+    single = service.create_deal("Single path", stage="negotiation")
+    service.mark_deal_won(single["id"])
+    service.update_deal_stage(single["id"], "negotiation")
+    service.mark_deal_won(single["id"])
+    assert [
+        (e["old_stage"], e["new_stage"]) for e in pg_fetchall(
+            "SELECT old_stage, new_stage FROM deal_stage_events WHERE deal_id = %s "
+            "ORDER BY id", (single["id"],),
+        )
+    ] == [("negotiation", "won"), ("won", "negotiation"), ("negotiation", "won")]
+    # MAX over the 'won' rows is the LATEST win, which is what TOUCH_AT_SQL reads.
+    newest_won = pg_fetchone(
+        "SELECT MAX(changed_at) AS at FROM deal_stage_events "
+        "WHERE deal_id = %s AND new_stage = 'won'", (single["id"],),
+    )["at"]
+    last_row = pg_fetchone(
+        "SELECT changed_at FROM deal_stage_events WHERE deal_id = %s "
+        "ORDER BY id DESC LIMIT 1", (single["id"],),
+    )["changed_at"]
+    assert newest_won == last_row
+
+    bulk = service.create_deal("Bulk path", stage="proposal")
+    assert service.bulk_move_deals([bulk["id"]], "won")["updated"] == 1
+    assert service.bulk_move_deals([bulk["id"]], "negotiation")["updated"] == 1
+    assert service.bulk_move_deals([bulk["id"]], "won")["updated"] == 1
+    assert [
+        (e["old_stage"], e["new_stage"]) for e in pg_fetchall(
+            "SELECT old_stage, new_stage FROM deal_stage_events WHERE deal_id = %s "
+            "ORDER BY id", (bulk["id"],),
+        )
+    ] == [("proposal", "won"), ("won", "negotiation"), ("negotiation", "won")]
+
+    created_won = service.create_deal("Born won", stage="won")
+    assert pg_fetchone(
+        "SELECT COUNT(*) AS c FROM deal_stage_events WHERE deal_id = %s",
+        (created_won["id"],),
+    )["c"] == 0
+
+
 # ── archive ───────────────────────────────────────────────────────────────────
 
 def test_archiving_removes_a_deal_from_every_read_at_once(pg_db):

@@ -110,8 +110,9 @@ async def chat(req: ChatRequest, user=Depends(get_current_user)):
         raise HTTPException(status_code=400, detail="messages or conversation_id is required.")
     provider = await asyncio.to_thread(_require_provider)
     # ToolRegistry construction reads the Gmail connection state from Postgres
-    # (issue #8), so build it off the event loop.
-    registry = await asyncio.to_thread(ToolRegistry)
+    # (issue #8), so build it off the event loop. `user` is what carries the caller's
+    # seat into the tool layer (issue #190).
+    registry = await asyncio.to_thread(ToolRegistry, user=user)
     stream = engine.chat(
         provider, registry, req.messages,
         tool_mode=req.tool_mode, conversation_id=req.conversation_id,
@@ -183,13 +184,16 @@ async def chat_upload(
         messages[-1] = {**messages[-1], "content": "\n\n".join(blocks) + "\n\n" + original_text}
         # Uploaded documents are the untrusted-content channel. A prompt-injected
         # file could ask the model to run a destructive write; in power ("Auto")
-        # mode that would execute with no human check. Downgrade this turn to
-        # normal so any write the model proposes after reading an upload still
-        # routes through the confirmation gate. (No files → unchanged.)
+        # mode that would execute with no human check. What actually forces every
+        # write on this turn through the gate — routine ones included — is the
+        # engine's own scan of the assembled context (`context_is_untrusted`,
+        # issue #180); normal mode alone no longer confirms everything, so this
+        # demotion cannot carry that guarantee by itself. It is kept so the mode
+        # the client is running under is honest about the risk. (No files → unchanged.)
         if tool_mode == "power":
             tool_mode = "normal"
 
-    registry = await asyncio.to_thread(ToolRegistry)
+    registry = await asyncio.to_thread(ToolRegistry, user=user)
     stream = engine.chat(
         provider, registry, messages,
         tool_mode=tool_mode, conversation_id=conversation_id, title_hint=original_text,
@@ -204,8 +208,14 @@ async def chat_upload(
 def confirm(req: ConfirmRequest, user=Depends(get_current_user)):
     if req.decision not in ("approve", "deny"):
         raise HTTPException(status_code=400, detail="decision must be 'approve' or 'deny'.")
+    # The APPROVER is the actor a confirmed write is credited to (issue #190) — the
+    # person who said yes, not whoever proposed it. That is why threading identity through
+    # the registry needs no change to `resolve_confirmation`: the registry it is handed
+    # already carries the right seat, and the stored tool arguments (which the DB, not the
+    # client, is authoritative for) cannot override it.
     return engine.resolve_confirmation(
-        ToolRegistry(), req.conversation_id, req.tool_use_id, req.decision, msg_id=req.msg_id,
+        ToolRegistry(user=user), req.conversation_id, req.tool_use_id, req.decision,
+        msg_id=req.msg_id,
     )
 
 

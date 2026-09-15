@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { CrmDeal } from '../core/types';
-import type { FacetDef, MultiFacetDef, SingleFacetDef, BooleanFacetDef, RangeFacetDef } from '../shared/collection';
+import type { FacetDef, MultiFacetDef, SingleFacetDef, BooleanFacetDef, RangeFacetDef, CustomFacetDef, DateRangeValue } from '../shared/collection';
 import type { CrmUser } from './useUsers';
 import { DEAL_DETAIL_CONFIG } from './dealDetailConfig';
 import { archivedSelectionIncludesArchived, makePipelineCollectionConfig } from './pipelineCollection';
@@ -206,5 +206,101 @@ describe('archived facet', () => {
     expect(archivedSelectionIncludesArchived('only')).toBe(true);
     expect(archivedSelectionIncludesArchived(null)).toBe(false);
     expect(archivedSelectionIncludesArchived(undefined)).toBe(false);
+  });
+});
+
+describe('date facets (#181)', () => {
+  const range = (key: string) => facet<CustomFacetDef<CrmDeal, DateRangeValue>>(key);
+  const q1 = { from: '2026-01-01', to: '2026-03-31' };
+
+  it('declares each range beside its preset, in panel order', () => {
+    // Declared order IS panel order, so a range sits under the preset it extends rather than
+    // at the bottom of the panel away from it.
+    expect(build().facets?.map(f => f.key)).toEqual([
+      'stage',
+      'owner',
+      'value',
+      'closeDate',
+      'closeDateRange',
+      'createdDate',
+      'createdDateRange',
+      'lastActivity',
+      'lastActivityRange',
+      'archived',
+    ]);
+  });
+
+  it('keeps the pipeline at storage version 1 — adding facets is not a shape change', () => {
+    // coerceSelections walks the DECLARED facets and defaults a key the envelope lacks, so a
+    // session saved before #181 restores cleanly. The version pins facet KEYS, and saved views
+    // are stamped with it.
+    expect(build().storage).toEqual({ key: 'crm_pipeline', version: 1 });
+  });
+
+  it('the Created preset delegates to dealMatchesAdvanced like the other two', () => {
+    const created = facet<SingleFacetDef<CrmDeal>>('createdDate');
+    expect(created.kind).toBe('single');
+    expect(created.options.map(o => o.value)).toEqual([
+      'last7', 'last30', 'thisMonth', 'thisQuarter', 'lastQuarter',
+    ]);
+    const now = new Date();
+    const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 12);
+    expect(created.predicate(deal({ id: 1, created_at: yesterday.toISOString() }), 'last7')).toBe(true);
+    expect(created.predicate(deal({ id: 2, created_at: '2020-01-01T00:00:00Z' }), 'last7')).toBe(false);
+  });
+
+  it('the three ranges are custom facets, so the layer needed no new kind', () => {
+    for (const key of ['closeDateRange', 'createdDateRange', 'lastActivityRange']) {
+      expect(range(key).kind).toBe('custom');
+      expect(range(key).isActive(range(key).defaultValue)).toBe(false);
+    }
+  });
+
+  it('closeDateRange reads the date-only close field verbatim', () => {
+    const f = range('closeDateRange');
+    expect(f.predicate(deal({ id: 1, expected_close_date: '2026-03-15' }), q1)).toBe(true);
+    expect(f.predicate(deal({ id: 2, expected_close_date: '2026-04-01' }), q1)).toBe(false);
+    // A deal with no close date is what the preset's "No close date" bucket is for.
+    expect(f.predicate(deal({ id: 3, expected_close_date: '' }), q1)).toBe(false);
+  });
+
+  it('createdDateRange reads created_at as a local calendar day', () => {
+    const f = range('createdDateRange');
+    expect(f.predicate(deal({ id: 1, created_at: '2026-02-02T18:00:00Z' }), q1)).toBe(true);
+    expect(f.predicate(deal({ id: 2, created_at: '2026-06-02T18:00:00Z' }), q1)).toBe(false);
+    // 03:30 UTC on 1 Apr is still 31 Mar in America/Chicago, which the runner pins.
+    expect(f.predicate(deal({ id: 3, created_at: '2026-04-01T03:30:00Z' }), q1)).toBe(true);
+  });
+
+  it('lastActivityRange reads last_activity_at and never matches a deal with none', () => {
+    const f = range('lastActivityRange');
+    expect(f.predicate(deal({ id: 1, last_activity_at: '2026-02-02T18:00:00Z' }), q1)).toBe(true);
+    expect(f.predicate(deal({ id: 2, last_activity_at: null }), q1)).toBe(false);
+    expect(f.predicate(deal({ id: 3 }), q1)).toBe(false);
+  });
+
+  it('a range coerces junk to inactive rather than throwing inside the state initialiser', () => {
+    const f = range('closeDateRange');
+    expect(f.coerce(null)).toEqual({ from: null, to: null });
+    expect(f.coerce({ from: '2026-13-45' })).toEqual({ from: null, to: null });
+    expect(f.coerce({ from: '2026-01-01', to: 'soon' })).toEqual({ from: '2026-01-01', to: null });
+  });
+
+  it('rests inactive, so the layer never consults its predicate and nothing is filtered', () => {
+    // `applyFacets` only evaluates facets `selectionActive` reports as active. That gate is
+    // what makes it safe for the predicate to answer false for a dateless deal: at rest the
+    // predicate is never reached, and a dateless deal is only excluded once a bound is set.
+    const f = range('closeDateRange');
+    expect(f.isActive(f.coerce(undefined))).toBe(false);
+    expect(f.isActive({ from: '2026-01-01', to: null })).toBe(true);
+  });
+
+  it('a range and its preset stay separate facets, so the layer ANDs them', () => {
+    // Merging them would have meant a new value shape and a rewritten preset predicate; two
+    // facets compose for free and leave every #21 rule byte-identical.
+    const preset = facet<SingleFacetDef<CrmDeal>>('closeDate');
+    const march = deal({ id: 1, expected_close_date: '2026-03-15', stage: 'lead' });
+    expect(range('closeDateRange').predicate(march, q1)).toBe(true);
+    expect(preset.predicate(march, 'noDate')).toBe(false);
   });
 });

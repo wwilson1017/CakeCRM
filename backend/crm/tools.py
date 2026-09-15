@@ -13,6 +13,14 @@ the assistant's confirmation gate (``backend/assistant/registry.ToolRegistry``):
 mutating tools (create/update/delete/log/complete) are ``True`` and prompt for
 confirmation in normal mode; read tools are ``False``. Any def added here MUST
 carry a ``"writes"`` flag — ``tests/test_crm_tools.py`` fails loudly otherwise.
+
+Sixteen of those writes additionally carry ``"confirm_tier": ROUTINE`` (issue #180):
+ordinary record edits that stay in Postgres, notify nobody, remove nothing from view,
+are not bulk and never leave the install. Those skip the Approve card in normal mode.
+Absence of the key is the deny state, so a new write confirms until somebody classifies
+it — read ``assistant/confirm_tier.py`` before adding one. ``removes_from_view()``
+below is the argument-level carve-out: three of the sixteen can hide a record through a
+``status`` argument, and that particular call keeps its card.
 """
 
 import logging
@@ -20,6 +28,7 @@ from collections.abc import Callable
 
 import psycopg2
 
+from assistant.confirm_tier import ROUTINE
 from crm import (
     analytics_service,
     chatter_service,
@@ -30,11 +39,31 @@ from crm import (
 )
 from crm.links import with_deal_url
 
+# Resolving an `owner` the model named as an email address. `users.service` imports only
+# `core.postgres`, so this adds no cycle — the same reasoning `crm.service` records for
+# its own import of it.
+from users import service as users_service
+
 logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Tool Definitions (schema only — sent to the AI provider)
 # ═══════════════════════════════════════════════════════════════════════════════
+
+# The `owner` filter shared by every owner-filterable read (#190). One constant so the
+# model is told the same three words everywhere and a later tool cannot describe them
+# differently. Deliberately a WORD and never an internal id: the model has no legitimate
+# way to know user ids, and accepting one would let it read another seat's slice by
+# guessing a number. `_resolve_owner` is the only thing that turns a word into an id.
+_OWNER_FILTER_DESCRIPTION = (
+    "Whose records to return: 'me' for the person you are talking with, 'unassigned' "
+    "for records nobody owns, or a teammate's email address. Omit it for everyone's."
+)
+
+
+def owner_filter_property() -> dict:
+    """A fresh copy of the shared `owner` schema property, so no two defs alias one dict."""
+    return {"type": "string", "description": _OWNER_FILTER_DESCRIPTION}
 
 # Appended to every contact-READ tool description. The link is authoritative for
 # display and search (issue #35), but the legacy free-text column deliberately
@@ -67,6 +96,7 @@ CRM_TOOL_DEFS = [
                 "status": {"type": "string", "description": "Filter by status: active, inactive, archived"},
                 "tags": {"type": "string", "description": "Exact tag label, case-insensitive; comma-separate multiple tags"},
                 "limit": {"type": "integer", "description": "Max results (default 20)", "default": 20},
+                "owner": owner_filter_property(),
             },
             "required": ["query"],
         },
@@ -75,6 +105,7 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_create_contact",
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": (
             "Create a new contact in the CRM. Use when the user mentions a new customer, prospect, "
             "or person they want to track."
@@ -100,6 +131,7 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_update_contact",
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": (
             "Update an existing contact's information. Use when the user wants to change a "
             "contact's details like email, phone, company, status, or tags."
@@ -249,6 +281,7 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_create_deal",
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": (
             "Create a new deal/opportunity. Use when the user mentions a potential sale, "
             "project, or business opportunity with a customer."
@@ -283,6 +316,7 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_update_deal",
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": (
             "Update a deal's details — value, stage, close date, probability, notes, etc."
         ),
@@ -317,6 +351,7 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_update_deal_stage",
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": (
             "Move a deal between OPEN pipeline stages. To CLOSE a deal use "
             "crm_mark_deal_won or crm_mark_deal_lost instead — they capture the lost "
@@ -384,6 +419,7 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_mark_deal_won",
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": (
             "Close a deal as WON: moves it to the 'won' stage and sets probability to "
             "100%. Use when the user says a deal closed, was signed, or came through."
@@ -400,6 +436,7 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_mark_deal_lost",
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": (
             "Close a deal as LOST: moves it to the 'lost' stage, sets probability to 0, "
             "records why, and adds the reason to the deal's notes thread. Always try to "
@@ -469,6 +506,7 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_log_activity",
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": (
             "Log a touchpoint (call, email, meeting, follow_up) against a contact or deal — a dated "
             "record of an interaction. Use after the user mentions interacting with a customer. For "
@@ -506,6 +544,9 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_create_task",
         "writes": True,
+        # Routine, but hidden in GTD task mode (the default) — see _TASK_TOOL_NAMES.
+        # The todo_* family is NOT classified; classifying it is a separate call (#180).
+        "confirm_tier": ROUTINE,
         "description": (
             "Create a follow-up task or reminder. Use when the user mentions needing to "
             "follow up, check in, or do something by a certain date for a customer or deal."
@@ -540,6 +581,7 @@ CRM_TOOL_DEFS = [
                 "due_before": {"type": "string", "description": "Show tasks due before this date (YYYY-MM-DD)"},
                 "priority": {"type": "string", "description": "Filter: low, medium, high"},
                 "limit": {"type": "integer", "default": 50},
+                "owner": owner_filter_property(),
             },
             "required": [],
         },
@@ -548,6 +590,9 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_complete_task",
         "writes": True,
+        # Routine, but hidden in GTD task mode (the default) — see _TASK_TOOL_NAMES.
+        # The todo_* family is NOT classified; classifying it is a separate call (#180).
+        "confirm_tier": ROUTINE,
         "description": "Mark a CRM task as completed.",
         "input_schema": {
             "type": "object",
@@ -561,6 +606,9 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_update_task",
         "writes": True,
+        # Routine, but hidden in GTD task mode (the default) — see _TASK_TOOL_NAMES.
+        # The todo_* family is NOT classified; classifying it is a separate call (#180).
+        "confirm_tier": ROUTINE,
         "description": (
             "Edit an existing CRM task — retitle it, move its due date, change priority, "
             "re-link it to a contact or deal, or reopen a completed one. Use when the user "
@@ -707,6 +755,7 @@ CRM_TOOL_DEFS = [
             "properties": {
                 "stale_days": {"type": "integer", "description": "Days without a touch to count as stale (default 14)", "default": 14},
                 "limit": {"type": "integer", "description": "Max deals (default 20, max 100)", "default": 20},
+                "owner": owner_filter_property(),
             },
             "required": [],
         },
@@ -727,6 +776,7 @@ CRM_TOOL_DEFS = [
             "properties": {
                 "stale_days": {"type": "integer", "description": "Days without contact to count as stale (default 30)", "default": 30},
                 "limit": {"type": "integer", "description": "Max contacts (default 20, max 100)", "default": 20},
+                "owner": owner_filter_property(),
             },
             "required": [],
         },
@@ -827,6 +877,7 @@ CRM_TOOL_DEFS = [
                 "query": {"type": "string", "description": "Search term (name, domain, industry, or keyword)"},
                 "status": {"type": "string", "description": "Filter by status: active, archived"},
                 "limit": {"type": "integer", "description": "Max results (default 20)", "default": 20},
+                "owner": owner_filter_property(),
             },
             "required": ["query"],
         },
@@ -866,6 +917,7 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_create_company",
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": (
             "Create a new company/organization in the CRM. Use when the user mentions a business "
             "they want to track, or to group contacts and deals under an organization."
@@ -889,6 +941,7 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_update_company",
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": (
             "Update an existing company's details — name, domain, industry, phone, address, notes, "
             "or status. Archive a company by setting status to 'archived' (agent-initiated hard "
@@ -938,6 +991,7 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_set_contact_fields",
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": (
             "Set custom-field values on a contact. Pass a map of field_key → value. "
             "Send an empty string to clear a field; booleans as true/false or \"1\"/\"0\". "
@@ -980,6 +1034,7 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_set_company_fields",
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": (
             "Set custom-field values on a company. Pass a map of field_key → value. "
             "Send an empty string to clear a field; booleans as true/false or \"1\"/\"0\". "
@@ -1022,6 +1077,7 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_set_deal_fields",
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": (
             "Set custom-field values on a deal. Pass a map of field_key → value. "
             "Send an empty string to clear a field; booleans as true/false or \"1\"/\"0\". "
@@ -1222,8 +1278,11 @@ def _bounded_limit(limit, default: int = 20, high: int = 100) -> int:
 
 def crm_find_contact(
     query: str, status: str | None = None, tags: str | None = None, limit: int = 20,
+    owner_id: int | str | None = None,
 ) -> dict:
-    contacts = crm.search_contacts(query, status=status, tags=tags, limit=_bounded_limit(limit))
+    contacts = crm.search_contacts(
+        query, status=status, tags=tags, limit=_bounded_limit(limit), owner_id=owner_id,
+    )
     return {"contacts": contacts, "count": len(contacts)}
 
 
@@ -1529,8 +1588,17 @@ def crm_merge_deals(target_deal_id: int, source_deal_id: int) -> dict:
 
 # ── Activities ────────────────────────────────────────────────────────────────
 
-def crm_log_activity(activity: str, note: str = "", contact_id: int | None = None, deal_id: int | None = None) -> dict:
-    return crm.log_activity(activity=activity, note=note, contact_id=contact_id, deal_id=deal_id)
+def crm_log_activity(
+    activity: str, note: str = "", contact_id: int | None = None,
+    deal_id: int | None = None, actor_id: int | None = None,
+) -> dict:
+    # `actor_id` is SERVER-supplied — bound by `_identity_executors`, never advertised to
+    # the model and stripped from its arguments, so an activity cannot be credited to
+    # someone the model names.
+    return crm.log_activity(
+        activity=activity, note=note, contact_id=contact_id, deal_id=deal_id,
+        actor_id=actor_id,
+    )
 
 
 def crm_get_activity_log(contact_id: int | None = None, deal_id: int | None = None, limit: int = 20) -> dict:
@@ -1548,10 +1616,11 @@ def crm_list_tasks(
     contact_id: int | None = None, deal_id: int | None = None,
     completed: bool | None = None, due_before: str | None = None,
     priority: str | None = None, limit: int = 50,
+    owner_id: int | str | None = None,
 ) -> dict:
     tasks = crm.list_tasks(
         contact_id=contact_id, deal_id=deal_id, completed=completed,
-        due_before=due_before, priority=priority, limit=limit,
+        due_before=due_before, priority=priority, limit=limit, owner_id=owner_id,
     )
     return {"tasks": tasks, "count": len(tasks)}
 
@@ -1580,8 +1649,13 @@ def crm_delete_task(task_id: int) -> dict:
 
 # ── Companies ─────────────────────────────────────────────────────────────────
 
-def crm_search_companies(query: str, status: str | None = None, limit: int = 20) -> dict:
-    companies = crm.search_companies(query, status=status, limit=_bounded_limit(limit))
+def crm_search_companies(
+    query: str, status: str | None = None, limit: int = 20,
+    owner_id: int | str | None = None,
+) -> dict:
+    companies = crm.search_companies(
+        query, status=status, limit=_bounded_limit(limit), owner_id=owner_id,
+    )
     return {"companies": companies, "count": len(companies)}
 
 
@@ -1668,8 +1742,12 @@ def crm_get_pipeline_analytics(window_days: int = 90) -> dict:
     return analytics_service.get_pipeline_analytics(window_days=window_days)
 
 
-def crm_get_stale_deals(stale_days: int = 14, limit: int = 20) -> dict:
-    result = analytics_service.get_stale_deals(stale_days=stale_days, limit=limit)
+def crm_get_stale_deals(
+    stale_days: int = 14, limit: int = 20, owner_id: int | str | None = None,
+) -> dict:
+    result = analytics_service.get_stale_deals(
+        stale_days=stale_days, limit=limit, owner_id=owner_id,
+    )
     # THE "deals you should chase" list — the one the assistant reads out to the user,
     # so the one that most needs a clickable link. Mapped here rather than in the
     # service: analytics_service is shared with the REST surface, and a link is derived
@@ -1679,8 +1757,12 @@ def crm_get_stale_deals(stale_days: int = 14, limit: int = 20) -> dict:
     return result
 
 
-def crm_get_contact_staleness(stale_days: int = 30, limit: int = 20) -> dict:
-    return analytics_service.get_contact_staleness(stale_days=stale_days, limit=limit)
+def crm_get_contact_staleness(
+    stale_days: int = 30, limit: int = 20, owner_id: int | str | None = None,
+) -> dict:
+    return analytics_service.get_contact_staleness(
+        stale_days=stale_days, limit=limit, owner_id=owner_id,
+    )
 
 
 def crm_find_duplicates(entity_type: str = "all", limit: int = 20) -> dict:
@@ -1708,9 +1790,12 @@ def crm_scan_gaps(entity_type: str = "all", limit: int = 20) -> dict:
 
 # ── Chatter / notes ───────────────────────────────────────────────────────────
 
-def crm_add_note(entity_type: str, entity_id: int, message: str) -> dict:
+def crm_add_note(
+    entity_type: str, entity_id: int, message: str, author_id: int | None = None,
+) -> dict:
+    # `author_id` is SERVER-supplied — see crm_log_activity.
     try:
-        note = chatter_service.add_note(entity_type, entity_id, message)
+        note = chatter_service.add_note(entity_type, entity_id, message, author_id=author_id)
     except ValueError as e:
         return {"error": str(e)}
     return {"ok": True, "note": note}
@@ -1939,6 +2024,53 @@ TOOL_EXECUTORS = {
 }
 
 
+# ── Argument-level carve-out from the routine tier (issue #180) ───────────────
+# Rule 3 of the routine classification is "nothing is removed from view", and three of
+# the sixteen routine tools can do exactly that through ONE `status` argument:
+#   * `crm_update_contact` / `crm_update_company` — "archived". `crm_update_company`'s
+#     own description sells it as the stand-in for the delete tool we deliberately do
+#     not expose;
+#   * `crm_update_task` — "dropped", which `list_tasks` filters out unconditionally
+#     (`NOT_DROPPED_TASK_T`), i.e. a soft delete. The def does not advertise `status`,
+#     but tool arguments are NOT validated against the schema at runtime and the
+#     executor forwards `**kwargs` into `service.update_task`, whose allow-list accepts
+#     `status` — so an undeclared argument really does reach the column.
+# The TOOL stays routine — renaming a company or retitling a task should not raise a
+# card — while that one CALL keeps its confirmation.
+#
+# Deliberately keyed on the values that HIDE a record, not on every status: 'done' on a
+# task is completion, and `crm_complete_task` is routine by design.
+#
+# Named the same shape as `context_files.tools.requires_confirmation`: the engine's
+# routine predicate is name-keyed, and this is the hook that makes one tool
+# "routine sometimes". It only ever ADDS a confirmation, so it is safe to fail closed.
+_HIDING_STATUS: dict[str, frozenset[str]] = {
+    "crm_update_contact": frozenset({"archived"}),
+    "crm_update_company": frozenset({"archived"}),
+    "crm_update_task": frozenset({"dropped"}),
+}
+
+
+def removes_from_view(tool_name: str, args: dict | None) -> bool:
+    """True when this specific call would take the record it edits out of the lists.
+
+    Fails CLOSED: a provider can decode malformed tool JSON to a list, string or
+    number, and an unreadable argument set on a hide-capable tool is treated as a hide.
+    The cost of being wrong is one Approve card.
+    """
+    hiding = _HIDING_STATUS.get(tool_name)
+    if hiding is None:
+        return False
+    if not isinstance(args, dict):
+        return True
+    status = args.get("status")
+    if status is None:
+        return False
+    if not isinstance(status, str):
+        return True
+    return status.strip().lower() in hiding
+
+
 # The five task tools, hidden while GTD mode is active — the ten richer `todo_*`
 # tools (crm/gtd_tools.py) cover the same ground there. Advertising both would give
 # the model two vocabularies for one store and it WILL mix them mid-conversation.
@@ -1950,12 +2082,124 @@ _TASK_TOOL_NAMES = frozenset({
 })
 
 
-def get_crm_tools() -> tuple[list[dict], dict[str, Callable[..., dict]]]:
+# ── Identity currying (issue #190) ─────────────────────────────────────────────
+# The registry is built fresh for every turn — per SSE request, per confirmation, per
+# Telegram message, per background run — so currying the caller's seat into the executor
+# map here is what carries identity into the tool layer without touching dispatch, which
+# stays `fn(**args)` over the model's arguments alone. `get_notification_tools(registry)`
+# established this closure-factory shape; this is the same one.
+
+
+def _resolve_owner(owner, user: dict | None) -> tuple[int | str | None, dict | None]:
+    """Turn the model's `owner` word into an owner_id for the service layer.
+
+    Returns ``(owner_id, error)``; exactly one is meaningful. ``owner_id`` is a user id,
+    ``crm.UNASSIGNED``, or None for "everyone" (the default, and what every one of these
+    reads did before this existed). ``error`` is a tool-result dict to return INSTEAD of
+    running the query — errors are returned, never raised, because a tool that raises
+    aborts the whole turn.
+
+    An email is resolved through ``users.service``; only the id is kept (that read also
+    returns the password hash, which must not travel further than this function).
+    A DEACTIVATED teammate still resolves, deliberately: their records outlive their seat,
+    and "what was Ana working on before she left" is the question this filter is for.
+    """
+    value = str(owner or "").strip()
+    lowered = value.lower()
+    if not lowered or lowered in ("all", "everyone", "anyone"):
+        return None, None
+    if lowered in ("me", "mine", "my"):
+        if not user:
+            return None, {"error": (
+                "owner='me' needs the person you are talking with, and this run has "
+                "nobody — it is unattended. Omit owner, or name an email address."
+            )}
+        return user["id"], None
+    if lowered == crm.UNASSIGNED:
+        return crm.UNASSIGNED, None
+    row = users_service.get_user_by_email(value)
+    if not row:
+        return None, {"error": (
+            f"No user matches owner '{value}'. Use 'me', 'unassigned', or a "
+            f"teammate's email address."
+        )}
+    return row["id"], None
+
+
+def bind_server_args(fn: Callable[..., dict], **server_args) -> Callable[..., dict]:
+    """Wrap an executor so the named arguments come from the SERVER, not the model.
+
+    Any same-named key in the model's arguments is DROPPED before the call, so a
+    hallucinated — or prompt-injected — ``actor_id``/``owner_id`` can never decide who a
+    record is credited to. The binding is unconditional, including when there is no user:
+    an unattended turn must land the None it already landed before Phase B, not whatever
+    the model produced.
+    """
+    def _run(**kwargs) -> dict:
+        for key in server_args:
+            kwargs.pop(key, None)
+        return fn(**kwargs, **server_args)
+    return _run
+
+
+def bind_owner_filter(fn: Callable[..., dict], user: dict | None) -> Callable[..., dict]:
+    """Wrap an owner-filterable read so the model's `owner` word becomes an owner_id."""
+    def _run(owner=None, **kwargs) -> dict:
+        # The model names people; internal ids are ours. Dropping a model-supplied
+        # owner_id keeps `_resolve_owner` the only path from a word to an id.
+        kwargs.pop("owner_id", None)
+        owner_id, error = _resolve_owner(owner, user)
+        if error is not None:
+            return error
+        return fn(owner_id=owner_id, **kwargs)
+    return _run
+
+
+def _identity_executors(user: dict | None) -> dict[str, Callable[..., dict]]:
+    """``TOOL_EXECUTORS`` with the identity-bearing tools bound to ``user``.
+
+    ``user`` is the ``get_current_user`` row (id/email/name/role) or None for an
+    unattended turn, where every binding below degrades to exactly the NULL these tools
+    already wrote: background runs record nobody, because there is nobody to record.
+    """
+    user_id = (user or {}).get("id")
+    bound: dict[str, Callable[..., dict]] = {
+        # Who DID it. Both service functions have accepted these since Phase A and have
+        # been receiving None only because no identity reached this layer.
+        "crm_log_activity": bind_server_args(crm_log_activity, actor_id=user_id),
+        "crm_log_note": bind_server_args(crm_log_activity, actor_id=user_id),  # legacy alias
+        "crm_add_note": bind_server_args(crm_add_note, author_id=user_id),
+        # Who ASKED for it. Stamping the seat that requested a record is RECORDING, not
+        # fabricating — which is why the unattended path, having nobody to record, still
+        # stamps nothing and leaves the row unassigned.
+        "crm_create_contact": bind_server_args(crm_create_contact, owner_id=user_id),
+        "crm_create_company": bind_server_args(crm_create_company, owner_id=user_id),
+        "crm_create_deal": bind_server_args(crm_create_deal, owner_id=user_id),
+        "crm_create_task": bind_server_args(crm_create_task, owner_id=user_id),
+    }
+    bound.update({
+        name: bind_owner_filter(fn, user) for name, fn in (
+            ("crm_find_contact", crm_find_contact),
+            ("crm_search_companies", crm_search_companies),
+            ("crm_list_tasks", crm_list_tasks),
+            ("crm_get_stale_deals", crm_get_stale_deals),
+            ("crm_get_contact_staleness", crm_get_contact_staleness),
+        )
+    })
+    return {**TOOL_EXECUTORS, **bound}
+
+
+def get_crm_tools(user: dict | None = None) -> tuple[list[dict], dict[str, Callable[..., dict]]]:
     """Return (tool definitions, executor map) for the CRM.
 
     CRM tools are first-class core: always collected, with NO per-integration
     enable gate (unlike their chatty origin) — except the task tools, which swap out
     for the GTD tool set when the user has chosen GTD task mode (#70).
+
+    ``user`` is the seat this registry serves (#190) — the ``get_current_user`` row, or
+    None for an unattended turn. It never changes WHICH tools exist or their ``writes``
+    flags, only what the identity-bearing ones record and whose records the owner filters
+    return; the background allowlist is derived from those flags, so it must not move.
 
     The executors are returned UNFILTERED on purpose. The registry fails closed on
     unknown tool NAMES, and advertisement is what actually steers the model; keeping
@@ -1965,4 +2209,4 @@ def get_crm_tools() -> tuple[list[dict], dict[str, Callable[..., dict]]]:
     defs = CRM_TOOL_DEFS
     if crm.get_task_mode() == "gtd":
         defs = [d for d in CRM_TOOL_DEFS if d["name"] not in _TASK_TOOL_NAMES]
-    return defs, TOOL_EXECUTORS
+    return defs, _identity_executors(user)

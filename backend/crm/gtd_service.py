@@ -83,6 +83,7 @@ def create_todo(
     contact_id: int | None = None,
     deal_id: int | None = None,
     source: str = "agent",
+    owner_id: int | None = None,
 ) -> dict:
     """Create a todo. Defaults to the inbox — the GTD capture-first rule.
 
@@ -116,6 +117,7 @@ def create_todo(
             auto_star_on_due=auto_star_on_due,
             project_id=pid,
             source=source,
+            owner_id=owner_id,
         )
     )
 
@@ -199,9 +201,15 @@ def list_todos(
     due_after: str | None = None,
     search: str | None = None,
     limit: int = 100,
+    owner_id: int | str | None = None,
 ) -> list[dict]:
     where: list[str] = []
     params: list = []
+    # Same three values as every other owner filter (#190): an id, None for everyone, or
+    # service.UNASSIGNED for the unowned pile.
+    owner_sql = service.owner_condition("t.owner_id", owner_id, params)
+    if owner_sql:
+        where.append(owner_sql)
     if status:
         gtd_common.validate_status(status)
         where.append("t.status = %s")

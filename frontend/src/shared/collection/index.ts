@@ -20,6 +20,9 @@ export { default as visibleOrder } from './visibleOrder';
 // supplying `onRequestClose` replaces that default wholesale, which is why `denyEscapeBackdrop`
 // names both refusals. Exported because the surfaces blocked on this layer adopt it directly.
 export { CRM_CLOSING_REASONS, denyEscapeBackdrop, confirmDiscardOn } from './closePolicy';
+// The from/to calendar-day filter (#181). A factory over the existing `custom` kind, not a
+// sixth kind — every surface that wants one supplies only how to read its item's day.
+export { dateRangeFacet } from './dateRangeFacet';
 export type { AssemblyPage, PageAssembly } from './usePageAssembly';
 export type {
   CollectionConfig,
@@ -37,6 +40,7 @@ export type {
   CustomFacetDef,
   FacetSelections,
   RangeValue,
+  DateRangeValue,
   VoidedFilter,
   ToggleDef,
   ListViewConfig,

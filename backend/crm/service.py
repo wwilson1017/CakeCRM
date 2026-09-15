@@ -214,6 +214,37 @@ def _check_assembly_cursor(after_id: int | None, sort: str, offset: int = 0) -> 
 # sides agree regardless of the database's libc/locale.
 _WS = " \t\n\r\f\v"
 
+# ── Owner filters (issue #190) ────────────────────────────────────────────────
+# Every owner-filterable read takes ONE ``owner_id`` argument with three legal
+# values: an int ("this person's records"), ``None`` ("everyone" — the default that
+# keeps an install which never assigns owners behaving exactly as before), or this
+# sentinel ("nobody's — the unassigned pile").
+#
+# A sentinel rather than a second boolean parameter, deliberately: the shared WHERE
+# builders exist so a filter can never reach a page query without also reaching its
+# COUNT, and a second parameter is a second thing to forget at one of the two call
+# sites. Riding the argument that is already threaded everywhere keeps that property.
+# The REST routers type ``owner_id`` as ``int | None`` through FastAPI, so a client
+# string is a 422 long before it gets here — only the assistant's tool layer, which
+# resolves the model's ``owner`` word, can produce the sentinel.
+UNASSIGNED = "unassigned"
+
+
+def owner_condition(column: str, owner_id: int | str | None, params: list) -> str | None:
+    """SQL for an owner filter on ``column``, or None when there is no filter.
+
+    Appends the bind parameter to ``params`` when one is needed, so the caller adds
+    the returned condition at the same point it would have appended the parameter and
+    the two stay in lockstep. Compared with ``==`` rather than ``is``: the sentinel
+    travels as a plain string and an equal value built elsewhere must behave the same.
+    """
+    if owner_id is None:
+        return None
+    if owner_id == UNASSIGNED:
+        return f"{column} IS NULL"
+    params.append(owner_id)
+    return f"{column} = %s"
+
 # SQL fragment for whitespace-tolerant boundary matching against the comma-separated
 # tags column. Strips whitespace adjacent to commas so the filter survives free-form
 # input like "PT, ET, MT". Valid Postgres (|| concat + REPLACE).
@@ -320,7 +351,7 @@ def get_contact(contact_id: int) -> dict | None:
 
 
 def _contact_search_where(
-    query: str, status: str | None, tags: str | None, owner_id: int | None = None
+    query: str, status: str | None, tags: str | None, owner_id: int | str | None = None
 ) -> tuple[str, list]:
     """Build the shared WHERE clause + params for contact free-text search.
 
@@ -344,12 +375,12 @@ def _contact_search_where(
     Pinned by test_search_matches_old_company_spelling_but_displays_new_name.
 
     ``owner_id`` (issue #60) narrows to one person's records — "Mine" is simply this
-    parameter set to the caller's own id, so there is no separate flag or magic
-    value. Absent means everyone, which is what keeps the endpoint's behavior
-    identical for an install that never assigns owners. It lives in this SHARED
-    builder precisely so it can never reach the page query without also reaching the
-    COUNT: a filter present in one and not the other does not fail, it just reports
-    a total that disagrees with the rows.
+    parameter set to the caller's own id. Absent means everyone, which is what keeps
+    the endpoint's behavior identical for an install that never assigns owners, and
+    the ``UNASSIGNED`` sentinel means the unowned pile (#190; see ``owner_condition``).
+    It lives in this SHARED builder precisely so it can never reach the page query
+    without also reaching the COUNT: a filter present in one and not the other does
+    not fail, it just reports a total that disagrees with the rows.
     """
     like = f"%{query}%"
     conditions = [
@@ -360,9 +391,9 @@ def _contact_search_where(
     if status:
         conditions.append("ct.status = %s")
         params.append(status)
-    if owner_id is not None:
-        conditions.append("ct.owner_id = %s")
-        params.append(owner_id)
+    owner_sql = owner_condition("ct.owner_id", owner_id, params)
+    if owner_sql:
+        conditions.append(owner_sql)
     if tags:
         labels = [tag.strip() for tag in tags.split(",") if tag.strip()]
         if labels:
@@ -375,7 +406,7 @@ def _contact_search_where(
 def search_contacts(
     query: str, status: str | None = None, tags: str | None = None,
     limit: int = 20, offset: int = 0, sort: str = "updated_at",
-    owner_id: int | None = None,
+    owner_id: int | str | None = None,
 ) -> list[dict]:
     where, params = _contact_search_where(query, status, tags, owner_id)
     return pg_fetchall(
@@ -390,7 +421,7 @@ def search_contacts(
 
 def count_search_contacts(
     query: str, status: str | None = None, tags: str | None = None,
-    owner_id: int | None = None,
+    owner_id: int | str | None = None,
 ) -> int:
     """Total number of contacts matching a search (for accurate pagination totals).
 
@@ -411,7 +442,7 @@ def count_search_contacts(
 def list_contacts(
     offset: int = 0, limit: int = 50, status: str | None = None,
     tags: str | None = None, sort: str = "updated_at",
-    owner_id: int | None = None, after_id: int | None = None,
+    owner_id: int | str | None = None, after_id: int | None = None,
 ) -> dict:
     _check_assembly_cursor(after_id, sort, offset)
     order_by = _contact_order_by(sort)
@@ -424,9 +455,9 @@ def list_contacts(
     # One condition list feeds BOTH the COUNT and the page query below. Adding an
     # owner filter to only one of them would silently return a total that disagrees
     # with the rows on the page.
-    if owner_id is not None:
-        conditions.append("ct.owner_id = %s")
-        params.append(owner_id)
+    owner_sql = owner_condition("ct.owner_id", owner_id, params)
+    if owner_sql:
+        conditions.append(owner_sql)
     if tags:
         labels = [tag.strip() for tag in tags.split(",") if tag.strip()]
         if labels:
@@ -706,12 +737,14 @@ def resolve_or_create_company_ids(names: list[str]) -> dict[str, int]:
 
 
 def _company_search_where(
-    query: str, status: str | None, owner_id: int | None = None
+    query: str, status: str | None, owner_id: int | str | None = None
 ) -> tuple[str, list]:
     """Build the shared WHERE clause + params for company free-text search.
 
     ``owner_id`` (issue #60) belongs here rather than at each call site so the search
-    and its COUNT can never disagree about what is being counted.
+    and its COUNT can never disagree about what is being counted. It takes the same
+    three values as every other owner filter — an id, None for everyone, or the
+    ``UNASSIGNED`` sentinel (#190).
     """
     like = f"%{query}%"
     conditions = ["(name ILIKE %s OR domain ILIKE %s OR industry ILIKE %s OR notes ILIKE %s)"]
@@ -719,15 +752,15 @@ def _company_search_where(
     if status:
         conditions.append("status = %s")
         params.append(status)
-    if owner_id is not None:
-        conditions.append("owner_id = %s")
-        params.append(owner_id)
+    owner_sql = owner_condition("owner_id", owner_id, params)
+    if owner_sql:
+        conditions.append(owner_sql)
     return " AND ".join(conditions), params
 
 
 def search_companies(
     query: str, status: str | None = None, limit: int = 20, offset: int = 0,
-    owner_id: int | None = None,
+    owner_id: int | str | None = None,
 ) -> list[dict]:
     where, params = _company_search_where(query, status, owner_id)
     return pg_fetchall(
@@ -737,7 +770,7 @@ def search_companies(
 
 
 def count_search_companies(
-    query: str, status: str | None = None, owner_id: int | None = None
+    query: str, status: str | None = None, owner_id: int | str | None = None
 ) -> int:
     """Total number of companies matching a search (for accurate pagination totals)."""
     where, params = _company_search_where(query, status, owner_id)
@@ -747,7 +780,7 @@ def count_search_companies(
 
 def list_companies(
     offset: int = 0, limit: int = 50, status: str | None = None, sort: str = "name",
-    owner_id: int | None = None, after_id: int | None = None,
+    owner_id: int | str | None = None, after_id: int | None = None,
 ) -> dict:
     _check_assembly_cursor(after_id, sort, offset)
     allowed_sorts = {"name", "industry", "created_at", "updated_at", "id"}
@@ -765,9 +798,9 @@ def list_companies(
         conditions.append("status = %s")
         params.append(status)
     # Shared by the COUNT and the page query below — see list_contacts.
-    if owner_id is not None:
-        conditions.append("owner_id = %s")
-        params.append(owner_id)
+    owner_sql = owner_condition("owner_id", owner_id, params)
+    if owner_sql:
+        conditions.append(owner_sql)
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
     # Skipped on a cursor page — see list_contacts.
@@ -2014,16 +2047,16 @@ def list_tasks(
     contact_id: int | None = None, deal_id: int | None = None,
     completed: bool | None = None, due_before: str | None = None,
     priority: str | None = None, limit: int = 50,
-    owner_id: int | None = None, after_id: int | None = None,
+    owner_id: int | str | None = None, after_id: int | None = None,
     sort: str = "due",
 ) -> list[dict]:
     _check_assembly_cursor(after_id, sort)
     conditions = []
     params: list = []
-    if owner_id is not None:
-        # On a task, owner_id reads as "assigned to" (issue #60).
-        conditions.append("t.owner_id = %s")
-        params.append(owner_id)
+    # On a task, owner_id reads as "assigned to" (issue #60).
+    owner_sql = owner_condition("t.owner_id", owner_id, params)
+    if owner_sql:
+        conditions.append(owner_sql)
     if contact_id is not None:
         conditions.append("t.contact_id = %s")
         params.append(contact_id)
@@ -2488,7 +2521,7 @@ WEEKLY_TOUCHES_DETAIL_MAX = 500
 # The bucket name the drill-down URL uses for deals with no owner. `deals.owner_id` is
 # nullable forever (#60) — the Gmail scan, the assistant and the CSV importer all
 # legitimately produce it — so NULL is a bucket to name, not a row to drop.
-TOUCH_OWNER_UNASSIGNED = "unassigned"
+TOUCH_OWNER_UNASSIGNED = UNASSIGNED
 
 # `users.id` is a 32-bit SERIAL and `deals.owner_id` a 32-bit INTEGER, so an id past this
 # reaches Postgres as an out-of-range comparison and surfaces as a 500 on what is really
@@ -2606,16 +2639,36 @@ def _touch_rep_rows(
 ) -> list[dict]:
     """One row per owner bucket: open deals, computed counts, deals touched in the window.
 
-    This query alone defines the rep universe AND every total the payload reports, so a rep
-    who touched nothing still gets a row — seeing who did nothing is the point of a weekly
-    accountability pull — and the NULL owner is a bucket rather than an exclusion, which is
-    what makes the totals the sums of the buckets.
+    This query alone defines the rep universe AND every total the payload reports. The
+    universe is every owner of a live OPEN deal — a rep who touched nothing still gets a
+    row, because seeing who did nothing is the point of a weekly accountability pull — plus
+    every owner of a deal WON inside the window (issue #179), so a rep whose only deal
+    closed this week is credited rather than erased. The ``w.in_window`` on the won branch
+    is load-bearing: without it, a win outside the window — last month, or next week while
+    you view this week — would keep its owner on the roster as a permanent zero row. The
+    NULL owner is a bucket rather than an exclusion, which is what makes the totals the sums
+    of the buckets.
+
+    ``open_deals`` and ``touched_deals`` are two independent facts, NOT a ratio: a deal won
+    this week was touched but is no longer open, so touches can legitimately exceed open
+    deals, and the UI renders them side by side rather than as "N of M". ``open_deals``
+    therefore carries its own ``OPEN_PREDICATE_D`` filter — it must keep meaning "currently
+    open" now that the row set is wider than that.
+
+    The window predicate is WRITTEN once, in its own LATERAL, and read twice (the roster
+    clause and the ``touched_deals`` FILTER) — two textual copies of a predicate that must
+    agree are exactly what ``_touched_deal_rows`` refuses below for the same reason.
 
     ``computed_deals`` sits OUTSIDE the window FILTER on purpose (#76's reasoning,
-    unchanged): it counts non-NULL ``ai_touch_count`` across ALL open deals, because it is
-    the has-a-provider-ever-run gate. Scoping it to the window would turn "no provider
-    configured" into "no touches this week" and hide the card during a quiet week on a
-    fully configured install.
+    unchanged): it counts non-NULL ``ai_touch_count`` across the whole row set, because it
+    is the has-a-provider-ever-run gate. Scoping it to the window would turn "no provider
+    configured" into "no touches this week" and hide the card during a quiet week on a fully
+    configured install. Scoping it to OPEN deals only would be a new bug of the same shape:
+    a rep who won their only deal this week would drive it to 0 and hide the very card that
+    exists to credit that win. The zero-keys guarantee survives the widening — with no
+    provider the worker never runs, so every count is NULL on won and open rows alike and
+    the gate still reads 0 — and a won deal keeps the count it earned while open
+    (touch_count_service skips closed deals).
 
     LEFT JOIN, never INNER: an INNER JOIN would drop the unowned bucket. No ORDER BY — rep
     order is the shaper's, so there is one definition of it and it is testable with no DB.
@@ -2627,16 +2680,16 @@ def _touch_rep_rows(
     return _touch_query(
         cur,
         f"""SELECT d.owner_id AS user_id, u.name, u.email,
-                   COUNT(*) AS open_deals,
+                   COUNT(*) FILTER (WHERE {OPEN_PREDICATE_D}) AS open_deals,
                    COUNT(d.ai_touch_count) AS computed_deals,
-                   COUNT(*) FILTER (
-                       WHERE t.last_touch >= %s AND t.last_touch < %s
-                         AND t.last_touch <> d.created_at
-                   ) AS touched_deals
+                   COUNT(*) FILTER (WHERE w.in_window) AS touched_deals
             FROM deals d
-            JOIN LATERAL (SELECT {LAST_TOUCH_SQL} AS last_touch) t ON TRUE
+            JOIN LATERAL (SELECT {TOUCH_AT_SQL} AS touch_at) t ON TRUE
+            JOIN LATERAL (SELECT t.touch_at >= %s AND t.touch_at < %s
+                             AND t.touch_at <> d.created_at AS in_window) w ON TRUE
             LEFT JOIN users u ON u.id = d.owner_id
-            WHERE {LIVE_PREDICATE_D} AND {OPEN_PREDICATE_D}{owner_sql}
+            WHERE {LIVE_PREDICATE_D}
+              AND ({OPEN_PREDICATE_D} OR (d.stage = 'won' AND w.in_window)){owner_sql}
             GROUP BY d.owner_id, u.name, u.email""",
         [window_start, window_end, *owner_params],
     )
@@ -2658,6 +2711,13 @@ def _touched_deal_rows(
     than the limit. ``PARTITION BY d.owner_id`` puts every unowned deal in one partition,
     which is exactly the Unassigned bucket.
 
+    A won deal is a member iff its WIN falls in the window — the same ``TOUCH_AT_SQL``
+    instant the rep query counts by (issue #179), so a rep's number and the rows beneath it
+    are one definition rather than two. ``touched_at`` is that instant, so the drill-down
+    dates a won deal by its close rather than by a note typed on it afterwards. Unlike the
+    rep query this one reads the window predicate ONCE, so it stays in the WHERE clause and
+    needs no second LATERAL.
+
     A global ``LIMIT`` (what #76 had, when the card had one implicit rep) would leave rep
     rows showing a count with no rows beneath them and make the truncation line lie. Both
     surfaces share this one SQL string and differ only in the cap they pass — the card's
@@ -2674,19 +2734,19 @@ def _touched_deal_rows(
             FROM (
                 SELECT d.id, d.title, d.value, d.stage, d.owner_id,
                        d.ai_touch_count AS touch_count,
-                       t.last_touch AS touched_at,
+                       t.touch_at AS touched_at,
                        c.name AS contact_name, co.name AS company_name,
                        ROW_NUMBER() OVER (
                            PARTITION BY d.owner_id
                            ORDER BY d.ai_touch_count DESC NULLS LAST, d.id DESC
                        ) AS rn
                 FROM deals d
-                JOIN LATERAL (SELECT {LAST_TOUCH_SQL} AS last_touch) t ON TRUE
+                JOIN LATERAL (SELECT {TOUCH_AT_SQL} AS touch_at) t ON TRUE
                 LEFT JOIN contacts c ON d.contact_id = c.id
                 LEFT JOIN companies co ON d.company_id = co.id
-                WHERE {LIVE_PREDICATE_D} AND {OPEN_PREDICATE_D}
-                  AND t.last_touch >= %s AND t.last_touch < %s
-                  AND t.last_touch <> d.created_at{owner_sql}
+                WHERE {LIVE_PREDICATE_D} AND ({OPEN_PREDICATE_D} OR d.stage = 'won')
+                  AND t.touch_at >= %s AND t.touch_at < %s
+                  AND t.touch_at <> d.created_at{owner_sql}
             ) ranked
             WHERE rn <= %s
             ORDER BY owner_id NULLS LAST, rn""",
@@ -2705,10 +2765,12 @@ def _touch_snapshot_reads(
     """Both weekly-touches reads, on ONE snapshot.
 
     Every surface here puts a count and the rows behind it on the same screen, so two
-    snapshots are a way to render a contradiction: "6 of 5 open deals touched", a rep row
-    with more deals under it than its own number admits, or — if a bucket vanished between
-    the reads — every row dropped and 0 reported for a rep who has them. `REPEATABLE READ`
-    makes all of those unrepresentable rather than merely unlikely.
+    snapshots are a way to render a contradiction: a rep row with more deals under it than
+    its own number admits, or — if a bucket vanished between the reads — every row dropped
+    and 0 reported for a rep who has them. `REPEATABLE READ` makes all of those
+    unrepresentable rather than merely unlikely. (Touches exceeding open deals is NOT one of
+    those contradictions since #179 — a deal won this week was touched but is no longer
+    open — which is why the two are rendered as separate facts.)
 
     It costs one pooled connection held across two reads instead of two taken in turn,
     which is the same total work; `core.postgres` bounds concurrency with a semaphore
@@ -2792,7 +2854,7 @@ def _shape_touch_reps(rep_rows: list[dict], deal_rows: list[dict]) -> list[dict]
 
 
 def get_weekly_touches(start: str | None = None, end: str | None = None) -> dict:
-    """Open deals touched in the window, grouped per owner, keyed off #16's AI touch counts.
+    """Deals touched in the window, grouped per owner, keyed off #16's AI touch counts.
 
     #76 shipped this per DEAL because CakeCRM was single-user, keeping the blueprint's
     envelope so that "a later multi-user port is a re-grouping". #60 landed
@@ -2821,10 +2883,19 @@ def get_weekly_touches(start: str | None = None, end: str | None = None) -> dict
       zero-keys gate: with no provider the worker never runs, every count stays NULL,
       ``computed_deals`` is 0, and the card hides itself rather than rendering an empty or
       erroring panel (product rule: hidden affordance, never an error).
+    * **A touch counts while the deal is open, up to and including the move into Won, and
+      never after** (issue #179). ``TOUCH_AT_SQL`` freezes a won deal's instant at its
+      journaled win, so the week a rep worked a deal and closed it credits every touch on
+      it — including the close, the touch most worth crediting — instead of erasing the deal
+      from the numbers on Friday. Consequently ``open_deals`` keeps meaning "currently open"
+      and is NOT a denominator: a won deal is touched but not open, so ``touches`` can
+      exceed it, and both surfaces render the two as separate facts rather than "N of M".
+      Lost and archived deals stay excluded outright — ``bulk_move_deals`` can mark hundreds
+      of deals Lost in one click, and a symmetric rule would mint that many touches.
 
-    Because membership never depends on AI coverage, numerator and denominator are both
-    coverage-independent — a half-backfilled install can't report "1 of 40" when the user
-    really touched 15.
+    Because membership never depends on AI coverage, both counts are coverage-independent —
+    a half-backfilled install can't report 1 touched beside 40 open when the user really
+    touched 15.
     """
     window_start, window_end, label, custom = _resolve_touch_window(start, end)
     # ONE snapshot for both reads, exactly as the drill-down does — see
@@ -2857,15 +2928,16 @@ def get_weekly_touch_detail(
     start: str | None = None,
     end: str | None = None,
 ) -> dict | None:
-    """One owner bucket's touched open deals — the whole list, not the card's ten (#146).
+    """One owner bucket's touched deals — the whole list, not the card's ten (#146).
 
     Bounded by ``WEEKLY_TOUCHES_DETAIL_MAX`` rather than literally unbounded, and the
     payload's ``truncated`` flag says so when the ceiling is reached, because a page whose
     contract is "the full list" must not quietly serve a prefix.
 
     Returns ``None`` for a user id that does not exist, which the router turns into a 404.
-    The Unassigned bucket always resolves, and so does a real rep with nothing open — they
-    get a zero row, because "this rep touched nothing" is an answer, not a missing page.
+    The Unassigned bucket always resolves, and so does a real rep with nothing open and
+    nothing won this window — they get a zero row, because "this rep touched nothing" is an
+    answer, not a missing page.
 
     Shares both query builders AND the window resolver with the card, so there is exactly
     one SQL definition of a touched deal and one definition of the window it is counted in.
@@ -2954,6 +3026,45 @@ LAST_TOUCH_SQL = """GREATEST(
                WHERE ch.entity_type = 'deal' AND ch.entity_id = d.id
                  AND ch.archived = 0), d.updated_at)
 )"""
+
+# "When did this deal earn its accountability touch" (issue #179). The rule, stated once:
+# a deal currently in 'won' is dated by its recorded win; anything else is dated by its
+# last touch. So a rep who works a deal Monday through Wednesday and closes it Thursday
+# keeps that whole week — including the close, which is the touch most worth crediting —
+# and a note typed on a deal that is already won moves nothing, because the deal's instant
+# has frozen at the win.
+#
+# The win instant is read from the `deal_stage_events` journal (#22), which has recorded
+# every stage transition — in both directions, in the same transaction as the stage write —
+# since 2026-08-16. It is NOT a `deals.closed_at` column: a column would be a second copy
+# of a fact the journal already holds, would start empty where the journal carries real
+# history, and would need its own write path to keep in step. `MAX(changed_at)` mirrors the
+# derivation already shipped in analytics_service.get_pipeline_analytics, so there is one
+# spelling of "when was this won" in the codebase rather than two. (`changed_at` defaults to
+# the transaction's `now()`, so under concurrent re-wins of ONE deal the greatest timestamp
+# is not provably the last-committed one. Selecting by timestamp is the self-consistent
+# choice when the value is then compared against a time window, and stage writes are
+# serialized by _write_deal_update's SELECT ... FOR UPDATE.)
+#
+# A CASE, deliberately NOT LEAST(last_touch, won_at): Postgres LEAST ignores NULL operands,
+# so LEAST would fall back to `updated_at` for a deal in 'won' with no journaled win — the
+# one deal that must count for nothing. Those deals are real and enumerable: created
+# straight into 'won' (create_deal writes no event — it has no old stage to leave), the
+# demo seed's won/lost rows, and anything won before the journal existed. NULL here fails
+# every window comparison, so they contribute nothing, exactly as they do today. That is
+# the issue's own forward-only rule, and it agrees with the existing "creation is not a
+# touch" guard.
+#
+# 'lost' is deliberately NOT mirrored: bulk_move_deals can mark a whole column lost in one
+# click, and a symmetric rule would mint that many touches. Lost and archived deals stay
+# excluded outright.
+#
+# Requires the deals table aliased as `d`. Shared by BOTH Weekly Touches builders, so the
+# card and the drill-down cannot disagree about when a deal was touched.
+TOUCH_AT_SQL = f"""CASE WHEN d.stage = 'won'
+    THEN (SELECT MAX(e.changed_at) FROM deal_stage_events e
+           WHERE e.deal_id = d.id AND e.new_stage = 'won')
+    ELSE {LAST_TOUCH_SQL} END"""
 
 # The assistant tool trims activity_by_type to the top-N by count: the activity
 # vocabulary is free text (no CHECK), so an unbounded tail of one-off kinds would

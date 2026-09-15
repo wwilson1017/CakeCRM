@@ -411,3 +411,125 @@ describe('dragPolicy — what a drop MEANS decides what can lock it', () => {
     expect(state().dragLocked).toBe(true);
   });
 });
+
+describe('applySnapshot (#181)', () => {
+  const snapshotConfig = (key: string) =>
+    makeConfig(key, {
+      persistSearch: true,
+      facets: [
+        { kind: 'boolean', key: 'priority', label: 'Priority', predicate: r => r.priority },
+        {
+          kind: 'single',
+          key: 'stage',
+          label: 'Stage',
+          options: [{ value: 1, label: 'One' }, { value: 2, label: 'Two' }],
+          predicate: (r, v) => r.stage === v,
+        },
+      ],
+    });
+
+  const FULL = {
+    query: 'alpha',
+    facets: { priority: true, stage: 2 },
+    voided: 'only',
+    sort: { field: 'name', dir: 'desc' },
+    view: 'list',
+  };
+
+  it('replaces query, facets, voided, sort and view in one call', () => {
+    renderState(snapshotConfig('as_full'));
+    act(() => state().applySnapshot(FULL));
+    expect(state().query).toBe('alpha');
+    expect(state().facetSelections).toEqual({ priority: true, stage: 2 });
+    expect(state().voided).toBe('only');
+    expect(state().sort).toEqual({ field: 'name', dir: 'desc' });
+    expect(state().view).toBe('list');
+  });
+
+  it('writes all three sessionStorage keys, so a reload keeps the applied view', () => {
+    renderState(snapshotConfig('as_persist'));
+    act(() => state().applySnapshot(FULL));
+    const envelope = JSON.parse(sessionStorage.getItem('collection_as_persist_v1') ?? '{}');
+    expect(envelope.facets).toEqual({ priority: true, stage: 2 });
+    expect(envelope.voided).toBe('only');
+    expect(envelope.query).toBe('alpha');
+    expect(JSON.parse(sessionStorage.getItem('collection_as_persist_sort_v1') ?? '{}')).toEqual({
+      field: 'name',
+      dir: 'desc',
+    });
+    expect(JSON.parse(sessionStorage.getItem('collection_as_persist_view') ?? '""')).toBe('list');
+  });
+
+  it.each([null, undefined, 'x', 5, [], { facets: 5, sort: 'no', view: 'nope', voided: 'maybe' }])(
+    'lands junk (%o) on defaults instead of throwing',
+    raw => {
+      // The payload arrives off the wire; the hook coerces it with the same functions that
+      // restore a persisted envelope, so a hostile or stale row cannot white-screen the page.
+      renderState(snapshotConfig(`as_junk_${String(raw)}`));
+      act(() => state().applySnapshot(raw));
+      expect(state().query).toBe('');
+      expect(state().facetSelections).toEqual({ priority: false, stage: null });
+      expect(state().voided).toBeNull();
+      expect(state().sort).toEqual({ field: 'manual', dir: 'asc' });
+      expect(state().view).toBe('kanban');
+    },
+  );
+
+  it('drops a facet key the config no longer declares', () => {
+    renderState(snapshotConfig('as_unknown'));
+    act(() => state().applySnapshot({ ...FULL, facets: { priority: true, retired: ['x'] } }));
+    expect(state().facetSelections).toEqual({ priority: true, stage: null });
+  });
+
+  it('resets a declared facet the payload omits, rather than leaving the old selection', () => {
+    renderState(snapshotConfig('as_omitted'));
+    act(() => state().setFacet('priority', true));
+    act(() => state().applySnapshot({ ...FULL, facets: { stage: 1 } }));
+    expect(state().facetSelections).toEqual({ priority: false, stage: 1 });
+  });
+
+  it('falls back to the resting sort and default view for values the config rejects', () => {
+    renderState(snapshotConfig('as_bad_sort'));
+    act(() => state().applySnapshot({ ...FULL, sort: { field: 'nope', dir: 'up' }, view: 'cards' }));
+    expect(state().sort).toEqual({ field: 'manual', dir: 'asc' });
+    // 'cards' is a real view kind but this config declares no cards block.
+    expect(state().view).toBe('kanban');
+  });
+
+  it('clears expansions like every other handler', () => {
+    renderState(snapshotConfig('as_expand'));
+    act(() => state().expandColumn(1));
+    act(() => state().expandSection('S1'));
+    expect(state().expandedColumns.size).toBe(1);
+    act(() => state().applySnapshot(FULL));
+    expect(state().expandedColumns.size).toBe(0);
+    expect(state().expandedSections.size).toBe(0);
+  });
+
+  it('adopts the query in memory even when the surface does not persist search', () => {
+    // persistSearch governs what reaches storage, not what a payload means: a saved view
+    // captures the search box by contract, so applying one must restore it.
+    renderState(makeConfig('as_nopersist'));
+    act(() => state().applySnapshot({ query: 'beta' }));
+    expect(state().query).toBe('beta');
+    const envelope = JSON.parse(sessionStorage.getItem('collection_as_nopersist_v1') ?? '{}');
+    expect(envelope.query).toBeUndefined();
+  });
+
+  it('leaves toggles alone — a shared view must not rearrange a teammate’s columns', () => {
+    renderState(snapshotConfig('as_toggles'));
+    act(() => state().setToggle('showClosed', true));
+    act(() => state().applySnapshot({ ...FULL, toggles: { showClosed: false } }));
+    expect(state().toggles.showClosed).toBe(true);
+  });
+
+  it('never calls a controlled toggle’s writer', () => {
+    const onToggle = vi.fn();
+    renderState(snapshotConfig('as_controlled'), items, {
+      controlledToggles: { values: { showClosed: true }, onToggle },
+    });
+    act(() => state().applySnapshot({ ...FULL, toggles: { showClosed: false } }));
+    expect(onToggle).not.toHaveBeenCalled();
+    expect(state().toggles.showClosed).toBe(true);
+  });
+});

@@ -55,6 +55,7 @@ import type {
   CollectionState,
   CollectionViewKind,
   ControlledToggleProps,
+  FacetDef,
   FacetSelections,
   VoidedFilter,
 } from './types';
@@ -106,6 +107,41 @@ function defaultToggles<T>(config: CollectionConfig<T, DragPolicy>): Record<stri
   return out;
 }
 
+/**
+ * Restore an envelope from arbitrary JSON — a persisted sessionStorage blob or a saved view's
+ * payload (#181). ONE function for both, because two copies of "what does junk become" would
+ * drift and the saved-view path would be the one nobody exercises. Never throws
+ * (`loadPersistedState`'s contract, and `applySnapshot` inherits it).
+ *
+ * `query` is adopted whenever the source carries a string; the `persistSearch` gate is the
+ * CALLER's, because it is about what gets written to storage, not about what a payload means.
+ */
+function coerceEnvelope<T>(
+  config: CollectionConfig<T, DragPolicy>,
+  facets: readonly FacetDef<T>[],
+  raw: unknown,
+): EnvelopeShape {
+  const source = isRecord(raw) ? raw : {};
+  return {
+    query: typeof source.query === 'string' ? source.query : '',
+    facets: coerceSelections(facets, source.facets),
+    voided:
+      source.voided === 'hide' || source.voided === 'only'
+        ? (source.voided as VoidedFilter)
+        : null,
+    toggles: (() => {
+      const merged = defaultToggles(config);
+      if (isRecord(source.toggles)) {
+        for (const t of config.toggles ?? []) {
+          const v = source.toggles[t.key];
+          if (typeof v === 'boolean') merged[t.key] = v;
+        }
+      }
+      return merged;
+    })(),
+  };
+}
+
 export interface UseCollectionStateOptions {
   /** Server-persisted column visibility (CRM stage hiding): overrides the layer's persisted
    *  toggle per key; the app owns the optimistic overlay + rollback. */
@@ -150,26 +186,9 @@ export default function useCollectionState<T>(
   // ── State, restored via never-throw coercions (loadPersistedState's contract) ──
   const [envelope, setEnvelope] = useState<EnvelopeShape>(() =>
     loadPersistedState(envelopeKey(config.storage), raw => {
-      const source = isRecord(raw) ? raw : {};
-      return {
-        query:
-          config.persistSearch === true && typeof source.query === 'string' ? source.query : '',
-        facets: coerceSelections(facets, source.facets),
-        voided:
-          source.voided === 'hide' || source.voided === 'only'
-            ? (source.voided as VoidedFilter)
-            : null,
-        toggles: (() => {
-          const merged = defaultToggles(config);
-          if (isRecord(source.toggles)) {
-            for (const t of config.toggles ?? []) {
-              const v = source.toggles[t.key];
-              if (typeof v === 'boolean') merged[t.key] = v;
-            }
-          }
-          return merged;
-        })(),
-      };
+      const restored = coerceEnvelope(config, facets, raw);
+      // A surface that does not persist its search starts empty even if a blob carries a query.
+      return config.persistSearch === true ? restored : { ...restored, query: '' };
     }),
   );
 
@@ -353,6 +372,25 @@ export default function useCollectionState<T>(
     setView: next => {
       if (!(views as string[]).includes(next)) return;
       setViewState(next);
+      resetExpansions();
+    },
+    applySnapshot: raw => {
+      // Three underlying useStates means three persistence effects fire; React batches the
+      // three setStates into ONE render inside the click handler, and the writes are the same
+      // cheap effects a keystroke already triggers. Collapsing them into one state to save two
+      // setItem calls would be churn for no user-visible gain.
+      const next = coerceEnvelope(config, facets, raw);
+      // Toggles stay put: a team-visible view must not rearrange a teammate's columns.
+      setEnvelope(prev => ({ ...next, toggles: prev.toggles }));
+      const source = isRecord(raw) ? raw : {};
+      setSortState(
+        sortFields ? coerceSortState(source.sort, sortFields, fallbackSort) : fallbackSort,
+      );
+      setViewState(
+        typeof source.view === 'string' && (views as string[]).includes(source.view)
+          ? (source.view as CollectionViewKind)
+          : config.defaultView,
+      );
       resetExpansions();
     },
     expandColumn: columnId => {
