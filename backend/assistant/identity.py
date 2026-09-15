@@ -119,6 +119,35 @@ CONTEXT_FILES_NOTE = (
     "one knowledge file shown unfenced, because it is yours."
 )
 
+# Framing for the product help library (issue #143). Deliberately SLIM: the library's
+# bulk is fetched by tool call, never front-loaded — a full manual in the static prompt
+# would grow the cached prefix without bound, ride every turn whether or not anyone asked
+# a how-to question, and re-key the provider's prompt cache on every wording edit.
+#
+# What IS here is the part search cannot supply: that the library exists at all, the shape
+# of it, and the discipline. The section list is a handful of deterministic words that
+# change only on deploy — which satisfies the static-half invariant precisely ("no
+# per-turn entropy in static", not "static never changes") — and it is pinned against the
+# real content directory by tests/test_help_library.py, so adding a folder without
+# updating this line fails CI rather than leaving the model a stale map.
+#
+# The discipline half is prompt instruction, not a mechanism: it is the same class of
+# statement as SALES_GUIDE's "look before you create", and is stated as such.
+HELP_NOTE = (
+    "## The product manual\n"
+    "This CRM ships with a built-in help library — a searchable manual describing how the "
+    "product itself works. Its sections are: assistant, contacts-and-companies, pipeline, "
+    "reports, settings, tasks, plus a getting-started page.\n\n"
+    "When the user asks how something in THIS product works — how to connect something, "
+    "what a setting does, where a number on screen comes from, what happens when they "
+    "click something, why they cannot find a record — search the library with help_search "
+    "before you answer, and read the topic with help_read_topic. Use help_list_topics to "
+    "browse a section. Answer from what the library says: general CRM knowledge is "
+    "usually wrong about this product's specifics, and confidently wrong help is worse "
+    "than none. If the library does not cover it, say so plainly rather than improvising, "
+    "and say whether a flow is admin-only when the topic says it is."
+)
+
 # Appended to the static system prompt so the model reads the confirmation
 # contract consistently regardless of the user's custom personality text.
 CONFIRMATION_NOTE = (
@@ -366,8 +395,8 @@ def build_system_prompt(
     Static: personality (``{name}`` interpolated to the fixed brand) + Baker's soul (#72)
     + the name contract (#71) + sales working
     practices (+ the GTD working practices while task mode is GTD, #70) +
-    confirmation note + memory framing + context-file framing +
-    upload-safety instruction (cacheable — MUST stay byte-identical whether or not a
+    confirmation note + memory framing + context-file framing + help-library
+    framing (#143) + upload-safety instruction (cacheable — MUST stay byte-identical whether or not a
     record context or memory block is present, so Anthropic's prompt cache is never
     poisoned). Volatile: the current date/time (changes every turn), plus — when a
     validated CRM record context is supplied (#14) — a server-built one-sentence note
@@ -411,6 +440,7 @@ def build_system_prompt(
             CONFIRMATION_NOTE,
             MEMORY_NOTE,
             CONTEXT_FILES_NOTE,
+            HELP_NOTE,
             delimiters.UPLOAD_SAFETY_INSTRUCTION,
         ] if part
     ])

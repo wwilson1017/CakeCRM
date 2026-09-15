@@ -15,6 +15,9 @@ features append cleanly):
   * always: ``memory.tools.get_memory_tools()`` (issue #5 — long-term facts).
   * always: ``context_files.tools.get_context_file_tools()`` (issue #72 — soul.md,
     MEMORY.md, topic files and daily notes). Core, keyless, no enable gate.
+  * always: ``help.tools.get_help_tools()`` (issue #143 — the product manual's three
+    read tools). Core, keyless, no enable gate; the defs are constants, so composing
+    the registry never touches the disk.
   * conditional: ``gmail.tools.get_gmail_tools()`` (issue #8) — defs ONLY when
     Gmail is connected, so a disconnected/keyless instance never shows the model
     those tools; it returns ``([], {})`` otherwise and never raises. It reads the
@@ -50,6 +53,7 @@ from context_files.tools import get_context_file_tools
 from crm.gtd_tools import get_gtd_tools
 from crm.tools import get_crm_tools
 from gmail.tools import get_gmail_tools
+from help.tools import get_help_tools
 from memory.tools import get_memory_tools
 from reminders.tools import get_reminder_tools
 
@@ -80,6 +84,7 @@ class ToolRegistry:
             get_memory_tools(),
             get_context_file_tools(),
             get_gmail_tools(),
+            get_help_tools(),
         ]
         if background:
             from notifications.tools import get_notification_tools

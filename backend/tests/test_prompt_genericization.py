@@ -330,6 +330,7 @@ def _all_tool_defs() -> list[dict]:
     from crm.gtd_tools import GTD_TOOL_DEFS
     from crm.tools import CRM_TOOL_DEFS
     from gmail.tools import GMAIL_TOOL_DEFS
+    from help.tools import HELP_TOOL_DEFS
     from memory.tools import get_memory_tools
     from notifications.tools import get_notification_tools
     from reminders.tools import get_reminder_tools
@@ -339,8 +340,27 @@ def _all_tool_defs() -> list[dict]:
     defs = list(CRM_TOOL_DEFS) + list(GTD_TOOL_DEFS) + list(GMAIL_TOOL_DEFS)
     defs += list(get_memory_tools()[0]) + list(get_reminder_tools()[0])
     defs += list(get_context_file_tools()[0])
+    defs += list(HELP_TOOL_DEFS)
     defs += list(get_notification_tools(ToolRegistry())[0])
     return defs
+
+
+def _help_topic_texts() -> list[tuple[str, str]]:
+    """(label, RAW file text) for every committed help topic (#143).
+
+    Help content becomes model-facing payload the moment a tool returns it, so it belongs
+    on the payload surface — where the BLUEPRINT tokens are banned too, not just the
+    company and vertical ones that the committed-file sweep already covers. The file is
+    read RAW rather than through the parsed library because the front matter (title,
+    description, aliases) rides search results and so reaches the provider as well.
+    """
+    from help.library import CONTENT_ROOT
+
+    return [
+        (f"help topic {path.relative_to(CONTENT_ROOT).as_posix()}",
+         path.read_text(encoding="utf-8"))
+        for path in sorted(CONTENT_ROOT.rglob("*.md"))
+    ]
 
 
 @pytest.fixture
@@ -397,6 +417,7 @@ def model_facing(monkeypatch):
     # Tool defs go to the provider verbatim — name, description AND the JSON schema
     # (property descriptions, enums and defaults are all example-text hiding places).
     texts += [(f"tool def {d['name']}", json.dumps(d)) for d in _all_tool_defs()]
+    texts += _help_topic_texts()
     return texts
 
 
@@ -661,3 +682,22 @@ def test_sales_guide_never_promises_to_send_email():
     assert "draft" in text
     for claim in ("send the email", "send an email", "i can send", "sends the email"):
         assert claim not in text, f"SALES_GUIDE implies sending: {claim!r}"
+
+
+def test_the_guard_scans_every_help_topic(model_facing):
+    """The help library is committed prose that a tool hands to the provider, so it is
+    payload — and payload is the surface where blueprint identifiers are banned as well.
+    A topic file added without reaching this fixture would be scanned against the narrower
+    committed-file denylist only, which is exactly the hole this test closes."""
+    from help.library import CONTENT_ROOT
+
+    on_disk = {p.relative_to(CONTENT_ROOT).as_posix() for p in CONTENT_ROOT.rglob("*.md")}
+    assert on_disk, f"no help topics found under {CONTENT_ROOT} — the help scan is not running"
+    scanned = {
+        label[len("help topic "):] for label, _ in model_facing
+        if label.startswith("help topic ")
+    }
+    assert scanned == on_disk, (
+        "help topics that reach the model but are not scanned for leaked tokens: "
+        f"{sorted(on_disk - scanned)}"
+    )
