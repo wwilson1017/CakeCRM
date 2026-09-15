@@ -450,15 +450,21 @@ def list_open_task_titles(days: int = 30, limit: int = 30) -> list[str]:
 
 
 def open_task_with_title_exists(title: str) -> bool:
-    """True iff an OPEN task already carries this exact title (case-insensitively).
+    """True iff an OPEN task already carries this title (case- and whitespace-insensitive).
 
     No day window and no source filter, on purpose: this is the check that actually
-    prevents a duplicate, and an open task from six months ago is still open work. The
-    comparison runs entirely in SQL so there is one case-folding rule. Whitespace is
-    collapsed on the NEEDLE only, because ``gtd_common.validate_title`` merely strips — a
-    stored title keeps whatever internal spacing its author used. That is deliberately the
-    permissive direction: it can only ever match MORE, and "already tracked" is the
-    answer we want when a human typed the same line with a stray double space.
+    prevents a duplicate, and an open task from six months ago is still open work.
+
+    BOTH sides are normalized, and they have to be. `gtd_common.validate_title` only
+    strips the ends, so a stored title keeps whatever internal spacing its author typed —
+    collapsing only the needle would make this comparison LESS permissive, not more: a
+    human's "Call  Bob" would never match the observer's collapsed "Call Bob", and the
+    very function whose job is to prevent a duplicate would create one. Case-folding and
+    whitespace-collapsing both run in SQL, so there is exactly one rule and no chance of
+    Python and Postgres disagreeing about it.
+
+    No index supports the normalized comparison and none is added: `tasks` is a
+    single-user table and this runs at most three times per observed conversation.
     """
     clean = " ".join((title or "").split())
     if not clean:
@@ -469,7 +475,8 @@ def open_task_with_title_exists(title: str) -> bool:
     # it cannot resolve, which it is right to object to — a capped read with no total
     # order is exactly the shape that guard exists to catch.)
     row = pg_fetchone(
-        f"SELECT EXISTS (SELECT 1 FROM tasks WHERE {_OPEN_TASK} AND lower(title) = lower(%s)) AS found",
+        f"SELECT EXISTS (SELECT 1 FROM tasks WHERE {_OPEN_TASK} "
+        r"  AND lower(regexp_replace(btrim(title), '\s+', ' ', 'g')) = lower(%s)) AS found",
         (clean,),
     )
     return bool(row and row["found"])

@@ -502,3 +502,49 @@ def test_an_open_task_from_outside_the_prompt_list_still_blocks_a_duplicate(pg_d
 
     assert out["tasks_added"] == 0
     assert pg_fetchone("SELECT count(*) AS n FROM tasks")["n"] == 1
+
+
+# ── the title dedupe, against the real regex (#198 review) ──────────────────
+
+def test_an_open_task_with_odd_internal_spacing_still_blocks_a_duplicate(pg_db):
+    """`validate_title` only strips the ends, so a human's "Call  Bob" is STORED with two
+    spaces while the observer always proposes a collapsed title. Normalizing only the
+    needle would make the check less permissive, not more, and this function would
+    create the duplicate it exists to prevent."""
+    from crm import gtd_service
+
+    gtd_service.create_todo("Call  Bob   about   the   quote", status="inbox", source="ui")
+    assert gtd_service.open_task_with_title_exists("Call Bob about the quote") is True
+    assert gtd_service.open_task_with_title_exists("call bob ABOUT the quote") is True
+    assert gtd_service.open_task_with_title_exists("  Call Bob about the quote  ") is True
+    # ...but it must still be an EXACT title match, not a fuzzy one.
+    assert gtd_service.open_task_with_title_exists("Call Bob") is False
+
+
+def test_a_finished_task_does_not_block_a_new_one(pg_db):
+    from crm import gtd_service
+
+    todo = gtd_service.create_todo("Chase the Acme quote", status="inbox", source="agent")
+    assert gtd_service.open_task_with_title_exists("Chase the Acme quote") is True
+    gtd_service.update_todo(todo["id"], {"status": "done"})
+    assert gtd_service.open_task_with_title_exists("Chase the Acme quote") is False
+
+
+def test_the_observed_day_follows_the_configured_timezone(pg_db, real_model, monkeypatch):
+    """End to end through the real column type: a message written in the evening in a
+    zone west of UTC must be labelled with the USER's day, not the session's."""
+    import re
+
+    monkeypatch.setenv("TIMEZONE", "America/Los_Angeles")
+    from core.localtime import today_local
+
+    cid = _conversation()
+    _message(cid, 0, "user", "Dana works at Acme and owes us a quote", minutes_ago=30)
+    _message(cid, 1, "user", "she said she would send it by tomorrow", minutes_ago=20)
+    _observe_once(cid, ScriptedProvider(REPLY))
+
+    prompt = real_model.prompts[0]
+    today = today_local().isoformat()
+    assert f"Today's date: {today}" in prompt
+    days = set(re.findall(r"USER \[(\d{4}-\d{2}-\d{2})\]:", prompt))
+    assert days == {today}, f"transcript days {days} disagree with today {today}"

@@ -839,3 +839,47 @@ def test_the_candidate_query_is_asked_for_both_thresholds(wired):
         observer.QUIET_MINUTES, observer.MIN_NEW_USER_ROWS,
         observer.MIN_NEW_USER_CHARS, observer.MAX_CONVERSATIONS_PER_RUN,
     )
+
+
+# ── 13. Timezone: the row's day is the USER's day, not the database session's ───
+
+@pytest.mark.parametrize("value,zone,expected", [
+    # 10pm Sep 14 in Los Angeles is 05:00 UTC on Sep 15 — which is exactly how Postgres
+    # serializes it, because the session runs UTC on Railway and in Docker. Taking
+    # .date() off that labels the message "tomorrow" and a relative "tomorrow" in it then
+    # resolves a day late.
+    ("2026-09-15T05:00:00+00:00", "America/Los_Angeles", datetime.date(2026, 9, 14)),
+    ("2026-09-15T05:00:00+00:00", "UTC", datetime.date(2026, 9, 15)),
+    # ...and east of UTC the error runs the other way.
+    ("2026-09-14T22:00:00+00:00", "Asia/Tokyo", datetime.date(2026, 9, 15)),
+])
+def test_row_day_resolves_in_the_configured_timezone(monkeypatch, value, zone, expected):
+    monkeypatch.setenv("TIMEZONE", zone)
+    assert observer._row_day(value) == expected
+
+
+def test_row_day_converts_aware_datetimes_too_not_just_strings(monkeypatch):
+    monkeypatch.setenv("TIMEZONE", "America/Los_Angeles")
+    aware = datetime.datetime(2026, 9, 15, 5, 0, tzinfo=datetime.timezone.utc)
+    assert observer._row_day(aware) == datetime.date(2026, 9, 14)
+
+
+def test_row_day_leaves_a_naive_value_alone(monkeypatch):
+    """A naive timestamp carries no offset to convert; inventing one would be worse."""
+    monkeypatch.setenv("TIMEZONE", "America/Los_Angeles")
+    naive = datetime.datetime(2026, 9, 15, 5, 0)
+    assert observer._row_day(naive) == datetime.date(2026, 9, 15)
+    assert observer._row_day(datetime.date(2026, 9, 15)) == datetime.date(2026, 9, 15)
+
+
+def test_the_transcript_line_and_todays_date_agree_on_the_day(monkeypatch):
+    """The bug this closes is the two disagreeing: a message labelled 2026-09-15 sitting
+    under "Today's date: 2026-09-14" reads as a message from the future."""
+    monkeypatch.setenv("TIMEZONE", "America/Los_Angeles")
+    from core.localtime import now_local
+
+    stamp = now_local().astimezone(datetime.timezone.utc).isoformat()
+    text, _ = observer.build_transcript(
+        [{"id": "m1", "seq": 1, "content": "Dana works at Acme", "created_at": stamp}])
+    from core.localtime import today_local
+    assert f"USER [{today_local().isoformat()}]:" in text

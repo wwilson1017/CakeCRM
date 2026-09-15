@@ -68,7 +68,7 @@ import math
 from assistant import background, history, identity
 from assistant.delimiters import UNTRUSTED_MARKERS, wrap_untrusted_external
 from core.config import settings
-from core.localtime import today_local
+from core.localtime import today_local, tz as local_tz
 from core.postgres import pg_execute
 from crm import gtd_common, gtd_service
 from memory import service
@@ -162,27 +162,40 @@ def _clip(text: str, limit: int) -> str:
 
 
 def _row_day(value) -> datetime.date | None:
-    """The calendar day of a message row's ``created_at``, or None if unreadable.
+    """The message's calendar day IN THE CONFIGURED TIMEZONE, or None if unreadable.
 
-    It has to accept BOTH shapes. ``core.postgres.row_to_dict`` serializes timestamps to
-    ISO STRINGS on the way out of every ``pg_fetch*`` call, so what actually arrives here
-    at runtime is a string — while a hand-built test row is naturally a ``datetime``. A
-    check that only understood ``datetime`` would therefore pass every hermetic test and
-    silently disable BOTH date-dependent behaviours in production: every line would read
-    "unknown date", and the per-row stale cutoff would never fire at all.
+    Two things this has to get right, and the first draft got neither.
+
+    **Shape.** ``core.postgres.row_to_dict`` serializes timestamps to ISO STRINGS on the
+    way out of every ``pg_fetch*`` call, so what arrives here at runtime is a string —
+    while a hand-built test row is naturally a ``datetime``. A check that understood only
+    ``datetime`` passed every hermetic test while silently disabling both date-dependent
+    behaviours in production: every line read "unknown date" and the per-row stale cutoff
+    never fired.
+
+    **Zone.** A ``TIMESTAMPTZ`` comes back on the database session's offset, which is UTC
+    on Railway and in Docker regardless of intent. Taking ``.date()`` off that yields the
+    UTC day, while ``today_local()`` yields the user's day — so for a message typed in the
+    evening anywhere west of UTC the two disagree, the transcript labels it tomorrow, and
+    the model resolves a relative "tomorrow" a day late. Aware values are therefore
+    converted through ``core.localtime.tz()`` first, which is the repo's single timezone
+    authority (``localtime.py``: "Never use the implicit process-local time instead").
+    A naive value carries no offset to convert and is taken at face value.
     """
-    if isinstance(value, datetime.datetime):
-        return value.date()
-    if isinstance(value, datetime.date):
-        return value
     if isinstance(value, str) and value:
         try:
-            return datetime.datetime.fromisoformat(value).date()
+            value = datetime.datetime.fromisoformat(value)
         except ValueError:
             try:
                 return datetime.date.fromisoformat(value[:10])
             except ValueError:
                 return None
+    if isinstance(value, datetime.datetime):
+        if value.tzinfo is not None:
+            value = value.astimezone(local_tz())
+        return value.date()
+    if isinstance(value, datetime.date):
+        return value
     return None
 
 
