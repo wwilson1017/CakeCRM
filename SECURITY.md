@@ -43,9 +43,9 @@ Because scopes can't guarantee it, the guarantee lives in code:
   first.
 - **The assistant only searches or opens your mail in a conversation with you.** The two
   read tools are offered in interactive chats; they are withheld from the assistant's
-  *unattended* runs (the background heartbeat, a firing reminder, the proactive digest).
+  *unattended* runs (the background heartbeat, the proactive digest).
   Such a run may send you at most one notification, and without the read tools it cannot
-  pull your messages in order to put them there — so text planted in a reminder or a CRM
+  pull your messages in order to put them there — so text planted in a CRM
   record cannot turn that notification into a copy of your mail.
   Two limits on that promise, stated plainly rather than glossed over. First, it covers
   the assistant's own reading; the optional **email touch-scan** is a separate,
@@ -169,7 +169,7 @@ In **Ask** mode a tool may be classified **routine**, which means it runs withou
 Approve card. A tool qualifies only when all five of these hold:
 
 1. the effect stays in a CakeCRM Postgres record;
-2. nobody is notified — no email draft, no push, no Telegram, no reminder that fires;
+2. nobody is notified — no email draft, no push, no Telegram, nothing that fires at someone later;
 3. nothing is removed from view — no delete, archive, merge or cancel;
 4. it is not a bulk write;
 5. nothing leaves your install — no Gmail, no outbound HTTP.
@@ -181,7 +181,7 @@ completing a task; and setting custom-field values on a contact, company or deal
 **Everything else still asks**, and absence of the classification is the deny state — a
 tool nobody has classified confirms, so a capability added later is never silently
 exempt. Deletes, archives, merges, bulk moves, lead-score recomputation, Gmail drafts,
-notifications, reminders, memory facts, and any write to `soul.md` or `MEMORY.md` all
+notifications, memory facts, and any write to `soul.md` or `MEMORY.md` all
 keep their Approve card. Three of the sixteen can take a record out of your lists by
 setting its `status` — archiving a contact or a company, or dropping a task; that
 particular call keeps its card even though the tool is routine.
@@ -191,7 +191,7 @@ Three rules override the tier entirely, in every mode:
 - a write to a protected context file always confirms (see below);
 - untrusted content in the conversation — an uploaded document, or email the assistant
   read, this turn or an earlier one — makes every write confirm;
-- the unattended assistant (heartbeat, reminders, proactive nudges) cannot reach any of
+- the unattended assistant (heartbeat, proactive nudges) cannot reach any of
   these tools at all: its allowlist is read tools plus a single notification.
 
 ## The no-login todo links
@@ -264,8 +264,8 @@ Four things bound that risk:
   context-file tool may ever join. You see the file and the new content before anything
   is stored.
 - **Background turns can never write them.** The unattended assistant (heartbeat,
-  reminders, proactive nudges) runs under a read-only allowlist, so a prompt
-  injection arriving through a reminder or a CRM record cannot reach these files
+  proactive nudges) runs under a read-only allowlist, so a prompt
+  injection arriving through a CRM record cannot reach these files
   at all.
 - **Only the identity file is unfenced.** `MEMORY.md`, topic files and daily notes
   are wrapped in the same tamper-proof data fence as email and uploaded documents,

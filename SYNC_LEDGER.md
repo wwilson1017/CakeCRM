@@ -43,7 +43,7 @@ Note that `chatty` rows are historical only. chatty was **retired as a sync sour
 | Assistant engine (chat loop, tool registry, confirmations, uploads) | `chatty/backend/core/agents/` | #4 | — |
 | Assistant memory + dreaming | `chatty/backend/core/agents/` | #5 | — |
 | Heartbeat + background AI turn | `chatty/backend/core/agents/background_runner.py` | #6 | — |
-| Reminders | `chatty/backend/core/agents/reminders/` | #6 | — |
+| Reminders | `chatty/backend/core/agents/reminders/` | #6 | removed in #188 |
 | Notifications + system alerts | `chatty/backend/core/agents/notifications/` | #6 | — |
 | Telegram integration | `chatty/backend/integrations/telegram/` | #7 | — |
 | Gmail (read + draft only) | `chatty/backend/integrations/google/` | #8 | — |

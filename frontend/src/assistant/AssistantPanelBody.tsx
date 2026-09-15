@@ -43,7 +43,7 @@ const MODES: { mode: ToolMode; label: string; title: string }[] = [
     mode: 'normal',
     label: 'Ask',
     title:
-      'Ask first — everyday CRM edits (creating and updating contacts, companies, deals, tasks, activity and custom fields) run right away; deletes, archives, merges, bulk changes, email drafts, notifications, reminders and memory always ask. Anything proposed after reading an email or an uploaded file asks too.',
+      'Ask first — everyday CRM edits (creating and updating contacts, companies, deals, tasks, activity and custom fields) run right away; deletes, archives, merges, bulk changes, email drafts, notifications and memory always ask. Anything proposed after reading an email or an uploaded file asks too.',
   },
   { mode: 'power', label: 'Auto', title: 'Auto — changes run without asking' },
 ];
