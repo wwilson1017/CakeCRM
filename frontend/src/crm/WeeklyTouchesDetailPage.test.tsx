@@ -163,11 +163,19 @@ describe('WeeklyTouchesDetailPage (issue #146)', () => {
     ]);
   });
 
-  it('renders the rep, the window label and the ratio', async () => {
+  it('keeps the body copy readable — no words fused across an <em>', async () => {
+    // The card's twin of this sentence regressed exactly this way in #179; pin both so
+    // the two surfaces cannot drift apart on a sentence they otherwise share.
+    await renderAt('/crm/touches/3');
+    expect(container.textContent).toContain('lifetime touch count');
+    expect(container.textContent).not.toContain('lifetimetouch');
+  });
+
+  it('renders the rep, the window label and the two counts', async () => {
     await renderAt('/crm/touches/3');
     expect(container.textContent).toContain('Dana Reyes');
     expect(container.textContent).toContain('Last 7 days');
-    expect(container.textContent).toContain('12 open deals touched');
+    expect(container.textContent).toContain('2 deals touched · 12 open');
   });
 
   it('renders an uncomputed count as a dash — no zero-keys gate on this page', async () => {
@@ -390,11 +398,11 @@ describe('WeeklyTouchesDetailPage (issue #146)', () => {
       ...detail, rep: { ...detail.rep, touches: 9, open_deals: 9 },
     });
     await closeSheet();
-    expect(container.textContent).toContain('9 of 9 open deals touched');
+    expect(container.textContent).toContain('9 deals touched · 9 open');
 
     // Reload #2 finally answers, with the older payload and the same path.
     await act(async () => { resolveStale(detail); });
-    expect(container.textContent).toContain('9 of 9 open deals touched');
-    expect(container.textContent).not.toContain('2 of 12 open deals touched');
+    expect(container.textContent).toContain('9 deals touched · 9 open');
+    expect(container.textContent).not.toContain('2 deals touched · 12 open');
   });
 });
