@@ -177,6 +177,33 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   assistant engine (`backend/assistant/`, landed #4): an SSE streaming tool loop
   with write-tool confirmation modes and file uploads, mounted at `/api/assistant`
   and gated off `ai_ready`.
+  **Normal mode auto-approves a routine tier of writes** (#180): a tool def may carry
+  `"confirm_tier": ROUTINE` beside `"writes": True` — the constant lives alone in
+  `assistant/confirm_tier.py` (an import-free leaf, because `crm/tools.py` declares the
+  tier and `assistant/registry.py` validates it, and the registry already imports
+  `crm.tools`). The registry adds it to `_INTERNAL_KEYS` (so it never reaches a
+  provider), FAILS LOUD at construction on any other value or on a tier declared on a
+  read, and exposes `is_routine_write(name)` — pure set membership, so **absence is the
+  deny state**: an unknown name, a read and every unclassified write all confirm.
+  Sixteen `crm_*` tools carry it (create/update contact, company, deal; deal stage;
+  won/lost; log activity; create/update/complete task; set custom fields) — the
+  classification rule and the never-routine list live in `assistant/confirm_tier.py`
+  and `SECURITY.md`. Never add one to a tool that notifies, deletes/archives/merges,
+  bulk-writes, or leaves the install. In the engine the routine predicate may appear
+  **only** as a narrowing of the normal-mode term of the gate, never as a term of its
+  own, so a stronger rule can never be masked by it. Two consequences of "normal no
+  longer means confirm everything" are load-bearing: the power→normal demotion for
+  untrusted content was replaced by a `context_is_untrusted` boolean that reaches the
+  gate directly (demoting INTO a mode that auto-approves would have switched the
+  mitigation off silently), and the same-turn Gmail binding was generalized from the
+  power arm to every mode. Only the first costs anything: normal-mode turns now pay the
+  one indexed `is_conversation_tainted` read that power mode always paid, deliberately.
+  The Gmail generalization is free — it widens where an already-set in-memory flag is
+  consulted. `crm.tools.removes_from_view()` is the argument-level carve-out: contacts
+  and companies archive, and tasks drop, through a `status` argument — including one
+  the def does not advertise, since nothing validates tool arguments against the
+  schema at runtime — so that one call keeps its card while the tool stays routine. GTD task mode (the default) hides three of the sixteen;
+  the `todo_*` family is deliberately unclassified.
   **The assistant is named Baker and that name is a brand, not a setting** (#71):
   `identity.NAME` is the only source (the old `DEFAULT_NAME` spelling is gone — a
   "default" implies something may override it), `get_identity()` does not select the

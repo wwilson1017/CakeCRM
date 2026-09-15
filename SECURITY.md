@@ -37,7 +37,10 @@ Because scopes can't guarantee it, the guarantee lives in code:
   operations, so no other Gmail method can be invoked.
 - `gmail_create_draft` is a **write** tool, so in the assistant's default (normal)
   mode it passes through the human-confirmation gate: the draft is not created until
-  you approve it, and you see the full recipient/subject/body first.
+  you approve it, and you see the full recipient/subject/body first. It is deliberately
+  **not** in the routine tier described below — that tier covers only edits to your own
+  CRM records, so anything addressed to another person always shows you the content
+  first.
 - **The assistant only searches or opens your mail in a conversation with you.** The two
   read tools are offered in interactive chats; they are withheld from the assistant's
   *unattended* runs (the background heartbeat, a firing reminder, the proactive digest).
@@ -150,9 +153,46 @@ the residual risks, is in `docs/SYNC.md`.
   refused instead of landing in the new account.
 - **Untrusted content.** Email you receive is untrusted input. If the assistant
   reads email during a turn, any write actions it proposes for the rest of that turn
-  are routed through the human-confirmation gate even in "power" mode — so a
-  malicious email cannot silently drive the assistant to create a draft or change
-  CRM data without your approval.
+  are routed through the human-confirmation gate in **every** mode — "power", and the
+  routine tier that normal mode otherwise runs without asking. The same holds for a
+  conversation carrying an uploaded document, and it survives compaction: once a thread
+  has seen untrusted content, later turns keep confirming even after the message that
+  carried it has aged out. So a malicious email cannot silently drive the assistant to
+  create a draft or change CRM data without your approval.
+
+## What the assistant does without asking (the routine tier)
+
+The assistant runs in one of three modes, chosen per conversation: **Read** (it cannot
+change anything), **Ask** (the default), and **Auto** (writes run immediately).
+
+In **Ask** mode a tool may be classified **routine**, which means it runs without an
+Approve card. A tool qualifies only when all five of these hold:
+
+1. the effect stays in a CakeCRM Postgres record;
+2. nobody is notified — no email draft, no push, no Telegram, no reminder that fires;
+3. nothing is removed from view — no delete, archive, merge or cancel;
+4. it is not a bulk write;
+5. nothing leaves your install — no Gmail, no outbound HTTP.
+
+Sixteen tools qualify: creating and updating contacts, companies and deals; moving a
+deal's stage; marking a deal won or lost; logging an activity; creating, updating and
+completing a task; and setting custom-field values on a contact, company or deal.
+
+**Everything else still asks**, and absence of the classification is the deny state — a
+tool nobody has classified confirms, so a capability added later is never silently
+exempt. Deletes, archives, merges, bulk moves, lead-score recomputation, Gmail drafts,
+notifications, reminders, memory facts, and any write to `soul.md` or `MEMORY.md` all
+keep their Approve card. Three of the sixteen can take a record out of your lists by
+setting its `status` — archiving a contact or a company, or dropping a task; that
+particular call keeps its card even though the tool is routine.
+
+Three rules override the tier entirely, in every mode:
+
+- a write to a protected context file always confirms (see below);
+- untrusted content in the conversation — an uploaded document, or email the assistant
+  read, this turn or an earlier one — makes every write confirm;
+- the unattended assistant (heartbeat, reminders, proactive nudges) cannot reach any of
+  these tools at all: its allowlist is read tools plus a single notification.
 
 ## The no-login todo links
 
@@ -219,9 +259,10 @@ background ones, and it would survive deleting the conversation that created it.
 Four things bound that risk:
 
 - **Every edit needs your approval.** Writing or deleting `soul.md` or `MEMORY.md`
-  always routes through the human-confirmation gate — including in "power" mode,
-  where ordinary writes run automatically. You see the file and the new content
-  before anything is stored.
+  always routes through the human-confirmation gate — including in "power" mode, where
+  ordinary writes run automatically, and including normal mode's routine tier, which no
+  context-file tool may ever join. You see the file and the new content before anything
+  is stored.
 - **Background turns can never write them.** The unattended assistant (heartbeat,
   reminders, proactive nudges) runs under a read-only allowlist, so a prompt
   injection arriving through a reminder or a CRM record cannot reach these files
