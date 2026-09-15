@@ -42,6 +42,16 @@ export interface CollectionStorage {
   /** Unique per surface — two configs sharing a key share (and cross-contaminate) their
    *  persisted filter/sort/view state. */
   key: string;
+  /**
+   * Bump on any INCOMPATIBLE change to the persisted shape — a facet key renamed or removed,
+   * a facet's value shape changed, or an option value repurposed. Adding a facet is NOT such a
+   * change: `coerceSelections` defaults a key the payload lacks.
+   *
+   * Saved views (#181) are stamped with this number server-side, so it is also the
+   * compatibility contract between a stored view and the surface it was saved from: a view
+   * carrying a different version is listed disabled rather than applied, which is what stops a
+   * renamed facet from turning a shared view into a silently-empty filter.
+   */
   version: number;
 }
 
@@ -143,9 +153,35 @@ export interface RangeValue {
   max: number | null;
 }
 
+/** Value of a `dateRangeFacet` (#181): viewer-local calendar days as `YYYY-MM-DD`, either
+ *  bound null. A `custom` facet value, not a sixth facet kind — see `dateRangeFacet`. */
+export interface DateRangeValue {
+  from: string | null;
+  to: string | null;
+}
+
 /** Tri-state voided filter, enabled by `getVoided`: null = show all (struck through where the
  *  view renders voids), 'hide' = operational reads, 'only' = audit view. */
 export type VoidedFilter = 'hide' | 'only' | null;
+
+/**
+ * The screen state a saved view captures (#181): every facet selection, the voided tri-state,
+ * the search text, the sort field/direction and the view mode. Built from a `CollectionState`
+ * by `snapshotFromState`, restored by `CollectionState.applySnapshot`, which coerces it exactly
+ * as it coerces a persisted sessionStorage envelope — so a payload off the wire cannot throw.
+ *
+ * Toggles are deliberately NOT captured. On the pipeline they are per-stage column visibility,
+ * which #124 established as a personal, per-device display preference; a view one member shares
+ * with the team must not reach in and rearrange another member's columns. The issue's own
+ * enumeration — facets, search, sort, view mode — says the same thing.
+ */
+export interface CollectionSnapshot {
+  query: string;
+  facets: FacetSelections;
+  voided: VoidedFilter;
+  sort: SortState;
+  view: CollectionViewKind;
+}
 
 // ---------------------------------------------------------------------------------------------
 // Sort / toggles / views
@@ -339,6 +375,14 @@ export interface CollectionState<T> {
   setToggle: (key: string, value: boolean) => void;
   setSort: (next: SortState) => void;
   setView: (view: CollectionViewKind) => void;
+  /**
+   * Replace query, facets, voided, sort AND view in one call — the saved-views apply path
+   * (#181), and the only whole-state setter. Takes `unknown` because the payload arrives off
+   * the wire: coercing it is this layer's job, not the caller's, and it reuses the very
+   * functions that restore a persisted envelope, so junk lands on defaults instead of throwing.
+   * Leaves toggles alone (see `CollectionSnapshot`). Resets expansions like every other handler.
+   */
+  applySnapshot: (raw: unknown) => void;
   expandColumn: (columnId: string | number) => void;
   expandedColumns: ReadonlySet<string | number>;
   expandSection: (section: string) => void;

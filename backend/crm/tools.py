@@ -13,6 +13,14 @@ the assistant's confirmation gate (``backend/assistant/registry.ToolRegistry``):
 mutating tools (create/update/delete/log/complete) are ``True`` and prompt for
 confirmation in normal mode; read tools are ``False``. Any def added here MUST
 carry a ``"writes"`` flag — ``tests/test_crm_tools.py`` fails loudly otherwise.
+
+Sixteen of those writes additionally carry ``"confirm_tier": ROUTINE`` (issue #180):
+ordinary record edits that stay in Postgres, notify nobody, remove nothing from view,
+are not bulk and never leave the install. Those skip the Approve card in normal mode.
+Absence of the key is the deny state, so a new write confirms until somebody classifies
+it — read ``assistant/confirm_tier.py`` before adding one. ``removes_from_view()``
+below is the argument-level carve-out: three of the sixteen can hide a record through a
+``status`` argument, and that particular call keeps its card.
 """
 
 import logging
@@ -20,6 +28,7 @@ from collections.abc import Callable
 
 import psycopg2
 
+from assistant.confirm_tier import ROUTINE
 from crm import (
     analytics_service,
     chatter_service,
@@ -96,6 +105,7 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_create_contact",
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": (
             "Create a new contact in the CRM. Use when the user mentions a new customer, prospect, "
             "or person they want to track."
@@ -121,6 +131,7 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_update_contact",
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": (
             "Update an existing contact's information. Use when the user wants to change a "
             "contact's details like email, phone, company, status, or tags."
@@ -270,6 +281,7 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_create_deal",
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": (
             "Create a new deal/opportunity. Use when the user mentions a potential sale, "
             "project, or business opportunity with a customer."
@@ -304,6 +316,7 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_update_deal",
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": (
             "Update a deal's details — value, stage, close date, probability, notes, etc."
         ),
@@ -338,6 +351,7 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_update_deal_stage",
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": (
             "Move a deal between OPEN pipeline stages. To CLOSE a deal use "
             "crm_mark_deal_won or crm_mark_deal_lost instead — they capture the lost "
@@ -405,6 +419,7 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_mark_deal_won",
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": (
             "Close a deal as WON: moves it to the 'won' stage and sets probability to "
             "100%. Use when the user says a deal closed, was signed, or came through."
@@ -421,6 +436,7 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_mark_deal_lost",
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": (
             "Close a deal as LOST: moves it to the 'lost' stage, sets probability to 0, "
             "records why, and adds the reason to the deal's notes thread. Always try to "
@@ -490,6 +506,7 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_log_activity",
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": (
             "Log a touchpoint (call, email, meeting, follow_up) against a contact or deal — a dated "
             "record of an interaction. Use after the user mentions interacting with a customer. For "
@@ -527,6 +544,9 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_create_task",
         "writes": True,
+        # Routine, but hidden in GTD task mode (the default) — see _TASK_TOOL_NAMES.
+        # The todo_* family is NOT classified; classifying it is a separate call (#180).
+        "confirm_tier": ROUTINE,
         "description": (
             "Create a follow-up task or reminder. Use when the user mentions needing to "
             "follow up, check in, or do something by a certain date for a customer or deal."
@@ -570,6 +590,9 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_complete_task",
         "writes": True,
+        # Routine, but hidden in GTD task mode (the default) — see _TASK_TOOL_NAMES.
+        # The todo_* family is NOT classified; classifying it is a separate call (#180).
+        "confirm_tier": ROUTINE,
         "description": "Mark a CRM task as completed.",
         "input_schema": {
             "type": "object",
@@ -583,6 +606,9 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_update_task",
         "writes": True,
+        # Routine, but hidden in GTD task mode (the default) — see _TASK_TOOL_NAMES.
+        # The todo_* family is NOT classified; classifying it is a separate call (#180).
+        "confirm_tier": ROUTINE,
         "description": (
             "Edit an existing CRM task — retitle it, move its due date, change priority, "
             "re-link it to a contact or deal, or reopen a completed one. Use when the user "
@@ -891,6 +917,7 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_create_company",
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": (
             "Create a new company/organization in the CRM. Use when the user mentions a business "
             "they want to track, or to group contacts and deals under an organization."
@@ -914,6 +941,7 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_update_company",
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": (
             "Update an existing company's details — name, domain, industry, phone, address, notes, "
             "or status. Archive a company by setting status to 'archived' (agent-initiated hard "
@@ -963,6 +991,7 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_set_contact_fields",
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": (
             "Set custom-field values on a contact. Pass a map of field_key → value. "
             "Send an empty string to clear a field; booleans as true/false or \"1\"/\"0\". "
@@ -1005,6 +1034,7 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_set_company_fields",
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": (
             "Set custom-field values on a company. Pass a map of field_key → value. "
             "Send an empty string to clear a field; booleans as true/false or \"1\"/\"0\". "
@@ -1047,6 +1077,7 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_set_deal_fields",
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": (
             "Set custom-field values on a deal. Pass a map of field_key → value. "
             "Send an empty string to clear a field; booleans as true/false or \"1\"/\"0\". "
@@ -1991,6 +2022,53 @@ TOOL_EXECUTORS = {
     # editable notes thread is crm_add_note.
     "crm_log_note": crm_log_activity,
 }
+
+
+# ── Argument-level carve-out from the routine tier (issue #180) ───────────────
+# Rule 3 of the routine classification is "nothing is removed from view", and three of
+# the sixteen routine tools can do exactly that through ONE `status` argument:
+#   * `crm_update_contact` / `crm_update_company` — "archived". `crm_update_company`'s
+#     own description sells it as the stand-in for the delete tool we deliberately do
+#     not expose;
+#   * `crm_update_task` — "dropped", which `list_tasks` filters out unconditionally
+#     (`NOT_DROPPED_TASK_T`), i.e. a soft delete. The def does not advertise `status`,
+#     but tool arguments are NOT validated against the schema at runtime and the
+#     executor forwards `**kwargs` into `service.update_task`, whose allow-list accepts
+#     `status` — so an undeclared argument really does reach the column.
+# The TOOL stays routine — renaming a company or retitling a task should not raise a
+# card — while that one CALL keeps its confirmation.
+#
+# Deliberately keyed on the values that HIDE a record, not on every status: 'done' on a
+# task is completion, and `crm_complete_task` is routine by design.
+#
+# Named the same shape as `context_files.tools.requires_confirmation`: the engine's
+# routine predicate is name-keyed, and this is the hook that makes one tool
+# "routine sometimes". It only ever ADDS a confirmation, so it is safe to fail closed.
+_HIDING_STATUS: dict[str, frozenset[str]] = {
+    "crm_update_contact": frozenset({"archived"}),
+    "crm_update_company": frozenset({"archived"}),
+    "crm_update_task": frozenset({"dropped"}),
+}
+
+
+def removes_from_view(tool_name: str, args: dict | None) -> bool:
+    """True when this specific call would take the record it edits out of the lists.
+
+    Fails CLOSED: a provider can decode malformed tool JSON to a list, string or
+    number, and an unreadable argument set on a hide-capable tool is treated as a hide.
+    The cost of being wrong is one Approve card.
+    """
+    hiding = _HIDING_STATUS.get(tool_name)
+    if hiding is None:
+        return False
+    if not isinstance(args, dict):
+        return True
+    status = args.get("status")
+    if status is None:
+        return False
+    if not isinstance(status, str):
+        return True
+    return status.strip().lower() in hiding
 
 
 # The five task tools, hidden while GTD mode is active — the ten richer `todo_*`

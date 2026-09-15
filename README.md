@@ -15,6 +15,7 @@ that works your pipeline for you.
 **The CRM** (works with no AI at all):
 - Contacts, companies, deals, and tasks with an activity timeline
 - Kanban pipeline with drag-and-drop stages and per-stage value totals
+- Filter any list or board by preset or custom from/to date range, and save the whole view — filters, search, sort and layout — as a named view the team can apply
 - CSV import, custom fields, lead scoring, analytics dashboard
 - Accounts for your whole team: admin/member roles, an owner on every record, and
   "Mine vs Everyone" filters on the lists, the board and the dashboard

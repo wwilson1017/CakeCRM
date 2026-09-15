@@ -193,6 +193,44 @@ describe('WeeklyTouchesCard per-rep grouping (issue #146)', () => {
     expect(hrefs[1]).toBe('/crm/touches/unassigned');
   });
 
+  it('keeps the body copy readable — no words fused across an <em>', async () => {
+    // #179 rewrote this sentence and moved the </em> to the wrong side of a JSX line
+    // break, so it rendered "AI-estimated lifetimetouch count". JSX strips the trailing
+    // whitespace-plus-newline run at the end of a text node, which is why the eye misses
+    // it in the diff and nothing else in this suite reads the paragraph.
+    await render(<WeeklyTouchesCard />);
+    expect(container.textContent).toContain('lifetime touch count');
+    expect(container.textContent).not.toContain('lifetimetouch');
+  });
+
+  it('states touches and open deals as two facts, never a ratio (#179)', async () => {
+    // A deal won inside the window is touched but no longer open, so touches CAN exceed
+    // open deals — "7 of 2 open deals touched" would be nonsense on its face.
+    await render(<WeeklyTouchesCard />);
+    expect(container.textContent).toContain('7 deals touched · 2 open');
+    expect(container.textContent).not.toContain(' of 2 open');
+  });
+
+  it('marks a won deal in the rows and leaves the open ones unmarked', async () => {
+    api.mockResolvedValue({
+      ...payload,
+      reps: [{
+        ...payload.reps[0],
+        deals: [
+          { ...deal(41, 3, 4, 'Northwind rollout', 'Northwind'), stage: 'won' },
+          deal(42, 3, 3, 'Acme refresh', 'Acme'),
+        ],
+      }],
+    });
+    // dealRows() finds rows by role="button", which they only carry when they can open
+    // a deal — so this needs the same onOpenDeal the drill-down tests above pass.
+    await render(<WeeklyTouchesCard onOpenDeal={() => {}} />);
+    const rows = dealRows();
+    expect(rows).toHaveLength(2);
+    expect(rows[0].textContent).toContain('won · Northwind');
+    expect(rows[1].textContent).not.toContain('won');
+  });
+
   it('shows a per-rep truncation line with a See all link, and only when truncated', async () => {
     api.mockResolvedValue({
       ...twoReps,

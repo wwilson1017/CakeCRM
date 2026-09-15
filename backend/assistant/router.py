@@ -184,9 +184,12 @@ async def chat_upload(
         messages[-1] = {**messages[-1], "content": "\n\n".join(blocks) + "\n\n" + original_text}
         # Uploaded documents are the untrusted-content channel. A prompt-injected
         # file could ask the model to run a destructive write; in power ("Auto")
-        # mode that would execute with no human check. Downgrade this turn to
-        # normal so any write the model proposes after reading an upload still
-        # routes through the confirmation gate. (No files → unchanged.)
+        # mode that would execute with no human check. What actually forces every
+        # write on this turn through the gate — routine ones included — is the
+        # engine's own scan of the assembled context (`context_is_untrusted`,
+        # issue #180); normal mode alone no longer confirms everything, so this
+        # demotion cannot carry that guarantee by itself. It is kept so the mode
+        # the client is running under is honest about the risk. (No files → unchanged.)
         if tool_mode == "power":
             tool_mode = "normal"
 

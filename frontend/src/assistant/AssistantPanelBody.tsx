@@ -39,7 +39,12 @@ const MAX_BYTES = 10 * 1024 * 1024;
 
 const MODES: { mode: ToolMode; label: string; title: string }[] = [
   { mode: 'read-only', label: 'Read', title: 'Read-only — the assistant can look things up but not change data' },
-  { mode: 'normal', label: 'Ask', title: 'Ask first — changes need your approval' },
+  {
+    mode: 'normal',
+    label: 'Ask',
+    title:
+      'Ask first — everyday CRM edits (creating and updating contacts, companies, deals, tasks, activity and custom fields) run right away; deletes, archives, merges, bulk changes, email drafts, notifications, reminders and memory always ask. Anything proposed after reading an email or an uploaded file asks too.',
+  },
   { mode: 'power', label: 'Auto', title: 'Auto — changes run without asking' },
 ];
 

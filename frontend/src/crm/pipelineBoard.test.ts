@@ -9,9 +9,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CrmDeal } from '../core/types';
 import { installLocalStorage } from './testStorage';
 import {
-  boardOrder, lastContactLabel, loadHiddenStages, loadShowClosedStages, openPipelineTotals,
-  saveHiddenStages, saveShowClosedStages, stageFromToggleKey, stageLabel, stageToggleKey,
-  visibleStageKeys,
+  boardColumnLayout, boardOrder, lastContactLabel, loadHiddenStages, loadShowClosedStages,
+  openPipelineTotals, saveHiddenStages, saveShowClosedStages, stageFromToggleKey, stageLabel,
+  stageToggleKey, visibleStageKeys,
 } from './pipelineBoard';
 
 let restoreLocalStorage: () => void = () => {};
@@ -288,5 +288,45 @@ describe('lastContactLabel', () => {
     expect(lastContactLabel(null, now)).toBe('No contact logged');
     expect(lastContactLabel(undefined, now)).toBe('No contact logged');
     expect(lastContactLabel('', now)).toBe('No contact logged');
+  });
+});
+
+describe('boardColumnLayout', () => {
+  // STAGE_ORDER has six stages, so "nothing hidden" is the 6 case and #124's default (won and
+  // lost put away) is the 4 case — the two boards a rep actually starts from.
+  it('leaves the full board compact, so the default view is not a redesign', () => {
+    expect(boardColumnLayout(6).density).toBe('compact');
+    expect(boardColumnLayout(5).density).toBe('compact');
+  });
+
+  it('goes roomy at 3-4 visible stages', () => {
+    expect(boardColumnLayout(4).density).toBe('roomy');
+    expect(boardColumnLayout(3).density).toBe('roomy');
+  });
+
+  it('goes wide at 1-2 visible stages', () => {
+    expect(boardColumnLayout(2).density).toBe('wide');
+    expect(boardColumnLayout(1).density).toBe('wide');
+  });
+
+  // Every stage hidden, or a facet matching none. The board renders no columns and shows
+  // EmptyFilterState, so the tier is unused — it just must not throw or return junk.
+  it('answers for an empty board rather than throwing', () => {
+    expect(boardColumnLayout(0).density).toBe('wide');
+  });
+
+  it('never narrows a column below the fixed width it has today', () => {
+    for (const n of [0, 1, 2, 3, 4, 5, 6, 20]) {
+      expect(boardColumnLayout(n).minWidth).toBe(288);
+    }
+  });
+
+  // The ceiling is what turns freed width into wider columns, and it has to move WITH the
+  // density tier: a tier that adds fields but not room would just make the card taller.
+  it('raises the ceiling as the board narrows, and always leaves room to grow', () => {
+    const [wide, roomy, compact] = [boardColumnLayout(2), boardColumnLayout(4), boardColumnLayout(6)];
+    expect(wide.maxWidth).toBeGreaterThan(roomy.maxWidth);
+    expect(roomy.maxWidth).toBeGreaterThan(compact.maxWidth);
+    expect(compact.maxWidth).toBeGreaterThan(compact.minWidth);
   });
 });
