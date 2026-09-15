@@ -160,14 +160,6 @@ export function tableRow(columns: string): CSSProperties {
 
 // ── Filters ──────────────────────────────────────────────────────────────────
 
-export function filterBar(isMobile: boolean): CSSProperties {
-  return {
-    display: 'flex', gap: 0, marginBottom: isMobile ? 16 : 28,
-    overflowX: isMobile ? 'auto' : undefined,
-    WebkitOverflowScrolling: 'touch' as const,
-  };
-}
-
 export function filterTab(isMobile: boolean, isActive: boolean, activeColor?: string): CSSProperties {
   const borderColor = activeColor || ACCENT;
   return {

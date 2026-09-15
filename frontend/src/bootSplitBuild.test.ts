@@ -150,13 +150,12 @@ describe('boot split (#149) — the built chunk graph', () => {
       'src/crm/ContactsPage.tsx',
       'src/crm/CompaniesPage.tsx',
       'src/crm/PipelinePage.tsx',
-      'src/crm/RemindersPage.tsx',
-      'src/crm/SettingsPage.tsx',
+        'src/crm/SettingsPage.tsx',
       'src/crm/MemoryPage.tsx',
       'src/crm/TasksPage.tsx',
       'src/setup/SetupPage.tsx',
     ];
-    expect(boundaries.length).toBe(14);
+    expect(boundaries.length).toBe(13);
     const files = boundaries.map((b) => chunkFor(b).fileName);
     expect(new Set(files).size).toBe(boundaries.length);
     expect(files).not.toContain(ENTRY.fileName);

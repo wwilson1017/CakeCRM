@@ -108,7 +108,7 @@ export function NotificationSettings({ isMobile }: { isMobile: boolean }) {
     <SettingsCard
       id="notifications"
       title="Notifications"
-      description="Get browser push notifications when reminders fire and when the assistant has something worth flagging. Works with zero AI keys."
+      description="Get browser push notifications when the assistant has something worth flagging. Works with zero AI keys."
       isMobile={isMobile}
     >
       {!supported ? (

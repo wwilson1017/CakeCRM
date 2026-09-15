@@ -14,7 +14,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../../core/api/client';
 import { useAuth } from '../../core/auth/AuthContext';
 import type {
-  CrmToday, CrmTodayItem, CrmTodayReminderItem, CrmTodayTaskItem,
+  CrmToday, CrmTodayItem, CrmTodayTaskItem,
 } from '../../core/types';
 import { loadPersistedState, savePersistedState } from '../../shared/search/persist';
 import {
@@ -23,7 +23,7 @@ import {
 import { toast } from '../../shared/toast';
 import { dealDeepLink } from '../dealDeepLink';
 import DealTemperatureIcon from './DealTemperatureIcon';
-import { dueLabel, parseUTC } from '../gtd/util';
+import { dueLabel } from '../gtd/util';
 import { cardStyle, sectionHeading } from '../styles';
 import {
   TODAY_MAX_RETRIES, TODAY_SCOPE_KEY, coerceTodayScope, collapseToday, dealEvidence,
@@ -164,7 +164,7 @@ export function TodayPanel({ wrapperStyle, refreshKey, onMutated }: Props) {
     // Tasks have no detail URL: /crm/tasks is mode-routed (GTD's Today view by default
     // since #102, the list in normal mode). Both are coherent destinations, and the
     // row's own checkbox is how you act on that specific task without leaving.
-    navigate(item.kind === 'reminder' ? '/crm/reminders' : '/crm/tasks');
+    navigate('/crm/tasks');
   }, [navigate]);
 
   if (loading && !data) return null;  // no flash at the top of the dashboard
@@ -247,9 +247,8 @@ interface RowProps {
 function TodayRow({ item, today, showUnassigned, onOpen, onComplete }: RowProps) {
   const due = item.kind === 'task' ? dueLabel(item.due_date, today) : null;
   // Deals carry an owner too (#60), and an unowned hot deal is exactly the row somebody
-  // has to pick up — the same reason the tasks wear this. Reminders are excluded because
-  // they have no owner column at all, so the label would invite an impossible action.
-  const unassigned = item.kind !== 'reminder' && item.owner_id === null && showUnassigned;
+  // has to pick up — the same reason the tasks wear this.
+  const unassigned = item.owner_id === null && showUnassigned;
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0', borderBottom: `1px solid ${LINE}` }}>
@@ -260,8 +259,8 @@ function TodayRow({ item, today, showUnassigned, onOpen, onComplete }: RowProps)
                          alignItems: 'center', justifyContent: 'center', color: SAGE_TEXT }} />
       ) : (
         // Only tasks can be completed, but the badges still have to line up: without
-        // this spacer a reminder or deal row starts a checkbox-width to the left of every
-        // task row, and the panel reads as misaligned rather than as three kinds of row.
+        // this spacer a deal row starts a checkbox-width to the left of every task row,
+        // and the panel reads as misaligned rather than as two kinds of row.
         <span aria-hidden="true" style={{ flexShrink: 0, width: 18 }} />
       )}
       <button type="button" onClick={() => onOpen(item)}
@@ -281,39 +280,16 @@ function TodayRow({ item, today, showUnassigned, onOpen, onComplete }: RowProps)
         </span>
         {unassigned && <span style={{ ...mono(9, INK_DIM), flexShrink: 0 }}>{UNASSIGNED_LABEL}</span>}
         <span style={{ ...mono(9, INK_MUTE), flexShrink: 0 }}>
-          {item.kind === 'reminder' ? reminderTime(item.due_at)
-            : item.kind === 'deal' ? dealEvidence(item.days_since_touch, item.value)
-            : due?.text}
+          {item.kind === 'deal' ? dealEvidence(item.days_since_touch, item.value) : due?.text}
         </span>
       </button>
     </div>
   );
 }
 
-/** The task/reminder badge. Its own component so the row can hand `whyBadge` an item the
+/** The task badge. Its own component so the row can hand `whyBadge` an item the
  *  compiler has already narrowed away from deals. */
-function TextBadge({ item }: { item: CrmTodayTaskItem | CrmTodayReminderItem }) {
+function TextBadge({ item }: { item: CrmTodayTaskItem }) {
   const badge = whyBadge(item);
   return <span style={{ ...mono(9, badge.color), flexShrink: 0 }}>{badge.label}</span>;
-}
-
-/**
- * A reminder's time, rendered in the VIEWER's timezone.
- *
- * Deliberately the browser's zone even though membership was decided in the server's:
- * `due_at` is an instant, and the useful answer to "when is this?" is the wall clock the
- * reader is looking at. The residual, stated rather than hidden: when the browser and
- * `TIMEZONE` differ — the default install, where the server is on UTC — a reminder near
- * the server's midnight can show a time that reads as another calendar day while sitting
- * under a heading that says "Today". Showing it in the server's zone instead would put a
- * time in front of the user that is not their own, which is worse for the common case.
- *
- * Parsed via `gtd/util.parseUTC` rather than `new Date()`: Postgres emits six fractional
- * digits and Safari need not parse that form, which would render "Invalid Date".
- */
-function reminderTime(dueAt: string): string {
-  const parsed = parseUTC(dueAt);
-  return Number.isNaN(parsed.getTime())
-    ? ''
-    : parsed.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }

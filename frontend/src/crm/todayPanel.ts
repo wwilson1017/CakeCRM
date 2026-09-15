@@ -5,7 +5,7 @@
  * panel renders it as given. What lives here is only what the client decides: how many
  * rows the collapsed card shows, and which owner scope it is asking for.
  */
-import type { CrmTodayItem, CrmTodayReminderItem, CrmTodayTaskItem } from '../core/types';
+import type { CrmTodayItem, CrmTodayTaskItem } from '../core/types';
 import { CORAL_TEXT, GOLD_TEXT, INK_MUTE, formatNumber } from '../shared/styles';
 
 /** Rows the collapsed panel shows before the "+N more today" expander. */
@@ -56,7 +56,7 @@ export function collapseToday(items: CrmTodayItem[], expanded: boolean): TodayCo
 }
 
 /**
- * The why-badge a task or reminder row wears: the ladder made legible.
+ * The why-badge a task row wears: the ladder made legible.
  *
  * Text only, in existing ink/status colours — deliberately NO `tint()` background. A
  * new tinted surface under ink text has to be added to `inkContrast.test.ts`'s surface
@@ -68,16 +68,12 @@ export function collapseToday(items: CrmTodayItem[], expanded: boolean): TodayCo
  * that a compiler-checked fact: with `CrmTodayItem` this function would answer a deal from
  * its `default` branch and quietly label it "DUE TODAY".
  */
-export function whyBadge(
-  item: CrmTodayTaskItem | CrmTodayReminderItem,
-): { label: string; color: string } {
+export function whyBadge(item: CrmTodayTaskItem): { label: string; color: string } {
   switch (item.why) {
     case 'starred':
       return { label: 'STARRED', color: GOLD_TEXT };
     case 'overdue':
       return { label: 'OVERDUE', color: CORAL_TEXT };
-    case 'reminder':
-      return { label: 'REMINDER', color: INK_MUTE };
     default:
       return { label: 'DUE TODAY', color: INK_MUTE };
   }

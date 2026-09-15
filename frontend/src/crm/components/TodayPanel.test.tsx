@@ -26,7 +26,7 @@ vi.mock('../useUsers', () => ({
 const { TodayPanel } = await import('./TodayPanel');
 
 function taskItem(id: number, over: Partial<CrmTodayItem> = {}): CrmTodayItem {
-  return { kind: 'task', id, rank: 5, why: 'due_today', title: `Task ${id}`,
+  return { kind: 'task', id, rank: 4, why: 'due_today', title: `Task ${id}`,
            due_date: '2026-06-05', owner_id: 3, ...over } as CrmTodayItem;
 }
 
@@ -40,8 +40,7 @@ const PAYLOAD: CrmToday = {
   items: [
     taskItem(90, { rank: 1, why: 'starred', title: 'Starred one' }),
     taskItem(80, { rank: 3, why: 'overdue', title: 'Overdue one', due_date: '2026-06-01' }),
-    { kind: 'reminder', id: 'r1', rank: 4, why: 'reminder', title: 'Call back',
-      due_at: '2026-06-05T15:30:00+00:00' },
+    taskItem(70, { rank: 3, why: 'overdue', title: 'Overdue two', due_date: '2026-06-02' }),
     taskItem(60, { title: 'Due today one', owner_id: null }),
     taskItem(50, { title: 'Due today two' }),
     taskItem(40, { title: 'Due today three' }),
@@ -78,7 +77,7 @@ function rowTitles(): string[] {
   return [...container.querySelectorAll('button')]
     .map(b => b.textContent ?? '')
     .filter(t => t.includes('Task ') || t.includes('one') || t.includes('two')
-              || t.includes('three') || t.includes('four') || t.includes('Call back'));
+              || t.includes('three') || t.includes('four'));
 }
 
 function buttonByText(text: string): HTMLButtonElement {
@@ -93,7 +92,7 @@ describe('TodayPanel', () => {
     const titles = rowTitles();
     expect(titles[0]).toContain('Starred one');
     expect(titles[1]).toContain('Overdue one');
-    expect(titles[2]).toContain('Call back');
+    expect(titles[2]).toContain('Overdue two');
     expect(titles[3]).toContain('Due today one');
   });
 
@@ -136,20 +135,17 @@ describe('TodayPanel', () => {
     expect(navigate).not.toHaveBeenCalled();  // sibling controls — no bubbling to the row
   });
 
-  it('routes task rows to tasks and reminder rows to reminders', async () => {
+  it('routes task rows to the tasks page', async () => {
     await render(<TodayPanel />);
     await act(async () => { buttonByText('Starred one').click(); });
     expect(navigate).toHaveBeenCalledWith('/crm/tasks');
-
-    await act(async () => { buttonByText('Call back').click(); });
-    expect(navigate).toHaveBeenCalledWith('/crm/reminders');
   });
 
-  it('badges an unassigned task and never badges a reminder', async () => {
+  it('badges an unassigned task and not an owned one', async () => {
     await render(<TodayPanel />);
     await act(async () => { buttonByText('+2 more today').click(); });
     expect(buttonByText('Due today one').textContent).toContain('Unassigned');
-    expect(buttonByText('Call back').textContent).not.toContain('Unassigned');
+    expect(buttonByText('Due today two').textContent).not.toContain('Unassigned');
   });
 
   it('asks for my own items by default and drops the param for everyone', async () => {

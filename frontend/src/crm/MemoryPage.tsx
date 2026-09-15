@@ -96,7 +96,7 @@ function FilesPanel({ isMobile }: { isMobile: boolean }) {
   }, []);
 
   // queueMicrotask, not a bare call: the repo's eslint ruleset rejects setState directly
-  // in an effect body (see RemindersPage, same pattern).
+  // in an effect body (see ContactDetailPage, same pattern).
   useEffect(() => { queueMicrotask(refresh); }, [refresh]);
 
   const openFile = useCallback(async (filename: string) => {
