@@ -162,6 +162,19 @@ def test_owner_email_resolves_through_users(crm_executors):
     assert m.call_args.kwargs["owner_id"] == 12
 
 
+def test_a_deactivated_teammate_still_resolves(crm_executors):
+    # Deliberate: records outlive the seat, and "what was Ana working on before she left"
+    # is the question this filter exists for. Pinned because it is a decision, not an
+    # accident — get_user_by_email does not filter on is_active, and the next reader
+    # should be able to tell which of those two it is.
+    ex = crm_executors(USER)
+    departed = {"id": 12, "email": "gone@example.com", "is_active": False}
+    with patch("crm.tools.users_service.get_user_by_email", return_value=departed), \
+         patch("crm.tools.crm.search_contacts", return_value=[]) as m:
+        ex["crm_find_contact"](query="a", owner="gone@example.com")
+    assert m.call_args.kwargs["owner_id"] == 12
+
+
 def test_unknown_owner_errors_without_querying(crm_executors):
     ex = crm_executors(USER)
     with patch("crm.tools.users_service.get_user_by_email", return_value=None), \

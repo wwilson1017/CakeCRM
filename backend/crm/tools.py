@@ -2023,6 +2023,8 @@ def _resolve_owner(owner, user: dict | None) -> tuple[int | str | None, dict | N
 
     An email is resolved through ``users.service``; only the id is kept (that read also
     returns the password hash, which must not travel further than this function).
+    A DEACTIVATED teammate still resolves, deliberately: their records outlive their seat,
+    and "what was Ana working on before she left" is the question this filter is for.
     """
     value = str(owner or "").strip()
     lowered = value.lower()
