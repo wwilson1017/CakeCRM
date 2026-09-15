@@ -13,11 +13,15 @@ assistant text so the in-request history matches what the DB assembler rebuilds)
 
 Confirmation modes:
   read-only — write tools are hidden from the provider AND refused if named.
-  normal    — a write is NOT executed; a ``confirm`` event is emitted and the
-              pending call is persisted; the user approves it out-of-band via
+  normal    — a write is NOT executed unless its def declares ``confirm_tier``
+              ROUTINE (issue #180); otherwise a ``confirm`` event is emitted and
+              the pending call is persisted; the user approves it out-of-band via
               ``POST /confirm`` (server-authoritative, idempotent), then the
               client re-POSTs an empty-``messages`` continuation to resume.
   power     — writes execute immediately.
+
+Untrusted content in play — an uploaded document, a Gmail read, this turn or an
+earlier one — makes EVERY write confirm in EVERY mode, routine ones included.
 
 All Postgres work is offloaded with ``asyncio.to_thread`` so a blocking pooled
 connection never stalls the event loop / other concurrent SSE streams.
@@ -33,6 +37,7 @@ from collections.abc import AsyncGenerator
 from assistant import assembly, compaction, delimiters, history, identity
 from assistant.write_budget import WRITE_BUDGET_PER_TURN, BudgetAction, BudgetState
 from context_files import prompt as context_prompt, tools as context_file_tools
+from crm import tools as crm_tools
 from memory import context as memory_context
 from providers.base import AIProvider, _sse
 from providers.windows import cache_inclusive_input_tokens, context_usage_event
@@ -43,14 +48,14 @@ MAX_ITERATIONS = 20
 _VALID_MODES = {"read-only", "normal", "power"}
 _UNTRUSTED_MARKER = delimiters.UNTRUSTED_FILE_MARKER
 # Tool results from untrusted EXTERNAL sources (e.g. Gmail — issue #8) are wrapped
-# with this marker when recorded, so a later turn's power→normal downgrade fires on
+# with this marker when recorded, so a later turn's untrusted-context confirmation fires on
 # them exactly like uploaded-file content does. Both literals moved to `delimiters`
 # with #72 Phase 3, which needs the same test one layer down.
 _UNTRUSTED_EXTERNAL_MARKER = delimiters.UNTRUSTED_EXTERNAL_MARKER
 _UNTRUSTED_MARKERS = delimiters.UNTRUSTED_MARKERS
 # Baker's own recorded knowledge (issue #72), fenced when a context-file read is handed
 # back to the model. Deliberately NOT in _UNTRUSTED_MARKERS: that tuple drives the
-# power→normal downgrade and encodes THIRD-PARTY origin (email, uploads). Context files
+# untrusted-context confirmation and encodes THIRD-PARTY origin (email, uploads). Context files
 # are written by the user, or by the assistant under a confirmation gate, so tainting
 # them would kill power mode every time Baker reads its own notes — a cost with no
 # matching risk, and the same call #5 already made for memory facts.
@@ -132,7 +137,7 @@ def _context_has_untrusted_upload(messages: list[dict]) -> bool:
     ``response.result``, OpenAI keeps a top-level string. Keying off one field name
     (e.g. ``text``) would miss the marker for Anthropic/Gemini, so we stringify
     non-string content and substring-scan the whole structure — provider-agnostic,
-    which is what keeps the power→normal downgrade firing on later turns."""
+    which is what keeps the untrusted-context confirmation firing on later turns."""
     def _has_marker(text: str) -> bool:
         return any(marker in text for marker in _UNTRUSTED_MARKERS)
 
@@ -223,7 +228,7 @@ async def _chat_impl(
             )
             # Durable half of the untrusted-content taint (#72 Phase 3). The scan below
             # reads the ASSEMBLED context, which compaction can empty of this row; the
-            # flag is what keeps the power→normal downgrade firing afterwards. Written
+            # flag is what keeps the untrusted-context confirmation firing afterwards. Written
             # here, unconditionally, rather than beside that scan — which only runs in
             # power mode, so a file uploaded during a normal-mode turn would otherwise
             # never be recorded and would go unnoticed after the thread compacts.
@@ -266,24 +271,30 @@ async def _chat_impl(
         yield _sse({"type": "error", "error": "No conversation content to send."})
         return
 
-    # Uploaded-document text is the untrusted-content channel. The upload endpoint
-    # downgrades power→normal for the turn a file is attached, but the file text
-    # stays in context, so a LATER turn (a continuation after approval, or the next
-    # message) in power mode could still auto-execute a write the model proposed
-    # from injected instructions. Enforce it here for EVERY turn: if the assembled
-    # context carries untrusted upload content, writes route through confirmation
-    # regardless of the client-selected mode.
-    # The second half is what keeps this true after compaction: the scan above reads the
+    # Uploaded-document text is the untrusted-content channel, and it outlives the turn
+    # it arrived on: the file text stays in context, so a LATER turn (a continuation
+    # after approval, or the next message) could still auto-execute a write the model
+    # proposed from injected instructions. So: if the assembled context carries
+    # untrusted content, EVERY write this turn routes through confirmation, in every
+    # mode and routine tier included (#180) — the client-selected mode does not matter.
+    #
+    # This used to be expressed by demoting power→normal, which was only correct while
+    # "normal" meant "confirm everything". Since #180 it does not, so the signal is its
+    # own boolean and reaches the gate directly instead of riding `tool_mode`. Demoting
+    # into a mode that auto-approves would have switched the mitigation off silently.
+    #
+    # The second half is what keeps this true after compaction: the scan reads the
     # ASSEMBLED context, and compaction REMOVES rows, so a thread that aged out a Gmail
-    # read or an uploaded file would otherwise quietly stop downgrading. The flag is
-    # monotone and fails closed, and the read only happens in power mode when the
-    # in-context scan already came up clean.
-    if tool_mode == "power" and (
+    # read or an uploaded file would otherwise quietly stop confirming. The flag is
+    # monotone and fails closed, and the read only happens when the in-context scan
+    # already came up clean. Read-only skips both: its writes are refused before the
+    # gate, so it never needs the answer.
+    context_is_untrusted = tool_mode != "read-only" and (
         _context_has_untrusted_upload(current_messages)
         or await asyncio.to_thread(history.is_conversation_tainted, conversation_id)
-    ):
-        logger.info("assistant.chat: untrusted upload content present — forcing normal mode")
-        tool_mode = "normal"
+    )
+    if context_is_untrusted:
+        logger.info("assistant.chat: untrusted content in context — every write confirms this turn")
 
     # A resumed (continuation) turn can end on an assistant row — the persisted
     # pending-confirmation wrap-up narration ("Shall I create X?") is saved as its
@@ -328,9 +339,10 @@ async def _chat_impl(
 
     # ── Main tool-execution loop ───────────────────────────────────────────────
     iteration = 0
-    # Set once an untrusted-external read (e.g. Gmail) runs during THIS turn; from
-    # then on, power-mode writes route through confirmation (issue #8). Prior-turn
-    # untrusted content already downgraded tool_mode above.
+    # Set once an untrusted-external read (e.g. Gmail) runs during THIS turn; from then
+    # on EVERY write routes through confirmation, in every mode and routine tier
+    # included (issues #8, #180). Prior-turn untrusted content is already covered by
+    # `context_is_untrusted` above.
     turn_has_untrusted_reads = False
     while iteration < MAX_ITERATIONS:
         iteration += 1
@@ -444,21 +456,34 @@ async def _chat_impl(
                     terminated = True
                     break
 
-            # Confirmation gate: normal mode always confirms writes; power mode
-            # confirms them too once an untrusted external read (Gmail) has run this
-            # turn, so injected instructions in that content can't auto-execute a
-            # write (issue #8). Persist the pending placeholder BEFORE emitting
-            # confirm (so /confirm can find it), then wait for approval.
-            # A write to a PROTECTED context file (soul.md / MEMORY.md) confirms in every
-            # mode, power included (issue #72). `writes: True` alone is not enough there:
-            # a poisoned soul is not one bad record, it is a permanent system instruction
-            # replayed on every later turn — including background ones — that survives
-            # deleting the conversation. Same shape as the Gmail binding check below.
+            # Confirmation gate (issues #4, #8, #72, #180). A write confirms when ANY of
+            # these holds:
+            #   * it is a write to a PROTECTED context file (soul.md / MEMORY.md) —
+            #     every mode, power included. `writes: True` alone is not enough there:
+            #     a poisoned soul is not one bad record, it is a permanent system
+            #     instruction replayed on every later turn — including background ones —
+            #     that survives deleting the conversation;
+            #   * untrusted content is in the assembled context, or the conversation
+            #     carries the durable taint;
+            #   * an untrusted external read (Gmail) already ran THIS turn, so injected
+            #     instructions in that content can't auto-execute a write;
+            #   * we are in normal mode and the tool is not declared ROUTINE (#180).
+            # The routine exemption appears exactly once, as a narrowing of the
+            # normal-mode term, so it can never mask one of the terms above — that is
+            # what makes "the stronger rule wins" structural rather than a fact about
+            # today's tool defs. Power with a clean turn executes, unchanged; read-only
+            # never reaches here.
+            # Persist the pending placeholder BEFORE emitting confirm (so /confirm can
+            # find it), then wait for approval.
             always_confirms = context_file_tools.requires_confirmation(name, args)
+            # Routine by name, minus the call shapes that take a record out of view
+            # (see crm.tools.removes_from_view) — normal mode only; power is untouched.
+            routine_exempt = registry.is_routine_write(name) and not crm_tools.removes_from_view(name, args)
             if is_write and (
                 always_confirms
-                or tool_mode == "normal"
-                or (tool_mode == "power" and turn_has_untrusted_reads)
+                or context_is_untrusted
+                or turn_has_untrusted_reads
+                or (tool_mode == "normal" and not routine_exempt)
             ):
                 placeholder = await _pending_placeholder(name, args)
                 try:
@@ -526,7 +551,7 @@ async def _chat_impl(
                 # rebuild would show the stub and tempt the model to redo the
                 # mutation), or (b) an untrusted external read (Gmail) whose taint
                 # marker didn't persist — a later turn would then miss the
-                # power→normal downgrade and could auto-execute an injected write.
+                # untrusted-context confirmation and could auto-execute an injected write.
                 yield _sse({"type": "error", "error": "The result could not be fully saved — please reload the conversation."})
                 return
 

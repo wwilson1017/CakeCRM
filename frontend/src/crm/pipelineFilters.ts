@@ -25,6 +25,13 @@
  * `stale30` includes never-contacted deals (so `le30` and `stale30` partition the open set
  * rather than leaving a gap). `pipelineCollection.ts` delegates to `dealMatchesAdvanced`
  * for exactly that reason instead of restating the rules in a facet definition.
+ *
+ * SCOPE NOTE (#181): the RELATIVE buckets live here — including the new Created ones, which
+ * need the same local-calendar day math and the same injected clock. The three ABSOLUTE
+ * from/to date ranges do NOT: they are `dateRangeFacet`s declared in `pipelineCollection.ts`,
+ * reading their day through `closeDatePart`/`localDayOf` below, and an absolute range needs no
+ * clock at all. Each range is a facet of its own beside its preset, so the layer ANDs them and
+ * every predicate here stays exactly as it was.
  */
 import type { CrmDeal } from '../core/types';
 import { parseUTC } from './gtd/util';
@@ -34,6 +41,10 @@ import { OPEN_STAGES } from './constants';
 
 /** Relative close-date buckets (single-select). */
 export type ClosePreset = 'overdue' | 'next7' | 'thisMonth' | 'noDate';
+/** Relative creation buckets (single-select, #181). `overdue`/`noDate` have no meaning for a
+ *  NOT NULL creation timestamp, so the set is recency windows plus the two quarter buckets the
+ *  issue's use case names ("deals created last quarter"). Anything else is a custom range. */
+export type CreatedPreset = 'last7' | 'last30' | 'thisMonth' | 'thisQuarter' | 'lastQuarter';
 /** Relative last-activity buckets (single-select). Activity is DEAL-scoped
  *  (deal-level activity_log rows + un-archived deal chatter); contact-level
  *  activity is not counted — hence "no activity logged", not "never contacted". */
@@ -68,11 +79,13 @@ export function isArchivedDeal(deal: CrmDeal): boolean {
  *  aggregates, the bulk payload and the per-card drag gate all read it outside the facet. */
 export interface AdvancedFilters {
   closeDate: ClosePreset | null;
+  createdDate: CreatedPreset | null;
   lastActivity: ActivityPreset | null;
 }
 
 export const EMPTY_ADVANCED: AdvancedFilters = {
   closeDate: null,
+  createdDate: null,
   lastActivity: null,
 };
 
@@ -99,14 +112,14 @@ export function ymd(base: Date, offsetDays = 0): string {
 /** Close date: stored as a date-only 'YYYY-MM-DD' string (or ''), already a local calendar
  *  date — take it verbatim (parsing 'YYYY-MM-DD' as a Date would read it as UTC midnight and
  *  could shift a day). */
-function closeDatePart(ts: string | null | undefined): string {
+export function closeDatePart(ts: string | null | undefined): string {
   return ts ? ts.slice(0, 10) : '';
 }
 
 /** Last-activity: a full TIMESTAMPTZ ISO string (DB offset, UTC by default). Parse it and
  *  take the VIEWER'S LOCAL calendar date so the recency buckets are correct in local time
  *  (a slice(0,10) would use the UTC date and misbucket an evening touch near midnight). */
-function activityLocalDate(ts: string | null | undefined): string {
+export function localDayOf(ts: string | null | undefined): string {
   if (!ts) return '';
   // parseUTC, not `new Date(ts)`: the backend emits datetime.isoformat(), i.e. SIX
   // fractional digits, and ECMAScript only guarantees parsing of three — which is why
@@ -135,6 +148,42 @@ function matchesCloseDate(deal: CrmDeal, preset: ClosePreset, now: Date): boolea
   }
 }
 
+/** First local calendar day of the quarter `offsetQuarters` away from `now`'s.
+ *  Month arithmetic only: JS normalises a negative month into the previous year, so
+ *  `lastQuarter` on 15 Jan lands on 1 Oct of the prior year with no branch. */
+function quarterStart(now: Date, offsetQuarters: number): string {
+  const firstMonth = Math.floor(now.getMonth() / 3) * 3 + 3 * offsetQuarters;
+  return ymdOf(new Date(now.getFullYear(), firstMonth, 1));
+}
+
+/**
+ * Recency/quarter bucket for a creation timestamp (#181). `created_at` is NOT NULL on every
+ * deal, so there is no "none" bucket; an unparseable value matches nothing rather than
+ * silently joining a bucket.
+ *
+ * `last7`/`last30` are inclusive of today, i.e. today plus the preceding 7 (or 30) dates —
+ * deliberately the SAME boundary as the `le7`/`le30` activity buckets beside them. A stricter
+ * count here would be the surprise, not the fix.
+ */
+export function matchesCreatedPreset(
+  ts: string | null | undefined, preset: CreatedPreset, now: Date,
+): boolean {
+  const day = localDayOf(ts);
+  if (!day) return false;
+  switch (preset) {
+    case 'last7':
+      return day >= ymd(now, -7);
+    case 'last30':
+      return day >= ymd(now, -30);
+    case 'thisMonth':
+      return day.slice(0, 7) === ymd(now).slice(0, 7);
+    case 'thisQuarter':
+      return day >= quarterStart(now, 0);
+    case 'lastQuarter':
+      return day >= quarterStart(now, -1) && day < quarterStart(now, 0);
+  }
+}
+
 /**
  * Recency bucket for ANY last-touch timestamp — the deal-shaped wrapper below is one
  * caller, the Contacts list's Last-contact facet (#77) is the other. Extracted rather than
@@ -144,7 +193,7 @@ function matchesCloseDate(deal: CrmDeal, preset: ClosePreset, now: Date): boolea
 export function matchesActivityPreset(
   ts: string | null | undefined, preset: ActivityPreset, now: Date,
 ): boolean {
-  const act = activityLocalDate(ts);
+  const act = localDayOf(ts);
   switch (preset) {
     case 'none':
       return !act;
@@ -165,6 +214,7 @@ function matchesLastActivity(deal: CrmDeal, preset: ActivityPreset, now: Date): 
 /** True if `deal` passes every active advanced facet (AND across facets). */
 export function dealMatchesAdvanced(deal: CrmDeal, f: AdvancedFilters, now: Date): boolean {
   if (f.closeDate && !matchesCloseDate(deal, f.closeDate, now)) return false;
+  if (f.createdDate && !matchesCreatedPreset(deal.created_at, f.createdDate, now)) return false;
   if (f.lastActivity && !matchesLastActivity(deal, f.lastActivity, now)) return false;
   return true;
 }

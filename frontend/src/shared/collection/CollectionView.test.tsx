@@ -9,6 +9,18 @@
 import { StrictMode, act, useEffect, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// The shell renders the saved-views menu (#181) for every surface, so it now reaches the API
+// client. Stubbed here for the same reason the CRM page suites stub it: this file tests
+// wiring, and an unmocked `api()` would try to fetch on every menu open.
+const { apiMock } = vi.hoisted(() => ({ apiMock: vi.fn() }));
+vi.mock('../../core/api/client', () => ({
+  api: (...args: unknown[]) => apiMock(...args),
+  ApiError: class extends Error {
+    status = 0;
+    detail = '';
+  },
+}));
 import useCollectionState from './useCollectionState';
 import CollectionView from './CollectionView';
 import type {
@@ -495,5 +507,65 @@ describe('list rows (#148)', () => {
     const row = document.querySelector('tbody tr') as HTMLElement;
     expect(row.getAttribute('tabindex')).toBeNull();
     expect(row.className).not.toContain('cursor-pointer');
+  });
+});
+
+describe('saved views (#181)', () => {
+  const menu = () => document.querySelector('button[aria-haspopup="dialog"]');
+
+  beforeEach(() => {
+    apiMock.mockReset();
+    apiMock.mockResolvedValue({ views: [] });
+  });
+
+  it('offers the control on a surface with no toggles and no toolbarExtras', () => {
+    // Unconditional in the shell is what makes "every surface gets saved views" true without
+    // a line of per-page wiring — the pipeline passes no toolbarExtras at all.
+    renderPage({ config: makeConfig('sv_default') });
+    expect(menu()).not.toBeNull();
+    expect(menu()!.textContent).toBe('Views');
+  });
+
+  it('stays reachable on an EMPTY surface, where the bar is not rendered', () => {
+    // A board can be empty while a teammate's stale view sits on it needing a repair or a
+    // delete; a control that vanishes with the data is one nobody can reach to fix that.
+    renderPage({ config: makeConfig('sv_empty'), data: [] });
+    expect(document.body.textContent).toContain('No deals yet.');
+    expect(menu()).not.toBeNull();
+  });
+
+  it('is absent while the surface is still loading', () => {
+    renderPage({
+      config: makeConfig('sv_loading'),
+      loading: { loading: true, error: null, itemsLoaded: 0, retry: () => {} },
+    });
+    expect(menu()).toBeNull();
+  });
+
+  it('empties the search box when an applied view carries a different query', async () => {
+    // The box holds its own debounced text; applying a view replaces `state.query`, so the
+    // shell must bump resetNonce or the pending debounce would re-apply what was typed. Driven
+    // through the real menu, because the nonce lives on the shell's `onApplied`, not the hook.
+    apiMock.mockResolvedValue({
+      views: [{
+        id: 1, surface: 'sv_nonce', name: 'Everything', version: 1,
+        payload: { query: '' }, created_by: 1, created_by_name: 'Ada',
+        created_at: 'x', updated_at: 'x', can_edit: false,
+      }],
+    });
+    renderPage({ config: makeConfig('sv_nonce', { persistSearch: true }) });
+    const box = document.querySelector<HTMLInputElement>('input[aria-label="Search deals..."]');
+    expect(box).not.toBeNull();
+    setInputValue(box!, 'typed');
+    expect(box!.value).toBe('typed');
+
+    await act(async () => {
+      (menu() as HTMLElement).click();
+    });
+    await act(async () => {
+      (buttonByText('Everything') as HTMLElement).click();
+    });
+    expect(state().query).toBe('');
+    expect(box!.value).toBe('');
   });
 });

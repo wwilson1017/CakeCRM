@@ -199,7 +199,7 @@ function DetailView({ apiPath, isMobile }: { apiPath: string; isMobile: boolean 
           <RepLabel name={data.rep.name} unassigned={data.rep.user_id === null} />
           {' · '}{data.window.label}
           {' · '}<span style={{ color: INK }}>{data.rep.touches}</span>
-          {' of '}{data.rep.open_deals} open deals touched
+          {' deals touched · '}{data.rep.open_deals} open
         </div>
       )}
 
@@ -225,15 +225,15 @@ function DetailView({ apiPath, isMobile }: { apiPath: string; isMobile: boolean 
       {data && (
         data.deals.length === 0 ? (
           <p style={{ fontSize: 13, color: INK_DIM, marginTop: 16 }}>
-            No open deals touched in this window.
+            No deals touched in this window.
           </p>
         ) : (
           <>
             <p style={{ fontSize: 12, color: INK_MUTE, margin: '14px 0', maxWidth: 560 }}>
-              Open deals edited, noted, or logged against in this window — however many times,
-              each deal counts once. The number beside each deal is its AI-estimated
-              <em> lifetime</em> touch count, not this window's, and is blank until one has
-              been computed.
+              Deals edited, noted, or logged against in this window while open — through
+              the move to Won, and never after. However many times, each deal counts once.
+              The number beside each deal is its AI-estimated<em> lifetime</em> touch count,
+              not this window's, and is blank until one has been computed.
             </p>
             <div style={{ ...cardStyle, padding: '2px 20px 6px' }}>
               <div style={{ borderTop: `1px solid ${LINE}` }}>

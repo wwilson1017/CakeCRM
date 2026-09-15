@@ -12,12 +12,13 @@
  * bar's active-count / chip-row / clear-all ("filtered but you cannot tell by what" is the
  * failure the bar exists to prevent; `toolbarExtras` is actions only, never filters).
  */
-import { useMemo, type ReactNode } from 'react';
-import { IconX } from '../icons';
+import { useMemo, useState, type ReactNode } from 'react';
 import { ChipButton, SearchFilterBar, toggleValue } from '../search';
 import type { FacetGroup, FacetOption } from '../search';
 import { ViewSwitcher } from '../listview';
 import { deriveFacetOptions, selectionActive } from './facets';
+import ActiveChip from './ActiveChip';
+import SavedViewsMenu from './SavedViewsMenu';
 import { restingSort } from './useCollectionState';
 import EmptyState from './EmptyState';
 import KanbanView from './views/KanbanView';
@@ -32,24 +33,6 @@ import type {
   RangeValue,
   VoidedFilter,
 } from './types';
-
-/** Removable chip for a non-group facet (range) in the collapsed row. Module scope — a
- *  component declared during render remounts its subtree every render. */
-function ActiveChip({ label, onRemove }: { label: string; onRemove: () => void }) {
-  return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-sand py-1 pl-2.5 pr-1 text-xs text-charcoal">
-      {label}
-      <button
-        type="button"
-        onClick={onRemove}
-        aria-label={`Remove filter ${label}`}
-        className="inline-flex h-4 w-4 items-center justify-center rounded-full text-muted hover:bg-line/50 hover:text-charcoal"
-      >
-        <IconX className="h-3 w-3" aria-hidden="true" />
-      </button>
-    </span>
-  );
-}
 
 function rangeChipLabel(label: string, r: RangeValue, format?: (value: number) => string): string {
   const fmt = format ?? String;
@@ -80,6 +63,18 @@ export default function CollectionView<T, C = unknown, P extends DragPolicy = 'i
 }: CollectionViewProps<T, C, P>) {
   const facets = useMemo(() => config.facets ?? [], [config]);
   const noun = config.itemNoun?.plural ?? 'items';
+
+  // Applying a saved view replaces the query, so the search box must follow — otherwise the
+  // pending 250 ms debounce re-applies whatever was typed. Both terms only ever increase,
+  // which is `resetNonce`'s contract.
+  const [applyNonce, setApplyNonce] = useState(0);
+  const savedViews = (
+    <SavedViewsMenu
+      storage={config.storage}
+      state={state}
+      onApplied={() => setApplyNonce(n => n + 1)}
+    />
+  );
 
   // Option derivation scans the whole set per multi facet — memoized on the data, unlike the
   // group closures below, which are cheap and close over live state on purpose.
@@ -303,8 +298,12 @@ export default function CollectionView<T, C = unknown, P extends DragPolicy = 'i
   }
 
   if (items.length === 0) {
+    // No bar to hang it on, but the saved-views menu still renders: a surface can be empty
+    // while a teammate's stale view sits on it needing a repair or a delete, and a control
+    // that vanishes with the data is a control nobody can reach to fix that.
     return (
       <div>
+        <div className="mb-4 flex justify-end">{savedViews}</div>
         <EmptyState message={config.emptyState?.message ?? `No ${noun} yet.`} />
         {detailBlock}
       </div>
@@ -317,7 +316,7 @@ export default function CollectionView<T, C = unknown, P extends DragPolicy = 'i
         query={state.query}
         onQueryChange={state.setQuery}
         placeholder={searchPlaceholder ?? `Search ${noun}...`}
-        resetNonce={searchResetNonce}
+        resetNonce={(searchResetNonce ?? 0) + applyNonce}
         groups={groups}
         extraFacets={panelExtras.length > 0 ? <>{panelExtras}</> : undefined}
         extraChips={chipExtras.length > 0 ? <>{chipExtras}</> : undefined}
@@ -376,6 +375,7 @@ export default function CollectionView<T, C = unknown, P extends DragPolicy = 'i
                 {t.label}
               </label>
             ))}
+            {savedViews}
             {toolbarExtras}
           </>
         }

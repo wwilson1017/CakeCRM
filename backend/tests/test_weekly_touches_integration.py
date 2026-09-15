@@ -8,6 +8,11 @@ ranking, that LAST_TOUCH_SQL really admits an edit / an activity / a live note a
 excludes a deal that was only created, and that the closed/archived sweeps really hold on
 both sides of the ratio.
 
+Since #179 it also pins the rule that a touch counts while the deal is open, up to and
+including the move into Won and never after: a deal won inside the window keeps that
+week's touches and gains the win itself, while a note typed on an already-won deal, a win
+outside the window, and a deal sitting in Won with no journaled win all count for nothing.
+
 The hermetic suite pins the shaper and the SQL's shape; this pins its meaning.
 
 Marked ``integration`` and excluded from the default no-DB run. Fixture data is fresh and
@@ -137,6 +142,64 @@ def _deal(
     return deal_id
 
 
+def _win(deal_id: int, *, days_ago: int | None = None) -> None:
+    """A REAL move into Won, so the journal row is written by the code path production
+    uses — there is no INSERT INTO deal_stage_events anywhere in this suite, on purpose.
+
+    ``days_ago`` then backdates that row (the test_integration_crm_lifecycle_pg idiom),
+    which is how a win is placed outside the rolling window without putting anything in
+    the future. It rewrites every 'won' row for the deal, so call it with no ``days_ago``
+    for the second win of a reopened-then-re-won deal.
+    """
+    from core.postgres import pg_execute
+    from crm import service
+
+    assert service.mark_deal_won(deal_id) is not None
+    if days_ago is not None:
+        pg_execute(
+            "UPDATE deal_stage_events SET changed_at = now() - make_interval(days => %s) "
+            "WHERE deal_id = %s AND new_stage = 'won'",
+            (days_ago, deal_id),
+        )
+
+
+def _win_at(deal_id: int, instant) -> None:
+    """As ``_win``, but pins the journal row to an EXACT instant so a test can sit a win
+    on a window bound rather than merely near one."""
+    from core.postgres import pg_execute
+    from crm import service
+
+    assert service.mark_deal_won(deal_id) is not None
+    pg_execute(
+        "UPDATE deal_stage_events SET changed_at = %s "
+        "WHERE deal_id = %s AND new_stage = 'won'",
+        (instant, deal_id),
+    )
+
+
+def _activity(deal_id: int, days_ago: int = 0) -> None:
+    """One logged activity, dated off the DATABASE clock for the reason the
+    activity/note test states: the module-level NOW is captured at import."""
+    from core.postgres import pg_execute
+
+    pg_execute(
+        "INSERT INTO activity_log (deal_id, activity, note, created_at) "
+        "VALUES (%s, 'call', 'rang', now() - make_interval(days => %s))",
+        (deal_id, days_ago),
+    )
+
+
+def _won_at(deal_id: int):
+    """The instant the journal says this deal most recently entered 'won'."""
+    from core.postgres import pg_fetchone
+
+    return pg_fetchone(
+        "SELECT MAX(changed_at) AS at FROM deal_stage_events "
+        "WHERE deal_id = %s AND new_stage = 'won'",
+        (deal_id,),
+    )["at"]
+
+
 def _reps(payload) -> dict:
     return {r["name"]: r for r in payload["reps"]}
 
@@ -219,18 +282,227 @@ def test_an_activity_and_a_live_note_each_count_as_a_touch():
     assert reps["Ada"]["open_deals"] == 3
 
 
-def test_closed_and_archived_deals_are_excluded_from_both_sides():
+def test_lost_and_archived_deals_are_excluded_from_both_sides():
+    """Lost is deliberately asymmetric with Won (#179): crm_bulk_move_deals can mark a
+    whole column lost in one click, and a symmetric rule would mint that many touches."""
     from crm import service
 
     ada = _user("Ada")
     _deal("Open", owner=ada)
-    _deal("Won", owner=ada, stage="won")
     _deal("Lost", owner=ada, stage="lost")
     _deal("Archived", owner=ada, archived=True)
 
     reps = _reps(service.get_weekly_touches())
     assert (reps["Ada"]["open_deals"], reps["Ada"]["touches"]) == (1, 1)
     assert [d["title"] for d in reps["Ada"]["deals"]] == ["Open"]
+
+
+def test_a_won_deal_with_no_journaled_win_contributes_nothing():
+    """Forward-only, no backfill. Three real cases land here: a deal created straight
+    into 'won' (create_deal has no old stage to transition from, so it writes no event),
+    the demo seed's raw-INSERTed won row, and anything won before the journal existed.
+
+    The planted deal is TOUCHED, and that is load-bearing rather than incidental: its
+    updated_at then sits inside the window, which is what makes this the mutation detector
+    for LEAST(last_touch, won_at) — Postgres LEAST ignores NULL operands, so that shape
+    would credit this deal with its updated_at. Verified both ways: with `touched=False`
+    the deal's updated_at equals its created_at, the creation guard excludes it anyway, and
+    the LEAST mutation goes UNDETECTED. Do not "tidy" that argument away.
+    """
+    from crm import service
+
+    ada = _user("Ada")
+    _deal("Open", owner=ada)
+    _deal("Won, never journaled", owner=ada, stage="won")
+
+    reps = _reps(service.get_weekly_touches())
+    assert (reps["Ada"]["open_deals"], reps["Ada"]["touches"]) == (1, 1)
+    assert [d["title"] for d in reps["Ada"]["deals"]] == ["Open"]
+
+
+def test_touches_on_a_deal_survive_its_move_to_won_and_the_move_itself_counts():
+    """The issue's worked example: noted Monday, edited Wednesday, won Thursday. By
+    Friday every one of those touches used to be gone; now the deal counts once, dated
+    at the win, and the rep's open_deals is 0 while their touches is 1."""
+    from crm import service
+
+    ada = _user("Ada")
+    deal = _deal("Proposal to Won", owner=ada, touched=False)
+    _activity(deal, days_ago=3)                      # Monday's note
+    assert service.update_deal(deal, value=5000) is not None   # Wednesday's field edit
+    _win(deal)                                       # Thursday's close
+
+    out = service.get_weekly_touches()
+    rep = _reps(out)["Ada"]
+    assert (rep["open_deals"], rep["touches"]) == (0, 1)
+    assert [d["title"] for d in rep["deals"]] == ["Proposal to Won"]
+    assert rep["deals"][0]["stage"] == "won"
+    # Dated at the win, not at the note and not at the edit.
+    assert rep["deals"][0]["touched_at"] == _won_at(deal)
+    assert (out["total_touches"], out["total_open_deals"]) == (1, 0)
+
+
+def test_the_move_to_won_is_itself_a_touch_with_nothing_before_it():
+    """Nothing noted, nothing edited — just the close. The worked-example test stages an
+    activity AND an edit first, so it cannot prove this on its own."""
+    from crm import service
+
+    ada = _user("Ada")
+    deal = _deal("Won outright", owner=ada, touched=False)
+    _win(deal)
+
+    rep = _reps(service.get_weekly_touches())["Ada"]
+    assert (rep["open_deals"], rep["touches"]) == (0, 1)
+    assert [d["title"] for d in rep["deals"]] == ["Won outright"]
+
+
+def test_a_note_on_a_deal_already_won_is_not_a_touch():
+    """Row four of the issue's table. The deal's instant froze at its win, so a note
+    typed while it sits in Won moves nothing — and the win itself is long outside the
+    window, so the deal is not on the board at all."""
+    from crm import service
+
+    ada = _user("Ada")
+    won = _deal("Won last month", owner=ada, touched=False)
+    _win(won, days_ago=20)
+    _activity(won)                                   # a note, now, while sitting in Won
+    _deal("Still open, untouched", owner=ada, touched=False)
+
+    rep = _reps(service.get_weekly_touches())["Ada"]
+    assert (rep["open_deals"], rep["touches"]) == (1, 0)
+    assert rep["deals"] == []
+
+
+def test_a_reopened_then_rewon_deal_counts_once_at_its_latest_win():
+    """MAX over the 'won' events, so a deal re-won this week is credited this week and
+    not in the window of the win it was reopened out of."""
+    from core.postgres import pg_fetchone
+    from crm import service
+
+    ada = _user("Ada")
+    deal = _deal("Won, reopened, re-won", owner=ada, touched=False)
+    _win(deal, days_ago=20)
+    assert service.update_deal_stage(deal, "negotiation") is not None
+    _win(deal)
+
+    assert pg_fetchone(
+        "SELECT COUNT(*) AS c FROM deal_stage_events "
+        "WHERE deal_id = %s AND new_stage = 'won'", (deal,),
+    )["c"] == 2
+
+    rep = _reps(service.get_weekly_touches())["Ada"]
+    assert rep["touches"] == 1
+    assert [d["title"] for d in rep["deals"]] == ["Won, reopened, re-won"]
+    assert rep["deals"][0]["touched_at"] == _won_at(deal)
+
+    # A window covering only the FIRST win credits nothing: MAX picked the latest.
+    early = service.get_weekly_touch_detail(
+        owner_id=ada,
+        start=(NOW - timedelta(days=21)).strftime("%Y-%m-%d"),
+        end=(NOW - timedelta(days=19)).strftime("%Y-%m-%d"),
+    )
+    assert early["rep"]["touches"] == 0
+    assert early["deals"] == []
+
+
+def test_open_deals_means_currently_open_and_touches_can_exceed_it():
+    """The two are separate facts since #179, never a ratio — which is why open_deals
+    carries its own OPEN_PREDICATE_D filter over the widened row set."""
+    from crm import service
+
+    ada = _user("Ada")
+    for title in ("Closed one", "Closed two"):
+        deal = _deal(title, owner=ada, touched=False)
+        _activity(deal, days_ago=2)
+        _win(deal)
+    _deal("Still open", owner=ada, touched=False)
+
+    out = service.get_weekly_touches()
+    rep = _reps(out)["Ada"]
+    assert (rep["open_deals"], rep["touches"]) == (1, 2)
+    assert out["total_touches"] == 2 and out["total_open_deals"] == 1
+
+
+def test_a_rep_whose_only_deal_was_won_this_week_still_shows_and_keeps_the_card_visible():
+    """computed_deals counts the WIDENED row set. Scoped to open deals it would read 0
+    here and the client would hide the card — hiding exactly the win it exists to
+    credit. The zero-keys gate is untouched: a NULL count adds nothing either way."""
+    from crm import service
+
+    ada = _user("Ada")
+    _win(_deal("Only deal", owner=ada, touch_count=3, touched=False))
+
+    out = service.get_weekly_touches()
+    assert "Ada" in _reps(out)
+    rep = _reps(out)["Ada"]
+    assert (rep["open_deals"], rep["touches"]) == (0, 1)
+    assert out["computed_deals"] == 1
+
+    bob = _user("Bob")
+    _win(_deal("Keyless win", owner=bob, touch_count=None, touched=False))
+    assert service.get_weekly_touches()["computed_deals"] == 1
+
+
+def test_a_win_outside_the_window_never_creates_a_zero_row():
+    """A removed user must not be resurrected as a permanent 0/0 row, so the roster's
+    won branch carries the window's UPPER bound as well as its lower one."""
+    from crm import service
+
+    ada = _user("Ada")
+    _win(_deal("Won ten days ago", owner=ada, touched=False), days_ago=10)
+    assert "Ada" not in _reps(service.get_weekly_touches())
+
+    bob = _user("Bob")
+    _win(_deal("Won just now", owner=bob, touched=False))
+    historical = service.get_weekly_touches(
+        start=(NOW - timedelta(days=10)).strftime("%Y-%m-%d"),
+        end=(NOW - timedelta(days=8)).strftime("%Y-%m-%d"),
+    )
+    assert "Bob" not in _reps(historical)
+
+
+def test_the_window_bounds_are_inclusive_start_exclusive_end():
+    """A win sitting exactly on window_start counts and one exactly on window_end does
+    not. The outside-window cases cannot tell >= from > or < from <=."""
+    from crm import service
+
+    start_day = (NOW - timedelta(days=10)).strftime("%Y-%m-%d")
+    end_day = (NOW - timedelta(days=8)).strftime("%Y-%m-%d")
+    window_start = datetime.strptime(start_day, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    window_end = (
+        datetime.strptime(end_day, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        + timedelta(days=1)
+    )
+
+    ada = _user("Ada")
+    _win_at(_deal("At the start bound", owner=ada, touched=False), window_start)
+    _win_at(_deal("At the end bound", owner=ada, touched=False), window_end)
+
+    rep = _reps(service.get_weekly_touches(start=start_day, end=end_day))["Ada"]
+    assert rep["touches"] == 1
+    assert [d["title"] for d in rep["deals"]] == ["At the start bound"]
+
+
+def test_the_card_and_the_detail_agree_about_a_won_deal():
+    """Both surfaces read one SQL definition of a touched deal, so a won deal must land
+    identically on the card and on the drill-down — same counts, same rows, same date."""
+    from crm import service
+
+    ada = _user("Ada")
+    _deal("Open and touched", owner=ada)
+    won = _deal("Worked then won", owner=ada, touched=False)
+    _activity(won, days_ago=2)
+    _win(won)
+
+    card = _reps(service.get_weekly_touches())["Ada"]
+    detail = service.get_weekly_touch_detail(owner_id=ada)
+
+    assert (card["open_deals"], card["touches"]) == (1, 2)
+    assert (detail["rep"]["open_deals"], detail["rep"]["touches"]) == (1, 2)
+    assert {d["id"] for d in card["deals"]} == {d["id"] for d in detail["deals"]}
+    card_won = next(d for d in card["deals"] if d["id"] == won)
+    detail_won = next(d for d in detail["deals"] if d["id"] == won)
+    assert card_won["touched_at"] == detail_won["touched_at"] == _won_at(won)
 
 
 def test_the_cap_is_per_rep_and_ranks_only_touched_deals():
