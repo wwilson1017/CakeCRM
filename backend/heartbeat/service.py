@@ -280,3 +280,35 @@ def _maybe_run_proactive():
         return run_proactive_if_due()
     except Exception:
         logger.warning("proactive heartbeat errored", exc_info=True)
+
+
+# ── #72 Phase 4 observer seam (its OWN scheduler job, like #17's and #22's) ──
+# The rule the two seams above establish: local SQL rides maintenance_tick; network- or
+# AI-bound work gets its own decoupled job, so a hung request can never delay the fast
+# tick's deliveries. The observer makes one light-tier provider call per settled
+# conversation, so it lands squarely on the second side of that line.
+#
+# Note the CONTRAST with #72's other half: file-dreaming is pure local SQL and therefore
+# rides the existing _maybe_run_dreaming seam above rather than getting a job of its own.
+# Same issue, opposite side of the same rule.
+
+def observer_tick() -> dict | None:
+    """Dedicated scheduler job (registered in heartbeat/scheduler.py).
+
+    ``run_observer_if_due`` self-throttles to OBSERVER_INTERVAL_MINUTES, returns before
+    any claim or query when no provider is configured, and respects
+    ``heartbeat_enabled`` — so a 60s trigger is only the due-check cadence, and on a
+    keyless install this job costs one attribute read per minute.
+    """
+    return _maybe_run_observer()
+
+
+def _maybe_run_observer():
+    """Drive #72's observer if present. BOTH the lazy import (merge-order independence)
+    and the call sit under one broad guard, so nothing here — not even an import-time
+    error — can abort the observer job."""
+    try:
+        from memory.observer import run_observer_if_due
+        return run_observer_if_due()
+    except Exception:
+        logger.warning("observer pass errored", exc_info=True)

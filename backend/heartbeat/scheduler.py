@@ -1,6 +1,6 @@
 """APScheduler wiring for the heartbeat (issue #6).
 
-A single ``BackgroundScheduler`` with FOUR jobs, deliberately decoupled so a slow
+A single ``BackgroundScheduler`` with FIVE jobs, deliberately decoupled so a slow
 system AI turn (or a slow inbox scan) never stalls the bounded maintenance passes:
   * ``maintenance_tick`` — every 60s: stamp the clock, drive dreaming + the lead-score
     refresh (fast, bounded, local SQL).
@@ -10,9 +10,11 @@ system AI turn (or a slow inbox scan) never stalls the bounded maintenance passe
     bounds its Gmail call with a wall-clock deadline).
   * ``proactive`` — every 60s: run the daily digest / stale nudges if due (#22 Phase 3;
     delivers over the network and may run one AI turn, so same reasoning as gmail_scan).
-Each job is ``max_instances=1, coalesce=True`` so a slow run never stacks. The four
+  * ``observer`` — every 60s: run the #72 Phase 4 observer if due (one light-tier call
+    per settled conversation, so AI-bound: same reasoning again).
+Each job is ``max_instances=1, coalesce=True`` so a slow run never stacks. The five
 jobs share APScheduler's default thread pool, whose default width (10) far exceeds the
-four low-frequency jobs here, so a slow scan can't starve maintenance_tick of a worker. No persistent job store — jobs are re-registered on every boot
+five low-frequency jobs here, so a slow scan can't starve maintenance_tick of a worker. No persistent job store — jobs are re-registered on every boot
 (the ticks are idempotent). ``get_scheduler()`` exposes the scheduler so other
 features (e.g. #5 dreaming, if it ever wants its own job) can register without
 touching this module.
@@ -65,9 +67,19 @@ def start_scheduler() -> None:
         service.proactive_tick, "interval", seconds=60, id="proactive",
         max_instances=1, coalesce=True,
     )
+    # #72 Phase 4: the observer makes a light-tier provider call per settled
+    # conversation, so by the same rule as gmail_scan and proactive it gets its own
+    # decoupled job. run_observer_if_due is settings-gated, returns before any claim or
+    # query when no provider is configured, and self-throttles to its own interval, so a
+    # 60s trigger is only the due-check cadence. (#72's OTHER half, file-dreaming, is
+    # pure local SQL and rides maintenance_tick's existing dreaming seam instead.)
+    _scheduler.add_job(
+        service.observer_tick, "interval", seconds=60, id="observer",
+        max_instances=1, coalesce=True,
+    )
     _scheduler.start()
     logger.info("Heartbeat scheduler started (maintenance_tick 60s + heartbeat_turn 300s "
-                "+ gmail_scan 60s + proactive 60s)")
+                "+ gmail_scan 60s + proactive 60s + observer 60s)")
 
 
 def shutdown_scheduler() -> None:
