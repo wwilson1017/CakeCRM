@@ -301,14 +301,69 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   due-guard) and is driven by **#6's 60s `maintenance_tick`** (via
   `heartbeat.service._maybe_run_dreaming`) — #5's interim lifespan task was absorbed
   when #6 landed, exactly as planned.
+  Since **#72 Phase 4 the cycle has a SECOND unit**: live `topics/*.md` context files,
+  scored by `scorer.score_file` inside `_run_cycle`'s *existing* transaction — same
+  advisory lock, same 03:00 slot guard, same `SET LOCAL` timeouts, same audit row, **no
+  new job** (file-dreaming is local SQL, so it rides the tick; the observer below is
+  AI-bound and does not — that pair IS the rule, not an exception to it). The usage
+  signal is `assistant_context_files.read_count` / `last_read_at`, bumped by
+  `context_files.service.track_read_for()` from **exactly three places**: the
+  `read_context_file`, `read_daily_note` and `search_context_files` tool executors (the
+  search records the *surfaced subset* only). It is deliberately **never** bumped by
+  `build_knowledge_block`, by the manifests, or by the REST router — that is the
+  **load-count trap**: `soul.md`, `MEMORY.md` and both manifests load on every single
+  turn, so an unconditional count would be a constant and nothing could ever be archived.
+  Same call #5 made for facts (FTS matches count, confidence backfill does not), and a
+  test invokes every excluded entry point with non-empty fixtures so it cannot pass
+  vacuously. Chatty's five file signals renormalize to four — read recency .35,
+  recency-gated read frequency .20, write recency .25 (`updated_at`, the one signal a
+  file has and a fact does not), age .20; mention frequency is dropped, it has no
+  producer here. **Topic files only** (Decision C): protected files and daily notes are
+  never archived, re-asserted in SQL from the GENERATED `kind`/`is_protected` columns
+  rather than a Python set. The archive UPDATE deliberately does **not** set
+  `updated_at` — it is both the write-recency signal and the Memory editor's
+  optimistic-concurrency token, so bumping it would inflate the score and 409 an open
+  editor. Archival stays soft: `read_file` still returns archived rows and any write
+  un-archives. `dreaming_runs` gains `files_scored`/`files_archived`, exposed by the REST
+  endpoint as counts only — archived *filenames* live in `details` and are the same kind
+  of leak that already keeps `details` out of the response.
+  **The observer** (#72 Phase 4, `backend/memory/observer.py`) is the assistant's **only
+  automatic learning path** and the one AI member of `backend/memory/`. It reads the
+  `role='user'` rows written since a per-conversation watermark
+  (`assistant_conversations.observed_through_seq`), makes **one light-tier call per
+  settled conversation**, and writes two row shapes: `memory_facts` rows with
+  `created_by='observer'`, `source='conversation:<id>'` and confidence **≤ 0.9**, and GTD
+  **`inbox`** tasks with `source='agent'` and no owner. It is **not an agent turn** — no
+  tools, no registry, no iteration, a fixed JSON schema — so the background allowlist and
+  the one-`notify_user` ceiling are untouched and it **cannot schedule a notification of
+  any kind** (Decision B: the inbox IS the confirmation discipline for a writer with no
+  human to ask; a test reads the module's own AST and proves it references no delivery
+  channel). Chatty's THREE pipelines (observer, per-fourth-message extractor, 581-line
+  commitments store) collapse into this one pass; its `observations` table, commitment
+  lifecycle and per-provider HTTP fan-out are not ported. Injection posture: assistant
+  rows — and therefore every tool result, Gmail body and context-file read — are excluded
+  **by SQL, not by filtering**; a user row carrying an upload fence is skipped whole (fail
+  closed); the transcript **and** the already-tracked task titles are each nonce-fenced
+  separately; rows older than 14 days are dropped **per row**, not per segment. Dedupe and
+  supersession run off `memory.service.find_live_facts_by_key` (exact, case-folded, in
+  SQL — `query_facts` is unescaped-ILIKE substring matching and must never be used for
+  this), it **refuses to supersede any fact it did not write**, and the replacement is
+  **inserted before** the old row is invalidated so a crash costs a duplicate, never the
+  fact. It runs on its own 60s scheduler job, claims one run per 15 minutes with a
+  rowcount UPDATE on `heartbeat_state.last_observer_run_at`, respects
+  `settings.heartbeat_enabled`, and is a **complete keyless no-op** — with no provider it
+  returns before the claim, the query and any log above debug. The migration backfilled
+  every existing conversation's watermark to its own `max(seq)`, so history is never
+  replayed; that backfill is **once-only by the runner's `_migrations_applied` ledger**,
+  not by being idempotent, and re-running it would consume unobserved messages.
   **Context files** (#72 Phase 1+2, `backend/context_files/` + `frontend/src/crm/MemoryPage.tsx`)
   restore chatty's *other* memory unit, which #5 deliberately skipped: `soul.md` (the
   assistant's self-written identity), `MEMORY.md` (its living snapshot), `topics/<name>.md`
   and `daily/YYYY-MM-DD.md`, all rows in `assistant_context_files`. So the #5 note above
   that "dreaming's unit is the fact because CakeCRM has no context-file store" now states
-  a *history*, not a constraint — file-dreaming is #72 Phase 4 and nothing sets
-  `archived_at` yet, though every read already carries the live predicate so that phase is
-  purely additive. `kind` and `is_protected` are **GENERATED columns** derived from
+  a *history*, not a constraint — **file-dreaming landed in Phase 4 and is the only writer
+  of `archived_at`** (see the dreaming paragraph above); every read already carried the
+  live predicate, so that phase was purely additive. `kind` and `is_protected` are **GENERATED columns** derived from
   `filename` (a code-only convention drifts; a generated column cannot), and the filename
   grammar is the single normalizer — `soul.md` | `MEMORY.md` | `topics/<slug>.md` |
   `daily/<ISO date>.md`, case-canonicalized, NFC-normalized, with a bare `x.md` normalized
@@ -441,8 +496,11 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   a context window today, so the other five providers run on the chars/4 estimate against
   `DEFAULT_BUDGET_TOKENS` — bounded, but a real window smaller than that could still refuse
   a request before the trigger fires. Giving them real windows is its own issue.
-  Phases 4 (observer/extractor/commitments-as-tasks/file-dreaming) and 5
-  (optional embeddings re-ranker) are follow-ups; #72 stays open as the tracker.
+  **Phase 4 (observer + commitments-as-inbox-tasks + file-dreaming) landed**; **Phase 5
+  (the optional embeddings re-ranker) was DECLINED** on 2026-09-14 — the default provider
+  cannot embed at all, and without pgvector a stored vector could only re-rank what FTS
+  already found, so it could never surface what FTS missed. FTS is the search,
+  permanently. The Phase 4 PR carries no closing keyword; #72 is closed by hand.
   Assistant chat history and memory are still install-wide — Phase B of #60.
   **The product manual is a searchable library of committed markdown** (#143 phase 1,
   `backend/help/`): `content/**/*.md`, one file per topic, loaded lazily and cached,
@@ -2472,11 +2530,12 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Postgres pool + migration runner | `cake_os/backend/core/postgres.py` |
 | AI providers + pricing + setup wizard | `chatty/backend/core/providers/`, `chatty/frontend/src/setup/` |
 | CRM core (schema, router, tools, smart import) — **landed #3** as `backend/crm/` + `frontend/src/crm/` + `frontend/src/shared/` | `chatty/backend/integrations/crm_lite/`, `chatty/frontend/src/crm/` |
-| Assistant engine — **chat loop, tool registry, confirmations, uploads landed #4** as `backend/assistant/` + `frontend/src/assistant/`; **memory (facts + FTS) + dreaming (pure-algorithmic usage scoring + fact soft-archival) landed #5** as `backend/memory/` + `backend/dreaming/` (dreaming's archival unit is the fact row, not context files — CakeCRM has no file store; driven by #6's maintenance tick) | `chatty/backend/core/agents/` |
-| Context files + Memory UI (`assistant_context_files` with GENERATED `kind`/`is_protected`; soul unfenced in static, knowledge nonce-fenced in volatile; 7 keyless tools; always-confirm on protected files; `/api/context-files` + `/api/memory`; `MemoryPage`) — **landed #72 Phase 1+2** as `backend/context_files/` + `backend/memory/router.py` + `frontend/src/crm/MemoryPage.tsx`. Chatty's `_load-order.json`, GCS sync, `atomic_write`, meetings/transcripts and `relevance_prefetch` do not translate and were not ported; its flat namespace became `topics/`+`daily/` prefixes to fit one table; its regex `sanitize_memory_content` was dropped in favour of this repo's nonce fencing (forge-proof where a blocklist is not). Fencing `MEMORY.md` is deliberately STRICTER than chatty, which loads it raw, because ours becomes extractor-fed in Phase 4 | `chatty/backend/core/agents/context_manager.py` + `tools/context_tools.py` + `ai_service._knowledge_management_instructions()` |
+| Assistant engine — **chat loop, tool registry, confirmations, uploads landed #4** as `backend/assistant/` + `frontend/src/assistant/`; **memory (facts + FTS) + dreaming (pure-algorithmic usage scoring + fact soft-archival) landed #5** as `backend/memory/` + `backend/dreaming/` (dreaming's archival unit was the fact row because CakeCRM had no file store; since #72 Phase 4 it scores topic files too, driven by #6's `maintenance_tick`) | `chatty/backend/core/agents/` |
+| Context files + Memory UI (`assistant_context_files` with GENERATED `kind`/`is_protected`; soul unfenced in static, knowledge nonce-fenced in volatile; 7 keyless tools; always-confirm on protected files; `/api/context-files` + `/api/memory`; `MemoryPage`) — **landed #72 Phase 1+2** as `backend/context_files/` + `backend/memory/router.py` + `frontend/src/crm/MemoryPage.tsx`. Chatty's `_load-order.json`, GCS sync, `atomic_write`, meetings/transcripts and `relevance_prefetch` do not translate and were not ported; its flat namespace became `topics/`+`daily/` prefixes to fit one table; its regex `sanitize_memory_content` was dropped in favour of this repo's nonce fencing (forge-proof where a blocklist is not). Fencing `MEMORY.md` is deliberately STRICTER than chatty, which loads it raw. (The original reason given was "ours becomes extractor-fed in Phase 4"; that turned out to be wrong — Phase 4's observer writes `memory_facts` rows and never touches a context file. The tightening stands on its own: Baker rewrites `MEMORY.md` from conversation content, which is laundered third-party text either way.) | `chatty/backend/core/agents/context_manager.py` + `tools/context_tools.py` + `ai_service._knowledge_management_instructions()` |
+| Observer + file-dreaming — **landed #72 Phase 4** as `backend/memory/observer.py` (+ `assistant_conversations.observed_through_seq`, `heartbeat_state.last_observer_run_at`, three `history` helpers, `gtd_service.{list_open_task_titles,open_task_with_title_exists}`, the `observer` scheduler job) and `dreaming.scorer.score_file` + the topic-file pass inside `processor._run_cycle` (+ `assistant_context_files.read_count`/`last_read_at`, `context_files.service.track_read_for`, `dreaming_runs.files_*`). Chatty's THREE pipelines collapse into ONE pass: its nightly observer, its per-fourth-message extractor and its 581-line commitments store all become one scheduler pass writing temporal facts + GTD inbox tasks. **Not ported:** the per-provider HTTP fan-out with hardcoded model ids (the ABC's light tier replaces it — repo rule), the SQLite `MemoryDB` and its GCS backup, the `observations` table and its `## Things I've Noticed About You` prompt block (the fact IS the unit), and the whole commitment lifecycle — `surfaced_count`, the rolling daily surfacing cap, the three expiry cutoffs and `complete_commitment` — because the GTD inbox IS the surfacing and done/dropped IS the lifecycle (a 14-day stale-segment guard replaces chatty's immortal-commitment rule). File-dreaming renormalizes chatty's FIVE file signals to four: mention frequency is dropped (no producer here) and load rate becomes an on-demand read count, because an unconditional load count is a constant in this tree. **Phase 5 (embeddings) declined.** | `chatty/backend/core/agents/memory/{observer,extractor,commitments}.py` + `dreaming/scorer.py` |
 | Conversation compaction (`backend/assistant/compaction.py` + `assembly._apply_compaction` + four `assistant_conversations` columns + `history.{get_compaction_state,set_compaction,mark_untrusted_seen,is_conversation_tainted}` + `delimiters.wrap_conversation_summary`) — **landed #72 Phase 3**. Four deliberate departures from the blueprint, each because CakeCRM differs: the summarizer goes through the `AIProvider` ABC on the light tier (chatty hardcodes a Haiku id and calls the SDK directly, which this repo forbids), so the gist is bounded by CHARACTERS — `stream_turn` exposes no `max_tokens` knob; the gist is nonce-fenced rather than regex-scrubbed, and the fence is minted ONCE at write time because our provider caches the conversation PREFIX; a row whose tool work is unfinished is never gisted (chatty needs no such guard — it never persists a call and its result separately); and the transcript truncates at ROW granularity rather than slicing the rendered character stream, which can sever a fence. Row granularity also deletes a whole class of chatty's care: one row carries an iteration's calls AND its results, so a boundary can never SPLIT a `tool_use` from its `tool_result`. NOT ported: chatty's `sanitize_memory_content` (dropped in Phase 1 for nonce fencing) and its `_fetch_anthropic_key` fallback (no provider-specific key path here). Fixed in passing: `claude-opus-4-8`, `get_ai_provider`'s DEFAULT Anthropic model, had no `MODEL_CONTEXT_WINDOWS` entry, so the composer's context meter was hidden on a default install | `chatty/backend/core/agents/compaction/service.py` + `context_assembly._apply_compaction` |
 | Assistant brand + identity-panel role gate (`identity.NAME` fixed as "Baker": no `name` column read, no `name` write path, prompt interpolation from the constant, and `NAME_NOTE` between soul and `SALES_GUIDE` so free identity text cannot rename it either; one-shot `UPDATE assistant_identity SET name='Baker'` migration with the column kept for rollback safety; `IdentitySettings.tsx` renders the name read-only and gates the personality editor on `useAuth().isAdmin`, members read-only) — **landed #71 (bundling #106)** as `backend/assistant/{identity,router}.py` + `20260826010825_assistant_name_is_a_brand.sql` + `frontend/src/assistant/IdentitySettings.tsx` (+ co-located vitest). Personality stays user-editable; only the name became permanent | New capability (product decision on issue #71 — no blueprint) |
-| Heartbeat + background AI turn — **landed #6** as `backend/heartbeat/` (60s APScheduler tick) + `backend/assistant/background.py` (non-SSE `run_background_turn`: auto-approved writes under a server-enforced tool allowlist + `WRITE_BUDGET_BACKGROUND`). The scheduler now runs **four** jobs, split by one rule the code states explicitly: **local SQL rides `maintenance_tick`** (#5 dreaming, #18's score refresh), **network- or AI-bound work gets its OWN `add_job`** (`heartbeat_turn`, #17's `gmail_scan`, #22 Phase 3's `proactive`) so a hung request can never stall the maintenance passes. **#188 removed reminders entirely** (todos are the one follow-up primitive): the package, the `/api/reminders` mount, the three agent tools and the `reminders` table are gone (dropped by migration), and the 60s job — which also stamps the clock and drives dreaming + the score refresh — was renamed `reminder_tick` → `maintenance_tick` and now runs no AI and reads no env gate | `chatty/backend/core/agents/background_runner.py` + `main.py` scheduler wiring |
+| Heartbeat + background AI turn — **landed #6** as `backend/heartbeat/` (60s APScheduler tick) + `backend/assistant/background.py` (non-SSE `run_background_turn`: auto-approved writes under a server-enforced tool allowlist + `WRITE_BUDGET_BACKGROUND`). The scheduler now runs **five** jobs, split by one rule the code states explicitly: **local SQL rides `maintenance_tick`** (#5 dreaming and #72 Phase 4's file-dreaming inside it, #18's score refresh), **network- or AI-bound work gets its OWN `add_job`** (`heartbeat_turn`, #17's `gmail_scan`, #22 Phase 3's `proactive`, #72 Phase 4's `observer`) so a hung request can never stall the maintenance passes. **#188 removed reminders entirely** (todos are the one follow-up primitive): the package, the `/api/reminders` mount, the three agent tools and the `reminders` table are gone (dropped by migration), and the 60s job — which also stamps the clock and drives dreaming + the score refresh — was renamed `reminder_tick` → `maintenance_tick` and now runs no AI and reads no env gate | `chatty/backend/core/agents/background_runner.py` + `main.py` scheduler wiring #72 Phase 4 is the clearest statement of the rule: its two halves land on opposite sides of it | `chatty/backend/core/agents/background_runner.py` + `main.py` scheduler wiring |
 | Notifications (Web Push VAPID keys persisted in Postgres, `notify_user` tool, bell) + system alerts — **landed #6** as `backend/notifications/` + `backend/alerts/` + `frontend/src/crm/components/{NotificationsBell,NotificationSettings}.tsx` + `frontend/public/sw.js`. Telegram delivery goes out through `telegram.service.notify_linked_user` (the pure-sync channel #7 landed), via `_send_telegram`; WhatsApp not ported. Chatty's user-configurable `scheduled_actions` subsystem (leases/active-hours/triage/dashboards) deliberately deferred | `chatty/backend/core/agents/notifications/` + `alerts/` |
 | Telegram — **landed #7** as `backend/telegram/*` + `frontend/src/crm/components/TelegramSettings.tsx`: single-assistant long-polling (one main-loop asyncio task offloads `getUpdates` via `to_thread` and drives `engine.chat` on the SAME loop as the SSE endpoint — provider async clients are loop-bound), Fernet-encrypted bot token on a `telegram_settings` singleton, one linked user via a single-use `link_code` (Telegram deep link), CRM write confirmations as inline-keyboard Approve/Deny buttons (mapped onto `engine.resolve_confirmation` + an empty-messages continuation, batched so it continues only once every write is resolved), and `telegram.service.notify_linked_user(text)->bool` as the pure-sync outbound channel #6 consumes. No webhooks, no group chat (deliberately cut). | `chatty/backend/integrations/telegram/` |
 | Gmail (read + draft only: `gmail_connection` singleton, BYO OAuth at `/api/gmail`, tools `gmail_search`/`gmail_read_thread`/`gmail_create_draft`, guard test + SECURITY.md) — **landed #8** as `backend/gmail/` + `frontend/src/crm/components/GmailCard.tsx` | `chatty/backend/integrations/google/` |
