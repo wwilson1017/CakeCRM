@@ -35,6 +35,7 @@ def with_provider(monkeypatch):
     captured = {}
 
     def _chat(provider, registry, messages, **kwargs):
+        captured["registry"] = registry
         captured["messages"] = messages
         captured["kwargs"] = kwargs
         return _fake_stream()
@@ -280,6 +281,44 @@ def test_confirm_delegates_to_resolver(client, monkeypatch):
                     json={"conversation_id": "c1", "tool_use_id": "t1", "decision": "approve", "msg_id": "row-9"})
     assert r.status_code == 200 and r.json()["decision"] == "approve"
     assert seen["msg_id"] == "row-9"  # msg_id threaded through
+
+
+# ── Identity reaches the tool layer (issue #190) ──────────────────────────────
+# These pin the ROUTE's construction of the registry. Every other test of #190 builds a
+# registry by hand, so dropping `user=user` from a route here is a silent return to
+# Phase A's unattributed writes with the whole suite still green — which is how it was
+# caught: the mutation stayed green until these existed.
+
+def test_chat_builds_the_registry_with_the_caller(client, with_provider):
+    r = client.post("/api/assistant/chat", json={"messages": [{"role": "user", "content": "hi"}]})
+    assert r.status_code == 200
+    assert with_provider["registry"].user == fake_admin()
+
+
+def test_chat_upload_builds_the_registry_with_the_caller(client, with_provider):
+    r = client.post(
+        "/api/assistant/chat/upload",
+        data={"payload": json.dumps({"messages": [{"role": "user", "content": "hi"}]})},
+    )
+    assert r.status_code == 200
+    assert with_provider["registry"].user == fake_admin()
+
+
+def test_confirm_credits_the_approver_not_the_proposer(client, monkeypatch):
+    # The approver is the actor a confirmed write is attributed to. The registry the
+    # route hands `resolve_confirmation` is what carries that, which is why the
+    # resolver's signature never changed.
+    seen = {}
+
+    def _resolve(reg, cid, tuid, decision, msg_id=None):
+        seen["registry"] = reg
+        return {"tool": "crm_create_contact", "decision": decision}
+
+    monkeypatch.setattr(router_mod.engine, "resolve_confirmation", _resolve)
+    r = client.post("/api/assistant/confirm",
+                    json={"conversation_id": "c1", "tool_use_id": "t1", "decision": "approve"})
+    assert r.status_code == 200
+    assert seen["registry"].user == fake_admin()
 
 
 # ── Conversations ─────────────────────────────────────────────────────────────
