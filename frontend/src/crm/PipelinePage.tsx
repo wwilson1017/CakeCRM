@@ -1915,6 +1915,14 @@ function DealBoardCard({ deal, columnStage, onOpen, selectable = false, isSelect
   return (
     <div
       role="button"
+      // NAMED EXPLICITLY, because a role="button" with no label takes its accessible name from
+      // its own contents — which here begin with the selection checkbox's "Select <title>".
+      // Screen readers therefore announced this control as "Select Acme renewal, Acme renewal,
+      // $600 …": the wrong verb (it OPENS the deal, it does not select it) followed by the
+      // title twice. An explicit label also keeps the money and the metadata row out of the
+      // name, and carries the ARCHIVED chip's state — the one thing in the subtree worth
+      // hearing — rather than losing it with the rest (issue #176).
+      aria-label={archived ? `Open ${deal.title} (archived)` : `Open ${deal.title}`}
       tabIndex={0}
       onClick={onOpen}
       onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); } }}

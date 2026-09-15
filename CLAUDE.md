@@ -892,6 +892,17 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `flex: 1; minWidth: 0`: its row is `space-between` over up to four children, so a short
   title on a 560px card drifted into the middle until the title owned the slack — invisible
   at 288px, which is why it survived until a column could grow.
+  **The card carries an explicit `aria-label` and must keep one** (#176). It is a
+  `role="button"` div, so with no label its accessible name is computed from its own
+  contents — which begin with the bulk-select checkbox's `Select <title>`, making the
+  control that OPENS a deal announce as "Select Acme renewal, Acme renewal, $600 …": the
+  wrong verb, the title twice, and the money in the name. The label is
+  `Open <title>` / `Open <title> (archived)`, so the ARCHIVED chip — the one thing in the
+  subtree worth hearing — survives while the metadata row does not. **The general rule for
+  this repo:** a container given an interactive `role` that also holds a labelled control
+  needs a name of its own, and the test for it asserts the ACCESSIBLE NAME (#162's
+  convention), never `textContent` — which here can see neither the bug nor the fix, both
+  being attributes, so a `textContent` assertion is green in both directions.
   `deal_stage_events` is the one CRM table with a real FK to `deals`, so it MUST stay in
   every `TRUNCATE` sweep or the CRM reset errors out. `merge_deals` repoints
   activity/tasks, copies notes with a `[Merged from deal #N]` marker, gap-fills custom
