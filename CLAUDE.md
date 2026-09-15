@@ -331,7 +331,10 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   automatic learning path** and the one AI member of `backend/memory/`. It reads the
   `role='user'` rows written since a per-conversation watermark
   (`assistant_conversations.observed_through_seq`), makes **one light-tier call per
-  settled conversation**, and writes two row shapes: `memory_facts` rows with
+  settled conversation** (settled = quiet for 10 minutes counting *every* message, not
+  just the user's — a still-streaming assistant reply means nothing has settled yet; and
+  eligible on **rows OR characters**, because a row count alone never observes a user who
+  types one substantial message and stops), and writes two row shapes: `memory_facts` rows with
   `created_by='observer'`, `source='conversation:<id>'` and confidence **≤ 0.9**, and GTD
   **`inbox`** tasks with `source='agent'` and no owner. It is **not an agent turn** — no
   tools, no registry, no iteration, a fixed JSON schema — so the background allowlist and

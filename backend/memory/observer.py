@@ -82,6 +82,11 @@ logger = logging.getLogger(__name__)
 OBSERVER_INTERVAL_MINUTES = 15   # claim cadence; the 60s job is only the due-check
 QUIET_MINUTES = 10               # how long a conversation must be idle to be settled
 MIN_NEW_USER_ROWS = 2            # one "thanks" is not worth a model call
+# ...but one LONG message is. Rows OR characters: without the character floor a user who
+# types a single substantial message and stops is never observed at all, and the last row
+# of a segment too large for one transcript budget can strand until the stale guard drops
+# it unread. 200 chars is comfortably above any acknowledgement and below a real note.
+MIN_NEW_USER_CHARS = 200
 MAX_CONVERSATIONS_PER_RUN = 5
 MAX_ROWS_PER_SEGMENT = 200       # bound the fetch; the transcript budget bounds the call
 MAX_TRANSCRIPT_CHARS = 8_000     # chatty verbatim
@@ -692,7 +697,7 @@ def run_observer_if_due(now=None) -> dict | None:
             return None                     # another instance claimed this interval
 
         candidates = history.list_observer_candidates(
-            QUIET_MINUTES, MIN_NEW_USER_ROWS, MAX_CONVERSATIONS_PER_RUN,
+            QUIET_MINUTES, MIN_NEW_USER_ROWS, MIN_NEW_USER_CHARS, MAX_CONVERSATIONS_PER_RUN,
         )
         if not candidates:
             return None

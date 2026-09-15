@@ -525,14 +525,24 @@ def claim_pending_tool(conversation_id: str, tool_use_id: str, msg_id: str | Non
 
 # ── Observer watermark (issue #72 Phase 4) ─────────────────────────────────
 
-def list_observer_candidates(quiet_minutes: int, min_new_user_rows: int, limit: int) -> list[dict]:
-    """Conversations the observer should look at: enough NEW user rows above their
+def list_observer_candidates(quiet_minutes: int, min_new_user_rows: int,
+                             min_new_user_chars: int, limit: int) -> list[dict]:
+    """Conversations the observer should look at: enough NEW user material above their
     watermark, and quiet for at least *quiet_minutes*.
 
-    Returns ``[{id, observed_through_seq, new_user_rows, newest_at}]``, oldest-activity
-    first so one busy thread cannot starve the others, with ``c.id`` closing the order
-    (issue #58 — ``newest_at`` ties whenever two threads' last messages land in the same
-    instant, and an unstable capped window would silently drop a conversation).
+    "Enough" is rows OR characters, and the OR is load-bearing in two places. A row count
+    alone means a user who types ONE substantial message and stops is never observed at
+    all — which is most of what this feature exists to catch. And when a segment is too
+    large for one transcript budget, the observer processes it across successive runs; a
+    row-only threshold can strand the final row of such a batch until another message
+    arrives, or until the 14-day stale guard drops it unread. The character floor closes
+    both, while still keeping a lone "thanks" from buying a model call.
+
+    Returns ``[{id, observed_through_seq, new_user_rows, new_user_chars, newest_at}]``,
+    oldest-activity first so one busy thread cannot starve the others, with ``c.id``
+    closing the order (issue #58 — ``newest_at`` ties whenever two threads' last messages
+    land in the same instant, and an unstable capped window would silently drop a
+    conversation).
 
     **Quietness is measured over EVERY message, not just the new user rows.** Taking the
     newest USER row would only prove the person stopped typing; an assistant row newer
@@ -555,22 +565,28 @@ def list_observer_candidates(quiet_minutes: int, min_new_user_rows: int, limit: 
         SELECT c.id,
                COALESCE(c.observed_through_seq, -1) AS observed_through_seq,
                m.new_user_rows,
+               m.new_user_chars,
                m.newest_at
         FROM assistant_conversations c
         JOIN LATERAL (
             SELECT count(*) FILTER (
                        WHERE role = 'user' AND seq > COALESCE(c.observed_through_seq, -1)
                    ) AS new_user_rows,
+                   COALESCE(sum(length(content)) FILTER (
+                       WHERE role = 'user' AND seq > COALESCE(c.observed_through_seq, -1)
+                   ), 0) AS new_user_chars,
                    max(created_at) AS newest_at
             FROM assistant_messages
             WHERE conversation_id = c.id
         ) m ON TRUE
-        WHERE m.new_user_rows >= %s
+        WHERE (m.new_user_rows >= %s OR m.new_user_chars >= %s)
+          AND m.new_user_rows >= 1
           AND m.newest_at <= now() - make_interval(mins => %s)
         ORDER BY m.newest_at ASC, c.id ASC
         LIMIT %s
         """,
-        (max(1, int(min_new_user_rows)), max(0, int(quiet_minutes)), max(1, int(limit))),
+        (max(1, int(min_new_user_rows)), max(1, int(min_new_user_chars)),
+         max(0, int(quiet_minutes)), max(1, int(limit))),
     )
 
 

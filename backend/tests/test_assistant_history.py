@@ -353,7 +353,7 @@ def test_set_compaction_clears_the_meter(fake_conn, rec):
 
 def test_candidate_query_counts_only_new_user_rows(rec):
     rec.fetchall_queue.append([])
-    history.list_observer_candidates(10, 2, 5)
+    history.list_observer_candidates(10, 2, 200, 5)
     sql = rec.sql_with("new_user_rows")
     assert "count(*) FILTER ( WHERE role = 'user' AND seq > COALESCE(c.observed_through_seq, -1) )" in sql
 
@@ -363,7 +363,7 @@ def test_candidate_query_measures_quietness_over_every_message(rec):
     is still in flight, and observing mid-turn is the one moment a commitment has not
     settled."""
     rec.fetchall_queue.append([])
-    history.list_observer_candidates(10, 2, 5)
+    history.list_observer_candidates(10, 2, 200, 5)
     sql = rec.sql_with("newest_at")
     filtered, _, rest = sql.partition("max(created_at) AS newest_at")
     assert "FILTER" not in rest.split("FROM assistant_messages")[0]
@@ -372,20 +372,31 @@ def test_candidate_query_measures_quietness_over_every_message(rec):
 
 def test_candidate_query_orders_oldest_first_with_an_id_tiebreak(rec):
     rec.fetchall_queue.append([])
-    history.list_observer_candidates(10, 2, 5)
+    history.list_observer_candidates(10, 2, 200, 5)
     assert "ORDER BY m.newest_at ASC, c.id ASC" in rec.sql_with("new_user_rows")
 
 
 def test_candidate_query_coalesces_a_null_watermark_for_the_caller(rec):
     rec.fetchall_queue.append([])
-    history.list_observer_candidates(10, 2, 5)
+    history.list_observer_candidates(10, 2, 200, 5)
     assert "COALESCE(c.observed_through_seq, -1) AS observed_through_seq" in rec.sql_with("new_user_rows")
 
 
 def test_candidate_query_clamps_its_arguments(rec):
     rec.fetchall_queue.append([])
-    history.list_observer_candidates(-5, 0, 0)
-    assert rec.params_with("new_user_rows") == [1, 0, 1]
+    history.list_observer_candidates(-5, 0, 0, 0)
+    assert rec.params_with("new_user_rows") == [1, 1, 0, 1]
+
+
+def test_candidate_query_accepts_rows_OR_characters(rec):
+    """A row count alone would never observe a user who types one substantial message
+    and stops, and could strand the last row of a budget-truncated batch."""
+    rec.fetchall_queue.append([])
+    history.list_observer_candidates(10, 2, 200, 5)
+    sql = rec.sql_with("new_user_chars")
+    assert "(m.new_user_rows >= %s OR m.new_user_chars >= %s)" in sql
+    assert "m.new_user_rows >= 1" in sql          # ...but never zero new rows
+    assert "COALESCE(sum(length(content)) FILTER (" in sql
 
 
 def test_user_rows_since_is_user_only_and_seq_bounded(rec):

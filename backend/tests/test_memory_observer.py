@@ -78,8 +78,9 @@ class FakeHistory:
     def user_rows_since(self, cid, after, limit):
         return [r for r in self.rows if r["seq"] > after][:limit]
 
-    def list_observer_candidates(self, quiet, min_rows, limit):
+    def list_observer_candidates(self, quiet, min_rows, min_chars, limit):
         self.candidate_calls += 1
+        self.candidate_args = (quiet, min_rows, min_chars, limit)
         return self.candidates[:limit]
 
     def advance_observed_seq(self, cid, seq):
@@ -829,3 +830,12 @@ def test_a_row_with_an_unreadable_date_is_still_included():
         [{"id": "m1", "seq": 1, "content": "Dana works at Acme", "created_at": None}], today=TODAY)
     assert "Dana works at Acme" in text and "unknown date" in text
     assert through == 1
+
+
+def test_the_candidate_query_is_asked_for_both_thresholds(wired):
+    w = wired(candidates=[])
+    observer.run_observer_if_due()
+    assert w.history.candidate_args == (
+        observer.QUIET_MINUTES, observer.MIN_NEW_USER_ROWS,
+        observer.MIN_NEW_USER_CHARS, observer.MAX_CONVERSATIONS_PER_RUN,
+    )

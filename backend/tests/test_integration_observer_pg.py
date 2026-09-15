@@ -90,10 +90,10 @@ def _message(cid: str, seq: int, role: str, content: str, minutes_ago: float = 6
     )
 
 
-def _candidate_ids(quiet=10, min_rows=2, limit=10):
+def _candidate_ids(quiet=10, min_rows=2, min_chars=200, limit=10):
     from assistant import history
 
-    return [c["id"] for c in history.list_observer_candidates(quiet, min_rows, limit)]
+    return [c["id"] for c in history.list_observer_candidates(quiet, min_rows, min_chars, limit)]
 
 
 # ── the migration ────────────────────────────────────────────────────────────
@@ -145,10 +145,39 @@ def test_a_settled_conversation_with_enough_new_user_rows_is_a_candidate(pg_db):
     assert _candidate_ids() == [cid]
 
 
-def test_one_new_user_row_is_not_enough(pg_db):
+def test_one_SHORT_new_user_row_is_not_enough(pg_db):
     cid = _conversation()
     _message(cid, 0, "user", "just one")
     assert _candidate_ids() == []
+
+
+def test_one_LONG_new_user_row_is_enough_on_its_own(pg_db):
+    """Without the character floor a user who types one substantial message and stops is
+    never observed at all — which is most of what the observer exists to catch."""
+    cid = _conversation()
+    _message(cid, 0, "user", "Dana at Acme said she would send the quote by Friday. " * 6)
+    assert _candidate_ids() == [cid]
+
+
+def test_the_last_row_of_a_budget_truncated_batch_is_offered_again(pg_db):
+    """The transcript budget processes an oversized segment across successive runs. With
+    a row-only threshold the final leftover row would strand until another message
+    arrived, or until the stale guard dropped it unread 14 days later."""
+    from assistant import history
+    from memory import observer
+
+    cid = _conversation()
+    big = "y" * observer.MAX_ROW_CHARS
+    for seq in range(10):
+        _message(cid, seq, "user", big)
+
+    # The budget really does truncate this segment, so the boundary is not the last row.
+    _, through = observer.build_transcript(history.user_rows_since(cid, -1, 200))
+    assert through is not None and through < 9
+
+    # Walk the watermark to the point where exactly ONE long row is left unobserved.
+    history.advance_observed_seq(cid, 8)
+    assert _candidate_ids() == [cid]
 
 
 def test_a_conversation_still_being_typed_in_is_not_a_candidate(pg_db):
@@ -179,13 +208,22 @@ def test_rows_at_or_below_the_watermark_do_not_count(pg_db):
     assert _candidate_ids() == [cid]
 
 
+def test_characters_below_the_watermark_do_not_count_either(pg_db):
+    """The char sum carries the same FILTER as the row count — otherwise a long observed
+    history would keep re-qualifying a conversation with nothing new in it."""
+    cid = _conversation(watermark=0)
+    _message(cid, 0, "user", "an extremely long already-observed message. " * 20)
+    _message(cid, 1, "user", "hi")
+    assert _candidate_ids() == []
+
+
 def test_a_null_watermark_counts_every_user_row(pg_db):
     cid = _conversation(watermark=None)
     _message(cid, 0, "user", "first thing")
     _message(cid, 1, "user", "second thing")
     from assistant import history
 
-    rows = history.list_observer_candidates(10, 2, 10)
+    rows = history.list_observer_candidates(10, 2, 200, 10)
     assert rows[0]["observed_through_seq"] == -1     # COALESCEd for the caller
 
 
@@ -326,7 +364,7 @@ def _observe_once(cid, provider, tracked=None):
     from memory import observer
 
     conv = {"id": cid, "observed_through_seq": None}
-    row = history.list_observer_candidates(10, 2, 10)
+    row = history.list_observer_candidates(10, 2, 200, 10)
     conv["observed_through_seq"] = next((c["observed_through_seq"] for c in row if c["id"] == cid), -1)
     return observer.observe_conversation(conv, provider, tracked if tracked is not None else {})
 
