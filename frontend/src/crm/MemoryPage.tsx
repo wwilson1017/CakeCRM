@@ -27,6 +27,7 @@ import {
 import { pagePadding, pageHeading, sectionHeading, cardStyle, btnPrimary, btnSecondary, btnDanger } from './styles';
 import {
   type ContextFile, type ContextFileMeta, type MemoryFact,
+  OBSERVER_CREATED_BY,
   listContextFiles, getContextFile, saveContextFile, deleteContextFile,
   listFacts, deleteFact,
 } from './memory/api';
@@ -336,6 +337,7 @@ function FactsPanel({ isMobile }: { isMobile: boolean }) {
             <div style={{ color: INK_DIM, fontSize: 12, marginTop: 2 }}>
               {f.memory_type ? `${f.memory_type} · ` : ''}
               {f.valid_to ? `no longer current (ended ${f.valid_to})` : 'current'}
+              {f.created_by === OBSERVER_CREATED_BY ? ' · noticed automatically' : ''}
               {f.archived_at ? ' · archived by nightly cleanup' : ''}
             </div>
           </div>

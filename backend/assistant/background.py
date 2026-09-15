@@ -327,3 +327,13 @@ def run_background_turn(system_prompt, user_message: str, *, allowed_tools: set[
     logger.info("background turn done in %dms (tools=%d, error=%s)",
                 int((time.monotonic() - started) * 1000), len(result.tool_log), result.error)
     return result
+
+
+def main_loop():
+    """The app's main event loop, or None before the lifespan handler captured it.
+
+    A read accessor so scheduler-thread code (the #72 observer) can bridge onto the loop
+    with ``run_coroutine_threadsafe`` without reaching into this module's private
+    ``_main_loop``. Callers must handle None and a closed loop — the observer does.
+    """
+    return _main_loop

@@ -64,8 +64,30 @@ _STOPWORDS = frozenset({
     "very", "too", "not", "all", "any", "some", "each", "every", "into", "so", "me", "my",
 })
 
-# Columns returned to callers (never expose search_tsv).
-_FACT_COLS = "id, subject, predicate, object, valid_from, valid_to, confidence, memory_type, created_at"
+# Columns returned to callers (never expose search_tsv or updated_at).
+#
+# `created_by` / `source` were always stored and never returned, so every fact read as
+# assistant-authored; issue #72 Phase 4 introduces a second writer (the observer) and
+# provenance has to be readable for the Memory page to distinguish them.
+# `archived_at` / `retrieval_count` / `last_retrieved_at` were a live bug: the frontend
+# `MemoryFact` type declares all three and MemoryPage renders "archived by nightly
+# cleanup" off `archived_at`, which was ALWAYS undefined because no read returned it —
+# so the label could never appear even with `include_archived=true`.
+_FACT_COLS = (
+    "id, subject, predicate, object, valid_from, valid_to, created_by, source, "
+    "confidence, memory_type, retrieval_count, last_retrieved_at, archived_at, created_at"
+)
+
+# Same shape from the FTS path, so the two endpoints backing one page cannot disagree
+# about what a fact looks like. (`archived_at` is always NULL here — search is live-only
+# — but a column that is present-and-null is a contract; a missing key is a bug.)
+_SEARCH_COLS = _FACT_COLS + ", ts_rank(search_tsv, q) AS rank"
+
+# Upper bound on how many live facts can share one subject+predicate key before
+# find_live_facts_by_key stops looking. Supersession keeps that set at one per writer,
+# so 50 is far past any real corpus; blowing through it can at worst insert a duplicate,
+# never retire the wrong fact.
+_KEY_MATCH_LIMIT = 50
 
 
 def _date_error(value, field: str) -> dict | None:
@@ -258,8 +280,7 @@ def search_facts(
     # from user input can survive), and is still bound as a %s parameter — so
     # to_tsquery cannot be injected or raise a syntax error on it.
     sql = (
-        "SELECT id, subject, predicate, object, valid_from, valid_to, confidence, memory_type, "
-        "created_at, ts_rank(search_tsv, q) AS rank "
+        f"SELECT {_SEARCH_COLS} "
         "FROM memory_facts, to_tsquery('simple', %s) AS q "
         "WHERE search_tsv @@ q AND valid_to IS NULL AND archived_at IS NULL"
     )
@@ -284,6 +305,44 @@ def search_facts(
     if track_retrieval and results:
         track_retrieval_for([r["id"] for r in results])
     return results
+
+
+# ---------------------------------------------------------------------------
+# find_live_facts_by_key  (exact subject+predicate lookup)
+# ---------------------------------------------------------------------------
+
+def find_live_facts_by_key(subject: str, predicate: str) -> list[dict]:
+    """Every LIVE fact whose subject AND predicate match *exactly*, case-insensitively.
+
+    ``query_facts`` cannot answer this question and must not be used for it. Its filters
+    are ``ILIKE '%' || x || '%'`` substring matches, ordered by confidence and capped —
+    so an exact match can be pushed out of the window by partial ones, and a subject
+    containing ``%`` or ``_`` matches half the table because those are LIKE wildcards and
+    nothing escapes them. Deciding "is this fact already recorded, and may I retire the
+    old one" on that basis could silently retire the WRONG fact.
+
+    The comparison is done entirely in SQL (``lower()`` on both sides) rather than half in
+    Python, so there is exactly ONE case-folding rule and no chance of Postgres and Python
+    disagreeing about a non-ASCII subject. Inputs run through ``_clean_field`` first —
+    the same normalization ``add_fact`` applies on write — so "Dana  Chen" finds the
+    stored "Dana Chen".
+
+    Retrieval is deliberately NOT tracked: checking whether a fact exists is not the
+    assistant *using* it, and counting it would keep dormant facts alive forever (the
+    rule ``memory/router.py`` already states for browsing).
+    """
+    subject = _clean_field(subject)
+    predicate = _clean_field(predicate)
+    if not subject or not predicate:
+        return []
+    # _FACT_COLS is a module constant (no user data) — the f-string is safe.
+    return pg_fetchall(
+        f"SELECT {_FACT_COLS} FROM memory_facts "
+        "WHERE lower(subject) = lower(%s) AND lower(predicate) = lower(%s) "
+        "  AND valid_to IS NULL AND archived_at IS NULL "
+        "ORDER BY id LIMIT %s",
+        (subject, predicate, _KEY_MATCH_LIMIT),
+    )
 
 
 # ---------------------------------------------------------------------------

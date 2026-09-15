@@ -342,3 +342,74 @@ def test_set_compaction_clears_the_meter(fake_conn, rec):
     keep the greater of the two. The next turn pays one row scan for a fresh reading."""
     history.set_compaction("c1", "gist", 42, False)
     assert "last_context_tokens = NULL" in rec.sql_with("compaction_summary =")
+
+
+# ── Observer watermark (#72 Phase 4) ──────────────────────────────────────────
+#
+# These pin the SQL SHAPE only, which is all a hermetic test can honestly claim.
+# Whether the candidate predicate actually selects the right conversations is proved
+# against a real server in tests/test_integration_observer_pg.py — a substring assertion
+# cannot establish selection behaviour.
+
+def test_candidate_query_counts_only_new_user_rows(rec):
+    rec.fetchall_queue.append([])
+    history.list_observer_candidates(10, 2, 5)
+    sql = rec.sql_with("new_user_rows")
+    assert "count(*) FILTER ( WHERE role = 'user' AND seq > COALESCE(c.observed_through_seq, -1) )" in sql
+
+
+def test_candidate_query_measures_quietness_over_every_message(rec):
+    """max(created_at) is NOT filtered to user rows. A newer ASSISTANT row means the turn
+    is still in flight, and observing mid-turn is the one moment a commitment has not
+    settled."""
+    rec.fetchall_queue.append([])
+    history.list_observer_candidates(10, 2, 5)
+    sql = rec.sql_with("newest_at")
+    filtered, _, rest = sql.partition("max(created_at) AS newest_at")
+    assert "FILTER" not in rest.split("FROM assistant_messages")[0]
+    assert "m.newest_at <= now() - make_interval(mins => %s)" in sql
+
+
+def test_candidate_query_orders_oldest_first_with_an_id_tiebreak(rec):
+    rec.fetchall_queue.append([])
+    history.list_observer_candidates(10, 2, 5)
+    assert "ORDER BY m.newest_at ASC, c.id ASC" in rec.sql_with("new_user_rows")
+
+
+def test_candidate_query_coalesces_a_null_watermark_for_the_caller(rec):
+    rec.fetchall_queue.append([])
+    history.list_observer_candidates(10, 2, 5)
+    assert "COALESCE(c.observed_through_seq, -1) AS observed_through_seq" in rec.sql_with("new_user_rows")
+
+
+def test_candidate_query_clamps_its_arguments(rec):
+    rec.fetchall_queue.append([])
+    history.list_observer_candidates(-5, 0, 0)
+    assert rec.params_with("new_user_rows") == [1, 0, 1]
+
+
+def test_user_rows_since_is_user_only_and_seq_bounded(rec):
+    rec.fetchall_queue.append([])
+    history.user_rows_since("c1", 4, 200)
+    sql = rec.sql_with("FROM assistant_messages")
+    assert "role = 'user'" in sql and "seq > %s" in sql and "ORDER BY seq" in sql
+    assert rec.params_with("FROM assistant_messages") == ["c1", 4, 200]
+
+
+def test_advance_observed_seq_only_moves_forward(rec):
+    assert history.advance_observed_seq("c1", 9) is True
+    sql = rec.sql_with("observed_through_seq = %s")
+    assert "COALESCE(observed_through_seq, -1) < %s" in sql
+    assert rec.params_with("observed_through_seq = %s") == [9, "c1", 9]
+
+
+def test_advance_observed_seq_reports_a_no_op(rec):
+    rec.rowcount = 0
+    assert history.advance_observed_seq("c1", 9) is False
+
+
+def test_advance_observed_seq_does_not_bump_updated_at(rec):
+    """updated_at orders the user's conversation list as a record of THEIR activity;
+    housekeeping must not make every observed thread look freshly active."""
+    history.advance_observed_seq("c1", 9)
+    assert "updated_at" not in rec.sql_with("observed_through_seq = %s")

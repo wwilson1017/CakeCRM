@@ -416,3 +416,54 @@ def capture(text: str, source: str = "capture_web") -> dict:
     if len(text) > MAX_TEXT_CHARS:
         raise ValidationError(f"Capture text too long (max {MAX_TEXT_CHARS} characters)")
     return create_todo(text, status="inbox", source=source)
+
+
+# ── Open-title lookups (the observer's task dedupe, issue #72 Phase 4) ──────
+
+# `status NOT IN ('done','dropped')` is the open predicate used throughout this module
+# (list_todos, the project open_count). It is authoritative rather than `completed = 0`
+# because create_task DERIVES `completed` from `status` under a CHECK constraint, so
+# status is the column that cannot drift.
+_OPEN_TASK = "status NOT IN ('done','dropped')"
+
+
+def list_open_task_titles(days: int = 30, limit: int = 30) -> list[str]:
+    """Recent open task titles — the "already tracked, do not repeat" list for a prompt.
+
+    This is a BUDGET, not a correctness check. Thirty titles is what fits comfortably in
+    a light-tier prompt; it cannot prove anything about the 31st task or about one opened
+    a year ago, so the actual duplicate check on the write path is
+    ``open_task_with_title_exists`` below. Feeding the model the capped list is still
+    worth it: it stops most duplicates before a call is even made.
+
+    Deliberately NOT filtered to ``source='agent'``. The question the list answers is "is
+    this already on the user's list", and a todo the user typed themselves answers it just
+    as well as one the assistant captured.
+    """
+    rows = pg_fetchall(
+        f"SELECT title FROM tasks WHERE {_OPEN_TASK} "
+        "  AND created_at >= now() - make_interval(days => %s) "
+        "ORDER BY created_at DESC, id DESC LIMIT %s",
+        (max(1, int(days)), max(1, int(limit))),
+    )
+    return [r["title"] for r in rows if (r["title"] or "").strip()]
+
+
+def open_task_with_title_exists(title: str) -> bool:
+    """True iff an OPEN task already carries this exact title (case-insensitively).
+
+    No day window and no source filter, on purpose: this is the check that actually
+    prevents a duplicate, and an open task from six months ago is still open work. The
+    comparison runs entirely in SQL so there is one case-folding rule. Whitespace is
+    collapsed on the NEEDLE only, because ``gtd_common.validate_title`` merely strips — a
+    stored title keeps whatever internal spacing its author used. That is deliberately the
+    permissive direction: it can only ever match MORE, and "already tracked" is the
+    answer we want when a human typed the same line with a stray double space.
+    """
+    clean = " ".join((title or "").split())
+    if not clean:
+        return False
+    return pg_fetchone(
+        f"SELECT 1 AS ok FROM tasks WHERE {_OPEN_TASK} AND lower(title) = lower(%s) LIMIT 1",
+        (clean,),
+    ) is not None
