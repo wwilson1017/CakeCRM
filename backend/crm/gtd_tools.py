@@ -24,6 +24,10 @@ from crm.gtd_common import (
     ValidationError,
 )
 
+# ONE implementation of "who is asking" for the whole tool layer (#190). `crm.tools` does
+# not import this module, so this adds no cycle.
+from crm.tools import bind_owner_filter, bind_server_args, owner_filter_property
+
 logger = logging.getLogger(__name__)
 
 _STATUS_LIST = ", ".join(TODO_STATUSES)
@@ -157,6 +161,7 @@ GTD_TOOL_DEFS: list[dict] = [
                 "due_after": {"type": "string", "description": "YYYY-MM-DD"},
                 "search": {"type": "string", "description": "Free-text across title, notes, context, tags, project"},
                 "limit": {"type": "integer", "default": 100},
+                "owner": owner_filter_property(),
             },
             "required": [],
         },
@@ -309,7 +314,7 @@ GTD_TOOL_EXECUTORS: dict[str, Callable[..., dict]] = {
 }
 
 
-def get_gtd_tools() -> tuple[list[dict], dict[str, Callable[..., dict]]]:
+def get_gtd_tools(user: dict | None = None) -> tuple[list[dict], dict[str, Callable[..., dict]]]:
     """(defs, executors) for the assistant registry.
 
     Returns ([], {}) unless GTD task mode is active — the `get_gmail_tools`
@@ -320,7 +325,18 @@ def get_gtd_tools() -> tuple[list[dict], dict[str, Callable[..., dict]]]:
 
     (Historic note: before #102 that same no-database path read as normal mode and this
     returned `([], {})`.)
+
+    ``user`` is the seat this registry serves (#190), or None for an unattended turn. It
+    binds who a captured todo belongs to and resolves `todo_list`'s `owner` word; it never
+    changes which tools exist or their ``writes`` flags. The bindings sit OUTSIDE `_wrap`,
+    so a validation error still comes back as a tool-result dict rather than an exception.
     """
     if service.get_task_mode() != "gtd":
         return [], {}
-    return GTD_TOOL_DEFS, GTD_TOOL_EXECUTORS
+    user_id = (user or {}).get("id")
+    executors = {
+        **GTD_TOOL_EXECUTORS,
+        "todo_create": bind_server_args(GTD_TOOL_EXECUTORS["todo_create"], owner_id=user_id),
+        "todo_list": bind_owner_filter(GTD_TOOL_EXECUTORS["todo_list"], user),
+    }
+    return GTD_TOOL_DEFS, executors

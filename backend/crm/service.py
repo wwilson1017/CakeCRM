@@ -214,6 +214,37 @@ def _check_assembly_cursor(after_id: int | None, sort: str, offset: int = 0) -> 
 # sides agree regardless of the database's libc/locale.
 _WS = " \t\n\r\f\v"
 
+# ── Owner filters (issue #190) ────────────────────────────────────────────────
+# Every owner-filterable read takes ONE ``owner_id`` argument with three legal
+# values: an int ("this person's records"), ``None`` ("everyone" — the default that
+# keeps an install which never assigns owners behaving exactly as before), or this
+# sentinel ("nobody's — the unassigned pile").
+#
+# A sentinel rather than a second boolean parameter, deliberately: the shared WHERE
+# builders exist so a filter can never reach a page query without also reaching its
+# COUNT, and a second parameter is a second thing to forget at one of the two call
+# sites. Riding the argument that is already threaded everywhere keeps that property.
+# The REST routers type ``owner_id`` as ``int | None`` through FastAPI, so a client
+# string is a 422 long before it gets here — only the assistant's tool layer, which
+# resolves the model's ``owner`` word, can produce the sentinel.
+UNASSIGNED = "unassigned"
+
+
+def owner_condition(column: str, owner_id: int | str | None, params: list) -> str | None:
+    """SQL for an owner filter on ``column``, or None when there is no filter.
+
+    Appends the bind parameter to ``params`` when one is needed, so the caller adds
+    the returned condition at the same point it would have appended the parameter and
+    the two stay in lockstep. Compared with ``==`` rather than ``is``: the sentinel
+    travels as a plain string and an equal value built elsewhere must behave the same.
+    """
+    if owner_id is None:
+        return None
+    if owner_id == UNASSIGNED:
+        return f"{column} IS NULL"
+    params.append(owner_id)
+    return f"{column} = %s"
+
 # SQL fragment for whitespace-tolerant boundary matching against the comma-separated
 # tags column. Strips whitespace adjacent to commas so the filter survives free-form
 # input like "PT, ET, MT". Valid Postgres (|| concat + REPLACE).
@@ -320,7 +351,7 @@ def get_contact(contact_id: int) -> dict | None:
 
 
 def _contact_search_where(
-    query: str, status: str | None, tags: str | None, owner_id: int | None = None
+    query: str, status: str | None, tags: str | None, owner_id: int | str | None = None
 ) -> tuple[str, list]:
     """Build the shared WHERE clause + params for contact free-text search.
 
@@ -344,12 +375,12 @@ def _contact_search_where(
     Pinned by test_search_matches_old_company_spelling_but_displays_new_name.
 
     ``owner_id`` (issue #60) narrows to one person's records — "Mine" is simply this
-    parameter set to the caller's own id, so there is no separate flag or magic
-    value. Absent means everyone, which is what keeps the endpoint's behavior
-    identical for an install that never assigns owners. It lives in this SHARED
-    builder precisely so it can never reach the page query without also reaching the
-    COUNT: a filter present in one and not the other does not fail, it just reports
-    a total that disagrees with the rows.
+    parameter set to the caller's own id. Absent means everyone, which is what keeps
+    the endpoint's behavior identical for an install that never assigns owners, and
+    the ``UNASSIGNED`` sentinel means the unowned pile (#190; see ``owner_condition``).
+    It lives in this SHARED builder precisely so it can never reach the page query
+    without also reaching the COUNT: a filter present in one and not the other does
+    not fail, it just reports a total that disagrees with the rows.
     """
     like = f"%{query}%"
     conditions = [
@@ -360,9 +391,9 @@ def _contact_search_where(
     if status:
         conditions.append("ct.status = %s")
         params.append(status)
-    if owner_id is not None:
-        conditions.append("ct.owner_id = %s")
-        params.append(owner_id)
+    owner_sql = owner_condition("ct.owner_id", owner_id, params)
+    if owner_sql:
+        conditions.append(owner_sql)
     if tags:
         labels = [tag.strip() for tag in tags.split(",") if tag.strip()]
         if labels:
@@ -375,7 +406,7 @@ def _contact_search_where(
 def search_contacts(
     query: str, status: str | None = None, tags: str | None = None,
     limit: int = 20, offset: int = 0, sort: str = "updated_at",
-    owner_id: int | None = None,
+    owner_id: int | str | None = None,
 ) -> list[dict]:
     where, params = _contact_search_where(query, status, tags, owner_id)
     return pg_fetchall(
@@ -390,7 +421,7 @@ def search_contacts(
 
 def count_search_contacts(
     query: str, status: str | None = None, tags: str | None = None,
-    owner_id: int | None = None,
+    owner_id: int | str | None = None,
 ) -> int:
     """Total number of contacts matching a search (for accurate pagination totals).
 
@@ -411,7 +442,7 @@ def count_search_contacts(
 def list_contacts(
     offset: int = 0, limit: int = 50, status: str | None = None,
     tags: str | None = None, sort: str = "updated_at",
-    owner_id: int | None = None, after_id: int | None = None,
+    owner_id: int | str | None = None, after_id: int | None = None,
 ) -> dict:
     _check_assembly_cursor(after_id, sort, offset)
     order_by = _contact_order_by(sort)
@@ -424,9 +455,9 @@ def list_contacts(
     # One condition list feeds BOTH the COUNT and the page query below. Adding an
     # owner filter to only one of them would silently return a total that disagrees
     # with the rows on the page.
-    if owner_id is not None:
-        conditions.append("ct.owner_id = %s")
-        params.append(owner_id)
+    owner_sql = owner_condition("ct.owner_id", owner_id, params)
+    if owner_sql:
+        conditions.append(owner_sql)
     if tags:
         labels = [tag.strip() for tag in tags.split(",") if tag.strip()]
         if labels:
@@ -706,12 +737,14 @@ def resolve_or_create_company_ids(names: list[str]) -> dict[str, int]:
 
 
 def _company_search_where(
-    query: str, status: str | None, owner_id: int | None = None
+    query: str, status: str | None, owner_id: int | str | None = None
 ) -> tuple[str, list]:
     """Build the shared WHERE clause + params for company free-text search.
 
     ``owner_id`` (issue #60) belongs here rather than at each call site so the search
-    and its COUNT can never disagree about what is being counted.
+    and its COUNT can never disagree about what is being counted. It takes the same
+    three values as every other owner filter — an id, None for everyone, or the
+    ``UNASSIGNED`` sentinel (#190).
     """
     like = f"%{query}%"
     conditions = ["(name ILIKE %s OR domain ILIKE %s OR industry ILIKE %s OR notes ILIKE %s)"]
@@ -719,15 +752,15 @@ def _company_search_where(
     if status:
         conditions.append("status = %s")
         params.append(status)
-    if owner_id is not None:
-        conditions.append("owner_id = %s")
-        params.append(owner_id)
+    owner_sql = owner_condition("owner_id", owner_id, params)
+    if owner_sql:
+        conditions.append(owner_sql)
     return " AND ".join(conditions), params
 
 
 def search_companies(
     query: str, status: str | None = None, limit: int = 20, offset: int = 0,
-    owner_id: int | None = None,
+    owner_id: int | str | None = None,
 ) -> list[dict]:
     where, params = _company_search_where(query, status, owner_id)
     return pg_fetchall(
@@ -737,7 +770,7 @@ def search_companies(
 
 
 def count_search_companies(
-    query: str, status: str | None = None, owner_id: int | None = None
+    query: str, status: str | None = None, owner_id: int | str | None = None
 ) -> int:
     """Total number of companies matching a search (for accurate pagination totals)."""
     where, params = _company_search_where(query, status, owner_id)
@@ -747,7 +780,7 @@ def count_search_companies(
 
 def list_companies(
     offset: int = 0, limit: int = 50, status: str | None = None, sort: str = "name",
-    owner_id: int | None = None, after_id: int | None = None,
+    owner_id: int | str | None = None, after_id: int | None = None,
 ) -> dict:
     _check_assembly_cursor(after_id, sort, offset)
     allowed_sorts = {"name", "industry", "created_at", "updated_at", "id"}
@@ -765,9 +798,9 @@ def list_companies(
         conditions.append("status = %s")
         params.append(status)
     # Shared by the COUNT and the page query below — see list_contacts.
-    if owner_id is not None:
-        conditions.append("owner_id = %s")
-        params.append(owner_id)
+    owner_sql = owner_condition("owner_id", owner_id, params)
+    if owner_sql:
+        conditions.append(owner_sql)
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
     # Skipped on a cursor page — see list_contacts.
@@ -2014,16 +2047,16 @@ def list_tasks(
     contact_id: int | None = None, deal_id: int | None = None,
     completed: bool | None = None, due_before: str | None = None,
     priority: str | None = None, limit: int = 50,
-    owner_id: int | None = None, after_id: int | None = None,
+    owner_id: int | str | None = None, after_id: int | None = None,
     sort: str = "due",
 ) -> list[dict]:
     _check_assembly_cursor(after_id, sort)
     conditions = []
     params: list = []
-    if owner_id is not None:
-        # On a task, owner_id reads as "assigned to" (issue #60).
-        conditions.append("t.owner_id = %s")
-        params.append(owner_id)
+    # On a task, owner_id reads as "assigned to" (issue #60).
+    owner_sql = owner_condition("t.owner_id", owner_id, params)
+    if owner_sql:
+        conditions.append(owner_sql)
     if contact_id is not None:
         conditions.append("t.contact_id = %s")
         params.append(contact_id)
@@ -2488,7 +2521,7 @@ WEEKLY_TOUCHES_DETAIL_MAX = 500
 # The bucket name the drill-down URL uses for deals with no owner. `deals.owner_id` is
 # nullable forever (#60) — the Gmail scan, the assistant and the CSV importer all
 # legitimately produce it — so NULL is a bucket to name, not a row to drop.
-TOUCH_OWNER_UNASSIGNED = "unassigned"
+TOUCH_OWNER_UNASSIGNED = UNASSIGNED
 
 # `users.id` is a 32-bit SERIAL and `deals.owner_id` a 32-bit INTEGER, so an id past this
 # reaches Postgres as an out-of-range comparison and surfaces as a 500 on what is really

@@ -30,6 +30,7 @@ from crm.service import (
     OPEN_PREDICATE,
     OPEN_PREDICATE_D,
     OPEN_STAGES,
+    owner_condition,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,7 +51,10 @@ def _bounded(value, default: int, low: int = 1, high: int = MAX_LIMIT) -> int:
 
 # ── Stale deals ───────────────────────────────────────────────────────────────
 
-def get_stale_deals(stale_days: int = DEFAULT_DEAL_STALE_DAYS, limit: int = DEFAULT_LIMIT) -> dict:
+def get_stale_deals(
+    stale_days: int = DEFAULT_DEAL_STALE_DAYS, limit: int = DEFAULT_LIMIT,
+    owner_id: int | str | None = None,
+) -> dict:
     """Open deals nobody has touched in ``stale_days`` days, stalest first.
 
     Complements ``service.get_analytics``: that one answers "how many are stale" for
@@ -62,13 +66,26 @@ def get_stale_deals(stale_days: int = DEFAULT_DEAL_STALE_DAYS, limit: int = DEFA
     ``days_in_stage`` reads the newest ``deal_stage_events`` row and falls back to the
     deal's ``created_at`` for deals that predate the stage log — honest either way:
     a deal that has never moved HAS been in its stage since it was created.
+
+    ``owner_id`` (#190) narrows to one rep, or to the unowned pile via
+    ``service.UNASSIGNED``; absent means everyone. It is applied to the truncation
+    COUNT as well as the page, because a filtered list beside an unfiltered total
+    does not fail, it just reports a number that disagrees with the rows.
+
+    ``owner_id`` is also SELECTed unconditionally: it is the routing signal the
+    owner-routed proactive nudges read, so the column has to be on the row whether or
+    not the caller filtered by it.
     """
     stale_days = _bounded(stale_days, DEFAULT_DEAL_STALE_DAYS, 1, 365)
     limit = _bounded(limit, DEFAULT_LIMIT)
+    params: list = [stale_days]
+    owner_sql = owner_condition("d.owner_id", owner_id, params)
+    owner_clause = f" AND {owner_sql}" if owner_sql else ""
+    params.append(limit)
     rows = pg_fetchall(
         f"""
         SELECT d.id, d.title, d.stage, d.value, d.currency, d.expected_close_date,
-               d.probability, d.contact_id, d.company_id,
+               d.probability, d.contact_id, d.company_id, d.owner_id,
                c.name  AS contact_name,
                co.name AS company_name,
                FLOOR(EXTRACT(EPOCH FROM (now() - {LAST_TOUCH_SQL})) / 86400.0)::int
@@ -84,11 +101,11 @@ def get_stale_deals(stale_days: int = DEFAULT_DEAL_STALE_DAYS, limit: int = DEFA
           LEFT JOIN contacts  c  ON d.contact_id = c.id
           LEFT JOIN companies co ON d.company_id = co.id
          WHERE {OPEN_PREDICATE_D} AND {LIVE_PREDICATE_D}
-           AND {LAST_TOUCH_SQL} < now() - make_interval(days => %s)
+           AND {LAST_TOUCH_SQL} < now() - make_interval(days => %s){owner_clause}
          ORDER BY days_since_touch DESC, d.id ASC
          LIMIT %s
         """,
-        (stale_days, limit),
+        params,
     )
     # The count exists so a truncated list never understates the problem — but it is a
     # second full scan of the same non-sargable predicate (~150ms at 50k deals), so
@@ -97,11 +114,14 @@ def get_stale_deals(stale_days: int = DEFAULT_DEAL_STALE_DAYS, limit: int = DEFA
     if len(rows) < limit:
         total_stale = len(rows)
     else:
+        count_params: list = [stale_days]
+        count_owner_sql = owner_condition("d.owner_id", owner_id, count_params)
+        count_owner_clause = f" AND {count_owner_sql}" if count_owner_sql else ""
         total_row = pg_fetchone(
             f"""SELECT COUNT(*) AS cnt FROM deals d
                  WHERE {OPEN_PREDICATE_D} AND {LIVE_PREDICATE_D}
-                   AND {LAST_TOUCH_SQL} < now() - make_interval(days => %s)""",
-            (stale_days,),
+                   AND {LAST_TOUCH_SQL} < now() - make_interval(days => %s){count_owner_clause}""",
+            count_params,
         )
         total_stale = (total_row or {}).get("cnt", 0)
     return {
@@ -116,6 +136,7 @@ def get_stale_deals(stale_days: int = DEFAULT_DEAL_STALE_DAYS, limit: int = DEFA
 
 def get_contact_staleness(
     stale_days: int = DEFAULT_CONTACT_STALE_DAYS, limit: int = DEFAULT_LIMIT,
+    owner_id: int | str | None = None,
 ) -> dict:
     """Active contacts with no logged interaction in ``stale_days`` days.
 
@@ -132,6 +153,12 @@ def get_contact_staleness(
 
     Archived/inactive contacts are excluded: deliberately parked, not neglected.
 
+    ``owner_id`` (#190) narrows to one rep, or to the unowned pile via
+    ``service.UNASSIGNED``; absent means everyone. There is no second COUNT query here
+    to keep in step, unlike ``get_stale_deals``. ``owner_id`` is SELECTed
+    unconditionally for the same reason it is there: it is the owner-routed nudge's
+    routing signal, not only a filter.
+
     Scale note: the CTE derives a last-touch date for EVERY active contact before
     filtering (two correlated subqueries each) — accepted at single-user v1 scale, the
     same trade-off get_pipeline documents. If contact volume ever grows, index-driven
@@ -139,6 +166,13 @@ def get_contact_staleness(
     """
     stale_days = _bounded(stale_days, DEFAULT_CONTACT_STALE_DAYS, 1, 365)
     limit = _bounded(limit, DEFAULT_LIMIT)
+    # The housekeeping pattern binds inside the CTE, so it precedes every WHERE param;
+    # the owner filter's own param sits between the staleness window and the limit,
+    # which is where its condition appears in the statement.
+    params: list = [scoring_service.HOUSEKEEPING_NOTE_LIKE, stale_days]
+    owner_sql = owner_condition("ct.owner_id", owner_id, params)
+    owner_clause = f" AND {owner_sql}" if owner_sql else ""
+    params.append(limit)
     rows = pg_fetchall(
         f"""
         -- GREATEST ignores NULLs (returning NULL only when every argument is NULL),
@@ -156,6 +190,7 @@ def get_contact_staleness(
               FROM contacts ct
         )
         SELECT ct.id, ct.name, ct.email, ct.company, ct.company_id, ct.status,
+               ct.owner_id,
                co.name AS company_name,
                lt.touched_at AS last_contact_at,
                FLOOR(EXTRACT(EPOCH FROM (now() - lt.touched_at)) / 86400.0)::int
@@ -168,11 +203,11 @@ def get_contact_staleness(
           LEFT JOIN companies co ON ct.company_id = co.id
          WHERE ct.status = 'active'
            AND (lt.touched_at IS NULL OR lt.touched_at < now() - make_interval(days => %s))
+           {owner_clause}
          ORDER BY lt.touched_at ASC NULLS FIRST, ct.id ASC
          LIMIT %s
         """,
-        # The housekeeping pattern binds inside the CTE, so it precedes both WHERE params.
-        (scoring_service.HOUSEKEEPING_NOTE_LIKE, stale_days, limit),
+        params,
     )
     return {"stale_days": stale_days, "contacts": rows, "count": len(rows)}
 

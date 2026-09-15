@@ -88,7 +88,12 @@ def test_get_crm_tools_has_no_enable_gate(task_mode):
     task_mode("normal")
     defs, execs = get_crm_tools()
     assert defs is CRM_TOOL_DEFS
-    assert execs is TOOL_EXECUTORS
+    # The executor map is now built per call so the caller's seat can be curried into the
+    # identity-bearing tools (#190), so it is no longer the module-level dict by identity.
+    # What must not move is WHICH tools exist — binding a user may change what an executor
+    # records, never the set of executors there are to record with.
+    assert set(execs) == set(TOOL_EXECUTORS)
+    assert set(get_crm_tools(user={"id": 1})[1]) == set(TOOL_EXECUTORS)
     # No enable gate: the accessor takes no required args.
     sig = inspect.signature(get_crm_tools)
     assert not [p for p in sig.parameters.values()
@@ -227,7 +232,10 @@ def test_chatter_executors_wrap_validation_errors():
 def test_chatter_executors_happy_path_shapes(monkeypatch):
     # The tool return shape is the contract the assistant engine consumes; pin it.
     from crm import chatter_service
-    monkeypatch.setattr(chatter_service, "add_note", lambda t, i, m: {"id": 1, "message": m})
+    monkeypatch.setattr(
+        chatter_service, "add_note",
+        lambda t, i, m, author_id=None: {"id": 1, "message": m},
+    )
     monkeypatch.setattr(chatter_service, "get_chatter", lambda *a, **k: [{"id": 1}, {"id": 2}])
     assert tools.crm_add_note("deal", 3, "hi") == {"ok": True, "note": {"id": 1, "message": "hi"}}
     assert tools.crm_get_chatter("deal", 3) == {"notes": [{"id": 1}, {"id": 2}], "count": 2}
@@ -543,11 +551,11 @@ def test_bounded_limit_clamps_model_supplied_values():
 def test_find_contact_and_search_companies_pass_the_limit_through(monkeypatch):
     seen = {}
 
-    def fake_contacts(q, status=None, tags=None, limit=20):
+    def fake_contacts(q, status=None, tags=None, limit=20, owner_id=None):
         seen["c"] = limit
         return []
 
-    def fake_companies(q, status=None, limit=20):
+    def fake_companies(q, status=None, limit=20, owner_id=None):
         seen["co"] = limit
         return []
 
