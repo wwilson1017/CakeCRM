@@ -27,6 +27,17 @@ source can never silently clobber another feature's tool (issue #6 R13).
 Executors are synchronous, blocking psycopg2 code. ``execute_tool_sync`` is the
 real dispatch; ``execute_tool`` offloads it to a thread so a call never blocks the
 async SSE event loop.
+
+**Identity (issue #190).** ``ToolRegistry(user=…)`` is where the caller's seat enters the
+tool layer. A registry is built fresh for every turn — per SSE request, per confirmation,
+per Telegram message, per background run — so handing the ``get_current_user`` row to the
+sources that accept it curries identity into the handful of executors that need it with
+NO change to dispatch, which stays ``fn(**args)`` over the model's arguments alone. The
+sources bind those arguments server-side and strip any same-named key the model produced,
+so who a record is credited to is never something the model can say. ``user=None`` means
+an unattended turn: every identity-bearing executor then records nobody, exactly as it did
+before. Identity never changes which tools exist or their ``writes`` flags — the
+background allowlist is derived from that map, so it must not move.
 """
 
 import asyncio
@@ -48,15 +59,21 @@ _INTERNAL_KEYS = {"kind", "writes"}
 
 
 class ToolRegistry:
-    def __init__(self, *, background: bool = False) -> None:
+    def __init__(self, *, background: bool = False, user: dict | None = None) -> None:
         # Per-run flag for the one-notification-per-run guard (see notify_user).
         self._notify_user_called = False
+
+        # The seat this registry serves (the get_current_user row), or None for an
+        # unattended turn. Read by the sources below; kept on the instance so a later
+        # source (per-user Telegram, the Gmail seat gate) can reach it without another
+        # constructor change.
+        self.user = user
 
         # Ordered tool sources — the extension point. Each is a (defs, executors)
         # pair. Features append here; second-to-land resolves keep-both.
         sources: list[tuple[list[dict], dict[str, Callable[..., dict]]]] = [
-            get_crm_tools(),
-            get_gtd_tools(),
+            get_crm_tools(user=user),
+            get_gtd_tools(user=user),
             get_reminder_tools(),
             get_memory_tools(),
             get_context_file_tools(),

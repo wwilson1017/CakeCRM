@@ -110,8 +110,9 @@ async def chat(req: ChatRequest, user=Depends(get_current_user)):
         raise HTTPException(status_code=400, detail="messages or conversation_id is required.")
     provider = await asyncio.to_thread(_require_provider)
     # ToolRegistry construction reads the Gmail connection state from Postgres
-    # (issue #8), so build it off the event loop.
-    registry = await asyncio.to_thread(ToolRegistry)
+    # (issue #8), so build it off the event loop. `user` is what carries the caller's
+    # seat into the tool layer (issue #190).
+    registry = await asyncio.to_thread(ToolRegistry, user=user)
     stream = engine.chat(
         provider, registry, req.messages,
         tool_mode=req.tool_mode, conversation_id=req.conversation_id,
@@ -189,7 +190,7 @@ async def chat_upload(
         if tool_mode == "power":
             tool_mode = "normal"
 
-    registry = await asyncio.to_thread(ToolRegistry)
+    registry = await asyncio.to_thread(ToolRegistry, user=user)
     stream = engine.chat(
         provider, registry, messages,
         tool_mode=tool_mode, conversation_id=conversation_id, title_hint=original_text,
@@ -204,8 +205,14 @@ async def chat_upload(
 def confirm(req: ConfirmRequest, user=Depends(get_current_user)):
     if req.decision not in ("approve", "deny"):
         raise HTTPException(status_code=400, detail="decision must be 'approve' or 'deny'.")
+    # The APPROVER is the actor a confirmed write is credited to (issue #190) — the
+    # person who said yes, not whoever proposed it. That is why threading identity through
+    # the registry needs no change to `resolve_confirmation`: the registry it is handed
+    # already carries the right seat, and the stored tool arguments (which the DB, not the
+    # client, is authoritative for) cannot override it.
     return engine.resolve_confirmation(
-        ToolRegistry(), req.conversation_id, req.tool_use_id, req.decision, msg_id=req.msg_id,
+        ToolRegistry(user=user), req.conversation_id, req.tool_use_id, req.decision,
+        msg_id=req.msg_id,
     )
 
 

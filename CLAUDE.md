@@ -444,10 +444,13 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   server-side owner filter would still be a second filtering model, not a page of one.
   **Ownership and authorship are different columns** (the cake_os #1454/#1532
   lesson): `activity_log.actor_id` and `crm_chatter.author_id` record who DID the
-  work, so per-rep activity credits a rep for work on a colleague's record. Only the
-  human REST paths stamp them — the assistant's tool executors don't thread identity
-  in Phase A, so their writes stay NULL and roll up as "Unattributed". Phase A
-  therefore **undercounts** assistant-delegated work but never **misattributes** it.
+  work, so per-rep activity credits a rep for work on a colleague's record. Phase A
+  stamped them on the human REST paths only, so assistant writes rolled up as
+  "Unattributed" — **#190 closed that for attended turns**: the registry carries the
+  caller's seat, so an assistant-logged activity or note credits the person talking,
+  and a confirmed write credits the APPROVER. Unattended turns still stamp nobody,
+  because there is nobody to stamp; those rows stay "Unattributed", which
+  undercounts but never misattributes.
   The per-rep query excludes `provenance_service.confirm`'s housekeeping notes and
   `merge_deals`' copies (the copies leave the originals on the archived source, so
   both read `archived = 0` and one note would count twice).
@@ -514,8 +517,11 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   *inside* a member-visible card (pinned in `SettingsPage.test.tsx`). Any future card
   mixing personal and install controls needs the same second gate: the registry cannot
   express it, and "don't offer what can only 403" is a rule about controls, not cards.
-  **Still install-wide, deliberately (Phase B):** assistant chat history and memory,
-  the Gmail connection, the Telegram binding, reminders, notifications and alerts.
+  **Still install-wide, deliberately (Phase B, tracked by #98 → #190–#194):** assistant
+  chat history and memory, the Gmail connection, the Telegram binding, notifications and
+  alerts. Memory facts and context files stay shared permanently (Phase B Decision 1 —
+  they are team knowledge, and per-seat facts would make the assistant amnesiac for every
+  new seat); the rest move to the person in #191–#194.
   Every active seat gets the assistant (Will's §15 ruling — no temporary admin gate
   someone has to remember to remove), so a member can have it read the admin's
   connected mailbox. `GET /api/telegram/status` redacts the link code for members,
@@ -1147,7 +1153,24 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   that split needs). The ~45 `crm_*` agent tools + executors are
   collected UNCONDITIONALLY via `crm.tools.get_crm_tools()` — each def carries a
   `"writes"` flag (the single source of truth for the assistant's confirmation gate),
-  consumed by `assistant.registry.ToolRegistry` (landed #4). The four read-only
+  consumed by `assistant.registry.ToolRegistry` (landed #4).
+  **The tool layer knows who is asking** (#190, Phase B/B1): `ToolRegistry(user=…)` takes
+  the `get_current_user` row and curries it into `get_crm_tools`/`get_gtd_tools`, which is
+  what lets `crm_log_activity`/`crm_add_note` pass `actor_id`/`author_id` and the four
+  interactive creates (plus `todo_create`) stamp the requesting seat as `owner_id`.
+  Dispatch is untouched — still `fn(**args)` over the model's arguments — because the
+  binding happens in the executor map, the closure shape `get_notification_tools(registry)`
+  already established. **Identity is server-supplied and unspoofable:** every bound
+  argument is stripped from the model's args first, unconditionally, so `user=None` means
+  NULL rather than "whatever the model produced". Five reads (`crm_find_contact`,
+  `crm_search_companies`, `crm_list_tasks`, `crm_get_stale_deals`,
+  `crm_get_contact_staleness`, plus `todo_list`) take an `owner` WORD — `me`,
+  `unassigned`, or an email — never an id, so the model cannot address a seat by guessing
+  a number; `crm.service.owner_condition` + the `UNASSIGNED` sentinel are how that reaches
+  the shared WHERE builders, which is what keeps a filter from landing on a page query
+  without also landing on its COUNT. Binding a user never changes which tools exist or
+  their `writes` flags — the background allowlist is derived from that map, and a test
+  pins it in both directions. The four read-only
   intelligence tools (`crm_get_stale_deals`, `crm_get_contact_staleness`,
   `crm_find_duplicates`, `crm_scan_gaps`, all in `crm/analytics_service.py`) are pure
   SQL — keyless — and because `writes:False` derives the background allowlist they are
