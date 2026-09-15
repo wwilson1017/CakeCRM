@@ -18,9 +18,11 @@ work, and splitting analytics per person.
 
 ## Unassigned is a real state
 
-An owner can be empty, and that is legitimate rather than a mistake. The mail touch scan, the
-assistant and the importer all produce unassigned records, and companies created from a
-quick-create picker are deliberately left unassigned. Lists show an **Unassigned** bucket
+An owner can be empty, and that is legitimate rather than a mistake. The mail touch scan and
+the assistant both produce unassigned records. So does every path that auto-creates a
+**company** as a side effect of linking a contact — a bulk import or a quick-create picker —
+because a company nobody picked up is not one anybody owns. The contacts an import creates
+*are* owned, by whoever ran it. Lists show an **Unassigned** bucket
 beside the named people, and record pages show the owner row even when it is empty — hiding
 it is what makes an empty owner unreadable.
 

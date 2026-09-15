@@ -32,11 +32,14 @@ name is blank is skipped and counted, not treated as an error.
 
 ## What happens to each row
 
-- A contact is created. **The person running the import becomes the owner** of everything it
-  creates.
+- A contact is created, and **the person running the import owns it**.
 - A company name is resolved to a real company record, creating one if it does not exist yet,
   matched case-insensitively after trimming. That resolution is batched, so importing
   thousands of rows does not mean thousands of extra queries.
+- **A company created that way is left unassigned**, deliberately, unlike the contacts. A
+  company that appeared as a side effect of linking a contact is not one anybody chose to
+  take on, so a bulk import puts the contacts in your own list and leaves the companies for
+  someone to claim. See `contacts-and-companies/ownership`.
 - A row that fails is reported in an error list while the rest of the import continues.
 
 You get back three numbers: imported, skipped, and the errors.
