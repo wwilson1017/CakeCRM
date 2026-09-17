@@ -387,6 +387,16 @@ def model_facing(monkeypatch):
     monkeypatch.setattr(heartbeat_service, "_task_mode", lambda: "gtd")
     gtd_static, _ = identity.build_system_prompt({"name": "Baker", "personality": ""})
     gtd_hb_static, _ = heartbeat_service._heartbeat_prompt()
+
+    # The "You are currently talking with ..." line (#191) is only assembled when the turn
+    # has a seat, so the prompt built above never contains it — its framing would reach
+    # the model unscanned. Assembled with a placeholder seat, exactly as the GTD variant
+    # is assembled under its own mode. The seat's own name/email are runtime data, not
+    # committed text, so only the surrounding sentence is under test here.
+    _, seat_volatile = identity.build_system_prompt(
+        {"name": "Baker", "personality": ""},
+        user_note=identity.build_user_note({"name": "Sample Seat", "email": "seat@example.com"}),
+    )
     texts = [
         ("assistant system prompt (static)", static),
         ("assistant system prompt (volatile)", volatile),
@@ -408,6 +418,7 @@ def model_facing(monkeypatch):
         ("observer prompt", observer.OBSERVER_SYSTEM_PROMPT),
         ("assistant system prompt (static, GTD mode)", gtd_static),
         ("heartbeat prompt (GTD mode)", gtd_hb_static),
+        ("assistant system prompt (volatile, with a seat)", seat_volatile),
     ]
     # Tool defs go to the provider verbatim — name, description AND the JSON schema
     # (property descriptions, enums and defaults are all example-text hiding places).

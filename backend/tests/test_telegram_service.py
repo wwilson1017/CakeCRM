@@ -25,6 +25,8 @@ class Harness:
         self.pending_sets = []
         self.cleared = 0
         self.chat_calls = []          # messages passed to each engine.chat call
+        self.chat_users = []          # the `user` each engine.chat call was given (#191)
+        self.resolve_users = []       # the `user` each resolve_confirmation call was given
         self.pending_tool_uses = []   # what list_pending_tool_uses returns (stale-batch tests)
         self._chat_scripts = []
         self._chat_idx = 0
@@ -44,16 +46,21 @@ def _install(monkeypatch, h: Harness, *, chat_scripts=None, consume=None, provid
     if provider is not ...:
         h._provider = provider
 
-    async def fake_chat(provider, registry, messages, tool_mode="normal", conversation_id=None, title_hint=None):
+    async def fake_chat(provider, registry, messages, tool_mode="normal", conversation_id=None,
+                        title_hint=None, context=None, *, user):
+        # `user` is required keyword-only since #191; the poller is a trusted seatless
+        # caller until B4 (#193), so it must pass None explicitly — asserted below.
         h.chat_calls.append(messages)
+        h.chat_users.append(user)
         i = h._chat_idx
         h._chat_idx += 1
         script = h._chat_scripts[i] if i < len(h._chat_scripts) else []
         for evt in script:
             yield f"data: {json.dumps(evt)}\n\n"
 
-    def fake_resolve(registry, conv, tuid, decision, msg_id=None):
+    def fake_resolve(registry, conv, tuid, decision, msg_id=None, *, user):
         h.resolve_calls.append((conv, tuid, decision, msg_id))
+        h.resolve_users.append(user)
         return {"tool": "crm_create_task", "decision": decision, "result": {"ok": True}}
 
     fake_engine = types.SimpleNamespace(chat=fake_chat, resolve_confirmation=fake_resolve)

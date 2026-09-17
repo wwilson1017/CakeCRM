@@ -144,7 +144,7 @@ def test_approve_injects_the_bound_version_as_a_precondition(monkeypatch):
     monkeypatch.setattr(history, "claim_pending_tool", lambda *a, **k: _claimed(_placeholder(_VERSION)))
     monkeypatch.setattr(history, "merge_tool_result", lambda *a: None)
 
-    engine.resolve_confirmation(registry, "c1", "t1", "approve", msg_id="m1")
+    engine.resolve_confirmation(registry, "c1", "t1", "approve", msg_id="m1", user=None)
 
     assert registry.executed == [("write_context_file", {
         "filename": "soul.md", "content": "rewritten", "expected_updated_at": _VERSION,
@@ -159,7 +159,7 @@ def test_approve_of_an_unbound_pending_write_stays_unconditional(monkeypatch):
                         lambda *a, **k: _claimed(history.PENDING_RESULT_JSON))
     monkeypatch.setattr(history, "merge_tool_result", lambda *a: None)
 
-    engine.resolve_confirmation(registry, "c1", "t1", "approve", msg_id="m1")
+    engine.resolve_confirmation(registry, "c1", "t1", "approve", msg_id="m1", user=None)
 
     assert registry.executed == [("write_context_file",
                                  {"filename": "soul.md", "content": "rewritten"})]

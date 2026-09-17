@@ -71,9 +71,12 @@ def test_is_pending_result_exact_on_status():
 
 def test_create_conversation_inserts_uuid(rec):
     rec.fetchone_queue = [{"id": "abc", "title": "New conversation"}]
-    out = history.create_conversation()
+    out = history.create_conversation(user_id=7)
     assert out["id"] == "abc"
-    assert "INSERT INTO assistant_conversations" in rec.sql_with("INSERT INTO assistant_conversations")
+    sql = rec.sql_with("INSERT INTO assistant_conversations")
+    assert "(id, user_id)" in sql
+    # The owner is stamped at creation, never backfilled (#191).
+    assert rec.params_with("INSERT INTO assistant_conversations")[1] == 7
 
 
 def test_auto_title_truncates_and_guards_user_edit(rec):
@@ -90,38 +93,38 @@ def test_auto_title_blank_falls_back(rec):
 
 def test_list_conversations_clamps_limit(rec):
     rec.fetchall_queue = [[]]
-    history.list_conversations(limit=99999, offset=-5)
+    history.list_conversations(user_id=3, limit=99999, offset=-5)
     params = rec.params_with("FROM assistant_conversations")
     assert params[-2] == 200 and params[-1] == 0  # clamped
 
 
 def test_get_conversation_none_when_missing(rec):
     rec.fetchone_queue = [None]
-    assert history.get_conversation("nope") is None
+    assert history.get_conversation("nope", user_id=1) is None
 
 
 def test_get_conversation_attaches_messages(rec):
     rec.fetchone_queue = [{"id": "c1", "title": "t"}]
     rec.fetchall_queue = [[{"id": "m1", "role": "user", "content": "hi", "seq": 0}]]
-    conv = history.get_conversation("c1")
+    conv = history.get_conversation("c1", user_id=1)
     assert conv["messages"][0]["id"] == "m1"
 
 
 def test_rename_blank_returns_none(rec):
-    assert history.rename_conversation("c1", "   ") is None
+    assert history.rename_conversation("c1", "   ", user_id=1) is None
 
 
 def test_rename_sets_user_edited(rec):
     rec.rowcount = 1
-    assert history.rename_conversation("c1", "My chat") == "My chat"
+    assert history.rename_conversation("c1", "My chat", user_id=1) == "My chat"
     assert "title_edited_by_user = TRUE" in rec.sql_with("UPDATE assistant_conversations")
 
 
 def test_delete_conversation_reports_rowcount(rec):
     rec.rowcount = 0
-    assert history.delete_conversation("gone") is False
+    assert history.delete_conversation("gone", user_id=1) is False
     rec.rowcount = 1
-    assert history.delete_conversation("c1") is True
+    assert history.delete_conversation("c1", user_id=1) is True
 
 
 def test_get_tool_result_by_msg_id_parses_content(rec):
@@ -424,3 +427,60 @@ def test_advance_observed_seq_does_not_bump_updated_at(rec):
     housekeeping must not make every observed thread look freshly active."""
     history.advance_observed_seq("c1", 9)
     assert "updated_at" not in rec.sql_with("observed_through_seq = %s")
+
+
+# ── Ownership (issue #191) ────────────────────────────────────────────────────
+# These pin the SQL itself. Every higher-level test of #191 goes through a fake or a
+# real database; if the filter clause were dropped from one of these six statements the
+# route tests would still pass their own stubs, so the WHERE terms are asserted here.
+
+@pytest.mark.parametrize("call, needle", [
+    (lambda: history.conversation_exists("c1", user_id=4), "SELECT 1 AS ok"),
+    (lambda: history.get_conversation("c1", user_id=4), "compaction_summary"),
+    (lambda: history.delete_conversation("c1", user_id=4), "DELETE FROM assistant_conversations"),
+    (lambda: history.rename_conversation("c1", "t", user_id=4), "title_edited_by_user = TRUE"),
+])
+def test_every_scoped_statement_filters_on_the_owner(rec, call, needle):
+    call()
+    assert "user_id = %s" in rec.sql_with(needle)
+    assert 4 in rec.params_with(needle)
+
+
+def test_list_filters_on_the_owner(rec):
+    rec.fetchall_queue = [[]]
+    history.list_conversations(user_id=4)
+    sql = rec.sql_with("FROM assistant_conversations")
+    assert "WHERE c.user_id = %s" in sql
+    # The owner is the FIRST parameter, before limit/offset — a mis-ordered tuple would
+    # filter on the page size and quietly return someone else's threads.
+    assert rec.params_with("FROM assistant_conversations")[0] == 4
+    # #58's tiebreaker survives the added WHERE (test_query_determinism's rule).
+    assert "ORDER BY c.updated_at DESC, c.id DESC" in sql
+
+
+@pytest.mark.parametrize("call, needle", [
+    (lambda: history.conversation_exists("c1", user_id=None), "SELECT 1 AS ok"),
+    (lambda: history.get_conversation("c1", user_id=None), "compaction_summary"),
+    (lambda: history.delete_conversation("c1", user_id=None), "DELETE FROM assistant_conversations"),
+    (lambda: history.rename_conversation("c1", "t", user_id=None), "title_edited_by_user = TRUE"),
+])
+def test_user_id_none_means_no_filter_not_only_unowned(rec, call, needle):
+    """``user_id=None`` is the TRUSTED-caller escape hatch, not "rows with a NULL owner".
+
+    Getting this backwards would be silent and severe: internal callers (assembly,
+    compaction, the Telegram poller) would stop seeing every real conversation and
+    start seeing only orphaned ones.
+    """
+    call()
+    assert "user_id" not in rec.sql_with(needle)
+
+
+def test_the_scoped_argument_is_keyword_only_and_required():
+    """A positional or defaulted owner is how a future caller silently opts out (#191)."""
+    import inspect
+    for fn in (history.create_conversation, history.conversation_exists,
+               history.list_conversations, history.get_conversation,
+               history.delete_conversation, history.rename_conversation):
+        param = inspect.signature(fn).parameters["user_id"]
+        assert param.kind is inspect.Parameter.KEYWORD_ONLY, fn.__name__
+        assert param.default is inspect.Parameter.empty, fn.__name__

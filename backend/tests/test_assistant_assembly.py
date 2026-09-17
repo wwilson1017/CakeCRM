@@ -94,7 +94,7 @@ def test_malformed_tool_row_falls_back_to_text(monkeypatch):
         {"id": "m1", "role": "assistant", "content": "hello", "seq": 0,
          "tool_calls": [{"tool": "x", "tool_use_id": "t1", "args": {}}], "tool_results": []},
     ]}
-    monkeypatch.setattr(assembly.history, "get_conversation", lambda cid: conv)
+    monkeypatch.setattr(assembly.history, "get_conversation", lambda cid, *, user_id: conv)
     out = assembly.assemble_messages(_Provider(raise_on_build=True), "c1")
     assert out == [{"role": "assistant", "content": "hello"}]  # graceful text fallback
 
@@ -106,14 +106,14 @@ def test_assemble_end_to_end(monkeypatch):
          "tool_calls": [{"tool": "crm_dashboard", "tool_use_id": "t1", "args": {}}],
          "tool_results": [{"tool_use_id": "t1", "tool_name": "crm_dashboard", "content": "{}"}]},
     ]}
-    monkeypatch.setattr(assembly.history, "get_conversation", lambda cid: conv)
+    monkeypatch.setattr(assembly.history, "get_conversation", lambda cid, *, user_id: conv)
     out = assembly.assemble_messages(_Provider(), "c1")
     assert out[0] == {"role": "user", "content": "hi"}
     assert out[-1]["role"] == "user"  # ends on the reconstructed tool_result turn
 
 
 def test_assemble_empty_when_no_conversation(monkeypatch):
-    monkeypatch.setattr(assembly.history, "get_conversation", lambda cid: None)
+    monkeypatch.setattr(assembly.history, "get_conversation", lambda cid, *, user_id: None)
     assert assembly.assemble_messages(_Provider(), "nope") == []
 
 
@@ -223,7 +223,7 @@ def test_the_assembled_gist_is_byte_identical_across_turns(monkeypatch):
         "id": "c1", "messages": _rows(6),
         "compaction_summary": _gist(), "compaction_first_kept_seq": 4,
     }
-    monkeypatch.setattr(assembly.history, "get_conversation", lambda cid: conv)
+    monkeypatch.setattr(assembly.history, "get_conversation", lambda cid, *, user_id: conv)
     first = assembly.assemble_messages(_EchoProvider(), "c1")
     second = assembly.assemble_messages(_EchoProvider(), "c1")
     assert first == second

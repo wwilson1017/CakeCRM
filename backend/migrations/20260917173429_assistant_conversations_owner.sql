@@ -29,7 +29,7 @@ UPDATE assistant_conversations
    SET user_id = (SELECT MIN(id) FROM users WHERE role = 'admin')
  WHERE user_id IS NULL;
 
--- Covers the sidebar list, which is the one hot read: WHERE user_id = %s ORDER BY
+-- Covers the sidebar list, which is the one hot read: filter on user_id, order by
 -- updated_at DESC.
 CREATE INDEX IF NOT EXISTS idx_assistant_conv_user_updated
     ON assistant_conversations (user_id, updated_at DESC);
