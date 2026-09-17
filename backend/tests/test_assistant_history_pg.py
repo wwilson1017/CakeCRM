@@ -421,3 +421,37 @@ def test_the_legacy_claim_is_a_no_op_with_no_admin(pg_db):
         assert member["role"] == "member"
     finally:
         pg_execute("DELETE FROM users")
+
+
+def test_the_bootstrap_claims_legacy_conversations_on_a_skipped_version_upgrade(pg_db):
+    """The one case migration M1 cannot cover, end to end against a real database.
+
+    An install upgrading straight from a pre-multi-user release applies the users
+    migration and M1 in the SAME startup, before any admin exists, so M1's `MIN(id)
+    WHERE role='admin'` subquery is NULL and its UPDATE matches nothing. The bootstrap
+    that seeds the first admin is what claims those rows — the same thing it already
+    does for the legacy totp_config and trusted_devices rows.
+    """
+    from assistant import history
+    from core.postgres import pg_execute, pg_fetchone
+    from users import bootstrap
+    pg_execute("DELETE FROM users")
+    legacy = history.create_conversation(user_id=None)          # a pre-#191 row
+    _run_claim_migration()                                      # M1 with no admin: no-op
+    assert pg_fetchone("SELECT user_id FROM assistant_conversations WHERE id = %s",
+                       (legacy["id"],))["user_id"] is None
+    try:
+        seeded = bootstrap.ensure_bootstrap_admin()
+        assert seeded is not None
+        assert pg_fetchone("SELECT user_id FROM assistant_conversations WHERE id = %s",
+                           (legacy["id"],))["user_id"] == seeded["id"]
+        # And the owner can actually reach it again — the point of the whole claim.
+        assert history.conversation_exists(legacy["id"], user_id=seeded["id"]) is True
+        # A second boot is a no-op: the function returns early once a user exists, so a
+        # deliberately unowned conversation is never swept up later.
+        later = history.create_conversation(user_id=None)
+        assert bootstrap.ensure_bootstrap_admin() is None
+        assert pg_fetchone("SELECT user_id FROM assistant_conversations WHERE id = %s",
+                           (later["id"],))["user_id"] is None
+    finally:
+        pg_execute("DELETE FROM users")

@@ -16,12 +16,20 @@
 ALTER TABLE assistant_conversations
     ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE;
 
--- Claim pre-existing rows for the earliest admin. Correct in BOTH directions, which is
--- why it lives here and needs no users/bootstrap.py change:
---   * fresh install — migrations run before the bootstrap admin exists, so the subquery
---     is NULL; but assistant_conversations is empty too, so the UPDATE matches 0 rows.
---   * upgrade — users is already populated, ensure_bootstrap_admin returns early as
---     designed, and this claim has already run.
+-- Claim pre-existing rows for the earliest admin. This covers the ORDINARY upgrade — an
+-- install already running multi-user, where `users` is populated and
+-- ensure_bootstrap_admin() returns early — and it is a no-op on a fresh install, where
+-- the subquery is NULL but assistant_conversations is empty too, so 0 rows match.
+--
+-- It is deliberately NOT the only claim. An install upgrading straight from a
+-- PRE-multi-user release applies 20260821100126_multi_user.sql and this file in one
+-- startup, and the bootstrap admin is only seeded afterwards — so here the subquery
+-- reads an empty users table, matches nothing, and this migration never runs again.
+-- users/bootstrap.py claims those rows inside the same transaction that creates the
+-- admin, exactly as it already does for the legacy totp_config and trusted_devices
+-- rows. Both claims are WHERE user_id IS NULL, so they are idempotent and only one of
+-- them can ever find rows.
+--
 -- This is NOT the owner_id-fabrication case: pre-Phase-A there was genuinely one seat,
 -- and between A and B every conversation was readable install-wide, so the admin gains
 -- nothing here they could not already read.

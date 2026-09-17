@@ -692,8 +692,14 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   rather than defaulted so a future route cannot silently reopen the hole), and
   `engine.chat`/`resolve_confirmation` take a required keyword-only `user` for the same
   reason. Migration `20260917173429` claims legacy rows for `MIN(id) WHERE role='admin'`
-  — correct in both directions with no `users/bootstrap.py` change, because a fresh
-  install runs it against an empty table — and the column is `ON DELETE CASCADE`
+  (a no-op on a fresh install, where the table is empty), and `users/bootstrap.py`
+  repeats the claim inside the transaction that seeds the first admin — the same thing
+  it already does for legacy `totp_config`/`trusted_devices` rows. **Both are needed:**
+  an install upgrading straight from a pre-multi-user release runs
+  `20260821100126_multi_user.sql` and this migration in ONE startup, before any admin
+  exists, so the migration's subquery is NULL and never re-runs; without the bootstrap
+  half that install's whole chat history would stay unowned, and an unowned conversation
+  is invisible to every seat. The column is `ON DELETE CASCADE`
   (personal data follows its person, the `totp_config` idiom, not `owner_id`'s SET
   NULL). Telegram has no seat until B4 (#193), so `telegram/store` stamps
   `users.service.earliest_admin_id()` — the same expression — as a stopgap.
