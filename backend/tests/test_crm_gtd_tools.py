@@ -12,6 +12,9 @@ _TASK_TOOLS = {"crm_create_task", "crm_list_tasks", "crm_complete_task",
 _GTD_WRITE_TOOLS = {"todo_create", "todo_update", "todo_bulk_update", "todo_delete",
                     "todo_create_project", "todo_update_project", "todo_delete_project"}
 _GTD_READ_TOOLS = {"todo_list", "todo_get", "todo_list_projects"}
+# The four writes #186 classified ROUTINE. Spelled out, not derived: this is the pin.
+_GTD_ROUTINE_TOOLS = {"todo_create", "todo_update",
+                      "todo_create_project", "todo_update_project"}
 
 
 def test_normal_mode_hides_every_todo_tool(task_mode):
@@ -147,6 +150,23 @@ def test_the_writes_flags_match_the_intended_split():
         assert writes[name] is True, f"{name} must be writes=True"
     for name in _GTD_READ_TOOLS:
         assert writes[name] is False, f"{name} must be writes=False"
+
+
+def test_the_confirm_tiers_match_the_intended_split():
+    """#186's classification, pinned at the DEF (the registry pin lives in
+    tests/test_confirm_tier.py). A tier here is an auto-approved write, so a def
+    growing one by accident must fail a test in its own module too."""
+    from assistant.confirm_tier import ROUTINE
+    tiered = {d["name"] for d in GTD_TOOL_DEFS if "confirm_tier" in d}
+    assert tiered == _GTD_ROUTINE_TOOLS
+    for d in GTD_TOOL_DEFS:
+        if d["name"] in _GTD_ROUTINE_TOOLS:
+            assert d["confirm_tier"] is ROUTINE, d["name"]
+            assert d["writes"] is True, d["name"]
+    # The other six — bulk, both deletes, and the three reads — stay unclassified,
+    # so they keep their Approve card. Absence of the key is the deny state.
+    for name in (_GTD_WRITE_TOOLS | _GTD_READ_TOOLS) - _GTD_ROUTINE_TOOLS:
+        assert name not in {d["name"] for d in GTD_TOOL_DEFS if "confirm_tier" in d}, name
 
 
 def test_every_def_has_an_executor_and_vice_versa():

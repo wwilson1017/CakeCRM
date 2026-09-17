@@ -185,11 +185,19 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   provider), FAILS LOUD at construction on any other value or on a tier declared on a
   read, and exposes `is_routine_write(name)` — pure set membership, so **absence is the
   deny state**: an unknown name, a read and every unclassified write all confirm.
-  Sixteen `crm_*` tools carry it (create/update contact, company, deal; deal stage;
-  won/lost; log activity; create/update/complete task; set custom fields) — the
-  classification rule and the never-routine list live in `assistant/confirm_tier.py`
-  and `SECURITY.md`. Never add one to a tool that notifies, deletes/archives/merges,
-  bulk-writes, or leaves the install. In the engine the routine predicate may appear
+  Twenty tools carry it. Sixteen are `crm_*` (create/update contact, company, deal;
+  deal stage; won/lost; log activity; create/update/complete task; set custom fields),
+  and **#186 added the four `todo_*` ones that GTD task mode — the product default since
+  #102 — puts in their place**: `todo_create`, `todo_update`, `todo_create_project`,
+  `todo_update_project`. Without those, #180's own motivating example still raised a card
+  on nearly every install, because `_TASK_TOOL_NAMES` hides three of the sixteen in GTD
+  mode. The other six todo tools stay unclassified on the rule: `todo_bulk_update` is
+  bulk, the two deletes remove a record, and the three reads cannot carry a tier at all.
+  No single registry holds all twenty — normal mode loads the sixteen, GTD mode
+  thirteen plus four — so `test_confirm_tier.py` pins the SOURCE set and each registry
+  separately. The classification rule and the never-routine list live in
+  `assistant/confirm_tier.py` and `SECURITY.md`. Never add one to a tool that notifies,
+  deletes/archives/merges, bulk-writes, or leaves the install. In the engine the routine predicate may appear
   **only** as a narrowing of the normal-mode term of the gate, never as a term of its
   own, so a stronger rule can never be masked by it. Two consequences of "normal no
   longer means confirm everything" are load-bearing: the power→normal demotion for
@@ -199,11 +207,22 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   power arm to every mode. Only the first costs anything: normal-mode turns now pay the
   one indexed `is_conversation_tainted` read that power mode always paid, deliberately.
   The Gmail generalization is free — it widens where an already-set in-memory flag is
-  consulted. `crm.tools.removes_from_view()` is the argument-level carve-out: contacts
-  and companies archive, and tasks drop, through a `status` argument — including one
-  the def does not advertise, since nothing validates tool arguments against the
-  schema at runtime — so that one call keeps its card while the tool stays routine. GTD task mode (the default) hides three of the sixteen;
-  the `todo_*` family is deliberately unclassified.
+  consulted. `assistant.confirm_tier.removes_from_view()` is the argument-level
+  carve-out: contacts and companies archive, and tasks, todos and GTD projects drop,
+  through a `status` argument — including one the def does not advertise, since nothing
+  validates tool arguments against the schema at runtime — so that one call keeps its
+  card while the tool stays routine. It **moved there from `crm/tools.py` in #186**,
+  when its keys stopped belonging to one tool module (`todo_update*` are defined in
+  `crm/gtd_tools.py`); that also took `assistant/engine.py` off its only import of CRM
+  feature code, so the gate reads as assistant-layer vocabulary end to end. `dropped` is
+  the carved-out value on both todo keys and nothing else is: `done` on a todo and
+  `completed` on a project are completion (the same call #180 made for a task), and
+  `someday`/`someday_maybe` is filing between working lists that each have their own GTD
+  page. Only `dropped` is a soft delete — `todo_delete`'s own description tells the model
+  to prefer it — and it is the one argument that can hide either row, because
+  `gtd_service._check_fields` RAISES on any field outside `TODO_FIELDS`/`PROJECT_FIELDS`
+  (unlike `service.update_task`, which silently filters), so `deal_id` — the only other
+  column that hides a todo — is unreachable through `todo_update`.
   **The assistant is named Baker and that name is a brand, not a setting** (#71):
   `identity.NAME` is the only source (the old `DEFAULT_NAME` spelling is gone — a
   "default" implies something may override it), `get_identity()` does not select the

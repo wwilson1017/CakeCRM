@@ -18,9 +18,11 @@ Sixteen of those writes additionally carry ``"confirm_tier": ROUTINE`` (issue #1
 ordinary record edits that stay in Postgres, notify nobody, remove nothing from view,
 are not bulk and never leave the install. Those skip the Approve card in normal mode.
 Absence of the key is the deny state, so a new write confirms until somebody classifies
-it — read ``assistant/confirm_tier.py`` before adding one. ``removes_from_view()``
-below is the argument-level carve-out: three of the sixteen can hide a record through a
-``status`` argument, and that particular call keeps its card.
+it — read ``assistant/confirm_tier.py`` before adding one. That module also owns
+``removes_from_view()``, the argument-level carve-out: three of the sixteen defined here
+can hide a record through a ``status`` argument, and that particular call keeps its card.
+(GTD task mode, the product default, hides three of the sixteen from the model; their
+``todo_*`` replacements in ``crm/gtd_tools.py`` carry their own tiers since #186.)
 """
 
 import logging
@@ -2024,51 +2026,11 @@ TOOL_EXECUTORS = {
 }
 
 
-# ── Argument-level carve-out from the routine tier (issue #180) ───────────────
-# Rule 3 of the routine classification is "nothing is removed from view", and three of
-# the sixteen routine tools can do exactly that through ONE `status` argument:
-#   * `crm_update_contact` / `crm_update_company` — "archived". `crm_update_company`'s
-#     own description sells it as the stand-in for the delete tool we deliberately do
-#     not expose;
-#   * `crm_update_task` — "dropped", which `list_tasks` filters out unconditionally
-#     (`NOT_DROPPED_TASK_T`), i.e. a soft delete. The def does not advertise `status`,
-#     but tool arguments are NOT validated against the schema at runtime and the
-#     executor forwards `**kwargs` into `service.update_task`, whose allow-list accepts
-#     `status` — so an undeclared argument really does reach the column.
-# The TOOL stays routine — renaming a company or retitling a task should not raise a
-# card — while that one CALL keeps its confirmation.
-#
-# Deliberately keyed on the values that HIDE a record, not on every status: 'done' on a
-# task is completion, and `crm_complete_task` is routine by design.
-#
-# Named the same shape as `context_files.tools.requires_confirmation`: the engine's
-# routine predicate is name-keyed, and this is the hook that makes one tool
-# "routine sometimes". It only ever ADDS a confirmation, so it is safe to fail closed.
-_HIDING_STATUS: dict[str, frozenset[str]] = {
-    "crm_update_contact": frozenset({"archived"}),
-    "crm_update_company": frozenset({"archived"}),
-    "crm_update_task": frozenset({"dropped"}),
-}
-
-
-def removes_from_view(tool_name: str, args: dict | None) -> bool:
-    """True when this specific call would take the record it edits out of the lists.
-
-    Fails CLOSED: a provider can decode malformed tool JSON to a list, string or
-    number, and an unreadable argument set on a hide-capable tool is treated as a hide.
-    The cost of being wrong is one Approve card.
-    """
-    hiding = _HIDING_STATUS.get(tool_name)
-    if hiding is None:
-        return False
-    if not isinstance(args, dict):
-        return True
-    status = args.get("status")
-    if status is None:
-        return False
-    if not isinstance(status, str):
-        return True
-    return status.strip().lower() in hiding
+# The argument-level carve-out from the routine tier (rule 3, spelled at argument
+# level) moved to `assistant/confirm_tier.py` in #186: its keys now span two tool
+# modules — `crm_update_contact`/`_company`/`_task` here, and `todo_update` /
+# `todo_update_project` in `crm/gtd_tools.py` — so it belongs beside the rule it
+# narrows rather than inside either tool module. The engine consults it there.
 
 
 # The five task tools, hidden while GTD mode is active — the ten richer `todo_*`

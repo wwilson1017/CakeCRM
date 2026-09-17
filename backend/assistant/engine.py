@@ -34,10 +34,9 @@ import time
 import uuid
 from collections.abc import AsyncGenerator
 
-from assistant import assembly, compaction, delimiters, history, identity
+from assistant import assembly, compaction, confirm_tier, delimiters, history, identity
 from assistant.write_budget import WRITE_BUDGET_PER_TURN, BudgetAction, BudgetState
 from context_files import prompt as context_prompt, tools as context_file_tools
-from crm import tools as crm_tools
 from memory import context as memory_context
 from providers.base import AIProvider, _sse
 from providers.windows import cache_inclusive_input_tokens, context_usage_event
@@ -477,8 +476,8 @@ async def _chat_impl(
             # find it), then wait for approval.
             always_confirms = context_file_tools.requires_confirmation(name, args)
             # Routine by name, minus the call shapes that take a record out of view
-            # (see crm.tools.removes_from_view) — normal mode only; power is untouched.
-            routine_exempt = registry.is_routine_write(name) and not crm_tools.removes_from_view(name, args)
+            # (see confirm_tier.removes_from_view) — normal mode only; power is untouched.
+            routine_exempt = registry.is_routine_write(name) and not confirm_tier.removes_from_view(name, args)
             if is_write and (
                 always_confirms
                 or context_is_untrusted

@@ -1127,6 +1127,63 @@ async def test_dropping_a_task_through_a_routine_update_still_confirms(store):
 
 
 @pytest.mark.asyncio
+async def test_adding_a_todo_runs_with_no_card(store):
+    """#186's motivating example: GTD task mode is the default, so `todo_create` is
+    what "add a todo" reaches — and before it was classified this raised a card."""
+    reg = Registry(writes={"todo_create"}, routine={"todo_create"})
+    prov = FakeProvider([
+        [_complete([_tc("todo_create", args={"title": "call the vendor"})], stop="tool_use")],
+        [{"type": "text", "text": "captured"}, _complete()],
+    ])
+    events = await _run(prov, reg, [{"role": "user", "content": "add a todo"}], tool_mode="normal")
+    assert "confirm" not in _types(events)
+    assert reg.calls == [("todo_create", {"title": "call the vendor"})]
+
+
+@pytest.mark.asyncio
+async def test_dropping_a_todo_through_a_routine_update_still_confirms(store):
+    """`todo_delete`'s own description tells the model to drop instead of deleting, so
+    without the carve-out the routine tier would hand it an unconfirmed delete."""
+    reg = Registry(writes={"todo_update"}, routine={"todo_update"})
+    prov = FakeProvider([
+        [_complete([_tc("todo_update", args={"todo_id": 5, "status": "dropped"})],
+                   stop="tool_use")],
+        [{"type": "text", "text": "confirm?"}, _complete()],
+    ])
+    events = await _run(prov, reg, [{"role": "user", "content": "drop todo 5"}], tool_mode="normal")
+    assert "confirm" in _types(events)
+    assert reg.calls == []
+
+
+@pytest.mark.asyncio
+async def test_completing_a_todo_is_not_removal_and_runs(store):
+    """Positive control for the todo half: only `dropped` is carved out."""
+    reg = Registry(writes={"todo_update"}, routine={"todo_update"})
+    prov = FakeProvider([
+        [_complete([_tc("todo_update", args={"todo_id": 5, "status": "done"})], stop="tool_use")],
+        [{"type": "text", "text": "done"}, _complete()],
+    ])
+    events = await _run(prov, reg, [{"role": "user", "content": "finish todo 5"}], tool_mode="normal")
+    assert "confirm" not in _types(events)
+    assert reg.calls == [("todo_update", {"todo_id": 5, "status": "done"})]
+
+
+@pytest.mark.asyncio
+async def test_dropping_a_project_through_a_routine_update_still_confirms(store):
+    """The same gesture one level up — `todo_update_project(status='dropped')`."""
+    reg = Registry(writes={"todo_update_project"}, routine={"todo_update_project"})
+    prov = FakeProvider([
+        [_complete([_tc("todo_update_project", args={"project_id": 2, "status": "dropped"})],
+                   stop="tool_use")],
+        [{"type": "text", "text": "confirm?"}, _complete()],
+    ])
+    events = await _run(prov, reg, [{"role": "user", "content": "drop that project"}],
+                        tool_mode="normal")
+    assert "confirm" in _types(events)
+    assert reg.calls == []
+
+
+@pytest.mark.asyncio
 async def test_an_ordinary_update_on_the_same_tool_runs(store):
     """Positive control: the carve-out is about the ARGUMENT, not the tool."""
     reg = Registry(writes={"crm_update_company"}, routine={"crm_update_company"})
