@@ -8,6 +8,15 @@ uses (the ``notify_user`` tool, the proactive digest, heartbeat-failure alerts).
      blocks the others or the row;
   3. records which channels actually delivered.
 
+**Recipients (issue #192).** The optional keyword-only ``user_id`` is a DELIVERY
+ADDRESS, not an acting identity: it changes where a notification lands and nothing
+about what the caller may do. ``None`` means broadcast, which is the right default for
+the install-level senders. Targeted delivery narrows Web Push to that seat's own
+subscriptions; a broadcast still fans out to every stored subscription, so an
+unclaimed legacy endpoint receives broadcasts and only broadcasts.
+
+Telegram is the one channel #192 does NOT route — see ``_send_telegram``.
+
 There is no channel base class — adding/deferring a channel is adding/omitting one
 ``_send_*`` branch (Telegram is a lazy-imported stub until #7 lands). WhatsApp is
 NOT ported (per issue #6). pywebpush is imported lazily.
@@ -28,12 +37,15 @@ _PUSH_TIMEOUT_SECONDS = 10
 _MAX_ENDPOINT_LEN = 2000
 
 
-def deliver_notification(title: str, message: str) -> dict:
+def deliver_notification(title: str, message: str, *, user_id: int | None = None) -> dict:
     """Deliver a notification to all channels and log it. NEVER raises.
 
     Callers (notify_user, the proactive digest, heartbeat-failure alerts) rely on this
     contract — a DB hiccup or one broken channel must never propagate out and
     abort a digest send or a scheduler tick.
+
+    ``user_id`` is the recipient seat; ``None`` (the default) broadcasts to the whole
+    install.
     """
     title = (title or "").strip() or "Notification"
     message = (message or "").strip()
@@ -43,7 +55,7 @@ def deliver_notification(title: str, message: str) -> dict:
     notification_id = None
     logged = False
     try:
-        notification_id = service.create_notification(title, message, [])
+        notification_id = service.create_notification(title, message, [], user_id=user_id)
         logged = True
     except Exception:
         logger.warning("failed to create notification row", exc_info=True)
@@ -53,7 +65,7 @@ def deliver_notification(title: str, message: str) -> dict:
     channels_sent: list[str] = []
     web_push_ok = False
     try:
-        web_push_ok = _send_web_push(title, message, notification_id)
+        web_push_ok = _send_web_push(title, message, notification_id, user_id)
     except Exception:
         logger.warning("web push channel errored", exc_info=True)
     if web_push_ok:
@@ -112,9 +124,15 @@ def _build_payload(title: str, message: str, notification_id: str) -> str:
     return data
 
 
-def _send_web_push(title: str, message: str, notification_id: str) -> bool:
-    """Send to every stored subscription. Returns True if ≥1 device accepted it."""
-    subs = subscriptions.list_subscriptions()
+def _send_web_push(title: str, message: str, notification_id: str,
+                   user_id: int | None = None) -> bool:
+    """Send to the recipient's subscriptions. Returns True if ≥1 device accepted it.
+
+    ``user_id=None`` is a broadcast and reaches every stored subscription, unclaimed
+    ones included. A targeted send reaches that seat's stamped rows ONLY — an endpoint
+    whose owner is unknown must never receive somebody's personal notification.
+    """
+    subs = subscriptions.list_subscriptions(user_id=user_id)
     if not subs:
         return False
     try:
@@ -191,6 +209,13 @@ def _send_telegram(title: str, message: str) -> bool:
     ImportError-guarded import so merge order is irrelevant: until #7 lands the
     import fails and this no-ops (channels_sent stays ["web_push"]); when #7 lands
     the channel lights up with zero change here.
+
+    **Not routed by #192, and that is a stated gap rather than an oversight.** There is
+    exactly ONE install-wide Telegram binding today, so there is no per-seat address to
+    route to: a targeted notification's text still reaches whoever linked that chat.
+    Making it per-seat is #193 (Phase B / B4), which rewires this function to deliver a
+    targeted notification to that seat's link and a broadcast to all links. Until then
+    the honest description of this channel is install-wide, and SECURITY.md says so.
     """
     try:
         from telegram.service import notify_linked_user  # lands with issue #7

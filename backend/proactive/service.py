@@ -278,6 +278,14 @@ def _maybe_send_nudges(now: datetime) -> dict:
 
     Claim-then-send per record, and the sweep itself is claimed the same way the
     digest is, so a 60s tick cannot run the sweep every minute.
+
+    **Owner-routed (#192).** A nudge is about ONE record, so it goes to that record's
+    owner rather than to the whole install. An UNOWNED record broadcasts — a stale deal
+    nobody has claimed is everyone's problem, and silently sending it to nobody would be
+    the worst of the three options. ``cand["owner_id"]`` is indexed, never ``.get()``:
+    an explicit ``None`` is a deliberate broadcast, while a candidate missing the key is
+    a broken producer contract that must fail loudly instead of quietly widening one
+    rep's nudge into an install-wide one.
     """
     claimed = pg_execute(
         "UPDATE heartbeat_state SET last_nudge_at = now() "
@@ -296,14 +304,22 @@ def _maybe_send_nudges(now: datetime) -> dict:
             break
         if not _claim_nudge(cand["entity_type"], cand["entity_id"], cand["kind"]):
             continue                    # still inside its cooldown
-        deliver_notification(cand["title"], cand["message"])
+        deliver_notification(cand["title"], cand["message"], user_id=cand["owner_id"])
         sent.append(cand)
     return {"sent": len(sent), "candidates": len(candidates), "nudges": sent}
 
 
 def collect_nudge_candidates() -> list[dict]:
     """Detect what is worth nudging about, highest-value first. Keyless — this reads
-    Phase 1's intelligence functions, which are pure SQL."""
+    Phase 1's intelligence functions, which are pure SQL.
+
+    Every candidate carries ``owner_id`` — the routing address ``_maybe_send_nudges``
+    delivers to. Both analytics readers SELECT it unconditionally (#190), so it is a
+    read-through rather than a second query, and it is INDEXED rather than ``.get()``
+    for the same reason the consumer indexes: ``None`` (unowned) is a real value that
+    means broadcast, so a silent default would turn a dropped SELECT column into an
+    install-wide leak of one rep's nudges instead of an error.
+    """
     from crm import analytics_service
 
     out = []
@@ -316,6 +332,7 @@ def collect_nudge_candidates() -> list[dict]:
         out.append({
             "entity_type": "deal",
             "entity_id": deal["id"],
+            "owner_id": deal["owner_id"],
             "kind": KIND_STALE_DEAL,
             "title": "Deal going cold",
             "message": (
@@ -338,6 +355,7 @@ def collect_nudge_candidates() -> list[dict]:
         out.append({
             "entity_type": "contact",
             "entity_id": contact["id"],
+            "owner_id": contact["owner_id"],
             "kind": KIND_UNTOUCHED_CONTACT,
             "title": "Contact needs a check-in",
             "message": (
