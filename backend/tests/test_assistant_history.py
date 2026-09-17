@@ -463,6 +463,7 @@ def test_list_filters_on_the_owner(rec):
     (lambda: history.get_conversation("c1", user_id=None), "compaction_summary"),
     (lambda: history.delete_conversation("c1", user_id=None), "DELETE FROM assistant_conversations"),
     (lambda: history.rename_conversation("c1", "t", user_id=None), "title_edited_by_user = TRUE"),
+    (lambda: history.list_conversations(user_id=None), "FROM assistant_conversations c"),
 ])
 def test_user_id_none_means_no_filter_not_only_unowned(rec, call, needle):
     """``user_id=None`` is the TRUSTED-caller escape hatch, not "rows with a NULL owner".

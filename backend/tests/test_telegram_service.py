@@ -203,6 +203,11 @@ async def test_callback_approve_resolves_and_continues(monkeypatch):
     # The continuation ran (engine.chat called with empty messages) and streamed text.
     assert h.chat_calls == [[]]
     assert ("html", "chat1", "Done — task created.", None) in h.sent
+    # The poller is a trusted SEATLESS caller until B4 (#193), so both the confirmation
+    # and the continuation must carry user=None (#191). A fabricated seat here would be
+    # worse than none: the Telegram conversation is owned by earliest_admin_id(), so a
+    # mismatched id makes every turn refuse with "Conversation not found".
+    assert h.resolve_users == [None] and h.chat_users == [None]
 
 
 async def test_two_confirms_continue_only_after_both_resolved(monkeypatch):
@@ -351,6 +356,8 @@ async def test_new_message_auto_denies_stale_batch(monkeypatch):
     assert ("conv1", "tuA", "deny", "mOLD") in h.resolve_calls
     assert ("conv1", "tuB", "deny", "mOLD") in h.resolve_calls
     assert h.cleared >= 1  # pending marker cleared before the new turn
+    # The auto-deny path is the third seatless call site (#191) — same contract.
+    assert set(h.resolve_users) == {None} and set(h.chat_users) == {None}
 
 
 async def test_stale_batch_auto_denied_even_without_provider(monkeypatch):

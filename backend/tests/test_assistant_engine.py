@@ -1302,3 +1302,24 @@ def test_an_unattended_confirmation_skips_the_ownership_check(monkeypatch):
     out = engine.resolve_confirmation(
         Registry(writes={"crm_create_contact"}), "c1", "t1", "approve", user=None)
     assert out["decision"] == "approve"
+
+
+async def test_a_user_row_without_an_id_ends_the_turn_rather_than_going_unfiltered(store):
+    """Fail-closed at the seam: `.get("id")` would answer None, which is the TRUSTED
+    unfiltered path — the one value a malformed seat must never be promoted to."""
+    conv = store.create_conversation(user_id=_SEAT_A["id"])
+    prov = FakeProvider([[{"type": "text", "text": "leaked"}, _complete()]])
+    events = await _run(prov, Registry(), [{"role": "user", "content": "hi"}],
+                        conversation_id=conv["id"], user={"name": "no id here"})
+    assert _types(events) == ["error"]
+    assert prov.captured_system_prompts == [] and store.saved == []
+
+
+def test_a_confirmation_from_a_user_row_without_an_id_refuses_too(monkeypatch):
+    monkeypatch.setattr(history, "conversation_exists",
+                        lambda *a, **k: pytest.fail("must not reach the ownership query"))
+    monkeypatch.setattr(history, "claim_pending_tool",
+                        lambda *a, **k: pytest.fail("must not claim"))
+    with pytest.raises(KeyError):
+        engine.resolve_confirmation(Registry(writes={"t"}), "c1", "t1", "approve",
+                                    user={"name": "no id here"})

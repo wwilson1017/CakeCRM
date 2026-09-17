@@ -211,7 +211,10 @@ async def _chat_impl(
     is_continuation = not messages
     # The seat every conversation lookup below is scoped to. None = a trusted seatless
     # caller (the Telegram poller), which sees the conversation it was handed (#191).
-    user_id = user.get("id") if isinstance(user, dict) else None
+    # Indexed, not ``.get``: a user row without an id is a bug, and answering it with
+    # None would silently promote that seat to the unfiltered trusted path. The KeyError
+    # reaches ``chat``'s catch-all and ends the turn, which is the safe direction.
+    user_id = user["id"] if isinstance(user, dict) else None
 
     # ── Resolve / validate the conversation, persist the user row ──────────────
     try:
@@ -738,7 +741,7 @@ def resolve_confirmation(registry, conversation_id: str, tool_use_id: str, decis
     callers (the Telegram poller) pass ``user=None`` explicitly.
     """
     if user is not None and not history.conversation_exists(
-        conversation_id, user_id=user.get("id")
+        conversation_id, user_id=user["id"]  # indexed: see chat()'s note on failing closed
     ):
         return {"status": "not_found"}
     claimed = history.claim_pending_tool(conversation_id, tool_use_id, msg_id=msg_id)
