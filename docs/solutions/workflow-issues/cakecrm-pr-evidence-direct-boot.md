@@ -56,6 +56,7 @@ encrypted, and unavailable to workers by design; the same applies to real bot to
 Blanket `evidence-infra-skip` under-verifies: half the feature's contract is still
 provable. Skip only when the live boot itself genuinely fails.
 
-**Origin:** 2026-07-25 `/auto-issues-team` run (PRs #39–#47); supersedes the harness half
-of the older evidence notes in `.claude/coach-lessons.md` (the boot half there still
-holds and points here).
+**Origin:** 2026-07-25 `/auto-issues-team` run (PRs #39–#47). This document is the
+durable home for both halves of the evidence rule: boot the real backend, then verify
+the half of the contract that a live boot can prove (the retired coach ledger used to
+hold the boot half and pointed here).
