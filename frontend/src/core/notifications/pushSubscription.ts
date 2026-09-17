@@ -43,6 +43,24 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
   return outputArray;
 }
 
+/**
+ * POST a subscription to the server, which upserts it by endpoint and stamps the
+ * signed-in seat as its owner (#192). One definition on purpose: the first subscribe
+ * and the self-heal re-POST must send the SAME body, or an endpoint could be created
+ * with one shape and re-stamped with another.
+ */
+async function postSubscription(subscription: PushSubscription): Promise<void> {
+  const sub = subscription.toJSON();
+  await api('/api/notifications/push/subscribe', {
+    method: 'POST',
+    body: JSON.stringify({
+      endpoint: sub.endpoint,
+      keys: sub.keys,
+      user_agent: navigator.userAgent,
+    }),
+  });
+}
+
 export async function subscribeToPush(): Promise<boolean> {
   if (!isPushSupported()) return false;
   try {
@@ -60,15 +78,7 @@ export async function subscribeToPush(): Promise<boolean> {
       applicationServerKey: applicationServerKey.buffer as ArrayBuffer,
     });
 
-    const sub = subscription.toJSON();
-    await api('/api/notifications/push/subscribe', {
-      method: 'POST',
-      body: JSON.stringify({
-        endpoint: sub.endpoint,
-        keys: sub.keys,
-        user_agent: navigator.userAgent,
-      }),
-    });
+    await postSubscription(subscription);
     return true;
   } catch (err) {
     console.error('Push subscription failed:', err);
@@ -125,15 +135,7 @@ export async function resyncPushSubscription(): Promise<void> {
     const subscription = await registration.pushManager.getSubscription();
     if (!subscription) return;
 
-    const sub = subscription.toJSON();
-    await api('/api/notifications/push/subscribe', {
-      method: 'POST',
-      body: JSON.stringify({
-        endpoint: sub.endpoint,
-        keys: sub.keys,
-        user_agent: navigator.userAgent,
-      }),
-    });
+    await postSubscription(subscription);
   } catch {
     /* best-effort: the endpoint keeps its previous owner until the next load */
   }
