@@ -148,7 +148,9 @@ async def _maybe_compact(provider, conversation_id: str) -> bool:
     if last_ct is not None and last_ct < _TARGET_FULLNESS * budget:
         return False
 
-    conv = await asyncio.to_thread(history.get_conversation, conversation_id)
+    # user_id=None: internal housekeeping inside a turn whose ownership the engine
+    # already checked — not a seat reaching for a conversation (#191).
+    conv = await asyncio.to_thread(history.get_conversation, conversation_id, user_id=None)
     if not conv:
         return False
     rows = conv.get("messages") or []

@@ -15,6 +15,18 @@ Key differences from the SQLite original, all deliberate:
 Every function here is synchronous, blocking psycopg2 code. The async streaming
 engine must call these via ``asyncio.to_thread``; the non-streaming router
 endpoints are sync handlers (FastAPI runs them in its threadpool).
+
+**Ownership (issue #191).** A conversation belongs to ONE seat. Unlike CRM records —
+where "ownership is not access control" — conversations are access-controlled,
+owner-only, with no admin override: they carry drafts, half-thoughts and private asks.
+The six conversation functions below therefore take a **keyword-only, REQUIRED**
+``user_id``. Required rather than defaulted, because ``None`` means *no filter* and a
+future route that simply forgot the argument would silently reopen the hole; making it
+mandatory forces every call site to say, in one word, whether it is an untrusted seat or
+a trusted internal caller that has already checked. The message-level helpers
+(``save_message``, ``auto_title``, ``merge_tool_result``, ``claim_pending_tool``, the
+compaction helpers) stay conversation-scoped: every one of them is reached only after an
+ownership check upstream.
 """
 
 import json
@@ -70,17 +82,32 @@ def is_unsettled_result(content: str | None) -> bool:
 
 # ── Conversations ──────────────────────────────────────────────────────────
 
-def create_conversation() -> dict:
+def create_conversation(*, user_id: int | None) -> dict:
+    """Mint a conversation owned by ``user_id`` (None only for a trusted caller)."""
     conv_id = str(uuid.uuid4())
     return pg_fetchone(
-        "INSERT INTO assistant_conversations (id) VALUES (%s) "
+        "INSERT INTO assistant_conversations (id, user_id) VALUES (%s, %s) "
         "RETURNING id, title, title_edited_by_user, created_at, updated_at",
-        (conv_id,),
+        (conv_id, user_id),
     )
 
 
-def conversation_exists(conv_id: str) -> bool:
-    return pg_fetchone("SELECT 1 AS ok FROM assistant_conversations WHERE id = %s", (conv_id,)) is not None
+def conversation_exists(conv_id: str, *, user_id: int | None) -> bool:
+    """True iff the conversation exists AND (when scoped) belongs to ``user_id``.
+
+    This is the check ``engine.chat`` runs on a client-supplied ``conversation_id``, and
+    it is what stops one seat resuming another seat's thread by uuid. Scoped and unknown
+    both answer False, so the caller's response is identical either way — no existence
+    oracle.
+    """
+    if user_id is None:
+        return pg_fetchone(
+            "SELECT 1 AS ok FROM assistant_conversations WHERE id = %s", (conv_id,)
+        ) is not None
+    return pg_fetchone(
+        "SELECT 1 AS ok FROM assistant_conversations WHERE id = %s AND user_id = %s",
+        (conv_id, user_id),
+    ) is not None
 
 
 def auto_title(conversation_id: str, first_message: str) -> str:
@@ -101,18 +128,23 @@ def auto_title(conversation_id: str, first_message: str) -> str:
     return title
 
 
-def list_conversations(limit: int = 50, offset: int = 0) -> list[dict]:
-    """Conversations newest-first, each with a message count and a short preview.
+def list_conversations(*, user_id: int | None, limit: int = 50, offset: int = 0) -> list[dict]:
+    """One seat's conversations, newest-first, with a message count and short preview.
 
     This was the last OFFSET paginator still missing a tiebreaker — the CRM's contact
     and company lists already ended on `id` — so the `c.id` term is what stops a
     conversation appearing on two pages or on none when `updated_at` ties (issue #58).
     The LATERAL's own `ORDER BY seq DESC` needs none: (conversation_id, seq) is unique.
+
+    ``user_id=None`` lists EVERY conversation and is reserved for trusted internal
+    callers; the REST route always passes the caller's seat (issue #191).
     """
     limit = max(1, min(int(limit), 200))
     offset = max(0, int(offset))
+    where = "" if user_id is None else "WHERE c.user_id = %s"
+    params: tuple = (limit, offset) if user_id is None else (user_id, limit, offset)
     return pg_fetchall(
-        """
+        f"""
         SELECT c.id, c.title, c.title_edited_by_user, c.created_at, c.updated_at,
                COALESCE(m.msg_count, 0) AS message_count,
                COALESCE(u.preview, '')  AS preview
@@ -127,20 +159,26 @@ def list_conversations(limit: int = 50, offset: int = 0) -> list[dict]:
             WHERE conversation_id = c.id AND role = 'user' AND content <> ''
             ORDER BY seq DESC LIMIT 1
         ) u ON TRUE
+        {where}
         ORDER BY c.updated_at DESC, c.id DESC
         LIMIT %s OFFSET %s
         """,
-        (limit, offset),
+        params,
     )
 
 
-def get_conversation(conv_id: str) -> dict | None:
-    """A conversation with its messages ordered by seq (JSONB → Python lists)."""
+def get_conversation(conv_id: str, *, user_id: int | None) -> dict | None:
+    """A conversation with its messages ordered by seq (JSONB → Python lists).
+
+    Returns None both when the conversation does not exist and when it belongs to
+    another seat, so the route's 404 is the same either way (issue #191).
+    """
     conv = pg_fetchone(
         "SELECT id, title, title_edited_by_user, created_at, updated_at, "
         "       compaction_summary, compaction_first_kept_seq "
-        "FROM assistant_conversations WHERE id = %s",
-        (conv_id,),
+        "FROM assistant_conversations WHERE id = %s"
+        + ("" if user_id is None else " AND user_id = %s"),
+        (conv_id,) if user_id is None else (conv_id, user_id),
     )
     if conv is None:
         return None
@@ -152,19 +190,29 @@ def get_conversation(conv_id: str) -> dict | None:
     return conv
 
 
-def delete_conversation(conv_id: str) -> bool:
-    return pg_execute("DELETE FROM assistant_conversations WHERE id = %s", (conv_id,)) > 0
+def delete_conversation(conv_id: str, *, user_id: int | None) -> bool:
+    """Delete one conversation. False when unknown OR owned by another seat (#191)."""
+    if user_id is None:
+        return pg_execute("DELETE FROM assistant_conversations WHERE id = %s", (conv_id,)) > 0
+    return pg_execute(
+        "DELETE FROM assistant_conversations WHERE id = %s AND user_id = %s",
+        (conv_id, user_id),
+    ) > 0
 
 
-def rename_conversation(conv_id: str, title: str) -> str | None:
-    """Set a user-edited title. Returns the new title, or None if blank/not found."""
+def rename_conversation(conv_id: str, title: str, *, user_id: int | None) -> str | None:
+    """Set a user-edited title. Returns the new title, or None if blank/not found.
+
+    Another seat's conversation is "not found" here too (issue #191).
+    """
     clean = " ".join((title or "").split()).strip()[:_RENAME_MAX]
     if not clean:
         return None
     updated = pg_execute(
         "UPDATE assistant_conversations "
-        "SET title = %s, title_edited_by_user = TRUE, updated_at = now() WHERE id = %s",
-        (clean, conv_id),
+        "SET title = %s, title_edited_by_user = TRUE, updated_at = now() WHERE id = %s"
+        + ("" if user_id is None else " AND user_id = %s"),
+        (clean, conv_id) if user_id is None else (clean, conv_id, user_id),
     )
     return clean if updated > 0 else None
 

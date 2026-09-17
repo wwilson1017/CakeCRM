@@ -10,10 +10,17 @@ Bearer header, which a browser EventSource cannot set).
                                                  optional validated `context` (open CRM record, #14)
   POST   /api/assistant/chat/upload           — same, multipart (payload + files)
   POST   /api/assistant/confirm               — approve/deny a pending write (idempotent)
-  GET    /api/assistant/conversations         — list
-  GET    /api/assistant/conversations/:id     — one conversation with messages
-  DELETE /api/assistant/conversations/:id     — delete
-  PATCH  /api/assistant/conversations/:id/title — rename
+  GET    /api/assistant/conversations         — list (own only)
+  GET    /api/assistant/conversations/:id     — one conversation with messages (own only)
+  DELETE /api/assistant/conversations/:id     — delete (own only)
+  PATCH  /api/assistant/conversations/:id/title — rename (own only)
+
+Conversations are **owner-only, with no admin override** (issue #191) — the one place
+the product access-controls a record rather than merely attributing it. Every path that
+can reach a conversation from a seat is scoped to that seat: the four endpoints above,
+``/chat``'s resume of a supplied ``conversation_id``, and ``/confirm``'s claim. A
+conversation owned by someone else answers exactly as one that does not exist — 404,
+never 403 — so the API is not an existence oracle for other people's threads.
   GET    /api/assistant/identity              — fixed name + personality
   PUT    /api/assistant/identity              — edit the personality (admin only; the
                                                  name is a fixed brand, #71)
@@ -117,6 +124,7 @@ async def chat(req: ChatRequest, user=Depends(get_current_user)):
         provider, registry, req.messages,
         tool_mode=req.tool_mode, conversation_id=req.conversation_id,
         context=req.context.model_dump() if req.context else None,
+        user=user,
     )
     return StreamingResponse(stream, media_type="text/event-stream", headers=_SSE_HEADERS)
 
@@ -197,7 +205,7 @@ async def chat_upload(
     stream = engine.chat(
         provider, registry, messages,
         tool_mode=tool_mode, conversation_id=conversation_id, title_hint=original_text,
-        context=context,
+        context=context, user=user,
     )
     return StreamingResponse(stream, media_type="text/event-stream", headers=_SSE_HEADERS)
 
@@ -213,22 +221,27 @@ def confirm(req: ConfirmRequest, user=Depends(get_current_user)):
     # the registry needs no change to `resolve_confirmation`: the registry it is handed
     # already carries the right seat, and the stored tool arguments (which the DB, not the
     # client, is authoritative for) cannot override it.
-    return engine.resolve_confirmation(
+    result = engine.resolve_confirmation(
         ToolRegistry(user=user), req.conversation_id, req.tool_use_id, req.decision,
-        msg_id=req.msg_id,
+        msg_id=req.msg_id, user=user,
     )
+    # Another seat's conversation is refused before the claim (issue #191) and reported
+    # exactly as an unknown one is — 404, never 403, so this is not an existence oracle.
+    if result.get("status") == "not_found":
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    return result
 
 
 # ── Conversations ──────────────────────────────────────────────────────────
 
 @router.get("/conversations")
 def list_conversations(limit: int = Query(50), offset: int = Query(0), user=Depends(get_current_user)):
-    return {"conversations": history.list_conversations(limit=limit, offset=offset)}
+    return {"conversations": history.list_conversations(user_id=user["id"], limit=limit, offset=offset)}
 
 
 @router.get("/conversations/{conv_id}")
 def get_conversation(conv_id: str, user=Depends(get_current_user)):
-    conv = history.get_conversation(conv_id)
+    conv = history.get_conversation(conv_id, user_id=user["id"])
     if conv is None:
         raise HTTPException(status_code=404, detail="Conversation not found.")
     conv["messages"] = [_message_for_ui(m) for m in conv.get("messages", [])]
@@ -237,14 +250,14 @@ def get_conversation(conv_id: str, user=Depends(get_current_user)):
 
 @router.delete("/conversations/{conv_id}")
 def delete_conversation(conv_id: str, user=Depends(get_current_user)):
-    if not history.delete_conversation(conv_id):
+    if not history.delete_conversation(conv_id, user_id=user["id"]):
         raise HTTPException(status_code=404, detail="Conversation not found.")
     return {"deleted": True}
 
 
 @router.patch("/conversations/{conv_id}/title")
 def rename_conversation(conv_id: str, req: TitleRequest, user=Depends(get_current_user)):
-    new_title = history.rename_conversation(conv_id, req.title)
+    new_title = history.rename_conversation(conv_id, req.title, user_id=user["id"])
     if new_title is None:
         raise HTTPException(status_code=400, detail="Title is empty or conversation not found.")
     return {"title": new_title}

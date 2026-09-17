@@ -235,8 +235,11 @@ async def _handle_callback(cb: dict) -> None:
         return
 
     registry = ToolRegistry()
+    # user=None: the Telegram binding is install-wide until B4 (#193), so the poller is
+    # a trusted seatless caller — not a seat that must prove it owns this thread (#191).
     result = await asyncio.to_thread(
-        engine.resolve_confirmation, registry, conv, tool_use_id, decision, pending_msg_id
+        engine.resolve_confirmation, registry, conv, tool_use_id, decision, pending_msg_id,
+        user=None,
     )
     outcome = _outcome_text(decision, result)
     await asyncio.to_thread(client.answer_callback_query, cb_id, token, outcome)
@@ -279,7 +282,9 @@ async def _run_turn(settings: dict, token: str, user_text: str | None) -> None:
 
     buffer = ""
     try:
-        async for line in engine.chat(provider, registry, messages, tool_mode="normal", conversation_id=conv):
+        async for line in engine.chat(
+            provider, registry, messages, tool_mode="normal", conversation_id=conv, user=None,
+        ):
             evt = _parse_sse(line)
             if not evt:
                 continue
@@ -309,7 +314,9 @@ async def _auto_deny_batch(conv: str, msg_id: str) -> None:
     pending = await asyncio.to_thread(list_pending_tool_uses, conv, msg_id)
     registry = ToolRegistry()
     for tuid in pending:
-        await asyncio.to_thread(engine.resolve_confirmation, registry, conv, tuid, "deny", msg_id)
+        await asyncio.to_thread(
+            engine.resolve_confirmation, registry, conv, tuid, "deny", msg_id, user=None,
+        )
 
 
 # ── Send helpers (all offloaded; never raise to the loop) ────────────────────

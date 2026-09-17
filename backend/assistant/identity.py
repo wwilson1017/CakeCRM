@@ -319,6 +319,44 @@ def build_context_note(record_type, record_id) -> str | None:
     )
 
 
+_USER_NOTE_FIELD_MAX = 80
+
+
+def _one_line(value, limit: int) -> str:
+    """Collapse a stored user field to one safe, bounded line for the prompt.
+
+    ``users.name`` is free text, so it is the one part of the note below that a person
+    chose. Newlines are what would let it impersonate a new prompt section, so every
+    run of whitespace (and every control character) collapses to a single space and the
+    result is capped. Not a substitute for treating model output as untrusted — just the
+    cheap structural half.
+    """
+    text = "".join(ch if ch.isprintable() else " " for ch in str(value or ""))
+    text = " ".join(text.split()).strip()
+    return text[:limit].strip()
+
+
+def build_user_note(user: dict | None) -> str:
+    """Server-built volatile sentence naming the seat the assistant is talking to (#191).
+
+    Assembled HERE from the database row the auth dependency loaded — never from client
+    text and never from a tool argument — for the same reason ``build_context_note``
+    is: it is a prompt-injection boundary. Returns "" for an unattended turn (the
+    heartbeat, the Telegram poller before B4), which appends nothing.
+    """
+    if not isinstance(user, dict):
+        return ""
+    name = _one_line(user.get("name"), _USER_NOTE_FIELD_MAX)
+    email = _one_line(user.get("email"), _USER_NOTE_FIELD_MAX)
+    if name and email:
+        who = f"{name} ({email})"
+    else:
+        who = name or email
+    if not who:
+        return ""
+    return f"You are currently talking with {who}."
+
+
 def render_personality(text: str) -> str:
     """Substitute the brand into a personality template.
 
@@ -391,7 +429,7 @@ def _task_mode() -> str:
 
 def build_system_prompt(
     identity: dict, context: dict | None = None, memory_context: str = "",
-    soul: str = "", knowledge_context: str = "",
+    soul: str = "", knowledge_context: str = "", user_note: str = "",
 ) -> tuple[str, str]:
     """Build the ``(static, volatile)`` system prompt for stream_turn().
 
@@ -405,7 +443,8 @@ def build_system_prompt(
     validated CRM record context is supplied (#14) — a server-built one-sentence note
     about the open record, plus — when provided (#5) — the ``memory_context`` block of
     long-term facts surfaced for this turn, plus — when provided (#72) — the fenced
-    ``knowledge_context`` block. All are volatile ON PURPOSE: they change
+    ``knowledge_context`` block, plus — when the turn has a signed-in seat (#191) — the
+    ``user_note`` naming who is asking. All are volatile ON PURPOSE: they change
     turn-to-turn and MUST NOT enter the static (cache_control) block, or a stale cached
     prefix would hide updates and thrash the cache. Context is per-turn only: it lives
     solely in this system prompt and is never persisted to history.
@@ -448,6 +487,10 @@ def build_system_prompt(
         ] if part
     ])
     volatile = f"Current date and time: {datetime.now().astimezone().strftime('%A, %B %d, %Y %I:%M %p %Z')}"
+    # Who is asking changes per turn and per seat, so it belongs in the volatile half —
+    # putting it in the cached static prefix would serve one seat's identity to the next.
+    if user_note:
+        volatile = f"{volatile}\n\n{user_note}"
     if context:
         note = build_context_note(context.get("record_type"), context.get("record_id"))
         if note:
