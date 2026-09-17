@@ -257,9 +257,17 @@ def delete_conversation(conv_id: str, user=Depends(get_current_user)):
 
 @router.patch("/conversations/{conv_id}/title")
 def rename_conversation(conv_id: str, req: TitleRequest, user=Depends(get_current_user)):
+    # Split the two reasons apart, because #191 gave the second one a rule: a
+    # conversation this seat does not own must answer 404, exactly as a missing one does.
+    # A blank title is the caller's own input and stays a 400. This is an emptiness test,
+    # not a second normalization: `" ".join(x.split())` is empty for precisely the
+    # whitespace-only strings `x.strip()` is, so history.rename_conversation remains the
+    # single place a title is actually cleaned.
+    if not (req.title or "").strip():
+        raise HTTPException(status_code=400, detail="Title is empty.")
     new_title = history.rename_conversation(conv_id, req.title, user_id=user["id"])
     if new_title is None:
-        raise HTTPException(status_code=400, detail="Title is empty or conversation not found.")
+        raise HTTPException(status_code=404, detail="Conversation not found.")
     return {"title": new_title}
 
 

@@ -512,3 +512,18 @@ def test_a_foreign_conversation_is_indistinguishable_from_a_missing_one(client, 
     foreign = client.get("/api/assistant/conversations/owned-by-another-seat")
     assert missing.status_code == foreign.status_code == 404
     assert missing.json() == foreign.json()
+
+
+def test_rename_separates_a_blank_title_from_a_conversation_you_cannot_reach(client, monkeypatch):
+    """The rename route answered 400 for both reasons, so a foreign conversation was the
+    one cross-seat access that did not follow #191's 404 rule."""
+    monkeypatch.setattr(router_mod.history, "rename_conversation",
+                        lambda cid, title, *, user_id: None)
+    blank = client.patch("/api/assistant/conversations/c1/title", json={"title": "   "})
+    assert blank.status_code == 400 and blank.json()["detail"] == "Title is empty."
+    foreign = client.patch("/api/assistant/conversations/someone-elses/title",
+                           json={"title": "Renamed"})
+    missing = client.patch("/api/assistant/conversations/no-such-id/title",
+                           json={"title": "Renamed"})
+    assert foreign.status_code == missing.status_code == 404
+    assert foreign.json() == missing.json() == {"detail": "Conversation not found."}
