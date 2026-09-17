@@ -223,6 +223,24 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `gtd_service._check_fields` RAISES on any field outside `TODO_FIELDS`/`PROJECT_FIELDS`
   (unlike `service.update_task`, which silently filters), so `deal_id` — the only other
   column that hides a todo — is unreachable through `todo_update`.
+  **One ceiling is accepted here and stated rather than hidden**, because the Codex PR
+  review raised it against #186 and it is older and wider than #186: `/api/capture` is
+  mounted unconditionally and takes text from an unauthenticated stranger while no
+  `todo_capture_token` is set (#70), and `todo_list`/`todo_get` are NOT in
+  `delimiters.UNTRUSTED_SOURCE_TOOLS`, so that text reaches the model unfenced (a prose
+  "treat as data" note rides the payload; there is no nonce fence and no turn taint). A
+  prompt injection planted through that surface can therefore steer a routine write with
+  no Approve card. That is true on main **without** #186 — the same turn already
+  advertises thirteen routine `crm_*` writes beside `todo_list`, including
+  `crm_update_deal` and `crm_mark_deal_lost` — so #186 widens the reachable set by four
+  todo writes rather than opening the path, and it keeps a card on the two verbs that
+  actually destroy a todo (delete, and `status='dropped'`). The fix is NOT to add the
+  todo reads to `UNTRUSTED_SOURCE_TOOLS`: that set IS
+  `background.BACKGROUND_EXCLUDED_TOOLS`, and `heartbeat.service` reads `todo_list` as
+  its task surface in GTD mode, so doing it blinds the heartbeat on the default install
+  and taints every turn that lists todos. A result-conditional taint (the row carries
+  `source='capture_web'`, the one value only an unauthenticated caller can produce) is
+  the shape to build, and it is its own issue (#204).
   **The assistant is named Baker and that name is a brand, not a setting** (#71):
   `identity.NAME` is the only source (the old `DEFAULT_NAME` spelling is gone — a
   "default" implies something may override it), `get_identity()` does not select the
