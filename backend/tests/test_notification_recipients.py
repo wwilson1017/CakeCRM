@@ -248,13 +248,14 @@ def test_delivery_target_is_keyword_only():
 
 # ── 4. nudges route to the record's owner ────────────────────────────────────
 
-def _nudge_env(monkeypatch, candidates):
-    """Drive _maybe_send_nudges with a claimed sweep and claimed nudges."""
+def _nudge_env(monkeypatch, candidates, active=(THEM,)):
+    """Drive _maybe_send_nudges with a claimed sweep, claimed nudges and a seat roster."""
     from proactive import service as ps
 
     monkeypatch.setattr(ps, "collect_nudge_candidates", lambda: candidates)
     monkeypatch.setattr(ps, "pg_execute", lambda sql, params=(): 1)       # sweep claimed
     monkeypatch.setattr(ps, "pg_fetchone", lambda sql, params=(): {"id": 1})  # nudge claimed
+    monkeypatch.setattr(ps, "_active_owner_ids", lambda: set(active))
     out = []
     import notifications.delivery as d
     monkeypatch.setattr(d, "deliver_notification",
@@ -282,6 +283,49 @@ def test_unowned_nudge_broadcasts(monkeypatch):
     ps, out = _nudge_env(monkeypatch, [_cand(1, None)])
     ps._maybe_send_nudges(datetime(2026, 9, 17, 9, 0, tzinfo=timezone.utc))
     assert out == [None]
+
+
+def test_a_deactivated_owners_nudge_broadcasts_rather_than_vanishing(monkeypatch):
+    """Deactivation keeps the user row and every owner_id, so a departed rep's stale
+    deals keep their owner forever. Addressing that id would hide the nudge from every
+    seat that can actually act on the record."""
+    from datetime import datetime, timezone
+    ps, out = _nudge_env(monkeypatch, [_cand(1, THEM)], active=())   # THEM deactivated
+    ps._maybe_send_nudges(datetime(2026, 9, 17, 9, 0, tzinfo=timezone.utc))
+    assert out == [None]
+
+
+def test_a_roster_read_failure_degrades_to_broadcast(monkeypatch):
+    """The safe direction: a nudge is about a shared CRM record, so the worst case of
+    guessing wrong is that the team sees what one rep would have."""
+    from proactive import service as ps
+    from users import service as users_service
+
+    def boom(**kw):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(users_service, "list_users", boom)
+    assert ps._active_owner_ids() == set()
+
+
+def test_the_roster_is_read_once_per_sweep_not_once_per_nudge(monkeypatch):
+    """A per-candidate lookup would put a query inside a loop capped only by the nudge
+    limit, on the scheduler thread."""
+    from datetime import datetime, timezone
+
+    from proactive import service as ps
+
+    calls = []
+    monkeypatch.setattr(ps, "collect_nudge_candidates",
+                        lambda: [_cand(1, THEM), _cand(2, THEM), _cand(3, None)])
+    monkeypatch.setattr(ps, "pg_execute", lambda sql, params=(): 1)
+    monkeypatch.setattr(ps, "pg_fetchone", lambda sql, params=(): {"id": 1})
+    monkeypatch.setattr(ps, "_active_owner_ids", lambda: calls.append(1) or {THEM})
+    monkeypatch.setattr(ps.settings, "proactive_max_nudges_per_run", 5)
+    import notifications.delivery as d
+    monkeypatch.setattr(d, "deliver_notification", lambda t, m, user_id=None: {"ok": True})
+    ps._maybe_send_nudges(datetime(2026, 9, 17, 9, 0, tzinfo=timezone.utc))
+    assert calls == [1]
 
 
 def test_a_candidate_missing_its_owner_is_an_error_not_a_broadcast(monkeypatch):

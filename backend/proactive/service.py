@@ -286,6 +286,14 @@ def _maybe_send_nudges(now: datetime) -> dict:
     an explicit ``None`` is a deliberate broadcast, while a candidate missing the key is
     a broken producer contract that must fail loudly instead of quietly widening one
     rep's nudge into an install-wide one.
+
+    **A DEACTIVATED owner broadcasts too**, for the same reason. Deactivation keeps the
+    user row and every ``owner_id`` on purpose (``users/router.py``: "accounts are
+    deactivated, never removed"), so a departed rep's stale deals keep their owner
+    forever. Routing to that id would address a seat nobody can sign in as, and the
+    recipient filter would then hide the nudge from every ACTIVE seat — silently sending
+    it to nobody, which is exactly the failure this docstring calls the worst option.
+    A record whose owner can no longer act on it is, for notification purposes, unowned.
     """
     claimed = pg_execute(
         "UPDATE heartbeat_state SET last_nudge_at = now() "
@@ -299,12 +307,14 @@ def _maybe_send_nudges(now: datetime) -> dict:
     candidates = collect_nudge_candidates()
     sent = []
     from notifications.delivery import deliver_notification
+    active_owners = _active_owner_ids()
     for cand in candidates:
         if len(sent) >= settings.proactive_max_nudges_per_run:
             break
         if not _claim_nudge(cand["entity_type"], cand["entity_id"], cand["kind"]):
             continue                    # still inside its cooldown
-        deliver_notification(cand["title"], cand["message"], user_id=cand["owner_id"])
+        target = cand["owner_id"] if cand["owner_id"] in active_owners else None
+        deliver_notification(cand["title"], cand["message"], user_id=target)
         sent.append(cand)
     return {"sent": len(sent), "candidates": len(candidates), "nudges": sent}
 
@@ -364,6 +374,28 @@ def collect_nudge_candidates() -> list[dict]:
             ),
         })
     return out
+
+
+def _active_owner_ids() -> set[int]:
+    """Ids of the seats a nudge may be addressed to — read ONCE per sweep.
+
+    Reuses ``users.service.list_users``, which already filters to live accounts, rather
+    than adding a second roster query: this is a single-tenant CRM, so the roster is a
+    handful of rows and one read beats one per candidate.
+
+    A read failure returns the empty set, which degrades every nudge in this sweep to a
+    broadcast. That is the safe direction — the nudge is about a shared CRM record, so
+    the worst case is that the whole team sees something one rep would have seen.
+    """
+    # Lazy, like every other cross-package import in this module.
+    from users import service as users_service
+
+    try:
+        return {u["id"] for u in users_service.list_users(include_inactive=False)}
+    except Exception:
+        logger.warning("could not read the seat roster — nudges broadcast this sweep",
+                       exc_info=True)
+        return set()
 
 
 def _claim_nudge(entity_type: str, entity_id: int, kind: str) -> bool:

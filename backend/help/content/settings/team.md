@@ -54,6 +54,9 @@ Assigning a record to someone does not restrict anyone else. See
 
 ## What is still shared
 
-The assistant's conversation history and memory, the Gmail connection, the Telegram link and
-notifications are install-wide today. Every active seat gets the assistant, so a member can
-have Baker read the mailbox an admin connected. Per-person separation is future work.
+The assistant's conversation history and memory, the Gmail connection and the Telegram link
+are install-wide today. Every active seat gets the assistant, so a member can have Baker read
+the mailbox an admin connected. Per-person separation is future work.
+
+Notifications are no longer on that list. Each one is either addressed to one person or sent
+to everyone — see `settings/notifications`.
