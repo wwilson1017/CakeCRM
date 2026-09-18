@@ -183,7 +183,16 @@ CONTEXT_READ_TOOLS = frozenset({
 # It is deliberately NOT restricted to the todo reads. `crm.service.list_tasks` returns
 # the same rows (`SELECT t.*`) in the non-GTD task mode, and a write echo — `todo_update`
 # answers with the row it just edited — puts the same text back in front of the model. A
-# result-keyed rule covers all of them, and covers a future task reader for free.
+# result-keyed rule covers all of them, and covers a future task reader for free. (The
+# one write echo it does NOT reach is an APPROVED one: `engine.resolve_confirmation`
+# taints without fencing, for a reason stated there.)
+#
+# The value is re-typed rather than imported from `crm.gtd_common.TODO_SOURCES` on
+# purpose: this module is a leaf that imports nothing but the stdlib, and BOTH execution
+# loops plus compaction import it. Reaching into `crm` from here would hang the CRM
+# package — and its `core.localtime` dependency — off the import path of every one of
+# them to read one word. The coupling is asserted by a test instead, which is the same
+# trade `assembly._SUMMARY_TAG`'s comment records one layer up.
 PUBLIC_CAPTURE_SOURCES = frozenset({"capture_web"})
 
 # The fence's `source=` attribute. Not a tool name — this text came from a SURFACE, and
@@ -192,12 +201,15 @@ PUBLIC_CAPTURE_FENCE_SOURCE = "public_capture"
 
 # Which values on a public row are NOT prose. Deny-by-default is the point: everything
 # else that is a string gets fenced, so a free-text column added to `tasks` later is
-# covered without anyone remembering this list. These are the only string-typed columns a
-# task row carries that a human does not write — `status`/`priority`/`repeat` are
-# constrained vocabularies, `due_date` is a date, and the three timestamps are `datetime`
-# objects at this point anyway (the walk runs BEFORE `json.dumps(default=str)` stringifies
-# them) and are named only so a pre-stringified row cannot surprise us. Ints, bools and
-# None are never fenced, so no id, flag or foreign key needs naming here.
+# covered without anyone remembering this list. Ints, bools and None are never fenced, so
+# no id, flag or foreign key needs naming here — only the string-typed columns a human
+# does not write: `status`/`priority`/`repeat` are constrained vocabularies and
+# `due_date` is a calendar date.
+#
+# The three TIMESTAMPS have to be named too, and that is not a hedge: `core.postgres.
+# _postprocess_value` converts every datetime and date to an ISO string at the pg-helper
+# boundary, so a row reaches this walk with `created_at` already a `str`. Drop them from
+# this set and every public row comes back with three nonce-fenced timestamps.
 #
 # A new column that is an enum rather than prose gets fenced until it joins this set —
 # harmless noise, and the safe direction to be wrong in.

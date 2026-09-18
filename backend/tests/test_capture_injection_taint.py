@@ -41,7 +41,16 @@ def _capture_row(**over):
         "repeat": "",
         "due_date": "",
         "star": False,
+        "auto_star_on_due": False,
         "completed": 0,
+        "completed_at": None,
+        # ISO STRINGS, not datetimes: `core.postgres._postprocess_value`
+        # converts every timestamp at the pg-helper boundary, so this is the
+        # shape a tool result really carries — and the reason the three
+        # timestamp names in PUBLIC_ROW_STRUCTURAL_FIELDS are load-bearing
+        # rather than a hedge.
+        "created_at": "2026-09-18T12:00:00+00:00",
+        "updated_at": "2026-09-18T12:00:00+00:00",
         "contact_id": None,
         "deal_id": None,
         "project_id": None,
@@ -84,8 +93,13 @@ def test_structural_fields_survive_and_prose_does_not():
     fenced, _ = delimiters.fence_public_rows({"todo": row})
     out = fenced["todo"]
 
-    for structural in ("source", "status", "priority", "repeat", "due_date"):
+    for structural in ("source", "status", "priority", "repeat", "due_date",
+                       "created_at", "updated_at"):
         assert out[structural] == row[structural], structural
+    # The timestamps are the ones worth pinning: they arrive as ISO STRINGS (the pg
+    # helpers convert them), so dropping them from the structural set would fence three
+    # machine fields on every public row rather than doing nothing.
+    assert isinstance(row["created_at"], str)
     for prose in ("title", "description", "context"):
         assert out[prose].startswith("<untrusted_external_content id="), prose
     # Non-strings are never touched, so no id, flag or foreign key needs naming.
@@ -406,21 +420,56 @@ async def test_a_public_read_whose_result_cannot_persist_fails_closed(store, mon
     assert not any(e["type"] == "done" for e in events)
 
 
-def test_an_approved_write_echoing_a_public_row_is_fenced(store):
-    """`todo_update` on a stranger's inbox item answers with the stranger's title, and the
-    continuation turn reads that persisted row. The confirm path fences it too."""
-    reg = Registry({"todo_update": _capture_row(status="next_action")},
-                   writes={"todo_update"})
+def _approve_a_capture_write(store, monkeypatch, row):
+    """Drive resolve_confirmation over an approved write whose echo is ``row``.
+
+    `claim_pending_tool` goes through monkeypatch, never a bare module assignment: this
+    file runs in the same process as `test_assistant_history.py`, whose own claim tests
+    read the real function.
+    """
+    reg = Registry({"todo_update": row}, writes={"todo_update"})
     conv = store.create_conversation()["id"]
     store.convs[conv]["messages"].append({"id": "m1", "role": "assistant", "content": ""})
     claimed = {"msg_id": "m1", "tool": "todo_update", "args": {"todo_id": 42}, "content": None}
-    engine.history.claim_pending_tool = lambda *a, **k: claimed
+    monkeypatch.setattr(history, "claim_pending_tool", lambda *a, **k: claimed)
+    return conv, engine.resolve_confirmation(reg, conv, "w1", "approve")
 
-    out = engine.resolve_confirmation(reg, conv, "w1", "approve")
+
+def test_an_approved_write_echoing_a_public_row_taints_the_conversation(store, monkeypatch):
+    """`todo_update` on a stranger's inbox item answers with the stranger's title, and the
+    continuation turn reads that persisted row back. The confirm path taints on it, so
+    every later write in the conversation confirms — routine tier included."""
+    conv, out = _approve_a_capture_write(store, monkeypatch, _capture_row(status="next_action"))
 
     assert out["decision"] == "approve"
-    # The human still sees the real record...
-    assert out["result"]["title"] == _INJECTION
-    # ...while the model gets the fenced copy, and the conversation is tainted.
-    assert engine._UNTRUSTED_EXTERNAL_MARKER in store.merges[-1]["content"]
     assert store.untrusted_marks == [conv]
+
+
+def test_an_approved_write_persists_the_record_not_fence_markup(store, monkeypatch):
+    """The other half, and the reason this path taints rather than fencing: the persisted
+    content is what `history.get_tool_result` hands straight back to the /confirm caller
+    on a duplicate Approve, so nonce markup there reaches the HUMAN where the record's
+    real text belongs."""
+    _, out = _approve_a_capture_write(store, monkeypatch, _capture_row(status="next_action"))
+
+    persisted = store.merges[-1]["content"]
+    assert engine._UNTRUSTED_EXTERNAL_MARKER not in persisted
+    assert json.loads(persisted)["title"] == _INJECTION
+    assert out["result"]["title"] == _INJECTION
+
+
+def test_an_approved_write_on_an_ordinary_row_does_not_taint(store, monkeypatch):
+    """The control: approving a write the user authored costs the conversation nothing."""
+    conv, _ = _approve_a_capture_write(store, monkeypatch, _own_row())
+    assert store.untrusted_marks == []
+    assert conv
+
+
+def test_the_public_source_set_is_a_real_tasks_source_value():
+    """`delimiters` re-types `capture_web` rather than importing it, to stay a stdlib-only
+    leaf (see the comment there). This is the coupling that comment promises: a rename in
+    the CRM's own vocabulary fails here instead of silently fencing nothing."""
+    from crm.gtd_common import TODO_SOURCES
+
+    assert delimiters.PUBLIC_CAPTURE_SOURCES
+    assert delimiters.PUBLIC_CAPTURE_SOURCES <= set(TODO_SOURCES)

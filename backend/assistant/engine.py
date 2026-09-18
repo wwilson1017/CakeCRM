@@ -750,22 +750,31 @@ def resolve_confirmation(registry, conversation_id: str, tool_use_id: str, decis
             )
     else:  # deny
         result = {"status": history.DENIED_STATUS}
-    # An approved write ECHOES the row it wrote, and that row can be a public-capture
-    # one — `todo_update` on a stranger's inbox item answers with the stranger's title.
-    # The continuation turn reads this persisted content, so it is fenced by the same
-    # shared rule the main loop uses (issue #204). `result` itself is returned unfenced
-    # to the /confirm caller, which renders it for the human. A write tool is never in
-    # UNTRUSTED_SOURCE_TOOLS or CONTEXT_READ_TOOLS, so only the row fence can fire here.
-    content, tainted = delimiters.fence_tool_result(tool, result)
+    # An approved write ECHOES the row it wrote, and that row can be a public-capture one:
+    # `todo_update` on a stranger's inbox item answers with the stranger's title, which
+    # the continuation turn then reads back out of history (issue #204). So this path
+    # TAINTS but deliberately does NOT fence.
+    #
+    # The taint is what carries the security property: from here on `context_is_untrusted`
+    # is true for the rest of the conversation, so every write — routine tier included —
+    # routes through the confirmation gate, and an injection riding that echo can at worst
+    # raise an Approve card the human sees. Fencing the persisted content as well was
+    # tried and reverted: `history.get_tool_result` is what the `already_resolved` branch
+    # above returns to the /confirm caller VERBATIM, so a double-click on Approve would
+    # have shown the human nonce markup where the record's real text belongs. The model
+    # loses only the prose framing on one already-approved write, and the static
+    # untrusted-content instruction still tells it what a fence means everywhere else.
+    _fenced, tainted = delimiters.fence_tool_result(tool, result)
     if tainted:
-        # The in-context scan already catches the fence while this row is assembled;
-        # this is the half that survives compaction. Best-effort, exactly as in the
-        # main loop — losing it must not strand an approved write.
+        # Best-effort, exactly as in the main loop — losing this must not strand an
+        # approved write. The next turn's in-context scan is not a backstop here (nothing
+        # was fenced), so this write IS the record; a failure degrades to the pre-#204
+        # behaviour rather than to something worse.
         try:
             history.mark_untrusted_seen(conversation_id)
         except Exception as e:
             logger.warning("assistant.confirm: failed to record untrusted taint: %s", e)
-    history.merge_tool_result(claimed_msg_id, tool_use_id, tool, content)
+    history.merge_tool_result(claimed_msg_id, tool_use_id, tool, json.dumps(result, default=str))
     return {"tool": tool, "decision": decision, "result": result}
 
 
