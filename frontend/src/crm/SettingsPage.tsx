@@ -42,6 +42,7 @@ import { NotificationSettings } from './components/NotificationSettings';
 import { PipelineBoardCard } from './components/PipelineBoardCard';
 import { TaskModeCard } from './components/TaskModeCard';
 import { TeamSettings } from './components/TeamSettings';
+import { TelegramLinkCard } from './components/TelegramLinkCard';
 import { TelegramSettings } from './components/TelegramSettings';
 
 // A total Record over the card-id union: adding an id to the registry without a component
@@ -50,6 +51,7 @@ const CARD_COMPONENTS: Record<SettingsCardId, ComponentType<{ isMobile: boolean 
   notifications: NotificationSettings,
   change_password: ChangePasswordCard,
   pipeline_board: PipelineBoardCard,
+  telegram_link: TelegramLinkCard,
   memory: MemoryCard,
   task_mode: TaskModeCard,
   branding: BrandingCard,

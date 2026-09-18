@@ -407,15 +407,20 @@ def get_filters() -> dict:
     return {"contexts": contexts, "tags": sorted(tags, key=str.lower), "status_counts": counts}
 
 
-def capture(text: str, source: str = "capture_web") -> dict:
+def capture(text: str, source: str = "capture_web", owner_id: int | None = None) -> dict:
     """Deterministic quick capture: the full trimmed text becomes an inbox todo's
-    title. No AI, no parsing — capture must work with zero keys and never surprise."""
+    title. No AI, no parsing — capture must work with zero keys and never surprise.
+
+    ``owner_id`` stamps the seat the capture came from (#193). It is None for the PUBLIC
+    ``/api/capture`` surface, which is unauthenticated and so has nobody to attribute —
+    those rows stay unowned, exactly as before. Telegram passes the linked seat.
+    """
     text = (text or "").strip()
     if not text:
         raise ValidationError("Nothing to capture")
     if len(text) > MAX_TEXT_CHARS:
         raise ValidationError(f"Capture text too long (max {MAX_TEXT_CHARS} characters)")
-    return create_todo(text, status="inbox", source=source)
+    return create_todo(text, status="inbox", source=source, owner_id=owner_id)
 
 
 # ── Open-title lookups (the observer's task dedupe, issue #72 Phase 4) ──────

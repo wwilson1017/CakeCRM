@@ -76,9 +76,13 @@ ADMIN_ONLY = {
     ("/api/branding/logo", "POST"),
     ("/api/branding/logo", "DELETE"),
     # Integrations
+    # Bot config is install-wide (one token, one poller), so connecting and
+    # disconnecting stay admin. The per-seat link routes (POST /api/telegram/link-code,
+    # POST /api/telegram/unlink) are deliberately NOT here: since #193 a link code claims
+    # the caller's own row, so there is nothing an admin gate would protect. That is why
+    # /api/telegram/link-code/regenerate left this set.
     ("/api/telegram/connect", "POST"),
     ("/api/telegram/disconnect", "POST"),
-    ("/api/telegram/link-code/regenerate", "POST"),
     ("/api/gmail/app", "POST"),
     ("/api/gmail/oauth/start", "POST"),
     ("/api/gmail/connection", "DELETE"),

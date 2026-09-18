@@ -1,13 +1,23 @@
-"""Telegram admin API — mounted at ``/api/telegram`` (see main.py).
+"""Telegram API — mounted at ``/api/telegram`` (see main.py).
 
-JWT-protected management for the single-user integration: connect/validate a bot token,
-read connection + link status, regenerate the link code, and disconnect. ``status`` and
-``regenerate`` are sync handlers (FastAPI runs them in its threadpool). ``connect`` and
-``disconnect`` are async: they must ``stop()`` the poll task, mutate config, then
-``start()`` a fresh one — so an in-flight ``getUpdates`` against the OLD bot can't
-process a stale update or skew the NEW bot's reset offset — and they offload their
-blocking DB/getMe calls with ``asyncio.to_thread``. The bot token is never returned in
-any response.
+Two kinds of route, gated differently since #193 (Phase B / B4):
+
+* **Install-wide bot config — admin only.** ``connect``/``disconnect`` own the shared bot
+  token and the single poller. They are async: they must ``stop()`` the poll task, mutate
+  config, then ``start()`` a fresh one — so an in-flight ``getUpdates`` against the OLD
+  bot can't process a stale update or skew the NEW bot's reset offset — and they offload
+  their blocking DB/getMe calls with ``asyncio.to_thread``.
+* **My own link — any seat.** ``link-code`` mints/rotates the code that binds MY chat, and
+  ``unlink`` releases it. No admin gate, and no redaction: a per-seat code claims the
+  caller's own row and nothing else. (Before #193 one code claimed the single install-wide
+  binding, so handing it to a member would have made the admin gate on connect/disconnect
+  pointless — hence the old member redaction, now deleted along with its premise.)
+
+``POST /api/telegram/link-code`` replaces the admin-only
+``POST /api/telegram/link-code/regenerate``; the bidirectional ``ADMIN_ONLY`` pin in
+``tests/test_route_authz.py`` is edited to match.
+
+The bot token is never returned in any response.
 """
 
 import asyncio
@@ -29,25 +39,24 @@ class ConnectRequest(BaseModel):
     bot_token: str
 
 
-def _status_payload(include_link: bool) -> dict:
-    """The connection/link status the frontend renders. Never includes the token.
+def _status_payload(user_id: int) -> dict:
+    """Install status (the bot) + MY link status, in one flat object.
 
-    ``include_link`` gates the single-use link code. Telegram binding is still an
-    install-wide singleton until Phase B of #60 gives it per-user bindings, so the
-    code claims the ONE seat that receives every notification and can drive the
-    assistant from a phone. Handing it to every authenticated member would let any of
-    them take that binding — which would make connect/disconnect being admin-only
-    pointless. Admins see it; members see only whether Telegram is connected.
+    ``connected``/``bot_username`` describe the install; ``linked``/``linked_name``/
+    ``link_code``/``link_url`` describe the caller's own link and nobody else's.
+    ``link_code`` is empty until this seat mints one — ``POST /link-code`` does that, so
+    a GET never has a side effect.
     """
     s = store.get_settings()
+    link = store.get_link(user_id) or {}
     username = s.get("bot_username") or ""
-    code = (s.get("link_code") or "") if include_link else ""
+    code = link.get("link_code") or ""
     link_url = f"https://t.me/{username}?start={code}" if username and code else ""
     return {
         "connected": bool(s.get("connected")),
         "bot_username": username,
-        "linked": bool(s.get("linked")),
-        "linked_name": s.get("linked_name") or "",
+        "linked": bool(link.get("chat_id")),
+        "linked_name": link.get("telegram_name") or "",
         "link_code": code,
         "link_url": link_url,
     }
@@ -55,7 +64,7 @@ def _status_payload(include_link: bool) -> dict:
 
 @router.get("/status")
 def get_status(user=Depends(get_current_user)):
-    return _status_payload(include_link=user.get("role") == "admin")
+    return _status_payload(user["id"])
 
 
 @router.post("/connect")
@@ -78,6 +87,8 @@ async def connect(body: ConnectRequest, user=Depends(require_admin)):
         # drop_pending_updates=True: at connect time, discard the new bot's pre-connect
         # backlog so up-to-24h of old queued messages aren't replayed to their senders.
         await asyncio.to_thread(client.delete_webhook, token, True)
+        # Also clears every seat's chat binding: a chat id is per (user, bot) pair, so a
+        # new bot invalidates them all and each seat re-links with its own fresh code.
         await asyncio.to_thread(store.connect, token, username)
     finally:
         # ALWAYS restart the poller — even if the mutation raised — so a DB blip during
@@ -85,7 +96,7 @@ async def connect(body: ConnectRequest, user=Depends(require_admin)):
         # failure the prior config simply resumes).
         poller.start()
     logger.info("telegram bot connected (@%s)", username)
-    return await asyncio.to_thread(_status_payload, True)
+    return await asyncio.to_thread(_status_payload, user["id"])
 
 
 @router.post("/disconnect")
@@ -96,10 +107,26 @@ async def disconnect(user=Depends(require_admin)):
     finally:
         poller.start()  # always resume the task (it idles until a token is connected)
     logger.info("telegram bot disconnected")
-    return await asyncio.to_thread(_status_payload, True)
+    return await asyncio.to_thread(_status_payload, user["id"])
 
 
-@router.post("/link-code/regenerate")
-def regenerate_link_code(user=Depends(require_admin)):
-    store.regenerate_link_code()
-    return _status_payload(include_link=True)
+@router.post("/link-code")
+def mint_link_code(user=Depends(get_current_user)):
+    """Mint (or rotate) MY single-use link code, releasing any device I had bound.
+
+    Member-legal by design: the code claims the caller's own row, so there is nothing
+    here an admin gate would protect. Rotating is how you move your assistant to a new
+    phone, which is a personal action, not an install-configuration one.
+    """
+    store.mint_link_code(user["id"])
+    return _status_payload(user["id"])
+
+
+@router.post("/unlink")
+def unlink(user=Depends(get_current_user)):
+    """Release MY chat binding. Self only — there is no route to unlink someone else.
+
+    An admin who needs to cut every link disconnects the bot, which clears them all.
+    """
+    store.unlink(user["id"])
+    return _status_payload(user["id"])

@@ -1,30 +1,32 @@
 /**
- * TelegramSettings — connect a Telegram bot and link your phone to the assistant (#7).
+ * TelegramSettings — connect the workspace's Telegram bot (#7; split in #193).
  *
- * Rendered in the Integrations section of Settings. Mirrors the
- * repo's load→edit→save + `null = unknown` idiom: status is null until the first fetch
- * resolves, so nothing renders assumptively. While connected-but-unlinked it polls
- * status every few seconds so the card notices when `/start <code>` links the account.
- * The bot token is a password field, cleared immediately after submit, and never echoed
- * back by the API. Assistant replies need an AI provider, so a soft note shows when
- * `ai_ready` is false — the connection itself still works without a key.
+ * Install configuration only: one bot token for the whole workspace, one poller, admin
+ * gated. Linking a phone is personal and moved to `TelegramLinkCard` in the Personal
+ * section when #193 gave every seat its own link — this card no longer shows a link code,
+ * because there is no longer one install-wide binding for a code to claim.
+ *
+ * Rendered in the Integrations section of Settings. Mirrors the repo's load→edit→save +
+ * `null = unknown` idiom: status is null until the first fetch resolves, so nothing
+ * renders assumptively. The bot token is a password field, cleared immediately after
+ * submit, and never echoed back by the API. Assistant replies need an AI provider, so a
+ * soft note shows when `ai_ready` is false — the connection itself still works without a
+ * key.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { api } from '../../core/api/client';
 import { FONT_SANS, INK, INK_MUTE, ACCENT_TEXT, labelStyle, inputStyle } from '../../shared/styles';
 import { toast } from '../../shared/toast';
-import { btnPrimary, btnSecondary, btnDanger } from '../styles';
+import { btnPrimary, btnDanger } from '../styles';
 import { SettingsCard } from './SettingsCard';
 
+// Only the install-wide half of /api/telegram/status. The response also carries the
+// caller's own link fields; `TelegramLinkCard` is what reads those.
 interface TelegramStatus {
   connected: boolean;
   bot_username: string;
-  linked: boolean;
-  linked_name: string;
-  link_code: string;
-  link_url: string;
 }
 
 interface SetupStatus {
@@ -36,7 +38,6 @@ export function TelegramSettings({ isMobile }: { isMobile: boolean }) {
   const [aiReady, setAiReady] = useState<boolean | null>(null);
   const [tokenInput, setTokenInput] = useState('');
   const [busy, setBusy] = useState(false);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const refresh = () => api<TelegramStatus>('/api/telegram/status').then(setStatus).catch(() => { /* keep unknown */ });
 
@@ -44,25 +45,6 @@ export function TelegramSettings({ isMobile }: { isMobile: boolean }) {
     refresh();
     api<SetupStatus>('/api/setup/status').then((s) => setAiReady(s.ai_ready)).catch(() => setAiReady(null));
   }, []);
-
-  // Poll only while we're waiting for the user to link from Telegram, so the card
-  // flips to "linked" on its own. Stop as soon as that's no longer the state.
-  useEffect(() => {
-    const waiting = status?.connected && !status?.linked;
-    if (waiting && pollRef.current === null) {
-      pollRef.current = setInterval(refresh, 4000);
-    }
-    if (!waiting && pollRef.current !== null) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-    return () => {
-      if (pollRef.current !== null) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-    };
-  }, [status?.connected, status?.linked]);
 
   async function connect() {
     const token = tokenInput.trim();
@@ -95,17 +77,6 @@ export function TelegramSettings({ isMobile }: { isMobile: boolean }) {
     }
   }
 
-  async function regenerate() {
-    setBusy(true);
-    try {
-      setStatus(await api<TelegramStatus>('/api/telegram/link-code/regenerate', { method: 'POST' }));
-    } catch {
-      toast.error('Failed to regenerate the link code.');
-    } finally {
-      setBusy(false);
-    }
-  }
-
   const loaded = status !== null;
   const fieldWrap: React.CSSProperties = { marginBottom: 20, maxWidth: 420 };
 
@@ -113,7 +84,7 @@ export function TelegramSettings({ isMobile }: { isMobile: boolean }) {
     <SettingsCard
       id="telegram"
       title="Telegram"
-      description="Chat with your CakeCRM assistant from Telegram — ask about contacts, deals, and tasks, and approve any changes right from your phone."
+      description="Connect a Telegram bot for the workspace. Once it's connected, everyone can link their own phone to the assistant from their Personal settings."
       isMobile={isMobile}
     >
       {aiReady === false && (
@@ -155,41 +126,14 @@ export function TelegramSettings({ isMobile }: { isMobile: boolean }) {
         </div>
       )}
 
-      {loaded && status.connected && !status.linked && (
-        <div style={fieldWrap}>
-          <p style={{ fontFamily: FONT_SANS, fontSize: 13.5, color: INK, margin: '0 0 12px' }}>
-            Bot <strong>@{status.bot_username}</strong> is connected. Link this device to start chatting:
-          </p>
-          {status.link_url && (
-            <a href={status.link_url} target="_blank" rel="noreferrer"
-               style={{ ...btnPrimary, display: 'inline-block', textDecoration: 'none', marginBottom: 12 }}>
-              Open Telegram to link
-            </a>
-          )}
-          <p style={{ fontFamily: FONT_SANS, fontSize: 12.5, color: INK_MUTE, lineHeight: 1.6, margin: '4px 0 16px' }}>
-            Or, in your Telegram chat with the bot, send{' '}
-            <code style={{ color: INK }}>/link {status.link_code}</code>. The code links the
-            first device that uses it, then expires.
-          </p>
-          <div style={{ display: 'flex', gap: 12 }}>
-            <button onClick={regenerate} disabled={busy} style={{ ...btnSecondary, opacity: busy ? 0.6 : 1 }}>
-              Regenerate code
-            </button>
-            <button onClick={disconnect} disabled={busy} style={{ ...btnDanger, opacity: busy ? 0.6 : 1 }}>
-              Disconnect
-            </button>
-          </div>
-        </div>
-      )}
-
-      {loaded && status.connected && status.linked && (
+      {loaded && status.connected && (
         <div style={fieldWrap}>
           <p style={{ fontFamily: FONT_SANS, fontSize: 13.5, color: INK, margin: '0 0 4px' }}>
-            ✅ Linked{status.linked_name ? ` to ${status.linked_name}` : ''} via{' '}
-            <strong>@{status.bot_username}</strong>.
+            ✅ Bot <strong>@{status.bot_username}</strong> is connected.
           </p>
-          <p style={{ fontFamily: FONT_SANS, fontSize: 12.5, color: INK_MUTE, margin: '0 0 16px' }}>
-            You can now message the assistant from Telegram.
+          <p style={{ fontFamily: FONT_SANS, fontSize: 12.5, color: INK_MUTE, lineHeight: 1.6, margin: '0 0 16px' }}>
+            Everyone on the team can now link their own phone from Settings → Personal →
+            Link my Telegram. Disconnecting the bot unlinks every device.
           </p>
           <button onClick={disconnect} disabled={busy} style={{ ...btnDanger, opacity: busy ? 0.6 : 1 }}>
             Disconnect
