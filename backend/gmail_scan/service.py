@@ -29,10 +29,10 @@ rollup, just not fed to #16). Guessing a deal would fabricate an attribution int
 derived metric, which #16 forbids.
 
 SCHEDULING (tier-2). Driven by its OWN ``gmail_scan`` scheduler job (heartbeat/scheduler.py),
-NOT as a ``reminder_tick`` sibling: an inbox scan is slow / network-bound and a hung
-request in ``reminder_tick``'s shared ``max_instances=1`` slot would stall reminder
-delivery — the same decoupling principle that split ``heartbeat_turn`` from
-``reminder_tick`` in #6. That decoupling protects *reminders*, not this job — so the
+NOT as a ``maintenance_tick`` sibling: an inbox scan is slow / network-bound and a hung
+request in ``maintenance_tick``'s shared ``max_instances=1`` slot would stall the dreaming
+and lead-score passes — the same decoupling principle that split ``heartbeat_turn`` from
+``maintenance_tick`` in #6. That decoupling protects those passes, not this job — so the
 list call itself runs under a wall-clock deadline (``_SCAN_HTTP_DEADLINE``) on a worker
 thread: a hung request abandons the pass and frees the ``gmail_scan`` slot for the next
 tick instead of parking it forever. ``t.join(timeout)`` cannot TERMINATE a hung request

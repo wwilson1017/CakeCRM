@@ -15,7 +15,7 @@ from enum import Enum
 # multi-step turn while still capping a runaway loop.
 WRITE_BUDGET_PER_TURN = 20
 
-# Background turns (heartbeat / reminder firing) have no human to confirm writes,
+# Background turns (heartbeat / proactive digest) have no human to confirm writes,
 # so a server-enforced tool allowlist (assistant/background.py) admits only READ
 # tools + notify_user — no CRM writes at all. This budget therefore just bounds how
 # many notify_user calls a runaway turn can make. Half the interactive budget.

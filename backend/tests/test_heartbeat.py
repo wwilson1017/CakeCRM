@@ -1,9 +1,8 @@
 """Heartbeat orchestration (heartbeat/service.py).
 
-Hermetic: reminders service, delivery, the background runner, alerts, provider,
-and pg helpers are all mocked. Covers baseline-delivery-always, claim-loss skip,
-no-alert-on-AI-enhancement-failure (R11), and the heartbeat turn's three gates +
-failure-alert threshold.
+Hermetic: delivery, the background runner, alerts, provider, and pg helpers are all
+mocked. Covers the heartbeat turn's three gates + failure-alert threshold, and the two
+tick entrypoints (the 60s maintenance tick and the run-now workhorse).
 """
 
 import pytest
@@ -15,7 +14,7 @@ from heartbeat import service
 @pytest.fixture
 def mocks(monkeypatch):
     state = {
-        "delivered": [], "finished": [], "alerts": [], "resolved": [],
+        "delivered": [], "alerts": [], "resolved": [],
         "ran_turn": 0, "notified": [],
     }
     def _deliver(title, message):
@@ -25,159 +24,11 @@ def mocks(monkeypatch):
 
     monkeypatch.setattr(service.delivery, "deliver_notification", _deliver)
     monkeypatch.setattr(service, "_maybe_run_dreaming", lambda: None)
-    monkeypatch.setattr(service.reminders_service, "finish_reminder",
-                        lambda rid, result: state["finished"].append((rid, result)))
     monkeypatch.setattr(service.alerts, "create_alert",
                         lambda **k: state["alerts"].append(k))
     monkeypatch.setattr(service.alerts, "resolve_by_source",
                         lambda s, sid: state["resolved"].append((s, sid)) or 0)
     return state
-
-
-def _reminder(rid="r1"):
-    return {"id": rid, "message": "Call Dana", "context": "", "due_at": "2026-07-24T09:00:00+00:00",
-            "recurrence_rule": None, "series_id": None}
-
-
-# ── process_due_reminders ───────────────────────────────────────────────────
-
-def test_baseline_delivery_always_then_ai(monkeypatch, mocks):
-    monkeypatch.setattr(service.reminders_service, "get_due_reminders", lambda n: [_reminder()])
-    monkeypatch.setattr(service.reminders_service, "claim_reminder", lambda r: r)  # fresh row
-    monkeypatch.setattr(service.background, "run_background_turn",
-                        lambda *a, **k: BackgroundResult(text="did something", error=False))
-    out = service.process_due_reminders(run_ai_enhancement=True)
-    assert out[0]["status"] == "processed"
-    assert mocks["delivered"] and mocks["delivered"][0][0].startswith("Reminder:")
-    assert mocks["finished"][0][1].startswith("processed:")
-    assert mocks["alerts"] == []
-
-
-def test_claim_loss_skips(monkeypatch, mocks):
-    monkeypatch.setattr(service.reminders_service, "get_due_reminders", lambda n: [_reminder()])
-    monkeypatch.setattr(service.reminders_service, "claim_reminder", lambda r: None)  # lost
-    called = {"turn": False}
-    monkeypatch.setattr(service.background, "run_background_turn",
-                        lambda *a, **k: called.__setitem__("turn", True))
-    out = service.process_due_reminders()
-    assert out == []
-    assert mocks["delivered"] == []       # never processed
-    assert called["turn"] is False
-
-
-def test_no_provider_reminder_delivers_no_alert(monkeypatch, mocks):
-    monkeypatch.setattr(service.reminders_service, "get_due_reminders", lambda n: [_reminder()])
-    monkeypatch.setattr(service.reminders_service, "claim_reminder", lambda r: r)  # fresh row
-    monkeypatch.setattr(service.background, "run_background_turn",
-                        lambda *a, **k: BackgroundResult(text="No AI provider configured", error=True))
-    out = service.process_due_reminders()
-    assert out[0]["status"] == "delivered_no_ai"
-    assert mocks["delivered"]              # baseline still delivered
-    assert mocks["alerts"] == []           # keyless is never an alert
-
-
-def test_ai_error_after_delivery_no_alert(monkeypatch, mocks):
-    # R11: baseline delivered → an AI-enhancement failure is recorded, NOT alerted.
-    monkeypatch.setattr(service.reminders_service, "get_due_reminders", lambda n: [_reminder()])
-    monkeypatch.setattr(service.reminders_service, "claim_reminder", lambda r: r)  # fresh row
-    monkeypatch.setattr(service.background, "run_background_turn",
-                        lambda *a, **k: BackgroundResult(text="rate limited", error=True))
-    out = service.process_due_reminders()
-    assert out[0]["status"] == "delivered_ai_error"
-    assert mocks["alerts"] == []
-    assert "AI enhancement error" in mocks["finished"][0][1]
-
-
-def test_enhancement_exception_after_delivery_no_alert(monkeypatch, mocks):
-    # An exception in the enhancement PHASE (setup or the turn) after the baseline
-    # was delivered is recorded as delivered_ai_error, NEVER a false failure alert.
-    monkeypatch.setattr(service.reminders_service, "get_due_reminders", lambda n: [_reminder()])
-    monkeypatch.setattr(service.reminders_service, "claim_reminder", lambda r: r)  # fresh row
-
-    def boom(*a, **k):
-        raise RuntimeError("enhancement setup exploded")
-
-    monkeypatch.setattr(service.background, "run_background_turn", boom)
-    out = service.process_due_reminders(run_ai_enhancement=True)
-    assert out[0]["status"] == "delivered_ai_error"
-    assert mocks["delivered"]          # baseline delivered before the enhancement crash
-    assert mocks["alerts"] == []       # R11: enhancement failure is never alerted
-
-
-def test_baseline_delivery_failure_alerts(monkeypatch, mocks):
-    # A genuine post-claim failure (baseline delivery itself) alerts, since the row
-    # is already 'fired' and won't retry.
-    monkeypatch.setattr(service.reminders_service, "get_due_reminders", lambda n: [_reminder()])
-    monkeypatch.setattr(service.reminders_service, "claim_reminder", lambda r: r)  # fresh row
-
-    calls = {"n": 0}
-
-    def deliver(title, message):
-        calls["n"] += 1
-        if calls["n"] == 1:   # the baseline call raises; the alert's own deliver is fine
-            raise RuntimeError("push subsystem down")
-
-    monkeypatch.setattr(service.delivery, "deliver_notification", deliver)
-    out = service.process_due_reminders(run_ai_enhancement=False)
-    assert out[0]["status"] == "error"
-    assert mocks["alerts"] and mocks["alerts"][0]["source"] == "reminder"
-
-
-def test_baseline_uses_fresh_claimed_row(monkeypatch, mocks):
-    # A PATCH between get_due_reminders and the claim changes the content; the fresh
-    # row returned by claim_reminder must drive delivery, not the stale snapshot.
-    stale = {"id": "r1", "message": "STALE text", "context": "", "due_at": "2026-07-24T09:00:00+00:00",
-             "recurrence_rule": None, "series_id": None}
-    fresh = {"id": "r1", "message": "FRESH text", "context": "", "due_at": "2026-07-24T09:00:00+00:00",
-             "recurrence_rule": None, "series_id": None}
-    monkeypatch.setattr(service.reminders_service, "get_due_reminders", lambda n: [stale])
-    monkeypatch.setattr(service.reminders_service, "claim_reminder", lambda r: fresh)
-    service.process_due_reminders(run_ai_enhancement=False)
-    titles = [t for t, _ in mocks["delivered"]]
-    assert any("FRESH text" in t for t in titles)
-    assert not any("STALE text" in t for t in titles)
-
-
-def test_zero_channel_delivery_alerts(monkeypatch, mocks):
-    # deliver_notification returns zero-channel (in-app row insert failed AND no
-    # channel) → the fired reminder reached nobody → error + reminder alert.
-    monkeypatch.setattr(service.reminders_service, "get_due_reminders", lambda n: [_reminder()])
-    monkeypatch.setattr(service.reminders_service, "claim_reminder", lambda r: r)
-
-    def deliver(title, message):
-        mocks["delivered"].append((title, message))
-        return {"ok": True, "notification_id": "x", "channels_sent": [], "web_push": False, "logged": False}
-
-    monkeypatch.setattr(service.delivery, "deliver_notification", deliver)
-    out = service.process_due_reminders(run_ai_enhancement=False)
-    assert out[0]["status"] == "error"
-    assert mocks["alerts"] and mocks["alerts"][0]["source"] == "reminder"
-
-
-def test_claim_failure_no_alert_stays_pending(monkeypatch, mocks):
-    # A claim exception means the row is still pending (rolled back) → retries next
-    # tick, no alert, no double handling.
-    monkeypatch.setattr(service.reminders_service, "get_due_reminders", lambda n: [_reminder()])
-
-    def boom(r):
-        raise RuntimeError("db blip")
-
-    monkeypatch.setattr(service.reminders_service, "claim_reminder", boom)
-    out = service.process_due_reminders()
-    assert out == []
-    assert mocks["alerts"] == [] and mocks["delivered"] == []
-
-
-def test_run_ai_enhancement_false_skips_turn(monkeypatch, mocks):
-    monkeypatch.setattr(service.reminders_service, "get_due_reminders", lambda n: [_reminder()])
-    monkeypatch.setattr(service.reminders_service, "claim_reminder", lambda r: r)  # fresh row
-    ran = {"n": 0}
-    monkeypatch.setattr(service.background, "run_background_turn",
-                        lambda *a, **k: ran.__setitem__("n", ran["n"] + 1))
-    out = service.process_due_reminders(run_ai_enhancement=False)
-    assert out[0]["status"] == "delivered"
-    assert ran["n"] == 0
-    assert mocks["delivered"]              # baseline still fired
 
 
 # ── maybe_run_heartbeat_turn (three gates + failure alert) ──────────────────
@@ -249,25 +100,6 @@ def test_heartbeat_turn_runs_under_the_background_allowlist(monkeypatch, mocks):
     assert captured["allowed"] == {"crm_dashboard", "notify_user"}
 
 
-def test_reminder_enhancement_runs_under_the_background_allowlist(monkeypatch, mocks):
-    """The reminder-firing turn is the other unattended surface — same pin, and the one
-    whose input (reminder text) is the injection vector #114 is written against."""
-    import assistant.background as background
-
-    monkeypatch.setattr(service.reminders_service, "get_due_reminders", lambda n: [_reminder()])
-    monkeypatch.setattr(service.reminders_service, "claim_reminder", lambda r: r)
-    captured = {}
-
-    def fake_turn(prompt, user_message, *, allowed_tools, registry, model_tier, timeout):
-        captured["allowed"] = allowed_tools
-        return BackgroundResult(text="did something", error=False)
-
-    monkeypatch.setattr(background, "run_background_turn", fake_turn)
-    monkeypatch.setattr(background, "background_allowlist", lambda reg: {"crm_dashboard", "notify_user"})
-    assert service.process_due_reminders(run_ai_enhancement=True)[0]["status"] == "processed"
-    assert captured["allowed"] == {"crm_dashboard", "notify_user"}
-
-
 def test_failure_alert_fires_at_threshold(monkeypatch, mocks):
     monkeypatch.setattr(service.settings, "heartbeat_enabled", True)
     monkeypatch.setattr(service, "get_ai_provider", lambda *a, **k: object())
@@ -313,34 +145,51 @@ def test_failure_alert_suppressed_within_cooldown(monkeypatch, mocks):
 # ── tick / entrypoints ──────────────────────────────────────────────────────
 
 def test_tick_runs_turn_only_when_forced(monkeypatch):
-    calls = {"turn": 0, "reminders": 0}
+    calls = {"turn": 0, "dreaming": 0, "scores": 0}
     monkeypatch.setattr(service, "pg_execute", lambda *a, **k: 1)
-    monkeypatch.setattr(service, "process_due_reminders",
-                        lambda run_ai_enhancement=True: calls.__setitem__("reminders", calls["reminders"] + 1) or [])
-    monkeypatch.setattr(service, "_maybe_run_dreaming", lambda: None)
+    monkeypatch.setattr(service, "_maybe_run_dreaming",
+                        lambda: calls.__setitem__("dreaming", calls["dreaming"] + 1))
+    monkeypatch.setattr(service, "_maybe_refresh_scores",
+                        lambda: calls.__setitem__("scores", calls["scores"] + 1))
     monkeypatch.setattr(service, "maybe_run_heartbeat_turn",
                         lambda force=False: calls.__setitem__("turn", calls["turn"] + 1) or {"status": "ok"})
 
-    out = service.tick(force_turn=False, run_ai_enhancement=False)
+    out = service.tick(force_turn=False)
     assert out["heartbeat_turn"] == {"skipped": "not requested"}
-    assert calls["turn"] == 0 and calls["reminders"] == 1   # run_ai_turn=false → no AI turn
+    assert calls["turn"] == 0                      # run_ai_turn=false → no AI turn
+    # The maintenance passes run either way — run-now is not an AI-only button.
+    assert calls["dreaming"] == 1 and calls["scores"] == 1
 
-    out = service.tick(force_turn=True, run_ai_enhancement=True)
+    out = service.tick(force_turn=True)
     assert calls["turn"] == 1 and out["heartbeat_turn"] == {"status": "ok"}
+    assert calls["dreaming"] == 2 and calls["scores"] == 2
 
 
-def test_reminder_tick_gates_ai_on_env(monkeypatch):
-    captured = {}
-    monkeypatch.setattr(service, "pg_execute", lambda *a, **k: 1)
-    monkeypatch.setattr(service, "_maybe_run_dreaming", lambda: None)
-    monkeypatch.setattr(service, "process_due_reminders",
-                        lambda run_ai_enhancement=True: captured.__setitem__("ai", run_ai_enhancement) or [])
-    monkeypatch.setattr(service.settings, "heartbeat_enabled", False)
-    service.reminder_tick()
-    assert captured["ai"] is False       # local (disabled) → reminders deliver baseline-only
-    monkeypatch.setattr(service.settings, "heartbeat_enabled", True)
-    service.reminder_tick()
-    assert captured["ai"] is True
+def test_maintenance_tick_is_keyless_and_drives_both_passes(monkeypatch):
+    """The 60s job stamps the clock, drives dreaming + the score refresh, and runs NO AI.
+
+    The only AI this tick ever ran was an enhancement turn on a fired row, and that whole
+    path is gone. This pins the job keyless so a later edit cannot quietly put a provider
+    call back on a 60-second interval.
+    """
+    calls = {"dreaming": 0, "scores": 0, "turn": 0, "sql": []}
+    monkeypatch.setattr(service, "pg_execute", lambda sql, *a, **k: calls["sql"].append(sql) or 1)
+    monkeypatch.setattr(service, "_maybe_run_dreaming",
+                        lambda: calls.__setitem__("dreaming", calls["dreaming"] + 1) or {"ran": True})
+    monkeypatch.setattr(service, "_maybe_refresh_scores",
+                        lambda: calls.__setitem__("scores", calls["scores"] + 1) or {"refreshed": 0})
+    monkeypatch.setattr(service, "maybe_run_heartbeat_turn",
+                        lambda force=False: calls.__setitem__("turn", calls["turn"] + 1))
+    monkeypatch.setattr(service.background, "run_background_turn",
+                        lambda *a, **k: calls.__setitem__("turn", calls["turn"] + 1))
+    monkeypatch.setattr(service.settings, "heartbeat_enabled", True)   # even with AI enabled…
+
+    out = service.maintenance_tick()
+
+    assert out == {"dreaming": {"ran": True}, "score_refresh": {"refreshed": 0}}
+    assert calls["dreaming"] == 1 and calls["scores"] == 1
+    assert calls["turn"] == 0                                          # …the tick runs no AI
+    assert any("last_tick_at = now()" in q for q in calls["sql"])      # the clock stamp survived
 
 
 def test_heartbeat_turn_tick_delegates(monkeypatch):

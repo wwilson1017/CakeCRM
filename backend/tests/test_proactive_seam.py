@@ -28,7 +28,7 @@ def test_proactive_tick_swallows_exceptions(monkeypatch):
 
     monkeypatch.setattr(ps, "run_proactive_if_due", boom)
     # A proactive failure must never propagate out of the scheduler job — it shares a
-    # thread pool with reminder delivery.
+    # thread pool with the maintenance tick.
     assert service.proactive_tick() is None
 
 

@@ -1,11 +1,11 @@
 """Tripwire: the issue-#6 packages must not import their heavy deps
-(apscheduler/croniter/pywebpush/py_vapid) at MODULE TOP LEVEL — only lazily inside
+(apscheduler/pywebpush/py_vapid) at MODULE TOP LEVEL — only lazily inside
 functions — so the module graph imports cleanly without them installed. AST-based
 (matches tests/test_lazy_imports.py's technique), plus a real import smoke test.
 
-Note: apscheduler/croniter ARE required at startup (main.py's lifespan calls
-start_scheduler), so this is about import-graph hygiene, not a "missing dep can't
-break startup" guarantee — the scheduler genuinely needs them to run.
+Note: apscheduler IS required at startup (main.py's lifespan calls start_scheduler),
+so this is about import-graph hygiene, not a "missing dep can't break startup"
+guarantee — the scheduler genuinely needs it to run.
 """
 
 import ast
@@ -13,8 +13,8 @@ import importlib
 from pathlib import Path
 
 BACKEND = Path(__file__).resolve().parent.parent
-PKGS = ["reminders", "notifications", "alerts", "heartbeat"]
-HEAVY_ROOTS = {"apscheduler", "croniter", "pywebpush", "py_vapid"}
+PKGS = ["notifications", "alerts", "heartbeat"]
+HEAVY_ROOTS = {"apscheduler", "pywebpush", "py_vapid"}
 
 
 def _top_level_imports(tree: ast.Module):
@@ -40,7 +40,6 @@ def test_no_top_level_heavy_imports():
 def test_modules_import_clean():
     # Every new module imports without a DB or the heavy deps being exercised.
     for mod in [
-        "reminders.recurrence", "reminders.service", "reminders.tools", "reminders.router",
         "notifications.vapid", "notifications.subscriptions", "notifications.service",
         "notifications.delivery", "notifications.tools", "notifications.router",
         "alerts.service", "alerts.router",

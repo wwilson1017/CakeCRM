@@ -10,8 +10,7 @@ The ladder, as decided on the issue::
     1  starred tasks      the human already said "today"; starred+overdue stays rank 1
     2  hot + stale deals  a deal a human marked hot that has since gone quiet (#131)
     3  overdue tasks      most overdue first
-    4  reminders due today
-    5  tasks due today
+    4  tasks due today
     –  every other hot deal  no rank at all: reachable only through the expander
 
 Rank 2 arrived exactly as #130 promised — an insertion, renumbering nothing. What it did
@@ -35,23 +34,15 @@ instant, which is two definitions of one word — the thing the imports exist to
 **One clock.** "Today" is read once per request from ``gtd_common.today_local_str()`` —
 the identical call ``gtd_service.today_view()`` makes — which is the mechanism behind the
 issue's requirement that this panel and the GTD Today view agree on what "due today"
-means. The reminder window is derived FROM that captured day rather than from a second
+means. ``next_refresh_at`` is derived FROM that captured day rather than from a second
 clock read, so a request that straddles local midnight cannot bound tasks to one day and
-reminders to the next.
-
-**Reminders are scope-invariant.** ``reminders`` has no owner column and is install-wide
-by design (CLAUDE.md, Phase B), so the owner filter applies to the tasks read only and
-today's reminders appear in every scope. That is the strongest form of the issue's own
-rule that unowned work shows up in "my" view — someone has to catch it, and hiding it
-from the one person looking is how it gets missed. They carry no "Unassigned" badge: that
-label invites an action ("assign it") which cannot exist for a reminder.
+arm the client's reload for another.
 
 **Uncapped, deliberately — and the honest bound is NOT "one day".** The endpoint returns
 the full ranked list and the client shows five behind a "+N more" expander, because the
 issue specifies that expander over the full list and because ``today_view()`` already
-serves exactly these rows uncapped to the GTD home screen. Reminders really are bounded
-by one local day, but starred and overdue tasks are a BACKLOG: they accumulate without
-limit, so a CRM with a thousand neglected overdue tasks sends all thousand on every
+serves exactly these rows uncapped to the GTD home screen. Starred and overdue tasks are
+a BACKLOG: they accumulate without limit, so a CRM with a thousand neglected overdue tasks sends all thousand on every
 dashboard load. That is parity with the GTD Today page rather than a new exposure, and it
 buys a count that is honest by construction — the visible rows and the "+N" are two views
 of ONE array, so they cannot disagree the way a rows-query and a separate COUNT can. The
@@ -59,7 +50,7 @@ upgrade path, when that stops paying, is a probe-row ``truncated`` flag (#56's i
 rather than pagination: the panel's whole job is to be the short list.
 """
 
-from datetime import date, datetime, timezone
+from datetime import date
 
 from core.localtime import local_day_bounds
 from core.postgres import pg_fetchall
@@ -72,23 +63,19 @@ from crm.service import (
     NOT_DROPPED_TASK,
     OPEN_PREDICATE_D,
 )
-from reminders import service as reminders_service
 
 # Ladder positions. A hot deal that is NOT stale carries no rank at all (see the module
 # docstring) — the expander is the only way to it, which is what issue #131 specifies.
 RANK_STARRED = 1
 RANK_HOT_DEAL = 2
 RANK_OVERDUE = 3
-RANK_REMINDER = 4
-RANK_DUE_TODAY = 5
+RANK_DUE_TODAY = 4
 
 #: How many hot + stale deals may sit above the user's own commitments. The issue's
 #: anti-flood cap: a deal is someone else's problem until you decide otherwise, and a
 #: neglected pipeline must never bury the calls and promises you made yourself. Deals
 #: past the cap are not dropped — they join the unranked tail, still most-idle first.
 HOT_DEAL_SLOTS = 2
-
-_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
 def _fetch_today_tasks(today: str, owner_id: int | None) -> list[dict]:
@@ -174,27 +161,6 @@ def _fetch_hot_deals(owner_id: int | None) -> list[dict]:
     )
 
 
-def _reminder_instant(value) -> datetime | None:
-    """A reminder's ``due_at`` as an aware instant, or None if it cannot be read.
-
-    ``pg_fetchall`` runs every value through ``_postprocess_value``, which ISO-formats
-    datetimes — so this receives a STRING from Postgres, not a datetime (the reminders
-    service reparses for the same reason when it computes a recurrence). Both forms are
-    accepted because callers in a transaction may hand over raw rows.
-
-    Parsing matters for ordering, not just display: ISO strings sort lexicographically
-    by their offset as well as their instant, so on a DST fall-back day two reminders an
-    hour apart can compare backwards. A naive value is read as UTC rather than dropped.
-    """
-    if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    try:
-        parsed = datetime.fromisoformat(str(value))
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-
-
 def _rank_hot_deals(deals) -> tuple[list[dict], list[dict]]:
     """Hot deals, split into the promoted few and the unranked tail. PURE.
 
@@ -210,8 +176,7 @@ def _rank_hot_deals(deals) -> tuple[list[dict], list[dict]]:
     would be a worse failure than showing them one click away.
 
     ``idle_seconds`` is the sort key and is deleted before returning — an implementation
-    detail, not payload, the same call ``build_today_items`` makes for a reminder's parsed
-    ``instant``. The displayed whole-day count is derived from it, so a row can never be
+    detail, not payload. The displayed whole-day count is derived from it, so a row can never be
     ordered by one number and labelled with another. It is clamped at zero: a deal whose
     ``updated_at`` sits slightly in the future (clock skew on a restore, say) is "idle 0d",
     never "idle -1d".
@@ -245,7 +210,7 @@ def _rank_hot_deals(deals) -> tuple[list[dict], list[dict]]:
 
 
 def build_today_items(
-    tasks: list[dict], reminders: list[dict], today: str, deals: list[dict] | tuple = (),
+    tasks: list[dict], today: str, deals: list[dict] | tuple = (),
 ) -> list[dict]:
     """The ladder. PURE — no I/O, no clock: ``today`` arrives as a parameter.
 
@@ -256,7 +221,7 @@ def build_today_items(
     than forced into a bucket — a defensive drop keeps a caller that widens the query
     from silently mis-ranking rows.
 
-    ``deals`` defaults to empty so the task-and-reminder ladder stays testable on its own
+    ``deals`` defaults to empty so the task ladder stays testable on its own
     terms. The default is safe only because something asserts the real caller passes them
     — ``test_get_today_feeds_the_fetched_deals_into_the_ladder`` — since a defaulted
     parameter is otherwise exactly how a source silently drops out of a merged list.
@@ -292,28 +257,8 @@ def build_today_items(
     # Date-only granularity has no finer "earlier due", so id (creation order) decides.
     due_today.sort(key=lambda i: i["id"])
 
-    reminder_items = [
-        {
-            "kind": "reminder",
-            "id": row["id"],
-            "rank": RANK_REMINDER,
-            "why": "reminder",
-            "title": row.get("message") or "",
-            # Passed through as stored: an instant renders correctly in any browser
-            # timezone, and re-formatting it here would only add a place to drift.
-            "due_at": row.get("due_at"),
-            "instant": _reminder_instant(row.get("due_at")),
-        }
-        for row in reminders
-    ]
-    # Unreadable timestamps sort last instead of being dropped — a reminder you cannot
-    # order is still a reminder you need to see.
-    reminder_items.sort(key=lambda i: (i["instant"] is None, i["instant"] or _EPOCH, str(i["id"])))
-    for item in reminder_items:
-        del item["instant"]
-
     hot_stale, hot_tail = _rank_hot_deals(deals)
-    return starred + hot_stale + overdue + reminder_items + due_today + hot_tail
+    return starred + hot_stale + overdue + due_today + hot_tail
 
 
 def get_today(owner_id: int | None = None) -> dict:
@@ -327,14 +272,14 @@ def get_today(owner_id: int | None = None) -> dict:
     prevent, merely relocated.
     """
     today = gtd_common.today_local_str()
-    # Derived from the captured day, never a second clock read (see the module docstring).
-    start, end = local_day_bounds(date.fromisoformat(today))
+    # Derived from the captured day, never a second clock read (see the module
+    # docstring): the client arms its reload on this boundary.
+    _, end = local_day_bounds(date.fromisoformat(today))
     tasks = _fetch_today_tasks(today, owner_id)
     deals = _fetch_hot_deals(owner_id)
-    reminders = reminders_service.list_pending_between(start, end)
     return {
         "date": today,
         "next_refresh_at": end.isoformat(),
         "scope": {"owner_id": owner_id},
-        "items": build_today_items(tasks, reminders, today, deals=deals),
+        "items": build_today_items(tasks, today, deals=deals),
     }

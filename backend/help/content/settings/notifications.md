@@ -1,7 +1,7 @@
 ---
 title: Notifications
 description: Browser push, the bell, and Telegram delivery. Works with no AI keys.
-aliases: notifications, push, web push, alerts, bell, reminders, digest, nudges
+aliases: notifications, push, web push, alerts, bell, digest, nudges
 admin: false
 ---
 ## Who can do this

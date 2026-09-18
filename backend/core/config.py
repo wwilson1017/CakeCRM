@@ -119,7 +119,7 @@ class Settings:
     # ── Heartbeat / notifications (issue #6) ────────────────────────────────
     # The heartbeat AI turn is env-gated: unset → enabled on Railway, disabled
     # locally (a local `python run.py` must not spam real background AI turns —
-    # coach lesson). Reminder processing and push delivery ALWAYS run (they are
+    # coach lesson). The maintenance tick and push delivery ALWAYS run (they are
     # keyless and cost-free), only the AI turn keys off this flag.
     heartbeat_enabled: bool = (
         os.getenv("HEARTBEAT_ENABLED", "").lower() in ("1", "true", "yes")

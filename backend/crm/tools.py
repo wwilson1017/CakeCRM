@@ -548,7 +548,7 @@ CRM_TOOL_DEFS = [
         # The todo_* family is NOT classified; classifying it is a separate call (#180).
         "confirm_tier": ROUTINE,
         "description": (
-            "Create a follow-up task or reminder. Use when the user mentions needing to "
+            "Create a follow-up task. Use when the user mentions needing to "
             "follow up, check in, or do something by a certain date for a customer or deal."
         ),
         "input_schema": {
@@ -832,7 +832,7 @@ CRM_TOOL_DEFS = [
         "description": (
             "Add a free-form note to a deal, contact, or company — editable, archivable "
             "commentary shown in the entity's notes thread alongside its activity timeline. "
-            "Use for observations, context, or reminders about the record (not a dated "
+            "Use for observations, context, or things to remember about the record (not a dated "
             "interaction — that's crm_log_activity)."
         ),
         "input_schema": {

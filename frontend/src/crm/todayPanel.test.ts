@@ -6,7 +6,7 @@ import {
 } from './todayPanel';
 
 function task(id: number, why: 'starred' | 'overdue' | 'due_today' = 'due_today'): CrmTodayTaskItem {
-  return { kind: 'task', id, rank: why === 'starred' ? 1 : why === 'overdue' ? 3 : 5, why,
+  return { kind: 'task', id, rank: why === 'starred' ? 1 : why === 'overdue' ? 3 : 4, why,
            title: `t${id}`, due_date: '2026-06-05', owner_id: null };
 }
 
@@ -106,8 +106,6 @@ describe('whyBadge', () => {
   it('labels each rung of the ladder distinctly', () => {
     const labels = (['starred', 'overdue', 'due_today'] as const).map(w => whyBadge(task(1, w)).label);
     expect(labels).toEqual(['STARRED', 'OVERDUE', 'DUE TODAY']);
-    expect(whyBadge({ kind: 'reminder', id: 'r', rank: 4, why: 'reminder',
-                      title: 'x', due_at: '' }).label).toBe('REMINDER');
   });
 });
 

@@ -288,20 +288,11 @@ export interface CrmWeeklyTouchDetail {
 export interface CrmTodayTaskItem {
   kind: 'task';
   id: number;
-  rank: 1 | 3 | 5;
+  rank: 1 | 3 | 4;
   why: 'starred' | 'overdue' | 'due_today';
   title: string;
   due_date: string;
   owner_id: number | null;
-}
-
-export interface CrmTodayReminderItem {
-  kind: 'reminder';
-  id: string;
-  rank: 4;
-  why: 'reminder';
-  title: string;
-  due_at: string;
 }
 
 /** A hot deal (#125's `deal_temperature`), on the panel because a human said it matters.
@@ -321,7 +312,7 @@ export interface CrmTodayDealItem {
   owner_id: number | null;
 }
 
-export type CrmTodayItem = CrmTodayTaskItem | CrmTodayReminderItem | CrmTodayDealItem;
+export type CrmTodayItem = CrmTodayTaskItem | CrmTodayDealItem;
 
 export interface CrmToday {
   /** The SERVER's local day (YYYY-MM-DD). Due labels render against this, not the

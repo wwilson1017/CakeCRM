@@ -254,8 +254,8 @@ async def test_no_provider_degrades_gracefully(monkeypatch):
 def test_notify_linked_user_sends_when_linked(monkeypatch):
     h = Harness()
     _install(monkeypatch, h)
-    assert service.notify_linked_user("Reminder: follow up with Acme") is True
-    assert ("text", "chat1", "Reminder: follow up with Acme", None) in h.sent
+    assert service.notify_linked_user("Todo due: follow up with Acme") is True
+    assert ("text", "chat1", "Todo due: follow up with Acme", None) in h.sent
 
 
 def test_notify_linked_user_false_when_unlinked(monkeypatch):

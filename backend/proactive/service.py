@@ -15,7 +15,7 @@ rule: the CRM must be fully usable with no provider configured.)
 its day with a rowcount UPDATE on ``heartbeat_state``, and a nudge writes its
 ``proactive_nudges`` row BEFORE delivering. A crash between claim and send loses one
 notification; the reverse order would re-send on every tick, which is far worse for a
-thing that pushes to a phone. Same trade-off the reminder path already makes.
+thing that pushes to a phone.
 
 **The unattended turn's ceiling is unchanged.** The optional AI enhancement runs
 through ``assistant.background.run_background_turn`` under

@@ -34,7 +34,6 @@ const CrmDashboardPage = lazy(() => import('./crm/CrmDashboardPage').then((m) =>
 const ContactsPage = lazy(() => import('./crm/ContactsPage').then((m) => ({ default: m.ContactsPage })));
 const CompaniesPage = lazy(() => import('./crm/CompaniesPage').then((m) => ({ default: m.CompaniesPage })));
 const PipelinePage = lazy(() => import('./crm/PipelinePage').then((m) => ({ default: m.PipelinePage })));
-const RemindersPage = lazy(() => import('./crm/RemindersPage').then((m) => ({ default: m.RemindersPage })));
 const SettingsPage = lazy(() => import('./crm/SettingsPage').then((m) => ({ default: m.SettingsPage })));
 const MemoryPage = lazy(() => import('./crm/MemoryPage').then((m) => ({ default: m.MemoryPage })));
 // Reports (#144) — lazy like every other page here, per the rule above: a static page
@@ -133,8 +132,7 @@ export default function App() {
               <Route path="tasks/review" element={<TasksModeRouter gtd={<ReviewPage />} normal="redirect" />} />
               <Route path="tasks/search" element={<TasksModeRouter gtd={<SearchPage />} normal="redirect" />} />
               <Route path="reports" element={<ReportsPage />} />
-              <Route path="reminders" element={<RemindersPage />} />
-              <Route path="memory" element={<MemoryPage />} />
+                <Route path="memory" element={<MemoryPage />} />
               <Route path="settings" element={<SettingsPage />} />
             </Route>
             <Route path="*" element={<Navigate to="/crm" replace />} />

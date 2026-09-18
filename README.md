@@ -77,7 +77,7 @@ an owner, which drives the "Mine" filters and the per-rep numbers — but any me
 can still see and edit anything. There are no per-record permissions, deliberately.
 
 **Sharing to be aware of.** The assistant's chat history and memory, the Gmail
-connection, the Telegram link, reminders and notifications are still **shared by
+connection, the Telegram link and notifications are still **shared by
 the whole install**. If the admin connects their personal Gmail, any seat can have
 the assistant read it. Per-user isolation of those surfaces is the next phase of
 this work.

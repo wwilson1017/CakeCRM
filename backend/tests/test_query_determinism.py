@@ -563,7 +563,7 @@ def test_scanner_reads_split_and_interpolated_literals():
 # stay satisfied while a narrowed walk quietly stopped scanning all the others.
 MODULES_WITH_CAPPED_READERS = frozenset({
     "alerts", "assistant", "context_files", "core", "crm",
-    "gmail_scan", "memory", "notifications", "proactive", "reminders",
+    "gmail_scan", "memory", "notifications", "proactive",
 })
 
 

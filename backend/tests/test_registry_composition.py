@@ -1,6 +1,6 @@
 """ToolRegistry composition + collision checks + background gating (issue #6).
 
-Hermetic: ToolRegistry reads the real CRM + reminder defs (no DB at construction).
+Hermetic: ToolRegistry reads the real CRM + memory defs (no DB at construction).
 """
 
 import pytest
@@ -9,11 +9,11 @@ from assistant import registry as registry_mod
 from assistant.registry import ToolRegistry
 
 
-def test_interactive_registry_has_crm_and_reminder_tools_not_notify():
+def test_interactive_registry_has_crm_and_memory_tools_not_notify():
     reg = ToolRegistry()
     names = {t["name"] for t in reg.tool_defs}
     assert "crm_create_contact" in names          # crm source
-    assert {"create_reminder", "list_reminders", "cancel_reminder"} <= names  # reminder source
+    assert {"memory_search", "memory_add_fact"} <= names  # memory source
     assert "notify_user" not in names             # background-only
 
 
@@ -59,28 +59,28 @@ def test_duplicate_tool_name_across_sources_raises(monkeypatch):
     # A source that redefines an existing crm tool name must fail construction.
     def bad_source():
         return ([{"name": "crm_dashboard", "writes": False, "description": "dup",
-                  "input_schema": {"type": "object", "properties": {}}, "kind": "reminder"}],
+                  "input_schema": {"type": "object", "properties": {}}, "kind": "memory"}],
                 {"crm_dashboard": lambda: {}})
-    monkeypatch.setattr(registry_mod, "get_reminder_tools", bad_source)
+    monkeypatch.setattr(registry_mod, "get_memory_tools", bad_source)
     with pytest.raises(ValueError, match="duplicate tool name"):
         ToolRegistry()
 
 
 def test_non_bool_writes_raises(monkeypatch):
     def bad_source():
-        return ([{"name": "reminder_x", "writes": "yes", "description": "d",
-                  "input_schema": {"type": "object", "properties": {}}, "kind": "reminder"}],
-                {"reminder_x": lambda: {}})
-    monkeypatch.setattr(registry_mod, "get_reminder_tools", bad_source)
+        return ([{"name": "memory_x", "writes": "yes", "description": "d",
+                  "input_schema": {"type": "object", "properties": {}}, "kind": "memory"}],
+                {"memory_x": lambda: {}})
+    monkeypatch.setattr(registry_mod, "get_memory_tools", bad_source)
     with pytest.raises(ValueError, match="boolean 'writes'"):
         ToolRegistry()
 
 
 def test_def_without_executor_raises(monkeypatch):
     def bad_source():
-        return ([{"name": "reminder_y", "writes": False, "description": "d",
-                  "input_schema": {"type": "object", "properties": {}}, "kind": "reminder"}],
-                {})  # no executor for reminder_y
-    monkeypatch.setattr(registry_mod, "get_reminder_tools", bad_source)
+        return ([{"name": "memory_y", "writes": False, "description": "d",
+                  "input_schema": {"type": "object", "properties": {}}, "kind": "memory"}],
+                {})  # no executor for memory_y
+    monkeypatch.setattr(registry_mod, "get_memory_tools", bad_source)
     with pytest.raises(ValueError, match="no executor"):
         ToolRegistry()

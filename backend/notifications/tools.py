@@ -2,7 +2,7 @@
 
 Added ONLY to background registries (``ToolRegistry(background=True)``) — Chatty
 gates it behind ``background_mode`` because it's meaningful only for autonomous
-turns (heartbeat / reminder firing), where the assistant proactively alerts the
+turns (heartbeat / proactive digest), where the assistant proactively alerts the
 user. The executor is a closure over the registry so the "one notification per
 run" guard hangs on the per-run registry instance (a fresh registry is built for
 each background turn).

@@ -33,11 +33,9 @@ class RunNowRequest(BaseModel):
 
 @router.post("/run-now")
 async def run_now(req: RunNowRequest, _user: dict = Depends(require_admin)):
-    """Run one heartbeat tick now. Reminders always fire (deterministic baseline
-    delivery); the system AI turn runs only when ``run_ai_turn`` is true."""
-    report = await run_in_threadpool(
-        service.tick, force_turn=req.run_ai_turn, run_ai_enhancement=req.run_ai_turn,
-    )
+    """Run one heartbeat tick now: the maintenance passes (dreaming, lead-score refresh)
+    always run; the system AI turn runs only when ``run_ai_turn`` is true."""
+    report = await run_in_threadpool(service.tick, force_turn=req.run_ai_turn)
     return report
 
 

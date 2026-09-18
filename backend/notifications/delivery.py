@@ -1,7 +1,7 @@
 """Notification delivery — a flat fan-out over the available channels (issue #6).
 
 ``deliver_notification(title, message)`` is the single entry point every caller
-uses (the ``notify_user`` tool, reminder firing, heartbeat-failure alerts). It:
+uses (the ``notify_user`` tool, the proactive digest, heartbeat-failure alerts). It:
   1. writes the in-app ``notifications`` row FIRST (guaranteed audit record, R12);
   2. best-effort sends to each channel — Web Push (VAPID) now, Telegram via the
      frozen #7 seam — each swallowing its own errors so one broken channel never
@@ -31,9 +31,9 @@ _MAX_ENDPOINT_LEN = 2000
 def deliver_notification(title: str, message: str) -> dict:
     """Deliver a notification to all channels and log it. NEVER raises.
 
-    Callers (notify_user, reminder firing, heartbeat-failure alerts) rely on this
+    Callers (notify_user, the proactive digest, heartbeat-failure alerts) rely on this
     contract — a DB hiccup or one broken channel must never propagate out and
-    abort a reminder batch or a scheduler tick.
+    abort a digest send or a scheduler tick.
     """
     title = (title or "").strip() or "Notification"
     message = (message or "").strip()
@@ -130,7 +130,7 @@ def _send_web_push(title: str, message: str, notification_id: str) -> bool:
     except Exception as e:
         # A persistent VAPID failure (e.g. ENCRYPTION_KEY rotated) breaks push for
         # good — surface it as a deduplicated alert, not just a log line, so the
-        # operator sees it in the bell. Delivery of reminders still continues.
+        # operator sees it in the bell. Delivery over the other channels still continues.
         logger.warning("VAPID keys unavailable — skipping Web Push", exc_info=True)
         try:
             from alerts import service as alerts_service

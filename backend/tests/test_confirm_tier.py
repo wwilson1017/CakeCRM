@@ -194,7 +194,6 @@ def test_no_read_is_routine(task_mode):
 @pytest.mark.parametrize("name", [
     "crm_delete_contact", "crm_delete_task", "crm_archive_deal", "crm_merge_deals",
     "crm_bulk_move_deals", "crm_recompute_lead_scores", "crm_add_note",
-    "create_reminder", "cancel_reminder",
     "memory_add_fact", "memory_invalidate_fact",
     "write_context_file", "delete_context_file", "append_daily_note",
 ])
