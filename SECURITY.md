@@ -174,17 +174,22 @@ Approve card. A tool qualifies only when all five of these hold:
 4. it is not a bulk write;
 5. nothing leaves your install — no Gmail, no outbound HTTP.
 
-Sixteen tools qualify: creating and updating contacts, companies and deals; moving a
-deal's stage; marking a deal won or lost; logging an activity; creating, updating and
-completing a task; and setting custom-field values on a contact, company or deal.
+Twenty tools qualify. Sixteen are CRM tools: creating and updating contacts, companies
+and deals; moving a deal's stage; marking a deal won or lost; logging an activity;
+creating, updating and completing a task; and setting custom-field values on a contact,
+company or deal. The other four are the todo tools GTD task mode uses in place of three
+of those: capturing a todo, updating one, and creating or updating a project.
 
 **Everything else still asks**, and absence of the classification is the deny state — a
 tool nobody has classified confirms, so a capability added later is never silently
 exempt. Deletes, archives, merges, bulk moves, lead-score recomputation, Gmail drafts,
 notifications, memory facts, and any write to `soul.md` or `MEMORY.md` all
-keep their Approve card. Three of the sixteen can take a record out of your lists by
-setting its `status` — archiving a contact or a company, or dropping a task; that
-particular call keeps its card even though the tool is routine.
+keep their Approve card. Bulk todo updates and both todo deletes are in that group too.
+Five of the twenty can take a record out of your lists by setting its `status` —
+archiving a contact or a company, or dropping a task, a todo or a project; that
+particular call keeps its card even though the tool is routine. Finishing something is
+not the same as removing it, so marking a todo done or a project completed runs without
+asking, and so does filing either one to someday.
 
 Three rules override the tier entirely, in every mode:
 

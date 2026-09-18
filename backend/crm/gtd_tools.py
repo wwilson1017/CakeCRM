@@ -10,11 +10,35 @@ Every mutating def carries `writes: True`, which is the single source of truth f
 the assistant's confirmation gate. The three reads are `writes: False` and are
 therefore inside the background-turn allowlist, so the heartbeat can consult the
 todo list — see the note on untrusted text below.
+
+Four of the seven writes also carry `confirm_tier: ROUTINE` (#186), so normal ("Ask")
+mode runs them with no Approve card. The rule is #180's, in `assistant/confirm_tier.py`;
+this is how the ten came out against it:
+
+  * `todo_create` — ROUTINE. Capture into the inbox, and the very same
+    `crm.service.create_task` that `crm_create_task` (routine since #180) calls, so
+    classifying one and not the other would be incoherent.
+  * `todo_update` — ROUTINE, minus `status='dropped'`. Retitling, filing, starring and
+    completing are ordinary; dropping is this product's delete gesture (`todo_delete`'s
+    own description sends the model there), so that one CALL keeps its card.
+  * `todo_create_project` — ROUTINE. A new grouping row.
+  * `todo_update_project` — ROUTINE, minus `status='dropped'`, for the same reason.
+    `completed` is completion, not removal, exactly as `'done'` is on a todo.
+  * `todo_bulk_update` — NOT routine. Rule 4: bulk by construction (up to 500 ids).
+  * `todo_delete` / `todo_delete_project` — NOT routine. Rule 3: a hard DELETE.
+  * `todo_list` / `todo_get` / `todo_list_projects` — not eligible; the tier is
+    write-only and `ToolRegistry` fails loud on one declared on a read.
+
+Absence of the key is the deny state, so a todo tool added later confirms until somebody
+classifies it. `tests/test_confirm_tier.py` pins this list by name.
 """
 
 import logging
 from collections.abc import Callable
 
+# The routine confirmation tier (#180) and the rule for declaring it. An import-free
+# leaf, so this adds no cycle either.
+from assistant.confirm_tier import ROUTINE
 from crm import gtd_service, service
 from crm.gtd_common import (
     PROJECT_STATUSES,
@@ -116,7 +140,9 @@ def _todo_delete_project(project_id: int) -> dict:
 GTD_TOOL_DEFS: list[dict] = [
     {
         "name": "todo_create",
+        # Routine (#186): plain capture into the inbox.
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": (
             "Capture a new todo. Default it to the inbox unless the user has already "
             "clarified what the next physical action is — capture first, organize later."
@@ -180,7 +206,9 @@ GTD_TOOL_DEFS: list[dict] = [
     },
     {
         "name": "todo_update",
+        # Routine (#186), EXCEPT status='dropped' — see confirm_tier.removes_from_view().
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": (
             "Update one todo — clarify its title, file it to a status, set its context or "
             "project, star it, or complete it (status='done'). Completing a repeating todo "
@@ -256,7 +284,9 @@ GTD_TOOL_DEFS: list[dict] = [
     },
     {
         "name": "todo_create_project",
+        # Routine (#186): a new grouping row.
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": "Create a GTD project — an outcome that needs more than one action.",
         "input_schema": {
             "type": "object",
@@ -271,7 +301,9 @@ GTD_TOOL_DEFS: list[dict] = [
     },
     {
         "name": "todo_update_project",
+        # Routine (#186), EXCEPT status='dropped' — see confirm_tier.removes_from_view().
         "writes": True,
+        "confirm_tier": ROUTINE,
         "description": "Rename a project, edit its notes, or change its status.",
         "input_schema": {
             "type": "object",
