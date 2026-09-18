@@ -223,24 +223,49 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `gtd_service._check_fields` RAISES on any field outside `TODO_FIELDS`/`PROJECT_FIELDS`
   (unlike `service.update_task`, which silently filters), so `deal_id` — the only other
   column that hides a todo — is unreachable through `todo_update`.
-  **One ceiling is accepted here and stated rather than hidden**, because the Codex PR
-  review raised it against #186 and it is older and wider than #186: `/api/capture` is
-  mounted unconditionally and takes text from an unauthenticated stranger while no
-  `todo_capture_token` is set (#70), and `todo_list`/`todo_get` are NOT in
-  `delimiters.UNTRUSTED_SOURCE_TOOLS`, so that text reaches the model unfenced (a prose
-  "treat as data" note rides the payload; there is no nonce fence and no turn taint). A
-  prompt injection planted through that surface can therefore steer a routine write with
-  no Approve card. That is true on main **without** #186 — the same turn already
-  advertises thirteen routine `crm_*` writes beside `todo_list`, including
-  `crm_update_deal` and `crm_mark_deal_lost` — so #186 widens the reachable set by four
-  todo writes rather than opening the path, and it keeps a card on the two verbs that
-  actually destroy a todo (delete, and `status='dropped'`). The fix is NOT to add the
-  todo reads to `UNTRUSTED_SOURCE_TOOLS`: that set IS
-  `background.BACKGROUND_EXCLUDED_TOOLS`, and `heartbeat.service` reads `todo_list` as
-  its task surface in GTD mode, so doing it blinds the heartbeat on the default install
-  and taints every turn that lists todos. A result-conditional taint (the row carries
-  `source='capture_web'`, the one value only an unauthenticated caller can produce) is
-  the shape to build, and it is its own issue (#204).
+  **The tier is bounded by a RESULT-conditional untrusted taint, not just a tool-name
+  one** (#204). `/api/capture` is mounted unconditionally and takes text from an
+  unauthenticated stranger while no `todo_capture_token` is set (#70), so until #204 that
+  text reached the model through `todo_list`/`todo_get` unfenced and untainted — a prose
+  "treat as data" note rode the payload and nothing else did — and an injection planted
+  there could steer any routine write with no Approve card. That was true of the thirteen
+  non-task `crm_*` routine writes before #186 ever classified a `todo_*` one, so #186
+  widened the reachable set rather than opening the path.
+  `delimiters.fence_public_rows` walks every tool result for a row carrying
+  `source='capture_web'` and nonce-fences its prose as
+  `<untrusted_external_content source="public_capture">`;
+  `fence_tool_result(tool_name, result) -> (content, tainted)` is now the ONE place both
+  execution loops serialize and fence, and `engine._chat_impl` sets
+  `turn_has_untrusted_reads` off that flag instead of off
+  `name in _UNTRUSTED_SOURCE_TOOLS`. The taint COMPOSES and is never cleared, so a context
+  read (fenced-but-untainted by ORIGIN) cannot reset one the row already set. Keying on the
+  row rather than the tool covers `crm_list_tasks` — the same `tasks` rows in the other task
+  mode — and unconfirmed write echoes for free. **Adding the three todo reads to
+  `UNTRUSTED_SOURCE_TOOLS` was the rejected alternative**, for two reasons: that set IS
+  `background.BACKGROUND_EXCLUDED_TOOLS` (#114), so it would blind the heartbeat on the
+  surface `heartbeat.service._heartbeat_prompt` names in GTD mode, the default install; and
+  a whole-payload fence would mark the user's OWN todos as adversarial data the assistant
+  must not act on, which in GTD mode is the product.
+  **`resolve_confirmation` TAINTS but does NOT fence**, deliberately and not by omission:
+  `history.get_tool_result` hands the persisted content straight back to the /confirm caller
+  on a duplicate Approve, so fencing there showed the HUMAN nonce markup where the record's
+  text belongs. The taint is what carries the property — every later write in that
+  conversation confirms regardless.
+  Four residuals, stated rather than rediscovered: `PUBLIC_ROW_STRUCTURAL_FIELDS` is
+  deny-by-default, so a new free-text column on `tasks` is fenced automatically while a new
+  ENUM column is fenced until it joins that set — and the three TIMESTAMP names in it are
+  load-bearing, not a hedge, because `core.postgres._postprocess_value` makes every
+  timestamp an ISO string before a row reaches the walk; `contacts.source`/`companies.source`
+  are lead-source free text, so a contact whose source someone typed as literally
+  `capture_web` costs one Approve card; an install that actually uses public capture will
+  taint the turns that list its inbox, which is the price of the guarantee and is narrower
+  than shape B's; and `task_projects` has no `source` column and `gtd_service.capture`
+  cannot create a project, so `todo_list_projects` carries no stranger text and needs none.
+  **A fence nested in JSON arrives with its quotes ESCAPED**, which
+  `assembly._reclose_untrusted` could not see until #204 widened its three patterns — a
+  truncated oversized row otherwise handed the model an open fence, the one thing that
+  function exists to prevent. The tokenless capture DEFAULT is unchanged: shrinking the
+  on-ramp is a product question, not a fix to the read path.
   **The assistant is named Baker and that name is a brand, not a setting** (#71):
   `identity.NAME` is the only source (the old `DEFAULT_NAME` spelling is gone — a
   "default" implies something may override it), `get_identity()` does not select the
