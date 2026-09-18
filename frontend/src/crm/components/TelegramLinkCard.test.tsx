@@ -16,8 +16,9 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => vi.fn());
+const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock('../../core/api/client', () => ({ api }));
-vi.mock('../../shared/toast', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../../shared/toast', () => ({ toast }));
 
 const { TelegramLinkCard } = await import('./TelegramLinkCard');
 
@@ -37,6 +38,8 @@ let root: Root;
 beforeEach(() => {
   vi.useFakeTimers();
   api.mockReset();
+  toast.success.mockReset();
+  toast.error.mockReset();
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -147,5 +150,29 @@ describe('TelegramLinkCard — the waiting poll', () => {
     await render(LINKED);
     await act(async () => { vi.advanceTimersByTime(12000); });
     expect(api).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe('TelegramLinkCard — a failed write says so and gives the button back', () => {
+  it('re-enables Get my link code after a failed mint', async () => {
+    await render(NO_CODE);
+    api.mockRejectedValueOnce(new Error('boom'));
+    await click('Get my link code');
+    expect(toast.error).toHaveBeenCalledWith('Failed to create a link code.');
+    // Without the `finally`, the button would read "Creating…" forever.
+    expect(buttonLabelled('Get my link code')?.disabled).toBe(false);
+  });
+
+  it('re-enables Unlink after a failed unlink, and stays linked', async () => {
+    await render(LINKED);
+    api.mockRejectedValueOnce(new Error('boom'));
+    await click('Unlink my Telegram');
+    expect(toast.error).toHaveBeenCalledWith('Failed to unlink.');
+    const button = buttonLabelled('Unlink my Telegram');
+    expect(button).toBeDefined();
+    expect(button?.disabled).toBe(false);
+    // The write failed, so the card must not claim the chat was released.
+    expect(container.textContent).toContain('Linked as Alex');
   });
 });

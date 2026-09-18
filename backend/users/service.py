@@ -119,17 +119,22 @@ def earliest_admin_id() -> int | None:
 
     The single definition of "who owns what predates seats" (issue #191): migration M1
     claims legacy conversations with the identical
-    ``MIN(id) WHERE role='admin' AND is_active`` expression, and Telegram stamps its
-    seatless conversation with this until B4 (#193) gives that thread a real per-seat
-    owner. Returns None when no active admin exists — a fresh database mid-migration, or
-    an install whose admins have all been deactivated — which every caller treats as
-    "unowned".
+    ``MIN(id) WHERE role='admin' AND is_active`` expression, and this is where that
+    expression is written down in Python. Returns None when no active admin exists — a
+    fresh database mid-migration, or an install whose admins have all been deactivated —
+    which every caller treats as "unowned".
 
     ``is_active`` is part of the answer, not a filter bolted on: a deactivated user cannot
     authenticate, and #191 made conversations owner-only with no admin override, so
     handing a thread to a deactivated seat makes it unreachable by anyone. Unowned is the
     fail-safe direction; the wrong owner is not. This is the same expression
     ``update_user()`` already uses for "an admin who counts".
+
+    **No production caller since #193.** Telegram was the last one: it stamped its
+    seatless conversation with this while the binding was install-wide, and B4 gave every
+    link a real per-seat owner instead. Kept rather than deleted because it is still the
+    one readable definition of that migration expression, and `test_assistant_history_pg`
+    asserts the bare-database precondition through it.
     """
     row = pg_fetchone("SELECT MIN(id) AS id FROM users WHERE role = 'admin' AND is_active")
     return int(row["id"]) if row and row.get("id") is not None else None

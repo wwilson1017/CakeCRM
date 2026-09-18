@@ -151,18 +151,28 @@ def test_claim_link_losing_the_chat_race_returns_none_not_an_exception(monkeypat
     """
     from contextlib import contextmanager
 
+    # The fake must walk claim_link all the way TO the UPDATE: the code SELECT answers
+    # with a row, the chat-conflict probe answers with nothing, and only then does the
+    # UPDATE trip the index. Answering the probe with a row instead would return None one
+    # statement early and never enter the except at all — a green test proving nothing.
+    class Cur:
+        def __init__(self):
+            self.fetches = 0
+            self.statements = []
+
+        def execute(self, sql, params=()):
+            self.statements.append(sql.strip().split()[0])
+            if sql.strip().startswith("UPDATE"):
+                raise psycopg2.errors.UniqueViolation("uq_telegram_links_chat")
+
+        def fetchone(self):
+            self.fetches += 1
+            return (7, 2) if self.fetches == 1 else None   # code row, then no conflict
+
+    cur = Cur()
+
     @contextmanager
     def exploding_conn():
-        class Cur:
-            def execute(self, sql, params=()):
-                if sql.strip().startswith("UPDATE"):
-                    raise psycopg2.errors.UniqueViolation("uq_telegram_links_chat")
-
-            def fetchone(self):
-                return (7, 2) if not getattr(self, "_probed", False) else None
-
-        cur = Cur()
-
         class C:
             def cursor(self_inner):
                 return cur
@@ -170,6 +180,8 @@ def test_claim_link_losing_the_chat_race_returns_none_not_an_exception(monkeypat
 
     monkeypatch.setattr(store, "get_connection", exploding_conn)
     assert store.claim_link("SECRET123", "chat1", "tg1", "Alex") is None
+    # The branch under test was actually reached — the UPDATE ran and raised.
+    assert cur.statements == ["SELECT", "SELECT", "UPDATE"]
 
 
 # ── The inbound authorization gate ──────────────────────────────────────────
