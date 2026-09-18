@@ -11,7 +11,7 @@ Three rules live in this module and nowhere else:
     read and apply every view on a surface; only the creator or an admin may rename,
     overwrite or delete one. This is the repo's first per-row authorization rule, so it is
     decided in ONE place — ``_may_edit`` — and enforced inside the write transaction after a
-    ``SELECT … FOR UPDATE`` pre-read, per the CLAUDE.md check-then-write rule. A refusal
+    ``SELECT … FOR UPDATE`` pre-read, per the AGENTS.md check-then-write rule. A refusal
     returns ``code="forbidden"`` (→ 403), matching ``core.auth.require_admin``: the caller is
     authenticated and already sees the row in the list, so a 404 would only obscure it.
 

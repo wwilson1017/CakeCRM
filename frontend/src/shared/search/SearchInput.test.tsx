@@ -11,7 +11,7 @@
 //   • failing to adopt an external change would leave stale text sitting in the box after a
 //     Clear — or, worse, push that stale text back up and undo the Clear.
 //
-// jsdom is opted into per-file via the docblock, per CLAUDE.md; the harness is `createRoot` +
+// jsdom is opted into per-file via the docblock, per AGENTS.md; the harness is `createRoot` +
 // React 19's `act`, following `the blueprint's debounce-hook test`.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';

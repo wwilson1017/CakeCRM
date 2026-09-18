@@ -1361,7 +1361,7 @@ def _write_deal_update(deal_id: int, filtered: dict) -> bool:
        or a win/loss read.
     3. **Serialization** — the old stage is read under ``SELECT ... FOR UPDATE``,
        so two concurrent moves can't both log a transition from the same old
-       stage (CLAUDE.md: a check-then-write spanning reads and updates is one
+       stage (AGENTS.md: a check-then-write spanning reads and updates is one
        transaction).
     4. **Lead scores** (#18) — after the write commits, the deal and its linked
        contact(s) are rescored. Hooked HERE rather than in each caller (where #18

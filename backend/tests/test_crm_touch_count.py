@@ -811,7 +811,7 @@ def test_load_evidence_missing_deal(monkeypatch):
 
 
 def test_load_evidence_converts_each_row_before_the_next_execute(monkeypatch):
-    """The coach-lesson guard (#16/PR#45): cursor.description rebinds on every execute,
+    """The cursor.description guard (#16/PR#45): cursor.description rebinds on every execute,
     so a row converted late is zipped against ANOTHER query's columns. Only the real
     row_to_dict against a per-statement description can catch it — a monkeypatched
     identity row_to_dict masks the whole class."""

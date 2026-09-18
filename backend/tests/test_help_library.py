@@ -14,7 +14,7 @@ enforces the parts that CAN be structural, and says plainly which part is conven
    list here.
 
 The convention half — a pull request that changes a user-facing flow updates its topic —
-is stated in CLAUDE.md and is NOT mechanically testable. Guard 1 exists precisely because
+is stated in AGENTS.md and is NOT mechanically testable. Guard 1 exists precisely because
 it is the part that can be.
 
 Per this repo's guard rules, every detector below carries a self-test on synthetic input

@@ -6,7 +6,7 @@
 // first one land — are all invisible to `tsc` and to eslint, and a regression would
 // show up only as a search box that feels laggy or fires on every keystroke.
 //
-// jsdom is opted into per-file via the docblock above, per CLAUDE.md; the harness is
+// jsdom is opted into per-file via the docblock above, per AGENTS.md; the harness is
 // `createRoot` + React 19's `act`, following `the blueprint's polling-hook test`.
 import { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';

@@ -11,7 +11,7 @@
 // plain http on a LAN install, where `navigator.clipboard` is undefined, so the
 // fallback is not an edge case there — it is the only path.
 //
-// Harness is `createRoot` + React's `act`, per CLAUDE.md — no testing-library.
+// Harness is `createRoot` + React's `act`, per AGENTS.md — no testing-library.
 import { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';

@@ -20,7 +20,7 @@ nothing breaks — the workflow simply never runs.
 ## 1. The two guarantees
 
 **Never a direct push.** The bot opens issues. Ports become ordinary pull requests through
-the ordinary review path, and a human merges them, exactly as `CLAUDE.md` requires. This is
+the ordinary review path, and a human merges them, exactly as `AGENTS.md` requires. This is
 structural, not a promise: no component in the pipeline holds a push-capable credential
 (§6.2).
 
@@ -288,7 +288,7 @@ is about **chatty's** SQLite `crm_lite` (issue #3). For a cake_os port:
 
 Run the normal gates (`ruff check .` → import check → `pytest -q` from `backend/`;
 `npm ci` → `npm run build` → `npm run lint` → `npm test` from `frontend/`), add a
-`SYNC_LEDGER.md` row, update `CLAUDE.md`'s Source Map if the architecture moved, and open a PR.
+`SYNC_LEDGER.md` row, update `AGENTS.md`'s Source Map if the architecture moved, and open a PR.
 Close the intake issue with it.
 
 ---

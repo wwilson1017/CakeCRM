@@ -6,7 +6,7 @@ a cheap in-process guard against flooding and against brute-forcing the secret p
 token.
 
 # simplification: in-process counters, so a multi-worker deploy limits per worker
-# rather than globally. The deploy pins one worker (see CLAUDE.md), and a shared
+# rather than globally. The deploy pins one worker (see AGENTS.md), and a shared
 # store would mean adding Redis — which this project deliberately does not have.
 # Moving the buckets into Postgres is the upgrade path if that changes.
 """

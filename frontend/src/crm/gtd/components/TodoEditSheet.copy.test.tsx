@@ -7,7 +7,7 @@
 // you just retyped and getting the old one back is a silent wrong answer, and
 // nothing in tsc or eslint can see the difference.
 //
-// createRoot + React 19 `act`, per CLAUDE.md — no testing-library.
+// createRoot + React 19 `act`, per AGENTS.md — no testing-library.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';

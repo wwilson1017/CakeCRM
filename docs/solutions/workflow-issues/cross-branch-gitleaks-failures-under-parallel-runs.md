@@ -43,4 +43,10 @@ the PR's own history. A negative control that cannot fail is not a control.
 
 - History-pinned findings cannot be fixed by editing the tip — the finding stays on the
   original commit forever. Fingerprint it or (where policy allows, not here) rewrite.
-- `.claude/coach-lessons.md` "Run 2026-08-21" instincts (CI/gitleaks).
+- When `Secret scan (gitleaks)` reddens a PR, check WHOSE commit the finding pins
+  (`git branch -a --contains <sha>`) before reading your own diff — under
+  `fetch-depth: 0` one branch's finding used to fail every open PR at once.
+- When validating any secret-scanner change, plant a RANDOMLY GENERATED credential,
+  never a canonical doc example: scanners allowlist known examples
+  (`AKIAIOSFODNN7EXAMPLE` proves nothing), and a negative control that cannot fail is
+  not a control.

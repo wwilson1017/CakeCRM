@@ -62,7 +62,8 @@ worse than no comment.
 
 ## Related
 
-- The lifecycle guard that refuses a stage change on an archived row is an API change:
-  see the "adding a `raise` to a shared function" instinct in `.claude/coach-lessons.md`.
+- The lifecycle guard that refuses a stage change on an archived row is an API change.
+  Adding a `raise` to a shared function is always one: check every caller at every layer
+  that surfaces it (service, router, agent tool, background job) before landing it.
 - Same-PR doc updates describe the plan, not the shipped code — re-read them against the
   final diff.
