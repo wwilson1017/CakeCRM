@@ -240,14 +240,24 @@ def _is_public_row(row: dict) -> bool:
 
 
 def _fence_field(value):
-    """Nonce-fence one field value of a public row. Strings and lists of strings only."""
+    """Fence one non-structural value of a public row.
+
+    A STRING is this row's own prose, so it is fenced. A CONTAINER is not: matching a
+    parent must never stop the descent, because a nested record carries its own `source`
+    and answers for itself. `crm.service.get_contact_detail` is the live case —
+    ``{**contact, "tasks": [...full task rows...]}`` — and `contacts.source` is the
+    free-text LEAD source a user types, so a contact whose source reads `capture_web`
+    would otherwise shield a genuine capture row nested under it from the walk.
+    """
     if isinstance(value, str):
         return wrap_untrusted_external(PUBLIC_CAPTURE_FENCE_SOURCE, value)
     if isinstance(value, list):
-        return [
-            wrap_untrusted_external(PUBLIC_CAPTURE_FENCE_SOURCE, v) if isinstance(v, str) else v
-            for v in value
-        ]
+        # Element-wise, so a list of strings (`tags`) is fenced while a list of ROWS
+        # (`tasks`, `deals`, `activity`) goes back through the walk one level down.
+        return [_fence_field(v) for v in value]
+    if isinstance(value, dict):
+        nested, _ = fence_public_rows(value)
+        return nested
     return value
 
 

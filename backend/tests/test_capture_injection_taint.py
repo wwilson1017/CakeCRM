@@ -134,6 +134,34 @@ def test_rows_with_no_source_and_foreign_sources_are_left_alone():
     assert fenced == payload
 
 
+def test_a_matched_parent_does_not_stop_the_descent():
+    """REGRESSION (Codex, PR #206): matching a row used to END the walk there, so a real
+    capture row nested UNDER a matched parent reached the model raw.
+
+    `crm.service.get_contact_detail` returns `{**contact, "tasks": [...full task rows...]}`
+    and `contacts.source` is the free-text LEAD source a user types — so a contact whose
+    source reads `capture_web` shielded every task nested under it. `crm_get_contact` is a
+    read, hence background-callable, where the fence is the ONLY control (the unattended
+    loop has no confirmation gate and discards the flag).
+    """
+    payload = {
+        "id": 5, "name": "Dana", "source": "capture_web", "tags": ["vip"],
+        "tasks": [_capture_row(), _own_row()],
+    }
+    fenced, tainted = delimiters.fence_public_rows(payload)
+
+    assert tainted is True
+    assert fenced["name"].startswith("<untrusted_external_content id=")
+    # The nested STRANGER row is fenced...
+    assert fenced["tasks"][0]["title"].startswith("<untrusted_external_content id=")
+    # ...and the nested row the user wrote answers for itself, so it is left alone.
+    assert fenced["tasks"][1] == _own_row()
+    # A list of plain strings on the matched parent is still fenced element-wise.
+    assert fenced["tags"][0].startswith("<untrusted_external_content id=")
+    # Nothing was mutated in place.
+    assert payload["tasks"][0]["title"] == _INJECTION
+
+
 def test_a_nested_public_row_is_found():
     """`_todo_get` answers `{"todo": {...}}` and a rollup can nest one deeper still, so
     the walk is recursive rather than keyed on a known envelope shape."""

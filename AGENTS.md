@@ -240,7 +240,12 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `name in _UNTRUSTED_SOURCE_TOOLS`. The taint COMPOSES and is never cleared, so a context
   read (fenced-but-untainted by ORIGIN) cannot reset one the row already set. Keying on the
   row rather than the tool covers `crm_list_tasks` — the same `tasks` rows in the other task
-  mode — and unconfirmed write echoes for free. **Adding the three todo reads to
+  mode — and unconfirmed write echoes for free. **Matching a row never ENDS the walk**:
+  a nested record carries its own `source` and answers for itself, which matters because
+  `crm.service.get_contact_detail` returns `{**contact, "tasks": [...]}` and
+  `contacts.source` is the free-text LEAD source a user types, so a contact whose source
+  reads `capture_web` would otherwise shield every capture row nested under it — on a read
+  that is background-callable, where the fence is the only control. **Adding the three todo reads to
   `UNTRUSTED_SOURCE_TOOLS` was the rejected alternative**, for two reasons: that set IS
   `background.BACKGROUND_EXCLUDED_TOOLS` (#114), so it would blind the heartbeat on the
   surface `heartbeat.service._heartbeat_prompt` names in GTD mode, the default install; and
