@@ -198,3 +198,36 @@ def test_heartbeat_turn_tick_delegates(monkeypatch):
                         lambda force=False: seen.__setitem__("force", force) or {"skipped": "throttled"})
     assert service.heartbeat_turn_tick() == {"skipped": "throttled"}
     assert seen["force"] is False
+
+
+# ── #72 Phase 4 observer seam ───────────────────────────────────────────────────
+
+def test_observer_tick_survives_the_module_being_absent(monkeypatch):
+    """The seam is lazily imported so merge order is irrelevant; an ImportError must be
+    a quiet no-op, never a dead scheduler job."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def no_observer(name, *args, **kwargs):
+        if name == "memory.observer":
+            raise ImportError("not here yet")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_observer)
+    assert service.observer_tick() is None
+
+
+def test_observer_tick_survives_a_raising_callee(monkeypatch):
+    from memory import observer
+
+    monkeypatch.setattr(observer, "run_observer_if_due",
+                        lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert service.observer_tick() is None
+
+
+def test_observer_tick_returns_the_pass_summary(monkeypatch):
+    from memory import observer
+
+    monkeypatch.setattr(observer, "run_observer_if_due", lambda: {"conversations": 2})
+    assert service.observer_tick() == {"conversations": 2}

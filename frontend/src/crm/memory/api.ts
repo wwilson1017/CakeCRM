@@ -39,7 +39,19 @@ export interface MemoryFact {
   archived_at: string | null;
   retrieval_count: number | null;
   last_retrieved_at: string | null;
+  /**
+   * Who wrote the fact: `assistant` when Baker recorded it during a turn, `observer`
+   * when it was noticed automatically from what you typed (issue #72 Phase 4). The
+   * Memory page labels the second kind, because an automatic fact is a hint to confirm
+   * rather than something you told it.
+   */
+  created_by: string | null;
+  /** Provenance, e.g. `conversation:<id>` for an observer-written fact. */
+  source: string | null;
 }
+
+/** Facts written by the automatic observer rather than recorded during a turn. */
+export const OBSERVER_CREATED_BY = 'observer';
 
 /** Filenames contain '/', so each segment must be encoded without encoding the separator. */
 const encodePath = (filename: string) => filename.split('/').map(encodeURIComponent).join('/');

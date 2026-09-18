@@ -7,7 +7,10 @@ Two blocks, split by TRUST rather than by file — this is the approved Decision
   identity; fencing it as untrusted data would defeat the feature outright.
 * ``build_knowledge_block()`` → the **volatile** half, nonce-FENCED as
   ``<recorded_context>``. MEMORY.md, the topic manifest and the daily manifest are the
-  large, frequently-written, (from Phase 4) extractor-fed surface, so they stay DATA.
+  large, frequently-written surface, so they stay DATA. (An earlier draft called this
+  surface "extractor-fed"; Phase 4's observer writes facts, not context files. MEMORY.md
+  is fenced because BAKER rewrites it from conversation content, which is laundered
+  third-party text all the same.)
 
 Why the split is by half and not "all context files are static, as the issue says":
 ``delimiters._wrap`` mints fresh entropy on every call, so a fenced block placed in the

@@ -185,7 +185,14 @@ def test_empty_db_cycle_records_run(pg_db):
     from core.postgres import pg_fetchone
     from dreaming.processor import run_dreaming_cycle
     out = run_dreaming_cycle()
-    assert out == {"facts_scored": 0, "facts_archived": 0, "archived": [], "duration_ms": out["duration_ms"]}
+    # The cycle scores TWO units since #72 Phase 4. An empty database has no live facts
+    # and no topic files — the migration's two seeded files are protected, so they are
+    # not scored — and every counter is therefore zero.
+    assert out == {
+        "facts_scored": 0, "facts_archived": 0, "archived": [],
+        "files_scored": 0, "files_archived": 0, "archived_files": [],
+        "duration_ms": out["duration_ms"],
+    }
     assert pg_fetchone("SELECT count(*) AS n FROM dreaming_runs")["n"] == 1
 
 

@@ -9,10 +9,15 @@ manifest, bounded by a character cap.
 
 What deliberately did NOT port: GCS sync, ``atomic_write``, ``_load-order.json``,
 meetings/transcripts, and ``relevance_prefetch``/``_semantic_prefetch`` (the BM25 and
-embedding prefetch — issue #72 Phase 5 territory).
+embedding prefetch). The embedding half was designed as #72 Phase 5 and DECLINED on
+2026-09-14: the default provider cannot embed at all, and without pgvector a stored
+vector could only ever re-rank what FTS already found. FTS is the search, permanently.
 
 ``_first_headline`` ports verbatim: it is pure, and it runs on write so the manifests are
 a plain column read rather than a re-parse of every file each turn.
+
+``track_read_for`` (Phase 4) is the usage signal file-dreaming scores on, and it is the
+one place chatty's design had to be corrected rather than translated — see its docstring.
 
 Never raises across the tool/prompt boundary is NOT this module's job — it raises
 normally and the callers (``prompt.build_prompt_block``, ``tools``) decide. That matches
@@ -439,6 +444,59 @@ def append_daily_note(content: str, day: str | None = None,
             code="too_large",
         )
     return {"filename": name, "date": day_str, "ok": True}
+
+
+# ── read tracking (file-dreaming's usage signal, issue #72 Phase 4) ───────────────
+
+def track_read_for(filenames: list[str]) -> None:
+    """Bump ``read_count`` / ``last_read_at`` for *filenames*, throttled to once per hour
+    per file. Fire-and-forget — never raises (a tracking failure must not break a tool
+    call), and mirrors ``memory.service.track_retrieval_for`` line for line.
+
+    **Only ON-DEMAND reads count.** The three read TOOL executors call this; the per-turn
+    knowledge block, the two manifests and the REST router deliberately do not. That is
+    the same call issue #5 made for facts, and here it is load-bearing rather than
+    stylistic: ``soul.md``, ``MEMORY.md`` and both manifests are read unconditionally on
+    every single turn, so a raw load count would be a constant and would keep every file
+    permanently "used" — file-dreaming could then never archive anything.
+
+    ``updated_at`` is deliberately NOT bumped. It is both the write-recency signal
+    ``scorer.score_file`` reads and the optimistic-concurrency token the Memory editor
+    round-trips, so touching it here would inflate the score of every file the assistant
+    merely read AND 409 an editor that happened to be open.
+
+    Archived files are skipped (``archived_at IS NULL``): ``read_file`` still returns an
+    archived row, but reading one must not resurrect it — only a write un-archives.
+    """
+    names = [n for n in (filenames or []) if n]
+    if not names:
+        return
+    try:
+        # ORDER BY id + FOR UPDATE SKIP LOCKED, exactly as track_retrieval_for does: the
+        # ORDER BY gives a consistent lock order with the dreaming cycle's
+        # `_SELECT_LIVE_FILES ... ORDER BY id FOR UPDATE`, and SKIP LOCKED means this
+        # tool-call path never blocks behind a running cycle. A skipped row is the same
+        # benign read-vs-archival race documented for facts.
+        pg_execute(
+            """
+            UPDATE assistant_context_files
+            SET read_count = read_count + 1,
+                last_read_at = now()
+            WHERE id IN (
+                SELECT id FROM assistant_context_files
+                WHERE filename = ANY(%s)
+                  AND archived_at IS NULL
+                  AND (last_read_at IS NULL OR last_read_at < now() - interval '1 hour')
+                ORDER BY id
+                FOR UPDATE SKIP LOCKED
+            )
+            """,
+            (names,),
+        )
+    except Exception:
+        # Warning, not debug: silent tracking failure makes every file look never-read,
+        # which would make the dreaming cycle over-archive.
+        logger.warning("context-file read tracking failed", exc_info=True)
 
 
 def delete_file(filename: str) -> bool:

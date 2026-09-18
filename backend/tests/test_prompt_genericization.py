@@ -368,6 +368,7 @@ def model_facing(monkeypatch):
     from assistant import compaction, identity
     from crm import touch_count_service
     from heartbeat import service as heartbeat_service
+    from memory import observer
 
     monkeypatch.setattr(
         identity, "get_identity",
@@ -406,6 +407,9 @@ def model_facing(monkeypatch):
         # Conversation compaction (#72 Phase 3) is the third provider caller with a
         # system prompt of its own — same reason the touch-count one is scanned here.
         ("compaction summary prompt", compaction._SUMMARY_SYSTEM_PROMPT),
+        # The observer (#72 Phase 4) is the fourth provider caller with a system prompt
+        # of its own — same reason as the two above.
+        ("observer prompt", observer.OBSERVER_SYSTEM_PROMPT),
         ("assistant system prompt (static, GTD mode)", gtd_static),
         ("heartbeat prompt (GTD mode)", gtd_hb_static),
     ]

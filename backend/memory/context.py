@@ -24,7 +24,10 @@ logger = logging.getLogger(__name__)
 MEMORY_CONTEXT_FACT_LIMIT = 10
 _USER_TEXT_CAP = 2000       # never feed a whole upload into the search tokenizer
 
-_HEADER = "Facts you previously recorded with your memory tools, most relevant first:"
+_HEADER = (
+    "Facts from your long-term memory — recorded by you, or noticed automatically from "
+    "what the user typed — most relevant first:"
+)
 
 
 def _render_fact(fact: dict) -> str:

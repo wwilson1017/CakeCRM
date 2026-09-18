@@ -58,7 +58,16 @@ def clean(pg_db):
     from core.postgres import pg_execute
 
     pg_execute("DELETE FROM assistant_context_files WHERE filename NOT IN ('soul.md','MEMORY.md')")
-    pg_execute("UPDATE assistant_context_files SET content = '', headline = ''")
+    # Reset EVERY mutable column, not just the body: the file-dreaming tests below
+    # backdate timestamps and archive rows, and a protected row left backdated or
+    # archived would silently change what the next test's cycle scores.
+    pg_execute(
+        "UPDATE assistant_context_files SET content = '', headline = '', "
+        "  archived_at = NULL, read_count = 0, last_read_at = NULL, "
+        "  created_at = now(), updated_at = now()"
+    )
+    pg_execute("DELETE FROM dreaming_runs")
+    pg_execute("DELETE FROM memory_facts")
 
 
 def test_migration_seeds_the_two_protected_files(pg_db):
@@ -313,3 +322,177 @@ def test_daily_manifest_excludes_today(pg_db):
     names = {r["filename"] for r in service.daily_manifest()}
     assert service.daily_filename() not in names
     assert "daily/2026-01-02.md" in names
+
+
+# ── file-dreaming: the real SQL, against a real mixed corpus (#72 Phase 4) ───────
+#
+# The hermetic processor tests feed the fake only ELIGIBLE rows, so they prove the
+# Python branch and nothing about the WHERE clauses. These tests hand Postgres a corpus
+# that deliberately contains the rows the SQL must refuse.
+
+def _age_file(filename: str, *, days_old: float, days_since_written: float,
+              read_count: int = 0, days_since_read: float | None = None) -> None:
+    """Backdate a file's timestamps so the scorer sees the age we want."""
+    from core.postgres import pg_execute
+
+    pg_execute(
+        "UPDATE assistant_context_files SET "
+        "  created_at = now() - make_interval(secs => %s), "
+        "  updated_at = now() - make_interval(secs => %s), "
+        "  read_count = %s, "
+        "  last_read_at = CASE WHEN %s::double precision IS NULL THEN NULL "
+        "                      ELSE now() - make_interval(secs => %s::double precision) END "
+        "WHERE filename = %s",
+        (days_old * 86400, days_since_written * 86400, read_count,
+         days_since_read, (days_since_read or 0) * 86400, filename),
+    )
+
+
+def _seed_mixed_corpus():
+    """One dormant old topic file plus four rows the SQL must refuse to archive."""
+    from context_files import service
+
+    service.write_file("topics/dormant.md", "an abandoned topic")
+    service.write_file("topics/fresh.md", "written just now")
+    service.write_file("MEMORY.md", "the protected memory file")
+    service.write_file("soul.md", "the protected identity file")
+    service.append_daily_note("an old daily entry", day="2020-01-02")
+
+    _age_file("topics/dormant.md", days_old=200, days_since_written=200)
+    # Protected + daily rows are made JUST AS dormant, so only the WHERE clause can
+    # save them. If the exemptions were dropped, these would archive.
+    _age_file("MEMORY.md", days_old=400, days_since_written=400)
+    _age_file("soul.md", days_old=400, days_since_written=400)
+    _age_file("daily/2020-01-02.md", days_old=400, days_since_written=400)
+    # fresh.md keeps its real timestamps -> active.
+
+
+def _archived() -> set:
+    from core.postgres import pg_fetchall
+
+    return {r["filename"] for r in pg_fetchall(
+        "SELECT filename FROM assistant_context_files WHERE archived_at IS NOT NULL")}
+
+
+def test_cycle_archives_only_the_dormant_old_topic_file(pg_db):
+    from dreaming.processor import run_dreaming_cycle
+
+    _seed_mixed_corpus()
+    out = run_dreaming_cycle()
+
+    assert _archived() == {"topics/dormant.md"}
+    assert out["files_archived"] == 1
+    assert out["archived_files"] == ["topics/dormant.md"]
+    # Protected files and daily notes are not even SCORED (the SELECT excludes them).
+    assert out["files_scored"] == 2      # dormant.md + fresh.md
+
+
+def test_cycle_is_idempotent_on_rerun(pg_db):
+    from dreaming.processor import run_dreaming_cycle
+
+    _seed_mixed_corpus()
+    run_dreaming_cycle()
+    second = run_dreaming_cycle()
+    assert _archived() == {"topics/dormant.md"}
+    assert second["files_archived"] == 0          # already archived -> not live -> not scored
+    assert second["files_scored"] == 1            # only fresh.md remains live
+
+
+def test_archiving_does_not_bump_updated_at(pg_db):
+    """updated_at is the write-recency signal AND the editor's concurrency token."""
+    from core.postgres import pg_fetchone
+    from dreaming.processor import run_dreaming_cycle
+
+    _seed_mixed_corpus()
+    before = pg_fetchone(
+        "SELECT updated_at FROM assistant_context_files WHERE filename = %s",
+        ("topics/dormant.md",))["updated_at"]
+    run_dreaming_cycle()
+    after = pg_fetchone(
+        "SELECT updated_at, archived_at FROM assistant_context_files WHERE filename = %s",
+        ("topics/dormant.md",))
+    assert after["archived_at"] is not None
+    assert after["updated_at"] == before
+
+
+def test_a_write_unarchives_what_dreaming_put_away(pg_db):
+    from context_files import service
+    from dreaming.processor import run_dreaming_cycle
+
+    _seed_mixed_corpus()
+    run_dreaming_cycle()
+    assert _archived() == {"topics/dormant.md"}
+
+    service.write_file("topics/dormant.md", "back in use")
+    assert _archived() == set()
+    assert service.read_file("topics/dormant.md")["content"] == "back in use"
+
+
+def test_read_file_still_returns_an_archived_file(pg_db):
+    from context_files import service
+    from dreaming.processor import run_dreaming_cycle
+
+    _seed_mixed_corpus()
+    run_dreaming_cycle()
+    row = service.read_file("topics/dormant.md")
+    assert row is not None and row["archived_at"] is not None
+    # ...but it is gone from the manifest and from search.
+    assert "topics/dormant.md" not in {r["filename"] for r in service.topic_manifest()}
+    assert "topics/dormant.md" not in {r["filename"] for r in service.search_files("abandoned")}
+
+
+def test_the_audit_row_records_both_units(pg_db):
+    from core.postgres import pg_fetchone
+    from dreaming.processor import run_dreaming_cycle
+
+    _seed_mixed_corpus()
+    run_dreaming_cycle()
+    run = pg_fetchone(
+        "SELECT files_scored, files_archived, details FROM dreaming_runs "
+        "WHERE status = 'ok' ORDER BY id DESC LIMIT 1")
+    assert run["files_scored"] == 2 and run["files_archived"] == 1
+    details = run["details"] if isinstance(run["details"], dict) else json.loads(run["details"])
+    assert details["archived_files"] == ["topics/dormant.md"]
+    assert {f["filename"] for f in details["file_scores"]} == {"topics/dormant.md", "topics/fresh.md"}
+
+
+def test_track_read_for_throttles_to_once_an_hour_and_skips_archived(pg_db):
+    from context_files import service
+    from core.postgres import pg_execute, pg_fetchone
+    from dreaming.processor import run_dreaming_cycle
+
+    _seed_mixed_corpus()
+
+    def counts(name):
+        return pg_fetchone(
+            "SELECT read_count, last_read_at FROM assistant_context_files WHERE filename = %s",
+            (name,))
+
+    service.track_read_for(["topics/fresh.md"])
+    first = counts("topics/fresh.md")
+    assert first["read_count"] == 1 and first["last_read_at"] is not None
+
+    service.track_read_for(["topics/fresh.md"])          # inside the hour -> throttled
+    assert counts("topics/fresh.md")["read_count"] == 1
+
+    pg_execute("UPDATE assistant_context_files SET last_read_at = now() - interval '2 hours' "
+               "WHERE filename = %s", ("topics/fresh.md",))
+    service.track_read_for(["topics/fresh.md"])          # past the hour -> counted
+    assert counts("topics/fresh.md")["read_count"] == 2
+
+    # An archived file is never bumped: reading one must not resurrect it.
+    run_dreaming_cycle()
+    before = counts("topics/dormant.md")["read_count"]
+    service.track_read_for(["topics/dormant.md"])
+    assert counts("topics/dormant.md")["read_count"] == before
+
+
+def test_a_recently_read_old_file_survives_the_cycle(pg_db):
+    """The read signal is what keeps an old file alive — the whole point of tracking it."""
+    from dreaming.processor import run_dreaming_cycle
+
+    _seed_mixed_corpus()
+    _age_file("topics/dormant.md", days_old=200, days_since_written=200,
+              read_count=3, days_since_read=5)
+    run_dreaming_cycle()
+    assert _archived() == set()

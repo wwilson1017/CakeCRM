@@ -119,3 +119,110 @@ def test_read_daily_note_reports_absence(monkeypatch):
     monkeypatch.setattr(service, "read_daily_note", lambda d: "")
     out = tools._read_daily_note("2026-08-21")
     assert out["exists"] is False and out["content"] == ""
+
+
+# ── the read signal, and the load-count trap (#72 Phase 4) ──────────────────────
+#
+# file-dreaming scores a file on reads the assistant CHOSE to make. Exactly three
+# executors record that; every unconditional load must NOT, or the count becomes a
+# constant and nothing is ever archivable. The exclusions are the load-bearing half of
+# this contract, so each excluded entry point is invoked here with NON-EMPTY data —
+# a spy asserting "zero calls" against empty fixtures would pass vacuously.
+
+@pytest.fixture
+def read_spy(monkeypatch):
+    seen: list[list[str]] = []
+    monkeypatch.setattr(service, "track_read_for", lambda names: seen.append(list(names)))
+    return seen
+
+
+def test_read_context_file_records_the_read(monkeypatch, read_spy):
+    monkeypatch.setattr(service, "read_file", lambda f: {
+        "filename": "topics/pricing.md", "kind": "topic", "content": "body",
+        "updated_at": "2026-09-14T00:00:00+00:00",
+    })
+    tools.CONTEXT_FILE_TOOL_EXECUTORS["read_context_file"](filename="pricing.md")
+    assert read_spy == [["topics/pricing.md"]]   # the CANONICAL name, not the raw arg
+
+
+def test_read_context_file_records_nothing_when_the_file_is_missing(monkeypatch, read_spy):
+    monkeypatch.setattr(service, "read_file", lambda f: None)
+    tools.CONTEXT_FILE_TOOL_EXECUTORS["read_context_file"](filename="nope.md")
+    assert read_spy == []
+
+
+def test_read_daily_note_records_the_days_file(monkeypatch, read_spy):
+    monkeypatch.setattr(service, "read_daily_note", lambda day=None: "# 2026-08-21\nstuff")
+    tools.CONTEXT_FILE_TOOL_EXECUTORS["read_daily_note"](date="2026-08-21")
+    assert read_spy == [["daily/2026-08-21.md"]]
+
+
+def test_read_daily_note_records_nothing_for_an_absent_note(monkeypatch, read_spy):
+    monkeypatch.setattr(service, "read_daily_note", lambda day=None: "")
+    tools.CONTEXT_FILE_TOOL_EXECUTORS["read_daily_note"](date="2026-08-21")
+    assert read_spy == []
+
+
+def test_search_records_only_the_surfaced_subset(monkeypatch, read_spy):
+    """What the search HANDED BACK, never the corpus it scanned — the same rule
+    memory/context.py applies to FTS matches versus confidence backfill."""
+    monkeypatch.setattr(service, "search_files", lambda q, limit=20: [
+        {"filename": "topics/a.md", "kind": "topic", "headline": "A", "updated_at": "x"},
+        {"filename": "topics/b.md", "kind": "topic", "headline": "B", "updated_at": "x"},
+    ])
+    tools.CONTEXT_FILE_TOOL_EXECUTORS["search_context_files"](query="pricing")
+    assert read_spy == [["topics/a.md", "topics/b.md"]]
+
+
+def test_list_context_files_records_nothing(monkeypatch, read_spy):
+    """Listing is not use. Non-empty fixture on purpose."""
+    monkeypatch.setattr(service, "list_files", lambda kind=None, **k: [
+        {"filename": "topics/a.md", "kind": "topic", "headline": "A",
+         "is_protected": False, "updated_at": "x", "size_chars": 10},
+    ])
+    out = tools.CONTEXT_FILE_TOOL_EXECUTORS["list_context_files"]()
+    assert out["count"] == 1        # the fixture really was surfaced
+    assert read_spy == []
+
+
+def test_the_per_turn_knowledge_block_records_nothing(monkeypatch, read_spy):
+    """THE load-count trap: MEMORY.md, today's note and both manifests load on EVERY
+    turn. Counting them would make read_count a constant and file-dreaming a no-op."""
+    from context_files import prompt as cf_prompt
+    monkeypatch.setattr(service, "read_file", lambda f: {"content": "remembered things"})
+    monkeypatch.setattr(service, "read_daily_note", lambda *a, **k: "today's entry")
+    monkeypatch.setattr(service, "topic_manifest", lambda: [
+        {"filename": "topics/a.md", "headline": "A", "updated_at": "x"}])
+    monkeypatch.setattr(service, "daily_manifest", lambda *a, **k: [
+        {"filename": "daily/2026-08-20.md", "headline": "D", "updated_at": "x"}])
+    block = cf_prompt.build_knowledge_block()
+    assert "remembered things" in block and "topics/a.md" in block   # non-vacuous
+    assert read_spy == []
+
+
+def test_the_rest_router_records_nothing(monkeypatch, read_spy):
+    """Browsing the Memory page is not the assistant using a file — the rule
+    memory/router.py already states for facts."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from context_files.router import router as cf_router
+    from core.auth import get_current_user
+
+    monkeypatch.setattr(service, "read_file", lambda f: {
+        "filename": "topics/a.md", "kind": "topic", "content": "body",
+        "headline": "A", "is_protected": False, "written_by": "user",
+        "created_at": "x", "updated_at": "x", "archived_at": None, "id": 1,
+    })
+    monkeypatch.setattr(service, "list_files", lambda *a, **k: [{"filename": "topics/a.md"}])
+    monkeypatch.setattr(service, "search_files", lambda *a, **k: [{"filename": "topics/a.md"}])
+
+    app = FastAPI()
+    app.include_router(cf_router, prefix="/api/context-files")
+    app.dependency_overrides[get_current_user] = lambda: {"sub": "u"}
+    client = TestClient(app)
+
+    assert client.get("/api/context-files/file/topics/a.md").status_code == 200
+    assert client.get("/api/context-files").status_code == 200
+    assert client.get("/api/context-files/search", params={"q": "a"}).status_code == 200
+    assert read_spy == []

@@ -416,3 +416,67 @@ def capture(text: str, source: str = "capture_web") -> dict:
     if len(text) > MAX_TEXT_CHARS:
         raise ValidationError(f"Capture text too long (max {MAX_TEXT_CHARS} characters)")
     return create_todo(text, status="inbox", source=source)
+
+
+# ── Open-title lookups (the observer's task dedupe, issue #72 Phase 4) ──────
+
+# `status NOT IN ('done','dropped')` is the open predicate used throughout this module
+# (list_todos, the project open_count). It is authoritative rather than `completed = 0`
+# because create_task DERIVES `completed` from `status` under a CHECK constraint, so
+# status is the column that cannot drift.
+_OPEN_TASK = "status NOT IN ('done','dropped')"
+
+
+def list_open_task_titles(days: int = 30, limit: int = 30) -> list[str]:
+    """Recent open task titles — the "already tracked, do not repeat" list for a prompt.
+
+    This is a BUDGET, not a correctness check. Thirty titles is what fits comfortably in
+    a light-tier prompt; it cannot prove anything about the 31st task or about one opened
+    a year ago, so the actual duplicate check on the write path is
+    ``open_task_with_title_exists`` below. Feeding the model the capped list is still
+    worth it: it stops most duplicates before a call is even made.
+
+    Deliberately NOT filtered to ``source='agent'``. The question the list answers is "is
+    this already on the user's list", and a todo the user typed themselves answers it just
+    as well as one the assistant captured.
+    """
+    rows = pg_fetchall(
+        f"SELECT title FROM tasks WHERE {_OPEN_TASK} "
+        "  AND created_at >= now() - make_interval(days => %s) "
+        "ORDER BY created_at DESC, id DESC LIMIT %s",
+        (max(1, int(days)), max(1, int(limit))),
+    )
+    return [r["title"] for r in rows if (r["title"] or "").strip()]
+
+
+def open_task_with_title_exists(title: str) -> bool:
+    """True iff an OPEN task already carries this title (case- and whitespace-insensitive).
+
+    No day window and no source filter, on purpose: this is the check that actually
+    prevents a duplicate, and an open task from six months ago is still open work.
+
+    BOTH sides are normalized, and they have to be. `gtd_common.validate_title` only
+    strips the ends, so a stored title keeps whatever internal spacing its author typed —
+    collapsing only the needle would make this comparison LESS permissive, not more: a
+    human's "Call  Bob" would never match the observer's collapsed "Call Bob", and the
+    very function whose job is to prevent a duplicate would create one. Case-folding and
+    whitespace-collapsing both run in SQL, so there is exactly one rule and no chance of
+    Python and Postgres disagreeing about it.
+
+    No index supports the normalized comparison and none is added: `tasks` is a
+    single-user table and this runs at most three times per observed conversation.
+    """
+    clean = " ".join((title or "").split())
+    if not clean:
+        return False
+    # EXISTS rather than `SELECT 1 ... LIMIT 1`: the question is whether ANY row matches,
+    # so there is no ordering to define and no cap to make non-deterministic. (The LIMIT
+    # form also reads to the issue #58 pagination guard as a capped reader whose ORDER BY
+    # it cannot resolve, which it is right to object to — a capped read with no total
+    # order is exactly the shape that guard exists to catch.)
+    row = pg_fetchone(
+        f"SELECT EXISTS (SELECT 1 FROM tasks WHERE {_OPEN_TASK} "
+        r"  AND lower(regexp_replace(btrim(title), '\s+', ' ', 'g')) = lower(%s)) AS found",
+        (clean,),
+    )
+    return bool(row and row["found"])

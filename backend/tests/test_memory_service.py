@@ -142,7 +142,9 @@ def test_query_facts_tracks_retrieval_of_results(rec):
 def test_query_facts_can_skip_tracking(rec):
     r = rec(fetchall=[{"id": 3}])
     service.query_facts(track_retrieval=False)
-    assert all("retrieval_count" not in sql for sql, _ in r.calls)
+    # Match the tracking UPDATE, not the bare word: since #72 Phase 4 `retrieval_count`
+    # is also a SELECTED column, so a substring test would fail on the read itself.
+    assert all("retrieval_count = retrieval_count + 1" not in sql for sql, _ in r.calls)
 
 
 # ── search_facts (FTS) ──────────────────────────────────────────────────────────
@@ -266,3 +268,63 @@ def test_or_tsquery_drops_function_words_with_fallback():
     assert service._or_tsquery("is at") == "is | at"
     # Name/acronym homographs are NOT stoplisted, so they stay searchable as entities.
     assert service._or_tsquery("Li US IT") == "li | us | it"
+
+
+# ── provenance columns (#72 Phase 4) ────────────────────────────────────────────
+
+def test_reads_return_provenance_and_lifecycle_columns(rec):
+    """`created_by`/`source` were stored and never returned, so every fact read as
+    assistant-authored; `archived_at`/`retrieval_count`/`last_retrieved_at` were
+    declared by the frontend `MemoryFact` type and returned by nothing, which is why
+    MemoryPage's "archived by nightly cleanup" label could never render."""
+    r = rec(fetchall=[{"id": 1}])
+    service.query_facts(track_retrieval=False)
+    sql = r.calls[0][0]
+    for col in ("created_by", "source", "archived_at", "retrieval_count", "last_retrieved_at"):
+        assert col in sql
+
+
+def test_search_returns_the_same_columns_as_query(rec):
+    """Two endpoints back one page; a key present on one and missing on the other is
+    how a field silently becomes undefined in the UI."""
+    r = rec(fetchall=[{"id": 1}])
+    service.search_facts("dana", track_retrieval=False)
+    sql = r.calls[0][0]
+    for col in service._FACT_COLS.split(", "):
+        assert col.strip() in sql
+
+
+# ── find_live_facts_by_key ──────────────────────────────────────────────────────
+
+def test_find_live_facts_by_key_matches_exactly_not_by_substring(rec):
+    r = rec(fetchall=[])
+    service.find_live_facts_by_key("Dana", "works at")
+    sql, params = r.calls[0]
+    assert "lower(subject) = lower(%s)" in sql
+    assert "lower(predicate) = lower(%s)" in sql
+    assert "ILIKE" not in sql                      # substring matching would be wrong here
+    assert "valid_to IS NULL" in sql and "archived_at IS NULL" in sql
+    assert params[:2] == ("Dana", "works at")
+
+
+def test_find_live_facts_by_key_normalizes_like_add_fact_does(rec):
+    """One normalization rule for querying and for writing, or "Dana  Chen" never finds
+    the stored "Dana Chen"."""
+    r = rec(fetchall=[])
+    service.find_live_facts_by_key("  Dana   Chen ", " works\tat ")
+    assert r.calls[0][1][:2] == ("Dana Chen", "works at")
+
+
+@pytest.mark.parametrize("subject,predicate", [("", "p"), ("s", ""), ("   ", "p"), (None, "p")])
+def test_find_live_facts_by_key_hits_no_db_without_both_halves(rec, subject, predicate):
+    r = rec(fetchall=[{"id": 1}])
+    assert service.find_live_facts_by_key(subject, predicate) == []
+    assert r.calls == []
+
+
+def test_find_live_facts_by_key_does_not_track_retrieval(rec):
+    """Checking whether a fact exists is not the assistant USING it — counting it would
+    keep dormant facts alive forever."""
+    r = rec(fetchall=[{"id": 1}])
+    service.find_live_facts_by_key("Dana", "works at")
+    assert all("retrieval_count = retrieval_count + 1" not in sql for sql, _ in r.calls)

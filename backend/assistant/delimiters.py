@@ -61,13 +61,16 @@ def wrap_recorded_context(text: str) -> str:
     The approved split for #72 is identity-vs-knowledge: ``soul.md`` loads UNFENCED (it
     is genuinely Baker's identity, and fencing it as data would defeat the feature),
     while ``MEMORY.md``, the topic manifest and the daily manifest load fenced. Those are
-    the large, frequently-rewritten surface — and from #72 Phase 4, the one an automatic
-    extractor writes — so anything inside them stays DATA. The static
-    ``CONTEXT_FILES_NOTE`` tells the model exactly that.
+    the large, frequently-rewritten surface, so anything inside them stays DATA. The
+    static ``CONTEXT_FILES_NOTE`` tells the model exactly that.
 
     Note chatty is LESS strict here: its ``load_all_context`` sanitizes every file except
     ``soul.md`` *and* ``MEMORY.md``, both of which it loads raw. Fencing MEMORY.md is a
-    deliberate tightening, because ours becomes extractor-fed.
+    deliberate tightening. The original reason given was "ours becomes extractor-fed",
+    which #72 Phase 4 turned out NOT to be: the observer writes ``memory_facts`` rows and
+    never touches a context file. The tightening still stands on its own — Baker rewrites
+    MEMORY.md from conversation content, which can quote observer-noticed facts and
+    untrusted material, so it is laundered third-party text either way.
     """
     nonce = secrets.token_hex(8)
     return (

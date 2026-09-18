@@ -521,3 +521,106 @@ def claim_pending_tool(conversation_id: str, tool_use_id: str, msg_id: str | Non
                 "content": existing.get("content"),
             }
     return None
+
+
+# ── Observer watermark (issue #72 Phase 4) ─────────────────────────────────
+
+def list_observer_candidates(quiet_minutes: int, min_new_user_rows: int,
+                             min_new_user_chars: int, limit: int) -> list[dict]:
+    """Conversations the observer should look at: enough NEW user material above their
+    watermark, and quiet for at least *quiet_minutes*.
+
+    "Enough" is rows OR characters, and the OR is load-bearing in two places. A row count
+    alone means a user who types ONE substantial message and stops is never observed at
+    all — which is most of what this feature exists to catch. And when a segment is too
+    large for one transcript budget, the observer processes it across successive runs; a
+    row-only threshold can strand the final row of such a batch until another message
+    arrives, or until the 14-day stale guard drops it unread. The character floor closes
+    both, while still keeping a lone "thanks" from buying a model call.
+
+    Returns ``[{id, observed_through_seq, new_user_rows, new_user_chars, newest_at}]``,
+    oldest-activity first so one busy thread cannot starve the others, with ``c.id``
+    closing the order (issue #58 — ``newest_at`` ties whenever two threads' last messages
+    land in the same instant, and an unstable capped window would silently drop a
+    conversation).
+
+    **Quietness is measured over EVERY message, not just the new user rows.** Taking the
+    newest USER row would only prove the person stopped typing; an assistant row newer
+    than it means the turn is still streaming, and observing mid-turn is exactly the
+    moment a commitment has not settled yet. The two aggregates are therefore different:
+    the count filters to new user rows, the timestamp does not.
+
+    ``observed_through_seq`` is returned already COALESCEd to -1, so callers never have
+    to re-derive what NULL means. NULL is the honest state for a conversation created
+    after the Phase 4 migration ("nothing observed yet"); the migration backfilled every
+    pre-existing conversation to its own ``max(seq)`` so history is never replayed.
+
+    One statement, no N+1: the LATERAL runs once per conversation over the
+    ``(conversation_id, seq)`` index. No new index — a single-user install has tens of
+    conversations, and the aggregate has to be computed per row regardless of what drives
+    the scan, so an index on ``updated_at`` would not change the plan.
+    """
+    return pg_fetchall(
+        """
+        SELECT c.id,
+               COALESCE(c.observed_through_seq, -1) AS observed_through_seq,
+               m.new_user_rows,
+               m.new_user_chars,
+               m.newest_at
+        FROM assistant_conversations c
+        JOIN LATERAL (
+            SELECT count(*) FILTER (
+                       WHERE role = 'user' AND seq > COALESCE(c.observed_through_seq, -1)
+                   ) AS new_user_rows,
+                   COALESCE(sum(length(content)) FILTER (
+                       WHERE role = 'user' AND seq > COALESCE(c.observed_through_seq, -1)
+                   ), 0) AS new_user_chars,
+                   max(created_at) AS newest_at
+            FROM assistant_messages
+            WHERE conversation_id = c.id
+        ) m ON TRUE
+        WHERE (m.new_user_rows >= %s OR m.new_user_chars >= %s)
+          AND m.new_user_rows >= 1
+          AND m.newest_at <= now() - make_interval(mins => %s)
+        ORDER BY m.newest_at ASC, c.id ASC
+        LIMIT %s
+        """,
+        (max(1, int(min_new_user_rows)), max(1, int(min_new_user_chars)),
+         max(0, int(quiet_minutes)), max(1, int(limit))),
+    )
+
+
+def user_rows_since(conversation_id: str, after_seq: int, limit: int) -> list[dict]:
+    """``role='user'`` rows with ``seq > after_seq``, oldest first.
+
+    Assistant rows — and therefore every tool result, every Gmail body and every
+    context-file read the model quoted back — never reach the observer, by CONSTRUCTION
+    rather than by filtering downstream. That is chatty's rule and the whole of the
+    observer's indirect-injection story: what is left is what a human typed.
+    """
+    return pg_fetchall(
+        "SELECT id, content, seq, created_at FROM assistant_messages "
+        "WHERE conversation_id = %s AND role = 'user' AND seq > %s "
+        "ORDER BY seq LIMIT %s",
+        (conversation_id, int(after_seq), max(1, int(limit))),
+    )
+
+
+def advance_observed_seq(conversation_id: str, through_seq: int) -> bool:
+    """Move the observer watermark forward. Returns True iff it actually moved.
+
+    A compare-and-set in the same shape as ``set_compaction``: the WHERE refuses a value
+    that does not move strictly FORWARD, so a late or duplicated run can never rewind the
+    watermark and cause a segment to be observed twice.
+
+    ``updated_at`` is deliberately NOT bumped. It orders the conversation list as a record
+    of USER activity, and it is also what the quiet-window candidate query above reads
+    through ``max(created_at)``'s sibling ordering — a housekeeping write that made every
+    observed thread look freshly active would reorder the user's sidebar for no reason.
+    Same call ``set_compaction`` makes, for the same reason.
+    """
+    return pg_execute(
+        "UPDATE assistant_conversations SET observed_through_seq = %s "
+        "WHERE id = %s AND COALESCE(observed_through_seq, -1) < %s",
+        (int(through_seq), conversation_id, int(through_seq)),
+    ) > 0
