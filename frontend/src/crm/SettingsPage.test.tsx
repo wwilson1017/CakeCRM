@@ -85,7 +85,11 @@ const RESPONSES: Record<string, unknown> = {
 
 // 'Task mode' is admin-only as of #102, which makes its routes require_admin.
 const ADMIN_ONLY_TITLES = ['Branding', 'Team', 'Custom Fields', 'Telegram', 'Gmail', 'Task mode'];
-const MEMBER_TITLES = ['Notifications', 'Change password', 'Pipeline board', 'Assistant memory'];
+// 'Link my Telegram' is the personal half of the Telegram split (#193); the bot card
+// above stays admin-only.
+const MEMBER_TITLES = [
+  'Notifications', 'Change password', 'Pipeline board', 'Link my Telegram', 'Assistant memory',
+];
 
 let container: HTMLDivElement;
 let root: Root;
@@ -177,13 +181,13 @@ describe('SettingsPage — the gating partition survives the restructure', () =>
     }
   });
 
-  it('reaches an admin all ten cards, across four sections', async () => {
+  it('reaches an admin all eleven cards, across four sections', async () => {
     auth.isAdmin = true;
     await render();
     expect(navLabels()).toEqual(['Personal', 'Assistant', 'Workspace', 'Integrations']);
 
     const reachable = await allReachableTitles();
-    expect(reachable).toHaveLength(10);
+    expect(reachable).toHaveLength(11);
     expect(reachable.sort()).toEqual([...MEMBER_TITLES, ...ADMIN_ONLY_TITLES].sort());
   });
 
@@ -205,7 +209,9 @@ describe('SettingsPage — the gating partition survives the restructure', () =>
     await render('/crm/settings?section=workspace');
     expect(navLabels()).not.toContain('Workspace');
     expect(container.querySelector('[aria-current="page"]')!.textContent).toBe('Personal');
-    expect(cardTitles()).toEqual(['Notifications', 'Change password', 'Pipeline board']);
+    expect(cardTitles()).toEqual([
+      'Notifications', 'Change password', 'Pipeline board', 'Link my Telegram',
+    ]);
   });
 
   it('honours an admin deep link', async () => {

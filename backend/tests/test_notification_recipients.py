@@ -14,7 +14,11 @@ somebody's notification if it is wrong, so each gets a test here:
      converge without anybody clicking anything;
   4. a proactive nudge routes to the record's owner, and an UNOWNED record broadcasts.
 
-Hermetic: pg helpers and pywebpush are mocked, no database.
+Since #193 (Phase B / B4) Telegram is routed too, closing the one gap #192 documented
+and left open: a targeted notification goes to that seat's own link and a broadcast to
+every link, so the fifth section below is the same question asked of the other channel.
+
+Hermetic: pg helpers, pywebpush and the telegram module are mocked, no database.
 """
 
 import sys
@@ -377,3 +381,67 @@ def test_the_digest_stays_a_broadcast(monkeypatch):
                         lambda title, message, user_id=None: out.append(user_id) or {"ok": True})
     ps._maybe_send_digest(datetime(2026, 9, 17, 23, 0, tzinfo=timezone.utc))
     assert out == [None]
+
+
+# ── 5. Telegram delivery is routed too (#193) ────────────────────────────────
+
+
+@pytest.fixture
+def telegram_channel(monkeypatch):
+    """Install a fake ``telegram.service`` for delivery's lazy import to find."""
+    seen: dict = {"targeted": [], "broadcast": [], "fail": False}
+
+    svc = types.ModuleType("telegram.service")
+
+    def notify_user_telegram(user_id, text):
+        if seen["fail"]:
+            raise RuntimeError("boom")
+        seen["targeted"].append((user_id, text))
+        return True
+
+    def broadcast_telegram(text):
+        if seen["fail"]:
+            raise RuntimeError("boom")
+        seen["broadcast"].append(text)
+        return True
+
+    svc.notify_user_telegram = notify_user_telegram
+    svc.broadcast_telegram = broadcast_telegram
+    pkg = types.ModuleType("telegram")
+    pkg.service = svc
+    monkeypatch.setitem(sys.modules, "telegram", pkg)
+    monkeypatch.setitem(sys.modules, "telegram.service", svc)
+    return seen
+
+
+def test_targeted_notification_reaches_only_that_seats_telegram(telegram_channel):
+    """Before #193 this text landed in whatever chat happened to be linked."""
+    assert delivery._send_telegram("Hi", "there", ME) is True
+    assert telegram_channel["targeted"] == [(ME, "Hi\nthere")]
+    assert telegram_channel["broadcast"] == []
+
+
+def test_broadcast_notification_reaches_every_link(telegram_channel):
+    assert delivery._send_telegram("Hi", "there") is True
+    assert telegram_channel["broadcast"] == ["Hi\nthere"]
+    assert telegram_channel["targeted"] == []
+
+
+def test_delivery_passes_the_recipient_through_to_telegram(telegram_channel, delivered):
+    """The seam that matters: deliver_notification's user_id must reach the channel."""
+    result = delivery.deliver_notification("Hi", "there", user_id=ME)
+    assert telegram_channel["targeted"] == [(ME, "Hi\nthere")]
+    assert "telegram" in result["channels_sent"]
+
+    telegram_channel["targeted"].clear()
+    delivery.deliver_notification("Hi", "there")
+    assert telegram_channel["broadcast"] == ["Hi\nthere"]
+    assert telegram_channel["targeted"] == []
+
+
+def test_a_broken_telegram_channel_never_breaks_delivery(telegram_channel, delivered):
+    telegram_channel["fail"] = True
+    result = delivery.deliver_notification("Hi", "there", user_id=ME)
+    assert result["ok"] is True
+    assert "telegram" not in result["channels_sent"]
+    assert result["web_push"] is True          # the other channel still delivered

@@ -22,7 +22,11 @@ import {
   type SettingsCardId,
 } from './settingsSections';
 
-const MEMBER_CARDS: SettingsCardId[] = ['notifications', 'change_password', 'pipeline_board', 'memory'];
+const MEMBER_CARDS: SettingsCardId[] = [
+  'notifications', 'change_password', 'pipeline_board', 'memory',
+  // #193. Linking YOUR phone is personal; the bot token stays admin-only below.
+  'telegram_link',
+];
 const ADMIN_ONLY_CARDS: SettingsCardId[] = [
   'branding', 'team', 'custom_fields', 'telegram', 'gmail',
   // #102 made the task-mode + todo-surface routes require_admin.
@@ -38,10 +42,10 @@ describe('settingsSections — the member/admin partition', () => {
     expect(visibleCardIds(false).sort()).toEqual([...MEMBER_CARDS].sort());
   });
 
-  it('shows an admin all ten cards, each exactly once', () => {
+  it('shows an admin all eleven cards, each exactly once', () => {
     const ids = visibleCardIds(true);
-    expect(ids).toHaveLength(10);
-    expect(new Set(ids).size).toBe(10);
+    expect(ids).toHaveLength(11);
+    expect(new Set(ids).size).toBe(11);
     expect(ids.sort()).toEqual([...MEMBER_CARDS, ...ADMIN_ONLY_CARDS].sort());
   });
 
@@ -50,6 +54,17 @@ describe('settingsSections — the member/admin partition', () => {
     for (const adminOnly of ADMIN_ONLY_CARDS) {
       expect(memberIds).not.toContain(adminOnly);
     }
+  });
+
+  it('offers a member their own Telegram link while the bot stays admin-only', () => {
+    // #193 dissolved the link-code redaction by dissolving its premise: a per-seat code
+    // claims the caller's OWN row, so there is nothing an admin gate would protect.
+    // Connecting the workspace's bot is still install configuration.
+    const memberIds = visibleCardIds(false);
+    expect(memberIds).toContain('telegram_link');
+    expect(memberIds).not.toContain('telegram');
+    const personal = SETTINGS_SECTIONS.find(s => s.id === 'personal');
+    expect(personal?.cards.map(c => c.id)).toContain('telegram_link');
   });
 
   it('never hides a personal card from an admin', () => {
@@ -131,7 +146,7 @@ describe('settingsSections — every card has a home', () => {
   it('declares each card id exactly once across all sections', () => {
     const ids = SETTINGS_SECTIONS.flatMap(s => s.cards).map(c => c.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(10);
+    expect(ids).toHaveLength(11);
   });
 
   it('gives every section a non-empty label', () => {
@@ -166,6 +181,7 @@ describe('SettingsCard is the only owner of card chrome', () => {
     'PipelineBoardCard.tsx': 'pipeline_board',
     'TaskModeCard.tsx': 'task_mode',
     'TeamSettings.tsx': 'team',
+    'TelegramLinkCard.tsx': 'telegram_link',
     'TelegramSettings.tsx': 'telegram',
   };
   const SETTINGS_CARD_FILES = Object.keys(CARD_FILE_IDS);
