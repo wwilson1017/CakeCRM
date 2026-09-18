@@ -23,10 +23,33 @@ The bell in the app chrome lists notifications and carries a count of the unread
 Dismiss them one at a time or all at once. The count is asked for separately from the list,
 so a long backlog still shows a true number rather than the size of one page.
 
+## Who sees a notification
+
+Every notification is one of two things, and the bell shows you both.
+
+- **Addressed to you.** Nobody else sees it, and nobody else can dismiss it. A nudge about a
+  deal or contact you own is the usual case.
+- **Sent to everyone.** The daily digest, anything Baker raises from a background turn, and a
+  nudge about a record with no owner — an unassigned deal going cold is everybody's problem.
+  A record owned by a deactivated account counts as unowned here, so its nudges reach the
+  people who can still act on it.
+
+One thing to know about the shared kind: dismissing it dismisses it for the whole team, the
+way every notification behaved before recipients existed. Your own notifications are yours to
+dismiss alone.
+
+Browser push follows the same rule. A notification addressed to you is pushed only to the
+browsers you have enabled push on; a shared one is pushed to everybody's. A browser binds
+itself to whoever is signed in on it the next time the app loads, so handing a laptop to a
+colleague does not leave your notifications arriving on it.
+
 ## Telegram
 
 If Telegram is linked, notifications also go to the linked chat. There is no per-channel
 switch — when Telegram is connected it is used.
+
+There is one install-wide Telegram link, not one per person, so the linked chat receives
+notifications whoever they were addressed to. Per-person links are a later piece of work.
 
 ## Testing it
 

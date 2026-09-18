@@ -16,6 +16,7 @@ import { BrandLogo } from './components/BrandLogo';
 import { NotificationsBell } from './components/NotificationsBell';
 import { ThemeToggle } from './components/ThemeToggle';
 import { ActiveRecordProvider } from './RecordContext';
+import { resyncPushSubscription } from '../core/notifications/pushSubscription';
 import { TaskModeContext, TaskModeSetterContext } from './gtd/TaskModeContext';
 import type { TaskMode } from './gtd/TaskModeContext';
 
@@ -180,7 +181,8 @@ export function CrmLayout() {
   // navigates away from the page that threw, or one crash freezes the content column for the
   // rest of the session while the nav around it keeps working.
   const location = useLocation();
-  const { logout, isAdmin } = useAuth();
+  const { logout, isAdmin, currentUser } = useAuth();
+  const currentUserId = currentUser?.id;
   const { branding, logoVersion } = useBranding();
   const [showMenu, setShowMenu] = useState(false);
   const [status, setStatus] = useState<DemoStatus | null>(null);
@@ -205,6 +207,18 @@ export function CrmLayout() {
       .then(setSetup)
       .catch(() => { /* keep unknown */ });
   }, []);
+
+  // #192 self-heal: re-stamp this browser's push subscription onto the signed-in seat.
+  // Keyed on the account id rather than mount alone, so a cross-tab login swap (the
+  // BroadcastChannel path in AuthContext, which does not remount this layout) also
+  // re-binds the endpoint. Fires nowhere else and prompts for nothing — see
+  // resyncPushSubscription. This layout hosts it rather than NotificationsBell because
+  // the bell is mounted twice (desktop + mobile) and Settings is a page most seats
+  // never open.
+  useEffect(() => {
+    if (!currentUserId) return;
+    void resyncPushSubscription();
+  }, [currentUserId]);
 
   // #102: the Settings card switches the mode, but this layout owns it for the whole
   // CRM and does not refetch on navigation — so the card pushes the new value up here

@@ -77,10 +77,15 @@ an owner, which drives the "Mine" filters and the per-rep numbers — but any me
 can still see and edit anything. There are no per-record permissions, deliberately.
 
 **Sharing to be aware of.** The assistant's chat history and memory, the Gmail
-connection, the Telegram link and notifications are still **shared by
-the whole install**. If the admin connects their personal Gmail, any seat can have
-the assistant read it. Per-user isolation of those surfaces is the next phase of
-this work.
+connection and the Telegram link are still **shared by the whole install**. If the
+admin connects their personal Gmail, any seat can have the assistant read it.
+Per-user isolation of those surfaces is the next phase of this work.
+
+**Notifications carry a recipient.** Each one is either addressed to a single seat —
+visible and dismissible only by them, and pushed only to their browsers — or sent to
+everyone, which is what the daily digest and a nudge about an unowned record do.
+Telegram is the exception and still install-wide: there is one linked chat, so it
+receives notifications whoever they were addressed to.
 
 ### Passwords
 

@@ -14,7 +14,10 @@
 //                   the backend's get_task_mode() gives when it cannot read the row.
 //   field absent  → a backend that predates #70 and has no GTD endpoints at all, where
 //                   'normal' is the only mode that renders a working page.
-// Nothing else about the layout (nav, onboarding, the AI nudge) is tested here.
+// Nothing else about the layout (nav, onboarding, the AI nudge) is tested here, EXCEPT
+// #192's push-subscription self-heal: the layout is where it is triggered, and the
+// migration's decision not to claim legacy push endpoints depends on it firing once per
+// signed-in seat. pushSubscription.test.ts pins what the function itself does.
 import { useState } from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -23,9 +26,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => vi.fn());
 vi.mock('../core/api/client', () => ({ api }));
+const currentUser = vi.hoisted(() => ({ value: { id: 7 } as { id: number } | null }));
 vi.mock('../core/auth/AuthContext', () => ({
-  useAuth: () => ({ logout: vi.fn(), isAdmin: true }),
+  useAuth: () => ({ logout: vi.fn(), isAdmin: true, currentUser: currentUser.value }),
 }));
+const resyncPushSubscription = vi.hoisted(() => vi.fn());
+vi.mock('../core/notifications/pushSubscription', () => ({ resyncPushSubscription }));
 vi.mock('../core/branding/BrandingContext', () => ({
   useBranding: () => ({ branding: { company_name: 'Test Co' }, logoVersion: 0 }),
 }));
@@ -45,6 +51,8 @@ let root: Root;
 
 beforeEach(() => {
   api.mockReset();
+  resyncPushSubscription.mockReset();
+  currentUser.value = { id: 7 };
   // jsdom ships no matchMedia, and useIsMobile calls it on mount. Stubbed per-file
   // rather than in a shared setup file, per the repo's "opt in per test file" rule.
   vi.stubGlobal('matchMedia', (query: string) => ({
@@ -219,5 +227,39 @@ describe('CrmLayout route Suspense boundary (#149)', () => {
     expect(container.textContent).toContain('ROUTE CONTENT');
     expect(container.querySelector('[role="status"]')).toBeNull();
     expect(container.textContent).toContain('Dashboard');
+  });
+});
+
+describe('CrmLayout push-subscription self-heal (issue #192)', () => {
+  beforeEach(() => {
+    api.mockResolvedValue({
+      empty: false, sample_data_loaded: true, show_onboarding: false,
+      ai_key_prompt_dismissed: true, task_mode: 'gtd',
+    });
+  });
+
+  it('re-stamps this browser onto the signed-in seat on load', async () => {
+    await renderLayout();
+    expect(resyncPushSubscription).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not fire while nobody is signed in', async () => {
+    // currentUser is null during the auth bootstrap. Re-POSTing then would stamp the
+    // endpoint with whatever the expiring session was, which is the state the self-heal
+    // exists to get out of.
+    currentUser.value = null;
+    await renderLayout();
+    expect(resyncPushSubscription).not.toHaveBeenCalled();
+  });
+
+  it('fires again when the signed-in account changes', async () => {
+    // The cross-tab BroadcastChannel login swap in AuthContext does not remount this
+    // layout, so a mount-only effect would leave the endpoint bound to the previous
+    // occupant of a shared browser.
+    await renderLayout();
+    expect(resyncPushSubscription).toHaveBeenCalledTimes(1);
+    currentUser.value = { id: 9 };
+    await renderLayout();
+    expect(resyncPushSubscription).toHaveBeenCalledTimes(2);
   });
 });

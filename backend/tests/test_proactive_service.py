@@ -31,8 +31,9 @@ def sent(monkeypatch):
     module attribute the import resolves to."""
     out = []
     import notifications.delivery as delivery
-    monkeypatch.setattr(delivery, "deliver_notification",
-                        lambda title, message: out.append((title, message)) or {"ok": True})
+    monkeypatch.setattr(
+        delivery, "deliver_notification",
+        lambda title, message, user_id=None: out.append((title, message, user_id)) or {"ok": True})
     return out
 
 
@@ -231,8 +232,8 @@ def test_nudges_claim_before_they_send(rec, sent, monkeypatch):
     order re-sends on every tick, which is far worse for a push notification."""
     from datetime import datetime, timezone
     monkeypatch.setattr(ps, "collect_nudge_candidates", lambda: [
-        {"entity_type": "deal", "entity_id": 1, "kind": ps.KIND_STALE_DEAL,
-         "title": "Deal going cold", "message": "m"},
+        {"entity_type": "deal", "entity_id": 1, "owner_id": None,
+         "kind": ps.KIND_STALE_DEAL, "title": "Deal going cold", "message": "m"},
     ])
     rec.fetchone_queue = [{"id": 10}]           # claim succeeds
     ps._maybe_send_nudges(datetime(2026, 8, 19, 9, 0, tzinfo=timezone.utc))
@@ -243,8 +244,8 @@ def test_nudges_claim_before_they_send(rec, sent, monkeypatch):
 def test_nudge_on_cooldown_is_not_sent(rec, sent, monkeypatch):
     from datetime import datetime, timezone
     monkeypatch.setattr(ps, "collect_nudge_candidates", lambda: [
-        {"entity_type": "deal", "entity_id": 1, "kind": ps.KIND_STALE_DEAL,
-         "title": "t", "message": "m"},
+        {"entity_type": "deal", "entity_id": 1, "owner_id": None,
+         "kind": ps.KIND_STALE_DEAL, "title": "t", "message": "m"},
     ])
     rec.fetchone_queue = [None]                 # upsert matched nothing → still cooling
     out = ps._maybe_send_nudges(datetime(2026, 8, 19, 9, 0, tzinfo=timezone.utc))
@@ -268,8 +269,8 @@ def test_nudges_are_capped_per_run(rec, sent, monkeypatch):
     from datetime import datetime, timezone
     monkeypatch.setattr(ps.settings, "proactive_max_nudges_per_run", 2)
     monkeypatch.setattr(ps, "collect_nudge_candidates", lambda: [
-        {"entity_type": "deal", "entity_id": i, "kind": ps.KIND_STALE_DEAL,
-         "title": "t", "message": "m"} for i in range(10)
+        {"entity_type": "deal", "entity_id": i, "owner_id": None,
+         "kind": ps.KIND_STALE_DEAL, "title": "t", "message": "m"} for i in range(10)
     ])
     rec.fetchone_queue = [{"id": i} for i in range(10)]
     out = ps._maybe_send_nudges(datetime(2026, 8, 19, 9, 0, tzinfo=timezone.utc))
@@ -284,9 +285,9 @@ def test_candidates_skip_deals_that_already_have_a_follow_up(monkeypatch):
     from crm import analytics_service
     monkeypatch.setattr(analytics_service, "get_stale_deals", lambda limit: {"deals": [
         {"id": 1, "title": "Handled", "value": 1.0, "stage": "lead",
-         "days_since_touch": 30, "has_open_task": True},
+         "days_since_touch": 30, "has_open_task": True, "owner_id": None},
         {"id": 2, "title": "Neglected", "value": 2.0, "stage": "lead",
-         "days_since_touch": 40, "has_open_task": False},
+         "days_since_touch": 40, "has_open_task": False, "owner_id": None},
     ]})
     monkeypatch.setattr(analytics_service, "get_contact_staleness", lambda limit: {"contacts": []})
     ids = [c["entity_id"] for c in ps.collect_nudge_candidates()]
@@ -298,8 +299,10 @@ def test_candidates_only_nudge_contacts_with_live_business(monkeypatch):
     from crm import analytics_service
     monkeypatch.setattr(analytics_service, "get_stale_deals", lambda limit: {"deals": []})
     monkeypatch.setattr(analytics_service, "get_contact_staleness", lambda limit: {"contacts": [
-        {"id": 1, "name": "No deals", "open_deals": 0, "days_since_contact": 90},
-        {"id": 2, "name": "Live deal", "open_deals": 1, "days_since_contact": 45},
+        {"id": 1, "name": "No deals", "open_deals": 0, "days_since_contact": 90,
+         "owner_id": None},
+        {"id": 2, "name": "Live deal", "open_deals": 1, "days_since_contact": 45,
+         "owner_id": None},
     ]})
     cands = ps.collect_nudge_candidates()
     assert [c["entity_id"] for c in cands] == [2]
@@ -313,7 +316,8 @@ def test_never_contacted_reads_as_never_not_none_days(monkeypatch):
     from crm import analytics_service
     monkeypatch.setattr(analytics_service, "get_stale_deals", lambda limit: {"deals": []})
     monkeypatch.setattr(analytics_service, "get_contact_staleness", lambda limit: {"contacts": [
-        {"id": 3, "name": "Never called", "open_deals": 2, "days_since_contact": None},
+        {"id": 3, "name": "Never called", "open_deals": 2, "days_since_contact": None,
+         "owner_id": None},
     ]})
     message = ps.collect_nudge_candidates()[0]["message"]
     assert "None" not in message

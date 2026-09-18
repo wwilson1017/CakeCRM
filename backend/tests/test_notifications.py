@@ -40,10 +40,12 @@ def wiring(monkeypatch):
     order = []
     created = {}
 
-    def create_notification(title, message, channels_sent=None, notification_id=None):
+    def create_notification(title, message, channels_sent=None, notification_id=None,
+                            user_id=None):
         order.append("create")
         created["id"] = "nid-1"
         created["channels_at_create"] = list(channels_sent or [])
+        created["user_id"] = user_id
         return "nid-1"
 
     def update_channels(nid, channels):
@@ -63,7 +65,7 @@ _SUB = {"endpoint": "https://push.example/abc", "p256dh": "p", "auth": "a", "use
 def test_creates_row_before_sending(wiring, monkeypatch):
     order, created = wiring
     _install_pywebpush(monkeypatch)
-    monkeypatch.setattr(subscriptions, "list_subscriptions", lambda: [_SUB])
+    monkeypatch.setattr(subscriptions, "list_subscriptions", lambda user_id=None: [_SUB])
     result = delivery.deliver_notification("Hi", "there")
     assert order[0] == "create" and order[-1] == "update"   # row first (R12)
     assert result["web_push"] is True
@@ -73,7 +75,7 @@ def test_creates_row_before_sending(wiring, monkeypatch):
 
 def test_no_subscriptions_still_logs(wiring, monkeypatch):
     order, created = wiring
-    monkeypatch.setattr(subscriptions, "list_subscriptions", lambda: [])
+    monkeypatch.setattr(subscriptions, "list_subscriptions", lambda user_id=None: [])
     result = delivery.deliver_notification("Hi", "there")
     assert result["channels_sent"] == []   # no push channel
     assert result["web_push"] is False
@@ -83,7 +85,7 @@ def test_no_subscriptions_still_logs(wiring, monkeypatch):
 def test_expired_subscription_pruned(wiring, monkeypatch):
     _wiring = wiring
     _install_pywebpush(monkeypatch, fail_status=410)
-    monkeypatch.setattr(subscriptions, "list_subscriptions", lambda: [_SUB])
+    monkeypatch.setattr(subscriptions, "list_subscriptions", lambda user_id=None: [_SUB])
     removed = []
     monkeypatch.setattr(subscriptions, "remove_subscription", lambda ep: removed.append(ep))
     result = delivery.deliver_notification("Hi", "there")
@@ -94,7 +96,7 @@ def test_expired_subscription_pruned(wiring, monkeypatch):
 def test_invalid_endpoint_skipped(wiring, monkeypatch):
     _install_pywebpush(monkeypatch)
     monkeypatch.setattr(subscriptions, "list_subscriptions",
-                        lambda: [{"endpoint": "http://insecure/x", "p256dh": "p", "auth": "a"}])
+                        lambda user_id=None: [{"endpoint": "http://insecure/x", "p256dh": "p", "auth": "a"}])
     result = delivery.deliver_notification("Hi", "there")
     assert result["web_push"] is False           # non-https endpoint never sent
 
@@ -102,7 +104,7 @@ def test_invalid_endpoint_skipped(wiring, monkeypatch):
 def test_telegram_stub_absent_is_false(wiring, monkeypatch):
     # No telegram module present (#7 not landed) → _send_telegram returns False,
     # never raises, and telegram is absent from channels_sent.
-    monkeypatch.setattr(subscriptions, "list_subscriptions", lambda: [])
+    monkeypatch.setattr(subscriptions, "list_subscriptions", lambda user_id=None: [])
     monkeypatch.setitem(sys.modules, "telegram", None)  # force ImportError on submodule import
     result = delivery.deliver_notification("Hi", "there")
     assert "telegram" not in result["channels_sent"]
@@ -111,7 +113,7 @@ def test_telegram_stub_absent_is_false(wiring, monkeypatch):
 def test_pywebpush_missing_degrades(wiring, monkeypatch):
     # Simulate pywebpush not installed → web push channel unavailable, no crash.
     monkeypatch.setitem(sys.modules, "pywebpush", None)
-    monkeypatch.setattr(subscriptions, "list_subscriptions", lambda: [_SUB])
+    monkeypatch.setattr(subscriptions, "list_subscriptions", lambda user_id=None: [_SUB])
     result = delivery.deliver_notification("Hi", "there")
     assert result["web_push"] is False
 
@@ -123,7 +125,7 @@ def test_create_notification_failure_never_raises(monkeypatch):
 
     monkeypatch.setattr(delivery.service, "create_notification", boom)
     monkeypatch.setattr(delivery.service, "update_channels", lambda *a, **k: None)
-    monkeypatch.setattr(subscriptions, "list_subscriptions", lambda: [])
+    monkeypatch.setattr(subscriptions, "list_subscriptions", lambda user_id=None: [])
     result = delivery.deliver_notification("Hi", "there")   # must not raise
     assert result["ok"] is True and result["notification_id"]
 
