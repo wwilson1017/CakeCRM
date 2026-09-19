@@ -691,15 +691,23 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   REQUIRED** `user_id` (`None` = no filter, for trusted internal callers only — required
   rather than defaulted so a future route cannot silently reopen the hole), and
   `engine.chat`/`resolve_confirmation` take a required keyword-only `user` for the same
-  reason. Migration `20260917173429` claims legacy rows for `MIN(id) WHERE role='admin'`
-  (a no-op on a fresh install, where the table is empty), and `users/bootstrap.py`
-  repeats the claim inside the transaction that seeds the first admin — the same thing
+  reason. Migration `20260917173429` claims legacy rows for
+  `MIN(id) WHERE role='admin' AND is_active` (a no-op on a fresh install, where the
+  table is empty), and `users/bootstrap.py` repeats the claim inside the transaction
+  that seeds the first admin — the same thing
   it already does for legacy `totp_config`/`trusted_devices` rows. **Both are needed:**
   an install upgrading straight from a pre-multi-user release runs
   `20260821100126_multi_user.sql` and this migration in ONE startup, before any admin
   exists, so the migration's subquery is NULL and never re-runs; without the bootstrap
   half that install's whole chat history would stay unowned, and an unowned conversation
-  is invisible to every seat. The column is `ON DELETE CASCADE`
+  is invisible to every seat. **`AND is_active` is load-bearing in the migration**
+  (and in `users.service.earliest_admin_id()`, which is the same expression and stamps
+  the seatless Telegram thread): access here is owner-only with no admin override, so
+  claiming history for a deactivated lowest-id admin would hand it to a seat nobody can
+  authenticate as. With no active admin the subquery is NULL, the UPDATE is a no-op and
+  the rows stay unowned — invisible, which is the fail-safe direction. The bootstrap
+  claim needs no such predicate: it stamps the admin row it just INSERTed as active, and
+  only ever runs on an install with no users at all. The column is `ON DELETE CASCADE`
   (personal data follows its person, the `totp_config` idiom, not `owner_id`'s SET
   NULL). Telegram has no seat until B4 (#193), so `telegram/store` stamps
   `users.service.earliest_admin_id()` — the same expression — as a stopgap.

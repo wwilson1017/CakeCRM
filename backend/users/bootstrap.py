@@ -142,6 +142,12 @@ def ensure_bootstrap_admin() -> dict | None:
         # would silently disappear from the sidebar with no way back short of SQL.
         # Idempotent against M1: both are WHERE user_id IS NULL, and this whole function
         # returns early once any user exists, so it can only ever see legacy rows.
+        #
+        # M1's claim carries an `AND is_active` predicate; this one deliberately does NOT
+        # need one and must not grow one. It stamps `admin_id` — the row INSERTed six
+        # lines up with `is_active` TRUE — not the result of a MIN(id) lookup, so the
+        # owner is active by construction. There is no admin to be stale about: the
+        # COUNT(*) guard above means this runs only on an install with no users at all.
         cur.execute(
             "UPDATE assistant_conversations SET user_id = %s WHERE user_id IS NULL",
             (admin_id,),

@@ -423,6 +423,85 @@ def test_the_legacy_claim_is_a_no_op_with_no_admin(pg_db):
         pg_execute("DELETE FROM users")
 
 
+def test_the_legacy_claim_skips_a_deactivated_admin(pg_db):
+    """The lowest-id admin may be a seat nobody can log into.
+
+    Deactivation is a supported, one-click action, and #191 made conversations
+    owner-only with NO admin override. So claiming the install's entire pre-#191 chat
+    history for a deactivated admin would not merely mis-attribute it — it would put it
+    permanently out of reach of every seat that can actually sign in, with no in-app way
+    back. The claim therefore reads "the lowest-id admin who counts", the same predicate
+    the last-active-admin guard in update_user() already uses.
+
+    The fixture is the trap itself: the deactivated admin keeps the LOWEST id, so a claim
+    that dropped the predicate would pick it and this assertion is the only thing that
+    can tell the two apart.
+    """
+    from assistant import history
+    from core.postgres import pg_execute, pg_fetchone
+    from users import service as users_service
+    pg_execute("DELETE FROM users")
+    retired = users_service.create_user(
+        "retired@example.com", "Retired", "pw-retired-123", role="admin")
+    current = users_service.create_user(
+        "current@example.com", "Current", "pw-current-123", role="admin")
+    try:
+        # Deactivated through the real service call, so the last-active-admin guard is
+        # part of the setup rather than something the test routes around.
+        assert users_service.update_user(retired["id"], is_active=False)["is_active"] is False
+        assert retired["id"] < current["id"]
+
+        conv = history.create_conversation(user_id=None)
+        _run_claim_migration()
+        assert pg_fetchone(
+            "SELECT user_id FROM assistant_conversations WHERE id = %s",
+            (conv["id"],))["user_id"] == current["id"]
+        # ... and the seat that got it can genuinely reach it, which is the whole point.
+        assert history.conversation_exists(conv["id"], user_id=current["id"]) is True
+        assert history.conversation_exists(conv["id"], user_id=retired["id"]) is False
+
+        # The helper that stamps seatless conversations must agree with the migration:
+        # users/service.earliest_admin_id() documents itself as the identical expression,
+        # and a drift there hands the Telegram thread to the unreachable seat instead.
+        assert users_service.earliest_admin_id() == current["id"]
+    finally:
+        pg_execute("DELETE FROM users")
+
+
+def test_the_legacy_claim_leaves_rows_unowned_when_every_admin_is_deactivated(pg_db):
+    """No ACTIVE admin: the subquery is NULL, and that must be a no-op, not a failure.
+
+    update_user() refuses to deactivate the last active admin, so this state is only
+    reachable by a route it does not police — a direct database edit, a restore from an
+    older dump, or a release predating that guard. A migration cannot assume its input
+    was produced by the current code, and it runs during boot: raising here would wedge
+    the install on every subsequent start.
+
+    Unowned is the right resting place. Every read path filters on user_id, so the rows
+    go invisible rather than to a member or to a seat that cannot sign in.
+    """
+    from assistant import history
+    from core.postgres import pg_execute, pg_fetchone
+    from users import service as users_service
+    pg_execute("DELETE FROM users")
+    users_service.create_user("gone@example.com", "Gone", "pw-gone-123456", role="admin")
+    member = users_service.create_user(
+        "leftover@example.com", "Leftover", "pw-leftover-12", role="member")
+    try:
+        pg_execute("UPDATE users SET is_active = FALSE WHERE role = 'admin'")
+        assert users_service.earliest_admin_id() is None
+
+        conv = history.create_conversation(user_id=None)
+        _run_claim_migration()  # must complete, not raise
+        assert pg_fetchone(
+            "SELECT user_id FROM assistant_conversations WHERE id = %s",
+            (conv["id"],))["user_id"] is None
+        # Not handed to the one seat that CAN log in, either: the claim is admin-scoped.
+        assert [c["id"] for c in history.list_conversations(user_id=member["id"])] == []
+    finally:
+        pg_execute("DELETE FROM users")
+
+
 def test_the_bootstrap_claims_legacy_conversations_on_a_skipped_version_upgrade(pg_db):
     """The one case migration M1 cannot cover, end to end against a real database.
 
