@@ -215,12 +215,20 @@ async def _run_turn(provider, registry, system_prompt, user_message: str,
             else:
                 result = await registry.execute_tool(name, args)
 
-            # Fence exactly as the interactive loop does. An unattended turn has no human
-            # to notice a planted instruction, and its read allowlist reaches Baker's
-            # context files (Gmail is excluded outright — BACKGROUND_EXCLUDED_TOOLS) —
-            # a stored `Headline:` line is attacker-authored text that must arrive as
-            # DATA, not as raw JSON (issue #72).
-            content = delimiters.fence_tool_result(name, json.dumps(result, default=str))
+            # Fence exactly as the interactive loop does — same function, so the two can
+            # never disagree about what the model is shown. An unattended turn has no
+            # human to notice a planted instruction, and its read allowlist reaches
+            # Baker's context files (Gmail is excluded outright —
+            # BACKGROUND_EXCLUDED_TOOLS) and, in GTD mode, `todo_list`: a stored
+            # `Headline:` line or a stranger's quick-capture text is attacker-authored
+            # and must arrive as DATA, not as raw JSON (issues #72, #204).
+            #
+            # The taint flag is deliberately DISCARDED here. It exists to route later
+            # writes through the human-confirmation gate, and this mode has no such gate —
+            # its protection is the allowlist (read tools + `notify_user`), which holds
+            # whatever the text says. Fencing `todo_list` per ROW rather than by tool name
+            # is what lets it stay background-callable at all (see delimiters).
+            content, _tainted = delimiters.fence_tool_result(name, result)
             results.append({"tool_use_id": tool_use_id, "tool_name": name, "content": content})
             tool_log.append({"tool": name, "args": _short(args, 200), "result": _short(result, 500)})
             if terminated:

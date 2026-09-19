@@ -63,7 +63,12 @@ _RECORDED_CONTEXT_MARKER = "<recorded_context"
 # tool result as a plain string on a user message would otherwise let file content choose
 # which memories surface. Same defence _usable already applies to Gmail content.
 _NON_USER_MARKERS = _UNTRUSTED_MARKERS + (_RECORDED_CONTEXT_MARKER,)
-# Defined in delimiters so the background runner fences identically (issue #72).
+# Both sets live in delimiters, which owns the fencing for BOTH loops (issue #72) and
+# since #204 decides the taint too — `fence_tool_result` reads them, not this module. They
+# are re-exported here because two coupling guards read them through the engine
+# (test_gmail_guard pins every Gmail read into the first; test_context_files_security pins
+# every context read into the second), and those guards are the reason a new
+# attacker-controlled read cannot land un-fenced.
 _CONTEXT_READ_TOOLS = delimiters.CONTEXT_READ_TOOLS
 # Read tools whose output is untrusted external content. Reading it must not let a
 # prompt injection inside that content drive an unconfirmed write in power mode.
@@ -361,10 +366,10 @@ async def _chat_impl(
 
     # ── Main tool-execution loop ───────────────────────────────────────────────
     iteration = 0
-    # Set once an untrusted-external read (e.g. Gmail) runs during THIS turn; from then
-    # on EVERY write routes through confirmation, in every mode and routine tier
-    # included (issues #8, #180). Prior-turn untrusted content is already covered by
-    # `context_is_untrusted` above.
+    # Set once a read returns THIRD-PARTY text during THIS turn — an external read
+    # (Gmail, #8) or any result carrying a public-capture row (#204). From then on EVERY
+    # write routes through confirmation, in every mode and routine tier included (#180).
+    # Prior-turn untrusted content is already covered by `context_is_untrusted` above.
     turn_has_untrusted_reads = False
     while iteration < MAX_ITERATIONS:
         iteration += 1
@@ -487,8 +492,9 @@ async def _chat_impl(
             #     that survives deleting the conversation;
             #   * untrusted content is in the assembled context, or the conversation
             #     carries the durable taint;
-            #   * an untrusted external read (Gmail) already ran THIS turn, so injected
-            #     instructions in that content can't auto-execute a write;
+            #   * a read returning THIRD-PARTY text already ran THIS turn — an external
+            #     read (Gmail), or one that returned a public-capture row (#204) — so
+            #     injected instructions in that content can't auto-execute a write;
             #   * we are in normal mode and the tool is not declared ROUTINE (#180).
             # The routine exemption appears exactly once, as a narrowing of the
             # normal-mode term, so it can never mask one of the terms above — that is
@@ -530,15 +536,25 @@ async def _chat_impl(
             t0 = time.monotonic()
             result = await registry.execute_tool(name, args)
             elapsed_ms = int((time.monotonic() - t0) * 1000)
-            content = json.dumps(result, default=str)
-            # An untrusted external read (Gmail) taints the rest of the turn and, via
-            # the nonce-fenced marker persisted below, later turns too — so a prompt
-            # injection in the email can't silently drive a power-mode write. The
-            # nonce fence (delimiters.wrap_untrusted_external) is forge-proof and the
-            # paired system-prompt instruction tells the model to treat it as data.
-            if name in _UNTRUSTED_SOURCE_TOOLS:
+            # ONE call decides what the model is shown and whether this result carried
+            # THIRD-PARTY text — shared with the background runner so the two loops can
+            # never disagree (delimiters.fence_tool_result). It covers three fences: a
+            # live external read (Gmail) wrapped whole by tool name; a public-capture row
+            # wrapped per ROW, because the same `todo_list`/`crm_list_tasks` call returns
+            # a stranger's inbox item beside the user's own (issue #204); and a
+            # context-file read, wrapped but deliberately NOT tainting — see
+            # _RECORDED_CONTEXT_MARKER.
+            #
+            # `result` itself is untouched and is what the browser gets as `tool_end`, so
+            # the tool-call preview shows the record rather than a wall of nonce tags.
+            content, tainted = delimiters.fence_tool_result(name, result)
+            # Third-party text taints the rest of the turn and, via the nonce-fenced
+            # marker persisted below, later turns too — so a prompt injection in an email
+            # or in a stranger's capture can't silently drive an unconfirmed write. The
+            # fence is forge-proof and the paired system-prompt instruction tells the
+            # model to treat what is inside it as data.
+            if tainted:
                 turn_has_untrusted_reads = True
-                content = delimiters.wrap_untrusted_external(name, content)
                 # Recorded NOW, not when compaction later removes this row: the row is
                 # saved with its tool_calls and its results merged afterwards, so a
                 # compaction pass reading in between would find no marker and record no
@@ -550,12 +566,6 @@ async def _chat_impl(
                     await asyncio.to_thread(history.mark_untrusted_seen, conversation_id)
                 except Exception as e:
                     logger.warning("assistant.chat: failed to record untrusted taint: %s", e)
-            # A context-file read hands back a whole document Baker (or the user) wrote
-            # earlier, which may quote an email or an upload. Fence it as DATA for the
-            # same reason the prompt-injected copy is fenced (issue #72) — but do NOT
-            # taint the turn: see _RECORDED_CONTEXT_MARKER.
-            elif name in _CONTEXT_READ_TOOLS:
-                content = delimiters.wrap_recorded_context(content)
             results.append({"tool_use_id": tool_use_id, "tool_name": name, "content": content})
             persisted = True
             try:
@@ -567,13 +577,14 @@ async def _chat_impl(
                 "type": "tool_end", "tool": name, "tool_use_id": tool_use_id,
                 "result": result, "elapsed_ms": elapsed_ms,
             })
-            if not persisted and (is_write or name in _UNTRUSTED_SOURCE_TOOLS):
+            if not persisted and (is_write or tainted):
                 # Fail closed when the result couldn't be recorded, for either of two
                 # reasons: (a) a write executed but its result is unrecorded (a later
                 # rebuild would show the stub and tempt the model to redo the
-                # mutation), or (b) an untrusted external read (Gmail) whose taint
-                # marker didn't persist — a later turn would then miss the
-                # untrusted-context confirmation and could auto-execute an injected write.
+                # mutation), or (b) a read that returned third-party text (Gmail, or a
+                # public-capture row) whose taint marker didn't persist — a later turn
+                # would then miss the untrusted-context confirmation and could
+                # auto-execute an injected write.
                 yield _sse({"type": "error", "error": "The result could not be fully saved — please reload the conversation."})
                 return
 
@@ -774,6 +785,30 @@ def resolve_confirmation(registry, conversation_id: str, tool_use_id: str, decis
             )
     else:  # deny
         result = {"status": history.DENIED_STATUS}
+    # An approved write ECHOES the row it wrote, and that row can be a public-capture one:
+    # `todo_update` on a stranger's inbox item answers with the stranger's title, which
+    # the continuation turn then reads back out of history (issue #204). So this path
+    # TAINTS but deliberately does NOT fence.
+    #
+    # The taint is what carries the security property: from here on `context_is_untrusted`
+    # is true for the rest of the conversation, so every write — routine tier included —
+    # routes through the confirmation gate, and an injection riding that echo can at worst
+    # raise an Approve card the human sees. Fencing the persisted content as well was
+    # tried and reverted: `history.get_tool_result` is what the `already_resolved` branch
+    # above returns to the /confirm caller VERBATIM, so a double-click on Approve would
+    # have shown the human nonce markup where the record's real text belongs. The model
+    # loses only the prose framing on one already-approved write, and the static
+    # untrusted-content instruction still tells it what a fence means everywhere else.
+    _fenced, tainted = delimiters.fence_tool_result(tool, result)
+    if tainted:
+        # Best-effort, exactly as in the main loop — losing this must not strand an
+        # approved write. The next turn's in-context scan is not a backstop here (nothing
+        # was fenced), so this write IS the record; a failure degrades to the pre-#204
+        # behaviour rather than to something worse.
+        try:
+            history.mark_untrusted_seen(conversation_id)
+        except Exception as e:
+            logger.warning("assistant.confirm: failed to record untrusted taint: %s", e)
     history.merge_tool_result(claimed_msg_id, tool_use_id, tool, json.dumps(result, default=str))
     return {"tool": tool, "decision": decision, "result": result}
 

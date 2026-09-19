@@ -228,3 +228,46 @@ def test_the_assembled_gist_is_byte_identical_across_turns(monkeypatch):
     second = assembly.assemble_messages(_EchoProvider(), "c1")
     assert first == second
     assert _SUMMARY_NONCE in str(first)
+
+
+# ── #204: a fence nested in JSON arrives with its quotes escaped ─────────────────
+
+def test_reclose_matches_a_json_escaped_row_fence():
+    """REGRESSION: `fence_public_rows` wraps ONE FIELD of a public-capture row and
+    `fence_tool_result` then serializes the whole row, so the persisted fence reads
+    `id=\\"<nonce>\\"`. Patterns spelling the quote bare match none of those, and
+    `_reclose_untrusted` silently appends nothing — leaving the model exactly the open
+    fence this machinery exists to close. Verified red against the bare-quote patterns.
+    """
+    content, tainted = delimiters.fence_tool_result(
+        "todo_list", {"todos": [{"id": 1, "title": "X" * 400, "source": "capture_web"}]}
+    )
+    assert tainted is True
+    assert '\\"' in content, "the row fence must be JSON-escaped, or this pins nothing"
+
+    cut = content[:200]
+    assert delimiters.UNTRUSTED_EXTERNAL_MARKER in cut and "</untrusted" not in cut
+
+    reclosed = assembly._reclose_untrusted(cut)
+    assert reclosed.startswith("</untrusted_external_content id=")
+    # ...and spelled the way the OPENING tag was, or the model cannot pair them.
+    assert '\\"' in reclosed
+
+
+def test_reclose_still_matches_the_unescaped_whole_payload_fence():
+    """The control: a Gmail read fences the WHOLE payload outside `json.dumps`, so its
+    quotes are bare. Widening the pattern must leave that byte-identical."""
+    content, _ = delimiters.fence_tool_result("gmail_search", {"messages": ["Y" * 400]})
+    cut = content[:200]
+    reclosed = assembly._reclose_untrusted(cut)
+    assert reclosed.startswith('</untrusted_external_content id="')
+    assert "\\" not in reclosed
+
+
+def test_reclose_appends_nothing_when_the_escaped_fence_is_already_closed():
+    """The no-double-close rule has to hold in the escaped spelling too — the
+    'already closed?' test compares against a tag it builds itself."""
+    content, _ = delimiters.fence_tool_result(
+        "todo_list", {"todos": [{"id": 1, "title": "short", "source": "capture_web"}]}
+    )
+    assert assembly._reclose_untrusted(content) == ""

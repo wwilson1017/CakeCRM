@@ -151,14 +151,21 @@ the residual risks, is in `docs/SYNC.md`.
   is checked against it, so a sign-in you interrupted cannot resurrect a connection
   you just removed, and a draft approved after you switch Google accounts is
   refused instead of landing in the new account.
-- **Untrusted content.** Email you receive is untrusted input. If the assistant
-  reads email during a turn, any write actions it proposes for the rest of that turn
-  are routed through the human-confirmation gate in **every** mode — "power", and the
-  routine tier that normal mode otherwise runs without asking. The same holds for a
-  conversation carrying an uploaded document, and it survives compaction: once a thread
-  has seen untrusted content, later turns keep confirming even after the message that
-  carried it has aged out. So a malicious email cannot silently drive the assistant to
-  create a draft or change CRM data without your approval.
+- **Untrusted content.** Email you receive is untrusted input, and so is anything typed
+  into the public quick-capture page described below. If the assistant reads either
+  during a turn, any write actions it proposes for the rest of that turn are routed
+  through the human-confirmation gate in **every** mode — "power", and the routine tier
+  that normal mode otherwise runs without asking. The same holds for a conversation
+  carrying an uploaded document, and it survives compaction: once a thread has seen
+  untrusted content, later turns keep confirming even after the message that carried it
+  has aged out. So a malicious email — or an instruction a stranger files in your inbox —
+  cannot silently drive the assistant to create a draft or change CRM data without your
+  approval.
+  The two are marked differently, because a mailbox is external while a todo list is
+  yours: an email read fences the whole result, while a captured item is fenced
+  **row by row**, so your own todos still read as ordinary records and only the ones a
+  stranger could have written are marked as data. A turn that lists your todos and finds
+  none of them costs you nothing.
 
 ## What the assistant does without asking (the routine tier)
 
@@ -245,9 +252,18 @@ history and may appear in referrer headers or a proxy log. Treat it like a passw
   touches it. Request bodies are size-checked before they are parsed. Every response
   carries `Cache-Control: no-store` and `X-Robots-Tag: noindex, nofollow`.
 - **What a stranger can do at worst**, with capture public: add junk to your inbox,
-  up to the rate limit. That text is data — it is never treated as instructions,
-  including by the background assistant turn, whose ceiling remains a single
-  notification with no ability to write to the CRM.
+  up to the rate limit. Three controls keep that from becoming more than junk. Text
+  captured this way is wrapped in a tamper-proof marker wherever the assistant reads it,
+  with the instruction that content inside such a marker is data to read and never a
+  command to follow. A conversation that has actually read one of those items confirms
+  **every** write for the rest of that thread, so an instruction hidden in captured text
+  cannot reach even the routine tier without your approval. And the unattended assistant
+  (heartbeat, nudges) is capped by its allowlist at read tools plus a single
+  notification — it cannot write to the CRM at all, whatever it reads.
+  Be precise about what the marker is and is not: it is an instruction to the model, not
+  an enforced boundary, so treat the confirmation gate and the background allowlist as the
+  controls that actually hold. Setting a capture token closes the surface to strangers
+  outright, and is the right move if the URL has been shared widely.
 
 ## The assistant's self-written identity (`soul.md`)
 

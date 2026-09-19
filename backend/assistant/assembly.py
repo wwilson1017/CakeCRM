@@ -43,14 +43,26 @@ DEFAULT_BUDGET_TOKENS = 128_000
 HEAD_ROWS = 2
 
 _TRUNCATION_MARKER = "\n…[truncated]"
-_UPLOAD_OPEN_RE = re.compile(r'<untrusted_file_content id="([0-9a-f]+)"')
-_EXTERNAL_OPEN_RE = re.compile(r'<untrusted_external_content id="([0-9a-f]+)"')
+# Each pattern captures TWO groups: whether the tag's quotes are backslash-escaped, and
+# the nonce. The escape group exists because since #204 a fence can sit INSIDE a JSON
+# string value — `delimiters.fence_public_rows` wraps one field of a public-capture row
+# and `fence_tool_result` then serializes the whole row, so the persisted text reads
+# `id=\"<nonce>\"`. A pattern spelling the quote bare matches none of those, and
+# `_reclose_untrusted` then silently appends nothing: exactly the open fence that
+# function exists to close. The `\1` backreference ties the two quotes together, so a
+# half-escaped lookalike matches neither spelling, and the group is empty for every
+# pre-#204 fence (uploads and Gmail whole-payload), where behaviour is byte-identical.
+_ESCAPED_QUOTE = r'(\\?)'
+_UPLOAD_OPEN_RE = re.compile(rf'<untrusted_file_content id={_ESCAPED_QUOTE}"([0-9a-f]+)\1"')
+_EXTERNAL_OPEN_RE = re.compile(rf'<untrusted_external_content id={_ESCAPED_QUOTE}"([0-9a-f]+)\1"')
 # Built from the tag `delimiters` owns rather than a fourth copy of the literal — that
 # module's own comment calls a second copy a silent bug, because the test keeps passing
 # and just stops matching. (The two untrusted tags above predate this and still spell
 # themselves out; they are left alone rather than widened into this diff.)
 _SUMMARY_TAG = delimiters.CONVERSATION_SUMMARY_TAG
-_SUMMARY_OPEN_RE = re.compile(rf'<{_SUMMARY_TAG} id="([0-9a-f]+)"')
+# A gist is never JSON-nested, so its escape group is always empty; it carries one only
+# so the three patterns can share `_reclose_untrusted`'s single loop.
+_SUMMARY_OPEN_RE = re.compile(rf'<{_SUMMARY_TAG} id={_ESCAPED_QUOTE}"([0-9a-f]+)\1"')
 # A complete gist sitting at the very START of a row — the shape _apply_compaction
 # writes. The backreference makes it a matched pair rather than two lookalike tags.
 _SUMMARY_BLOCK_AT_START_RE = re.compile(
@@ -72,8 +84,11 @@ def _reclose_untrusted(cut: str) -> str:
         # oversized row can cut it open exactly like an upload block.
         (_SUMMARY_OPEN_RE, _SUMMARY_TAG),
     ):
-        for nonce in open_re.findall(cut):
-            close = f'</{tag} id="{nonce}">'
+        for esc, nonce in open_re.findall(cut):
+            # The close tag has to be spelled the way the OPEN tag was: appending a bare
+            # `</… id="n">` after an escaped `id=\"n\"` opener closes nothing the model
+            # can pair up, and the "already closed?" test below would miss a real close.
+            close = f'</{tag} id={esc}"{nonce}{esc}">'
             if close not in cut:
                 reopened.append(close)
     return "\n".join(reopened)
