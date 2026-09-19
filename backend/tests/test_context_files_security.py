@@ -150,12 +150,15 @@ def test_the_background_loop_fences_the_same_tools_as_the_engine():
 
     assert background.delimiters is delimiters
     for tool in delimiters.CONTEXT_READ_TOOLS:
-        fenced = delimiters.fence_tool_result(tool, '{"headline": "x"}')
+        fenced, tainted = delimiters.fence_tool_result(tool, {"headline": "x"})
         assert fenced.startswith("<recorded_context id=")
+        # Baker's own notes are fenced but never taint — see engine._RECORDED_CONTEXT_MARKER.
+        assert tainted is False
     for tool in delimiters.UNTRUSTED_SOURCE_TOOLS:
-        fenced = delimiters.fence_tool_result(tool, '{"body": "x"}')
+        fenced, tainted = delimiters.fence_tool_result(tool, {"body": "x"})
         assert fenced.startswith("<untrusted_external_content id=")
-    assert delimiters.fence_tool_result("crm_dashboard", "{}") == "{}"
+        assert tainted is True
+    assert delimiters.fence_tool_result("crm_dashboard", {}) == ("{}", False)
 
 
 # ── The prompt split ──────────────────────────────────────────────────────────────
