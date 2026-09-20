@@ -26,7 +26,7 @@ import {
 import { IdentitySettings } from './IdentitySettings';
 import { MessageBubble } from './MessageBubble';
 import { QuickActions } from './QuickActions';
-import type { ActiveRecordContext, ToolMode } from './types';
+import type { ActiveRecordContext, SettingsPageContext, ToolMode } from './types';
 import { useAssistantChat } from './useAssistantChat';
 import { useConversations } from './useConversations';
 
@@ -51,10 +51,14 @@ const MODES: { mode: ToolMode; label: string; title: string }[] = [
 export interface AssistantPanelBodyProps {
   /** CRM record open behind this surface; null/omitted → generic panel. */
   recordContext?: ActiveRecordContext | null;
+  /** Settings section open behind this surface (#200); null/omitted off that page. */
+  pageContext?: SettingsPageContext | null;
 }
 
-export default function AssistantPanelBody({ recordContext = null }: AssistantPanelBodyProps = {}) {
-  const chat = useAssistantChat(recordContext);
+export default function AssistantPanelBody({
+  recordContext = null, pageContext = null,
+}: AssistantPanelBodyProps = {}) {
+  const chat = useAssistantChat(recordContext, pageContext);
   const { conversations, load: loadConversations, openConversation: fetchConversation, remove: removeConversation } = useConversations();
   const [input, setInput] = useState('');
   const [files, setFiles] = useState<File[]>([]);
@@ -179,9 +183,10 @@ export default function AssistantPanelBody({ recordContext = null }: AssistantPa
 
       {/* Composer */}
       <div style={{ borderTop: `1px solid ${LINE}`, padding: 8 }}>
-        {recordContext && (
+        {(recordContext || pageContext) && (
           <QuickActions
             record={recordContext}
+            page={pageContext}
             onPick={(p) => { if (!chat.isStreaming) chat.sendMessage(p); }}
             disabled={chat.isStreaming}
           />

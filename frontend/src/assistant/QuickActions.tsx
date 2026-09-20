@@ -6,7 +6,8 @@
 // never "send" (SECURITY.md trust guarantee).
 
 import { ACCENT_TEXT, ACCENT_SOFT, INK_DIM, LINE } from '../shared/styles';
-import type { ActiveRecordContext, ActiveRecordType } from './types';
+import { SETTINGS_SECTIONS, type SettingsSectionId } from '../crm/settingsSections';
+import type { ActiveRecordContext, ActiveRecordType, SettingsPageContext } from './types';
 
 // Sales-oriented starters (issue #22). Each maps to a working practice the assistant
 // is instructed to follow in identity.SALES_GUIDE — recap before an interaction, always
@@ -47,23 +48,86 @@ const STARTERS: Record<ActiveRecordType, string[]> = {
   ],
 };
 
+// Settings-section starters (issue #200 — help manual phase 2). Every chip is a
+// question the built-in manual answers, so a click lands on help_search →
+// help_read_topic rather than on general CRM folklore. The last chip in each section is
+// the same one everywhere on purpose: it is the one question the manual CANNOT answer,
+// because it is about this install rather than about the product, and it is what
+// crm_get_setup_status exists for.
+//
+// Same generic-prose rule as STARTERS above (tests/test_prompt_genericization.py).
+const SETTINGS_STARTERS: Record<SettingsSectionId, string[]> = {
+  personal: [
+    'How do notifications work?',
+    'How do I set up two-factor authentication?',
+    'What is set up on this install?',
+  ],
+  assistant: [
+    'How does your long-term memory work?',
+    'What is the difference between the task modes?',
+    'What is set up on this install?',
+  ],
+  workspace: [
+    'How do custom fields work?',
+    'How do I add someone to the team?',
+    'How do I change the branding?',
+    'What is set up on this install?',
+  ],
+  integrations: [
+    'How do I connect Gmail?',
+    'What can you do with my email?',
+    'How do I set up Telegram?',
+    'What is set up on this install?',
+  ],
+};
+
+const SECTION_LABELS: Record<string, string> = Object.fromEntries(
+  SETTINGS_SECTIONS.map((s) => [s.id, s.label]),
+);
+
 interface QuickActionsProps {
-  record: ActiveRecordContext;
+  /** CRM record open behind the drawer. */
+  record?: ActiveRecordContext | null;
+  /** Settings section open behind the drawer (#200). */
+  page?: SettingsPageContext | null;
   onPick: (prompt: string) => void;
   disabled?: boolean;
 }
 
-export function QuickActions({ record, onPick, disabled }: QuickActionsProps) {
+/** Nothing open behind the drawer → no chips (the caller renders nothing either).
+ *  A record wins over a page when both are somehow present: it is the more specific
+ *  thing to be looking at, and the record starters are about the work rather than
+ *  about the product. */
+function starters(record?: ActiveRecordContext | null, page?: SettingsPageContext | null):
+  { heading: string; prompts: string[] } | null {
+  if (record) {
+    return {
+      heading: `Viewing: ${record.label || `${record.recordType} #${record.recordId}`}`,
+      prompts: STARTERS[record.recordType],
+    };
+  }
+  if (page) {
+    return {
+      heading: `Settings — ${SECTION_LABELS[page.section] ?? page.section}`,
+      prompts: SETTINGS_STARTERS[page.section],
+    };
+  }
+  return null;
+}
+
+export function QuickActions({ record, page, onPick, disabled }: QuickActionsProps) {
+  const picked = starters(record, page);
+  if (!picked) return null;
   return (
     <div style={{ marginBottom: 8 }}>
       <div style={{
         fontSize: 11, color: INK_DIM, marginBottom: 6,
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       }}>
-        Viewing: {record.label || `${record.recordType} #${record.recordId}`}
+        {picked.heading}
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-        {STARTERS[record.recordType].map((p) => (
+        {picked.prompts.map((p) => (
           <button
             key={p}
             onClick={() => onPick(p)}

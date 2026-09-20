@@ -1137,6 +1137,27 @@ CRM_TOOL_DEFS = [
         },
         "kind": "integration",
     },
+    # Install setup status (issue #200). A READ — there are no settings WRITE tools and
+    # there must not be: an API key or an OAuth secret must never flow through chat
+    # history, and a wrong settings write is install-wide where a wrong record write is
+    # one record. Keyless, like every other CRM tool.
+    {
+        "name": "crm_get_setup_status",
+        "writes": False,
+        "description": (
+            "Check what is actually configured on this CRM install: whether an AI "
+            "provider is ready and which one, whether Gmail is connected or its "
+            "connection has broken, whether a Telegram bot is configured and this seat "
+            "has a chat linked, which task mode is active, and how many custom field "
+            "definitions exist per entity type. Use it before explaining how to use a "
+            "feature, so you never walk the user through something that was never set "
+            "up — and before suggesting they connect something that already is. "
+            "A field that comes back null means it could NOT be read: say so, and do "
+            "not tell the user to go and set that thing up."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+        "kind": "crm",
+    },
 ]
 
 
@@ -1701,6 +1722,18 @@ def crm_update_company(company_id: int, **kwargs) -> dict:
     return result
 
 
+# ── Install setup status (issue #200) ─────────────────────────────────────────
+
+def crm_get_setup_status() -> dict:
+    """Structured install configuration. Thin delegate — the assembly and its
+    unknown-vs-off discipline live in ``crm.setup_status_service``, which is imported
+    lazily so building the tool registry never pulls in the provider, Gmail and Telegram
+    modules on a turn that will not call this."""
+    from crm.setup_status_service import get_setup_status
+
+    return get_setup_status()
+
+
 # ── Analytics ─────────────────────────────────────────────────────────────────
 
 def crm_dashboard() -> dict:
@@ -2020,6 +2053,8 @@ TOOL_EXECUTORS = {
     "crm_set_company_fields": crm_set_company_fields,
     "crm_get_deal_fields": crm_get_deal_fields,
     "crm_set_deal_fields": crm_set_deal_fields,
+    # Install setup status
+    "crm_get_setup_status": crm_get_setup_status,
     # Backwards compat alias — a legacy 'note' logs an activity (unchanged); the
     # editable notes thread is crm_add_note.
     "crm_log_note": crm_log_activity,

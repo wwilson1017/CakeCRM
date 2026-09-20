@@ -8,6 +8,7 @@ Bearer header, which a browser EventSource cannot set).
 
   POST   /api/assistant/chat                  — stream a turn (SSE); {} messages = continuation;
                                                  optional validated `context` (open CRM record, #14)
+                                                 and `page` (open settings section, #200)
   POST   /api/assistant/chat/upload           — same, multipart (payload + files)
   POST   /api/assistant/confirm               — approve/deny a pending write (idempotent)
   GET    /api/assistant/conversations         — list (own only)
@@ -71,11 +72,34 @@ class ChatContext(BaseModel):
     record_id: Annotated[int, Field(strict=True, gt=0, le=2_147_483_647)]
 
 
+class SettingsPageContext(BaseModel):
+    """The settings section the user has open — the second prompt context seam (#200).
+
+    A SEPARATE optional field from ``context``, never a widening of ``ChatContext``: the
+    record boundary stays byte-for-byte what it is, and the two answer different
+    questions (which record vs. which page), so a turn may carry either or both.
+
+    Both fields are Literals, which is the whole defence: only a value from a closed set
+    crosses the seam, anything else is a clean 422, and the English the model reads is
+    built server-side by ``identity.build_page_note`` from a hardcoded table — never from
+    client text. ``section`` restates the four ids declared in
+    ``frontend/src/crm/settingsSections.ts``; that restatement is deliberate, because a
+    seam that accepted whatever the client called a section would not be a closed set.
+
+    Section-level, not card-level: a section is a stable, small, already-declared set,
+    while card ids churn with every settings feature (#193 adds one) and would put the
+    prompt's vocabulary on a moving target for no gain in answer quality.
+    """
+    page: Literal["settings"]
+    section: Literal["personal", "assistant", "workspace", "integrations"]
+
+
 class ChatRequest(BaseModel):
     messages: list[dict] = []
     conversation_id: str | None = None
     tool_mode: str = "normal"
     context: ChatContext | None = None
+    page: SettingsPageContext | None = None
 
 
 class ConfirmRequest(BaseModel):
@@ -124,6 +148,7 @@ async def chat(req: ChatRequest, user=Depends(get_current_user)):
         provider, registry, req.messages,
         tool_mode=req.tool_mode, conversation_id=req.conversation_id,
         context=req.context.model_dump() if req.context else None,
+        page=req.page.model_dump() if req.page else None,
         user=user,
     )
     return StreamingResponse(stream, media_type="text/event-stream", headers=_SSE_HEADERS)
@@ -163,6 +188,19 @@ async def chat_upload(
             context = ChatContext.model_validate(raw_context).model_dump()
         except ValidationError:
             raise HTTPException(status_code=400, detail="Invalid context.")
+
+    # The settings-page context threads IDENTICALLY (#200): same hand-rolled
+    # revalidation through the same Pydantic model, and the same 400 this path already
+    # answers for a bad `context` — 422 is what /chat gives, 400 is this endpoint's
+    # local contract for a malformed hand-parsed payload, and the two seams must not
+    # disagree about which one a bad enum gets.
+    page = None
+    raw_page = data.get("page")
+    if raw_page is not None:
+        try:
+            page = SettingsPageContext.model_validate(raw_page).model_dump()
+        except ValidationError:
+            raise HTTPException(status_code=400, detail="Invalid page.")
 
     # Reject when no provider is configured BEFORE parsing any file — a keyless
     # instance must not burn CPU extracting arbitrary PDF/DOCX/XLSX content.
@@ -205,7 +243,7 @@ async def chat_upload(
     stream = engine.chat(
         provider, registry, messages,
         tool_mode=tool_mode, conversation_id=conversation_id, title_hint=original_text,
-        context=context, user=user,
+        context=context, page=page, user=user,
     )
     return StreamingResponse(stream, media_type="text/event-stream", headers=_SSE_HEADERS)
 
