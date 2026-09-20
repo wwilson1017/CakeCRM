@@ -66,7 +66,8 @@ def _ai() -> tuple[bool | None, str | None]:
     would otherwise be reported here as "no AI provider configured", inviting Baker to
     walk someone through an AI Setup they already did. ``load_failed`` is the store
     telling us which of the two it was, read off the SAME load rather than inferred from
-    a separate preflight query that could succeed just before this one fails.
+    a separate preflight query that could succeed just before this one fails — and that
+    one load is handed to the factory too, so both fields describe one snapshot.
 
     The provider name is sanitized against the canonical list rather than echoed: the
     value reaches Postgres only through validated routes today, but this payload's claim
@@ -81,7 +82,12 @@ def _ai() -> tuple[bool | None, str | None]:
         store = CredentialStore()
         if store.load_failed:
             return None, None
-        ready = get_ai_provider() is not None
+        # ONE load, and the factory resolves against it. Calling `get_ai_provider()` bare
+        # would load a SECOND store, whose own failure `load_failed` cannot see — so a
+        # read that failed there came back as `ai_ready: false` beside an
+        # `active_provider` from the first snapshot. Sharing the store also means the two
+        # fields cannot straddle a concurrent connect or disconnect.
+        ready = get_ai_provider(store=store) is not None
         active = store.data.get("active_provider", "") or ""
         return ready, (active if active in ALL_PROVIDERS else "")
     except Exception:

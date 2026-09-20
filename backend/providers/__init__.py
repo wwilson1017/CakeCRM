@@ -16,6 +16,8 @@ def get_ai_provider(
     agent_provider: str | None = None,
     agent_model: str | None = None,
     agent_model_tier: str | None = None,
+    *,
+    store: CredentialStore | None = None,
 ) -> AIProvider | None:
     """
     Return an initialized AIProvider for the active (or specified) provider.
@@ -26,11 +28,18 @@ def get_ai_provider(
         agent_model: Optional per-agent model override (takes precedence over tier).
         agent_model_tier: Optional tier ("auto", "top", "mid", "light").
             For "auto", resolves to "top" here (triage runs separately later).
+        store: An ALREADY-LOADED CredentialStore to resolve against, instead of loading
+            a fresh one. Keyword-only and optional; every caller that omits it behaves
+            exactly as before. It exists for a caller that must report on the same
+            snapshot it resolves against — issue #200's setup-status read, which would
+            otherwise pair an `active_provider` from its own load with a readiness answer
+            from a second load that could have failed, or have seen a concurrent
+            connect/disconnect. The factory only READS the store.
 
     Returns None if no provider is configured OR the resolved provider's stored
     credentials are not usable (empty key / empty Ollama URL / mismatched type).
     """
-    store = CredentialStore()
+    store = store if store is not None else CredentialStore()
     profile_name, profile = store.get_active_profile(provider_override=agent_provider)
 
     if not profile:

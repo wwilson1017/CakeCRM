@@ -314,6 +314,41 @@ def test_a_failed_credential_load_is_unknown_not_unconfigured(sources):
     assert out["gmail_connected"] is True and out["task_mode"] == "gtd"
 
 
+def test_readiness_is_resolved_against_the_SAME_load_the_provider_name_came_from(sources):
+    """`get_ai_provider()` builds its own CredentialStore, which `load_failed` cannot see.
+    Bare, a failure in that second load came back as `ai_ready: false` beside an
+    `active_provider` from the first snapshot — and the two could also straddle a
+    concurrent connect or disconnect. One store, handed in, removes both."""
+    import providers.credentials
+
+    mine = _Store()
+    seen = {}
+    sources.setattr(providers.credentials, "CredentialStore", lambda: mine)
+    sources.setattr(providers, "get_ai_provider",
+                    lambda *a, **k: seen.setdefault("store", k.get("store")) and object())
+    out = svc.get_setup_status(user_id=7)
+    assert seen["store"] is mine, "the factory loaded a second store"
+    assert out["ai_ready"] is True and out["active_provider"] == "anthropic"
+
+
+def test_the_factory_really_accepts_a_store_and_does_not_reload(monkeypatch):
+    """Pinned against the real factory, not the fixture's stand-in: a keyword it quietly
+    ignored would leave the window open while every mock-based test stayed green."""
+    import providers
+    import providers.credentials
+
+    def _explode():
+        raise AssertionError("the factory loaded its own store")
+
+    monkeypatch.setattr(providers, "CredentialStore", _explode)
+    mine = providers.credentials.CredentialStore.__new__(providers.credentials.CredentialStore)
+    mine.load_failed = False
+    mine.data = {"active_provider": "", "active_model": "", "profiles": {}}
+    # Nothing configured, so it resolves to None without constructing an SDK client —
+    # what matters is that it got there without loading a store of its own.
+    assert providers.get_ai_provider(store=mine) is None
+
+
 def test_the_store_really_sets_that_flag_when_its_load_fails(monkeypatch):
     """Pinned against the real CredentialStore, not the fixture's stand-in — the fixture
     could agree with a flag nothing ever sets."""

@@ -675,7 +675,11 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   the read it was meant to vouch for fails, so it proves nothing (this was built as a probe
   first and corrected). Gmail brings its own (the seeded singleton means an EMPTY row can
   only be a failed read); `CredentialStore` gained a **`load_failed`** flag set in the same
-  `except` that returns the empty shape, which every other caller ignores; and task mode is
+  `except` that returns the empty shape, which every other caller ignores, **and
+  `get_ai_provider` gained a keyword-only `store=`** so the readiness answer and the
+  provider name come from ONE load — bare, the factory builds a second store whose failure
+  that flag cannot see, and the two fields could also straddle a concurrent
+  connect/disconnect; and task mode is
   read through `crm.service.get_crm_meta`, the failure-AWARE reader of that singleton, which
   lets the error propagate — so `setup_status_service` restates the mode-normalization rule
   rather than calling `get_task_mode`, and a test pins the two against the same stored value
