@@ -1137,6 +1137,27 @@ CRM_TOOL_DEFS = [
         },
         "kind": "integration",
     },
+    # Install setup status (issue #200). A READ — there are no settings WRITE tools and
+    # there must not be: an API key or an OAuth secret must never flow through chat
+    # history, and a wrong settings write is install-wide where a wrong record write is
+    # one record. Keyless, like every other CRM tool.
+    {
+        "name": "crm_get_setup_status",
+        "writes": False,
+        "description": (
+            "Check what is actually configured on this CRM install: whether an AI "
+            "provider is ready and which one, whether Gmail is connected or its "
+            "connection has broken, whether a Telegram bot is configured and this seat "
+            "has a chat linked, which task mode is active, and how many custom field "
+            "definitions exist per entity type. Use it before explaining how to use a "
+            "feature, so you never walk the user through something that was never set "
+            "up — and before suggesting they connect something that already is. "
+            "A field that comes back null means it could NOT be read: say so, and do "
+            "not tell the user to go and set that thing up."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+        "kind": "integration",
+    },
 ]
 
 
@@ -1701,6 +1722,23 @@ def crm_update_company(company_id: int, **kwargs) -> dict:
     return result
 
 
+# ── Install setup status (issue #200) ─────────────────────────────────────────
+
+def crm_get_setup_status(user_id: int | None = None) -> dict:
+    """Structured install configuration. Thin delegate — the assembly and its
+    unknown-vs-off discipline live in ``crm.setup_status_service``, which is imported
+    lazily so building the tool registry never pulls in the provider, Gmail and Telegram
+    modules on a turn that will not call this.
+
+    ``user_id`` is bound server-side in ``_identity_executors`` and stripped from the
+    model's arguments (#190). Exactly one field needs it — whether THIS seat has a linked
+    Telegram chat (#193) — and letting the model name a seat there would turn a status
+    read into a way to ask about somebody else's phone."""
+    from crm.setup_status_service import get_setup_status
+
+    return get_setup_status(user_id=user_id)
+
+
 # ── Analytics ─────────────────────────────────────────────────────────────────
 
 def crm_dashboard() -> dict:
@@ -2020,6 +2058,8 @@ TOOL_EXECUTORS = {
     "crm_set_company_fields": crm_set_company_fields,
     "crm_get_deal_fields": crm_get_deal_fields,
     "crm_set_deal_fields": crm_set_deal_fields,
+    # Install setup status
+    "crm_get_setup_status": crm_get_setup_status,
     # Backwards compat alias — a legacy 'note' logs an activity (unchanged); the
     # editable notes thread is crm_add_note.
     "crm_log_note": crm_log_activity,
@@ -2138,6 +2178,10 @@ def _identity_executors(user: dict | None) -> dict[str, Callable[..., dict]]:
         "crm_create_company": bind_server_args(crm_create_company, owner_id=user_id),
         "crm_create_deal": bind_server_args(crm_create_deal, owner_id=user_id),
         "crm_create_task": bind_server_args(crm_create_task, owner_id=user_id),
+        # Which seat is ASKING. A read, and the only per-person fact in its payload is
+        # whether this seat has a linked Telegram chat (#193) — bound rather than taken
+        # as an argument so the model cannot ask about another person's device.
+        "crm_get_setup_status": bind_server_args(crm_get_setup_status, user_id=user_id),
     }
     bound.update({
         name: bind_owner_filter(fn, user) for name, fn in (

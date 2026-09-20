@@ -18,6 +18,20 @@ vi.mock('../../core/api/client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../core/api/client')>()),
   api,
 }));
+// `useAuth` throws outside `AuthProvider`, and the launcher reads `isAdmin` to resolve
+// the settings section it reports to the drawer (#200). Mocked per the repo idiom
+// (`CrmLayout.test.tsx`) rather than wrapping every case in a provider that fetches.
+const isAdmin = vi.hoisted(() => ({ value: true }));
+vi.mock('../../core/auth/AuthContext', () => ({
+  useAuth: () => ({ isAdmin: isAdmin.value }),
+}));
+
+// The drawer body is lazy and heavy; stubbed so the props it is handed can be read
+// without booting the chat surface.
+const panelProps = vi.hoisted(() => ({ value: undefined as unknown }));
+vi.mock('../../assistant/AssistantPanelBody', () => ({
+  default: (props: unknown) => { panelProps.value = props; return null; },
+}));
 
 const { AssistantLauncher } = await import('./AssistantLauncher');
 const { MemoryRouter } = await import('react-router-dom');
@@ -46,10 +60,10 @@ afterEach(() => {
   container.remove();
 });
 
-function render(aiReady: boolean | null) {
+function render(aiReady: boolean | null, url = '/crm/pipeline') {
   act(() => {
     root.render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={[url]}>
         <ActiveRecordProvider>
           <AssistantLauncher aiReady={aiReady} />
         </ActiveRecordProvider>
@@ -93,5 +107,32 @@ describe('the launcher over an open detail panel', () => {
     expect(launcher().disabled).toBe(true);
     expect(zOf(launcher())).toBeLessThan(PANEL_Z);
     expect(launcher().hasAttribute('data-detail-companion')).toBe(false);
+  });
+});
+
+describe('the settings section behind the drawer (#200)', () => {
+  // The chips and the per-turn prompt note both key off this prop, so a launcher that
+  // reported a different section from the one on screen would be worse than none.
+  async function panel(url: string, admin: boolean) {
+    isAdmin.value = admin;
+    panelProps.value = undefined;
+    render(true, url);
+    // The body is behind React.lazy + Suspense; let the stubbed import resolve.
+    await act(async () => { await Promise.resolve(); });
+    return panelProps.value as { pageContext?: { page: string; section: string } | null };
+  }
+
+  it('hands the drawer the section the URL names', async () => {
+    expect((await panel('/crm/settings?section=integrations', true)).pageContext)
+      .toEqual({ page: 'settings', section: 'integrations' });
+  });
+
+  it('hands it the section a MEMBER actually lands on', async () => {
+    expect((await panel('/crm/settings?section=workspace', false)).pageContext)
+      .toEqual({ page: 'settings', section: 'personal' });
+  });
+
+  it('hands it nothing off the Settings page', async () => {
+    expect((await panel('/crm/pipeline', true)).pageContext).toBeNull();
   });
 });

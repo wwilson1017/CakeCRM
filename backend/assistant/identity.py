@@ -383,6 +383,72 @@ def build_context_note(record_type, record_id) -> str | None:
     )
 
 
+# Settings sections, restated for the prompt (issue #200 — help manual phase 2).
+#
+# The keys are the four section ids the Settings page declares in
+# `frontend/src/crm/settingsSections.ts`; the router's ``SettingsPageContext`` Literal is
+# the same set, and only a value from it ever crosses the seam. Each entry is a
+# (plain-words gloss, manual topic slugs) pair, and BOTH halves are hardcoded here — the
+# sentence handed to the model is assembled only from this table plus the validated
+# section id, never from client text. That is the same prompt-injection boundary
+# ``_CONTEXT_TOOLS`` draws for the record note.
+#
+# The topic slugs tie "where" to "how": knowing the user is in Integrations is only
+# useful if the model also knows which page of the manual answers questions about it.
+# They are pinned against the real help library by tests/test_help_library.py, so a
+# renamed or deleted topic fails CI rather than sending the model to a dead slug.
+_SETTINGS_SECTION_HELP: dict[str, tuple[str, tuple[str, ...]]] = {
+    "personal": (
+        "their own notification preferences, their password and two-factor "
+        "authentication, linking their own Telegram chat to you, and how the pipeline "
+        "board looks on this device",
+        ("settings/notifications", "settings/passwords-and-2fa",
+         "settings/telegram-link", "pipeline/stages"),
+    ),
+    "assistant": (
+        "your long-term memory, and the task mode the CRM runs in",
+        ("assistant/memory", "settings/task-mode", "tasks/modes"),
+    ),
+    "workspace": (
+        "branding, the team roster, and user-defined custom fields",
+        ("settings/branding", "settings/team", "settings/custom-fields"),
+    ),
+    "integrations": (
+        "the Telegram bot, and the Gmail connection",
+        ("settings/telegram", "settings/gmail"),
+    ),
+}
+
+
+def build_page_note(page, section) -> str | None:
+    """Server-constructed volatile sentence for the settings section the user has open (#200).
+
+    A SEPARATE seam from ``build_context_note`` — the record context stays byte-for-byte
+    what it is — but the same discipline: defense in depth behind the router's Pydantic
+    Literal, so anything that is not the known page with a known section returns None,
+    and the English is interpolated only from the hardcoded table above plus the
+    validated id. Never from client free text.
+
+    It also states that the assistant cannot change settings itself. There are no
+    settings write tools and there must not be: a key or an OAuth secret must never flow
+    through chat history, and a wrong settings write is install-wide where a wrong record
+    write is one record. Saying so in the note is what keeps the model from proposing one.
+    """
+    if not isinstance(page, str) or page != "settings":
+        return None
+    if not isinstance(section, str) or section not in _SETTINGS_SECTION_HELP:
+        return None
+    gloss, topics = _SETTINGS_SECTION_HELP[section]
+    return (
+        f"The user is on the CRM's Settings page, in the {section} section — "
+        f"{gloss}. When they say \"this page\", \"this setting\" or \"here\", that is "
+        f"what they mean. The manual topics covering it are "
+        f"{', '.join(topics)}; read one with help_read_topic before explaining how any "
+        f"of it works. You cannot change settings yourself — say where the control is "
+        f"and what it does, and let them make the change."
+    )
+
+
 _USER_NOTE_FIELD_MAX = 80
 
 
@@ -400,13 +466,53 @@ def _one_line(value, limit: int) -> str:
     return text[:limit].strip()
 
 
+# What the seat's ROLE changes — for ADVICE ONLY (issue #200).
+#
+# The server gates are the enforcement and stay exactly where they are: `require_admin`
+# on every install-configuration route, `bind_owner_filter` on the owner-scoped reads.
+# This table is deliberately NOT threaded into any tool executor, so it can never widen
+# or narrow what a seat may actually do. All it prevents is the failure where Baker
+# walks a member step-by-step through a flow whose route will refuse them.
+#
+# Keyed by the exact values of `users.service.ROLES`. An unrecognized role adds nothing,
+# which is the safe direction: no claim about what the user may do.
+_ROLE_NOTES: dict[str, str] = {
+    "admin": (
+        "They are an administrator of this install, so every install-wide setting is "
+        "theirs to change: AI providers and the active model, your personality, "
+        "branding, the team roster, custom field definitions, the task mode and its "
+        "no-login links, the Telegram bot, the Gmail connection, the daily digest and "
+        "nudges, and the sample-data and clear-everything operations."
+    ),
+    "member": (
+        "They are a member of this install, not an administrator. Install-wide settings "
+        "are admin-only for them — AI providers and the active model, your personality, "
+        "branding, the team roster, custom field definitions, the task mode and its "
+        "no-login links, connecting the Telegram bot, connecting Gmail, the daily digest "
+        "and nudges, and the sample-data and clear-everything operations. If they ask to "
+        "change one, say it needs an administrator rather than walking them through a "
+        "flow that will be refused. What IS theirs: their own password and two-factor "
+        "authentication, push notifications on their own device, linking or unlinking "
+        "their own Telegram chat, how the pipeline board looks for them, and every CRM "
+        "record — members create, edit and delete those freely."
+    ),
+}
+
+
 def build_user_note(user: dict | None) -> str:
-    """Server-built volatile sentence naming the seat the assistant is talking to (#191).
+    """Server-built volatile sentences naming the seat the assistant is talking to.
 
     Assembled HERE from the database row the auth dependency loaded — never from client
     text and never from a tool argument — for the same reason ``build_context_note``
     is: it is a prompt-injection boundary. Returns "" for an unattended turn (the
     heartbeat, the Telegram poller before B4), which appends nothing.
+
+    Two sentences since #200: WHO the seat is (#191) and WHAT ROLE it holds. The role
+    rides here rather than on its own ``build_system_prompt`` parameter because it is a
+    property of the very same row this function already reads — a second seam through
+    ``engine.chat`` would only give the same object two ways in. The two are emitted
+    INDEPENDENTLY: a row with no usable name or email still yields the role sentence,
+    because what the user may do is the half that changes the answer.
     """
     if not isinstance(user, dict):
         return ""
@@ -416,9 +522,16 @@ def build_user_note(user: dict | None) -> str:
         who = f"{name} ({email})"
     else:
         who = name or email
-    if not who:
-        return ""
-    return f"You are currently talking with {who}."
+    parts: list[str] = []
+    if who:
+        parts.append(f"You are currently talking with {who}.")
+    role = user.get("role")
+    # `.get` on a non-str key would be a TypeError for an unhashable value, so the
+    # isinstance check is load-bearing, not decorative — this reads a DB row today but
+    # it is a prompt boundary, and those fail closed.
+    if isinstance(role, str) and role in _ROLE_NOTES:
+        parts.append(_ROLE_NOTES[role])
+    return " ".join(parts)
 
 
 def render_personality(text: str) -> str:
@@ -494,6 +607,7 @@ def _task_mode() -> str:
 def build_system_prompt(
     identity: dict, context: dict | None = None, memory_context: str = "",
     soul: str = "", knowledge_context: str = "", user_note: str = "",
+    *, page: dict | None = None,
 ) -> tuple[str, str]:
     """Build the ``(static, volatile)`` system prompt for stream_turn().
 
@@ -509,7 +623,9 @@ def build_system_prompt(
     about the open record, plus — when provided (#5) — the ``memory_context`` block of
     long-term facts surfaced for this turn, plus — when provided (#72) — the fenced
     ``knowledge_context`` block, plus — when the turn has a signed-in seat (#191) — the
-    ``user_note`` naming who is asking. All are volatile ON PURPOSE: they change
+    ``user_note`` naming who is asking and what role they hold, plus — when the client
+    supplied a validated settings-page context (#200) — a server-built note naming the
+    settings section on screen and the manual topics that cover it. All are volatile ON PURPOSE: they change
     turn-to-turn and MUST NOT enter the static (cache_control) block, or a stale cached
     prefix would hide updates and thrash the cache. Context is per-turn only: it lives
     solely in this system prompt and is never persisted to history.
@@ -564,6 +680,13 @@ def build_system_prompt(
         note = build_context_note(context.get("record_type"), context.get("record_id"))
         if note:
             volatile = f"{volatile}\n\n{note}"
+    # A SEPARATE input from `context`, never a widening of it (#200): the record note
+    # and the page note answer different questions and a turn can legitimately carry
+    # both (a deal sheet open behind the Settings page) or either alone.
+    if page:
+        page_note = build_page_note(page.get("page"), page.get("section"))
+        if page_note:
+            volatile = f"{volatile}\n\n{page_note}"
     if memory_context:
         volatile = f"{volatile}\n\n{memory_context}"
     if knowledge_context:

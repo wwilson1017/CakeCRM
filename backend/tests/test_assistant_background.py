@@ -347,3 +347,28 @@ def test_a_public_capture_row_reaches_the_unattended_model_fenced(monkeypatch):
     assert '<untrusted_external_content id=' in content
     # The stranger's row is fenced; the user's own is handed over plainly.
     assert '"title": "Call the dentist"' in content
+
+
+# ── #200: the install setup-status read is deliberately background-callable ──────
+
+def test_setup_status_is_allowed_unattended_and_that_is_a_decision():
+    """`writes:False` means "changes nothing", not "safe unattended" (#114), so this
+    membership is asserted rather than left to the derivation.
+
+    It is allowed because of WHAT it returns: install configuration only — readiness
+    booleans, a provider enum, connection/link booleans, the task-mode enum and three
+    integer counts. No record content, no email address, no bot username, no key
+    material, nothing about any other seat. A background turn cannot write, and its one
+    externally visible action is a notify_user over the install's own channels — so the
+    worst a prompt-injected turn does with this is tell the install's owner that their
+    Gmail connection is broken, which is the useful case rather than a leak.
+    """
+    from assistant.registry import ToolRegistry
+    from crm.tools import CRM_TOOL_DEFS
+
+    d = next(t for t in CRM_TOOL_DEFS if t["name"] == "crm_get_setup_status")
+    assert d["writes"] is False
+    assert "crm_get_setup_status" not in background.BACKGROUND_EXCLUDED_TOOLS
+
+    reg = ToolRegistry(background=True)
+    assert "crm_get_setup_status" in background.background_allowlist(reg)

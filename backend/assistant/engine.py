@@ -163,6 +163,7 @@ async def chat(
     conversation_id: str | None = None,
     title_hint: str | None = None,
     context: dict | None = None,
+    page: dict | None = None,
     *,
     user: dict | None,
 ) -> AsyncGenerator[str, None]:
@@ -175,6 +176,13 @@ async def chat(
     ``context`` (the CRM record the user has open, e.g.
     ``{"record_type": "deal", "record_id": 3}``) is per-request/volatile: it is
     folded into the system prompt for this turn only and is NEVER persisted.
+
+    ``page`` (the settings section the user has open, e.g.
+    ``{"page": "settings", "section": "integrations"}``) is a SEPARATE input with the
+    same lifetime and the same rules (#200) — validated as an enum pair at the router,
+    rendered into English server-side, volatile, never persisted. Separate rather than
+    folded into ``context`` so the record boundary stays exactly what it is, and because
+    a turn can carry both.
 
     ``user`` is the seat this turn belongs to — keyword-only and REQUIRED (issue #191),
     because it decides which conversations the caller may resume and who a new one is
@@ -189,7 +197,7 @@ async def chat(
     stop).
     """
     try:
-        async for line in _chat_impl(provider, registry, messages, tool_mode, conversation_id, title_hint, context, user):
+        async for line in _chat_impl(provider, registry, messages, tool_mode, conversation_id, title_hint, context, page, user):
             yield line
     except Exception:
         logger.exception("assistant.chat crashed mid-stream")
@@ -204,6 +212,7 @@ async def _chat_impl(
     conversation_id: str | None = None,
     title_hint: str | None = None,
     context: dict | None = None,
+    page: dict | None = None,
     user: dict | None = None,
 ) -> AsyncGenerator[str, None]:
     if tool_mode not in _VALID_MODES:
@@ -362,6 +371,7 @@ async def _chat_impl(
         ident, context=context, memory_context=memory_block,
         soul=soul_block, knowledge_context=knowledge_block,
         user_note=identity.build_user_note(user),
+        page=page,
     )
 
     # ── Main tool-execution loop ───────────────────────────────────────────────

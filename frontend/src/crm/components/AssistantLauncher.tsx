@@ -12,13 +12,16 @@
  *                          issue #4). The drawer is context-aware (issue #14): the
  *                          CRM record open behind it (via RecordContext) is passed
  *                          in as recordContext for record-aware quick actions and
- *                          per-turn context injection. It stays mounted whenever AI
+ *                          per-turn context injection, and — on the Settings page —
+ *                          the open section is passed as pageContext (issue #200),
+ *                          derived here from the URL with the same helpers the page
+ *                          itself uses. It stays mounted whenever AI
  *                          is ready (hidden via transform when closed) so live chat
  *                          state survives open/close.
  */
 
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import BootFallback from '../../core/components/BootFallback';
 import ChunkErrorBoundary from '../../core/components/ChunkErrorBoundary';
 import { IconBot, IconX } from '../../shared/icons';
@@ -26,7 +29,9 @@ import {
   INK, INK_MUTE, LINE, BG_CARD, ACCENT, ACCENT_TEXT, ACCENT_INK, FONT_DISPLAY,
   SCRIM, SHADOW,
 } from '../../shared/styles';
+import { useAuth } from '../../core/auth/AuthContext';
 import { useActiveRecord } from '../RecordContext';
+import { settingsPageContext } from '../../assistant/pageContext';
 
 // The chat surface is the heaviest thing in the CRM (react-markdown + highlight.js), and it
 // is only ever needed once a provider is configured — so it is lazy (#149), imported by its
@@ -39,6 +44,17 @@ const AssistantPanelBody = lazy(() => import('../../assistant/AssistantPanelBody
 export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
   const navigate = useNavigate();
   const { record } = useActiveRecord();
+  const { isAdmin } = useAuth();
+  const { pathname } = useLocation();
+  const [searchParams] = useSearchParams();
+
+  // The settings section open behind the drawer (issue #200). The rules are pure and
+  // live in `assistant/pageContext` — see that module for why this is derived from the
+  // URL rather than published the way the record context is.
+  const pageContext = useMemo(
+    () => settingsPageContext(pathname, searchParams, isAdmin),
+    [pathname, searchParams, isAdmin],
+  );
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -188,7 +204,7 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
                   contains it here and never auto-reloads (#149). */}
               <ChunkErrorBoundary scope="panel">
                 <Suspense fallback={<BootFallback variant="panel" />}>
-                  <AssistantPanelBody recordContext={record} />
+                  <AssistantPanelBody recordContext={record} pageContext={pageContext} />
                 </Suspense>
               </ChunkErrorBoundary>
             </div>

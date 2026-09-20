@@ -66,13 +66,20 @@ def _resolved_default_model(provider: str) -> str:
 
 class CredentialStore:
     def __init__(self):
+        # True when the load below hit a database error and fell back to the empty
+        # shape. Reads still never raise — this only lets a caller that CARES about the
+        # difference tell "nobody has configured a provider" from "we could not look"
+        # (issue #200's setup-status read, whose contract is that a null field means
+        # unknown and never "off"). Every existing caller ignores it, unchanged.
+        self.load_failed = False
         self.data = self._load()
 
     def _load(self) -> dict:
         """Load active settings + provider profiles under a single REPEATABLE READ
         snapshot so a concurrent connect/disconnect can't split the two SELECTs
         (Postgres' default READ COMMITTED gives each statement its own snapshot).
-        On ANY DB error, log and return the empty shape (store reads never raise).
+        On ANY DB error, log, set ``load_failed`` and return the empty shape (store
+        reads never raise).
         Each row is decoded defensively so one malformed/undecryptable row can't
         sink the load (decrypt_value already returns "" on tamper/key-mismatch,
         which the factory then treats as unconfigured)."""
@@ -92,6 +99,7 @@ class CredentialStore:
                 provider_rows = cur.fetchall()
         except Exception as e:
             logger.error("Failed to load provider credentials: %s", e)
+            self.load_failed = True
             return {"active_provider": "", "active_model": "", "profiles": {}}
 
         profiles: dict[str, dict] = {}

@@ -21,12 +21,13 @@ def test_def_and_executor_counts():
     # Casey parity: search_deals, mark_deal_won/lost, archive_deal, merge_deals,
     # get_stale_deals, get_contact_staleness, find_duplicates, scan_gaps) + 2 (#22
     # Phase 2: get_deal_health, get_pipeline_analytics) + 2 (#70 task parity:
-    # crm_update_task, crm_delete_task) + 1 (#55 crm_bulk_move_deals) + N (sibling
+    # crm_update_task, crm_delete_task) + 1 (#55 crm_bulk_move_deals) + 1 (#200
+    # crm_get_setup_status) + N (sibling
     # additions) — SUM the additions, never overwrite the number. On rebase behind a
     # sibling that also adds a tool, recompute cumulative (do NOT keep-both a single
     # number). The executor count is always defs + 1 (crm_log_note alias).
-    assert len(CRM_TOOL_DEFS) == 47
-    assert len(TOOL_EXECUTORS) == 48
+    assert len(CRM_TOOL_DEFS) == 48
+    assert len(TOOL_EXECUTORS) == 49
     # Relative invariant (robust to any future additions): exactly one alias-only executor.
     assert len(TOOL_EXECUTORS) == len(CRM_TOOL_DEFS) + 1
 
@@ -864,3 +865,51 @@ def test_crm_recompute_lead_scores_passes_scope_and_wraps_error(monkeypatch):
         raise ValueError("bad scope")
     monkeypatch.setattr(scoring_service, "backfill_scores", boom)
     assert "error" in tools.crm_recompute_lead_scores("weird")
+
+
+# ── Install setup status (issue #200) ─────────────────────────────────────────
+
+def test_setup_status_is_a_read_with_no_arguments():
+    """A READ, and there is no settings WRITE tool beside it — an API key or an OAuth
+    secret must never flow through chat history, and a wrong settings write is
+    install-wide where a wrong record write is one record."""
+    d = next(t for t in CRM_TOOL_DEFS if t["name"] == "crm_get_setup_status")
+    assert d["writes"] is False
+    # Only a write may carry a confirmation tier; the registry fails loud otherwise.
+    assert "confirm_tier" not in d
+    assert d["input_schema"]["properties"] == {}
+    assert d["input_schema"].get("required", []) == []
+
+
+def test_setup_status_tells_the_model_what_a_null_field_means():
+    """The payload's nullable leaves are only useful if the model knows `null` is
+    "could not read" rather than "switched off"."""
+    d = next(t for t in CRM_TOOL_DEFS if t["name"] == "crm_get_setup_status")
+    assert "null" in d["description"]
+
+
+def test_no_settings_write_tool_exists():
+    for t in CRM_TOOL_DEFS:
+        if "setup_status" in t["name"] or "settings" in t["name"]:
+            assert t["writes"] is False, f"{t['name']} writes to install configuration"
+
+
+def test_setup_status_executor_delegates_to_the_service(monkeypatch):
+    import crm.setup_status_service as svc
+
+    monkeypatch.setattr(svc, "get_setup_status", lambda user_id=None: {"seat": user_id})
+    assert tools.crm_get_setup_status() == {"seat": None}
+    assert tools.crm_get_setup_status(user_id=7) == {"seat": 7}
+
+
+def test_the_model_cannot_name_the_seat_the_setup_status_answers_for(monkeypatch):
+    """The payload's one per-person field is whether THIS seat has a linked Telegram chat
+    (#193). The seat is bound server-side, and a model-supplied `user_id` is dropped —
+    otherwise a status read becomes a way to ask about somebody else's device."""
+    import crm.setup_status_service as svc
+
+    monkeypatch.setattr(svc, "get_setup_status", lambda user_id=None: {"seat": user_id})
+    _, executors = get_crm_tools(user={"id": 4})
+    assert executors["crm_get_setup_status"](user_id=99) == {"seat": 4}
+    _, unattended = get_crm_tools(user=None)
+    assert unattended["crm_get_setup_status"](user_id=99) == {"seat": None}

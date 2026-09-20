@@ -1,5 +1,7 @@
 // CakeCRM — assistant chat types (single built-in assistant).
 
+import type { SettingsSectionId } from '../crm/settingsSections';
+
 export type ToolMode = 'read-only' | 'normal' | 'power';
 
 export interface ToolCallInfo {
@@ -59,6 +61,18 @@ export interface ActiveRecordContext {
   /** Display only (drawer chip / quick-actions header). NEVER sent to the
    *  backend — the wire payload carries record_type + record_id exclusively. */
   label?: string;
+}
+
+// Settings page context (issue #200) -----------------------------------------
+
+/** The settings section open behind the drawer. A SEPARATE wire field from the record
+ *  context, never a widening of it — the two answer different questions and a turn can
+ *  carry both. `SettingsSectionId` is imported rather than restated so the drawer can
+ *  never name a section the Settings page does not have; the BACKEND restates it as a
+ *  Pydantic Literal on purpose, because that is the seam that has to be a closed set. */
+export interface SettingsPageContext {
+  page: 'settings';
+  section: SettingsSectionId;
 }
 
 // Raw server shapes (SSE events + history rows) ------------------------------

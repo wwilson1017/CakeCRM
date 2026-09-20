@@ -16,11 +16,21 @@ import type {
   ChatMessage,
   ContextUsage,
   ServerMessage,
+  SettingsPageContext,
   ToolCallInfo,
   ToolMode,
 } from './types';
 
 const API = '/api/assistant';
+
+/** What one turn was started against: the CRM record open behind the drawer and the
+ *  settings section on screen. Snapshotted per assistant message so a post-confirmation
+ *  continuation resumes the turn as it started, even if the user has navigated since.
+ *  Either half may be absent; `undefined` for a key means "send no such field". */
+interface TurnContext {
+  context?: { record_type: string; record_id: number };
+  page?: SettingsPageContext;
+}
 
 type SSEEvent = Record<string, unknown>;
 
@@ -97,7 +107,10 @@ function addConfirm(m: ChatMessage, evt: SSEEvent): ChatMessage {
   };
 }
 
-export function useAssistantChat(recordContext?: ActiveRecordContext | null) {
+export function useAssistantChat(
+  recordContext?: ActiveRecordContext | null,
+  pageContext?: SettingsPageContext | null,
+) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -120,6 +133,11 @@ export function useAssistantChat(recordContext?: ActiveRecordContext | null) {
   // sites; this ref tracks a prop, hence the layout-effect mirror.)
   const recordCtxRef = useRef<ActiveRecordContext | null>(null);
   useLayoutEffect(() => { recordCtxRef.current = recordContext ?? null; }, [recordContext]);
+  // The settings section open behind the drawer (issue #200), mirrored in the commit
+  // phase for exactly the same reason as the record above: a chip click must read the
+  // section currently on screen, not the one a passive effect had not caught up to.
+  const pageCtxRef = useRef<SettingsPageContext | null>(null);
+  useLayoutEffect(() => { pageCtxRef.current = pageContext ?? null; }, [pageContext]);
 
   // Per-assistant-message context snapshot, keyed by the client message id. A
   // confirmation belongs to a specific assistant message; its post-confirm
@@ -128,12 +146,22 @@ export function useAssistantChat(recordContext?: ActiveRecordContext | null) {
   // record before approving an earlier confirmation. A reload-resumed conversation has
   // no snapshot for its restored message id → context is OMITTED (never the live
   // record), so a reload can't rebind the resumed turn either.
-  const turnCtxByMsgRef = useRef<Record<string, { record_type: string; record_id: number } | undefined>>({});
+  // Both contexts travel together in one snapshot (#200): a continuation has to resume
+  // the turn as it started, and "which settings section was open" is as much a part of
+  // that as "which record" — the user can navigate between proposing a write and
+  // approving it.
+  const turnCtxByMsgRef = useRef<Record<string, TurnContext | undefined>>({});
 
   // Only type + id cross the wire — label is display-only (injection boundary).
-  const wireContext = useCallback((): { record_type: string; record_id: number } | undefined => {
+  const wireTurn = useCallback((): TurnContext => {
     const ctx = recordCtxRef.current;
-    return ctx ? { record_type: ctx.recordType, record_id: ctx.recordId } : undefined;
+    const page = pageCtxRef.current;
+    return {
+      context: ctx ? { record_type: ctx.recordType, record_id: ctx.recordId } : undefined,
+      // The section id is re-sent as-is because it is already a closed set on both
+      // sides; the backend re-validates it as a Literal regardless.
+      page: page ? { page: page.page, section: page.section } : undefined,
+    };
   }, []);
 
   const commit = useCallback((next: ChatMessage[]) => {
@@ -335,15 +363,16 @@ export function useAssistantChat(recordContext?: ActiveRecordContext | null) {
     const asstId = startAssistant([userMsg]);
     // Snapshot the record for THIS message's turn so its post-confirm continuation
     // reuses it (keyed by the assistant message id).
-    const turnContext = wireContext();
-    turnCtxByMsgRef.current[asstId] = turnContext;
+    const turn = wireTurn();
+    turnCtxByMsgRef.current[asstId] = turn;
     const payload = {
       messages: [{ role: 'user', content: text }],
       conversation_id: convIdRef.current,
       tool_mode: toolModeRef.current,
       // JSON.stringify drops an `undefined` value, so no key is added when no
-      // record is open — the wire shape stays back-compatible.
-      context: turnContext,
+      // record is open — the wire shape stays back-compatible. Same for `page`.
+      context: turn.context,
+      page: turn.page,
     };
     if (files && files.length) {
       const fd = new FormData();
@@ -353,21 +382,22 @@ export function useAssistantChat(recordContext?: ActiveRecordContext | null) {
     } else {
       void runStream(JSON.stringify(payload), false, asstId);
     }
-  }, [runStream, startAssistant, wireContext]);
+  }, [runStream, startAssistant, wireTurn]);
 
-  const continueTurn = useCallback((context: { record_type: string; record_id: number } | undefined) => {
+  const continueTurn = useCallback((turn: TurnContext | undefined) => {
     if (!convIdRef.current || abortRef.current) return;
     const asstId = startAssistant([]);
     // Carry the snapshot from the message being resumed, and propagate it forward: if
     // this continuation itself proposes a write, its own continuation reuses the same
-    // record. (undefined = no record, or an unknowable reload-resumed context.)
-    turnCtxByMsgRef.current[asstId] = context;
+    // record and page. (undefined = nothing open, or an unknowable reload-resumed turn.)
+    turnCtxByMsgRef.current[asstId] = turn;
     void runStream(
       JSON.stringify({
         messages: [],
         conversation_id: convIdRef.current,
         tool_mode: toolModeRef.current,
-        context,
+        context: turn?.context,
+        page: turn?.page,
       }),
       false,
       asstId,
