@@ -229,6 +229,70 @@ SALES_GUIDE = (
     "mailbox connected: say so plainly rather than offering to look."
 )
 
+# Light sales coaching (issue #201, phase 3 of #143). Its OWN static block, deliberately
+# not folded into SALES_GUIDE: that guide is operating discipline — how to work the
+# records — while this is advisory voice, how to turn the reads into a recommendation.
+# One can be reshaped without disturbing the other, and the split is visible in the
+# prompt the model actually reads.
+#
+# Static for the same reason SALES_GUIDE is: a user who writes a custom personality
+# REPLACES DEFAULT_PERSONALITY wholesale, so anything that lives there can be switched
+# off by accident. Coaching discipline — ground every claim in a read, never judge the
+# user, state how far back the data goes — is a behavior contract, so it rides the lever
+# no personality text can reach. It is also why coaching does NOT live in the help
+# library (#143 phase 1): a help topic is content the assistant MAY read, this is
+# behavior it MUST keep.
+#
+# Every behavior here is genericized from the blueprint sales agent, none of its text;
+# tests/test_prompt_genericization.py fails CI if a company, vertical or blueprint token
+# ever reaches this constant.
+COACHING_GUIDE = (
+    "## Coaching the selling\n"
+    "The user pulls coaching; you do not push it. When they ask what to do about a "
+    "deal, what needs attention, how the pipeline is doing, or how to play a situation, "
+    "coach them. Otherwise answer the question they actually asked.\n\n"
+    "**Read before you advise.** Pull the evidence first: crm_get_deal_health for one "
+    "deal, crm_get_stale_deals and crm_get_contact_staleness for silence, "
+    "crm_get_pipeline_analytics and crm_analytics for the funnel, crm_scan_gaps for "
+    "missing information. Ground every claim in something a tool actually returned and "
+    "say which signal you read it from — advice with no read behind it is a guess "
+    "wearing a recommendation's clothes. These are ordinary database reads: they work on "
+    "every install whatever else is or is not configured, so there is never a setup step "
+    "between the user and coaching.\n\n"
+    "**Lead with the one or two highest-leverage moves.** Open with what to do next and "
+    "why, not with a tour of every flag you found. Rank by what moves the number: a "
+    "large deal that has gone quiet outranks a small one missing a phone number. More "
+    "than three suggestions is a list nobody acts on — hold the rest until asked.\n\n"
+    "**Coach the process, not the outcome.** What you can see is process: whether a deal "
+    "has a next step, how long the silence has run, how long it has sat in one stage, "
+    "whether losses carry a reason, whether a contact and company are linked. Those are "
+    "worth coaching because the user can change them this week. Offer the concrete move "
+    "— the task to create, the call to make, the reason to capture.\n\n"
+    "**Check what the CRM knows, then ask about the rest.** Budget, timing, who actually "
+    "decides, what the competition is doing, why a deal really went quiet — some of that "
+    "may already be recorded, in the deal's own fields, in the custom_fields this "
+    "install defines, or in a note or past activity. Read those first: asking a user to "
+    "retype something they already wrote down is how an assistant stops being worth "
+    "talking to. What is genuinely not there, ask about rather than assume, and offer to "
+    "write the answer down (crm_add_note, crm_log_activity) so the next conversation "
+    "starts from it instead of from the same question.\n\n"
+    "**Say how far back the data really goes.** When crm_get_pipeline_analytics returns "
+    "history_covers_window false, the funnel is partial. Say the span it actually covers "
+    "before drawing any conclusion from it, and never turn a partial window into a "
+    "verdict about how the user sells. Coaching is exactly where that mistake does the "
+    "most damage: a number presented as the whole picture becomes advice acted on.\n\n"
+    "**The score describes the deal, never the person.** A lead score, a stale flag or a "
+    "stalled stage is a fact about a record. Do not grade the user, do not imply they "
+    "have been slack, and do not read effort into an empty field. Assume there is a good "
+    "reason for silence and ask what it is.\n\n"
+    "**Borrow a method when one is on the shelf.** The help library may carry playbooks "
+    "— summaries of well-known sales books and the methods in them. When you are "
+    "coaching or working out how to play a situation, search it with help_search, and "
+    "when you use a method, name the book it comes from so the user can weigh the advice "
+    "against its source. If the library has no playbook for the situation, coach from "
+    "this CRM's own signals rather than inventing a framework."
+)
+
 # Appended to the static block ONLY when GTD task mode is active (#70). Genericized
 # from the blueprint's coaching text.
 #
@@ -435,7 +499,8 @@ def build_system_prompt(
 
     Static: personality (``{name}`` interpolated to the fixed brand) + Baker's soul (#72)
     + the name contract (#71) + sales working
-    practices (+ the GTD working practices while task mode is GTD, #70) +
+    practices + the coaching voice (#201) (+ the GTD working practices while task mode
+    is GTD, #70) +
     confirmation note + memory framing + context-file framing + help-library
     framing (#143) + upload-safety instruction (cacheable — MUST stay byte-identical whether or not a
     record context or memory block is present, so Anthropic's prompt cache is never
@@ -468,7 +533,11 @@ def build_system_prompt(
     personality = render_personality(identity.get("personality") or DEFAULT_PERSONALITY)
     # NAME_NOTE sits immediately after the two identity texts and before every other
     # contract: it is the first thing neither the user nor the assistant may override.
-    blocks = [personality, soul, NAME_NOTE, SALES_GUIDE]
+    # COACHING_GUIDE sits immediately after SALES_GUIDE: operating discipline first,
+    # then the advisory voice built on top of it. Separate blocks on purpose (#201) —
+    # one can be reshaped without touching the other — but both static, so a custom
+    # personality cannot switch either off.
+    blocks = [personality, soul, NAME_NOTE, SALES_GUIDE, COACHING_GUIDE]
     # GTD mode swaps the task tool surface, so the working practices have to swap with
     # it — coaching the model to use crm_create_task while only todo_* is advertised
     # is how a turn stalls. Read fail-safe: an unreadable mode is 'gtd' (#102).

@@ -13,6 +13,12 @@ import type { ActiveRecordContext, ActiveRecordType } from './types';
 // name a next step, log what happened, close deals with a reason — so a chip and the
 // system prompt pull in the same direction. Generic by rule: no industry, product, or
 // company wording may appear here (tests/test_prompt_genericization.py enforces it).
+//
+// The last chip on the deal and company contexts is a COACHING starter (issue #201):
+// it asks for the advisory turn identity.COACHING_GUIDE describes — read the health,
+// staleness and analytics signals first, then lead with the highest-leverage move —
+// rather than for a summary or a write. It sits last so the everyday actions stay
+// first under the thumb.
 const STARTERS: Record<ActiveRecordType, string[]> = {
   deal: [
     'Summarize this deal',
@@ -22,6 +28,7 @@ const STARTERS: Record<ActiveRecordType, string[]> = {
     // Replaces the narrower "Has this deal gone quiet?": crm_get_deal_health answers
     // that and the rest of the picture (score, stuck-in-stage, overdue, missing links).
     'How healthy is this deal?',
+    'What is my plan to win this deal?',
   ],
   contact: [
     'Summarize this contact',
@@ -36,6 +43,7 @@ const STARTERS: Record<ActiveRecordType, string[]> = {
     'Which deals here need attention?',
     'Draft a follow-up email to a contact at this company',
     'Add a note about this company',
+    'Where should I focus in this company?',
   ],
 };
 

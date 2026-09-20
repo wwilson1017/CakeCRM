@@ -291,3 +291,73 @@ def test_the_user_note_is_volatile_and_leaves_the_cached_prefix_alone():
     # Anthropic prompt cache).
     assert static_a == static_b
     assert "Ada" in volatile_b and "Ada" not in volatile_a
+
+
+# --- the coaching voice (#201, phase 3 of #143) --------------------------------------
+#
+# POSITION, not presence — the NAME_NOTE/HELP_NOTE treatment. What makes the coaching
+# discipline unswitchable is where it sits, so that is what is asserted.
+
+
+def test_coaching_guide_is_in_the_cacheable_static_half():
+    static, volatile = identity.build_system_prompt({"name": "Baker", "personality": ""})
+    assert identity.COACHING_GUIDE in static
+    assert identity.COACHING_GUIDE not in volatile
+
+
+def test_coaching_guide_follows_the_contracts_it_does_not_outrank():
+    """It comes after the identity texts, the name contract and the sales guide — so no
+    personality or soul text can move it — and before the upload-safety instruction,
+    which stays last. SALES_GUIDE first is the deliberate order: operating discipline,
+    then the advisory voice built on top of it."""
+    from assistant import delimiters
+
+    static, _ = identity.build_system_prompt(
+        {"name": "Baker", "personality": "You are Ace, a helper."},
+        soul="I am Ace and I always have been.",
+    )
+    assert static.index(identity.NAME_NOTE) < static.index(identity.COACHING_GUIDE)
+    assert static.index(identity.SALES_GUIDE) < static.index(identity.COACHING_GUIDE)
+    assert static.index("You are Ace, a helper.") < static.index(identity.COACHING_GUIDE)
+    assert static.index("I am Ace and I always have been.") < static.index(identity.COACHING_GUIDE)
+    assert static.index(identity.COACHING_GUIDE) < static.index(
+        delimiters.UPLOAD_SAFETY_INSTRUCTION)
+
+
+def test_coaching_guide_survives_a_custom_personality():
+    """The whole reason it is a static constant: a user who writes their own personality
+    REPLACES DEFAULT_PERSONALITY wholesale, and coaching discipline must not go with it."""
+    static, _ = identity.build_system_prompt(
+        {"name": "Baker", "personality": "You are a laconic robot."}
+    )
+    assert identity.COACHING_GUIDE in static and "laconic robot" in static
+
+
+def test_coaching_guide_is_its_own_block_not_part_of_the_sales_guide():
+    """#201 asks for a separate block precisely so one can be reshaped without the other.
+    Folding the text into SALES_GUIDE would satisfy every assertion above by accident."""
+    assert identity.COACHING_GUIDE not in identity.SALES_GUIDE
+    assert identity.SALES_GUIDE not in identity.COACHING_GUIDE
+    static, _ = identity.build_system_prompt({"name": "Baker", "personality": ""})
+    # Joined by the blank line build_system_prompt puts between blocks, not run together.
+    assert f"{identity.SALES_GUIDE}\n\n{identity.COACHING_GUIDE}" in static
+
+
+def test_coaching_guide_names_the_reads_it_tells_the_model_to_make():
+    """Every tool it names must be a real registered tool: a guide that coaches the model
+    toward a ghost tool is worse than no guide, and renames happen."""
+    import re
+
+    from crm.tools import get_crm_tools
+    from help.tools import HELP_TOOL_DEFS
+
+    registered = {d["name"] for d in get_crm_tools()[0]} | {d["name"] for d in HELP_TOOL_DEFS}
+    named = set(re.findall(r"\b(?:crm|help)_[a-z_]+\b", identity.COACHING_GUIDE))
+    assert named, "the guide should name the reads it expects"
+    assert named <= registered, f"unregistered tools named: {sorted(named - registered)}"
+
+
+def test_coaching_guide_keeps_the_partial_history_caveat():
+    """The issue calls presenting a partial funnel as the whole picture the worst way to
+    get coaching wrong, so the flag is named in the text rather than left implied."""
+    assert "history_covers_window" in identity.COACHING_GUIDE
