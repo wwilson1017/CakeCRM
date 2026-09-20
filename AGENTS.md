@@ -776,7 +776,8 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   make that guard's own vacuity precondition false and let it pass without testing
   anything — and it gained an assertion that an unattended registry carries no Gmail
   tools at all.
-  **Writing a PROTECTED context file is admin-only, also since #194** (Decision 1d):
+  **The REST write to a PROTECTED context file is admin-only since #194** (Decision 1d)
+  — the REST write, and deliberately not every write:
   `context_files/router.put_context_file` 403s a non-admin whose NORMALIZED filename is
   in `service.PROTECTED_FILES`. In-handler on purpose, not a route-level
   `require_admin` — the same route serves member-writable `topics/` and `daily/` writes,
@@ -785,7 +786,16 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   which is a genuine route-level gate). Normalization is load-bearing: gating the raw
   path would be bypassed by typing `SOUL.MD`. Reads stay member-open — visibility is the
   Memory page's whole point — delete already refused protected files for everyone, and
-  the assistant's own tool path is unchanged (a protected write still always confirms).
+  the assistant's own tool path is unchanged. **State that last one precisely, because it
+  bounds the guarantee:** `get_context_file_tools()` takes no user and advertises
+  `write_context_file` to every registry, so ANY seat can still ask the assistant to
+  rewrite `soul.md`, and the control on that path is the always-confirm rule
+  (`context_files.tools.requires_confirmation`, which holds in power mode too) rather
+  than a role. The gate closes the SILENT path — a member overwriting the file from a
+  form — and leaves the loud one to the confirmation card. Closing the tool path too
+  would mean threading `user` into that source the way #194 threads it into Gmail, and
+  the approved Phase B plan scoped this to REST; the docs must therefore say "the Memory
+  page", never "nobody but an admin can change soul.md".
   `MemoryPage` renders those two files read-only for a member so the 403 is never the
   first thing they learn. The dead `MULTI_USER_ENABLED` flag was deleted — grep found
   only its own definition and the docstring advertising it.

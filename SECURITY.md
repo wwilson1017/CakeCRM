@@ -305,13 +305,23 @@ Five things bound that risk:
   confirmation contract and safety instructions are also assembled *after* the soul
   text, so a rewritten soul can add to who the assistant is but cannot override how
   it behaves.
-- **Only an admin can edit them.** Since issue #194, writing `soul.md` or `MEMORY.md`
-  through the Memory page is admin-only — a member sees both files read-only and the
-  server refuses the write with a 403. The assistant's personality is already
-  admin-only, and these two files are the other half of the same standing instruction,
-  so they are held to the same bar. Everything else on that page — topic files and
-  daily notes — stays open to every seat, and *reading* the protected files does too:
-  seeing what the assistant knows is the point of the page.
+- **Editing them directly is admin-only.** Since issue #194, writing `soul.md` or
+  `MEMORY.md` **through the Memory page** is admin-only — a member sees both files
+  read-only and the REST endpoint refuses the write with a 403. The assistant's
+  personality is already admin-only, and these two files are the other half of the same
+  standing instruction, so the direct editor is held to the same bar. Everything else on
+  that page — topic files and daily notes — stays open to every seat, and *reading* the
+  protected files does too: seeing what the assistant knows is the point of the page.
+
+  Be precise about what that gate does and does not cover, because the two paths differ:
+  **any seat can still ask the assistant to rewrite either file**, and that write is
+  governed by the confirmation rule above rather than by role — it always stops and shows
+  you the new content first, in every mode, and the approver is whoever is in that
+  conversation. So the admin gate closes the silent path (a member overwriting the file
+  from a form) and the always-confirm rule covers the loud one. Closing the tool path to
+  members as well is deliberately not done here: it would need the same identity the
+  Gmail gate uses, and it is a separate decision about what a member's assistant may do
+  on their behalf.
 - **Changes are visible.** Every file on the Memory page shows who last wrote it
   ("Baker" or "You") and when, so an unexpected rewrite is discoverable rather than
   silent.

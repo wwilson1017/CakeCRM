@@ -73,7 +73,7 @@ Add the rest of your team at **Settings → Workspace → Team**. Two roles:
   the destructive operations (clear-all, sample data, backfills). Two things the
   assistant does are admin-only too: using the connected Gmail mailbox (unless the
   install shares it — see below) and editing the assistant's own `soul.md` and
-  `MEMORY.md`, which every seat can still read.
+  `MEMORY.md` from the Memory page, which every seat can still read.
 
 **Ownership is not a permission.** Every contact, company, deal and task can carry
 an owner, which drives the "Mine" filters and the per-rep numbers — but any member
