@@ -5,6 +5,12 @@
  * OAuth app credentials (showing the exact redirect URI to register), connect
  * (full-page redirect to Google), and connected (email + disconnect). The OAuth
  * callback lands back on /crm/settings?gmail=connected|error&reason=… for a toast.
+ *
+ * The connected state also carries the install's mailbox-sharing policy (#194). There is
+ * one mailbox per install, so by default only admin seats are offered the Gmail tools;
+ * this checkbox is how an install that deliberately runs one shared inbox opts every seat
+ * in. The card is admin-only already (settingsSections), so the control needs no gate of
+ * its own — the route behind it is require_admin regardless.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -26,6 +32,7 @@ interface GmailStatus {
   client_id: string;
   client_secret_present: boolean;
   scopes: string[];
+  share_with_all_seats: boolean;
   redirect_uri: string;
 }
 
@@ -142,6 +149,27 @@ export function GmailCard({ isMobile }: { isMobile: boolean }) {
     }
   }
 
+  async function setSharing(shared: boolean) {
+    setBusy(true);
+    try {
+      // The response is the same status payload, so one write refreshes the card — and a
+      // failure leaves the checkbox showing the server's value rather than an optimistic
+      // lie about who can read the mailbox.
+      setStatus(await api<GmailStatus>('/api/gmail/sharing', {
+        method: 'PUT',
+        body: JSON.stringify({ shared }),
+      }));
+      toast.success(shared
+        ? 'Every seat can now use this mailbox.'
+        : 'Only admins can use this mailbox.');
+    } catch {
+      toast.error('Couldn’t change mailbox sharing.');
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const note: React.CSSProperties = {
     fontFamily: FONT_SANS, fontSize: 13, color: INK_MUTE, lineHeight: 1.6, margin: '0 0 20px', maxWidth: 460,
   };
@@ -174,6 +202,26 @@ export function GmailCard({ isMobile }: { isMobile: boolean }) {
             Connected as <strong style={{ color: INK }}>{status.email || 'your Google account'}</strong>.
           </p>
           <p style={{ ...note, marginBottom: 20 }}>{TRUST_NOTE}</p>
+          <div style={{ ...fieldWrap, marginBottom: 20 }}>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={status.share_with_all_seats}
+                disabled={busy}
+                onChange={e => void setSharing(e.target.checked)}
+                style={{ marginTop: 2 }}
+              />
+              <span style={{ fontFamily: FONT_SANS, fontSize: 13, color: INK, lineHeight: 1.5 }}>
+                Share this mailbox with all seats
+              </span>
+            </label>
+            <p style={{ ...note, margin: '8px 0 0 24px' }}>
+              Off by default: only admins can ask the assistant to search this mailbox or
+              draft from it. Turn it on if your team deliberately works one shared inbox —
+              every member then gets the same access. Unattended background work never
+              touches the mailbox either way.
+            </p>
+          </div>
           <button onClick={disconnect} disabled={busy} style={{ ...btnDanger, opacity: busy ? 0.6 : 1 }}>
             {busy ? 'Working…' : 'Disconnect Gmail'}
           </button>
