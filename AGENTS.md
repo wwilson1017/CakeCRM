@@ -650,7 +650,14 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   the member fallback comes free — and `useAssistantChat`'s per-message turn snapshot now
   carries record AND page together, so a post-confirmation continuation resumes the turn as
   it started. (2) The seat's **role** is one more sentence from `build_user_note`, which
-  already builds the volatile "who am I talking to" line from the same auth row; it is
+  already builds the volatile "who am I talking to" line from the same auth row. Its
+  vocabulary is derived from `test_route_authz.ADMIN_ONLY` — the list CI already pins in
+  both directions — and a test asserts the member note names every install-wide control a
+  person might ask about, because a control it fails to name is a control it fails at. The
+  trap worth remembering: Notifications is ONE card with two halves, so "notification
+  preferences are yours" is a positive ERROR (push on this device is everyone's, the daily
+  digest writes install state through a `require_admin` route), and Telegram has the same
+  shape since #193 — connecting the bot is admin, linking your own chat is not. It is
   emitted independently of name/email, is absent on an unattended turn, and is deliberately
   NOT threaded into any tool executor — `require_admin` and `bind_owner_filter` stay the
   enforcement, this only stops Baker walking a member through an admin-only flow.
