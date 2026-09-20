@@ -380,6 +380,18 @@ def test_the_user_note_tells_a_member_to_ask_an_administrator():
     assert "needs an administrator" in note
 
 
+def test_the_member_note_separates_the_telegram_BOT_from_a_personal_link():
+    """#193 made linking your own Telegram chat member-legal while the bot token stayed
+    admin-only. A note that calls "Telegram" admin-only outright would have Baker refuse
+    the one Telegram question a member can actually act on — and it would contradict the
+    member-visible `settings/telegram-link` topic the page note points them at."""
+    note = identity.build_user_note({"name": "Ada", "role": "member"})
+    assert "connecting the Telegram bot" in note        # admin-only half, named precisely
+    assert "linking or unlinking their own Telegram chat" in note   # theirs to do
+    # The bare claim is what must not appear.
+    assert "the task mode, Telegram and Gmail — are admin-only" not in note
+
+
 def test_the_role_sentence_does_not_depend_on_a_usable_name_or_email():
     """The two halves are emitted independently: what the seat MAY DO is the half that
     changes the answer, so an unnamed row still gets it."""

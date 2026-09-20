@@ -37,12 +37,14 @@ talking to has a linked Telegram chat (#193) — and it is the only reason
 ``get_setup_status`` takes a ``user_id`` at all. An unattended turn has no seat, so that
 field is unknown there rather than false.
 
-Two readers cannot express "unknown" because they are documented never-raising,
-fail-safe-to-a-default reads used on hot paths (`gmail.store.get_row`,
-`crm.service.get_task_mode`). For Gmail the degenerate case is still detectable — the
-`gmail_connection` singleton is seeded by its own migration, so an EMPTY row can only
-mean the read failed — and that is mapped back to ``None`` here. Task mode has no such
-tell, and its fail-safe default is the product default, so it is reported as read.
+Three readers cannot express "unknown" on their own, because they are documented
+never-raising, fail-safe-to-a-default reads used on hot paths (`gmail.store.get_row`,
+`providers.credentials.CredentialStore._load`, `crm.service.get_task_mode`). That is
+correct for them and wrong for here, so each gets a tell instead. Gmail brings its own:
+the `gmail_connection` singleton is seeded by its migration, so an EMPTY row can only mean
+the read failed. The other two collapse failure into a plausible value — no provider
+configured, and the product-default task mode — so `_readable` probes their singleton
+directly before believing what they return.
 """
 
 import logging
@@ -53,6 +55,33 @@ logger = logging.getLogger(__name__)
 # crm.field_service.VALID_ENTITY_TYPES; ordered so the payload is stable.
 _FIELD_ENTITIES = ("contact", "company", "deal")
 
+# Readability probes for the two sources whose own readers CANNOT report failure.
+#
+# `CredentialStore._load` catches every database error and returns the EMPTY credential
+# shape ("store reads never raise"), and `crm.service.get_task_mode` catches and returns
+# the product default. Both are right for their hot paths — chat must not 500 because a
+# read hiccuped — but they mean an exception never reaches this module, so without a probe
+# a dead database would be reported here as "no AI provider configured" and "the install
+# runs GTD". Those are exactly the confident falsehoods the nullable payload exists to
+# prevent: the first invites Baker to walk someone through AI Setup they already did.
+#
+# Each singleton is seeded by its own migration and deleted by nothing (both CRM-reset
+# TRUNCATE sweeps exclude `crm_meta`), and a serving process has always run migrations —
+# so an absent row means the read did not work, the same tell `_gmail` uses. The SQL is a
+# literal constant per source, never interpolated, and reads one indexed row.
+_AI_SETTINGS_PROBE = "SELECT 1 AS ok FROM ai_settings WHERE id = 1"
+_CRM_META_PROBE = "SELECT 1 AS ok FROM crm_meta WHERE id = 1"
+
+
+def _readable(probe: str) -> bool:
+    """True only when that singleton could actually be read just now."""
+    try:
+        from core.postgres import pg_fetchone
+
+        return pg_fetchone(probe) is not None
+    except Exception:
+        return False
+
 
 def _ai() -> tuple[bool | None, str | None]:
     """(ai_ready, active_provider). ``active_provider`` is '' when none is configured.
@@ -62,6 +91,9 @@ def _ai() -> tuple[bool | None, str | None]:
     is that it carries enums, and an enum that is "whatever the column happens to hold"
     is not one.
     """
+    if not _readable(_AI_SETTINGS_PROBE):
+        logger.debug("setup status: ai_settings unreadable — AI state is unknown")
+        return None, None
     try:
         from providers import get_ai_provider
         from providers.credentials import CredentialStore
@@ -130,9 +162,16 @@ def _telegram(user_id) -> tuple[bool | None, bool | None]:
 
 
 def _task_mode() -> str | None:
-    """'gtd' or 'normal'. ``get_task_mode`` is documented never to raise and to
-    fail-safe to the product default, so there is no unknown to report; the except is
-    the belt-and-braces half (an import failure in an embedding with no CRM)."""
+    """'gtd' or 'normal', or None when the row could not be read.
+
+    ``get_task_mode`` is documented never to raise and to fail-safe to the product
+    default, which is right for the four hot paths that call it — an unreadable mode must
+    not break chat — but it means the value it returns during an outage is a GUESS, and
+    this surface promised not to present a guess as a fact. The probe is what separates
+    the two."""
+    if not _readable(_CRM_META_PROBE):
+        logger.debug("setup status: crm_meta unreadable — task mode is unknown")
+        return None
     try:
         from crm.service import get_task_mode
 

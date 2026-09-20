@@ -660,7 +660,19 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   leaf's type so a later field cannot quietly widen it. **Every leaf is nullable and `null`
   means UNKNOWN, never "off"**: each fact is read in its own try/except, so a database
   hiccup cannot have Baker tell someone their Gmail is disconnected and walk them through
-  reconnecting it, and the tool description states that contract to the model. It is
+  reconnecting it, and the tool description states that contract to the model. **Three
+  readers cannot report their own failure and each needed a tell**, which is the part to
+  preserve: `gmail.store.get_row`, `providers.credentials.CredentialStore._load` and
+  `crm.service.get_task_mode` all catch every database error and return a plausible value
+  ("store reads never raise" is correct for their hot paths — chat must not 500 on a
+  hiccup), so NO exception reaches this module and a naive try/except reports an outage as
+  a deliberate configuration. Gmail brings its own tell (the seeded singleton means an
+  EMPTY row can only be a failed read); the other two collapse failure into *no provider
+  configured* and *the product-default task mode*, so `_readable` probes their seeded
+  singleton (`ai_settings`, `crm_meta` — literal SQL constants, one indexed row) before
+  believing what they return. The AI one is the worst case the nullable payload exists for:
+  without it a dead database invites Baker to walk someone through an AI Setup they already
+  completed. It is
   background-callable and that is asserted rather than incidental — the payload is install
   configuration with no record content and nothing about another seat, and a background
   turn's one egress is a `notify_user` over the install's own channels. **Exactly one field

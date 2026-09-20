@@ -53,6 +53,8 @@ def sources(monkeypatch):
     import providers.credentials
     import telegram.store
 
+    # Both singletons readable by default; individual tests take one away.
+    monkeypatch.setattr(svc, "_readable", lambda probe: True)
     monkeypatch.setattr(providers, "get_ai_provider", lambda *a, **k: object())
     monkeypatch.setattr(providers.credentials, "CredentialStore", _Store)
     monkeypatch.setattr(gmail.store, "get_row", lambda: {"connection_status": "ok"})
@@ -275,3 +277,65 @@ def test_get_setup_status_never_raises(sources):
     out = svc.get_setup_status(user_id=7)
     assert set(out) == EXPECTED_KEYS
     assert all(v is None for v in out.values())
+
+
+# ── The two readers that cannot report their own failure ─────────────────────
+#
+# `CredentialStore._load` and `crm.service.get_task_mode` both catch every database error
+# and return a plausible value — no provider configured, and the product-default task
+# mode. Nothing raises, so the surrounding try/except cannot see it, and without a probe
+# this surface would report a dead database as a deliberate configuration. The first of
+# those is the worst case the nullable payload exists for: it invites Baker to walk
+# someone through an AI Setup they already completed.
+
+def test_an_unreadable_ai_settings_row_is_unknown_not_unconfigured(sources):
+    import providers.credentials
+
+    # Exactly what a database outage produces: the store hands back the empty shape and
+    # the factory hands back None, with no exception anywhere.
+    sources.setattr(svc, "_readable", lambda probe: probe != svc._AI_SETTINGS_PROBE)
+    sources.setattr(providers.credentials, "CredentialStore", lambda: _Store(active=""))
+    sources.setattr(providers, "get_ai_provider", lambda *a, **k: None)
+    out = svc.get_setup_status(user_id=7)
+    assert out["ai_ready"] is None and out["active_provider"] is None
+    # One dead probe does not blank the sources that CAN answer.
+    assert out["gmail_connected"] is True and out["task_mode"] == "gtd"
+
+
+def test_an_unreadable_crm_meta_row_makes_the_task_mode_unknown(sources):
+    """`get_task_mode` fail-safes to the product default, which is right for the four hot
+    paths that call it and wrong here — a guess must not be reported as a fact."""
+    sources.setattr(svc, "_readable", lambda probe: probe != svc._CRM_META_PROBE)
+    out = svc.get_setup_status(user_id=7)
+    assert out["task_mode"] is None
+    assert out["ai_ready"] is True
+
+
+def test_a_readable_singleton_with_nothing_configured_still_reports_false(sources):
+    """The probe must not turn "nobody has set this up" into "unknown" — that is the
+    answer the tool exists to give."""
+    import providers.credentials
+
+    sources.setattr(providers.credentials, "CredentialStore", lambda: _Store(active=""))
+    sources.setattr(providers, "get_ai_provider", lambda *a, **k: None)
+    out = svc.get_setup_status(user_id=7)
+    assert out["ai_ready"] is False and out["active_provider"] == ""
+
+
+def test_the_probe_reports_a_missing_row_and_a_failed_read_alike(monkeypatch):
+    """Both singletons are seeded by their own migrations and deleted by nothing, so an
+    absent row can only mean the read did not work — the same tell `_gmail` uses."""
+    import core.postgres
+
+    monkeypatch.setattr(core.postgres, "pg_fetchone", lambda *a, **k: {"ok": 1})
+    assert svc._readable(svc._AI_SETTINGS_PROBE) is True
+    monkeypatch.setattr(core.postgres, "pg_fetchone", lambda *a, **k: None)
+    assert svc._readable(svc._AI_SETTINGS_PROBE) is False
+    monkeypatch.setattr(core.postgres, "pg_fetchone", _boom)
+    assert svc._readable(svc._AI_SETTINGS_PROBE) is False
+
+
+def test_the_probes_name_seeded_singletons_and_interpolate_nothing():
+    for probe in (svc._AI_SETTINGS_PROBE, svc._CRM_META_PROBE):
+        assert "%" not in probe and "{" not in probe and ";" not in probe
+        assert probe.lower().startswith("select 1 as ok from ")

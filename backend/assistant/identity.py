@@ -479,16 +479,17 @@ def _one_line(value, limit: int) -> str:
 _ROLE_NOTES: dict[str, str] = {
     "admin": (
         "They are an administrator of this install, so the workspace and integration "
-        "settings — branding, the team roster, custom fields, the task mode, Telegram "
-        "and Gmail — are theirs to change."
+        "settings — branding, the team roster, custom fields, the task mode, the "
+        "Telegram bot and the Gmail connection — are theirs to change."
     ),
     "member": (
         "They are a member of this install, not an administrator. The workspace and "
         "integration settings — branding, the team roster, custom fields, the task mode, "
-        "Telegram and Gmail — are admin-only, so if they ask to change one, say it needs "
-        "an administrator rather than walking them through a flow that will be refused. "
-        "Their own notification preferences, password and two-factor authentication are "
-        "theirs to change."
+        "connecting the Telegram bot and connecting Gmail — are admin-only, so if they "
+        "ask to change one, say it needs an administrator rather than walking them "
+        "through a flow that will be refused. Their own settings ARE theirs: "
+        "notification preferences, their password and two-factor authentication, and "
+        "linking or unlinking their own Telegram chat."
     ),
 }
 
