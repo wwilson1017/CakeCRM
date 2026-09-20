@@ -9,6 +9,12 @@
  * into the system prompt and Baker can rewrite it, so every file shows who wrote it and
  * when — an unexpected identity rewrite should be noticeable, not silent.
  *
+ * Since #194 the two PROTECTED files (soul.md, MEMORY.md) are admin-only to WRITE: a
+ * member able to rewrite soul.md could rewrite the assistant's standing orders for every
+ * seat. Members still SEE both files — visibility is the point of this page — so the
+ * editor renders them read-only rather than hiding them. The server returns 403
+ * regardless; this just means a member never types a paragraph only to lose it.
+ *
  * Fully keyless: files and facts are plain rows, so nothing here needs an AI provider.
  *
  * Ported in spirit from chatty's AgentContextEditor, including its stale-response guard
@@ -17,6 +23,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useAuth } from '../core/auth/AuthContext';
 import { useIsMobile } from '../shared/useIsMobile';
 import { toast } from '../shared/toast';
 import { confirmDialog } from '../shared/confirm';
@@ -72,6 +79,7 @@ export function MemoryPage() {
 // ── Files ────────────────────────────────────────────────────────────────────────
 
 function FilesPanel({ isMobile }: { isMobile: boolean }) {
+  const { isAdmin } = useAuth();
   const [files, setFiles] = useState<ContextFileMeta[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [open, setOpen] = useState<ContextFile | null>(null);
@@ -85,6 +93,11 @@ function FilesPanel({ isMobile }: { isMobile: boolean }) {
   // it disables: naming it in a useCallback dep array below its own `const` would read it
   // during render, before initialization — a TDZ crash, not a lint warning.
   const dirty = open !== null && draft !== open.content;
+  // Protected files (soul.md, MEMORY.md) are admin-only to write since #194. The
+  // server 403s regardless — this only spares a member from typing a paragraph they
+  // would then lose. `is_protected` comes from the row, so the two names live in ONE
+  // place (context_files.service.PROTECTED_FILES) rather than being re-listed here.
+  const readOnly = open !== null && open.is_protected && !isAdmin;
 
   const refresh = useCallback(async () => {
     try {
@@ -228,20 +241,30 @@ function FilesPanel({ isMobile }: { isMobile: boolean }) {
                 file, and any change needs your approval first.
               </p>
             )}
+            {readOnly && (
+              <p style={{ color: INK_MUTE, fontSize: 13, marginTop: 0 }}>
+                An admin maintains this file. You can read it, but only an admin can change it.
+              </p>
+            )}
             <textarea
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
+              readOnly={readOnly}
               spellCheck={false}
               style={{
                 width: '100%', minHeight: 360, resize: 'vertical', padding: 12,
-                borderRadius: 8, border: `1px solid ${LINE_STRONG}`, background: BG_CARD,
-                color: INK, fontFamily: FONT_MONO, fontSize: 13, lineHeight: 1.55,
+                borderRadius: 8, border: `1px solid ${LINE_STRONG}`,
+                background: readOnly ? BG_RAISED : BG_CARD,
+                color: readOnly ? INK_MUTE : INK,
+                fontFamily: FONT_MONO, fontSize: 13, lineHeight: 1.55,
               }}
             />
             <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-              <button style={btnPrimary} onClick={() => void save()} disabled={!dirty || saving}>
-                {saving ? 'Saving…' : 'Save'}
-              </button>
+              {!readOnly && (
+                <button style={btnPrimary} onClick={() => void save()} disabled={!dirty || saving}>
+                  {saving ? 'Saving…' : 'Save'}
+                </button>
+              )}
               <button style={btnSecondary} onClick={() => setDraft(open.content)} disabled={!dirty}>
                 Revert
               </button>

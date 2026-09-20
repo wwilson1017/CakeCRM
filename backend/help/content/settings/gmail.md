@@ -17,7 +17,27 @@ written down as a trust guarantee in the project's security document.
 
 ## Who can do this
 
-Admin only. The whole Integrations section of Settings is hidden from members.
+Setting the connection up is admin only — the whole Integrations section of Settings is
+hidden from members.
+
+**Using** it is admin only too, by default. There is one mailbox per install, whichever
+account an admin connected, so Baker offers the three mail tools only on an admin's seat. On
+a member's seat it is not given them at all, which means it cannot search that mailbox or
+draft from it even if asked — it simply has no way to.
+
+If your team genuinely works one shared inbox, the Gmail card carries a **Share this mailbox
+with all seats** checkbox. It is off by default, and switching it on gives every member the
+same mail access an admin has. It resets itself to off whenever the connection changes —
+disconnecting, replacing the OAuth app, or connecting a different account — so a newly
+connected mailbox always starts private and you have to opt in again deliberately.
+
+When Baker runs unattended — the heartbeat, the daily digest — it is given no mail tools at
+all, whatever that checkbox says. Only a conversation with a person in it can reach the
+mailbox.
+
+Per-person mail, where everyone connects their own account instead of sharing one, is not
+built. The read-and-draft-only guarantee above is unaffected by any of this: the seat rule
+decides who is offered the tools, never what those tools can do.
 
 ## Setting it up
 

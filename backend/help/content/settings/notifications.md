@@ -48,8 +48,9 @@ colleague does not leave your notifications arriving on it.
 If Telegram is linked, notifications also go to the linked chat. There is no per-channel
 switch — when Telegram is connected it is used.
 
-There is one install-wide Telegram link, not one per person, so the linked chat receives
-notifications whoever they were addressed to. Per-person links are a later piece of work.
+Each person links their own Telegram from Settings, Personal, Link my Telegram, and a
+notification addressed to one person reaches only that person's chat. A notification sent to
+everyone reaches every linked chat. A seat that has not linked simply receives nothing there.
 
 ## Testing it
 

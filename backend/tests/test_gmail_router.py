@@ -305,3 +305,23 @@ def test_callback_persists_only_minimal_scopes(monkeypatch, api):
     # Google granted an extra scope, but we persist ONLY the minimal requested set.
     assert saved["scopes"].split() == oauth.SCOPES
     assert "gmail.modify" not in saved["scopes"]
+
+
+# ── mailbox sharing toggle (issue #194) ───────────────────────────────────────
+
+@pytest.mark.parametrize("shared", [True, False])
+def test_put_sharing_persists_and_returns_status(api, monkeypatch, shared):
+    seen = []
+    monkeypatch.setattr(router_mod.store, "set_sharing", lambda v: seen.append(v))
+    monkeypatch.setattr(router_mod.store, "status_dict",
+                        lambda: {"connected": True, "share_with_all_seats": shared})
+    r = api.put("/api/gmail/sharing", json={"shared": shared})
+    assert r.status_code == 200
+    assert seen == [shared]
+    assert r.json()["share_with_all_seats"] is shared
+
+
+def test_put_sharing_requires_the_flag(api):
+    """Pydantic rejects a body with no `shared`, so the route can never be called in a
+    way that leaves the policy ambiguous."""
+    assert api.put("/api/gmail/sharing", json={}).status_code == 422

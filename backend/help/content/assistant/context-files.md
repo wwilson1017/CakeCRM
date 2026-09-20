@@ -56,6 +56,16 @@ The Memory page has a Files tab: read, edit and delete. If Baker or another tab 
 file while you had it open, saving is refused with a message asking you to reload, rather
 than silently overwriting.
 
+**Editing the two protected files there is admin only.** Everyone can read soul.md and
+MEMORY.md — seeing what Baker knows is the point of the page — but on a member's seat both
+open read-only with no Save. Baker's own personality is already admin-only, and these two
+files are the other half of the same standing instruction.
+
+That gate is on the editor, not on Baker: anyone can still ask Baker to rewrite either file,
+and that write stops for approval first, in every mode, as described above. So the quiet way
+of changing a standing instruction is admin-only, and the loud way shows you the new text
+before it is stored.
+
 The same protection covers Baker: when a write is waiting for your approval and you edit that
 file in the meantime, the approved write is refused and Baker is told to re-read and reapply
 rather than flattening your edit.

@@ -32,6 +32,10 @@ class AppCredentials(BaseModel):
     client_secret: str
 
 
+class SharingUpdate(BaseModel):
+    shared: bool
+
+
 def _settings_redirect(status: str, reason: str = "") -> RedirectResponse:
     """Redirect the browser back to the SPA settings page with a result code."""
     base = settings.frontend_url.rstrip("/")
@@ -198,3 +202,19 @@ def disconnect(user=Depends(require_admin)):
     if refresh_secret:
         oauth.revoke_token(refresh_secret)
     return {"ok": True}
+
+
+@router.put("/sharing")
+def set_sharing(body: SharingUpdate, user=Depends(require_admin)):
+    """Turn "share the connected mailbox with all seats" on or off (issue #194).
+
+    There is one mailbox per install, so this is install policy, not a preference —
+    hence admin-only, and hence a route-level ``require_admin`` rather than the
+    in-handler check the protected context files use (there the same route serves
+    member-writable files, so the gate has to see the filename; here the whole route is
+    configuration). Default is OFF: with it off, only admin seats are offered the Gmail
+    tools. It never widens what those tools can do, and an unattended turn is denied by
+    ``get_gmail_tools`` regardless of this setting.
+    """
+    store.set_sharing(body.shared)
+    return store.status_dict()

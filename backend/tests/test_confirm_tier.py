@@ -240,10 +240,15 @@ def test_unclassified_writes_keep_their_card(task_mode, name):
 
 
 def test_the_gmail_draft_is_never_routine(task_mode, monkeypatch):
+    from conftest import fake_admin
+
     from gmail import tools as gmail_tools
+
     monkeypatch.setattr(gmail_tools.store, "is_connected", lambda: True)
     task_mode("normal")
-    reg = ToolRegistry()
+    # An admin seat: since #194 the Gmail tools are seat-gated, so a bare registry would
+    # not carry the draft tool and this test would pass vacuously.
+    reg = ToolRegistry(user=fake_admin())
     assert reg.is_write("gmail_create_draft") is True
     assert reg.is_routine_write("gmail_create_draft") is False
 

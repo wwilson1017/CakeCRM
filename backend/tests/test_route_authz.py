@@ -86,6 +86,11 @@ ADMIN_ONLY = {
     ("/api/gmail/app", "POST"),
     ("/api/gmail/oauth/start", "POST"),
     ("/api/gmail/connection", "DELETE"),
+    # One mailbox per install, so "share it with all seats" (#194) is install policy.
+    # The protected-context-file gate from that same issue is deliberately NOT here: it
+    # lives in put_context_file because the route also serves member-writable topic and
+    # daily notes, so the gate has to see the filename.
+    ("/api/gmail/sharing", "PUT"),
     # Assistant identity is install-wide (one assistant per install)
     ("/api/assistant/identity", "PUT"),
     # Heartbeat control

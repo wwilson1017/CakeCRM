@@ -52,11 +52,21 @@ have to turn an owner into a name.
 Assigning a record to someone does not restrict anyone else. See
 `contacts-and-companies/ownership`.
 
-## What is still shared
+## What is per-seat, and what the team shares
 
-The assistant's conversation history and memory, the Gmail connection and the Telegram link
-are install-wide today. Every active seat gets the assistant, so a member can have Baker read
-the mailbox an admin connected. Per-person separation is future work.
+Each person's conversation history with Baker is their own — owner-only, with no admin
+override. So are their notifications and their Telegram link.
 
-Notifications are no longer on that list. Each one is either addressed to one person or sent
-to everyone — see `settings/notifications`.
+Baker's **memory** is shared: the facts it records and the context files it keeps are one
+brain for the whole team, deliberately, because per-person memory would make Baker amnesiac
+for every new seat. The honest cost is that something said in one person's private
+conversation can become a fact every seat can see. System alerts and the AI provider keys are
+install-wide too.
+
+There is one **Gmail** connection per install, but using it is admin-only by default: a
+member's Baker is not given the mail tools at all. An admin can share the mailbox with every
+seat from Settings, Integrations, Gmail — see `settings/gmail`.
+
+Editing Baker's two protected files, soul.md and MEMORY.md, from the Memory page is
+admin-only; everyone can still read them, and everyone can still ask Baker to change them,
+which always stops for approval first. See `assistant/context-files`.

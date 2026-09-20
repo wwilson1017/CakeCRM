@@ -18,11 +18,13 @@ features append cleanly):
   * always: ``help.tools.get_help_tools()`` (issue #143 — the product manual's three
     read tools). Core, keyless, no enable gate; the defs are constants, so composing
     the registry never touches the disk.
-  * conditional: ``gmail.tools.get_gmail_tools()`` (issue #8) — defs ONLY when
-    Gmail is connected, so a disconnected/keyless instance never shows the model
-    those tools; it returns ``([], {})`` otherwise and never raises. It reads the
-    connection state from Postgres, so constructing a registry does one DB read —
-    the async chat endpoints build it via ``asyncio.to_thread``.
+  * conditional: ``gmail.tools.get_gmail_tools(user=…)`` (issue #8, seat-gated by
+    #194) — defs ONLY when Gmail is connected AND the caller is an admin seat (or the
+    install turned on ``share_with_all_seats``), so a disconnected/keyless instance —
+    and, now, a member seat — never shows the model those tools; it returns ``([], {})``
+    otherwise and never raises. It reads the connection state from Postgres, so
+    constructing a registry does one DB read — the async chat endpoints build it via
+    ``asyncio.to_thread``. An unattended registry (``user=None``) gets nothing at all.
 
 Construction FAILS LOUD on a malformed composition — a duplicate tool name, a def
 with no executor, an executor with no def, or a non-boolean ``writes`` — so a new
@@ -40,8 +42,13 @@ NO change to dispatch, which stays ``fn(**args)`` over the model's arguments alo
 sources bind those arguments server-side and strip any same-named key the model produced,
 so who a record is credited to is never something the model can say. ``user=None`` means
 an unattended turn: every identity-bearing executor then records nobody, exactly as it did
-before. Identity never changes which tools exist or their ``writes`` flags — the
-background allowlist is derived from that map, so it must not move.
+before.
+
+Identity changes which tools EXIST in exactly one place — the Gmail seat gate above
+(#194) — and never changes a ``writes`` flag. The background allowlist is derived from
+the writes map, so this can only make that allowlist SMALLER (an unattended registry
+carries no Gmail tools to admit), never larger; ``assistant.background`` subtracts the
+Gmail reads independently anyway, so neither lock depends on the other.
 """
 
 import asyncio
@@ -81,7 +88,7 @@ class ToolRegistry:
             get_gtd_tools(user=user),
             get_memory_tools(),
             get_context_file_tools(),
-            get_gmail_tools(),
+            get_gmail_tools(user=user),
             get_help_tools(),
         ]
         if background:

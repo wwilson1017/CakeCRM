@@ -83,6 +83,28 @@ def is_connected(row: dict | None = None) -> bool:
     return True
 
 
+def sharing_enabled(row: dict | None = None) -> bool:
+    """True when this install has opted into sharing the connected mailbox with every
+    seat (issue #194).
+
+    Default FALSE. Read by ``gmail.tools.get_gmail_tools`` for a MEMBER seat only — an
+    admin never reaches it and an unattended turn is denied before it — so the common
+    paths still do exactly one row read. Never raises: an unreadable row is "not
+    shared", the fail-closed direction, matching ``is_connected``'s discipline.
+    """
+    row = get_row() if row is None else row
+    return bool(row.get("share_with_all_seats"))
+
+
+def set_sharing(enabled: bool) -> None:
+    """Turn mailbox sharing on or off (admin-only at the route layer)."""
+    pg_execute(
+        "UPDATE gmail_connection SET share_with_all_seats = %s, updated_at = now() "
+        "WHERE id = 1",
+        (bool(enabled),),
+    )
+
+
 def save_app_credentials(client_id: str, client_secret: str) -> str:
     """Store BYO OAuth app credentials and force a fresh connect.
 
@@ -120,6 +142,10 @@ def _clear_returning_old_refresh(extra_set_sql: str, extra_params: tuple) -> str
 
     ``extra_set_sql`` is a trusted, caller-supplied fragment of literal SQL
     assignments (never user input) whose placeholders bind ``extra_params`` first.
+
+    ``share_with_all_seats`` is reset here (#194) because both callers end the current
+    connection: the next mailbox connected must start private rather than inherit a
+    policy an admin set for a different account.
     """
     row = pg_fetchone(
         f"""
@@ -136,6 +162,7 @@ def _clear_returning_old_refresh(extra_set_sql: str, extra_params: tuple) -> str
             connection_status = 'disconnected',
             oauth_state_hash = '',
             oauth_state_created_at = NULL,
+            share_with_all_seats = FALSE,
             connection_generation = gmail_connection.connection_generation + 1,
             updated_at = now()
         FROM old
@@ -218,6 +245,13 @@ def save_tokens(
     A successful persist bumps the generation: a new grant is a new connection
     identity, so any pending draft proposed under the previous one must not
     execute against it, and a second racing callback must miss too (#43).
+
+    That same "new identity" reasoning resets ``share_with_all_seats`` (#194). Connecting
+    a second mailbox does NOT have to pass through clear_connection — an admin can run
+    the OAuth flow again while a connection is live — so resetting only in the clear
+    paths would let mailbox B silently inherit mailbox A's sharing policy. A CAS miss
+    writes nothing, so a losing racer leaves the live connection's policy untouched, and
+    a plain token refresh (update_access_token) is not a new grant and does not reset it.
     """
     return pg_execute(
         """
@@ -228,6 +262,7 @@ def save_tokens(
             scopes = %s,
             email = %s,
             connection_status = 'ok',
+            share_with_all_seats = FALSE,
             connection_generation = connection_generation + 1,
             updated_at = now()
         WHERE id = 1 AND connection_generation = %s
@@ -334,5 +369,6 @@ def status_dict() -> dict:
         "client_id": row.get("client_id", ""),
         "client_secret_present": bool(row.get("client_secret_enc")),
         "scopes": row.get("scopes", "").split() if row.get("scopes") else [],
+        "share_with_all_seats": sharing_enabled(row),
         "redirect_uri": oauth.redirect_uri(),
     }

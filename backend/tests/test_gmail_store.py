@@ -52,6 +52,7 @@ def _row(**over):
         "oauth_state_hash": "",
         "oauth_state_created_at": None,
         "connection_generation": 0,
+        "share_with_all_seats": False,
     }
     base.update(over)
     return base
@@ -288,3 +289,94 @@ def test_set_oauth_state_hash_does_not_bump_generation(monkeypatch):
     monkeypatch.setattr(store, "pg_execute", rec)
     store.set_oauth_state_hash("s")
     assert "connection_generation" not in rec.calls[0][0]
+
+
+# ── mailbox sharing (issue #194) ──────────────────────────────────────────────
+
+def test_sharing_enabled_reads_the_flag(monkeypatch):
+    monkeypatch.setattr(store, "pg_fetchone", lambda *a, **k: _row(share_with_all_seats=True))
+    assert store.sharing_enabled() is True
+
+
+@pytest.mark.parametrize("value", [False, None])
+def test_sharing_disabled_by_default(monkeypatch, value):
+    """Absent, NULL and False all mean 'not shared' — the fail-closed direction."""
+    monkeypatch.setattr(store, "pg_fetchone", lambda *a, **k: _row(share_with_all_seats=value))
+    assert store.sharing_enabled() is False
+
+
+def test_sharing_enabled_never_raises_on_db_error(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("Postgres pool not initialized")
+
+    monkeypatch.setattr(store, "pg_fetchone", boom)
+    assert store.sharing_enabled() is False
+
+
+def test_sharing_enabled_accepts_a_preread_row():
+    """The row-passing overload exists so a caller that already has the row pays no
+    second read, exactly like is_connected."""
+    assert store.sharing_enabled(_row(share_with_all_seats=True)) is True
+    assert store.sharing_enabled(_row()) is False
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_set_sharing_writes_the_singleton(monkeypatch, enabled):
+    rec = ExecRecorder()
+    monkeypatch.setattr(store, "pg_execute", rec)
+    store.set_sharing(enabled)
+    sql, params = rec.calls[0]
+    assert "share_with_all_seats = %s" in sql
+    assert "WHERE id = 1" in sql
+    assert params == (enabled,)
+
+
+def test_status_dict_reports_sharing(monkeypatch):
+    monkeypatch.setattr(store, "pg_fetchone", lambda *a, **k: _connected_row(share_with_all_seats=True))
+    assert store.status_dict()["share_with_all_seats"] is True
+
+
+# ── a new connection identity starts private ──────────────────────────────────
+
+def test_clearing_the_connection_resets_sharing(monkeypatch):
+    """Disconnect and OAuth-app replace both end the current connection, so the next
+    mailbox must not inherit a policy an admin set for a different account."""
+    rec = FetchRecorder(row={"old_refresh_token_enc": ""})
+    monkeypatch.setattr(store, "pg_fetchone", rec)
+    store.clear_connection()
+    assert "share_with_all_seats = FALSE" in rec.calls[0][0]
+
+
+def test_app_replacement_resets_sharing(monkeypatch):
+    rec = FetchRecorder(row={"old_refresh_token_enc": ""})
+    monkeypatch.setattr(store, "pg_fetchone", rec)
+    store.save_app_credentials("cid", "secret")
+    assert "share_with_all_seats = FALSE" in rec.calls[0][0]
+
+
+def test_a_fresh_grant_resets_sharing(monkeypatch):
+    """The path clear_connection does NOT cover: an admin can run the OAuth flow again
+    while a connection is live, so mailbox B would otherwise inherit mailbox A's policy.
+    A new grant starts private."""
+    rec = ExecRecorder(rowcount=1)
+    monkeypatch.setattr(store, "pg_execute", rec)
+    assert store.save_tokens("at", "rt", None, "scope", "me@x.com", 4) is True
+    sql, _ = rec.calls[0]
+    assert "share_with_all_seats = FALSE" in sql
+    assert "connection_generation = %s" in sql  # still CAS-guarded
+
+
+def test_a_token_refresh_does_not_reset_sharing(monkeypatch):
+    """update_access_token is the SAME account — resetting there would silently revoke a
+    deliberate install policy roughly once an hour."""
+    rec = ExecRecorder(rowcount=1)
+    monkeypatch.setattr(store, "pg_execute", rec)
+    store.update_access_token("at", None, encrypt_value("rt"))
+    assert all("share_with_all_seats" not in sql for sql, _ in rec.calls)
+
+
+def test_mark_broken_does_not_reset_sharing(monkeypatch):
+    rec = ExecRecorder(rowcount=1)
+    monkeypatch.setattr(store, "pg_execute", rec)
+    store.mark_broken(encrypt_value("rt"))
+    assert all("share_with_all_seats" not in sql for sql, _ in rec.calls)
