@@ -3,6 +3,8 @@ get_gmail_tools() connection + seat gating (#8, seat gate #194)."""
 
 from __future__ import annotations
 
+from conftest import fake_admin, fake_member
+
 from gmail import tools
 from gmail.client import GmailAuthError
 
@@ -76,8 +78,10 @@ def test_gmail_create_draft_auth_error(monkeypatch):
 
 _ALL_THREE = {"gmail_search", "gmail_read_thread", "gmail_create_draft"}
 
-ADMIN = {"id": 1, "email": "admin@x.test", "role": "admin", "is_active": True}
-MEMBER = {"id": 2, "email": "member@x.test", "role": "member", "is_active": True}
+# The shared seat fixtures, not hand-rolled copies: conftest keeps ONE definition so the
+# shape can only drift in one place, and every other Gmail test file imports it.
+ADMIN = fake_admin()
+MEMBER = fake_member()
 
 
 def _connection(monkeypatch, *, connected=True, shared=False):
