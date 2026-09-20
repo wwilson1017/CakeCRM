@@ -109,14 +109,25 @@ the residual risks, is in `docs/SYNC.md`.
 
 ## Data handling
 
-- **The Gmail connection is install-wide, and so is access to it.** CakeCRM has user
-  accounts (issue #60), but exactly one Gmail connection per install — whichever
-  account an admin connected. **Every active seat can have the assistant search and
-  read that mailbox and create drafts in it**, because every seat gets the assistant.
-  Connecting, replacing and disconnecting are admin-only; *using* the connection is
-  not. If that is not what you want, do not connect a personal mailbox to a shared
-  install. Per-user Gmail is the next phase of the multi-user work; the read+draft-only
-  guarantee above is unaffected either way.
+- **The Gmail connection is install-wide; access to it is admin-only by default.**
+  There is exactly one Gmail connection per install — whichever account an admin
+  connected. Connecting, replacing and disconnecting have always been admin-only, and
+  since issue #194 so is *using* it: the assistant offers the three Gmail tools only to
+  an **admin seat**, and a member's assistant is not shown them at all. The enforcement
+  is the same hidden-affordance shape as the connected/disconnected gate — the tools are
+  not advertised to the model, so there is nothing for a member to ask for.
+  **Unattended work never touches the mailbox**, whatever the setting below says: a
+  background turn (the heartbeat, the daily digest) has no seat, and the Gmail tools are
+  withheld from a turn with no seat. That is on top of the separate exclusion that keeps
+  live external reads out of every background allowlist.
+  If your team deliberately works one shared inbox, an admin can turn on **"share the
+  connected mailbox with all seats"** under Settings → Integrations → Gmail. It is
+  **off by default**, it opens the gate to member seats only, and it resets to off
+  whenever the connection changes — disconnecting, replacing the OAuth app, or
+  connecting a different mailbox — so a newly connected account always starts private.
+  Per-user Gmail, where each seat connects their own account, is tracked as issue #189
+  and is not built. The read + create-draft-only guarantee above is unaffected by any
+  of this: this decides *who is offered* the tools, never what those tools can do.
 - **BYO OAuth app.** You supply your own Google Cloud OAuth client (client ID +
   secret), entered in-app (never as environment variables). The redirect URI to
   register is shown on the Settings → Integrations → Gmail card
@@ -277,7 +288,7 @@ That is a real escalation over anything else the assistant can save, and it is
 treated as one. A poisoned `soul.md` would not be one bad record: it would be a
 standing instruction replayed on every future conversation, including unattended
 background ones, and it would survive deleting the conversation that created it.
-Four things bound that risk:
+Five things bound that risk:
 
 - **Every edit needs your approval.** Writing or deleting `soul.md` or `MEMORY.md`
   always routes through the human-confirmation gate — including in "power" mode, where
@@ -294,6 +305,13 @@ Four things bound that risk:
   confirmation contract and safety instructions are also assembled *after* the soul
   text, so a rewritten soul can add to who the assistant is but cannot override how
   it behaves.
+- **Only an admin can edit them.** Since issue #194, writing `soul.md` or `MEMORY.md`
+  through the Memory page is admin-only — a member sees both files read-only and the
+  server refuses the write with a 403. The assistant's personality is already
+  admin-only, and these two files are the other half of the same standing instruction,
+  so they are held to the same bar. Everything else on that page — topic files and
+  daily notes — stays open to every seat, and *reading* the protected files does too:
+  seeing what the assistant knows is the point of the page.
 - **Changes are visible.** Every file on the Memory page shows who last wrote it
   ("Baker" or "You") and when, so an unexpected rewrite is discoverable rather than
   silent.

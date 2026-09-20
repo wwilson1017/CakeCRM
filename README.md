@@ -70,16 +70,33 @@ Add the rest of your team at **Settings → Workspace → Team**. Two roles:
 - **Member** — the whole CRM: records, pipeline, tasks, notes, import, and the
   assistant.
 - **Admin** — all of that, plus managing users, AI keys, branding, integrations and
-  the destructive operations (clear-all, sample data, backfills).
+  the destructive operations (clear-all, sample data, backfills). Two things the
+  assistant does are admin-only too: using the connected Gmail mailbox (unless the
+  install shares it — see below) and editing the assistant's own `soul.md` and
+  `MEMORY.md`, which every seat can still read.
 
 **Ownership is not a permission.** Every contact, company, deal and task can carry
 an owner, which drives the "Mine" filters and the per-rep numbers — but any member
 can still see and edit anything. There are no per-record permissions, deliberately.
 
-**Sharing to be aware of.** The assistant's memory and the Gmail connection are still
-**shared by the whole install**. If the admin connects their personal Gmail, any seat
-can have the assistant read it. Chat history and the Telegram link are per-seat.
-Per-user isolation of the remaining surfaces is the next phase of this work.
+**What is per-seat, and what the team shares.** Your chat history with the assistant is
+yours alone — owner-only, with no admin override. So are your notifications and your
+Telegram link. What the whole team shares is the assistant's **memory**: the facts it
+records and the context files it keeps (`soul.md`, `MEMORY.md`, topic notes) are one
+shared brain, deliberately — per-seat memory would make the assistant amnesiac for
+every new person. System alerts and the AI provider keys are install-wide too.
+
+Say the cost of that plainly: **memory is team memory.** A fact the assistant records
+out of your private conversation becomes visible to every seat through the Memory page
+and through the assistant itself. Don't ask it to remember something your colleagues
+must not see.
+
+The **Gmail connection** is install-wide but its access is not: only admin seats can
+have the assistant search the connected mailbox or draft from it, and a member's
+assistant is never shown those tools. An admin can switch on *"share the connected
+mailbox with all seats"* under **Settings → Integrations → Gmail** for teams that
+genuinely work one shared inbox; it is off by default. Per-user Gmail, where everyone
+connects their own account, is tracked as [issue #189](https://github.com/wwilson1017/CakeCRM/issues/189) — say so there if you want it.
 
 **Notifications carry a recipient.** Each one is either addressed to a single seat —
 visible and dismissible only by them, and pushed only to their browsers and their own
