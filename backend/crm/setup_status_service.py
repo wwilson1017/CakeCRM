@@ -134,7 +134,8 @@ def _telegram(user_id) -> tuple[bool | None, bool | None]:
     The two halves answer different questions and #193 split them apart: the bot token is
     install-wide configuration, while a linked chat belongs to ONE seat. So
     ``telegram_connected`` reads the singleton and ``telegram_linked`` means "the seat
-    Baker is talking to has a linked Telegram chat", read through ``store.get_link``.
+    Baker is talking to has a Telegram chat that can actually be reached", read through
+    ``store.get_link`` and keyed on ``chat_id`` rather than on the row existing.
 
     An unattended turn has no seat, so the link question has no answer and the field is
     ``None`` — unknown — rather than ``False``. Reporting "not linked" to a background
@@ -155,7 +156,12 @@ def _telegram(user_id) -> tuple[bool | None, bool | None]:
     try:
         from telegram.store import get_link
 
-        return connected, get_link(user_id) is not None
+        # A ROW is not a link. `mint_link_code` upserts the seat's row and clears
+        # `chat_id`, and re-connecting or disconnecting the workspace bot clears it too,
+        # so a seat that pressed "Get my link code" and stopped there has a row and no
+        # reachable phone. `chat_id` is the predicate `/api/telegram/status` uses, and the
+        # two must agree — the card says "not linked" while this said "linked" otherwise.
+        return connected, bool((get_link(user_id) or {}).get("chat_id"))
     except Exception:
         logger.debug("setup status: Telegram link state unreadable", exc_info=True)
         return connected, None

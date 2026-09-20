@@ -60,7 +60,8 @@ def sources(monkeypatch):
     monkeypatch.setattr(gmail.store, "get_row", lambda: {"connection_status": "ok"})
     monkeypatch.setattr(gmail.store, "is_connected", lambda row=None: True)
     monkeypatch.setattr(telegram.store, "get_settings", lambda: {"connected": True})
-    monkeypatch.setattr(telegram.store, "get_link", lambda user_id: {"id": 1, "chat_id": "9"})
+    monkeypatch.setattr(telegram.store, "get_link",
+                        lambda user_id: {"id": 1, "chat_id": "9", "link_code": ""})
     monkeypatch.setattr(crm.service, "get_task_mode", lambda: "gtd")
     monkeypatch.setattr(crm.field_service, "list_field_definitions", lambda *a, **k: [
         {"entity_type": "contact"}, {"entity_type": "contact"}, {"entity_type": "deal"},
@@ -169,6 +170,17 @@ def test_the_telegram_link_is_read_for_THIS_seat(sources):
     out = svc.get_setup_status(user_id=7)
     assert seen == {"user_id": 7}
     assert out["telegram_connected"] is True and out["telegram_linked"] is False
+
+
+def test_a_minted_code_with_no_device_on_it_is_not_linked(sources):
+    """`mint_link_code` upserts the seat's row and CLEARS `chat_id`, and a bot swap clears
+    it too — so a row is not a link. `chat_id` is the predicate /api/telegram/status uses,
+    and the two must agree or the card says "not linked" while the assistant says linked."""
+    import telegram.store
+
+    sources.setattr(telegram.store, "get_link",
+                    lambda user_id: {"id": 1, "link_code": "abc123", "chat_id": ""})
+    assert svc.get_setup_status(user_id=7)["telegram_linked"] is False
 
 
 def test_an_unattended_turn_cannot_answer_the_link_question(sources):

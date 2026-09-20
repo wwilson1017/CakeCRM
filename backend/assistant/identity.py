@@ -403,7 +403,7 @@ _SETTINGS_SECTION_HELP: dict[str, tuple[str, tuple[str, ...]]] = {
         "authentication, linking their own Telegram chat to you, and how the pipeline "
         "board looks on this device",
         ("settings/notifications", "settings/passwords-and-2fa",
-         "settings/telegram-link"),
+         "settings/telegram-link", "pipeline/stages"),
     ),
     "assistant": (
         "your long-term memory, and the task mode the CRM runs in",
