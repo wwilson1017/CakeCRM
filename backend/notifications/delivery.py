@@ -15,10 +15,10 @@ the install-level senders. Targeted delivery narrows Web Push to that seat's own
 subscriptions; a broadcast still fans out to every stored subscription, so an
 unclaimed legacy endpoint receives broadcasts and only broadcasts.
 
-Telegram is the one channel #192 does NOT route — see ``_send_telegram``.
+Telegram is routed too since #193 — targeted to that seat's link, broadcast to all.
 
 There is no channel base class — adding/deferring a channel is adding/omitting one
-``_send_*`` branch (Telegram is a lazy-imported stub until #7 lands). WhatsApp is
+``_send_*`` branch (Telegram is lazy-imported so its module stays optional). WhatsApp is
 NOT ported (per issue #6). pywebpush is imported lazily.
 """
 
@@ -71,7 +71,7 @@ def deliver_notification(title: str, message: str, *, user_id: int | None = None
     if web_push_ok:
         channels_sent.append("web_push")
     try:
-        if _send_telegram(title, message):
+        if _send_telegram(title, message, user_id):
             channels_sent.append("telegram")
     except Exception:
         logger.debug("telegram channel errored", exc_info=True)
@@ -201,28 +201,30 @@ def _send_web_push(title: str, message: str, notification_id: str,
     return sent > 0
 
 
-def _send_telegram(title: str, message: str) -> bool:
-    """Telegram delivery — the frozen seam for issue #7.
+def _send_telegram(title: str, message: str, user_id: int | None = None) -> bool:
+    """Telegram delivery — targeted to one seat's link, or broadcast to every link.
 
-    Calls ``telegram.service.notify_linked_user(text)`` (sync, no loop/engine
-    dependency, returns False when not connected/linked) via a lazy
-    ImportError-guarded import so merge order is irrelevant: until #7 lands the
-    import fails and this no-ops (channels_sent stays ["web_push"]); when #7 lands
-    the channel lights up with zero change here.
+    Calls ``telegram.service.notify_user_telegram(user_id, text)`` or
+    ``broadcast_telegram(text)`` (both sync, no loop/engine dependency, returning False
+    when Telegram isn't connected or the recipient has no link) via a lazy
+    ImportError-guarded import, so this no-ops rather than raising if the module is absent.
 
-    **Not routed by #192, and that is a stated gap rather than an oversight.** There is
-    exactly ONE install-wide Telegram binding today, so there is no per-seat address to
-    route to: a targeted notification's text still reaches whoever linked that chat.
-    Making it per-seat is #193 (Phase B / B4), which rewires this function to deliver a
-    targeted notification to that seat's link and a broadcast to all links. Until then
-    the honest description of this channel is install-wide, and SECURITY.md says so.
+    **Routed since #193 (Phase B / B4).** #192 gave a notification a recipient but there
+    was exactly ONE install-wide Telegram binding to deliver it to, so a targeted
+    notification's text still reached whoever linked that chat — a stated gap, and this
+    is where it closes. Each seat now has its own link, so ``user_id`` picks a chat the
+    way it already picks push subscriptions: a seat with no link (or a deactivated one)
+    simply receives nothing here, and ``None`` still means broadcast.
     """
     try:
-        from telegram.service import notify_linked_user  # lands with issue #7
+        from telegram.service import broadcast_telegram, notify_user_telegram
     except ImportError:
         return False
+    text = f"{title}\n{message}"
     try:
-        return bool(notify_linked_user(f"{title}\n{message}"))
+        if user_id is None:
+            return bool(broadcast_telegram(text))
+        return bool(notify_user_telegram(user_id, text))
     except Exception:
         logger.debug("telegram delivery failed", exc_info=True)
         return False

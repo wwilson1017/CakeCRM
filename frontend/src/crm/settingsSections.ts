@@ -22,7 +22,7 @@
 export type SettingsSectionId = 'personal' | 'assistant' | 'workspace' | 'integrations';
 
 export type SettingsCardId =
-  | 'notifications' | 'change_password' | 'pipeline_board'
+  | 'notifications' | 'change_password' | 'pipeline_board' | 'telegram_link'
   | 'memory' | 'task_mode'
   | 'branding' | 'team' | 'custom_fields'
   | 'telegram' | 'gmail';
@@ -50,6 +50,11 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
       // device and calls no route, so unlike Notifications' digest half there is nothing here
       // that could only 403 for a member.
       { id: 'pipeline_board', adminOnly: false },
+      // #193. A Telegram chat is a person's own device, so linking one is personal, not
+      // install configuration. Member-visible because the routes it drives
+      // (POST /api/telegram/{link-code,unlink}) are `get_current_user` and act on the
+      // caller's own link — the bot token itself stays in Integrations, admin-only.
+      { id: 'telegram_link', adminOnly: false },
     ],
   },
   {

@@ -1,18 +1,26 @@
 """Telegram service — the update→assistant translation and the confirm handshake.
 
-The single most important test module for issue #7. Hermetic: a scripted fake
+The single most important test module for the feature. Hermetic: a scripted fake
 ``engine.chat`` (async generator yielding SSE lines) stands in for the real loop, and
 fake client/store namespaces capture what would be sent. It pins the acceptance
 criteria + the security-critical behaviors Codex flagged: auth gates, private-chat-only
 linking, inline-keyboard confirmations, the resolve→continuation flow, multi-write
 batching (continue only after ALL resolved), unauthorized-callback rejection, no-provider
-degradation, and the ``notify_linked_user`` contract for #6.
+degradation, and the outbound delivery contract.
+
+Since #193 it also pins the per-seat half: every inbound update resolves to ONE active
+seat through ``store.find_link``, that seat's identity reaches ``ToolRegistry``,
+``engine.chat`` and ``engine.resolve_confirmation``, a Telegram capture is stamped with
+its owner, and outbound delivery is targeted or broadcast rather than install-wide.
 """
 
 import json
 import types
 
 from telegram import client as real_client, service
+
+MEMBER = {"id": 2, "email": "member@cakecrm.test", "name": "Member",
+          "role": "member", "is_active": True}
 
 
 class Harness:
@@ -21,22 +29,31 @@ class Harness:
         self.answers = []   # (callback_query_id, text)
         self.edits = []     # (chat_id, message_id, reply_markup)
         self.resolve_calls = []
-        self.link_calls = []
+        self.claim_calls = []
         self.pending_sets = []
-        self.cleared = 0
+        self.cleared = []             # (link_id, expected_msg_id) per conditional clear
         self.chat_calls = []          # messages passed to each engine.chat call
-        self.chat_users = []          # the `user` each engine.chat call was given (#191)
+        self.chat_users = []          # the `user` each engine.chat call was given
         self.resolve_users = []       # the `user` each resolve_confirmation call was given
+        self.registry_users = []      # the `user` each ToolRegistry was built with (#190)
+        self.captures = []            # (text, source, owner_id) per gtd capture
         self.pending_tool_uses = []   # what list_pending_tool_uses returns (stale-batch tests)
+        self.consume_calls = []       # (link_id, batch) per try_consume_batch
         self._chat_scripts = []
         self._chat_idx = 0
         self._consume = iter(())
         self._provider = object()
-        self.settings = {
-            "connected": True, "linked": True,
-            "linked_chat_id": "chat1", "linked_user_id": "user1", "linked_name": "Alex",
+        self.connected = True
+        self.linked = True
+        # The row store.find_link resolves for this chat. One seat, one chat.
+        self.link = {
+            "id": 7, "user_id": 2, "link_code": "", "chat_id": "chat1",
+            "telegram_user_id": "user1", "telegram_name": "Alex",
             "conversation_id": "conv1", "pending_msg_id": "",
+            "user": dict(MEMBER),
         }
+        # Extra seats reachable for a broadcast.
+        self.send_targets = [("TESTTOKEN", "chat1")]
 
 
 def _install(monkeypatch, h: Harness, *, chat_scripts=None, consume=None, provider=...):
@@ -48,8 +65,8 @@ def _install(monkeypatch, h: Harness, *, chat_scripts=None, consume=None, provid
 
     async def fake_chat(provider, registry, messages, tool_mode="normal", conversation_id=None,
                         title_hint=None, context=None, *, user):
-        # `user` is required keyword-only since #191; the poller is a trusted seatless
-        # caller until B4 (#193), so it must pass None explicitly — asserted below.
+        # `user` is required keyword-only since #191. Since #193 a Telegram turn has a
+        # real seat behind it, so this must be that seat's row — never None.
         h.chat_calls.append(messages)
         h.chat_users.append(user)
         i = h._chat_idx
@@ -65,28 +82,50 @@ def _install(monkeypatch, h: Harness, *, chat_scripts=None, consume=None, provid
 
     fake_engine = types.SimpleNamespace(chat=fake_chat, resolve_confirmation=fake_resolve)
 
-    def link_chat(code, chat_id, user_id, name):
-        h.link_calls.append((code, chat_id, user_id, name))
-        return code == "GOODCODE"
+    def claim_link(code, chat_id, tg_user_id, name):
+        h.claim_calls.append((code, chat_id, tg_user_id, name))
+        if code != "GOODCODE":
+            return None
+        h.linked = True
+        h.link.update(chat_id=chat_id, telegram_user_id=tg_user_id, telegram_name=name)
+        return h.link["user_id"]
 
-    def try_consume_batch(msg_id):
+    def find_link(chat_id, tg_user_id):
+        if not h.linked:
+            return None
+        if chat_id != h.link["chat_id"] or tg_user_id != h.link["telegram_user_id"]:
+            return None
+        return dict(h.link, user=dict(h.link["user"]))
+
+    def try_consume_batch(link_id, batch):
+        h.consume_calls.append((link_id, batch))
         try:
             return next(h._consume)
         except StopIteration:
             return False
 
+    def set_pending(link_id, msg_id):
+        h.pending_sets.append((link_id, msg_id))
+        h.link["pending_msg_id"] = msg_id
+
+    def clear_pending(link_id, expected):
+        h.cleared.append((link_id, expected))
+        if h.link["pending_msg_id"] == expected:
+            h.link["pending_msg_id"] = ""
+
     fake_store = types.SimpleNamespace(
-        get_settings=lambda: dict(h.settings),
-        get_bot_token=lambda: ("TESTTOKEN" if h.settings.get("connected") else ""),
-        get_send_target=lambda: (
-            ("TESTTOKEN", h.settings["linked_chat_id"])
-            if h.settings.get("connected") and h.settings.get("linked") else None
+        get_bot_token=lambda: ("TESTTOKEN" if h.connected else ""),
+        get_send_target=lambda uid: (
+            ("TESTTOKEN", h.link["chat_id"])
+            if h.connected and h.linked and uid == h.link["user_id"] else None
         ),
-        get_or_create_conversation=lambda: "conv1",
-        set_pending_msg=lambda m: (h.pending_sets.append(m), h.settings.__setitem__("pending_msg_id", m)),
-        clear_pending_msg=lambda: (setattr_count(h), h.settings.__setitem__("pending_msg_id", "")),
+        list_send_targets=lambda: (list(h.send_targets) if h.connected and h.linked else []),
+        get_or_create_conversation=lambda link: link.get("conversation_id") or "conv1",
+        set_pending_msg=set_pending,
+        clear_pending_msg=clear_pending,
         try_consume_batch=try_consume_batch,
-        link_chat=link_chat,
+        claim_link=claim_link,
+        find_link=find_link,
     )
 
     fake_client = types.SimpleNamespace(
@@ -97,17 +136,17 @@ def _install(monkeypatch, h: Harness, *, chat_scripts=None, consume=None, provid
         TelegramError=real_client.TelegramError,
     )
 
+    def fake_registry(*, user=None, background=False):
+        h.registry_users.append(user)
+        return object()
+
     monkeypatch.setattr(service, "engine", fake_engine)
     monkeypatch.setattr(service, "store", fake_store)
     monkeypatch.setattr(service, "client", fake_client)
     monkeypatch.setattr(service, "get_ai_provider", lambda: h._provider)
-    monkeypatch.setattr(service, "ToolRegistry", lambda: object())
+    monkeypatch.setattr(service, "ToolRegistry", fake_registry)
     monkeypatch.setattr(service, "list_pending_tool_uses", lambda conv, msg: list(h.pending_tool_uses))
     return h
-
-
-def setattr_count(h):
-    h.cleared += 1
 
 
 def _msg(text, chat_id="chat1", user_id="user1", chat_type="private"):
@@ -128,26 +167,45 @@ def _texts(h):
 
 async def test_unlinked_sender_gets_link_help(monkeypatch):
     h = Harness()
-    h.settings.update(linked=False, linked_chat_id="", linked_user_id="")
+    h.linked = False
     _install(monkeypatch, h)
     await service.handle_update(_msg("how many deals?", user_id="stranger"))
     assert any("don't recognize" in t for t in _texts(h))
     assert h.chat_calls == []  # the assistant was never invoked for an unknown sender
 
 
-async def test_link_command_in_private_chat_links(monkeypatch):
+async def test_a_different_telegram_account_in_a_linked_chat_is_not_the_seat(monkeypatch):
+    """find_link matches BOTH identifiers — the chat alone does not authorize."""
     h = Harness()
     _install(monkeypatch, h)
+    await service.handle_update(_msg("how many deals?", chat_id="chat1", user_id="intruder"))
+    assert h.chat_calls == []
+    assert any("don't recognize" in t for t in _texts(h))
+
+
+async def test_link_command_in_private_chat_links(monkeypatch):
+    h = Harness()
+    h.linked = False
+    _install(monkeypatch, h)
     await service.handle_update(_msg("/link GOODCODE", user_id="newuser"))
-    assert h.link_calls and h.link_calls[0][0] == "GOODCODE"
+    assert h.claim_calls and h.claim_calls[0][0] == "GOODCODE"
     assert any("Linked" in t for t in _texts(h))
+
+
+async def test_link_reply_names_the_cakecrm_seat_it_bound(monkeypatch):
+    """A mis-pasted code must be visible before the assistant writes as someone else."""
+    h = Harness()
+    h.linked = False
+    _install(monkeypatch, h)
+    await service.handle_update(_msg("/link GOODCODE", user_id="user1"))
+    assert any("Member" in t for t in _texts(h))
 
 
 async def test_link_command_in_group_rejected(monkeypatch):
     h = Harness()
     _install(monkeypatch, h)
     await service.handle_update(_msg("/link GOODCODE", chat_type="group"))
-    assert h.link_calls == []  # never consume a code from a group
+    assert h.claim_calls == []  # never consume a code from a group
     assert any("private chat" in t for t in _texts(h))
 
 
@@ -168,6 +226,20 @@ async def test_authorized_message_streams_reply(monkeypatch):
     assert ("html", "chat1", "You have 3 open deals.", None) in h.sent
 
 
+async def test_the_turn_runs_as_the_linked_seat(monkeypatch):
+    """#193's whole point: a Telegram write is attributed to the person holding the phone.
+
+    Before this, `telegram/service` built `ToolRegistry()` with no user at three sites, so
+    a CRM write from Telegram recorded NULL and `owner: "me"` answered "this run has
+    nobody — it is unattended" to a human who was very much attended.
+    """
+    h = Harness()
+    _install(monkeypatch, h, chat_scripts=[[{"type": "done"}]])
+    await service.handle_update(_msg("how many open deals?"))
+    assert h.chat_users == [MEMBER]
+    assert h.registry_users == [MEMBER]
+
+
 async def test_confirm_event_sends_keyboard_and_marks_batch(monkeypatch):
     h = Harness()
     script = [
@@ -186,12 +258,13 @@ async def test_confirm_event_sends_keyboard_and_marks_batch(monkeypatch):
     buttons = kb_sends[0][3]["inline_keyboard"][0]
     assert {b["callback_data"] for b in buttons} == {"a:m1:tu1", "d:m1:tu1"}
     assert "Create a task" in kb_sends[0][2]  # server-derived description, not narration
-    assert h.pending_sets == ["m1"]
+    # The batch marker rides the pressing seat's OWN link row, not the singleton.
+    assert h.pending_sets == [(7, "m1")]
 
 
 async def test_callback_approve_resolves_and_continues(monkeypatch):
     h = Harness()
-    h.settings["pending_msg_id"] = "m1"
+    h.link["pending_msg_id"] = "m1"
     # Continuation turn (2nd engine.chat call) narrates the result.
     _install(monkeypatch, h,
              chat_scripts=[[{"type": "text", "text": "Done — task created."}, {"type": "done"}]],
@@ -203,16 +276,23 @@ async def test_callback_approve_resolves_and_continues(monkeypatch):
     # The continuation ran (engine.chat called with empty messages) and streamed text.
     assert h.chat_calls == [[]]
     assert ("html", "chat1", "Done — task created.", None) in h.sent
-    # The poller is a trusted SEATLESS caller until B4 (#193), so both the confirmation
-    # and the continuation must carry user=None (#191). A fabricated seat here would be
-    # worse than none: the Telegram conversation is owned by earliest_admin_id(), so a
-    # mismatched id makes every turn refuse with "Conversation not found".
-    assert h.resolve_users == [None] and h.chat_users == [None]
+    # The approver is a real seat: the write records who approved it, and
+    # resolve_confirmation can prove the conversation belongs to them.
+    assert h.resolve_users == [MEMBER] and h.chat_users == [MEMBER]
+    assert h.registry_users == [MEMBER, MEMBER]
+
+
+async def test_batch_is_consumed_against_the_pressing_seats_link(monkeypatch):
+    h = Harness()
+    h.link["pending_msg_id"] = "m1"
+    _install(monkeypatch, h, chat_scripts=[[{"type": "done"}]], consume=[True])
+    await service.handle_update(_callback("a:m1:tu1"))
+    assert h.consume_calls == [(7, "m1")]
 
 
 async def test_two_confirms_continue_only_after_both_resolved(monkeypatch):
     h = Harness()
-    h.settings["pending_msg_id"] = "m1"
+    h.link["pending_msg_id"] = "m1"
     # First press: batch NOT done (False). Second press: done (True) → one continuation.
     _install(monkeypatch, h,
              chat_scripts=[[{"type": "text", "text": "All set."}, {"type": "done"}]],
@@ -226,16 +306,27 @@ async def test_two_confirms_continue_only_after_both_resolved(monkeypatch):
 
 async def test_unauthorized_callback_rejected(monkeypatch):
     h = Harness()
-    h.settings["pending_msg_id"] = "m1"
+    h.link["pending_msg_id"] = "m1"
     _install(monkeypatch, h)
     await service.handle_update(_callback("a:m1:tu1", user_id="intruder"))
     assert h.answers and "authorized" in h.answers[0][1].lower()
     assert h.resolve_calls == []  # the intruder never triggered a write
 
 
+async def test_callback_from_an_unlinked_chat_is_rejected(monkeypatch):
+    """A keyboard left over from before an unlink must not still resolve writes."""
+    h = Harness()
+    h.link["pending_msg_id"] = "m1"
+    h.linked = False
+    _install(monkeypatch, h)
+    await service.handle_update(_callback("a:m1:tu1"))
+    assert h.resolve_calls == []
+    assert h.answers and "authorized" in h.answers[0][1].lower()
+
+
 async def test_expired_callback_when_no_pending(monkeypatch):
     h = Harness()
-    h.settings["pending_msg_id"] = ""  # nothing pending
+    h.link["pending_msg_id"] = ""  # nothing pending
     _install(monkeypatch, h)
     await service.handle_update(_callback("a:m1:tu1"))
     assert h.resolve_calls == []
@@ -246,7 +337,7 @@ async def test_stale_batch_button_is_rejected_not_resolved(monkeypatch):
     # The current pending batch is m2 (a superseded turn); a leftover m1 button must NOT
     # resolve against m2 — critical for Gemini's reused positional tool ids.
     h = Harness()
-    h.settings["pending_msg_id"] = "m2deadbe"
+    h.link["pending_msg_id"] = "m2deadbe"
     _install(monkeypatch, h)
     await service.handle_update(_callback("a:m1:tu1"))  # batch prefix "m1" != "m2deadbe"
     assert h.resolve_calls == []
@@ -261,28 +352,51 @@ async def test_no_provider_degrades_gracefully(monkeypatch):
     assert h.chat_calls == []
 
 
-# ── Outbound contract for #6 ────────────────────────────────────────────────
+# ── Outbound delivery (targeted vs broadcast) ───────────────────────────────
 
-def test_notify_linked_user_sends_when_linked(monkeypatch):
+def test_notify_user_telegram_sends_to_that_seats_chat(monkeypatch):
     h = Harness()
     _install(monkeypatch, h)
-    assert service.notify_linked_user("Todo due: follow up with Acme") is True
+    assert service.notify_user_telegram(2, "Todo due: follow up with Acme") is True
     assert ("text", "chat1", "Todo due: follow up with Acme", None) in h.sent
 
 
-def test_notify_linked_user_false_when_unlinked(monkeypatch):
+def test_notify_user_telegram_false_for_a_seat_with_no_link(monkeypatch):
+    """A targeted notification must NOT fall back to somebody else's chat."""
     h = Harness()
-    h.settings.update(linked=False, linked_chat_id="")
     _install(monkeypatch, h)
-    assert service.notify_linked_user("anything") is False
+    assert service.notify_user_telegram(999, "private thing") is False
     assert h.sent == []
 
 
-def test_notify_linked_user_false_when_disconnected(monkeypatch):
+def test_notify_user_telegram_false_when_unlinked(monkeypatch):
     h = Harness()
-    h.settings.update(connected=False)
+    h.linked = False
     _install(monkeypatch, h)
-    assert service.notify_linked_user("anything") is False
+    assert service.notify_user_telegram(2, "anything") is False
+    assert h.sent == []
+
+
+def test_notify_user_telegram_false_when_disconnected(monkeypatch):
+    h = Harness()
+    h.connected = False
+    _install(monkeypatch, h)
+    assert service.notify_user_telegram(2, "anything") is False
+
+
+def test_broadcast_reaches_every_linked_chat(monkeypatch):
+    h = Harness()
+    h.send_targets = [("TESTTOKEN", "chatA"), ("TESTTOKEN", "chatB")]
+    _install(monkeypatch, h)
+    assert service.broadcast_telegram("Daily digest") is True
+    assert [c for (_k, c, _b, _m) in h.sent] == ["chatA", "chatB"]
+
+
+def test_broadcast_false_when_nobody_is_linked(monkeypatch):
+    h = Harness()
+    h.linked = False
+    _install(monkeypatch, h)
+    assert service.broadcast_telegram("Daily digest") is False
 
 
 def _raise_tg(*a, **k):
@@ -293,19 +407,43 @@ def _raise_generic(*a, **k):
     raise RuntimeError("boom")
 
 
-def test_notify_linked_user_false_on_send_error(monkeypatch):
-    # The frozen #6 contract: never raises. A TelegramError from send → False.
+def test_notify_user_telegram_false_on_send_error(monkeypatch):
+    # The delivery contract: never raises. A TelegramError from send → False.
     h = Harness()
     _install(monkeypatch, h)
     monkeypatch.setattr(service.client, "send_text", _raise_tg)
-    assert service.notify_linked_user("hi") is False
+    assert service.notify_user_telegram(2, "hi") is False
 
 
-def test_notify_linked_user_false_on_unexpected_error(monkeypatch):
+def test_notify_user_telegram_false_on_unexpected_error(monkeypatch):
     h = Harness()
     _install(monkeypatch, h)
     monkeypatch.setattr(service.client, "send_text", _raise_generic)
-    assert service.notify_linked_user("hi") is False
+    assert service.notify_user_telegram(2, "hi") is False
+
+
+def test_broadcast_survives_one_unreachable_chat(monkeypatch):
+    """One blocked bot must not swallow everyone else's notification."""
+    h = Harness()
+    h.send_targets = [("TESTTOKEN", "chatDEAD"), ("TESTTOKEN", "chatOK")]
+    _install(monkeypatch, h)
+
+    def flaky(chat_id, text, token, reply_markup=None):
+        if chat_id == "chatDEAD":
+            raise real_client.TelegramError("blocked", status=403)
+        h.sent.append(("text", chat_id, text, reply_markup))
+
+    monkeypatch.setattr(service.client, "send_text", flaky)
+    assert service.broadcast_telegram("Daily digest") is True
+    assert [c for (_k, c, _b, _m) in h.sent] == ["chatOK"]
+
+
+def test_empty_text_is_never_sent(monkeypatch):
+    h = Harness()
+    _install(monkeypatch, h)
+    assert service.notify_user_telegram(2, "") is False
+    assert service.broadcast_telegram("") is False
+    assert h.sent == []
 
 
 # ── Non-text messages, error/edge turns, stale-batch cleanup ────────────────
@@ -349,22 +487,25 @@ async def test_generator_without_done_flushes_buffer(monkeypatch):
 
 async def test_new_message_auto_denies_stale_batch(monkeypatch):
     h = Harness()
-    h.settings["pending_msg_id"] = "mOLD"
+    h.link["pending_msg_id"] = "mOLD"
     h.pending_tool_uses = ["tuA", "tuB"]
     _install(monkeypatch, h, chat_scripts=[[{"type": "text", "text": "ok"}, {"type": "done"}]])
     await service.handle_update(_msg("never mind, do this instead"))
     assert ("conv1", "tuA", "deny", "mOLD") in h.resolve_calls
     assert ("conv1", "tuB", "deny", "mOLD") in h.resolve_calls
-    assert h.cleared >= 1  # pending marker cleared before the new turn
-    # The auto-deny path is the third seatless call site (#191) — same contract.
-    assert set(h.resolve_users) == {None} and set(h.chat_users) == {None}
+    # Cleared CONDITIONALLY — only the batch this turn actually denied, so a batch
+    # installed in between keeps its live buttons.
+    assert h.cleared == [(7, "mOLD")]
+    # The auto-deny path carries the seat too, so a denial is attributable.
+    assert h.resolve_users and all(u == MEMBER for u in h.resolve_users)
+    assert h.chat_users and all(u == MEMBER for u in h.chat_users)
 
 
 async def test_stale_batch_auto_denied_even_without_provider(monkeypatch):
     # The reorder fix: a new message cancels abandoned buttons BEFORE the provider gate,
     # so a disconnected provider can't leave a live Approve/Deny for an abandoned write.
     h = Harness()
-    h.settings["pending_msg_id"] = "mOLD"
+    h.link["pending_msg_id"] = "mOLD"
     h.pending_tool_uses = ["tuA"]
     _install(monkeypatch, h, provider=None)
     await service.handle_update(_msg("never mind"))
@@ -383,7 +524,7 @@ async def test_bare_start_linked_greets(monkeypatch):
 
 async def test_bare_start_unlinked_shows_help(monkeypatch):
     h = Harness()
-    h.settings.update(linked=False, linked_chat_id="", linked_user_id="")
+    h.linked = False
     _install(monkeypatch, h)
     await service.handle_update(_msg("/start", user_id="stranger"))
     assert any("don't recognize" in t for t in _texts(h))
@@ -422,12 +563,31 @@ async def test_capture_intercept_files_a_todo_and_never_reaches_the_model(monkey
     _install(monkeypatch, h)
     monkeypatch.setattr(service, "_task_mode", lambda: "gtd")
     monkeypatch.setattr(service.gtd_service, "capture",
-                        lambda text, source: {"id": 7, "title": text})
+                        lambda text, source, owner_id=None: h.captures.append((text, source, owner_id))
+                        or {"id": 7, "title": text})
 
     await service.handle_update(_msg("capture buy more candles"))
 
     assert h.chat_calls == [], "the intercept must short-circuit before engine.chat"
     assert any("Captured: buy more candles" in t for t in _texts(h))
+
+
+async def test_telegram_capture_is_stamped_with_the_linked_seat(monkeypatch):
+    """Unlike the PUBLIC capture surface, a Telegram capture has a known person behind it.
+
+    The `source` value is unchanged — "telegram", never "capture_web" — so the public
+    path's own handling of capture-sourced text is untouched by this.
+    """
+    h = Harness()
+    _install(monkeypatch, h)
+    monkeypatch.setattr(service, "_task_mode", lambda: "gtd")
+    monkeypatch.setattr(service.gtd_service, "capture",
+                        lambda text, source, owner_id=None: h.captures.append((text, source, owner_id))
+                        or {"id": 7, "title": text})
+
+    await service.handle_update(_msg("capture buy more candles"))
+
+    assert h.captures == [("buy more candles", "telegram", 2)]
 
 
 async def test_capture_is_ordinary_conversation_in_normal_task_mode(monkeypatch):
@@ -454,7 +614,7 @@ async def test_capture_failure_answers_the_user_instead_of_crashing(monkeypatch)
     _install(monkeypatch, h)
     monkeypatch.setattr(service, "_task_mode", lambda: "gtd")
 
-    def _boom(text, source):
+    def _boom(text, source, owner_id=None):
         raise RuntimeError("Postgres pool not initialized")
 
     monkeypatch.setattr(service.gtd_service, "capture", _boom)
@@ -463,3 +623,18 @@ async def test_capture_failure_answers_the_user_instead_of_crashing(monkeypatch)
 
     assert h.chat_calls == []
     assert any("Couldn't capture that" in t for t in _texts(h))
+
+
+async def test_an_unlinked_sender_can_never_capture(monkeypatch):
+    """The capture intercept sits behind the link gate — no owner, no capture."""
+    h = Harness()
+    h.linked = False
+    _install(monkeypatch, h)
+    monkeypatch.setattr(service, "_task_mode", lambda: "gtd")
+
+    def _never(*a, **k):
+        raise AssertionError("an unlinked sender must not reach capture")
+
+    monkeypatch.setattr(service.gtd_service, "capture", _never)
+    await service.handle_update(_msg("capture something", user_id="stranger"))
+    assert any("don't recognize" in t for t in _texts(h))

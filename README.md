@@ -76,16 +76,27 @@ Add the rest of your team at **Settings → Workspace → Team**. Two roles:
 an owner, which drives the "Mine" filters and the per-rep numbers — but any member
 can still see and edit anything. There are no per-record permissions, deliberately.
 
-**Sharing to be aware of.** The assistant's chat history and memory, the Gmail
-connection and the Telegram link are still **shared by the whole install**. If the
-admin connects their personal Gmail, any seat can have the assistant read it.
-Per-user isolation of those surfaces is the next phase of this work.
+**Sharing to be aware of.** The assistant's memory and the Gmail connection are still
+**shared by the whole install**. If the admin connects their personal Gmail, any seat
+can have the assistant read it. Chat history and the Telegram link are per-seat.
+Per-user isolation of the remaining surfaces is the next phase of this work.
 
 **Notifications carry a recipient.** Each one is either addressed to a single seat —
-visible and dismissible only by them, and pushed only to their browsers — or sent to
-everyone, which is what the daily digest and a nudge about an unowned record do.
-Telegram is the exception and still install-wide: there is one linked chat, so it
-receives notifications whoever they were addressed to.
+visible and dismissible only by them, and pushed only to their browsers and their own
+Telegram chat — or sent to everyone, which is what the daily digest and a nudge about
+an unowned record do.
+
+**Telegram is per-seat.** One bot serves the whole workspace: an admin connects it once
+under **Settings → Integrations → Telegram**, and then everyone links their own phone
+from **Settings → Personal → Link my Telegram**. Your link code is yours alone — it
+binds Telegram to *your* account, so anything the assistant changes from your phone is
+recorded as you, and one chat can only ever speak for one seat.
+
+> **Upgrading from a version before per-seat Telegram?** The old install-wide binding
+> stored a Telegram account id with no way to tell which CakeCRM seat it belonged to, so
+> nothing is guessed: whoever was linked simply links again from **Settings → Personal →
+> Link my Telegram**. It takes about twenty seconds, and the bot itself does not need to
+> be reconnected.
 
 ### Passwords
 

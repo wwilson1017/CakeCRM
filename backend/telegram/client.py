@@ -3,7 +3,7 @@
 Every function takes an explicit ``bot_token``; there is no global fallback. The
 client is fully synchronous and importable without side effects (``httpx`` is
 imported lazily inside ``_post``), so it can be called from any context — the poll
-task offloads it via ``asyncio.to_thread``; ``service.notify_linked_user`` (for the
+task offloads it via ``asyncio.to_thread``; ``service.notify_user_telegram`` (for the
 #6 heartbeat) calls it directly on a plain thread.
 
 Security: the bot token is embedded in every Bot API URL, so this module NEVER logs a
@@ -150,7 +150,8 @@ def _send_message(bot_token: str, payload: dict) -> None:
 def send_text(chat_id: int | str, text: str, bot_token: str, reply_markup: dict | None = None) -> None:
     """Send plain text (NO parse mode) — safe for arbitrary/untrusted content.
 
-    Used for system messages, errors, and ``notify_linked_user``: without a parse
+    Used for system messages, errors, and the outbound notification path
+    (``service.notify_user_telegram`` / ``broadcast_telegram``): without a parse
     mode, Telegram renders the text literally, so nothing can break HTML parsing.
     """
     if not bot_token or not text:
