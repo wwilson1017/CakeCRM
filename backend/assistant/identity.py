@@ -478,18 +478,23 @@ def _one_line(value, limit: int) -> str:
 # which is the safe direction: no claim about what the user may do.
 _ROLE_NOTES: dict[str, str] = {
     "admin": (
-        "They are an administrator of this install, so the workspace and integration "
-        "settings — branding, the team roster, custom fields, the task mode, the "
-        "Telegram bot and the Gmail connection — are theirs to change."
+        "They are an administrator of this install, so every install-wide setting is "
+        "theirs to change: AI providers and the active model, your personality, "
+        "branding, the team roster, custom field definitions, the task mode and its "
+        "no-login links, the Telegram bot, the Gmail connection, the daily digest and "
+        "nudges, and the sample-data and clear-everything operations."
     ),
     "member": (
-        "They are a member of this install, not an administrator. The workspace and "
-        "integration settings — branding, the team roster, custom fields, the task mode, "
-        "connecting the Telegram bot and connecting Gmail — are admin-only, so if they "
-        "ask to change one, say it needs an administrator rather than walking them "
-        "through a flow that will be refused. Their own settings ARE theirs: "
-        "notification preferences, their password and two-factor authentication, and "
-        "linking or unlinking their own Telegram chat."
+        "They are a member of this install, not an administrator. Install-wide settings "
+        "are admin-only for them — AI providers and the active model, your personality, "
+        "branding, the team roster, custom field definitions, the task mode and its "
+        "no-login links, connecting the Telegram bot, connecting Gmail, the daily digest "
+        "and nudges, and the sample-data and clear-everything operations. If they ask to "
+        "change one, say it needs an administrator rather than walking them through a "
+        "flow that will be refused. What IS theirs: their own password and two-factor "
+        "authentication, push notifications on their own device, linking or unlinking "
+        "their own Telegram chat, how the pipeline board looks for them, and every CRM "
+        "record — members create, edit and delete those freely."
     ),
 }
 

@@ -388,8 +388,34 @@ def test_the_member_note_separates_the_telegram_BOT_from_a_personal_link():
     note = identity.build_user_note({"name": "Ada", "role": "member"})
     assert "connecting the Telegram bot" in note        # admin-only half, named precisely
     assert "linking or unlinking their own Telegram chat" in note   # theirs to do
-    # The bare claim is what must not appear.
-    assert "the task mode, Telegram and Gmail — are admin-only" not in note
+
+
+def test_the_member_note_names_every_install_wide_control_a_member_might_ask_about():
+    """The note's whole job is to stop Baker walking someone through a flow their route
+    will refuse, so a control it fails to name is a control it fails at. Derived from
+    `test_route_authz.ADMIN_ONLY`, which is the list CI pins in both directions."""
+    note = identity.build_user_note({"role": "member"}).lower()
+    for control in (
+        "ai providers",          # /api/providers/* connect-key, active, tiers
+        "your personality",      # PUT /api/assistant/identity
+        "branding",              # PUT /api/branding
+        "the team roster",       # POST /api/users
+        "custom field definitions",   # the field SCHEMA routes
+        "the task mode",         # POST /api/crm/task-mode + todo-surfaces
+        "connecting the telegram bot",
+        "connecting gmail",
+        "the daily digest and nudges",  # POST /api/heartbeat/proactive
+    ):
+        assert control in note, f"the member note never mentions {control!r}"
+
+
+def test_the_member_note_does_not_hand_a_member_the_admin_half_of_notifications():
+    """Notifications is ONE card with two halves: push on this device is everyone's, the
+    daily digest writes install state through a require_admin route. Calling the card
+    theirs was a positive error — Baker would have talked a member through the toggle."""
+    note = identity.build_user_note({"role": "member"})
+    assert "push notifications on their own device" in note
+    assert "notification preferences" not in note
 
 
 def test_the_role_sentence_does_not_depend_on_a_usable_name_or_email():
