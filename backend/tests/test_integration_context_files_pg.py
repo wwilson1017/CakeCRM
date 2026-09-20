@@ -238,7 +238,7 @@ async def test_approving_a_stale_assistant_overwrite_keeps_the_user_edit(pg_db, 
         "content": placeholder,
     })
     monkeypatch.setattr(history, "merge_tool_result", lambda *a: None)
-    out = engine.resolve_confirmation(registry, "c1", "t1", "approve", msg_id="m1")
+    out = engine.resolve_confirmation(registry, "c1", "t1", "approve", msg_id="m1", user=None)
 
     # The user's edit survived and Baker was told what to do about it.
     assert service.read_file("soul.md")["content"] == "I am Baker, and I am the user's."
@@ -252,7 +252,7 @@ async def test_approving_a_stale_assistant_overwrite_keeps_the_user_edit(pg_db, 
         "args": {"filename": "soul.md", "content": "BAKER'S FRESH REWRITE"},
         "content": placeholder2,
     })
-    engine.resolve_confirmation(registry, "c1", "t2", "approve", msg_id="m2")
+    engine.resolve_confirmation(registry, "c1", "t2", "approve", msg_id="m2", user=None)
     assert service.read_file("soul.md")["content"] == "BAKER'S FRESH REWRITE"
     assert cf_tools.binding_kwargs(json.loads(placeholder2))["expected_updated_at"]
 

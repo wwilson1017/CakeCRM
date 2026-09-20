@@ -56,13 +56,13 @@ class Store:
         self.tainted = False
         self._n = 0
 
-    def create_conversation(self):
+    def create_conversation(self, *, user_id=None):
         self._n += 1
         cid = f"conv{self._n}"
         self.convs[cid] = {"id": cid, "messages": []}
         return {"id": cid}
 
-    def conversation_exists(self, cid):
+    def conversation_exists(self, cid, *, user_id=None):
         return cid in self.convs
 
     def auto_title(self, cid, text):
@@ -132,6 +132,7 @@ def store(monkeypatch):
 
 
 async def _run(provider, registry, messages, **kw):
+    kw.setdefault("user", None)  # required keyword-only since #191
     out = []
     async for line in engine.chat(provider, registry, messages, **kw):
         out.append(json.loads(line[len("data: "):]))

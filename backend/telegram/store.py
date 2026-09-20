@@ -23,6 +23,7 @@ from assistant.history import (
 )
 from core.encryption import decrypt_value, encrypt_value
 from core.postgres import get_connection, pg_execute, pg_fetchone
+from users.service import earliest_admin_id
 
 logger = logging.getLogger(__name__)
 
@@ -179,12 +180,21 @@ def get_or_create_conversation() -> str:
     The assistant API can delete the conversation out from under us (the column is a
     nullable FK with ON DELETE SET NULL), so a stored id is verified for existence and
     recreated when gone. Sequential poll processing means no concurrent creation.
+
+    The Telegram binding is still install-wide, so the poller has no seat of its own.
+    Until B4 (#193) gives each link a real owner, a minted conversation is stamped with
+    the earliest admin — the same expression migration M1 claims legacy rows with — so
+    the Telegram thread stays visible in the admin's sidebar instead of becoming a
+    NULL-owner row nobody can open. The existence probe stays unscoped on purpose: this
+    is a trusted internal caller asking whether the id it already stored is still live,
+    not a seat reaching for a conversation. **B4 deletes this stopgap.**
     """
     row = pg_fetchone("SELECT conversation_id FROM telegram_settings WHERE id = 1")
     conv_id = (row.get("conversation_id") if row else None) or ""
-    if conv_id and conversation_exists(conv_id):
+    if conv_id and conversation_exists(conv_id, user_id=None):
         return conv_id
-    conv = create_conversation()  # own transaction — not nested under a held lock
+    # own transaction — not nested under a held lock
+    conv = create_conversation(user_id=earliest_admin_id())
     new_id = conv["id"]
     pg_execute(
         "UPDATE telegram_settings SET conversation_id = %s, updated_at = now() WHERE id = 1",

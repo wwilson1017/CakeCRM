@@ -163,6 +163,8 @@ async def chat(
     conversation_id: str | None = None,
     title_hint: str | None = None,
     context: dict | None = None,
+    *,
+    user: dict | None,
 ) -> AsyncGenerator[str, None]:
     """Stream one assistant turn as SSE.
 
@@ -174,6 +176,12 @@ async def chat(
     ``{"record_type": "deal", "record_id": 3}``) is per-request/volatile: it is
     folded into the system prompt for this turn only and is NEVER persisted.
 
+    ``user`` is the seat this turn belongs to — keyword-only and REQUIRED (issue #191),
+    because it decides which conversations the caller may resume and who a new one is
+    owned by. A defaulted ``None`` would let a future route forget it and silently
+    resume anyone's thread, so trusted seatless callers (the Telegram poller until B4)
+    must pass ``user=None`` explicitly.
+
     Thin catch-all wrapper: the SSE response has already started (200 + bytes
     flushed), so any unexpected exception in the loop must still terminate with a
     proper ``error`` event rather than dropping the connection with no terminal
@@ -181,7 +189,7 @@ async def chat(
     stop).
     """
     try:
-        async for line in _chat_impl(provider, registry, messages, tool_mode, conversation_id, title_hint, context):
+        async for line in _chat_impl(provider, registry, messages, tool_mode, conversation_id, title_hint, context, user):
             yield line
     except Exception:
         logger.exception("assistant.chat crashed mid-stream")
@@ -196,6 +204,7 @@ async def _chat_impl(
     conversation_id: str | None = None,
     title_hint: str | None = None,
     context: dict | None = None,
+    user: dict | None = None,
 ) -> AsyncGenerator[str, None]:
     if tool_mode not in _VALID_MODES:
         tool_mode = "normal"
@@ -205,19 +214,32 @@ async def _chat_impl(
     budget = BudgetState(limit=WRITE_BUDGET_PER_TURN)
 
     is_continuation = not messages
+    # The seat every conversation lookup below is scoped to. None = a trusted seatless
+    # caller (the Telegram poller), which sees the conversation it was handed (#191).
+    # Indexed, not ``.get``: a user row without an id is a bug, and answering it with
+    # None would silently promote that seat to the unfiltered trusted path. The KeyError
+    # reaches ``chat``'s catch-all and ends the turn, which is the safe direction.
+    user_id = user["id"] if isinstance(user, dict) else None
 
     # ── Resolve / validate the conversation, persist the user row ──────────────
     try:
         new_conversation = False
         if conversation_id:
-            if not await asyncio.to_thread(history.conversation_exists, conversation_id):
+            # Scoped to the caller's seat, so ANOTHER seat's conversation is refused
+            # with the identical response an unknown uuid gets — a resume is the third
+            # door into a conversation and the REST filters would be decoration without
+            # it (#191). Refusing here, before any write, is what keeps a rejected
+            # resume from saving a message row or auto-titling someone else's thread.
+            if not await asyncio.to_thread(
+                history.conversation_exists, conversation_id, user_id=user_id
+            ):
                 yield _sse({"type": "error", "error": "Conversation not found."})
                 return
         else:
             if is_continuation:
                 yield _sse({"type": "error", "error": "Cannot continue without a conversation."})
                 return
-            conv = await asyncio.to_thread(history.create_conversation)
+            conv = await asyncio.to_thread(history.create_conversation, user_id=user_id)
             conversation_id = conv["id"]
             new_conversation = True
 
@@ -339,6 +361,7 @@ async def _chat_impl(
     system_prompt = identity.build_system_prompt(
         ident, context=context, memory_context=memory_block,
         soul=soul_block, knowledge_context=knowledge_block,
+        user_note=identity.build_user_note(user),
     )
 
     # ── Main tool-execution loop ───────────────────────────────────────────────
@@ -703,7 +726,7 @@ def _binding_conflict(tool: str, pending_content: str | None) -> dict | None:
 
 
 def resolve_confirmation(registry, conversation_id: str, tool_use_id: str, decision: str,
-                         msg_id: str | None = None) -> dict:
+                         msg_id: str | None = None, *, user: dict | None) -> dict:
     """Approve or deny a pending write — server-authoritative and idempotent.
 
     Atomically claims the pending call (loading its canonical tool + args from the
@@ -719,7 +742,19 @@ def resolve_confirmation(registry, conversation_id: str, tool_use_id: str, decis
     a rare, inspectable stuck state for a guarantee of NO double-execution — the
     safer failure mode for non-idempotent CRM mutations (create/delete). Full
     exactly-once recovery would need idempotency keys on the CRM ops (future work).
+
+    ``user`` is keyword-only and REQUIRED for the same reason ``chat``'s is (#191): a
+    confirmation is the fourth door into a conversation — it reaches the stored tool
+    call by ``(conversation_id, tool_use_id, msg_id)`` and would otherwise execute
+    another seat's pending write. The ownership check runs BEFORE the claim, so a
+    refused call leaves the pending result untouched and returns ``not_found``, which
+    the route renders as the same 404 an unknown conversation gets. Trusted seatless
+    callers (the Telegram poller) pass ``user=None`` explicitly.
     """
+    if user is not None and not history.conversation_exists(
+        conversation_id, user_id=user["id"]  # indexed: see chat()'s note on failing closed
+    ):
+        return {"status": "not_found"}
     claimed = history.claim_pending_tool(conversation_id, tool_use_id, msg_id=msg_id)
     if claimed is None:
         # Already resolved (or executing) by a prior call — return the CANONICAL

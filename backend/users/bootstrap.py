@@ -12,8 +12,8 @@ special-cased:
   point #78 made ``AUTH_PASSWORD`` inert — so that env var is NOT their password and
   seeding from it would lock them out of their own CRM. The live credential is the
   bcrypt hash in ``auth_credential``, and the bootstrap carries it across verbatim.
-  Their 2FA keeps working, their trusted devices keep working, and every record they
-  own becomes theirs.
+  Their 2FA keeps working, their trusted devices keep working, every record they own
+  becomes theirs, and their assistant conversations stay theirs (#191).
 
 Everything below happens in ONE transaction under an advisory lock, so two workers
 booting at the same moment cannot both seed, and a crash halfway cannot leave a
@@ -129,6 +129,28 @@ def ensure_bootstrap_admin() -> dict | None:
         cur.execute("UPDATE totp_config SET user_id = %s WHERE user_id IS NULL", (admin_id,))
         cur.execute(
             "UPDATE trusted_devices SET user_id = %s WHERE user_id IS NULL", (admin_id,)
+        )
+
+        # Claim the legacy conversations for the same reason, in the same transaction
+        # (#191). Migration M1 carries an identical MIN(id)-admin claim, and on a normal
+        # upgrade — an install already running Phase A — that one does the work and this
+        # line finds nothing. It is the SKIPPED-VERSION upgrade this covers: an install
+        # coming straight from a pre-multi-user release applies the users migration and
+        # M1 in the same startup, so M1's subquery reads an empty users table, matches no
+        # rows, and is never re-run. Without this the install's entire chat history would
+        # stay unowned — and an unowned conversation is invisible to every seat, so it
+        # would silently disappear from the sidebar with no way back short of SQL.
+        # Idempotent against M1: both are WHERE user_id IS NULL, and this whole function
+        # returns early once any user exists, so it can only ever see legacy rows.
+        #
+        # M1's claim carries an `AND is_active` predicate; this one deliberately does NOT
+        # need one and must not grow one. It stamps `admin_id` — the row INSERTed six
+        # lines up with `is_active` TRUE — not the result of a MIN(id) lookup, so the
+        # owner is active by construction. There is no admin to be stale about: the
+        # COUNT(*) guard above means this runs only on an install with no users at all.
+        cur.execute(
+            "UPDATE assistant_conversations SET user_id = %s WHERE user_id IS NULL",
+            (admin_id,),
         )
 
         # Attribute existing records. Ownership is safe to backfill: on a single-user

@@ -571,7 +571,8 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   cannot embed at all, and without pgvector a stored vector could only re-rank what FTS
   already found, so it could never surface what FTS missed. FTS is the search,
   permanently. The Phase 4 PR carries no closing keyword; #72 is closed by hand.
-  Assistant chat history and memory are still install-wide — Phase B of #60.
+  Assistant memory is still install-wide — Phase B of #60; chat history is per-seat
+  since #191.
   **The product manual is a searchable library of committed markdown** (#143 phase 1,
   `backend/help/`): `content/**/*.md`, one file per topic, loaded lazily and cached,
   warmed once in the lifespan by a `warm()` that CANNOT raise. Three keyless
@@ -703,11 +704,50 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   *inside* a member-visible card (pinned in `SettingsPage.test.tsx`). Any future card
   mixing personal and install controls needs the same second gate: the registry cannot
   express it, and "don't offer what can only 403" is a rule about controls, not cards.
-  **Still install-wide, deliberately (Phase B, tracked by #98 → #190–#194):** assistant
-  chat history and memory, the Gmail connection, the Telegram binding, notifications and
+  **Assistant conversations ARE access-controlled** (#191, Phase B/B2) — the one place
+  the product does that, and a deliberate NEW position rather than an extension of the
+  old one. "Ownership is not access control" is scoped to **CRM records**: a deal is
+  team data with a name attached. A conversation is not — it carries drafts,
+  half-thoughts and private asks — so `assistant_conversations.user_id` is a real
+  permission, **owner-only with NO admin override**. Adding an admin read path later is
+  additive; removing one would be a breach, which is why the strict direction ships
+  first. Every path that reaches a conversation from a seat is scoped to it: the four
+  REST endpoints, `engine.chat`'s resume of a client-supplied `conversation_id`, and
+  `/confirm`'s claim — the last two are what a naive pass misses, and without them the
+  REST filters are decoration because any seat could resume another's thread by uuid.
+  Cross-seat access answers **404, never 403** (no existence oracle), and `/chat`
+  answers a foreign uuid with the byte-identical SSE error an unknown one gets.
+  Mechanically: `history.py`'s six conversation functions take a **keyword-only,
+  REQUIRED** `user_id` (`None` = no filter, for trusted internal callers only — required
+  rather than defaulted so a future route cannot silently reopen the hole), and
+  `engine.chat`/`resolve_confirmation` take a required keyword-only `user` for the same
+  reason. Migration `20260917173429` claims legacy rows for
+  `MIN(id) WHERE role='admin' AND is_active` (a no-op on a fresh install, where the
+  table is empty), and `users/bootstrap.py` repeats the claim inside the transaction
+  that seeds the first admin — the same thing
+  it already does for legacy `totp_config`/`trusted_devices` rows. **Both are needed:**
+  an install upgrading straight from a pre-multi-user release runs
+  `20260821100126_multi_user.sql` and this migration in ONE startup, before any admin
+  exists, so the migration's subquery is NULL and never re-runs; without the bootstrap
+  half that install's whole chat history would stay unowned, and an unowned conversation
+  is invisible to every seat. **`AND is_active` is load-bearing in the migration**
+  (and in `users.service.earliest_admin_id()`, which is the same expression and stamps
+  the seatless Telegram thread): access here is owner-only with no admin override, so
+  claiming history for a deactivated lowest-id admin would hand it to a seat nobody can
+  authenticate as. With no active admin the subquery is NULL, the UPDATE is a no-op and
+  the rows stay unowned — invisible, which is the fail-safe direction. The bootstrap
+  claim needs no such predicate: it stamps the admin row it just INSERTed as active, and
+  only ever runs on an install with no users at all. The column is `ON DELETE CASCADE`
+  (personal data follows its person, the `totp_config` idiom, not `owner_id`'s SET
+  NULL). Telegram has no seat until B4 (#193), so `telegram/store` stamps
+  `users.service.earliest_admin_id()` — the same expression — as a stopgap.
+  **Still install-wide, deliberately (Phase B, tracked by #98 → #192–#194):** assistant
+  memory, the Gmail connection, the Telegram binding, notifications and
   alerts. Memory facts and context files stay shared permanently (Phase B Decision 1 —
   they are team knowledge, and per-seat facts would make the assistant amnesiac for every
-  new seat); the rest move to the person in #191–#194.
+  new seat); the rest move to the person in #192–#194. A fact the assistant records out
+  of a now-private conversation still becomes install-visible — documented, not
+  engineered around.
   Every active seat gets the assistant (Will's §15 ruling — no temporary admin gate
   someone has to remember to remove), so a member can have it read the admin's
   connected mailbox. `GET /api/telegram/status` redacts the link code for members,
@@ -2594,7 +2634,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | CakeCRM area | Source |
 |---|---|
 | Product shell (run.py, auth, 2FA, encryption, config, Railway) | `chatty/backend/` + `chatty/run.py` |
-| Accounts, roles, per-user 2FA, record ownership + per-rep analytics — **landed #60 (Phase A)** as `backend/users/` (`service`/`router`/`bootstrap`) + reworked `core/{auth,auth_2fa,config}.py` + `20260821100126_multi_user.sql` + `frontend/src/crm/{useUsers.ts,components/{TeamSettings,OwnerSelect,OwnerScopeToggle}.tsx}` (`OwnerScopeToggle` retired in #77 for a multi-select Owner facet). Phase B (assistant memory/chat partitioning, per-user Telegram, owner-routed notifications, owner-aware agent tools) is a separate plan. Corrects the issue's premise: cake_os uses `owner_email` TEXT with no FK, so this is an FK design, not a carry | New capability (no blueprint — `cake_os/backend/apps/crm/analytics_service.get_rep_performance` for the per-rep shape only) |
+| Accounts, roles, per-user 2FA, record ownership + per-rep analytics — **landed #60 (Phase A)** as `backend/users/` (`service`/`router`/`bootstrap`) + reworked `core/{auth,auth_2fa,config}.py` + `20260821100126_multi_user.sql` + `frontend/src/crm/{useUsers.ts,components/{TeamSettings,OwnerSelect,OwnerScopeToggle}.tsx}` (`OwnerScopeToggle` retired in #77 for a multi-select Owner facet). Phase B (#98) is a separate plan, landing as children: **B1 #190** (identity reaches the tool layer) and **B2 #191** (`assistant_conversations.user_id` — per-seat, access-controlled chat history) have landed; per-user Telegram, owner-routed notifications and the Gmail seat gate are #192–#194. Corrects the issue's premise: cake_os uses `owner_email` TEXT with no FK, so this is an FK design, not a carry | New capability (no blueprint — `cake_os/backend/apps/crm/analytics_service.get_rep_performance` for the per-rep shape only) |
 | DB-backed login credential + in-app password change (`auth_credential` singleton, `POST /api/auth/change-password`, `AUTH_PASSWORD_RESET` recovery lever) — **landed #78** as `backend/core/auth.py` + `frontend/src/crm/components/ChangePasswordCard.tsx` | New capability (no blueprint — back-port candidate to CAKE OS) |
 | Postgres pool + migration runner | `cake_os/backend/core/postgres.py` |
 | AI providers + pricing + setup wizard | `chatty/backend/core/providers/`, `chatty/frontend/src/setup/` |

@@ -152,7 +152,7 @@ def test_approve_after_account_swap_does_not_create_the_draft(monkeypatch, at_ge
     monkeypatch.setattr(history, "claim_pending_tool", lambda *a, **k: _claimed(_placeholder(3)))
     monkeypatch.setattr(history, "merge_tool_result", lambda *a: merged.append(a))
 
-    out = engine.resolve_confirmation(registry, "c1", "t1", "approve", msg_id="m1")
+    out = engine.resolve_confirmation(registry, "c1", "t1", "approve", msg_id="m1", user=None)
 
     assert registry.executed == []  # nothing was sent to Gmail
     assert "error" in out["result"] and "changed" in out["result"]["error"]
@@ -165,7 +165,7 @@ def test_approve_on_the_same_connection_creates_the_draft(monkeypatch, at_genera
     monkeypatch.setattr(history, "claim_pending_tool", lambda *a, **k: _claimed(_placeholder(3)))
     monkeypatch.setattr(history, "merge_tool_result", lambda *a: None)
 
-    out = engine.resolve_confirmation(registry, "c1", "t1", "approve", msg_id="m1")
+    out = engine.resolve_confirmation(registry, "c1", "t1", "approve", msg_id="m1", user=None)
 
     assert registry.executed == [("gmail_create_draft", {"to": "a@b.c"})]
     assert out["result"] == {"ok": True, "draft_id": "d1"}
@@ -180,7 +180,7 @@ def test_approve_of_a_pre_43_pending_draft_still_executes(monkeypatch, at_genera
                         lambda *a, **k: _claimed(history.PENDING_RESULT_JSON))
     monkeypatch.setattr(history, "merge_tool_result", lambda *a: None)
 
-    engine.resolve_confirmation(registry, "c1", "t1", "approve", msg_id="m1")
+    engine.resolve_confirmation(registry, "c1", "t1", "approve", msg_id="m1", user=None)
     assert registry.executed == [("gmail_create_draft", {"to": "a@b.c"})]
 
 
@@ -190,7 +190,7 @@ def test_unparseable_placeholder_does_not_strand_the_confirmation(monkeypatch, a
     monkeypatch.setattr(history, "claim_pending_tool", lambda *a, **k: _claimed("not json"))
     monkeypatch.setattr(history, "merge_tool_result", lambda *a: None)
 
-    engine.resolve_confirmation(registry, "c1", "t1", "approve", msg_id="m1")
+    engine.resolve_confirmation(registry, "c1", "t1", "approve", msg_id="m1", user=None)
     assert registry.executed == [("gmail_create_draft", {"to": "a@b.c"})]
 
 
@@ -200,7 +200,7 @@ def test_deny_is_unaffected_by_the_binding(monkeypatch, at_generation):
     monkeypatch.setattr(history, "claim_pending_tool", lambda *a, **k: _claimed(_placeholder(3)))
     monkeypatch.setattr(history, "merge_tool_result", lambda *a: None)
 
-    out = engine.resolve_confirmation(registry, "c1", "t1", "deny", msg_id="m1")
+    out = engine.resolve_confirmation(registry, "c1", "t1", "deny", msg_id="m1", user=None)
     assert out["result"] == {"status": history.DENIED_STATUS}
     assert registry.executed == []
 

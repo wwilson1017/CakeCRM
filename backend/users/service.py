@@ -114,6 +114,27 @@ def list_users(include_inactive: bool = True) -> list[dict]:
     )
 
 
+def earliest_admin_id() -> int | None:
+    """The lowest-id ACTIVE admin — the install's de-facto owner, or None on a bare database.
+
+    The single definition of "who owns what predates seats" (issue #191): migration M1
+    claims legacy conversations with the identical
+    ``MIN(id) WHERE role='admin' AND is_active`` expression, and Telegram stamps its
+    seatless conversation with this until B4 (#193) gives that thread a real per-seat
+    owner. Returns None when no active admin exists — a fresh database mid-migration, or
+    an install whose admins have all been deactivated — which every caller treats as
+    "unowned".
+
+    ``is_active`` is part of the answer, not a filter bolted on: a deactivated user cannot
+    authenticate, and #191 made conversations owner-only with no admin override, so
+    handing a thread to a deactivated seat makes it unreachable by anyone. Unowned is the
+    fail-safe direction; the wrong owner is not. This is the same expression
+    ``update_user()`` already uses for "an admin who counts".
+    """
+    row = pg_fetchone("SELECT MIN(id) AS id FROM users WHERE role = 'admin' AND is_active")
+    return int(row["id"]) if row and row.get("id") is not None else None
+
+
 def user_count() -> int:
     row = pg_fetchone("SELECT COUNT(*) AS n FROM users")
     return int(row["n"]) if row else 0
@@ -348,6 +369,7 @@ __all__ = [
     "change_own_password",
     "create_user",
     "display_name",
+    "earliest_admin_id",
     "get_user",
     "get_user_by_email",
     "hash_password",

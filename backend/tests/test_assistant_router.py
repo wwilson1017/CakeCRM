@@ -272,8 +272,9 @@ def test_confirm_invalid_decision_400(client):
 def test_confirm_delegates_to_resolver(client, monkeypatch):
     seen = {}
 
-    def _resolve(reg, cid, tuid, decision, msg_id=None):
+    def _resolve(reg, cid, tuid, decision, msg_id=None, *, user=None):
         seen["msg_id"] = msg_id
+        seen["user"] = user
         return {"tool": "crm_create_contact", "decision": decision}
 
     monkeypatch.setattr(router_mod.engine, "resolve_confirmation", _resolve)
@@ -310,7 +311,7 @@ def test_confirm_credits_the_approver_not_the_proposer(client, monkeypatch):
     # resolver's signature never changed.
     seen = {}
 
-    def _resolve(reg, cid, tuid, decision, msg_id=None):
+    def _resolve(reg, cid, tuid, decision, msg_id=None, *, user=None):
         seen["registry"] = reg
         return {"tool": "crm_create_contact", "decision": decision}
 
@@ -324,9 +325,12 @@ def test_confirm_credits_the_approver_not_the_proposer(client, monkeypatch):
 # ── Conversations ─────────────────────────────────────────────────────────────
 
 def test_list_conversations(client, monkeypatch):
-    monkeypatch.setattr(router_mod.history, "list_conversations", lambda limit, offset: [{"id": "c1"}])
+    monkeypatch.setattr(router_mod.history, "list_conversations",
+                        lambda *, user_id, limit, offset: [{"id": "c1", "seen_user": user_id}])
     r = client.get("/api/assistant/conversations")
-    assert r.json()["conversations"] == [{"id": "c1"}]
+    # The route scopes the list to the caller (#191) — an unscoped list would leak
+    # every seat's threads into the sidebar.
+    assert r.json()["conversations"] == [{"id": "c1", "seen_user": fake_admin()["id"]}]
 
 
 def test_get_conversation_merges_previews_and_strips_results(client, monkeypatch):
@@ -338,7 +342,7 @@ def test_get_conversation_merges_previews_and_strips_results(client, monkeypatch
             "tool_results": [{"tool_use_id": "t1", "tool_name": "crm_dashboard", "content": '{"n": 3}'}],
         }],
     }
-    monkeypatch.setattr(router_mod.history, "get_conversation", lambda cid: conv)
+    monkeypatch.setattr(router_mod.history, "get_conversation", lambda cid, *, user_id: conv)
     r = client.get("/api/assistant/conversations/c1")
     msg = r.json()["messages"][0]
     assert "tool_results" not in msg
@@ -355,7 +359,7 @@ def test_get_conversation_ui_preview_caps_large_result(client, monkeypatch):
             "tool_results": [{"tool_use_id": "t1", "tool_name": "crm_list_contacts", "content": big}],
         }],
     }
-    monkeypatch.setattr(router_mod.history, "get_conversation", lambda cid: conv)
+    monkeypatch.setattr(router_mod.history, "get_conversation", lambda cid, *, user_id: conv)
     r = client.get("/api/assistant/conversations/c1")
     result = r.json()["messages"][0]["tool_calls"][0]["result"]
     assert isinstance(result, str) and len(result) < len(big)  # capped, not shipped whole
@@ -370,23 +374,24 @@ def test_get_conversation_ui_preview_non_json_fallback(client, monkeypatch):
             "tool_results": [{"tool_use_id": "t1", "tool_name": "x", "content": "not valid json {"}],
         }],
     }
-    monkeypatch.setattr(router_mod.history, "get_conversation", lambda cid: conv)
+    monkeypatch.setattr(router_mod.history, "get_conversation", lambda cid, *, user_id: conv)
     r = client.get("/api/assistant/conversations/c1")
     assert r.json()["messages"][0]["tool_calls"][0]["result"] == "not valid json {"  # raw fallback
 
 
 def test_get_conversation_404(client, monkeypatch):
-    monkeypatch.setattr(router_mod.history, "get_conversation", lambda cid: None)
+    monkeypatch.setattr(router_mod.history, "get_conversation", lambda cid, *, user_id: None)
     assert client.get("/api/assistant/conversations/nope").status_code == 404
 
 
 def test_delete_conversation_404(client, monkeypatch):
-    monkeypatch.setattr(router_mod.history, "delete_conversation", lambda cid: False)
+    monkeypatch.setattr(router_mod.history, "delete_conversation", lambda cid, *, user_id: False)
     assert client.delete("/api/assistant/conversations/nope").status_code == 404
 
 
 def test_rename_conversation(client, monkeypatch):
-    monkeypatch.setattr(router_mod.history, "rename_conversation", lambda cid, title: "New Name")
+    monkeypatch.setattr(router_mod.history, "rename_conversation",
+                        lambda cid, title, *, user_id: "New Name")
     r = client.patch("/api/assistant/conversations/c1/title", json={"title": "New Name"})
     assert r.json()["title"] == "New Name"
 
@@ -440,3 +445,85 @@ def test_every_route_requires_auth():
         assert {"get_current_user", "require_admin"} & set(dep_names), (
             f"{route.path} missing auth"
         )
+
+
+# ── Conversations are owner-only (issue #191) ─────────────────────────────────
+# The four REST routes are only half the surface: /chat resumes a client-supplied
+# conversation_id and /confirm claims by conversation_id, so these pin that every one of
+# the six carries the caller's seat, and that a foreign conversation is reported exactly
+# as a missing one.
+
+def test_every_conversation_route_scopes_to_the_caller(client, monkeypatch):
+    seen = {}
+
+    def _record(key, answer):
+        def _fn(*a, user_id, **kw):
+            seen[key] = user_id
+            return answer
+        return _fn
+
+    monkeypatch.setattr(router_mod.history, "list_conversations", _record("list", []))
+    monkeypatch.setattr(router_mod.history, "get_conversation", _record("get", None))
+    monkeypatch.setattr(router_mod.history, "delete_conversation", _record("delete", False))
+    monkeypatch.setattr(router_mod.history, "rename_conversation", _record("rename", None))
+    client.get("/api/assistant/conversations")
+    client.get("/api/assistant/conversations/c1")
+    client.delete("/api/assistant/conversations/c1")
+    client.patch("/api/assistant/conversations/c1/title", json={"title": "x"})
+    me = fake_admin()["id"]
+    assert seen == {"list": me, "get": me, "delete": me, "rename": me}
+
+
+def test_chat_routes_forward_the_caller_to_the_engine(client, with_provider):
+    # Without this the engine cannot scope its conversation_exists check, and any seat
+    # could resume any thread by uuid — the REST filters above would be decoration.
+    client.post("/api/assistant/chat",
+                json={"messages": [{"role": "user", "content": "hi"}], "conversation_id": "c1"})
+    assert with_provider["kwargs"]["user"] == fake_admin()
+    client.post("/api/assistant/chat/upload",
+                data={"payload": json.dumps({"messages": [{"role": "user", "content": "hi"}]})})
+    assert with_provider["kwargs"]["user"] == fake_admin()
+
+
+def test_confirm_forwards_the_caller_and_404s_a_foreign_conversation(client, monkeypatch):
+    seen = {}
+
+    def _resolve(reg, cid, tuid, decision, msg_id=None, *, user):
+        seen["user"] = user
+        return {"status": "not_found"}
+
+    monkeypatch.setattr(router_mod.engine, "resolve_confirmation", _resolve)
+    r = client.post("/api/assistant/confirm",
+                    json={"conversation_id": "someone-elses", "tool_use_id": "t1", "decision": "approve"})
+    assert seen["user"] == fake_admin()
+    # 404, never 403 — a 403 would confirm the conversation exists (#191).
+    assert r.status_code == 404
+    assert r.json()["detail"] == "Conversation not found."
+
+
+def test_a_foreign_conversation_is_indistinguishable_from_a_missing_one(client, monkeypatch):
+    """No existence oracle: the two cases must produce byte-identical responses.
+
+    Both reach the route through the same None/False return, so this asserts the
+    property the 404-not-403 rule actually buys rather than re-asserting the status code.
+    """
+    monkeypatch.setattr(router_mod.history, "get_conversation", lambda cid, *, user_id: None)
+    missing = client.get("/api/assistant/conversations/definitely-not-a-real-id")
+    foreign = client.get("/api/assistant/conversations/owned-by-another-seat")
+    assert missing.status_code == foreign.status_code == 404
+    assert missing.json() == foreign.json()
+
+
+def test_rename_separates_a_blank_title_from_a_conversation_you_cannot_reach(client, monkeypatch):
+    """The rename route answered 400 for both reasons, so a foreign conversation was the
+    one cross-seat access that did not follow #191's 404 rule."""
+    monkeypatch.setattr(router_mod.history, "rename_conversation",
+                        lambda cid, title, *, user_id: None)
+    blank = client.patch("/api/assistant/conversations/c1/title", json={"title": "   "})
+    assert blank.status_code == 400 and blank.json()["detail"] == "Title is empty."
+    foreign = client.patch("/api/assistant/conversations/someone-elses/title",
+                           json={"title": "Renamed"})
+    missing = client.patch("/api/assistant/conversations/no-such-id/title",
+                           json={"title": "Renamed"})
+    assert foreign.status_code == missing.status_code == 404
+    assert foreign.json() == missing.json() == {"detail": "Conversation not found."}

@@ -229,14 +229,19 @@ class Store:
         self.tainted = False
         self._n = 0
 
-    def create_conversation(self):
+    def create_conversation(self, *, user_id=None):
+        # Keyword-only `user_id` mirrors the real history signature since #191; these
+        # tests are about capture fencing, so every conversation here is unowned.
         self._n += 1
         cid = f"conv{self._n}"
-        self.convs[cid] = {"id": cid, "messages": []}
+        self.convs[cid] = {"id": cid, "messages": [], "user_id": user_id}
         return {"id": cid}
 
-    def conversation_exists(self, cid):
-        return cid in self.convs
+    def conversation_exists(self, cid, *, user_id=None):
+        conv = self.convs.get(cid)
+        if conv is None:
+            return False
+        return user_id is None or conv.get("user_id") == user_id
 
     def auto_title(self, cid, text):
         return (text or "")[:60]
@@ -312,6 +317,9 @@ def store(monkeypatch):
 
 
 async def _run(provider, registry, messages, **kw):
+    # `user` is required keyword-only since #191; these tests are about capture fencing,
+    # not seat scoping, so an unattended turn is the default here.
+    kw.setdefault("user", None)
     out = []
     async for line in engine.chat(provider, registry, messages, **kw):
         out.append(json.loads(line[len("data: "):]))
@@ -460,7 +468,7 @@ def _approve_a_capture_write(store, monkeypatch, row):
     store.convs[conv]["messages"].append({"id": "m1", "role": "assistant", "content": ""})
     claimed = {"msg_id": "m1", "tool": "todo_update", "args": {"todo_id": 42}, "content": None}
     monkeypatch.setattr(history, "claim_pending_tool", lambda *a, **k: claimed)
-    return conv, engine.resolve_confirmation(reg, conv, "w1", "approve")
+    return conv, engine.resolve_confirmation(reg, conv, "w1", "approve", user=None)
 
 
 def test_an_approved_write_echoing_a_public_row_taints_the_conversation(store, monkeypatch):

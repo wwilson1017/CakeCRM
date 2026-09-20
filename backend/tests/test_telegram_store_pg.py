@@ -103,10 +103,33 @@ def test_deleted_conversation_is_recreated(pg_db):
     store.connect("t", "bot")
     conv1 = store.get_or_create_conversation()
     assert store.get_or_create_conversation() == conv1  # stable while it exists
-    history.delete_conversation(conv1)                  # FK → conversation_id SET NULL
+    history.delete_conversation(conv1, user_id=None)    # FK → conversation_id SET NULL
     conv2 = store.get_or_create_conversation()
     assert conv2 and conv2 != conv1
-    assert history.conversation_exists(conv2)
+    assert history.conversation_exists(conv2, user_id=None)
+
+
+def test_the_telegram_conversation_is_stamped_with_the_earliest_admin(pg_db):
+    """Stopgap until B4 (#193): the poller has no seat of its own.
+
+    Without the stamp the Telegram thread would be a NULL-owner row, invisible in every
+    seat's sidebar — the conversation the admin is actually talking in would silently
+    vanish from the UI the moment #191 shipped.
+    """
+    from core.postgres import pg_execute, pg_fetchone
+    from telegram import store
+    from users import service as users_service
+
+    pg_execute("DELETE FROM users")
+    first = users_service.create_user("owner@example.com", "Owner", "pw-owner-123", role="admin")
+    users_service.create_user("second@example.com", "Second", "pw-second-123", role="admin")
+    assert users_service.earliest_admin_id() == first["id"]
+
+    store.connect("t", "bot")
+    conv = store.get_or_create_conversation()
+    row = pg_fetchone("SELECT user_id FROM assistant_conversations WHERE id = %s", (conv,))
+    assert row["user_id"] == first["id"]
+    pg_execute("DELETE FROM users")
 
 
 def test_batch_gate_waits_then_continues(pg_db):

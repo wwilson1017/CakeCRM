@@ -69,14 +69,18 @@ class Store:
         self.compaction_boundary = None
         self._n = 0
 
-    def create_conversation(self):
+    def create_conversation(self, *, user_id):
         self._n += 1
         cid = f"conv{self._n}"
-        self.convs[cid] = {"id": cid, "messages": []}
+        self.convs[cid] = {"id": cid, "messages": [], "user_id": user_id}
         return {"id": cid}
 
-    def conversation_exists(self, cid):
-        return cid in self.convs
+    def conversation_exists(self, cid, *, user_id):
+        """Mirrors the real signature (#191): scoped lookups see only their own."""
+        conv = self.convs.get(cid)
+        if conv is None:
+            return False
+        return user_id is None or conv.get("user_id") == user_id
 
     def auto_title(self, cid, text):
         self.title_calls.append((cid, text))
@@ -157,6 +161,8 @@ def store(monkeypatch):
 
 
 async def _run(provider, registry, messages, **kw):
+    # `user` is required keyword-only since #191; an unattended turn is the default here.
+    kw.setdefault("user", None)
     out = []
     async for line in engine.chat(provider, registry, messages, **kw):
         assert isinstance(line, str) and line.startswith("data: ")
@@ -468,7 +474,7 @@ def test_resolve_confirmation_approve_executes_and_merges(monkeypatch):
     merged = {}
     monkeypatch.setattr(history, "merge_tool_result",
                         lambda mid, tuid, tname, content: merged.update({"content": content}))
-    out = engine.resolve_confirmation(reg, "c1", "t1", "approve")
+    out = engine.resolve_confirmation(reg, "c1", "t1", "approve", user=None)
     assert reg.calls == [("crm_create_contact", {"name": "Y"})]  # server-owned args, not client's
     assert out["result"] == {"ok": True, "name": "crm_create_contact"}
     assert '"ok": true' in merged["content"]
@@ -486,7 +492,7 @@ def test_resolve_confirmation_threads_msg_id_to_claim(monkeypatch):
 
     monkeypatch.setattr(history, "claim_pending_tool", _claim)
     monkeypatch.setattr(history, "merge_tool_result", lambda *a: None)
-    engine.resolve_confirmation(reg, "c1", "call_0", "approve", msg_id="row-42")
+    engine.resolve_confirmation(reg, "c1", "call_0", "approve", msg_id="row-42", user=None)
     assert seen["msg_id"] == "row-42"
 
 
@@ -499,7 +505,7 @@ def test_resolve_confirmation_refuses_non_write(monkeypatch):
     merged = {}
     monkeypatch.setattr(history, "merge_tool_result",
                         lambda mid, tuid, tname, content: merged.update({"content": content}))
-    out = engine.resolve_confirmation(reg, "c1", "t1", "approve")
+    out = engine.resolve_confirmation(reg, "c1", "t1", "approve", user=None)
     assert reg.calls == []  # not executed
     assert "error" in out["result"]
 
@@ -511,7 +517,7 @@ def test_resolve_confirmation_deny_records_denied(monkeypatch):
     merged = {}
     monkeypatch.setattr(history, "merge_tool_result",
                         lambda mid, tuid, tname, content: merged.update({"content": content}))
-    out = engine.resolve_confirmation(reg, "c1", "t1", "deny")
+    out = engine.resolve_confirmation(reg, "c1", "t1", "deny", user=None)
     assert reg.calls == []  # deny never executes
     assert history.DENIED_STATUS in merged["content"]
     assert out["decision"] == "deny"
@@ -521,7 +527,7 @@ def test_resolve_confirmation_idempotent_noop_returns_canonical_result(monkeypat
     reg = Registry(writes={"crm_create_contact"})
     monkeypatch.setattr(history, "claim_pending_tool", lambda cid, tuid, msg_id=None: None)  # already resolved
     monkeypatch.setattr(history, "get_tool_result", lambda cid, tuid, msg_id=None: {"ok": True})
-    out = engine.resolve_confirmation(reg, "c1", "t1", "approve")
+    out = engine.resolve_confirmation(reg, "c1", "t1", "approve", user=None)
     # reports the CANONICAL persisted outcome, not the caller's assumed decision
     assert out == {"status": "already_resolved", "result": {"ok": True}}
     assert reg.calls == []  # never double-executes
@@ -584,7 +590,7 @@ async def test_static_prompt_byte_identical_with_and_without_context(store):
 async def test_continuation_turn_carries_context(store):
     """A continuation (empty messages + conversation_id) is a fresh request that
     rebuilds the system prompt — context passed on it must reach the volatile half."""
-    conv = store.create_conversation()
+    conv = store.create_conversation(user_id=None)
     prov = FakeProvider([[{"type": "text", "text": "Done."}, _complete()]])
     events = await _run(
         prov, Registry(), [], conversation_id=conv["id"],
@@ -1195,3 +1201,125 @@ async def test_an_ordinary_update_on_the_same_tool_runs(store):
     events = await _run(prov, reg, [{"role": "user", "content": "rename Acme"}], tool_mode="normal")
     assert "confirm" not in _types(events)
     assert reg.calls == [("crm_update_company", {"company_id": 3, "name": "Acme Inc"})]
+
+
+# ── Conversations are owner-only (issue #191) ─────────────────────────────────
+# engine.chat's resume and resolve_confirmation's claim are the two doors into a
+# conversation that do NOT go through the REST conversation endpoints. Without these the
+# router's filters are decoration: any seat could resume or confirm another's thread by
+# uuid.
+
+_SEAT_A = {"id": 1, "name": "Ada", "email": "ada@example.com", "role": "admin"}
+_SEAT_B = {"id": 2, "name": "Bo", "email": "bo@example.com", "role": "member"}
+
+
+async def test_a_new_conversation_is_owned_by_the_caller(store):
+    prov = FakeProvider([[{"type": "text", "text": "hi"}, _complete()]])
+    await _run(prov, Registry(), [{"role": "user", "content": "hello"}], user=_SEAT_A)
+    assert [c["user_id"] for c in store.convs.values()] == [_SEAT_A["id"]]
+
+
+async def test_an_unattended_turn_creates_an_unowned_conversation(store):
+    # The Telegram poller and the heartbeat have no seat; they must still be able to run.
+    prov = FakeProvider([[{"type": "text", "text": "hi"}, _complete()]])
+    await _run(prov, Registry(), [{"role": "user", "content": "hello"}], user=None)
+    assert [c["user_id"] for c in store.convs.values()] == [None]
+
+
+async def test_resuming_another_seats_conversation_is_refused(store):
+    conv = store.create_conversation(user_id=_SEAT_A["id"])
+    prov = FakeProvider([[{"type": "text", "text": "leaked"}, _complete()]])
+    events = await _run(
+        prov, Registry(), [{"role": "user", "content": "what did Ada say?"}],
+        conversation_id=conv["id"], user=_SEAT_B,
+    )
+    assert _types(events) == ["error"]
+    assert events[0]["error"] == "Conversation not found."
+    # Refused BEFORE any write: no message row, no auto-title, no provider call. A check
+    # placed after save_message would still leak Bo's text into Ada's thread.
+    assert store.saved == [] and store.title_calls == []
+    assert prov.captured_system_prompts == []
+
+
+async def test_a_foreign_conversation_reads_exactly_like_an_unknown_one(store):
+    """The no-oracle property, asserted as an equality rather than restated twice."""
+    conv = store.create_conversation(user_id=_SEAT_A["id"])
+    prov = FakeProvider([[{"type": "text", "text": "x"}, _complete()]])
+    foreign = await _run(prov, Registry(), [{"role": "user", "content": "hi"}],
+                         conversation_id=conv["id"], user=_SEAT_B)
+    unknown = await _run(prov, Registry(), [{"role": "user", "content": "hi"}],
+                         conversation_id="no-such-conversation", user=_SEAT_B)
+    assert foreign == unknown
+
+
+async def test_the_owner_can_still_resume_their_own_conversation(store):
+    conv = store.create_conversation(user_id=_SEAT_A["id"])
+    prov = FakeProvider([[{"type": "text", "text": "welcome back"}, _complete()]])
+    events = await _run(prov, Registry(), [{"role": "user", "content": "hi"}],
+                        conversation_id=conv["id"], user=_SEAT_A)
+    assert _types(events)[-1] == "done"
+
+
+async def test_the_seat_is_named_in_the_volatile_half_only(store):
+    prov = FakeProvider([[{"type": "text", "text": "ok"}, _complete()]])
+    await _run(prov, Registry(), [{"role": "user", "content": "hi"}], user=_SEAT_A)
+    static, volatile = prov.captured_system_prompts[0]
+    assert "ada@example.com" in volatile
+    # The static half is the cached prefix — one seat's identity in it would be served
+    # to the next seat on this install.
+    assert "ada@example.com" not in static and "Ada" not in static
+
+
+def test_resolve_confirmation_refuses_another_seats_conversation(monkeypatch):
+    claimed = []
+    monkeypatch.setattr(history, "conversation_exists", lambda cid, *, user_id: False)
+    monkeypatch.setattr(history, "claim_pending_tool",
+                        lambda *a, **k: claimed.append(a) or {"msg_id": "m", "tool": "t", "args": {}})
+    out = engine.resolve_confirmation(Registry(writes={"t"}), "c1", "t1", "approve", user=_SEAT_B)
+    assert out == {"status": "not_found"}
+    # The refusal runs BEFORE the claim, so the pending write is left untouched and the
+    # real owner can still approve or deny it.
+    assert claimed == []
+
+
+def test_resolve_confirmation_still_runs_for_the_owner(monkeypatch):
+    monkeypatch.setattr(history, "conversation_exists", lambda cid, *, user_id: user_id == _SEAT_A["id"])
+    monkeypatch.setattr(history, "claim_pending_tool",
+                        lambda *a, **k: {"msg_id": "m", "tool": "crm_create_contact", "args": {}, "content": None})
+    monkeypatch.setattr(history, "merge_tool_result", lambda *a, **k: None)
+    out = engine.resolve_confirmation(
+        Registry(writes={"crm_create_contact"}), "c1", "t1", "approve", user=_SEAT_A)
+    assert out["decision"] == "approve" and out["result"]["ok"] is True
+
+
+def test_an_unattended_confirmation_skips_the_ownership_check(monkeypatch):
+    """user=None is the trusted-caller path (Telegram until B4) — it must not 404."""
+    monkeypatch.setattr(history, "conversation_exists",
+                        lambda *a, **k: pytest.fail("a seatless caller must not be ownership-checked"))
+    monkeypatch.setattr(history, "claim_pending_tool",
+                        lambda *a, **k: {"msg_id": "m", "tool": "crm_create_contact", "args": {}, "content": None})
+    monkeypatch.setattr(history, "merge_tool_result", lambda *a, **k: None)
+    out = engine.resolve_confirmation(
+        Registry(writes={"crm_create_contact"}), "c1", "t1", "approve", user=None)
+    assert out["decision"] == "approve"
+
+
+async def test_a_user_row_without_an_id_ends_the_turn_rather_than_going_unfiltered(store):
+    """Fail-closed at the seam: `.get("id")` would answer None, which is the TRUSTED
+    unfiltered path — the one value a malformed seat must never be promoted to."""
+    conv = store.create_conversation(user_id=_SEAT_A["id"])
+    prov = FakeProvider([[{"type": "text", "text": "leaked"}, _complete()]])
+    events = await _run(prov, Registry(), [{"role": "user", "content": "hi"}],
+                        conversation_id=conv["id"], user={"name": "no id here"})
+    assert _types(events) == ["error"]
+    assert prov.captured_system_prompts == [] and store.saved == []
+
+
+def test_a_confirmation_from_a_user_row_without_an_id_refuses_too(monkeypatch):
+    monkeypatch.setattr(history, "conversation_exists",
+                        lambda *a, **k: pytest.fail("must not reach the ownership query"))
+    monkeypatch.setattr(history, "claim_pending_tool",
+                        lambda *a, **k: pytest.fail("must not claim"))
+    with pytest.raises(KeyError):
+        engine.resolve_confirmation(Registry(writes={"t"}), "c1", "t1", "approve",
+                                    user={"name": "no id here"})

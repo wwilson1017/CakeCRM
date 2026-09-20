@@ -54,7 +54,7 @@ def pg_db():
 @pytest.fixture
 def conv(pg_db):
     from assistant import history
-    return history.create_conversation()["id"]
+    return history.create_conversation(user_id=None)["id"]
 
 
 def test_a_fresh_conversation_starts_clean(conv):
@@ -179,7 +179,7 @@ def test_get_conversation_carries_the_boundary_the_assembler_reads(conv):
 
     history.save_message(conv, str(uuid.uuid4()), "user", "one")
     history.set_compaction(conv, "the gist", 7, False)
-    row = history.get_conversation(conv)
+    row = history.get_conversation(conv, user_id=None)
     assert row["compaction_summary"] == "the gist"
     assert row["compaction_first_kept_seq"] == 7
 

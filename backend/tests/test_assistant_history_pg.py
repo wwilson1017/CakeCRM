@@ -117,12 +117,12 @@ def test_name_brand_migration_resets_a_renamed_assistant(pg_db):
 
 def test_jsonb_roundtrips_as_python_lists(pg_db):
     from assistant import history
-    conv = history.create_conversation()
+    conv = history.create_conversation(user_id=None)
     mid = str(uuid.uuid4())
     history.save_message(conv["id"], mid, "assistant", "text",
                         tool_calls=[{"tool": "crm_dashboard", "tool_use_id": "t1", "args": {"a": 1}}])
     history.merge_tool_result(mid, "t1", "crm_dashboard", '{"n": 3}')
-    got = history.get_conversation(conv["id"])
+    got = history.get_conversation(conv["id"], user_id=None)
     msg = got["messages"][0]
     assert isinstance(msg["tool_calls"], list)  # NOT a JSON string
     assert msg["tool_calls"][0]["args"] == {"a": 1}
@@ -132,7 +132,7 @@ def test_jsonb_roundtrips_as_python_lists(pg_db):
 
 def test_concurrent_seq_allocation_stays_unique(pg_db):
     from assistant import history
-    conv = history.create_conversation()
+    conv = history.create_conversation(user_id=None)
     errors = []
 
     def _save():
@@ -148,28 +148,28 @@ def test_concurrent_seq_allocation_stays_unique(pg_db):
         t.join()
 
     assert not errors, errors
-    got = history.get_conversation(conv["id"])
+    got = history.get_conversation(conv["id"], user_id=None)
     seqs = [m["seq"] for m in got["messages"]]
     assert sorted(seqs) == list(range(12))  # unique, contiguous
 
 
 def test_merge_preserves_siblings(pg_db):
     from assistant import history
-    conv = history.create_conversation()
+    conv = history.create_conversation(user_id=None)
     mid = str(uuid.uuid4())
     history.save_message(conv["id"], mid, "assistant", "",
                         tool_calls=[{"tool": "a", "tool_use_id": "t1", "args": {}},
                                     {"tool": "b", "tool_use_id": "t2", "args": {}}])
     history.merge_tool_result(mid, "t1", "a", '{"r": 1}')
     history.merge_tool_result(mid, "t2", "b", '{"r": 2}')
-    msg = history.get_conversation(conv["id"])["messages"][0]
+    msg = history.get_conversation(conv["id"], user_id=None)["messages"][0]
     by_id = {r["tool_use_id"]: r["content"] for r in msg["tool_results"]}
     assert by_id == {"t1": '{"r": 1}', "t2": '{"r": 2}'}
 
 
 def test_claim_pending_tool_is_once_only(pg_db):
     from assistant import engine, history
-    conv = history.create_conversation()
+    conv = history.create_conversation(user_id=None)
     mid = str(uuid.uuid4())
     history.save_message(conv["id"], mid, "assistant", "",
                         tool_calls=[{"tool": "crm_create_contact", "tool_use_id": "t1", "args": {"name": "Z"}}])
@@ -198,8 +198,8 @@ def test_claim_pending_tool_is_once_only(pg_db):
                         tool_calls=[{"tool": "crm_create_contact", "tool_use_id": "t2", "args": {}}])
     history.merge_tool_result(mid2, "t2", "crm_create_contact", history.PENDING_RESULT_JSON)
     reg = R()
-    out1 = engine.resolve_confirmation(reg, conv["id"], "t2", "approve")
-    out2 = engine.resolve_confirmation(reg, conv["id"], "t2", "approve")
+    out1 = engine.resolve_confirmation(reg, conv["id"], "t2", "approve", user=None)
+    out2 = engine.resolve_confirmation(reg, conv["id"], "t2", "approve", user=None)
     assert reg.n == 1  # executed exactly once
     assert out1["result"] == {"ok": True}
     assert out2["status"] == "already_resolved"
@@ -224,7 +224,7 @@ def test_real_assemble_ends_on_assistant_after_pending_wrapup(pg_db):
     assembled sequence END ON AN ASSISTANT TURN — which is exactly why the engine
     appends a user ack before resuming."""
     from assistant import assembly, history
-    conv = history.create_conversation()
+    conv = history.create_conversation(user_id=None)
     m1 = str(uuid.uuid4())
     history.save_message(conv["id"], m1, "assistant", "",
                         tool_calls=[{"tool": "crm_create_contact", "tool_use_id": "t1", "args": {"name": "Z"}}])
@@ -237,7 +237,7 @@ def test_real_assemble_ends_on_assistant_after_pending_wrapup(pg_db):
 
 def test_deny_records_denied_status(pg_db):
     from assistant import engine, history
-    conv = history.create_conversation()
+    conv = history.create_conversation(user_id=None)
     mid = str(uuid.uuid4())
     history.save_message(conv["id"], mid, "assistant", "",
                         tool_calls=[{"tool": "crm_delete_contact", "tool_use_id": "t1", "args": {"contact_id": 1}}])
@@ -247,7 +247,290 @@ def test_deny_records_denied_status(pg_db):
         def execute_tool_sync(self, name, args):
             raise AssertionError("deny must not execute")
 
-    out = engine.resolve_confirmation(R(), conv["id"], "t1", "deny")
+    out = engine.resolve_confirmation(R(), conv["id"], "t1", "deny", user=None)
     assert out["decision"] == "deny"
-    msg = history.get_conversation(conv["id"])["messages"][0]
+    msg = history.get_conversation(conv["id"], user_id=None)["messages"][0]
     assert history.DENIED_STATUS in msg["tool_results"][0]["content"]
+
+
+# ── Conversations are owner-only (issue #191) ─────────────────────────────────
+# The hermetic tests pin the SQL text; these prove the column, the index, the migration's
+# legacy claim and the FK's delete behaviour against a real Postgres, which is the only
+# place a wrong ON DELETE rule or a mis-ordered migration shows up.
+
+@pytest.fixture
+def seats(pg_db):
+    """Two real users, cleaned up afterwards (the DB is module-scoped)."""
+    from core.postgres import pg_execute
+    from users import service as users_service
+
+    pg_execute("DELETE FROM users")
+    ada = users_service.create_user("ada@example.com", "Ada", "pw-ada-123456", role="admin")
+    bo = users_service.create_user("bo@example.com", "Bo", "pw-bo-123456", role="member")
+    yield ada, bo
+    pg_execute("DELETE FROM users")
+
+
+def test_migration_added_the_owner_column_and_its_index(pg_db):
+    from core.postgres import pg_fetchall, pg_fetchone
+    col = pg_fetchone(
+        "SELECT data_type, is_nullable FROM information_schema.columns "
+        "WHERE table_name = 'assistant_conversations' AND column_name = 'user_id'"
+    )
+    # Nullable on purpose: a NULL owner is invisible to every seat, the fail-safe way.
+    assert col is not None and col["is_nullable"] == "YES"
+    idx = {r["indexname"] for r in pg_fetchall(
+        "SELECT indexname FROM pg_indexes WHERE tablename = 'assistant_conversations'")}
+    assert "idx_assistant_conv_user_updated" in idx
+
+
+def test_the_owner_fk_cascades_rather_than_orphaning(pg_db, seats):
+    """Personal data follows its person — the totp_config idiom, not owner_id's SET NULL.
+
+    SET NULL would be the worse failure: a departed seat's private threads would become
+    unowned rows that survive forever, and (per Decision 1c's reasoning) the next
+    migration to claim unowned rows would hand them to an admin.
+    """
+    from assistant import history
+    from core.postgres import pg_execute, pg_fetchone
+    ada, bo = seats
+    gone = history.create_conversation(user_id=ada["id"])
+    kept = history.create_conversation(user_id=bo["id"])
+
+    pg_execute("DELETE FROM users WHERE id = %s", (ada["id"],))
+    assert pg_fetchone(
+        "SELECT 1 AS ok FROM assistant_conversations WHERE id = %s", (gone["id"],)) is None
+    # Only theirs: a cascade that took the whole table would also pass a weaker test.
+    assert pg_fetchone(
+        "SELECT 1 AS ok FROM assistant_conversations WHERE id = %s", (kept["id"],)) is not None
+
+
+def test_every_read_and_write_path_is_scoped_to_the_owner(pg_db, seats):
+    from assistant import history
+    ada, bo = seats
+    mine = history.create_conversation(user_id=ada["id"])
+    theirs = history.create_conversation(user_id=bo["id"])
+    history.save_message(mine["id"], "m-ada", "user", "my private note")
+    history.save_message(theirs["id"], "m-bo", "user", "bo's private note")
+
+    # List: each seat sees only their own thread.
+    assert [c["id"] for c in history.list_conversations(user_id=ada["id"])] == [mine["id"]]
+    assert [c["id"] for c in history.list_conversations(user_id=bo["id"])] == [theirs["id"]]
+
+    # Get: a foreign conversation is None — the same answer a missing one gives, so the
+    # route's 404 carries no information about whether it exists.
+    assert history.get_conversation(mine["id"], user_id=ada["id"])["id"] == mine["id"]
+    assert history.get_conversation(theirs["id"], user_id=ada["id"]) is None
+    assert history.get_conversation("no-such-id", user_id=ada["id"]) is None
+
+    # Exists (the engine's resume check): scoped the same way.
+    assert history.conversation_exists(mine["id"], user_id=ada["id"]) is True
+    assert history.conversation_exists(theirs["id"], user_id=ada["id"]) is False
+
+    # Rename and delete are refusals, not silent successes on someone else's row.
+    assert history.rename_conversation(theirs["id"], "hijacked", user_id=ada["id"]) is None
+    assert history.delete_conversation(theirs["id"], user_id=ada["id"]) is False
+    assert history.get_conversation(theirs["id"], user_id=bo["id"])["title"] != "hijacked"
+
+    # And the owner's own operations still work.
+    assert history.rename_conversation(mine["id"], "My thread", user_id=ada["id"]) == "My thread"
+    assert history.delete_conversation(mine["id"], user_id=ada["id"]) is True
+
+
+def test_a_null_owner_row_is_invisible_to_every_seat(pg_db, seats):
+    """The fail-safe direction: an unowned row (a legacy install with no admin at all,
+    or an unattended turn) is unreachable rather than readable by anyone."""
+    from assistant import history
+    ada, _ = seats
+    orphan = history.create_conversation(user_id=None)
+    assert history.get_conversation(orphan["id"], user_id=ada["id"]) is None
+    assert history.conversation_exists(orphan["id"], user_id=ada["id"]) is False
+    assert [c["id"] for c in history.list_conversations(user_id=ada["id"])] == []
+    # ... but a trusted internal caller still reaches it.
+    assert history.conversation_exists(orphan["id"], user_id=None) is True
+
+
+def _run_claim_migration():
+    """Re-run just M1's legacy-claim UPDATE against the current database."""
+    from pathlib import Path
+
+    from core.postgres import pg_execute
+    sql = (Path(__file__).resolve().parent.parent / "migrations"
+           / "20260917173429_assistant_conversations_owner.sql").read_text()
+    # The ALTER/CREATE INDEX halves are IF NOT EXISTS, so the whole file is re-runnable.
+    return pg_execute(sql)
+
+
+def test_the_legacy_claim_picks_the_earliest_admin(pg_db):
+    """An UPGRADE: pre-#191 rows have no owner and must land on the install's owner.
+
+    Seeded as a genuinely unowned row, because on a fresh database every assertion here
+    would pass against a migration that was mistyped or deleted outright — the table
+    would simply be empty. Seeding the pre-migration state is the only thing that can
+    tell a working claim from an absent one.
+    """
+    from assistant import history
+    from core.postgres import pg_execute, pg_fetchone
+    from users import service as users_service
+    pg_execute("DELETE FROM users")
+    first = users_service.create_user("first@example.com", "First", "pw-first-12345", role="admin")
+    users_service.create_user("later@example.com", "Later", "pw-later-12345", role="admin")
+    users_service.create_user("member@example.com", "Member", "pw-member-1234", role="member")
+    try:
+        conv = history.create_conversation(user_id=None)
+        _run_claim_migration()
+        row = pg_fetchone(
+            "SELECT user_id FROM assistant_conversations WHERE id = %s", (conv["id"],))
+        assert row["user_id"] == first["id"]
+
+        # Idempotent: a second run claims nothing further and moves nobody's rows.
+        _run_claim_migration()
+        assert pg_fetchone(
+            "SELECT user_id FROM assistant_conversations WHERE id = %s",
+            (conv["id"],))["user_id"] == first["id"]
+    finally:
+        pg_execute("DELETE FROM users")
+
+
+def test_the_legacy_claim_is_a_no_op_with_no_admin(pg_db):
+    """A FRESH install runs this migration before the bootstrap admin exists.
+
+    The MIN(id) subquery is then NULL. The row count is what makes that safe — on a fresh
+    install the table is empty too — so the only way to reach a NULL owner is a database
+    that has conversations but no admin, and those rows stay invisible rather than being
+    handed to an arbitrary member.
+    """
+    from assistant import history
+    from core.postgres import pg_execute, pg_fetchone
+    from users import service as users_service
+    pg_execute("DELETE FROM users")
+    assert users_service.earliest_admin_id() is None
+    conv = history.create_conversation(user_id=None)
+    _run_claim_migration()
+    assert pg_fetchone(
+        "SELECT user_id FROM assistant_conversations WHERE id = %s",
+        (conv["id"],))["user_id"] is None
+
+    # A members-only install is the same case: the claim is admin-scoped by design.
+    member = users_service.create_user("solo@example.com", "Solo", "pw-solo-123456", role="member")
+    try:
+        _run_claim_migration()
+        assert pg_fetchone(
+            "SELECT user_id FROM assistant_conversations WHERE id = %s",
+            (conv["id"],))["user_id"] is None
+        assert member["role"] == "member"
+    finally:
+        pg_execute("DELETE FROM users")
+
+
+def test_the_legacy_claim_skips_a_deactivated_admin(pg_db):
+    """The lowest-id admin may be a seat nobody can log into.
+
+    Deactivation is a supported, one-click action, and #191 made conversations
+    owner-only with NO admin override. So claiming the install's entire pre-#191 chat
+    history for a deactivated admin would not merely mis-attribute it — it would put it
+    permanently out of reach of every seat that can actually sign in, with no in-app way
+    back. The claim therefore reads "the lowest-id admin who counts", the same predicate
+    the last-active-admin guard in update_user() already uses.
+
+    The fixture is the trap itself: the deactivated admin keeps the LOWEST id, so a claim
+    that dropped the predicate would pick it and this assertion is the only thing that
+    can tell the two apart.
+    """
+    from assistant import history
+    from core.postgres import pg_execute, pg_fetchone
+    from users import service as users_service
+    pg_execute("DELETE FROM users")
+    retired = users_service.create_user(
+        "retired@example.com", "Retired", "pw-retired-123", role="admin")
+    current = users_service.create_user(
+        "current@example.com", "Current", "pw-current-123", role="admin")
+    try:
+        # Deactivated through the real service call, so the last-active-admin guard is
+        # part of the setup rather than something the test routes around.
+        assert users_service.update_user(retired["id"], is_active=False)["is_active"] is False
+        assert retired["id"] < current["id"]
+
+        conv = history.create_conversation(user_id=None)
+        _run_claim_migration()
+        assert pg_fetchone(
+            "SELECT user_id FROM assistant_conversations WHERE id = %s",
+            (conv["id"],))["user_id"] == current["id"]
+        # ... and the seat that got it can genuinely reach it, which is the whole point.
+        assert history.conversation_exists(conv["id"], user_id=current["id"]) is True
+        assert history.conversation_exists(conv["id"], user_id=retired["id"]) is False
+
+        # The helper that stamps seatless conversations must agree with the migration:
+        # users/service.earliest_admin_id() documents itself as the identical expression,
+        # and a drift there hands the Telegram thread to the unreachable seat instead.
+        assert users_service.earliest_admin_id() == current["id"]
+    finally:
+        pg_execute("DELETE FROM users")
+
+
+def test_the_legacy_claim_leaves_rows_unowned_when_every_admin_is_deactivated(pg_db):
+    """No ACTIVE admin: the subquery is NULL, and that must be a no-op, not a failure.
+
+    update_user() refuses to deactivate the last active admin, so this state is only
+    reachable by a route it does not police — a direct database edit, a restore from an
+    older dump, or a release predating that guard. A migration cannot assume its input
+    was produced by the current code, and it runs during boot: raising here would wedge
+    the install on every subsequent start.
+
+    Unowned is the right resting place. Every read path filters on user_id, so the rows
+    go invisible rather than to a member or to a seat that cannot sign in.
+    """
+    from assistant import history
+    from core.postgres import pg_execute, pg_fetchone
+    from users import service as users_service
+    pg_execute("DELETE FROM users")
+    users_service.create_user("gone@example.com", "Gone", "pw-gone-123456", role="admin")
+    member = users_service.create_user(
+        "leftover@example.com", "Leftover", "pw-leftover-12", role="member")
+    try:
+        pg_execute("UPDATE users SET is_active = FALSE WHERE role = 'admin'")
+        assert users_service.earliest_admin_id() is None
+
+        conv = history.create_conversation(user_id=None)
+        _run_claim_migration()  # must complete, not raise
+        assert pg_fetchone(
+            "SELECT user_id FROM assistant_conversations WHERE id = %s",
+            (conv["id"],))["user_id"] is None
+        # Not handed to the one seat that CAN log in, either: the claim is admin-scoped.
+        assert [c["id"] for c in history.list_conversations(user_id=member["id"])] == []
+    finally:
+        pg_execute("DELETE FROM users")
+
+
+def test_the_bootstrap_claims_legacy_conversations_on_a_skipped_version_upgrade(pg_db):
+    """The one case migration M1 cannot cover, end to end against a real database.
+
+    An install upgrading straight from a pre-multi-user release applies the users
+    migration and M1 in the SAME startup, before any admin exists, so M1's `MIN(id)
+    WHERE role='admin'` subquery is NULL and its UPDATE matches nothing. The bootstrap
+    that seeds the first admin is what claims those rows — the same thing it already
+    does for the legacy totp_config and trusted_devices rows.
+    """
+    from assistant import history
+    from core.postgres import pg_execute, pg_fetchone
+    from users import bootstrap
+    pg_execute("DELETE FROM users")
+    legacy = history.create_conversation(user_id=None)          # a pre-#191 row
+    _run_claim_migration()                                      # M1 with no admin: no-op
+    assert pg_fetchone("SELECT user_id FROM assistant_conversations WHERE id = %s",
+                       (legacy["id"],))["user_id"] is None
+    try:
+        seeded = bootstrap.ensure_bootstrap_admin()
+        assert seeded is not None
+        assert pg_fetchone("SELECT user_id FROM assistant_conversations WHERE id = %s",
+                           (legacy["id"],))["user_id"] == seeded["id"]
+        # And the owner can actually reach it again — the point of the whole claim.
+        assert history.conversation_exists(legacy["id"], user_id=seeded["id"]) is True
+        # A second boot is a no-op: the function returns early once a user exists, so a
+        # deliberately unowned conversation is never swept up later.
+        later = history.create_conversation(user_id=None)
+        assert bootstrap.ensure_bootstrap_admin() is None
+        assert pg_fetchone("SELECT user_id FROM assistant_conversations WHERE id = %s",
+                           (later["id"],))["user_id"] is None
+    finally:
+        pg_execute("DELETE FROM users")

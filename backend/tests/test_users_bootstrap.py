@@ -130,6 +130,20 @@ def test_claims_the_orphaned_2fa_rows(monkeypatch, fake_conn):
     assert "UPDATE trusted_devices SET user_id = %s WHERE user_id IS NULL" in sql
 
 
+def test_claims_the_legacy_conversations(monkeypatch, fake_conn):
+    """The SKIPPED-VERSION upgrade (#191): an install coming straight from a
+    pre-multi-user release runs the users migration and M1 in one startup, so M1's own
+    MIN(id)-admin claim reads an empty users table and matches nothing. Without this
+    claim that install's whole chat history stays unowned — and an unowned conversation
+    is invisible to every seat, so it would vanish from the sidebar for good."""
+    conn = fake_conn(monkeypatch, bootstrap, fetchone_results=_seq())
+    bootstrap.ensure_bootstrap_admin()
+    assert (
+        "UPDATE assistant_conversations SET user_id = %s WHERE user_id IS NULL"
+        in _sql(conn)
+    )
+
+
 # ── Ownership backfill ───────────────────────────────────────────────────────
 
 def test_backfills_ownership_on_every_owned_table(monkeypatch, fake_conn):

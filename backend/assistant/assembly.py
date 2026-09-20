@@ -100,7 +100,9 @@ def assemble_messages(provider, conversation_id: str) -> list[dict]:
     Returns [] when the conversation has no rows. Callers persist the new user row
     BEFORE assembling, so the result already ends with the latest user turn.
     """
-    conv = history.get_conversation(conversation_id)
+    # user_id=None: assembly runs inside a turn the engine has already scoped to the
+    # caller's seat (#191); re-checking here would be a second round trip for nothing.
+    conv = history.get_conversation(conversation_id, user_id=None)
     if not conv:
         return []
     rows = _apply_compaction(

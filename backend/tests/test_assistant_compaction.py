@@ -75,7 +75,7 @@ class _Store:
     def get_compaction_state(self, cid):
         return dict(self.state)
 
-    def get_conversation(self, cid):
+    def get_conversation(self, cid, *, user_id=None):
         self.conversation_reads += 1
         return {"id": cid, "messages": self.rows}
 
