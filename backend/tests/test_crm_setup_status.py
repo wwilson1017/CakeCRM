@@ -38,8 +38,9 @@ ALLOWED_TASK_MODES = {"gtd", "normal"}
 
 
 class _Store:
-    def __init__(self, active="anthropic"):
+    def __init__(self, active="anthropic", load_failed=False):
         self.data = {"active_provider": active, "active_model": "some-model-v2"}
+        self.load_failed = load_failed
 
 
 @pytest.fixture
@@ -53,8 +54,6 @@ def sources(monkeypatch):
     import providers.credentials
     import telegram.store
 
-    # Both singletons readable by default; individual tests take one away.
-    monkeypatch.setattr(svc, "_readable", lambda probe: True)
     monkeypatch.setattr(providers, "get_ai_provider", lambda *a, **k: object())
     monkeypatch.setattr(providers.credentials, "CredentialStore", _Store)
     monkeypatch.setattr(gmail.store, "get_row", lambda: {"connection_status": "ok"})
@@ -62,7 +61,7 @@ def sources(monkeypatch):
     monkeypatch.setattr(telegram.store, "get_settings", lambda: {"connected": True})
     monkeypatch.setattr(telegram.store, "get_link",
                         lambda user_id: {"id": 1, "chat_id": "9", "link_code": ""})
-    monkeypatch.setattr(crm.service, "get_task_mode", lambda: "gtd")
+    monkeypatch.setattr(crm.service, "get_crm_meta", lambda: {"id": 1, "task_mode": "gtd"})
     monkeypatch.setattr(crm.field_service, "list_field_definitions", lambda *a, **k: [
         {"entity_type": "contact"}, {"entity_type": "contact"}, {"entity_type": "deal"},
     ])
@@ -283,7 +282,7 @@ def test_get_setup_status_never_raises(sources):
     for module, name in (
         (providers, "get_ai_provider"), (gmail.store, "get_row"),
         (telegram.store, "get_settings"), (telegram.store, "get_link"),
-        (crm.service, "get_task_mode"), (crm.field_service, "list_field_definitions"),
+        (crm.service, "get_crm_meta"), (crm.field_service, "list_field_definitions"),
     ):
         sources.setattr(module, name, _boom)
     out = svc.get_setup_status(user_id=7)
@@ -300,27 +299,72 @@ def test_get_setup_status_never_raises(sources):
 # those is the worst case the nullable payload exists for: it invites Baker to walk
 # someone through an AI Setup they already completed.
 
-def test_an_unreadable_ai_settings_row_is_unknown_not_unconfigured(sources):
+def test_a_failed_credential_load_is_unknown_not_unconfigured(sources):
+    """Exactly what a database outage produces: the store hands back the empty shape and
+    the factory hands back None, with NO exception anywhere. `load_failed` is the store
+    reporting which of the two it was, off the same load that produced the shape."""
     import providers.credentials
 
-    # Exactly what a database outage produces: the store hands back the empty shape and
-    # the factory hands back None, with no exception anywhere.
-    sources.setattr(svc, "_readable", lambda probe: probe != svc._AI_SETTINGS_PROBE)
-    sources.setattr(providers.credentials, "CredentialStore", lambda: _Store(active=""))
+    sources.setattr(providers.credentials, "CredentialStore",
+                    lambda: _Store(active="", load_failed=True))
     sources.setattr(providers, "get_ai_provider", lambda *a, **k: None)
     out = svc.get_setup_status(user_id=7)
     assert out["ai_ready"] is None and out["active_provider"] is None
-    # One dead probe does not blank the sources that CAN answer.
+    # One dead source does not blank the ones that CAN answer.
     assert out["gmail_connected"] is True and out["task_mode"] == "gtd"
+
+
+def test_the_store_really_sets_that_flag_when_its_load_fails(monkeypatch):
+    """Pinned against the real CredentialStore, not the fixture's stand-in — the fixture
+    could agree with a flag nothing ever sets."""
+    import providers.credentials as creds
+
+    monkeypatch.setattr(creds, "get_connection", _boom)
+    store = creds.CredentialStore()
+    assert store.load_failed is True
+    assert store.data == {"active_provider": "", "active_model": "", "profiles": {}}
 
 
 def test_an_unreadable_crm_meta_row_makes_the_task_mode_unknown(sources):
     """`get_task_mode` fail-safes to the product default, which is right for the four hot
-    paths that call it and wrong here — a guess must not be reported as a fact."""
-    sources.setattr(svc, "_readable", lambda probe: probe != svc._CRM_META_PROBE)
+    paths that call it and wrong here — a guess must not be reported as a fact. The value
+    is therefore read through `get_crm_meta`, which lets the error propagate, so failure
+    and value come from ONE query."""
+    import crm.service
+
+    sources.setattr(crm.service, "get_crm_meta", _boom)
     out = svc.get_setup_status(user_id=7)
     assert out["task_mode"] is None
     assert out["ai_ready"] is True
+
+
+def test_an_absent_crm_meta_row_is_unknown_too(sources):
+    """`get_crm_meta` answers a missing row with a default dict carrying no task_mode.
+    The singleton is seeded by its migration and swept by nothing, so that means the row
+    did not come back."""
+    import crm.service
+
+    sources.setattr(crm.service, "get_crm_meta",
+                    lambda: {"id": 1, "sample_data_loaded": False})
+    assert svc.get_setup_status(user_id=7)["task_mode"] is None
+
+
+@pytest.mark.parametrize("stored,expected", [
+    ("gtd", "gtd"), ("normal", "normal"), (None, "gtd"), ("", "gtd"), ("bogus", "gtd"),
+])
+def test_the_task_mode_rule_matches_the_one_every_other_reader_uses(
+    sources, monkeypatch, stored, expected
+):
+    """This module restates `get_task_mode`'s normalization instead of calling it, so the
+    two are pinned together against the same stored value — four readers already agree on
+    this default and a fifth must not drift."""
+    import crm.service
+
+    sources.setattr(crm.service, "get_crm_meta", lambda: {"id": 1, "task_mode": stored})
+    assert svc.get_setup_status(user_id=7)["task_mode"] == expected
+
+    monkeypatch.setattr(crm.service, "pg_fetchone", lambda *a, **k: {"task_mode": stored})
+    assert crm.service.get_task_mode() == expected
 
 
 def test_a_readable_singleton_with_nothing_configured_still_reports_false(sources):
@@ -334,20 +378,12 @@ def test_a_readable_singleton_with_nothing_configured_still_reports_false(source
     assert out["ai_ready"] is False and out["active_provider"] == ""
 
 
-def test_the_probe_reports_a_missing_row_and_a_failed_read_alike(monkeypatch):
-    """Both singletons are seeded by their own migrations and deleted by nothing, so an
-    absent row can only mean the read did not work — the same tell `_gmail` uses."""
-    import core.postgres
+def test_no_source_is_answered_by_a_separate_preflight_query():
+    """A probe can succeed in the instant before the read it was meant to vouch for
+    fails, so every tell here has to ride the SAME query as the value. Read off the
+    module source, because the shape is the guarantee."""
+    import inspect
 
-    monkeypatch.setattr(core.postgres, "pg_fetchone", lambda *a, **k: {"ok": 1})
-    assert svc._readable(svc._AI_SETTINGS_PROBE) is True
-    monkeypatch.setattr(core.postgres, "pg_fetchone", lambda *a, **k: None)
-    assert svc._readable(svc._AI_SETTINGS_PROBE) is False
-    monkeypatch.setattr(core.postgres, "pg_fetchone", _boom)
-    assert svc._readable(svc._AI_SETTINGS_PROBE) is False
-
-
-def test_the_probes_name_seeded_singletons_and_interpolate_nothing():
-    for probe in (svc._AI_SETTINGS_PROBE, svc._CRM_META_PROBE):
-        assert "%" not in probe and "{" not in probe and ";" not in probe
-        assert probe.lower().startswith("select 1 as ok from ")
+    source = inspect.getsource(svc)
+    assert "_readable" not in source
+    assert "SELECT 1" not in source.upper()

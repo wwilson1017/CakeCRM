@@ -636,7 +636,11 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   merge and split Telegram in two** — the bot is install configuration (admin, Integrations)
   while a linked chat is a person's own device (member-visible, Personal) — so the manual
   gained `settings/telegram-link` beside `settings/telegram`, the Personal section names it,
-  and `_TOPIC_TO_CARD` covers the new card. Two cards with different gating cannot share one
+  and `_TOPIC_TO_CARD` covers the new card. #191 and #193 had also left three OTHER topics
+  asserting the pre-split world — `settings/notifications`, `settings/team` and
+  `assistant/permissions` all still said the Telegram link and the chat history were
+  install-wide — so those were reconciled in the same pass: contradictory topics are worse
+  than a missing one, because which answer Baker gives then depends on what search returned. Two cards with different gating cannot share one
   topic, because a topic carries exactly one `admin` flag; the admin topic's stale
   one-account-per-install claims were corrected in the same pass, per the convention that a
   change to a user-facing flow updates its topic. `build_system_prompt` takes it as a **keyword-only**
@@ -666,13 +670,18 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   `crm.service.get_task_mode` all catch every database error and return a plausible value
   ("store reads never raise" is correct for their hot paths — chat must not 500 on a
   hiccup), so NO exception reaches this module and a naive try/except reports an outage as
-  a deliberate configuration. Gmail brings its own tell (the seeded singleton means an
-  EMPTY row can only be a failed read); the other two collapse failure into *no provider
-  configured* and *the product-default task mode*, so `_readable` probes their seeded
-  singleton (`ai_settings`, `crm_meta` — literal SQL constants, one indexed row) before
-  believing what they return. The AI one is the worst case the nullable payload exists for:
-  without it a dead database invites Baker to walk someone through an AI Setup they already
-  completed. It is
+  a deliberate configuration. Every tell must ride the SAME query as
+  the value, never a separate preflight probe — a probe can succeed in the instant before
+  the read it was meant to vouch for fails, so it proves nothing (this was built as a probe
+  first and corrected). Gmail brings its own (the seeded singleton means an EMPTY row can
+  only be a failed read); `CredentialStore` gained a **`load_failed`** flag set in the same
+  `except` that returns the empty shape, which every other caller ignores; and task mode is
+  read through `crm.service.get_crm_meta`, the failure-AWARE reader of that singleton, which
+  lets the error propagate — so `setup_status_service` restates the mode-normalization rule
+  rather than calling `get_task_mode`, and a test pins the two against the same stored value
+  so the fifth reader of that default cannot drift from the four. The AI one is the worst
+  case the nullable payload exists for: without it a dead database invites Baker to walk
+  someone through an AI Setup they already completed. It is
   background-callable and that is asserted rather than incidental — the payload is install
   configuration with no record content and nothing about another seat, and a background
   turn's one egress is a `notify_user` over the install's own channels. **Exactly one field
