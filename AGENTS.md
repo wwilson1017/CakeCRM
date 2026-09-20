@@ -639,7 +639,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   and `_TOPIC_TO_CARD` covers the new card. #191 and #193 had also left three OTHER topics
   asserting the pre-split world — `settings/notifications`, `settings/team` and
   `assistant/permissions` all still said the Telegram link and the chat history were
-  install-wide — so those were reconciled in the same pass: contradictory topics are worse
+  install-wide — #194 reconciled all three ahead of this branch, so it rebases onto that text rather than restating it: contradictory topics are worse
   than a missing one, because which answer Baker gives then depends on what search returned. Two cards with different gating cannot share one
   topic, because a topic carries exactly one `admin` flag; the admin topic's stale
   one-account-per-install claims were corrected in the same pass, per the convention that a
