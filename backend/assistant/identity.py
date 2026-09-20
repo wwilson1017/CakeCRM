@@ -400,8 +400,10 @@ def build_context_note(record_type, record_id) -> str | None:
 _SETTINGS_SECTION_HELP: dict[str, tuple[str, tuple[str, ...]]] = {
     "personal": (
         "their own notification preferences, their password and two-factor "
-        "authentication, and how the pipeline board looks on this device",
-        ("settings/notifications", "settings/passwords-and-2fa"),
+        "authentication, linking their own Telegram chat to you, and how the pipeline "
+        "board looks on this device",
+        ("settings/notifications", "settings/passwords-and-2fa",
+         "settings/telegram-link"),
     ),
     "assistant": (
         "your long-term memory, and the task mode the CRM runs in",

@@ -516,6 +516,10 @@ def test_the_marker_detector_bites():
 _TOPIC_TO_CARD = {
     "settings/gmail": "gmail",
     "settings/telegram": "telegram",
+    # #193 split Telegram in two: the bot is install configuration (admin), a linked chat
+    # is a person's own device (member-visible). Two cards with different gating cannot
+    # share one topic, because a topic carries exactly one `admin` flag.
+    "settings/telegram-link": "telegram_link",
     "settings/task-mode": "task_mode",
     "settings/custom-fields": "custom_fields",
     "settings/branding": "branding",
