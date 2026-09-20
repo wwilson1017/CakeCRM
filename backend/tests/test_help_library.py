@@ -25,6 +25,7 @@ permanent green, which reads as coverage and is worse than no guard.
 
 import re
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
@@ -656,3 +657,39 @@ def test_help_note_stays_slim():
     assert len(identity.HELP_NOTE) < 1200, len(identity.HELP_NOTE)
     body = sum(len(t.body) for t in lib.get_library().topics)
     assert len(identity.HELP_NOTE) < body / 10
+
+
+# ── The settings-section → manual-topic map (issue #200) ─────────────────────
+#
+# `identity._SETTINGS_SECTION_HELP` is what ties phase 2's "where you are" note to phase
+# 1's "how it works" library: the note hands the model topic slugs to read. Those slugs
+# are only useful while they resolve, so they are pinned against the real corpus here —
+# the same discipline HELP_NOTE's folder list gets above — and a renamed or deleted topic
+# fails CI instead of quietly sending the model to a dead slug at runtime.
+
+def test_every_settings_section_names_topics_that_exist():
+    library = lib.get_library()
+    for section, (_gloss, slugs) in identity._SETTINGS_SECTION_HELP.items():
+        assert slugs, f"section {section!r} names no help topics"
+        for slug in slugs:
+            assert library.get(slug) is not None, (
+                f"section {section!r} points at help topic {slug!r}, which does not exist"
+            )
+
+
+def test_the_section_map_covers_exactly_the_sections_the_seam_accepts():
+    """The map and the router's Literal are the same closed set. If they drift, a section
+    the client may legitimately send produces no note at all — a silent hole, because
+    `build_page_note` returns None for an unknown section by design."""
+    from assistant.router import SettingsPageContext
+
+    accepted = set(get_args(SettingsPageContext.model_fields["section"].annotation))
+    assert set(identity._SETTINGS_SECTION_HELP) == accepted
+
+
+def test_the_page_note_is_reachable_for_every_accepted_section():
+    for section in identity._SETTINGS_SECTION_HELP:
+        note = identity.build_page_note("settings", section)
+        assert note and section in note
+        for slug in identity._SETTINGS_SECTION_HELP[section][1]:
+            assert slug in note

@@ -31,11 +31,7 @@ import {
 } from '../../shared/styles';
 import { useAuth } from '../../core/auth/AuthContext';
 import { useActiveRecord } from '../RecordContext';
-import { resolveSection, wantedSection } from '../settingsSections';
-import type { SettingsPageContext } from '../../assistant';
-
-/** Where the drawer's page context comes from. */
-const SETTINGS_PATH = '/crm/settings';
+import { settingsPageContext } from '../../assistant/pageContext';
 
 // The chat surface is the heaviest thing in the CRM (react-markdown + highlight.js), and it
 // is only ever needed once a provider is configured — so it is lazy (#149), imported by its
@@ -52,18 +48,13 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
   const { pathname } = useLocation();
   const [searchParams] = useSearchParams();
 
-  // The settings section open behind the drawer (issue #200). Derived from the URL
-  // rather than published by SettingsPage through a second RecordContext: the shown
-  // section already IS a pure function of the URL and the role, and it is computed by
-  // exactly these two helpers on the page itself — so reusing them here makes
-  // disagreement between the chip strip and the tab on screen impossible, with no
-  // provider, no publisher and no ownership-token dance. `resolveSection` also gives the
-  // member fallback for free: deep-linked to an admin section, they see (and Baker is
-  // told about) the section they actually landed on.
-  const pageContext = useMemo<SettingsPageContext | null>(() => {
-    if (pathname !== SETTINGS_PATH) return null;
-    return { page: 'settings', section: resolveSection(wantedSection(searchParams), isAdmin) };
-  }, [pathname, searchParams, isAdmin]);
+  // The settings section open behind the drawer (issue #200). The rules are pure and
+  // live in `assistant/pageContext` — see that module for why this is derived from the
+  // URL rather than published the way the record context is.
+  const pageContext = useMemo(
+    () => settingsPageContext(pathname, searchParams, isAdmin),
+    [pathname, searchParams, isAdmin],
+  );
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);

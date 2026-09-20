@@ -1156,7 +1156,7 @@ CRM_TOOL_DEFS = [
             "not tell the user to go and set that thing up."
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
-        "kind": "crm",
+        "kind": "integration",
     },
 ]
 

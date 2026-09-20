@@ -361,3 +361,132 @@ def test_coaching_guide_keeps_the_partial_history_caveat():
     """The issue calls presenting a partial funnel as the whole picture the worst way to
     get coaching wrong, so the flag is named in the text rather than left implied."""
     assert "history_covers_window" in identity.COACHING_GUIDE
+
+
+# ── The seat's ROLE (issue #200) ──────────────────────────────────────────────
+# Advice only. The server gates (require_admin, bind_owner_filter) are the enforcement
+# and are not touched; this sentence exists so Baker does not walk a member step by step
+# through a flow whose route will refuse them.
+
+def test_the_user_note_states_an_admin_can_change_install_settings():
+    note = identity.build_user_note({"name": "Ada", "email": "a@b.c", "role": "admin"})
+    assert note.startswith("You are currently talking with Ada (a@b.c).")
+    assert "administrator of this install" in note
+
+
+def test_the_user_note_tells_a_member_to_ask_an_administrator():
+    note = identity.build_user_note({"name": "Ada", "email": "a@b.c", "role": "member"})
+    assert "not an administrator" in note
+    assert "needs an administrator" in note
+
+
+def test_the_role_sentence_does_not_depend_on_a_usable_name_or_email():
+    """The two halves are emitted independently: what the seat MAY DO is the half that
+    changes the answer, so an unnamed row still gets it."""
+    note = identity.build_user_note({"name": "", "email": "", "role": "admin"})
+    assert note and "currently talking with" not in note
+    assert "administrator of this install" in note
+
+
+@pytest.mark.parametrize("role", [None, "", "owner", "ADMIN", 7, ["admin"], {"admin": 1}])
+def test_an_unrecognized_role_claims_nothing(role):
+    """Silence is the safe direction — and a non-string must not become a TypeError on a
+    dict lookup, because this function is a prompt boundary, not a DB convenience."""
+    note = identity.build_user_note({"name": "Ada", "email": "a@b.c", "role": role})
+    assert note == "You are currently talking with Ada (a@b.c)."
+
+
+def test_an_unattended_turn_states_no_role():
+    assert identity.build_user_note(None) == ""
+    assert identity.build_user_note({"role": "admin"}).startswith("They are an administrator")
+
+
+def test_the_role_rides_the_volatile_half_like_the_rest_of_the_seat():
+    ident = {"name": "Baker", "personality": ""}
+    static_a, _ = identity.build_system_prompt(ident)
+    static_b, volatile_b = identity.build_system_prompt(
+        ident, user_note=identity.build_user_note({"name": "Ada", "role": "member"}))
+    assert static_a == static_b
+    assert "not an administrator" in volatile_b
+
+
+# ── The settings-page note (issue #200) ───────────────────────────────────────
+# A SEPARATE seam from build_context_note. Same discipline: enum in, hardcoded English
+# out, defence in depth behind the router's Pydantic Literal.
+
+def test_the_page_note_names_the_section_and_its_manual_topics():
+    note = identity.build_page_note("settings", "integrations")
+    assert "Settings page" in note and "integrations section" in note
+    assert "settings/telegram" in note and "settings/gmail" in note
+    assert "help_read_topic" in note
+
+
+def test_the_page_note_says_the_assistant_cannot_change_settings():
+    """There are no settings write tools and there must not be. Saying so in the note is
+    what stops the model proposing one it cannot call."""
+    note = identity.build_page_note("settings", "workspace")
+    assert "cannot change settings yourself" in note
+
+
+@pytest.mark.parametrize("page,section", [
+    ("pipeline", "workspace"),        # a page this seam does not describe
+    ("settings", "billing"),          # a section that does not exist
+    ("settings", "Workspace"),        # exact match only — no case folding
+    ("settings", ""),
+    ("settings", None),
+    ("settings", 3),
+    ("settings", ["workspace"]),
+    (None, "workspace"),
+    (7, "workspace"),
+    ("SETTINGS", "workspace"),
+])
+def test_the_page_note_refuses_anything_outside_the_closed_set(page, section):
+    assert identity.build_page_note(page, section) is None
+
+
+def test_the_page_note_is_built_only_from_the_hardcoded_table():
+    """Nothing a caller supplies is interpolated: the id that survives validation is one
+    of four fixed strings, and the gloss and slugs come from the table beside it."""
+    note = identity.build_page_note("settings", "personal")
+    gloss, slugs = identity._SETTINGS_SECTION_HELP["personal"]
+    assert gloss in note
+    assert all(slug in note for slug in slugs)
+
+
+def test_the_page_note_appends_to_volatile_only():
+    ident = {"name": "Baker", "personality": ""}
+    static_a, volatile_a = identity.build_system_prompt(ident)
+    static_b, volatile_b = identity.build_system_prompt(
+        ident, page={"page": "settings", "section": "assistant"})
+    assert static_a == static_b
+    assert "assistant section" in volatile_b and "assistant section" not in volatile_a
+
+
+def test_an_invalid_page_adds_nothing_to_the_prompt():
+    ident = {"name": "Baker", "personality": ""}
+    _, volatile_a = identity.build_system_prompt(ident)
+    _, volatile_b = identity.build_system_prompt(
+        ident, page={"page": "settings", "section": "nope"})
+    assert volatile_a == volatile_b
+
+
+def test_the_page_context_is_keyword_only_and_optional():
+    """Every pre-#200 caller — the heartbeat, the Telegram poller, the background runner,
+    and #201's tests — passes positionally up to user_note and must keep working."""
+    import inspect
+
+    sig = inspect.signature(identity.build_system_prompt)
+    assert sig.parameters["page"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert sig.parameters["page"].default is None
+
+
+def test_a_record_and_a_page_can_both_ride_one_turn():
+    """They are separate inputs answering different questions, so neither displaces the
+    other — the record boundary is exactly what it was before #200."""
+    _, volatile = identity.build_system_prompt(
+        {"name": "Baker", "personality": ""},
+        context={"record_type": "deal", "record_id": 7},
+        page={"page": "settings", "section": "workspace"},
+    )
+    assert "deal #7" in volatile
+    assert "workspace section" in volatile
