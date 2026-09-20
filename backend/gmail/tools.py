@@ -4,6 +4,10 @@ Exactly three tools — gmail_search, gmail_read_thread (reads), gmail_create_dr
 (the only write). NO send/reply tool exists; there is no code path to send email.
 Executors follow the registry contract: plain sync `def(**kwargs) -> dict`, never
 raise (return {"error": ...}); the confirmation gate keys off the "writes" flag.
+
+Since #194 the tools are gated on the SEAT as well as the connection — see
+get_gmail_tools() below. That gate decides who is offered the tools; it never widens
+what they can do.
 """
 
 from __future__ import annotations
@@ -224,20 +228,47 @@ GMAIL_TOOL_EXECUTORS: dict[str, Callable[..., dict]] = {
 }
 
 
-def get_gmail_tools() -> tuple[list[dict], dict[str, Callable[..., dict]]]:
-    """(defs, executors) for the assistant registry.
+def get_gmail_tools(user: dict | None = None) -> tuple[list[dict], dict[str, Callable[..., dict]]]:
+    """(defs, executors) for the assistant registry — gated on the connection AND the seat.
 
-    Defs are offered ONLY when Gmail is connected — a disconnected/keyless instance
-    hides the tools from the model entirely (hidden affordance, never an error).
-    When disconnected we return ([], {}); the registry fails closed on any unknown
-    tool name, so a stale/replayed call degrades to an error dict, never a raise.
-    MUST never raise: ToolRegistry() is constructed with no DB in the hermetic
-    suite, and get_gmail_tools() is called there.
+    Three reasons to return the empty pair, tested in this order:
+
+    1. ``user is None`` — an unattended turn (heartbeat, the proactive digest, any
+       future background caller). It needs NO database, so the denial holds even when
+       the connection row is unreadable, and it sits ABOVE the sharing test on purpose:
+       "share the mailbox with all seats" widens the gate to *seats*, and a turn with no
+       user is not a seat. This strictly narrows the background surface, which
+       ``assistant.background.BACKGROUND_EXCLUDED_TOOLS`` (#114) also enforces one layer
+       down at allowlist time — two independent locks, neither relying on the other.
+    2. Gmail is not connected — a disconnected/keyless instance hides the tools from the
+       model entirely (hidden affordance, never an error). Unchanged since #8.
+    3. The caller is a MEMBER seat and this install has not opted into sharing (#194).
+       There is exactly one mailbox per install, whichever account an admin connected,
+       so advertising it to every seat is how a member came to be able to read the
+       admin's mail. Admins are unaffected; an install that deliberately runs one shared
+       inbox turns ``share_with_all_seats`` on and every seat is offered the tools again.
+
+    This changes only WHO is offered the tools. The three tools, their ``writes`` flags,
+    the op allow-list, the scopes and the draft's connection binding are untouched: read
+    + create-draft only, forever. A stale or replayed call from a seat that no longer
+    holds them degrades to the registry's unknown-tool error dict, never a raise.
+
+    MUST never raise: ToolRegistry() is constructed with no DB in the hermetic suite,
+    and get_gmail_tools() is called there.
     """
+    if user is None:
+        return [], {}
     try:
         connected = store.is_connected()
     except Exception:
         connected = False
     if not connected:
         return [], {}
+    if user.get("role") != "admin":
+        try:
+            shared = store.sharing_enabled()
+        except Exception:
+            shared = False
+        if not shared:
+            return [], {}
     return GMAIL_TOOL_DEFS, GMAIL_TOOL_EXECUTORS

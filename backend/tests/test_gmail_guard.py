@@ -130,13 +130,22 @@ def test_gmail_reads_are_not_background_callable(monkeypatch):
     gmail_search → gmail_read_thread → private mail in the notification body.
 
     Only the READ tools are asserted: gmail_create_draft is already excluded as a write,
-    so including it would let this pass while the reads leaked."""
+    so including it would let this pass while the reads leaked.
+
+    The guarded registry is built for an ADMIN SEAT, not with background=True, since
+    #194: the seat gate means an unattended registry carries no Gmail tools at all, which
+    would make the vacuity precondition below — and therefore this whole guard — pass
+    without testing anything. Building the registry that DOES carry the tools is what
+    keeps BACKGROUND_EXCLUDED_TOOLS under test; the separate guard beneath this one pins
+    the seat gate's own contribution. Every assertion here is unchanged."""
+    from conftest import fake_admin
+
     from assistant.background import background_allowlist
     from assistant.registry import ToolRegistry
     from gmail import tools as gmail_tools
 
     monkeypatch.setattr(gmail_tools.store, "is_connected", lambda: True)
-    reg = ToolRegistry(background=True)
+    reg = ToolRegistry(user=fake_admin())
 
     reads = {d["name"] for d in gmail_tools.GMAIL_TOOL_DEFS if not d["writes"]}
     # Prove the registry really carries them, or the disjointness below is vacuous.
@@ -145,6 +154,35 @@ def test_gmail_reads_are_not_background_callable(monkeypatch):
     )
     leaked = reads & set(background_allowlist(reg))
     assert not leaked, f"Gmail read tools reachable from an unattended turn: {leaked}"
+
+
+def test_an_unattended_registry_carries_no_gmail_tools_at_all(monkeypatch):
+    """The second, EARLIER lock the seat gate adds in front of #114 (issue #194).
+
+    BACKGROUND_EXCLUDED_TOOLS subtracts the Gmail reads at allowlist time, downstream of
+    advertisement. Since #194 an unattended turn has no seat, so get_gmail_tools returns
+    nothing and there is no Gmail tool in the registry to subtract — including the DRAFT
+    tool, which the allowlist only ever excluded incidentally, as a write.
+
+    Asserted with sharing ON, because that is the case that could plausibly regress: a
+    future edit that treated "share with all seats" as "share with everything" would put
+    the mailbox back in the heartbeat's hands. Neither lock relies on the other."""
+    from assistant.background import background_allowlist
+    from assistant.registry import ToolRegistry
+    from gmail import tools as gmail_tools
+
+    monkeypatch.setattr(gmail_tools.store, "is_connected", lambda: True)
+    monkeypatch.setattr(gmail_tools.store, "sharing_enabled", lambda: True)
+    reg = ToolRegistry(background=True)
+
+    names = {d["name"] for d in gmail_tools.GMAIL_TOOL_DEFS}
+    assert names, "no Gmail tools exist — this guard would pass vacuously"
+    assert not (names & reg.writes_map.keys()), (
+        "an unattended registry advertises Gmail tools: "
+        f"{sorted(names & reg.writes_map.keys())}"
+    )
+    assert not (names & set(reg.executors)), "an unattended registry can dispatch Gmail"
+    assert not (names & set(background_allowlist(reg)))
 
 
 def test_gmail_write_tools_are_in_the_engine_connection_binding_set():

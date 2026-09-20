@@ -16,18 +16,26 @@ from memory import router as mem_router_mod
 from memory.router import router as memory_router
 
 
-def _app(*, authed: bool = True) -> FastAPI:
+def _app(*, authed: bool = True, role: str = "admin") -> FastAPI:
     app = FastAPI()
     app.include_router(context_files_router, prefix="/api/context-files")
     app.include_router(memory_router, prefix="/api/memory")
     if authed:
-        app.dependency_overrides[get_current_user] = lambda: {"sub": "u"}
+        app.dependency_overrides[get_current_user] = lambda: {"sub": "u", "role": role}
     return app
 
 
 @pytest.fixture
 def client():
+    """An ADMIN seat. The default is admin because these tests pin the write CONTRACT
+    (status mapping, concurrency, provenance); the role gate #194 added on protected
+    files has its own section at the bottom of this file."""
     return TestClient(_app())
+
+
+@pytest.fixture
+def member_client():
+    return TestClient(_app(role="member"))
 
 
 def _svc(monkeypatch, mod, name, result):
@@ -122,6 +130,61 @@ def test_put_records_the_human_as_the_writer(client, monkeypatch):
     monkeypatch.setattr(cf_router_mod.service, "write_file", fake_write)
     assert client.put("/api/context-files/file/soul.md", json={"content": "x"}).status_code == 200
     assert captured["written_by"] == "user"
+
+
+# ── protected files are admin-only to WRITE (issue #194, Decision 1d) ─────────────
+
+_PROTECTED_SPELLINGS = ["soul.md", "MEMORY.md", "SOUL.MD", "memory.md"]
+
+
+@pytest.mark.parametrize("name", _PROTECTED_SPELLINGS)
+def test_a_member_cannot_write_a_protected_file(member_client, monkeypatch, name):
+    """soul.md loads UNFENCED into the static system prompt, so a member able to rewrite
+    it could rewrite the assistant's standing orders for every seat.
+
+    Every case spelling is covered because the gate runs on the NORMALIZED name: gating
+    on the raw path would be bypassed by typing SOUL.MD.
+    """
+    def boom(*a, **k):
+        raise AssertionError("a denied write must never reach the service layer")
+
+    monkeypatch.setattr(cf_router_mod.service, "write_file", boom)
+    r = member_client.put(f"/api/context-files/file/{name}", json={"content": "pwned"})
+    assert r.status_code == 403
+
+
+@pytest.mark.parametrize("name", _PROTECTED_SPELLINGS)
+def test_an_admin_can_write_a_protected_file(client, monkeypatch, name):
+    captured = {}
+
+    def fake_write(filename, content, written_by="assistant", expected_updated_at=None):
+        captured.update(filename=filename)
+        return {"filename": filename}
+
+    monkeypatch.setattr(cf_router_mod.service, "write_file", fake_write)
+    assert client.put(f"/api/context-files/file/{name}", json={"content": "x"}).status_code == 200
+    # The service receives the canonical name, whatever case the caller typed.
+    assert captured["filename"] in {"soul.md", "MEMORY.md"}
+
+
+@pytest.mark.parametrize("name", ["topics/x.md", "daily/2026-09-19.md", "notes.md"])
+def test_a_member_can_still_write_unprotected_files(member_client, monkeypatch, name):
+    """The gate is selective, not a blanket refusal: the Memory page stays usable for
+    members, which is why this is an in-handler check and not route-level require_admin."""
+    _svc(monkeypatch, cf_router_mod, "write_file", {"filename": name})
+    assert member_client.put(f"/api/context-files/file/{name}", json={"content": "x"}).status_code == 200
+
+
+def test_a_member_can_still_READ_a_protected_file(member_client, monkeypatch):
+    """Seeing what the assistant knows stays open — only writing is gated."""
+    _svc(monkeypatch, cf_router_mod, "read_file", {"filename": "soul.md", "content": "hi"})
+    assert member_client.get("/api/context-files/file/soul.md").status_code == 200
+
+
+def test_a_member_writing_a_malformed_name_still_gets_400_not_403(member_client):
+    """The gate runs after normalization, so an invalid name is still a bad request —
+    the role check must not swallow the validation contract."""
+    assert member_client.put("/api/context-files/file/a/b/c.md", json={"content": "x"}).status_code == 400
 
 
 # ── memory facts ──────────────────────────────────────────────────────────────────

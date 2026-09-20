@@ -7,7 +7,8 @@ plain rows, so browsing and editing them never touches a provider.
   GET    /api/context-files                    — list metadata (?kind=, ?include_archived=)
   GET    /api/context-files/search?q=          — full-text search
   GET    /api/context-files/file/{filename}    — one file with its body
-  PUT    /api/context-files/file/{filename}    — create/overwrite (optimistic concurrency)
+  PUT    /api/context-files/file/{filename}    — create/overwrite (optimistic concurrency;
+                                                 protected files are admin-only, #194)
   DELETE /api/context-files/file/{filename}    — delete (protected files refused)
 
 Filenames contain '/' (``topics/x.md``), which a plain ``{filename}`` path parameter
@@ -87,11 +88,32 @@ async def get_context_file(filename: str, _user: dict = Depends(get_current_user
 async def put_context_file(
     filename: str,
     req: ContextFileWriteRequest,
-    _user: dict = Depends(get_current_user),
+    user: dict = Depends(get_current_user),
 ):
+    """Create or overwrite a context file; writing a PROTECTED one is admin-only (#194).
+
+    ``soul.md`` and ``MEMORY.md`` load into the system prompt — soul.md unfenced, as a
+    permanent instruction — so a member able to rewrite them could rewrite the
+    assistant's standing orders for every seat. The personality editor is already
+    admin-only; this closes the back door beside it.
+
+    The check is IN THE HANDLER, deliberately, not a route-level ``require_admin``: the
+    same route serves ``topics/`` and ``daily/`` writes that must stay member-open, so
+    the gate has to see the filename to decide. It runs on the NORMALIZED name, because
+    normalization is what makes ``SOUL.MD`` and ``soul.md`` one identity — gating on the
+    raw path would be bypassed by a change of case. Reads are unchanged (members can see
+    what the assistant knows), delete already refuses protected files for everyone, and
+    the assistant's own tool path is untouched.
+    """
     try:
+        name = service.normalize_filename(filename)
+        if name in service.PROTECTED_FILES and user.get("role") != "admin":
+            raise HTTPException(
+                status_code=403,
+                detail=f"Only an admin can edit {name}.",
+            )
         return await run_in_threadpool(
-            service.write_file, filename, req.content, "user", req.expected_updated_at,
+            service.write_file, name, req.content, "user", req.expected_updated_at,
         )
     except service.ContextFileError as exc:
         raise _http(exc) from None
