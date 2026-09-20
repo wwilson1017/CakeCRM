@@ -897,5 +897,19 @@ def test_no_settings_write_tool_exists():
 def test_setup_status_executor_delegates_to_the_service(monkeypatch):
     import crm.setup_status_service as svc
 
-    monkeypatch.setattr(svc, "get_setup_status", lambda: {"ai_ready": True})
-    assert tools.crm_get_setup_status() == {"ai_ready": True}
+    monkeypatch.setattr(svc, "get_setup_status", lambda user_id=None: {"seat": user_id})
+    assert tools.crm_get_setup_status() == {"seat": None}
+    assert tools.crm_get_setup_status(user_id=7) == {"seat": 7}
+
+
+def test_the_model_cannot_name_the_seat_the_setup_status_answers_for(monkeypatch):
+    """The payload's one per-person field is whether THIS seat has a linked Telegram chat
+    (#193). The seat is bound server-side, and a model-supplied `user_id` is dropped —
+    otherwise a status read becomes a way to ask about somebody else's device."""
+    import crm.setup_status_service as svc
+
+    monkeypatch.setattr(svc, "get_setup_status", lambda user_id=None: {"seat": user_id})
+    _, executors = get_crm_tools(user={"id": 4})
+    assert executors["crm_get_setup_status"](user_id=99) == {"seat": 4}
+    _, unattended = get_crm_tools(user=None)
+    assert unattended["crm_get_setup_status"](user_id=99) == {"seat": None}

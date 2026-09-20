@@ -57,8 +57,8 @@ def sources(monkeypatch):
     monkeypatch.setattr(providers.credentials, "CredentialStore", _Store)
     monkeypatch.setattr(gmail.store, "get_row", lambda: {"connection_status": "ok"})
     monkeypatch.setattr(gmail.store, "is_connected", lambda row=None: True)
-    monkeypatch.setattr(
-        telegram.store, "get_settings", lambda: {"connected": True, "linked": True})
+    monkeypatch.setattr(telegram.store, "get_settings", lambda: {"connected": True})
+    monkeypatch.setattr(telegram.store, "get_link", lambda user_id: {"id": 1, "chat_id": "9"})
     monkeypatch.setattr(crm.service, "get_task_mode", lambda: "gtd")
     monkeypatch.setattr(crm.field_service, "list_field_definitions", lambda *a, **k: [
         {"entity_type": "contact"}, {"entity_type": "contact"}, {"entity_type": "deal"},
@@ -69,11 +69,12 @@ def sources(monkeypatch):
 # ── The contract ──────────────────────────────────────────────────────────────
 
 def test_the_payload_key_set_is_exactly_this(sources):
-    assert set(svc.get_setup_status()) == EXPECTED_KEYS
+    assert set(svc.get_setup_status(user_id=7)) == EXPECTED_KEYS
+    assert set(svc.get_setup_status()) == EXPECTED_KEYS  # unattended: same shape
 
 
 def test_a_healthy_install_reads_back_as_configured(sources):
-    out = svc.get_setup_status()
+    out = svc.get_setup_status(user_id=7)
     assert out == {
         "ai_ready": True,
         "active_provider": "anthropic",
@@ -89,7 +90,7 @@ def test_a_healthy_install_reads_back_as_configured(sources):
 def test_every_leaf_is_a_boolean_an_enum_a_count_or_unknown(sources):
     """The structural half of "no free text on this surface": a later field cannot
     quietly become a string the model reads as prose."""
-    out = svc.get_setup_status()
+    out = svc.get_setup_status(user_id=7)
     for key in ("ai_ready", "gmail_connected", "gmail_broken",
                 "telegram_connected", "telegram_linked"):
         assert isinstance(out[key], bool) or out[key] is None, key
@@ -113,7 +114,7 @@ def test_no_secret_or_connected_account_address_can_appear(sources):
         "connection_status": "ok", "email": "someone@example.com",
         "client_secret_enc": "gAAAAAB-ciphertext", "refresh_token_enc": "gAAAAAB-more",
     })
-    blob = repr(svc.get_setup_status())
+    blob = repr(svc.get_setup_status(user_id=7))
     for leak in ("some-model-v2", "someone@example.com", "gAAAAAB"):
         assert leak not in blob, f"{leak!r} reached the setup-status payload"
 
@@ -155,17 +156,42 @@ def test_a_broken_gmail_connection_is_reported_as_broken(sources):
     assert out["gmail_connected"] is False and out["gmail_broken"] is True
 
 
-def test_telegram_link_state_moving_reads_as_unknown_not_unlinked(sources):
-    """Issue #193 (PR #207) moves per-seat link state out of `get_settings()` into
-    `store.get_link(user_id)`. The key is subscripted rather than `.get`-ed precisely so
-    that lands here as unknown — reporting `False` for every seat would be a lie, and a
-    silent one."""
+def test_the_telegram_link_is_read_for_THIS_seat(sources):
+    """#193 split the two: the bot token is install-wide, a linked chat belongs to one
+    person. A status read must answer the asking seat's question, not somebody else's."""
     import telegram.store
 
-    sources.setattr(telegram.store, "get_settings", lambda: {"connected": True})
+    seen = {}
+    sources.setattr(telegram.store, "get_link",
+                    lambda user_id: seen.setdefault("user_id", user_id) and None)
+    out = svc.get_setup_status(user_id=7)
+    assert seen == {"user_id": 7}
+    assert out["telegram_connected"] is True and out["telegram_linked"] is False
+
+
+def test_an_unattended_turn_cannot_answer_the_link_question(sources):
+    """There is no seat, so "is your chat linked" has no answer. `False` would invite the
+    turn to tell the install to link a chat that may already exist — unknown is honest.
+    The install-wide half is still reported."""
     out = svc.get_setup_status()
-    assert out["telegram_connected"] is None and out["telegram_linked"] is None
-    assert out["ai_ready"] is True
+    assert out["telegram_connected"] is True
+    assert out["telegram_linked"] is None
+
+
+def test_an_unreadable_link_does_not_blank_the_bot_config_beside_it(sources):
+    import telegram.store
+
+    sources.setattr(telegram.store, "get_link", _boom)
+    out = svc.get_setup_status(user_id=7)
+    assert out["telegram_connected"] is True and out["telegram_linked"] is None
+
+
+def test_an_unreadable_bot_config_does_not_blank_the_seat_link_beside_it(sources):
+    import telegram.store
+
+    sources.setattr(telegram.store, "get_settings", _boom)
+    out = svc.get_setup_status(user_id=7)
+    assert out["telegram_connected"] is None and out["telegram_linked"] is True
 
 
 def test_unreadable_custom_fields_are_unknown_not_zero(sources):
@@ -188,10 +214,10 @@ def test_an_install_with_nothing_configured_reports_false_not_unknown(sources):
     sources.setattr(providers.credentials, "CredentialStore", lambda: _Store(active=""))
     sources.setattr(gmail.store, "is_connected", lambda row=None: False)
     sources.setattr(gmail.store, "get_row", lambda: {"connection_status": "disconnected"})
-    sources.setattr(
-        telegram.store, "get_settings", lambda: {"connected": False, "linked": False})
+    sources.setattr(telegram.store, "get_settings", lambda: {"connected": False})
+    sources.setattr(telegram.store, "get_link", lambda user_id: None)
     sources.setattr(crm.field_service, "list_field_definitions", lambda *a, **k: [])
-    out = svc.get_setup_status()
+    out = svc.get_setup_status(user_id=7)
     assert out["ai_ready"] is False and out["active_provider"] == ""
     assert out["gmail_connected"] is False and out["gmail_broken"] is False
     assert out["telegram_connected"] is False and out["telegram_linked"] is False
@@ -242,10 +268,10 @@ def test_get_setup_status_never_raises(sources):
 
     for module, name in (
         (providers, "get_ai_provider"), (gmail.store, "get_row"),
-        (telegram.store, "get_settings"), (crm.service, "get_task_mode"),
-        (crm.field_service, "list_field_definitions"),
+        (telegram.store, "get_settings"), (telegram.store, "get_link"),
+        (crm.service, "get_task_mode"), (crm.field_service, "list_field_definitions"),
     ):
         sources.setattr(module, name, _boom)
-    out = svc.get_setup_status()
+    out = svc.get_setup_status(user_id=7)
     assert set(out) == EXPECTED_KEYS
     assert all(v is None for v in out.values())

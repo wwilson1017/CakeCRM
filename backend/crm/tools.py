@@ -1724,14 +1724,19 @@ def crm_update_company(company_id: int, **kwargs) -> dict:
 
 # ── Install setup status (issue #200) ─────────────────────────────────────────
 
-def crm_get_setup_status() -> dict:
+def crm_get_setup_status(user_id: int | None = None) -> dict:
     """Structured install configuration. Thin delegate — the assembly and its
     unknown-vs-off discipline live in ``crm.setup_status_service``, which is imported
     lazily so building the tool registry never pulls in the provider, Gmail and Telegram
-    modules on a turn that will not call this."""
+    modules on a turn that will not call this.
+
+    ``user_id`` is bound server-side in ``_identity_executors`` and stripped from the
+    model's arguments (#190). Exactly one field needs it — whether THIS seat has a linked
+    Telegram chat (#193) — and letting the model name a seat there would turn a status
+    read into a way to ask about somebody else's phone."""
     from crm.setup_status_service import get_setup_status
 
-    return get_setup_status()
+    return get_setup_status(user_id=user_id)
 
 
 # ── Analytics ─────────────────────────────────────────────────────────────────
@@ -2173,6 +2178,10 @@ def _identity_executors(user: dict | None) -> dict[str, Callable[..., dict]]:
         "crm_create_company": bind_server_args(crm_create_company, owner_id=user_id),
         "crm_create_deal": bind_server_args(crm_create_deal, owner_id=user_id),
         "crm_create_task": bind_server_args(crm_create_task, owner_id=user_id),
+        # Which seat is ASKING. A read, and the only per-person fact in its payload is
+        # whether this seat has a linked Telegram chat (#193) — bound rather than taken
+        # as an argument so the model cannot ask about another person's device.
+        "crm_get_setup_status": bind_server_args(crm_get_setup_status, user_id=user_id),
     }
     bound.update({
         name: bind_owner_filter(fn, user) for name, fn in (

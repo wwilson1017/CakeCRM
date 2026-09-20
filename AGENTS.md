@@ -656,10 +656,16 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   reconnecting it, and the tool description states that contract to the model. It is
   background-callable and that is asserted rather than incidental — the payload is install
   configuration with no record content and nothing about another seat, and a background
-  turn's one egress is a `notify_user` over the install's own channels. One coupling to
-  know: `_telegram` SUBSCRIPTS `get_settings()["linked"]` rather than `.get`-ing it, so when
-  #193 moves per-seat link state to `store.get_link(user_id)` the field degrades to `null`
-  (honest) instead of `False` (a lie) — switching to the per-seat read is the fix.
+  turn's one egress is a `notify_user` over the install's own channels. **Exactly one field
+  is per-SEAT rather than per-install** — whether the person Baker is talking to has a
+  linked Telegram chat, which #193 moved out of the singleton into `store.get_link(user_id)`
+  — and it is the only reason `get_setup_status` takes a `user_id` at all. That id is bound
+  server-side in `_identity_executors` and stripped from the model's arguments the way every
+  other identity binding is (#190), so a status read can never be turned into a question
+  about somebody else's phone; an unattended turn has no seat, so the field is `null` there
+  rather than `false`, which would invite the turn to say "go link a chat" about one that
+  may already exist. The bot-config half and the seat half are read in SEPARATE
+  try/excepts, so a failed per-seat read cannot blank the install-wide fact beside it.
 - **Accounts, roles and record ownership** (#60 Phase A) — the install has real
   `users` (email + bcrypt + `admin`/`member` + `is_active` + per-user `token_epoch`),
   and the shared `AUTH_PASSWORD` login is gone. Authorization has exactly **two**

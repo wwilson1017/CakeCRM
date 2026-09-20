@@ -32,6 +32,11 @@ Baker tell a user their Gmail is disconnected and walk them through reconnecting
 when in fact the database hiccuped. The tool description states the same contract to the
 model in one line.
 
+Only one fact here is per-SEAT rather than per-install — whether the person Baker is
+talking to has a linked Telegram chat (#193) — and it is the only reason
+``get_setup_status`` takes a ``user_id`` at all. An unattended turn has no seat, so that
+field is unknown there rather than false.
+
 Two readers cannot express "unknown" because they are documented never-raising,
 fail-safe-to-a-default reads used on hot paths (`gmail.store.get_row`,
 `crm.service.get_task_mode`). For Gmail the degenerate case is still detectable — the
@@ -91,27 +96,37 @@ def _gmail() -> tuple[bool | None, bool | None]:
         return None, None
 
 
-def _telegram() -> tuple[bool | None, bool | None]:
+def _telegram(user_id) -> tuple[bool | None, bool | None]:
     """(telegram_connected, telegram_linked).
 
-    ``telegram_linked`` means "the seat Baker is talking to has a linked Telegram chat".
-    Today the schema holds exactly ONE link install-wide, so the singleton's ``linked``
-    flag IS that seat's answer and no user argument is needed.
+    The two halves answer different questions and #193 split them apart: the bot token is
+    install-wide configuration, while a linked chat belongs to ONE seat. So
+    ``telegram_connected`` reads the singleton and ``telegram_linked`` means "the seat
+    Baker is talking to has a linked Telegram chat", read through ``store.get_link``.
 
-    The key is SUBSCRIPTED, not ``.get``-ed with a default, and that is deliberate.
-    Issue #193 (PR #207) moves per-seat link state out of ``get_settings()`` into
-    ``store.get_link(user_id)``; when it lands, the ``KeyError`` lands here and the field
-    degrades to unknown — honest — instead of silently reporting ``False`` for every
-    seat, which would be a lie. Switching to the per-seat read is the fix.
+    An unattended turn has no seat, so the link question has no answer and the field is
+    ``None`` — unknown — rather than ``False``. Reporting "not linked" to a background
+    turn would invite it to tell the install to go and link a chat that may well exist.
+    They are read in SEPARATE try/excepts for the same reason every other source is:
+    a per-seat read that fails must not also blank the install-wide fact beside it.
     """
+    connected: bool | None
     try:
         from telegram.store import get_settings
 
-        settings = get_settings()
-        return bool(settings["connected"]), bool(settings["linked"])
+        connected = bool(get_settings()["connected"])
     except Exception:
-        logger.debug("setup status: Telegram state unreadable", exc_info=True)
-        return None, None
+        logger.debug("setup status: Telegram bot config unreadable", exc_info=True)
+        connected = None
+    if user_id is None:
+        return connected, None
+    try:
+        from telegram.store import get_link
+
+        return connected, get_link(user_id) is not None
+    except Exception:
+        logger.debug("setup status: Telegram link state unreadable", exc_info=True)
+        return connected, None
 
 
 def _task_mode() -> str | None:
@@ -149,11 +164,17 @@ def _custom_field_counts() -> dict[str, int] | None:
         return None
 
 
-def get_setup_status() -> dict:
-    """The install's configuration state, as structured values. Never raises."""
+def get_setup_status(user_id=None) -> dict:
+    """The install's configuration state, as structured values. Never raises.
+
+    ``user_id`` is the seat this turn belongs to, bound server-side by the tool layer
+    (#190) and never supplied by the model. It is read by exactly ONE field — whether
+    THIS seat has a linked Telegram chat — because that is the only fact here that is
+    per-person rather than per-install. ``None`` is an unattended turn.
+    """
     ai_ready, active_provider = _ai()
     gmail_connected, gmail_broken = _gmail()
-    telegram_connected, telegram_linked = _telegram()
+    telegram_connected, telegram_linked = _telegram(user_id)
     return {
         "ai_ready": ai_ready,
         "active_provider": active_provider,
