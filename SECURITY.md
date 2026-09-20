@@ -324,7 +324,9 @@ Five things bound that risk:
   on their behalf.
 - **Changes are visible.** Every file on the Memory page shows who last wrote it
   ("Baker" or "You") and when, so an unexpected rewrite is discoverable rather than
-  silent.
+  silent. Note the limit on a multi-seat install: `written_by` records only whether a
+  human or the assistant wrote the file, not WHICH person, so a colleague's edit also
+  reads as "You". It tells you a human changed it, never who.
 
 ## Reporting a vulnerability
 
