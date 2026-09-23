@@ -62,9 +62,11 @@ author: Neil Rackham
 - **Write the problem down, in the buyer's words** — after a discovery call the single most
   valuable line on the record is the problem the buyer admitted. Put it on the deal with
   `crm_add_note` and log the call with `crm_log_activity`.
-- **Let the gap scan build the question list** — `crm_scan_gaps` names what the record does
-  not know. Missing decision-maker, missing timeline and missing value are situation and
-  problem questions you have not asked yet.
+- **Let the gap scan build part of the question list** — `crm_scan_gaps` names three
+  things a deal is missing: value, expected close date and a linked contact. Each is a
+  situation question you have not asked. The rest of the list comes from reading the
+  record: `crm_get_deal` and `crm_get_chatter` show whether a problem was ever written
+  down, which is the question that actually matters.
 - **An advance is a task with a date** — end the call with a specific commitment and create
   it as a task (`crm_create_task`; `todo_create` in GTD task mode). A deal whose only next
   step is "follow up" has not advanced, and the *no next step* health flag will say so.

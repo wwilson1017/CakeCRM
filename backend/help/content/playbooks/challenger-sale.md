@@ -71,9 +71,10 @@ author: Matthew Dixon and Brent Adamson
 - **Tension becomes a next step, not a nudge** — book the conversation where you share the
   insight as a task (`crm_create_task`; `todo_create` in GTD task mode), with what you
   intend to challenge in the description.
-- **Record the loss reason honestly** — when a deal dies of indecision, `crm_mark_deal_lost`
-  with the real reason is what lets `crm_analytics` show how much of the pipeline the
-  status quo is taking.
+- **Record the loss reason honestly** — when a deal dies of indecision rather than to a
+  competitor, `crm_mark_deal_lost` with the real reason is the only place that fact is
+  ever written down. `crm_analytics` counts the losses but does not group them by reason,
+  so reading the reasons means pulling the lost deals with `crm_search_deals`.
 
 ## Go read it
 

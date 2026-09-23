@@ -60,9 +60,11 @@ author: Robert B. Cialdini
 - **Get the commitment in writing on the record** — when the buyer states their own
   problem or names their own date, capture the exact wording with `crm_add_note`. The
   point of consistency is that it is theirs, and paraphrase loses it.
-- **Choose social proof from the CRM, not from memory** — `crm_search_companies` and
-  `crm_analytics` can show which won deals actually resemble this one in size and
-  situation, which is what makes the reference land.
+- **Choose social proof from the CRM, not from memory** — `crm_search_deals` with the
+  stage set to won returns the real won deals with their values, and `crm_get_company`
+  opens the one you want to cite. A reference picked from records that genuinely resemble
+  this deal is what makes it land; a half-remembered one is how an invented customer ends
+  up in a proposal.
 - **A favour is a logged activity, not a feeling** — record what you gave and when with
   `crm_log_activity`, so the follow-up is grounded in something real rather than in "we
   have been very helpful".

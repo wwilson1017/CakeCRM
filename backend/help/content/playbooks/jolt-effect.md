@@ -69,8 +69,9 @@ author: Matthew Dixon and Ted McKenna
   it with `crm_update_deal_stage`; letting a decided deal sit in *proposal* is how a second
   round of doubt gets invited in.
 - **Name indecision as the loss reason when it is one** — `crm_mark_deal_lost` with an
-  honest reason, so `crm_analytics` can show how much of the pipeline never went to anyone
-  at all.
+  honest reason. "No decision" and "lost to a competitor" are the same row to
+  `crm_analytics`, which counts losses without grouping them by reason, so the written
+  reason on each deal is what tells you later how much of the pipeline went to nobody.
 
 ## Go read it
 

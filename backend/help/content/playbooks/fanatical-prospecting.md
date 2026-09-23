@@ -55,19 +55,26 @@ author: Jeb Blount
 - **Let the CRM name the neglected list** — `crm_get_stale_deals` and
   `crm_get_contact_staleness` produce today's prospecting list from real silence, which
   beats any list assembled from memory.
-- **The block is a recurring task** — create the daily prospecting block as a task
-  (`crm_create_task`; `todo_create` in GTD task mode) and treat it as unmovable. A block
-  that lives in the CRM survives a busy week better than one that lives in an intention.
+- **Put the block in the system, not in your intentions** — in GTD task mode
+  `todo_create` takes a repeat, so the daily prospecting block can be created once and
+  recur. `crm_create_task` has no recurrence, so outside GTD mode it is one task at a
+  time: create tomorrow's when you close today's, and treat the slot as unmovable.
 - **Draft the outreach, review it, then put it out yourself** — `gmail_create_draft`
   prepares an email touch for the user to check; Baker drafts and never delivers.
 - **Log the attempts, including the ones that went nowhere** — `crm_log_activity` on the
   contact is what makes a cadence visible. Untracked outreach is indistinguishable from no
   outreach a month later.
-- **Watch the top of the funnel, not just the bottom** —
-  `crm_get_pipeline_analytics` shows what is entering *lead* over time, which is where the
-  30-day rule shows up first; `crm_analytics` shows activity volume alongside outcomes.
-- **Work the customers you already won** — `crm_list_companies` and `crm_get_activity_log`
-  will find the accounts that have gone quiet since they signed.
+- **Watch the top of the funnel, not just the bottom** — to see whether new business is
+  arriving, list the newest deals in *lead* with `crm_search_deals` sorted by creation
+  date. Do not read that off `crm_get_pipeline_analytics`: its "entered" count is stage
+  transitions, and a deal created straight into *lead* never transitions into it, so the
+  number stays near zero however much prospecting is done. `crm_analytics` is the one that
+  shows activity volume alongside outcomes, which is where the 30-day rule shows up.
+- **Work the customers you already won** — `crm_search_deals` with the stage set to won
+  lists them; `crm_get_company` then gives one account's contacts, deals and recent
+  activity in a single read, which is where the silence since signing shows up. The
+  activity log filters by contact or deal, not by company, so go through the company
+  rollup rather than asking it for an account.
 
 ## Go read it
 

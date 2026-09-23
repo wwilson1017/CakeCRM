@@ -62,15 +62,20 @@ author: Keenan
   `crm_get_deal_fields` to see the custom fields this CRM has been configured with. If one
   fits, write to it with `crm_set_deal_fields`; if none does, the note is the right home,
   because a field that has not been defined in settings cannot be written.
-- **Let the gap scan drive qualification** — `crm_scan_gaps` shows what the record is
-  missing, and a deal with no recorded problem, no value and no decision-maker is the
-  profile Keenan says to qualify out of.
+- **Let the gap scan start qualification, then read the rest** — `crm_scan_gaps` reports
+  three things on a deal: no value, no expected close date, and no linked contact. That is
+  the shape of a deal nobody has worked, and it is where Keenan's qualifying-out
+  conversation begins. Whether a real problem was ever established is not something the
+  scan can see — read the deal's notes and activity (`crm_get_deal`, `crm_get_chatter`)
+  before concluding there is no gap.
 - **Size the deal from the gap, not from hope** — when the buyer states what the problem
   costs, update the value with `crm_update_deal`, and say in the note where the number came
   from.
 - **A qualified-out deal gets closed, not left to rot** — `crm_mark_deal_lost` with "no
-  compelling reason to change" as the reason keeps the pipeline honest, and
-  `crm_get_pipeline_analytics` will show how many deals died that way.
+  compelling reason to change" as the reason keeps the pipeline honest. Neither analytics
+  tool groups losses by reason, so the reasons are read on the deals themselves
+  (`crm_search_deals` with the stage set to lost); what `crm_analytics` gives you is the
+  win and loss counts those reasons sit behind.
 
 ## Go read it
 
