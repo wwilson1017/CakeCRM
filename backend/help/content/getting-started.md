@@ -27,7 +27,7 @@ configured — AI features hide themselves rather than showing errors.
 2. If the CRM is empty you are offered sample data — fictional contacts, deals and tasks so
    you can see how everything behaves. While it is loaded a banner stays on screen with a
    Clear action, so there is no way to confuse examples with real records.
-3. Walk the navigation: Dashboard, Pipeline, Contacts, Companies, Tasks, Reports.
+3. Walk the navigation: Dashboard, Pipeline, Contacts, Companies, Todos, Reports.
 4. Create a contact, create a deal linked to it, log an activity against the deal, and add a
    follow-up todo. That loop is the whole CRM in miniature.
 
@@ -39,7 +39,7 @@ configured — AI features hide themselves rather than showing errors.
   `pipeline/stages`.
 - **Contacts** and **Companies** — searchable lists with detail pages that roll up linked
   records, notes and activity.
-- **Tasks** — your follow-ups. Todos are the one follow-up primitive in this product. See
+- **Todos** — your follow-ups. Todos are the one follow-up primitive in this product. See
   `tasks/modes`.
 - **Reports** — one report: everything known about a single company. See
   `reports/company-rollup`.

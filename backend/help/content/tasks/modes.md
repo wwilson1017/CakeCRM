@@ -11,13 +11,13 @@ parallel follow-up mechanism to keep in step with it.
 
 ## The two modes
 
-**Normal mode** is a plain task list. The Tasks page shows a table: done, the task and what it
+**Normal mode** is a plain task list. The Todos page shows a table: done, the task and what it
 is linked to, priority, and the due date, with an Open / Done / All filter that starts on
 Open.
 
 **GTD mode** is the full Getting Things Done workflow: an inbox to triage, next actions,
 waiting-for and delegated items, someday-maybe, projects, contexts, tags, stars, repeats and
-a weekly review. The Tasks page becomes nine tabs. See `tasks/gtd`.
+a weekly review. The Todos page becomes nine tabs. See `tasks/gtd`.
 
 **GTD is the default** on a new install.
 

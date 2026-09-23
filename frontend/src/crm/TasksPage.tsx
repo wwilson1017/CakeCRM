@@ -85,7 +85,7 @@ export function TasksPage() {
   return (
     <div style={{ padding: isMobile ? '20px 16px' : '32px 44px', maxWidth: 900 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: isMobile ? 16 : 24 }}>
-        <h1 style={pageHeading(isMobile)}>Tasks</h1>
+        <h1 style={pageHeading(isMobile)}>Todos</h1>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <RefreshButton onClick={retry} label="Reload tasks" />
           <button onClick={() => setShowCreate(true)} style={{ ...btnPrimary, ...btnSmall }}>

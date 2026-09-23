@@ -283,7 +283,7 @@ export function ContactDetailPage({ onChanged, onDeleted, onWriteUncertain }: Co
         {/* Tasks */}
         <div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-            <span style={mono(10, INK_DIM)}>Tasks</span>
+            <span style={mono(10, INK_DIM)}>Todos</span>
             <button onClick={() => setShowAddTask(true)} style={{
               background: 'none', border: 'none', color: ACCENT_TEXT,
               fontSize: 12, cursor: 'pointer',
