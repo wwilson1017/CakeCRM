@@ -621,9 +621,14 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   v1), each an own-words summary carrying the same four H2 sections in the same order —
   `Core ideas`, `When Baker reaches for it`, `Applied to the CRM`, `Go read it` — with the
   technique names as `aliases`, so a search for the technique lands on the book and search
-  itself needed no change (aliases already score 6 with a phrase bonus; the author's
-  surname is one alias, which is why "what does Cialdini say" resolves with no `author`
-  field in `search._field_tokens`). Attribution IS the copyright posture — ideas
+  itself needed no change (aliases already score 6 with a phrase bonus, and the author's
+  surname is one of them, so "what does Cialdini say" resolves with no `author` field in
+  `search._field_tokens`). The per-book search pins in `test_help_library.py` pin that
+  END-TO-END ranking rather than one field — alias, title, description and body all feed
+  the score, and by mutation most of those queries still resolve with the aliases removed
+  — so the alias line is guarded structurally by `_playbook_defects` instead; a pin that
+  demanded the hit come from the alias field would fail on an innocent reword.
+  Attribution IS the copyright posture — ideas
   summarized and attributed, no reproduced passages, at most one short attributed quote,
   a "go read it" line, published books only (CONTRIBUTING.md) — so it is structural: a
   fifth front-matter key `author:` (optional at the loader, `Topic.author`, title-sized

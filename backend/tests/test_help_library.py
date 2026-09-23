@@ -370,7 +370,12 @@ def test_search_order_does_not_depend_on_the_order_topics_were_read():
     ("upload a logo", "settings/branding"),
     ("add a user to my team", "settings/team"),
     # #209 playbooks: a technique, an objection, a buyer behaviour and an author each land
-    # on the book they belong to — through `aliases` alone, with no change to search.
+    # on the book they belong to, with no change to search. These pin the end-to-end
+    # ranking, not one field: a book's aliases, title, description and body all feed the
+    # score, and several of these queries would still resolve with the aliases removed
+    # (checked by mutation). The alias LINE is guarded structurally by _playbook_defects
+    # instead, which is the honest division — a pin that demanded the hit come from the
+    # alias field would fail on an innocent description reword.
     ("mirroring and labeling", "playbooks/never-split-the-difference"),
     ("they pushed back on price", "playbooks/never-split-the-difference"),
     ("implication questions", "playbooks/spin-selling"),
@@ -752,7 +757,8 @@ _H2_RE = re.compile(r"^## +(.+?) *$", re.MULTILINE)
 
 
 def _playbook_defects(topics) -> list[str]:
-    """Playbooks missing a byline, or whose H2 sections are not exactly the four in order.
+    """Playbooks missing a byline or an alias list, or whose H2 sections are not exactly
+    the four in order.
 
     Takes the topics as an argument so the self-test can drive it with synthetic `Topic`s;
     the real sweep hands it `library.in_folder("playbooks")`.
@@ -761,17 +767,20 @@ def _playbook_defects(topics) -> list[str]:
     for topic in topics:
         if not topic.author.strip():
             defects.append(f"{topic.slug}: no author in front matter")
+        if not topic.aliases:
+            defects.append(f"{topic.slug}: no aliases — technique search has nothing to hit")
         sections = tuple(_H2_RE.findall(topic.body))
         if sections != PLAYBOOK_SECTIONS:
             defects.append(f"{topic.slug}: H2 sections {list(sections)} != {list(PLAYBOOK_SECTIONS)}")
     return defects
 
 
-def _synthetic_playbook(*, author="Jane Doe", body=None, sections=PLAYBOOK_SECTIONS) -> lib.Topic:
+def _synthetic_playbook(*, author="Jane Doe", aliases=("a method",), body=None,
+                        sections=PLAYBOOK_SECTIONS) -> lib.Topic:
     if body is None:
         body = "\n\n".join(f"## {s}\n\nText." for s in sections)
     return lib.Topic(slug="playbooks/probe", folder=PLAYBOOKS_FOLDER, title="T", description="D",
-                     aliases=(), admin_only=False, body=body, author=author)
+                     aliases=aliases, admin_only=False, body=body, author=author)
 
 
 def test_the_playbook_detector_flags_defects_and_spares_a_good_one():
@@ -780,6 +789,7 @@ def test_the_playbook_detector_flags_defects_and_spares_a_good_one():
     assert not _playbook_defects([_synthetic_playbook()]), "flagged a complete playbook"
     assert _playbook_defects([_synthetic_playbook(author="")]), "missed a missing author"
     assert _playbook_defects([_synthetic_playbook(author="   ")]), "missed a whitespace author"
+    assert _playbook_defects([_synthetic_playbook(aliases=())]), "missed a missing alias list"
     assert _playbook_defects([_synthetic_playbook(sections=PLAYBOOK_SECTIONS[:3])]), (
         "missed a missing section"
     )
