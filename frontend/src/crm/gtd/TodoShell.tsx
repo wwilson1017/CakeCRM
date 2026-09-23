@@ -68,7 +68,7 @@ export function TodoShell({ active, hideQuickAdd, onAdded, children }: Props) {
     <>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="font-heading text-2xl font-bold text-charcoal">Tasks</h1>
+          <h1 className="font-heading text-2xl font-bold text-charcoal">Todos</h1>
           <p className="text-sm text-muted">Capture everything. Mind like water.</p>
         </div>
         <form

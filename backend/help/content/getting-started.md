@@ -27,7 +27,7 @@ configured — AI features hide themselves rather than showing errors.
 2. If the CRM is empty you are offered sample data — fictional contacts, deals and tasks so
    you can see how everything behaves. While it is loaded a banner stays on screen with a
    Clear action, so there is no way to confuse examples with real records.
-3. Walk the navigation: Dashboard, Pipeline, Contacts, Companies, Tasks, Reports.
+3. Walk the navigation: Dashboard, Pipeline, Contacts, Companies, Todos, Reports.
 4. Create a contact, create a deal linked to it, log an activity against the deal, and add a
    follow-up todo. That loop is the whole CRM in miniature.
 
