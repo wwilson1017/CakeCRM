@@ -128,5 +128,11 @@ CakeCRM has a deliberately tight scope. Before proposing a feature, note these r
   when no provider is configured.
 - **Gmail is read + draft only, forever.** There is no email-send tool anywhere in the
   codebase, and none may be added.
+- **Playbooks summarize; they never reproduce.** A topic under
+  `backend/help/content/playbooks/` is an own-words summary of a *published* book's
+  ideas, attributed by author and title in its front matter (`author:`) and in its
+  "Go read it" section. Ideas are not copyrightable; the text is — so no reproduced
+  passages, at most one short attributed quote, and nothing internal or unpublished.
+  Every playbook carries the four sections `backend/tests/test_help_library.py` checks.
 
 Questions? Open an issue using one of the templates, or start a discussion.
