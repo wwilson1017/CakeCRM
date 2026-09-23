@@ -79,6 +79,7 @@ class Topic:
     aliases: tuple[str, ...]
     admin_only: bool     # the flow this topic describes is admin-only
     body: str            # markdown, front matter stripped
+    author: str = ""     # "Chris Voss with Tahl Raz" — set on playbooks, "" elsewhere
 
     @property
     def headings(self) -> tuple[str, ...]:
@@ -119,7 +120,7 @@ class Library:
 def parse_front_matter(text: str) -> tuple[dict[str, str], str]:
     """Split a topic file into its front-matter mapping and its body.
 
-    Hand-parsed on purpose: the grammar is four scalar keys, so a YAML dependency would
+    Hand-parsed on purpose: the grammar is five scalar keys, so a YAML dependency would
     buy nothing but a parser with far more surface than the format needs. Unknown keys
     are a hard error rather than a silent ignore — a typo in ``description`` would
     otherwise ship a topic with no search snippet and nothing would say so.
@@ -147,7 +148,7 @@ def parse_front_matter(text: str) -> tuple[dict[str, str], str]:
 
 
 _REQUIRED_KEYS = {"title", "description"}
-_OPTIONAL_KEYS = {"aliases", "admin"}
+_OPTIONAL_KEYS = {"aliases", "admin", "author"}
 
 
 def _parse_topic(slug: str, text: str) -> Topic:
@@ -186,6 +187,14 @@ def _parse_topic(slug: str, text: str) -> Topic:
     if admin_raw not in ("true", "false"):
         raise HelpLibraryError(f"{slug}: 'admin' must be true or false, got {admin_raw!r}")
 
+    # Title-sized on purpose: a byline is one line, and a fifth ceiling constant with a
+    # single use would be a constant nobody pins. Optional HERE — the 27 product topics
+    # carry no byline; only the playbook guard in tests/test_help_library.py demands one,
+    # and only of playbooks, where attribution IS the copyright posture (CONTRIBUTING.md).
+    author = meta.get("author", "")
+    if len(author) > MAX_TITLE_CHARS:
+        raise HelpLibraryError(f"{slug}: author must be at most {MAX_TITLE_CHARS} characters")
+
     folder, _, _ = slug.rpartition("/")
     return Topic(
         slug=slug,
@@ -195,6 +204,7 @@ def _parse_topic(slug: str, text: str) -> Topic:
         aliases=tuple(raw_aliases),
         admin_only=admin_raw == "true",
         body=body,
+        author=author,
     )
 
 

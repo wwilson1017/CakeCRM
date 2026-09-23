@@ -243,6 +243,7 @@ def test_a_bad_slug_is_rejected(tmp_path, bad):
     ({}, ""),                                      # empty body
     ({}, "x" * (lib.MAX_TOPIC_CHARS + 1)),         # over the ceiling
     ({"title": "x" * (lib.MAX_TITLE_CHARS + 1)}, "Body."),
+    ({"author": "x" * (lib.MAX_TITLE_CHARS + 1)}, "Body."),  # byline over its ceiling
 ])
 def test_malformed_front_matter_is_rejected(tmp_path, meta, body):
     _write(tmp_path, "topic.md", body=body, **meta)
@@ -283,6 +284,17 @@ def test_aliases_within_the_bounds_load(tmp_path):
     """Control: a detector that rejected every alias list would pass the test above."""
     _write(tmp_path, "topic.md", aliases="one, two, three")
     assert lib.load_library(tmp_path).topics[0].aliases == ("one", "two", "three")
+
+
+def test_an_author_loads_and_is_optional_at_the_loader(tmp_path):
+    """Control for the over-length case above, and the contract that `author` is optional
+    HERE: only the playbook guard (section 7) demands one, and only of playbooks, so the
+    product topics never have to grow a byline they do not need."""
+    _write(tmp_path, "playbooks/a-book.md", author="Jane Doe")
+    _write(tmp_path, "settings/plain.md")
+    library = lib.load_library(tmp_path)
+    assert library.get("playbooks/a-book").author == "Jane Doe"
+    assert library.get("settings/plain").author == ""
 
 
 @pytest.mark.parametrize("front, message", [
@@ -357,6 +369,19 @@ def test_search_order_does_not_depend_on_the_order_topics_were_read():
     ("capture a todo from my phone", "tasks/no-login-surfaces"),
     ("upload a logo", "settings/branding"),
     ("add a user to my team", "settings/team"),
+    # #209 playbooks: a technique, an objection, a buyer behaviour and an author each land
+    # on the book they belong to — through `aliases` alone, with no change to search.
+    ("mirroring and labeling", "playbooks/never-split-the-difference"),
+    ("they pushed back on price", "playbooks/never-split-the-difference"),
+    ("implication questions", "playbooks/spin-selling"),
+    ("commercial insight", "playbooks/challenger-sale"),
+    ("current state vs future state", "playbooks/gap-selling"),
+    ("what does Cialdini say", "playbooks/influence"),
+    ("what is BATNA", "playbooks/getting-to-yes"),
+    ("prospecting cadence", "playbooks/fanatical-prospecting"),
+    ("the customer is still deciding", "playbooks/jolt-effect"),
+    ("repair a relationship", "playbooks/how-to-win-friends"),
+    ("how do I handle rejection", "playbooks/to-sell-is-human"),
 ])
 def test_search_answers_the_questions_it_exists_for(query, expected):
     """A determinism test passes on a search that is uselessly consistent. These are the
@@ -697,3 +722,119 @@ def test_the_page_note_is_reachable_for_every_accepted_section():
         assert note and section in note
         for slug in identity._SETTINGS_SECTION_HELP[section][1]:
             assert slug in note
+
+
+# ── 7. playbooks: attributed, four-section book summaries (issue #209) ──────────────
+#
+# A playbook is a topic under `playbooks/` summarizing one published sales or negotiation
+# book in our own words. Two things about it are structural, and therefore guarded here:
+#
+#   * every playbook names its author — attribution IS the copyright posture the whole
+#     shelf rests on (CONTRIBUTING.md: ideas summarized and attributed, no reproduced
+#     passages), so a byline that quietly went missing is a real defect, not a cosmetic one;
+#   * every playbook carries the same four H2 sections in the same order, so the coaching
+#     guide's "search, read, apply, name the book" finds one shape to read from whichever
+#     book search landed on.
+#
+# Whether the prose is genuinely our own words is the convention half — reviewed in the
+# pull request, and not mechanically testable. This file does not pretend otherwise.
+#
+# Headings are parsed HERE rather than through `Topic.headings`, which strips the level and
+# returns every heading at every depth: against that property a file whose four sections
+# were H3, or which carried a fifth H2, would pass a membership check while breaking the
+# shape the coaching guide depends on.
+
+PLAYBOOKS_FOLDER = "playbooks"
+PLAYBOOK_SECTIONS = (
+    "Core ideas", "When Baker reaches for it", "Applied to the CRM", "Go read it",
+)
+_H2_RE = re.compile(r"^## +(.+?) *$", re.MULTILINE)
+
+
+def _playbook_defects(topics) -> list[str]:
+    """Playbooks missing a byline, or whose H2 sections are not exactly the four in order.
+
+    Takes the topics as an argument so the self-test can drive it with synthetic `Topic`s;
+    the real sweep hands it `library.in_folder("playbooks")`.
+    """
+    defects = []
+    for topic in topics:
+        if not topic.author.strip():
+            defects.append(f"{topic.slug}: no author in front matter")
+        sections = tuple(_H2_RE.findall(topic.body))
+        if sections != PLAYBOOK_SECTIONS:
+            defects.append(f"{topic.slug}: H2 sections {list(sections)} != {list(PLAYBOOK_SECTIONS)}")
+    return defects
+
+
+def _synthetic_playbook(*, author="Jane Doe", body=None, sections=PLAYBOOK_SECTIONS) -> lib.Topic:
+    if body is None:
+        body = "\n\n".join(f"## {s}\n\nText." for s in sections)
+    return lib.Topic(slug="playbooks/probe", folder=PLAYBOOKS_FOLDER, title="T", description="D",
+                     aliases=(), admin_only=False, body=body, author=author)
+
+
+def test_the_playbook_detector_flags_defects_and_spares_a_good_one():
+    """Both directions. Without the first assertion a detector that flagged everything
+    would pass every case below and fail the build on the real shelf."""
+    assert not _playbook_defects([_synthetic_playbook()]), "flagged a complete playbook"
+    assert _playbook_defects([_synthetic_playbook(author="")]), "missed a missing author"
+    assert _playbook_defects([_synthetic_playbook(author="   ")]), "missed a whitespace author"
+    assert _playbook_defects([_synthetic_playbook(sections=PLAYBOOK_SECTIONS[:3])]), (
+        "missed a missing section"
+    )
+    assert _playbook_defects([_synthetic_playbook(sections=PLAYBOOK_SECTIONS[1:] + PLAYBOOK_SECTIONS[:1])]), (
+        "missed sections out of order"
+    )
+    # The two cases `Topic.headings` cannot see, which is why this parses H2 itself.
+    assert _playbook_defects([_synthetic_playbook(
+        body="\n\n".join(f"### {s}\n\nText." for s in PLAYBOOK_SECTIONS))]), (
+        "missed four sections written at the wrong heading level"
+    )
+    assert _playbook_defects([_synthetic_playbook(
+        body="\n\n".join(f"## {s}\n\nText." for s in (*PLAYBOOK_SECTIONS, "Bonus")))]), (
+        "missed an extra H2 section"
+    )
+
+
+def test_every_playbook_is_attributed_and_carries_the_four_sections():
+    """Reached-the-real-content, PER TOPIC: the sweep saw exactly the playbook files on
+    disk and the shelf is not empty, so a folder that quietly emptied — or a `folder`
+    attribute that stopped matching — fails here rather than passing vacuously."""
+    playbooks = lib.get_library().in_folder(PLAYBOOKS_FOLDER)
+    on_disk = {_slug_of(p) for p in _topic_paths() if p.parent.name == PLAYBOOKS_FOLDER}
+    assert {t.slug for t in playbooks} == on_disk, sorted(on_disk)
+    assert len(playbooks) >= 10, f"the shelf holds {len(playbooks)} books"
+    defects = _playbook_defects(playbooks)
+    assert not defects, "the playbook shelf is malformed:\n" + "\n".join(defects)
+
+
+def test_a_playbook_payload_names_its_author_and_a_product_topic_does_not():
+    """Executor-level and per topic, in both directions. The byline is read off the file's
+    own bytes rather than through the library, so the same implementation is not standing
+    on both sides of the assertion. Product topics must NOT grow an `author` key: `_brief`
+    adds it only when set, so the product listings do not carry an empty field."""
+    saw_playbook = saw_product = False
+    for path in _topic_paths():
+        slug = _slug_of(path)
+        raw = path.read_text(encoding="utf-8")
+        line = next((ln for ln in raw.splitlines() if ln.startswith("author:")), None)
+        payload = HELP_TOOL_EXECUTORS["help_read_topic"](topic=slug)
+        if path.parent.name == PLAYBOOKS_FOLDER:
+            assert line, f"{slug}: a playbook must declare 'author:' in its front matter"
+            assert payload["author"] == line.partition(":")[2].strip(), slug
+            saw_playbook = True
+        else:
+            assert line is None and "author" not in payload, f"{slug}: product topic grew an author"
+            saw_product = True
+    assert saw_playbook and saw_product, "the sweep did not reach both classes of topic"
+    listing = HELP_TOOL_EXECUTORS["help_list_topics"](folder=PLAYBOOKS_FOLDER)["topics"]
+    assert listing and all(t.get("author") for t in listing), listing
+
+
+def test_the_playbooks_folder_is_a_real_browsable_section():
+    """`help_list_topics` with no argument is how the model discovers the shelf exists at
+    all — the reading path decision 4 of the issue leaves it (no shelf UI in v1)."""
+    sections = {s["section"] for s in HELP_TOOL_EXECUTORS["help_list_topics"]()["sections"]}
+    assert PLAYBOOKS_FOLDER in sections
+    assert PLAYBOOKS_FOLDER in identity.HELP_NOTE
