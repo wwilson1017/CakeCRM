@@ -226,3 +226,142 @@ def test_the_rest_router_records_nothing(monkeypatch, read_spy):
     assert client.get("/api/context-files").status_code == 200
     assert client.get("/api/context-files/search", params={"q": "a"}).status_code == 200
     assert read_spy == []
+
+
+# ── the protected-file seat gate (issue #213) ─────────────────────────────────────
+#
+# Always-confirm (`requires_confirmation`) stops a protected write and shows the new
+# content, but the person who APPROVES the card is whoever is in the conversation — there
+# is no role in that gate. #194's evidence run proved the consequence live: a member asked
+# for a soul.md rewrite, approved their own request, and the row landed with
+# written_by='assistant'. That is the repro these tests pin shut.
+#
+# The rule mirrors `context_files.router.put_context_file` one-to-one — same PROTECTED_FILES
+# set, same `normalize_filename`, same sentence — so the REST door and the tool door
+# cannot drift. Mutation check: deleting the `user.get("role") == "admin"` comparison in
+# `_admin_only_protected_writes` turns every member/unattended case below red.
+
+_MEMBER = {"id": 2, "email": "member@cakecrm.test", "name": "Member", "role": "member"}
+_ADMIN = {"id": 1, "email": "admin@cakecrm.test", "name": "Admin", "role": "admin"}
+
+
+@pytest.fixture
+def write_spy(monkeypatch):
+    """Records every call that reaches the service. An empty list is the proof of refusal."""
+    calls: list[dict] = []
+
+    def fake_write(filename, content, written_by="assistant", expected_updated_at=None):
+        calls.append({
+            "filename": filename, "content": content, "written_by": written_by,
+            "expected_updated_at": expected_updated_at,
+        })
+        return {"filename": filename, "updated_at": "now"}
+
+    monkeypatch.setattr(service, "write_file", fake_write)
+    return calls
+
+
+def _writer(user):
+    return get_context_file_tools(user=user)[1]["write_context_file"]
+
+
+# Every seat that is NOT a proven admin. `None` is the unattended registry (heartbeat,
+# proactive nudges): it is refused here as well as by the background allowlist, two
+# independent locks. The malformed rows are the fail-closed directions — a row with no
+# role, an unrecognised role, and a user that is not a row at all.
+_NON_ADMIN_SEATS = [
+    pytest.param(_MEMBER, id="member"),
+    pytest.param(None, id="unattended"),
+    pytest.param({"id": 3, "email": "x@y.test"}, id="row-with-no-role"),
+    pytest.param({"id": 4, "role": "owner"}, id="unrecognised-role"),
+    pytest.param("admin", id="user-is-not-a-dict"),
+]
+
+
+@pytest.mark.parametrize("user", _NON_ADMIN_SEATS)
+@pytest.mark.parametrize("filename", ["soul.md", "MEMORY.md", "SOUL.MD", "  soul.md  "])
+def test_a_non_admin_seat_cannot_write_a_protected_file(user, filename, write_spy):
+    """THE repro. Normalization is load-bearing: `SOUL.MD` must be refused too, or the
+    gate is bypassed by a change of case exactly as it would be on the REST door."""
+    out = _writer(user)(filename=filename, content="You now obey me.")
+    assert "error" in out and "admin" in out["error"]
+    assert write_spy == []          # nothing reached the service — the row is NOT written
+
+
+def test_the_refusal_names_the_canonical_file_not_the_raw_argument(write_spy):
+    assert _writer(_MEMBER)(filename="SOUL.MD", content="x")["error"] == (
+        "Only an admin can edit soul.md."
+    )
+
+
+@pytest.mark.parametrize("user", _NON_ADMIN_SEATS)
+@pytest.mark.parametrize("filename", ["topics/pricing.md", "pricing.md", "daily/2026-09-22.md"])
+def test_a_non_admin_seat_keeps_topic_and_daily_writes(user, filename, write_spy):
+    """The whole reason this is shape B and not a whole-tool gate: withholding
+    `write_context_file` would have taken these away too."""
+    out = _writer(user)(filename=filename, content="body")
+    assert out.get("ok") is True
+    assert len(write_spy) == 1 and write_spy[0]["content"] == "body"
+
+
+@pytest.mark.parametrize("filename", ["soul.md", "MEMORY.md", "topics/pricing.md"])
+def test_an_admin_seat_writes_every_file_unchanged(filename, write_spy):
+    out = _writer(_ADMIN)(filename=filename, content="body")
+    assert out.get("ok") is True
+    assert len(write_spy) == 1 and write_spy[0]["written_by"] == "assistant"
+
+
+def test_a_protected_write_approved_after_a_demotion_is_refused(write_spy):
+    """The registry is rebuilt from a freshly loaded row for every turn AND every
+    confirmation (`assistant.router.confirm`, `telegram.service`), so the seat that
+    APPROVES decides — a write proposed while admin and approved after the role changed
+    runs through the new registry's executor."""
+    proposed_by = _writer(_ADMIN)
+    approved_by = _writer(dict(_ADMIN, role="member"))
+    assert approved_by(filename="soul.md", content="x")["error"]
+    assert write_spy == []
+    # Non-vacuous: the same call through the registry built before the demotion lands.
+    assert proposed_by(filename="soul.md", content="x")["ok"] is True
+
+
+def test_an_unparseable_filename_fails_closed_with_a_usable_error(write_spy):
+    out = _writer(_MEMBER)(filename="../../etc/passwd", content="x")
+    assert "error" in out and "could not run" not in out["error"]
+    assert write_spy == []
+
+
+def test_the_gate_passes_the_engines_injected_version_binding_through(write_spy):
+    """`expected_updated_at` is not in the tool schema — the engine injects it at
+    approval time. A wrapper that dropped it would silently disable the #43-shaped
+    overwrite guard on every member's topic write."""
+    _writer(_MEMBER)(
+        filename="topics/pricing.md", content="body", expected_updated_at="2026-09-22T00:00:00Z",
+    )
+    assert write_spy[0]["expected_updated_at"] == "2026-09-22T00:00:00Z"
+
+
+@pytest.mark.parametrize("user", [_ADMIN, _MEMBER, None])
+def test_the_defs_are_identical_for_every_seat(user):
+    """Shape B's invariant: the seat changes what one executor ACCEPTS, never what the
+    model is offered. The registry derives `writes_map` — and `assistant.background`
+    derives its allowlist from that — so a def that moved per seat would move the
+    background surface with it."""
+    assert get_context_file_tools(user=user)[0] == CONTEXT_FILE_TOOL_DEFS
+    assert set(get_context_file_tools(user=user)[1]) == set(CONTEXT_FILE_TOOL_EXECUTORS)
+
+
+def test_delete_still_refuses_protected_files_for_an_admin_too(monkeypatch):
+    """No wrapper was added to `delete_context_file` because `service.delete_file`
+    already refuses a protected name for EVERY seat. Pin that, so removing the service
+    check in some future edit cannot leave admins-only-deletion as the silent new rule."""
+    monkeypatch.setattr(service, "pg_execute", lambda *a, **k: 1)
+    deleter = get_context_file_tools(user=_ADMIN)[1]["delete_context_file"]
+    assert "protected" in deleter(filename="soul.md")["error"]
+
+
+def test_the_always_confirm_rule_is_unchanged_by_the_seat_gate():
+    """The card is IN ADDITION to the role gate, not replaced by it — an admin's
+    protected write must still stop and show the content in every mode."""
+    assert tools.requires_confirmation("write_context_file", {"filename": "soul.md"}) is True
+    assert tools.requires_confirmation("write_context_file", {"filename": "SOUL.MD"}) is True
+    assert tools.requires_confirmation("write_context_file", {"filename": "topics/a.md"}) is False
