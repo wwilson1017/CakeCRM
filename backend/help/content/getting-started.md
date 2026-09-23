@@ -39,7 +39,7 @@ configured — AI features hide themselves rather than showing errors.
   `pipeline/stages`.
 - **Contacts** and **Companies** — searchable lists with detail pages that roll up linked
   records, notes and activity.
-- **Tasks** — your follow-ups. Todos are the one follow-up primitive in this product. See
+- **Todos** — your follow-ups. Todos are the one follow-up primitive in this product. See
   `tasks/modes`.
 - **Reports** — one report: everything known about a single company. See
   `reports/company-rollup`.
