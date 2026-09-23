@@ -24,6 +24,15 @@ writes immediately in power mode unless the turn is already tainted, and a poiso
 future turn, including background ones, surviving conversation deletion. So
 ``requires_confirmation()`` below marks writes to a protected file as always-confirm, in
 every mode; the engine consults it exactly as it consults ``gmail.tools.binding_conflict``.
+
+Always-confirm is not a ROLE, though, and issue #213 is the hole that leaves: the person
+who approves the card is whoever is in the conversation, so a member could ask for a
+``soul.md`` rewrite and then approve their own request. Since #213 the seat decides too —
+``get_context_file_tools(user=…)`` wraps ``write_context_file`` so a non-admin seat is
+refused a PROTECTED filename, the same rule ``context_files.router.put_context_file``
+applies to the REST door (#194, Decision 1d). The two gates are independent and both
+hold: the card still fires for an admin, and the role check still refuses a member who
+somehow got past the card.
 """
 
 import logging
@@ -398,6 +407,75 @@ CONTEXT_FILE_TOOL_EXECUTORS: dict[str, Callable[..., dict]] = {
 }
 
 
-def get_context_file_tools() -> tuple[list[dict], dict[str, Callable[..., dict]]]:
-    """The ``(defs, executors)`` pair for ``assistant.registry.ToolRegistry``."""
-    return list(CONTEXT_FILE_TOOL_DEFS), dict(CONTEXT_FILE_TOOL_EXECUTORS)
+# ── Seat gate for the two protected files (issue #213) ───────────────────────────
+# Shape B of the two the issue named: the tools stay advertised to EVERY seat, and the
+# executor refuses a protected filename for a non-admin. The whole-tool gate Gmail uses
+# would also take `topics/` and `daily/` writes away from members — real product loss for
+# the case Decision 1d never meant to restrict — unless `write_context_file` were split
+# in two. Refusing inside the executor keeps one tool and puts the check on the same
+# normalized name the REST handler checks, so the two doors cannot drift apart.
+#
+# `delete_context_file` needs no wrapper: `service.delete_file` already raises `forbidden`
+# for a protected file, for every seat including an admin.
+
+
+def _admin_only_protected_writes(
+    fn: Callable[..., dict], user: dict | None,
+) -> Callable[..., dict]:
+    """``fn`` with writes to a PROTECTED file refused unless ``user`` is an admin seat.
+
+    Wraps at collection time rather than inside the executor, the shape
+    ``crm.tools.bind_server_args`` established: the module-level executor map keeps its
+    plain, seat-free functions and only the registry's copy carries the gate.
+
+    Resolving the role ONCE is safe because a registry is built fresh for every turn —
+    per SSE request, per ``/confirm`` (``assistant.router.confirm``), per Telegram button
+    (``telegram.service``) — each from a row the server just loaded. A protected write
+    proposed while the seat was an admin and approved after a demotion is therefore
+    refused: the approving registry is a new one built from the new row.
+
+    Fails CLOSED in every direction. ``user=None`` is an unattended turn and is not an
+    admin, so a background registry can never write a protected file — a second lock in
+    front of ``assistant.background``'s read-only allowlist, which already excludes every
+    ``writes: True`` tool; neither relies on the other. A non-dict user, a row with no
+    role, and an unrecognised role are all "not admin". A filename that will not normalize
+    returns the service's own error and never reaches ``service.write_file`` — and
+    normalization is load-bearing, because gating the raw string would be bypassed by
+    asking for ``SOUL.MD``.
+    """
+    if isinstance(user, dict) and user.get("role") == "admin":
+        return fn
+
+    def _run(**kwargs) -> dict:
+        try:
+            name = service.normalize_filename(kwargs.get("filename"))
+        except service.ContextFileError as exc:
+            return _error(exc)
+        if name in service.PROTECTED_FILES:
+            # The REST handler's sentence verbatim (router.put_context_file), so a member
+            # is told the same thing whichever door they came through.
+            return {"error": f"Only an admin can edit {name}."}
+        return fn(**kwargs)
+
+    return _run
+
+
+def get_context_file_tools(
+    user: dict | None = None,
+) -> tuple[list[dict], dict[str, Callable[..., dict]]]:
+    """The ``(defs, executors)`` pair for ``assistant.registry.ToolRegistry``.
+
+    ``user`` is the seat this registry serves (#190) — the ``get_current_user`` row, or
+    None for an unattended turn. Collection stays UNCONDITIONAL: the store is core and
+    keyless, and the defs handed back are identical for every seat, so the model always
+    sees the same seven tools and the registry's derived ``writes_map`` — and therefore
+    the background allowlist — cannot move. The seat changes exactly one thing: whether
+    ``write_context_file`` will accept a protected filename (#213).
+
+    MUST never raise; it touches no database at all.
+    """
+    executors = dict(CONTEXT_FILE_TOOL_EXECUTORS)
+    executors["write_context_file"] = _admin_only_protected_writes(
+        executors["write_context_file"], user,
+    )
+    return list(CONTEXT_FILE_TOOL_DEFS), executors

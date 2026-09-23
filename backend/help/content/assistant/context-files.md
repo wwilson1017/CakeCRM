@@ -56,15 +56,21 @@ The Memory page has a Files tab: read, edit and delete. If Baker or another tab 
 file while you had it open, saving is refused with a message asking you to reload, rather
 than silently overwriting.
 
-**Editing the two protected files there is admin only.** Everyone can read soul.md and
+**Changing the two protected files is admin only.** Everyone can read soul.md and
 MEMORY.md — seeing what Baker knows is the point of the page — but on a member's seat both
 open read-only with no Save. Baker's own personality is already admin-only, and these two
 files are the other half of the same standing instruction.
 
-That gate is on the editor, not on Baker: anyone can still ask Baker to rewrite either file,
-and that write stops for approval first, in every mode, as described above. So the quiet way
-of changing a standing instruction is admin-only, and the loud way shows you the new text
-before it is stored.
+That gate is on Baker too, not only on the editor. Asking Baker to rewrite soul.md or
+MEMORY.md is refused on a member's seat, and Baker says so rather than composing the
+rewrite. The reason is that the approval card is not a permission: it stops the write and
+shows you the new text, but the person who approves it is whoever is in that conversation,
+so without the seat check a member could ask for the change and then approve it. Both
+checks still apply on an admin's seat — the write is allowed, and it still stops for
+approval first.
+
+Everything else Baker keeps is unrestricted: topic files and daily notes can be written,
+rewritten and deleted from any seat, on the Memory page and through Baker alike.
 
 The same protection covers Baker: when a write is waiting for your approval and you edit that
 file in the meantime, the approved write is refused and Baker is told to re-read and reapply

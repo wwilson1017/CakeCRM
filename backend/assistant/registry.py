@@ -13,8 +13,10 @@ features append cleanly):
   * background only (``ToolRegistry(background=True)``): ``notify_user`` — Chatty
     gates it behind background mode; interactive chat never needs it.
   * always: ``memory.tools.get_memory_tools()`` (issue #5 — long-term facts).
-  * always: ``context_files.tools.get_context_file_tools()`` (issue #72 — soul.md,
-    MEMORY.md, topic files and daily notes). Core, keyless, no enable gate.
+  * always: ``context_files.tools.get_context_file_tools(user=…)`` (issue #72 — soul.md,
+    MEMORY.md, topic files and daily notes). Core, keyless, no enable gate: the SAME
+    seven defs reach every registry. The seat is passed only so the write executor can
+    refuse a PROTECTED filename for a non-admin (#213); it never removes a tool.
   * always: ``help.tools.get_help_tools()`` (issue #143 — the product manual's three
     read tools). Core, keyless, no enable gate; the defs are constants, so composing
     the registry never touches the disk.
@@ -49,6 +51,11 @@ Identity changes which tools EXIST in exactly one place — the Gmail seat gate 
 the writes map, so this can only make that allowlist SMALLER (an unattended registry
 carries no Gmail tools to admit), never larger; ``assistant.background`` subtracts the
 Gmail reads independently anyway, so neither lock depends on the other.
+
+Since #213 identity also changes what ONE executor will accept — ``write_context_file``
+refuses ``soul.md``/``MEMORY.md`` for a non-admin seat — which is a different thing from
+changing the tool surface: the def, the name and the ``writes`` flag are identical for
+every seat, so the writes map and the allowlist derived from it still cannot move.
 """
 
 import asyncio
@@ -87,7 +94,7 @@ class ToolRegistry:
             get_crm_tools(user=user),
             get_gtd_tools(user=user),
             get_memory_tools(),
-            get_context_file_tools(),
+            get_context_file_tools(user=user),
             get_gmail_tools(user=user),
             get_help_tools(),
         ]

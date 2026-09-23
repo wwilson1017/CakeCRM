@@ -67,6 +67,7 @@ There is one **Gmail** connection per install, but using it is admin-only by def
 member's Baker is not given the mail tools at all. An admin can share the mailbox with every
 seat from Settings, Integrations, Gmail — see `settings/gmail`.
 
-Editing Baker's two protected files, soul.md and MEMORY.md, from the Memory page is
-admin-only; everyone can still read them, and everyone can still ask Baker to change them,
-which always stops for approval first. See `assistant/context-files`.
+Changing Baker's two protected files, soul.md and MEMORY.md, is admin-only — on the Memory
+page and through Baker, which refuses the rewrite on a member's seat. Everyone can still
+read them, and topic files and daily notes are open to every seat either way. See
+`assistant/context-files`.

@@ -305,23 +305,29 @@ Five things bound that risk:
   confirmation contract and safety instructions are also assembled *after* the soul
   text, so a rewritten soul can add to who the assistant is but cannot override how
   it behaves.
-- **Editing them directly is admin-only.** Since issue #194, writing `soul.md` or
-  `MEMORY.md` **through the Memory page** is admin-only — a member sees both files
-  read-only and the REST endpoint refuses the write with a 403. The assistant's
-  personality is already admin-only, and these two files are the other half of the same
-  standing instruction, so the direct editor is held to the same bar. Everything else on
-  that page — topic files and daily notes — stays open to every seat, and *reading* the
-  protected files does too: seeing what the assistant knows is the point of the page.
+- **Changing them is admin-only, on both paths.** Writing `soul.md` or `MEMORY.md` needs
+  an admin seat whether you edit the file on the Memory page or ask the assistant to
+  rewrite it. The assistant's personality is already admin-only, and these two files are
+  the other half of the same standing instruction, so they are held to the same bar.
+  Everything else — topic files and daily notes — stays open to every seat through both
+  doors, and *reading* the protected files does too: seeing what the assistant knows is
+  the point of the page.
 
-  Be precise about what that gate does and does not cover, because the two paths differ:
-  **any seat can still ask the assistant to rewrite either file**, and that write is
-  governed by the confirmation rule above rather than by role — it always stops and shows
-  you the new content first, in every mode, and the approver is whoever is in that
-  conversation. So the admin gate closes the silent path (a member overwriting the file
-  from a form) and the always-confirm rule covers the loud one. Closing the tool path to
-  members as well is deliberately not done here: it would need the same identity the
-  Gmail gate uses, and it is a separate decision about what a member's assistant may do
-  on their behalf.
+  The two doors are gated separately and the wording differs, so here is each one.
+  Issue #194 closed the **form**: `PUT /api/context-files/file/{filename}` refuses a
+  non-admin with a 403, and the Memory page renders both files read-only for a member so
+  the error is never the first thing they learn. Issue #213 closed the **assistant**: the
+  tool that writes these files is still offered to every seat — members write topic files
+  and daily notes through it constantly — but it refuses a protected filename when the
+  seat that approves the write is not an admin. Both checks run on the same normalized
+  name, so asking for `SOUL.MD` is the same request as asking for `soul.md`.
+
+  Why the assistant needed its own gate: the confirmation card above is not a role. It
+  stops the write and shows you the new content, but the person who approves it is
+  whoever is in that conversation — so before #213 a member could ask for the rewrite and
+  then approve their own request. The card and the role gate are independent and both
+  still apply: an admin's protected write stops for confirmation exactly as it always
+  did.
 - **Changes are visible.** Every file on the Memory page shows who last wrote it
   ("Baker" or "You") and when, so an unexpected rewrite is discoverable rather than
   silent. Note the limit on a multi-seat install: `written_by` records only whether a

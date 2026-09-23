@@ -470,7 +470,10 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   **always confirms, power mode included**, via `context_files.tools.requires_confirmation()`
   consulted from the engine's gate — `writes:true` alone is NOT enough there, because a
   poisoned `soul.md` is a permanent system instruction, not one bad record. That hook
-  **fails closed** on a missing/unparseable filename. `read_context_file`/`read_daily_note`
+  **fails closed** on a missing/unparseable filename. Since #213 a protected write ALSO
+  needs an admin seat (`_admin_only_protected_writes`, §multi-user) — always-confirm is
+  not a role, and the approver is whoever is in the conversation; the two gates are
+  independent and both still fire. `read_context_file`/`read_daily_note`
   results are fenced but deliberately do NOT taint the turn (`_UNTRUSTED_SOURCE_TOOLS`
   encodes *third-party* origin; Baker reading its own notes must not kill power mode) — the
   same call #5 made for facts — while `_NON_USER_MARKERS` DOES exclude the fence from
@@ -585,7 +588,8 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   permanently. The Phase 4 PR carries no closing keyword; #72 is closed by hand.
   Assistant memory is install-wide and stays that way — Phase B Decision 1 settled it
   as permanent team knowledge rather than a gap; chat history is per-seat since #191,
-  and writing the two PROTECTED files is admin-only since #194.
+  and writing the two PROTECTED files is admin-only on both doors — REST since #194, the
+  assistant's `write_context_file` since #213.
   **The product manual is a searchable library of committed markdown** (#143 phase 1,
   `backend/help/`): `content/**/*.md`, one file per topic, loaded lazily and cached,
   warmed once in the lifespan by a `warm()` that CANNOT raise. Three keyless
@@ -899,26 +903,41 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   make that guard's own vacuity precondition false and let it pass without testing
   anything — and it gained an assertion that an unattended registry carries no Gmail
   tools at all.
-  **The REST write to a PROTECTED context file is admin-only since #194** (Decision 1d)
-  — the REST write, and deliberately not every write:
-  `context_files/router.put_context_file` 403s a non-admin whose NORMALIZED filename is
-  in `service.PROTECTED_FILES`. In-handler on purpose, not a route-level
-  `require_admin` — the same route serves member-writable `topics/` and `daily/` writes,
-  so the gate has to see the filename, and `test_route_authz`'s `ADMIN_ONLY` pin is
-  therefore untouched by it (the one entry that pin DID gain is the Gmail sharing route,
-  which is a genuine route-level gate). Normalization is load-bearing: gating the raw
-  path would be bypassed by typing `SOUL.MD`. Reads stay member-open — visibility is the
-  Memory page's whole point — delete already refused protected files for everyone, and
-  the assistant's own tool path is unchanged. **State that last one precisely, because it
-  bounds the guarantee:** `get_context_file_tools()` takes no user and advertises
-  `write_context_file` to every registry, so ANY seat can still ask the assistant to
-  rewrite `soul.md`, and the control on that path is the always-confirm rule
-  (`context_files.tools.requires_confirmation`, which holds in power mode too) rather
-  than a role. The gate closes the SILENT path — a member overwriting the file from a
-  form — and leaves the loud one to the confirmation card. Closing the tool path too
-  would mean threading `user` into that source the way #194 threads it into Gmail, and
-  the approved Phase B plan scoped this to REST; the docs must therefore say "the Memory
-  page", never "nobody but an admin can change soul.md".
+  **Writing a PROTECTED context file is admin-only on BOTH doors** — the REST write since
+  #194 (Decision 1d), the assistant's tool since #213. Both run on the NORMALIZED name
+  (`service.normalize_filename` → `service.PROTECTED_FILES`), which is load-bearing:
+  gating the raw string would be bypassed by typing `SOUL.MD`.
+  *REST:* `context_files/router.put_context_file` 403s a non-admin, in-handler on purpose
+  rather than a route-level `require_admin` — the same route serves member-writable
+  `topics/` and `daily/` writes, so the gate has to see the filename, and
+  `test_route_authz`'s `ADMIN_ONLY` pin is therefore untouched by it (the one entry that
+  pin DID gain is the Gmail sharing route, which is a genuine route-level gate).
+  *Tool:* `get_context_file_tools(user=…)` wraps `write_context_file` in
+  `_admin_only_protected_writes`, which refuses a protected filename for a non-admin
+  seat. **This is shape B of the two #213 named, and the distinction matters:** unlike the
+  Gmail seat gate the tool is still ADVERTISED to every seat — the defs are identical for
+  admin, member and unattended registries — because withholding `write_context_file`
+  would also take members' topic and daily writes away unless the tool were split in two.
+  Refusing inside the executor keeps one tool and one rule shared with the REST door, at
+  the cost that the model is sometimes offered a write it will be refused; the member
+  entry in `identity._ROLE_NOTES` (advice only, #200) buys that back by telling Baker not
+  to offer the rewrite. The wrapper is applied at collection time, the
+  `crm.tools.bind_server_args` shape, so the module-level `CONTEXT_FILE_TOOL_EXECUTORS`
+  map stays seat-free. Fails closed on `user=None` (an unattended registry, a second lock
+  in front of `assistant.background`'s read-only allowlist), on a row with no role or an
+  unrecognised one, on a non-dict user, and on an unparseable filename. Resolving the
+  role ONCE per collection is safe because the registry is rebuilt from a freshly loaded
+  row for every turn AND every confirmation (`assistant.router.confirm`,
+  `telegram.service`), so the seat that APPROVES decides — a write proposed while admin
+  and approved after a demotion is refused.
+  **Why the tool needed its own gate:** `requires_confirmation` is not a role. It stops
+  every protected write and shows the content, in power mode too, but the approver is
+  whoever is in the conversation, so before #213 a member could ask for a `soul.md`
+  rewrite and approve their own request (proven live in #194's evidence run,
+  `written_by='assistant'`). The card is UNCHANGED and still fires for admins — the two
+  gates are independent. Reads stay member-open (visibility is the Memory page's whole
+  point) and `delete_context_file` needed no wrapper, because `service.delete_file`
+  already refuses a protected file for every seat including an admin.
   `MemoryPage` renders those two files read-only for a member so the 403 is never the
   first thing they learn. The dead `MULTI_USER_ENABLED` flag was deleted — grep found
   only its own definition and the docstring advertising it.
@@ -2802,13 +2821,13 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | CakeCRM area | Source |
 |---|---|
 | Product shell (run.py, auth, 2FA, encryption, config, Railway) | `chatty/backend/` + `chatty/run.py` |
-| Accounts, roles, per-user 2FA, record ownership + per-rep analytics — **landed #60 (Phase A)** as `backend/users/` (`service`/`router`/`bootstrap`) + reworked `core/{auth,auth_2fa,config}.py` + `20260821100126_multi_user.sql` + `frontend/src/crm/{useUsers.ts,components/{TeamSettings,OwnerSelect,OwnerScopeToggle}.tsx}` (`OwnerScopeToggle` retired in #77 for a multi-select Owner facet). Phase B (#98) is a separate plan, landing as children: **B1 #190** (identity reaches the tool layer), **B2 #191** (`assistant_conversations.user_id` — per-seat, access-controlled chat history), **B3 #192** (notification recipients + owner-routed nudges) **B4 #193** (per-user Telegram links) and **B5 #194** (Gmail seat gate + protected-file admin gate + the docs truth pass) have all landed; #98 stays open as the tracker. Corrects the issue's premise: cake_os uses `owner_email` TEXT with no FK, so this is an FK design, not a carry | New capability (no blueprint — `cake_os/backend/apps/crm/analytics_service.get_rep_performance` for the per-rep shape only) |
+| Accounts, roles, per-user 2FA, record ownership + per-rep analytics — **landed #60 (Phase A)** as `backend/users/` (`service`/`router`/`bootstrap`) + reworked `core/{auth,auth_2fa,config}.py` + `20260821100126_multi_user.sql` + `frontend/src/crm/{useUsers.ts,components/{TeamSettings,OwnerSelect,OwnerScopeToggle}.tsx}` (`OwnerScopeToggle` retired in #77 for a multi-select Owner facet). Phase B (#98) is a separate plan, landing as children: **B1 #190** (identity reaches the tool layer), **B2 #191** (`assistant_conversations.user_id` — per-seat, access-controlled chat history), **B3 #192** (notification recipients + owner-routed nudges) **B4 #193** (per-user Telegram links) and **B5 #194** (Gmail seat gate + protected-file admin gate + the docs truth pass) have all landed; #98 stays open as the tracker. **#213** is B5's follow-up — the same admin gate on the assistant's tool door, which B5's approved plan had scoped to REST. Corrects the issue's premise: cake_os uses `owner_email` TEXT with no FK, so this is an FK design, not a carry | New capability (no blueprint — `cake_os/backend/apps/crm/analytics_service.get_rep_performance` for the per-rep shape only) |
 | DB-backed login credential + in-app password change (`auth_credential` singleton, `POST /api/auth/change-password`, `AUTH_PASSWORD_RESET` recovery lever) — **landed #78** as `backend/core/auth.py` + `frontend/src/crm/components/ChangePasswordCard.tsx` | New capability (no blueprint — back-port candidate to CAKE OS) |
 | Postgres pool + migration runner | `cake_os/backend/core/postgres.py` |
 | AI providers + pricing + setup wizard | `chatty/backend/core/providers/`, `chatty/frontend/src/setup/` |
 | CRM core (schema, router, tools, smart import) — **landed #3** as `backend/crm/` + `frontend/src/crm/` + `frontend/src/shared/` | `chatty/backend/integrations/crm_lite/`, `chatty/frontend/src/crm/` |
 | Assistant engine — **chat loop, tool registry, confirmations, uploads landed #4** as `backend/assistant/` + `frontend/src/assistant/`; **memory (facts + FTS) + dreaming (pure-algorithmic usage scoring + fact soft-archival) landed #5** as `backend/memory/` + `backend/dreaming/` (dreaming's archival unit was the fact row because CakeCRM had no file store; since #72 Phase 4 it scores topic files too, driven by #6's `maintenance_tick`) | `chatty/backend/core/agents/` |
-| Context files + Memory UI (`assistant_context_files` with GENERATED `kind`/`is_protected`; soul unfenced in static, knowledge nonce-fenced in volatile; 7 keyless tools; always-confirm on protected files; **REST writes to a protected file are admin-only since #194** — an in-handler 403 on the NORMALIZED filename, deliberately not a route-level `require_admin`, since the same route serves member-writable topic and daily notes; reads and the assistant's tool path unchanged) — **landed #72 Phase 1+2** as `backend/context_files/` + `backend/memory/router.py` + `frontend/src/crm/MemoryPage.tsx`. Chatty's `_load-order.json`, GCS sync, `atomic_write`, meetings/transcripts and `relevance_prefetch` do not translate and were not ported; its flat namespace became `topics/`+`daily/` prefixes to fit one table; its regex `sanitize_memory_content` was dropped in favour of this repo's nonce fencing (forge-proof where a blocklist is not). Fencing `MEMORY.md` is deliberately STRICTER than chatty, which loads it raw. (The original reason given was "ours becomes extractor-fed in Phase 4"; that turned out to be wrong — Phase 4's observer writes `memory_facts` rows and never touches a context file. The tightening stands on its own: Baker rewrites `MEMORY.md` from conversation content, which is laundered third-party text either way.) | `chatty/backend/core/agents/context_manager.py` + `tools/context_tools.py` + `ai_service._knowledge_management_instructions()` |
+| Context files + Memory UI (`assistant_context_files` with GENERATED `kind`/`is_protected`; soul unfenced in static, knowledge nonce-fenced in volatile; 7 keyless tools; always-confirm on protected files; **writing a protected file is admin-only on both doors** — REST since #194 (an in-handler 403 on the NORMALIZED filename, deliberately not a route-level `require_admin`, since the same route serves member-writable topic and daily notes) and the assistant's `write_context_file` since #213 (shape B: the tool stays advertised to every seat and the executor refuses a protected name for a non-admin, because a whole-tool gate would also cost members their topic and daily writes; the always-confirm card is unchanged and still fires for admins); reads stay member-open) — **landed #72 Phase 1+2** as `backend/context_files/` + `backend/memory/router.py` + `frontend/src/crm/MemoryPage.tsx`. Chatty's `_load-order.json`, GCS sync, `atomic_write`, meetings/transcripts and `relevance_prefetch` do not translate and were not ported; its flat namespace became `topics/`+`daily/` prefixes to fit one table; its regex `sanitize_memory_content` was dropped in favour of this repo's nonce fencing (forge-proof where a blocklist is not). Fencing `MEMORY.md` is deliberately STRICTER than chatty, which loads it raw. (The original reason given was "ours becomes extractor-fed in Phase 4"; that turned out to be wrong — Phase 4's observer writes `memory_facts` rows and never touches a context file. The tightening stands on its own: Baker rewrites `MEMORY.md` from conversation content, which is laundered third-party text either way.) | `chatty/backend/core/agents/context_manager.py` + `tools/context_tools.py` + `ai_service._knowledge_management_instructions()` |
 | Observer + file-dreaming — **landed #72 Phase 4** as `backend/memory/observer.py` (+ `assistant_conversations.observed_through_seq`, `heartbeat_state.last_observer_run_at`, three `history` helpers, `gtd_service.{list_open_task_titles,open_task_with_title_exists}`, the `observer` scheduler job) and `dreaming.scorer.score_file` + the topic-file pass inside `processor._run_cycle` (+ `assistant_context_files.read_count`/`last_read_at`, `context_files.service.track_read_for`, `dreaming_runs.files_*`). Chatty's THREE pipelines collapse into ONE pass: its nightly observer, its per-fourth-message extractor and its 581-line commitments store all become one scheduler pass writing temporal facts + GTD inbox tasks. **Not ported:** the per-provider HTTP fan-out with hardcoded model ids (the ABC's light tier replaces it — repo rule), the SQLite `MemoryDB` and its GCS backup, the `observations` table and its `## Things I've Noticed About You` prompt block (the fact IS the unit), and the whole commitment lifecycle — `surfaced_count`, the rolling daily surfacing cap, the three expiry cutoffs and `complete_commitment` — because the GTD inbox IS the surfacing and done/dropped IS the lifecycle (a 14-day stale-segment guard replaces chatty's immortal-commitment rule). File-dreaming renormalizes chatty's FIVE file signals to four: mention frequency is dropped (no producer here) and load rate becomes an on-demand read count, because an unconditional load count is a constant in this tree. **Phase 5 (embeddings) declined.** | `chatty/backend/core/agents/memory/{observer,extractor,commitments}.py` + `dreaming/scorer.py` |
 | Conversation compaction (`backend/assistant/compaction.py` + `assembly._apply_compaction` + four `assistant_conversations` columns + `history.{get_compaction_state,set_compaction,mark_untrusted_seen,is_conversation_tainted}` + `delimiters.wrap_conversation_summary`) — **landed #72 Phase 3**. Four deliberate departures from the blueprint, each because CakeCRM differs: the summarizer goes through the `AIProvider` ABC on the light tier (chatty hardcodes a Haiku id and calls the SDK directly, which this repo forbids), so the gist is bounded by CHARACTERS — `stream_turn` exposes no `max_tokens` knob; the gist is nonce-fenced rather than regex-scrubbed, and the fence is minted ONCE at write time because our provider caches the conversation PREFIX; a row whose tool work is unfinished is never gisted (chatty needs no such guard — it never persists a call and its result separately); and the transcript truncates at ROW granularity rather than slicing the rendered character stream, which can sever a fence. Row granularity also deletes a whole class of chatty's care: one row carries an iteration's calls AND its results, so a boundary can never SPLIT a `tool_use` from its `tool_result`. NOT ported: chatty's `sanitize_memory_content` (dropped in Phase 1 for nonce fencing) and its `_fetch_anthropic_key` fallback (no provider-specific key path here). Fixed in passing: `claude-opus-4-8`, `get_ai_provider`'s DEFAULT Anthropic model, had no `MODEL_CONTEXT_WINDOWS` entry, so the composer's context meter was hidden on a default install | `chatty/backend/core/agents/compaction/service.py` + `context_assembly._apply_compaction` |
 | Assistant brand + identity-panel role gate (`identity.NAME` fixed as "Baker": no `name` column read, no `name` write path, prompt interpolation from the constant, and `NAME_NOTE` between soul and `SALES_GUIDE` so free identity text cannot rename it either; one-shot `UPDATE assistant_identity SET name='Baker'` migration with the column kept for rollback safety; `IdentitySettings.tsx` renders the name read-only and gates the personality editor on `useAuth().isAdmin`, members read-only) — **landed #71 (bundling #106)** as `backend/assistant/{identity,router}.py` + `20260826010825_assistant_name_is_a_brand.sql` + `frontend/src/assistant/IdentitySettings.tsx` (+ co-located vitest). Personality stays user-editable; only the name became permanent | New capability (product decision on issue #71 — no blueprint) |
