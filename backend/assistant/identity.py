@@ -469,10 +469,12 @@ def _one_line(value, limit: int) -> str:
 # What the seat's ROLE changes — for ADVICE ONLY (issue #200).
 #
 # The server gates are the enforcement and stay exactly where they are: `require_admin`
-# on every install-configuration route, `bind_owner_filter` on the owner-scoped reads.
-# This table is deliberately NOT threaded into any tool executor, so it can never widen
-# or narrow what a seat may actually do. All it prevents is the failure where Baker
-# walks a member step-by-step through a flow whose route will refuse them.
+# on every install-configuration route, `bind_owner_filter` on the owner-scoped reads,
+# and — since #213 — `context_files.tools._admin_only_protected_writes` on the one tool
+# that can rewrite soul.md. This table is deliberately NOT threaded into any tool
+# executor, so it can never widen or narrow what a seat may actually do. All it prevents
+# is the failure where Baker walks a member step-by-step through a flow whose route will
+# refuse them — including, now, composing a soul.md rewrite that dies at approval.
 #
 # Keyed by the exact values of `users.service.ROLES`. An unrecognized role adds nothing,
 # which is the safe direction: no claim about what the user may do.
@@ -491,7 +493,11 @@ _ROLE_NOTES: dict[str, str] = {
         "no-login links, connecting the Telegram bot, connecting Gmail, the daily digest "
         "and nudges, and the sample-data and clear-everything operations. If they ask to "
         "change one, say it needs an administrator rather than walking them through a "
-        "flow that will be refused. What IS theirs: their own password and two-factor "
+        "flow that will be refused. Your soul.md and MEMORY.md are admin-only too, on "
+        "the Memory page and through you alike, so do not offer to rewrite either one "
+        "for this person — reading them and saying what is in them is fine, and their "
+        "topic files and daily notes are not restricted at all. What IS theirs: their "
+        "own password and two-factor "
         "authentication, push notifications on their own device, linking or unlinking "
         "their own Telegram chat, how the pipeline board looks for them, and every CRM "
         "record — members create, edit and delete those freely."
