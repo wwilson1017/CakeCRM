@@ -74,12 +74,20 @@ def _clean(value, *, default: str = "") -> str | None:
 
 
 def _brief(topic: lib.Topic) -> dict:
-    return {
+    brief = {
         "topic": topic.slug,
         "title": topic.title,
         "description": topic.description,
         "admin_only": topic.admin_only,
     }
+    if topic.author:
+        # Attribution rides every search hit and every listing row, so naming a playbook's
+        # author never costs a second read — which is what makes "name the book and its
+        # author" (identity.COACHING_GUIDE) cheap enough that the model actually does it.
+        # Absent rather than empty for the product topics: a key that is "" on 27 of 37
+        # rows is noise in every listing payload.
+        brief["author"] = topic.author
+    return brief
 
 
 def _help_search(query=None, limit: int = help_search_mod.DEFAULT_RESULTS) -> dict:
