@@ -76,12 +76,12 @@
       <div class="tour-text">
         <p class="tour-num">02</p>
         <h3>Your pipeline is a board. Drag the card.</h3>
-        <p>Every open deal on one screen, in the stage it is in, with the value and the next date on the card. Moving a deal is a drag. That is the entire workflow.</p>
+        <p>Every open deal on one screen, in the stage it is in, with the value, the close date and the last contact on the card. Won and lost stay tucked away until you ask. Moving a deal is a drag; a filter you keep coming back to becomes a saved view the whole team can use. That is the entire workflow.</p>
       </div>
       <figure class="frame">
         <picture>
           <source srcset="img/pipeline.webp" type="image/webp">
-          <img src="img/pipeline.png" width="1440" height="900" loading="lazy" alt="The CakeCRM pipeline board: deals as cards in Lead, Qualified, Proposal, Negotiation and Won columns, with values and probabilities on each card.">
+          <img src="img/pipeline.png" width="1440" height="900" loading="lazy" alt="The CakeCRM pipeline board: open deals as cards in Lead, Qualified, Proposal and Negotiation columns, each showing its value, probability, close date, lead score and last contact, with the Won and Lost stages hidden.">
         </picture>
       </figure>
     </div>
@@ -95,7 +95,7 @@
       <figure class="frame">
         <picture>
           <source srcset="img/deal.webp" type="image/webp">
-          <img src="img/deal.png" width="1440" height="900" loading="lazy" alt="A deal card open over the CakeCRM pipeline: title, value, stage, contact, probability, lead score and expected close, then the activity history and a note box.">
+          <img src="img/deal.png" width="1440" height="900" loading="lazy" alt="A deal card open over the CakeCRM pipeline: title, value, stage, contact, company, owner, temperature, probability, lead score and expected close, then Call, Email, Meeting and Note buttons, the activity history and a note box.">
         </picture>
       </figure>
     </div>
@@ -104,12 +104,12 @@
       <div class="tour-text">
         <p class="tour-num">04</p>
         <h3>Ask Baker. <span class="muted">Optional.</span></h3>
-        <p>Add any AI provider key and Baker reads the deal you have open, checks its health, and tells you the next step in plain words. It can log the call, put a follow-up draft in your Gmail Drafts, and nudge you when a deal goes quiet. In Ask mode, which is how Baker starts, every write waits for your approval &mdash; there is an Auto mode that runs them without asking, and switching it on is your call. Skip the key and the CRM is still the whole CRM.</p>
+        <p>Add any AI provider key and Baker reads the deal you have open, checks its health, and tells you the next step in plain words, grounded in what is actually on the card. It can log the call, put a follow-up draft in your Gmail Drafts, and nudge you when a deal goes quiet. It has read the manual too, so &ldquo;how do I&hellip;&rdquo; gets answered without leaving the page. In Ask mode, which is how Baker starts, every write waits for your approval &mdash; there is an Auto mode that runs them without asking, and switching it on is your call. Skip the key and the CRM is still the whole CRM.</p>
       </div>
       <figure class="frame">
         <picture>
           <source srcset="img/deal-baker.webp" type="image/webp">
-          <img src="img/deal-baker.png" width="1440" height="900" loading="lazy" alt="A deal open in CakeCRM with the Baker assistant drawer beside it, answering 'What should my next step be on this deal?' with a summary of where the deal stands and a recommended call.">
+          <img src="img/deal-baker.png" width="1440" height="900" loading="lazy" alt="A deal open in CakeCRM with the Baker assistant drawer beside it, answering 'What should my next step be on this deal?' with the follow-up that is already scheduled, why it is the right move, and what to cover on that call.">
         </picture>
       </figure>
     </div>
@@ -135,7 +135,7 @@
       </li>
       <li>
         <h3>Works with zero AI keys</h3>
-        <p>Contacts, companies, pipeline, todos and CSV import all run with no AI configured. The assistant is a feature you switch on, not a gate.</p>
+        <p>Contacts, companies, pipeline, todos, reports and CSV import all run with no AI configured. The assistant is a feature you switch on, not a gate.</p>
       </li>
       <li>
         <h3>Bring any model</h3>
@@ -147,7 +147,7 @@
       </li>
       <li>
         <h3>Talk to it from your phone</h3>
-        <p>Link a Telegram bot and ask about a deal, log a call or capture a todo from wherever you are. Confirmations arrive as Approve / Deny buttons.</p>
+        <p>Connect one Telegram bot, and each person on the team links their own chat to ask about a deal, log a call or capture a todo from wherever they are. Confirmations arrive as Approve / Deny buttons.</p>
       </li>
     </ul>
   </div>
@@ -164,7 +164,7 @@
     <ol class="steps">
       <li><strong>Deploy.</strong> Click the Railway button and set a password. Railway provisions PostgreSQL and starts CakeCRM. Prefer your own hardware? <code>python run.py</code> starts everything locally with Postgres in Docker.</li>
       <li><strong>Sign in.</strong> Load the sample data to look around, or import your contacts from CSV.</li>
-      <li><strong>Optionally, hire Baker.</strong> Paste an AI provider key in Settings. Skip this step and the CRM is still the whole CRM.</li>
+      <li><strong>Optionally, hire Baker.</strong> Paste an AI provider key under AI Setup. Skip this step and the CRM is still the whole CRM.</li>
     </ol>
     <div class="actions">
       <a href="https://railway.com/deploy/cakecrm?referralCode=HMgK-M" class="btn btn-primary" rel="noopener">Deploy on Railway</a>
