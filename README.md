@@ -86,8 +86,13 @@ Three screens your people will actually use, and an assistant that handles the b
    (the CRM is fully usable without one)
 
 `DATABASE_URL` is injected by the template's Postgres service; `JWT_SECRET` and
-`ENCRYPTION_KEY` auto-generate. Prefer your own hardware? `python run.py` runs
-everything locally, with Postgres via Docker Compose.
+`ENCRYPTION_KEY` auto-generate. Both are generated **once** and kept on the
+persistent volume the template mounts at `/app/backend/data`, so a redeploy does
+not sign everyone out. Setting `JWT_SECRET` yourself is still the recommended
+production posture — a secret you control survives a volume being recreated, and
+the Railway template can generate one for you as a variable. Prefer your own
+hardware? `python run.py` runs everything locally, with Postgres via Docker
+Compose.
 
 ### Accounts
 

@@ -6,8 +6,9 @@ issue #13) plus the five setval calls that advance the SERIAL sequences past the
 fixed demo ids, with the FK-safe insert order and correct company links.
 """
 
+from conftest import FakeConn
+
 from crm.seed_data import seed_demo_data
-from tests.conftest import FakeConn
 
 
 def test_seed_skips_when_any_table_has_rows():

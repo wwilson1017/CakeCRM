@@ -2,31 +2,27 @@
 CakeCRM — Encryption at rest for credentials.
 
 Encrypts sensitive fields (API keys, OAuth tokens) using Fernet (AES-128-CBC)
-before writing to disk. The encryption key is sourced from (in priority order):
+before writing to disk. The key resolves through the shared ladder in
+`core.secret_store` — ENCRYPTION_KEY env var, then the OS keychain, then
+`backend/data/.encryption-key` — which is the same ladder the JWT signing secret
+uses (issue #222); see that module for why each step exists.
 
-1. ENCRYPTION_KEY environment variable  (deployed instances — Railway, etc.)
-2. OS keychain via `keyring` library     (local macOS / Windows / Linux)
-3. File fallback: data/.encryption-key   (headless Linux, CI, Docker)
+Unlike the JWT secret this key does NOT fall back to a process-local value when
+it cannot be stored: a Fernet key that dies at restart would encrypt new
+credentials into ciphertext nobody can ever read back, so a visible failure at
+the first credential operation is the better outcome.
 
 Encrypted values are prefixed with "enc:v1:" so plaintext values (pre-migration)
 are detected and auto-encrypted on first load.
 """
 
 import logging
-import os
-from pathlib import Path
 
 from cryptography.fernet import Fernet
 
-from core.storage import atomic_write
+from core.secret_store import PersistedSecret
 
 logger = logging.getLogger(__name__)
-
-DATA_DIR = Path(__file__).parent.parent / "data"
-KEY_FILE_PATH = DATA_DIR / ".encryption-key"
-
-KEYCHAIN_SERVICE = "cakecrm"
-KEYCHAIN_ACCOUNT = "encryption-key"
 
 ENCRYPTED_PREFIX = "enc:v1:"
 
@@ -52,103 +48,37 @@ SENSITIVE_FIELDS = frozenset({
 # Key management
 # ---------------------------------------------------------------------------
 
-class EncryptionKeyManager:
-    """Resolve or generate a Fernet encryption key.  Result is cached."""
+def _is_fernet_key(value: str) -> bool:
+    try:
+        Fernet(value.encode())
+        return True
+    except Exception:
+        return False
 
-    _cached_key: bytes | None = None
+
+_ENCRYPTION_KEY = PersistedSecret(
+    env_var="ENCRYPTION_KEY",
+    filename=".encryption-key",
+    generate=lambda: Fernet.generate_key().decode(),
+    validate=_is_fernet_key,
+)
+
+
+class EncryptionKeyManager:
+    """Resolve or generate the Fernet encryption key.  Result is cached.
+
+    A thin façade over the shared `PersistedSecret` ladder, kept because the
+    whole app (and the test suite) already addresses the key through this name.
+    """
 
     @classmethod
     def get_key(cls) -> bytes:
-        if cls._cached_key is not None:
-            return cls._cached_key
-
-        key = cls._try_env() or cls._try_keychain() or cls._try_file()
-        if not key:
-            key = cls._generate_and_store()
-
-        cls._cached_key = key
-        return key
+        return _ENCRYPTION_KEY.resolve().encode()
 
     @classmethod
     def reset_cache(cls) -> None:
         """Clear the cached key (useful for tests)."""
-        cls._cached_key = None
-
-    # -- sources -------------------------------------------------------------
-
-    @classmethod
-    def _try_env(cls) -> bytes | None:
-        raw = os.environ.get("ENCRYPTION_KEY")
-        if not raw:
-            return None
-        try:
-            key = raw.encode()
-            Fernet(key)  # validate
-            logger.info("Using encryption key from ENCRYPTION_KEY env var")
-            return key
-        except Exception:
-            logger.warning("ENCRYPTION_KEY env var is not a valid Fernet key, ignoring")
-            return None
-
-    @classmethod
-    def _try_keychain(cls) -> bytes | None:
-        try:
-            import keyring
-            stored = keyring.get_password(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)
-            if stored:
-                key = stored.encode()
-                Fernet(key)  # validate
-                logger.info("Using encryption key from OS keychain")
-                return key
-        except Exception as exc:
-            logger.debug("Keychain not available: %s", exc)
-        return None
-
-    @classmethod
-    def _try_file(cls) -> bytes | None:
-        if not KEY_FILE_PATH.exists():
-            return None
-        try:
-            key = KEY_FILE_PATH.read_text(encoding="utf-8").strip().encode()
-            Fernet(key)  # validate
-            logger.info("Using encryption key from file: %s", KEY_FILE_PATH)
-            return key
-        except Exception:
-            logger.warning("Key file exists but is invalid, will regenerate")
-            return None
-
-    # -- generation ----------------------------------------------------------
-
-    @classmethod
-    def _generate_and_store(cls) -> bytes:
-        key = Fernet.generate_key()
-
-        # Try keychain first
-        stored_in_keychain = False
-        try:
-            import keyring
-            keyring.set_password(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT, key.decode())
-            stored_in_keychain = True
-            logger.info("Generated new encryption key, stored in OS keychain")
-        except Exception as exc:
-            logger.debug("Cannot store in keychain: %s", exc)
-
-        if not stored_in_keychain:
-            DATA_DIR.mkdir(parents=True, exist_ok=True)
-            atomic_write(KEY_FILE_PATH, key.decode())
-            if os.name != "nt":
-                KEY_FILE_PATH.chmod(0o600)
-            else:
-                logger.warning(
-                    "Key file %s written with default ACLs — "
-                    "restrict access manually on shared machines",
-                    KEY_FILE_PATH,
-                )
-            logger.info(
-                "Generated new encryption key, stored in file: %s", KEY_FILE_PATH
-            )
-
-        return key
+        _ENCRYPTION_KEY.reset_cache()
 
 
 # ---------------------------------------------------------------------------

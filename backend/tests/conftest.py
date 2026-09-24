@@ -6,6 +6,8 @@ so the unit suite needs neither a database nor network. The real-Postgres path
 is exercised only by tests/test_integration_pg.py (marker: integration).
 """
 
+import os
+import secrets
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -15,6 +17,21 @@ from cryptography.fernet import Fernet
 
 # Make the backend dir importable as the package root (providers, core, main).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# Pin the JWT signing secret for the whole suite. Same intent as the
+# `encryption_key` fixture below — keep the hermetic run off the developer's real
+# OS keychain and out of `backend/data/` — but one import earlier, because
+# `core.config` resolves the secret in its module body and test modules import the
+# app at COLLECTION time, before any fixture runs (issue #222).
+#
+# Not a bare `os.environ[...] = ...`: an inherited EMPTY value or the
+# `change-me-in-production` placeholder must be replaced (either falls through to
+# the keychain/file steps this exists to avoid), but a value already set must be
+# left alone, because re-running this line would strand `core.config` on the
+# secret it resolved at its own import and every later comparison against the
+# env var would disagree with it.
+if os.environ.get("JWT_SECRET", "") in ("", "change-me-in-production"):
+    os.environ["JWT_SECRET"] = secrets.token_hex(32)
 
 
 def pytest_collection_modifyitems(config, items):

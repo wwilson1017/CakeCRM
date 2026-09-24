@@ -136,8 +136,12 @@ the residual risks, is in `docs/SYNC.md`.
 - **Encryption at rest.** The Google client secret and the OAuth access/refresh
   tokens are Fernet-encrypted in Postgres (`enc:v1:…`, with database CHECK
   constraints rejecting any plaintext write). The encryption key resolves from
-  `ENCRYPTION_KEY` → OS keychain → a protected local file. Secrets never appear in
-  any API response; the OAuth CSRF state is stored only as a SHA-256 hash.
+  `ENCRYPTION_KEY` → OS keychain → a protected local file (mode 0600 under
+  `backend/data/`), generated once on first start and reused thereafter. The JWT
+  signing secret takes the same ladder from `JWT_SECRET`, so a restart does not
+  invalidate every session; neither secret is ever written outside that
+  directory. Secrets never appear in any API response; the OAuth CSRF state is
+  stored only as a SHA-256 hash.
 - **Email content and the AI provider.** When you ask the assistant to work with
   your email, the search results, message bodies, addresses, and any draft text are
   sent to whichever AI provider you have configured (Anthropic/OpenAI/Gemini/etc.)
