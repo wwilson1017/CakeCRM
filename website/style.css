@@ -133,6 +133,7 @@ p { margin: 0; }
   box-shadow: 0 24px 60px -24px var(--shadow), 0 2px 6px -2px var(--shadow);
 }
 .frame img { border-radius: 8px; }
+.frame figcaption { color: var(--ink-mute); font-size: 0.9rem; padding: 0.6rem 0.5rem 0.3rem; }
 
 /* Sections */
 .section { padding: clamp(4rem, 10vw, 7rem) 0 clamp(3rem, 7vw, 5rem); }
