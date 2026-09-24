@@ -105,6 +105,51 @@ def test_the_shipped_placeholder_does_not_count_as_supplied(data_dir, monkeypatc
     assert store.source == "generated"
 
 
+def _fake_keychain(monkeypatch, vault: dict[str, str]) -> None:
+    """Back the keychain steps with a dict instead of the developer's real one."""
+    def _write(account: str, value: str) -> bool:
+        vault[account] = value
+        return True
+
+    monkeypatch.setattr(secret_store, "_keychain_read", lambda account: vault.get(account))
+    monkeypatch.setattr(secret_store, "_keychain_write", _write)
+
+
+def test_a_generated_secret_goes_into_the_keychain_when_there_is_one(data_dir, monkeypatch):
+    """The ladder's step 2 — the path a local macOS/Windows dev machine takes for
+    BOTH secrets, and the one the `data_dir` fixture otherwise turns off."""
+    monkeypatch.delenv("JWT_SECRET", raising=False)
+    vault: dict[str, str] = {}
+    _fake_keychain(monkeypatch, vault)
+
+    store = _jwt_like()
+
+    assert store.resolve() == vault["jwt-secret"]
+    assert store.source == "generated"
+    assert not store.file_path.exists(), "the keychain held it; no file should be written"
+
+
+def test_a_process_that_loses_the_keychain_race_adopts_what_is_stored(data_dir, monkeypatch):
+    """`_generate_and_store` reads the keychain BACK instead of trusting its own
+    write, so two processes generating at the same moment still agree. Here the
+    keychain is empty when the ladder looks and holds another process's value by
+    the time the write returns."""
+    monkeypatch.delenv("JWT_SECRET", raising=False)
+    vault: dict[str, str] = {}
+    _fake_keychain(monkeypatch, vault)
+
+    def _write_but_lose(account: str, value: str) -> bool:
+        vault[account] = "the-other-process-won"
+        return True
+
+    monkeypatch.setattr(secret_store, "_keychain_write", _write_but_lose)
+
+    store = _jwt_like()
+
+    assert store.resolve() == "the-other-process-won"
+    assert store.source == "generated"
+
+
 def test_the_keychain_beats_the_file(data_dir, monkeypatch):
     (data_dir / ".jwt-secret").write_text("from-the-file", encoding="utf-8")
     monkeypatch.delenv("JWT_SECRET", raising=False)

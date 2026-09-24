@@ -6,8 +6,9 @@ CakeCRM — Crash-safe file-write helpers.
   atomic_write_bytes()  — crash-safe binary file writes
 
 Relational data lives in Postgres (core/postgres.py); these helpers cover the
-few file-based artifacts (branding uploads, the encryption-key fallback file,
-the volume marker).
+few file-based artifacts (branding uploads, the volume marker). NOT the secret
+files — `core/secret_store.py` claims those with `O_CREAT|O_EXCL` at mode 0600,
+for the concurrency and permissions guarantees these helpers do not give.
 """
 
 import json
