@@ -25,8 +25,8 @@ vi.mock('../useUsers', () => ({
 
 const { TodayPanel } = await import('./TodayPanel');
 
-function taskItem(id: number, over: Partial<CrmTodayItem> = {}): CrmTodayItem {
-  return { kind: 'task', id, rank: 4, why: 'due_today', title: `Task ${id}`,
+function todoItem(id: number, over: Partial<CrmTodayItem> = {}): CrmTodayItem {
+  return { kind: 'todo', id, rank: 4, why: 'due_today', title: `Todo ${id}`,
            due_date: '2026-06-05', owner_id: 3, ...over } as CrmTodayItem;
 }
 
@@ -38,13 +38,13 @@ const PAYLOAD: CrmToday = {
   next_refresh_at: '2026-06-06T05:00:00Z',
   scope: { owner_id: 3 },
   items: [
-    taskItem(90, { rank: 1, why: 'starred', title: 'Starred one' }),
-    taskItem(80, { rank: 3, why: 'overdue', title: 'Overdue one', due_date: '2026-06-01' }),
-    taskItem(70, { rank: 3, why: 'overdue', title: 'Overdue two', due_date: '2026-06-02' }),
-    taskItem(60, { title: 'Due today one', owner_id: null }),
-    taskItem(50, { title: 'Due today two' }),
-    taskItem(40, { title: 'Due today three' }),
-    taskItem(30, { title: 'Due today four' }),
+    todoItem(90, { rank: 1, why: 'starred', title: 'Starred one' }),
+    todoItem(80, { rank: 3, why: 'overdue', title: 'Overdue one', due_date: '2026-06-01' }),
+    todoItem(70, { rank: 3, why: 'overdue', title: 'Overdue two', due_date: '2026-06-02' }),
+    todoItem(60, { title: 'Due today one', owner_id: null }),
+    todoItem(50, { title: 'Due today two' }),
+    todoItem(40, { title: 'Due today three' }),
+    todoItem(30, { title: 'Due today four' }),
   ],
 };
 
@@ -76,7 +76,7 @@ async function render(node: React.ReactElement) {
 function rowTitles(): string[] {
   return [...container.querySelectorAll('button')]
     .map(b => b.textContent ?? '')
-    .filter(t => t.includes('Task ') || t.includes('one') || t.includes('two')
+    .filter(t => t.includes('Todo ') || t.includes('one') || t.includes('two')
               || t.includes('three') || t.includes('four'));
 }
 
@@ -121,7 +121,7 @@ describe('TodayPanel', () => {
     expect(container.textContent).toBe('');
   });
 
-  it('completes a task through the normal endpoint without navigating', async () => {
+  it('completes a todo through the normal endpoint without navigating', async () => {
     const onMutated = vi.fn();
     await render(<TodayPanel onMutated={onMutated} />);
     api.mockClear();
@@ -130,18 +130,18 @@ describe('TodayPanel', () => {
     const checkbox = container.querySelector('button[aria-label="Complete Starred one"]');
     await act(async () => { (checkbox as HTMLButtonElement).click(); });
 
-    expect(api).toHaveBeenCalledWith('/api/crm/tasks/90/complete', { method: 'PUT' });
+    expect(api).toHaveBeenCalledWith('/api/crm/todos/90/complete', { method: 'PUT' });
     expect(onMutated).toHaveBeenCalled();
     expect(navigate).not.toHaveBeenCalled();  // sibling controls — no bubbling to the row
   });
 
-  it('routes task rows to the tasks page', async () => {
+  it('routes todo rows to the todos page', async () => {
     await render(<TodayPanel />);
     await act(async () => { buttonByText('Starred one').click(); });
-    expect(navigate).toHaveBeenCalledWith('/crm/tasks');
+    expect(navigate).toHaveBeenCalledWith('/crm/todos');
   });
 
-  it('badges an unassigned task and not an owned one', async () => {
+  it('badges an unassigned todo and not an owned one', async () => {
     await render(<TodayPanel />);
     await act(async () => { buttonByText('+2 more today').click(); });
     expect(buttonByText('Due today one').textContent).toContain('Unassigned');
@@ -174,7 +174,7 @@ describe('TodayPanel', () => {
     expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
   });
 
-  it('tells the user when completing a task fails, and still reconciles', async () => {
+  it('tells the user when completing a todo fails, and still reconciles', async () => {
     const onMutated = vi.fn();
     await render(<TodayPanel onMutated={onMutated} />);
     api.mockClear();
@@ -347,7 +347,7 @@ describe('TodayPanel hot deals', () => {
     // One commitment and one unranked deal — well under five rows, which is exactly the
     // case a sixth rank could not have kept apart.
     api.mockResolvedValue(withItems([
-      taskItem(80, { rank: 3, why: 'overdue', title: 'Overdue one', due_date: '2026-06-01' }),
+      todoItem(80, { rank: 3, why: 'overdue', title: 'Overdue one', due_date: '2026-06-01' }),
       dealItem(42),
     ]));
     await render(<TodayPanel />);
@@ -366,7 +366,7 @@ describe('TodayPanel hot deals', () => {
     // renders "Show less" at all, stranding the reader in the expanded view. Two items
     // here, so `items.length > 5` is false and the old guard cannot pass this.
     api.mockResolvedValue(withItems([
-      taskItem(80, { rank: 3, why: 'overdue', title: 'Overdue one', due_date: '2026-06-01' }),
+      todoItem(80, { rank: 3, why: 'overdue', title: 'Overdue one', due_date: '2026-06-01' }),
       dealItem(42),
     ]));
     await render(<TodayPanel />);
@@ -392,7 +392,7 @@ describe('TodayPanel hot deals', () => {
     expect(rowButton('Deal 42')).toBeDefined();
   });
 
-  it('badges an unassigned deal, the same as an unassigned task', async () => {
+  it('badges an unassigned deal, the same as an unassigned todo', async () => {
     api.mockResolvedValue(withItems([
       dealItem(42, { rank: 2, why: 'hot_stale', owner_id: null }),
       dealItem(43, { rank: 2, why: 'hot_stale', owner_id: 3 }),

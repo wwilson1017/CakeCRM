@@ -1,17 +1,17 @@
 /**
- * TaskModeCard — pick the task experience, and manage the two no-login todo
+ * TodoModeCard — pick the todo experience, and manage the two no-login todo
  * surfaces (#70).
  *
  * Todo-GTD is the DEFAULT since #102, so this card frames it first and presents the
  * flat list as the simpler opt-out — including for the installs #102's migration
  * flipped, whose owners arrive here looking for exactly that.
  *
- * Switching modes migrates nothing: GTD is a view over the same task rows, so the
+ * Switching modes migrates nothing: GTD is a view over the same todo rows, so the
  * change is instant and losslessly reversible. The card says so plainly, because
- * "switch task system" otherwise reads like a destructive operation.
+ * "switch todo system" otherwise reads like a destructive operation.
  *
  * The mode itself is NOT local state (#102): CrmLayout owns it for the whole CRM, and
- * a second copy here meant a switch did not reach /crm/tasks until a page reload.
+ * a second copy here meant a switch did not reach /crm/todos until a page reload.
  *
  * The public-surface half is deliberately blunt about what each link exposes. A
  * tokenless capture URL is a write-only inbox drop that anyone with the address can
@@ -25,8 +25,8 @@ import { api } from '../../core/api/client';
 import { copyToClipboard } from '../../shared/hooks/useCopyToClipboard';
 import { CORAL_TEXT, FONT_SANS, INK_MUTE, labelStyle } from '../../shared/styles';
 import { toast } from '../../shared/toast';
-import { useSetTaskMode, useTaskMode } from '../gtd/TaskModeContext';
-import type { TaskMode } from '../gtd/TaskModeContext';
+import { useSetTodoMode, useTodoMode } from '../gtd/TodoModeContext';
+import type { TodoMode } from '../gtd/TodoModeContext';
 // #102's body + #103's shell: the card chrome and heading helpers are gone because
 // SettingsCard owns both now (settingsSections.test.ts pins that no settings card
 // imports them).
@@ -43,11 +43,11 @@ interface Surfaces {
   web_public: boolean;
 }
 
-export function TaskModeCard({ isMobile }: { isMobile: boolean }) {
+export function TodoModeCard({ isMobile }: { isMobile: boolean }) {
   // Read AND write the mode through the layout that owns it — no local copy (#102).
   // `null` = not known yet, which disables the buttons below.
-  const mode = useTaskMode();
-  const setMode = useSetTaskMode();
+  const mode = useTodoMode();
+  const setMode = useSetTodoMode();
   const [surfaces, setSurfaces] = useState<Surfaces | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -55,19 +55,19 @@ export function TaskModeCard({ isMobile }: { isMobile: boolean }) {
     api<Surfaces>('/api/crm/todo-surfaces').then(setSurfaces).catch(() => { /* keep unknown */ });
   }, []);
 
-  async function switchMode(next: TaskMode) {
+  async function switchMode(next: TodoMode) {
     if (busy || next === mode) return;
     setBusy(true);
     try {
-      await api('/api/crm/task-mode', { method: 'POST', body: JSON.stringify({ mode: next }) });
+      await api('/api/crm/todo-mode', { method: 'POST', body: JSON.stringify({ mode: next }) });
       setMode(next);
       toast.success(
         next === 'gtd'
-          ? 'Todo-GTD mode on. Your existing tasks are all still there, as next actions.'
-          : 'Switched to the simple task list. Nothing was lost — your todos are all still there.',
+          ? 'Todo-GTD mode on. Your existing todos are all still there, as next actions.'
+          : 'Switched to the simple todo list. Nothing was lost — your todos are all still there.',
       );
     } catch {
-      toast.error('Failed to switch task mode.');
+      toast.error('Failed to switch todo mode.');
     } finally {
       setBusy(false);
     }
@@ -98,7 +98,7 @@ export function TaskModeCard({ isMobile }: { isMobile: boolean }) {
     else toast.error('Could not copy — select the link and copy it manually.');
   }
 
-  const modeButton = (value: TaskMode, label: string, hint: string) => (
+  const modeButton = (value: TodoMode, label: string, hint: string) => (
     <button
       type="button"
       onClick={() => void switchMode(value)}
@@ -118,18 +118,18 @@ export function TaskModeCard({ isMobile }: { isMobile: boolean }) {
   return (
     <SettingsCard
       id="todo_mode"
-      title="Task mode"
-      description="Switching is safe and reversible — both modes read the same tasks. Nothing is migrated, copied or deleted."
+      title="Todo mode"
+      description="Switching is safe and reversible — both modes read the same todos. Nothing is migrated, copied or deleted."
       isMobile={isMobile}
     >
       <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 10 }}>
         {modeButton('gtd', 'Todo-GTD (default)', 'Inbox, contexts, projects, repeats and a weekly review.')}
-        {modeButton('normal', 'Simple list', 'Just tasks with due dates and priorities — no inbox or contexts.')}
+        {modeButton('normal', 'Simple list', 'Just todos with due dates and priorities — no inbox or contexts.')}
       </div>
 
-      {/* #102: shown in BOTH modes, because neither surface depends on the task mode.
+      {/* #102: shown in BOTH modes, because neither surface depends on the todo mode.
           They are mounted unconditionally and gated only on their own settings, and
-          switching mode does not turn either off (set_task_mode writes task_mode and
+          switching mode does not turn either off (set_todo_mode writes todo_mode and
           nothing else) — so gating this section on `mode === 'gtd'` hid the controls for
           endpoints that kept serving. Two ways that bit, both made routine by #102
           making "Simple list" the opt-out every flipped install is invited to take: an

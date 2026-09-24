@@ -62,7 +62,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
     label: 'Assistant',
     cards: [
       { id: 'memory', adminOnly: false },
-      // Admin-only as of #102, which makes POST /api/crm/task-mode and both
+      // Admin-only as of #102, which makes POST /api/crm/todo-mode and both
       // /api/crm/todo-surfaces routes `require_admin` (pinned in
       // test_route_authz.ADMIN_ONLY). #102's own page gated this at the call site;
       // that gate lives here now, because this page replaced that call site.

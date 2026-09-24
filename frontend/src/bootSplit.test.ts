@@ -431,7 +431,10 @@ describe('boot split (#149) — the CRM shell', () => {
       './core/branding/BrandingContext',
       './core/components/BootFallback',
       './login/LoginPage',
-      './crm/gtd/TasksModeRouter',
+      './crm/gtd/TodosModeRouter',
+      // #169's /crm/tasks -> /crm/todos redirect. A leaf that imports react-router-dom
+      // and nothing else, so it pulls no page graph into the shell chunk.
+      './crm/legacyTodoRedirect',
       './shared/ToastViewport',
       './shared/ConfirmHost',
     ]);
@@ -480,18 +483,18 @@ describe('boot split (#149) — the CRM shell', () => {
     expect(suspenseClose).toBeLessThan(src.indexOf('<ToastViewport />'));
   });
 
-  it('TasksModeRouter keeps TasksPage lazy — it is imported eagerly by the shell', () => {
-    const src = read('./crm/gtd/TasksModeRouter.tsx');
+  it('TodosModeRouter keeps TodosPage lazy — it is imported eagerly by the shell', () => {
+    const src = read('./crm/gtd/TodosModeRouter.tsx');
     const specs = staticImportSpecifiers(src).map(bare);
-    expect(specs.filter((s) => !new Set(['react', 'react-router-dom', './TaskModeContext']).has(s))).toEqual([]);
-    // TasksPage drags the collection layer and @dnd-kit; static here = in the shell chunk.
-    expect(dynamicImportSpecifiers(src).map(bare)).toEqual(['../TasksPage']);
+    expect(specs.filter((s) => !new Set(['react', 'react-router-dom', './TodoModeContext']).has(s))).toEqual([]);
+    // TodosPage drags the collection layer and @dnd-kit; static here = in the shell chunk.
+    expect(dynamicImportSpecifiers(src).map(bare)).toEqual(['../TodosPage']);
   });
 
   it('CrmLayout wraps its Outlet in a Suspense boundary', () => {
     // The route chunks load INSIDE the chrome: the nav stays put, and the layout's own fetches
     // run in parallel with the download instead of after it. Also the boundary that catches
-    // the task mode flipping from unknown to GTD — a plain setState, not a router transition,
+    // the todo mode flipping from unknown to GTD — a plain setState, not a router transition,
     // so without this the whole layout would be replaced by the fallback.
     const src = read('./crm/CrmLayout.tsx');
     expect(count(src, '<Suspense')).toBe(1);
@@ -504,7 +507,7 @@ describe('boot split (#149) — the CRM shell', () => {
     // "The Outlet is inside it" is only HALF the invariant, and the weaker half. Hoisting the
     // boundary to wrap the entire layout body — nav, logo, bell, launcher, with the Outlet
     // still nested somewhere inside — satisfies every assertion above while turning each route
-    // chunk load and each task-mode flip into a full-shell spinner, which is precisely the
+    // chunk load and each todo-mode flip into a full-shell spinner, which is precisely the
     // behaviour this boundary was added to PREVENT. (Measured: that mutation kept all 803
     // frontend tests green before these two lines existed.) So pin what must stay OUTSIDE.
     // Stated as "not BETWEEN the tags" rather than "before the open tag", because outside is
@@ -512,7 +515,7 @@ describe('boot split (#149) — the CRM shell', () => {
     // rearrangement for no reason.
     // `AssistantLauncher` belongs on this list as much as the nav does: a boundary hoisted to
     // swallow the launcher and the content — but not the nav — would pass a nav-only check
-    // while hiding the assistant every time a route chunk or the task mode is in flight.
+    // while hiding the assistant every time a route chunk or the todo mode is in flight.
     const navMarkers = ['NAV_ITEMS.map', 'Sign out', '<AssistantLauncher'];
     expect(navMarkers.length).toBe(3);
     for (const marker of navMarkers) {
@@ -577,7 +580,7 @@ describe('boot split (#149) — the CRM shell', () => {
     const bodies: Array<[string, string]> = [
       ['./App.tsx', 'export default function App()'],
       ['./Root.tsx', 'export default function Root()'],
-      ['./crm/gtd/TasksModeRouter.tsx', 'export function TasksModeRouter('],
+      ['./crm/gtd/TodosModeRouter.tsx', 'export function TodosModeRouter('],
       ['./crm/components/AssistantLauncher.tsx', 'export function AssistantLauncher('],
     ];
     expect(bodies.length).toBe(4);
@@ -815,15 +818,15 @@ describe('boot split (#149) — the scanner itself', () => {
     expect(dynamic.length).toBeGreaterThanOrEqual(20);
 
     // Reported from EVERY module the closure reaches, not just the root — which is the whole
-    // point: `TasksModeRouter` is an eager leaf of App, and its own `lazy(() => import(
-    // '../TasksPage'))` is exactly the shape a CRM import hidden one hop down would take.
+    // point: `TodosModeRouter` is an eager leaf of App, and its own `lazy(() => import(
+    // '../TodosPage'))` is exactly the shape a CRM import hidden one hop down would take.
     const importers = new Set(dynamic.map(([importer]) => importer));
     expect(importers).toContain('./App.tsx');
-    expect(importers).toContain('./crm/gtd/TasksModeRouter.tsx');
+    expect(importers).toContain('./crm/gtd/TodosModeRouter.tsx');
 
     // …and every target stayed OUT of the closure, which is what "not followed" means.
     expect(modules).not.toContain('./crm/PipelinePage.tsx');
     expect(modules).not.toContain('./crm/gtd/pages.ts');
-    expect(modules).not.toContain('./crm/TasksPage.tsx');
+    expect(modules).not.toContain('./crm/TodosPage.tsx');
   });
 });

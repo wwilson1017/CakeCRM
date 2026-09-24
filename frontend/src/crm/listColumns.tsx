@@ -19,7 +19,7 @@
  *   keyboard stop, but an anchor adds what no click handler can hand-roll: it announces as a
  *   link, and it carries Ctrl/Cmd-click, middle-click and right-click into a new tab —
  *   a middle click never fires `click` at all, so the row handler cannot see it. Contacts and
- *   Companies navigate and so take the anchor; Tasks opens a detail overlay and does not.
+ *   Companies navigate and so take the anchor; Todos opens a detail overlay and does not.
  *
  * The file exports no component, so `react-refresh/only-export-components` stays quiet.
  */
@@ -27,18 +27,18 @@ import { Link } from 'react-router-dom';
 import { ChipButton } from '../shared/search';
 import { IconCheck, IconX } from '../shared/icons';
 import type { ListColumn } from '../shared/listview';
-import type { CrmCompany, CrmContact, CrmTask } from '../core/types';
+import type { CrmCompany, CrmContact, CrmTodo } from '../core/types';
 import { PriorityBadge, ScorePill, StatusBadge } from './components/badges';
 import { LINE_STRONG, SAGE_FILL, SAGE_TEXT, tint } from '../shared/styles';
 import { formatAge, dueLabel } from './gtd/util';
 import {
-  CONTACT_SORT_FIELDS, COMPANY_SORT_FIELDS, TASK_SORT_FIELDS,
+  CONTACT_SORT_FIELDS, COMPANY_SORT_FIELDS, TODO_SORT_FIELDS,
   DONE_OPTIONS, type DoneFacetRenderers, type DonePreset,
 } from './collectionConfig';
 
 type ContactSortKey = (typeof CONTACT_SORT_FIELDS)[number]['value'];
 type CompanySortKey = (typeof COMPANY_SORT_FIELDS)[number]['value'];
-type TaskSortKey = (typeof TASK_SORT_FIELDS)[number]['value'];
+type TodoSortKey = (typeof TODO_SORT_FIELDS)[number]['value'];
 
 /** A column that is deliberately display-only (no matching sort field, so not sortable). */
 type Display<K extends string> = K;
@@ -144,17 +144,17 @@ export function buildCompanyColumns(): ListColumn<CrmCompany>[] {
   return cols;
 }
 
-// ── Tasks ───────────────────────────────────────────────────────────────────
+// ── Todos ───────────────────────────────────────────────────────────────────
 
 /**
  * `onToggleComplete` is invoked from a control INSIDE the row, so the click must not also
  * open the row's detail — hence `stopPropagation`, the same trick the blueprint's Company
  * cell uses for its cross-navigation button.
  */
-export function buildTaskColumns(
-  onToggleComplete: (task: CrmTask) => void, today: string,
-): ListColumn<CrmTask>[] {
-  const cols: (ListColumn<CrmTask> & { key: TaskSortKey | Display<'done'> })[] = [
+export function buildTodoColumns(
+  onToggleComplete: (todo: CrmTodo) => void, today: string,
+): ListColumn<CrmTodo>[] {
+  const cols: (ListColumn<CrmTodo> & { key: TodoSortKey | Display<'done'> })[] = [
     {
       key: 'done',
       header: <span className="sr-only">Done</span>,
@@ -178,7 +178,7 @@ export function buildTaskColumns(
     },
     {
       key: 'title',
-      header: 'Task',
+      header: 'Todo',
       render: t => {
         const linked = [t.contact_name, t.deal_title].filter(Boolean).join(' · ');
         return (
@@ -202,10 +202,10 @@ export function buildTaskColumns(
         // renderer only runs when React re-renders, so a tab left open past midnight would
         // otherwise keep comparing against the day it was opened.
         const { text, overdue } = dueLabel(t.due_date, today);
-        // An overdue COMPLETED task is just a task that was finished late — no alarm.
+        // An overdue COMPLETED todo is just a todo that was finished late — no alarm.
         const late = overdue && !t.completed;
         // ck-red, not the brand accent: red-as-danger is the app-wide convention for
-        // overdue (TaskDetailBody, the dashboard tiles, the badges), and the two tokens
+        // overdue (TodoDetailBody, the dashboard tiles, the badges), and the two tokens
         // are genuinely different colours in both themes.
         return <span className={late ? 'font-semibold text-ck-red-text' : 'text-muted'}>{text}</span>;
       },

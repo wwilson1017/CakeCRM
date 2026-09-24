@@ -25,12 +25,12 @@ afterEach(() => {
 
 describe('inside the CRM', () => {
   it('is not public mode and targets the authed API', async () => {
-    const m = await loadWith({ pathname: '/crm/tasks' });
+    const m = await loadWith({ pathname: '/crm/todos' });
     expect(m.isTodoPublicMode).toBe(false);
     expect(m.TODO_PUBLIC_BASE).toBeNull();
     expect(m.TODO_API_BASE).toBe('/api/crm/gtd');
-    expect(m.todoPath('/inbox')).toBe('/crm/tasks/inbox');
-    expect(m.todoPath()).toBe('/crm/tasks');
+    expect(m.todoPath('/inbox')).toBe('/crm/todos/inbox');
+    expect(m.todoPath()).toBe('/crm/todos');
   });
 });
 

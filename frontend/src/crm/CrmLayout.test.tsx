@@ -1,17 +1,17 @@
 // @vitest-environment jsdom
 //
-// Scope: only #102's task-mode ownership in the layout — which mode CrmLayout publishes
+// Scope: only #102's todo-mode ownership in the layout — which mode CrmLayout publishes
 // for each demo-status outcome, and that the setter it provides actually reaches the
 // context a route consumer reads.
 //
-// TaskModeCard.test.tsx pins the CARD's half of that contract against a stand-in owner;
-// this file pins the real owner, so a change that stops passing `handleSetTaskMode` into
+// TodoModeCard.test.tsx pins the CARD's half of that contract against a stand-in owner;
+// this file pins the real owner, so a change that stops passing `handleSetTodoMode` into
 // the provider — or swaps the two fallback constants — fails here instead of silently
 // keeping every other test green.
 //
 // The two fallbacks are DIFFERENT on purpose and that is the subtlest thing in #102:
 //   failed fetch  → mode unknown → mirror the product default ('gtd'), the same answer
-//                   the backend's get_task_mode() gives when it cannot read the row.
+//                   the backend's get_todo_mode() gives when it cannot read the row.
 //   field absent  → a backend that predates #70 and has no GTD endpoints at all, where
 //                   'normal' is the only mode that renders a working page.
 // Nothing else about the layout (nav, onboarding, the AI nudge) is tested here, EXCEPT
@@ -43,8 +43,8 @@ vi.mock('./components/BrandLogo', () => ({ BrandLogo: () => null }));
 vi.mock('./components/ThemeToggle', () => ({ ThemeToggle: () => null }));
 
 const { CrmLayout } = await import('./CrmLayout');
-const { useSetTaskMode, useTaskMode } = await import('./gtd/TaskModeContext');
-import type { TaskMode } from './gtd/TaskModeContext';
+const { useSetTodoMode, useTodoMode } = await import('./gtd/TodoModeContext');
+import type { TodoMode } from './gtd/TodoModeContext';
 
 let container: HTMLDivElement;
 let root: Root;
@@ -77,12 +77,12 @@ afterEach(() => {
 });
 
 /**
- * Stands in for a real route under the layout's <Outlet/> — TasksModeRouter, in the app.
+ * Stands in for a real route under the layout's <Outlet/> — TodosModeRouter, in the app.
  * It reports exactly what that consumer would see, which is the value the layout owns.
  */
-function Probe({ onSeen }: { onSeen?: (m: TaskMode | null) => void }) {
-  const mode = useTaskMode();
-  const setMode = useSetTaskMode();
+function Probe({ onSeen }: { onSeen?: (m: TodoMode | null) => void }) {
+  const mode = useTodoMode();
+  const setMode = useSetTodoMode();
   const [clicked, setClicked] = useState(false);
   onSeen?.(mode);
   return (
@@ -99,7 +99,7 @@ function Probe({ onSeen }: { onSeen?: (m: TaskMode | null) => void }) {
   );
 }
 
-async function renderLayout(onSeen?: (m: TaskMode | null) => void) {
+async function renderLayout(onSeen?: (m: TodoMode | null) => void) {
   await act(async () => root.render(
     <MemoryRouter initialEntries={['/crm']}>
       <Routes>
@@ -115,11 +115,11 @@ function publishedMode(): string {
   return container.querySelector('[data-testid="mode"]')?.textContent ?? '';
 }
 
-describe('CrmLayout task-mode ownership (issue #102)', () => {
+describe('CrmLayout todo-mode ownership (issue #102)', () => {
   it('publishes the mode the backend reports', async () => {
     api.mockResolvedValue({
       empty: false, sample_data_loaded: true, show_onboarding: false,
-      ai_key_prompt_dismissed: true, task_mode: 'gtd',
+      ai_key_prompt_dismissed: true, todo_mode: 'gtd',
     });
     await renderLayout();
     expect(publishedMode()).toBe('gtd');
@@ -128,7 +128,7 @@ describe('CrmLayout task-mode ownership (issue #102)', () => {
   it('falls back to the GTD product default when the demo-status fetch FAILS', async () => {
     api.mockRejectedValue(new Error('offline'));
     await renderLayout();
-    // Mirrors the backend: get_task_mode() answers 'gtd' when it cannot read the row,
+    // Mirrors the backend: get_todo_mode() answers 'gtd' when it cannot read the row,
     // so the client must not guess 'normal' and disagree with it.
     expect(publishedMode()).toBe('gtd');
   });
@@ -148,7 +148,7 @@ describe('CrmLayout task-mode ownership (issue #102)', () => {
     // This is what closes the switch-while-loading race, and it was disputed twice in
     // review — so it is pinned here rather than argued. `status` starts null and
     // DEMO_STATUS_UNKNOWN is reachable ONLY from the .catch, so the pending state
-    // publishes null, which disables TaskModeCard's buttons. With no window in which a
+    // publishes null, which disables TodoModeCard's buttons. With no window in which a
     // switch can be made, there is no window in which a late GET can overwrite one.
     //
     // If someone ever seeds `useState` with DEMO_STATUS_UNKNOWN instead of null, this
@@ -161,7 +161,7 @@ describe('CrmLayout task-mode ownership (issue #102)', () => {
   it('routes a mode switch from a child straight into the published context', async () => {
     api.mockResolvedValue({
       empty: false, sample_data_loaded: true, show_onboarding: false,
-      ai_key_prompt_dismissed: true, task_mode: 'gtd',
+      ai_key_prompt_dismissed: true, todo_mode: 'gtd',
     });
     await renderLayout();
     expect(publishedMode()).toBe('gtd');
@@ -171,14 +171,14 @@ describe('CrmLayout task-mode ownership (issue #102)', () => {
         .dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
-    // The assertion that fails if the layout ever stops providing handleSetTaskMode:
-    // the Settings card's switch has to be visible to /crm/tasks with no reload.
+    // The assertion that fails if the layout ever stops providing handleSetTodoMode:
+    // the Settings card's switch has to be visible to /crm/todos with no reload.
     expect(publishedMode()).toBe('normal');
   });
 });
 
 // #149's route-chunk boundary. CrmLayout wraps <Outlet /> in its own Suspense so a page chunk
-// loading — or the task mode flipping from unknown to 'gtd', which is a plain setState and not
+// loading — or the todo mode flipping from unknown to 'gtd', which is a plain setState and not
 // a router transition — suspends only the content column.
 //
 // `bootSplit.test.ts` pins that positionally, in source. This pins the BEHAVIOUR, because the
@@ -190,7 +190,7 @@ describe('CrmLayout route Suspense boundary (#149)', () => {
   it('keeps the nav mounted while a lazy route chunk is still loading', async () => {
     api.mockResolvedValue({
       empty: false, sample_data_loaded: true, show_onboarding: false,
-      ai_key_prompt_dismissed: true, task_mode: 'gtd',
+      ai_key_prompt_dismissed: true, todo_mode: 'gtd',
     });
 
     // A route element that is genuinely pending: `lazy()` over a promise we resolve by hand,
@@ -234,7 +234,7 @@ describe('CrmLayout push-subscription self-heal (issue #192)', () => {
   beforeEach(() => {
     api.mockResolvedValue({
       empty: false, sample_data_loaded: true, show_onboarding: false,
-      ai_key_prompt_dismissed: true, task_mode: 'gtd',
+      ai_key_prompt_dismissed: true, todo_mode: 'gtd',
     });
   });
 

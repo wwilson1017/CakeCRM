@@ -1,24 +1,24 @@
 /**
- * Tasks (normal mode), on the shared collection layer (issue #77).
+ * Todos (normal mode), on the shared collection layer (issue #77).
  *
- * Designed rather than ported: the issue names a `TasksTab.tsx` in the blueprint, but no
+ * Designed rather than ported: the issue names a `TodosTab.tsx` in the blueprint, but no
  * such file exists — that CRM has four tabs (Dashboard/Contacts/Companies/Pipeline) and
- * keeps tasks in a separate todo app that never adopted this layer. So the wiring follows
+ * keeps todos in a separate todo app that never adopted this layer. So the wiring follows
  * ContactsTab and the domain is this repo's own.
  *
  * This page gains free-text search, which it has never had, and loses the 100-row silent
  * truncation. Unlike Contacts and Companies it DOES use the layer's `CollectionDetail`
- * shell: a task has no route to preserve, and its detail was already a modal covering the
+ * shell: a todo has no route to preserve, and its detail was already a modal covering the
  * assistant launcher, so the z-index objection that kept those two on routed pages does
  * not apply here.
  *
- * GTD mode is unaffected — `TasksModeRouter` still chooses between this page and the GTD
+ * GTD mode is unaffected — `TodosModeRouter` still chooses between this page and the GTD
  * surfaces, and this export's name is unchanged.
  */
 import { useCallback, useMemo, useState } from 'react';
 import { api } from '../core/api/client';
-import type { CrmTask } from '../core/types';
-import { TaskForm } from './components/TaskForm';
+import type { CrmTodo } from '../core/types';
+import { TodoForm } from './components/TodoForm';
 import { PriorityBadge } from './components/badges';
 import { RefreshButton } from './components/RefreshButton';
 import { useOwnerOptions } from './useOwnerOptions';
@@ -31,65 +31,65 @@ import {
   INK, INK_MUTE, INK_DIM, LINE_STRONG, CORAL_TEXT, SAGE_FILL, ON_STATUS, HOVER, mono,
 } from '../shared/styles';
 import { pageHeading, btnPrimary, btnSecondary, btnSmall } from './styles';
-import { makeTasksCollectionConfig } from './collectionConfig';
-import { buildTaskColumns, buildDoneFacetRenderers } from './listColumns';
+import { makeTodosCollectionConfig } from './collectionConfig';
+import { buildTodoColumns, buildDoneFacetRenderers } from './listColumns';
 import { useCrmCorpus, rowIsGone, writeMayHaveLanded, type CrmCorpus } from './usePatchableAssembly';
 import { useLocalDay } from './useLocalDay';
 
 import { dueLabel } from './gtd/util';
 
-const NO_ROWS: CrmTask[] = [];
+const NO_ROWS: CrmTodo[] = [];
 const DONE_FACET = buildDoneFacetRenderers();
 
-export function TasksPage() {
+export function TodosPage() {
   const isMobile = useIsMobile();
   const [showCreate, setShowCreate] = useState(false);
-  const [editTask, setEditTask] = useState<CrmTask | null>(null);
+  const [editTodo, setEditTodo] = useState<CrmTodo | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const { options: owners, loading: usersLoading } = useOwnerOptions();
   const { today, now } = useLocalDay();
 
-  const corpus = useCrmCorpus<CrmTask>(
+  const corpus = useCrmCorpus<CrmTodo>(
     useCallback(async (params, signal) => {
-      // No `completed=` filter: the corpus is every live, non-dropped task, and which of
+      // No `completed=` filter: the corpus is every live, non-dropped todo, and which of
       // them to show is the Done facet's business, client-side.
-      const res = await api<{ tasks: CrmTask[] }>(`/api/crm/tasks?${params}`, { signal });
-      return res.tasks;
+      const res = await api<{ todos: CrmTodo[] }>(`/api/crm/todos?${params}`, { signal });
+      return res.todos;
     }, []),
   );
   const { upsert, remove, retry } = corpus;
 
-  const toggleComplete = useCallback(async (task: CrmTask) => {
-    let saved: CrmTask;
+  const toggleComplete = useCallback(async (todo: CrmTodo) => {
+    let saved: CrmTodo;
     try {
-      saved = task.completed
-        ? await api<CrmTask>(`/api/crm/tasks/${task.id}`, { method: 'PUT', body: JSON.stringify({ completed: 0 }) })
-        : await api<CrmTask>(`/api/crm/tasks/${task.id}/complete`, { method: 'PUT' });
+      saved = todo.completed
+        ? await api<CrmTodo>(`/api/crm/todos/${todo.id}`, { method: 'PUT', body: JSON.stringify({ completed: 0 }) })
+        : await api<CrmTodo>(`/api/crm/todos/${todo.id}/complete`, { method: 'PUT' });
     } catch (err) {
-      toast.error('Failed to update task.');
+      toast.error('Failed to update todo.');
       // A 404 says someone else already deleted it, so drop the ghost rather than keep
       // failing on it. Any other 4xx wrote nothing and the list is still right; anything
       // else may have committed and lost the response, so re-sweep.
-      if (rowIsGone(err)) remove(task.id);
+      if (rowIsGone(err)) remove(todo.id);
       else if (writeMayHaveLanded(err)) retry();
       return;
     }
-    // Completing a REPEATING task spawns its next occurrence server-side (#70) — a row no
+    // Completing a REPEATING todo spawns its next occurrence server-side (#70) — a row no
     // local patch can invent. Decided from the SERVER's copy, not the pre-write one: the
     // response reflects the state it actually used to decide whether to spawn.
-    if (!task.completed && saved.repeat) retry();
+    if (!todo.completed && saved.repeat) retry();
     else upsert(saved);
   }, [upsert, remove, retry]);
 
-  const columns = useMemo(() => buildTaskColumns(toggleComplete, today), [toggleComplete, today]);
+  const columns = useMemo(() => buildTodoColumns(toggleComplete, today), [toggleComplete, today]);
   return (
     <div style={{ padding: isMobile ? '20px 16px' : '32px 44px', maxWidth: 900 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: isMobile ? 16 : 24 }}>
         <h1 style={pageHeading(isMobile)}>Todos</h1>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <RefreshButton onClick={retry} label="Reload tasks" />
+          <RefreshButton onClick={retry} label="Reload todos" />
           <button onClick={() => setShowCreate(true)} style={{ ...btnPrimary, ...btnSmall }}>
-            <IconPlus size={13} strokeWidth={2.25} /> {isMobile ? 'Add' : 'Add Task'}
+            <IconPlus size={13} strokeWidth={2.25} /> {isMobile ? 'Add' : 'Add Todo'}
           </button>
         </div>
       </div>
@@ -97,7 +97,7 @@ export function TasksPage() {
       {usersLoading
         ? <p style={{ ...mono(12), color: INK_DIM }}>Loading…</p>
         : (
-          <TasksCollection
+          <TodosCollection
             corpus={corpus}
             columns={columns}
             owners={owners}
@@ -105,23 +105,23 @@ export function TasksPage() {
             today={today}
             selectedId={selectedId}
             onSelect={setSelectedId}
-            onEdit={task => { setSelectedId(null); setEditTask(task); }}
-            onToggleComplete={async task => { await toggleComplete(task); setSelectedId(null); }}
+            onEdit={todo => { setSelectedId(null); setEditTodo(todo); }}
+            onToggleComplete={async todo => { await toggleComplete(todo); setSelectedId(null); }}
           />
         )}
 
       {showCreate && (
-        <TaskForm
+        <TodoForm
           onClose={() => setShowCreate(false)}
           onSaved={saved => { setShowCreate(false); upsert(saved); }}
           onWriteUncertain={retry}
         />
       )}
-      {editTask && (
-        <TaskForm
-          task={editTask}
-          onClose={() => setEditTask(null)}
-          onSaved={saved => { setEditTask(null); upsert(saved); }}
+      {editTodo && (
+        <TodoForm
+          todo={editTodo}
+          onClose={() => setEditTodo(null)}
+          onSaved={saved => { setEditTodo(null); upsert(saved); }}
           onWriteUncertain={retry}
         />
       )}
@@ -130,34 +130,34 @@ export function TasksPage() {
 }
 
 interface CollectionProps {
-  corpus: CrmCorpus<CrmTask>;
-  columns: ReturnType<typeof buildTaskColumns>;
+  corpus: CrmCorpus<CrmTodo>;
+  columns: ReturnType<typeof buildTodoColumns>;
   owners: FacetOption[] | null;
   now: Date;
   today: string;
   selectedId: number | null;
   onSelect: (id: number | null) => void;
-  onEdit: (task: CrmTask) => void;
-  onToggleComplete: (task: CrmTask) => void | Promise<void>;
+  onEdit: (todo: CrmTodo) => void;
+  onToggleComplete: (todo: CrmTodo) => void | Promise<void>;
 }
 
-function TasksCollection(
+function TodosCollection(
   { corpus, columns, owners, now, today, selectedId, onSelect, onEdit, onToggleComplete }: CollectionProps,
 ) {
   const config = useMemo(
-    () => makeTasksCollectionConfig({ columns, owners, doneFacet: DONE_FACET, now }),
+    () => makeTodosCollectionConfig({ columns, owners, doneFacet: DONE_FACET, now }),
     [columns, owners, now],
   );
   const rows = corpus.items ?? NO_ROWS;
   const state = useCollectionState(config, rows);
   return (
-    <CollectionView<CrmTask>
+    <CollectionView<CrmTodo>
       config={config}
       state={state}
       items={rows}
       selectedId={selectedId}
       onSelect={id => onSelect(id === null ? null : Number(id))}
-      searchPlaceholder="Search tasks..."
+      searchPlaceholder="Search todos..."
       loading={{
         loading: corpus.loading,
         error: corpus.error,
@@ -165,45 +165,45 @@ function TasksCollection(
         retry: corpus.retry,
       }}
       detail={{
-        render: task => (
-          <TaskDetailBody
-            task={task}
-            onEdit={() => onEdit(task)}
-            onToggleComplete={() => onToggleComplete(task)}
+        render: todo => (
+          <TodoDetailBody
+            todo={todo}
+            onEdit={() => onEdit(todo)}
+            onToggleComplete={() => onToggleComplete(todo)}
             today={today}
           />
         ),
         // Escape and backdrop are allowed to close, unlike the CRM's routed panels. That
         // policy exists to protect nested modals with no Escape handling of their own;
-        // this body opens TaskForm only AFTER closing itself, so none can be orphaned.
+        // this body opens TodoForm only AFTER closing itself, so none can be orphaned.
         onRequestClose: () => true,
       }}
     />
   );
 }
 
-/** The task detail — title and subtitle come from `config.detail`, so this is the body only. */
-function TaskDetailBody(
-  { task, onEdit, onToggleComplete, today }:
-  { task: CrmTask; onEdit: () => void; onToggleComplete: () => void | Promise<void>; today: string },
+/** The todo detail — title and subtitle come from `config.detail`, so this is the body only. */
+function TodoDetailBody(
+  { todo, onEdit, onToggleComplete, today }:
+  { todo: CrmTodo; onEdit: () => void; onToggleComplete: () => void | Promise<void>; today: string },
 ) {
-  const due = task.due_date ? dueLabel(task.due_date, today) : null;
-  const late = !!due?.overdue && !task.completed;
+  const due = todo.due_date ? dueLabel(todo.due_date, today) : null;
+  const late = !!due?.overdue && !todo.completed;
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
-        <PriorityBadge priority={task.priority} />
+        <PriorityBadge priority={todo.priority} />
       </div>
 
-      {task.description && (
+      {todo.description && (
         <p style={{ fontSize: 14, color: INK_MUTE, marginBottom: 16, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
-          {task.description}
+          {todo.description}
         </p>
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
-        {task.contact_name && <DetailRow label="Contact" value={task.contact_name} />}
-        {task.deal_title && <DetailRow label="Deal" value={task.deal_title} />}
+        {todo.contact_name && <DetailRow label="Contact" value={todo.contact_name} />}
+        {todo.deal_title && <DetailRow label="Deal" value={todo.deal_title} />}
         {due && (
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
             <span style={{ ...mono(10), color: INK_DIM }}>Due</span>
@@ -212,7 +212,7 @@ function TaskDetailBody(
             </span>
           </div>
         )}
-        {!!task.completed && <DetailRow label="Status" value="Completed" />}
+        {!!todo.completed && <DetailRow label="Status" value="Completed" />}
       </div>
 
       <div style={{ display: 'flex', gap: 8 }}>
@@ -223,12 +223,12 @@ function TaskDetailBody(
           onClick={() => { void onToggleComplete(); }}
           style={{
             flex: 1, padding: '10px 16px', borderRadius: 6,
-            background: task.completed ? HOVER : SAGE_FILL,
-            color: task.completed ? INK : ON_STATUS,
+            background: todo.completed ? HOVER : SAGE_FILL,
+            color: todo.completed ? INK : ON_STATUS,
             border: 'none', fontWeight: 500, fontSize: 13, cursor: 'pointer',
           }}
         >
-          {task.completed ? 'Mark Incomplete' : 'Mark Complete'}
+          {todo.completed ? 'Mark Incomplete' : 'Mark Complete'}
         </button>
       </div>
     </div>

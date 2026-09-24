@@ -21,7 +21,7 @@ import { isArchivedDeal } from './pipelineFilters';
  * Above this many rows in a section, the "Expand all" control is WITHHELD (not disabled).
  *
  * The blueprint's reason was network — each expanded row fetched its own custom fields and
- * tasks, so one click was an account-sized request storm. That reason is gone here: the
+ * todos, so one click was an account-sized request storm. That reason is gone here: the
  * rollup embeds both, batched, and an expanded row issues no request at all. What remains
  * is DOM: every field of every record of a 200-row section rendered at once is a real cost
  * on a modest machine. Per-row expansion and "Collapse all" stay available at any count,

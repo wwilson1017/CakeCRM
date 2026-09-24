@@ -5,16 +5,16 @@ import { useAuth } from '../../core/auth/AuthContext';
 import { OwnerSelect } from './OwnerSelect';
 import { labelStyle, inputStyle, CORAL_TEXT } from '../../shared/styles';
 import { formModalOverlay, formModalContent, formTitle, btnPrimary, btnSecondary } from '../styles';
-import type { CrmContact, CrmTask } from '../../core/types';
+import type { CrmContact, CrmTodo } from '../../core/types';
 
 interface Props {
-  task?: CrmTask;
+  todo?: CrmTodo;
   contactId?: number;
   dealId?: number;
   onClose: () => void;
-  /** Receives the saved task (joined with contact/deal names) so the Tasks list can
+  /** Receives the saved todo (joined with contact/deal names) so the Todos list can
    *  patch its row without a refetch (#77). */
-  onSaved: (saved: CrmTask) => void;
+  onSaved: (saved: CrmTodo) => void;
   /**
    * Fired when a save FAILS in a way that may still have committed (#77).
    *
@@ -26,14 +26,14 @@ interface Props {
   onWriteUncertain?: (err: unknown) => void;
 }
 
-export function TaskForm({ task, contactId, dealId, onClose, onSaved, onWriteUncertain }: Props) {
+export function TodoForm({ todo, contactId, dealId, onClose, onSaved, onWriteUncertain }: Props) {
   const { currentUser } = useAuth();
-  const isEdit = !!task;
-  const [title, setTitle] = useState(task?.title || '');
-  const [description, setDescription] = useState(task?.description || '');
-  const [dueDate, setDueDate] = useState(task?.due_date || '');
-  const [priority, setPriority] = useState(task?.priority || 'medium');
-  const [selectedContact, setSelectedContact] = useState<number | null>(task?.contact_id ?? contactId ?? null);
+  const isEdit = !!todo;
+  const [title, setTitle] = useState(todo?.title || '');
+  const [description, setDescription] = useState(todo?.description || '');
+  const [dueDate, setDueDate] = useState(todo?.due_date || '');
+  const [priority, setPriority] = useState(todo?.priority || 'medium');
+  const [selectedContact, setSelectedContact] = useState<number | null>(todo?.contact_id ?? contactId ?? null);
   const [contacts, setContacts] = useState<CrmContact[]>([]);
   // Owner (issue #60). On an EDIT the record's own owner is used verbatim — `null`
   // means unassigned and must survive, or saving an unrelated field would silently
@@ -42,7 +42,7 @@ export function TaskForm({ task, contactId, dealId, onClose, onSaved, onWriteUnc
   // create lets the server assign the caller, which is race-free (currentUser can
   // still be resolving right after login) and keeps one rule in one place.
   const [ownerId, setOwnerId] = useState<number | null>(
-    task ? (task.owner_id ?? null) : (currentUser?.id ?? null),
+    todo ? (todo.owner_id ?? null) : (currentUser?.id ?? null),
   );
   const [ownerTouched, setOwnerTouched] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -67,11 +67,11 @@ export function TaskForm({ task, contactId, dealId, onClose, onSaved, onWriteUnc
       if (isEdit || ownerTouched) body.owner_id = ownerId;
       if (dealId) body.deal_id = dealId;
 
-      // Both endpoints return get_task, which since #77 carries contact_name/deal_title —
+      // Both endpoints return get_todo, which since #77 carries contact_name/deal_title —
       // so the list can fold the saved row in rather than re-sweep.
       const saved = isEdit
-        ? await api<CrmTask>(`/api/crm/tasks/${task.id}`, { method: 'PUT', body: JSON.stringify(body) })
-        : await api<CrmTask>('/api/crm/tasks', { method: 'POST', body: JSON.stringify(body) });
+        ? await api<CrmTodo>(`/api/crm/todos/${todo.id}`, { method: 'PUT', body: JSON.stringify(body) })
+        : await api<CrmTodo>('/api/crm/todos', { method: 'POST', body: JSON.stringify(body) });
       onSaved(saved);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to save');
@@ -86,7 +86,7 @@ export function TaskForm({ task, contactId, dealId, onClose, onSaved, onWriteUnc
     <div style={formModalOverlay} onClick={onClose}>
       <form onClick={e => e.stopPropagation()} onSubmit={handleSubmit} style={formModalContent()}>
         <h2 style={formTitle}>
-          {isEdit ? 'Edit Task' : 'New Task'}
+          {isEdit ? 'Edit Todo' : 'New Todo'}
         </h2>
         {error && <p style={{ color: CORAL_TEXT, fontSize: 12, marginBottom: 12 }}>{error}</p>}
 
@@ -125,7 +125,7 @@ export function TaskForm({ task, contactId, dealId, onClose, onSaved, onWriteUnc
               <OwnerSelect
               value={ownerId}
               onChange={v => { setOwnerId(v); setOwnerTouched(true); }}
-              id="task-owner"
+              id="todo-owner"
             />
             </div>
           </div>
@@ -135,7 +135,7 @@ export function TaskForm({ task, contactId, dealId, onClose, onSaved, onWriteUnc
           <button type="button" onClick={onClose} style={{ ...btnSecondary, flex: 1 }}>Cancel</button>
           <button type="submit" disabled={saving} style={{
             ...btnPrimary, flex: 1, opacity: saving ? 0.5 : 1,
-          }}>{saving ? 'Saving...' : isEdit ? 'Save Changes' : 'Create Task'}</button>
+          }}>{saving ? 'Saving...' : isEdit ? 'Save Changes' : 'Create Todo'}</button>
         </div>
       </form>
     </div>

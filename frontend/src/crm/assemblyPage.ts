@@ -10,8 +10,8 @@
  * Two decisions are load-bearing:
  *
  * 1. **The sweep is a KEYSET walk (`after_id`), never OFFSET.** Membership is not stable
- *    across a multi-second sweep — contacts and tasks are hard-deleted here, and a task
- *    also leaves `list_tasks` when it is dropped or its deal is archived. Under OFFSET,
+ *    across a multi-second sweep — contacts and todos are hard-deleted here, and a todo
+ *    also leaves `list_todos` when it is dropped or its deal is archived. Under OFFSET,
  *    one deletion behind the cursor shifts every later row back by one and a record is
  *    skipped entirely; under `id > cursor` a shift cannot move a row across the boundary.
  *    `sort=id` (an immutable, append-only key) is what makes the cursor meaningful: a row

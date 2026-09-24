@@ -118,7 +118,7 @@ describe('usePatchableAssembly', () => {
 
   it('retry() CLEARS the overlay so a fresh sweep is not overwritten by stale patches', () => {
     // The bug this pins: patch a row, re-sweep, and the pre-retry patch merges back over
-    // the server's newer truth. Concretely — completing a repeating task re-sweeps to pick
+    // the server's newer truth. Concretely — completing a repeating todo re-sweeps to pick
     // up the spawned occurrence, and a surviving `completed: 0` would un-complete it.
     const retry = vi.fn();
     const before = stub(rows({ id: 1, name: 'stale-patch-target' }), retry);

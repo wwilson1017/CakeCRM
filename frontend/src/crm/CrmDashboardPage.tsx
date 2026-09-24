@@ -206,17 +206,17 @@ export function CrmDashboardPage() {
       {/* Parity stat row (issue #76 — cake_os DashboardTab's four cards). Built from
           the dashboard payload ALONE, so it survives an analytics fetch failure; the
           Snapshot below needs /api/crm/analytics and vanishes without it, which is
-          why overdue tasks appears in both places rather than only there. */}
+          why overdue todos appears in both places rather than only there. */}
       <div style={{ padding: `0 ${px} 18px`, position: 'relative', zIndex: 2 }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
           <StatCard label="Contacts" value={data.total_contacts.toLocaleString()} />
           <StatCard label="Companies" value={data.total_companies.toLocaleString()} />
           <StatCard label="Pipeline value" value={totalPipelineValue} />
           <StatCard
-            label="Overdue tasks"
-            value={`${data.overdue_tasks}`}
-            sub={`${data.pending_tasks} pending`}
-            color={data.overdue_tasks > 0 ? CORAL_TEXT : undefined}
+            label="Overdue todos"
+            value={`${data.overdue_todos}`}
+            sub={`${data.pending_todos} pending`}
+            color={data.overdue_todos > 0 ? CORAL_TEXT : undefined}
           />
         </div>
       </div>
@@ -249,7 +249,7 @@ export function CrmDashboardPage() {
               value={`${wl.open_deals}`}
               sub={`worth $${formatNumber(wl.total_pipeline_value)}`}
             />
-            {/* Overdue tasks deliberately NOT repeated here — it is the fourth tile of
+            {/* Overdue todos deliberately NOT repeated here — it is the fourth tile of
                 the always-on parity row above (#76), and rendering it twice on one
                 screen read as an unfinished merge. */}
           </div>
@@ -609,7 +609,7 @@ export function CrmDashboardPage() {
         {[
           { label: '+ Add Contact', path: '/crm/contacts' },
           { label: '+ Add Deal', path: '/crm/pipeline' },
-          { label: '+ Add Task', path: '/crm/tasks' },
+          { label: '+ Add Todo', path: '/crm/todos' },
         ].map(a => (
           <button
             key={a.label}

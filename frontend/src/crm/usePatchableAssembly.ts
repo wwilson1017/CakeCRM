@@ -15,11 +15,11 @@
  * - Entries are **merge patches** (`{...row, ...patch}`), not replacements. Several CRM
  *   write responses are narrower than a list row (a derived `last_contact_at`, a joined
  *   `contact_name`), and a replacement would blank exactly the columns the list renders.
- * - There is a **`remove(id)` tombstone**, because CakeCRM hard-deletes contacts and tasks
+ * - There is a **`remove(id)` tombstone**, because CakeCRM hard-deletes contacts and todos
  *   where the blueprint archives them.
  * - `retry()` **clears the overlay before restarting the sweep**. Without that, a patch
  *   written before the re-sweep merges back over the fresh rows and resurrects stale state
- *   — e.g. completing a repeating task re-sweeps to pick up the spawned occurrence, and a
+ *   — e.g. completing a repeating todo re-sweeps to pick up the spawned occurrence, and a
  *   surviving `completed: 0` patch from an earlier edit would un-complete the original.
  *   Writes arriving DURING the new sweep still apply: they land in the cleared map, and
  *   the assembly publishes no rows until it finishes.
@@ -67,7 +67,7 @@ export function applyOverlay<T>(
     const entry = overlay.get(id);
     if (entry === REMOVED) continue;
     // A patch that omits a field must not blank it; a patch that carries an explicit
-    // null MUST overwrite (unlinking a task's contact is a real edit).
+    // null MUST overwrite (unlinking a todo's contact is a real edit).
     out.push(entry === undefined ? row : { ...row, ...entry });
   }
   const created: T[] = [];

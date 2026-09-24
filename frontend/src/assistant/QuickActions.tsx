@@ -64,7 +64,7 @@ const SETTINGS_STARTERS: Record<SettingsSectionId, string[]> = {
   ],
   assistant: [
     'How does your long-term memory work?',
-    'What is the difference between the task modes?',
+    'What is the difference between the todo modes?',
     'What is set up on this install?',
   ],
   workspace: [

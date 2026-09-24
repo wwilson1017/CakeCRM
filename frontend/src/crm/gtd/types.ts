@@ -14,7 +14,7 @@ export type TodoProjectStatus = 'active' | 'someday' | 'completed' | 'dropped';
 export interface Todo {
   id: number;
   title: string;
-  /** The `tasks.description` column, aliased — GTD calls it notes. */
+  /** The `todos.description` column, aliased — GTD calls it notes. */
   notes: string;
   project_id: number | null;
   project_name: string | null;
@@ -32,7 +32,7 @@ export interface Todo {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
-  // The CRM link. CakeCRM's tasks table already carries these, which is why the
+  // The CRM link. CakeCRM's todos table already carries these, which is why the
   // blueprint's Projects-card connector was not ported — a todo points at a contact
   // or a deal instead, and the row carries the label needed to render the chip.
   contact_id: number | null;

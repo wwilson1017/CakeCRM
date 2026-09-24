@@ -9,7 +9,7 @@
  * gives them a new identity on every render, which remounts the whole subtree — so an
  * unrelated state change would collapse every row the reader had opened.
  *
- * Expanded rows render entirely from the rollup payload: custom fields and open tasks ride
+ * Expanded rows render entirely from the rollup payload: custom fields and open todos ride
  * it, batched server-side. Opening a row therefore costs no request, which is what makes
  * "Expand all" safe and what makes the row's field list complete — including the fields
  * nobody has filled in, which is the issue's load-bearing requirement.
@@ -22,7 +22,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../../core/api/client';
-import type { CrmActivity, CrmCompanyRollup, CrmRollupField, CrmTask } from '../../core/types';
+import type { CrmActivity, CrmCompanyRollup, CrmRollupField, CrmTodo } from '../../core/types';
 import {
   EXPAND_ALL_MAX, isArchivedContact, isArchivedDeal, partitionArchived,
 } from '../companyRollup';
@@ -169,13 +169,13 @@ function NotesBlock({ notes }: { notes: string }) {
   );
 }
 
-function TaskList({ tasks, truncated }: { tasks: CrmTask[]; truncated: boolean }) {
+function TodoList({ todos, truncated }: { todos: CrmTodo[]; truncated: boolean }) {
   return (
     <div style={{ marginTop: 12 }}>
-      <div style={sectionHeading()}>Open tasks</div>
-      {tasks.length === 0
-        ? <p style={{ fontSize: 13, color: INK_DIM, margin: 0 }}>No open tasks.</p>
-        : tasks.map(t => (
+      <div style={sectionHeading()}>Open todos</div>
+      {todos.length === 0
+        ? <p style={{ fontSize: 13, color: INK_DIM, margin: 0 }}>No open todos.</p>
+        : todos.map(t => (
             <div key={t.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '3px 0' }}>
               <span style={{ fontSize: 13, color: INK }}>{t.title}</span>
               <PriorityBadge priority={t.priority} />
@@ -184,7 +184,7 @@ function TaskList({ tasks, truncated }: { tasks: CrmTask[]; truncated: boolean }
           ))}
       {truncated && (
         <p style={{ fontSize: 12, color: INK_DIM, margin: '6px 0 0' }}>
-          Only the first open tasks on this deal are shown.
+          Only the first open todos on this deal are shown.
         </p>
       )}
     </div>
@@ -330,7 +330,7 @@ function DealRow({ deal, open, onToggle }: {
       <InfoRow label="Updated">{formatDate(deal.updated_at)}</InfoRow>
       <NotesBlock notes={deal.notes} />
       <CustomFields fields={deal.custom_fields} />
-      <TaskList tasks={deal.tasks} truncated={deal.tasks_truncated} />
+      <TodoList todos={deal.todos} truncated={deal.todos_truncated} />
       <ActivityBlock activities={deal.activities} truncated={deal.activities_truncated} />
     </RowShell>
   );

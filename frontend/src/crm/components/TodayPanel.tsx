@@ -14,7 +14,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../../core/api/client';
 import { useAuth } from '../../core/auth/AuthContext';
 import type {
-  CrmToday, CrmTodayItem, CrmTodayTaskItem,
+  CrmToday, CrmTodayItem, CrmTodayTodoItem,
 } from '../../core/types';
 import { loadPersistedState, savePersistedState } from '../../shared/search/persist';
 import {
@@ -36,7 +36,7 @@ interface Props {
   /** Bumped by the page's reload() so a mutation anywhere on the dashboard refreshes
    *  this card with the rest — the same mechanism WeeklyTouchesCard uses. */
   refreshKey?: number;
-  /** Called after this panel completes a task, so the page can refresh every card. */
+  /** Called after this panel completes a todo, so the page can refresh every card. */
   onMutated?: () => void;
 }
 
@@ -144,12 +144,12 @@ export function TodayPanel({ wrapperStyle, refreshKey, onMutated }: Props) {
 
   const complete = useCallback(async (id: number) => {
     try {
-      await api(`/api/crm/tasks/${id}/complete`, { method: 'PUT' });
+      await api(`/api/crm/todos/${id}/complete`, { method: 'PUT' });
     } catch {
       // Includes a 404: the row is already gone, and the refetch below clears it.
-      toast.error('Could not complete that task.');
+      toast.error('Could not complete that todo.');
     }
-    // Refetch either way — a repeating task spawns its successor server-side, and a
+    // Refetch either way — a repeating todo spawns its successor server-side, and a
     // failure may still have committed. onMutated refreshes the sibling cards too.
     setReloadTick(t => t + 1);
     onMutated?.();
@@ -161,10 +161,10 @@ export function TodayPanel({ wrapperStyle, refreshKey, onMutated }: Props) {
     // the browser's half of a shape pinned against `backend/crm/links.py` — a second
     // literal would be a second producer nothing checks.
     if (item.kind === 'deal') { navigate(dealDeepLink(item.id)); return; }
-    // Tasks have no detail URL: /crm/tasks is mode-routed (GTD's Today view by default
+    // Todos have no detail URL: /crm/todos is mode-routed (GTD's Today view by default
     // since #102, the list in normal mode). Both are coherent destinations, and the
-    // row's own checkbox is how you act on that specific task without leaving.
-    navigate('/crm/tasks');
+    // row's own checkbox is how you act on that specific todo without leaving.
+    navigate('/crm/todos');
   }, [navigate]);
 
   if (loading && !data) return null;  // no flash at the top of the dashboard
@@ -245,21 +245,21 @@ interface RowProps {
  * `stopPropagation` fires too late to prevent that.
  */
 function TodayRow({ item, today, showUnassigned, onOpen, onComplete }: RowProps) {
-  const due = item.kind === 'task' ? dueLabel(item.due_date, today) : null;
+  const due = item.kind === 'todo' ? dueLabel(item.due_date, today) : null;
   // Deals carry an owner too (#60), and an unowned hot deal is exactly the row somebody
-  // has to pick up — the same reason the tasks wear this.
+  // has to pick up — the same reason the todos wear this.
   const unassigned = item.owner_id === null && showUnassigned;
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0', borderBottom: `1px solid ${LINE}` }}>
-      {item.kind === 'task' ? (
+      {item.kind === 'todo' ? (
         <button type="button" aria-label={`Complete ${item.title}`} onClick={() => onComplete(item.id)}
                 style={{ flexShrink: 0, width: 18, height: 18, padding: 0, borderRadius: 4, cursor: 'pointer',
                          border: `1px solid ${LINE}`, background: 'none', display: 'flex',
                          alignItems: 'center', justifyContent: 'center', color: SAGE_TEXT }} />
       ) : (
-        // Only tasks can be completed, but the badges still have to line up: without
-        // this spacer a deal row starts a checkbox-width to the left of every task row,
+        // Only todos can be completed, but the badges still have to line up: without
+        // this spacer a deal row starts a checkbox-width to the left of every todo row,
         // and the panel reads as misaligned rather than as two kinds of row.
         <span aria-hidden="true" style={{ flexShrink: 0, width: 18 }} />
       )}
@@ -287,9 +287,9 @@ function TodayRow({ item, today, showUnassigned, onOpen, onComplete }: RowProps)
   );
 }
 
-/** The task badge. Its own component so the row can hand `whyBadge` an item the
+/** The todo badge. Its own component so the row can hand `whyBadge` an item the
  *  compiler has already narrowed away from deals. */
-function TextBadge({ item }: { item: CrmTodayTaskItem }) {
+function TextBadge({ item }: { item: CrmTodayTodoItem }) {
   const badge = whyBadge(item);
   return <span style={{ ...mono(9, badge.color), flexShrink: 0 }}>{badge.label}</span>;
 }

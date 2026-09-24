@@ -8,7 +8,7 @@
  * `stale30` includes never-contacted) keep exactly one home.
  *
  * Named `pipelineCollection.ts` rather than `collectionConfig.ts` so it cannot collide with the
- * sibling list-page port (#77), which is adding a file by that name for Contacts/Companies/Tasks;
+ * sibling list-page port (#77), which is adding a file by that name for Contacts/Companies/Todos;
  * it follows the same `make*CollectionConfig(deps) → CollectionConfig<T>` shape, so folding the
  * two together later is a move, not a rewrite.
  *

@@ -23,7 +23,7 @@ import type {
 } from '../shared/collection';
 import type { FacetOption, SortFieldDef, SortState } from '../shared/search';
 import type { ListColumn } from '../shared/listview';
-import type { CrmCompany, CrmContact, CrmTask } from '../core/types';
+import type { CrmCompany, CrmContact, CrmTodo } from '../core/types';
 import type { CrmUser } from './useUsers';
 import { UNASSIGNED_LABEL } from './useUsers';
 import { scoreBand, type ScoreBand } from './constants';
@@ -200,10 +200,10 @@ export function makeCompaniesCollectionConfig(deps: CompaniesConfigDeps): Collec
   };
 }
 
-// ── Tasks ───────────────────────────────────────────────────────────────────
+// ── Todos ───────────────────────────────────────────────────────────────────
 
 /** Matches the backend's advisory priority vocabulary; ordered by urgency, not alphabet. */
-export const TASK_PRIORITY_OPTIONS: FacetOption[] = [
+export const TODO_PRIORITY_OPTIONS: FacetOption[] = [
   { value: 'high', label: 'High' },
   { value: 'medium', label: 'Medium' },
   { value: 'low', label: 'Low' },
@@ -211,29 +211,29 @@ export const TASK_PRIORITY_OPTIONS: FacetOption[] = [
 
 const PRIORITY_RANK: Record<string, number> = { high: 3, medium: 2, low: 1 };
 
-export const TASK_SORT_FIELDS = [
+export const TODO_SORT_FIELDS = [
   // The server's historical order (`completed ASC, due_date ASC`) as ONE getter, because
   // the layer sorts by a single value per field. Without it the "All" view interleaves
-  // done and open tasks, which the old tab bar never did. '~' sorts after every digit in
-  // ASCII, so an undated task lands last WITHIN its group rather than last overall.
+  // done and open todos, which the old tab bar never did. '~' sorts after every digit in
+  // ASCII, so an undated todo lands last WITHIN its group rather than last overall.
   {
     value: 'open_due', label: 'Open first, then due',
-    get: (t: CrmTask) => `${t.completed ? 1 : 0}|${t.due_date || '~'}`,
+    get: (t: CrmTodo) => `${t.completed ? 1 : 0}|${t.due_date || '~'}`,
   },
   // due_date is a date-only string, so lexicographic order IS chronological; '' (unset)
   // maps to null and therefore sorts LAST in both directions — an improvement on the
-  // server order, which put undated tasks first.
-  { value: 'due', label: 'Due date', get: (t: CrmTask) => t.due_date || null },
-  { value: 'priority', label: 'Priority', get: (t: CrmTask) => PRIORITY_RANK[t.priority] ?? null },
-  { value: 'title', label: 'Title', get: (t: CrmTask) => text(t.title) },
-  { value: 'created_at', label: 'Recently added', get: (t: CrmTask) => isoMillis(t.created_at) },
-] as const satisfies readonly SortFieldDef<CrmTask>[];
+  // server order, which put undated todos first.
+  { value: 'due', label: 'Due date', get: (t: CrmTodo) => t.due_date || null },
+  { value: 'priority', label: 'Priority', get: (t: CrmTodo) => PRIORITY_RANK[t.priority] ?? null },
+  { value: 'title', label: 'Title', get: (t: CrmTodo) => text(t.title) },
+  { value: 'created_at', label: 'Recently added', get: (t: CrmTodo) => isoMillis(t.created_at) },
+] as const satisfies readonly SortFieldDef<CrmTodo>[];
 
-export const TASK_DEFAULT_SORT: SortState = { field: 'open_due', dir: 'asc' };
+export const TODO_DEFAULT_SORT: SortState = { field: 'open_due', dir: 'asc' };
 
 export type DuePreset = 'overdue' | 'today' | 'next7' | 'none';
 
-export const TASK_DUE_OPTIONS: FacetOption[] = [
+export const TODO_DUE_OPTIONS: FacetOption[] = [
   { value: 'overdue', label: 'Overdue' },
   { value: 'today', label: 'Due today' },
   { value: 'next7', label: 'Next 7 days' },
@@ -244,10 +244,10 @@ export const TASK_DUE_OPTIONS: FacetOption[] = [
  * Due-date bucket, on the VIEWER'S LOCAL calendar day via `ymd`.
  *
  * The page this replaces derived "today" from `toISOString()`, i.e. the UTC day, so west of
- * Greenwich every evening a task due tomorrow already read as due today.
+ * Greenwich every evening a todo due tomorrow already read as due today.
  */
-export function matchesDuePreset(task: CrmTask, preset: DuePreset, now: Date): boolean {
-  const due = task.due_date || '';
+export function matchesDuePreset(todo: CrmTodo, preset: DuePreset, now: Date): boolean {
+  const due = todo.due_date || '';
   switch (preset) {
     case 'none':
       return !due;
@@ -256,12 +256,12 @@ export function matchesDuePreset(task: CrmTask, preset: DuePreset, now: Date): b
     case 'next7':
       return !!due && due >= ymd(now) && due <= ymd(now, 7);
     case 'overdue':
-      // Only an OPEN task can be overdue — a completed one was dealt with, late or not.
-      return !task.completed && !!due && due < ymd(now);
+      // Only an OPEN todo can be overdue — a completed one was dealt with, late or not.
+      return !todo.completed && !!due && due < ymd(now);
   }
 }
 
-/** Which tasks the list shows at rest. `open` reproduces today's default "Pending" tab. */
+/** Which todos the list shows at rest. `open` reproduces today's default "Pending" tab. */
 export type DonePreset = 'open' | 'done' | 'all';
 
 export const DONE_OPTIONS: FacetOption[] = [
@@ -274,32 +274,32 @@ export function coerceDonePreset(raw: unknown): DonePreset {
   return raw === 'done' || raw === 'all' ? raw : 'open';
 }
 
-export function matchesDonePreset(task: CrmTask, value: DonePreset): boolean {
+export function matchesDonePreset(todo: CrmTodo, value: DonePreset): boolean {
   if (value === 'all') return true;
-  return value === 'done' ? !!task.completed : !task.completed;
+  return value === 'done' ? !!todo.completed : !todo.completed;
 }
 
 /** The rendering half of the Done facet, supplied by `listColumns.tsx` (it returns JSX). */
 export type DoneFacetRenderers = Pick<
-  CustomFacetDef<CrmTask, DonePreset>, 'renderControl' | 'renderChip'
+  CustomFacetDef<CrmTodo, DonePreset>, 'renderControl' | 'renderChip'
 >;
 
-export interface TasksConfigDeps {
-  columns: ListColumn<CrmTask>[];
+export interface TodosConfigDeps {
+  columns: ListColumn<CrmTodo>[];
   owners: FacetOption[] | null;
   doneFacet: DoneFacetRenderers;
   /** The viewer's current local day (see useLocalDay) — the due buckets pivot on it. */
   now: Date;
 }
 
-export function makeTasksCollectionConfig(deps: TasksConfigDeps): CollectionConfig<CrmTask> {
+export function makeTodosCollectionConfig(deps: TodosConfigDeps): CollectionConfig<CrmTodo> {
   // Open/Done/All is a CUSTOM facet rather than a toggle or a single-select, and the reason
   // is narrow: only `CustomFacetDef` carries a `defaultValue`, and this facet has to default
   // to an ACTIVE state ("Open") to reproduce today's Pending-by-default page. A toggle would
   // also have been wrong twice over — the layer never filters rows on toggles (they are
   // documented as column visibility), and a two-state control cannot express the Done-only
   // view the old tab bar had.
-  const done: CustomFacetDef<CrmTask, DonePreset> = {
+  const done: CustomFacetDef<CrmTodo, DonePreset> = {
     kind: 'custom',
     key: 'done',
     label: 'Show',
@@ -310,30 +310,30 @@ export function makeTasksCollectionConfig(deps: TasksConfigDeps): CollectionConf
     renderControl: deps.doneFacet.renderControl,
     renderChip: deps.doneFacet.renderChip,
   };
-  const facets: FacetDef<CrmTask>[] = [
+  const facets: FacetDef<CrmTodo>[] = [
     done,
     {
       kind: 'single', key: 'due', label: 'Due',
-      options: TASK_DUE_OPTIONS,
+      options: TODO_DUE_OPTIONS,
       predicate: (t, v) => matchesDuePreset(t, v as DuePreset, deps.now),
     },
-    { key: 'priority', label: 'Priority', getValue: t => t.priority || null, options: TASK_PRIORITY_OPTIONS },
-    ...(deps.owners ? [ownerFacet<CrmTask>(deps.owners)] : []),
+    { key: 'priority', label: 'Priority', getValue: t => t.priority || null, options: TODO_PRIORITY_OPTIONS },
+    ...(deps.owners ? [ownerFacet<CrmTodo>(deps.owners)] : []),
   ];
   return {
-    storage: { key: 'crm_tasks', version: 1 },
+    storage: { key: 'crm_todos', version: 1 },
     defaultView: 'list',
     getItemId: t => t.id,
     searchText: t => [t.title, t.description, t.contact_name, t.deal_title],
     persistSearch: true,
     facets,
-    sort: { fields: TASK_SORT_FIELDS, defaultSort: TASK_DEFAULT_SORT },
+    sort: { fields: TODO_SORT_FIELDS, defaultSort: TODO_DEFAULT_SORT },
     list: { columns: deps.columns },
     detail: {
       getTitle: t => t.title,
       getSubtitle: t => [t.contact_name, t.deal_title].filter(Boolean).join(' · ') || null,
     },
-    itemNoun: { singular: 'task', plural: 'tasks' },
-    emptyState: { message: 'No tasks to show.' },
+    itemNoun: { singular: 'todo', plural: 'todos' },
+    emptyState: { message: 'No todos to show.' },
   };
 }

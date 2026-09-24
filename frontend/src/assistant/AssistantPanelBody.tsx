@@ -43,7 +43,7 @@ const MODES: { mode: ToolMode; label: string; title: string }[] = [
     mode: 'normal',
     label: 'Ask',
     title:
-      'Ask first — everyday CRM edits (creating and updating contacts, companies, deals, tasks, activity and custom fields) run right away; deletes, archives, merges, bulk changes, email drafts, notifications and memory always ask. Anything proposed after reading an email or an uploaded file asks too.',
+      'Ask first — everyday CRM edits (creating and updating contacts, companies, deals, todos, activity and custom fields) run right away; deletes, archives, merges, bulk changes, email drafts, notifications and memory always ask. Anything proposed after reading an email or an uploaded file asks too.',
   },
   { mode: 'power', label: 'Auto', title: 'Auto — changes run without asking' },
 ];
@@ -171,7 +171,7 @@ export default function AssistantPanelBody({
         {chat.messages.length === 0 ? (
           <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: INK_MUTE, textAlign: 'center', gap: 8, padding: 20 }}>
             <IconBot size={28} />
-            <div style={{ fontSize: 14 }}>Ask me about your contacts, deals, and tasks — or drop in a file.</div>
+            <div style={{ fontSize: 14 }}>Ask me about your contacts, deals, and todos — or drop in a file.</div>
           </div>
         ) : (
           chat.messages.map((m) => (
