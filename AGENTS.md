@@ -2787,6 +2787,53 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   the card colour, so a masked launcher's safe zone never clips it. The mark always sits
   LEFT of the "CakeCRM" wordmark, never above it, and never on a badge.
 
+## Website (mycakecrm.com)
+
+- **The explainer site lives in `website/` and is part of the open-source repo** (#163).
+  One static `index.html` + `style.css`, no build step, no framework — copied from the
+  Chatty `website/` pattern. `.github/workflows/deploy-website.yml` FTP-pushes that
+  directory to pair.com on every push to `main` touching `website/**` (plus
+  `workflow_dispatch`), using the operator-created `PAIR_FTP_HOST`/`PAIR_FTP_USER`/
+  `PAIR_FTP_PASSWORD` secrets. That third-party action is **pinned to a commit SHA with
+  the version in a trailing comment**, never to its `v4.3.5` tag: it is handed all three
+  production FTP credentials, and a tag is movable, so a retagged or compromised upstream
+  would run replacement code against the live host on the very next website push. Re-pin
+  the SHA and update the comment together when upgrading it. The theme tokens in
+  `style.css` are a LITERAL copy of the light `--color-ck-*` values in
+  `frontend/src/index.css` (the site cannot import the app's CSS) — when the app palette
+  changes, re-copy them; light only by decision. Fonts are the same `@fontsource` woff2
+  files the app ships, self-hosted under `website/fonts/` so the page makes no
+  third-party request — and self-hosting IS redistribution, so the SIL Open Font License
+  1.1 text plus both upstream copyright notices ride beside them in
+  `website/fonts/OFL.txt`, pointed at from the `@font-face` block. Be precise about why
+  that file is needed, because the review finding that prompted it overstated the case:
+  each woff2 DOES embed a copyright (sfnt `name` nameID 0) and a license URL (nameID 14)
+  — what it carries is no license *text* (no nameID 13) and a zero-length WOFF2
+  extended-metadata block, and OFL 1.1 condition 2 wants the license itself to travel
+  with the copy. So `OFL.txt` is the only full notice shipped with them: adding a font
+  family here means adding its notice there in the same commit.
+  **Screenshots come ONLY from the demo instance after a reset to the fictional sample
+  data** (`POST /api/crm/clear-all` → `/load-sample-data`), shot with Playwright at
+  1440×900 light at 2× (WebP at 2880 wide, quality 82; PNG fallback downscaled to 1440
+  and palettised) — dashboard, pipeline board, a deal card over the board, and a deal with
+  the Baker drawer; the hero is a mark + wordmark lockup (see **Brand mark**), not a
+  screenshot, and the theme of the copy is simplicity. The genericization guard scans
+  text, not pixels, so a real prospect name in a PNG would be invisible to CI and
+  permanent in history. Strip the example-data banner and the bell badge before shooting;
+  the Baker shot uses a deal-scoped quick action, because an install-wide question can
+  surface memory facts from pre-reset data. Demo credentials never enter the repo.
+  **The copy is a claim about the app and is re-read against it whenever the shots are
+  re-taken** — the nav word is Todos, closed stages are hidden on the board by default,
+  filters save as team views, Reports is a tab, the key goes in under AI Setup, and one
+  Telegram bot serves a link per seat; a sentence the app no longer backs comes out.
+  **Marketing copy about safety is a claim about the code and is held to it.** The
+  assistant ships three tool modes (`AssistantPanelBody.MODES`: Read / Ask / Auto), Ask
+  is the default, and `engine` executes a write immediately under `tool_mode == "power"`
+  — the drawer's **Auto** — so the page says writes ask first *in Ask mode* and that Auto
+  is something you turn on yourself. An unqualified "every write asks first" is false for
+  a real, reachable setting. Any future safety sentence owes the same check against
+  `frontend/src/assistant/` and `backend/assistant/engine.py`.
+
 ## CI & Contributing
 
 - **CI** (`.github/workflows/ci.yml`) runs on every PR to `main` and on `push` to
@@ -2883,3 +2930,4 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Light sales coaching (`identity.COACHING_GUIDE` — a static prompt block after `SALES_GUIDE` — plus one coaching starter chip on the deal and company contexts in `QuickActions.tsx`) — **landed #143 phase 3**. Prompt and chips ONLY: every read it coaches from (`crm_get_deal_health`, `crm_get_pipeline_analytics`, `crm_get_stale_deals`, `crm_get_contact_staleness`, `crm_scan_gaps`, `crm_analytics`) already existed, so there is no new backend, no new tool, no scheduler, and `backend/proactive/` is untouched — proactive stays deterministic push, coaching is pull. Static rather than a help topic because of the trust ladder: a topic is content Baker MAY read, a behaviour contract is one it MUST keep, and only the static half is out of reach of a user-written personality. Pinned by POSITION (after `NAME_NOTE` and `SALES_GUIDE`, before the upload-safety instruction) and by a guard that every `crm_*`/`help_*` name in the text is a registered tool. It tells Baker to search the help library for a sales playbook when coaching and to name the book the method came from — worded so it is honest before that shelf exists (#209) and live the moment it lands | New capability (behaviours genericized from the blueprint sales agent, none of its text) |
 | Todo-GTD inbox triage step badges (a local `StepHeading` in `TriageCard.tsx`: the step number as a solid `bg-ck-accent` + `text-ck-accent-ink` badge beside the heading, and a `text-ck-accent-text` star in place of the word "(required)" on step 3) — **landed #162**. A from-spec build, not a port: cake_os #2613 is an open, unimplemented spec, so the issue text is the spec of record. **The rule this establishes for any future glyph-for-words swap here:** both the badge and the star are `aria-hidden` and each carries a visually-hidden equivalent INSIDE the `<h3>`, so the heading's accessible name still reads exactly as the words they replaced ("Step 3: Last step — set context (required)"). An `aria-label` on the badge would NOT do that job — a bare `<span>` is `role=generic`, which does not reliably take a name from the author — and naming the `<h3>` itself would hide the heading's own words from any reader that matches on text. The tests assert the ACCESSIBLE name (textContent minus `aria-hidden` subtrees), never raw `textContent`, which would pass on markup that announces a heading as "01"; all three go red against the pre-#162 component. No token or guard-registry edits: `bg-ck-accent`/`text-ck-accent-ink` is the repo's one solid-accent pairing and is already pinned at AA in `core/theme/hueContrast.test.ts`, and the star is text on the card, which `accent-text` already covers. `stepCls` lost its `mb-2` to the flex row that now holds badge and heading together — same 8 px gap, one owner | New capability (no blueprint — cake_os #2613 is an unimplemented spec) |
 | Weekly Touches counted through the move to Won (`service.TOUCH_AT_SQL` beside `LAST_TOUCH_SQL`, driving both builders; `open_deals` as its own `COUNT FILTER`; the two ratio renderings replaced by two facts; a `won` cue on `TouchDealRow`) — **landed #179** as `backend/crm/{service,router}.py` + `frontend/src/crm/{components/{WeeklyTouchesCard,TouchDealRow}.tsx,WeeklyTouchesDetailPage.tsx}`. A deal is dated by its recorded win once it is in `won`, and by `LAST_TOUCH_SQL` otherwise — so the week a rep worked a deal and closed it credits every touch on it, including the close, instead of erasing the deal on Friday. **Corrects the issue's premise, which is why there is NO `deals.closed_at` column and no migration**: it prescribes one on the grounds that "CakeCRM has nothing to reconstruct from", but `deal_stage_events` (#22) has journaled every stage transition — both directions, same transaction as the stage write — since 2026-08-16, four weeks before the issue was filed, and `analytics_service.get_pipeline_analytics` already derives `won_at` from it. A column would be a second copy of that fact, starting empty and needing its own write path. **A CASE, deliberately not the issue's `LEAST(last_touch, won_at)`**: Postgres `LEAST` ignores NULL operands, so `LEAST` would credit a deal sitting in `won` with no journaled win — created straight into `won` (`create_deal` has no old stage to leave), the demo seed's raw-INSERTed rows, or won before the journal existed — with its `updated_at`, and those are exactly the deals the issue's forward-only rule says must count for nothing. The roster gains every owner of a deal won INSIDE the window, bounded at BOTH ends so a win before or after it can never leave a rep as a permanent 0/0 row; `open_deals` keeps meaning "currently open" and is no longer a denominator, so `touches` may exceed it and all three "N of M" renderings became two facts; `computed_deals` counts the widened row set, because scoping the visibility gate to open deals would hide the card from a rep who just won their only deal — the very win this issue exists to credit (zero keys is unaffected: every count is NULL either way). Lost stays excluded outright — `bulk_move_deals` can mark a whole column lost in one click, and a symmetric rule would mint that many touches. **The issue's second stale premise:** there is no `crm_weekly_touches` assistant tool and none was added; the two REST surfaces already share one SQL definition through `_touch_snapshot_reads`. | `cake_os` #2636 / issue #2607 for the bug shape only — upstream reconstructs status from its `status_change` chatter rows, which CakeCRM does not have; the journal derivation is this repo's own |
+| Explainer site (`website/index.html` + `style.css`, self-hosted fonts, four sample-data screenshots; `.github/workflows/deploy-website.yml` FTP deploy to pair.com) — **landed #163**. Content is new; the delivery pattern (static dir + FTP-Deploy on push, path-filtered) is the port | `chatty/website/` + `chatty/.github/workflows/deploy-website.yml` |

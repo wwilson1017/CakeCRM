@@ -7,6 +7,8 @@ zero AI configuration — add any AI provider API key (Anthropic, OpenAI, Google
 Gemini, Together AI, or local models via Ollama) and it comes with a sales assistant
 that works your pipeline for you.
 
+**Website:** [mycakecrm.com](https://mycakecrm.com) — the short version, with screenshots.
+
 > **Status: pre-v0.1, under active construction.** The build is spec'd as GitHub
 > issues in this repo and being assembled in phases. Star/watch for the launch.
 
