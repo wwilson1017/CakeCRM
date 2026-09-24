@@ -136,3 +136,79 @@ describe('the settings section behind the drawer (#200)', () => {
     expect((await panel('/crm/pipeline', true)).pageContext).toBeNull();
   });
 });
+
+// ── The fold ────────────────────────────────────────────────────────────────
+//
+// The pill reads its full label for `LAUNCHER_INTRO_MS` after every (re)label, then folds to
+// the icon; it unfolds while the pointer is within `LAUNCHER_REACH_PX` of it or it holds focus.
+const { LAUNCHER_INTRO_MS, LAUNCHER_REACH_PX } = await import('./AssistantLauncher');
+
+const expanded = () => launcher().getAttribute('data-expanded') === 'true';
+
+/** Park the button at a known box so pointer distances mean something under jsdom. */
+function placeLauncher() {
+  launcher().getBoundingClientRect = () =>
+    ({ left: 900, right: 1000, top: 700, bottom: 752, width: 100, height: 52, x: 900, y: 700, toJSON: () => ({}) }) as DOMRect;
+}
+
+function pointerAt(clientX: number, clientY: number) {
+  // jsdom has no PointerEvent constructor; a MouseEvent under the pointer name carries the
+  // coordinates and an undefined `pointerType`, which is what a mouse looks like to the handler.
+  act(() => { document.dispatchEvent(new MouseEvent('pointermove', { clientX, clientY, bubbles: true })); });
+}
+
+describe('the launcher fold', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('shows the full label on load, then folds to the icon', () => {
+    render(true);
+    expect(expanded()).toBe(true);
+
+    act(() => { vi.advanceTimersByTime(LAUNCHER_INTRO_MS - 1); });
+    expect(expanded()).toBe(true);
+    act(() => { vi.advanceTimersByTime(1); });
+    expect(expanded()).toBe(false);
+  });
+
+  it('restarts the intro when the label changes, so "Ask Baker" gets its full showing', () => {
+    // `aiReady` resolves a beat after mount: the placeholder "Baker" spends the intro, then the
+    // real call-to-action arrives — and must not arrive already folded.
+    render(null);
+    act(() => { vi.advanceTimersByTime(LAUNCHER_INTRO_MS); });
+    expect(expanded()).toBe(false);
+
+    render(true);
+    expect(launcher().getAttribute('aria-label')).toBe('Ask Baker');
+    expect(expanded()).toBe(true);
+    act(() => { vi.advanceTimersByTime(LAUNCHER_INTRO_MS); });
+    expect(expanded()).toBe(false);
+  });
+
+  it('unfolds as the pointer approaches and folds again as it leaves', () => {
+    render(true);
+    act(() => { vi.advanceTimersByTime(LAUNCHER_INTRO_MS); });
+    placeLauncher();
+    expect(expanded()).toBe(false);
+
+    pointerAt(900 - LAUNCHER_REACH_PX + 1, 726);   // just inside reach, to the left
+    expect(expanded()).toBe(true);
+    pointerAt(900 - LAUNCHER_REACH_PX - 1, 726);   // just outside
+    expect(expanded()).toBe(false);
+    pointerAt(950, 726);                           // directly over it
+    expect(expanded()).toBe(true);
+    pointerAt(100, 100);
+    expect(expanded()).toBe(false);
+  });
+
+  it('unfolds while it holds keyboard focus', () => {
+    render(true);
+    act(() => { vi.advanceTimersByTime(LAUNCHER_INTRO_MS); });
+    expect(expanded()).toBe(false);
+
+    act(() => { launcher().focus(); });
+    expect(expanded()).toBe(true);
+    act(() => { launcher().blur(); });
+    expect(expanded()).toBe(false);
+  });
+});

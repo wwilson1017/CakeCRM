@@ -372,6 +372,20 @@ describe.each([
     }
   });
 
+  it('keeps the launcher label legible on the launcher fill', () => {
+    // The floating "Ask Baker" pill paints `--color-ck-accent-launcher` as a SOLID fill under
+    // an `accent-ink` label. That token is outside the fill/text hue family (it has no
+    // `-text` twin — nothing paints it as a glyph), so the pairing sweep above never sees it;
+    // this is its one guard. `accent-ink` is white in both themes, so darkening the fill can
+    // only help — the assertion exists so a later "brighten it back" cannot slip under 4.5:1
+    // the way the brand red itself sits at 4.66:1.
+    const fill = hexToRgb(resolve(tokens, 'accent-launcher'));
+    const ink = hexToRgb(resolve(tokens, 'accent-ink'));
+    const ratio = contrast(ink, fill);
+    expect(ratio, `${themeName}: accent-ink on accent-launcher is ${ratio.toFixed(2)}:1`)
+      .toBeGreaterThanOrEqual(AA_NORMAL_TEXT);
+  });
+
   it('keeps a solid status fill legible under ON_STATUS', () => {
     // The three buttons that paint a hue as a SOLID background and put a label on it:
     // `TasksPage` "Mark Complete", `DealDetailBody` "Mark Won" (both green) and `ConfirmHost`'s

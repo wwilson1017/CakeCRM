@@ -24,6 +24,9 @@ export const BG_RAISED = 'var(--color-ck-raised)';
 export const BG_PAGE = 'var(--color-ck-bg)';
 export const ACCENT = 'var(--color-ck-accent)';
 export const ACCENT_INK = 'var(--color-ck-accent-ink)';
+// The floating "Ask Baker" pill's own fill — a hair darker and warmer than ACCENT (see the
+// token's comment in index.css). Glyph on it is ACCENT_INK. One consumer by design.
+export const ACCENT_LAUNCHER = 'var(--color-ck-accent-launcher)';
 export const ACCENT_SOFT = 'var(--color-ck-accent-soft)';
 // Accent as *text*/icon. Darker than ACCENT in light, lighter under .dark — the fixed
 // brand red fails WCAG AA as body text on BOTH a light wash and a dark surface. Fills

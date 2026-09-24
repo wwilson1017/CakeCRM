@@ -473,7 +473,7 @@ export function CompanyRollupReport({ companyId, onCompanyName }: Props) {
 
   return (
     <div style={{ marginTop: 24 }}>
-      <div style={cardStyle}>
+      <div style={{ ...cardStyle, padding: isMobile ? 14 : 20 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <h2 style={{
             fontFamily: FONT_DISPLAY, fontSize: isMobile ? 20 : 26, color: INK, margin: 0,
