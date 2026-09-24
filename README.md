@@ -9,10 +9,48 @@ that works your pipeline for you.
 
 **Website:** [mycakecrm.com](https://mycakecrm.com) — the short version, with screenshots.
 
-> **Status: pre-v0.1, under active construction.** The build is spec'd as GitHub
-> issues in this repo and being assembled in phases. Star/watch for the launch.
+> **Status: v0.1.** Everything below is shipped and running on the public demo the
+> screenshots come from. Bugs and ideas go in the issues; the tracker is the roadmap.
 
-## What it will do
+<p align="center">
+  <img src="website/img/deal-baker.png" alt="A deal open in CakeCRM with Baker's drawer beside it, answering what the next step should be, grounded in the deal's own notes and activity." width="900">
+</p>
+
+<p align="center">
+  <img src="website/img/dashboard.png" alt="Dashboard: the Today list of what is overdue and due, above the pipeline number and the stats that matter." width="440">
+  <img src="website/img/pipeline.png" alt="Pipeline board: every open deal by stage, with value, close date and last contact on each card." width="440">
+</p>
+<p align="center">
+  <img src="website/img/todos-today.png" alt="Todos, Today tab: what is overdue and what is due, each linked to its contact or deal." width="440">
+  <img src="website/img/todos-inbox.png" alt="Todos, Inbox: the triage card that turns a captured thought into a next action in three numbered steps." width="440">
+</p>
+
+## The tour
+
+Three screens your people will actually use, and an assistant that handles the busywork.
+
+- **Start with what needs you today.** The dashboard opens on a short Today list: the
+  overdue call, the thing that goes out this afternoon. Under it, one pipeline number and
+  the handful of stats that matter.
+- **Your pipeline is a board. Drag the card.** Every open deal on one screen, in the stage
+  it is in, with the value, the close date and the last contact on the card. Won and lost
+  stay tucked away until you ask. A filter you keep coming back to becomes a saved view the
+  whole team can use.
+- **Open a deal. Everything is on one card.** Who, how much, how likely, when. The calls and
+  emails so far, and a box to add a note. No tabs, no sub-pages, nothing behind a settings
+  gear.
+- **Todos: capture it, file it, do it.** A GTD-style inbox. Anything on your mind goes in,
+  from your phone through a no-login capture link, and stays there until you have said what
+  kind of action it is. Then it is a next action, and Today shows what is overdue or due.
+- **Ask Baker. Optional.** Add any AI provider key and Baker reads the deal you have open,
+  checks its health and tells you the next step in plain words. It can log the call, put a
+  follow-up draft in your Gmail Drafts, nudge you when a deal goes quiet, and coach from the
+  sales playbooks it has read. Skip the key and the CRM is still the whole CRM.
+- **Talk to it from your phone.** Connect one Telegram bot; each person links their own
+  chat to ask about a deal, log a call or capture a todo. Write confirmations arrive as
+  Approve / Deny buttons.
+
+## What it does
 
 **The CRM** (works with no AI at all):
 - Contacts, companies, deals, and todos with an activity timeline
@@ -150,6 +188,25 @@ The lever targets the first admin account, re-activates it if it was deactivated
 and **turns that account's two-factor authentication off** — a password-only reset
 is no help to someone who also lost their authenticator. Turn 2FA back on from
 Settings once you are in.
+
+## Roadmap
+
+Multi-user, the original headline item, shipped in v0.1: accounts, admin and member roles,
+an owner on every record, per-seat chat history, notifications and Telegram. What comes next
+is decided in the issues, but these are the ones already on the table:
+
+- **Per-seat Gmail** — each person connects their own mailbox instead of sharing the
+  admin's. Deliberately deferred until someone asks: [#189](https://github.com/wwilson1017/CakeCRM/issues/189).
+- **Importers from other CRMs** — CSV and vCard work today; mapped imports from the common
+  hosted CRMs are the obvious next door.
+- **More of the manual and the playbooks** — Baker's in-product help library and its sales
+  playbooks grow with the product; a topic per feature is the rule.
+- **A mobile-first pass** — the no-login todo capture is already a PWA; the rest of the
+  CRM on a phone is next.
+
+Want something else? Open an issue. Contributions are welcome under the DCO — see
+[CONTRIBUTING.md](CONTRIBUTING.md). Security questions and the Gmail guarantee are in
+[SECURITY.md](SECURITY.md).
 
 ## Lineage
 
