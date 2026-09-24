@@ -1,0 +1,46 @@
+name: Deploy Website
+
+# Publishes website/ (the static explainer site) to mycakecrm.com on pair.com.
+# Mirrors the Chatty website deploy: FTP-Deploy on push to main, filtered to the
+# website tree so app-only merges never touch the host. workflow_dispatch lets an
+# operator redeploy without a commit (e.g. after rotating the FTP secrets).
+#
+# Secrets (repo Settings → Secrets → Actions), created by the operator:
+#   PAIR_FTP_HOST      pair.com FTP host
+#   PAIR_FTP_USER      FTP user rooted at the mycakecrm.com docroot
+#   PAIR_FTP_PASSWORD  its password
+# If the FTP user is rooted at the account home instead of the site docroot,
+# set `server-dir` below to the path of the docroot relative to that root.
+
+on:
+  push:
+    branches: [main]
+    paths: ['website/**']
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-website
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy mycakecrm.com
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy website/ over FTP
+        # Pinned to the immutable commit for v4.3.5, not the movable tag: this action
+        # receives all three production FTP credentials, so a retagged or compromised
+        # upstream would run replacement code against the live host. Re-pin the SHA and
+        # update the trailing comment together when upgrading.
+        uses: SamKirkland/FTP-Deploy-Action@8e83cea8672e3fbcbb9fdafff34debf6ae4c5f65 # v4.3.5
+        with:
+          server: ${{ secrets.PAIR_FTP_HOST }}
+          username: ${{ secrets.PAIR_FTP_USER }}
+          password: ${{ secrets.PAIR_FTP_PASSWORD }}
+          protocol: ftps
+          local-dir: website/
+          server-dir: /

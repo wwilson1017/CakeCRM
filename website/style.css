@@ -1,0 +1,175 @@
+/* mycakecrm.com — a single static page, no build step.
+ *
+ * Tokens are copied LITERALLY from the app's light theme in
+ * frontend/src/index.css (the `--color-ck-*` block). The site cannot import the
+ * app's Tailwind CSS, so this is the one place the values are duplicated: when
+ * the app palette changes, re-copy the values here. Light only by decision — the
+ * cream-and-red look is the brand, and a marketing page has no dark mode to honor.
+ *
+ * Fonts are self-hosted woff2 files from the @fontsource packages the app itself
+ * uses (Montserrat headings, Open Sans body; both SIL OFL 1.1), so the page makes
+ * no third-party request. Self-hosting is redistribution, and the woff2 files carry
+ * no license text of their own, so the copyright notices and the full OFL 1.1 text
+ * ship beside them in fonts/OFL.txt -- add a family here, add its notice there.
+ */
+
+@font-face { font-family: 'Montserrat'; font-weight: 600; font-display: swap; src: url(fonts/montserrat-latin-600-normal.woff2) format('woff2'); }
+@font-face { font-family: 'Montserrat'; font-weight: 700; font-display: swap; src: url(fonts/montserrat-latin-700-normal.woff2) format('woff2'); }
+@font-face { font-family: 'Montserrat'; font-weight: 800; font-display: swap; src: url(fonts/montserrat-latin-800-normal.woff2) format('woff2'); }
+@font-face { font-family: 'Open Sans'; font-weight: 400; font-display: swap; src: url(fonts/open-sans-latin-400-normal.woff2) format('woff2'); }
+@font-face { font-family: 'Open Sans'; font-weight: 600; font-display: swap; src: url(fonts/open-sans-latin-600-normal.woff2) format('woff2'); }
+
+:root {
+  --bg: #f1f1e8;
+  --card: #fffffa;
+  --raised: #e8e8dd;
+  --line: #e5e7eb;
+  --line-strong: #d1d5db;
+  --ink: #292929;
+  --ink-mute: #3c3c3c;
+  --ink-soft: #4a4a4a;
+  --ink-dim: #595959;
+  --accent: #e31d3b;
+  --accent-dark: #a8302c;
+  --accent-ink: #ffffff;
+  --accent-text: #ba002a;
+  --shadow: rgba(41, 41, 41, 0.18);
+  --font-display: 'Montserrat', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --font-sans: 'Open Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 17px;
+  line-height: 1.6;
+}
+img { max-width: 100%; height: auto; display: block; }
+a { color: var(--accent-text); }
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.92em;
+  background: var(--raised);
+  padding: 0.1em 0.4em;
+  border-radius: 4px;
+}
+h1, h2, h3 {
+  font-family: var(--font-display);
+  line-height: 1.15;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+h1 { font-size: clamp(2.4rem, 6vw, 4.25rem); font-weight: 800; }
+h2 { font-size: clamp(1.7rem, 3.5vw, 2.5rem); font-weight: 700; }
+h3 { font-size: 1.25rem; font-weight: 700; }
+h1 em { color: var(--accent-text); font-style: normal; }
+p { margin: 0; }
+.muted { color: var(--ink-dim); font-weight: 600; }
+
+.container { width: min(1120px, 100% - 2.5rem); margin-inline: auto; }
+
+.skip-link {
+  position: absolute; left: 1rem; top: -100px;
+  background: var(--card); color: var(--ink); padding: 0.5rem 1rem;
+  border: 1px solid var(--line-strong); border-radius: 6px; z-index: 100;
+}
+.skip-link:focus { top: 1rem; }
+
+/* Buttons */
+.btn {
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  font-family: var(--font-display); font-weight: 700; font-size: 1rem;
+  padding: 0.8rem 1.4rem; border-radius: 8px; text-decoration: none;
+  border: 1.5px solid transparent; transition: background 120ms, border-color 120ms;
+}
+.btn-sm { font-size: 0.9rem; padding: 0.5rem 0.95rem; }
+.btn-primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn-primary:hover { background: var(--accent-dark); border-color: var(--accent-dark); }
+.btn-outline { color: var(--ink); border-color: var(--line-strong); background: transparent; }
+.btn-outline:hover { background: var(--raised); }
+.btn:focus-visible, a:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.actions { display: flex; flex-wrap: wrap; gap: 0.75rem; justify-content: center; }
+
+/* Nav */
+.nav {
+  position: sticky; top: 0; z-index: 10;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--line);
+}
+.nav-inner { display: flex; align-items: center; justify-content: space-between; height: 64px; gap: 1rem; }
+.brand { display: inline-flex; align-items: center; gap: 0.5rem; text-decoration: none; color: var(--ink); }
+.brand-mark { width: 28px; height: 28px; }
+.footer-mark { display: inline-block; width: 20px; height: 20px; vertical-align: -4px; margin-right: 2px; }
+.brand-name { font-family: var(--font-display); font-weight: 700; font-size: 1.25rem; }
+.nav-actions { display: flex; gap: 0.5rem; }
+@media (max-width: 560px) { .nav-actions .btn-outline { display: none; } }
+
+/* Hero */
+.hero { padding: clamp(3rem, 8vw, 6rem) 0 clamp(1rem, 3vw, 2rem); }
+.hero-inner { text-align: center; max-width: 780px; display: grid; gap: 1.5rem; justify-items: center; }
+.hero-lockup { display: inline-flex; align-items: center; gap: 0.75rem; font-family: var(--font-display); font-weight: 700; font-size: clamp(1.75rem, 4vw, 2.5rem); color: var(--ink); margin-bottom: 0.25rem; }
+.hero-lockup img { width: clamp(44px, 6vw, 72px); height: auto; }
+.eyebrow {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.lede { font-size: clamp(1.1rem, 2vw, 1.3rem); color: var(--ink-mute); }
+.tagline { color: var(--ink); font-weight: 600; font-size: clamp(1.2rem, 2.4vw, 1.5rem); }
+.hero-note { font-size: 0.95rem; color: var(--ink-dim); }
+
+/* Screenshot frame: the CSS card that replaces fake browser chrome */
+.frame {
+  margin: 0;
+  background: var(--card);
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  padding: 6px;
+  box-shadow: 0 24px 60px -24px var(--shadow), 0 2px 6px -2px var(--shadow);
+}
+.frame img { border-radius: 8px; }
+
+/* Sections */
+.section { padding: clamp(4rem, 10vw, 7rem) 0 clamp(3rem, 7vw, 5rem); }
+.section-alt { background: var(--card); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.section-head { display: grid; gap: 0.75rem; max-width: 640px; margin-bottom: 3rem; }
+.section-sub { color: var(--ink-mute); font-size: 1.05rem; }
+
+/* Tour */
+.tour-item { display: grid; gap: 1.5rem; margin-bottom: clamp(3rem, 7vw, 5.5rem); }
+.tour-text { max-width: 640px; display: grid; gap: 0.6rem; }
+.tour-num { font-family: var(--font-display); font-weight: 800; color: var(--accent-text); font-size: 0.95rem; letter-spacing: 0.08em; }
+.tour-text p:not(.tour-num) { color: var(--ink-mute); }
+
+/* What it is */
+.grid {
+  list-style: none; padding: 0; margin: 0;
+  display: grid; gap: 1.25rem;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+.grid li {
+  background: var(--bg); border: 1px solid var(--line); border-radius: 12px;
+  padding: 1.5rem; display: grid; gap: 0.5rem; align-content: start;
+}
+.grid h3 { font-size: 1.1rem; }
+.grid p { color: var(--ink-mute); font-size: 0.98rem; }
+
+/* Get it */
+.get .section-head { margin-inline: auto; text-align: center; }
+.steps {
+  max-width: 720px; margin: 0 auto 2.5rem; padding-left: 1.5rem;
+  display: grid; gap: 1rem; color: var(--ink-mute);
+}
+.steps li::marker { font-family: var(--font-display); font-weight: 800; color: var(--accent-text); }
+.steps strong { color: var(--ink); }
+
+/* Footer */
+.footer { border-top: 1px solid var(--line); padding: 2rem 0 3rem; font-size: 0.95rem; color: var(--ink-dim); }
+.footer-inner { display: flex; flex-wrap: wrap; gap: 1rem 2rem; justify-content: space-between; align-items: center; }
+.footer nav { display: flex; gap: 1.25rem; }
+.footer a { color: var(--ink-soft); }
