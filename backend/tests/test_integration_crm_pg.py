@@ -203,7 +203,16 @@ def test_the_todo_mode_migration_is_scoped_and_replayable(pg_db):
             ) ON COMMIT DROP
             """
         )
-        cur.execute("INSERT INTO crm_meta (id, task_mode) VALUES (1, 'gtd')")
+        # The stamp is seeded into the PAST, and that is what makes the skip case
+        # falsifiable rather than vacuous. `now()` is the TRANSACTION's start time and is
+        # frozen for its whole life, so a row inserted with DEFAULT now() and a later
+        # `updated_at = now()` inside the same transaction are byte-identical — an
+        # unscoped UPDATE would rewrite the row and the timestamps would still compare
+        # equal. Seeding an older value means only a write can move it.
+        cur.execute(
+            "INSERT INTO crm_meta (id, task_mode, updated_at) "
+            "VALUES (1, 'gtd', now() - interval '1 day')"
+        )
 
         # Skip case: already 'gtd' (where the migration left it) — replaying changes nothing.
         cur.execute("SELECT task_mode, updated_at FROM crm_meta WHERE id = 1")
@@ -217,6 +226,14 @@ def test_the_todo_mode_migration_is_scoped_and_replayable(pg_db):
             "the backfill must be scoped WHERE task_mode = 'normal' — an already-GTD "
             "install must not be rewritten"
         )
+        # Independent of the timestamp: the scoped UPDATE must have matched NO row at all.
+        # Two signals, because the one above is the one that silently stopped working once
+        # this test moved into a single transaction.
+        cur.execute(
+            "UPDATE crm_meta SET task_mode = 'gtd', updated_at = now() "
+            "WHERE task_mode = 'normal'"
+        )
+        assert cur.rowcount == 0, "an already-GTD row must not be in the backfill's scope"
 
         # Flip case: an upgrading install still on the DDL default gets moved.
         cur.execute("UPDATE crm_meta SET task_mode = 'normal' WHERE id = 1")
