@@ -60,7 +60,7 @@ const PROJECT: TodoProject = {
 // `updated_at`. So the fixtures have to move that column the way the server does — with one
 // frozen timestamp every response and every reload looks stale, the card ignores them all,
 // and the suite would be testing a component that never adopts anything.
-// …and in the shape the server emits: `_apply_task_update_cur` stamps `updated_at` from
+// …and in the shape the server emits: `_apply_todo_update_cur` stamps `updated_at` from
 // `datetime.now(timezone.utc).isoformat()`, which is microseconds and a `+00:00` zone — not
 // `toISOString()`'s millisecond `Z`. Fixtures in the wrong shape would let a comparison bug
 // that only bites production pass here.

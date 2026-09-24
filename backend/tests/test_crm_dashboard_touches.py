@@ -630,8 +630,8 @@ def test_dashboard_stats_reports_company_count(rec):
     rec.fetchone_queue = [
         {"cnt": 5},   # contacts
         {"cnt": 3},   # companies
-        {"cnt": 1},   # overdue tasks
-        {"cnt": 2},   # pending tasks
+        {"cnt": 1},   # overdue todos
+        {"cnt": 2},   # pending todos
     ]
     out = service.get_dashboard_stats()
     assert out["total_contacts"] == 5

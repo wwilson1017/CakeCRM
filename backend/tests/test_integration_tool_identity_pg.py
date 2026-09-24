@@ -73,7 +73,7 @@ def seats(pg_db):
 def _clean(pg_db):
     from core.postgres import pg_execute
     pg_execute(
-        "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
+        "TRUNCATE companies, contacts, deals, activity_log, todos, crm_chatter, "
         "crm_chatter_attachments, crm_field_definitions, crm_field_values, "
         "crm_field_provenance, deal_stage_events, proactive_nudges, "
         "deal_ai_touch_evidence RESTART IDENTITY"
@@ -118,7 +118,7 @@ def test_unattended_turn_writes_null_not_a_guess(seats):
     ("crm_create_contact", {"name": "Owned Contact"}, "contacts"),
     ("crm_create_company", {"name": "Owned Company"}, "companies"),
     ("crm_create_deal", {"title": "Owned Deal"}, "deals"),
-    ("crm_create_task", {"title": "Owned Task"}, "tasks"),
+    ("crm_create_todo", {"title": "Owned Todo"}, "todos"),
 ])
 def test_interactive_creates_land_the_requesting_seat(seats, tool, kwargs, table):
     from core.postgres import pg_fetchone
@@ -155,13 +155,13 @@ def test_contact_owner_filter_splits_the_three_buckets(seats, three_contacts):
         == ["Acme Boss Contact"]
 
 
-def test_company_and_task_owner_filters_run(seats):
+def test_company_and_todo_owner_filters_run(seats):
     from crm import service
 
     service.create_company(name="Acme Rep Co", owner_id=seats["rep"]["id"])
     service.create_company(name="Acme Orphan Co")
-    service.create_task(title="Rep task", owner_id=seats["rep"]["id"])
-    service.create_task(title="Orphan task")
+    service.create_todo(title="Rep todo", owner_id=seats["rep"]["id"])
+    service.create_todo(title="Orphan todo")
 
     ex = _tools(seats["rep"])
     assert [c["name"] for c in ex["crm_search_companies"](query="Acme", owner="me")["companies"]] \
@@ -169,8 +169,8 @@ def test_company_and_task_owner_filters_run(seats):
     assert [c["name"] for c in
             ex["crm_search_companies"](query="Acme", owner="unassigned")["companies"]] \
         == ["Acme Orphan Co"]
-    assert [t["title"] for t in ex["crm_list_tasks"](owner="me")["tasks"]] == ["Rep task"]
-    assert [t["title"] for t in ex["crm_list_tasks"](owner="unassigned")["tasks"]] == ["Orphan task"]
+    assert [t["title"] for t in ex["crm_list_todos"](owner="me")["todos"]] == ["Rep todo"]
+    assert [t["title"] for t in ex["crm_list_todos"](owner="unassigned")["todos"]] == ["Orphan todo"]
 
 
 def test_counts_pagination_stays_in_step_with_the_filtered_page(seats, three_contacts):

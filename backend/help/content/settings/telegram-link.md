@@ -37,7 +37,7 @@ you had done it here.
 When it wants to make a change, the message arrives with two inline buttons, Approve and
 Deny. Only your linked account can press yours.
 
-In GTD task mode, a message beginning with `capture ` (or `/capture `) creates an inbox todo
+In GTD todo mode, a message beginning with `capture ` (or `/capture `) creates an inbox todo
 directly, without the model running at all — so it is instant and works even when the
 workspace has no AI provider configured.
 

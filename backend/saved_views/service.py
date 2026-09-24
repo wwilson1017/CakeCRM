@@ -48,7 +48,7 @@ MAX_PAYLOAD_BYTES = 65536
 MAX_VIEWS_PER_SURFACE = 100
 
 # Every CollectionStorage.key in the frontend is lower snake_case (crm_pipeline, crm_contacts,
-# crm_companies, crm_tasks). Pinning the shape keeps a surface key from becoming a free-text
+# crm_companies, crm_todos). Pinning the shape keeps a surface key from becoming a free-text
 # column that silently forks one board's views into two.
 _SURFACE_RE = re.compile(r"^[a-z0-9_]{1,%d}$" % MAX_SURFACE_CHARS)
 

@@ -1,4 +1,4 @@
-"""Real-Postgres integration for Todo-GTD task mode (issue #70).
+"""Real-Postgres integration for Todo-GTD todo mode (issue #70).
 
 The hermetic suites pin the SQL shape; these prove the parts only a real database can
 answer:
@@ -8,8 +8,8 @@ answer:
 - the migration's backfill-before-CHECK ordering survives rows that already existed,
 - the row-locked completion transition spawns exactly one next occurrence, through a
   real transaction rather than a scripted fake cursor,
-- `task_projects` sits inside the CRM-reset TRUNCATE despite being FK-referenced by
-  `tasks` (Postgres rejects truncating a referenced table on its own),
+- `todo_projects` sits inside the CRM-reset TRUNCATE despite being FK-referenced by
+  `todos` (Postgres rejects truncating a referenced table on its own),
 - the demo seed satisfies the CHECK on a first run.
 
 Marked ``integration`` and excluded from the default no-DB run (see pytest.ini). Same
@@ -67,7 +67,7 @@ def pg_db():
 def _clean(pg_db):
     from core.postgres import pg_execute
     pg_execute(
-        "TRUNCATE companies, contacts, deals, activity_log, tasks, task_projects, "
+        "TRUNCATE companies, contacts, deals, activity_log, todos, todo_projects, "
         "crm_chatter, crm_chatter_attachments, crm_field_definitions, "
         "crm_field_values, crm_field_provenance, deal_stage_events, "
         "proactive_nudges RESTART IDENTITY"
@@ -81,11 +81,11 @@ def test_the_migration_added_the_gtd_columns_and_the_projects_table(pg_db):
     from core.postgres import pg_fetchall
 
     cols = {r["column_name"] for r in pg_fetchall(
-        "SELECT column_name FROM information_schema.columns WHERE table_name = 'tasks'")}
+        "SELECT column_name FROM information_schema.columns WHERE table_name = 'todos'")}
     assert {"status", "star", "context", "tags", "repeat", "auto_star_on_due",
             "project_id", "completed_at", "source"} <= cols
     assert pg_fetchall("SELECT 1 FROM information_schema.tables "
-                       "WHERE table_name = 'task_projects'")
+                       "WHERE table_name = 'todo_projects'")
 
 
 def test_the_check_constraint_refuses_drift(pg_db):
@@ -93,26 +93,26 @@ def test_the_check_constraint_refuses_drift(pg_db):
     from core.postgres import pg_execute
     from crm import service
 
-    task = service.create_task("open work")
+    todo = service.create_todo("open work")
     with pytest.raises(psycopg2.errors.CheckViolation):
-        pg_execute("UPDATE tasks SET completed = 1 WHERE id = %s", (task["id"],))
+        pg_execute("UPDATE todos SET completed = 1 WHERE id = %s", (todo["id"],))
     with pytest.raises(psycopg2.errors.CheckViolation):
-        pg_execute("UPDATE tasks SET status = 'done' WHERE id = %s", (task["id"],))
+        pg_execute("UPDATE todos SET status = 'done' WHERE id = %s", (todo["id"],))
 
 
 def test_the_service_write_path_keeps_both_columns_in_step(pg_db):
     from core.postgres import pg_fetchone
     from crm import service
 
-    task = service.create_task("open work")
-    service.complete_task(task["id"])
-    row = pg_fetchone("SELECT completed, status, completed_at FROM tasks WHERE id = %s",
-                      (task["id"],))
+    todo = service.create_todo("open work")
+    service.complete_todo(todo["id"])
+    row = pg_fetchone("SELECT completed, status, completed_at FROM todos WHERE id = %s",
+                      (todo["id"],))
     assert row["completed"] == 1 and row["status"] == "done" and row["completed_at"]
 
-    service.update_task(task["id"], completed=False)
-    row = pg_fetchone("SELECT completed, status, completed_at FROM tasks WHERE id = %s",
-                      (task["id"],))
+    service.update_todo(todo["id"], completed=False)
+    row = pg_fetchone("SELECT completed, status, completed_at FROM todos WHERE id = %s",
+                      (todo["id"],))
     assert row["completed"] == 0 and row["status"] == "next_action"
     assert row["completed_at"] is None
 
@@ -121,9 +121,9 @@ def test_an_invalid_repeat_is_refused_by_the_column_check(pg_db):
     from core.postgres import pg_execute
     from crm import service
 
-    task = service.create_task("x")
+    todo = service.create_todo("x")
     with pytest.raises(psycopg2.errors.CheckViolation):
-        pg_execute("UPDATE tasks SET repeat = 'fortnightly' WHERE id = %s", (task["id"],))
+        pg_execute("UPDATE todos SET repeat = 'fortnightly' WHERE id = %s", (todo["id"],))
 
 
 # ── Recurrence, through a real transaction ────────────────────────────────────
@@ -139,9 +139,9 @@ def test_completing_a_repeating_todo_spawns_exactly_one_occurrence(pg_db, monkey
         "water the plants", status="next_action",
         due_date="2026-08-14", repeat="weekly", auto_star_on_due=True,
     )
-    service.update_task(todo["id"], status="done")
+    service.update_todo(todo["id"], status="done")
 
-    rows = pg_fetchall("SELECT status, completed, due_date, star FROM tasks "
+    rows = pg_fetchall("SELECT status, completed, due_date, star FROM todos "
                        "WHERE title = 'water the plants' ORDER BY id")
     assert len(rows) == 2
     assert rows[0]["status"] == "done" and rows[0]["completed"] == 1
@@ -151,8 +151,8 @@ def test_completing_a_repeating_todo_spawns_exactly_one_occurrence(pg_db, monkey
     assert rows[1]["star"] is True
 
     # A second complete must NOT spawn again — the transition already happened.
-    service.update_task(todo["id"], status="done")
-    assert len(pg_fetchall("SELECT 1 FROM tasks WHERE title = 'water the plants'")) == 2
+    service.update_todo(todo["id"], status="done")
+    assert len(pg_fetchall("SELECT 1 FROM todos WHERE title = 'water the plants'")) == 2
 
 
 def test_clearing_repeat_while_completing_does_not_spawn(pg_db):
@@ -161,8 +161,8 @@ def test_clearing_repeat_while_completing_does_not_spawn(pg_db):
 
     todo = gtd_service.create_todo("monthly report", status="next_action",
                                    due_date="2026-08-01", repeat="monthly")
-    service.update_task(todo["id"], status="done", repeat="")
-    assert len(pg_fetchall("SELECT 1 FROM tasks WHERE title = 'monthly report'")) == 1
+    service.update_todo(todo["id"], status="done", repeat="")
+    assert len(pg_fetchall("SELECT 1 FROM todos WHERE title = 'monthly report'")) == 1
 
 
 # ── The dropped sweep, end to end ─────────────────────────────────────────────
@@ -170,14 +170,14 @@ def test_clearing_repeat_while_completing_does_not_spawn(pg_db):
 def test_a_dropped_todo_leaves_normal_mode_open_work(pg_db):
     from crm import gtd_service, service
 
-    keep = service.create_task("still mine")
+    keep = service.create_todo("still mine")
     drop = gtd_service.create_todo("abandoned idea", status="next_action")
-    before = service.get_dashboard_stats()["pending_tasks"]
+    before = service.get_dashboard_stats()["pending_todos"]
 
     gtd_service.update_todo(drop["id"], {"status": "dropped"})
 
-    assert service.get_dashboard_stats()["pending_tasks"] == before - 1
-    titles = {t["title"] for t in service.list_tasks(limit=100)}
+    assert service.get_dashboard_stats()["pending_todos"] == before - 1
+    titles = {t["title"] for t in service.list_todos(limit=100)}
     assert "abandoned idea" not in titles and "still mine" in titles
     # It is hidden, not destroyed — GTD's own list still sees it.
     assert [t["id"] for t in gtd_service.list_todos(status="dropped")] == [drop["id"]]
@@ -187,7 +187,7 @@ def test_a_dropped_todo_leaves_normal_mode_open_work(pg_db):
 # ── Reset + seed ──────────────────────────────────────────────────────────────
 
 def test_clear_all_truncates_the_fk_referenced_project_table(pg_db):
-    """task_projects is referenced BY tasks, so Postgres rejects truncating it alone —
+    """todo_projects is referenced BY todos, so Postgres rejects truncating it alone —
     it has to share the statement, exactly like deal_stage_events."""
     from core.postgres import pg_fetchone
     from crm import gtd_service, service
@@ -195,8 +195,8 @@ def test_clear_all_truncates_the_fk_referenced_project_table(pg_db):
     gtd_service.create_project("Website")
     gtd_service.create_todo("build the thing", project="Website")
     service.clear_all()
-    assert pg_fetchone("SELECT COUNT(*) AS c FROM task_projects")["c"] == 0
-    assert pg_fetchone("SELECT COUNT(*) AS c FROM tasks")["c"] == 0
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM todo_projects")["c"] == 0
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM todos")["c"] == 0
 
 
 def test_the_demo_seed_satisfies_the_coherence_check(pg_db):
@@ -207,7 +207,7 @@ def test_the_demo_seed_satisfies_the_coherence_check(pg_db):
 
     with get_connection() as conn:
         assert seed_demo_data(conn) is True
-    rows = pg_fetchall("SELECT completed, status, completed_at FROM tasks")
+    rows = pg_fetchall("SELECT completed, status, completed_at FROM todos")
     assert rows
     for r in rows:
         assert (r["status"] == "done") == (r["completed"] == 1)
@@ -231,18 +231,18 @@ def test_case_insensitive_project_resolution_reuses_one_row(pg_db):
 
     gtd_service.create_todo("a", project="Website")
     gtd_service.create_todo("b", project="website")
-    assert pg_fetchone("SELECT COUNT(*) AS c FROM task_projects")["c"] == 1
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM todo_projects")["c"] == 1
 
 
 # ── #204: the fence keys on a column, so the column has to be there ───────────
 
-def test_every_task_read_hands_the_assistant_the_source_column(pg_db):
-    """`delimiters.fence_public_rows` decides per ROW, on `tasks.source`. A reader that
+def test_every_todo_read_hands_the_assistant_the_source_column(pg_db):
+    """`delimiters.fence_public_rows` decides per ROW, on `todos.source`. A reader that
     projected explicit columns and left `source` out would silently stop fencing —
     fail-OPEN, and invisible in the hermetic suite, which builds its rows by hand.
 
-    Both task modes are pinned: GTD advertises `todo_list`/`todo_get`, the other
-    advertises `crm_list_tasks` over the same rows.
+    Both todo modes are pinned: GTD advertises `todo_list`/`todo_get`, the other
+    advertises `crm_list_todos` over the same rows.
     """
     from assistant import delimiters
     from crm import gtd_service, gtd_tools, tools
@@ -252,9 +252,9 @@ def test_every_task_read_hands_the_assistant_the_source_column(pg_db):
 
     listed = gtd_tools.GTD_TOOL_EXECUTORS["todo_list"](status="inbox")
     got = gtd_tools.GTD_TOOL_EXECUTORS["todo_get"](todo_id=captured["id"])
-    tasks = tools.TOOL_EXECUTORS["crm_list_tasks"]()
+    todos = tools.TOOL_EXECUTORS["crm_list_todos"]()
 
-    for payload in (listed, got, tasks):
+    for payload in (listed, got, todos):
         _, tainted = delimiters.fence_public_rows(payload)
         assert tainted is True, payload
 

@@ -31,8 +31,8 @@ flags are exactly these, and no others:
 
 - **stale** — nothing has touched it for the staleness window, 14 days by default.
 - **stuck in stage** — it has sat in the same stage for 30 days.
-- **no next step** — it has no open task.
-- **overdue task** — it has a task past its due date.
+- **no next step** — it has no open todo.
+- **overdue todo** — it has a todo past its due date.
 - **missing contact** — no contact is linked.
 - **missing company** — no company is linked.
 

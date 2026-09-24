@@ -67,8 +67,8 @@ author: Neil Rackham
   situation question you have not asked. The rest of the list comes from reading the
   record: `crm_get_deal` and `crm_get_chatter` show whether a problem was ever written
   down, which is the question that actually matters.
-- **An advance is a task with a date** — end the call with a specific commitment and create
-  it as a task (`crm_create_task`; `todo_create` in GTD task mode). A deal whose only next
+- **An advance is a todo with a date** — end the call with a specific commitment and create
+  it as a todo (`crm_create_todo`; `todo_create` in GTD todo mode). A deal whose only next
   step is "follow up" has not advanced, and the *no next step* health flag will say so.
 - **Stage movement follows an agreed need, not a good meeting** — move *lead* to
   *qualified* with `crm_update_deal_stage` once the buyer has stated a problem and the

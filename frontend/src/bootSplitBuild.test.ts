@@ -152,7 +152,7 @@ describe('boot split (#149) — the built chunk graph', () => {
       'src/crm/PipelinePage.tsx',
         'src/crm/SettingsPage.tsx',
       'src/crm/MemoryPage.tsx',
-      'src/crm/TasksPage.tsx',
+      'src/crm/TodosPage.tsx',
       'src/setup/SetupPage.tsx',
     ];
     expect(boundaries.length).toBe(13);
@@ -182,7 +182,7 @@ describe('boot split (#149) — the built chunk graph', () => {
 
   it('the CRM shell downloads no page chunk, no assistant and no collection layer', () => {
     // The assertion `bootSplit.test.ts` cannot make: its App allowlist is one hop deep, so an
-    // eager leaf (LoginPage, TasksModeRouter, ToastViewport) growing a heavy import is invisible
+    // eager leaf (LoginPage, TodosModeRouter, ToastViewport) growing a heavy import is invisible
     // there and caught here.
     const modules = modulesDownloadedBy([ENTRY, chunkFor('src/App.tsx')]);
 

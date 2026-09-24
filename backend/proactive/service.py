@@ -131,25 +131,25 @@ def collect_digest() -> dict:
     from crm.service import (
         LIVE_PREDICATE,
         LIVE_PREDICATE_D,
-        LIVE_TASK_PREDICATE,
-        NOT_DROPPED_TASK,
+        LIVE_TODO_PREDICATE,
+        NOT_DROPPED_TODO,
         OPEN_PREDICATE,
         OPEN_PREDICATE_D,
     )
 
     # The CONFIGURED-TIMEZONE day since #130, not the UTC one. This digest answers
     # "what is due today" in prose a person reads: on a UTC day, a 6pm Central run
-    # reported TOMORROW's tasks as due today and understated the overdue count.
+    # reported TOMORROW's todos as due today and understated the overdue count.
     today = gtd_common.today_local_str()
     pipeline = pg_fetchone(
         f"""SELECT COUNT(*) AS open_deals, COALESCE(SUM(value), 0) AS open_value
               FROM deals WHERE {OPEN_PREDICATE} AND {LIVE_PREDICATE}"""
     ) or {}
-    tasks = pg_fetchone(
+    todos = pg_fetchone(
         f"""SELECT COUNT(*) FILTER (WHERE due_date != '' AND due_date < %s) AS overdue,
                    COUNT(*) FILTER (WHERE due_date = %s)                    AS due_today
-              FROM tasks WHERE completed = 0 AND {LIVE_TASK_PREDICATE}
-                                            AND {NOT_DROPPED_TASK}""",
+              FROM todos WHERE completed = 0 AND {LIVE_TODO_PREDICATE}
+                                            AND {NOT_DROPPED_TODO}""",
         (today, today),
     ) or {}
     # Top open deals by #18's lead score, falling back to value so a CRM whose scores
@@ -169,8 +169,8 @@ def collect_digest() -> dict:
     return {
         "open_deals": int(pipeline.get("open_deals") or 0),
         "open_value": float(pipeline.get("open_value") or 0),
-        "overdue_tasks": int(tasks.get("overdue") or 0),
-        "tasks_due_today": int(tasks.get("due_today") or 0),
+        "overdue_todos": int(todos.get("overdue") or 0),
+        "todos_due_today": int(todos.get("due_today") or 0),
         "stale_deals": int(stale.get("total_stale") or 0),
         "stale_days": stale.get("stale_days"),
         "top_deals": top_deals,
@@ -183,15 +183,15 @@ def format_digest(summary: dict) -> tuple[str, str]:
     lines = [
         f"{summary['open_deals']} open deals worth {_money(summary['open_value'])}.",
     ]
-    if summary["tasks_due_today"] or summary["overdue_tasks"]:
+    if summary["todos_due_today"] or summary["overdue_todos"]:
         parts = []
-        if summary["overdue_tasks"]:
-            parts.append(f"{summary['overdue_tasks']} overdue")
-        if summary["tasks_due_today"]:
-            parts.append(f"{summary['tasks_due_today']} due today")
-        lines.append("Tasks: " + ", ".join(parts) + ".")
+        if summary["overdue_todos"]:
+            parts.append(f"{summary['overdue_todos']} overdue")
+        if summary["todos_due_today"]:
+            parts.append(f"{summary['todos_due_today']} due today")
+        lines.append("Todos: " + ", ".join(parts) + ".")
     else:
-        lines.append("No tasks overdue or due today.")
+        lines.append("No todos overdue or due today.")
     if summary["stale_deals"]:
         lines.append(
             f"{summary['stale_deals']} deals untouched for {summary['stale_days']}+ days."
@@ -264,8 +264,8 @@ def _digest_user_message(summary: dict) -> str:
     return (
         "Today's digest was: "
         f"{summary['open_deals']} open deals worth {_money(summary['open_value'])}; "
-        f"{summary['overdue_tasks']} overdue tasks; "
-        f"{summary['tasks_due_today']} tasks due today; "
+        f"{summary['overdue_todos']} overdue todos; "
+        f"{summary['todos_due_today']} todos due today; "
         f"{summary['stale_deals']} stale deals. Top deals: {top}. "
         "Add at most one useful observation."
     )
@@ -335,9 +335,9 @@ def collect_nudge_candidates() -> list[dict]:
     out = []
     stale = analytics_service.get_stale_deals(limit=settings.proactive_max_nudges_per_run * 3)
     for deal in stale.get("deals", []):
-        # A deal with an open follow-up task is already being handled; nagging about
+        # A deal with an open follow-up todo is already being handled; nagging about
         # it is the noise that makes people turn notifications off.
-        if deal.get("has_open_task"):
+        if deal.get("has_open_todo"):
             continue
         out.append({
             "entity_type": "deal",
@@ -348,7 +348,7 @@ def collect_nudge_candidates() -> list[dict]:
             "message": (
                 f"{deal.get('title') or 'Untitled deal'} "
                 f"({_money(deal.get('value') or 0)}, {deal.get('stage')}) — "
-                f"no contact in {deal.get('days_since_touch')} days and no follow-up task."
+                f"no contact in {deal.get('days_since_touch')} days and no follow-up todo."
             ),
         })
 

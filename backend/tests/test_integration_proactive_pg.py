@@ -63,7 +63,7 @@ def pg_db():
 @pytest.fixture(autouse=True)
 def _clean(pg_db):
     from core.postgres import pg_execute
-    pg_execute("TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
+    pg_execute("TRUNCATE companies, contacts, deals, activity_log, todos, crm_chatter, "
                "crm_chatter_attachments, crm_field_values, crm_field_provenance, "
                "deal_stage_events, proactive_nudges, deal_ai_touch_evidence "
                "RESTART IDENTITY")
@@ -161,7 +161,7 @@ def test_deal_health_runs_against_the_real_schema():
     assert out["deal"]["title"] == "Neglected"
     assert out["score"] is not None          # #18 scored it
     assert "stale" in out["flags"]           # 40 days untouched
-    assert "no_next_step" in out["flags"]    # no open task
+    assert "no_next_step" in out["flags"]    # no open todo
     assert "missing_company" in out["flags"]
     assert "missing_contact" not in out["flags"]
 
@@ -249,11 +249,11 @@ def test_collect_digest_reads_real_pipeline_numbers():
     pg_execute("INSERT INTO deals (id, title, stage, value) VALUES (11, 'Closed', 'won', 9000)")
     pg_execute("INSERT INTO deals (id, title, stage, value, archived_at) "
                "VALUES (12, 'Archived', 'lead', 7000, now())")
-    pg_execute("INSERT INTO tasks (title, due_date, completed) "
+    pg_execute("INSERT INTO todos (title, due_date, completed) "
                "VALUES ('Overdue', to_char(now() - interval '3 days', 'YYYY-MM-DD'), 0)")
 
     summary = ps.collect_digest()
     assert summary["open_deals"] == 1               # won and archived both excluded
     assert summary["open_value"] == 2500.0
-    assert summary["overdue_tasks"] == 1
+    assert summary["overdue_todos"] == 1
     assert [d["title"] for d in summary["top_deals"]] == ["Live"]

@@ -62,9 +62,9 @@ def test_list_returns_the_views(client, calls):
 
 def test_list_forwards_surface_and_actor(client, calls):
     calls("list_views", [])
-    client.get("/api/saved-views?surface=crm_tasks")
+    client.get("/api/saved-views?surface=crm_todos")
     _, args, _ = calls.recorded[0]
-    assert args[0] == "crm_tasks"
+    assert args[0] == "crm_todos"
     assert args[1]["id"] == 1
 
 

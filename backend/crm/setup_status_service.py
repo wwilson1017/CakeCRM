@@ -39,12 +39,12 @@ field is unknown there rather than false.
 
 Three readers cannot express "unknown" on their own, because they are documented
 never-raising, fail-safe-to-a-default reads used on hot paths (`gmail.store.get_row`,
-`providers.credentials.CredentialStore._load`, `crm.service.get_task_mode`). That is
+`providers.credentials.CredentialStore._load`, `crm.service.get_todo_mode`). That is
 correct for them and wrong for here, so each is answered with a tell **carried by the same
 query as the value** — never a separate preflight probe, which can succeed in the instant
 before the real read fails and so proves nothing about it. Gmail brings its own: the
 `gmail_connection` singleton is seeded by its migration, so an EMPTY row can only mean the
-read failed. `CredentialStore` now reports `load_failed` off its own load. Task mode is
+read failed. `CredentialStore` now reports `load_failed` off its own load. Todo mode is
 read through `get_crm_meta`, the failure-aware reader of that singleton, which lets the
 error propagate.
 """
@@ -154,17 +154,17 @@ def _telegram(user_id) -> tuple[bool | None, bool | None]:
         return connected, None
 
 
-# The product default, and the rule `crm.service.get_task_mode` applies to the stored
+# The product default, and the rule `crm.service.get_todo_mode` applies to the stored
 # column: anything that is not one of the two known modes reads as GTD. Restated here
 # rather than reached through that function, because that function ALSO swallows a failed
 # read into this same default — which is right for the four hot paths that call it and
 # wrong for a surface that promised not to present a guess as a fact.
-# `test_the_task_mode_rule_matches_the_one_every_other_reader_uses` pins the two together.
-_TASK_MODES = ("normal", "gtd")
-_TASK_MODE_DEFAULT = "gtd"
+# `test_the_todo_mode_rule_matches_the_one_every_other_reader_uses` pins the two together.
+_TODO_MODES = ("normal", "gtd")
+_TODO_MODE_DEFAULT = "gtd"
 
 
-def _task_mode() -> str | None:
+def _todo_mode() -> str | None:
     """'gtd' or 'normal', or None when the row could not be read.
 
     Reads the value through ``get_crm_meta``, which is the singleton's failure-AWARE
@@ -177,16 +177,16 @@ def _task_mode() -> str | None:
 
         meta = get_crm_meta()
     except Exception:
-        logger.debug("setup status: crm_meta unreadable — task mode is unknown", exc_info=True)
+        logger.debug("setup status: crm_meta unreadable — todo mode is unknown", exc_info=True)
         return None
-    if "task_mode" not in meta:
+    if "todo_mode" not in meta:
         # `get_crm_meta` answers an ABSENT row with a literal default dict that has no
-        # task_mode key. The singleton is seeded by its migration and deleted by nothing
+        # todo_mode key. The singleton is seeded by its migration and deleted by nothing
         # (both CRM-reset TRUNCATE sweeps exclude it), so that can only mean the row did
         # not come back.
         return None
-    mode = meta.get("task_mode")
-    return mode if mode in _TASK_MODES else _TASK_MODE_DEFAULT
+    mode = meta.get("todo_mode")
+    return mode if mode in _TODO_MODES else _TODO_MODE_DEFAULT
 
 
 def _custom_field_counts() -> dict[str, int] | None:
@@ -229,6 +229,6 @@ def get_setup_status(user_id=None) -> dict:
         "gmail_broken": gmail_broken,
         "telegram_connected": telegram_connected,
         "telegram_linked": telegram_linked,
-        "task_mode": _task_mode(),
+        "todo_mode": _todo_mode(),
         "custom_field_counts": _custom_field_counts(),
     }

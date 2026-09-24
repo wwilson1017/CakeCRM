@@ -73,8 +73,8 @@ author: Roger Fisher and William Ury with Bruce Patton
 - **Every concession becomes an activity** — log what was given and what came back with
   `crm_log_activity`, so the pattern is visible and the same ground is not conceded twice.
 - **Agreement earns a stage change** — once the criteria are settled, move it with
-  `crm_update_deal_stage`, and create the paperwork step as a task (`crm_create_task`;
-  `todo_create` in GTD task mode).
+  `crm_update_deal_stage`, and create the paperwork step as a todo (`crm_create_todo`;
+  `todo_create` in GTD todo mode).
 
 ## Go read it
 

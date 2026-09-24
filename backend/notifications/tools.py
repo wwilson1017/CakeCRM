@@ -27,7 +27,7 @@ NOTIFY_USER_DEF = {
     "input_schema": {
         "type": "object",
         "properties": {
-            "title": {"type": "string", "description": "Short headline (e.g. 'Overdue tasks')"},
+            "title": {"type": "string", "description": "Short headline (e.g. 'Overdue todos')"},
             "message": {"type": "string", "description": "The notification body with details"},
         },
         "required": ["title", "message"],

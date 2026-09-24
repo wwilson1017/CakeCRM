@@ -89,6 +89,6 @@ describe('confirmDiscardOn', () => {
     // was the first consumer and is deliberately not mentioned.
     void confirmDiscardOn('button', () => true);
     const options: ConfirmOptions = confirmDialog.mock.calls[0][0];
-    expect(`${options.title} ${options.message}`.toLowerCase()).not.toMatch(/deal|contact|task|company/);
+    expect(`${options.title} ${options.message}`.toLowerCase()).not.toMatch(/deal|contact|todo|company/);
   });
 });

@@ -231,10 +231,10 @@ def fake_member() -> dict:
 
 
 @pytest.fixture
-def task_mode(monkeypatch):
-    """Pin the #70 task mode for one test.
+def todo_mode(monkeypatch):
+    """Pin the #70 todo mode for one test.
 
-    The hermetic suite runs with no database, so `crm.service.get_task_mode()` answers
+    The hermetic suite runs with no database, so `crm.service.get_todo_mode()` answers
     from its fail-safe — which #102 flipped from 'normal' to 'gtd'. Any test that
     builds a tool registry or a system prompt therefore has an opinion about the mode
     whether it states one or not, and three tests were silently relying on the old
@@ -242,6 +242,6 @@ def task_mode(monkeypatch):
     """
     def _set(value: str) -> None:
         from crm import gtd_tools, tools
-        monkeypatch.setattr(gtd_tools.service, "get_task_mode", lambda: value)
-        monkeypatch.setattr(tools.crm, "get_task_mode", lambda: value)
+        monkeypatch.setattr(gtd_tools.service, "get_todo_mode", lambda: value)
+        monkeypatch.setattr(tools.crm, "get_todo_mode", lambda: value)
     return _set

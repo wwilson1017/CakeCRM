@@ -5,7 +5,7 @@
  * Reading `new Date()` inside a facet predicate or a cell renderer is necessary but NOT
  * sufficient: those only run again when React re-renders, and nothing about the passage of
  * time causes a render. A CRM tab left open overnight — an ordinary thing to do — would
- * therefore keep yesterday's "today": tasks that became overdue at midnight would still
+ * therefore keep yesterday's "today": todos that became overdue at midnight would still
  * render as due today, and the "Due today" / "Overdue" / "Next 7 days" / "Last contact"
  * facets would keep selecting against a boundary that has moved.
  *

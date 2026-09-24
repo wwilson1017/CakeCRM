@@ -1,8 +1,8 @@
 """Real-Postgres integration for the dashboard Today panel (issue #130).
 
 These are the claims a Recorder cannot check, because it agrees with whatever SQL it is
-handed: that the TEXT date comparison really selects the right tasks, that the owner
-condition really admits unassigned rows, and that the sweeps (`NOT_DROPPED_TASK`, the
+handed: that the TEXT date comparison really selects the right todos, that the owner
+condition really admits unassigned rows, and that the sweeps (`NOT_DROPPED_TODO`, the
 live-deal predicate) really exclude what they claim to.
 
 Marked ``integration`` and excluded from the default no-DB run. Fixture data is fresh and
@@ -87,7 +87,7 @@ def _shift(day: str, days: int) -> str:
 
 
 def _user(name) -> int:
-    """A real row, because `tasks.owner_id` is a real FK to `users` (#60's design, and
+    """A real row, because `todos.owner_id` is a real FK to `users` (#60's design, and
     the reason a synthetic owner id cannot stand in here)."""
     from core.postgres import pg_fetchone
 
@@ -97,14 +97,14 @@ def _user(name) -> int:
     )["id"]
 
 
-def _task(title, *, due="", star=False, owner=None, status="next_action", deal_id=None) -> int:
+def _todo(title, *, due="", star=False, owner=None, status="next_action", deal_id=None) -> int:
     from core.postgres import pg_fetchone
 
     # `completed` is DERIVED from `status`, never hand-written: a DB CHECK binds the two
     # (#70), so any other pairing is a constraint violation — the same reason
     # `seed_data.py` derives it rather than setting both.
     return pg_fetchone(
-        "INSERT INTO tasks (title, due_date, star, owner_id, status, completed, deal_id) "
+        "INSERT INTO todos (title, due_date, star, owner_id, status, completed, deal_id) "
         "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
         (title, due, star, owner, status, 1 if status == "done" else 0, deal_id),
     )["id"]
@@ -168,10 +168,10 @@ def test_full_ladder_end_to_end(today):
     """Every rung, in order, against real SQL — the acceptance criterion's interleave."""
     from crm import today_service
 
-    _task("Starred", star=True, due=_shift(today, -3))
-    _task("Overdue older", due=_shift(today, -9))
-    _task("Overdue newer", due=_shift(today, -1))
-    _task("Due today", due=today)
+    _todo("Starred", star=True, due=_shift(today, -3))
+    _todo("Overdue older", due=_shift(today, -9))
+    _todo("Overdue newer", due=_shift(today, -1))
+    _todo("Due today", due=today)
 
     assert _titles(today_service.get_today()) == [
         "Starred", "Overdue older", "Overdue newer", "Due today",
@@ -179,49 +179,49 @@ def test_full_ladder_end_to_end(today):
 
 
 def test_sweeps_exclude_what_they_claim_to(today):
-    """Dropped todos, done todos, tasks on archived deals and undated tasks must all
+    """Dropped, done, on-archived-deal and undated todos must all
     stay out."""
     from crm import service, today_service
 
     deal = service.create_deal(title="Archived deal", value=10)["id"]
     service.archive_deal(deal, archived=True)
 
-    _task("Visible", due=today)
-    _task("Dropped", due=today, status="dropped")
-    _task("On an archived deal", due=today, deal_id=deal)
-    _task("Due tomorrow", due=_shift(today, 1))
-    _task("No due date", due="")
+    _todo("Visible", due=today)
+    _todo("Dropped", due=today, status="dropped")
+    _todo("On an archived deal", due=today, deal_id=deal)
+    _todo("Due tomorrow", due=_shift(today, 1))
+    _todo("No due date", due="")
 
     assert _titles(today_service.get_today()) == ["Visible"]
 
 
 def test_owner_scope_admits_unassigned_but_not_a_colleagues(today):
-    """The panel's one deliberate divergence from list_tasks' strict owner filter."""
+    """The panel's one deliberate divergence from list_todos' strict owner filter."""
     from crm import today_service
 
     me, colleague = _user("Ada"), _user("Bo")
-    _task("Mine", due=today, owner=me)
-    _task("Unassigned", due=today, owner=None)
-    _task("A colleague's", due=today, owner=colleague)
+    _todo("Mine", due=today, owner=me)
+    _todo("Unassigned", due=today, owner=None)
+    _todo("A colleague's", due=today, owner=colleague)
 
     assert _titles(today_service.get_today(owner_id=me)) == ["Mine", "Unassigned"]
     assert sorted(_titles(today_service.get_today())) == ["A colleague's", "Mine", "Unassigned"]
 
 
-def test_starred_overdue_task_appears_once_at_rank_one(today):
+def test_starred_overdue_todo_appears_once_at_rank_one(today):
     from crm import today_service
 
-    _task("Both starred and overdue", star=True, due=_shift(today, -5))
+    _todo("Both starred and overdue", star=True, due=_shift(today, -5))
     items = today_service.get_today()["items"]
     assert [(i["title"], i["rank"]) for i in items] == [("Both starred and overdue", 1)]
 
 
-def test_task_membership_matches_the_gtd_today_view_exactly(today):
+def test_todo_membership_matches_the_gtd_today_view_exactly(today):
     """The issue's acceptance criterion, asserted as SET EQUALITY rather than as two
     predicate lists that merely look alike.
 
-    `today_view()` and `_fetch_today_tasks()` are written independently — one says
-    `status NOT IN ('done','dropped')`, the other `completed = 0 AND NOT_DROPPED_TASK`
+    `today_view()` and `_fetch_today_todos()` are written independently — one says
+    `status NOT IN ('done','dropped')`, the other `completed = 0 AND NOT_DROPPED_TODO`
     — so nothing but a test like this stops them drifting apart. The fixtures deliberately
     include a row on each side of every clause the two spell differently.
     """
@@ -241,10 +241,10 @@ def test_task_membership_matches_the_gtd_today_view_exactly(today):
         ("Done", {"due": today, "status": "done"}),
         ("On an archived deal", {"due": today, "deal_id": deal}),
     ]:
-        _task(title, **kwargs)
+        _todo(title, **kwargs)
 
     gtd_ids = {t["id"] for t in gtd_service.today_view()}
-    panel_ids = {i["id"] for i in today_service.get_today()["items"] if i["kind"] == "task"}
+    panel_ids = {i["id"] for i in today_service.get_today()["items"] if i["kind"] == "todo"}
     assert panel_ids == gtd_ids
     # Guard against the assertion passing because BOTH are empty or trivially small.
     assert len(panel_ids) == 4

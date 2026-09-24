@@ -388,12 +388,12 @@ def test_the_guidance_is_appended_exactly_once_per_tool():
         assert tool["description"].count(tools.CRM_DEAL_URL_GUIDANCE) <= 1, tool["name"]
 
 
-def test_get_crm_tools_carries_the_guidance_in_both_task_modes(monkeypatch):
+def test_get_crm_tools_carries_the_guidance_in_both_todo_modes(monkeypatch):
     """The defs the assistant actually receives come from `get_crm_tools()`, which
-    filters by task mode. The guidance must survive that path, not just exist on the
+    filters by todo mode. The guidance must survive that path, not just exist on the
     module constant."""
     for mode in ("normal", "gtd"):
-        monkeypatch.setattr(tools.crm, "get_task_mode", lambda mode=mode: mode)
+        monkeypatch.setattr(tools.crm, "get_todo_mode", lambda mode=mode: mode)
         defs, _ = tools.get_crm_tools()
         by_name = {d["name"]: d["description"] for d in defs}
         # crm_get_deal is present in both modes and is a registered deal-URL tool.
@@ -466,16 +466,16 @@ def test_get_contact_links_the_deals_it_embeds(absolute_base, monkeypatch):
         tools.crm, "get_contact_detail",
         lambda _id: {"id": 5, "name": "Bob",
                      "deals": [{"id": 42, "title": "A"}, {"id": 7, "title": "B"}],
-                     "tasks": [{"id": 3, "title": "T"}]},
+                     "todos": [{"id": 3, "title": "T"}]},
     )
     contact = tools.crm_get_contact(5)
     assert [d["url"] for d in contact["deals"]] == [
         absolute_base + FRONTEND_DEAL_PATH, absolute_base + "/crm/pipeline?deal=7",
     ]
     # The contact itself is not a deal — its own id must not become a deal link, and
-    # neither must a task's.
+    # neither must a todo's.
     assert "url" not in contact
-    assert "url" not in contact["tasks"][0]
+    assert "url" not in contact["todos"][0]
 
 
 def test_dashboard_links_its_top_deals(absolute_base, monkeypatch):

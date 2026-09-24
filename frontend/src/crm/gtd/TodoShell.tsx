@@ -9,7 +9,7 @@ export type TodoTab =
   | 'someday' | 'done' | 'review' | 'search';
 
 // `sub` is the path relative to the todo root ('' = Today); todoPath() resolves it
-// against the active base (the CRM's /crm/tasks vs. the public router basename), so
+// against the active base (the CRM's /crm/todos vs. the public router basename), so
 // the same tabs render in both modes.
 const TABS: { key: TodoTab; label: string; sub: string }[] = [
   { key: 'today', label: 'Today', sub: '' },

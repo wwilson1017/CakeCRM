@@ -66,7 +66,7 @@ def clean(pg_db):
 
     pg_execute("DELETE FROM assistant_conversations")   # messages cascade
     pg_execute("DELETE FROM memory_facts")
-    pg_execute("DELETE FROM tasks")
+    pg_execute("DELETE FROM todos")
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -383,7 +383,7 @@ def real_model(monkeypatch):
     return call
 
 
-def test_one_settled_conversation_yields_a_fact_and_an_inbox_task(pg_db, real_model):
+def test_one_settled_conversation_yields_a_fact_and_an_inbox_todo(pg_db, real_model):
     from core.postgres import pg_fetchone
     from memory import service
 
@@ -392,17 +392,17 @@ def test_one_settled_conversation_yields_a_fact_and_an_inbox_task(pg_db, real_mo
     _message(cid, 1, "user", "she said she would send it by Friday")
 
     out = _observe_once(cid, ScriptedProvider(REPLY))
-    assert out["facts_added"] == 1 and out["tasks_added"] == 1
+    assert out["facts_added"] == 1 and out["todos_added"] == 1
 
     fact = service.find_live_facts_by_key("Dana", "works at")[0]
     assert fact["created_by"] == "observer"
     assert fact["source"] == f"conversation:{cid}"
     assert fact["confidence"] == 0.9
 
-    task = pg_fetchone("SELECT title, status, source, owner_id, description, completed FROM tasks")
-    assert task["status"] == "inbox" and task["source"] == "agent"
-    assert task["owner_id"] is None and task["completed"] == 0
-    assert f"conversation:{cid}" in task["description"]
+    todo = pg_fetchone("SELECT title, status, source, owner_id, description, completed FROM todos")
+    assert todo["status"] == "inbox" and todo["source"] == "agent"
+    assert todo["owner_id"] is None and todo["completed"] == 0
+    assert f"conversation:{cid}" in todo["description"]
 
     assert pg_fetchone("SELECT observed_through_seq FROM assistant_conversations WHERE id = %s",
                        (cid,))["observed_through_seq"] == 1
@@ -427,9 +427,9 @@ def test_equivalent_content_replayed_above_a_new_watermark_is_deduped(pg_db, rea
 
     assert provider.calls == 2                       # the model really was asked again
     assert out["facts_added"] == 0 and out["facts_superseded"] == 0
-    assert out["tasks_added"] == 0
+    assert out["todos_added"] == 0
     assert pg_fetchone("SELECT count(*) AS n FROM memory_facts")["n"] == 1
-    assert pg_fetchone("SELECT count(*) AS n FROM tasks")["n"] == 1
+    assert pg_fetchone("SELECT count(*) AS n FROM todos")["n"] == 1
     assert len(service.find_live_facts_by_key("Dana", "works at")) == 1
 
 
@@ -475,11 +475,11 @@ def test_the_prompt_carries_the_message_dates_and_both_fences(pg_db, real_model)
     cid = _conversation()
     _message(cid, 0, "user", "Dana works at Acme and owes us a quote")
     _message(cid, 1, "user", "she said she would send it by Friday")
-    tracked = {t.casefold(): t for t in gtd_service.list_open_task_titles(30, 30)}
+    tracked = {t.casefold(): t for t in gtd_service.list_open_todo_titles(30, 30)}
     _observe_once(cid, ScriptedProvider(REPLY), tracked)
 
     prompt = real_model.prompts[0]
-    assert 'source="conversation"' in prompt and 'source="tracked_tasks"' in prompt
+    assert 'source="conversation"' in prompt and 'source="tracked_todos"' in prompt
     assert "An existing open todo" in prompt
     assert "Dana works at Acme" in prompt
     # The row shape here is what row_to_dict really returns (an ISO string), so this is
@@ -489,7 +489,7 @@ def test_the_prompt_carries_the_message_dates_and_both_fences(pg_db, real_model)
     assert re.search(r"USER \[\d{4}-\d{2}-\d{2}\]: Dana works at Acme", prompt)
 
 
-def test_an_open_task_from_outside_the_prompt_list_still_blocks_a_duplicate(pg_db, real_model):
+def test_an_open_todo_from_outside_the_prompt_list_still_blocks_a_duplicate(pg_db, real_model):
     """The capped prompt list cannot see it; the existence query can."""
     from core.postgres import pg_fetchone
     from crm import gtd_service
@@ -500,13 +500,13 @@ def test_an_open_task_from_outside_the_prompt_list_still_blocks_a_duplicate(pg_d
     _message(cid, 1, "user", "she said she would send it by Friday")
     out = _observe_once(cid, ScriptedProvider(REPLY), {})    # deliberately EMPTY list
 
-    assert out["tasks_added"] == 0
-    assert pg_fetchone("SELECT count(*) AS n FROM tasks")["n"] == 1
+    assert out["todos_added"] == 0
+    assert pg_fetchone("SELECT count(*) AS n FROM todos")["n"] == 1
 
 
 # ── the title dedupe, against the real regex (#198 review) ──────────────────
 
-def test_an_open_task_with_odd_internal_spacing_still_blocks_a_duplicate(pg_db):
+def test_an_open_todo_with_odd_internal_spacing_still_blocks_a_duplicate(pg_db):
     """`validate_title` only strips the ends, so a human's "Call  Bob" is STORED with two
     spaces while the observer always proposes a collapsed title. Normalizing only the
     needle would make the check less permissive, not more, and this function would
@@ -514,20 +514,20 @@ def test_an_open_task_with_odd_internal_spacing_still_blocks_a_duplicate(pg_db):
     from crm import gtd_service
 
     gtd_service.create_todo("Call  Bob   about   the   quote", status="inbox", source="ui")
-    assert gtd_service.open_task_with_title_exists("Call Bob about the quote") is True
-    assert gtd_service.open_task_with_title_exists("call bob ABOUT the quote") is True
-    assert gtd_service.open_task_with_title_exists("  Call Bob about the quote  ") is True
+    assert gtd_service.open_todo_with_title_exists("Call Bob about the quote") is True
+    assert gtd_service.open_todo_with_title_exists("call bob ABOUT the quote") is True
+    assert gtd_service.open_todo_with_title_exists("  Call Bob about the quote  ") is True
     # ...but it must still be an EXACT title match, not a fuzzy one.
-    assert gtd_service.open_task_with_title_exists("Call Bob") is False
+    assert gtd_service.open_todo_with_title_exists("Call Bob") is False
 
 
-def test_a_finished_task_does_not_block_a_new_one(pg_db):
+def test_a_finished_todo_does_not_block_a_new_one(pg_db):
     from crm import gtd_service
 
     todo = gtd_service.create_todo("Chase the Acme quote", status="inbox", source="agent")
-    assert gtd_service.open_task_with_title_exists("Chase the Acme quote") is True
+    assert gtd_service.open_todo_with_title_exists("Chase the Acme quote") is True
     gtd_service.update_todo(todo["id"], {"status": "done"})
-    assert gtd_service.open_task_with_title_exists("Chase the Acme quote") is False
+    assert gtd_service.open_todo_with_title_exists("Chase the Acme quote") is False
 
 
 def test_the_observed_day_follows_the_configured_timezone(pg_db, real_model, monkeypatch):

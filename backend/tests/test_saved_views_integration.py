@@ -129,7 +129,7 @@ def test_the_same_name_is_free_on_another_surface(people):
     from saved_views import service
 
     service.create_view("crm_pipeline", "Mine", 1, {}, people["creator"])
-    assert "error" not in service.create_view("crm_tasks", "Mine", 1, {}, people["creator"])
+    assert "error" not in service.create_view("crm_todos", "Mine", 1, {}, people["creator"])
 
 
 def test_another_member_may_read_but_not_edit_or_delete(people):

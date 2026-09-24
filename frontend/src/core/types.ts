@@ -29,7 +29,7 @@ export interface CrmContact {
   last_contact_at?: string | null;
   // Detail view extras
   deals?: CrmDeal[];
-  tasks?: CrmTask[];
+  todos?: CrmTodo[];
   activity?: CrmActivity[];
 }
 
@@ -110,7 +110,7 @@ export interface CrmCompany {
   open_deal_value?: number;
 }
 
-export interface CrmTask {
+export interface CrmTodo {
   /** Owner (issue #60). null = unassigned, which is a real state, not missing data.
    *  Ownership is an assignment and a filter, never a permission. */
   owner_id?: number | null;
@@ -127,7 +127,7 @@ export interface CrmTask {
   created_at: string;
   updated_at: string;
   // GTD column (#70) that rides every `SELECT t.*` response. Normal mode neither shows nor
-  // edits it, but the Tasks list reads it for one decision: completing a REPEATING task
+  // edits it, but the Todos list reads it for one decision: completing a REPEATING todo
   // spawns its next occurrence server-side, a row no local patch can invent, so that one
   // path re-sweeps instead of patching (#77). '' = does not repeat.
   repeat?: string;
@@ -214,8 +214,8 @@ export interface CrmDashboard {
   contacts_by_status: Record<string, number>;
   pipeline_by_stage: { stage: string; count: number; total_value: number }[];
   total_pipeline_value: number;
-  overdue_tasks: number;
-  pending_tasks: number;
+  overdue_todos: number;
+  pending_todos: number;
   recent_activity: CrmActivity[];
   top_deals: CrmDeal[];
 }
@@ -277,16 +277,16 @@ export interface CrmWeeklyTouchDetail {
 // GET /api/crm/dashboard/today (issue #130). One ranked list of what needs the viewer
 // today, already ordered by the server's priority ladder — the client renders `items`
 // in the order given and never re-sorts. Rank 2 is hot+stale deals (#131), which is why
-// the task ranks skip it. Its own response types rather than a widened `CrmTask`: a panel
-// row is not a task row, and `CrmTask` declares no `star`.
+// the todo ranks skip it. Its own response types rather than a widened `CrmTodo`: a panel
+// row is not a todo row, and `CrmTodo` declares no `star`.
 //
 // A `rank` of `null` means "not on the ladder at all" — a hot deal that was touched
 // recently. Those rows are in the payload but never in the collapsed card: `collapseToday`
 // fills the five visible slots from ranked rows only, so the expander is the one way to
 // them. That is #131's rule, and encoding it as an absent rank rather than a sixth rung is
 // what keeps the browser from carrying a second copy of the ladder's numbering.
-export interface CrmTodayTaskItem {
-  kind: 'task';
+export interface CrmTodayTodoItem {
+  kind: 'todo';
   id: number;
   rank: 1 | 3 | 4;
   why: 'starred' | 'overdue' | 'due_today';
@@ -312,7 +312,7 @@ export interface CrmTodayDealItem {
   owner_id: number | null;
 }
 
-export type CrmTodayItem = CrmTodayTaskItem | CrmTodayDealItem;
+export type CrmTodayItem = CrmTodayTodoItem | CrmTodayDealItem;
 
 export interface CrmToday {
   /** The SERVER's local day (YYYY-MM-DD). Due labels render against this, not the
@@ -411,7 +411,7 @@ export interface AiTouchEvidenceResponse {
 // GET /api/crm/companies/:id/report (issue #144) — the Reports page's one-company rollup.
 // The child lists are capped server-side and say so; the headline numbers in `summary` are
 // their own aggregate over the full tables, so no cap and no archive toggle can move them.
-// Every expanded row renders entirely from this payload — custom fields and open tasks ride
+// Every expanded row renders entirely from this payload — custom fields and open todos ride
 // it, batched — so opening a row costs no request.
 
 /** One custom field on a rolled-up record: EVERY definition, whether or not it is filled in. */
@@ -449,8 +449,8 @@ export interface CrmCompanyRollup {
   contacts: (CrmContact & CrmRollupChild)[];
   deals: (CrmDeal & CrmRollupChild & {
     last_activity_at: string | null;
-    tasks: CrmTask[];
-    tasks_truncated: boolean;
+    todos: CrmTodo[];
+    todos_truncated: boolean;
   })[];
   contacts_truncated: boolean;
   deals_truncated: boolean;

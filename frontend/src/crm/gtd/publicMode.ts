@@ -43,12 +43,12 @@ export const TODO_API_BASE = TODO_PUBLIC_BASE
 /**
  * Route path for a todo page.
  *
- * Inside the CRM these live under /crm/tasks (Today at the bare /crm/tasks). In
+ * Inside the CRM these live under /crm/todos (Today at the bare /crm/todos). In
  * public mode the router basename already points at the todo root, so the pages hang
  * off '/'. Pass the sub-path WITHOUT the prefix: todoPath('/inbox') →
- * '/crm/tasks/inbox' (authed) or '/inbox' (public).
+ * '/crm/todos/inbox' (authed) or '/inbox' (public).
  */
 export function todoPath(sub = ''): string {
   if (isTodoPublicMode) return sub || '/';
-  return `/crm/tasks${sub}`;
+  return `/crm/todos${sub}`;
 }

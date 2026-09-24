@@ -1,4 +1,4 @@
-"""Todo-GTD — agent tools, advertised only in GTD task mode (#70).
+"""Todo-GTD — agent tools, advertised only in GTD todo mode (#70).
 
 Ported from cake_os `apps/personal_agent/tools/todo_gtd_tools.py`, minus the
 owner-binding closure (single-user) and minus the two link tools
@@ -16,7 +16,7 @@ mode runs them with no Approve card. The rule is #180's, in `assistant/confirm_t
 this is how the ten came out against it:
 
   * `todo_create` — ROUTINE. Capture into the inbox, and the very same
-    `crm.service.create_task` that `crm_create_task` (routine since #180) calls, so
+    `crm.service.create_todo` that `crm_create_todo` (routine since #180) calls, so
     classifying one and not the other would be incoherent.
   * `todo_update` — ROUTINE, minus `status='dropped'`. Retitling, filing, starring and
     completing are ordinary; dropping is this product's delete gesture (`todo_delete`'s
@@ -349,9 +349,9 @@ GTD_TOOL_EXECUTORS: dict[str, Callable[..., dict]] = {
 def get_gtd_tools(user: dict | None = None) -> tuple[list[dict], dict[str, Callable[..., dict]]]:
     """(defs, executors) for the assistant registry.
 
-    Returns ([], {}) unless GTD task mode is active — the `get_gmail_tools`
+    Returns ([], {}) unless GTD todo mode is active — the `get_gmail_tools`
     precedent: an unused surface is hidden from the model entirely rather than
-    advertised and refused. MUST never raise; `get_task_mode()` is itself fail-safe,
+    advertised and refused. MUST never raise; `get_todo_mode()` is itself fail-safe,
     so a registry built with no database sees the product default — GTD since #102, so
     this returns the full todo set there rather than nothing.
 
@@ -363,7 +363,7 @@ def get_gtd_tools(user: dict | None = None) -> tuple[list[dict], dict[str, Calla
     changes which tools exist or their ``writes`` flags. The bindings sit OUTSIDE `_wrap`,
     so a validation error still comes back as a tool-result dict rather than an exception.
     """
-    if service.get_task_mode() != "gtd":
+    if service.get_todo_mode() != "gtd":
         return [], {}
     user_id = (user or {}).get("id")
     executors = {

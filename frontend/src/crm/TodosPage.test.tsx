@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 /**
- * The two decisions in TasksPage that a compiler cannot check (#77).
+ * The two decisions in TodosPage that a compiler cannot check (#77).
  *
- * 1. Completing a REPEATING task spawns its next occurrence server-side, so that path must
+ * 1. Completing a REPEATING todo spawns its next occurrence server-side, so that path must
  *    re-sweep rather than patch — and the decision must read the SERVER's copy of `repeat`,
  *    not the pre-write one, because the response reflects the state the server actually
  *    used to decide whether to spawn.
@@ -29,18 +29,18 @@ vi.mock('./useOwnerOptions', () => ({
   useOwnerOptions: () => ({ options: null, loading: false }),
 }));
 
-const { TasksPage } = await import('./TasksPage');
+const { TodosPage } = await import('./TodosPage');
 
 let container: HTMLDivElement;
 let root: Root;
 
-const task = (over: Record<string, unknown> = {}) => ({
+const todo = (over: Record<string, unknown> = {}) => ({
   id: 1, contact_id: null, deal_id: null, title: 'Call Ada', description: '',
   due_date: '', completed: 0, priority: 'medium', repeat: '',
   created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', ...over,
 });
 
-const listCalls = () => apiMock.mock.calls.filter(c => String(c[0]).startsWith('/api/crm/tasks?'));
+const listCalls = () => apiMock.mock.calls.filter(c => String(c[0]).startsWith('/api/crm/todos?'));
 
 /** The row checkbox — the control that drives toggleComplete. */
 function completeButton(): HTMLButtonElement {
@@ -55,19 +55,19 @@ async function settle(rounds = 10): Promise<void> {
   }
 }
 
-async function mountWith(row: ReturnType<typeof task>): Promise<void> {
+async function mountWith(row: ReturnType<typeof todo>): Promise<void> {
   apiMock.mockImplementation(async (url: string) => {
-    if (String(url).startsWith('/api/crm/tasks?')) return { tasks: [row] };
+    if (String(url).startsWith('/api/crm/todos?')) return { todos: [row] };
     throw new Error(`unexpected request ${url}`);
   });
-  act(() => { root.render(<StrictMode><TasksPage /></StrictMode>); });
+  act(() => { root.render(<StrictMode><TodosPage /></StrictMode>); });
   await settle();
 }
 
 /** Point the mock at a write outcome, keeping the list response intact. */
-function onWrite(handler: () => Promise<unknown>, row: ReturnType<typeof task>): void {
+function onWrite(handler: () => Promise<unknown>, row: ReturnType<typeof todo>): void {
   apiMock.mockImplementation(async (url: string) => {
-    if (String(url).startsWith('/api/crm/tasks?')) return { tasks: [row] };
+    if (String(url).startsWith('/api/crm/todos?')) return { todos: [row] };
     return handler();
   });
 }
@@ -91,27 +91,27 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('completing a task', () => {
-  it('RE-SWEEPS when the server says the task repeats', async () => {
-    const row = task({ repeat: 'weekly' });
+describe('completing a todo', () => {
+  it('RE-SWEEPS when the server says the todo repeats', async () => {
+    const row = todo({ repeat: 'weekly' });
     await mountWith(row);
     const before = listCalls().length;
 
     // The spawned next occurrence is a row only the server knows about, so a local patch
     // could not produce it.
-    onWrite(async () => task({ completed: 1, repeat: 'weekly' }), row);
+    onWrite(async () => todo({ completed: 1, repeat: 'weekly' }), row);
     await act(async () => { completeButton().click(); });
     await settle();
 
     expect(listCalls().length).toBeGreaterThan(before);
   });
 
-  it('does NOT re-sweep for an ordinary task — it patches from the response', async () => {
-    const row = task({ repeat: '' });
+  it('does NOT re-sweep for an ordinary todo — it patches from the response', async () => {
+    const row = todo({ repeat: '' });
     await mountWith(row);
     const before = listCalls().length;
 
-    onWrite(async () => task({ completed: 1, repeat: '' }), row);
+    onWrite(async () => todo({ completed: 1, repeat: '' }), row);
     await act(async () => { completeButton().click(); });
     await settle();
 
@@ -122,11 +122,11 @@ describe('completing a task', () => {
     // The row on screen says it does not repeat; the server's answer says it does — e.g.
     // someone else made it recurring between the sweep and the click. Trusting the stale
     // local copy would silently hide the spawned occurrence until a manual refresh.
-    const stale = task({ repeat: '' });
+    const stale = todo({ repeat: '' });
     await mountWith(stale);
     const before = listCalls().length;
 
-    onWrite(async () => task({ completed: 1, repeat: 'weekly' }), stale);
+    onWrite(async () => todo({ completed: 1, repeat: 'weekly' }), stale);
     await act(async () => { completeButton().click(); });
     await settle();
 
@@ -136,7 +136,7 @@ describe('completing a task', () => {
 
 describe('a failed complete', () => {
   it('keeps the corpus after a definite 4xx refusal', async () => {
-    const row = task();
+    const row = todo();
     await mountWith(row);
     const before = listCalls().length;
 
@@ -149,7 +149,7 @@ describe('a failed complete', () => {
   });
 
   it('re-sweeps after a 5xx, whose outcome is genuinely unknown', async () => {
-    const row = task();
+    const row = todo();
     await mountWith(row);
     const before = listCalls().length;
 
@@ -161,7 +161,7 @@ describe('a failed complete', () => {
   });
 
   it('re-sweeps after a transport failure, which carries no status at all', async () => {
-    const row = task();
+    const row = todo();
     await mountWith(row);
     const before = listCalls().length;
 

@@ -62,7 +62,7 @@ author: Daniel H. Pink
   leaving it blank and remembering it as a personal failure.
 - **Turn problem-finding into a question you actually ask** — write the one question you
   would ask to surface an unarticulated problem on the deal with `crm_add_note`, and book
-  the conversation as a task (`crm_create_task`; `todo_create` in GTD task mode).
+  the conversation as a todo (`crm_create_todo`; `todo_create` in GTD todo mode).
 - **Attunement starts with what is already recorded** — `crm_get_contact` and
   `crm_get_company` tell you the constraints the person is working under before you guess
   at them.

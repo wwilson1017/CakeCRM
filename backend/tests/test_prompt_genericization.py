@@ -373,18 +373,18 @@ def model_facing(monkeypatch):
     # Normal mode first — patching the mode below is one-way for this fixture.
     # Pinned EXPLICITLY: with no database the fail-safe answers 'gtd' since #102, so
     # relying on it here would assemble the GTD prompt twice and leave every
-    # normal-mode-only string (the crm_list_tasks heartbeat wording) unscanned. A
+    # normal-mode-only string (the crm_list_todos heartbeat wording) unscanned. A
     # silent loss of coverage in a test whose whole job is to catch leaked strings.
-    monkeypatch.setattr(identity, "_task_mode", lambda: "normal")
-    monkeypatch.setattr(heartbeat_service, "_task_mode", lambda: "normal")
+    monkeypatch.setattr(identity, "_todo_mode", lambda: "normal")
+    monkeypatch.setattr(heartbeat_service, "_todo_mode", lambda: "normal")
     static, volatile = identity.build_system_prompt({"name": "Baker", "personality": ""})
     hb_static, hb_volatile = heartbeat_service._heartbeat_prompt()
 
-    # GTD mode appends GTD_GUIDE to the static half and renames the heartbeat's task
+    # GTD mode appends GTD_GUIDE to the static half and renames the heartbeat's todo
     # tool, so both prompts are assembled a SECOND time under that mode — otherwise
     # every GTD-only string reaches the model unscanned (#70).
-    monkeypatch.setattr(identity, "_task_mode", lambda: "gtd")
-    monkeypatch.setattr(heartbeat_service, "_task_mode", lambda: "gtd")
+    monkeypatch.setattr(identity, "_todo_mode", lambda: "gtd")
+    monkeypatch.setattr(heartbeat_service, "_todo_mode", lambda: "gtd")
     gtd_static, _ = identity.build_system_prompt({"name": "Baker", "personality": ""})
     gtd_hb_static, _ = heartbeat_service._heartbeat_prompt()
 

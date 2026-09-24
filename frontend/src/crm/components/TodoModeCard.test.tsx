@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 //
-// Scope: only #102's ownership change — the card reads and writes the task mode through
+// Scope: only #102's ownership change — the card reads and writes the todo mode through
 // the contexts CrmLayout owns, instead of keeping a local copy.
 //
 // This is the regression that mattered: before #102 the card held its own `mode` state,
-// so switching in Settings left the layout's TaskModeContext stale and /crm/tasks kept
-// rendering the OLD task system until a full page reload. #102 made GTD the default for
+// so switching in Settings left the layout's TodoModeContext stale and /crm/todos kept
+// rendering the OLD todo system until a full page reload. #102 made GTD the default for
 // every install, which makes "switch back in Settings" the opt-out — so it has to work
 // on the spot. A local copy would still make the BUTTON look right, which is exactly why
 // the assertion below is on the OWNER's state, not on the card's own rendering.
@@ -24,10 +24,10 @@ vi.mock('../../shared/toast', () => ({
 
 // Type-only import: erased at compile time, so it does not execute the module ahead of
 // the vi.mock hoisting the dynamic imports below are working around.
-import type { TaskMode } from '../gtd/TaskModeContext';
+import type { TodoMode } from '../gtd/TodoModeContext';
 
-const { TaskModeCard } = await import('./TaskModeCard');
-const { TaskModeContext, TaskModeSetterContext } = await import('../gtd/TaskModeContext');
+const { TodoModeCard } = await import('./TodoModeCard');
+const { TodoModeContext, TodoModeSetterContext } = await import('../gtd/TodoModeContext');
 
 let container: HTMLDivElement;
 let root: Root;
@@ -49,18 +49,18 @@ afterEach(() => {
 
 /**
  * Stands in for CrmLayout: it owns the mode and publishes both halves, exactly as the
- * real layout does. `seen` records what a consumer under the provider (TasksModeRouter,
+ * real layout does. `seen` records what a consumer under the provider (TodosModeRouter,
  * in the app) would observe — that is the value the old local-state bug left stale.
  */
-function Owner({ initial, seen }: { initial: TaskMode; seen: TaskMode[] }) {
-  const [mode, setMode] = useState<TaskMode>(initial);
+function Owner({ initial, seen }: { initial: TodoMode; seen: TodoMode[] }) {
+  const [mode, setMode] = useState<TodoMode>(initial);
   seen.push(mode);
   return (
-    <TaskModeContext.Provider value={mode}>
-      <TaskModeSetterContext.Provider value={setMode}>
-        <TaskModeCard isMobile={false} />
-      </TaskModeSetterContext.Provider>
-    </TaskModeContext.Provider>
+    <TodoModeContext.Provider value={mode}>
+      <TodoModeSetterContext.Provider value={setMode}>
+        <TodoModeCard isMobile={false} />
+      </TodoModeSetterContext.Provider>
+    </TodoModeContext.Provider>
   );
 }
 
@@ -74,9 +74,9 @@ async function click(el: HTMLElement) {
   });
 }
 
-describe('TaskModeCard mode ownership (issue #102)', () => {
+describe('TodoModeCard mode ownership (issue #102)', () => {
   it('leads with Todo-GTD as the default and offers the simple list as the opt-out', async () => {
-    const seen: TaskMode[] = [];
+    const seen: TodoMode[] = [];
     await act(async () => root.render(<Owner initial="gtd" seen={seen} />));
 
     const [first, second] = modeButtons();
@@ -88,14 +88,14 @@ describe('TaskModeCard mode ownership (issue #102)', () => {
     expect(second.getAttribute('aria-pressed')).toBe('false');
   });
 
-  it('writes the switch through to the OWNER, so /crm/tasks changes with no reload', async () => {
-    const seen: TaskMode[] = [];
+  it('writes the switch through to the OWNER, so /crm/todos changes with no reload', async () => {
+    const seen: TodoMode[] = [];
     await act(async () => root.render(<Owner initial="gtd" seen={seen} />));
 
-    api.mockResolvedValueOnce({ ok: true, task_mode: 'normal' });
+    api.mockResolvedValueOnce({ ok: true, todo_mode: 'normal' });
     await click(modeButtons()[1]);
 
-    expect(api).toHaveBeenCalledWith('/api/crm/task-mode', {
+    expect(api).toHaveBeenCalledWith('/api/crm/todo-mode', {
       method: 'POST',
       body: JSON.stringify({ mode: 'normal' }),
     });
@@ -105,7 +105,7 @@ describe('TaskModeCard mode ownership (issue #102)', () => {
   });
 
   it('leaves the owner untouched when the switch request fails', async () => {
-    const seen: TaskMode[] = [];
+    const seen: TodoMode[] = [];
     await act(async () => root.render(<Owner initial="gtd" seen={seen} />));
 
     api.mockRejectedValueOnce(new Error('boom'));
@@ -116,7 +116,7 @@ describe('TaskModeCard mode ownership (issue #102)', () => {
 
   it('keeps a CONFIGURED no-login surface manageable in the simple-list mode', async () => {
     // A live public surface must never lose its off switch. Switching mode does not
-    // disable it (set_task_mode writes task_mode and nothing else), so the section that
+    // disable it (set_todo_mode writes todo_mode and nothing else), so the section that
     // rotates and turns off the token has to survive the switch.
     api.mockReset();
     api.mockResolvedValue({
@@ -124,7 +124,7 @@ describe('TaskModeCard mode ownership (issue #102)', () => {
       capture_path: '/capture', capture_public: true,
       web_path: '/todo/sekrit', web_public: false,
     });
-    const seen: TaskMode[] = [];
+    const seen: TodoMode[] = [];
     await act(async () => root.render(<Owner initial="normal" seen={seen} />));
 
     expect(container.textContent).toContain('Full todo app');
@@ -141,7 +141,7 @@ describe('TaskModeCard mode ownership (issue #102)', () => {
       capture_path: '/capture', capture_public: true,
       web_path: null, web_public: false,
     });
-    const seen: TaskMode[] = [];
+    const seen: TodoMode[] = [];
     await act(async () => root.render(<Owner initial="normal" seen={seen} />));
 
     expect(container.textContent).toContain('Quick capture');
@@ -150,11 +150,11 @@ describe('TaskModeCard mode ownership (issue #102)', () => {
 
   it('disables both buttons until the mode is known', async () => {
     await act(async () => root.render(
-      <TaskModeContext.Provider value={null}>
-        <TaskModeSetterContext.Provider value={() => {}}>
-          <TaskModeCard isMobile={false} />
-        </TaskModeSetterContext.Provider>
-      </TaskModeContext.Provider>,
+      <TodoModeContext.Provider value={null}>
+        <TodoModeSetterContext.Provider value={() => {}}>
+          <TodoModeCard isMobile={false} />
+        </TodoModeSetterContext.Provider>
+      </TodoModeContext.Provider>,
     ));
     expect(modeButtons().every(b => b.disabled)).toBe(true);
   });

@@ -40,19 +40,19 @@ def test_get_missing_contact_404(client, monkeypatch):
     assert client.get("/api/crm/contacts/999").status_code == 404
 
 
-def test_missing_deal_task_activity_404(client, monkeypatch):
+def test_missing_deal_todo_activity_404(client, monkeypatch):
     monkeypatch.setattr(service, "get_deal_detail", lambda did: None)
-    monkeypatch.setattr(service, "complete_task", lambda tid: None)
+    monkeypatch.setattr(service, "complete_todo", lambda tid: None)
     monkeypatch.setattr(service, "delete_activity", lambda aid: False)
     assert client.get("/api/crm/deals/5").status_code == 404
-    assert client.put("/api/crm/tasks/5/complete").status_code == 404
+    assert client.put("/api/crm/todos/5/complete").status_code == 404
     assert client.delete("/api/crm/activity/5").status_code == 404
 
 
 def test_blank_required_fields_400(client):
     assert client.post("/api/crm/contacts", json={"name": "  "}).status_code == 400
     assert client.post("/api/crm/deals", json={"title": ""}).status_code == 400
-    assert client.post("/api/crm/tasks", json={"title": ""}).status_code == 400
+    assert client.post("/api/crm/todos", json={"title": ""}).status_code == 400
     assert client.post("/api/crm/activity", json={"activity": ""}).status_code == 400
 
 
@@ -63,15 +63,15 @@ def test_empty_update_400(client):
 
 # ── int `completed` wire contract ─────────────────────────────────────────────
 
-def test_task_update_accepts_completed_zero(client, monkeypatch):
+def test_todo_update_accepts_completed_zero(client, monkeypatch):
     seen = {}
 
-    def fake_update_task(task_id, **kw):
+    def fake_update_todo(todo_id, **kw):
         seen.update(kw)
-        return {"id": task_id, "completed": kw.get("completed")}
+        return {"id": todo_id, "completed": kw.get("completed")}
 
-    monkeypatch.setattr(service, "update_task", fake_update_task)
-    resp = client.put("/api/crm/tasks/7", json={"completed": 0})
+    monkeypatch.setattr(service, "update_todo", fake_update_todo)
+    resp = client.put("/api/crm/todos/7", json={"completed": 0})
     assert resp.status_code == 200
     assert seen == {"completed": 0}  # int 0 reaches the service, not dropped as falsy
 
@@ -326,11 +326,11 @@ def test_deal_update_omitted_contact_not_touched(client, monkeypatch):
     assert seen == {"title": "Renamed"}  # contact_id not sent → not in the update
 
 
-def test_task_update_can_clear_contact(client, monkeypatch):
+def test_todo_update_can_clear_contact(client, monkeypatch):
     seen = {}
-    monkeypatch.setattr(service, "update_task",
+    monkeypatch.setattr(service, "update_todo",
                         lambda tid, **kw: seen.update(kw) or {"id": tid})
-    client.put("/api/crm/tasks/9", json={"contact_id": None})
+    client.put("/api/crm/todos/9", json={"contact_id": None})
     assert seen.get("contact_id") is None and "contact_id" in seen
 
 
@@ -926,17 +926,17 @@ def test_list_params_reach_the_service_with_backward_compatible_defaults(client,
     """`after_id`/`sort` are forwarded, and an omitting caller sees the old behaviour."""
     seen: dict = {}
 
-    def fake_tasks(**kw):
+    def fake_todos(**kw):
         seen.update(kw)
         return []
 
-    monkeypatch.setattr(service, "list_tasks", fake_tasks)
+    monkeypatch.setattr(service, "list_todos", fake_todos)
 
-    assert client.get("/api/crm/tasks?after_id=500&sort=id&limit=501").status_code == 200
+    assert client.get("/api/crm/todos?after_id=500&sort=id&limit=501").status_code == 200
     assert (seen["after_id"], seen["sort"], seen["limit"]) == (500, "id", 501)
 
     seen.clear()
-    assert client.get("/api/crm/tasks").status_code == 200
+    assert client.get("/api/crm/todos").status_code == 200
     # Every pre-#77 caller keeps the historical order and no cursor.
     assert seen["after_id"] is None and seen["sort"] == "due"
 
@@ -964,7 +964,7 @@ def test_a_cursor_against_a_mutable_order_is_a_400_not_a_500(client, monkeypatch
         raise ValueError("after_id is only valid with sort='id'")
 
     for name, path in (
-        ("list_tasks", "/api/crm/tasks?after_id=5&sort=due"),
+        ("list_todos", "/api/crm/todos?after_id=5&sort=due"),
         ("list_contacts", "/api/crm/contacts?after_id=5&sort=name"),
         ("list_companies", "/api/crm/companies?after_id=5&sort=name"),
     ):
@@ -975,7 +975,7 @@ def test_a_cursor_against_a_mutable_order_is_a_400_not_a_500(client, monkeypatch
 
 
 def test_a_negative_cursor_is_rejected_by_validation(client):
-    assert client.get("/api/crm/tasks?after_id=-1").status_code == 422
+    assert client.get("/api/crm/todos?after_id=-1").status_code == 422
 
 
 def test_a_cursor_is_refused_on_the_search_branch(client, monkeypatch):
@@ -1001,7 +1001,7 @@ def test_an_out_of_range_cursor_is_a_422_not_a_500(client):
     """id columns are int4. Without an upper bound Postgres raises a range error that is
     NOT a ValueError, so it would escape the route's handler as an unhandled 500."""
     too_big = 2_147_483_648
-    for path in ("/api/crm/tasks", "/api/crm/contacts", "/api/crm/companies"):
+    for path in ("/api/crm/todos", "/api/crm/contacts", "/api/crm/companies"):
         assert client.get(f"{path}?after_id={too_big}&sort=id").status_code == 422, path
 
 

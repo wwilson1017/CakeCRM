@@ -354,7 +354,7 @@ def test_candidates_carry_the_owner_from_analytics(monkeypatch):
     monkeypatch.setattr(ps.settings, "proactive_max_nudges_per_run", 3)
     monkeypatch.setattr(analytics_service, "get_stale_deals", lambda limit: {"deals": [
         {"id": 2, "title": "Neglected", "value": 2.0, "stage": "lead",
-         "days_since_touch": 40, "has_open_task": False, "owner_id": THEM},
+         "days_since_touch": 40, "has_open_todo": False, "owner_id": THEM},
     ]})
     monkeypatch.setattr(analytics_service, "get_contact_staleness", lambda limit: {"contacts": [
         {"id": 5, "name": "Quiet", "open_deals": 1, "days_since_contact": 45,

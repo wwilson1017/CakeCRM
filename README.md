@@ -15,7 +15,7 @@ that works your pipeline for you.
 ## What it will do
 
 **The CRM** (works with no AI at all):
-- Contacts, companies, deals, and tasks with an activity timeline
+- Contacts, companies, deals, and todos with an activity timeline
 - Kanban pipeline with drag-and-drop stages and per-stage value totals
 - Filter any list or board by preset or custom from/to date range, and save the whole view — filters, search, sort and layout — as a named view the team can apply
 - CSV import, custom fields, lead scoring, analytics dashboard
@@ -69,7 +69,7 @@ one-way door: going back to an older CakeCRM build means restoring a pre-upgrade
 
 Add the rest of your team at **Settings → Workspace → Team**. Two roles:
 
-- **Member** — the whole CRM: records, pipeline, tasks, notes, import, and the
+- **Member** — the whole CRM: records, pipeline, todos, notes, import, and the
   assistant.
 - **Admin** — all of that, plus managing users, AI keys, branding, integrations and
   the destructive operations (clear-all, sample data, backfills). Two things the
@@ -80,7 +80,7 @@ Add the rest of your team at **Settings → Workspace → Team**. Two roles:
   those two files are standing instructions replayed in every later conversation. Every
   other file the assistant keeps is open to every seat.
 
-**Ownership is not a permission.** Every contact, company, deal and task can carry
+**Ownership is not a permission.** Every contact, company, deal and todo can carry
 an owner, which drives the "Mine" filters and the per-rep numbers — but any member
 can still see and edit anything. There are no per-record permissions, deliberately.
 

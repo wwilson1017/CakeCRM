@@ -57,8 +57,8 @@ const DASHBOARD: CrmDashboard = {
   contacts_by_status: { active: 4 },
   pipeline_by_stage: [{ stage: 'lead', count: 1, total_value: 100 }],
   total_pipeline_value: 100,
-  overdue_tasks: 0,
-  pending_tasks: 1,
+  overdue_todos: 0,
+  pending_todos: 1,
   recent_activity: [],
   top_deals: [TOP_DEAL],
 };

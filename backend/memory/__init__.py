@@ -8,7 +8,7 @@ facts. Issue #5 scoped this package to "facts + search", pure-algorithmic, no AI
 Issue #72 Phase 4 added exactly one AI member, ``observer.py``, and collapsed chatty's
 THREE pipelines into it: chatty's observer, its per-fourth-message extractor and its
 581-line commitments store all become one scheduler pass writing two row shapes — facts
-here, and GTD inbox tasks in ``crm.gtd_service``. Chatty's ``observations`` table, its
+here, and GTD inbox todos in ``crm.gtd_service``. Chatty's ``observations`` table, its
 ``complete_commitment`` lifecycle and its embeddings/vector search are still NOT ported;
 the embeddings half was designed as #72 Phase 5 and declined on 2026-09-14.
 

@@ -29,7 +29,7 @@ const COLUMNS: ListColumn<Row>[] = [
 
 // A cell carrying its own interactive control — the shape the collection layer's selection
 // checkbox and a CRM list column's inline button both take (#148). `guarded` follows the
-// contract (stops click propagation, as the Tasks complete-toggle and the selection checkbox
+// contract (stops click propagation, as the Todos complete-toggle and the selection checkbox
 // do); `bare` deliberately does not, so the contract's sharp edge is executable rather than
 // assumed.
 const INTERACTIVE_COLUMNS: ListColumn<Row>[] = [
@@ -243,7 +243,7 @@ describe('ListView', () => {
     // guarded on the event target (a mouse click always targets a cell, so that test would
     // swallow every row click), so a cell control that forgets `stopPropagation` opens the row
     // on both mouse AND keyboard activation. Every shipped interactive cell stops it — the
-    // collection layer's selection checkbox and the Tasks complete-toggle. This test is the
+    // collection layer's selection checkbox and the Todos complete-toggle. This test is the
     // reason a new one must too; if the row ever DOES guard its click path, it should fail.
     const onRowClick = vi.fn();
     const el = render(<ListView columns={INTERACTIVE_COLUMNS} items={ROWS} onRowClick={onRowClick} />);

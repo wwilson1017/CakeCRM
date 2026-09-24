@@ -54,23 +54,23 @@ def rec(monkeypatch):
     return r
 
 
-# Columns the task UPDATE ... RETURNING * produces, in migration order. The spawn step
+# Columns the todo UPDATE ... RETURNING * produces, in migration order. The spawn step
 # reads them through the REAL row_to_dict, so the described cursor below must supply a
 # matching `description` — a cursor returning bare tuples (or a monkeypatched
 # row_to_dict) would hide a description-reuse bug entirely.
-_TASK_COLS = [
+_TODO_COLS = [
     "id", "contact_id", "deal_id", "title", "description", "due_date", "completed",
     "priority", "created_at", "updated_at", "status", "star", "context", "tags",
     "repeat", "auto_star_on_due", "project_id", "completed_at", "source",
 ]
 
 
-class _TaskCursor:
+class _TodoCursor:
     """Cursor that mimics psycopg2's per-execute ``cursor.description``.
 
     steps are driven by the statement: the first SELECT ... FOR UPDATE yields the prior
     status (or nothing, for a missing row); the UPDATE ... RETURNING * yields a full
-    task row so the recurrence spawn can read it.
+    todo row so the recurrence spawn can read it.
     """
 
     def __init__(self, prior_status, returning_row=None):
@@ -87,7 +87,7 @@ class _TaskCursor:
             self.description = [("status",)]
             self._rows = [(self._prior,)] if self._prior is not None else []
         elif "RETURNING *" in norm:
-            self.description = [(c,) for c in _TASK_COLS]
+            self.description = [(c,) for c in _TODO_COLS]
             self._rows = [self._returning] if self._returning else []
         else:
             self.description = None
@@ -98,16 +98,16 @@ class _TaskCursor:
 
 
 @pytest.fixture
-def task_txn():
-    """Install a described cursor on service.get_connection for the task write path."""
+def todo_txn():
+    """Install a described cursor on service.get_connection for the todo write path."""
     from contextlib import contextmanager
 
     def _install(monkeypatch, *, prior_status, returning_row=None):
         if returning_row is None:
             returning_row = tuple(
-                {"id": 1, "title": "T", "repeat": "", "tags": "[]"}.get(c) for c in _TASK_COLS
+                {"id": 1, "title": "T", "repeat": "", "tags": "[]"}.get(c) for c in _TODO_COLS
             )
-        cur = _TaskCursor(prior_status, returning_row)
+        cur = _TodoCursor(prior_status, returning_row)
 
         class _Conn:
             def cursor(self):
@@ -205,52 +205,52 @@ def test_update_deal_stage_invalid_returns_none(rec):
     assert service.update_deal_stage(1, "bogus") is None
 
 
-# ── Tasks ─────────────────────────────────────────────────────────────────────
+# ── Todos ─────────────────────────────────────────────────────────────────────
 
-def test_list_tasks_completed_as_int_and_due_before_guard(rec):
-    service.list_tasks(completed=False, due_before="2026-01-01")
-    sql = rec.sql_containing("FROM tasks")
+def test_list_todos_completed_as_int_and_due_before_guard(rec):
+    service.list_todos(completed=False, due_before="2026-01-01")
+    sql = rec.sql_containing("FROM todos")
     assert "t.completed = %s" in sql
     assert "t.due_date != '' AND t.due_date <= %s" in sql
-    params = rec.params_for("FROM tasks")
+    params = rec.params_for("FROM todos")
     assert 0 in params  # completed=False → int 0
     assert "2026-01-01" in params
 
 
-def test_update_task_writes_completed_and_status_together(monkeypatch, rec, task_txn):
+def test_update_todo_writes_completed_and_status_together(monkeypatch, rec, todo_txn):
     """`completed` and `status` are two views of one fact, bound by a CHECK constraint
     since #70 — a stray truthy value must still normalize to exactly 1, and the paired
     status must be written in the SAME statement."""
-    cur = task_txn(monkeypatch, prior_status="next_action")
+    cur = todo_txn(monkeypatch, prior_status="next_action")
     rec.fetchone_queue = [{"id": 1, "completed": 1}]
-    service.update_task(1, completed=2)  # stray truthy value must normalize to 1
-    sql, params = next((s, p) for s, p in cur.executed if "UPDATE tasks SET" in s)
+    service.update_todo(1, completed=2)  # stray truthy value must normalize to 1
+    sql, params = next((s, p) for s, p in cur.executed if "UPDATE todos SET" in s)
     assert "status = %s" in sql and "completed = %s" in sql
     assert "done" in params and 1 in params and 2 not in params
 
 
-def test_update_task_uncompleting_a_done_task_reopens_it(monkeypatch, rec, task_txn):
-    cur = task_txn(monkeypatch, prior_status="done")
+def test_update_todo_uncompleting_a_done_todo_reopens_it(monkeypatch, rec, todo_txn):
+    cur = todo_txn(monkeypatch, prior_status="done")
     rec.fetchone_queue = [{"id": 1}]
-    service.update_task(1, completed=False)
-    sql, params = next((s, p) for s, p in cur.executed if "UPDATE tasks SET" in s)
+    service.update_todo(1, completed=False)
+    sql, params = next((s, p) for s, p in cur.executed if "UPDATE todos SET" in s)
     assert "next_action" in params and 0 in params
     assert "completed_at = NULL" in sql
 
 
-def test_complete_task_locks_the_row_and_none_when_missing(monkeypatch, rec, task_txn):
-    cur = task_txn(monkeypatch, prior_status=None)  # row absent
-    assert service.complete_task(999) is None
-    assert any("SELECT status FROM tasks WHERE id = %s FOR UPDATE" in s
+def test_complete_todo_locks_the_row_and_none_when_missing(monkeypatch, rec, todo_txn):
+    cur = todo_txn(monkeypatch, prior_status=None)  # row absent
+    assert service.complete_todo(999) is None
+    assert any("SELECT status FROM todos WHERE id = %s FOR UPDATE" in s
                for s, _ in cur.executed)
-    assert not any("UPDATE tasks SET" in s for s, _ in cur.executed)
+    assert not any("UPDATE todos SET" in s for s, _ in cur.executed)
 
 
-def test_delete_task_rowcount(rec):
+def test_delete_todo_rowcount(rec):
     rec.execute_rowcount = 0
-    assert service.delete_task(5) is False
+    assert service.delete_todo(5) is False
     rec.execute_rowcount = 1
-    assert service.delete_task(5) is True
+    assert service.delete_todo(5) is True
 
 
 def test_delete_activity_returns_true_and_rescores_links(rec):
@@ -285,7 +285,7 @@ def test_delete_contact_existence_check_and_cascade_one_txn(monkeypatch, fake_co
     assert service.delete_contact(42) is True
     stmts = [sql for sql, _ in conn.executed]
     assert any("SELECT id FROM contacts WHERE id" in s for s in stmts)
-    # activity_log, tasks, crm_chatter, crm_field_values, crm_field_provenance, contacts
+    # activity_log, todos, crm_chatter, crm_field_values, crm_field_provenance, contacts
     assert sum("DELETE FROM" in s for s in stmts) == 6
     assert any("DELETE FROM crm_chatter WHERE entity_type = 'contact'" in s for s in stmts)
     assert any("DELETE FROM crm_field_values WHERE entity_type = 'contact'" in s for s in stmts)
@@ -322,7 +322,7 @@ def test_clear_demo_data_truncates_when_sample_loaded(monkeypatch, fake_conn):
     # referenced table without its child in the same statement — dropping it here makes
     # every CRM reset raise.
     assert any(
-        "TRUNCATE companies, contacts, deals, activity_log, tasks, task_projects, "
+        "TRUNCATE companies, contacts, deals, activity_log, todos, todo_projects, "
         "crm_chatter, crm_chatter_attachments, crm_field_values, crm_field_provenance, "
         "deal_stage_events, proactive_nudges, deal_ai_touch_evidence RESTART IDENTITY"
         in s for s in stmts
@@ -359,7 +359,7 @@ def test_clear_all_truncates_and_resets_flag(monkeypatch, fake_conn):
     # consistent with both set_field_values entity→defs and delete_field_definition
     # defs→values); crm_field_provenance trails both.
     assert any(
-        "TRUNCATE companies, contacts, deals, activity_log, tasks, task_projects, "
+        "TRUNCATE companies, contacts, deals, activity_log, todos, todo_projects, "
         "crm_chatter, crm_chatter_attachments, crm_field_definitions, crm_field_values, "
         "crm_field_provenance, deal_stage_events, proactive_nudges, "
         "deal_ai_touch_evidence RESTART IDENTITY"
@@ -446,11 +446,11 @@ def test_update_contact_coerces_unknown_status(rec):
     assert "active" in rec.params_for("UPDATE contacts SET")
 
 
-def test_create_task_coerces_unknown_priority(rec):
+def test_create_todo_coerces_unknown_priority(rec):
     rec.fetchone_queue = [{"id": 1}, {"id": 1}]
-    service.create_task("T", priority="urgent")  # not a real priority
-    assert "medium" in rec.params_for("INSERT INTO tasks")
-    assert "urgent" not in rec.params_for("INSERT INTO tasks")
+    service.create_todo("T", priority="urgent")  # not a real priority
+    assert "medium" in rec.params_for("INSERT INTO todos")
+    assert "urgent" not in rec.params_for("INSERT INTO todos")
 
 
 # ── search pagination: offset + accurate total ────────────────────────────────
@@ -713,7 +713,7 @@ def test_update_deal_accepts_company_id(monkeypatch, rec, fake_conn):
 
 def test_get_contact_detail_joins_company_name(rec):
     rec.fetchone_queue = [{"id": 1, "name": "Ana", "company_name": "Acme"}]
-    rec.fetchall_queue = [[], [], []]  # deals, tasks, activity
+    rec.fetchall_queue = [[], [], []]  # deals, todos, activity
     out = service.get_contact_detail(1)
     join_sql = rec.sql_containing("company_name")
     assert "LEFT JOIN companies" in join_sql
@@ -1025,33 +1025,33 @@ def test_search_contacts_honors_lead_score_sort(rec):
 # ── #77: the list pages' keyset assembly, and the reads it needs ──────────────
 
 
-def test_list_tasks_default_order_gains_an_id_tiebreaker(rec):
+def test_list_todos_default_order_gains_an_id_tiebreaker(rec):
     """The historical due order, made deterministic.
 
-    Every pre-#77 caller (the crm_list_tasks tool, the heartbeat, the rollups) still gets
-    `completed ASC, due_date ASC` — but ties among tasks sharing a due date used to be
-    resolved arbitrarily by Postgres, so a LIMIT window could omit one task and repeat
+    Every pre-#77 caller (the crm_list_todos tool, the heartbeat, the rollups) still gets
+    `completed ASC, due_date ASC` — but ties among todos sharing a due date used to be
+    resolved arbitrarily by Postgres, so a LIMIT window could omit one todo and repeat
     another between two identical requests.
     """
-    service.list_tasks()
-    sql = rec.sql_containing("FROM tasks t")
+    service.list_todos()
+    sql = rec.sql_containing("FROM todos t")
     assert "ORDER BY t.completed ASC, t.due_date ASC, t.id ASC LIMIT %s" in sql
     assert "OFFSET" not in sql  # this endpoint never had one and still does not
-    assert rec.params_for("FROM tasks t")[-1] == 50
+    assert rec.params_for("FROM todos t")[-1] == 50
 
 
-def test_list_tasks_id_sort_is_the_assembly_key(rec):
-    service.list_tasks(sort="id", after_id=500, limit=501)
-    sql = rec.sql_containing("FROM tasks t")
+def test_list_todos_id_sort_is_the_assembly_key(rec):
+    service.list_todos(sort="id", after_id=500, limit=501)
+    sql = rec.sql_containing("FROM todos t")
     assert "ORDER BY t.id ASC LIMIT %s" in sql
     assert "t.id > %s" in sql
-    params = rec.params_for("FROM tasks t")
+    params = rec.params_for("FROM todos t")
     assert params[-2:] == [500, 501]  # cursor binds in the WHERE, limit last
 
 
-def test_list_tasks_unknown_sort_falls_back_to_the_due_order(rec):
-    service.list_tasks(sort="bogus")
-    assert "ORDER BY t.completed ASC, t.due_date ASC, t.id ASC" in rec.sql_containing("FROM tasks t")
+def test_list_todos_unknown_sort_falls_back_to_the_due_order(rec):
+    service.list_todos(sort="bogus")
+    assert "ORDER BY t.completed ASC, t.due_date ASC, t.id ASC" in rec.sql_containing("FROM todos t")
 
 
 @pytest.mark.parametrize(
@@ -1060,8 +1060,8 @@ def test_list_tasks_unknown_sort_falls_back_to_the_due_order(rec):
         lambda: service.list_contacts(after_id=5, sort="updated_at"),
         lambda: service.list_contacts(after_id=5),  # the DEFAULT sort is not id either
         lambda: service.list_companies(after_id=5, sort="name"),
-        lambda: service.list_tasks(after_id=5, sort="due"),
-        lambda: service.list_tasks(after_id=5),
+        lambda: service.list_todos(after_id=5, sort="due"),
+        lambda: service.list_todos(after_id=5),
     ],
 )
 def test_a_cursor_against_a_mutable_order_is_refused(rec, call):
@@ -1193,14 +1193,14 @@ def test_the_contact_count_query_stays_join_free(rec):
     assert "crm_chatter" not in count_sql
 
 
-def test_get_task_returns_a_list_shaped_row(rec):
-    """Task writes return get_task, and the list patches itself from those bodies (#77).
+def test_get_todo_returns_a_list_shaped_row(rec):
+    """Todo writes return get_todo, and the list patches itself from those bodies (#77).
 
-    Without the joins a saved task loses its contact/deal label in the list — and a task
+    Without the joins a saved todo loses its contact/deal label in the list — and a todo
     re-linked to another contact would keep showing the old name.
     """
-    service.get_task(1)
-    sql = rec.sql_containing("FROM tasks t")
+    service.get_todo(1)
+    sql = rec.sql_containing("FROM todos t")
     assert "c.name AS contact_name" in sql
     assert "d.title AS deal_title" in sql
 

@@ -272,7 +272,12 @@ def test_a_normal_save_round_trips_over_HTTP(pg_db):
 
     app = FastAPI()
     app.include_router(cf_router, prefix="/api/context-files")
-    app.dependency_overrides[get_current_user] = lambda: {"sub": "u"}
+    # An ADMIN seat: this test saves `soul.md`, and #194/#213 made writing a protected
+    # file admin-only on both doors. The subject under test is the `updated_at`
+    # round-trip and its 409, not the role gate, so the stub carries the role that gate
+    # requires. (Pre-existing failure on `main` — CI never runs integration tests, so
+    # #213 landed the gate without this stub following it.)
+    app.dependency_overrides[get_current_user] = lambda: {"sub": "u", "role": "admin"}
     client = TestClient(app)
 
     loaded = client.get("/api/context-files/file/soul.md").json()

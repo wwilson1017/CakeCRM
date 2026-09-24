@@ -149,7 +149,7 @@ omission is what preserved the data.
 
 Any form where a proper relation was added beside a denormalized column that still holds
 rows the relation does not cover — the CRM company link is one instance; a contact's
-free-text source vs. a source table, or a task's free-text project vs. `task_projects`,
+free-text source vs. a source table, or a todo's free-text project vs. `todo_projects`,
 would be others. It applies from the moment the old control is removed, not from the moment
 the old column is dropped: the column outlives the control, and the window between them is
 where the data goes missing.

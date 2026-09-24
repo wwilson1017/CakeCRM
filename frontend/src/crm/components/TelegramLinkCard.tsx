@@ -92,7 +92,7 @@ export function TelegramLinkCard({ isMobile }: { isMobile: boolean }) {
     <SettingsCard
       id="telegram_link"
       title="Link my Telegram"
-      description="Chat with your CakeCRM assistant from your own phone — ask about contacts, deals, and tasks, and approve any changes right from Telegram."
+      description="Chat with your CakeCRM assistant from your own phone — ask about contacts, deals, and todos, and approve any changes right from Telegram."
       isMobile={isMobile}
     >
       {!loaded && (

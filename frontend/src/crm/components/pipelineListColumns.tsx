@@ -97,7 +97,7 @@ export function buildPipelineListColumns(
       key: 'temperature',
       // A one-glyph column: a word header would be three times the width of its own content.
       // `ListColumn.header` types as ReactNode, so the accessible name rides an off-screen
-      // span — the same shape as the Tasks list's icon-only Done column in crm/listColumns.tsx.
+      // span — the same shape as the Todos list's icon-only Done column in crm/listColumns.tsx.
       header: <span className="sr-only">Temperature</span>,
       // Same control the board card renders — one temperature, one visual language, and one
       // place the cycle rules live (issue #125). The WRITER arrives by context rather than as

@@ -55,9 +55,9 @@ author: Jeb Blount
 - **Let the CRM name the neglected list** — `crm_get_stale_deals` and
   `crm_get_contact_staleness` produce today's prospecting list from real silence, which
   beats any list assembled from memory.
-- **Put the block in the system, not in your intentions** — in GTD task mode
+- **Put the block in the system, not in your intentions** — in GTD todo mode
   `todo_create` takes a repeat, so the daily prospecting block can be created once and
-  recur. `crm_create_task` has no recurrence, so outside GTD mode it is one task at a
+  recur. `crm_create_todo` has no recurrence, so outside GTD mode it is one todo at a
   time: create tomorrow's when you close today's, and treat the slot as unmovable.
 - **Draft the outreach, review it, then put it out yourself** — `gmail_create_draft`
   prepares an email touch for the user to check; Baker drafts and never delivers.

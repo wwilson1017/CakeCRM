@@ -185,10 +185,10 @@ def test_create_allows_the_last_slot_on_a_surface(conn):
 
 def test_the_ceiling_counts_only_the_target_surface(conn):
     cur = conn([(0,), (1,), _row()])
-    service.create_view("crm_tasks", "n", 1, {}, CREATOR)
+    service.create_view("crm_todos", "n", 1, {}, CREATOR)
     count_sql, params = cur.executed[0]
     assert "SELECT COUNT(*) FROM saved_views WHERE surface = %s" in count_sql
-    assert params == ("crm_tasks",)
+    assert params == ("crm_todos",)
 
 
 def test_create_maps_a_duplicate_name_to_conflict(conn):

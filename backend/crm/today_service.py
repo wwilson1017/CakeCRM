@@ -7,16 +7,16 @@ unit-testable without a database.
 
 The ladder, as decided on the issue::
 
-    1  starred tasks      the human already said "today"; starred+overdue stays rank 1
+    1  starred todos      the human already said "today"; starred+overdue stays rank 1
     2  hot + stale deals  a deal a human marked hot that has since gone quiet (#131)
-    3  overdue tasks      most overdue first
-    4  tasks due today
+    3  overdue todos      most overdue first
+    4  todos due today
     –  every other hot deal  no rank at all: reachable only through the expander
 
 Rank 2 arrived exactly as #130 promised — an insertion, renumbering nothing. What it did
 NOT need was a rank 6. Issue #131 rules that a hot deal which was touched recently must
 appear "only in the +N more today expanded list", and a sixth rung cannot enforce that:
-the collapsed card slices the first five ITEMS, so one overdue task beside one recently
+the collapsed card slices the first five ITEMS, so one overdue todo beside one recently
 touched hot deal would put both on screen. So those rows carry ``rank: None`` — not on
 the ladder — and the client shows the first five RANKED items. A null rank is the payload
 saying what it means, rather than the browser learning a second copy of the numbering.
@@ -35,14 +35,14 @@ instant, which is two definitions of one word — the thing the imports exist to
 the identical call ``gtd_service.today_view()`` makes — which is the mechanism behind the
 issue's requirement that this panel and the GTD Today view agree on what "due today"
 means. ``next_refresh_at`` is derived FROM that captured day rather than from a second
-clock read, so a request that straddles local midnight cannot bound tasks to one day and
+clock read, so a request that straddles local midnight cannot bound todos to one day and
 arm the client's reload for another.
 
 **Uncapped, deliberately — and the honest bound is NOT "one day".** The endpoint returns
 the full ranked list and the client shows five behind a "+N more" expander, because the
 issue specifies that expander over the full list and because ``today_view()`` already
-serves exactly these rows uncapped to the GTD home screen. Starred and overdue tasks are
-a BACKLOG: they accumulate without limit, so a CRM with a thousand neglected overdue tasks sends all thousand on every
+serves exactly these rows uncapped to the GTD home screen. Starred and overdue todos are
+a BACKLOG: they accumulate without limit, so a CRM with a thousand neglected overdue todos sends all thousand on every
 dashboard load. That is parity with the GTD Today page rather than a new exposure, and it
 buys a count that is honest by construction — the visible rows and the "+N" are two views
 of ONE array, so they cannot disagree the way a rows-query and a separate COUNT can. The
@@ -59,8 +59,8 @@ from crm.analytics_service import DEFAULT_DEAL_STALE_DAYS
 from crm.service import (
     LAST_TOUCH_SQL,
     LIVE_PREDICATE_D,
-    LIVE_TASK_PREDICATE,
-    NOT_DROPPED_TASK,
+    LIVE_TODO_PREDICATE,
+    NOT_DROPPED_TODO,
     OPEN_PREDICATE_D,
 )
 
@@ -78,29 +78,29 @@ RANK_DUE_TODAY = 4
 HOT_DEAL_SLOTS = 2
 
 
-def _fetch_today_tasks(today: str, owner_id: int | None) -> list[dict]:
-    """Open tasks that are starred or due on/before ``today``.
+def _fetch_today_todos(today: str, owner_id: int | None) -> list[dict]:
+    """Open todos that are starred or due on/before ``today``.
 
     Membership mirrors ``gtd_service.today_view()`` so the two surfaces select the same
     rows. ``completed = 0`` excludes 'done' (the #70 CHECK binds the two columns) and
-    ``NOT_DROPPED_TASK`` excludes 'dropped' — together the same set as that view's
+    ``NOT_DROPPED_TODO`` excludes 'dropped' — together the same set as that view's
     ``status NOT IN ('done','dropped')``. Dates compare TEXT-on-TEXT, never ``::date``,
     which cannot cast-error on a malformed row.
     """
     conditions = [
         "completed = 0",
-        NOT_DROPPED_TASK,
-        LIVE_TASK_PREDICATE,
+        NOT_DROPPED_TODO,
+        LIVE_TODO_PREDICATE,
         "(star OR (due_date != '' AND due_date <= %s))",
     ]
     params: list = [today]
     if owner_id is not None:
-        # Deliberately WIDER than list_tasks' strict `owner_id = %s`: the issue rules
+        # Deliberately WIDER than list_todos' strict `owner_id = %s`: the issue rules
         # that unassigned work appears in "my" view, because someone has to catch it.
         conditions.append("(owner_id = %s OR owner_id IS NULL)")
         params.append(owner_id)
     return pg_fetchall(
-        "SELECT id, title, due_date, owner_id, star FROM tasks "
+        "SELECT id, title, due_date, owner_id, star FROM todos "
         f"WHERE {' AND '.join(conditions)} "
         # Ends on the unique id (#58). Uncapped readers carry the term too, so a later
         # LIMIT cannot silently reintroduce a non-deterministic window.
@@ -130,7 +130,7 @@ def _fetch_hot_deals(owner_id: int | None) -> list[dict]:
     most-idle-first at all. The displayed day count is derived from this one number, so the
     order and the label can never tell different stories.
 
-    Uncapped, like ``_fetch_today_tasks`` — the panel's whole payload is uncapped by design
+    Uncapped, like ``_fetch_today_todos`` — the panel's whole payload is uncapped by design
     (see the module docstring), and hot is a temperature somebody has to click, so the set
     is bounded by human effort rather than by data volume. The ORDER BY still ends on the
     unique ``d.id`` (#58) so a later ``LIMIT`` cannot quietly reintroduce a
@@ -146,7 +146,7 @@ def _fetch_hot_deals(owner_id: int | None) -> list[dict]:
     # it beside the owner filter would silently swap the two.
     params: list = [DEFAULT_DEAL_STALE_DAYS]
     if owner_id is not None:
-        # The panel's widened owner rule, same as the tasks read: unassigned work appears
+        # The panel's widened owner rule, same as the todos read: unassigned work appears
         # in "my" view because somebody has to catch it.
         conditions.append("(d.owner_id = %s OR d.owner_id IS NULL)")
         params.append(owner_id)
@@ -210,18 +210,18 @@ def _rank_hot_deals(deals) -> tuple[list[dict], list[dict]]:
 
 
 def build_today_items(
-    tasks: list[dict], today: str, deals: list[dict] | tuple = (),
+    todos: list[dict], today: str, deals: list[dict] | tuple = (),
 ) -> list[dict]:
     """The ladder. PURE — no I/O, no clock: ``today`` arrives as a parameter.
 
-    Every task lands in exactly one bucket: starred wins outright (so a starred overdue
-    task is rank 1, once), and the other two buckets require ``not star``, which makes
-    them disjoint by construction. A non-starred task that is neither overdue nor due
-    today is unreachable from ``_fetch_today_tasks``' membership and is skipped rather
+    Every todo lands in exactly one bucket: starred wins outright (so a starred overdue
+    todo is rank 1, once), and the other two buckets require ``not star``, which makes
+    them disjoint by construction. A non-starred todo that is neither overdue nor due
+    today is unreachable from ``_fetch_today_todos``' membership and is skipped rather
     than forced into a bucket — a defensive drop keeps a caller that widens the query
     from silently mis-ranking rows.
 
-    ``deals`` defaults to empty so the task ladder stays testable on its own
+    ``deals`` defaults to empty so the todo ladder stays testable on its own
     terms. The default is safe only because something asserts the real caller passes them
     — ``test_get_today_feeds_the_fetched_deals_into_the_ladder`` — since a defaulted
     parameter is otherwise exactly how a source silently drops out of a merged list.
@@ -230,16 +230,16 @@ def build_today_items(
     overdue: list[dict] = []
     due_today: list[dict] = []
 
-    for task in tasks:
-        due = task.get("due_date") or ""
+    for todo in todos:
+        due = todo.get("due_date") or ""
         item = {
-            "kind": "task",
-            "id": task["id"],
-            "title": task.get("title") or "",
+            "kind": "todo",
+            "id": todo["id"],
+            "title": todo.get("title") or "",
             "due_date": due,
-            "owner_id": task.get("owner_id"),
+            "owner_id": todo.get("owner_id"),
         }
-        if task.get("star"):
+        if todo.get("star"):
             bucket, rank, why = starred, RANK_STARRED, "starred"
         elif due and due < today:
             bucket, rank, why = overdue, RANK_OVERDUE, "overdue"
@@ -251,7 +251,7 @@ def build_today_items(
 
     # Re-sorted here rather than trusted from the query, so the ladder holds for any
     # caller and the pure function can be tested without reproducing the SQL's order.
-    # Undated starred tasks sort last; every key ends on the unique id.
+    # Undated starred todos sort last; every key ends on the unique id.
     starred.sort(key=lambda i: (i["due_date"] == "", i["due_date"], i["id"]))
     overdue.sort(key=lambda i: (i["due_date"], i["id"]))
     # Date-only granularity has no finer "earlier due", so id (creation order) decides.
@@ -275,11 +275,11 @@ def get_today(owner_id: int | None = None) -> dict:
     # Derived from the captured day, never a second clock read (see the module
     # docstring): the client arms its reload on this boundary.
     _, end = local_day_bounds(date.fromisoformat(today))
-    tasks = _fetch_today_tasks(today, owner_id)
+    todos = _fetch_today_todos(today, owner_id)
     deals = _fetch_hot_deals(owner_id)
     return {
         "date": today,
         "next_refresh_at": end.isoformat(),
         "scope": {"owner_id": owner_id},
-        "items": build_today_items(tasks, today, deals=deals),
+        "items": build_today_items(todos, today, deals=deals),
     }

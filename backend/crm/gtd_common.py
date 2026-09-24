@@ -102,7 +102,7 @@ def validate_project_status(status: str) -> str:
 def validate_due(due_date) -> str:
     """Normalize a due date to 'YYYY-MM-DD', or '' for none.
 
-    Returns '' rather than None because `tasks.due_date` is TEXT NOT NULL DEFAULT ''
+    Returns '' rather than None because `todos.due_date` is TEXT NOT NULL DEFAULT ''
     (the existing CRM convention) — ISO strings still compare correctly, and '' is
     the repo's established "no due date".
     """

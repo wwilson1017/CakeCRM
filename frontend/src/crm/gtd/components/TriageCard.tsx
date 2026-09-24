@@ -80,7 +80,7 @@ function StepHeading({ step, required, children }: {
 }
 
 /** The sub-millisecond part of an ISO timestamp, in microseconds within the millisecond.
- * `Date.parse` truncates at the millisecond, and every task write stamps `updated_at` from
+ * `Date.parse` truncates at the millisecond, and every todo write stamps `updated_at` from
  * `datetime.now(timezone.utc).isoformat()` — microseconds. This is the precision it threw
  * away. Read out of the fractional field alone, so it does not care whether the zone is
  * written `+00:00` or `Z`; a lexical compare of the whole string would, since `Z` sorts
@@ -121,7 +121,7 @@ const subMs = (iso: string): number => {
 /**
  * Is row version `a` strictly newer than `b`?
  *
- * Every task write bumps `updated_at` (`service._apply_task_update_cur`), so this orders
+ * Every todo write bumps `updated_at` (`service._apply_todo_update_cur`), so this orders
  * every view of the record the card can be handed. Two commits inside the same millisecond
  * would compare equal on `Date.parse` alone — and equal means "reject", which would drop the
  * newer row and leave the card on the older one for good — so the tie falls to the
@@ -301,7 +301,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
       //
       // Deliberately NO "the write was acknowledged, so trust the text over the version" rule.
       // `_now()` is stamped under the row's own `FOR UPDATE` lock
-      // (`service._apply_task_update_cur`), so `updated_at` is monotonic PER ROW: a held row
+      // (`service._apply_todo_update_cur`), so `updated_at` is monotonic PER ROW: a held row
       // newer than this response was committed AFTER our write. Either it already carries our
       // text, making such a rule a no-op, or a later write replaced ours — and there, marking
       // the box clean would strand a paragraph the server does not have, silently and with no

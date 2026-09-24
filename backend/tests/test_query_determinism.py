@@ -10,7 +10,7 @@ Ties are the normal case here, not a rare one. ``created_at``/``updated_at`` def
 to ``now()``, which is TRANSACTION-start time, so every row written inside one
 transaction carries a byte-identical timestamp — a CSV import batch, ``seed_data``,
 a merge that copies notes, any multi-row CRM write. Other sort keys are worse:
-``tasks.completed`` is a 0/1 flag, ``tasks.due_date`` is TEXT defaulting to ``''``.
+``todos.completed`` is a 0/1 flag, ``todos.due_date`` is TEXT defaulting to ``''``.
 
 Four layers, each covering the previous one's blind spot:
 
@@ -456,7 +456,7 @@ def _scan_backend() -> tuple[list[str], dict[str, int], dict[str, int]]:
 @pytest.mark.parametrize("sql", [
     "SELECT * FROM alerts ORDER BY created_at DESC LIMIT %s",
     "SELECT * FROM t WHERE x = %s ORDER BY updated_at DESC LIMIT %s OFFSET %s",
-    "SELECT * FROM tasks ORDER BY completed ASC, due_date ASC LIMIT 20",
+    "SELECT * FROM todos ORDER BY completed ASC, due_date ASC LIMIT 20",
     "SELECT a.* FROM activity_log a ORDER BY a.created_at DESC LIMIT %s",
     "SELECT * FROM d ORDER BY value DESC NULLS LAST LIMIT 5",
     # Grouped, but the ORDER BY covers only half the group key.
@@ -589,14 +589,14 @@ def test_scan_actually_examined_the_backend():
 #                                      -> test_dynamic_order_by_contact_lists
 #   crm/service.py::list_companies   ORDER BY {order_by}, built in a local
 #                                      -> test_dynamic_order_by_company_list
-#   crm/service.py::list_tasks       ORDER BY {…}, from _TASK_SORTS
-#                                      -> test_dynamic_order_by_task_list
+#   crm/service.py::list_todos       ORDER BY {…}, from _TODO_SORTS
+#                                      -> test_dynamic_order_by_crm_todo_list
 #   crm/scoring_service.py::backfill_scores
 #                                    two reads shaped `{where} {order} LIMIT %s`, whose
 #                                    ORDER BY lives in a separate local
 #                                      -> test_scoring_backfill_orders_are_total
 #
-# `list_companies` and `list_tasks` joined this list in #77, and the way they did is the
+# `list_companies` and `list_todos` joined this list in #77, and the way they did is the
 # point of the registry: BOTH still end every branch on `id`, so neither ordering changed
 # and neither was ever broken — they simply stopped being PROVABLE from source. Before
 # #77 each carried its tie-breaker as a literal in the f-string
@@ -627,7 +627,7 @@ UNDECIDABLE_SITES = {
     "crm/service.py::list_contacts": 1,
     "crm/service.py::search_contacts": 1,
     "crm/service.py::list_companies": 1,
-    "crm/service.py::list_tasks": 1,
+    "crm/service.py::list_todos": 1,
     "crm/scoring_service.py::backfill_scores": 2,  # the deals read and the contacts read
 }
 
@@ -716,13 +716,13 @@ def test_order_by_fragment_constants_are_total():
     """Readers that interpolate an allow-listed ORDER BY fragment show the scanner only
     a placeholder, so the fragments themselves are checked directly. Reading the live
     constants means a sort option added later is covered without editing this test —
-    which is how ``_TASK_SORTS`` (arriving with #77, where ``list_tasks``' literal
+    which is how ``_TODO_SORTS`` (arriving with #77, where ``list_todos``' literal
     ORDER BY becomes a fragment lookup) is already accounted for here.
     """
     from crm import service
 
     checked = 0
-    for name in ("_CONTACT_SORTS", "_TASK_SORTS"):
+    for name in ("_CONTACT_SORTS", "_TODO_SORTS"):
         fragments = getattr(service, name, None)
         if fragments is None:
             continue
@@ -812,17 +812,17 @@ def test_dynamic_order_by_company_list(crm_recorder, sort):
     _assert_recorded_orders_are_total(crm_recorder)
 
 
-def _task_sort_keys():
-    from crm.service import _TASK_SORTS
+def _todo_sort_keys():
+    from crm.service import _TODO_SORTS
 
     # Read from the live dict for the same reason as _contact_sort_keys: a sort option
     # added later is covered here without anyone remembering to edit this list.
-    return sorted(_TASK_SORTS) + ["not-a-real-sort"]  # the last exercises the fallback
+    return sorted(_TODO_SORTS) + ["not-a-real-sort"]  # the last exercises the fallback
 
 
-@pytest.mark.parametrize("sort", _task_sort_keys())
-def test_dynamic_order_by_task_list(crm_recorder, sort):
-    """`list_tasks` interpolates a whole `_TASK_SORTS` fragment, so the scan sees only a
+@pytest.mark.parametrize("sort", _todo_sort_keys())
+def test_dynamic_order_by_crm_todo_list(crm_recorder, sort):
+    """`list_todos` interpolates a whole `_TODO_SORTS` fragment, so the scan sees only a
     placeholder and cannot judge the cap — this is the behavioral half of its
     registration in ``UNDECIDABLE_SITES``.
 
@@ -833,7 +833,7 @@ def test_dynamic_order_by_task_list(crm_recorder, sort):
     """
     from crm import service
 
-    service.list_tasks(sort=sort)
+    service.list_todos(sort=sort)
     _assert_recorded_orders_are_total(crm_recorder)
 
 

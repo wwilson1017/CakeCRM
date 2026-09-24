@@ -48,7 +48,7 @@ export function TodayPage() {
         overdue.length + dueToday.length + starred.length === 0 ? (
           <EmptyState
             title="Nothing on today's plate"
-            hint="Star a task or give it a due date and it shows up here."
+            hint="Star a todo or give it a due date and it shows up here."
           />
         ) : (
           <div className="space-y-6">

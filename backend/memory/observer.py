@@ -1,13 +1,13 @@
 """The observer — the assistant's only AUTOMATIC learning path (issue #72 Phase 4).
 
 Until now nothing in this product learned unless someone called a tool: every fact in
-``memory_facts`` was written by ``memory_add_fact`` during a live turn, every task by
-``crm_create_task`` or a human, every context file by an explicit write. Chatty closes
+``memory_facts`` was written by ``memory_add_fact`` during a live turn, every todo by
+``crm_create_todo`` or a human, every context file by an explicit write. Chatty closes
 that gap with three separate AI pipelines writing three separate stores — a nightly
 *observer* (plain-sentence observations), a per-fourth-message *extractor* (triples,
 fire-and-forget from inside the chat turn), and a nightly *commitments* extractor (a
 parallel to-do store with its own surfacing, caps and expiry). CakeCRM has one fact store
-and one task table, and Will ruled that commitments become ordinary CRM tasks, so the
+and one todo table, and Will ruled that commitments become ordinary CRM todos, so the
 three pipelines collapse into ONE pass: read what the user typed since we last looked,
 make one light-tier call per settled conversation, write two row shapes.
 
@@ -32,7 +32,7 @@ The only rows it can produce are:
 * a ``memory_facts`` row with ``created_by='observer'``, ``source='conversation:<id>'``
   and confidence <= 0.9, which is itself nonce-fenced DATA when it later reaches a prompt
   and which dreaming archives when it goes unused; and
-* a ``tasks`` row with ``status='inbox'``, ``source='agent'``, no owner and no CRM link —
+* a ``todos`` row with ``status='inbox'``, ``source='agent'``, no owner and no CRM link —
   a captured-not-yet-decided item the user processes, which is GTD's own confirmation
   discipline and the honest reading of "normal write-confirmation discipline" for a
   writer that has no human to ask.
@@ -48,7 +48,7 @@ than one notification, and every artifact visible and reversible.
 what the USER stated", "never credentials or amounts", "nothing that reads like an
 instruction") are MODEL INSTRUCTIONS. They are not enforceable in code and a confidence
 cap does not make poisoned content harmless. What IS enforced here is structural and
-listed on ``parse_observer_reply`` / ``normalize_fact`` / ``normalize_task``: the reply
+listed on ``parse_observer_reply`` / ``normalize_fact`` / ``normalize_todo``: the reply
 shape, the field types, the taxonomy, the caps, and — the part that actually bounds the
 damage — the two row shapes above being the only things this module can write.
 
@@ -93,7 +93,7 @@ MAX_TRANSCRIPT_CHARS = 8_000     # chatty verbatim
 MAX_ROW_CHARS = 2_000            # per-row clip, applied RAW before fencing
 MAX_SEGMENT_AGE_DAYS = 14        # never extract a commitment from a stale message
 MAX_FACTS_PER_SEGMENT = 8
-MAX_TASKS_PER_SEGMENT = 3        # chatty verbatim
+MAX_TODOS_PER_SEGMENT = 3        # chatty verbatim
 MAX_CONFIDENCE = 0.9             # chatty verbatim — an automatic fact is never certain
 MIN_TRANSCRIPT_CHARS = 50        # below this there is nothing to extract
 LLM_TIMEOUT_SECONDS = 45
@@ -106,7 +106,7 @@ OBSERVER_SOURCE_PREFIX = "conversation:"
 
 # Chatty's six-type subset. The full taxonomy (memory/types.py) has ten; `task`,
 # `problem`, `idea` and `someday-maybe` are deliberately unavailable to the observer —
-# work-shaped items become inbox TASKS, which the user can actually process, not facts.
+# work-shaped items become inbox TODOS, which the user can actually process, not facts.
 OBSERVER_MEMORY_TYPES = frozenset({
     "person", "decision", "preference", "insight", "reference", "milestone",
 })
@@ -268,7 +268,7 @@ def build_user_prompt(transcript: str, tracked_titles, today: str) -> str:
     """The user message: today's date, the already-tracked list, and the transcript.
 
     BOTH untrusted inputs are fenced. The transcript is obvious; the tracked titles are
-    the less obvious half and were nearly missed — they are stored task titles, which a
+    the less obvious half and were nearly missed — they are stored todo titles, which a
     user (or anyone who reached the public capture endpoint) typed, so a title is just as
     good an injection vector as a message. Each gets its own nonce.
     """
@@ -277,7 +277,7 @@ def build_user_prompt(transcript: str, tracked_titles, today: str) -> str:
         listed = "\n".join(f"- {_clip(t, 200)}" for t in tracked_titles)
         parts.append(
             "ALREADY TRACKED (do not record a commitment matching any of these):\n"
-            + wrap_untrusted_external("tracked_tasks", listed)
+            + wrap_untrusted_external("tracked_todos", listed)
         )
     parts.append(
         "CONVERSATION (what the user typed; each line is prefixed with the date it was "
@@ -371,14 +371,14 @@ def normalize_fact(item) -> dict | None:
             "memory_type": memory_type, "confidence": confidence}
 
 
-def normalize_task(item) -> dict | None:
+def normalize_todo(item) -> dict | None:
     """Validate one proposed commitment, or None to drop it.
 
-    The title goes through ``gtd_common.validate_title`` — the same gate every other task
+    The title goes through ``gtd_common.validate_title`` — the same gate every other todo
     writer passes — and a rejection drops the item. The due date goes through
     ``validate_due``, and anything that is not a real YYYY-MM-DD becomes NO due date
     rather than dropping an otherwise good follow-up: a hallucinated "next Tuesday" should
-    cost the date, not the task.
+    cost the date, not the todo.
     """
     if not isinstance(item, dict):
         return None
@@ -540,13 +540,13 @@ def _record_fact(proposed: dict, conversation_id: str) -> str:
     return "superseded" if superseded else "added"
 
 
-def _record_task(proposed: dict, conversation_id: str, tracked: dict[str, str]) -> bool:
+def _record_todo(proposed: dict, conversation_id: str, tracked: dict[str, str]) -> bool:
     """Create one inbox todo. Returns True iff a row was written.
 
     Two dedupe layers, because they answer different questions. ``tracked`` is the capped
     in-memory map that also went into the prompt; it is what stops two segments in ONE run
-    creating the same task. ``open_task_with_title_exists`` is the correctness check — it
-    sees every open task, including the 31st and the one opened a year ago, which a capped
+    creating the same todo. ``open_todo_with_title_exists`` is the correctness check — it
+    sees every open todo, including the 31st and the one opened a year ago, which a capped
     prompt list structurally cannot.
 
     The map is keyed by the case-folded title and holds the ORIGINAL text, because the two
@@ -554,7 +554,7 @@ def _record_task(proposed: dict, conversation_id: str, tracked: dict[str, str]) 
     the title as the user actually wrote it — a lower-cased list is harder for the model to
     match against and leaks nothing useful back.
 
-    The notes line carries the conversation id. Neither ``tasks`` nor any sibling table has
+    The notes line carries the conversation id. Neither ``todos`` nor any sibling table has
     a provenance column, and adding one for a badge is not worth a schema change, so the
     id rides in the notes where a human can read it — and where #98 can derive an owner
     from it later.
@@ -563,7 +563,7 @@ def _record_task(proposed: dict, conversation_id: str, tracked: dict[str, str]) 
     if key in tracked:
         return False
     try:
-        if gtd_service.open_task_with_title_exists(proposed["title"]):
+        if gtd_service.open_todo_with_title_exists(proposed["title"]):
             tracked[key] = proposed["title"]
             return False
         gtd_service.create_todo(
@@ -577,7 +577,7 @@ def _record_task(proposed: dict, conversation_id: str, tracked: dict[str, str]) 
             source="agent",
         )
     except gtd_common.ValidationError as exc:
-        logger.info("observer: task rejected by the store: %s", exc)
+        logger.info("observer: todo rejected by the store: %s", exc)
         return False
     except Exception as exc:
         raise _WriteFailure(str(exc)) from exc
@@ -604,7 +604,7 @@ def observe_conversation(conv: dict, provider, tracked_titles: dict[str, str]) -
     conv_id = conv["id"]
     watermark = conv.get("observed_through_seq")
     watermark = -1 if watermark is None else int(watermark)
-    out = {"facts_added": 0, "facts_superseded": 0, "tasks_added": 0,
+    out = {"facts_added": 0, "facts_superseded": 0, "todos_added": 0,
            "called": False, "provider_down": False, "advanced": False}
 
     rows = history.user_rows_since(conv_id, watermark, MAX_ROWS_PER_SEGMENT)
@@ -646,13 +646,13 @@ def observe_conversation(conv: dict, provider, tracked_titles: dict[str, str]) -
                 out["facts_superseded"] += 1
 
         for item in parsed["commitments"]:
-            if out["tasks_added"] >= MAX_TASKS_PER_SEGMENT:
+            if out["todos_added"] >= MAX_TODOS_PER_SEGMENT:
                 break
-            proposed = normalize_task(item)
+            proposed = normalize_todo(item)
             if proposed is None:
                 continue
-            if _record_task(proposed, conv_id, tracked_titles):
-                out["tasks_added"] += 1
+            if _record_todo(proposed, conv_id, tracked_titles):
+                out["todos_added"] += 1
     except _WriteFailure as exc:
         logger.warning("observer: transient write failure on %s (%s) — watermark held",
                        conv_id, exc)
@@ -718,14 +718,14 @@ def run_observer_if_due(now=None) -> dict | None:
         try:
             tracked = {
                 t.casefold(): t
-                for t in gtd_service.list_open_task_titles(TRACKED_TITLE_DAYS, MAX_TRACKED_TITLES)
+                for t in gtd_service.list_open_todo_titles(TRACKED_TITLE_DAYS, MAX_TRACKED_TITLES)
             }
         except Exception:
-            logger.warning("observer: could not load tracked task titles", exc_info=True)
+            logger.warning("observer: could not load tracked todo titles", exc_info=True)
             tracked = {}
 
         summary = {"conversations": 0, "facts_added": 0, "facts_superseded": 0,
-                   "tasks_added": 0, "skipped": 0}
+                   "todos_added": 0, "skipped": 0}
         for conv in candidates:
             try:
                 result = observe_conversation(conv, provider, tracked)
@@ -737,7 +737,7 @@ def run_observer_if_due(now=None) -> dict | None:
             summary["conversations"] += 1
             summary["facts_added"] += result["facts_added"]
             summary["facts_superseded"] += result["facts_superseded"]
-            summary["tasks_added"] += result["tasks_added"]
+            summary["todos_added"] += result["todos_added"]
             if result["provider_down"]:
                 # Stop the run: do not burn the remaining candidates on a dead provider.
                 summary["skipped"] += len(candidates) - summary["conversations"]
@@ -745,9 +745,9 @@ def run_observer_if_due(now=None) -> dict | None:
                 break
 
         logger.info(
-            "observer: conversations=%d facts=+%d/~%d tasks=+%d skipped=%d",
+            "observer: conversations=%d facts=+%d/~%d todos=+%d skipped=%d",
             summary["conversations"], summary["facts_added"],
-            summary["facts_superseded"], summary["tasks_added"], summary["skipped"],
+            summary["facts_superseded"], summary["todos_added"], summary["skipped"],
         )
         return summary
     except Exception:

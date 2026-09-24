@@ -27,14 +27,14 @@ EXPECTED_KEYS = {
     "gmail_broken",
     "telegram_connected",
     "telegram_linked",
-    "task_mode",
+    "todo_mode",
     "custom_field_counts",
 }
 
 # What a string leaf is allowed to be. Anything else is free text on a surface that
 # claims to carry none.
 ALLOWED_PROVIDERS = {"", "anthropic", "openai", "google", "ollama", "together"}
-ALLOWED_TASK_MODES = {"gtd", "normal"}
+ALLOWED_TODO_MODES = {"gtd", "normal"}
 
 
 class _Store:
@@ -61,7 +61,7 @@ def sources(monkeypatch):
     monkeypatch.setattr(telegram.store, "get_settings", lambda: {"connected": True})
     monkeypatch.setattr(telegram.store, "get_link",
                         lambda user_id: {"id": 1, "chat_id": "9", "link_code": ""})
-    monkeypatch.setattr(crm.service, "get_crm_meta", lambda: {"id": 1, "task_mode": "gtd"})
+    monkeypatch.setattr(crm.service, "get_crm_meta", lambda: {"id": 1, "todo_mode": "gtd"})
     monkeypatch.setattr(crm.field_service, "list_field_definitions", lambda *a, **k: [
         {"entity_type": "contact"}, {"entity_type": "contact"}, {"entity_type": "deal"},
     ])
@@ -84,7 +84,7 @@ def test_a_healthy_install_reads_back_as_configured(sources):
         "gmail_broken": False,
         "telegram_connected": True,
         "telegram_linked": True,
-        "task_mode": "gtd",
+        "todo_mode": "gtd",
         "custom_field_counts": {"contact": 2, "company": 0, "deal": 1},
     }
 
@@ -97,7 +97,7 @@ def test_every_leaf_is_a_boolean_an_enum_a_count_or_unknown(sources):
                 "telegram_connected", "telegram_linked"):
         assert isinstance(out[key], bool) or out[key] is None, key
     assert out["active_provider"] in ALLOWED_PROVIDERS or out["active_provider"] is None
-    assert out["task_mode"] in ALLOWED_TASK_MODES or out["task_mode"] is None
+    assert out["todo_mode"] in ALLOWED_TODO_MODES or out["todo_mode"] is None
     counts = out["custom_field_counts"]
     assert counts is None or (
         isinstance(counts, dict)
@@ -134,7 +134,7 @@ def test_an_unreadable_ai_state_is_unknown_not_unconfigured(sources):
     out = svc.get_setup_status()
     assert out["ai_ready"] is None and out["active_provider"] is None
     # One dead subsystem must not blank the rest.
-    assert out["gmail_connected"] is True and out["task_mode"] == "gtd"
+    assert out["gmail_connected"] is True and out["todo_mode"] == "gtd"
 
 
 def test_an_unreadable_gmail_row_is_unknown_not_disconnected(sources):
@@ -292,8 +292,8 @@ def test_get_setup_status_never_raises(sources):
 
 # ── The two readers that cannot report their own failure ─────────────────────
 #
-# `CredentialStore._load` and `crm.service.get_task_mode` both catch every database error
-# and return a plausible value — no provider configured, and the product-default task
+# `CredentialStore._load` and `crm.service.get_todo_mode` both catch every database error
+# and return a plausible value — no provider configured, and the product-default todo
 # mode. Nothing raises, so the surrounding try/except cannot see it, and without a probe
 # this surface would report a dead database as a deliberate configuration. The first of
 # those is the worst case the nullable payload exists for: it invites Baker to walk
@@ -311,7 +311,7 @@ def test_a_failed_credential_load_is_unknown_not_unconfigured(sources):
     out = svc.get_setup_status(user_id=7)
     assert out["ai_ready"] is None and out["active_provider"] is None
     # One dead source does not blank the ones that CAN answer.
-    assert out["gmail_connected"] is True and out["task_mode"] == "gtd"
+    assert out["gmail_connected"] is True and out["todo_mode"] == "gtd"
 
 
 def test_readiness_is_resolved_against_the_SAME_load_the_provider_name_came_from(sources):
@@ -360,8 +360,8 @@ def test_the_store_really_sets_that_flag_when_its_load_fails(monkeypatch):
     assert store.data == {"active_provider": "", "active_model": "", "profiles": {}}
 
 
-def test_an_unreadable_crm_meta_row_makes_the_task_mode_unknown(sources):
-    """`get_task_mode` fail-safes to the product default, which is right for the four hot
+def test_an_unreadable_crm_meta_row_makes_the_todo_mode_unknown(sources):
+    """`get_todo_mode` fail-safes to the product default, which is right for the four hot
     paths that call it and wrong here — a guess must not be reported as a fact. The value
     is therefore read through `get_crm_meta`, which lets the error propagate, so failure
     and value come from ONE query."""
@@ -369,37 +369,37 @@ def test_an_unreadable_crm_meta_row_makes_the_task_mode_unknown(sources):
 
     sources.setattr(crm.service, "get_crm_meta", _boom)
     out = svc.get_setup_status(user_id=7)
-    assert out["task_mode"] is None
+    assert out["todo_mode"] is None
     assert out["ai_ready"] is True
 
 
 def test_an_absent_crm_meta_row_is_unknown_too(sources):
-    """`get_crm_meta` answers a missing row with a default dict carrying no task_mode.
+    """`get_crm_meta` answers a missing row with a default dict carrying no todo_mode.
     The singleton is seeded by its migration and swept by nothing, so that means the row
     did not come back."""
     import crm.service
 
     sources.setattr(crm.service, "get_crm_meta",
                     lambda: {"id": 1, "sample_data_loaded": False})
-    assert svc.get_setup_status(user_id=7)["task_mode"] is None
+    assert svc.get_setup_status(user_id=7)["todo_mode"] is None
 
 
 @pytest.mark.parametrize("stored,expected", [
     ("gtd", "gtd"), ("normal", "normal"), (None, "gtd"), ("", "gtd"), ("bogus", "gtd"),
 ])
-def test_the_task_mode_rule_matches_the_one_every_other_reader_uses(
+def test_the_todo_mode_rule_matches_the_one_every_other_reader_uses(
     sources, monkeypatch, stored, expected
 ):
-    """This module restates `get_task_mode`'s normalization instead of calling it, so the
+    """This module restates `get_todo_mode`'s normalization instead of calling it, so the
     two are pinned together against the same stored value — four readers already agree on
     this default and a fifth must not drift."""
     import crm.service
 
-    sources.setattr(crm.service, "get_crm_meta", lambda: {"id": 1, "task_mode": stored})
-    assert svc.get_setup_status(user_id=7)["task_mode"] == expected
+    sources.setattr(crm.service, "get_crm_meta", lambda: {"id": 1, "todo_mode": stored})
+    assert svc.get_setup_status(user_id=7)["todo_mode"] == expected
 
-    monkeypatch.setattr(crm.service, "pg_fetchone", lambda *a, **k: {"task_mode": stored})
-    assert crm.service.get_task_mode() == expected
+    monkeypatch.setattr(crm.service, "pg_fetchone", lambda *a, **k: {"todo_mode": stored})
+    assert crm.service.get_todo_mode() == expected
 
 
 def test_a_readable_singleton_with_nothing_configured_still_reports_false(sources):

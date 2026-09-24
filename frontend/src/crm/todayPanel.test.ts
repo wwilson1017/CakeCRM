@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import type { CrmTodayDealItem, CrmTodayTaskItem } from '../core/types';
+import type { CrmTodayDealItem, CrmTodayTodoItem } from '../core/types';
 import {
   TODAY_COLLAPSED, coerceTodayScope, collapseToday, dealEvidence, msUntilRefresh, whyBadge,
 } from './todayPanel';
 
-function task(id: number, why: 'starred' | 'overdue' | 'due_today' = 'due_today'): CrmTodayTaskItem {
-  return { kind: 'task', id, rank: why === 'starred' ? 1 : why === 'overdue' ? 3 : 4, why,
+function todo(id: number, why: 'starred' | 'overdue' | 'due_today' = 'due_today'): CrmTodayTodoItem {
+  return { kind: 'todo', id, rank: why === 'starred' ? 1 : why === 'overdue' ? 3 : 4, why,
            title: `t${id}`, due_date: '2026-06-05', owner_id: null };
 }
 
@@ -19,26 +19,26 @@ function hotDeal(id: number, rank: 2 | null = null): CrmTodayDealItem {
 
 describe('collapseToday', () => {
   it('shows every row and hides nothing when the list fits', () => {
-    const items = [task(1), task(2)];
+    const items = [todo(1), todo(2)];
     expect(collapseToday(items, false)).toEqual({ visible: items, hiddenCount: 0 });
   });
 
   it('caps at five and reports the remainder', () => {
-    const items = Array.from({ length: 7 }, (_, i) => task(i));
+    const items = Array.from({ length: 7 }, (_, i) => todo(i));
     const { visible, hiddenCount } = collapseToday(items, false);
     expect(visible).toHaveLength(TODAY_COLLAPSED);
     expect(hiddenCount).toBe(2);
   });
 
   it('reveals everything when expanded, and still reports what the expander holds', () => {
-    const items = Array.from({ length: 7 }, (_, i) => task(i));
+    const items = Array.from({ length: 7 }, (_, i) => todo(i));
     // hiddenCount answers "what would the expander reveal", not "what is hidden right
     // now" — it is what tells the panel whether to offer Show less.
     expect(collapseToday(items, true)).toEqual({ visible: items, hiddenCount: 2 });
   });
 
   it('derives both halves from the SAME array, so the count cannot disagree', () => {
-    const items = Array.from({ length: 9 }, (_, i) => task(i));
+    const items = Array.from({ length: 9 }, (_, i) => todo(i));
     const { visible, hiddenCount } = collapseToday(items, false);
     expect(visible.length + hiddenCount).toBe(items.length);
   });
@@ -46,23 +46,23 @@ describe('collapseToday', () => {
   it('never shows an unranked hot deal in the collapsed card', () => {
     // The issue's rule, and the case a sixth rank could not have covered: one commitment
     // beside one recently-touched hot deal, well under the five-row cap.
-    const items = [task(1, 'overdue'), hotDeal(9)];
+    const items = [todo(1, 'overdue'), hotDeal(9)];
     expect(collapseToday(items, false)).toEqual({ visible: [items[0]], hiddenCount: 1 });
   });
 
   it('reveals the unranked rows once expanded', () => {
-    const items = [task(1, 'overdue'), hotDeal(9)];
+    const items = [todo(1, 'overdue'), hotDeal(9)];
     expect(collapseToday(items, true)).toEqual({ visible: items, hiddenCount: 1 });
   });
 
   it('shows a hot+stale deal in the collapsed card like any other ranked row', () => {
-    const items = [hotDeal(9, 2), task(1, 'overdue')];
+    const items = [hotDeal(9, 2), todo(1, 'overdue')];
     expect(collapseToday(items, false)).toEqual({ visible: items, hiddenCount: 0 });
   });
 
   it('fills all five slots from ranked rows even when unranked ones sit among them', () => {
-    // Slicing the first five ITEMS would spend a slot on the deal and drop task 5.
-    const items = [...Array.from({ length: 5 }, (_, i) => task(i)), hotDeal(9)];
+    // Slicing the first five ITEMS would spend a slot on the deal and drop todo 5.
+    const items = [...Array.from({ length: 5 }, (_, i) => todo(i)), hotDeal(9)];
     const { visible, hiddenCount } = collapseToday(items, false);
     expect(visible.map(i => i.id)).toEqual([0, 1, 2, 3, 4]);
     expect(hiddenCount).toBe(1);
@@ -104,7 +104,7 @@ describe('coerceTodayScope', () => {
 
 describe('whyBadge', () => {
   it('labels each rung of the ladder distinctly', () => {
-    const labels = (['starred', 'overdue', 'due_today'] as const).map(w => whyBadge(task(1, w)).label);
+    const labels = (['starred', 'overdue', 'due_today'] as const).map(w => whyBadge(todo(1, w)).label);
     expect(labels).toEqual(['STARRED', 'OVERDUE', 'DUE TODAY']);
   });
 });

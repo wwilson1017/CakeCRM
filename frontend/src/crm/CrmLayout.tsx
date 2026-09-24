@@ -17,15 +17,15 @@ import { NotificationsBell } from './components/NotificationsBell';
 import { ThemeToggle } from './components/ThemeToggle';
 import { ActiveRecordProvider } from './RecordContext';
 import { resyncPushSubscription } from '../core/notifications/pushSubscription';
-import { TaskModeContext, TaskModeSetterContext } from './gtd/TaskModeContext';
-import type { TaskMode } from './gtd/TaskModeContext';
+import { TodoModeContext, TodoModeSetterContext } from './gtd/TodoModeContext';
+import type { TodoMode } from './gtd/TodoModeContext';
 
 const NAV_ITEMS = [
   { to: '/crm', label: 'Dashboard', end: true },
   { to: '/crm/pipeline', label: 'Pipeline' },
   { to: '/crm/contacts', label: 'Contacts' },
   { to: '/crm/companies', label: 'Companies' },
-  { to: '/crm/tasks', label: 'Todos' },
+  { to: '/crm/todos', label: 'Todos' },
   { to: '/crm/reports', label: 'Reports' },
 ];
 
@@ -38,7 +38,7 @@ interface DemoStatus {
    * #70. Absent on an older backend — see the `?? 'normal'` at the provider below,
    * which is deliberately NOT the same fallback as a failed fetch.
    */
-  task_mode?: TaskMode;
+  todo_mode?: TodoMode;
 }
 
 /** First-run prompt: offer to load fictional sample data (or start fresh). */
@@ -71,7 +71,7 @@ function OnboardingDialog({ onLoad, onDismiss }: {
           fontFamily: FONT_SANS, fontSize: 14, color: INK_MUTE,
           lineHeight: 1.6, margin: 0,
         }}>
-          We can load a set of fictional contacts, deals, and tasks so you can see
+          We can load a set of fictional contacts, deals, and todos so you can see
           how CakeCRM works. You can clear it anytime, or start with an empty CRM.
         </p>
         {error && (
@@ -134,7 +134,7 @@ function DemoBanner({ onClear, isMobile }: {
       }}>
         {error
           ? 'Failed to clear example data. Please try again.'
-          : <>You're viewing example data &mdash; contacts, deals, and tasks are samples.</>}
+          : <>You're viewing example data &mdash; contacts, deals, and todos are samples.</>}
       </span>
       <button
         onClick={handleClear}
@@ -160,16 +160,16 @@ const actionLink: React.CSSProperties = {
 // Fail-closed demo-status: prompt nothing (incl. the AI nudge) when the fetch fails.
 const DEMO_STATUS_UNKNOWN: DemoStatus = {
   empty: false, sample_data_loaded: false, show_onboarding: false, ai_key_prompt_dismissed: true,
-  // A failed fetch must not strand /crm/tasks on a blank screen, so fall back to the
+  // A failed fetch must not strand /crm/todos on a blank screen, so fall back to the
   // default mode rather than leaving it unknown forever. GTD since #102.
   //
   // Note this is NOT the same event as the backend's fail-safe, and the reason matters:
-  // get_task_mode() falls back when THE SERVER cannot read crm_meta, whereas this .catch
+  // get_todo_mode() falls back when THE SERVER cannot read crm_meta, whereas this .catch
   // fires on a network blip or a 5xx, where the server may be perfectly healthy and
   // would have said 'normal' on a normal-mode install. So this is not mirroring the
   // backend — it is guessing the product default, which post-#102 is what nearly every
   // install is actually on, and is therefore right far more often than 'normal' was.
-  task_mode: 'gtd',
+  todo_mode: 'gtd',
 };
 
 interface SetupStatus { ai_ready: boolean; credentials_present: boolean; }
@@ -223,12 +223,12 @@ export function CrmLayout() {
   // #102: the Settings card switches the mode, but this layout owns it for the whole
   // CRM and does not refetch on navigation — so the card pushes the new value up here
   // instead of keeping its own copy. Without this, switching mode in Settings left
-  // /crm/tasks rendering the old task system until a full page reload.
+  // /crm/todos rendering the old todo system until a full page reload.
   //
   // Dropping the update while `status` is still null is correct: the card disables its
   // buttons until the mode is known, so there is nothing to lose.
-  const handleSetTaskMode = useCallback((mode: TaskMode) => {
-    setStatus(s => (s ? { ...s, task_mode: mode } : s));
+  const handleSetTodoMode = useCallback((mode: TodoMode) => {
+    setStatus(s => (s ? { ...s, todo_mode: mode } : s));
   }, []);
 
   const handleLoadSample = useCallback(async () => {
@@ -408,8 +408,8 @@ export function CrmLayout() {
           visible and reachable. Applied on desktop too: the pill overlaps the
           content column there just the same, only with more room around it. */}
       <div key={refreshKey} style={{ flex: 1, overflow: 'auto', position: 'relative', paddingBottom: LAUNCHER_CLEARANCE_PX }}>
-        {/* The task mode rides the demo-status payload this layout already fetches,
-            so /crm/tasks costs no extra request to decide which task system to show.
+        {/* The todo mode rides the demo-status payload this layout already fetches,
+            so /crm/todos costs no extra request to decide which todo system to show.
 
             `?? 'normal'` is deliberately NOT the 'gtd' fallback used for a FAILED fetch
             (DEMO_STATUS_UNKNOWN above). These answer different questions: a failed
@@ -417,10 +417,10 @@ export function CrmLayout() {
             field on a SUCCESSFUL response means a backend that predates #70 and has no
             GTD endpoints at all, where normal is the only mode that renders a working
             page — 'gtd' would render a shell whose every request 404s. */}
-        <TaskModeContext.Provider value={status ? (status.task_mode ?? 'normal') : null}>
-          <TaskModeSetterContext.Provider value={handleSetTaskMode}>
+        <TodoModeContext.Provider value={status ? (status.todo_mode ?? 'normal') : null}>
+          <TodoModeSetterContext.Provider value={handleSetTodoMode}>
             {/* Route chunks load here (#149), INSIDE the chrome: a page's first visit — or the
-                task mode flipping from unknown to GTD, which is a plain setState and not a
+                todo mode flipping from unknown to GTD, which is a plain setState and not a
                 router transition — suspends only the content column, so the nav stays put
                 and this layout's demo-status/setup fetches run in parallel with the download
                 instead of after it.
@@ -436,8 +436,8 @@ export function CrmLayout() {
                 <Outlet />
               </Suspense>
             </ChunkErrorBoundary>
-          </TaskModeSetterContext.Provider>
-        </TaskModeContext.Provider>
+          </TodoModeSetterContext.Provider>
+        </TodoModeContext.Provider>
       </div>
 
       {/* Persistent assistant affordance — always present, degrades gracefully. */}

@@ -32,7 +32,7 @@ function deal(over: Record<string, unknown> = {}) {
     created_at: '2026-01-01T00:00:00+00:00', updated_at: '2026-01-01T00:00:00+00:00',
     company_id: 7, lost_reason: '', archived_at: null,
     activities: [], activities_truncated: false, custom_fields: [],
-    tasks: [], tasks_truncated: false, last_activity_at: null,
+    todos: [], todos_truncated: false, last_activity_at: null,
     ...over,
   };
 }
@@ -269,10 +269,10 @@ describe('CompanyRollupReport', () => {
 
   it('states a per-record truncation inside the row it belongs to', async () => {
     // Distinct from the section notice above it: this is the only signal that ONE deal's own
-    // activity or task list was capped, and it renders only inside the expanded row.
+    // activity or todo list was capped, and it renders only inside the expanded row.
     apiMock.mockResolvedValue(rollup({
       deals: [
-        deal({ id: 1, title: 'Busy', activities_truncated: true, tasks_truncated: true }),
+        deal({ id: 1, title: 'Busy', activities_truncated: true, todos_truncated: true }),
         deal({ id: 2, title: 'Quiet' }),
       ] as never,
     }));
@@ -280,13 +280,13 @@ describe('CompanyRollupReport', () => {
     act(() => { expanders()[0].click(); });
     await settle();
     expect(text()).toContain('Only the most recent activity on this record is shown');
-    expect(text()).toContain('Only the first open tasks on this deal are shown');
+    expect(text()).toContain('Only the first open todos on this deal are shown');
 
     act(() => { expanders()[0].click(); });
     act(() => { expanders()[1].click(); });
     await settle();
     expect(text()).not.toContain('Only the most recent activity on this record is shown');
-    expect(text()).not.toContain('Only the first open tasks on this deal are shown');
+    expect(text()).not.toContain('Only the first open todos on this deal are shown');
   });
 
   it('refetches with include_archived and passes the flag to the timeline', async () => {

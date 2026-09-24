@@ -172,7 +172,7 @@ const HUES = [...STATUS_HUES, ...STAGES.map(s => `stage-${s}`)];
  * ai    12  `AiBadge`, `TouchCountPill high`
  * stage 12  every stage chip (`crm/constants.stage()`)
  *
- * Green's OTHER wash — `tint(SAGE_FILL, 20)` on `listColumns`' completed-task checkbox — is
+ * Green's OTHER wash — `tint(SAGE_FILL, 20)` on `listColumns`' completed-todo checkbox — is
  * deliberately absent from this table and asserted separately at the NON-TEXT threshold below.
  * It is listed as an exclusion rather than simply left out, because "a percentage nobody wrote
  * down" is exactly how a real surface goes unmeasured.
@@ -352,7 +352,7 @@ describe.each([
     }
   });
 
-  it('keeps the completed-task tick legible on its own 20% wash', () => {
+  it('keeps the completed-todo tick legible on its own 20% wash', () => {
     // `listColumns`' done checkbox: a `tint(SAGE_FILL, 20)` square with a `SAGE_TEXT`
     // IconCheck in it. Held to WCAG 1.4.11's 3:1 rather than 4.5:1 because the tick is a
     // graphic conveying a control's state, not text — and the distinction is load-bearing
@@ -388,7 +388,7 @@ describe.each([
 
   it('keeps a solid status fill legible under ON_STATUS', () => {
     // The three buttons that paint a hue as a SOLID background and put a label on it:
-    // `TasksPage` "Mark Complete", `DealDetailBody` "Mark Won" (both green) and `ConfirmHost`'s
+    // `TodosPage` "Mark Complete", `DealDetailBody` "Mark Won" (both green) and `ConfirmHost`'s
     // danger confirm (red). They use `--color-ck-on-status`, not `accent-ink`: white is correct
     // on the brand red in both themes but was only 2.49:1 on the green `.dark` lightens for text.
     const on = hexToRgb(resolve(tokens, 'on-status'));

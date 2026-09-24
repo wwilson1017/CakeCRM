@@ -1,13 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import type { CrmCompany, CrmContact, CrmTask } from '../core/types';
+import type { CrmCompany, CrmContact, CrmTodo } from '../core/types';
 import type { CrmUser } from './useUsers';
 import {
-  CONTACT_SORT_FIELDS, COMPANY_SORT_FIELDS, TASK_SORT_FIELDS,
+  CONTACT_SORT_FIELDS, COMPANY_SORT_FIELDS, TODO_SORT_FIELDS,
   buildOwnerOptions, matchesScoreBand, matchesDuePreset, matchesDonePreset,
   coerceDonePreset, makeContactsCollectionConfig, makeCompaniesCollectionConfig,
-  makeTasksCollectionConfig,
+  makeTodosCollectionConfig,
 } from './collectionConfig';
-import { buildContactColumns, buildCompanyColumns, buildTaskColumns, buildDoneFacetRenderers } from './listColumns';
+import { buildContactColumns, buildCompanyColumns, buildTodoColumns, buildDoneFacetRenderers } from './listColumns';
 
 const contact = (over: Partial<CrmContact> = {}): CrmContact => ({
   id: 1, name: 'Ada', email: '', phone: '', company: '', company_id: null, title: '',
@@ -19,7 +19,7 @@ const company = (over: Partial<CrmCompany> = {}): CrmCompany => ({
   source: '', status: 'active', created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z', ...over,
 });
-const task = (over: Partial<CrmTask> = {}): CrmTask => ({
+const todo = (over: Partial<CrmTodo> = {}): CrmTodo => ({
   id: 1, contact_id: null, deal_id: null, title: 'Call', description: '', due_date: '',
   completed: 0, priority: 'medium', created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z', ...over,
@@ -52,22 +52,22 @@ describe('sort getters', () => {
     }
   });
 
-  it('return null for every blank task field, including an unset due date', () => {
-    const blank = task({ title: '', due_date: '', priority: '', created_at: '' });
-    for (const [name, get] of getters<CrmTask>(TASK_SORT_FIELDS)) {
+  it('return null for every blank todo field, including an unset due date', () => {
+    const blank = todo({ title: '', due_date: '', priority: '', created_at: '' });
+    for (const [name, get] of getters<CrmTodo>(TODO_SORT_FIELDS)) {
       // `open_due` is exempt and must be: it is a COMPOSITE whose first component
       // (completion) is never unknown, so it always has a real position. Its own
       // "undated sorts last" is handled inside the string, not by the null rule.
       if (name === 'open_due') continue;
-      expect(get(blank), `task sort field "${name}"`).toBeNull();
+      expect(get(blank), `todo sort field "${name}"`).toBeNull();
     }
   });
 
   it('orders open-before-done, then by due date, in ONE composite key', () => {
     // The server's historical order. Without it the "All" view interleaves done and open
-    // tasks, which the tab bar this page replaces never did.
-    const get = TASK_SORT_FIELDS.find(f => f.value === 'open_due')!.get;
-    const key = (over: Partial<CrmTask>) => get(task(over)) as string;
+    // todos, which the tab bar this page replaces never did.
+    const get = TODO_SORT_FIELDS.find(f => f.value === 'open_due')!.get;
+    const key = (over: Partial<CrmTodo>) => get(todo(over)) as string;
     const openEarly = key({ completed: 0, due_date: '2026-01-01' });
     const openLate = key({ completed: 0, due_date: '2026-12-01' });
     const openUndated = key({ completed: 0, due_date: '' });
@@ -85,12 +85,12 @@ describe('sort getters', () => {
     expect(get(contact({ lead_score: 0 }))).toBe(0);
   });
 
-  it('ranks task priority by urgency rather than alphabetically', () => {
-    const get = TASK_SORT_FIELDS.find(f => f.value === 'priority')!.get;
-    const rank = (p: string) => get(task({ priority: p })) as number;
+  it('ranks todo priority by urgency rather than alphabetically', () => {
+    const get = TODO_SORT_FIELDS.find(f => f.value === 'priority')!.get;
+    const rank = (p: string) => get(todo({ priority: p })) as number;
     expect(rank('high')).toBeGreaterThan(rank('medium'));
     expect(rank('medium')).toBeGreaterThan(rank('low'));
-    expect(get(task({ priority: 'nonsense' }))).toBeNull();
+    expect(get(todo({ priority: 'nonsense' }))).toBeNull();
   });
 
   it('prefers the linked company name over the legacy free text (#35)', () => {
@@ -168,48 +168,48 @@ describe('matchesDuePreset', () => {
   const lateEvening = new Date(2026, 4, 1, 23, 30);
 
   it('uses the LOCAL calendar day, not the UTC one', () => {
-    expect(matchesDuePreset(task({ due_date: '2026-05-01' }), 'today', lateEvening)).toBe(true);
-    expect(matchesDuePreset(task({ due_date: '2026-05-02' }), 'today', lateEvening)).toBe(false);
+    expect(matchesDuePreset(todo({ due_date: '2026-05-01' }), 'today', lateEvening)).toBe(true);
+    expect(matchesDuePreset(todo({ due_date: '2026-05-02' }), 'today', lateEvening)).toBe(false);
   });
 
-  it('counts only OPEN tasks as overdue', () => {
+  it('counts only OPEN todos as overdue', () => {
     const late = { due_date: '2026-04-01' };
-    expect(matchesDuePreset(task({ ...late }), 'overdue', lateEvening)).toBe(true);
+    expect(matchesDuePreset(todo({ ...late }), 'overdue', lateEvening)).toBe(true);
     // Finished late is still finished — it does not belong on an "Overdue" list.
-    expect(matchesDuePreset(task({ ...late, completed: 1 }), 'overdue', lateEvening)).toBe(false);
+    expect(matchesDuePreset(todo({ ...late, completed: 1 }), 'overdue', lateEvening)).toBe(false);
   });
 
   it('includes both bounds of the next-7-days window and excludes the day after', () => {
-    expect(matchesDuePreset(task({ due_date: '2026-05-01' }), 'next7', lateEvening)).toBe(true);
-    expect(matchesDuePreset(task({ due_date: '2026-05-08' }), 'next7', lateEvening)).toBe(true);
-    expect(matchesDuePreset(task({ due_date: '2026-05-09' }), 'next7', lateEvening)).toBe(false);
+    expect(matchesDuePreset(todo({ due_date: '2026-05-01' }), 'next7', lateEvening)).toBe(true);
+    expect(matchesDuePreset(todo({ due_date: '2026-05-08' }), 'next7', lateEvening)).toBe(true);
+    expect(matchesDuePreset(todo({ due_date: '2026-05-09' }), 'next7', lateEvening)).toBe(false);
     // Already overdue is not "upcoming".
-    expect(matchesDuePreset(task({ due_date: '2026-04-30' }), 'next7', lateEvening)).toBe(false);
+    expect(matchesDuePreset(todo({ due_date: '2026-04-30' }), 'next7', lateEvening)).toBe(false);
   });
 
   it('matches an unset due date only under "none"', () => {
-    expect(matchesDuePreset(task({ due_date: '' }), 'none', lateEvening)).toBe(true);
+    expect(matchesDuePreset(todo({ due_date: '' }), 'none', lateEvening)).toBe(true);
     for (const p of ['today', 'next7', 'overdue'] as const) {
-      expect(matchesDuePreset(task({ due_date: '' }), p, lateEvening)).toBe(false);
+      expect(matchesDuePreset(todo({ due_date: '' }), p, lateEvening)).toBe(false);
     }
   });
 });
 
 describe('the Done facet', () => {
   it('defaults to Open, reproducing the old Pending-by-default page', () => {
-    const config = makeTasksCollectionConfig({
-      columns: buildTaskColumns(() => {}, TODAY), owners: null, doneFacet: buildDoneFacetRenderers(), now: NOW,
+    const config = makeTodosCollectionConfig({
+      columns: buildTodoColumns(() => {}, TODAY), owners: null, doneFacet: buildDoneFacetRenderers(), now: NOW,
     });
     const done = config.facets!.find(f => f.key === 'done')!;
     expect(done.kind).toBe('custom');
     // Only a CUSTOM facet carries a defaultValue, which is the whole reason for the kind:
-    // a single-select defaults to null (inactive) and could not hide done tasks at rest.
+    // a single-select defaults to null (inactive) and could not hide done todos at rest.
     expect((done as { defaultValue: unknown }).defaultValue).toBe('open');
   });
 
   it('reports itself ACTIVE while it is hiding rows, so the bar can say why', () => {
-    const config = makeTasksCollectionConfig({
-      columns: buildTaskColumns(() => {}, TODAY), owners: null, doneFacet: buildDoneFacetRenderers(), now: NOW,
+    const config = makeTodosCollectionConfig({
+      columns: buildTodoColumns(() => {}, TODAY), owners: null, doneFacet: buildDoneFacetRenderers(), now: NOW,
     });
     const isActive = (config.facets!.find(f => f.key === 'done') as { isActive: (v: unknown) => boolean }).isActive;
     expect(isActive('open')).toBe(true);
@@ -218,12 +218,12 @@ describe('the Done facet', () => {
   });
 
   it('selects the three states correctly', () => {
-    expect(matchesDonePreset(task({ completed: 0 }), 'open')).toBe(true);
-    expect(matchesDonePreset(task({ completed: 1 }), 'open')).toBe(false);
-    expect(matchesDonePreset(task({ completed: 1 }), 'done')).toBe(true);
-    expect(matchesDonePreset(task({ completed: 0 }), 'done')).toBe(false);
-    expect(matchesDonePreset(task({ completed: 1 }), 'all')).toBe(true);
-    expect(matchesDonePreset(task({ completed: 0 }), 'all')).toBe(true);
+    expect(matchesDonePreset(todo({ completed: 0 }), 'open')).toBe(true);
+    expect(matchesDonePreset(todo({ completed: 1 }), 'open')).toBe(false);
+    expect(matchesDonePreset(todo({ completed: 1 }), 'done')).toBe(true);
+    expect(matchesDonePreset(todo({ completed: 0 }), 'done')).toBe(false);
+    expect(matchesDonePreset(todo({ completed: 1 }), 'all')).toBe(true);
+    expect(matchesDonePreset(todo({ completed: 0 }), 'all')).toBe(true);
   });
 
   it('coerces junk from sessionStorage back to Open without throwing', () => {
@@ -250,10 +250,10 @@ describe('column keys line up with sort fields', () => {
     }
   };
 
-  it('for contacts, companies and tasks', () => {
+  it('for contacts, companies and todos', () => {
     check(buildContactColumns(), CONTACT_SORT_FIELDS, ['phone']);
     check(buildCompanyColumns(), COMPANY_SORT_FIELDS, ['phone']);
-    check(buildTaskColumns(() => {}, TODAY), TASK_SORT_FIELDS, ['done']);
+    check(buildTodoColumns(() => {}, TODAY), TODO_SORT_FIELDS, ['done']);
   });
 });
 
@@ -261,7 +261,7 @@ describe('config shape', () => {
   const configs = () => [
     makeContactsCollectionConfig({ columns: buildContactColumns(), owners: null, now: NOW }),
     makeCompaniesCollectionConfig({ columns: buildCompanyColumns(), owners: null }),
-    makeTasksCollectionConfig({ columns: buildTaskColumns(() => {}, TODAY), owners: null, doneFacet: buildDoneFacetRenderers(), now: NOW }),
+    makeTodosCollectionConfig({ columns: buildTodoColumns(() => {}, TODAY), owners: null, doneFacet: buildDoneFacetRenderers(), now: NOW }),
   ];
 
   it('declares the list view it defaults to (the hook throws otherwise)', () => {

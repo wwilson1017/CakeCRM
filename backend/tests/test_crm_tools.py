@@ -20,8 +20,8 @@ def test_def_and_executor_counts():
     # 6 (#19 custom fields) + 2 (#18 lead scores) + 1 (#20 crm_analytics) + 9 (#22
     # Casey parity: search_deals, mark_deal_won/lost, archive_deal, merge_deals,
     # get_stale_deals, get_contact_staleness, find_duplicates, scan_gaps) + 2 (#22
-    # Phase 2: get_deal_health, get_pipeline_analytics) + 2 (#70 task parity:
-    # crm_update_task, crm_delete_task) + 1 (#55 crm_bulk_move_deals) + 1 (#200
+    # Phase 2: get_deal_health, get_pipeline_analytics) + 2 (#70 todo parity:
+    # crm_update_todo, crm_delete_todo) + 1 (#55 crm_bulk_move_deals) + 1 (#200
     # crm_get_setup_status) + N (sibling
     # additions) — SUM the additions, never overwrite the number. On rebase behind a
     # sibling that also adds a tool, recompute cumulative (do NOT keep-both a single
@@ -78,15 +78,15 @@ def test_every_def_has_executor_and_alias_is_the_extra():
     assert set(TOOL_EXECUTORS) == def_names | {"crm_log_note"}
 
 
-def test_get_crm_tools_has_no_enable_gate(task_mode):
+def test_get_crm_tools_has_no_enable_gate(todo_mode):
     """The CRM tools are always on — there is no per-integration enable flag.
 
     The mode is pinned explicitly because #70 made the def list conditional on ONE
-    thing (GTD hides the five task tools) and #102 made GTD the fail-safe answer with
+    thing (GTD hides the five todo tools) and #102 made GTD the fail-safe answer with
     no database. Before that this test read the full list by accident of the old
     'normal' fallback; asking for normal mode is what it always meant.
     """
-    task_mode("normal")
+    todo_mode("normal")
     defs, execs = get_crm_tools()
     assert defs is CRM_TOOL_DEFS
     # The executor map is now built per call so the caller's seat can be curried into the
@@ -116,15 +116,15 @@ def test_no_enable_gate_in_source():
 _OWNED_WRITE_TOOLS = {
     "crm_create_contact", "crm_update_contact", "crm_delete_contact",
     "crm_create_deal", "crm_update_deal", "crm_update_deal_stage",
-    "crm_log_activity", "crm_create_task", "crm_complete_task",
-    "crm_update_task", "crm_delete_task",  # #70
+    "crm_log_activity", "crm_create_todo", "crm_complete_todo",
+    "crm_update_todo", "crm_delete_todo",  # #70
     "crm_set_contact_fields", "crm_set_company_fields", "crm_set_deal_fields",
     "crm_recompute_lead_scores",  # #18
     "crm_bulk_move_deals",  # #55
 }
 _OWNED_READ_TOOLS = {
     "crm_find_contact", "crm_get_contact", "crm_list_contacts", "crm_get_pipeline",
-    "crm_get_deal", "crm_get_activity_log", "crm_list_tasks", "crm_dashboard",
+    "crm_get_deal", "crm_get_activity_log", "crm_list_todos", "crm_dashboard",
     "crm_analytics",
     "crm_get_contact_fields", "crm_get_company_fields", "crm_get_deal_fields",
     "crm_get_lead_score",  # #18

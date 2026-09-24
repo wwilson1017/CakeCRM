@@ -5,7 +5,8 @@ import { ProtectedRoute } from './core/auth/ProtectedRoute';
 import { BrandingProvider } from './core/branding/BrandingContext';
 import BootFallback from './core/components/BootFallback';
 import { LoginPage } from './login/LoginPage';
-import { TasksModeRouter } from './crm/gtd/TasksModeRouter';
+import { TodosModeRouter } from './crm/gtd/TodosModeRouter';
+import { LegacyTodoRedirect } from './crm/legacyTodoRedirect';
 import { ToastViewport } from './shared/ToastViewport';
 import { ConfirmHost } from './shared/ConfirmHost';
 
@@ -20,7 +21,7 @@ import { ConfirmHost } from './shared/ConfirmHost';
 // deps for all of them. `src/bootSplit.test.ts` enforces this.
 //
 // What stays eager above is the shell every CRM surface needs anyway: the router, auth, the
-// route guard, branding, the toast/confirm hosts, `TasksModeRouter` (tiny glue — its own
+// route guard, branding, the toast/confirm hosts, `TodosModeRouter` (tiny glue — its own
 // heavy import is lazy inside it), and `LoginPage`: it is the first screen of every
 // signed-out visit and three small modules, so a Suspense hop there would cost every first
 // visit a round trip to save the logged-in visitor ~5 kB.
@@ -118,19 +119,23 @@ export default function App() {
               <Route path="contacts/:id?" element={<ContactsPage />} />
               <Route path="companies/:id?" element={<CompaniesPage />} />
               <Route path="pipeline" element={<PipelinePage />} />
-              {/* One task route, two task systems — TasksModeRouter picks by mode.
-                  The GTD-only sub-routes redirect to /crm/tasks in normal mode, so a
-                  bookmarked GTD URL degrades to the Tasks page instead of 404ing. */}
-              <Route path="tasks" element={<TasksModeRouter gtd={<TodayPage />} />} />
-              <Route path="tasks/inbox" element={<TasksModeRouter gtd={<InboxPage />} normal="redirect" />} />
-              <Route path="tasks/next" element={<TasksModeRouter gtd={<NextActionsPage />} normal="redirect" />} />
-              <Route path="tasks/projects" element={<TasksModeRouter gtd={<ProjectsPage />} normal="redirect" />} />
-              <Route path="tasks/projects/:id" element={<TasksModeRouter gtd={<ProjectDetailPage />} normal="redirect" />} />
-              <Route path="tasks/waiting" element={<TasksModeRouter gtd={<WaitingPage />} normal="redirect" />} />
-              <Route path="tasks/someday" element={<TasksModeRouter gtd={<SomedayPage />} normal="redirect" />} />
-              <Route path="tasks/done" element={<TasksModeRouter gtd={<DonePage />} normal="redirect" />} />
-              <Route path="tasks/review" element={<TasksModeRouter gtd={<ReviewPage />} normal="redirect" />} />
-              <Route path="tasks/search" element={<TasksModeRouter gtd={<SearchPage />} normal="redirect" />} />
+              {/* One todo route, two todo systems — TodosModeRouter picks by mode.
+                  The GTD-only sub-routes redirect to /crm/todos in normal mode, so a
+                  bookmarked GTD URL degrades to the Todos page instead of 404ing. */}
+              <Route path="todos" element={<TodosModeRouter gtd={<TodayPage />} />} />
+              <Route path="todos/inbox" element={<TodosModeRouter gtd={<InboxPage />} normal="redirect" />} />
+              <Route path="todos/next" element={<TodosModeRouter gtd={<NextActionsPage />} normal="redirect" />} />
+              <Route path="todos/projects" element={<TodosModeRouter gtd={<ProjectsPage />} normal="redirect" />} />
+              <Route path="todos/projects/:id" element={<TodosModeRouter gtd={<ProjectDetailPage />} normal="redirect" />} />
+              <Route path="todos/waiting" element={<TodosModeRouter gtd={<WaitingPage />} normal="redirect" />} />
+              <Route path="todos/someday" element={<TodosModeRouter gtd={<SomedayPage />} normal="redirect" />} />
+              <Route path="todos/done" element={<TodosModeRouter gtd={<DonePage />} normal="redirect" />} />
+              <Route path="todos/review" element={<TodosModeRouter gtd={<ReviewPage />} normal="redirect" />} />
+              <Route path="todos/search" element={<TodosModeRouter gtd={<SearchPage />} normal="redirect" />} />
+              {/* #169: every pre-rename /crm/tasks… URL redirects to its /crm/todos… twin,
+                  params, query and hash intact. The `*` catch-all below would otherwise
+                  swallow an old bookmark onto the dashboard with no explanation. */}
+              <Route path="tasks/*" element={<LegacyTodoRedirect />} />
               <Route path="reports" element={<ReportsPage />} />
                 <Route path="memory" element={<MemoryPage />} />
               <Route path="settings" element={<SettingsPage />} />

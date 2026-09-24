@@ -17,7 +17,7 @@
 //
 // Two firsts for this repo's harness: no other test renders under a Router, and none
 // renders a `useIsMobile` consumer (jsdom has no `matchMedia`, so the hook is module-mocked
-// rather than shimmed). The task-mode providers are real, not mocked — `useSetTaskMode()`
+// rather than shimmed). The todo-mode providers are real, not mocked — `useSetTodoMode()`
 // throws without one by design (#102), so omitting them fails loudly rather than silently.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -25,10 +25,10 @@ import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getToasts, _resetForTesting as resetToasts } from '../shared/toast';
-import { TaskModeContext, TaskModeSetterContext } from './gtd/TaskModeContext';
+import { TodoModeContext, TodoModeSetterContext } from './gtd/TodoModeContext';
 import { invalidateUsers } from './useUsers';
 
-const setTaskMode = vi.fn();
+const setTodoMode = vi.fn();
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 // Relative to THIS file; the cards' own `../../core/...` imports resolve to the same
@@ -80,11 +80,11 @@ const RESPONSES: Record<string, unknown> = {
     client_secret_present: false, scopes: [], redirect_uri: 'https://example.test/api/gmail/oauth/callback',
   },
   '/api/auth/2fa/status': { enabled: false },
-  '/api/crm/demo-status': { task_mode: 'normal' },
+  '/api/crm/demo-status': { todo_mode: 'normal' },
 };
 
-// 'Task mode' is admin-only as of #102, which makes its routes require_admin.
-const ADMIN_ONLY_TITLES = ['Branding', 'Team', 'Custom Fields', 'Telegram', 'Gmail', 'Task mode'];
+// 'Todo mode' is admin-only as of #102, which makes its routes require_admin.
+const ADMIN_ONLY_TITLES = ['Branding', 'Team', 'Custom Fields', 'Telegram', 'Gmail', 'Todo mode'];
 // 'Link my Telegram' is the personal half of the Telegram split (#193); the bot card
 // above stays admin-only.
 const MEMBER_TITLES = [
@@ -115,20 +115,20 @@ afterEach(() => {
 });
 
 /**
- * The page as it is actually mounted in the app: under a router, and under the two task-mode
- * providers `CrmLayout` owns. Both are required — `useSetTaskMode()` THROWS without its
+ * The page as it is actually mounted in the app: under a router, and under the two todo-mode
+ * providers `CrmLayout` owns. Both are required — `useSetTodoMode()` THROWS without its
  * provider by design (#102), rather than defaulting to a silent no-op, so a harness that
  * omitted it would fail loudly here exactly as a real missing mount point would.
  */
 function tree(url: string) {
   return (
     <MemoryRouter initialEntries={[url]}>
-      <TaskModeContext.Provider value="gtd">
-        <TaskModeSetterContext.Provider value={setTaskMode}>
+      <TodoModeContext.Provider value="gtd">
+        <TodoModeSetterContext.Provider value={setTodoMode}>
           <SettingsPage />
           <LocationProbe />
-        </TaskModeSetterContext.Provider>
-      </TaskModeContext.Provider>
+        </TodoModeSetterContext.Provider>
+      </TodoModeContext.Provider>
     </MemoryRouter>
   );
 }
@@ -342,7 +342,7 @@ describe('SettingsPage — the Gmail OAuth callback', () => {
     }
     await clickTab('Assistant');
     expect(container.querySelector('[aria-current="page"]')!.textContent).toBe('Assistant');
-    // Task mode is admin-only (#102), so a member's Assistant section is memory alone.
+    // Todo mode is admin-only (#102), so a member's Assistant section is memory alone.
     expect(cardTitles()).toEqual(['Assistant memory']);
   });
 

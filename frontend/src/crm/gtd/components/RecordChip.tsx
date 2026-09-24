@@ -6,7 +6,7 @@ import type { Todo } from '../types';
  * The CRM link chip: a todo attached to a contact or a deal names it.
  *
  * This is CakeCRM's answer to the blueprint's Projects-card chip. The blueprint had
- * to add link columns for it; here `tasks` already carries contact_id/deal_id, so the
+ * to add link columns for it; here `todos` already carries contact_id/deal_id, so the
  * link is native and the chip is free.
  *
  * In the no-login public app the chip renders as plain text, never a link: those CRM

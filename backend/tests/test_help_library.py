@@ -70,12 +70,12 @@ _NOT_TOOLS = {
 
 
 def _registered_tool_names() -> set[str]:
-    """Every tool name this product can advertise or execute, in EITHER task mode.
+    """Every tool name this product can advertise or execute, in EITHER todo mode.
 
     Read from the feature modules' own constants rather than from one constructed
     registry, because two composition rules would otherwise hide real tools from the
-    guard: `get_gmail_tools()` returns nothing until Gmail is connected, and the task
-    tools swap with the task mode, so a registry built here holds one mode's half.
+    guard: `get_gmail_tools()` returns nothing until Gmail is connected, and the todo
+    tools swap with the todo mode, so a registry built here holds one mode's half.
     Executor-only aliases are included — they are dispatchable, so naming one is legal.
     """
     from context_files.tools import CONTEXT_FILE_TOOL_DEFS, CONTEXT_FILE_TOOL_EXECUTORS
@@ -337,7 +337,7 @@ def test_warm_never_raises(monkeypatch, caplog):
 
 def test_search_is_deterministic():
     library = lib.get_library()
-    for query in ("deal", "how do I connect gmail", "task"):
+    for query in ("deal", "how do I connect gmail", "todo"):
         first = [(h.topic.slug, h.score) for h in help_search.search(library, query, 8)]
         second = [(h.topic.slug, h.score) for h in help_search.search(library, query, 8)]
         assert first == second
@@ -366,7 +366,7 @@ def test_search_order_does_not_depend_on_the_order_topics_were_read():
     ("bulk move deals", "pipeline/bulk-moves"),
     ("merge two contacts", "contacts-and-companies/dedupe"),
     ("how do I import a spreadsheet", "contacts-and-companies/import"),
-    ("capture a todo from my phone", "tasks/no-login-surfaces"),
+    ("capture a todo from my phone", "todos/no-login-surfaces"),
     ("upload a logo", "settings/branding"),
     ("add a user to my team", "settings/team"),
     # #209 playbooks: a technique, an objection, a buyer behaviour and an author each land
@@ -550,7 +550,7 @@ _TOPIC_TO_CARD = {
     # is a person's own device (member-visible). Two cards with different gating cannot
     # share one topic, because a topic carries exactly one `admin` flag.
     "settings/telegram-link": "telegram_link",
-    "settings/task-mode": "task_mode",
+    "settings/todo-mode": "todo_mode",
     "settings/custom-fields": "custom_fields",
     "settings/branding": "branding",
     "settings/team": "team",

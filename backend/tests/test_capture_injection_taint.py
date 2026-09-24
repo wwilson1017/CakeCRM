@@ -1,9 +1,9 @@
 """Prompt-injection defense for the PUBLIC quick-capture surface (issue #204).
 
 `POST /api/capture` is tokenless by default, so a stranger can type a block of text
-straight into the todo inbox. That row is the one `tasks.source = 'capture_web'` an
+straight into the todo inbox. That row is the one `todos.source = 'capture_web'` an
 unauthenticated caller can produce. Reading it back — `todo_list` in GTD mode,
-`crm_list_tasks` in the other, or a write echoing the row it just edited — must fence
+`crm_list_todos` in the other, or a write echoing the row it just edited — must fence
 that text as DATA and taint the turn, so an instruction planted through the public box
 cannot drive a `confirm_tier: ROUTINE` write with no Approve card.
 
@@ -87,7 +87,7 @@ def test_only_the_public_row_is_fenced():
 
 def test_structural_fields_survive_and_prose_does_not():
     """Deny-by-default: every string on a public row is fenced EXCEPT the named
-    structural ones, so a free-text column added to `tasks` later is covered with no
+    structural ones, so a free-text column added to `todos` later is covered with no
     edit here."""
     row = _capture_row(description="ring the bell", context="@errands")
     fenced, _ = delimiters.fence_public_rows({"todo": row})
@@ -138,28 +138,28 @@ def test_a_matched_parent_does_not_stop_the_descent():
     """REGRESSION (Codex, PR #206): matching a row used to END the walk there, so a real
     capture row nested UNDER a matched parent reached the model raw.
 
-    `crm.service.get_contact_detail` returns `{**contact, "tasks": [...full task rows...]}`
+    `crm.service.get_contact_detail` returns `{**contact, "todos": [...full todo rows...]}`
     and `contacts.source` is the free-text LEAD source a user types — so a contact whose
-    source reads `capture_web` shielded every task nested under it. `crm_get_contact` is a
+    source reads `capture_web` shielded every todo nested under it. `crm_get_contact` is a
     read, hence background-callable, where the fence is the ONLY control (the unattended
     loop has no confirmation gate and discards the flag).
     """
     payload = {
         "id": 5, "name": "Dana", "source": "capture_web", "tags": ["vip"],
-        "tasks": [_capture_row(), _own_row()],
+        "todos": [_capture_row(), _own_row()],
     }
     fenced, tainted = delimiters.fence_public_rows(payload)
 
     assert tainted is True
     assert fenced["name"].startswith("<untrusted_external_content id=")
     # The nested STRANGER row is fenced...
-    assert fenced["tasks"][0]["title"].startswith("<untrusted_external_content id=")
+    assert fenced["todos"][0]["title"].startswith("<untrusted_external_content id=")
     # ...and the nested row the user wrote answers for itself, so it is left alone.
-    assert fenced["tasks"][1] == _own_row()
+    assert fenced["todos"][1] == _own_row()
     # A list of plain strings on the matched parent is still fenced element-wise.
     assert fenced["tags"][0].startswith("<untrusted_external_content id=")
     # Nothing was mutated in place.
-    assert payload["tasks"][0]["title"] == _INJECTION
+    assert payload["todos"][0]["title"] == _INJECTION
 
 
 def test_a_nested_public_row_is_found():
@@ -173,7 +173,7 @@ def test_fence_tool_result_taints_on_the_row_not_the_tool_name():
     """The shape of the fix: `todo_list` is NOT in UNTRUSTED_SOURCE_TOOLS (that set is
     also the background exclusion list), so the taint has to come from the result."""
     assert "todo_list" not in delimiters.UNTRUSTED_SOURCE_TOOLS
-    assert "crm_list_tasks" not in delimiters.UNTRUSTED_SOURCE_TOOLS
+    assert "crm_list_todos" not in delimiters.UNTRUSTED_SOURCE_TOOLS
 
     clean, clean_tainted = delimiters.fence_tool_result("todo_list", {"todos": [_own_row()]})
     assert clean_tainted is False
@@ -336,13 +336,13 @@ def _read_then_write(read_tool, write_tool):
 
 # ── The headline: a planted instruction cannot drive an uncarded routine write ──
 
-@pytest.mark.parametrize("read_tool, key", [("todo_list", "todos"), ("crm_list_tasks", "tasks")])
+@pytest.mark.parametrize("read_tool, key", [("todo_list", "todos"), ("crm_list_todos", "todos")])
 @pytest.mark.asyncio
 async def test_a_public_capture_row_binds_a_routine_write_in_normal_mode(store, read_tool, key):
-    """The bug this issue reports, in both task modes.
+    """The bug this issue reports, in both todo modes.
 
-    GTD mode advertises `todo_list`; the other advertises `crm_list_tasks` over the same
-    `tasks` rows. Before #204 neither tainted, so a stranger's text could drive any
+    GTD mode advertises `todo_list`; the other advertises `crm_list_todos` over the same
+    `todos` rows. Before #204 neither tainted, so a stranger's text could drive any
     `confirm_tier: ROUTINE` write with no Approve card in normal ("Ask") mode.
     """
     reg = Registry(
@@ -358,7 +358,7 @@ async def test_a_public_capture_row_binds_a_routine_write_in_normal_mode(store, 
     assert reg.calls == [(read_tool, {})], "the routine write must not have executed"
 
 
-@pytest.mark.parametrize("read_tool, key", [("todo_list", "todos"), ("crm_list_tasks", "tasks")])
+@pytest.mark.parametrize("read_tool, key", [("todo_list", "todos"), ("crm_list_todos", "todos")])
 @pytest.mark.asyncio
 async def test_without_a_public_row_the_same_routine_write_runs(store, read_tool, key):
     """The positive control, and the reason this is shape A: an ordinary list of the
@@ -501,7 +501,7 @@ def test_an_approved_write_on_an_ordinary_row_does_not_taint(store, monkeypatch)
     assert conv
 
 
-def test_the_public_source_set_is_a_real_tasks_source_value():
+def test_the_public_source_set_is_a_real_todos_source_value():
     """`delimiters` re-types `capture_web` rather than importing it, to stay a stdlib-only
     leaf (see the comment there). This is the coupling that comment promises: a rename in
     the CRM's own vocabulary fails here instead of silently fencing nothing."""

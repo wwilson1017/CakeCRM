@@ -40,7 +40,7 @@ class FakeProvider:
 class FakeRegistry:
     def __init__(self, writes=frozenset()):
         self._writes = set(writes)
-        self.writes_map = {"crm_dashboard": False, "crm_create_task": True, "crm_delete_contact": True,
+        self.writes_map = {"crm_dashboard": False, "crm_create_todo": True, "crm_delete_contact": True,
                            "notify_user": True}
         # Advertise every untrusted-source read (writes:False, as they really are), or the
         # #114 exclusion tests would pass vacuously against a registry lacking them.
@@ -90,14 +90,14 @@ def test_text_only_response(monkeypatch):
 
 def test_write_executes_without_confirmation(monkeypatch):
     prov = FakeProvider([
-        [_complete([_tc("crm_create_task")], stop="tool_use")],
+        [_complete([_tc("crm_create_todo")], stop="tool_use")],
         [{"type": "text", "text": "logged"}, _complete(stop="stop")],
     ])
     _use(prov, monkeypatch)
-    reg = FakeRegistry(writes={"crm_create_task"})
-    r = run_background_turn(("sys", "vol"), "go", allowed_tools={"crm_create_task", "crm_dashboard"}, registry=reg)
+    reg = FakeRegistry(writes={"crm_create_todo"})
+    r = run_background_turn(("sys", "vol"), "go", allowed_tools={"crm_create_todo", "crm_dashboard"}, registry=reg)
     assert not r.error
-    assert ("crm_create_task", {}) in reg.calls   # executed, no pending/confirm anywhere
+    assert ("crm_create_todo", {}) in reg.calls   # executed, no pending/confirm anywhere
     assert prov.build_tool_turn_calls == [""]       # build_tool_turn used (R2), not add_tool_results
 
 
@@ -116,11 +116,11 @@ def test_allowlist_blocks_offlist_tool(monkeypatch):
 
 def test_write_budget_rejects_then_terminates(monkeypatch):
     prov = FakeProvider([
-        [_complete([_tc("crm_create_task", "a"), _tc("crm_create_task", "b"), _tc("crm_create_task", "c")], stop="tool_use")],
+        [_complete([_tc("crm_create_todo", "a"), _tc("crm_create_todo", "b"), _tc("crm_create_todo", "c")], stop="tool_use")],
     ])
     _use(prov, monkeypatch)
-    reg = FakeRegistry(writes={"crm_create_task"})
-    r = run_background_turn(("sys", "vol"), "go", allowed_tools={"crm_create_task"},
+    reg = FakeRegistry(writes={"crm_create_todo"})
+    r = run_background_turn(("sys", "vol"), "go", allowed_tools={"crm_create_todo"},
                             registry=reg, write_budget_limit=1)
     assert r.error                    # TERMINATE on the 3rd write
     assert len(reg.calls) == 1        # only the 1st write executed (budget=1)
@@ -161,7 +161,7 @@ def test_allowlist_is_reads_plus_notify_only():
     assert "crm_dashboard" in allowed and "notify_user" in allowed   # read + notify
     # NO CRM writes at all — not deletes, not creates, not logging.
     assert "crm_delete_contact" not in allowed
-    assert "crm_create_task" not in allowed
+    assert "crm_create_todo" not in allowed
     # heartbeat_allowlist is an alias of the same boundary.
     assert background.heartbeat_allowlist(reg) == allowed
 
@@ -280,7 +280,7 @@ def test_result_dataclass_defaults():
     assert r.tool_log == [] and r.input_tokens == 0 and not r.error
 
 
-def test_no_routine_write_ever_enters_the_background_allowlist(task_mode):
+def test_no_routine_write_ever_enters_the_background_allowlist(todo_mode):
     """#180 exempted sixteen CRM writes from the normal-mode Approve card. The
     unattended runner has no human to card in the first place, so its boundary must
     stay reads + notify_user — the routine tier must not become a back door into it.
@@ -289,7 +289,7 @@ def test_no_routine_write_ever_enters_the_background_allowlist(task_mode):
     """
     from assistant.registry import ToolRegistry
 
-    task_mode("normal")
+    todo_mode("normal")
     reg = ToolRegistry(background=True)
     assert reg.routine_writes, "vacuity guard — nothing is classified routine"
     allowed = background.background_allowlist(reg)
@@ -298,7 +298,7 @@ def test_no_routine_write_ever_enters_the_background_allowlist(task_mode):
 
 # ── #204: the public capture surface reaches the unattended turn as DATA ─────────
 
-def test_the_gtd_task_read_stays_background_callable(task_mode):
+def test_the_gtd_todo_read_stays_background_callable(todo_mode):
     """The whole reason #204 fences per ROW instead of adding `todo_list` to
     UNTRUSTED_SOURCE_TOOLS: that set IS BACKGROUND_EXCLUDED_TOOLS, and
     `heartbeat.service._heartbeat_prompt` builds its prompt around `todo_list` in GTD
@@ -309,7 +309,7 @@ def test_the_gtd_task_read_stays_background_callable(task_mode):
     """
     from assistant.registry import ToolRegistry
 
-    task_mode("gtd")
+    todo_mode("gtd")
     allowed = background.background_allowlist(ToolRegistry(background=True))
     assert "todo_list" in allowed
     assert "todo_get" in allowed and "todo_list_projects" in allowed
@@ -356,7 +356,7 @@ def test_setup_status_is_allowed_unattended_and_that_is_a_decision():
     membership is asserted rather than left to the derivation.
 
     It is allowed because of WHAT it returns: install configuration only — readiness
-    booleans, a provider enum, connection/link booleans, the task-mode enum and three
+    booleans, a provider enum, connection/link booleans, the todo-mode enum and three
     integer counts. No record content, no email address, no bot username, no key
     material, nothing about any other seat. A background turn cannot write, and its one
     externally visible action is a notify_user over the install's own channels — so the

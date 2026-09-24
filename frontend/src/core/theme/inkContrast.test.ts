@@ -240,7 +240,7 @@ function surfaces(t: Record<string, string>): Record<string, Rgb> {
   //
   // BOTH bases are HEADROOM now, with no producer today — and that changed under this comment
   // rather than being wrong when written. #68 called `bg` REAL because Contacts / Companies /
-  // Tasks rendered rows in a bare `borderTop` div on the page background and set
+  // Todos rendered rows in a bare `borderTop` div on the page background and set
   // `background = HOVER` on mouseenter. #77 then moved all three onto the shared collection
   // layer, whose rows hover by swapping to the OPAQUE `bg` token (`hover:bg-sand`), never an
   // ink tint; grep for a row-hover producer now returns nothing.

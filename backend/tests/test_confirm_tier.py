@@ -43,7 +43,7 @@ ROUTINE_CRM_TOOLS = frozenset({
     "crm_create_deal", "crm_update_deal", "crm_update_deal_stage",
     "crm_mark_deal_won", "crm_mark_deal_lost",
     "crm_log_activity",
-    "crm_create_task", "crm_update_task", "crm_complete_task",
+    "crm_create_todo", "crm_update_todo", "crm_complete_todo",
     "crm_set_contact_fields", "crm_set_company_fields", "crm_set_deal_fields",
 })
 # #186. The other six todo tools stay unclassified: `todo_bulk_update` (rule 4, bulk),
@@ -128,7 +128,7 @@ def test_every_confirm_tier_in_backend_is_the_constant_on_a_write():
     assert problems == []
 
 
-def test_the_routine_set_is_exactly_the_twenty(task_mode):
+def test_the_routine_set_is_exactly_the_twenty(todo_mode):
     """A twenty-first tool cannot slip in, and none of the twenty can slip out."""
     declared = set()
     for path in sorted(BACKEND.rglob("*.py")):
@@ -141,9 +141,9 @@ def test_the_routine_set_is_exactly_the_twenty(task_mode):
     assert len(declared) == 20
     # And the source agrees with what a registry actually loads, in BOTH modes — each
     # loads a subset, and between them they cover every declaration.
-    task_mode("normal")
+    todo_mode("normal")
     normal = ToolRegistry().routine_writes
-    task_mode("gtd")
+    todo_mode("gtd")
     gtd = ToolRegistry().routine_writes
     assert normal <= ROUTINE_TOOLS and gtd <= ROUTINE_TOOLS
     assert normal | gtd == ROUTINE_TOOLS
@@ -185,8 +185,8 @@ def test_the_detector_flags_synthetic_violations(source, expect_flagged):
 
 # ── Layer 2: the registry predicate ───────────────────────────────────────────
 
-def test_every_routine_tool_is_a_declared_write(task_mode):
-    task_mode("normal")
+def test_every_routine_tool_is_a_declared_write(todo_mode):
+    todo_mode("normal")
     reg = ToolRegistry()
     for name in ROUTINE_CRM_TOOLS:
         assert reg.is_write(name) is True, name
@@ -195,12 +195,12 @@ def test_every_routine_tool_is_a_declared_write(task_mode):
     assert reg.routine_writes == ROUTINE_CRM_TOOLS
 
 
-def test_the_gtd_registry_holds_the_thirteen_plus_the_four(task_mode):
+def test_the_gtd_registry_holds_the_thirteen_plus_the_four(todo_mode):
     """GTD mode (the product default) is where the routine tier must actually work."""
-    from crm.tools import _TASK_TOOL_NAMES
-    task_mode("gtd")
+    from crm.tools import _TODO_TOOL_NAMES
+    todo_mode("gtd")
     reg = ToolRegistry()
-    expected = (ROUTINE_CRM_TOOLS - _TASK_TOOL_NAMES) | ROUTINE_TODO_TOOLS
+    expected = (ROUTINE_CRM_TOOLS - _TODO_TOOL_NAMES) | ROUTINE_TODO_TOOLS
     assert len(expected) == 17
     for name in expected:
         assert reg.is_write(name) is True, name
@@ -208,8 +208,8 @@ def test_the_gtd_registry_holds_the_thirteen_plus_the_four(task_mode):
     assert reg.routine_writes == expected
 
 
-def test_an_unknown_name_is_not_routine(task_mode):
-    task_mode("normal")
+def test_an_unknown_name_is_not_routine(todo_mode):
+    todo_mode("normal")
     reg = ToolRegistry()
     assert reg.is_routine_write("nope_not_a_tool") is False
     # crm_log_note is an executor-only alias with no def, so it has no tier to read.
@@ -217,8 +217,8 @@ def test_an_unknown_name_is_not_routine(task_mode):
     assert reg.is_routine_write("crm_log_note") is False
 
 
-def test_no_read_is_routine(task_mode):
-    task_mode("normal")
+def test_no_read_is_routine(todo_mode):
+    todo_mode("normal")
     reg = ToolRegistry()
     reads = [n for n, w in reg.writes_map.items() if not w]
     assert reads  # vacuity guard
@@ -227,25 +227,25 @@ def test_no_read_is_routine(task_mode):
 
 
 @pytest.mark.parametrize("name", [
-    "crm_delete_contact", "crm_delete_task", "crm_archive_deal", "crm_merge_deals",
+    "crm_delete_contact", "crm_delete_todo", "crm_archive_deal", "crm_merge_deals",
     "crm_bulk_move_deals", "crm_recompute_lead_scores", "crm_add_note",
     "memory_add_fact", "memory_invalidate_fact",
     "write_context_file", "delete_context_file", "append_daily_note",
 ])
-def test_unclassified_writes_keep_their_card(task_mode, name):
-    task_mode("normal")
+def test_unclassified_writes_keep_their_card(todo_mode, name):
+    todo_mode("normal")
     reg = ToolRegistry()
     assert reg.is_write(name) is True, name  # vacuity: it really is a write
     assert reg.is_routine_write(name) is False, name
 
 
-def test_the_gmail_draft_is_never_routine(task_mode, monkeypatch):
+def test_the_gmail_draft_is_never_routine(todo_mode, monkeypatch):
     from conftest import fake_admin
 
     from gmail import tools as gmail_tools
 
     monkeypatch.setattr(gmail_tools.store, "is_connected", lambda: True)
-    task_mode("normal")
+    todo_mode("normal")
     # An admin seat: since #194 the Gmail tools are seat-gated, so a bare registry would
     # not carry the draft tool and this test would pass vacuously.
     reg = ToolRegistry(user=fake_admin())
@@ -253,21 +253,21 @@ def test_the_gmail_draft_is_never_routine(task_mode, monkeypatch):
     assert reg.is_routine_write("gmail_create_draft") is False
 
 
-def test_notify_user_is_never_routine(task_mode):
-    task_mode("normal")
+def test_notify_user_is_never_routine(todo_mode):
+    todo_mode("normal")
     reg = ToolRegistry(background=True)
     assert reg.is_write("notify_user") is True
     assert reg.is_routine_write("notify_user") is False
 
 
-def test_only_the_four_classified_todo_tools_are_routine(task_mode):
+def test_only_the_four_classified_todo_tools_are_routine(todo_mode):
     """#186's answer for the whole family, asserted in BOTH directions.
 
     The six that still deny are the reason this is not "every todo write is routine":
     `todo_bulk_update` is bulk, the two deletes remove a record, and the three reads
     cannot carry a tier at all.
     """
-    task_mode("gtd")
+    todo_mode("gtd")
     reg = ToolRegistry()
     todos = [n for n in reg.writes_map if n.startswith("todo_")]
     assert len(todos) == 10, todos  # vacuity guard
@@ -282,24 +282,24 @@ def test_only_the_four_classified_todo_tools_are_routine(task_mode):
         assert reg.is_routine_write(name) is False, name
 
 
-def test_gtd_mode_hides_the_three_task_tools_and_they_still_deny(task_mode):
+def test_gtd_mode_hides_the_three_todo_tools_and_they_still_deny(todo_mode):
     """Hidden from the model, so still denied by name — #186 classified their GTD
     replacements instead, which is what closes the gap this used to document."""
-    task_mode("gtd")
+    todo_mode("gtd")
     reg = ToolRegistry()
-    for name in ("crm_create_task", "crm_update_task", "crm_complete_task"):
+    for name in ("crm_create_todo", "crm_update_todo", "crm_complete_todo"):
         assert name not in reg.writes_map, name
         assert reg.is_routine_write(name) is False, name
 
 
-def test_no_routine_tool_is_a_targeted_context_file_write(task_mode):
-    task_mode("normal")
+def test_no_routine_tool_is_a_targeted_context_file_write(todo_mode):
+    todo_mode("normal")
     reg = ToolRegistry()
     assert reg.routine_writes.isdisjoint(context_file_tools._TARGETED_WRITE_TOOLS)
 
 
-def test_confirm_tier_never_reaches_the_provider(task_mode):
-    task_mode("normal")
+def test_confirm_tier_never_reaches_the_provider(todo_mode):
+    todo_mode("normal")
     reg = ToolRegistry()
     assert any("confirm_tier" in d for d in reg.tool_defs)  # vacuity guard
     for mode in ("read-only", "normal", "power"):
@@ -347,18 +347,18 @@ def test_the_constant_is_accepted(monkeypatch):
     ("crm_update_contact", {"status": "archived"}, True),
     ("crm_update_contact", {"status": "ARCHIVED "}, True),
     ("crm_update_company", {"status": "archived"}, True),
-    # `status` is undeclared on crm_update_task's schema, but arguments are not
+    # `status` is undeclared on crm_update_todo's schema, but arguments are not
     # validated against the schema at runtime and the executor forwards **kwargs into
-    # service.update_task, whose allow-list accepts `status`. A dropped task is
-    # filtered out of list_tasks unconditionally, so this is a soft delete.
-    ("crm_update_task", {"status": "dropped"}, True),
-    ("crm_update_task", {"status": "Dropped "}, True),
+    # service.update_todo, whose allow-list accepts `status`. A dropped todo is
+    # filtered out of list_todos unconditionally, so this is a soft delete.
+    ("crm_update_todo", {"status": "dropped"}, True),
+    ("crm_update_todo", {"status": "Dropped "}, True),
     ("crm_update_contact", {"status": "active"}, False),
     ("crm_update_contact", {"name": "New Name"}, False),
     ("crm_update_company", {}, False),
-    # Completion is not removal from view — crm_complete_task is routine by design.
-    ("crm_update_task", {"status": "done"}, False),
-    ("crm_update_task", {"completed": True}, False),
+    # Completion is not removal from view — crm_complete_todo is routine by design.
+    ("crm_update_todo", {"status": "done"}, False),
+    ("crm_update_todo", {"completed": True}, False),
     # Rule 3 does not reach tools that cannot hide a record through an argument.
     # Deals archive via `archived_at`, which _DEAL_USER_WRITABLE excludes.
     ("crm_update_deal", {"status": "archived"}, False),
@@ -368,7 +368,7 @@ def test_the_constant_is_accepted(monkeypatch):
     ("crm_update_contact", ["archived"], True),
     ("crm_update_contact", "archived", True),
     ("crm_update_contact", {"status": 7}, True),
-    ("crm_update_task", None, True),
+    ("crm_update_todo", None, True),
     # #186. `status` IS advertised on both todo update tools, and dropping is the
     # product's delete gesture — `todo_delete`'s own description sends the model here.
     ("todo_update", {"status": "dropped"}, True),
@@ -406,11 +406,11 @@ def test_the_hiding_statuses_are_real_values_the_services_accept():
     hiding = confirm_tier._HIDING_STATUS
     assert hiding["crm_update_contact"] <= set(crm_service.CONTACT_STATUSES)
     assert hiding["crm_update_company"] <= set(crm_service.COMPANY_STATUSES)
-    assert hiding["crm_update_task"] <= set(gtd_common.TODO_STATUSES)
+    assert hiding["crm_update_todo"] <= set(gtd_common.TODO_STATUSES)
     assert hiding["todo_update"] <= set(gtd_common.TODO_STATUSES)
     assert hiding["todo_update_project"] <= set(gtd_common.PROJECT_STATUSES)
     # And `status` really does reach the column on every one of those write paths.
-    assert "status" in crm_service._TASK_UPDATE_FIELDS
+    assert "status" in crm_service._TODO_UPDATE_FIELDS
     assert "status" in gtd_common.TODO_FIELDS
     assert "status" in gtd_common.PROJECT_FIELDS
 
@@ -420,7 +420,7 @@ def test_status_is_the_only_hiding_argument_the_todo_updates_accept():
 
     Tool arguments are never validated against the schema at runtime, so the question
     is what the SERVICE accepts, not what the def advertises. `gtd_service._check_fields`
-    RAISES on anything outside these sets — unlike `service.update_task`, which silently
+    RAISES on anything outside these sets — unlike `service.update_todo`, which silently
     filters — so the reachable arguments are exactly their members. `deal_id` is the one
     other column that can hide a todo (`list_todos` drops todos on archived deals via
     `LIVE_PREDICATE_D`), and it is not reachable here.
@@ -440,16 +440,16 @@ def test_status_is_the_only_hiding_argument_the_todo_updates_accept():
         gtd_service.update_project(1, {"archived": True})
 
 
-def test_only_routine_tools_need_the_carve_out(task_mode):
+def test_only_routine_tools_need_the_carve_out(todo_mode):
     """The carve-out exists to narrow the tier, so it must sit on tools IN the tier.
 
     Checked against the UNION of both registries: since #186 the map spans two tool
     modules, and no single registry holds every key — normal mode has no `todo_update`
-    and GTD mode hides `crm_update_task`.
+    and GTD mode hides `crm_update_todo`.
     """
-    task_mode("normal")
+    todo_mode("normal")
     routine = ToolRegistry().routine_writes
-    task_mode("gtd")
+    todo_mode("gtd")
     routine |= ToolRegistry().routine_writes
     for name in confirm_tier._HIDING_STATUS:
         assert name in routine, name

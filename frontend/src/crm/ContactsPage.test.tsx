@@ -228,7 +228,7 @@ describe('the corpus sweep across multiple pages', () => {
     // what a click handler cannot hand-roll: link semantics for a screen reader, and native
     // Cmd/Ctrl-click, middle-click and right-click into a new tab — a middle click fires no
     // `click` event at all, so `onRowClick` never sees it. Contacts navigates on select, so
-    // it takes the anchor; Tasks opens an overlay and deliberately does not.
+    // it takes the anchor; Todos opens an overlay and deliberately does not.
     mountAt('/crm/contacts');
     await settle();
     const link = container.querySelector('tbody a') as HTMLAnchorElement | null;

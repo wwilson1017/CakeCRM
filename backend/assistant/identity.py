@@ -32,14 +32,14 @@ DEFAULT_PERSONALITY = """You are {name}, the built-in AI sales assistant for thi
 
 You help the user manage their customer relationships conversationally: finding \
 and creating contacts, tracking deals through the pipeline, logging activities, \
-and keeping follow-up tasks moving. You are proactive, concise, and honest.
+and keeping follow-up todos moving. You are proactive, concise, and honest.
 
 How to work:
 - When the user mentions a person or company, look them up with the CRM tools \
 before assuming anything. Don't invent contacts, deals, or history — if a tool \
 returns nothing, say so.
 - When something meaningful happens (a call, an email, a meeting, a note), offer \
-to log it. When a next step is implied, offer to create a follow-up task.
+to log it. When a next step is implied, offer to create a follow-up todo.
 - Use the pipeline and dashboard tools to give the user a clear read on where \
 things stand.
 - Report tool results faithfully. If an action needs the user's confirmation, \
@@ -137,7 +137,7 @@ HELP_NOTE = (
     "## The product manual\n"
     "This CRM ships with a built-in help library — a searchable manual describing how the "
     "product itself works. Its sections are: assistant, contacts-and-companies, pipeline, "
-    "playbooks (well-known sales books, summarized), reports, settings, tasks, plus a "
+    "playbooks (well-known sales books, summarized), reports, settings, todos, plus a "
     "getting-started page.\n\n"
     "When the user asks how something in THIS product works — how to connect something, "
     "what a setting does, where a number on screen comes from, what happens when they "
@@ -188,15 +188,15 @@ SALES_GUIDE = (
     "pipeline when reviewing a quarter. Archive (crm_archive_deal) is for junk and "
     "abandoned records, never for a deal that genuinely closed.\n\n"
     "**Always have a next step.** When you report on a deal or a contact, say what "
-    "should happen next and offer to create the follow-up task. A deal with no next "
-    "step and no open task is a deal that will go quiet.\n\n"
+    "should happen next and offer to create the follow-up todo. A deal with no next "
+    "step and no open todo is a deal that will go quiet.\n\n"
     "**Notice what is going cold.** Use crm_get_stale_deals and "
     "crm_get_contact_staleness when the user asks what needs attention, and when "
     "reviewing the pipeline generally. Prioritize by value and by how long the silence "
-    "has run, and skip deals that already have an open follow-up task.\n\n"
+    "has run, and skip deals that already have an open follow-up todo.\n\n"
     "**Diagnose one deal, then the funnel.** For a single deal use crm_get_deal_health "
     "— it returns the lead score with the reasons behind it plus what is actually "
-    "wrong (no next step, overdue task, stuck in stage, missing contact or company). "
+    "wrong (no next step, overdue todo, stuck in stage, missing contact or company). "
     "Lead with the flags; the score alone tells the user nothing they can act on. For "
     "the pipeline as a whole, crm_get_pipeline_analytics shows where deals stall and "
     "how long each stage takes, while crm_analytics covers win rate, deal sizes and "
@@ -268,7 +268,7 @@ COACHING_GUIDE = (
     "has a next step, how long the silence has run, how long it has sat in one stage, "
     "whether losses carry a reason, whether a contact and company are linked. Those are "
     "worth coaching because the user can change them this week. Offer the concrete move "
-    "— the task to create, the call to make, the reason to capture.\n\n"
+    "— the todo to create, the call to make, the reason to capture.\n\n"
     "**Check what the CRM knows, then ask about the rest.** Budget, timing, who actually "
     "decides, what the competition is doing, why a deal really went quiet — some of that "
     "may already be recorded, in the deal's own fields, in the custom_fields this "
@@ -298,16 +298,16 @@ COACHING_GUIDE = (
     "inventing a framework."
 )
 
-# Appended to the static block ONLY when GTD task mode is active (#70). Genericized
+# Appended to the static block ONLY when GTD todo mode is active (#70). Genericized
 # from the blueprint's coaching text.
 #
 # Note on caching: the static half must be byte-identical turn to turn, and it is —
-# this block changes only when the user flips the task mode, which is a deliberate,
+# this block changes only when the user flips the todo mode, which is a deliberate,
 # rare cache invalidation of the same class as editing the personality. It must NOT
 # vary with anything per-turn.
 GTD_GUIDE = (
     "## Working the todo system (GTD)\n"
-    "The user runs their tasks GTD-style. Work the system with them:\n\n"
+    "The user runs their todos GTD-style. Work the system with them:\n\n"
     "**Capture everything.** When the user mentions an obligation, an idea, or "
     '"I should...", offer to todo_create it immediately. Anything unclear goes to the '
     "inbox — capture first, organize later.\n\n"
@@ -323,7 +323,7 @@ GTD_GUIDE = (
     "the follow-up), someday_maybe (not now), done, dropped.\n\n"
     "**Projects are outcomes needing more than one action.** Every active project should "
     "have at least one next_action — flag the ones that don't.\n\n"
-    "**Context vs tags.** Context is where or how the task can be done (@calls, @office, "
+    "**Context vs tags.** Context is where or how the todo can be done (@calls, @office, "
     "@errands, @computer); tags are for anything else. `star` marks today's priorities — "
     "keep starred items to a handful. Set a due date only for a real deadline, never an "
     "aspiration.\n\n"
@@ -411,8 +411,8 @@ _SETTINGS_SECTION_HELP: dict[str, tuple[str, tuple[str, ...]]] = {
          "settings/telegram-link", "pipeline/stages"),
     ),
     "assistant": (
-        "your long-term memory, and the task mode the CRM runs in",
-        ("assistant/memory", "settings/task-mode", "tasks/modes"),
+        "your long-term memory, and the todo mode the CRM runs in",
+        ("assistant/memory", "settings/todo-mode", "todos/modes"),
     ),
     "workspace": (
         "branding, the team roster, and user-defined custom fields",
@@ -487,14 +487,14 @@ _ROLE_NOTES: dict[str, str] = {
     "admin": (
         "They are an administrator of this install, so every install-wide setting is "
         "theirs to change: AI providers and the active model, your personality, "
-        "branding, the team roster, custom field definitions, the task mode and its "
+        "branding, the team roster, custom field definitions, the todo mode and its "
         "no-login links, the Telegram bot, the Gmail connection, the daily digest and "
         "nudges, and the sample-data and clear-everything operations."
     ),
     "member": (
         "They are a member of this install, not an administrator. Install-wide settings "
         "are admin-only for them — AI providers and the active model, your personality, "
-        "branding, the team roster, custom field definitions, the task mode and its "
+        "branding, the team roster, custom field definitions, the todo mode and its "
         "no-login links, connecting the Telegram bot, connecting Gmail, the daily digest "
         "and nudges, and the sample-data and clear-everything operations. If they ask to "
         "change one, say it needs an administrator rather than walking them through a "
@@ -601,16 +601,16 @@ def update_identity(personality: str | None = None) -> dict:
     return get_identity()
 
 
-def _task_mode() -> str:
-    """The current task mode, imported lazily so identity stays importable without a
+def _todo_mode() -> str:
+    """The current todo mode, imported lazily so identity stays importable without a
     database (the hermetic suite builds prompts with no pool).
 
-    Fail-safe 'gtd' since #102 — the same product default `crm.service.get_task_mode`
+    Fail-safe 'gtd' since #102 — the same product default `crm.service.get_todo_mode`
     degrades to, stated identically in all four readers so there is one default.
     """
     try:
-        from crm.service import get_task_mode
-        return get_task_mode()
+        from crm.service import get_todo_mode
+        return get_todo_mode()
     except Exception:
         return "gtd"
 
@@ -624,7 +624,7 @@ def build_system_prompt(
 
     Static: personality (``{name}`` interpolated to the fixed brand) + Baker's soul (#72)
     + the name contract (#71) + sales working
-    practices + the coaching voice (#201) (+ the GTD working practices while task mode
+    practices + the coaching voice (#201) (+ the GTD working practices while todo mode
     is GTD, #70) +
     confirmation note + memory framing + context-file framing + help-library
     framing (#143) + upload-safety instruction (cacheable — MUST stay byte-identical whether or not a
@@ -665,12 +665,12 @@ def build_system_prompt(
     # one can be reshaped without touching the other — but both static, so a custom
     # personality cannot switch either off.
     blocks = [personality, soul, NAME_NOTE, SALES_GUIDE, COACHING_GUIDE]
-    # GTD mode swaps the task tool surface, so the working practices have to swap with
-    # it — coaching the model to use crm_create_task while only todo_* is advertised
+    # GTD mode swaps the todo tool surface, so the working practices have to swap with
+    # it — coaching the model to use crm_create_todo while only todo_* is advertised
     # is how a turn stalls. Read fail-safe: an unreadable mode is 'gtd' (#102).
     # Appending GTD_GUIDE invalidates the cached static prefix, but since #102 made GTD
     # the default this is the steady state for almost every install, not a flip-flop.
-    if _task_mode() == "gtd":
+    if _todo_mode() == "gtd":
         blocks.append(GTD_GUIDE)
     static = "\n\n".join([
         part for part in [

@@ -67,7 +67,7 @@ def rec(monkeypatch):
 COMPANY = {"id": 7, "name": "Acme", "status": "active"}
 
 
-def _prime_rollup(rec, contacts=None, deals=None, deal_acts=None, contact_acts=None, tasks=None):
+def _prime_rollup(rec, contacts=None, deals=None, deal_acts=None, contact_acts=None, todos=None):
     rec.fetchone_queue = [
         COMPANY,
         {"open_deal_count": 0, "open_deal_value": 0, "contact_count": 0},
@@ -81,7 +81,7 @@ def _prime_rollup(rec, contacts=None, deals=None, deal_acts=None, contact_acts=N
     if contacts:
         rec.fetchall_queue.append(contact_acts or [])
     if deals:
-        rec.fetchall_queue.append(tasks or [])
+        rec.fetchall_queue.append(todos or [])
 
 
 # ── The 404 seam ────────────────────────────────────────────────────────────────────
@@ -182,7 +182,7 @@ def test_every_capped_read_asks_for_one_row_past_its_cap(rec):
     assert rec.params_for("FROM deals d")[-1] == report_service.ROLLUP_CHILD_CAP + 1
     assert rec.params_for("PARTITION BY a.deal_id")[-1] == report_service.ACTIVITY_PER_RECORD_CAP + 1
     assert rec.params_for("PARTITION BY a.contact_id")[-1] == report_service.ACTIVITY_PER_RECORD_CAP + 1
-    assert rec.params_for("PARTITION BY tasks.deal_id")[-1] == report_service.TASKS_PER_DEAL_CAP + 1
+    assert rec.params_for("PARTITION BY todos.deal_id")[-1] == report_service.TODOS_PER_DEAL_CAP + 1
 
 
 @pytest.mark.parametrize("returned,expected", [(1, False), (2, True)])
@@ -204,17 +204,17 @@ def test_contact_truncation_flag_follows_the_probe_row(rec, monkeypatch, returne
     assert len(result["contacts"]) == 1
 
 
-def test_task_truncation_is_flagged_per_deal(rec, monkeypatch):
-    monkeypatch.setattr(report_service, "TASKS_PER_DEAL_CAP", 1)
-    tasks = [
+def test_todo_truncation_is_flagged_per_deal(rec, monkeypatch):
+    monkeypatch.setattr(report_service, "TODOS_PER_DEAL_CAP", 1)
+    todos = [
         {"id": 1, "deal_id": 9, "title": "a", "rn": 1},
         {"id": 2, "deal_id": 9, "title": "b", "rn": 2},
         {"id": 3, "deal_id": 10, "title": "c", "rn": 1},
     ]
-    _prime_rollup(rec, deals=[{"id": 9, "value": 0}, {"id": 10, "value": 0}], tasks=tasks)
+    _prime_rollup(rec, deals=[{"id": 9, "value": 0}, {"id": 10, "value": 0}], todos=todos)
     busy, quiet = report_service.get_company_rollup(7)["deals"]
-    assert (len(busy["tasks"]), busy["tasks_truncated"]) == (1, True)
-    assert (len(quiet["tasks"]), quiet["tasks_truncated"]) == (1, False)
+    assert (len(busy["todos"]), busy["todos_truncated"]) == (1, True)
+    assert (len(quiet["todos"]), quiet["todos_truncated"]) == (1, False)
 
 
 def test_per_record_activity_cap_is_per_parent_not_global(rec, monkeypatch):
@@ -244,7 +244,7 @@ def test_children_without_activity_still_carry_both_keys(rec):
     result = report_service.get_company_rollup(7)
     for row in (result["contacts"][0], result["deals"][0]):
         assert row["activities"] == [] and row["activities_truncated"] is False
-    assert result["deals"][0]["tasks"] == [] and result["deals"][0]["tasks_truncated"] is False
+    assert result["deals"][0]["todos"] == [] and result["deals"][0]["todos_truncated"] is False
     assert result["deals"][0]["last_activity_at"] is None
 
 
@@ -254,7 +254,7 @@ def test_no_child_reads_fire_for_an_empty_company(rec):
     report_service.get_company_rollup(7)
     assert not rec.has_sql_containing("PARTITION BY a.deal_id")
     assert not rec.has_sql_containing("PARTITION BY a.contact_id")
-    assert not rec.has_sql_containing("PARTITION BY tasks.deal_id")
+    assert not rec.has_sql_containing("PARTITION BY todos.deal_id")
 
 
 # ── Headline numbers ────────────────────────────────────────────────────────────────
@@ -363,15 +363,15 @@ def test_custom_fields_cost_two_queries_per_entity_type_not_per_record(rec, monk
     ]
 
 
-# ── Tasks ───────────────────────────────────────────────────────────────────────────
+# ── Todos ───────────────────────────────────────────────────────────────────────────
 
 
-def test_deal_tasks_carry_the_not_dropped_predicate_and_are_open_only(rec):
+def test_deal_todos_carry_the_not_dropped_predicate_and_are_open_only(rec):
     _prime_rollup(rec, deals=[{"id": 9, "value": 0}])
     report_service.get_company_rollup(7)
-    sql = rec.sql_containing("PARTITION BY tasks.deal_id")
-    assert "tasks.status != 'dropped'" in sql
-    assert "tasks.completed = 0" in sql
+    sql = rec.sql_containing("PARTITION BY todos.deal_id")
+    assert "todos.status != 'dropped'" in sql
+    assert "todos.completed = 0" in sql
 
 
 # ── Timeline paging and hydration ───────────────────────────────────────────────────

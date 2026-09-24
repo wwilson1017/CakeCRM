@@ -24,7 +24,7 @@ export function MobileMenuDrawer({ onClose, navigate, onSignOut, children }: Mob
     { icon: IconFunnel, label: 'Pipeline', action: go('/crm/pipeline') },
     { icon: IconUsers, label: 'Contacts', action: go('/crm/contacts') },
     { icon: IconBuilding, label: 'Companies', action: go('/crm/companies') },
-    { icon: IconCheck, label: 'Todos', action: go('/crm/tasks') },
+    { icon: IconCheck, label: 'Todos', action: go('/crm/todos') },
     { icon: IconFile, label: 'Reports', action: go('/crm/reports') },
     { icon: IconSettings, label: 'Settings', action: go('/crm/settings') },
   ];

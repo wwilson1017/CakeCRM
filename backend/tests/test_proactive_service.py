@@ -38,7 +38,7 @@ def sent(monkeypatch):
 
 
 SUMMARY = {
-    "open_deals": 4, "open_value": 12500.0, "overdue_tasks": 2, "tasks_due_today": 1,
+    "open_deals": 4, "open_value": 12500.0, "overdue_todos": 2, "todos_due_today": 1,
     "stale_deals": 3, "stale_days": 14,
     "top_deals": [{"title": "Big renewal", "value": 9000.0}],
 }
@@ -196,8 +196,8 @@ def test_untrusted_record_text_stays_out_of_the_system_prompt(monkeypatch):
 
 def test_digest_message_reports_a_quiet_day_positively():
     title, message = ps.format_digest(
-        dict(SUMMARY, overdue_tasks=0, tasks_due_today=0, stale_deals=0, top_deals=[]))
-    assert "No tasks overdue or due today." in message
+        dict(SUMMARY, overdue_todos=0, todos_due_today=0, stale_deals=0, top_deals=[]))
+    assert "No todos overdue or due today." in message
     assert "stale" not in message
 
 
@@ -211,7 +211,7 @@ def test_digest_message_includes_every_live_signal():
 
 def test_digest_handles_an_empty_crm():
     _, message = ps.format_digest({
-        "open_deals": 0, "open_value": 0.0, "overdue_tasks": 0, "tasks_due_today": 0,
+        "open_deals": 0, "open_value": 0.0, "overdue_todos": 0, "todos_due_today": 0,
         "stale_deals": 0, "stale_days": 14, "top_deals": [],
     })
     assert "0 open deals worth 0." in message
@@ -279,15 +279,15 @@ def test_nudges_are_capped_per_run(rec, sent, monkeypatch):
 
 
 def test_candidates_skip_deals_that_already_have_a_follow_up(monkeypatch):
-    """A deal with an open task is being handled. Nagging about it is exactly the noise
+    """A deal with an open todo is being handled. Nagging about it is exactly the noise
     that makes people switch notifications off."""
     monkeypatch.setattr(ps.settings, "proactive_max_nudges_per_run", 3)
     from crm import analytics_service
     monkeypatch.setattr(analytics_service, "get_stale_deals", lambda limit: {"deals": [
         {"id": 1, "title": "Handled", "value": 1.0, "stage": "lead",
-         "days_since_touch": 30, "has_open_task": True, "owner_id": None},
+         "days_since_touch": 30, "has_open_todo": True, "owner_id": None},
         {"id": 2, "title": "Neglected", "value": 2.0, "stage": "lead",
-         "days_since_touch": 40, "has_open_task": False, "owner_id": None},
+         "days_since_touch": 40, "has_open_todo": False, "owner_id": None},
     ]})
     monkeypatch.setattr(analytics_service, "get_contact_staleness", lambda limit: {"contacts": []})
     ids = [c["entity_id"] for c in ps.collect_nudge_candidates()]

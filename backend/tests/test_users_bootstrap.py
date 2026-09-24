@@ -150,7 +150,7 @@ def test_backfills_ownership_on_every_owned_table(monkeypatch, fake_conn):
     conn = fake_conn(monkeypatch, bootstrap, fetchone_results=_seq())
     bootstrap.ensure_bootstrap_admin()
     sql = _sql(conn)
-    for table in ("contacts", "companies", "deals", "tasks"):
+    for table in ("contacts", "companies", "deals", "todos"):
         assert f"UPDATE {table} SET owner_id = %s WHERE owner_id IS NULL" in sql
 
 

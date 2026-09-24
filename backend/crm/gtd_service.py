@@ -1,15 +1,15 @@
-"""Todo-GTD — service layer over the shared `tasks` store.
+"""Todo-GTD — service layer over the shared `todos` store.
 
 GTD is a MODE, not a second store: every function here reads and writes the same
-`tasks` rows the rest of the CRM uses (issue #70). That is what keeps the dashboard
+`todos` rows the rest of the CRM uses (issue #70). That is what keeps the dashboard
 counts, the contact/deal rollups and the heartbeat's nudges aware of GTD todos —
-and it is why the write path funnels through `crm.service._apply_task_update_cur`
+and it is why the write path funnels through `crm.service._apply_todo_update_cur`
 rather than issuing its own UPDATE: `completed` and `status` are bound by a CHECK
 constraint and must always move together.
 
 Ported from cake_os `apps/todo_gtd/service.py` (itself a Postgres port of chatty's
 `core/todo/service.py`), minus the per-user owner scoping and minus the
-Projects/CRM card-link columns — CakeCRM's `tasks` already carries contact_id and
+Projects/CRM card-link columns — CakeCRM's `todos` already carries contact_id and
 deal_id, which is the better link for this product.
 
 Validation errors raise `gtd_common.ValidationError`; the router maps them to 400.
@@ -39,8 +39,8 @@ logger = logging.getLogger(__name__)
 _SELECT_TODO = (
     "SELECT t.*, t.description AS notes, p.name AS project_name, "
     "       c.name AS contact_name, d.title AS deal_title "
-    "FROM tasks t "
-    "LEFT JOIN task_projects p ON t.project_id = p.id "
+    "FROM todos t "
+    "LEFT JOIN todo_projects p ON t.project_id = p.id "
     "LEFT JOIN contacts c ON t.contact_id = c.id "
     "LEFT JOIN deals d ON t.deal_id = d.id"
 )
@@ -93,17 +93,19 @@ def create_todo(
     with get_connection() as conn:
         cur = conn.cursor()
         if project_id is not None:
-            pid = service._check_task_project_id_cur(cur, project_id)
+            pid = service._check_todo_project_id_cur(cur, project_id)
         elif project and str(project).strip():
-            pid = service._resolve_task_project_id_cur(
+            pid = service._resolve_todo_project_id_cur(
                 cur, gtd_common.validate_short(project, "project")
             )
         else:
             pid = None
-    # create_task owns the INSERT so there is ONE place that derives `completed`
-    # from `status` — the pairing the CHECK constraint enforces.
+    # The STORE layer's `service.create_todo` owns the INSERT so there is ONE place that
+    # derives `completed` from `status` — the pairing the CHECK constraint enforces. This
+    # module's own `create_todo` is the GTD-vocabulary wrapper over it; since #169 the two
+    # share a name, and every call here is module-qualified so the pair stays unambiguous.
     return _todo_dict(
-        service.create_task(
+        service.create_todo(
             title,
             description=notes,
             due_date=due_date or "",
@@ -138,8 +140,8 @@ def _check_fields(fields: dict, valid_fields: frozenset = TODO_FIELDS) -> None:
         )
 
 
-def _to_task_fields(fields: dict) -> dict:
-    """Translate the GTD field vocabulary into the `tasks` column names."""
+def _to_todo_fields(fields: dict) -> dict:
+    """Translate the GTD field vocabulary into the `todos` column names."""
     out = dict(fields)
     if "notes" in out:
         out["description"] = out.pop("notes")
@@ -151,7 +153,7 @@ def update_todo(todo_id: int, fields: dict) -> dict | None:
     _check_fields(fields)
     with get_connection() as conn:
         cur = conn.cursor()
-        found = service._apply_task_update_cur(cur, int(todo_id), _to_task_fields(fields))
+        found = service._apply_todo_update_cur(cur, int(todo_id), _to_todo_fields(fields))
     return get_todo(todo_id) if found else None
 
 
@@ -174,13 +176,13 @@ def bulk_update(ids: list[int], fields: dict) -> dict:
         id_list = sorted(int(i) for i in ids)
     except (TypeError, ValueError):
         raise ValidationError("ids must be integers")
-    task_fields = _to_task_fields(fields)
+    todo_fields = _to_todo_fields(fields)
     updated: list[int] = []
     not_found: list[int] = []
     with get_connection() as conn:
         cur = conn.cursor()
         for todo_id in id_list:
-            if service._apply_task_update_cur(cur, todo_id, task_fields):
+            if service._apply_todo_update_cur(cur, todo_id, todo_fields):
                 updated.append(todo_id)
             else:
                 not_found.append(todo_id)
@@ -188,7 +190,7 @@ def bulk_update(ids: list[int], fields: dict) -> dict:
 
 
 def delete_todo(todo_id: int) -> bool:
-    return service.delete_task(todo_id)
+    return service.delete_todo(todo_id)
 
 
 def list_todos(
@@ -220,7 +222,7 @@ def list_todos(
             pid = int(term)
         else:
             row = pg_fetchone(
-                "SELECT id FROM task_projects WHERE lower(name) = lower(%s)", (term,)
+                "SELECT id FROM todo_projects WHERE lower(name) = lower(%s)", (term,)
             )
             if not row:
                 return []
@@ -251,7 +253,7 @@ def list_todos(
             "OR t.tags::text ILIKE %s OR p.name ILIKE %s)"
         )
         params.extend([esc] * 5)
-    # A todo on an archived deal follows it out of view, exactly like list_tasks —
+    # A todo on an archived deal follows it out of view, exactly like list_todos —
     # work items follow the deal in both modes.
     where.append(f"(t.deal_id IS NULL OR {service.LIVE_PREDICATE_D})")
     sql = _SELECT_TODO + " WHERE " + " AND ".join(where)
@@ -298,8 +300,8 @@ def today_view() -> list[dict]:
 # open_count deliberately counts only unfinished todos — a project's badge answers
 # "how much is left", not "how much was ever filed here".
 _SELECT_PROJECT = (
-    "SELECT p.*, (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id "
-    "AND t.status NOT IN ('done','dropped')) AS open_count FROM task_projects p"
+    "SELECT p.*, (SELECT COUNT(*) FROM todos t WHERE t.project_id = p.id "
+    "AND t.status NOT IN ('done','dropped')) AS open_count FROM todo_projects p"
 )
 
 
@@ -327,7 +329,7 @@ def create_project(name: str, notes: str = "", status: str = "active") -> dict:
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO task_projects (name, notes, status) VALUES (%s, %s, %s) "
+            "INSERT INTO todo_projects (name, notes, status) VALUES (%s, %s, %s) "
             "ON CONFLICT (lower(name)) DO NOTHING RETURNING id",
             (name, notes, status),
         )
@@ -342,7 +344,7 @@ def update_project(project_id: int, fields: dict) -> dict | None:
     _check_fields(fields, PROJECT_FIELDS)
     with get_connection() as conn:
         cur = conn.cursor()
-        cur.execute("SELECT id FROM task_projects WHERE id = %s FOR UPDATE", (project_id,))
+        cur.execute("SELECT id FROM todo_projects WHERE id = %s FOR UPDATE", (project_id,))
         if not cur.fetchone():
             return None
         sets: list[str] = []
@@ -352,7 +354,7 @@ def update_project(project_id: int, fields: dict) -> dict | None:
             if not name:
                 raise ValidationError("name cannot be empty")
             cur.execute(
-                "SELECT id FROM task_projects WHERE lower(name) = lower(%s) AND id != %s",
+                "SELECT id FROM todo_projects WHERE lower(name) = lower(%s) AND id != %s",
                 (name, project_id),
             )
             if cur.fetchone():
@@ -368,7 +370,7 @@ def update_project(project_id: int, fields: dict) -> dict | None:
             params.append(fields["status"])
         sets.append("updated_at = now()")
         cur.execute(
-            f"UPDATE task_projects SET {', '.join(sets)} WHERE id = %s",
+            f"UPDATE todo_projects SET {', '.join(sets)} WHERE id = %s",
             (*params, project_id),
         )
     return get_project(project_id)
@@ -379,7 +381,7 @@ def delete_project(project_id: int) -> bool:
     ON DELETE SET NULL) — deleting a grouping must never delete the work."""
     with get_connection() as conn:
         cur = conn.cursor()
-        cur.execute("DELETE FROM task_projects WHERE id = %s", (project_id,))
+        cur.execute("DELETE FROM todo_projects WHERE id = %s", (project_id,))
         return cur.rowcount > 0
 
 
@@ -391,17 +393,17 @@ def get_filters() -> dict:
     contexts = [
         r["context"]
         for r in pg_fetchall(
-            "SELECT DISTINCT context FROM tasks WHERE context != '' ORDER BY context"
+            "SELECT DISTINCT context FROM todos WHERE context != '' ORDER BY context"
         )
     ]
     tags: set[str] = set()
     for r in pg_fetchall(
-        "SELECT DISTINCT jsonb_array_elements_text(tags) AS tag FROM tasks"
+        "SELECT DISTINCT jsonb_array_elements_text(tags) AS tag FROM todos"
     ):
         if isinstance(r.get("tag"), str) and r["tag"]:
             tags.add(r["tag"])
     counts = {s: 0 for s in TODO_STATUSES}
-    for r in pg_fetchall("SELECT status, COUNT(*) AS n FROM tasks GROUP BY status"):
+    for r in pg_fetchall("SELECT status, COUNT(*) AS n FROM todos GROUP BY status"):
         if r["status"] in counts:
             counts[r["status"]] = r["n"]
     return {"contexts": contexts, "tags": sorted(tags, key=str.lower), "status_counts": counts}
@@ -423,22 +425,22 @@ def capture(text: str, source: str = "capture_web", owner_id: int | None = None)
     return create_todo(text, status="inbox", source=source, owner_id=owner_id)
 
 
-# ── Open-title lookups (the observer's task dedupe, issue #72 Phase 4) ──────
+# ── Open-title lookups (the observer's todo dedupe, issue #72 Phase 4) ──────
 
 # `status NOT IN ('done','dropped')` is the open predicate used throughout this module
 # (list_todos, the project open_count). It is authoritative rather than `completed = 0`
-# because create_task DERIVES `completed` from `status` under a CHECK constraint, so
+# because create_todo DERIVES `completed` from `status` under a CHECK constraint, so
 # status is the column that cannot drift.
-_OPEN_TASK = "status NOT IN ('done','dropped')"
+_OPEN_TODO = "status NOT IN ('done','dropped')"
 
 
-def list_open_task_titles(days: int = 30, limit: int = 30) -> list[str]:
-    """Recent open task titles — the "already tracked, do not repeat" list for a prompt.
+def list_open_todo_titles(days: int = 30, limit: int = 30) -> list[str]:
+    """Recent open todo titles — the "already tracked, do not repeat" list for a prompt.
 
     This is a BUDGET, not a correctness check. Thirty titles is what fits comfortably in
-    a light-tier prompt; it cannot prove anything about the 31st task or about one opened
+    a light-tier prompt; it cannot prove anything about the 31st todo or about one opened
     a year ago, so the actual duplicate check on the write path is
-    ``open_task_with_title_exists`` below. Feeding the model the capped list is still
+    ``open_todo_with_title_exists`` below. Feeding the model the capped list is still
     worth it: it stops most duplicates before a call is even made.
 
     Deliberately NOT filtered to ``source='agent'``. The question the list answers is "is
@@ -446,7 +448,7 @@ def list_open_task_titles(days: int = 30, limit: int = 30) -> list[str]:
     as well as one the assistant captured.
     """
     rows = pg_fetchall(
-        f"SELECT title FROM tasks WHERE {_OPEN_TASK} "
+        f"SELECT title FROM todos WHERE {_OPEN_TODO} "
         "  AND created_at >= now() - make_interval(days => %s) "
         "ORDER BY created_at DESC, id DESC LIMIT %s",
         (max(1, int(days)), max(1, int(limit))),
@@ -454,11 +456,11 @@ def list_open_task_titles(days: int = 30, limit: int = 30) -> list[str]:
     return [r["title"] for r in rows if (r["title"] or "").strip()]
 
 
-def open_task_with_title_exists(title: str) -> bool:
-    """True iff an OPEN task already carries this title (case- and whitespace-insensitive).
+def open_todo_with_title_exists(title: str) -> bool:
+    """True iff an OPEN todo already carries this title (case- and whitespace-insensitive).
 
     No day window and no source filter, on purpose: this is the check that actually
-    prevents a duplicate, and an open task from six months ago is still open work.
+    prevents a duplicate, and an open todo from six months ago is still open work.
 
     BOTH sides are normalized, and they have to be. `gtd_common.validate_title` only
     strips the ends, so a stored title keeps whatever internal spacing its author typed —
@@ -468,7 +470,7 @@ def open_task_with_title_exists(title: str) -> bool:
     whitespace-collapsing both run in SQL, so there is exactly one rule and no chance of
     Python and Postgres disagreeing about it.
 
-    No index supports the normalized comparison and none is added: `tasks` is a
+    No index supports the normalized comparison and none is added: `todos` is a
     single-user table and this runs at most three times per observed conversation.
     """
     clean = " ".join((title or "").split())
@@ -480,7 +482,7 @@ def open_task_with_title_exists(title: str) -> bool:
     # it cannot resolve, which it is right to object to — a capped read with no total
     # order is exactly the shape that guard exists to catch.)
     row = pg_fetchone(
-        f"SELECT EXISTS (SELECT 1 FROM tasks WHERE {_OPEN_TASK} "
+        f"SELECT EXISTS (SELECT 1 FROM todos WHERE {_OPEN_TODO} "
         r"  AND lower(regexp_replace(btrim(title), '\s+', ' ', 'g')) = lower(%s)) AS found",
         (clean,),
     )

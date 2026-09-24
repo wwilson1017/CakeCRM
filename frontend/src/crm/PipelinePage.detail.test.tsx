@@ -532,7 +532,7 @@ describe("the body's own exits", () => {
   it('runs Mark Won once when the button is double-clicked', async () => {
     // The body's own leave paths never reach `CollectionDetail.request()`, so they never had its
     // one-in-flight lock. `leaveVia` awaits `canLeave`, and on a CLEAN body that resolves in a
-    // microtask with no dialog at all — so two clicks landing in the same task both cleared the
+    // microtask with no dialog at all — so two clicks landing in the same todo both cleared the
     // guard and both ran the action: two stage writes for one gesture.
     renderAt('/crm/pipeline?deal=5');
     await settle();

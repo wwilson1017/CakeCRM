@@ -46,10 +46,10 @@ ROUTINE = "routine"
 #   * `crm_update_contact` / `crm_update_company` — "archived". `crm_update_company`'s
 #     own description sells it as the stand-in for the delete tool we deliberately do
 #     not expose;
-#   * `crm_update_task` — "dropped", which `list_tasks` filters out unconditionally
-#     (`crm.service.NOT_DROPPED_TASK_T`), i.e. a soft delete. The def does not
+#   * `crm_update_todo` — "dropped", which `list_todos` filters out unconditionally
+#     (`crm.service.NOT_DROPPED_TODO_T`), i.e. a soft delete. The def does not
 #     advertise `status`, but tool arguments are NOT validated against the schema at
-#     runtime and the executor forwards `**kwargs` into `service.update_task`, whose
+#     runtime and the executor forwards `**kwargs` into `service.update_todo`, whose
 #     allow-list accepts `status` — so an undeclared argument really does reach the
 #     column;
 #   * `todo_update` — "dropped" (#186). Here `status` IS advertised, and
@@ -59,11 +59,11 @@ ROUTINE = "routine"
 #     `todo_update` routine would hand the model an unconfirmed delete;
 #   * `todo_update_project` — "dropped", the same gesture one level up. Dropping a
 #     project does NOT cascade to its todos (`gtd_service.update_project` writes only
-#     `task_projects`), so what leaves the view is the project row itself.
+#     `todo_projects`), so what leaves the view is the project row itself.
 #
 # Deliberately keyed on the values that HIDE a record, not on every status:
 #   * 'done' on a todo and 'completed' on a project are COMPLETION — the user's
-#     intended terminal state for work that happened. `crm_complete_task` is routine
+#     intended terminal state for work that happened. `crm_complete_todo` is routine
 #     by design and these are the same gesture;
 #   * 'someday_maybe' / 'someday' is FILING between working lists: GTD renders a page
 #     per status, and both `todo_list` and `todo_list_projects` still return the row.
@@ -71,10 +71,10 @@ ROUTINE = "routine"
 # `status` is the only hiding argument these four update tools can reach:
 #   * `gtd_service.update_todo` / `update_project` run `_check_fields` FIRST, which
 #     RAISES on any key outside `TODO_FIELDS` / `PROJECT_FIELDS` — a rejecting
-#     allow-list, unlike `service.update_task`'s silent filter. `deal_id` (the one
+#     allow-list, unlike `service.update_todo`'s silent filter. `deal_id` (the one
 #     other column that hides a todo, via `list_todos`' archived-deal predicate) is
 #     not in `TODO_FIELDS`, so it cannot be set through `todo_update` at all;
-#   * for contacts/companies/tasks the same conclusion was reached in #180.
+#   * for contacts/companies/todos the same conclusion was reached in #180.
 # `tests/test_confirm_tier.py` pins both halves of that.
 #
 # Named the same shape as `context_files.tools.requires_confirmation`: the engine's
@@ -83,7 +83,7 @@ ROUTINE = "routine"
 _HIDING_STATUS: dict[str, frozenset[str]] = {
     "crm_update_contact": frozenset({"archived"}),
     "crm_update_company": frozenset({"archived"}),
-    "crm_update_task": frozenset({"dropped"}),
+    "crm_update_todo": frozenset({"dropped"}),
     "todo_update": frozenset({"dropped"}),
     "todo_update_project": frozenset({"dropped"}),
 }

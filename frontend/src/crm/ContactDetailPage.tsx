@@ -5,7 +5,7 @@ import { rowIsGone, writeMayHaveLanded } from './usePatchableAssembly';
 import type { CrmContact } from '../core/types';
 import { ContactForm } from './components/ContactForm';
 import { DealForm } from './components/DealForm';
-import { TaskForm } from './components/TaskForm';
+import { TodoForm } from './components/TodoForm';
 import { ActivityTimeline } from './components/ActivityTimeline';
 import { NotesThread } from './components/NotesThread';
 import { CustomFieldsSection } from './components/CustomFieldsSection';
@@ -59,7 +59,7 @@ export function ContactDetailPage({ onChanged, onDeleted, onWriteUncertain }: Co
   // and would otherwise show stale values after a modal save) remounts and refetches.
   const [cfVersion, setCfVersion] = useState(0);
   const [showAddDeal, setShowAddDeal] = useState(false);
-  const [showAddTask, setShowAddTask] = useState(false);
+  const [showAddTodo, setShowAddTodo] = useState(false);
   const [logActivity, setLogActivity] = useState('');
   const [logNote, setLogNote] = useState('');
   const [logging, setLogging] = useState(false);
@@ -239,7 +239,7 @@ export function ContactDetailPage({ onChanged, onDeleted, onWriteUncertain }: Co
         </div>
       )}
 
-      {/* Deals + Tasks */}
+      {/* Deals + Todos */}
       <div style={{ display: isMobile ? 'flex' : 'grid', flexDirection: isMobile ? 'column' : undefined, gridTemplateColumns: isMobile ? undefined : '1fr 1fr', gap: 24 }}>
         {/* Deals */}
         <div>
@@ -280,20 +280,20 @@ export function ContactDetailPage({ onChanged, onDeleted, onWriteUncertain }: Co
           </div>
         </div>
 
-        {/* Tasks */}
+        {/* Todos */}
         <div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
             <span style={mono(10, INK_DIM)}>Todos</span>
-            <button onClick={() => setShowAddTask(true)} style={{
+            <button onClick={() => setShowAddTodo(true)} style={{
               background: 'none', border: 'none', color: ACCENT_TEXT,
               fontSize: 12, cursor: 'pointer',
             }}>+ Add</button>
           </div>
           <div style={{ borderTop: `1px solid ${LINE}` }}>
-            {!contact.tasks?.length ? (
-              <p style={{ color: INK_DIM, fontSize: 12, padding: '16px 0' }}>No tasks yet.</p>
+            {!contact.todos?.length ? (
+              <p style={{ color: INK_DIM, fontSize: 12, padding: '16px 0' }}>No todos yet.</p>
             ) : (
-              contact.tasks.map(t => (
+              contact.todos.map(t => (
                 <div key={t.id} style={{
                   padding: '10px 0', borderBottom: `1px solid ${LINE}`,
                   display: 'flex', alignItems: 'center', gap: 10,
@@ -380,7 +380,7 @@ export function ContactDetailPage({ onChanged, onDeleted, onWriteUncertain }: Co
 
       {showEdit && <ContactForm contact={contact} onWriteUncertain={onWriteUncertain} onClose={() => setShowEdit(false)} onSaved={() => { setShowEdit(false); load(); setCfVersion(v => v + 1); refreshProvenance(); }} />}
       {showAddDeal && <DealForm contactId={contact.id} onClose={() => setShowAddDeal(false)} onSaved={() => { setShowAddDeal(false); load(); }} />}
-      {showAddTask && <TaskForm contactId={contact.id} onClose={() => setShowAddTask(false)} onSaved={() => { setShowAddTask(false); load(); }} />}
+      {showAddTodo && <TodoForm contactId={contact.id} onClose={() => setShowAddTodo(false)} onSaved={() => { setShowAddTodo(false); load(); }} />}
     </div>
   );
 }
