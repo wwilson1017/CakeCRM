@@ -2828,11 +2828,16 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   Telegram bot serves a link per seat; a sentence the app no longer backs comes out.
   **Marketing copy about safety is a claim about the code and is held to it.** The
   assistant ships three tool modes (`AssistantPanelBody.MODES`: Read / Ask / Auto), Ask
-  is the default, and `engine` executes a write immediately under `tool_mode == "power"`
-  — the drawer's **Auto** — so the page says writes ask first *in Ask mode* and that Auto
-  is something you turn on yourself. An unqualified "every write asks first" is false for
-  a real, reachable setting. Any future safety sentence owes the same check against
-  `frontend/src/assistant/` and `backend/assistant/engine.py`.
+  is the default, `engine` executes a write immediately under `tool_mode == "power"` —
+  the drawer's **Auto** — and since #180 Ask itself auto-approves the ROUTINE tier
+  (`registry.is_routine_write`: creating and updating records, logging activity), keeping
+  the card for deletes, archives, merges, bulk writes, drafts, notifications and memory.
+  So the page says everyday edits go straight in under Ask, that removals, notifications
+  and anything leaving the app wait for approval, and that Auto is something you turn on
+  yourself. "Every write asks first" was false twice over — for Auto, and for a routine
+  write in Ask — and a review caught the second after the first was fixed. Any future
+  safety sentence owes the same check against `frontend/src/assistant/` (the Ask
+  tooltip is the shipped wording) and `backend/assistant/{engine,confirm_tier}.py`.
 
 ## CI & Contributing
 
