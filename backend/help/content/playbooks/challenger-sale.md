@@ -69,7 +69,7 @@ author: Matthew Dixon and Brent Adamson
   names *stuck in stage* and *no next step* together, which is the exact profile of a deal
   that needs a new idea rather than another check-in.
 - **Tension becomes a next step, not a nudge** — book the conversation where you share the
-  insight as a task (`crm_create_task`; `todo_create` in GTD task mode), with what you
+  insight as a todo (`crm_create_todo`; `todo_create` in GTD todo mode), with what you
   intend to challenge in the description.
 - **Record the loss reason honestly** — when a deal dies of indecision rather than to a
   competitor, `crm_mark_deal_lost` with the real reason is the only place that fact is

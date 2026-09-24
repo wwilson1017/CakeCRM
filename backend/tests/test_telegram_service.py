@@ -78,7 +78,7 @@ def _install(monkeypatch, h: Harness, *, chat_scripts=None, consume=None, provid
     def fake_resolve(registry, conv, tuid, decision, msg_id=None, *, user):
         h.resolve_calls.append((conv, tuid, decision, msg_id))
         h.resolve_users.append(user)
-        return {"tool": "crm_create_task", "decision": decision, "result": {"ok": True}}
+        return {"tool": "crm_create_todo", "decision": decision, "result": {"ok": True}}
 
     fake_engine = types.SimpleNamespace(chat=fake_chat, resolve_confirmation=fake_resolve)
 
@@ -243,21 +243,21 @@ async def test_the_turn_runs_as_the_linked_seat(monkeypatch):
 async def test_confirm_event_sends_keyboard_and_marks_batch(monkeypatch):
     h = Harness()
     script = [
-        {"type": "text", "text": "I'll create that task."},
-        {"type": "confirm", "tool": "crm_create_task", "args": {"title": "Call Acme"},
-         "tool_use_id": "tu1", "msg_id": "m1", "description": "Create a task"},
+        {"type": "text", "text": "I'll create that todo."},
+        {"type": "confirm", "tool": "crm_create_todo", "args": {"title": "Call Acme"},
+         "tool_use_id": "tu1", "msg_id": "m1", "description": "Create a todo"},
         {"type": "done"},
     ]
     _install(monkeypatch, h, chat_scripts=[script])
-    await service.handle_update(_msg("make a task to call Acme"))
+    await service.handle_update(_msg("make a todo to call Acme"))
     # Narration flushed as HTML before the button prompt.
-    assert ("html", "chat1", "I'll create that task.", None) in h.sent
+    assert ("html", "chat1", "I'll create that todo.", None) in h.sent
     # A confirm prompt with an inline Approve/Deny keyboard was sent.
     kb_sends = [s for s in h.sent if s[0] == "text" and s[3] and "inline_keyboard" in s[3]]
     assert kb_sends, "expected an inline-keyboard confirm message"
     buttons = kb_sends[0][3]["inline_keyboard"][0]
     assert {b["callback_data"] for b in buttons} == {"a:m1:tu1", "d:m1:tu1"}
-    assert "Create a task" in kb_sends[0][2]  # server-derived description, not narration
+    assert "Create a todo" in kb_sends[0][2]  # server-derived description, not narration
     # The batch marker rides the pressing seat's OWN link row, not the singleton.
     assert h.pending_sets == [(7, "m1")]
 
@@ -267,7 +267,7 @@ async def test_callback_approve_resolves_and_continues(monkeypatch):
     h.link["pending_msg_id"] = "m1"
     # Continuation turn (2nd engine.chat call) narrates the result.
     _install(monkeypatch, h,
-             chat_scripts=[[{"type": "text", "text": "Done — task created."}, {"type": "done"}]],
+             chat_scripts=[[{"type": "text", "text": "Done — todo created."}, {"type": "done"}]],
              consume=[True])
     await service.handle_update(_callback("a:m1:tu1"))
     assert h.resolve_calls == [("conv1", "tu1", "approve", "m1")]
@@ -275,7 +275,7 @@ async def test_callback_approve_resolves_and_continues(monkeypatch):
     assert h.edits and h.edits[0][2] is None  # keyboard stripped
     # The continuation ran (engine.chat called with empty messages) and streamed text.
     assert h.chat_calls == [[]]
-    assert ("html", "chat1", "Done — task created.", None) in h.sent
+    assert ("html", "chat1", "Done — todo created.", None) in h.sent
     # The approver is a real seat: the write records who approved it, and
     # resolve_confirmation can prove the conversation belongs to them.
     assert h.resolve_users == [MEMBER] and h.chat_users == [MEMBER]
@@ -554,14 +554,14 @@ def test_parse_sse():
     assert service._parse_sse("event: ping\n\n") is None
 
 
-# ── The `capture …` intercept and the task mode that gates it (#70, #102) ─────
+# ── The `capture …` intercept and the todo mode that gates it (#70, #102) ─────
 
 async def test_capture_intercept_files_a_todo_and_never_reaches_the_model(monkeypatch):
     """GTD mode's deterministic intercept runs BEFORE the model — zero AI cost, and it
     works with no provider configured at all."""
     h = Harness()
     _install(monkeypatch, h)
-    monkeypatch.setattr(service, "_task_mode", lambda: "gtd")
+    monkeypatch.setattr(service, "_todo_mode", lambda: "gtd")
     monkeypatch.setattr(service.gtd_service, "capture",
                         lambda text, source, owner_id=None: h.captures.append((text, source, owner_id))
                         or {"id": 7, "title": text})
@@ -580,7 +580,7 @@ async def test_telegram_capture_is_stamped_with_the_linked_seat(monkeypatch):
     """
     h = Harness()
     _install(monkeypatch, h)
-    monkeypatch.setattr(service, "_task_mode", lambda: "gtd")
+    monkeypatch.setattr(service, "_todo_mode", lambda: "gtd")
     monkeypatch.setattr(service.gtd_service, "capture",
                         lambda text, source, owner_id=None: h.captures.append((text, source, owner_id))
                         or {"id": 7, "title": text})
@@ -590,11 +590,11 @@ async def test_telegram_capture_is_stamped_with_the_linked_seat(monkeypatch):
     assert h.captures == [("buy more candles", "telegram", 2)]
 
 
-async def test_capture_is_ordinary_conversation_in_normal_task_mode(monkeypatch):
+async def test_capture_is_ordinary_conversation_in_normal_todo_mode(monkeypatch):
     """In normal mode `capture …` is just words — it has to reach the assistant."""
     h = Harness()
     _install(monkeypatch, h, chat_scripts=[[{"type": "text", "text": "sure"}]])
-    monkeypatch.setattr(service, "_task_mode", lambda: "normal")
+    monkeypatch.setattr(service, "_todo_mode", lambda: "normal")
 
     def _never(*a, **k):
         raise AssertionError("capture must not run in normal mode")
@@ -612,7 +612,7 @@ async def test_capture_failure_answers_the_user_instead_of_crashing(monkeypatch)
     An honest error beats a silently swallowed message — and beats a traceback."""
     h = Harness()
     _install(monkeypatch, h)
-    monkeypatch.setattr(service, "_task_mode", lambda: "gtd")
+    monkeypatch.setattr(service, "_todo_mode", lambda: "gtd")
 
     def _boom(text, source, owner_id=None):
         raise RuntimeError("Postgres pool not initialized")
@@ -630,7 +630,7 @@ async def test_an_unlinked_sender_can_never_capture(monkeypatch):
     h = Harness()
     h.linked = False
     _install(monkeypatch, h)
-    monkeypatch.setattr(service, "_task_mode", lambda: "gtd")
+    monkeypatch.setattr(service, "_todo_mode", lambda: "gtd")
 
     def _never(*a, **k):
         raise AssertionError("an unlinked sender must not reach capture")

@@ -30,7 +30,7 @@ const MEMBER_CARDS: SettingsCardId[] = [
 const ADMIN_ONLY_CARDS: SettingsCardId[] = [
   'branding', 'team', 'custom_fields', 'telegram', 'gmail',
   // #102 made the task-mode + todo-surface routes require_admin.
-  'task_mode',
+  'todo_mode',
 ];
 
 function visibleCardIds(isAdmin: boolean): SettingsCardId[] {
@@ -179,7 +179,7 @@ describe('SettingsCard is the only owner of card chrome', () => {
     'MemoryCard.tsx': 'memory',
     'NotificationSettings.tsx': 'notifications',
     'PipelineBoardCard.tsx': 'pipeline_board',
-    'TaskModeCard.tsx': 'task_mode',
+    'TaskModeCard.tsx': 'todo_mode',
     'TeamSettings.tsx': 'team',
     'TelegramLinkCard.tsx': 'telegram_link',
     'TelegramSettings.tsx': 'telegram',

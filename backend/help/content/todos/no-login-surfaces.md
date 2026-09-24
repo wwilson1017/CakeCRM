@@ -16,11 +16,11 @@ admin: false
 Neither one reaches anything else in the CRM. A token gets you todos and projects and
 nothing more: no contacts, no deals, no Settings, no assistant.
 
-Neither one cares which task mode is active.
+Neither one cares which todo mode is active.
 
 ## Turning them on
 
-**Admin only**, in Settings, Assistant, Task mode. That card is the only place the tokens are
+**Admin only**, in Settings, Assistant, Todo mode. That card is the only place the tokens are
 ever shown, because the token *is* the credential.
 
 You do not choose the token. Regenerating asks the server to mint a fresh random one, so a

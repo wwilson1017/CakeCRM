@@ -20,7 +20,7 @@ See `settings/gmail`.
 ## Settings
 
 Baker has **no settings tools at all**. It cannot add an AI key, connect a mailbox, switch
-task mode, define a custom field, add a user or change branding. Keys and OAuth secrets must
+todo mode, define a custom field, add a user or change branding. Keys and OAuth secrets must
 never flow through a chat transcript, and a wrong settings change is install-wide where a
 wrong record change is one record. Baker explains and points; you click.
 

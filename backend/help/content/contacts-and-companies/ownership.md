@@ -6,7 +6,7 @@ admin: false
 ---
 ## Owner is not access control
 
-Contacts, companies, deals and tasks each carry an owner. **It grants and withholds nothing.**
+Contacts, companies, deals and todos each carry an owner. **It grants and withholds nothing.**
 Any signed-in person can read, edit, delete and reassign any record regardless of who owns
 it. There are no per-record permissions in this product.
 

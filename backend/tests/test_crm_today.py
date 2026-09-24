@@ -6,7 +6,7 @@ important half of this file needs no mock at all.
 
 The last section pins the local-day sweep the panel forced (``get_dashboard_stats``,
 ``get_deal_health``, ``collect_digest``). Those three live here rather than in each
-function's own test file because they are ONE decision — "is this task overdue" must not
+function's own test file because they are ONE decision — "is this todo overdue" must not
 depend on which report asked — and splitting them across three files is how the next
 person changes one and leaves the others behind. Note there was nothing to "update":
 none of the three had an assertion that pinned the day at all, which is exactly why the
@@ -28,8 +28,8 @@ from proactive import service as proactive_service
 
 TODAY = "2026-06-05"
 
-#: Needle for the hot-deals read. NOT "FROM deals": `LIVE_TASK_PREDICATE` carries a
-#: `FROM deals` subquery of its own, so that needle finds the TASKS statement first and
+#: Needle for the hot-deals read. NOT "FROM deals": `LIVE_TODO_PREDICATE` carries a
+#: `FROM deals` subquery of its own, so that needle finds the TODOS statement first and
 #: every assertion below would be made against the wrong query.
 HOT_DEALS = "deal_temperature = 'hot'"
 
@@ -79,7 +79,7 @@ def pinned_today(monkeypatch):
     return TODAY
 
 
-def task(id, *, due="", star=False, owner=None, title="t"):
+def todo(id, *, due="", star=False, owner=None, title="t"):
     return {"id": id, "title": title, "due_date": due, "owner_id": owner, "star": star}
 
 
@@ -107,7 +107,7 @@ def test_ladder_interleaves_every_source_in_rank_order():
     """The whole feature: starred → hot+stale → overdue → due-today, one merged list,
     with the unranked hot tail last."""
     items = today_service.build_today_items(
-        [task(1, due=TODAY), task(2, due="2026-06-01"), task(3, star=True, due="2026-06-02")],
+        [todo(1, due=TODAY), todo(2, due="2026-06-01"), todo(3, star=True, due="2026-06-02")],
         TODAY,
         deals=[deal(8, idle_days=20, stale=True), deal(9, idle_days=1)],
     )
@@ -119,23 +119,23 @@ def test_ladder_interleaves_every_source_in_rank_order():
     ]
 
 
-def test_starred_overdue_task_is_rank_one_exactly_once():
-    """The issue's explicit rule. Also the bucketing's key invariant: a task that
+def test_starred_overdue_todo_is_rank_one_exactly_once():
+    """The issue's explicit rule. Also the bucketing's key invariant: a todo that
     qualifies twice must not be emitted twice."""
-    items = today_service.build_today_items([task(4, due="2026-01-01", star=True)], TODAY)
+    items = today_service.build_today_items([todo(4, due="2026-01-01", star=True)], TODAY)
     assert [(i["id"], i["rank"]) for i in items] == [(4, 1)]
 
 
 def test_starred_bucket_puts_dated_before_undated():
     items = today_service.build_today_items(
-        [task(1, star=True), task(2, star=True, due="2026-06-02")], TODAY
+        [todo(1, star=True), todo(2, star=True, due="2026-06-02")], TODAY
     )
     assert [i["id"] for i in items] == [2, 1]
 
 
 def test_overdue_sorts_most_overdue_first():
     items = today_service.build_today_items(
-        [task(1, due="2026-06-04"), task(2, due="2026-05-01"), task(3, due="2026-06-03")], TODAY,
+        [todo(1, due="2026-06-04"), todo(2, due="2026-05-01"), todo(3, due="2026-06-03")], TODAY,
     )
     assert [i["id"] for i in items] == [2, 3, 1]
 
@@ -144,7 +144,7 @@ def test_due_today_tiebreaks_on_id():
     """Date-only granularity has no finer 'earlier due', so the order must still be
     total (#58) — otherwise the client's slice-at-5 cuts arbitrarily."""
     items = today_service.build_today_items(
-        [task(9, due=TODAY), task(2, due=TODAY), task(5, due=TODAY)], TODAY
+        [todo(9, due=TODAY), todo(2, due=TODAY), todo(5, due=TODAY)], TODAY
     )
     assert [i["id"] for i in items] == [2, 5, 9]
 
@@ -153,16 +153,16 @@ def test_due_today_tiebreaks_on_id():
 
 def test_ladder_ranks_are_a_pinned_wire_contract():
     """The ladder's numbers are a wire contract the client's types spell out, so they are
-    pinned here: the frontend's `CrmTodayTaskItem.rank` union has to say the same thing."""
+    pinned here: the frontend's `CrmTodayTodoItem.rank` union has to say the same thing."""
     assert (today_service.RANK_STARRED, today_service.RANK_HOT_DEAL) == (1, 2)
     assert (today_service.RANK_OVERDUE, today_service.RANK_DUE_TODAY) == (3, 4)
 
 
 def test_a_hot_stale_deal_outranks_your_own_overdue_work():
     items = today_service.build_today_items(
-        [task(1, due="2026-01-01")], TODAY, deals=[deal(8, idle_days=30, stale=True)],
+        [todo(1, due="2026-01-01")], TODAY, deals=[deal(8, idle_days=30, stale=True)],
     )
-    assert [(i["kind"], i["rank"]) for i in items] == [("deal", 2), ("task", 3)]
+    assert [(i["kind"], i["rank"]) for i in items] == [("deal", 2), ("todo", 3)]
 
 
 def test_only_two_hot_deals_may_sit_above_your_commitments():
@@ -179,7 +179,7 @@ def test_only_two_hot_deals_may_sit_above_your_commitments():
 def test_a_hot_deal_touched_recently_is_unranked_not_absent():
     """The issue: it must NOT be in the Top 5, but it must still appear behind the
     expander. A null rank is what says both at once — a sixth rung would say neither,
-    since the collapsed card slices ITEMS and would show it beside one overdue task."""
+    since the collapsed card slices ITEMS and would show it beside one overdue todo."""
     (item,) = today_service.build_today_items([], TODAY, deals=[deal(8, idle_days=2)])
     assert (item["rank"], item["why"]) == (None, "hot")
 
@@ -243,18 +243,18 @@ def test_days_since_touch_is_never_negative():
     assert item["days_since_touch"] == 0
 
 
-def test_no_hot_deals_leaves_the_task_ladder_untouched():
-    assert today_service.build_today_items([task(1, due=TODAY)], TODAY, deals=[]) == [
-        {"kind": "task", "id": 1, "title": "t", "due_date": TODAY, "owner_id": None,
+def test_no_hot_deals_leaves_the_todo_ladder_untouched():
+    assert today_service.build_today_items([todo(1, due=TODAY)], TODAY, deals=[]) == [
+        {"kind": "todo", "id": 1, "title": "t", "due_date": TODAY, "owner_id": None,
          "rank": 4, "why": "due_today"},
     ]
 
 
-def test_future_or_undated_unstarred_task_is_dropped():
+def test_future_or_undated_unstarred_todo_is_dropped():
     """Unreachable from the query's membership; dropped rather than mis-bucketed so a
     caller that widens the query cannot silently mis-rank rows."""
     assert today_service.build_today_items(
-        [task(1, due="2026-12-31"), task(2)], TODAY
+        [todo(1, due="2026-12-31"), todo(2)], TODAY
     ) == []
 
 
@@ -306,12 +306,12 @@ def test_day_bounds_defaults_to_today_and_is_always_aware(monkeypatch):
 
 # ── SQL shape ─────────────────────────────────────────────────────────────────
 
-def test_tasks_query_carries_the_house_predicates(rec, pinned_today):
-    """A new task reader must sweep dropped todos and tasks on archived deals."""
+def test_todos_query_carries_the_house_predicates(rec, pinned_today):
+    """A new todo reader must sweep dropped todos and todos on archived deals."""
     today_service.get_today()
-    sql = rec.sql_containing("FROM tasks")
-    assert service.NOT_DROPPED_TASK in sql
-    assert service.LIVE_TASK_PREDICATE in sql
+    sql = rec.sql_containing("FROM todos")
+    assert service.NOT_DROPPED_TODO in sql
+    assert service.LIVE_TODO_PREDICATE in sql
     assert "completed = 0" in sql
     assert "::date" not in sql  # TEXT compare — a malformed row must not 500
 
@@ -320,7 +320,7 @@ def test_every_query_ends_its_order_by_on_id(rec, pinned_today):
     """#58's total order. The determinism guard's AST sweep skips uncapped SQL, so this
     is the only thing standing between a later LIMIT and a non-deterministic window."""
     today_service.get_today()
-    assert rec.sql_containing("FROM tasks").endswith("ORDER BY (due_date = '') ASC, due_date ASC, id ASC")
+    assert rec.sql_containing("FROM todos").endswith("ORDER BY (due_date = '') ASC, due_date ASC, id ASC")
     assert rec.sql_containing(HOT_DEALS).endswith("ORDER BY idle_seconds DESC, d.id ASC")
 
 
@@ -363,35 +363,35 @@ def test_get_today_feeds_the_fetched_deals_into_the_ladder(rec, pinned_today):
     assert (item["kind"], item["id"], item["rank"]) == ("deal", 8, 2)
 
 
-def test_owner_scope_includes_unassigned_tasks(rec, pinned_today):
+def test_owner_scope_includes_unassigned_todos(rec, pinned_today):
     """The issue's rule: unowned work appears in 'my' view because someone has to catch
-    it. Deliberately wider than list_tasks' strict owner filter."""
+    it. Deliberately wider than list_todos' strict owner filter."""
     today_service.get_today(owner_id=7)
-    sql = rec.sql_containing("FROM tasks")
+    sql = rec.sql_containing("FROM todos")
     assert "(owner_id = %s OR owner_id IS NULL)" in sql
-    assert rec.params_for("FROM tasks") == [TODAY, 7]
+    assert rec.params_for("FROM todos") == [TODAY, 7]
 
 
 def test_absent_owner_id_filters_nothing(rec, pinned_today):
     today_service.get_today()
-    assert "owner_id = %s" not in rec.sql_containing("FROM tasks")
-    assert rec.params_for("FROM tasks") == [TODAY]
+    assert "owner_id = %s" not in rec.sql_containing("FROM todos")
+    assert rec.params_for("FROM todos") == [TODAY]
 
 
-def test_one_clock_bounds_the_tasks_read_and_the_refresh_boundary(rec, pinned_today, monkeypatch):
+def test_one_clock_bounds_the_todos_read_and_the_refresh_boundary(rec, pinned_today, monkeypatch):
     """The panel and the GTD Today view must agree on 'today', and the reload boundary
     must come from that SAME captured day: a second clock read can straddle midnight and
-    bound tasks to one day while arming the client's reload for another."""
+    bound todos to one day while arming the client's reload for another."""
     monkeypatch.setenv("TIMEZONE", "America/Chicago")
     out = today_service.get_today()
     assert out["date"] == TODAY
-    assert rec.params_for("FROM tasks") == [TODAY]
+    assert rec.params_for("FROM todos") == [TODAY]
     assert out["next_refresh_at"] == "2026-06-06T00:00:00-05:00"
 
 
 def test_payload_envelope(rec, pinned_today):
-    # Two reads, in call order: tasks, hot deals.
-    rec.fetchall_queue = [[task(1, due=TODAY)], []]
+    # Two reads, in call order: todos, hot deals.
+    rec.fetchall_queue = [[todo(1, due=TODAY)], []]
     out = today_service.get_today(owner_id=3)
     assert out["date"] == TODAY
     assert out["scope"] == {"owner_id": 3}
@@ -445,7 +445,7 @@ def test_deal_health_overdue_uses_the_configured_timezone_day(monkeypatch, pinne
                          "probability": 0, "expected_close_date": "", "lost_reason": None,
                          "contact_id": None, "company_id": None, "archived": False,
                          "contact_name": None, "company_name": None, "days_since_touch": 1,
-                         "days_in_stage": 1, "open_tasks": 0, "overdue_tasks": 0,
+                         "days_in_stage": 1, "open_todos": 0, "overdue_todos": 0,
                          "note_count": 0, "activity_count": 0}]
     analytics_service.get_deal_health(7)
     assert TODAY in r.params_for("FROM deals d")
@@ -453,7 +453,7 @@ def test_deal_health_overdue_uses_the_configured_timezone_day(monkeypatch, pinne
 
 def test_digest_counts_use_the_configured_timezone_day(monkeypatch, pinned_today):
     """The digest tells a person in prose what is due today. On a UTC day an evening run
-    west of Greenwich reported TOMORROW's tasks as due today."""
+    west of Greenwich reported TOMORROW's todos as due today."""
     r = Recorder()
     monkeypatch.setattr(proactive_service, "pg_fetchone", r.fetchone)
     monkeypatch.setattr(proactive_service, "pg_fetchall", r.fetchall)

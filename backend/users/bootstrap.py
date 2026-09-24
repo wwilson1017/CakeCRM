@@ -34,7 +34,7 @@ _BOOTSTRAP_LOCK = 1901
 
 # Tables that carry an owner_id and, on an upgrade, should be attributed to the
 # person who has been the only user until now.
-_OWNED_TABLES = ("contacts", "companies", "deals", "tasks")
+_OWNED_TABLES = ("contacts", "companies", "deals", "todos")
 
 
 DEFAULT_ADMIN_EMAIL = "admin@cakecrm.local"

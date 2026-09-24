@@ -64,13 +64,13 @@ def test_stale_deals_shares_the_last_touch_definition_with_the_dashboard(rec):
     assert " ".join(LAST_TOUCH_SQL.split()) in rec.sql_containing("FROM deals d")
 
 
-def test_stale_deals_reports_days_in_stage_and_open_task(rec):
+def test_stale_deals_reports_days_in_stage_and_open_todo(rec):
     rec.fetchall_queue = [[]]
     rec.fetchone_queue = [{"cnt": 0}]
     az.get_stale_deals()
     sql = rec.sql_containing("FROM deals d")
     assert "deal_stage_events" in sql and "d.created_at" in sql  # with a fallback
-    assert "AS has_open_task" in sql
+    assert "AS has_open_todo" in sql
 
 
 def test_stale_total_is_counted_before_the_limit_when_truncated(rec):

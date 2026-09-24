@@ -367,7 +367,7 @@ def test_merge_repoints_moves_copies_and_archives_the_source(monkeypatch, rec, f
     assert "SELECT id, title, archived_at, contact_id FROM deals WHERE id IN (%s, %s) ORDER BY id FOR UPDATE" in joined
     # Dated interactions + open work MOVE to the target.
     assert any("UPDATE activity_log SET deal_id = %s WHERE deal_id = %s" in s for s in stmts)
-    assert any("UPDATE tasks SET deal_id = %s" in s for s in stmts)
+    assert any("UPDATE todos SET deal_id = %s" in s for s in stmts)
     # Notes are COPIED (source keeps its own thread for the restore case).
     assert any("INSERT INTO crm_chatter" in s and "left(%s || message, %s)" in s for s in stmts)
     # Custom fields gap-fill only — the target's own SET values must win, but a
@@ -646,10 +646,10 @@ def test_create_deal_settles_probability_when_created_closed(rec):
     assert 100 in rec.params_for("INSERT INTO deals")
 
 
-def test_tasks_on_archived_deals_drop_out_but_standalone_tasks_do_not(rec):
+def test_todos_on_archived_deals_drop_out_but_standalone_todos_do_not(rec):
     rec.fetchall_queue = [[]]
-    service.list_tasks()
-    sql = rec.sql_containing("FROM tasks t")
+    service.list_todos()
+    sql = rec.sql_containing("FROM todos t")
     assert "(t.deal_id IS NULL OR d.archived_at IS NULL)" in sql
 
 

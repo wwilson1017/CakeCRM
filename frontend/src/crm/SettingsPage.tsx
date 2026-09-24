@@ -53,7 +53,7 @@ const CARD_COMPONENTS: Record<SettingsCardId, ComponentType<{ isMobile: boolean 
   pipeline_board: PipelineBoardCard,
   telegram_link: TelegramLinkCard,
   memory: MemoryCard,
-  task_mode: TaskModeCard,
+  todo_mode: TaskModeCard,
   branding: BrandingCard,
   team: TeamSettings,
   custom_fields: CustomFieldSettings,

@@ -24,7 +24,7 @@ configured — AI features hide themselves rather than showing errors.
 ## The first ten minutes
 
 1. Sign in as the admin the install created.
-2. If the CRM is empty you are offered sample data — fictional contacts, deals and tasks so
+2. If the CRM is empty you are offered sample data — fictional contacts, deals and todos so
    you can see how everything behaves. While it is loaded a banner stays on screen with a
    Clear action, so there is no way to confuse examples with real records.
 3. Walk the navigation: Dashboard, Pipeline, Contacts, Companies, Todos, Reports.
@@ -40,7 +40,7 @@ configured — AI features hide themselves rather than showing errors.
 - **Contacts** and **Companies** — searchable lists with detail pages that roll up linked
   records, notes and activity.
 - **Todos** — your follow-ups. Todos are the one follow-up primitive in this product. See
-  `tasks/modes`.
+  `todos/modes`.
 - **Reports** — one report: everything known about a single company. See
   `reports/company-rollup`.
 - **Settings** — four sections: Personal, Assistant, Workspace and Integrations. Members

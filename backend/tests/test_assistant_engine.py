@@ -1118,23 +1118,23 @@ async def test_archiving_through_a_routine_update_still_confirms(store):
 
 
 @pytest.mark.asyncio
-async def test_dropping_a_task_through_a_routine_update_still_confirms(store):
-    """`status` is not on crm_update_task's schema, but nothing validates arguments
-    against the schema at runtime and a dropped task is filtered out of list_tasks."""
-    reg = Registry(writes={"crm_update_task"}, routine={"crm_update_task"})
+async def test_dropping_a_crm_todo_through_a_routine_update_still_confirms(store):
+    """`status` is not on crm_update_todo's schema, but nothing validates arguments
+    against the schema at runtime and a dropped todo is filtered out of list_todos."""
+    reg = Registry(writes={"crm_update_todo"}, routine={"crm_update_todo"})
     prov = FakeProvider([
-        [_complete([_tc("crm_update_task", args={"task_id": 5, "status": "dropped"})],
+        [_complete([_tc("crm_update_todo", args={"todo_id": 5, "status": "dropped"})],
                    stop="tool_use")],
         [{"type": "text", "text": "confirm?"}, _complete()],
     ])
-    events = await _run(prov, reg, [{"role": "user", "content": "drop task 5"}], tool_mode="normal")
+    events = await _run(prov, reg, [{"role": "user", "content": "drop todo 5"}], tool_mode="normal")
     assert "confirm" in _types(events)
     assert reg.calls == []
 
 
 @pytest.mark.asyncio
 async def test_adding_a_todo_runs_with_no_card(store):
-    """#186's motivating example: GTD task mode is the default, so `todo_create` is
+    """#186's motivating example: GTD todo mode is the default, so `todo_create` is
     what "add a todo" reaches — and before it was classified this raised a card."""
     reg = Registry(writes={"todo_create"}, routine={"todo_create"})
     prov = FakeProvider([

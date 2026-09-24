@@ -242,7 +242,7 @@ def update_field_definition(field_id: int, data: dict) -> dict | None:
 
 def delete_field_definition(field_id: int) -> bool:
     """Hard-delete a definition; its crm_field_values rows cascade via the FK. Returns
-    the DELETE's own rowcount (matching delete_task/delete_activity), so a racing
+    the DELETE's own rowcount (matching delete_todo/delete_activity), so a racing
     double-delete reports 404 rather than a misleading 200 from a stale pre-check."""
     return pg_execute("DELETE FROM crm_field_definitions WHERE id = %s", (field_id,)) > 0
 

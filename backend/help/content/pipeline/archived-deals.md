@@ -6,7 +6,7 @@ admin: false
 ---
 ## What archiving is
 
-A soft hide. The deal keeps every note, activity and task; it simply stops appearing. Nothing
+A soft hide. The deal keeps every note, activity and todo; it simply stops appearing. Nothing
 is deleted, ever.
 
 ## Archive is not the same as Lost
@@ -28,7 +28,7 @@ matters more than the shortcut.
 ## Where an archived deal goes
 
 Out of sight nearly everywhere: the board, the dashboard, analytics, the deal lists, and the
-contact and company rollups all skip archived deals. Its open tasks drop out of task lists
+contact and company rollups all skip archived deals. Its open todos drop out of todo lists
 too, because archiving is the "stop nagging me" gesture.
 
 Its **activity history is never hidden**. That record is what you read to decide whether to
@@ -54,5 +54,5 @@ Restoring puts it straight back on the board.
 ## Restoring a merged deal is not an undo
 
 When two deals are merged the source is archived. Restoring it makes it visible again, but
-the merge already moved its activity and tasks and copied its notes onto the survivor. Those
+the merge already moved its activity and todos and copied its notes onto the survivor. Those
 do not come back.

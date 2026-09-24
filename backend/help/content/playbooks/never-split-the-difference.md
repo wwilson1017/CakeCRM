@@ -60,7 +60,7 @@ author: Chris Voss with Tahl Raz
 
 - **The accusation audit becomes the next step** — before the call, list what the buyer may
   be holding against you and write it on the deal with `crm_add_note`, then book the call
-  as a task (`crm_create_task`; `todo_create` in GTD task mode) so the deal stops carrying
+  as a todo (`crm_create_todo`; `todo_create` in GTD todo mode) so the deal stops carrying
   *no next step*.
 - **A label becomes a logged fact** — when a label lands and the buyer confirms it, that is
   the real objection. Record it with `crm_log_activity` on the deal so the next

@@ -401,7 +401,7 @@ def test_the_member_note_names_every_install_wide_control_a_member_might_ask_abo
         "branding",              # PUT /api/branding
         "the team roster",       # POST /api/users
         "custom field definitions",   # the field SCHEMA routes
-        "the task mode",         # POST /api/crm/task-mode + todo-surfaces
+        "the todo mode",         # POST /api/crm/todo-mode + todo-surfaces
         "connecting the telegram bot",
         "connecting gmail",
         "the daily digest and nudges",  # POST /api/heartbeat/proactive

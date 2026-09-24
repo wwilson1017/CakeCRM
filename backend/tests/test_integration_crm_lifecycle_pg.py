@@ -61,7 +61,7 @@ def pg_db():
 def _clean(pg_db):
     from core.postgres import pg_execute
     pg_execute(
-        "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
+        "TRUNCATE companies, contacts, deals, activity_log, todos, crm_chatter, "
         "crm_chatter_attachments, crm_field_definitions, crm_field_values, "
         "crm_field_provenance, deal_stage_events, proactive_nudges, "
         "deal_ai_touch_evidence RESTART IDENTITY"
@@ -267,7 +267,7 @@ def test_merge_moves_history_gap_fills_fields_and_archives_the_source(pg_db, mon
     source = service.create_deal("Dupe deal", contact_id=contact["id"], value=700)
 
     service.log_activity("call", note="talked", deal_id=source["id"])
-    service.create_task("Follow up", deal_id=source["id"])
+    service.create_todo("Follow up", deal_id=source["id"])
     chatter_service.add_note("deal", source["id"], "source note")
 
     region = field_service.create_field_definition(
@@ -286,8 +286,8 @@ def test_merge_moves_history_gap_fills_fields_and_archives_the_source(pg_db, mon
 
     acts = service.get_activity_log(deal_id=target["id"])
     assert len(acts) == 1 and acts[0]["note"] == "talked"
-    assert [t["id"] for t in service.list_tasks(deal_id=source["id"])] == []
-    assert len(service.list_tasks(deal_id=target["id"])) == 1
+    assert [t["id"] for t in service.list_todos(deal_id=source["id"])] == []
+    assert len(service.list_todos(deal_id=target["id"])) == 1
 
     messages = [n["message"] for n in chatter_service.get_chatter("deal", target["id"])]
     assert any(m.startswith(f"[Merged from deal #{source['id']}] source note") for m in messages)
@@ -363,7 +363,7 @@ def test_stale_deals_reports_days_and_skips_fresh_or_closed_ones(pg_db):
     row = out["deals"][0]
     assert row["days_since_touch"] >= 39
     assert row["days_in_stage"] >= 59          # no stage events on it -> created_at
-    assert row["has_open_task"] is False
+    assert row["has_open_todo"] is False
     assert row["contact_name"] == "Ana"
 
     # Any touch resets it — that is the whole point of the shared last-touch rule.
@@ -376,10 +376,10 @@ def test_stale_deals_flags_a_deal_that_already_has_a_follow_up(pg_db):
     from crm import analytics_service, service
 
     deal = service.create_deal("Old")
-    service.create_task("Chase it", deal_id=deal["id"])
+    service.create_todo("Chase it", deal_id=deal["id"])
     pg_execute("UPDATE deals SET updated_at = now() - make_interval(days => 40) WHERE id = %s",
                (deal["id"],))
-    assert analytics_service.get_stale_deals(stale_days=14)["deals"][0]["has_open_task"] is True
+    assert analytics_service.get_stale_deals(stale_days=14)["deals"][0]["has_open_todo"] is True
 
 
 def test_contact_staleness_ranks_never_contacted_first(pg_db):
@@ -729,16 +729,16 @@ def test_archive_restore_keeps_the_deal_stale(pg_db):
         stale_days=14)["deals"]] == [deal["id"]]
 
 
-def test_tasks_follow_an_archived_deal_out_of_view_but_history_does_not(pg_db):
+def test_todos_follow_an_archived_deal_out_of_view_but_history_does_not(pg_db):
     from crm import service
 
     deal = service.create_deal("Junk")
-    service.create_task("Chase junk", deal_id=deal["id"])
-    standalone = service.create_task("Unrelated errand")
+    service.create_todo("Chase junk", deal_id=deal["id"])
+    standalone = service.create_todo("Unrelated errand")
     service.log_activity("call", note="talked", deal_id=deal["id"])
 
     service.archive_deal(deal["id"])
-    assert [t["id"] for t in service.list_tasks()] == [standalone["id"]]
+    assert [t["id"] for t in service.list_todos()] == [standalone["id"]]
     # History is still readable — you need it to decide whether to restore.
     assert len(service.get_activity_log(deal_id=deal["id"])) == 1
     assert len(service.get_activity_log()) == 1
@@ -787,27 +787,27 @@ def test_creating_a_deal_already_closed_settles_its_probability(pg_db):
     assert won["probability"] == 100 and lost["probability"] == 0
 
 
-def test_every_task_surface_hides_an_archived_deals_tasks(pg_db):
-    """list_tasks was fixed first; the dashboard counts and the contact page read the
-    same tasks and were still counting them — and crm_dashboard is background-callable,
-    so the heartbeat kept nagging about the task the archive was meant to silence."""
+def test_every_todo_surface_hides_an_archived_deals_todos(pg_db):
+    """list_todos was fixed first; the dashboard counts and the contact page read the
+    same todos and were still counting them — and crm_dashboard is background-callable,
+    so the heartbeat kept nagging about the todo the archive was meant to silence."""
     from crm import service
 
     contact = service.create_contact("Ana")
     deal = service.create_deal("Junk", contact_id=contact["id"])
-    service.create_task("Chase junk", deal_id=deal["id"], contact_id=contact["id"],
+    service.create_todo("Chase junk", deal_id=deal["id"], contact_id=contact["id"],
                         due_date="2020-01-01")
-    service.create_task("Real errand", contact_id=contact["id"], due_date="2020-01-01")
+    service.create_todo("Real errand", contact_id=contact["id"], due_date="2020-01-01")
 
     before = service.get_dashboard_stats()
-    assert before["overdue_tasks"] == 2 and before["pending_tasks"] == 2
+    assert before["overdue_todos"] == 2 and before["pending_todos"] == 2
 
     service.archive_deal(deal["id"])
     after = service.get_dashboard_stats()
-    assert after["overdue_tasks"] == 1 and after["pending_tasks"] == 1
-    assert [t["title"] for t in service.list_tasks()] == ["Real errand"]
+    assert after["overdue_todos"] == 1 and after["pending_todos"] == 1
+    assert [t["title"] for t in service.list_todos()] == ["Real errand"]
     assert [t["title"] for t in
-            service.get_contact_detail(contact["id"])["tasks"]] == ["Real errand"]
+            service.get_contact_detail(contact["id"])["todos"]] == ["Real errand"]
 
 
 def test_search_still_carries_the_lost_reason_for_a_quarter_review(pg_db):

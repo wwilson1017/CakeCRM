@@ -117,7 +117,7 @@ export function TaskModeCard({ isMobile }: { isMobile: boolean }) {
 
   return (
     <SettingsCard
-      id="task_mode"
+      id="todo_mode"
       title="Task mode"
       description="Switching is safe and reversible — both modes read the same tasks. Nothing is migrated, copied or deleted."
       isMobile={isMobile}

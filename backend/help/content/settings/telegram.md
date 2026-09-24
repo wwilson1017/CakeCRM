@@ -40,7 +40,7 @@ change in the batch is answered, then carries on.
 
 ## Capture
 
-In GTD task mode, a message beginning with `capture ` (or `/capture `) is intercepted before
+In GTD todo mode, a message beginning with `capture ` (or `/capture `) is intercepted before
 the model runs: it creates an inbox todo directly. That costs nothing, is instant, and works
 with no AI provider configured at all.
 

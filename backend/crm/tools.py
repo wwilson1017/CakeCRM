@@ -1,6 +1,6 @@
 """CakeCRM — CRM agent tools (42 tools).
 
-Contacts, deals (incl. search + the won/lost/archive/merge lifecycle verbs), tasks,
+Contacts, deals (incl. search + the won/lost/archive/merge lifecycle verbs), todos,
 activities, chatter/notes, companies, custom fields, analytics, lead scores, and the
 read-only sales-intelligence set (stale deals, contact staleness, duplicates, data
 gaps) — all accessible to the AI assistant for managing customer relationships
@@ -21,7 +21,7 @@ Absence of the key is the deny state, so a new write confirms until somebody cla
 it — read ``assistant/confirm_tier.py`` before adding one. That module also owns
 ``removes_from_view()``, the argument-level carve-out: three of the sixteen defined here
 can hide a record through a ``status`` argument, and that particular call keeps its card.
-(GTD task mode, the product default, hides three of the sixteen from the model; their
+(GTD todo mode, the product default, hides three of the sixteen from the model; their
 ``todo_*`` replacements in ``crm/gtd_tools.py`` carry their own tiers since #186.)
 """
 
@@ -161,7 +161,7 @@ CRM_TOOL_DEFS = [
         "name": "crm_get_contact",
         "writes": False,
         "description": (
-            "Get a contact's full profile including their deals, tasks, and recent activity. "
+            "Get a contact's full profile including their deals, todos, and recent activity. "
             "Use this to see everything about a specific customer. "
             + _COMPANY_NAME_NOTE
         ),
@@ -196,7 +196,7 @@ CRM_TOOL_DEFS = [
     {
         "name": "crm_delete_contact",
         "writes": True,
-        "description": "Delete a contact and all their associated activities and tasks.",
+        "description": "Delete a contact and all their associated activities and todos.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -487,7 +487,7 @@ CRM_TOOL_DEFS = [
         "writes": True,
         "description": (
             "Merge a duplicate deal into the one being kept. The source deal's logged "
-            "activities and tasks move to the target, its notes are copied across with "
+            "activities and todos move to the target, its notes are copied across with "
             "a '[Merged from deal #N]' marker, and its custom-field values fill in only "
             "the target's blanks — the target's own field values, title, value and "
             "stage are never overwritten. The source is archived, not deleted. Confirm "
@@ -542,15 +542,15 @@ CRM_TOOL_DEFS = [
         "kind": "integration",
     },
 
-    # ── Tasks (3 tools) ──────────────────────────────────────────────────────
+    # ── Todos (3 tools) ──────────────────────────────────────────────────────
     {
-        "name": "crm_create_task",
+        "name": "crm_create_todo",
         "writes": True,
-        # Routine, but hidden in GTD task mode (the default) — see _TASK_TOOL_NAMES.
+        # Routine, but hidden in GTD todo mode (the default) — see _TODO_TOOL_NAMES.
         # The todo_* family is NOT classified; classifying it is a separate call (#180).
         "confirm_tier": ROUTINE,
         "description": (
-            "Create a follow-up task. Use when the user mentions needing to "
+            "Create a follow-up todo. Use when the user mentions needing to "
             "follow up, check in, or do something by a certain date for a customer or deal."
         ),
         "input_schema": {
@@ -568,11 +568,11 @@ CRM_TOOL_DEFS = [
         "kind": "integration",
     },
     {
-        "name": "crm_list_tasks",
+        "name": "crm_list_todos",
         "writes": False,
         "description": (
-            "List CRM tasks with filters. Use to check what follow-ups are due, "
-            "what's overdue, or what tasks exist for a customer."
+            "List CRM todos with filters. Use to check what follow-ups are due, "
+            "what's overdue, or what todos exist for a customer."
         ),
         "input_schema": {
             "type": "object",
@@ -580,7 +580,7 @@ CRM_TOOL_DEFS = [
                 "contact_id": {"type": "integer", "description": "Filter by contact"},
                 "deal_id": {"type": "integer", "description": "Filter by deal"},
                 "completed": {"type": "boolean", "description": "Filter: true=done, false=pending"},
-                "due_before": {"type": "string", "description": "Show tasks due before this date (YYYY-MM-DD)"},
+                "due_before": {"type": "string", "description": "Show todos due before this date (YYYY-MM-DD)"},
                 "priority": {"type": "string", "description": "Filter: low, medium, high"},
                 "limit": {"type": "integer", "default": 50},
                 "owner": owner_filter_property(),
@@ -590,36 +590,36 @@ CRM_TOOL_DEFS = [
         "kind": "integration",
     },
     {
-        "name": "crm_complete_task",
+        "name": "crm_complete_todo",
         "writes": True,
-        # Routine, but hidden in GTD task mode (the default) — see _TASK_TOOL_NAMES.
+        # Routine, but hidden in GTD todo mode (the default) — see _TODO_TOOL_NAMES.
         # The todo_* family is NOT classified; classifying it is a separate call (#180).
         "confirm_tier": ROUTINE,
-        "description": "Mark a CRM task as completed.",
+        "description": "Mark a CRM todo as completed.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "task_id": {"type": "integer", "description": "Task ID to complete"},
+                "todo_id": {"type": "integer", "description": "Todo ID to complete"},
             },
-            "required": ["task_id"],
+            "required": ["todo_id"],
         },
         "kind": "integration",
     },
     {
-        "name": "crm_update_task",
+        "name": "crm_update_todo",
         "writes": True,
-        # Routine, but hidden in GTD task mode (the default) — see _TASK_TOOL_NAMES.
+        # Routine, but hidden in GTD todo mode (the default) — see _TODO_TOOL_NAMES.
         # The todo_* family is NOT classified; classifying it is a separate call (#180).
         "confirm_tier": ROUTINE,
         "description": (
-            "Edit an existing CRM task — retitle it, move its due date, change priority, "
+            "Edit an existing CRM todo — retitle it, move its due date, change priority, "
             "re-link it to a contact or deal, or reopen a completed one. Use when the user "
-            "wants to change a task they already have rather than create a new one."
+            "wants to change a todo they already have rather than create a new one."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "task_id": {"type": "integer", "description": "Task ID to update"},
+                "todo_id": {"type": "integer", "description": "Todo ID to update"},
                 "title": {"type": "string", "description": "New title"},
                 "description": {"type": "string"},
                 "due_date": {"type": "string", "description": "New due date (YYYY-MM-DD), or '' to clear"},
@@ -628,23 +628,23 @@ CRM_TOOL_DEFS = [
                 "priority": {"type": "string", "description": "low, medium, or high"},
                 "completed": {"type": "boolean", "description": "true=done, false=reopen"},
             },
-            "required": ["task_id"],
+            "required": ["todo_id"],
         },
         "kind": "integration",
     },
     {
-        "name": "crm_delete_task",
+        "name": "crm_delete_todo",
         "writes": True,
         "description": (
-            "Permanently delete a CRM task. Use only when the task was created in error — "
-            "to record that a task is finished, complete it instead so it stays in the history."
+            "Permanently delete a CRM todo. Use only when the todo was created in error — "
+            "to record that a todo is finished, complete it instead so it stays in the history."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "task_id": {"type": "integer", "description": "Task ID to delete"},
+                "todo_id": {"type": "integer", "description": "Todo ID to delete"},
             },
-            "required": ["task_id"],
+            "required": ["todo_id"],
         },
         "kind": "integration",
     },
@@ -657,7 +657,7 @@ CRM_TOOL_DEFS = [
         "name": "crm_dashboard",
         "writes": False,
         "description": (
-            "Get a CRM summary dashboard with pipeline value, contact counts, overdue tasks, "
+            "Get a CRM summary dashboard with pipeline value, contact counts, overdue todos, "
             "recent activity, and top deals. Use when the user asks for an overview, summary, "
             "or 'how's my pipeline'."
         ),
@@ -696,9 +696,9 @@ CRM_TOOL_DEFS = [
         "description": (
             "Health check on ONE deal: its lead score and the factors behind it, plus "
             "how long since the last touch, how long it has sat in its current stage, "
-            "open and overdue follow-up tasks, and whether a contact and company are "
+            "open and overdue follow-up todos, and whether a contact and company are "
             "linked. Returns a list of flags naming what is actually wrong (stale, "
-            "stuck_in_stage, no_next_step, overdue_task, missing_contact, "
+            "stuck_in_stage, no_next_step, overdue_todo, missing_contact, "
             "missing_company). Use when asked how a specific deal is doing, whether it "
             "is at risk, or what to do about it. For the whole pipeline at once use "
             "crm_get_stale_deals."
@@ -747,7 +747,7 @@ CRM_TOOL_DEFS = [
         "description": (
             "List the open deals nobody has touched recently, stalest first, with the "
             "stage, value, contact, how many days since the last touch, how long the "
-            "deal has sat in its current stage, and whether a follow-up task already "
+            "deal has sat in its current stage, and whether a follow-up todo already "
             "exists. Use for 'what's going cold', 'what needs attention', or to pick "
             "the next follow-up. crm_analytics gives the stale COUNT for a summary; "
             "this gives the actionable list."
@@ -1148,7 +1148,7 @@ CRM_TOOL_DEFS = [
             "Check what is actually configured on this CRM install: whether an AI "
             "provider is ready and which one, whether Gmail is connected or its "
             "connection has broken, whether a Telegram bot is configured and this seat "
-            "has a chat linked, which task mode is active, and how many custom field "
+            "has a chat linked, which todo mode is active, and how many custom field "
             "definitions exist per entity type. Use it before explaining how to use a "
             "feature, so you never walk the user through something that was never set "
             "up — and before suggesting they connect something that already is. "
@@ -1629,45 +1629,45 @@ def crm_get_activity_log(contact_id: int | None = None, deal_id: int | None = No
     return {"activities": activities, "count": len(activities)}
 
 
-# ── Tasks ─────────────────────────────────────────────────────────────────────
+# ── Todos ─────────────────────────────────────────────────────────────────────
 
-def crm_create_task(title: str, **kwargs) -> dict:
-    return crm.create_task(title=title, **kwargs)
+def crm_create_todo(title: str, **kwargs) -> dict:
+    return crm.create_todo(title=title, **kwargs)
 
 
-def crm_list_tasks(
+def crm_list_todos(
     contact_id: int | None = None, deal_id: int | None = None,
     completed: bool | None = None, due_before: str | None = None,
     priority: str | None = None, limit: int = 50,
     owner_id: int | str | None = None,
 ) -> dict:
-    tasks = crm.list_tasks(
+    todos = crm.list_todos(
         contact_id=contact_id, deal_id=deal_id, completed=completed,
         due_before=due_before, priority=priority, limit=limit, owner_id=owner_id,
     )
-    return {"tasks": tasks, "count": len(tasks)}
+    return {"todos": todos, "count": len(todos)}
 
 
-def crm_complete_task(task_id: int) -> dict:
-    result = crm.complete_task(task_id)
+def crm_complete_todo(todo_id: int) -> dict:
+    result = crm.complete_todo(todo_id)
     if not result:
-        return {"error": f"Task {task_id} not found"}
+        return {"error": f"Todo {todo_id} not found"}
     return result
 
 
-def crm_update_task(task_id: int, **kwargs) -> dict:
+def crm_update_todo(todo_id: int, **kwargs) -> dict:
     # The service filters to its own allow-list, so an unknown key is ignored rather
     # than reaching the UPDATE.
-    result = crm.update_task(task_id, **kwargs)
+    result = crm.update_todo(todo_id, **kwargs)
     if not result:
-        return {"error": f"Task {task_id} not found"}
+        return {"error": f"Todo {todo_id} not found"}
     return result
 
 
-def crm_delete_task(task_id: int) -> dict:
-    if not crm.delete_task(task_id):
-        return {"error": f"Task {task_id} not found"}
-    return {"ok": True, "deleted": task_id}
+def crm_delete_todo(todo_id: int) -> dict:
+    if not crm.delete_todo(todo_id):
+        return {"error": f"Todo {todo_id} not found"}
+    return {"ok": True, "deleted": todo_id}
 
 
 # ── Companies ─────────────────────────────────────────────────────────────────
@@ -2024,12 +2024,12 @@ TOOL_EXECUTORS = {
     # Activities
     "crm_log_activity": crm_log_activity,
     "crm_get_activity_log": crm_get_activity_log,
-    # Tasks
-    "crm_create_task": crm_create_task,
-    "crm_list_tasks": crm_list_tasks,
-    "crm_complete_task": crm_complete_task,
-    "crm_update_task": crm_update_task,
-    "crm_delete_task": crm_delete_task,
+    # Todos
+    "crm_create_todo": crm_create_todo,
+    "crm_list_todos": crm_list_todos,
+    "crm_complete_todo": crm_complete_todo,
+    "crm_update_todo": crm_update_todo,
+    "crm_delete_todo": crm_delete_todo,
     # Analytics + sales intelligence
     "crm_dashboard": crm_dashboard,
     "crm_analytics": crm_analytics,
@@ -2068,19 +2068,19 @@ TOOL_EXECUTORS = {
 
 # The argument-level carve-out from the routine tier (rule 3, spelled at argument
 # level) moved to `assistant/confirm_tier.py` in #186: its keys now span two tool
-# modules — `crm_update_contact`/`_company`/`_task` here, and `todo_update` /
+# modules — `crm_update_contact`/`_company`/`_todo` here, and `todo_update` /
 # `todo_update_project` in `crm/gtd_tools.py` — so it belongs beside the rule it
 # narrows rather than inside either tool module. The engine consults it there.
 
 
-# The five task tools, hidden while GTD mode is active — the ten richer `todo_*`
+# The five todo tools, hidden while GTD mode is active — the ten richer `todo_*`
 # tools (crm/gtd_tools.py) cover the same ground there. Advertising both would give
 # the model two vocabularies for one store and it WILL mix them mid-conversation.
-# Named rather than filtered by prefix: `crm_scan_gaps` also starts with a task-ish
+# Named rather than filtered by prefix: `crm_scan_gaps` also starts with a todo-ish
 # word, and a prefix rule would silently capture future tools.
-_TASK_TOOL_NAMES = frozenset({
-    "crm_create_task", "crm_list_tasks", "crm_complete_task",
-    "crm_update_task", "crm_delete_task",
+_TODO_TOOL_NAMES = frozenset({
+    "crm_create_todo", "crm_list_todos", "crm_complete_todo",
+    "crm_update_todo", "crm_delete_todo",
 })
 
 
@@ -2177,7 +2177,7 @@ def _identity_executors(user: dict | None) -> dict[str, Callable[..., dict]]:
         "crm_create_contact": bind_server_args(crm_create_contact, owner_id=user_id),
         "crm_create_company": bind_server_args(crm_create_company, owner_id=user_id),
         "crm_create_deal": bind_server_args(crm_create_deal, owner_id=user_id),
-        "crm_create_task": bind_server_args(crm_create_task, owner_id=user_id),
+        "crm_create_todo": bind_server_args(crm_create_todo, owner_id=user_id),
         # Which seat is ASKING. A read, and the only per-person fact in its payload is
         # whether this seat has a linked Telegram chat (#193) — bound rather than taken
         # as an argument so the model cannot ask about another person's device.
@@ -2187,7 +2187,7 @@ def _identity_executors(user: dict | None) -> dict[str, Callable[..., dict]]:
         name: bind_owner_filter(fn, user) for name, fn in (
             ("crm_find_contact", crm_find_contact),
             ("crm_search_companies", crm_search_companies),
-            ("crm_list_tasks", crm_list_tasks),
+            ("crm_list_todos", crm_list_todos),
             ("crm_get_stale_deals", crm_get_stale_deals),
             ("crm_get_contact_staleness", crm_get_contact_staleness),
         )
@@ -2199,8 +2199,8 @@ def get_crm_tools(user: dict | None = None) -> tuple[list[dict], dict[str, Calla
     """Return (tool definitions, executor map) for the CRM.
 
     CRM tools are first-class core: always collected, with NO per-integration
-    enable gate (unlike their chatty origin) — except the task tools, which swap out
-    for the GTD tool set when the user has chosen GTD task mode (#70).
+    enable gate (unlike their chatty origin) — except the todo tools, which swap out
+    for the GTD tool set when the user has chosen GTD todo mode (#70).
 
     ``user`` is the seat this registry serves (#190) — the ``get_current_user`` row, or
     None for an unattended turn. It never changes WHICH tools exist or their ``writes``
@@ -2213,6 +2213,6 @@ def get_crm_tools(user: dict | None = None) -> tuple[list[dict], dict[str, Calla
     still resolves instead of erroring at confirmation time.
     """
     defs = CRM_TOOL_DEFS
-    if crm.get_task_mode() == "gtd":
-        defs = [d for d in CRM_TOOL_DEFS if d["name"] not in _TASK_TOOL_NAMES]
+    if crm.get_todo_mode() == "gtd":
+        defs = [d for d in CRM_TOOL_DEFS if d["name"] not in _TODO_TOOL_NAMES]
     return defs, _identity_executors(user)

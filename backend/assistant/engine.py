@@ -550,7 +550,7 @@ async def _chat_impl(
             # THIRD-PARTY text — shared with the background runner so the two loops can
             # never disagree (delimiters.fence_tool_result). It covers three fences: a
             # live external read (Gmail) wrapped whole by tool name; a public-capture row
-            # wrapped per ROW, because the same `todo_list`/`crm_list_tasks` call returns
+            # wrapped per ROW, because the same `todo_list`/`crm_list_todos` call returns
             # a stranger's inbox item beside the user's own (issue #204); and a
             # context-file read, wrapped but deliberately NOT tainting — see
             # _RECORDED_CONTEXT_MARKER.

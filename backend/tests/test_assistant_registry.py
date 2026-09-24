@@ -11,16 +11,16 @@ from assistant.registry import ToolRegistry
 _WRITE_TOOLS = {
     "crm_create_contact", "crm_update_contact", "crm_delete_contact",
     "crm_create_deal", "crm_update_deal", "crm_update_deal_stage",
-    "crm_log_activity", "crm_create_task", "crm_complete_task",
+    "crm_log_activity", "crm_create_todo", "crm_complete_todo",
 }
 _READ_TOOLS = {"crm_find_contact", "crm_get_contact", "crm_list_contacts", "crm_dashboard"}
 
 
-def test_writes_map_matches_owned_tools(task_mode):
-    # `_WRITE_TOOLS` names the normal-mode task tools, which GTD mode hides — and with
+def test_writes_map_matches_owned_tools(todo_mode):
+    # `_WRITE_TOOLS` names the normal-mode todo tools, which GTD mode hides — and with
     # no database the mode fail-safe answers 'gtd' since #102. Pin normal: this test is
     # about the write/read split, not about mode gating (test_crm_gtd_tools owns that).
-    task_mode("normal")
+    todo_mode("normal")
     reg = ToolRegistry()
     for name in _WRITE_TOOLS:
         assert reg.is_write(name) is True, name
@@ -35,10 +35,10 @@ def test_provider_tools_strip_internal_keys():
         assert set(t) <= {"name", "description", "input_schema"}
 
 
-def test_read_only_mode_hides_write_tools(task_mode):
-    # Normal task mode for the same reason as above — the "mode" under test here is the
-    # CONFIRMATION mode (normal vs read-only), not the task mode.
-    task_mode("normal")
+def test_read_only_mode_hides_write_tools(todo_mode):
+    # Normal todo mode for the same reason as above — the "mode" under test here is the
+    # CONFIRMATION mode (normal vs read-only), not the todo mode.
+    todo_mode("normal")
     reg = ToolRegistry()
     normal_names = {t["name"] for t in reg.provider_tools("normal")}
     readonly_names = {t["name"] for t in reg.provider_tools("read-only")}

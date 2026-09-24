@@ -92,7 +92,7 @@ def _clean_crm(pg_db):
     # rides both production `_truncate_all` statements. Without it EVERY test in this
     # module errors in setup, this fixture being autouse.
     pg_execute(
-        "TRUNCATE companies, contacts, deals, activity_log, tasks, crm_chatter, "
+        "TRUNCATE companies, contacts, deals, activity_log, todos, crm_chatter, "
         "crm_chatter_attachments, crm_field_definitions, crm_field_values, "
         "crm_field_provenance, deal_stage_events, proactive_nudges, "
         "deal_ai_touch_evidence RESTART IDENTITY"
@@ -123,24 +123,24 @@ def test_migration_created_tables_and_singleton(pg_db):
             "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
         )
     }
-    assert {"companies", "contacts", "deals", "tasks", "activity_log", "crm_meta", "crm_chatter",
+    assert {"companies", "contacts", "deals", "todos", "activity_log", "crm_meta", "crm_chatter",
             "crm_field_definitions", "crm_field_values", "crm_field_provenance"} <= names
     meta = pg_fetchone("SELECT * FROM crm_meta WHERE id = 1")
     assert meta and meta["sample_data_loaded"] is False
     # issue #9 migration: durable AI-key-nudge dismissal, default FALSE
     assert meta["ai_key_prompt_dismissed"] is False
-    # issue #102: GTD is the default task mode. Two separate assertions because the
+    # issue #102: GTD is the default todo mode. Two separate assertions because the
     # migration has two halves and only ONE of them does any work here. The singleton
-    # row predates the task_mode column (crm_meta is inserted by the crm_core
+    # row predates the todo_mode column (crm_meta is inserted by the crm_core
     # migration), so the column DEFAULT is consumed once at ADD COLUMN time and never
     # again — the row value below comes from #102's UPDATE, not from the DDL default.
     # Asserting only the row would let someone delete the backfill and keep a green
     # suite on a fresh database while every install still read 'normal'.
-    assert meta["task_mode"] == "gtd"
+    assert meta["todo_mode"] == "gtd"
     assert pg_fetchone(
         "SELECT column_default FROM information_schema.columns "
         "WHERE table_schema = 'public' AND table_name = 'crm_meta' "
-        "AND column_name = 'task_mode'"
+        "AND column_name = 'todo_mode'"
     )["column_default"].startswith("'gtd'")
 
 
@@ -155,7 +155,7 @@ def test_migration_created_tables_and_singleton(pg_db):
     assert {"ai_touch_count", "ai_touch_count_at", "ai_touch_evidence_count"} <= deal_cols
 
 
-def test_the_task_mode_migration_is_scoped_and_replayable(pg_db):
+def test_the_todo_mode_migration_is_scoped_and_replayable(pg_db):
     """#102's migration must do BOTH halves of its contract, and only those:
 
       * it flips a row still at the DDL default ('normal') to 'gtd';
@@ -171,39 +171,61 @@ def test_the_task_mode_migration_is_scoped_and_replayable(pg_db):
     a test of SQL semantics rather than of this repo: deleting the WHERE clause from the
     migration left the whole suite green while every install got its `updated_at`
     stamped. `ALTER … SET DEFAULT` is idempotent, so replaying the file is safe.
+
+    #169 renamed the production column `crm_meta.task_mode` → `todo_mode`, so the frozen
+    text can no longer execute against the live table — and it never needs to again on
+    any install, because every install applied it BEFORE that rename. What still needs
+    pinning is the behaviour, not merely the file's bytes: two substring assertions
+    cannot prove scoping, since extra unscoped SQL could sit beside both required
+    strings. So the file is replayed against a transaction-scoped stand-in carrying the
+    pre-rename column name. A TEMP table shadows `public.crm_meta` (the temp schema is
+    searched first), `ON COMMIT DROP` removes it when `get_connection` commits — so it
+    can never leak onto the pooled connection — and one connection is held throughout so
+    every statement sees the same temp schema. The filename and its SQL are #169 grep
+    exclusions.
     """
     from pathlib import Path
 
-    from core.postgres import pg_execute, pg_fetchone
+    from core.postgres import get_connection, pg_fetchone
 
     sql = (
         Path(__file__).resolve().parents[1]
         / "migrations" / "20260825222000_default_task_mode_gtd.sql"
     ).read_text(encoding="utf-8")
 
-    # Skip case: already 'gtd' (where the migration left it) — replaying changes nothing.
-    before = pg_fetchone("SELECT task_mode, updated_at FROM crm_meta WHERE id = 1")
-    assert before["task_mode"] == "gtd"
-    pg_execute(sql)
-    after = pg_fetchone("SELECT task_mode, updated_at FROM crm_meta WHERE id = 1")
-    assert after["task_mode"] == "gtd"
-    assert after["updated_at"] == before["updated_at"], (
-        "the backfill must be scoped WHERE task_mode = 'normal' — an already-GTD "
-        "install must not be rewritten"
-    )
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            CREATE TEMP TABLE crm_meta (
+                id         INTEGER PRIMARY KEY,
+                task_mode  TEXT NOT NULL DEFAULT 'normal',
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            ) ON COMMIT DROP
+            """
+        )
+        cur.execute("INSERT INTO crm_meta (id, task_mode) VALUES (1, 'gtd')")
 
-    # Flip case: an upgrading install still on the DDL default gets moved.
-    #
-    # try/finally because `_clean_crm` does NOT reset task_mode: without it, a failure
-    # between these two statements would leave the singleton on 'normal' and cascade
-    # into test_demo_state_machine_over_http, which would then fail with a misleading
-    # message about demo-status instead of naming the real cause.
-    try:
-        pg_execute("UPDATE crm_meta SET task_mode = 'normal' WHERE id = 1")
-        pg_execute(sql)
-        assert pg_fetchone("SELECT task_mode FROM crm_meta WHERE id = 1")["task_mode"] == "gtd"
-    finally:
-        pg_execute("UPDATE crm_meta SET task_mode = 'gtd' WHERE id = 1")
+        # Skip case: already 'gtd' (where the migration left it) — replaying changes nothing.
+        cur.execute("SELECT task_mode, updated_at FROM crm_meta WHERE id = 1")
+        before_mode, before_stamp = cur.fetchone()
+        assert before_mode == "gtd"
+        cur.execute(sql)
+        cur.execute("SELECT task_mode, updated_at FROM crm_meta WHERE id = 1")
+        after_mode, after_stamp = cur.fetchone()
+        assert after_mode == "gtd"
+        assert after_stamp == before_stamp, (
+            "the backfill must be scoped WHERE task_mode = 'normal' — an already-GTD "
+            "install must not be rewritten"
+        )
+
+        # Flip case: an upgrading install still on the DDL default gets moved.
+        cur.execute("UPDATE crm_meta SET task_mode = 'normal' WHERE id = 1")
+        cur.execute(sql)
+        cur.execute("SELECT task_mode FROM crm_meta WHERE id = 1")
+        assert cur.fetchone()[0] == "gtd"
+
+    # …and the RENAMED production column still carries what that migration left behind.
+    assert pg_fetchone("SELECT todo_mode FROM crm_meta WHERE id = 1")["todo_mode"] == "gtd"
 
 
 # ── Fresh empty install (the acceptance clause, at the data layer) ────────────
@@ -214,7 +236,7 @@ def test_fresh_empty_dashboard(pg_db):
     assert stats["total_contacts"] == 0
     assert stats["pipeline_by_stage"] == []
     assert stats["total_pipeline_value"] == 0
-    assert stats["overdue_tasks"] == 0 and stats["pending_tasks"] == 0
+    assert stats["overdue_todos"] == 0 and stats["pending_todos"] == 0
     assert stats["recent_activity"] == [] and stats["top_deals"] == []
     assert service.list_contacts()["contacts"] == []
     assert service.get_pipeline()["deals"] == []
@@ -231,7 +253,7 @@ def test_crud_fk_search_and_aggregates(pg_db):
     assert c["id"] == 1 and c["tags"] == "vip,math"
 
     d = service.create_deal("Engine build", contact_id=c["id"], stage="proposal", value=5000)
-    t = service.create_task("Follow up", contact_id=c["id"], deal_id=d["id"], due_date="2000-01-01")
+    t = service.create_todo("Follow up", contact_id=c["id"], deal_id=d["id"], due_date="2000-01-01")
     a = service.log_activity("call", note="intro", contact_id=c["id"], deal_id=d["id"])
     assert d["contact_id"] == 1 and t["id"] == 1 and a["id"] == 1
 
@@ -242,22 +264,22 @@ def test_crud_fk_search_and_aggregates(pg_db):
     # update + complete->reopen via int flag
     service.update_contact(1, status="inactive")
     assert service.get_contact(1)["status"] == "inactive"
-    assert service.complete_task(1)["completed"] == 1
-    service.update_task(1, completed=0)
-    assert service.get_task(1)["completed"] == 0
+    assert service.complete_todo(1)["completed"] == 1
+    service.update_todo(1, completed=0)
+    assert service.get_todo(1)["completed"] == 0
 
     # dashboard aggregates over known rows
     stats = service.get_dashboard_stats()
     assert stats["total_contacts"] == 1
-    assert stats["overdue_tasks"] == 1  # due 2000-01-01, incomplete
+    assert stats["overdue_todos"] == 1  # due 2000-01-01, incomplete
     assert stats["total_pipeline_value"] == 5000
 
-    # delete contact: deal.contact_id -> NULL (SET NULL), task + activity deleted (cascade)
+    # delete contact: deal.contact_id -> NULL (SET NULL), todo + activity deleted (cascade)
     assert service.delete_contact(1) is True
     assert service.get_contact(1) is None
     surviving = service.get_deal(d["id"])
     assert surviving is not None and surviving["contact_id"] is None
-    assert service.get_task(1) is None
+    assert service.get_todo(1) is None
     assert service.get_activity_log() == []
 
 
@@ -272,7 +294,7 @@ def test_seed_idempotent_and_sequences_advance(pg_db):
     assert pg_fetchone("SELECT COUNT(*) AS c FROM companies")["c"] == 6
     assert pg_fetchone("SELECT COUNT(*) AS c FROM contacts")["c"] == 8
     assert pg_fetchone("SELECT COUNT(*) AS c FROM deals")["c"] == 7
-    assert pg_fetchone("SELECT COUNT(*) AS c FROM tasks")["c"] == 8
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM todos")["c"] == 8
     assert pg_fetchone("SELECT COUNT(*) AS c FROM activity_log")["c"] == 11
     assert pg_fetchone("SELECT COUNT(*) AS c FROM crm_chatter")["c"] == 4
     assert service.get_crm_meta()["sample_data_loaded"] is True
@@ -299,18 +321,18 @@ def test_demo_state_machine_over_http(pg_db):
     client = _client()
 
     status = client.get("/api/crm/demo-status").json()
-    # task_mode rides this payload (#70) so CrmLayout can pick the task surface
+    # todo_mode rides this payload (#70) so CrmLayout can pick the todo surface
     # without a second request. GTD since #102 — and because this database was built
     # by running every migration, this assertion IS the end-to-end check that #102's
     # backfill works: a freshly migrated install reports GTD over HTTP.
     assert status == {"empty": True, "sample_data_loaded": False, "show_onboarding": True,
-                      "ai_key_prompt_dismissed": False, "task_mode": "gtd"}
+                      "ai_key_prompt_dismissed": False, "todo_mode": "gtd"}
 
     seeded = client.post("/api/crm/load-sample-data").json()
     assert seeded["seeded"] is True
     after = client.get("/api/crm/demo-status").json()
     assert after == {"empty": False, "sample_data_loaded": True, "show_onboarding": False,
-                     "ai_key_prompt_dismissed": False, "task_mode": "gtd"}
+                     "ai_key_prompt_dismissed": False, "todo_mode": "gtd"}
 
     # guarded clear wipes example data and restarts identities
     cleared = client.post("/api/crm/demo-clear").json()
@@ -1489,29 +1511,29 @@ def test_get_contact_staleness_agrees_with_the_list(pg_db):
     assert stale[0]["last_contact_at"] is None
 
 
-def test_task_keyset_and_get_task_joins(pg_db):
+def test_todo_keyset_and_get_todo_joins(pg_db):
     from core.postgres import pg_fetchone
     from crm import service
 
-    cid = _mk_contact("Task Owner")
-    made = [service.create_task(f"T{i}", contact_id=cid)["id"] for i in range(5)]
+    cid = _mk_contact("Todo Owner")
+    made = [service.create_todo(f"T{i}", contact_id=cid)["id"] for i in range(5)]
 
     walked: list[int] = []
     cursor = None
     for _ in range(10):
-        page = service.list_tasks(sort="id", after_id=cursor, limit=2)
+        page = service.list_todos(sort="id", after_id=cursor, limit=2)
         if not page:
             break
         walked.extend(t["id"] for t in page)
         cursor = page[-1]["id"]
     assert walked == sorted(made)
 
-    # get_task is what every task WRITE returns, so it must carry the joined names the
-    # list renders — otherwise a saved task loses its contact label.
-    got = service.get_task(made[0])
-    assert got["contact_name"] == "Task Owner"
+    # get_todo is what every todo WRITE returns, so it must carry the joined names the
+    # list renders — otherwise a saved todo loses its contact label.
+    got = service.get_todo(made[0])
+    assert got["contact_name"] == "Todo Owner"
     assert got["deal_title"] is None
-    assert pg_fetchone("SELECT COUNT(*) AS c FROM tasks")["c"] == 5
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM todos")["c"] == 5
 
 
 def test_a_cursor_against_a_mutable_order_raises(pg_db):
@@ -1520,7 +1542,7 @@ def test_a_cursor_against_a_mutable_order_raises(pg_db):
     for call in (
         lambda: service.list_contacts(after_id=1, sort="updated_at"),
         lambda: service.list_companies(after_id=1, sort="name"),
-        lambda: service.list_tasks(after_id=1, sort="due"),
+        lambda: service.list_todos(after_id=1, sort="due"),
     ):
         with pytest.raises(ValueError):
             call()

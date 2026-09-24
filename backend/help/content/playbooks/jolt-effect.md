@@ -59,8 +59,8 @@ author: Matthew Dixon and Ted McKenna
 - **Separate the two kinds of stall on the record** — `crm_get_deal_health` shows *stuck in
   stage* and how long, and the notes say whether the buyer wants to move. Write which
   diagnosis you reached with `crm_add_note`, because the response depends entirely on it.
-- **Turn the recommendation into the next step** — one task (`crm_create_task`;
-  `todo_create` in GTD task mode) that says what you will recommend and on what call, so
+- **Turn the recommendation into the next step** — one todo (`crm_create_todo`;
+  `todo_create` in GTD todo mode) that says what you will recommend and on what call, so
   the deal stops carrying *no next step* and stops accumulating more exploration.
 - **Record the de-risking terms** — the smaller first phase, the checkpoint, the exit. Log
   it with `crm_log_activity` so what was promised is on the deal rather than in somebody's

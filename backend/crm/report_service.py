@@ -28,7 +28,7 @@ divergences, each forced by a real difference here:
    history could make the open-deal count go *down*. ``summary`` is therefore computed
    over the full tables and is exact regardless of every cap below it.
 
-4. **Custom fields and tasks ride the payload, batched.** The blueprint fetches two known
+4. **Custom fields and todos ride the payload, batched.** The blueprint fetches two known
    field keys for deals only; this issue's load-bearing requirement is EVERY field on
    EVERY expanded entity. Definitions are read once per entity type and values once per
    entity type (``field_service``'s existing batch reader), so an expanded row renders
@@ -37,10 +37,10 @@ divergences, each forced by a real difference here:
 
 **The payload ceiling, stated rather than implied.** At the documented maxima this response
 embeds 200 deals and 200 contacts, each with up to 25 activities, each deal with up to 25
-open tasks — so ~15,000 child rows plus the custom fields, and free text makes the byte size
+open todos — so ~15,000 child rows plus the custom fields, and free text makes the byte size
 unbounded even though the row counts are not. Realistic accounts are in the tens and the
 truncation flags say so when they are not, but a very large account WILL produce a large
-response. The upgrade path is to make the per-record activity and task lists lazy (fetched on
+response. The upgrade path is to make the per-record activity and todo lists lazy (fetched on
 expand, as the blueprint fetched custom fields) rather than to raise or lower the caps; that
 would leave only the two child lists in the initial payload.
 
@@ -81,14 +81,14 @@ from crm import attachment_service, field_service
 from crm.service import (
     LIVE_PREDICATE,
     LIVE_PREDICATE_D,
-    NOT_DROPPED_TASK,
+    NOT_DROPPED_TODO,
     OPEN_PREDICATE,
 )
 
 # Bound on BOTH child lists. Never SILENT: each read takes one row past the cap purely as
 # a probe, and the excess becomes an explicit `*_truncated` flag the page states in words.
 # It is 200 rather than the blueprint's 1000 because every child here carries its
-# activities, its custom fields and (for a deal) its tasks — so the cap bounds a payload,
+# activities, its custom fields and (for a deal) its todos — so the cap bounds a payload,
 # not just a row count, and 1000 children would permit a response nobody wants to receive.
 # The headline numbers in `summary` are computed over the FULL tables, so this cap changes
 # what you can scroll through, never what the company is reported to be worth.
@@ -100,8 +100,8 @@ ROLLUP_CHILD_CAP = 200
 # history. Same +1 probe, surfaced per record as `activities_truncated`.
 ACTIVITY_PER_RECORD_CAP = 25
 
-# Open tasks shown inside an expanded deal, same windowing and the same reason.
-TASKS_PER_DEAL_CAP = 25
+# Open todos shown inside an expanded deal, same windowing and the same reason.
+TODOS_PER_DEAL_CAP = 25
 
 # The timeline's page ceiling, mirrored by the route's `Query(le=...)`.
 TIMELINE_MAX_LIMIT = 200
@@ -163,7 +163,7 @@ def get_company_rollup(company_id: int, include_archived: bool = False) -> dict 
     Returns ``None`` when the company does not exist — that is the router's 404 seam.
 
     Every contact and every deal carries BOTH ``activities`` and ``activities_truncated``,
-    plus ``custom_fields``; a deal additionally carries ``tasks``/``tasks_truncated`` and
+    plus ``custom_fields``; a deal additionally carries ``todos``/``todos_truncated`` and
     ``last_activity_at``. None of those keys is ever absent: ``[]`` means "none", absent
     would read as "not loaded", and an expanded row must be able to tell the difference.
     """
@@ -281,22 +281,22 @@ def get_company_rollup(company_id: int, include_archived: bool = False) -> dict 
         else []
     )
 
-    # Open tasks per deal. `list_tasks`' own predicates are restated rather than reused
-    # because that reader takes no id list; NOT_DROPPED_TASK is imported so the "adding a
-    # task READER means adding NOT_DROPPED_TASK" rule has one definition. The live-deal
-    # half of LIVE_TASK_PREDICATE is already satisfied: `deal_ids` carries the archive
-    # policy, so an archived deal's tasks appear only when archived deals were asked for.
-    deal_tasks = (
+    # Open todos per deal. `list_todos`' own predicates are restated rather than reused
+    # because that reader takes no id list; NOT_DROPPED_TODO is imported so the "adding a
+    # todo READER means adding NOT_DROPPED_TODO" rule has one definition. The live-deal
+    # half of LIVE_TODO_PREDICATE is already satisfied: `deal_ids` carries the archive
+    # policy, so an archived deal's todos appear only when archived deals were asked for.
+    deal_todos = (
         pg_fetchall(
             f"""SELECT * FROM (
-                  SELECT tasks.*, row_number() OVER (
-                           PARTITION BY tasks.deal_id
-                           ORDER BY tasks.due_date ASC, tasks.id ASC) AS rn
-                    FROM tasks
-                   WHERE tasks.deal_id = ANY(%s)
-                     AND tasks.completed = 0 AND {NOT_DROPPED_TASK}
+                  SELECT todos.*, row_number() OVER (
+                           PARTITION BY todos.deal_id
+                           ORDER BY todos.due_date ASC, todos.id ASC) AS rn
+                    FROM todos
+                   WHERE todos.deal_id = ANY(%s)
+                     AND todos.completed = 0 AND {NOT_DROPPED_TODO}
                 ) w WHERE w.rn <= %s ORDER BY w.due_date ASC, w.id ASC""",
-            (deal_ids, TASKS_PER_DEAL_CAP + 1),
+            (deal_ids, TODOS_PER_DEAL_CAP + 1),
         )
         if deal_ids
         else []
@@ -308,7 +308,7 @@ def get_company_rollup(company_id: int, include_archived: bool = False) -> dict 
 
     by_deal = _group_by(deal_acts, "deal_id", ACTIVITY_PER_RECORD_CAP)
     by_contact = _group_by(contact_acts, "contact_id", ACTIVITY_PER_RECORD_CAP)
-    tasks_by_deal = _group_by(deal_tasks, "deal_id", TASKS_PER_DEAL_CAP)
+    todos_by_deal = _group_by(deal_todos, "deal_id", TODOS_PER_DEAL_CAP)
 
     for contact in contacts:
         contact["activities"], contact["activities_truncated"] = by_contact.get(
@@ -324,7 +324,7 @@ def get_company_rollup(company_id: int, include_archived: bool = False) -> dict 
         # last_activity_at is: the collapsed row says "last activity", and the notes are
         # in the timeline below.
         deal["last_activity_at"] = acts[0]["created_at"] if acts else None
-        deal["tasks"], deal["tasks_truncated"] = tasks_by_deal.get(deal["id"], ([], False))
+        deal["todos"], deal["todos_truncated"] = todos_by_deal.get(deal["id"], ([], False))
         deal["custom_fields"] = deal_fields.get(deal["id"], [])
 
     return {

@@ -21,7 +21,7 @@ Read-only: nothing on the page writes.
   Note the "Active contacts" figure counts only active ones, so it is deliberately smaller
   than the list.
 - **Every linked deal**, each expandable in place to show its activity, custom fields and
-  open tasks.
+  open todos.
 - **A merged timeline** of notes and activity in one feed.
 
 ## Archived is opt-in
@@ -51,7 +51,7 @@ serving a prefix.
 
 - A **Today panel**: one ranked list of what needs you now — starred todos, hot deals that
   have gone quiet, overdue items, and things due today. Plain database work, no AI.
-- Four always-present counts: contacts, companies, pipeline value and overdue tasks.
+- Four always-present counts: contacts, companies, pipeline value and overdue todos.
 - A snapshot: win rate, average days to close, average won deal size, open deals.
 - **Weekly touches** per person — how many of their open deals were touched inside a calendar
   week — with a drill-down page per person. A touch is an edit, a logged activity or a live

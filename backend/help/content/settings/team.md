@@ -9,7 +9,7 @@ admin: true
 Exactly two: **admin** and **member**.
 
 The split governs *install configuration*, not records. An admin can change how the install
-is set up — branding, team, custom fields, integrations, task mode, the assistant's
+is set up — branding, team, custom fields, integrations, todo mode, the assistant's
 personality. A member can do everything else, including every CRM record.
 
 ## What an admin can do

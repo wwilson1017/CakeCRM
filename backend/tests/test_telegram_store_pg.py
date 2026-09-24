@@ -321,11 +321,11 @@ def _pending_batch(history, store, link, msg_id):
     conv = store.get_or_create_conversation(link)
     history.save_message(
         conv, msg_id, "assistant", "doing two things", tool_calls=[
-            {"tool": "crm_create_task", "tool_use_id": "tu1", "args": {}},
+            {"tool": "crm_create_todo", "tool_use_id": "tu1", "args": {}},
             {"tool": "crm_update_deal", "tool_use_id": "tu2", "args": {}},
         ],
     )
-    history.merge_tool_result(msg_id, "tu1", "crm_create_task", history.PENDING_RESULT_JSON)
+    history.merge_tool_result(msg_id, "tu1", "crm_create_todo", history.PENDING_RESULT_JSON)
     history.merge_tool_result(msg_id, "tu2", "crm_update_deal", history.PENDING_RESULT_JSON)
     store.set_pending_msg(link["id"], msg_id)
     return conv
@@ -342,7 +342,7 @@ def test_batch_gate_waits_then_continues(pg_db, seats):
     assert history.list_pending_tool_uses(conv, "msg-batch-1") == ["tu1", "tu2"]
 
     # Resolve the first — batch NOT done yet.
-    history.merge_tool_result("msg-batch-1", "tu1", "crm_create_task", '{"ok": true}')
+    history.merge_tool_result("msg-batch-1", "tu1", "crm_create_todo", '{"ok": true}')
     assert store.try_consume_batch(link["id"], "msg-batch-1") is False
 
     # Resolve the second — batch done → continue exactly once, pending cleared.
@@ -365,7 +365,7 @@ def test_two_seats_batches_are_independent(pg_db, seats):
     _pending_batch(history, store, b, "msg-b")
 
     # Seat B settles while seat A's batch is still wide open.
-    history.merge_tool_result("msg-b", "tu1", "crm_create_task", '{"ok": true}')
+    history.merge_tool_result("msg-b", "tu1", "crm_create_todo", '{"ok": true}')
     history.merge_tool_result("msg-b", "tu2", "crm_update_deal", '{"ok": true}')
     assert store.try_consume_batch(b["id"], "msg-b") is True
     assert store.get_link(seats["admin"]["id"])["pending_msg_id"] == "msg-a"

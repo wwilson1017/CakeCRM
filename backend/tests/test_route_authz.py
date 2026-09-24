@@ -35,7 +35,7 @@ PUBLIC_ROUTES = {
     # todo web app are meant to be openable on a phone with no login. Each handler
     # 404s the surface unless the install has explicitly configured it and matches
     # the URL token, and rate-limits by IP — tests/test_todo_public.py pins all of
-    # that. Nothing here reads or writes a CRM record other than a task.
+    # that. Nothing here reads or writes a CRM record other than a todo.
     ("/capture", "GET"),                                # write-only capture page
     ("/capture/{token}", "GET"),
     ("/capture/manifest.webmanifest", "GET"),           # PWA manifests, static
@@ -102,12 +102,12 @@ ADMIN_ONLY = {
     ("/api/crm/clear-all", "POST"),
     ("/api/crm/deals/touch-count/backfill", "POST"),
     ("/api/crm/scores/backfill", "POST"),
-    # Task mode is install-wide (it lives on the crm_meta singleton, so one member
-    # flipping it changes everyone's task experience) — same rule as assistant identity.
+    # Todo mode is install-wide (it lives on the crm_meta singleton, so one member
+    # flipping it changes everyone's todo experience) — same rule as assistant identity.
     # The no-login surfaces are stronger still: GET returns the tokens themselves, and
     # POST can mint an unauthenticated read+write link to the whole todo store whose
     # lifetime is NOT tied to the account that created it. Both admin-only since #102.
-    ("/api/crm/task-mode", "POST"),
+    ("/api/crm/todo-mode", "POST"),
     ("/api/crm/todo-surfaces", "GET"),
     ("/api/crm/todo-surfaces", "POST"),
     # Custom-field SCHEMA (the install's data model). Field VALUES stay member-writable

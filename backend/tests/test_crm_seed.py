@@ -20,7 +20,7 @@ def test_seed_inserts_all_tables_and_setvals_when_empty():
     conn = FakeConn(fetchone_results=[(0,)])  # all-tables count == 0
     assert seed_demo_data(conn) is True
     stmts = [sql for sql, _ in conn.executed]
-    for table in ("companies", "contacts", "deals", "tasks", "activity_log"):
+    for table in ("companies", "contacts", "deals", "todos", "activity_log"):
         assert any(f"INSERT INTO {table}" in s for s in stmts), table
         assert any(f"pg_get_serial_sequence('{table}', 'id')" in s for s in stmts), table
     # placeholders are Postgres %s, never SQLite ?

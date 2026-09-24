@@ -134,12 +134,12 @@ def maybe_run_heartbeat_turn(force: bool = False) -> dict:
             "result": result.text[:500], "tools": len(result.tool_log)}
 
 
-def _task_mode() -> str:
-    """Current task mode; fail-safe to the product default ('gtd' since #102) so a read
+def _todo_mode() -> str:
+    """Current todo mode; fail-safe to the product default ('gtd' since #102) so a read
     error never breaks a tick, and never disagrees with the other three readers."""
     try:
-        from crm.service import get_task_mode
-        return get_task_mode()
+        from crm.service import get_todo_mode
+        return get_todo_mode()
     except Exception:
         return "gtd"
 
@@ -148,13 +148,13 @@ def _heartbeat_prompt() -> tuple[str, str]:
     # The brand is a constant, so this reads it directly rather than paying a DB
     # round-trip per tick to fetch a dict whose only used key is now fixed (#71).
     name = identity.NAME
-    # The task-listing tool swaps with the task mode (#70) — naming crm_list_tasks in
+    # The todo-listing tool swaps with the todo mode (#70) — naming crm_list_todos in
     # GTD mode would point the turn at a tool that is no longer advertised.
-    task_tool = "todo_list" if _task_mode() == "gtd" else "crm_list_tasks"
+    todo_tool = "todo_list" if _todo_mode() == "gtd" else "crm_list_todos"
     static = (
         f"You are {name}, running a periodic background heartbeat for this CRM. Use "
         "your READ tools to check for anything the user should know about — overdue "
-        f"tasks ({task_tool}), deals going cold (crm_get_stale_deals), and contacts "
+        f"todos ({todo_tool}), deals going cold (crm_get_stale_deals), and contacts "
         "nobody has followed up with (crm_get_contact_staleness). If, and ONLY if, "
         "something genuinely needs the user's attention, call notify_user ONCE with a "
         "short, actionable summary. You cannot modify CRM records. If nothing needs "

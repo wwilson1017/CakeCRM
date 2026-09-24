@@ -1,5 +1,5 @@
 """
-CakeCRM — CRM CRUD + analytics (contacts, deals, tasks, activity, dashboard).
+CakeCRM — CRM CRUD + analytics (contacts, deals, todos, activity, dashboard).
 
 Ported from chatty's SQLite ``crm_lite/client.py`` and translated to Postgres:
 ``%s`` placeholders, ``INSERT ... RETURNING id`` then re-select to hydrate,
@@ -49,7 +49,7 @@ DEAL_STAGES = ["lead", "qualified", "proposal", "negotiation", "won", "lost"]
 CLOSED_STAGES = ("won", "lost")
 OPEN_STAGES = tuple(s for s in DEAL_STAGES if s not in CLOSED_STAGES)
 CONTACT_STATUSES = ["active", "inactive", "archived"]
-TASK_PRIORITIES = ["low", "medium", "high"]
+TODO_PRIORITIES = ["low", "medium", "high"]
 COMPANY_STATUSES = ["active", "archived"]
 
 # Deal temperature (issue #125) — the rep's own read on a deal, and an input to #18's lead
@@ -117,26 +117,26 @@ def normalize_deal_temperature(value) -> str | None:
 LIVE_PREDICATE = "archived_at IS NULL"
 LIVE_PREDICATE_D = "d.archived_at IS NULL"
 
-# A task belongs to a live deal, or to no deal at all. Archiving is the user's "stop
-# nagging me about this" gesture and the heartbeat reads the task surfaces, so EVERY
-# task reader applies this rule — the dashboard's overdue/pending counts and the
-# contact detail page use this constant; list_tasks uses the equivalent aliased form
+# A todo belongs to a live deal, or to no deal at all. Archiving is the user's "stop
+# nagging me about this" gesture and the heartbeat reads the todo surfaces, so EVERY
+# todo reader applies this rule — the dashboard's overdue/pending counts and the
+# contact detail page use this constant; list_todos uses the equivalent aliased form
 # (`t.deal_id IS NULL OR d.archived_at IS NULL`) since it already joins deals. Any new
-# task reader must carry one of the two. Standalone tasks (deal_id NULL) are unaffected.
-LIVE_TASK_PREDICATE = (
-    "(tasks.deal_id IS NULL OR EXISTS (SELECT 1 FROM deals ld "
-    "WHERE ld.id = tasks.deal_id AND ld.archived_at IS NULL))"
+# todo reader must carry one of the two. Standalone todos (deal_id NULL) are unaffected.
+LIVE_TODO_PREDICATE = (
+    "(todos.deal_id IS NULL OR EXISTS (SELECT 1 FROM deals ld "
+    "WHERE ld.id = todos.deal_id AND ld.archived_at IS NULL))"
 )
 
 # GTD's `dropped` status (#70) is a soft delete: the row is NOT completed, but it is
 # not open work either. Normal mode renders two buckets from `completed`, so without
-# this a dropped todo would reappear as a pending task the moment the user switches
-# back — and the heartbeat would nag about it. Swept exactly like LIVE_TASK_PREDICATE
-# above: every "open task" query carries one of these two forms. Queries that count
-# ALL tasks (the is-the-CRM-empty checks) deliberately do NOT — a dropped row is
+# this a dropped todo would reappear as a pending todo the moment the user switches
+# back — and the heartbeat would nag about it. Swept exactly like LIVE_TODO_PREDICATE
+# above: every "open todo" query carries one of these two forms. Queries that count
+# ALL todos (the is-the-CRM-empty checks) deliberately do NOT — a dropped row is
 # still data.
-NOT_DROPPED_TASK = "tasks.status != 'dropped'"
-NOT_DROPPED_TASK_T = "t.status != 'dropped'"
+NOT_DROPPED_TODO = "todos.status != 'dropped'"
+NOT_DROPPED_TODO_T = "t.status != 'dropped'"
 
 # Contact list ORDER BY fragments (allowlisted — the param is NEVER interpolated). Every
 # fragment ends with `ct.id DESC` so limit/offset pagination is deterministic (no dupes/
@@ -169,11 +169,11 @@ def _contact_order_by(sort: str) -> str:
     return _CONTACT_SORTS.get(sort, _CONTACT_SORTS["updated_at"])
 
 
-# Task ORDER BY fragments — allow-listed, never interpolated from caller input.
+# Todo ORDER BY fragments — allow-listed, never interpolated from caller input.
 # "due" is the historical order plus an id tie-breaker, so a LIMIT window is deterministic
 # where before it was arbitrary among ties. "id" is the immutable assembly key (#77 — see
 # _CONTACT_SORTS["id"]); it is its own tie-breaker.
-_TASK_SORTS = {
+_TODO_SORTS = {
     "due": "t.completed ASC, t.due_date ASC, t.id ASC",
     "id": "t.id ASC",
 }
@@ -540,7 +540,7 @@ def update_contact(contact_id: int, **fields) -> dict | None:
 
 
 def delete_contact(contact_id: int) -> bool:
-    """Delete a contact and its dependent activity/tasks in one transaction.
+    """Delete a contact and its dependent activity/todos in one transaction.
 
     FKs are ON DELETE SET NULL, so the explicit cascade (matching chatty)
     preserves the delete-the-rows behavior rather than orphaning them.
@@ -563,7 +563,7 @@ def delete_contact(contact_id: int) -> bool:
         cur.execute("SELECT DISTINCT deal_id FROM activity_log WHERE contact_id = %s AND deal_id IS NOT NULL", (contact_id,))
         affected_deal_ids |= {r[0] for r in cur.fetchall()}
         cur.execute("DELETE FROM activity_log WHERE contact_id = %s", (contact_id,))
-        cur.execute("DELETE FROM tasks WHERE contact_id = %s", (contact_id,))
+        cur.execute("DELETE FROM todos WHERE contact_id = %s", (contact_id,))
         # crm_chatter, crm_field_values and crm_field_provenance are polymorphic (no
         # FK), so their rows are dropped explicitly — otherwise a reused contact SERIAL
         # id would inherit this contact's notes / custom-field values / AI badges.
@@ -594,7 +594,7 @@ def delete_contact(contact_id: int) -> bool:
 
 
 def get_contact_detail(contact_id: int) -> dict | None:
-    """Full contact profile with associated deals, tasks, and recent activity.
+    """Full contact profile with associated deals, todos, and recent activity.
 
     The company_name join is inlined here (not in get_contact) so the linked
     company can be shown/linked on the detail page without changing get_contact's
@@ -614,7 +614,7 @@ def get_contact_detail(contact_id: int) -> dict | None:
     # Every rollup below ends on `id` so its order is TOTAL (issue #58). Ties are the
     # norm, not the exception, in all three: timestamps default to `now()` — which is
     # TRANSACTION start, so rows written together are byte-identical, and an import or
-    # `seed_data` writes a whole batch that way — while the task sort's leading keys are
+    # `seed_data` writes a whole batch that way — while the todo sort's leading keys are
     # a 0/1 flag and a `due_date` that is very often the empty string. Under the LIMITs,
     # an untotalled order lets a row show up twice or not at all between two reads.
     deals = pg_fetchall(
@@ -622,9 +622,9 @@ def get_contact_detail(contact_id: int) -> dict | None:
         "ORDER BY updated_at DESC, id DESC",
         (contact_id,),
     )
-    tasks = pg_fetchall(
-        f"SELECT * FROM tasks WHERE contact_id = %s AND {LIVE_TASK_PREDICATE} "
-        f"AND {NOT_DROPPED_TASK} ORDER BY completed ASC, due_date ASC, id ASC LIMIT 20",
+    todos = pg_fetchall(
+        f"SELECT * FROM todos WHERE contact_id = %s AND {LIVE_TODO_PREDICATE} "
+        f"AND {NOT_DROPPED_TODO} ORDER BY completed ASC, due_date ASC, id ASC LIMIT 20",
         (contact_id,),
     )
     activity = pg_fetchall(
@@ -632,7 +632,7 @@ def get_contact_detail(contact_id: int) -> dict | None:
         "ORDER BY created_at DESC, id DESC LIMIT 20",
         (contact_id,),
     )
-    return {**contact, "deals": deals, "tasks": tasks, "activity": activity}
+    return {**contact, "deals": deals, "todos": todos, "activity": activity}
 
 
 # ── Companies ─────────────────────────────────────────────────────────────────
@@ -1084,7 +1084,7 @@ def get_pipeline(
     #     lateral-per-stage rewrite, which is a real perf project, not this issue.
     #
     # There is deliberately NO owner_id parameter here, unlike list_contacts/
-    # list_companies/list_tasks (issue #60). The board is fetched in keyset pages since
+    # list_companies/list_todos (issue #60). The board is fetched in keyset pages since
     # #59, but it still assembles EVERY live deal client-side and every other facet
     # (#21: keyword, stage, value, close date, last activity) filters client-side over
     # that complete array — a server-side facet would be a second filtering model. Owner
@@ -1856,9 +1856,9 @@ def merge_deals(target_deal_id: int, source_deal_id: int) -> dict:
     (the copied rows on the target are then the only cleanup).
 
     What moves vs. what is copied:
-      * ``activity_log`` + ``tasks`` are **repointed** — a dated interaction and an
+      * ``activity_log`` + ``todos`` are **repointed** — a dated interaction and an
         open follow-up belong to exactly one deal, and the surviving deal is the one
-        that still has work to do. (Tasks would additionally drop out of list_tasks
+        that still has work to do. (Todos would additionally drop out of list_todos
         with the archived source; activity would not, since history is never swept.)
       * notes are **copied** (annotated with the source id), because the source keeps
         its own thread for the restore case.
@@ -1905,7 +1905,7 @@ def merge_deals(target_deal_id: int, source_deal_id: int) -> dict:
             (target_deal_id, source_deal_id),
         )
         cur.execute(
-            "UPDATE tasks SET deal_id = %s, updated_at = %s WHERE deal_id = %s",
+            "UPDATE todos SET deal_id = %s, updated_at = %s WHERE deal_id = %s",
             (target_deal_id, now, source_deal_id),
         )
         # left(...) keeps a copied note inside chatter_service.MAX_MESSAGE_LEN so the
@@ -1956,7 +1956,7 @@ def merge_deals(target_deal_id: int, source_deal_id: int) -> dict:
     # The target just absorbed the source's evidence, so its touch count is stale —
     # force_write because the merged-in notes can move the watermark either way.
     touch_count_service.schedule_recompute(target_deal_id, force_write=True)
-    # #18: activity/tasks were repointed and the source archived — both deals'
+    # #18: activity/todos were repointed and the source archived — both deals'
     # interaction factors and both linked contacts' deal-linkage aggregates changed.
     scoring_service.score_on_event(
         deal_ids=(target_deal_id, source_deal_id),
@@ -1965,9 +1965,9 @@ def merge_deals(target_deal_id: int, source_deal_id: int) -> dict:
     return get_deal(target_deal_id)
 
 
-# ── Tasks ─────────────────────────────────────────────────────────────────────
+# ── Todos ─────────────────────────────────────────────────────────────────────
 
-def create_task(
+def create_todo(
     title: str, description: str = "", due_date: str = "",
     contact_id: int | None = None, deal_id: int | None = None,
     priority: str = "medium", owner_id: int | None = None,
@@ -1981,18 +1981,18 @@ def create_task(
     project_id: int | None = None,
     source: str = "ui",
 ) -> dict:
-    """Create a task. The GTD keyword-only fields (#70) default to the normal-mode
+    """Create a todo. The GTD keyword-only fields (#70) default to the normal-mode
     shape, so every existing caller is unchanged.
 
-    `status` defaults to 'next_action', NOT 'inbox': a task created from the CRM form
-    or by crm_create_task is already clarified work. Only a GTD *capture* means "I
+    `status` defaults to 'next_action', NOT 'inbox': a todo created from the CRM form
+    or by crm_create_todo is already clarified work. Only a GTD *capture* means "I
     haven't thought about this yet", and those pass status='inbox' explicitly.
 
     `completed` is derived from `status` in the INSERT rather than taken as a
     parameter — the migration's coherence CHECK makes any other arrangement a
     constraint violation.
     """
-    if priority not in TASK_PRIORITIES:
+    if priority not in TODO_PRIORITIES:
         priority = "medium"
     gtd_common.validate_status(status)
     if source not in gtd_common.TODO_SOURCES:
@@ -2000,7 +2000,7 @@ def create_task(
             f"Invalid source '{source}'. Valid: {', '.join(gtd_common.TODO_SOURCES)}"
         )
     row = pg_fetchone(
-        """INSERT INTO tasks (title, description, due_date, contact_id, deal_id, priority,
+        """INSERT INTO todos (title, description, due_date, contact_id, deal_id, priority,
                               owner_id, status, star, context, tags, repeat, auto_star_on_due,
                               project_id, source, completed, completed_at)
            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s,
@@ -2025,25 +2025,25 @@ def create_task(
             status,
         ),
     )
-    return get_task(row["id"])
+    return get_todo(row["id"])
 
 
-def get_task(task_id: int) -> dict | None:
-    # Joined exactly like list_tasks, because create_task / update_task / complete_task all
-    # return this row and the Tasks list patches itself from those bodies (#77). Without the
-    # joins a saved task would lose its contact/deal label in the list; worse, re-linking a
-    # task to a different contact would leave the OLD name showing.
+def get_todo(todo_id: int) -> dict | None:
+    # Joined exactly like list_todos, because create_todo / update_todo / complete_todo all
+    # return this row and the Todos list patches itself from those bodies (#77). Without the
+    # joins a saved todo would lose its contact/deal label in the list; worse, re-linking a
+    # todo to a different contact would leave the OLD name showing.
     return pg_fetchone(
         """SELECT t.*, c.name AS contact_name, d.title AS deal_title
-           FROM tasks t
+           FROM todos t
            LEFT JOIN contacts c ON t.contact_id = c.id
            LEFT JOIN deals d ON t.deal_id = d.id
            WHERE t.id = %s""",
-        (task_id,),
+        (todo_id,),
     )
 
 
-def list_tasks(
+def list_todos(
     contact_id: int | None = None, deal_id: int | None = None,
     completed: bool | None = None, due_before: str | None = None,
     priority: str | None = None, limit: int = 50,
@@ -2053,7 +2053,7 @@ def list_tasks(
     _check_assembly_cursor(after_id, sort)
     conditions = []
     params: list = []
-    # On a task, owner_id reads as "assigned to" (issue #60).
+    # On a todo, owner_id reads as "assigned to" (issue #60).
     owner_sql = owner_condition("t.owner_id", owner_id, params)
     if owner_sql:
         conditions.append(owner_sql)
@@ -2072,12 +2072,12 @@ def list_tasks(
     if priority:
         conditions.append("t.priority = %s")
         params.append(priority)
-    # A task on an archived deal follows it out of view: archiving is the user's "stop
+    # A todo on an archived deal follows it out of view: archiving is the user's "stop
     # bothering me about this" gesture, and the heartbeat is told to nag about overdue
-    # tasks. Standalone tasks (deal_id NULL) are untouched. Activity is deliberately NOT
+    # todos. Standalone todos (deal_id NULL) are untouched. Activity is deliberately NOT
     # swept the same way — see get_activity_log.
-    conditions.append(f"(t.deal_id IS NULL OR {LIVE_PREDICATE_D})")  # see LIVE_TASK_PREDICATE
-    conditions.append(NOT_DROPPED_TASK_T)  # see NOT_DROPPED_TASK
+    conditions.append(f"(t.deal_id IS NULL OR {LIVE_PREDICATE_D})")  # see LIVE_TODO_PREDICATE
+    conditions.append(NOT_DROPPED_TODO_T)  # see NOT_DROPPED_TODO
     # Window, not filter — see list_contacts. This list has no COUNT to disagree with.
     if after_id is not None:
         conditions.append("t.id > %s")
@@ -2086,15 +2086,15 @@ def list_tasks(
     params.append(limit)
     return pg_fetchall(
         f"""SELECT t.*, c.name AS contact_name, d.title AS deal_title
-            FROM tasks t
+            FROM todos t
             LEFT JOIN contacts c ON t.contact_id = c.id
             LEFT JOIN deals d ON t.deal_id = d.id
-            {where} ORDER BY {_TASK_SORTS.get(sort, _TASK_SORTS["due"])} LIMIT %s""",
+            {where} ORDER BY {_TODO_SORTS.get(sort, _TODO_SORTS["due"])} LIMIT %s""",
         params,
     )
 
 
-def _resolve_task_project_id_cur(cur, name: str) -> int:
+def _resolve_todo_project_id_cur(cur, name: str) -> int:
     """Id of the GTD project named `name`, creating it (active) if missing.
 
     ON CONFLICT DO NOTHING + re-SELECT so two concurrent first uses of the same new
@@ -2102,14 +2102,14 @@ def _resolve_task_project_id_cur(cur, name: str) -> int:
     case-insensitive, so `#Groceries` and `#groceries` are one project.
     """
     cur.execute(
-        "INSERT INTO task_projects (name) VALUES (%s) ON CONFLICT (lower(name)) DO NOTHING",
+        "INSERT INTO todo_projects (name) VALUES (%s) ON CONFLICT (lower(name)) DO NOTHING",
         (name,),
     )
-    cur.execute("SELECT id FROM task_projects WHERE lower(name) = lower(%s)", (name,))
+    cur.execute("SELECT id FROM todo_projects WHERE lower(name) = lower(%s)", (name,))
     return cur.fetchone()[0]
 
 
-def _check_task_project_id_cur(cur, project_id) -> int | None:
+def _check_todo_project_id_cur(cur, project_id) -> int | None:
     if project_id in (None, "", 0):
         return None
     try:
@@ -2118,16 +2118,16 @@ def _check_task_project_id_cur(cur, project_id) -> int | None:
         pid = int(project_id)
     except (TypeError, ValueError):
         raise gtd_common.ValidationError(f"project_id must be an integer, got {project_id!r}")
-    cur.execute("SELECT id FROM task_projects WHERE id = %s", (pid,))
+    cur.execute("SELECT id FROM todo_projects WHERE id = %s", (pid,))
     if not cur.fetchone():
         raise gtd_common.ValidationError(f"Project id not found: {pid}")
     return pid
 
 
-# Fields a task update may set. The GTD half (#70) is inert in normal mode — the UI
+# Fields a todo update may set. The GTD half (#70) is inert in normal mode — the UI
 # never sends those keys — but both modes write through this ONE allow-list so the
 # two surfaces can never drift into different validation rules.
-_TASK_UPDATE_FIELDS = {
+_TODO_UPDATE_FIELDS = {
     "title", "description", "due_date", "contact_id", "deal_id", "priority", "completed",
     "owner_id",
     "status", "star", "context", "tags", "repeat", "auto_star_on_due", "project_id",
@@ -2135,12 +2135,12 @@ _TASK_UPDATE_FIELDS = {
 }
 
 
-def _apply_task_update_cur(cur, task_id: int, fields: dict) -> bool:
-    """Apply a validated field update to one task inside the caller's transaction.
+def _apply_todo_update_cur(cur, todo_id: int, fields: dict) -> bool:
+    """Apply a validated field update to one todo inside the caller's transaction.
 
-    THE single write path for `tasks.completed` / `tasks.status`. Locks the row
+    THE single write path for `todos.completed` / `todos.status`. Locks the row
     (FOR UPDATE) so a completion transition is detected exactly once, then spawns the
-    next occurrence of a repeating task on that transition. Returns False if the task
+    next occurrence of a repeating todo on that transition. Returns False if the todo
     does not exist.
 
     `completed` and `status` are two views of one fact (the migration enforces it with
@@ -2148,7 +2148,7 @@ def _apply_task_update_cur(cur, task_id: int, fields: dict) -> bool:
     status='done'; `completed=0` on a done row ⇒ back to 'next_action'. A caller may
     send either spelling — normal mode sends `completed`, GTD sends `status`.
     """
-    cur.execute("SELECT status FROM tasks WHERE id = %s FOR UPDATE", (task_id,))
+    cur.execute("SELECT status FROM todos WHERE id = %s FOR UPDATE", (todo_id,))
     row = cur.fetchone()
     if not row:
         return False
@@ -2164,7 +2164,7 @@ def _apply_task_update_cur(cur, task_id: int, fields: dict) -> bool:
             if completed:
                 fields["status"] = "done"
             elif prior_status == "done":
-                # Un-completing returns the task to actionable. 'next_action' rather
+                # Un-completing returns the todo to actionable. 'next_action' rather
                 # than 'inbox': it was real work before it was finished.
                 fields["status"] = "next_action"
 
@@ -2193,14 +2193,14 @@ def _apply_task_update_cur(cur, task_id: int, fields: dict) -> bool:
     if "priority" in fields:
         priority = fields["priority"]
         sets.append("priority = %s")
-        params.append(priority if priority in TASK_PRIORITIES else "medium")
+        params.append(priority if priority in TODO_PRIORITIES else "medium")
     if "project_id" in fields:
         sets.append("project_id = %s")
-        params.append(_check_task_project_id_cur(cur, fields["project_id"]))
+        params.append(_check_todo_project_id_cur(cur, fields["project_id"]))
     elif "project" in fields:
         name = gtd_common.validate_short(fields["project"], "project")
         sets.append("project_id = %s")
-        params.append(_resolve_task_project_id_cur(cur, name) if name else None)
+        params.append(_resolve_todo_project_id_cur(cur, name) if name else None)
     if "context" in fields:
         sets.append("context = %s")
         params.append(gtd_common.validate_short(fields["context"], "context"))
@@ -2238,19 +2238,19 @@ def _apply_task_update_cur(cur, task_id: int, fields: dict) -> bool:
     sets.append("updated_at = %s")
     params.append(_now())
     cur.execute(
-        f"UPDATE tasks SET {', '.join(sets)} WHERE id = %s RETURNING *",
-        (*params, task_id),
+        f"UPDATE todos SET {', '.join(sets)} WHERE id = %s RETURNING *",
+        (*params, todo_id),
     )
     # row_to_dict reads cur.description, so the row MUST be converted before the next
     # execute() on this cursor — the spawn below issues one.
     updated = row_to_dict(cur, cur.fetchone())
     if just_completed:
-        _spawn_next_task_occurrence_cur(cur, updated, prior_status)
+        _spawn_next_todo_occurrence_cur(cur, updated, prior_status)
     return True
 
 
-def _spawn_next_task_occurrence_cur(cur, task: dict, prior_status: str) -> None:
-    """Completing a repeating task creates its next occurrence: same fields, due date
+def _spawn_next_todo_occurrence_cur(cur, todo: dict, prior_status: str) -> None:
+    """Completing a repeating todo creates its next occurrence: same fields, due date
     advanced, star cleared (today's priority doesn't carry over).
 
     Reads the POST-update row, so edits saved together with the completion carry — in
@@ -2261,55 +2261,55 @@ def _spawn_next_task_occurrence_cur(cur, task: dict, prior_status: str) -> None:
     late) it comes back already starred instead of waiting to be re-starred by hand.
     Two or more intervals late re-anchors past today and does not star.
     """
-    if not task.get("repeat"):
+    if not todo.get("repeat"):
         return
-    # A repeating task that was dropped-then-completed has no sensible prior state to
+    # A repeating todo that was dropped-then-completed has no sensible prior state to
     # return to; anything else keeps the status it was worked in.
     status = prior_status if prior_status not in gtd_common.FINISHED_STATUSES else "next_action"
-    tags = task.get("tags")
-    auto_star = bool(task.get("auto_star_on_due"))
+    tags = todo.get("tags")
+    auto_star = bool(todo.get("auto_star_on_due"))
     # ONE clock read, shared with the comparison below: two reads could straddle
     # midnight and disagree about whether the spawn is due today.
     today = today_local()
-    spawn_due = gtd_common.next_due(task["repeat"], task.get("due_date"), today=today)
+    spawn_due = gtd_common.next_due(todo["repeat"], todo.get("due_date"), today=today)
     cur.execute(
-        """INSERT INTO tasks (title, description, due_date, contact_id, deal_id, priority,
+        """INSERT INTO todos (title, description, due_date, contact_id, deal_id, priority,
                               owner_id, status, star, context, tags, repeat, auto_star_on_due,
                               project_id, source, completed)
            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, 0)""",
         (
-            task["title"], task["description"], spawn_due,
-            task["contact_id"], task["deal_id"], task["priority"],
-            # The assignee carries to the next occurrence (issue #60): a repeating task
+            todo["title"], todo["description"], spawn_due,
+            todo["contact_id"], todo["deal_id"], todo["priority"],
+            # The assignee carries to the next occurrence (issue #60): a repeating todo
             # someone owns must not come back unassigned.
-            task["owner_id"],
+            todo["owner_id"],
             status,
             auto_star and spawn_due == today.isoformat(),
-            task["context"],
+            todo["context"],
             tags if isinstance(tags, str) else json.dumps(tags or []),
-            task["repeat"], auto_star, task["project_id"], task["source"],
+            todo["repeat"], auto_star, todo["project_id"], todo["source"],
         ),
     )
 
 
-def complete_task(task_id: int) -> dict | None:
-    """Mark a task done. A thin adapter over the shared transition, so completing from
-    the plain normal-mode checkbox spawns a repeating task's next occurrence too."""
-    return update_task(task_id, status="done")
+def complete_todo(todo_id: int) -> dict | None:
+    """Mark a todo done. A thin adapter over the shared transition, so completing from
+    the plain normal-mode checkbox spawns a repeating todo's next occurrence too."""
+    return update_todo(todo_id, status="done")
 
 
-def update_task(task_id: int, **fields) -> dict | None:
-    filtered = {k: v for k, v in fields.items() if k in _TASK_UPDATE_FIELDS}
+def update_todo(todo_id: int, **fields) -> dict | None:
+    filtered = {k: v for k, v in fields.items() if k in _TODO_UPDATE_FIELDS}
     if not filtered:
-        return get_task(task_id)
+        return get_todo(todo_id)
     with get_connection() as conn:
         cur = conn.cursor()
-        found = _apply_task_update_cur(cur, task_id, filtered)
-    return get_task(task_id) if found else None
+        found = _apply_todo_update_cur(cur, todo_id, filtered)
+    return get_todo(todo_id) if found else None
 
 
-def delete_task(task_id: int) -> bool:
-    return pg_execute("DELETE FROM tasks WHERE id = %s", (task_id,)) > 0
+def delete_todo(todo_id: int) -> bool:
+    return pg_execute("DELETE FROM todos WHERE id = %s", (todo_id,)) > 0
 
 
 # ── Activity log ──────────────────────────────────────────────────────────────
@@ -2343,7 +2343,7 @@ def log_activity(activity: str, note: str = "", contact_id: int | None = None,
 def get_activity_log(contact_id: int | None = None, deal_id: int | None = None, limit: int = 20) -> list[dict]:
     """Activity rows, optionally scoped to a contact or deal.
 
-    Archived deals are deliberately NOT filtered here, unlike list_tasks: an activity
+    Archived deals are deliberately NOT filtered here, unlike list_todos: an activity
     row is the record of something that actually happened, not an outstanding work
     item, and reviewing an archived deal's history is exactly what you need before
     deciding to restore it. Passing deal_id for an archived deal must keep working.
@@ -2420,8 +2420,8 @@ def get_dashboard_stats() -> dict:
         r["total_value"] for r in pipeline_by_stage if r["stage"] not in ("won", "lost")
     )
 
-    # Overdue = incomplete tasks whose due date is strictly before TODAY. Date-only
-    # TEXT comparison: matches the Tasks page's client-side rule (a task due today is
+    # Overdue = incomplete todos whose due date is strictly before TODAY. Date-only
+    # TEXT comparison: matches the Todos page's client-side rule (a todo due today is
     # NOT overdue) and can never cast-error on a malformed row (unlike ::date).
     #
     # TODAY is the CONFIGURED-TIMEZONE day (#130), not the UTC one it used to be. A due
@@ -2430,17 +2430,17 @@ def get_dashboard_stats() -> dict:
     # the Today panel, which reads the local day. One screen cannot hold two todays.
     today = gtd_common.today_local_str()
     overdue_row = pg_fetchone(
-        "SELECT COUNT(*) AS cnt FROM tasks WHERE completed = 0 AND due_date != '' "
-        f"AND due_date < %s AND {LIVE_TASK_PREDICATE} AND {NOT_DROPPED_TASK}",
+        "SELECT COUNT(*) AS cnt FROM todos WHERE completed = 0 AND due_date != '' "
+        f"AND due_date < %s AND {LIVE_TODO_PREDICATE} AND {NOT_DROPPED_TODO}",
         (today,),
     )
-    overdue_tasks = overdue_row["cnt"] if overdue_row else 0
+    overdue_todos = overdue_row["cnt"] if overdue_row else 0
 
     pending_row = pg_fetchone(
-        f"SELECT COUNT(*) AS cnt FROM tasks WHERE completed = 0 AND {LIVE_TASK_PREDICATE} "
-        f"AND {NOT_DROPPED_TASK}"
+        f"SELECT COUNT(*) AS cnt FROM todos WHERE completed = 0 AND {LIVE_TODO_PREDICATE} "
+        f"AND {NOT_DROPPED_TODO}"
     )
-    pending_tasks = pending_row["cnt"] if pending_row else 0
+    pending_todos = pending_row["cnt"] if pending_row else 0
 
     recent_activity = get_activity_log(limit=10)
 
@@ -2468,8 +2468,8 @@ def get_dashboard_stats() -> dict:
         "contacts_by_status": contacts_by_status,
         "pipeline_by_stage": pipeline_by_stage,
         "total_pipeline_value": total_pipeline_value,
-        "overdue_tasks": overdue_tasks,
-        "pending_tasks": pending_tasks,
+        "overdue_todos": overdue_todos,
+        "pending_todos": pending_todos,
         "recent_activity": recent_activity,
         "top_deals": top_deals,
     }
@@ -2480,7 +2480,7 @@ def get_dashboard_stats() -> dict:
 # Window resolution mirrors cake_os dashboard_service._resolve_touch_window so a
 # later port diffs cleanly, but resolves UTC calendar days rather than Central, and
 # stays UTC even though #130 moved the "today" decisions in this module onto the
-# configured timezone. Those answer "is this task overdue RIGHT NOW", which is a
+# configured timezone. Those answer "is this todo overdue RIGHT NOW", which is a
 # question about the user's calendar intent; this resolves a LABELLED absolute window
 # the caller can name explicitly, where a fixed reference is the honest one. In UTC
 # there is also no DST boundary, so the inclusive end-day bound is a plain +1 day
@@ -2491,7 +2491,7 @@ def get_dashboard_stats() -> dict:
 # control "UTC" so the number is honest rather than surprising. Upgrade path if that
 # stops being good enough: resolve the window against the viewer's local midnight
 # instead of UTC — deferred because every other day-boundary in this app is already
-# UTC, and a per-viewer window here would disagree with the overdue-task count above it.
+# UTC, and a per-viewer window here would disagree with the overdue-todo count above it.
 #
 # That upgrade path used to name the blueprint's absolute-instant (ws/we) form as the
 # shape to copy. #146 built it, and it is the wrong shape for the ROLLING window:
@@ -3465,7 +3465,7 @@ def summarize_analytics(analytics: dict) -> dict:
 # "attachments exist while crm_chatter is empty" unrepresentable, so counting it there
 # could never change an answer.
 _CRM_TABLES = (
-    "companies", "contacts", "deals", "tasks", "task_projects", "activity_log",
+    "companies", "contacts", "deals", "todos", "todo_projects", "activity_log",
     "crm_chatter", "crm_chatter_attachments", "crm_field_values", "crm_field_provenance",
 )
 
@@ -3481,9 +3481,9 @@ def get_crm_meta() -> dict:
 
 def is_crm_empty() -> bool:
     """True only when ALL entity-data CRM tables are empty (companies, contacts,
-    deals, tasks, activity_log, crm_chatter, crm_field_values).
+    deals, todos, activity_log, crm_chatter, crm_field_values).
 
-    Checking every table matters: deals/tasks/activity/chatter/field-values can exist
+    Checking every table matters: deals/todos/activity/chatter/field-values can exist
     without contacts, and the fixed-id demo seed must never be inserted into a
     partially-populated CRM. crm_field_definitions is deliberately EXCLUDED — it is
     user configuration (like branding), not entity data; counting it would make a
@@ -3493,8 +3493,8 @@ def is_crm_empty() -> bool:
         """SELECT (SELECT COUNT(*) FROM companies)
                 + (SELECT COUNT(*) FROM contacts)
                 + (SELECT COUNT(*) FROM deals)
-                + (SELECT COUNT(*) FROM tasks)
-                + (SELECT COUNT(*) FROM task_projects)
+                + (SELECT COUNT(*) FROM todos)
+                + (SELECT COUNT(*) FROM todo_projects)
                 + (SELECT COUNT(*) FROM activity_log)
                 + (SELECT COUNT(*) FROM crm_chatter)
                 + (SELECT COUNT(*) FROM crm_field_values)
@@ -3512,8 +3512,8 @@ def _crm_empty_in_txn(cur) -> bool:
         """SELECT (SELECT COUNT(*) FROM companies)
                 + (SELECT COUNT(*) FROM contacts)
                 + (SELECT COUNT(*) FROM deals)
-                + (SELECT COUNT(*) FROM tasks)
-                + (SELECT COUNT(*) FROM task_projects)
+                + (SELECT COUNT(*) FROM todos)
+                + (SELECT COUNT(*) FROM todo_projects)
                 + (SELECT COUNT(*) FROM activity_log)
                 + (SELECT COUNT(*) FROM crm_chatter)
                 + (SELECT COUNT(*) FROM crm_field_values)
@@ -3534,14 +3534,14 @@ def get_demo_status() -> dict:
         "show_onboarding": empty and not sample_loaded and not dismissed,
         "ai_key_prompt_dismissed": bool(meta.get("ai_key_prompt_dismissed")),
         # Folded in here rather than given its own endpoint: CrmLayout already
-        # fetches demo-status on mount, so the task mode costs zero extra requests.
-        "task_mode": get_task_mode(),
+        # fetches demo-status on mount, so the todo mode costs zero extra requests.
+        "todo_mode": get_todo_mode(),
     }
 
 
-# ── Task mode + public todo surfaces (#70) ────────────────────────────────────
+# ── Todo mode + public todo surfaces (#70) ────────────────────────────────────
 
-def get_task_mode() -> str:
+def get_todo_mode() -> str:
     """'normal' or 'gtd'. NEVER raises.
 
     Read on every tool-registry build and on the Telegram hot path, so an unreadable
@@ -3551,7 +3551,7 @@ def get_task_mode() -> str:
     That default is GTD since #102, and it follows the PRODUCT default deliberately:
     a row we cannot read tells us nothing about what the user chose, so the honest
     guess is the experience a new install gets, not the legacy one. The three thin
-    `_task_mode()` wrappers (assistant.identity, heartbeat.service, telegram.service)
+    `_todo_mode()` wrappers (assistant.identity, heartbeat.service, telegram.service)
     say the same thing, so there is one default rather than four.
 
     Reviewed and rejected twice: "an unmigrated database (column absent) lands here and
@@ -3564,28 +3564,28 @@ def get_task_mode() -> str:
     want. If that startup contract ever changes, revisit this line first.
     """
     try:
-        row = pg_fetchone("SELECT task_mode FROM crm_meta WHERE id = 1")
+        row = pg_fetchone("SELECT todo_mode FROM crm_meta WHERE id = 1")
     except Exception:
-        logger.warning("crm_meta.task_mode unreadable — defaulting to GTD mode")
+        logger.warning("crm_meta.todo_mode unreadable — defaulting to GTD mode")
         return "gtd"
-    mode = (row or {}).get("task_mode")
+    mode = (row or {}).get("todo_mode")
     return mode if mode in ("normal", "gtd") else "gtd"
 
 
-def set_task_mode(mode: str) -> dict:
-    """Switch task mode. Switching migrates NOTHING — GTD is a view over the same
+def set_todo_mode(mode: str) -> dict:
+    """Switch todo mode. Switching migrates NOTHING — GTD is a view over the same
     rows, so the change is instant and losslessly reversible in both directions."""
     if mode not in ("normal", "gtd"):
-        raise gtd_common.ValidationError("task_mode must be 'normal' or 'gtd'")
+        raise gtd_common.ValidationError("todo_mode must be 'normal' or 'gtd'")
     pg_execute(
-        "UPDATE crm_meta SET task_mode = %s, updated_at = %s WHERE id = 1",
+        "UPDATE crm_meta SET todo_mode = %s, updated_at = %s WHERE id = 1",
         (mode, _now()),
     )
-    return {"ok": True, "task_mode": mode}
+    return {"ok": True, "todo_mode": mode}
 
 
 def get_todo_public_settings() -> dict:
-    """The three no-login-surface settings. Fail-safe like get_task_mode: if the row
+    """The three no-login-surface settings. Fail-safe like get_todo_mode: if the row
     can't be read, report the surfaces as OFF rather than guessing them open."""
     try:
         row = pg_fetchone(
@@ -3711,9 +3711,9 @@ def _truncate_all(cur, include_definitions: bool = False) -> None:
     # reseeded CRM inherits the old per-record nudge cooldowns and stays silent about
     # records it has never actually mentioned. Its only writer is a single-statement
     # upsert touching just this table, so its position can't invert against anything.
-    # task_projects (#70) is referenced BY tasks (tasks.project_id FK), so like
-    # deal_stage_events it has to share the statement — truncating tasks alone would
-    # leave orphan projects, and truncating task_projects alone errors on the FK.
+    # todo_projects (#70) is referenced BY todos (todos.project_id FK), so like
+    # deal_stage_events it has to share the statement — truncating todos alone would
+    # leave orphan projects, and truncating todo_projects alone errors on the FK.
     # A GTD project is entity data (the user's own outcomes), not configuration, so it
     # goes in BOTH variants — unlike crm_field_definitions.
     # deal_ai_touch_evidence (#56) trails everything. Same FK-less reasoning: nothing
@@ -3725,19 +3725,19 @@ def _truncate_all(cur, include_definitions: bool = False) -> None:
     # crm_chatter_attachments (#57) sits immediately AFTER crm_chatter in both variants,
     # and is not optional: it holds a real FK to crm_chatter, so Postgres refuses to
     # truncate crm_chatter without it in the same statement (the deal_stage_events and
-    # task_projects rule). Position matches its writers — create_attachment and
+    # todo_projects rule). Position matches its writers — create_attachment and
     # delete_attachment both lock the crm_chatter row FIRST and then touch this table, so
     # a chatter-before-attachments TRUNCATE order can't invert against either.
     if include_definitions:
         cur.execute(
-            "TRUNCATE companies, contacts, deals, activity_log, tasks, task_projects, "
+            "TRUNCATE companies, contacts, deals, activity_log, todos, todo_projects, "
             "crm_chatter, crm_chatter_attachments, crm_field_definitions, crm_field_values, "
             "crm_field_provenance, deal_stage_events, proactive_nudges, "
             "deal_ai_touch_evidence RESTART IDENTITY"
         )
     else:
         cur.execute(
-            "TRUNCATE companies, contacts, deals, activity_log, tasks, task_projects, "
+            "TRUNCATE companies, contacts, deals, activity_log, todos, todo_projects, "
             "crm_chatter, crm_chatter_attachments, crm_field_values, crm_field_provenance, "
             "deal_stage_events, proactive_nudges, deal_ai_touch_evidence RESTART IDENTITY"
         )

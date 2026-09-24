@@ -86,8 +86,8 @@ def test_company_search_filters_count_and_rows(captured_sql):
     assert len(_owner_filtered(captured_sql)) == 2
 
 
-def test_task_list_filters_by_assignee(captured_sql):
-    crm.list_tasks(owner_id=ME)
+def test_todo_list_filters_by_assignee(captured_sql):
+    crm.list_todos(owner_id=ME)
     assert len(_owner_filtered(captured_sql)) == 1
     assert ME in captured_sql[0][1]
 
@@ -97,7 +97,7 @@ def test_task_list_filters_by_assignee(captured_sql):
     [
         lambda: crm.list_contacts(),
         lambda: crm.list_companies(),
-        lambda: crm.list_tasks(),
+        lambda: crm.list_todos(),
         lambda: crm.search_contacts("x"),
         lambda: crm.search_companies("x"),
     ],
@@ -135,7 +135,7 @@ def test_no_read_or_write_path_filters_by_the_calling_user(captured_sql):
     owner_id into an ACL — which is a product decision, not a bug fix."""
     crm.list_contacts()
     crm.list_companies()
-    crm.list_tasks()
+    crm.list_todos()
     assert _owner_filtered(captured_sql) == []
 
 
@@ -168,7 +168,7 @@ def test_an_explicit_owner_is_honoured(client, monkeypatch):
     "path,service_fn,body",
     [
         ("/api/crm/deals", "create_deal", {"title": "D"}),
-        ("/api/crm/tasks", "create_task", {"title": "T"}),
+        ("/api/crm/todos", "create_todo", {"title": "T"}),
         ("/api/crm/companies", "create_company", {"name": "C"}),
     ],
 )
@@ -186,7 +186,7 @@ def test_every_entity_create_defaults_the_owner(client, monkeypatch, path, servi
     [
         ("/api/crm/contacts/5", "update_contact"),
         ("/api/crm/deals/5", "update_deal"),
-        ("/api/crm/tasks/5", "update_task"),
+        ("/api/crm/todos/5", "update_todo"),
         ("/api/crm/companies/5", "update_company"),
     ],
 )
@@ -370,7 +370,7 @@ def test_an_update_without_owner_id_leaves_ownership_alone(client, monkeypatch):
     [
         ("/api/crm/contacts/5", "update_contact"),
         ("/api/crm/deals/5", "update_deal"),
-        ("/api/crm/tasks/5", "update_task"),
+        ("/api/crm/todos/5", "update_todo"),
         ("/api/crm/companies/5", "update_company"),
     ],
 )

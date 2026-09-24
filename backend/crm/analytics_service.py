@@ -26,7 +26,7 @@ from crm.service import (
     LAST_TOUCH_SQL,
     LIVE_PREDICATE,
     LIVE_PREDICATE_D,
-    NOT_DROPPED_TASK_T,
+    NOT_DROPPED_TODO_T,
     OPEN_PREDICATE,
     OPEN_PREDICATE_D,
     OPEN_STAGES,
@@ -60,7 +60,7 @@ def get_stale_deals(
     Complements ``service.get_analytics``: that one answers "how many are stale" for
     the dashboard, this one answers "which ones, and what do I do about them" — so it
     carries the stage, value, owner-facing names, days in the current stage, and
-    whether a follow-up task already exists (a deal with an open task is being
+    whether a follow-up todo already exists (a deal with an open todo is being
     handled, and nagging about it is noise).
 
     ``days_in_stage`` reads the newest ``deal_stage_events`` row and falls back to the
@@ -94,9 +94,9 @@ def get_stale_deals(
                    (SELECT MAX(e.changed_at) FROM deal_stage_events e
                      WHERE e.deal_id = d.id), d.created_at))) / 86400.0)::int
                    AS days_in_stage,
-               EXISTS (SELECT 1 FROM tasks t
+               EXISTS (SELECT 1 FROM todos t
                         WHERE t.deal_id = d.id AND t.completed = 0
-                          AND {NOT_DROPPED_TASK_T}) AS has_open_task
+                          AND {NOT_DROPPED_TODO_T}) AS has_open_todo
           FROM deals d
           LEFT JOIN contacts  c  ON d.contact_id = c.id
           LEFT JOIN companies co ON d.company_id = co.id
@@ -465,10 +465,10 @@ def _health_flags(row: dict, stale_days: int) -> list[str]:
     days_in_stage = row.get("days_in_stage")
     if days_in_stage is not None and days_in_stage >= STUCK_IN_STAGE_DAYS:
         flags.append("stuck_in_stage")
-    if not row.get("open_tasks"):
+    if not row.get("open_todos"):
         flags.append("no_next_step")
-    if row.get("overdue_tasks"):
-        flags.append("overdue_task")
+    if row.get("overdue_todos"):
+        flags.append("overdue_todo")
     if not row.get("contact_id"):
         flags.append("missing_contact")
     if not row.get("company_id"):
@@ -489,10 +489,10 @@ def get_deal_health(deal_id: int, stale_days: int = DEFAULT_DEAL_STALE_DAYS) -> 
     be able to look at one to decide whether to restore it.
     """
     stale_days = _bounded(stale_days, DEFAULT_DEAL_STALE_DAYS, 1, 365)
-    # Date-only TEXT comparison for overdue, matching get_dashboard_stats: a task due
+    # Date-only TEXT comparison for overdue, matching get_dashboard_stats: a todo due
     # today is not overdue, and a malformed row can never cast-error the way ::date can.
     # That day is the CONFIGURED-TIMEZONE one since #130 — it moved here in the same
-    # sweep, because "is this task overdue" must not depend on which report asked.
+    # sweep, because "is this todo overdue" must not depend on which report asked.
     today = gtd_common.today_local_str()
     row = pg_fetchone(
         f"""
@@ -508,12 +508,12 @@ def get_deal_health(deal_id: int, stale_days: int = DEFAULT_DEAL_STALE_DAYS) -> 
                      WHERE e.deal_id = d.id), d.created_at))) / 86400.0)::int
                    AS days_in_stage,
                FLOOR(EXTRACT(EPOCH FROM (now() - d.created_at)) / 86400.0)::int AS age_days,
-               (SELECT COUNT(*) FROM tasks t
+               (SELECT COUNT(*) FROM todos t
                  WHERE t.deal_id = d.id AND t.completed = 0
-                   AND {NOT_DROPPED_TASK_T})::int AS open_tasks,
-               (SELECT COUNT(*) FROM tasks t
-                 WHERE t.deal_id = d.id AND t.completed = 0 AND {NOT_DROPPED_TASK_T}
-                   AND t.due_date != '' AND t.due_date < %s)::int AS overdue_tasks
+                   AND {NOT_DROPPED_TODO_T})::int AS open_todos,
+               (SELECT COUNT(*) FROM todos t
+                 WHERE t.deal_id = d.id AND t.completed = 0 AND {NOT_DROPPED_TODO_T}
+                   AND t.due_date != '' AND t.due_date < %s)::int AS overdue_todos
           FROM deals d
           LEFT JOIN contacts  c  ON d.contact_id = c.id
           LEFT JOIN companies co ON d.company_id = co.id

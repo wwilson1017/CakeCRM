@@ -35,7 +35,7 @@ which survives before running it — it is not symmetric.
 
 What happens:
 
-- **Activity and open tasks move** from the source onto the survivor.
+- **Activity and open todos move** from the source onto the survivor.
 - **Notes are copied** onto the survivor, marked as merged from the other deal.
 - **Custom fields are gap-filled**: the survivor's own values always win, and only fields it
   left blank are taken from the source.

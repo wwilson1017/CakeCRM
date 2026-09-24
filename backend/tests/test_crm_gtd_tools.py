@@ -1,14 +1,14 @@
 """Todo-GTD tool-surface tests: mode gating and the confirmation contract (#70).
 
-The two task vocabularies must never both be advertised — the model would mix them
+The two todo vocabularies must never both be advertised — the model would mix them
 mid-conversation and act on one store through two sets of names.
 """
 
 from crm import gtd_tools, tools
 from crm.gtd_tools import GTD_TOOL_DEFS, GTD_TOOL_EXECUTORS, get_gtd_tools
 
-_TASK_TOOLS = {"crm_create_task", "crm_list_tasks", "crm_complete_task",
-               "crm_update_task", "crm_delete_task"}
+_TODO_TOOLS = {"crm_create_todo", "crm_list_todos", "crm_complete_todo",
+               "crm_update_todo", "crm_delete_todo"}
 _GTD_WRITE_TOOLS = {"todo_create", "todo_update", "todo_bulk_update", "todo_delete",
                     "todo_create_project", "todo_update_project", "todo_delete_project"}
 _GTD_READ_TOOLS = {"todo_list", "todo_get", "todo_list_projects"}
@@ -17,93 +17,93 @@ _GTD_ROUTINE_TOOLS = {"todo_create", "todo_update",
                       "todo_create_project", "todo_update_project"}
 
 
-def test_normal_mode_hides_every_todo_tool(task_mode):
-    task_mode("normal")
+def test_normal_mode_hides_every_todo_tool(todo_mode):
+    todo_mode("normal")
     defs, executors = get_gtd_tools()
     assert defs == [] and executors == {}
 
 
-def test_normal_mode_still_advertises_the_task_tools(task_mode):
-    task_mode("normal")
+def test_normal_mode_still_advertises_the_todo_tools(todo_mode):
+    todo_mode("normal")
     names = {d["name"] for d in tools.get_crm_tools()[0]}
-    assert _TASK_TOOLS <= names
+    assert _TODO_TOOLS <= names
 
 
-def test_gtd_mode_advertises_the_todo_tools(task_mode):
-    task_mode("gtd")
+def test_gtd_mode_advertises_the_todo_tools(todo_mode):
+    todo_mode("gtd")
     defs, executors = get_gtd_tools()
     names = {d["name"] for d in defs}
     assert _GTD_WRITE_TOOLS | _GTD_READ_TOOLS <= names
     assert set(executors) == names
 
 
-def test_gtd_mode_hides_the_task_tools(task_mode):
+def test_gtd_mode_hides_the_todo_tools(todo_mode):
     """Two vocabularies for one store is how the model ends up calling both."""
-    task_mode("gtd")
+    todo_mode("gtd")
     names = {d["name"] for d in tools.get_crm_tools()[0]}
-    assert not (_TASK_TOOLS & names)
+    assert not (_TODO_TOOLS & names)
 
 
-def test_gtd_mode_keeps_every_non_task_crm_tool(task_mode):
-    task_mode("gtd")
+def test_gtd_mode_keeps_every_non_todo_crm_tool(todo_mode):
+    todo_mode("gtd")
     normal = {d["name"] for d in tools.CRM_TOOL_DEFS}
     gtd = {d["name"] for d in tools.get_crm_tools()[0]}
-    assert normal - gtd == _TASK_TOOLS
+    assert normal - gtd == _TODO_TOOLS
 
 
-def test_executors_stay_reachable_in_gtd_mode(task_mode):
+def test_executors_stay_reachable_in_gtd_mode(todo_mode):
     """Advertisement is what steers the model; keeping executors reachable means a
     call proposed just before a mode flip still resolves instead of erroring at
     confirmation time."""
-    task_mode("gtd")
+    todo_mode("gtd")
     _, executors = tools.get_crm_tools()
-    assert _TASK_TOOLS <= set(executors)
+    assert _TODO_TOOLS <= set(executors)
 
 
 # ── The fail-safe follows the product default (#102) ──────────────────────────
 
 def test_an_unreadable_mode_degrades_to_the_gtd_default(monkeypatch):
-    """get_task_mode is fail-safe, so a registry built with no database (which the
+    """get_todo_mode is fail-safe, so a registry built with no database (which the
     hermetic suite does on every run) gets an answer rather than an exception.
 
     Since #102 that answer is GTD: a row we cannot read says nothing about what the
     user chose, so the honest guess is the experience a new install gets.
     """
-    from crm.service import get_task_mode
+    from crm.service import get_todo_mode
 
     def _boom(*args, **kwargs):
         raise RuntimeError("Postgres pool not initialized")
 
     monkeypatch.setattr("crm.service.pg_fetchone", _boom)
-    assert get_task_mode() == "gtd"
+    assert get_todo_mode() == "gtd"
 
 
 def test_an_unmigrated_or_missing_row_reads_as_the_gtd_default(monkeypatch):
     monkeypatch.setattr("crm.service.pg_fetchone", lambda *a, **k: None)
-    from crm.service import get_task_mode
-    assert get_task_mode() == "gtd"
+    from crm.service import get_todo_mode
+    assert get_todo_mode() == "gtd"
 
 
 def test_an_out_of_range_value_reads_as_the_gtd_default(monkeypatch):
     """The column carries a CHECK, so this is belt-and-braces — but the normalizer
     must not leak a junk value into the mode comparisons that gate the tool surface."""
-    monkeypatch.setattr("crm.service.pg_fetchone", lambda *a, **k: {"task_mode": "kanban"})
-    from crm.service import get_task_mode
-    assert get_task_mode() == "gtd"
+    monkeypatch.setattr("crm.service.pg_fetchone", lambda *a, **k: {"todo_mode": "kanban"})
+    from crm.service import get_todo_mode
+    assert get_todo_mode() == "gtd"
 
 
 def test_all_four_fail_safes_agree_on_one_product_default(monkeypatch):
-    """Four modules read the task mode and each carries its own fallback. They must
-    name the SAME default — a split would give the assistant one task vocabulary and
+    """Four modules read the todo mode and each carries its own fallback. They must
+    name the SAME default — a split would give the assistant one todo vocabulary and
     the heartbeat another on the very install that can least afford the confusion.
 
     Each wrapper's own `except` is exercised by making the lazy import fail, which is
-    the only thing those handlers can actually catch (get_task_mode never raises).
+    the only thing those handlers can actually catch (get_todo_mode never raises).
     """
     import builtins
 
     from assistant import identity
-    from crm.service import get_task_mode
+    from crm.service import get_todo_mode
     from heartbeat import service as heartbeat_service
     from telegram import service as telegram_service
 
@@ -120,23 +120,23 @@ def test_all_four_fail_safes_agree_on_one_product_default(monkeypatch):
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", _no_crm_service)
-    wrappers = [identity._task_mode(), heartbeat_service._task_mode(),
-                telegram_service._task_mode()]
+    wrappers = [identity._todo_mode(), heartbeat_service._todo_mode(),
+                telegram_service._todo_mode()]
     monkeypatch.undo()
 
     monkeypatch.setattr("crm.service.pg_fetchone", _boom)
-    assert set(wrappers) == {get_task_mode()} == {"gtd"}
+    assert set(wrappers) == {get_todo_mode()} == {"gtd"}
 
 
 def test_a_no_database_registry_advertises_the_gtd_vocabulary():
     """End-to-end proof that the flipped fail-safe reaches the tool surface: with no
     pool initialised (the hermetic default — no monkeypatching here on purpose), the
-    todo tools are advertised and the normal task tools are not."""
+    todo tools are advertised and the normal todo tools are not."""
     gtd_defs, _ = get_gtd_tools()
     crm_defs, _ = tools.get_crm_tools()
     advertised = {d["name"] for d in gtd_defs}
     assert _GTD_WRITE_TOOLS | _GTD_READ_TOOLS <= advertised
-    assert not (_TASK_TOOLS & {d["name"] for d in crm_defs})
+    assert not (_TODO_TOOLS & {d["name"] for d in crm_defs})
 
 
 def test_every_def_declares_a_boolean_writes_flag():
@@ -189,10 +189,10 @@ def test_a_service_validation_error_becomes_an_error_dict(monkeypatch):
     assert GTD_TOOL_EXECUTORS["todo_create"](title="x") == {"error": "bad status"}
 
 
-def test_the_registry_composes_without_duplicate_names_in_both_modes(task_mode):
+def test_the_registry_composes_without_duplicate_names_in_both_modes(todo_mode):
     from assistant.registry import ToolRegistry
     for value in ("normal", "gtd"):
-        task_mode(value)
+        todo_mode(value)
         registry = ToolRegistry()
         names = [d["name"] for d in registry.tool_defs]
         assert len(names) == len(set(names)), f"duplicate tool names in {value} mode"

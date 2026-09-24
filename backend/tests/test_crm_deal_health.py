@@ -29,7 +29,7 @@ HEALTHY_ROW = {
     "id": 7, "title": "Renewal", "stage": "proposal", "value": 1000.0,
     "contact_id": 3, "company_id": 4, "archived": False,
     "days_since_touch": 1, "days_in_stage": 2, "age_days": 10,
-    "open_tasks": 1, "overdue_tasks": 0,
+    "open_todos": 1, "overdue_todos": 0,
 }
 
 
@@ -41,18 +41,18 @@ def test_healthy_deal_raises_no_flags():
 
 def test_every_flag_fires_on_a_neglected_deal():
     row = dict(HEALTHY_ROW, days_since_touch=40, days_in_stage=60,
-               open_tasks=0, overdue_tasks=0, contact_id=None, company_id=None)
+               open_todos=0, overdue_todos=0, contact_id=None, company_id=None)
     assert set(az._health_flags(row, 14)) == {
         "stale", "stuck_in_stage", "no_next_step", "missing_contact", "missing_company",
     }
 
 
-def test_overdue_task_flag_is_independent_of_no_next_step():
-    """A deal WITH an open task can still have an overdue one — the two flags say
+def test_overdue_todo_flag_is_independent_of_no_next_step():
+    """A deal WITH an open todo can still have an overdue one — the two flags say
     different things and must not cancel each other out."""
-    row = dict(HEALTHY_ROW, open_tasks=2, overdue_tasks=1)
+    row = dict(HEALTHY_ROW, open_todos=2, overdue_todos=1)
     flags = az._health_flags(row, 14)
-    assert "overdue_task" in flags and "no_next_step" not in flags
+    assert "overdue_todo" in flags and "no_next_step" not in flags
 
 
 def test_stale_uses_the_caller_supplied_threshold():

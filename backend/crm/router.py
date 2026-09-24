@@ -33,12 +33,12 @@ Deals:
   GET    /api/crm/deals/touch-count/backfill/status — backfill progress
   GET    /api/crm/deals/:id/touch-count/evidence    — per-event verdicts behind the count
 
-Tasks:
-  GET    /api/crm/tasks                 — filtered list
-  POST   /api/crm/tasks                 — create
-  PUT    /api/crm/tasks/:id             — update
-  PUT    /api/crm/tasks/:id/complete    — mark done
-  DELETE /api/crm/tasks/:id             — delete
+Todos:
+  GET    /api/crm/todos                 — filtered list
+  POST   /api/crm/todos                 — create
+  PUT    /api/crm/todos/:id             — update
+  PUT    /api/crm/todos/:id/complete    — mark done
+  DELETE /api/crm/todos/:id             — delete
 
 Activity:
   GET    /api/crm/activity              — log
@@ -263,7 +263,7 @@ class CompanyUpdate(BaseModel):
     owner_id: int | None = None
 
 
-class TaskCreate(BaseModel):
+class TodoCreate(BaseModel):
     title: str
     description: str = ""
     due_date: str = ""
@@ -273,7 +273,7 @@ class TaskCreate(BaseModel):
     owner_id: int | None = None
 
 
-class TaskUpdate(BaseModel):
+class TodoUpdate(BaseModel):
     title: str | None = None
     description: str | None = None
     due_date: str | None = None
@@ -605,7 +605,7 @@ async def bulk_move_deals(body: BulkDealMove, user=Depends(get_current_user)):
 # Restoring is idempotent (restoring a live deal is a no-op NULL write) and
 # member-accessible: ownership is not access control here, and this is ordinary record
 # CRUD, the same tier as PUT /deals/{id}. Note that restoring a deal that was archived by
-# a MERGE is not an undo — the merge already repointed activity/tasks, copied notes and
+# a MERGE is not an undo — the merge already repointed activity/todos, copied notes and
 # gap-filled custom fields onto the target; restore only makes the source visible again.
 @router.post("/deals/{deal_id}/restore")
 def restore_deal(deal_id: int, user=Depends(get_current_user)):
@@ -713,10 +713,10 @@ async def scores_backfill(
         raise HTTPException(status_code=400, detail=str(e)) from None
 
 
-# ── Tasks ─────────────────────────────────────────────────────────────────────
+# ── Todos ─────────────────────────────────────────────────────────────────────
 
-@router.get("/tasks")
-async def list_tasks(
+@router.get("/todos")
+async def list_todos(
     contact_id: int | None = None, deal_id: int | None = None,
     completed: bool | None = None, due_before: str = "",
     priority: str = "", limit: int = Query(50, ge=1, le=1000),
@@ -726,9 +726,9 @@ async def list_tasks(
 ):
     # #77: `sort=id` + `after_id` is the list page's keyset sweep. Every existing caller
     # omits both and keeps the historical due order (now with an id tie-breaker, so a
-    # LIMIT window is deterministic among tasks sharing a due date).
+    # LIMIT window is deterministic among todos sharing a due date).
     try:
-        tasks = crm.list_tasks(
+        todos = crm.list_todos(
             contact_id=contact_id, deal_id=deal_id,
             completed=completed, due_before=due_before or None,
             priority=priority or None, limit=limit, owner_id=owner_id,
@@ -736,24 +736,24 @@ async def list_tasks(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
-    return {"tasks": tasks, "count": len(tasks)}
+    return {"todos": todos, "count": len(todos)}
 
 
-@router.post("/tasks")
-async def create_task(body: TaskCreate, user=Depends(get_current_user)):
+@router.post("/todos")
+async def create_todo(body: TodoCreate, user=Depends(get_current_user)):
     if not body.title.strip():
         raise HTTPException(status_code=400, detail="Title is required")
     try:
-        return crm.create_task(**_create_payload(body, user))
+        return crm.create_todo(**_create_payload(body, user))
     except psycopg2.errors.ForeignKeyViolation:
         raise HTTPException(status_code=400, detail="Referenced contact or deal does not exist") from None
     except gtd_common.ValidationError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
 
 
-@router.put("/tasks/{task_id}")
-async def update_task(task_id: int, body: TaskUpdate, user=Depends(get_current_user)):
-    # exclude_unset + allow explicit null only for the nullable FKs so a task can
+@router.put("/todos/{todo_id}")
+async def update_todo(todo_id: int, body: TodoUpdate, user=Depends(get_current_user)):
+    # exclude_unset + allow explicit null only for the nullable FKs so a todo can
     # be unlinked from its contact/deal. Other columns are NOT NULL.
     updates = {
         k: v for k, v in body.model_dump(exclude_unset=True).items()
@@ -762,32 +762,32 @@ async def update_task(task_id: int, body: TaskUpdate, user=Depends(get_current_u
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
     try:
-        result = crm.update_task(task_id, **updates)
+        result = crm.update_todo(todo_id, **updates)
     except psycopg2.errors.ForeignKeyViolation:
         raise HTTPException(status_code=400, detail="Referenced contact or deal does not exist") from None
     except gtd_common.ValidationError as e:
-        # Since #70 the task write path validates its inputs (a malformed due_date
+        # Since #70 the todo write path validates its inputs (a malformed due_date
         # used to be stored verbatim). Bad input is the caller's, so it must surface
         # as 400 — an uncaught ValidationError here would be a 500.
         raise HTTPException(status_code=400, detail=str(e)) from None
     if not result:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail="Todo not found")
     return result
 
 
-@router.put("/tasks/{task_id}/complete")
-async def complete_task(task_id: int, user=Depends(get_current_user)):
-    result = crm.complete_task(task_id)
+@router.put("/todos/{todo_id}/complete")
+async def complete_todo(todo_id: int, user=Depends(get_current_user)):
+    result = crm.complete_todo(todo_id)
     if not result:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail="Todo not found")
     return result
 
 
-@router.delete("/tasks/{task_id}")
-async def delete_task(task_id: int, user=Depends(get_current_user)):
-    if not crm.delete_task(task_id):
-        raise HTTPException(status_code=404, detail="Task not found")
-    return {"deleted": True, "task_id": task_id}
+@router.delete("/todos/{todo_id}")
+async def delete_todo(todo_id: int, user=Depends(get_current_user)):
+    if not crm.delete_todo(todo_id):
+        raise HTTPException(status_code=404, detail="Todo not found")
+    return {"deleted": True, "todo_id": todo_id}
 
 
 # ── Activity ──────────────────────────────────────────────────────────────────
@@ -844,9 +844,9 @@ async def dashboard_today(
 ):
     """The Today panel (issue #130): one ranked list of what needs attention today.
 
-    `owner_id` absent means everyone (the `list_tasks` idiom — no separate flag or
+    `owner_id` absent means everyone (the `list_todos` idiom — no separate flag or
     magic value); present means that person's view, which deliberately INCLUDES
-    unassigned tasks, because someone has to catch them.
+    unassigned todos, because someone has to catch them.
 
     Pure SQL, so the ranking is identical with zero AI providers configured — rank 2's
     hot deals (#131) included: the temperature is a human's own judgment, written through
@@ -954,26 +954,26 @@ async def dismiss_ai_prompt(user=Depends(get_current_user)):
     return crm.dismiss_ai_prompt()
 
 
-# ── Task mode + no-login todo surfaces (#70) ──────────────────────────────────
+# ── Todo mode + no-login todo surfaces (#70) ──────────────────────────────────
 
-class TaskModeBody(BaseModel):
+class TodoModeBody(BaseModel):
     mode: str = Field(max_length=16)
 
 
-@router.post("/task-mode")
-async def set_task_mode(body: TaskModeBody, user=Depends(require_admin)):
-    """Switch between normal tasks and Todo-GTD mode.
+@router.post("/todo-mode")
+async def set_todo_mode(body: TodoModeBody, user=Depends(require_admin)):
+    """Switch between normal todos and Todo-GTD mode.
 
-    Switching migrates nothing — GTD is a view over the same task rows — so this is
+    Switching migrates nothing — GTD is a view over the same todo rows — so this is
     instant and reversible in both directions.
 
-    Admin-only since #102, on the same rule as `/api/assistant/identity`: `task_mode`
-    lives on the `crm_meta` singleton, so one member flipping it changes the task
+    Admin-only since #102, on the same rule as `/api/assistant/identity`: `todo_mode`
+    lives on the `crm_meta` singleton, so one member flipping it changes the todo
     experience for EVERYONE on the install. #102 made this reachable in practice by
     turning GTD on everywhere, which is what surfaced the gap.
     """
     try:
-        return crm.set_task_mode(body.mode)
+        return crm.set_todo_mode(body.mode)
     except gtd_common.ValidationError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -1679,7 +1679,7 @@ async def delete_company(company_id: int, user=Depends(get_current_user)):
 # (entity/field-type checks, value coercion, entity existence) lives in field_service
 # and surfaces here as ValueError → 400. The /{entity_type}/{entity_id}/fields paths
 # don't shadow existing routes: no other route ends in the literal "fields", and the
-# existing 3-segment routes have literal first segments (/chatter/…, /tasks/…).
+# existing 3-segment routes have literal first segments (/chatter/…, /todos/…).
 
 @router.get("/fields")
 async def list_field_definitions(entity_type: str | None = None, user=Depends(get_current_user)):

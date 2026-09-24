@@ -66,7 +66,7 @@ author: Dale Carnegie
 - **Find the quiet relationships before they cool further** — `crm_get_contact_staleness`
   names the people who used to answer and no longer do.
 - **Make the repair a real next step** — an apology call or a written acknowledgement as a
-  task (`crm_create_task`; `todo_create` in GTD task mode), with what you are admitting to
+  todo (`crm_create_todo`; `todo_create` in GTD todo mode), with what you are admitting to
   in the description so it does not soften on the way to the call.
 
 ## Go read it

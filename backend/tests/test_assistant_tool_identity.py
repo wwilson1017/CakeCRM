@@ -27,13 +27,13 @@ OTHER = {"id": 12, "email": "boss@example.com", "name": "Boss", "role": "admin"}
 
 
 @pytest.fixture
-def crm_executors(task_mode):
-    """Executor maps for an attended and an unattended turn, in normal task mode.
+def crm_executors(todo_mode):
+    """Executor maps for an attended and an unattended turn, in normal todo mode.
 
-    Normal mode so ``crm_list_tasks`` is present: GTD mode swaps the task tools out, and
+    Normal mode so ``crm_list_todos`` is present: GTD mode swaps the todo tools out, and
     the no-database fail-safe answers 'gtd' (#102).
     """
-    task_mode("normal")
+    todo_mode("normal")
 
     def _for(user):
         return tools.get_crm_tools(user=user)[1]
@@ -73,7 +73,7 @@ def test_add_note_records_its_author(crm_executors, user, expected):
     ("crm_create_contact", "crm.tools.crm.create_contact"),
     ("crm_create_company", "crm.tools.crm.create_company"),
     ("crm_create_deal", "crm.tools.crm.create_deal"),
-    ("crm_create_task", "crm.tools.crm.create_task"),
+    ("crm_create_todo", "crm.tools.crm.create_todo"),
 ])
 @pytest.mark.parametrize("user,expected", [(USER, 7), (None, None)])
 def test_interactive_creates_stamp_the_requesting_seat(crm_executors, tool, target, user, expected):
@@ -91,7 +91,7 @@ def test_interactive_creates_stamp_the_requesting_seat(crm_executors, tool, targ
     ("crm_create_contact", "crm.tools.crm.create_contact", "owner_id", {"name": "Acme"}),
     ("crm_create_company", "crm.tools.crm.create_company", "owner_id", {"name": "Acme"}),
     ("crm_create_deal", "crm.tools.crm.create_deal", "owner_id", {"title": "Acme"}),
-    ("crm_create_task", "crm.tools.crm.create_task", "owner_id", {"title": "Call"}),
+    ("crm_create_todo", "crm.tools.crm.create_todo", "owner_id", {"title": "Call"}),
 ])
 def test_model_supplied_identity_is_dropped_not_honored(crm_executors, tool, target, key, spoof):
     ex = crm_executors(USER)
@@ -193,7 +193,7 @@ def test_owner_me_on_an_unattended_turn_errors_without_querying(crm_executors):
 @pytest.mark.parametrize("tool,target,kwargs", [
     ("crm_find_contact", "crm.tools.crm.search_contacts", {"query": "a"}),
     ("crm_search_companies", "crm.tools.crm.search_companies", {"query": "a"}),
-    ("crm_list_tasks", "crm.tools.crm.list_tasks", {}),
+    ("crm_list_todos", "crm.tools.crm.list_todos", {}),
     ("crm_get_stale_deals", "crm.tools.analytics_service.get_stale_deals", {}),
     ("crm_get_contact_staleness", "crm.tools.analytics_service.get_contact_staleness", {}),
 ])
@@ -204,9 +204,9 @@ def test_every_owner_filterable_read_threads_the_filter(crm_executors, tool, tar
     assert m.call_args.kwargs["owner_id"] == 7
 
 
-def test_todo_tools_carry_the_same_identity(task_mode):
+def test_todo_tools_carry_the_same_identity(todo_mode):
     from crm import gtd_tools
-    task_mode("gtd")
+    todo_mode("gtd")
     _, ex = gtd_tools.get_gtd_tools(user=USER)
     with patch("crm.gtd_tools.gtd_service.create_todo", return_value={"id": 1}) as m:
         ex["todo_create"](title="Call Acme", owner_id=999)
@@ -218,24 +218,24 @@ def test_todo_tools_carry_the_same_identity(task_mode):
 
 # ── 4. Identity does not move the tool surface ─────────────────────────────────
 
-def test_user_binding_changes_no_tool_name_and_no_writes_flag(task_mode):
+def test_user_binding_changes_no_tool_name_and_no_writes_flag(todo_mode):
     # background_allowlist() is derived from writes_map. If identity could shift either,
     # binding a user would silently widen or narrow what an unattended turn may call.
-    task_mode("normal")
+    todo_mode("normal")
     anonymous = ToolRegistry()
     attended = ToolRegistry(user=USER)
     assert anonymous.writes_map == attended.writes_map
     assert set(anonymous.executors) == set(attended.executors)
 
 
-def test_owner_property_is_advertised_on_every_owner_filterable_read(task_mode):
-    task_mode("normal")
+def test_owner_property_is_advertised_on_every_owner_filterable_read(todo_mode):
+    todo_mode("normal")
     reg = ToolRegistry(user=USER)
     advertised = {
         d["name"] for d in reg.tool_defs if "owner" in d["input_schema"]["properties"]
     }
     assert advertised == {
-        "crm_find_contact", "crm_search_companies", "crm_list_tasks",
+        "crm_find_contact", "crm_search_companies", "crm_list_todos",
         "crm_get_stale_deals", "crm_get_contact_staleness",
     }
     for d in reg.tool_defs:
@@ -244,10 +244,10 @@ def test_owner_property_is_advertised_on_every_owner_filterable_read(task_mode):
             assert "owner" not in d["input_schema"].get("required", [])
 
 
-def test_owner_is_never_required_and_never_an_id(task_mode):
+def test_owner_is_never_required_and_never_an_id(todo_mode):
     # The description is what the model reads. It must offer words, not ids — a def that
     # invited an id would undo the executor's guard by making the id look legitimate.
-    task_mode("normal")
+    todo_mode("normal")
     reg = ToolRegistry(user=USER)
     for d in reg.tool_defs:
         prop = d["input_schema"]["properties"].get("owner")
