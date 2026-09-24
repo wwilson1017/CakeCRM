@@ -179,7 +179,7 @@ def test_full_ladder_end_to_end(today):
 
 
 def test_sweeps_exclude_what_they_claim_to(today):
-    """Dropped todos, done todos, todos on archived deals and undated todos must all
+    """Dropped, done, on-archived-deal and undated todos must all
     stay out."""
     from crm import service, today_service
 

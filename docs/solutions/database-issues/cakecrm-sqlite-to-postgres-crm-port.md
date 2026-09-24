@@ -18,7 +18,7 @@ the remaining cake_os feature ports (companies, chatter, scoring, custom fields,
 ## Symptoms (each shipped-looking but wrong)
 
 - Every activity/timeline timestamp renders the literal text **"Invalid Date"** in the browser.
-- Deal/task edit forms can't **unlink** a contact — the UI shows "No contact" but the row keeps its old FK.
+- Deal/todo edit forms can't **unlink** a contact — the UI shows "No contact" but the row keeps its old FK.
 - Contact **search silently caps at 20** results with a wrong total (no "load more").
 - A deal created with an out-of-range `stage` is **summed into pipeline value but invisible** in every column.
 - Money loses cents on larger values; a bulk CSV import **freezes the whole single-process app**.

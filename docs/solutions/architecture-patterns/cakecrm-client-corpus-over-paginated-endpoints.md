@@ -9,7 +9,7 @@ problem_type: pattern
 
 ## Context
 
-CakeCRM's shared collection layer (#73) filters, searches and sorts an **in-memory array**; it has no server-search hook. Issue #77 adopted it on Contacts, Companies and Tasks — three pages that until then used server-side `q=`, `status=`, `sort=` and `limit`/`offset` with infinite scroll.
+CakeCRM's shared collection layer (#73) filters, searches and sorts an **in-memory array**; it has no server-search hook. Issue #77 adopted it on Contacts, Companies and Todos — three pages that until then used server-side `q=`, `status=`, `sort=` and `limit`/`offset` with infinite scroll.
 
 That is not a UI rewrite. Applying a client-side facet to a server-paginated *slice* silently lies about what matched, so adopting the layer means moving the whole corpus into the browser — which changes pagination, cache coherence and failure handling all at once. This is the playbook, verified end-to-end on PR #107 (53 real-Postgres integration tests, 413 vitest tests, and a 12/12 independent smoke pass against the running app).
 
@@ -17,7 +17,7 @@ That is not a UI rewrite. Applying a client-side facet to a server-paginated *sl
 
 ### 1. Sweep on an immutable, append-only key — and use a keyset, not OFFSET
 
-Membership is not stable across a multi-second sweep: CakeCRM hard-deletes contacts and tasks, and a task also leaves `list_tasks` when it is dropped or its deal is archived. Under OFFSET, one deletion behind the cursor shifts every later row back by one and a record is **skipped entirely**.
+Membership is not stable across a multi-second sweep: CakeCRM hard-deletes contacts and todos, and a todo also leaves `list_todos` when it is dropped or its deal is archived. Under OFFSET, one deletion behind the cursor shifts every later row back by one and a record is **skipped entirely**.
 
 ```python
 _CONTACT_SORTS = {
@@ -66,9 +66,9 @@ Three rules the overlay needs:
 
 - **Merge patches, not replacements.** CRM write responses are narrower than a list row (a derived `last_contact_at`, a joined `contact_name`); a replacement blanks exactly the columns the list renders. An explicit `null` must still overwrite — unlinking is a real edit.
 - **A tombstone**, because CakeCRM hard-deletes where the blueprint archives.
-- **`retry()` clears the overlay before re-sweeping.** Otherwise a patch written before the re-sweep merges back over the fresh rows: completing a repeating task re-sweeps to pick up its spawned occurrence, and a surviving `completed: 0` from an earlier edit un-completes the original.
+- **`retry()` clears the overlay before re-sweeping.** Otherwise a patch written before the re-sweep merges back over the fresh rows: completing a repeating todo re-sweeps to pick up its spawned occurrence, and a surviving `completed: 0` from an earlier edit un-completes the original.
 
-Two backend reads had to change to make this honest: `get_task` gained the contact/deal joins (every task write returns it, and a task re-linked to another contact would otherwise keep the old name), and `get_contact_detail` carries the derived value so a detail reload propagates it.
+Two backend reads had to change to make this honest: `get_todo` gained the contact/deal joins (every todo write returns it, and a todo re-linked to another contact would otherwise keep the old name), and `get_contact_detail` carries the derived value so a detail reload propagates it.
 
 ### 5. Answer for every writer the page cannot see
 
@@ -82,7 +82,7 @@ This is the part that is easy to under-build, and it took three review stages to
 
 `contacts/:id?` is ONE route rendering the list page, which renders the detail when the segment is present. What matters is that the **element type** the router renders never changes: the assembly stays mounted, open → back does not re-sweep, and a cold deep link never sweeps at all (via the assembly's latching `enabled` gate). Two separate `<Route>`s both rendering the same component behave identically; what breaks it is routing `:id` at a *different* component.
 
-This also settled whether to adopt the layer's modal detail: `DetailModal` is `z-50` and the assistant launcher is `z-40` (`DealDetailSheet` drops its own overlay to 39 precisely to stay under it), so a modal detail would cover the launcher for exactly the records that publish assistant context (#14). Tasks, having no route to preserve and a detail that already covered the launcher, does use the shell.
+This also settled whether to adopt the layer's modal detail: `DetailModal` is `z-50` and the assistant launcher is `z-40` (`DealDetailSheet` drops its own overlay to 39 precisely to stay under it), so a modal detail would cover the launcher for exactly the records that publish assistant context (#14). Todos, having no route to preserve and a detail that already covered the launcher, does use the shell.
 
 ### 7. Prove the SQL against a real database
 

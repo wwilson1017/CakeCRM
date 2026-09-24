@@ -307,7 +307,7 @@ def test_day_bounds_defaults_to_today_and_is_always_aware(monkeypatch):
 # ── SQL shape ─────────────────────────────────────────────────────────────────
 
 def test_todos_query_carries_the_house_predicates(rec, pinned_today):
-    """A new todo reader must sweep dropped todos and todos on archived deals."""
+    """A new todo reader must sweep dropped todos and those on archived deals."""
     today_service.get_today()
     sql = rec.sql_containing("FROM todos")
     assert service.NOT_DROPPED_TODO in sql

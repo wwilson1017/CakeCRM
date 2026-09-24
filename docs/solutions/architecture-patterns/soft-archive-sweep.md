@@ -15,14 +15,14 @@ the sweep already looked done:
 
 | Missed reader | Symptom |
 |---|---|
-| `list_tasks` | an archived deal's task still listed, with its title |
-| `get_dashboard_stats` (overdue counter) | count disagreed with the task list |
+| `list_todos` | an archived deal's todo still listed, with its title |
+| `get_dashboard_stats` (overdue counter) | count disagreed with the todo list |
 | `get_dashboard_stats` (pending counter) | same |
-| `get_contact_detail` | archived deal's task on the contact page |
+| `get_contact_detail` | archived deal's todo on the contact page |
 
-The last one mattered most: `crm_list_tasks` and `crm_dashboard` are `writes:False`, so
+The last one mattered most: `crm_list_todos` and `crm_dashboard` are `writes:False`, so
 they are in the unattended heartbeat's allowlist. The user archives a junk deal and the
-autonomous assistant nags them about its follow-up task — the "archive stops the noise"
+autonomous assistant nags them about its follow-up todo — the "archive stops the noise"
 promise, inverted.
 
 ## What actually fixed it
@@ -31,7 +31,7 @@ Not another grep. **A stated rule:**
 
 > Work items follow the deal. History does not.
 
-Once that sentence existed, every remaining site classified itself in seconds. Tasks and
+Once that sentence existed, every remaining site classified itself in seconds. Todos and
 open work are swept; `activity_log` and win/loss history deliberately are not.
 
 ## The pattern
@@ -39,7 +39,7 @@ open work are swept; `activity_log` and win/loss history deliberately are not.
 1. **Grep every reader before writing any predicate.** `FROM|JOIN|UPDATE <table>` across
    the whole backend, not just the module you're editing.
 2. **State the inclusion rule in one sentence** and put it where the constant lives.
-3. **Export a named predicate constant** (`_LIVE_PREDICATE`, `LIVE_TASK_PREDICATE`) from
+3. **Export a named predicate constant** (`_LIVE_PREDICATE`, `LIVE_TODO_PREDICATE`) from
    the owning service and have siblings **import** it. A sibling that re-types
    `archived_at IS NULL` as a literal is a future miss — CakeCRM's `analytics_service.py`
    did exactly this and a reviewer caught it.

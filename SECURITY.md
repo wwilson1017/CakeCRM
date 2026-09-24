@@ -194,8 +194,8 @@ Approve card. A tool qualifies only when all five of these hold:
 
 Twenty tools qualify. Sixteen are CRM tools: creating and updating contacts, companies
 and deals; moving a deal's stage; marking a deal won or lost; logging an activity;
-creating, updating and completing a task; and setting custom-field values on a contact,
-company or deal. The other four are the todo tools GTD task mode uses in place of three
+creating, updating and completing a todo; and setting custom-field values on a contact,
+company or deal. The other four are the todo tools GTD todo mode uses in place of three
 of those: capturing a todo, updating one, and creating or updating a project.
 
 **Everything else still asks**, and absence of the classification is the deny state — a
@@ -204,7 +204,7 @@ exempt. Deletes, archives, merges, bulk moves, lead-score recomputation, Gmail d
 notifications, memory facts, and any write to `soul.md` or `MEMORY.md` all
 keep their Approve card. Bulk todo updates and both todo deletes are in that group too.
 Five of the twenty can take a record out of your lists by setting its `status` —
-archiving a contact or a company, or dropping a task, a todo or a project; that
+archiving a contact or a company, or dropping a todo or a project; that
 particular call keeps its card even though the tool is routine. Finishing something is
 not the same as removing it, so marking a todo done or a project completed runs without
 asking, and so does filing either one to someday.
@@ -222,11 +222,11 @@ Three rules override the tier entirely, in every mode:
 CakeCRM has **two unauthenticated todo surfaces**, and they are asymmetric — read the
 Default row in the table below before you assume both are off.
 
-Neither depends on which task mode you are in. They are mounted always and gated only
-on their own settings, so switching between Todo-GTD and normal tasks does not turn
-either one on or off — and because it does not, Settings → Tasks shows their controls in
+Neither depends on which todo mode you are in. They are mounted always and gated only
+on their own settings, so switching between Todo-GTD and normal todos does not turn
+either one on or off — and because it does not, Settings → Todos shows their controls in
 either mode, whether or not either surface is currently configured. Switching to the
-simple task list never hides a link that is still serving, and never hides the control
+simple todo list never hides a link that is still serving, and never hides the control
 that restricts one. Those controls are **admin-only**.
 
 They are authorized by an unguessable **secret token in the URL path**, not by a
@@ -239,7 +239,7 @@ history and may appear in referrer headers or a proxy log. Treat it like a passw
 | Path | `/capture` or `/capture/{token}` | `/todo` or `/todo/{token}` |
 | Grants | **Write-only** — creates one inbox item | **Read and write** on every todo |
 | Default | Reachable without a token (harmless: nothing is readable) | **Off entirely** |
-| Manage | Settings → Assistant → Task mode | Settings → Assistant → Task mode |
+| Manage | Settings → Assistant → Todo mode | Settings → Assistant → Todo mode |
 
 - **Capture is genuinely write-only.** It accepts a block of text, files it in your
   inbox, and answers with nothing but the new item's id. There is no read endpoint on
