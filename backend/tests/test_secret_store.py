@@ -259,6 +259,49 @@ def test_a_process_that_loses_the_race_adopts_the_winners_value(data_dir):
     assert store.file_path.read_text(encoding="utf-8") == "the-winners-secret"
 
 
+def test_the_secret_file_is_never_visible_half_written(data_dir, monkeypatch):
+    """The file is published by linking an already-complete temp file into place.
+    An exclusive CREATE would put an empty file at the target for the length of
+    the write, and a process racing it would read that as the secret."""
+    monkeypatch.delenv("JWT_SECRET", raising=False)
+    store = _jwt_like()
+    real_fsync = os.fsync
+    target_existed = []
+
+    def spy(fd):
+        target_existed.append(store.file_path.exists())
+        return real_fsync(fd)
+
+    monkeypatch.setattr(secret_store.os, "fsync", spy)
+    store.resolve()
+
+    assert target_existed, "the secret was never flushed to disk"
+    assert not any(target_existed), "the target existed while its content was still being written"
+
+
+def test_a_value_another_process_left_behind_is_not_adopted_unless_it_is_usable(
+    data_dir, monkeypatch
+):
+    """Losing the publish means re-reading the winner's value — but an empty or
+    malformed one must never become this process's signing key just because
+    somebody else put it there."""
+    monkeypatch.delenv("JWT_SECRET", raising=False)
+
+    def link_but_lose(src, dst):
+        Path(dst).write_text("", encoding="utf-8")
+        raise FileExistsError(dst)
+
+    monkeypatch.setattr(secret_store.os, "link", link_but_lose)
+
+    store = _jwt_like()
+    assert store.resolve(), "an empty secret was cached"
+    assert store.source == "ephemeral"
+
+    strict = _jwt_like(ephemeral_fallback=False)
+    with pytest.raises(SecretPersistenceError):
+        strict.resolve()
+
+
 def test_four_real_processes_starting_at_once_agree_on_one_secret(tmp_path):
     child = textwrap.dedent(
         f"""

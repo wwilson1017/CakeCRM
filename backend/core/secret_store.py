@@ -25,6 +25,7 @@ credentials under a key that dies at restart is worse than a visible failure.
 
 import logging
 import os
+import tempfile
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
@@ -196,10 +197,13 @@ class PersistedSecret:
         try:
             DATA_DIR.mkdir(parents=True, exist_ok=True)
             if replace_existing:
-                # Clear the rejected file so the exclusive create below can run.
-                # Unlinking rather than overwriting keeps ONE write path, and two
-                # processes that both reject it still converge: the one that loses
-                # the create re-reads the winner's value.
+                # Clear the rejected file so the exclusive publish below can run.
+                # Unlinking rather than overwriting keeps ONE write path. Two
+                # processes that both reject the SAME corrupt file are
+                # last-write-wins and may end up holding different secrets — an
+                # edge of an already-broken state, and the next restart converges
+                # them; a process that merely loses the ordinary create does
+                # converge, by re-reading the winner's value.
                 self.file_path.unlink(missing_ok=True)
             written = self._claim_file(value)
         except OSError as exc:
@@ -209,9 +213,16 @@ class PersistedSecret:
             return value, "ephemeral"
 
         if written != value:
-            # Another process booting at the same moment created the file first.
-            # Its value is the one on disk, so adopt it rather than keeping a
-            # secret no other process shares.
+            # Another process booting at the same moment published the file
+            # first. Its value is the one on disk, so adopt it rather than
+            # keeping a secret no other process shares — but only if it is
+            # usable. Caching an empty or malformed signing key because someone
+            # else put it there would be worse than any of the paths above.
+            if not self._validate(written):
+                self._fail(
+                    f"another process left an unusable {self.env_var} at {self.file_path}"
+                )
+                return value, "ephemeral"
             logger.info(
                 "Another process stored %s first; using the value already on disk",
                 self.env_var,
@@ -222,26 +233,35 @@ class PersistedSecret:
         return value, "generated"
 
     def _claim_file(self, value: str) -> str:
-        """Create the secret file exclusively and return whatever ended up on disk.
+        """Publish the secret file exclusively and return whatever ended up on disk.
 
-        ``O_CREAT | O_EXCL`` with mode 0600 is both the concurrency guard (two
-        processes booting together cannot each win) and the permissions guard
-        (the file is unreadable by others from its first byte — no
-        write-then-chmod window). A loser re-reads the winner's value.
+        Write to a private temp file in the same directory, then ``os.link`` it
+        into place. The link is the concurrency guard — it is atomic and fails
+        with ``FileExistsError`` if another process got there first, and a loser
+        then re-reads the winner's value — and it is also why the target file is
+        never seen half-written: it appears only once it is complete. An
+        ``O_CREAT|O_EXCL`` create would publish an EMPTY file for the length of
+        the write, which a process racing it would read as the secret (or reject
+        as corrupt and replace out from under the writer).
+
+        ``mkstemp`` creates at mode 0600, so the bytes are unreadable by others
+        from the first one and the published file inherits that — no
+        write-then-chmod window either.
         """
         path = self.file_path
-        try:
-            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        except FileExistsError:
-            return path.read_text(encoding="utf-8").strip()
+        fd, tmp_name = tempfile.mkstemp(prefix=f"{self.filename}.", dir=str(DATA_DIR))
+        tmp = Path(tmp_name)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(value)
                 handle.flush()
                 os.fsync(handle.fileno())
-        except BaseException:
-            path.unlink(missing_ok=True)
-            raise
+            try:
+                os.link(tmp, path)
+            except FileExistsError:
+                return path.read_text(encoding="utf-8").strip()
+        finally:
+            tmp.unlink(missing_ok=True)
         if os.name == "nt":
             logger.warning(
                 "%s was written with default ACLs — restrict access manually on "
