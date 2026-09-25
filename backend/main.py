@@ -136,9 +136,9 @@ async def lifespan(app: FastAPI):
             )
         else:
             logger.warning(
-                "JWT_SECRET is not set — using a generated secret, stored so sessions "
-                "survive restarts (OS keychain, or %s). Set JWT_SECRET to manage the "
-                "signing key yourself.",
+                "JWT_SECRET is not set — using a generated secret, stored at %s so "
+                "sessions survive restarts. Set JWT_SECRET to manage the signing key "
+                "yourself.",
                 JWT_SECRET_STORE.file_path,
             )
 
