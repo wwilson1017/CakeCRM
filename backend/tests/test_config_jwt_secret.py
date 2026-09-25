@@ -117,6 +117,21 @@ def test_config_is_wired_to_the_shared_ladder():
     assert store.file_path.parent.name == "data"
     assert store._ephemeral_fallback is True, "an unmounted volume must not stop the app"
     assert "change-me-in-production" in store._ignored_env_values
+    assert store.use_keychain is False, (
+        "a keychain entry is per-OS-account, so two checkouts under one login would "
+        "sign with the same key and accept each other's tokens"
+    )
+
+
+def test_the_encryption_key_still_uses_the_keychain():
+    """The JWT opt-out must not have been applied to the Fernet key: renaming or
+    skipping its keychain entry would make every existing install generate a new
+    one and orphan every encrypted credential."""
+    from core.encryption import _ENCRYPTION_KEY
+
+    assert _ENCRYPTION_KEY.use_keychain is True
+    assert _ENCRYPTION_KEY.keychain_account == "encryption-key"
+    assert _ENCRYPTION_KEY.filename == ".encryption-key"
 
 
 @pytest.mark.parametrize("placeholder", ["change-me-in-production"])

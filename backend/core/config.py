@@ -34,6 +34,12 @@ JWT_SECRET_STORE = PersistedSecret(
     # Losing every session is bad; refusing to boot is worse. An install with no
     # writable volume still starts, loudly, on a process-local secret.
     ephemeral_fallback=True,
+    # The one rung this does NOT share with the encryption key. A keychain entry
+    # is scoped to the OS ACCOUNT, so two checkouts under one login would sign
+    # with the same key and accept each other's tokens — a fresh install seeds
+    # admin id 1 at epoch 0, so a token from one is an admin session on the other.
+    # The file under `backend/data/` is install-local by construction.
+    use_keychain=False,
 )
 
 

@@ -44,13 +44,16 @@ def data_dir(tmp_path, monkeypatch):
 
 
 def _jwt_like(**overrides) -> PersistedSecret:
-    """A store configured the way core.config configures the JWT secret."""
+    """A store configured the way core.config configures the JWT secret — which
+    includes opting OUT of the keychain. Tests about the keychain rung itself pass
+    `use_keychain=True`, since that rung belongs to the encryption key."""
     kwargs = {
         "env_var": "JWT_SECRET",
         "filename": ".jwt-secret",
         "generate": lambda: os.urandom(16).hex(),
         "ignored_env_values": ("change-me-in-production",),
         "ephemeral_fallback": True,
+        "use_keychain": False,
     }
     kwargs.update(overrides)
     return PersistedSecret(**kwargs)
@@ -122,7 +125,7 @@ def test_a_generated_secret_goes_into_the_keychain_when_there_is_one(data_dir, m
     vault: dict[str, str] = {}
     _fake_keychain(monkeypatch, vault)
 
-    store = _jwt_like()
+    store = _jwt_like(use_keychain=True)
 
     assert store.resolve() == vault["jwt-secret"]
     assert store.source == "generated"
@@ -144,7 +147,7 @@ def test_a_process_that_loses_the_keychain_race_adopts_what_is_stored(data_dir, 
 
     monkeypatch.setattr(secret_store, "_keychain_write", _write_but_lose)
 
-    store = _jwt_like()
+    store = _jwt_like(use_keychain=True)
 
     assert store.resolve() == "the-other-process-won"
     assert store.source == "generated"
@@ -155,10 +158,31 @@ def test_the_keychain_beats_the_file(data_dir, monkeypatch):
     monkeypatch.delenv("JWT_SECRET", raising=False)
     monkeypatch.setattr(secret_store, "_keychain_read", lambda account: "from-the-keychain")
 
-    store = _jwt_like()
+    store = _jwt_like(use_keychain=True)
 
     assert store.resolve() == "from-the-keychain"
     assert store.source == "keychain"
+
+
+def test_a_store_that_opts_out_never_touches_the_keychain(data_dir, monkeypatch):
+    """A keychain entry is scoped to the OS ACCOUNT, so a SIGNING key stored there
+    is shared by every checkout under one login — each would accept the other's
+    tokens. The JWT secret therefore skips the rung on both read and write."""
+    monkeypatch.delenv("JWT_SECRET", raising=False)
+    touched: list[str] = []
+    monkeypatch.setattr(
+        secret_store, "_keychain_read", lambda account: touched.append("read") or "another-installs-key"
+    )
+    monkeypatch.setattr(
+        secret_store, "_keychain_write", lambda account, value: bool(touched.append("write"))
+    )
+
+    store = _jwt_like()
+
+    assert store.resolve() != "another-installs-key"
+    assert store.source == "generated"
+    assert store.file_path.exists(), "it must fall to the install-local file instead"
+    assert touched == [], f"the keychain was consulted: {touched}"
 
 
 def test_the_keychain_account_is_derived_from_the_file_name():

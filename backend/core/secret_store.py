@@ -7,13 +7,25 @@ secret (a new one signs every seat out — issue #222). They resolve the same wa
 and this module is the single place that ladder is written:
 
 1. an environment variable   (deployed instances that pin their own value)
-2. the OS keychain           (local macOS / Windows dev machines)
+2. the OS keychain           (local macOS / Windows dev machines) — OPT-IN
 3. a file under ``backend/data/``  (headless Linux, CI, Docker, Railway)
 4. otherwise: generate once, store it, and reuse it forever after
 
 Step 3 is the one that matters on Railway. The container filesystem is replaced
 on every redeploy EXCEPT ``/app/backend/data``, which ``railway.json`` requires
 as a mounted volume, and that is the directory ``backend/data/`` resolves to.
+
+Step 2 is opt-in (``use_keychain``) and the JWT secret opts OUT, which is the one
+place the two secrets take different rungs. The keychain namespace is per-OS-
+ACCOUNT, not per-install: two CakeCRM checkouts under one login would read the
+same entry, and for a SIGNING key that means each install accepts the other's
+tokens — a fresh install seeds admin id 1 at epoch 0, so a token minted against
+one authenticates as admin on the other. The file under ``backend/data/`` is
+install-local by construction, so the JWT secret uses it on every platform. The
+encryption key keeps step 2 unchanged: sharing a Fernet key between two of your
+own checkouts grants nobody a session, and renaming its keychain entry to scope
+it would make every existing install generate a new key and orphan every
+encrypted credential it holds.
 
 The two secrets differ in exactly one respect, which is a constructor argument
 rather than a second ladder: what to do when the *store* step fails (no volume,
@@ -86,10 +98,12 @@ class PersistedSecret:
         validate: Callable[[str], bool] | None = None,
         ignored_env_values: Iterable[str] = (),
         ephemeral_fallback: bool = False,
+        use_keychain: bool = True,
     ) -> None:
         self.env_var = env_var
         self.filename = filename
         self.keychain_account = filename.lstrip(".")
+        self.use_keychain = use_keychain
         self._generate = generate
         self._validate = validate or (lambda value: bool(value))
         self._ignored_env_values = frozenset(ignored_env_values)
@@ -139,14 +153,15 @@ class PersistedSecret:
                 return raw, "env"
             logger.warning("%s is set but is not a valid value, ignoring", self.env_var)
 
-        stored = _keychain_read(self.keychain_account)
-        if stored:
-            if self._validate(stored):
-                logger.info("Using %s from the OS keychain", self.env_var)
-                return stored, "keychain"
-            logger.warning(
-                "The OS keychain entry for %s is invalid, ignoring", self.keychain_account
-            )
+        if self.use_keychain:
+            stored = _keychain_read(self.keychain_account)
+            if stored:
+                if self._validate(stored):
+                    logger.info("Using %s from the OS keychain", self.env_var)
+                    return stored, "keychain"
+                logger.warning(
+                    "The OS keychain entry for %s is invalid, ignoring", self.keychain_account
+                )
 
         from_file, stale_file = self._read_file()
         if from_file is not None:
@@ -184,7 +199,7 @@ class PersistedSecret:
     def _generate_and_store(self, *, replace_existing: bool = False) -> tuple[str, str]:
         value = self._generate()
 
-        if _keychain_write(self.keychain_account, value):
+        if self.use_keychain and _keychain_write(self.keychain_account, value):
             # Read back rather than trusting the write: if a second process was
             # booting at the same moment, the keychain holds ITS value and both
             # processes must agree on the one that is actually stored.
@@ -194,11 +209,11 @@ class PersistedSecret:
             # A, B and read A-then-B, leaving A holding a value the keychain no
             # longer has until A restarts. `keyring` offers no compare-and-set, so
             # closing it means an interprocess lock, and the upgrade path is a
-            # lock file beside the data dir. Not built, because this branch is
-            # unreachable where it would matter: the deploy container has no
-            # keyring backend at all (the ladder falls straight through to the
-            # file step, which IS exclusive), so the residual is one extra
-            # sign-out on a developer machine whose very first two boots overlap.
+            # lock file beside the data dir. Not built, because of who reaches
+            # this branch: only the encryption key opts into the keychain, only on
+            # a machine that HAS one (the deploy container does not — it falls
+            # straight through to the exclusive file step), so the residual is one
+            # regenerated dev key when a machine's very first two boots overlap.
             stored = _keychain_read(self.keychain_account)
             logger.info(
                 "Generated a new %s and stored it in the OS keychain", self.env_var
