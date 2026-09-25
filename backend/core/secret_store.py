@@ -188,6 +188,17 @@ class PersistedSecret:
             # Read back rather than trusting the write: if a second process was
             # booting at the same moment, the keychain holds ITS value and both
             # processes must agree on the one that is actually stored.
+            #
+            # simplification: the read-back narrows the window but does not close
+            # it — two processes generating at once can still write in the order
+            # A, B and read A-then-B, leaving A holding a value the keychain no
+            # longer has until A restarts. `keyring` offers no compare-and-set, so
+            # closing it means an interprocess lock, and the upgrade path is a
+            # lock file beside the data dir. Not built, because this branch is
+            # unreachable where it would matter: the deploy container has no
+            # keyring backend at all (the ladder falls straight through to the
+            # file step, which IS exclusive), so the residual is one extra
+            # sign-out on a developer machine whose very first two boots overlap.
             stored = _keychain_read(self.keychain_account)
             logger.info(
                 "Generated a new %s and stored it in the OS keychain", self.env_var
