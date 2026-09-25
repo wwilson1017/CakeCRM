@@ -10,6 +10,8 @@ import secrets
 
 from dotenv import load_dotenv
 
+from core.secret_store import PersistedSecret
+
 _backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _root_dir = os.path.dirname(_backend_dir)
 load_dotenv(os.path.join(_root_dir, ".env"))
@@ -19,9 +21,26 @@ load_dotenv(os.path.join(_backend_dir, ".env"))
 RAILWAY_PUBLIC_DOMAIN = os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
 RAILWAY_PUBLIC_URL = f"https://{RAILWAY_PUBLIC_DOMAIN}" if RAILWAY_PUBLIC_DOMAIN else ""
 
-# Track whether JWT_SECRET was explicitly provided or auto-generated
-_jwt_secret_from_env = os.getenv("JWT_SECRET", "")
-_jwt_secret_is_auto = not _jwt_secret_from_env or _jwt_secret_from_env == "change-me-in-production"
+# The JWT signing secret. Resolved through the SAME ladder as the encryption key
+# (env -> OS keychain -> a file on the Railway volume -> generate once), because a
+# secret that only lived in the process meant every restart minted a new signing
+# key and signed every seat out — issue #222. `.env.example` ships the placeholder,
+# so it is declared here as "not a real value" rather than checked at each use.
+JWT_SECRET_STORE = PersistedSecret(
+    env_var="JWT_SECRET",
+    filename=".jwt-secret",
+    generate=lambda: secrets.token_hex(32),
+    ignored_env_values=("change-me-in-production",),
+    # Losing every session is bad; refusing to boot is worse. An install with no
+    # writable volume still starts, loudly, on a process-local secret.
+    ephemeral_fallback=True,
+    # The one rung this does NOT share with the encryption key. A keychain entry
+    # is scoped to the OS ACCOUNT, so two checkouts under one login would sign
+    # with the same key and accept each other's tokens — a fresh install seeds
+    # admin id 1 at epoch 0, so a token from one is an admin session on the other.
+    # The file under `backend/data/` is install-local by construction.
+    use_keychain=False,
+)
 
 
 def _positive_int_env(name: str, default: int) -> int:
@@ -81,7 +100,7 @@ class AuthSettings:
 
 
 class JWTSettings:
-    secret_key: str = _jwt_secret_from_env if not _jwt_secret_is_auto else secrets.token_hex(32)
+    secret_key: str = JWT_SECRET_STORE.resolve()
     algorithm: str = "HS256"
     expire_minutes: int = int(os.getenv("JWT_EXPIRE_MINUTES", "480"))
 
@@ -106,7 +125,10 @@ class Settings:
 
     # Railway environment detection
     is_railway: bool = bool(RAILWAY_PUBLIC_DOMAIN)
-    jwt_secret_is_auto: bool = _jwt_secret_is_auto
+    # "The operator did not supply JWT_SECRET" — NOT "the secret is unstable".
+    # Since #222 an auto secret persists across restarts; the startup warning in
+    # main.py reads `JWT_SECRET_STORE.source` to say which of those it is.
+    jwt_secret_is_auto: bool = not JWT_SECRET_STORE.from_env
     # Whether `frontend_url` above fell all the way through to the dev default, i.e.
     # nobody configured this install's public address (issue #145). Tracked the same way
     # `jwt_secret_is_auto` is, and for the same reason: the value is always present, so

@@ -950,15 +950,36 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   every redeploy — EXCEPT `/app/backend/data`, which `railway.json` requires as a mounted
   volume (`requiredMountPath`), so a deploy without one does not start. That is the
   directory `backend/data/` resolves to (Dockerfile `WORKDIR /app` + `COPY backend/
-  ./backend/`), and it is why the branding logo and the `.encryption-key` fallback persist
-  today. So "Railway filesystems are ephemeral" (the `assistant_context_files` migration
+  ./backend/`), and it is why the branding logo, the `.encryption-key` fallback and
+  (since #222) the `.jwt-secret` fallback persist today. So "Railway filesystems are ephemeral" (the `assistant_context_files` migration
   header) and "the volume is real" (#57's) are both true and are not in conflict. Anything
   written OUTSIDE `backend/data/` is gone on the next deploy. New durable state should
   still default to a Postgres row — one store, one transaction, one `pg_dump` — and #57
   put attachment bytes there for exactly that reason even though the volume would have
   held them.
   Required env vars: `AUTH_PASSWORD` + `DATABASE_URL`; `ADMIN_EMAIL`/`ADMIN_NAME`
-  seed the first admin's identity; `JWT_SECRET` and `ENCRYPTION_KEY` auto-generate. **The login credential is DB-backed** (#78): the
+  seed the first admin's identity; `JWT_SECRET` and `ENCRYPTION_KEY` auto-generate
+  — and since #222 both resolve through ONE ladder (`core/secret_store.PersistedSecret`:
+  env var → OS keychain → a 0600 file under `backend/data/` → generate once and store),
+  so an install that sets neither keeps the same signing key and the same Fernet key
+  across restarts instead of signing every seat out on each deploy. **The JWT secret
+  opts OUT of the keychain rung** (`use_keychain=False`) and that is the only rung the
+  two do not share: a keychain entry is scoped to the OS ACCOUNT, so two checkouts under
+  one login would sign with the same key and each accept the other's tokens — a fresh
+  install seeds admin id 1 at epoch 0, so a token from one is an admin session on the
+  other. The file under `backend/data/` is install-local by construction. The encryption
+  key KEEPS the rung unchanged: sharing a Fernet key between two of your own checkouts
+  grants nobody a session, and renaming its keychain account to scope it would make every
+  existing install generate a new key and orphan every encrypted credential. `jwt_secret_is_auto`
+  still means "the operator did not supply one" and the startup warning still says to pin
+  it; the two secrets differ in exactly one constructor argument, `ephemeral_fallback`
+  — the JWT secret boots on a process-local value (loudly) when the volume cannot be
+  written, the encryption key raises instead, because a Fernet key that dies at restart
+  would encrypt new credentials into ciphertext nobody can read back. An existing but
+  UNREADABLE secret file is never silently replaced; only one whose contents fail
+  validation is. The file is claimed with `O_CREAT|O_EXCL` at mode 0600, so two processes
+  booting together converge on one value rather than each caching its own.
+  **The login credential is DB-backed** (#78): the
   `auth_credential` singleton holds a bcrypt hash the logged-in user changes from
   `/crm/settings`, and `core.auth.verify_password()` resolves DB-hash-first, falling
   back to `AUTH_PASSWORD` only while that hash IS NULL — so the env var is a
@@ -2474,7 +2495,8 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   reserved because `/api/todo-web/todos/…` would otherwise shadow the API mount.
   Documented in SECURITY.md.
 - **API keys are entered in-app, encrypted at rest** (Fernet; key from env →
-  OS keychain → file fallback) — never as env vars.
+  OS keychain → file fallback, through the shared `core/secret_store.py` ladder the
+  JWT secret also uses, minus that middle rung — #222) — never as env vars.
 - **Backend tests** live in `backend/tests/` (config in `backend/pytest.ini`,
   `asyncio_mode = auto`). The default `pytest` run is **hermetic** — pg helpers and
   provider SDKs are mocked, encryption runs against a per-test key — so the CI gate
@@ -2897,6 +2919,7 @@ one-click in the cloud (the template provisions a PostgreSQL service).
 | Accounts, roles, per-user 2FA, record ownership + per-rep analytics — **landed #60 (Phase A)** as `backend/users/` (`service`/`router`/`bootstrap`) + reworked `core/{auth,auth_2fa,config}.py` + `20260821100126_multi_user.sql` + `frontend/src/crm/{useUsers.ts,components/{TeamSettings,OwnerSelect,OwnerScopeToggle}.tsx}` (`OwnerScopeToggle` retired in #77 for a multi-select Owner facet). Phase B (#98) is a separate plan, landing as children: **B1 #190** (identity reaches the tool layer), **B2 #191** (`assistant_conversations.user_id` — per-seat, access-controlled chat history), **B3 #192** (notification recipients + owner-routed nudges) **B4 #193** (per-user Telegram links) and **B5 #194** (Gmail seat gate + protected-file admin gate + the docs truth pass) have all landed; #98 stays open as the tracker. **#213** is B5's follow-up — the same admin gate on the assistant's tool door, which B5's approved plan had scoped to REST. Corrects the issue's premise: cake_os uses `owner_email` TEXT with no FK, so this is an FK design, not a carry | New capability (no blueprint — `cake_os/backend/apps/crm/analytics_service.get_rep_performance` for the per-rep shape only) |
 | DB-backed login credential + in-app password change (`auth_credential` singleton, `POST /api/auth/change-password`, `AUTH_PASSWORD_RESET` recovery lever) — **landed #78** as `backend/core/auth.py` + `frontend/src/crm/components/ChangePasswordCard.tsx` | New capability (no blueprint — back-port candidate to CAKE OS) |
 | Postgres pool + migration runner | `cake_os/backend/core/postgres.py` |
+| One resolution ladder for both long-lived secrets (`backend/core/secret_store.py`: `PersistedSecret` over env var → OS keychain → a 0600 file under `backend/data/` → generate once; published by linking an already-written `mkstemp` file into place, so the target is atomic, never half-written, and two processes booting together converge on one value; `ephemeral_fallback` and `use_keychain` as the two per-secret differences — the JWT secret skips the keychain because that namespace is per-OS-account and two checkouts under one login would then accept each other's tokens) — **landed #222**, rewiring `core/encryption.py` onto it (public API unchanged: `EncryptionKeyManager.get_key()`/`reset_cache()`, same `.encryption-key` filename and mode) and putting `core/config.py`'s JWT secret on it in place of an import-time `secrets.token_hex(32)`, which minted a new signing key on every process start and signed every seat out on each Railway redeploy. `jwt_secret_is_auto` keeps its meaning (`not JWT_SECRET_STORE.from_env`); `main.py`'s startup warning branches on `source` so it can no longer claim a durable secret resets on redeploy, and says the opposite, loudly, when the volume could not be written. Two behaviours are deliberately STRICTER than the code it replaces: an existing but unreadable secret file is never silently rotated (only one whose contents fail validation is), and the file is created at mode 0600 rather than written then chmod'd. Fixed in passing: `tests/test_crm_seed.py` imported the conftest as `tests.conftest` where its nine siblings use `conftest`, so that module body executed twice | New capability (no blueprint — back-port candidate to CAKE OS) |
 | AI providers + pricing + setup wizard | `chatty/backend/core/providers/`, `chatty/frontend/src/setup/` |
 | CRM core (schema, router, tools, smart import) — **landed #3** as `backend/crm/` + `frontend/src/crm/` + `frontend/src/shared/` | `chatty/backend/integrations/crm_lite/`, `chatty/frontend/src/crm/` |
 | Assistant engine — **chat loop, tool registry, confirmations, uploads landed #4** as `backend/assistant/` + `frontend/src/assistant/`; **memory (facts + FTS) + dreaming (pure-algorithmic usage scoring + fact soft-archival) landed #5** as `backend/memory/` + `backend/dreaming/` (dreaming's archival unit was the fact row because CakeCRM had no file store; since #72 Phase 4 it scores topic files too, driven by #6's `maintenance_tick`) | `chatty/backend/core/agents/` |

@@ -121,11 +121,26 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Running locally (no RAILWAY_PUBLIC_DOMAIN detected)")
 
+    # `jwt_secret_is_auto` says the operator did not supply a secret; it does NOT
+    # say whether the generated one is durable. Since #222 it normally is, so the
+    # two cases get different messages — the old text claimed sessions reset on
+    # every redeploy, which is now only true on the ephemeral path.
     if settings.jwt_secret_is_auto:
-        logger.warning(
-            "JWT_SECRET not set — using auto-generated secret. "
-            "Sessions will reset on redeploy. Set JWT_SECRET env var for persistent sessions."
-        )
+        from core.config import JWT_SECRET_STORE
+        if JWT_SECRET_STORE.source == "ephemeral":
+            logger.error(
+                "JWT_SECRET is not set and the generated secret could NOT be stored "
+                "at %s — every restart will sign everyone out. Set JWT_SECRET, or "
+                "mount the persistent volume at /app/backend/data.",
+                JWT_SECRET_STORE.file_path,
+            )
+        else:
+            logger.warning(
+                "JWT_SECRET is not set — using a generated secret, stored at %s so "
+                "sessions survive restarts. Set JWT_SECRET to manage the signing key "
+                "yourself.",
+                JWT_SECRET_STORE.file_path,
+            )
 
     if not os.environ.get("ENCRYPTION_KEY"):
         logger.info(
