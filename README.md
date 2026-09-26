@@ -16,16 +16,41 @@ with a sales assistant that works your pipeline for you.
 > issue on GitHub and say so.
 
 <p align="center">
-  <img src="website/img/deal-baker.png" alt="A deal open in CakeCRM with Baker's drawer beside it, answering what the next step should be, grounded in the deal's own notes and activity." width="900">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/readme/deal-baker-dark.png">
+    <img src="docs/brand/readme/deal-baker-light.png" alt="A deal open in CakeCRM with Baker beside it, answering what the next step should be from the deal's own notes, activity and todos." width="900">
+  </picture>
 </p>
 
 <p align="center">
-  <img src="website/img/dashboard.png" alt="Dashboard: the Today list of what is overdue and due, above the pipeline number and the stats that matter." width="440">
-  <img src="website/img/pipeline.png" alt="Pipeline board: every open deal by stage, with value, close date and last contact on each card." width="440">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/readme/dashboard-dark.png">
+    <img src="docs/brand/readme/dashboard-light.png" alt="Dashboard: the Today list leads with a hot deal that has gone quiet, then what is overdue and due, above the pipeline number and the stats that matter." width="440">
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/readme/pipeline-dark.png">
+    <img src="docs/brand/readme/pipeline-light.png" alt="Pipeline board: every open deal by stage, with value, probability, close date and last contact on each card. Won and lost stay hidden until asked for." width="440">
+  </picture>
 </p>
 <p align="center">
-  <img src="website/img/todos-today.png" alt="Todos, Today tab: what is overdue and what is due, each linked to its contact or deal." width="440">
-  <img src="website/img/todos-inbox.png" alt="Todos, Inbox: the triage card that turns a captured thought into a next action in three numbered steps." width="440">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/readme/deal-dark.png">
+    <img src="docs/brand/readme/deal-light.png" alt="A deal opened over the board: who, how much, how likely, when, the calls and emails so far, and a box for a note." width="440">
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/readme/contacts-dark.png">
+    <img src="docs/brand/readme/contacts-light.png" alt="Contacts: one list with company, email, phone, last contact, status and lead score, sortable and filterable." width="440">
+  </picture>
+</p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/readme/todos-today-dark.png">
+    <img src="docs/brand/readme/todos-today-light.png" alt="Todos, Today tab: what is overdue and what is due, each linked to its contact or deal." width="440">
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/readme/todos-inbox-dark.png">
+    <img src="docs/brand/readme/todos-inbox-light.png" alt="Todos, Inbox: the triage card that turns a captured thought into a next action in three numbered steps." width="440">
+  </picture>
 </p>
 
 ## The tour
