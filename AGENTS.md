@@ -2866,7 +2866,9 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   puts each WebP master in a browser window on the app's own page ground, light and dark,
   and writes 1× PNGs to `docs/brand/readme/`, which the README picks between with
   `<picture>`; re-run it whenever the site images are re-shot, and re-copy its colour
-  constants when the palette changes. The genericization guard scans
+  constants when the palette changes. The Contacts frame is README-only, so
+  `website/img/contacts.webp` is a master the site never displays; it lives beside the
+  others so one directory holds every source. The genericization guard scans
   text, not pixels, so a real prospect name in a PNG would be invisible to CI and
   permanent in history. Strip the example-data banner and the bell badge before shooting;
   the Baker shot uses a deal-scoped quick action, because an install-wide question can
