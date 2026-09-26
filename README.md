@@ -9,11 +9,11 @@ The CRM is fully usable with zero AI configuration — add any AI provider API k
 (Anthropic, OpenAI, Google Gemini, Together AI, or local models via Ollama) and it comes
 with a sales assistant that works your pipeline for you.
 
-**Website:** [mycakecrm.com](https://mycakecrm.com) — the short version, with screenshots.
+**Website:** [mycakecrm.com](https://mycakecrm.com)
 
 > **Status: v0.1.** Everything below is built and running on the public demo the
 > screenshots come from. Found a bug, or want something it doesn't do yet? Open an
-> issue on GitHub and say so.
+> issue.
 
 <p align="center">
   <picture>
@@ -57,10 +57,10 @@ with a sales assistant that works your pipeline for you.
 
 Three screens your people will actually use, and an assistant that handles the busywork.
 
-- **Start with what needs you today.** The dashboard opens on a short Today list: the
+- **Dashboard.** The dashboard opens on a short Today list: the
   overdue call, the thing that goes out this afternoon. Under it, one pipeline number and
   the handful of stats that matter.
-- **Your pipeline is a board. Drag the card.** Every open deal on one screen, in the stage
+- **Pipeline.** Every open deal on one screen, in the stage
   it is in, with the value, the close date and the last contact on the card. Won and lost
   stay tucked away until you ask. A filter you keep coming back to becomes a saved view the
   whole team can use.
@@ -107,8 +107,9 @@ Three screens your people will actually use, and an assistant that handles the b
 ## Build on it
 
 CakeCRM is also a good foundation for **simple business workflow software** of your own,
-and its author is already using it that way for a second product. Everything a small
-internal app needs is here and already proven under daily use:
+and its author is already using it that way for a second product. Sales is foundational to 
+a business and CakeCRM can be that foundation. Everything a small internal app needs is here 
+and already proven under daily use:
 
 - **One stack, one database.** FastAPI, React/Vite and PostgreSQL, with schema owned by
   plain SQL migrations that apply themselves at startup.
