@@ -309,13 +309,13 @@ def seed_demo_data(conn) -> bool:
              _ts(4, 9)[:10], 0, "low", _ts(12), _ts(5)),
 
             (14, None, None, "Ask Rachel how many holiday gift boxes she needs",
-             "", None, 0, "medium", _ts(1), _ts(1)),
+             "", "", 0, "medium", _ts(1), _ts(1)),
 
             (15, None, None, "Book the farmers market stall for October",
-             "", None, 0, "medium", _ts(1), _ts(1)),
+             "", "", 0, "medium", _ts(1), _ts(1)),
 
             (16, None, None, "Get a quote on the new display fridge",
-             "", None, 0, "low", _ts(0), _ts(0)),
+             "", "", 0, "low", _ts(0), _ts(0)),
         ]),
     )
     # The last three are raw captures that have not been triaged yet: they sit in the
