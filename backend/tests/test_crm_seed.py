@@ -124,3 +124,19 @@ def test_seed_marks_one_stale_and_one_fresh_deal_hot():
     assert hot_ids - idle, "no hot deal is fresh enough for the expanded tail"
     stages = {row[0]: row[3] for row in batches["deals"]}
     assert all(stages[d] not in ("won", "lost") for d in hot_ids)
+
+
+def test_seed_never_passes_none_for_a_not_null_text_column():
+    """`todos.due_date` and `description` are `TEXT NOT NULL DEFAULT ''` (crm_core
+    migration), and an explicit NULL in an INSERT bypasses the default — so a row
+    that spells "no due date" as None fails the whole seed on a real Postgres, which
+    the hermetic suite cannot see. #227's three inbox captures did exactly that and
+    left the demo empty; the app's own `service.create_todo` writes "" for an absent
+    date, and so must the seed."""
+    conn = FakeConn(fetchone_results=[(0,)])
+    seed_demo_data(conn)
+    batches = _seed_batches(conn)
+    for row in batches["todos"]:
+        title, description, due_date = row[3], row[4], row[5]
+        assert isinstance(description, str), (title, "description")
+        assert isinstance(due_date, str), (title, "due_date")
