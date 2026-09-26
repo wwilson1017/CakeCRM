@@ -10,7 +10,7 @@ Phase B). PostgreSQL, FastAPI, React/Vite.
 Deploy targets: `python run.py` locally (Postgres via Docker Compose), Railway
 one-click in the cloud (the template provisions a PostgreSQL service).
 
-- **Repo**: `wwilson1017/CakeCRM`, default branch `main`. **Private until launch.**
+- **Repo**: `wwilson1017/CakeCRM`, default branch `main`. **Public since v0.1 (2026-09-26).**
 - **Local convention (Will's machine)**: this repo lives at `~/ai/CakeCRM`.
 - **Blueprints**: CAKE OS at `~/ai/cake_os` (CRM features, Casey, auto-issues loop
   conventions), Chatty at `~/ai/chatty` (product shell, providers, agent engine,
