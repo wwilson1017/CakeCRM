@@ -33,6 +33,11 @@ def test_seed_row_counts_match_the_dataset():
     seed_demo_data(conn)
     inserts = [sql for sql, _ in conn.executed if "INSERT INTO" in sql]
     assert len(inserts) == 6  # one executemany per table (companies + the original 4 + crm_chatter)
+    stages = [row[3] for row in next(p for sql, p in conn.executed if "INSERT INTO deals" in sql)]
+    # every open stage has at least three deals so a fresh board is never half empty
+    for stage in ("lead", "qualified", "proposal"):
+        assert stages.count(stage) >= 3, stage
+    assert stages.count("negotiation") >= 2 and stages.count("won") >= 2 and stages.count("lost") >= 1
 
 
 def test_seed_empty_guard_counts_field_values_not_definitions():
@@ -74,7 +79,9 @@ def test_seed_links_contacts_and_deals_to_companies():
     assert [row[0] for row in batches["companies"]] == [1, 2, 3, 4, 5, 6]
     # contact company_id is the trailing column; matches the plan mapping
     contact_company = {row[0]: row[-1] for row in batches["contacts"]}
-    assert contact_company == {1: 1, 2: None, 3: 2, 4: 3, 5: 4, 6: None, 7: 5, 8: 6}
+    assert contact_company == {1: 1, 2: None, 3: 2, 4: 3, 5: 4, 6: None, 7: 5, 8: 6,
+                               9: None, 10: None, 11: None}
     # deal company_id mirrors each deal's contact's company
     deal_company = {row[0]: row[-1] for row in batches["deals"]}
-    assert deal_company == {1: 1, 2: None, 3: 3, 4: 4, 5: 2, 6: None, 7: 6}
+    assert deal_company == {1: 1, 2: None, 3: 3, 4: 4, 5: 2, 6: None, 7: 6, 8: 1, 9: 3, 10: None,
+                            11: None, 12: 4, 13: 6, 14: None, 15: 2, 16: None, 17: None}
