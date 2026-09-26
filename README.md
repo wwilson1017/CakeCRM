@@ -1,16 +1,19 @@
-# <img src="frontend/public/logo-mark.svg" alt="" height="32" align="absmiddle"> CakeCRM
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/brand/readme-banner-dark.svg">
+  <img src="docs/brand/readme-banner-light.svg" alt="CakeCRM — the simple CRM. Free, open source, self-hosted, with an AI sales assistant built in." width="100%">
+</picture>
 
 **A free, open-source, self-hostable CRM with an AI sales assistant built in.**
 
-No SaaS fees, no per-seat pricing, no vendor lock-in. The CRM is fully usable with
-zero AI configuration — add any AI provider API key (Anthropic, OpenAI, Google
-Gemini, Together AI, or local models via Ollama) and it comes with a sales assistant
-that works your pipeline for you.
+The CRM is fully usable with zero AI configuration — add any AI provider API key
+(Anthropic, OpenAI, Google Gemini, Together AI, or local models via Ollama) and it comes
+with a sales assistant that works your pipeline for you.
 
 **Website:** [mycakecrm.com](https://mycakecrm.com) — the short version, with screenshots.
 
-> **Status: v0.1.** Everything below is shipped and running on the public demo the
-> screenshots come from. Bugs and ideas go in the issues; the tracker is the roadmap.
+> **Status: v0.1.** Everything below is built and running on the public demo the
+> screenshots come from. Found a bug, or want something it doesn't do yet? Open an
+> issue on GitHub and say so.
 
 <p align="center">
   <img src="website/img/deal-baker.png" alt="A deal open in CakeCRM with Baker's drawer beside it, answering what the next step should be, grounded in the deal's own notes and activity." width="900">
@@ -75,6 +78,26 @@ Three screens your people will actually use, and an assistant that handles the b
   contact timelines automatically. There is no send capability anywhere in the
   codebase — by design.
 - Memory that persists across conversations
+
+## Build on it
+
+CakeCRM is also a good foundation for **simple business workflow software** of your own,
+and its author is already using it that way for a second product. Everything a small
+internal app needs is here and already proven under daily use:
+
+- **One stack, one database.** FastAPI, React/Vite and PostgreSQL, with schema owned by
+  plain SQL migrations that apply themselves at startup.
+- **Accounts and roles** out of the box: admin and member, an owner on every record,
+  two-factor auth, DB-backed passwords with an operator rescue lever.
+- **A shared collection layer** — search, facets, saved views, list and board views, a
+  detail shell — that any record type can adopt in one config object.
+- **An assistant engine that is a feature, not the product.** Register a tool with a
+  `writes` flag and it gets confirmations, background-turn safety and multi-provider
+  support for free; the help library makes the assistant know your product.
+- **A deploy story**: one Railway template or `python run.py`, and a CI that scans every
+  committed file for what must never leak.
+
+Fork it, rename the nouns, keep the plumbing.
 
 ## Deploy to Railway
 
@@ -144,7 +167,8 @@ have the assistant search the connected mailbox or draft from it, and a member's
 assistant is never shown those tools. An admin can switch on *"share the connected
 mailbox with all seats"* under **Settings → Integrations → Gmail** for teams that
 genuinely work one shared inbox; it is off by default. Per-user Gmail, where everyone
-connects their own account, is tracked as [issue #189](https://github.com/wwilson1017/CakeCRM/issues/189) — say so there if you want it.
+connects their own account, isn't built yet. If your team needs it, open an issue and
+say so — that is what gets it built.
 
 **Notifications carry a recipient.** Each one is either addressed to a single seat —
 visible and dismissible only by them, and pushed only to their browsers and their own
@@ -197,11 +221,11 @@ Settings once you are in.
 ## Roadmap
 
 Multi-user, the original headline item, shipped in v0.1: accounts, admin and member roles,
-an owner on every record, per-seat chat history, notifications and Telegram. What comes next
-is decided in the issues, but these are the ones already on the table:
+an owner on every record, and chat history, notifications and Telegram that belong to each
+person. What comes next is decided in the open, and these are already on the table:
 
-- **Per-seat Gmail** — each person connects their own mailbox instead of sharing the
-  admin's. Deliberately deferred until someone asks: [#189](https://github.com/wwilson1017/CakeCRM/issues/189).
+- **Per-person Gmail** — each person connects their own mailbox instead of sharing the
+  admin's. Waiting on the first team that asks for it.
 - **Importers from other CRMs** — CSV and vCard work today; mapped imports from the common
   hosted CRMs are the obvious next door.
 - **More of the manual and the playbooks** — Baker's in-product help library and its sales
@@ -209,9 +233,10 @@ is decided in the issues, but these are the ones already on the table:
 - **A mobile-first pass** — the no-login todo capture is already a PWA; the rest of the
   CRM on a phone is next.
 
-Want something else? Open an issue. Contributions are welcome under the DCO — see
-[CONTRIBUTING.md](CONTRIBUTING.md). Security questions and the Gmail guarantee are in
-[SECURITY.md](SECURITY.md).
+Want something else? Open an issue. Contributions are welcome, and
+[CONTRIBUTING.md](CONTRIBUTING.md) explains how: a sign-off on your commits, not a
+contract. Security questions, and the promise that the assistant can never send email, are
+answered in [SECURITY.md](SECURITY.md).
 
 ## Lineage
 
