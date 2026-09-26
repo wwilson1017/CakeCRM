@@ -132,6 +132,21 @@ def seed_demo_data(conn) -> bool:
              "Mike's Meals", "Head Chef", "event", "active",
              "collaboration,food-truck", "Runs a popular food truck. Discussed a collab pop-up event.",
              _ts(25), _ts(8), 6),
+
+            (9, "Priya Nair", "priya@lakesidecoffee.com", "(555) 012-3456",
+             "Lakeside Coffee", "Owner", "referral", "active",
+             "wholesale,cafe", "Two-location cafe. Wants a daily pastry case supplied before 6am.",
+             _ts(16), _ts(2), None),
+
+            (10, "Owen Blake", "owen@blakeevents.com", "(555) 123-4567",
+             "Blake & Daughters Events", "Events Director", "event", "active",
+             "events,corporate", "Plans corporate holiday parties for a dozen local firms.",
+             _ts(11), _ts(3), None),
+
+            (11, "Hannah Lee", "hannah@northsideschools.org", "(555) 234-5679",
+             "Northside Schools", "Nutrition Coordinator", "website", "active",
+             "schools,fundraiser", "Runs the district's fall fundraiser. Asked about cookie boxes.",
+             _ts(9), _ts(4), None),
         ],
     )
 
@@ -159,7 +174,7 @@ def seed_demo_data(conn) -> bool:
             (4, 5, "Holiday gift box wholesale", "qualified", 3500.00,
              _ts(-60, 9)[:10], 40, "USD",
              "150 custom boxes with cookies, brownies, and seasonal treats.",
-             _ts(18), _ts(4), 4),
+             _ts(28), _ts(16), 4),
 
             (5, 3, "Farmers market booth supplies", "lead", 600.00,
              _ts(-14, 9)[:10], 20, "USD",
@@ -175,6 +190,56 @@ def seed_demo_data(conn) -> bool:
              _ts(5, 9)[:10], 0, "USD",
              "Joint pop-up didn't work out — scheduling conflicts. Revisit in fall.",
              _ts(22), _ts(8), 6),
+
+            (8, 1, "Croissant add-on — The Green Table", "qualified", 1400.00,
+             _ts(-20, 9)[:10], 45, "USD",
+             "Maria wants croissants on the Thursday delivery. Pricing a 60-a-week run.",
+             _ts(9), _ts(2), 1),
+
+            (9, 4, "TechStart all-hands dessert bar", "proposal", 2600.00,
+             _ts(-12, 9)[:10], 65, "USD",
+             "Quarterly all-hands for 120 people. Dessert bar plus coffee service.",
+             _ts(8), _ts(1), 3),
+
+            (10, 6, "Local eats roundup feature", "lead", 300.00,
+             _ts(-30, 9)[:10], 10, "USD",
+             "Sponsored spot in Tom's roundup. Tasting box in exchange for the feature.",
+             _ts(6), _ts(6), None),
+
+            (11, 2, "Rivera anniversary cake", "qualified", 650.00,
+             _ts(-25, 9)[:10], 35, "USD",
+             "Two-tier lemon and raspberry for a 40th anniversary. James is the planner.",
+             _ts(7), _ts(2), None),
+
+            (12, 5, "Spring gift box run", "lead", 2200.00,
+             _ts(-75, 9)[:10], 15, "USD",
+             "Rachel floated a spring follow-up to the holiday boxes. Nothing scoped yet.",
+             _ts(4), _ts(4), 4),
+
+            (13, 8, "Fall pop-up — Mike's Meals", "proposal", 1500.00,
+             _ts(-40, 9)[:10], 55, "USD",
+             "Second try at the collab, September weekends. Mike has the dates this time.",
+             _ts(6), _ts(1), 6),
+
+            (14, 9, "Lakeside Coffee pastry case", "negotiation", 3100.00,
+             _ts(-9, 9)[:10], 70, "USD",
+             "Daily case for two cafes, delivered before 6am. Haggling over the Sunday run.",
+             _ts(15), _ts(0), None),
+
+            (15, 3, "Jam co-pack — Park Family Farms", "won", 1900.00,
+             _ts(4, 9)[:10], 100, "USD",
+             "We jar Lisa's strawberry and peach under her label. 400 jars for the season.",
+             _ts(30), _ts(4), 2),
+
+            (16, 10, "Corporate holiday party desserts", "proposal", 2800.00,
+             _ts(-18, 9)[:10], 60, "USD",
+             "Plated desserts for a 90-seat dinner. Owen wants a menu draft this week.",
+             _ts(10), _ts(2), None),
+
+            (17, 11, "School fundraiser cookie boxes", "lead", 800.00,
+             _ts(-35, 9)[:10], 20, "USD",
+             "Northside's fall fundraiser. Hannah asked for per-box pricing at three volumes.",
+             _ts(3), _ts(3), None),
         ],
     )
 
@@ -222,8 +287,46 @@ def seed_demo_data(conn) -> bool:
             (8, 1, 1, "Invoice The Green Table — April",
              "Monthly invoice for bread supply contract.",
              _ts(3, 9)[:10], 1, "high", _ts(10), _ts(3)),
+
+            (9, 11, 17, "Send fundraiser pricing sheet to Hannah",
+             "Per-box pricing at 100, 250 and 500 boxes.",
+             _ts(-1, 9)[:10], 0, "medium", _ts(3), _ts(3)),
+
+            (10, 9, 14, "Confirm pastry case delivery window with Priya",
+             "She needs the case stocked before the 6am open at both cafes.",
+             _ts(0, 9)[:10], 0, "high", _ts(4), _ts(1)),
+
+            (11, 10, 16, "Draft dessert menu for the Blake holiday party",
+             "Three plated options plus one vegan. Owen wants it before Friday.",
+             _ts(2, 9)[:10], 0, "high", _ts(6), _ts(2)),
+
+            (12, 4, 9, "Book the tasting room for the TechStart all-hands",
+             "David wants to preview the dessert bar with two colleagues.",
+             _ts(-3, 9)[:10], 0, "medium", _ts(5), _ts(2)),
+
+            (13, None, None, "Renew food handler certificates",
+             "Two expire this month. Book the online course for both.",
+             _ts(4, 9)[:10], 0, "low", _ts(12), _ts(5)),
+
+            (14, None, None, "Ask Rachel how many holiday gift boxes she needs",
+             "", None, 0, "medium", _ts(1), _ts(1)),
+
+            (15, None, None, "Book the farmers market stall for October",
+             "", None, 0, "medium", _ts(1), _ts(1)),
+
+            (16, None, None, "Get a quote on the new display fridge",
+             "", None, 0, "low", _ts(0), _ts(0)),
         ]),
     )
+    # The last three are raw captures that have not been triaged yet: they sit in the
+    # Inbox until someone says what kind of action they are (GTD, #70). `completed = 0`
+    # keeps the CHECK constraint happy; only the status moves.
+    cur.execute("UPDATE todos SET status = 'inbox', source = 'capture_web' WHERE id IN (14, 15, 16)")
+    # Two deals a rep has marked hot (#125). Deal 4 has had no touch of any kind —
+    # `updated_at`, activity or note — for over DEFAULT_DEAL_STALE_DAYS, so it reaches
+    # the Today panel's second rung (#131); deal 14 was touched yesterday, so it shows
+    # only in the panel's expanded tail. Both states are worth having on screen.
+    cur.execute("UPDATE deals SET deal_temperature = 'hot' WHERE id IN (4, 14)")
 
     # ── Activity log ───────────────────────────────────────────────────────────
     cur.executemany(
@@ -249,7 +352,7 @@ def seed_demo_data(conn) -> bool:
 
             (5, 5, 4, "email",
              "Sent photos of sample gift box designs. Rachel loves the rustic kraft option.",
-             _ts(4, 10)),
+             _ts(16, 10)),
 
             (6, 3, None, "call",
              "Lisa confirmed organic strawberries available through August. Locking in price.",
@@ -274,6 +377,26 @@ def seed_demo_data(conn) -> bool:
             (11, 1, 1, "note",
              "Increased Thursday delivery to 30 loaves — Green Table is growing fast.",
              _ts(12, 8)),
+
+            (12, 9, 14, "call",
+             "Priya is fine on price; the sticking point is a Sunday delivery. Offered a 7am Sunday drop.",
+             _ts(1, 9)),
+
+            (13, 10, 16, "email",
+             "Owen sent the dinner headcount (90) and a note that the client's CEO is vegan.",
+             _ts(2, 10)),
+
+            (14, 4, 9, "meeting",
+             "Walked David through the dessert bar layout. He wants a coffee station added.",
+             _ts(3, 14)),
+
+            (15, 3, 15, "note",
+             "Jam co-pack signed. First 200 jars go out with the Tuesday produce run.",
+             _ts(4, 11)),
+
+            (16, 11, 17, "email",
+             "Hannah confirmed the fundraiser dates: order forms go home Oct 6, pickup Oct 24.",
+             _ts(2, 16)),
         ],
     )
 
@@ -296,12 +419,21 @@ def seed_demo_data(conn) -> bool:
 
             (3, "deal", 4,
              "Rachel needs final box counts by Nov 1 to hit holiday production — flag early if we slip.",
-             _ts(3, 11)),
+             _ts(15, 11)),
 
             (4, "contact", 1,
              "Maria hinted at a second Green Table location opening in the fall — could double the "
              "standing bread order. Worth a proactive proposal.",
              _ts(2, 13)),
+
+            (5, "deal", 14,
+             "If Sunday is the blocker, propose Saturday double-stock with a Sunday morning top-up "
+             "from the downtown cafe's own kitchen.",
+             _ts(1, 10)),
+
+            (6, "deal", 16,
+             "Vegan option must be a real dessert, not a fruit plate — Owen has been burned before.",
+             _ts(2, 11)),
         ],
     )
 
@@ -313,5 +445,5 @@ def seed_demo_data(conn) -> bool:
             f"(SELECT COALESCE(MAX(id), 1) FROM {table}))"
         )
 
-    logger.info("CRM demo data seeded: 6 companies, 8 contacts, 7 deals, 8 todos, 11 activities")
+    logger.info("CRM demo data seeded: 6 companies, 11 contacts, 17 deals, 16 todos, 16 activities")
     return True
