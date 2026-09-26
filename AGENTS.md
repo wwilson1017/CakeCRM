@@ -2857,10 +2857,16 @@ one-click in the cloud (the template provisions a PostgreSQL service).
   family here means adding its notice there in the same commit.
   **Screenshots come ONLY from the demo instance after a reset to the fictional sample
   data** (`POST /api/crm/clear-all` → `/load-sample-data`), shot with Playwright at
-  1440×900 light at 2× (WebP at 2880 wide, quality 82; PNG fallback downscaled to 1440
-  and palettised) — dashboard, pipeline board, a deal card over the board, and a deal with
-  the Baker drawer; the hero is a mark + wordmark lockup (see **Brand mark**), not a
-  screenshot, and the theme of the copy is simplicity. The genericization guard scans
+  1280×800 light at 2× with the launcher folded (WebP at native 2× width, quality 82; PNG
+  fallback at 1× and palettised) — dashboard, pipeline board, a deal card over the board,
+  the Todos Today and Inbox tabs, and a deal with the Baker drawer, that last one at
+  1600×1000 so the drawer sits beside the sheet instead of over it; the hero is a mark +
+  wordmark lockup (see **Brand mark**), not a screenshot, and the theme of the copy is
+  simplicity. **The README uses the same captures, framed**: `scripts/frame_readme_shots.py`
+  puts each WebP master in a browser window on the app's own page ground, light and dark,
+  and writes 1× PNGs to `docs/brand/readme/`, which the README picks between with
+  `<picture>`; re-run it whenever the site images are re-shot, and re-copy its colour
+  constants when the palette changes. The genericization guard scans
   text, not pixels, so a real prospect name in a PNG would be invisible to CI and
   permanent in history. Strip the example-data banner and the bell badge before shooting;
   the Baker shot uses a deal-scoped quick action, because an install-wide question can

@@ -10,6 +10,7 @@ that cannot take a vector (app-store listings, README badges, chat avatars, soci
 | `logo-mark-128.png`, `logo-mark-256.png` | Avatars, README, docs. |
 | `logo-mark-180.png` | Apple touch icon size. |
 | `logo-mark-512.png`, `logo-mark-1024.png` | Store listings, social previews, print. |
+| `readme/*-{light,dark}.png` | The README screenshots: the website captures framed on the light and dark page ground by `scripts/frame_readme_shots.py`. Regenerate after any re-shoot. |
 | `lockup-light.png`, `lockup-dark.png` | Mark + "CakeCRM" wordmark (Montserrat 700) on the app's light and dark page colours, 2× resolution. |
 
 Colours are the app's own tokens from `frontend/src/index.css`: card and raised for the
