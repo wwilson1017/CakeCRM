@@ -6,8 +6,11 @@ issue #13) plus the five setval calls that advance the SERIAL sequences past the
 fixed demo ids, with the FK-safe insert order and correct company links.
 """
 
+from datetime import datetime, timedelta, timezone
+
 from conftest import FakeConn
 
+from crm.analytics_service import DEFAULT_DEAL_STALE_DAYS
 from crm.seed_data import seed_demo_data
 
 
@@ -85,3 +88,39 @@ def test_seed_links_contacts_and_deals_to_companies():
     deal_company = {row[0]: row[-1] for row in batches["deals"]}
     assert deal_company == {1: 1, 2: None, 3: 3, 4: 4, 5: 2, 6: None, 7: 6, 8: 1, 9: 3, 10: None,
                             11: None, 12: 4, 13: 6, 14: None, 15: 2, 16: None, 17: None}
+
+
+def _seed_batches(conn):
+    return {sql.split("INSERT INTO ")[1].split()[0]: params
+            for sql, params in conn.executed if "INSERT INTO" in sql}
+
+
+def _last_touch_by_deal(batches):
+    """The newest of `updated_at`, deal activity and deal chatter, per deal — the same
+    three inputs `LAST_TOUCH_SQL` reads, so the test asks the question the panel asks."""
+    touch = {row[0]: row[10] for row in batches["deals"]}  # updated_at
+    for row in batches["activity_log"]:
+        if row[2] is not None:
+            touch[row[2]] = max(touch[row[2]], row[5])
+    for row in batches["crm_chatter"]:
+        if row[1] == "deal":
+            touch[row[2]] = max(touch[row[2]], row[4])
+    return touch
+
+
+def test_seed_marks_one_stale_and_one_fresh_deal_hot():
+    """Rank 2 of the Today panel (#131) is hot AND stale; a hot deal touched recently
+    only rides the expanded tail. The seed has to show both, and `updated_at` alone is
+    not enough — an activity or note from yesterday keeps a deal fresh."""
+    conn = FakeConn(fetchone_results=[(0,)])
+    seed_demo_data(conn)
+    batches = _seed_batches(conn)
+    hot_sql = next(sql for sql, _ in conn.executed if "deal_temperature = 'hot'" in sql)
+    hot_ids = {int(x) for x in hot_sql.split("IN (")[1].rstrip(")").split(",")}
+    touch = _last_touch_by_deal(batches)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=DEFAULT_DEAL_STALE_DAYS)
+    idle = {d for d in hot_ids if datetime.fromisoformat(touch[d]) < cutoff}
+    assert idle, f"no hot deal is stale on every last-touch input: {hot_ids}"
+    assert hot_ids - idle, "no hot deal is fresh enough for the expanded tail"
+    stages = {row[0]: row[3] for row in batches["deals"]}
+    assert all(stages[d] not in ("won", "lost") for d in hot_ids)

@@ -174,7 +174,7 @@ def seed_demo_data(conn) -> bool:
             (4, 5, "Holiday gift box wholesale", "qualified", 3500.00,
              _ts(-60, 9)[:10], 40, "USD",
              "150 custom boxes with cookies, brownies, and seasonal treats.",
-             _ts(18), _ts(4), 4),
+             _ts(28), _ts(16), 4),
 
             (5, 3, "Farmers market booth supplies", "lead", 600.00,
              _ts(-14, 9)[:10], 20, "USD",
@@ -322,9 +322,11 @@ def seed_demo_data(conn) -> bool:
     # Inbox until someone says what kind of action they are (GTD, #70). `completed = 0`
     # keeps the CHECK constraint happy; only the status moves.
     cur.execute("UPDATE todos SET status = 'inbox', source = 'capture_web' WHERE id IN (14, 15, 16)")
-    # Two deals a rep has marked hot (#125); one of them is stale enough to reach the
-    # Today panel's second rung (#131).
-    cur.execute("UPDATE deals SET deal_temperature = 'hot' WHERE id IN (3, 14)")
+    # Two deals a rep has marked hot (#125). Deal 4 has had no touch of any kind —
+    # `updated_at`, activity or note — for over DEFAULT_DEAL_STALE_DAYS, so it reaches
+    # the Today panel's second rung (#131); deal 14 was touched yesterday, so it shows
+    # only in the panel's expanded tail. Both states are worth having on screen.
+    cur.execute("UPDATE deals SET deal_temperature = 'hot' WHERE id IN (4, 14)")
 
     # ── Activity log ───────────────────────────────────────────────────────────
     cur.executemany(
@@ -350,7 +352,7 @@ def seed_demo_data(conn) -> bool:
 
             (5, 5, 4, "email",
              "Sent photos of sample gift box designs. Rachel loves the rustic kraft option.",
-             _ts(4, 10)),
+             _ts(16, 10)),
 
             (6, 3, None, "call",
              "Lisa confirmed organic strawberries available through August. Locking in price.",
@@ -417,7 +419,7 @@ def seed_demo_data(conn) -> bool:
 
             (3, "deal", 4,
              "Rachel needs final box counts by Nov 1 to hit holiday production — flag early if we slip.",
-             _ts(3, 11)),
+             _ts(15, 11)),
 
             (4, "contact", 1,
              "Maria hinted at a second Green Table location opening in the fall — could double the "
