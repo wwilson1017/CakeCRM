@@ -88,12 +88,14 @@ internal app needs is here and already proven under daily use:
 - **One stack, one database.** FastAPI, React/Vite and PostgreSQL, with schema owned by
   plain SQL migrations that apply themselves at startup.
 - **Accounts and roles** out of the box: admin and member, an owner on every record,
-  two-factor auth, DB-backed passwords with an operator rescue lever.
+  passwords kept in the database with an operator rescue lever, and two-factor
+  authentication at the API level for a fork to put a screen on.
 - **A shared collection layer** — search, facets, saved views, list and board views, a
   detail shell — that any record type can adopt in one config object.
 - **An assistant engine that is a feature, not the product.** Register a tool with a
-  `writes` flag and it gets confirmations, background-turn safety and multi-provider
-  support for free; the help library makes the assistant know your product.
+  `writes` flag and it gets write confirmations and multi-provider support for free;
+  which reads the unattended assistant may run stays a list you own. The help library
+  makes the assistant know your product.
 - **A deploy story**: one Railway template or `python run.py`, and a CI that scans every
   committed file for what must never leak.
 
