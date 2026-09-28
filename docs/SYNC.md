@@ -288,7 +288,7 @@ is about **chatty's** SQLite `crm_lite` (issue #3). For a cake_os port:
 
 Run the normal gates (`ruff check .` → import check → `pytest -q` from `backend/`;
 `npm ci` → `npm run build` → `npm run lint` → `npm test` from `frontend/`), add a
-`SYNC_LEDGER.md` row, update `AGENTS.md`'s Source Map if the architecture moved, and open a PR.
+`SYNC_LEDGER.md` row, update the Source Map (`docs/agents/source-map.md`) if the architecture moved, and open a PR.
 Close the intake issue with it.
 
 ---
