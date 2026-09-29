@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { listProjects, listTodos } from './api';
 import { RecordChip } from './components/RecordChip';
+import { useTodosChanged } from './hooks';
 import { STALE_DAYS } from './constants';
 import { todoPath } from './publicMode';
 import { LoadFailed, LoadingRows, TodoShell } from './TodoShell';
@@ -52,6 +53,10 @@ export function ReviewPage() {
     }).catch(() => setFailed(true));
   };
   useEffect(load, []);
+  // Review owns its own fetch, so the undo broadcast has to be taken explicitly (#231).
+  // Without it, undoing a project's next action from here leaves that project listed
+  // under "no next action" until the page is remounted.
+  useTodosChanged(load);
 
   const counts = filters?.status_counts;
   const tiles: { label: string; value: number; to: string }[] = counts ? [
