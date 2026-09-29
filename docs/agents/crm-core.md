@@ -721,7 +721,7 @@
   **Every write tool's success result names the record it actually wrote** (#236, port
   of the blueprint's #3052): `target` = `{entity_type, id, title, owner_id}` plus `url`
   for a deal, attached by `crm.tools._with_target` (bulk twin `_with_targets` → a
-  `targets` list, ONE query). The blueprint's audit found notes logged against
+  `targets` list of the ids actually written, ONE query). The blueprint's audit found notes logged against
   hallucinated deal ids while the result said only `{"ok": true}`, so the model narrated
   success against the deal the user had named. `title` is a deal/todo `title` or a
   contact/company/project `name` under one key; `todo_projects` has no owner column, so

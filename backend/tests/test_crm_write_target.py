@@ -223,11 +223,22 @@ def test_a_failed_lookup_keeps_the_id_and_never_fails_the_write(monkeypatch, loo
     assert result["target"]["id"] == 4 and result["target"]["lookup_failed"] is True
 
 
+def test_a_bulk_move_names_only_the_deals_it_moved(monkeypatch, lookups):
+    _, rows = lookups
+    rows["deals"] = [{"id": 1, "title": "One", "owner_id": 1}, {"id": 2, "title": "Two", "owner_id": 2}]
+    monkeypatch.setattr(
+        crm, "bulk_move_deals",
+        lambda ids, stage: {"ok": True, "updated_ids": [1], "errors": ["Deal 2 is archived"]},
+    )
+    result = tools.crm_bulk_move_deals([1, 2], "proposal")
+    assert [t["id"] for t in result["targets"]] == [1]
+
+
 def test_a_bulk_move_lists_every_target_in_one_query(monkeypatch, lookups):
     calls, rows = lookups
     rows["deals"] = [{"id": 1, "title": "One", "owner_id": 1}, {"id": 2, "title": "Two", "owner_id": 2}]
-    monkeypatch.setattr(crm, "bulk_move_deals", lambda ids, stage: {"ok": True, "updated_ids": [1]})
-    result = tools.crm_bulk_move_deals([1, 2], "proposal")
+    monkeypatch.setattr(crm, "bulk_move_deals", lambda ids, stage: {"ok": True, "updated_ids": [1, 2]})
+    result = tools.crm_bulk_move_deals([1, 2, 3], "proposal")
     assert [t["title"] for t in result["targets"]] == ["One", "Two"]
     assert all(t["url"] for t in result["targets"])
     assert len(calls) == 1
