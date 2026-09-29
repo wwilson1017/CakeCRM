@@ -764,7 +764,9 @@ describe('writes decide against the state as it is NOW', () => {
     });
     await settle();
 
-    expect(titleText()).toBe('B');
+    // The rename is still in flight, so its editor is still open (#232: the control stays
+    // open until the write settles) — the pending value is what it shows, and what the sheet gets.
+    expect(container.querySelector<HTMLInputElement>('input[aria-label="Todo title"]')!.value).toBe('B');
     click(button('Edit'));
     await settle();
     expect(onEdit.mock.calls[0][0].title).toBe('B');
