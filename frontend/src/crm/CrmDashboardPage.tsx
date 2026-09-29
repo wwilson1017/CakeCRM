@@ -563,7 +563,7 @@ export function CrmDashboardPage() {
           <div style={sectionHeading(INK_SOFT)}>Top deals</div>
           <div style={{ borderTop: `1px solid ${LINE}` }}>
             {data.top_deals.length === 0 ? (
-              <p style={{ color: INK_DIM, fontSize: 15, padding: '16px 0' }}>No deals yet.</p>
+              <p style={{ color: INK_DIM, fontSize: 15, padding: '16px 0' }}>No open deals past the lead stage yet.</p>
             ) : (
               data.top_deals.map(deal => (
                 <div key={deal.id} onClick={() => setSelectedDealId(deal.id)} style={{

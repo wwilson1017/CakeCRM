@@ -1207,6 +1207,7 @@ def test_get_todo_returns_a_list_shaped_row(rec):
 
 # ── Link labels must ride every row that can reach the deal form (issue #123) ─
 
+
 def test_top_deals_joins_the_company_name(rec):
     """The dashboard hands `top_deals` rows straight to the deal sheet and on to DealForm,
     whose link pickers render the NAME the row arrives with. A row carrying a company_id and
@@ -1216,8 +1217,25 @@ def test_top_deals_joins_the_company_name(rec):
     rec.fetchone_queue = [{"cnt": 0}] * 12
     service.get_dashboard_stats()
 
-    sql = rec.sql_containing("ORDER BY d.value DESC, d.id DESC LIMIT 5")
+    sql = rec.sql_containing(service.TOP_DEAL_SCORE_SQL)
     assert "co.name AS company_name" in sql
     assert "LEFT JOIN companies co ON d.company_id = co.id" in sql
     # ...alongside the contact name it already carried, not instead of it.
     assert "c.name AS contact_name" in sql
+
+
+# ── Top deals: qualified-only, probability-weighted (issue #240) ──────────────
+
+def test_top_deals_leave_out_leads_and_rank_by_the_weighted_score(rec):
+    """The list used to be `ORDER BY d.value` over every open deal, so a $1M lead sat on
+    top forever. The ranking itself is pinned against real Postgres in
+    test_integration_crm_lifecycle_pg; this pins the query shape the dashboard emits."""
+    rec.fetchone_queue = [{"cnt": 0}] * 12
+    service.get_dashboard_stats()
+
+    sql = rec.sql_containing(service.TOP_DEAL_SCORE_SQL)
+    assert "d.stage NOT IN ('won', 'lost')" in sql
+    assert "d.stage <> 'lead'" in sql
+    assert "d.archived_at IS NULL" in sql
+    assert f"ORDER BY {service.TOP_DEAL_SCORE_SQL} DESC, d.updated_at DESC, d.id DESC LIMIT 5" in sql
+    assert "ORDER BY d.value" not in sql

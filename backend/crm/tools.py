@@ -658,8 +658,9 @@ CRM_TOOL_DEFS = [
         "writes": False,
         "description": (
             "Get a CRM summary dashboard with pipeline value, contact counts, overdue todos, "
-            "recent activity, and top deals. Use when the user asks for an overview, summary, "
-            "or 'how's my pipeline'."
+            "recent activity, and top deals — the five open deals past the lead stage, ranked "
+            "by a probability-weighted score that still favors dollar value (leads are left "
+            "out). Use when the user asks for an overview, summary, or 'how's my pipeline'."
         ),
         "input_schema": {
             "type": "object",

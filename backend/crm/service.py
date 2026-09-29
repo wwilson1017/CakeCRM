@@ -2398,6 +2398,25 @@ def delete_activity(activity_id: int) -> bool:
 
 # ── Analytics ─────────────────────────────────────────────────────────────────
 
+# ── Top deals ranking (issue #240) ─────────────────────────────────────────────
+#
+# "Qualified or later" is every open stage except `lead`. The blueprint keys this on a
+# stage win-probability threshold because its stages are a user-editable table; ours are
+# constants, so naming the one excluded stage is the whole rule.
+TOP_DEALS_QUALIFIED_D = "d.stage <> 'lead'"
+
+# An ATTENTION score, deliberately not expected value:
+#     max(value, 0) × (0.4 + 0.6 × clamp(probability / 100, 0, 1))
+# Value is the linear base and probability swings it by at most 60%, so a big likely deal
+# beats a small near-certain one (plain value × probability ranks $150K@99% above
+# $500K@20%), and a $0 or negative deal scores 0. Both columns are NOT NULL. Computed in
+# SQL so the LIMIT applies after ranking — the score is not monotonic in value, so a
+# value-ordered prefix would drop the deals it exists to surface.
+TOP_DEAL_SCORE_SQL = (
+    "(GREATEST(d.value, 0) * (0.4 + 0.6 * LEAST(GREATEST(d.probability, 0), 100) / 100.0))"
+)
+
+
 def get_dashboard_stats() -> dict:
     total_row = pg_fetchone("SELECT COUNT(*) AS cnt FROM contacts")
     total_contacts = total_row["cnt"] if total_row else 0
@@ -2444,7 +2463,9 @@ def get_dashboard_stats() -> dict:
 
     recent_activity = get_activity_log(limit=10)
 
-    # Top open deals by value.
+    # Top deals (#240, port of the blueprint's #603): open deals past the lead stage,
+    # ranked by TOP_DEAL_SCORE_SQL rather than raw value, so a $1M lead that will never
+    # close cannot sit above the $80K proposal closing this month.
     # company_name is joined for the same reason contact_name is: the dashboard hands these
     # rows straight to the deal sheet and on to DealForm, whose link pickers render the
     # NAME they arrive with (issue #123). Without the join the row carries a company_id and
@@ -2455,11 +2476,10 @@ def get_dashboard_stats() -> dict:
             FROM deals d
             LEFT JOIN contacts c ON d.contact_id = c.id
             LEFT JOIN companies co ON d.company_id = co.id
-            WHERE d.stage NOT IN ('won', 'lost') AND {LIVE_PREDICATE_D}
-            -- `value` is a round number that repeats constantly across a pipeline, so
-            -- without d.id the five deals on the dashboard can differ between two
-            -- loads with nothing having changed (issue #58).
-            ORDER BY d.value DESC, d.id DESC LIMIT 5"""
+            WHERE {OPEN_PREDICATE_D} AND {TOP_DEALS_QUALIFIED_D} AND {LIVE_PREDICATE_D}
+            -- Scores tie constantly (round values, default probabilities), so without the
+            -- trailing d.id the five deals can differ between two loads (issue #58).
+            ORDER BY {TOP_DEAL_SCORE_SQL} DESC, d.updated_at DESC, d.id DESC LIMIT 5"""
     )
 
     return {

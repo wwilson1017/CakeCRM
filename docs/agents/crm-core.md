@@ -1007,3 +1007,12 @@
   beside `LAST_TOUCH_SQL`, and rendering this component read-only (no `onCycle`) in the panel's
   badge slot, because that panel is a list of what needs you rather than a place to re-triage
   the pipeline.
+- **Dashboard Top deals are qualified-only and probability-weighted** (#240):
+  `get_dashboard_stats`' `top_deals` keeps open, live deals past `lead`
+  (`TOP_DEALS_QUALIFIED_D`) and orders them by `TOP_DEAL_SCORE_SQL`,
+  `max(value,0) × (0.4 + 0.6 × clamp(probability/100))`, then `updated_at`, then `id`. It
+  is an attention score, not expected value: value stays the base, so $500K@20% beats
+  $150K@99%, and a $0 deal never ranks. The score runs in SQL BEFORE the `LIMIT`, because
+  it is not monotonic in value and a value-ordered prefix would drop exactly the deals it
+  exists to surface. The proactive digest's own top list (`proactive.collect_digest`, by
+  `lead_score`) is a different question and is untouched.
