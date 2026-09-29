@@ -1,7 +1,7 @@
 ---
 title: Notifications
 description: Browser push, the bell, and Telegram delivery. Works with no AI keys.
-aliases: notifications, push, web push, alerts, bell, digest, nudges
+aliases: notifications, push, web push, alerts, bell, digest, nudges, mentions, @-mention
 admin: false
 ---
 ## Who can do this
@@ -68,8 +68,14 @@ at most one extra notification; with none, it still runs.
 
 ## What raises a notification
 
+A teammate can mention you in a note on a deal, contact or company by typing `@` and picking
+your name. You get a notification addressed to you, and its title opens that record. You are
+never notified about mentioning yourself, and editing a note only notifies people who were
+newly added to it.
+
 Baker can raise one from a background turn, and it is limited to a single notification per
 run. When its text names a deal Baker looked at during that run, the deal number is replaced
 with the deal's title and a link that opens it, since a push or a Telegram message cannot
-open a deal from its number. A number Baker did not look at is left as written. The digest and nudges raise their own, each claimed before it is sent so two ticks can
+open a deal from its number. A number Baker did not look at is left as written. Baker cannot
+mention anyone. The digest and nudges raise their own, each claimed before it is sent so two ticks can
 never send the same one twice.

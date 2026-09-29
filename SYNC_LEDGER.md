@@ -88,3 +88,4 @@ Populated by port PRs from here on.
 | Capture page retries focus on open and re-attempts on resume, gated to a standalone (PWA) launch — inline script in the backend-rendered `_CAPTURE_HTML`, not the blueprint's React effect | PR #3051 (`d49442c6e`) | #233 | 2026-09-29 |
 | Bare deal ids in outbound assistant text rewritten to `Title (url)` (Telegram replies + `notify_user`) | PR #3175 (`173693bd2`) | #238 | — |
 | Assistant company tools take an owner (`owner` word on `crm_create_company`/`crm_update_company`) | PR #3184 (`150982d02`) | #237 | — |
+| Chatter @-mentions that notify the mentioned seat (targeted, linked to the record) | `backend/core/chatter_mentions.py` + `migrations/20260915211213_chatter_mentions.sql` @ `50c395dda` (cake_os #2934/#2942) | #235 | — |

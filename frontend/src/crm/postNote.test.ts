@@ -33,7 +33,7 @@ describe('postNoteWithAttachments', () => {
     await postNoteWithAttachments({
       text: '  spaced  ', files: [], createNote, uploadPath: path, upload: vi.fn(),
     });
-    expect(createNote).toHaveBeenCalledWith('spaced');
+    expect(createNote).toHaveBeenCalledWith('spaced', []);
   });
 
   it('generates a body for a files-only post', async () => {
@@ -43,7 +43,7 @@ describe('postNoteWithAttachments', () => {
     await postNoteWithAttachments({
       text: '   ', files: [file('receipt.pdf')], createNote, uploadPath: path, upload: vi.fn(),
     });
-    expect(createNote).toHaveBeenCalledWith('Attached: receipt.pdf');
+    expect(createNote).toHaveBeenCalledWith('Attached: receipt.pdf', []);
   });
 
   it('skips uploading entirely when there are no files', async () => {
@@ -108,5 +108,13 @@ describe('uploadAttachments', () => {
 
   it('returns [] when everything lands', async () => {
     expect(await uploadAttachments(5, [file('a.png')], path, vi.fn())).toEqual([]);
+  });
+
+  it('carries the picked mentions on the create request (#235)', async () => {
+    const createNote = vi.fn(async () => ({ id: 1 }));
+    await postNoteWithAttachments({
+      text: '@Ada hi', files: [], mentions: [7], createNote, uploadPath: path, upload: vi.fn(),
+    });
+    expect(createNote).toHaveBeenCalledWith('@Ada hi', [7]);
   });
 });

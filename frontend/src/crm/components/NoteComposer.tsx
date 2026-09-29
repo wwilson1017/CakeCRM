@@ -10,14 +10,18 @@ import {
 import {
   COMPOSER_MIN_HEIGHT_PX, composerKeyAction, MAX_NOTE_LEN, nextComposerHeight,
 } from '../chatterComposer';
+import { useMentionPicker } from './MentionPicker';
 import {
   ACCENT, ACCENT_INK, ACCENT_TEXT, CORAL_FILL, CORAL_TEXT, INK, INK_DIM, INK_MUTE, LINE, LINE_STRONG,
   inputStyle, mono, tint,
 } from '../../shared/styles';
 
 export interface NoteComposerProps {
-  /** Rejects to keep the text and files staged; resolves to clear them. */
-  onSubmit: (text: string, files: File[]) => Promise<void>;
+  /**
+   * Rejects to keep the text and files staged; resolves to clear them. `mentions` are the
+   * user IDs picked with the `@` menu whose token is still in the text (#235).
+   */
+  onSubmit: (text: string, files: File[], mentions: number[]) => Promise<void>;
   /** Files still staged after a partial failure — Retry re-sends exactly these. */
   retryFiles?: File[];
   onRetry?: () => void;
@@ -64,6 +68,7 @@ export function NoteComposer({
   const [dragging, setDragging] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const mention = useMentionPicker(text, setText, textareaRef);
 
   // Revoke on unmount only. Per-chip revocation happens in the remove/submit paths, so
   // this reads the CURRENT list through a ref rather than re-running whenever the list
@@ -151,7 +156,7 @@ export function NoteComposer({
     setBusy(true);
     setErrors([]);
     try {
-      await onSubmit(text, files);
+      await onSubmit(text, files, mention.mentionIds());
       // Clear only what was SUBMITTED. Uploading several photos takes seconds and the
       // textarea stays live throughout, so a file pasted during that window would
       // otherwise be wiped without ever being uploaded — and its object URL leaked, since
@@ -163,13 +168,14 @@ export function NoteComposer({
       stagedRef.current = stagedRef.current.filter(item => !submitted.has(item));
       // Same rule for the text: clear only what was actually sent.
       setText(prev => (prev === sentText ? '' : prev));
+      mention.reset();
       setStaged(prev => prev.filter(item => !submitted.has(item)));
     } catch (err) {
       setErrors([err instanceof Error ? err.message : 'Could not post that note.']);
     } finally {
       setBusy(false);
     }
-  }, [busy, disabled, hasRetry, onSubmit, staged, text]);
+  }, [busy, disabled, hasRetry, onSubmit, staged, text, mention]);
 
   const canSubmit = !busy && !disabled && !hasRetry && (text.trim().length > 0 || staged.length > 0);
 
@@ -206,28 +212,35 @@ export function NoteComposer({
         </p>
       )}
 
-      <textarea
-        ref={textareaRef}
-        placeholder="Add a note…"
-        value={text}
-        onChange={e => setText(e.target.value)}
-        onPaste={handlePaste}
-        // `isComposing` off the NATIVE event: React's synthetic KeyboardEvent does not
-        // carry it, and passing the synthetic event makes the IME guard silently dead.
-        onKeyDown={e => {
-          if (composerKeyAction({
-            key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey,
-            isComposing: e.nativeEvent.isComposing,
-          }) === 'submit') { e.preventDefault(); void submit(); }
-        }}
-        maxLength={MAX_NOTE_LEN}
-        disabled={disabled}
-        style={{
-          ...inputStyle, width: '100%', fontSize: 13, lineHeight: 1.5,
-          minHeight: COMPOSER_MIN_HEIGHT_PX, resize: 'none', overflowY: 'auto',
-          border: 'none', background: 'transparent', padding: 8,
-        }}
-      />
+      {/* position: relative anchors the @ menu (#235) under the box. */}
+      <div style={{ position: 'relative' }}>
+        <textarea
+          ref={textareaRef}
+          placeholder="Add a note… (type @ to mention a teammate)"
+          value={text}
+          onChange={e => { setText(e.target.value); mention.onChange(e.target); }}
+          onPaste={handlePaste}
+          {...mention.textareaProps}
+          // `isComposing` off the NATIVE event: React's synthetic KeyboardEvent does not
+          // carry it, and passing the synthetic event makes the IME guard silently dead.
+          // The @ menu goes first: while it is open, Enter/Tab pick and Escape closes it.
+          onKeyDown={e => {
+            if (mention.onKeyDown(e)) return;
+            if (composerKeyAction({
+              key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey,
+              isComposing: e.nativeEvent.isComposing,
+            }) === 'submit') { e.preventDefault(); void submit(); }
+          }}
+          maxLength={MAX_NOTE_LEN}
+          disabled={disabled}
+          style={{
+            ...inputStyle, width: '100%', fontSize: 13, lineHeight: 1.5,
+            minHeight: COMPOSER_MIN_HEIGHT_PX, resize: 'none', overflowY: 'auto',
+            border: 'none', background: 'transparent', padding: 8,
+          }}
+        />
+        {mention.menu}
+      </div>
 
       {staged.length > 0 && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>

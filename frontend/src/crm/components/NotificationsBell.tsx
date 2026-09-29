@@ -9,14 +9,28 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../../core/api/client';
 import { INK, INK_MUTE, INK_SOFT, LINE, LINE_STRONG, BG_CARD, ACCENT, ACCENT_TEXT, CORAL_TEXT, FONT_SANS, ACCENT_INK, SHADOW } from '../../shared/styles';
 
 interface NotificationRow {
   id: string; title: string; message: string; created_at: string; channels_sent: string[];
+  // #235: an in-app path the notification points at (a chatter @-mention → its record).
+  link?: string | null;
+}
+
+/** Only a same-origin path is followed; the server already refuses anything else. */
+function inAppLink(link: string | null | undefined): string | null {
+  return link && link.startsWith('/') && !link.startsWith('//') ? link : null;
 }
 interface AlertRow {
   id: string; title: string; message: string; source: string; created_at: string;
+}
+
+function NotificationTitle({ row, onFollow }: { row: NotificationRow; onFollow: () => void }) {
+  const href = inAppLink(row.link);
+  if (!href) return <>{row.title}</>;
+  return <Link to={href} onClick={onFollow} style={{ color: INK }}>{row.title}</Link>;
 }
 
 function relTime(iso: string): string {
@@ -174,7 +188,9 @@ export function NotificationsBell() {
           ) : notifications.map(n => (
             <div key={n.id} style={{ display: 'flex', gap: 8, padding: '8px 14px', borderTop: `1px solid ${LINE}` }}>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontFamily: FONT_SANS, fontSize: 13, fontWeight: 600, color: INK }}>{n.title}</div>
+                <div style={{ fontFamily: FONT_SANS, fontSize: 13, fontWeight: 600, color: INK }}>
+                  <NotificationTitle row={n} onFollow={() => setOpen(false)} />
+                </div>
                 <div style={{ fontFamily: FONT_SANS, fontSize: 12, color: INK_MUTE, lineHeight: 1.5, margin: '2px 0 3px', whiteSpace: 'pre-wrap' }}>{n.message}</div>
                 <div style={{ fontFamily: FONT_SANS, fontSize: 11, color: INK_SOFT }}>{relTime(n.created_at)}</div>
               </div>

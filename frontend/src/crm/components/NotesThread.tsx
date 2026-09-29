@@ -2,13 +2,17 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '../../core/api/client';
 import { writeMayHaveLanded } from '../usePatchableAssembly';
 import type { CrmNote } from '../../core/types';
-import { mono, INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, ACCENT, ACCENT_INK, inputStyle } from '../../shared/styles';
+import {
+  mono, INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, ACCENT, ACCENT_INK, ACCENT_TEXT, inputStyle,
+} from '../../shared/styles';
 import { toast } from '../../shared/toast';
 import { formatDate } from '../../shared/formatDate';
 import { MAX_NOTE_LEN } from '../chatterComposer';
+import { mentionSegments } from '../chatterMentions';
 import { useChatterPost } from '../useChatterPost';
 import { NoteComposer } from './NoteComposer';
 import { NoteAttachments } from './NoteAttachments';
+import { useMentionPicker } from './MentionPicker';
 
 interface Props {
   entityType: 'deal' | 'contact' | 'company';
@@ -37,7 +41,6 @@ export function NotesThread({ entityType, entityId, onChanged }: Props) {
   const [error, setError] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [editText, setEditText] = useState('');
 
   const reqRef = useRef(0);
   const load = useCallback(async () => {
@@ -74,13 +77,16 @@ export function NotesThread({ entityType, entityId, onChanged }: Props) {
   // failure reject so the composer keeps the text and files the user is about to lose.
   // A definite 4xx wrote nothing.
   const createNote = useCallback(
-    async (message: string) => {
+    async (message: string, mentions: number[]) => {
       try {
         // The route already returns the created row, which is what gives the attachment
-        // uploads a note id to aim at.
+        // uploads a note id to aim at. Mentions (#235) ride only when there are some.
         return await api<{ id: number }>(
           `/api/crm/chatter/${entityType}/${entityId}/note`,
-          { method: 'POST', body: JSON.stringify({ message }) },
+          {
+            method: 'POST',
+            body: JSON.stringify(mentions.length ? { message, mentions } : { message }),
+          },
         );
       } catch (err) {
         toast.error('Failed to add note.');
@@ -98,15 +104,17 @@ export function NotesThread({ entityType, entityId, onChanged }: Props) {
     `${entityType}:${entityId}`, createNote, reload,
   );
 
-  async function saveEdit(id: number) {
-    if (!editText.trim()) return;
+  async function saveEdit(id: number, text: string, mentions: number[]) {
+    if (!text.trim()) return;
     try {
+      // An edit always sends its mention list (#235): the server treats a list as the new
+      // set, so deleting an `@name` token un-mentions that person, and only people newly
+      // added are notified. Omitting the field would preserve the old set instead.
       await api(`/api/crm/chatter/note/${id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ message: editText.trim() }),
+        body: JSON.stringify({ message: text.trim(), mentions }),
       });
       setEditingId(null);
-      setEditText('');
       reload();
     } catch (err) {
       toast.error('Failed to save note.');
@@ -173,23 +181,22 @@ export function NotesThread({ entityType, entityId, onChanged }: Props) {
               opacity: n.archived ? 0.55 : 1,
             }}>
               {editingId === n.id ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <textarea
-                    value={editText}
-                    onChange={e => setEditText(e.target.value)}
-                    rows={2}
-                    maxLength={MAX_NOTE_LEN}
-                    style={{ ...inputStyle, width: undefined, fontSize: 13, resize: 'vertical' }}
-                  />
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button onClick={() => saveEdit(n.id)} style={miniBtn(true)}>Save</button>
-                    <button onClick={() => { setEditingId(null); setEditText(''); }} style={miniBtn(false)}>Cancel</button>
-                  </div>
-                </div>
+                <NoteEditor
+                  note={n}
+                  onSave={(text, mentions) => saveEdit(n.id, text, mentions)}
+                  onCancel={() => setEditingId(null)}
+                />
               ) : (
                 <>
                   <p style={{ fontSize: 13, color: INK, margin: 0, whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
-                    {n.message}
+                    {mentionSegments(n.message, (n.mentions ?? []).map(m => m.name)).map((seg, i) => (
+                      seg.mention
+                        // #235: a mention reads as the person's name in the accent ink —
+                        // weight and colour, no tinted chip, so nothing new is owed to the
+                        // contrast guards (ACCENT_TEXT on the card is already pinned).
+                        ? <span key={i} style={{ color: ACCENT_TEXT, fontWeight: 600 }}>{seg.text}</span>
+                        : <span key={i}>{seg.text}</span>
+                    ))}
                   </p>
                   {n.attachments && n.attachments.length > 0 && (
                     <NoteAttachments items={n.attachments} onChanged={reload} />
@@ -199,7 +206,7 @@ export function NotesThread({ entityType, entityId, onChanged }: Props) {
                     {n.updated_at && <span style={{ ...mono(10), color: INK_DIM }}>· edited</span>}
                     {!!n.archived && <span style={{ ...mono(10), color: INK_DIM }}>· archived</span>}
                     {!n.archived && (
-                      <button onClick={() => { setEditingId(n.id); setEditText(n.message); }} style={linkBtn}>Edit</button>
+                      <button onClick={() => setEditingId(n.id)} style={linkBtn}>Edit</button>
                     )}
                     <button onClick={() => setArchived(n.id, !n.archived)} style={linkBtn}>
                       {n.archived ? 'Restore' : 'Archive'}
@@ -211,6 +218,45 @@ export function NotesThread({ entityType, entityId, onChanged }: Props) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * The inline edit box. Its own component so each edit gets its own @ picker (#235),
+ * seeded from the note's stored mentions — which carry the name frozen at post time, so
+ * a person deactivated since stays mentioned rather than dropping off on an unrelated edit.
+ */
+function NoteEditor({ note, onSave, onCancel }: {
+  note: CrmNote;
+  onSave: (text: string, mentions: number[]) => void;
+  onCancel: () => void;
+}) {
+  const [text, setText] = useState(note.message);
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const mention = useMentionPicker(
+    text, setText, ref, (note.mentions ?? []).map(m => ({ id: m.user_id, label: m.name })),
+  );
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ position: 'relative', display: 'flex', flexDirection: 'column' }}>
+        <textarea
+          ref={ref}
+          aria-label="Edit note"
+          value={text}
+          onChange={e => { setText(e.target.value); mention.onChange(e.target); }}
+          {...mention.textareaProps}
+          onKeyDown={e => { mention.onKeyDown(e); }}
+          rows={2}
+          maxLength={MAX_NOTE_LEN}
+          style={{ ...inputStyle, width: undefined, fontSize: 13, resize: 'vertical' }}
+        />
+        {mention.menu}
+      </div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button onClick={() => onSave(text, mention.mentionIds())} style={miniBtn(true)}>Save</button>
+        <button onClick={onCancel} style={miniBtn(false)}>Cancel</button>
+      </div>
     </div>
   );
 }
