@@ -106,8 +106,6 @@ paths on purpose — never turn them into `@` imports, which load eagerly.
   archived deal must be findable and never money. FK'd and FK-less audit tables MUST stay in
   both `_truncate_all` sweeps. Every deal-returning agent tool returns a `url` via
   `crm.links.with_deal_url` (guarded by `test_crm_deal_links.py` — never a hand-written list).
-  Every write tool's success result names the record it wrote under `target` via
-  `crm.tools._with_target` (guarded by `test_crm_write_target.py`, #236).
   A new upload route needs a row in `main._ROUTE_REQUEST_LIMIT_SPECS`. Colours come from
   `--color-ck-*` tokens (FILL vs `-text` split, no literal fallbacks, no `opacity` on a chip
   container); a new `tint()` background under ink text joins `inkContrast.test.ts`.
