@@ -34,7 +34,7 @@
  * `/todo` link looks at the SAME list and the SAME contexts; a chip left in the tab still means
  * what it said.
  */
-import { createElement } from 'react';
+import { createElement, useMemo } from 'react';
 import type { CollectionConfig } from '../../shared/collection';
 import { TodoRow } from './components/TodoRow';
 // The ONE context-option mapping, shared with the bespoke pages that render the bar directly.
@@ -65,6 +65,17 @@ export interface SomedayRowActions extends TodoRowActions {
  */
 export function todoSearchText(t: Todo): (string | null | undefined)[] {
   return [t.title, t.notes, t.context, t.project_name, ...t.tags];
+}
+
+/**
+ * The install's context list with a CONTENT-stable identity. `useTodoMeta` publishes a fresh
+ * snapshot on every revalidation and every row mutation triggers one, so keying a config on the
+ * `filters` object would rebuild it — and re-derive every search doc — on each checkbox click.
+ * The list itself changes only when someone files a todo under a brand-new context.
+ */
+export function useStableContexts(contexts: readonly string[] | undefined): string[] {
+  const json = JSON.stringify(contexts ?? []);
+  return useMemo(() => JSON.parse(json) as string[], [json]);
 }
 
 /**

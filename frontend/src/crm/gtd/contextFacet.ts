@@ -6,6 +6,10 @@
  * query/facet state and pass it to `SearchFilterBar` as fully-controlled props (the
  * kit's page-owns-state contract).
  *
+ * Someday and Done instead go through `shared/collection` (#234) and declare their
+ * equivalent facet in `collectionConfig.ts` — built from THIS module's `contextOptions`, so
+ * the two routes share one value mapping.
+ *
  * Shared rather than duplicated per page, because a drift between them would be
  * exactly the silent divergence the shared layer exists to end.
  */
