@@ -365,9 +365,10 @@ describe('ProjectDetailPage — inline notes edit (#232)', () => {
   it('keeps a failed name save on screen when the notes editor closes unchanged', async () => {
     // The sequence, which needs both editors open at once: clicking the notes trigger is what
     // blurs the name editor, so the name save is already in flight when notes opens and takes
-    // focus. The refusal then leaves the name editor open and pulls focus BACK to it — which
-    // blurs notes, closing it unchanged. An untagged failure line is cleared by that close,
-    // leaving the user's rejected text on screen with nothing explaining why it did not save.
+    // focus. The refusal leaves the name editor open — but must NOT pull focus back from the
+    // notes editor the user is now typing in. Closing notes unchanged later must not clear the
+    // name's failure line either: an untagged line would be wiped by that close, leaving the
+    // rejected text on screen with nothing explaining why it did not save.
     let rejectName: (e: unknown) => void = () => {};
     updateProjectMock.mockImplementationOnce(
       () => new Promise<TodoProject>((_res, rej) => { rejectName = rej; }),
@@ -386,11 +387,30 @@ describe('ProjectDetailPage — inline notes edit (#232)', () => {
       rejectName(refusal('Project "Roadmap" already exists'));
     });
     await settle();
-    // The focus recovery moved focus back to the name editor, which blurred the notes editor
-    // and closed it unchanged — exactly the close that used to wipe the line.
+    // Focus stays where the user put it; the refused name editor stays open beside it.
+    expect(document.activeElement).toBe(notesEditor());
+    expect(nameEditor()).not.toBeNull();
+    // Now the notes editor closes unchanged — exactly the close that used to wipe the line.
+    blur(notesEditor()!);
+    await settle();
     expect(notesEditor()).toBeNull();
-    expect(document.activeElement).toBe(nameEditor());
 
+    expect(alertText()).toBe('Project "Roadmap" already exists');
+  });
+
+  it('keeps focus in the name editor after an Enter-submitted save is refused', async () => {
+    updateProjectMock.mockRejectedValueOnce(refusal('Project "Roadmap" already exists'));
+    await render();
+
+    act(() => nameTrigger().click());
+    setValue(nameEditor()!, 'Roadmap');
+    press(nameEditor()!, 'Enter');
+    await settle();
+    await settle();
+
+    expect(nameEditor()!.value).toBe('Roadmap');
+    expect(nameEditor()!.disabled).toBe(false);
+    expect(document.activeElement).toBe(nameEditor());
     expect(alertText()).toBe('Project "Roadmap" already exists');
   });
 

@@ -54,6 +54,12 @@ interface Props {
   className?: string;
 }
 
+/** Focus is where a disabled or unmounted editor leaves it: nowhere the user chose. */
+function focusIsUnclaimed(): boolean {
+  const active = document.activeElement;
+  return !active || active === document.body;
+}
+
 export function InlineTitle({
   title, label, disabled = false, variant = 'title', placeholder, onSave, onCancel, className = '',
 }: Props) {
@@ -87,7 +93,7 @@ export function InlineTitle({
   useEffect(() => {
     if (editing || !refocus.current) return;
     refocus.current = false;
-    triggerRef.current?.focus();
+    if (focusIsUnclaimed()) triggerRef.current?.focus();
   }, [editing]);
 
   // Put focus BACK in the editor after a refused save. `saving` disables the field, and the
@@ -95,10 +101,15 @@ export function InlineTitle({
   // leave an open, unfocused editor whose next Escape reaches whatever owns the page's Escape
   // stack. An EFFECT rather than a `focus()` at the point of failure, because `setSaving(false)`
   // is not applied until React re-renders and focusing a still-disabled field is a silent no-op.
+  //
+  // Both effects take focus back ONLY if nothing else holds it. A save can take a real round
+  // trip, and a user who has moved on to another field in the meantime must not have it
+  // blurred under them — blur commits there, and their next keystrokes would land in this
+  // field instead.
   useEffect(() => {
     if (!editing || saving || !recoverFocus.current) return;
     recoverFocus.current = false;
-    editorRef.current?.focus();
+    if (focusIsUnclaimed()) editorRef.current?.focus();
   }, [editing, saving]);
 
   function start() {

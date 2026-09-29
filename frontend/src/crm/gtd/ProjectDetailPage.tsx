@@ -37,9 +37,9 @@ export function ProjectDetailPage() {
    *
    * The tag is not bookkeeping — without it the message can be wiped by the other field.
    * Both editors can be open at once (clicking the notes trigger is what blurs the name
-   * editor, and a REFUSED name save leaves that editor open and pulls focus back to it), so
-   * the name's focus recovery blurs the notes editor, which closes unchanged and would clear
-   * the very refusal the name save had just reported. Each field only ever clears its own.
+   * editor, and a REFUSED name save leaves that editor open), so closing the notes editor
+   * unchanged would clear the very refusal the name save had just reported. Each field only
+   * ever clears its own.
    */
   const [saveError, setSaveError] = useState<{ field: 'name' | 'notes'; text: string } | null>(null);
   const clearErrorFor = (field: 'name' | 'notes') =>
