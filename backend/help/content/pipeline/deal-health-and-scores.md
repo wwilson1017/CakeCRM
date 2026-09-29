@@ -53,11 +53,11 @@ gone quiet get their own slot in the dashboard's Today panel.
 
 The dashboard's Top deals list shows five open deals, and it leaves leads out: a deal has to
 be qualified or further along to appear. They are ranked by size first, with the win
-probability tipping the order: a deal counts at 40% of its value at 0% probability, rising to
-its full value at 100%. So a large deal that is reasonably likely still beats a small one that
-is nearly certain, and a deal worth nothing never ranks. This ranking is separate from the
-lead score above. If the list is empty while the pipeline is not, every open deal is still a
-lead.
+probability tipping the order: a deal counts at 40% of its value at 0% probability, rising
+to its full value at 100%. So a large deal that is reasonably likely still beats a small one
+that is nearly certain, and a deal worth nothing sorts behind every deal that has a value.
+This ranking is separate from the lead score above. If the list is empty while the pipeline
+is not, every open deal is still a lead.
 
 ## The touch-count pill
 
