@@ -173,7 +173,9 @@
   (an item that arrived as "@errands" from Quick Add goes back to "@errands"), and the
   revert asks the Inbox, via `notifyTodosChanged(focusInboxId)`, to promote it to the
   current triage card — clearing the filter bar, and re-keying the card with `focusSeq`
-  so a spent card is never reused. Pages that own their own fetch (Search, Project
+  so a spent card is never reused. A completion made from triage restores `inbox` too,
+  so it gets the same promotion — the focus keys on where the revert lands, not on the
+  kind. Pages that own their own fetch (Search, Projects, Project
   detail, Review) subscribe with `useTodosChanged`; everything on `useTodos` gets it
   free. **A new GTD list page that does not go through `useTodos` must call
   `useTodosChanged(reload)`**, or an undo clicked while standing on it leaves it stale.

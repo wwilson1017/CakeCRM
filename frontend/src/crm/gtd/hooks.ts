@@ -133,16 +133,19 @@ export async function undoAll(): Promise<void> {
   if (reopenedRepeats === 1) toast.info(REOPENED_REPEAT_ONE);
   else if (reopenedRepeats > 1) toast.info(REOPENED_REPEAT_MANY);
   if (restored.length === 0) return;
-  // The LAST filing that actually made it back — a revert that failed never returned to
-  // the inbox, so pointing the card at it would show an empty card.
+  // The LAST inbox item that actually made it back — a revert that failed never returned
+  // to the inbox, so pointing the card at it would show an empty card.
   afterUndo(restored.map(focusIdOf).filter(id => id !== undefined).pop());
 }
 
-/** A restored filing is the one kind of undo that has somewhere to be looked at: the
- *  item comes back as the CURRENT triage card, not corrected silently behind the list
- *  the user is standing on. */
+/** An undo that puts an item back in the INBOX has somewhere to be looked at: the item
+ *  comes back as the CURRENT triage card, not corrected silently behind the list the
+ *  user is standing on. Keyed on where the revert lands rather than on the kind: every
+ *  filing lands there, and so does a completion made from triage ("Took 2 minutes —
+ *  Done ✓", or the edit sheet opened off the card), which would otherwise reappear
+ *  wherever `items[0]` happens to put it. */
 function focusIdOf(entry: UndoEntry): number | undefined {
-  return entry.kind === 'filed' ? entry.id : undefined;
+  return entry.restore.status === 'inbox' ? entry.id : undefined;
 }
 
 async function revertEntry(entry: UndoEntry): Promise<boolean> {

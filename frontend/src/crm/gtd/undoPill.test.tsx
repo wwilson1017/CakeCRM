@@ -836,3 +836,36 @@ describe('a later context choice and a pending row (#2925, Codex stage 2)', () =
     expect(updateTodoMock).toHaveBeenLastCalledWith(122, { status: 'next_action' });
   });
 });
+
+describe('review-stage additions (#231)', () => {
+  it('re-focuses the triage card for ANY undo that lands an item back in the inbox', async () => {
+    // "Took 2 minutes — Done ✓" completes straight from triage, so its undo restores
+    // 'inbox' exactly as a filing's does. Keying the focus on the kind left that item
+    // wherever `items[0]` put it; keying it on where the revert lands does not.
+    const seen: number[] = [];
+    await act(async () => { root.render(<FocusHarness seen={seen} />); });
+    act(() => {
+      queueUndo(todo({ id: 131, title: 'two-minute job', status: 'inbox' }));
+      queueUndo(todo({ id: 132, title: 'off a list', status: 'next_action' }));
+    });
+
+    await clickAsync(undoFor('off a list'));
+    expect(seen).toEqual([]); // not an inbox item, so there is no card to promote it to
+
+    await clickAsync(undoFor('two-minute job'));
+    expect(seen).toEqual([131]);
+  });
+
+  it('replaces a pending filing when the same todo is then marked done', () => {
+    // One row per todo whatever the kinds: two rows would offer two conflicting reverts
+    // for one todo, and whichever the user did not click would re-apply a stale state.
+    renderPill();
+    const item = todo({ id: 133, title: 'filed then finished', status: 'inbox', context: '' });
+    act(() => { queueUndo(item, 'filed'); });
+    act(() => { queueUndo({ ...item, status: 'next_action', context: '@calls' }); });
+
+    expect(rows()).toHaveLength(1);
+    expect(rows()[0].textContent).toContain('Marked done');
+    expect(headerCount()).toBe('1 marked done');
+  });
+});
