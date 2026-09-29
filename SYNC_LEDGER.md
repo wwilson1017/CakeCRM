@@ -83,4 +83,4 @@ Populated by port PRs from here on.
 | Weekly Touches grouped per sales rep, plus a per-rep page listing that rep's touched open deals in full | `backend/apps/crm/dashboard_service.py` + `frontend/src/apps/crm/components/{WeeklyTouchesCard,WeeklyTouchesDetailPage}.tsx` @ `8e4d202f9` (cake_os #602) | #146 | 2026-09-04 |
 | Reports tab — single-page company rollup with a merged notes+activity timeline | `backend/apps/crm/report_service.py` + `frontend/src/apps/crm/{companyRollup.ts,components/{ReportsTab,CompanyRollupReport,CompanyTimeline}.tsx}` @ `74f902684` | #144 | — |
 | Per-deal deep links (link-shape module + `url` on deal tool results) | PR #1542 (`732678bd2`) | #145 | 2026-09-04 |
-| Capture page retries focus on open and re-attempts on resume, gated to a standalone (PWA) launch — inline script in the backend-rendered `_CAPTURE_HTML`, not the blueprint's React effect | PR #3051 (`d49442c6e`) | #233 | 2026-09-26 |
+| Capture page retries focus on open and re-attempts on resume, gated to a standalone (PWA) launch — inline script in the backend-rendered `_CAPTURE_HTML`, not the blueprint's React effect | PR #3051 (`d49442c6e`) | #233 | 2026-09-29 |

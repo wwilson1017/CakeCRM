@@ -159,3 +159,19 @@
   makes flipping every existing install acceptable.
   Neither no-login surface consults `todo_mode` (they gate on `todo_capture_token` /
   `todo_web_enabled`), so this flip does not widen them.
+- **The capture page puts the caret in the box on open AND on resume** (#233, port of
+  cake_os #3049). `autofocus` is one attempt at parse and never repeats, and a resumed
+  home-screen app is not re-navigated, so the inline script in `crm/todo_capture._CAPTURE_HTML`
+  retries `focus()` over the next frames (now, next rAF, 150 ms, 400 ms) and re-attempts on
+  `pageshow`/`visibilitychange` **only under a standalone launch** (`navigator.standalone` or
+  `(display-mode: standalone)`), so a browser tab never has its caret grabbed when the user
+  switches back. No attempt takes focus from an element the user is already in (after a resume
+  that could be Send). On a coarse pointer it also calls `navigator.virtualKeyboard.show()` —
+  including when the textarea ALREADY has focus, since a resumed app usually does with the
+  keyboard dismissed, so "focused" and "keyboard up" are separate questions. Best effort: WebKit
+  lacks the API and iOS raises the keyboard only under user activation, so a cold iOS launch
+  still lands with the caret placed and the keyboard down; a tap-to-start overlay is ruled out.
+  **Tested by running the page's real script**: `vitest.config.ts` defines
+  `__CAPTURE_PAGE_PY__` from the Python source (the `__INDEX_CSS__` pattern) and
+  `frontend/src/crm/capturePageFocus.test.ts` executes the extracted `<script>` in jsdom — the
+  repo's only JS runner — so the rules are pinned by behaviour rather than by source text.

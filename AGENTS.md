@@ -154,11 +154,6 @@ paths on purpose — never turn them into `@` imports, which load eagerly.
   contradicted). Neither consults `todo_mode`, so #102's default flip leaves both exactly
   as they were. `/capture[/{token}]` is **write-only** (creates one inbox row, returns only
   its id — no read endpoint exists on it) and is reachable while no token is set;
-  its page retries `focus()` over the frames after load and re-attempts on
-  `pageshow`/`visibilitychange` ONLY under a standalone (PWA) launch, never taking
-  focus from an element the user is already in (#233 — a browser tab must not have
-  its caret grabbed on every switch back; iOS still needs a tap to raise the keyboard
-  on a cold launch, and a tap-to-start overlay is ruled out).
   `/todo[/{token}]` serves the **whole todo app read+write** and is **off** until
   `todo_web_enabled`, which mints a token in the same action rather than publishing
   the list at a guessable address. Both mount ONLY `gtd_router.build_router` — the

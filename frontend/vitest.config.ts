@@ -37,6 +37,12 @@ export default defineConfig({
   // This file is not in any tsconfig's `include`, so the Node import here costs nothing.
   define: {
     __INDEX_CSS__: JSON.stringify(readFileSync(new URL('./src/index.css', import.meta.url), 'utf8')),
+    // The capture page's source, for `crm/capturePageFocus.test.ts` (#233). `/capture` is
+    // backend-rendered HTML with an inline script, and this is the only JS runner in the repo,
+    // so the test runs THAT script in jsdom rather than pinning a copy of it.
+    __CAPTURE_PAGE_PY__: JSON.stringify(
+      readFileSync(new URL('../backend/crm/todo_capture.py', import.meta.url), 'utf8'),
+    ),
   },
   test: {
     // `node` is the default because most targets are pure functions, and node-env tests are

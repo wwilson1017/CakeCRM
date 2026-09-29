@@ -81,30 +81,14 @@ def test_capture_page_renders_and_is_never_cached_or_indexed(client):
     assert "noindex" in r.headers["x-robots-tag"]
 
 
-def test_capture_page_retries_focus_and_gates_resume_on_a_standalone_launch(client):
-    """#233: `autofocus` is one attempt that never repeats, so the page retries focus over
-    the next frames and re-attempts on resume — but ONLY when launched standalone (PWA),
-    so a browser tab never has its caret grabbed when the user switches back to it."""
-    body = client.get("/capture").body.decode()
-    script = body[body.index("<script>"):body.index("</script>")]
-    # Both halves stay: the attribute is the first attempt, the script the retries.
+def test_capture_page_keeps_autofocus_under_the_focus_retry_script(client):
+    """#233: `autofocus` is the first focus attempt and the script's retry ladder is layered on
+    top of it. The ladder's behaviour (standalone-only resume, never stealing focus, the
+    touch-only keyboard nudge) is exercised in jsdom by
+    `frontend/src/crm/capturePageFocus.test.ts`, which runs this page's real script."""
+    body = client.get("/capture").text
     assert '<textarea id="t" autofocus' in body
-    assert "requestAnimationFrame(focusAttempt)" in script
-    assert "setTimeout(focusAttempt, 150)" in script and "setTimeout(focusAttempt, 400)" in script
-    # The resume handler checks the standalone gate BEFORE it retries, and both platform
-    # signals feed that gate.
-    resume = script[script.index("function onResume()"):]
-    assert resume.index("if (!isStandalone()) return;") < resume.index("focusRetry();")
-    assert "navigator.standalone === true" in script
-    assert "'(display-mode: standalone)'" in script
-    assert "addEventListener('pageshow', onResume)" in script
-    assert "addEventListener('visibilitychange', onResume)" in script
-    # Never yank the caret out of something the user is already in.
-    assert "if (active && active !== document.body) return;" in script
-    # Keyboard nudge is touch-only and best-effort (WebKit has no virtualKeyboard).
-    assert "'(pointer: coarse)'" in script and "navigator.virtualKeyboard.show()" in script
-    # The tap-to-start overlay was ruled out upstream; the page stays one textarea + button.
-    assert "overlay" not in body.lower()
+    assert "function onResume()" in body
 
 
 # ── Capture: token mode ───────────────────────────────────────────────────────
