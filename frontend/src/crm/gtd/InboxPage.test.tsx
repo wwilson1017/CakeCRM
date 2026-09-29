@@ -86,14 +86,6 @@ const onCard = () =>
 const restRows = () =>
   [...container.querySelectorAll<HTMLButtonElement>('[data-inbox-queue] button')];
 
-function button(label: string): HTMLButtonElement {
-  const found = [...container.querySelectorAll('button')].find(
-    b => (b.textContent ?? '').trim() === label,
-  );
-  if (!found) throw new Error(`no button labelled "${label}"`);
-  return found;
-}
-
 const click = (el: Element) => act(() => { (el as HTMLElement).click(); });
 
 /** The card's context picker — the affordance that has to still work afterwards. */
