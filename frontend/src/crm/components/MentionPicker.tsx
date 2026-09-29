@@ -1,7 +1,8 @@
-import { useCallback, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode, RefObject } from 'react';
 import {
-  activeMentionQuery, applyMention, filterMentionCandidates, keptMentionIds, mentionLabel,
+  activeMentionQuery, applyMention, filterMentionCandidates, hasMentionToken, keptMentionIds,
+  mentionLabel,
 } from '../chatterMentions';
 import type { PickedMention } from '../chatterMentions';
 import { useUsers } from '../useUsers';
@@ -22,12 +23,14 @@ export interface MentionPicker {
   onChange: (el: HTMLTextAreaElement) => void;
   /** The listbox, or null. Render inside a `position: relative` wrapper around the textarea. */
   menu: ReactNode;
-  /**
-   * The user IDs to send: people picked whose `@name` is still in the text. Picks are
-   * never cleared — one that no longer has a token simply stops counting, which is also
-   * what keeps a pick made while an earlier post was in flight.
-   */
+  /** The user IDs to send: people picked whose `@name` is still in the text. */
   mentionIds: () => number[];
+  /**
+   * After `sentText` posted: forget the picks that belonged to it, so a later draft that
+   * merely TYPES `@Ada` does not reuse an old pick. A pick whose token is in the draft that
+   * survives (text typed while the post was in flight) is kept.
+   */
+  retire: (sentText: string) => void;
 }
 
 /**
@@ -57,6 +60,10 @@ export function useMentionPicker(
   const [dismissedAt, setDismissedAt] = useState<number | null>(null);
   const [highlight, setHighlight] = useState({ key: '', index: 0 });
   const pendingCaret = useRef<number | null>(null);
+  // The latest committed text, for `retire`, which runs from an async continuation whose
+  // closure holds the text as it was when the post started.
+  const latestText = useRef(text);
+  useEffect(() => { latestText.current = text; }, [text]);
   const listId = useId();
 
   const query = caret === null ? null : activeMentionQuery(text, caret);
@@ -166,5 +173,13 @@ export function useMentionPicker(
     onChange: track,
     menu,
     mentionIds: () => keptMentionIds(text, picked),
+    retire: (sentText: string) => {
+      // Mirrors the composer's own rule: the draft is cleared only if it is still exactly
+      // what was sent; otherwise the edited draft survives.
+      const surviving = latestText.current === sentText ? '' : latestText.current;
+      setPicked(prev => prev.filter(
+        p => !hasMentionToken(sentText, p.label) || hasMentionToken(surviving, p.label),
+      ));
+    },
   };
 }

@@ -5,7 +5,7 @@
 // Escape closes the menu without leaking to a surrounding modal.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 vi.mock('../../core/api/client', () => ({
   api: vi.fn(async () => ({
@@ -56,7 +56,7 @@ function key(k: string): KeyboardEvent {
 type OnSubmit = (text: string, files: File[], mentions: number[]) => Promise<void>;
 
 async function renderComposer(
-  onSubmit: OnSubmit & { mock?: unknown } = vi.fn<OnSubmit>(async () => {}),
+  onSubmit: Mock<OnSubmit> = vi.fn<OnSubmit>(async () => {}),
 ) {
   await act(async () => { root.render(<NoteComposer onSubmit={onSubmit} />); });
   await act(async () => { await Promise.resolve(); });  // let the roster land
@@ -129,5 +129,17 @@ describe('NoteComposer @ mentions across a pending post', () => {
     type('@Ann second');
     await act(async () => { postButton().click(); });
     expect(sent).toEqual([[], [2]]);
+  });
+
+  it('a later note that only TYPES a previously picked name mentions nobody', async () => {
+    const onSubmit = await renderComposer();
+    type('@ad');
+    key('Enter');
+    type('@Ada Lovelace first');
+    await act(async () => { postButton().click(); });
+    expect(textarea().value).toBe('');
+    type('hand typed @Ada Lovelace');
+    await act(async () => { postButton().click(); });
+    expect(onSubmit.mock.calls.map(c => c[2])).toEqual([[1], []]);
   });
 });
