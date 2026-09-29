@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from '../../shared/toast';
 import { updateTodo } from './api';
 import type { Todo, TodoStatus } from './types';
-import { dropUndo, queueUndo, takeAll, takeEntry, type UndoEntry } from './undoQueue';
+import { dropUndo, isCurrentSession, queueUndo, takeAll, takeEntry, type UndoEntry } from './undoQueue';
 import { refreshMeta } from './useTodoMeta';
 
 /** Reopening a completed repeating todo leaves its already-spawned successor in place —
@@ -116,7 +116,9 @@ export function useTodos(fetcher: () => Promise<Todo[]>, refetchKey: unknown = n
  *  still reachable, from the Done list or from its new list. */
 export async function undoOne(key: number): Promise<void> {
   const entry = takeEntry(key);
-  if (!entry) return;
+  // A row from another session is never reverted: it would re-issue the PUT with the
+  // CURRENT seat's token (see undoQueue.ts). Taken off the queue all the same.
+  if (!entry || !isCurrentSession(entry)) return;
   if (!await revertEntry(entry)) return;
   // Only a completion spawned anything to warn about.
   if (entry.kind === 'done' && entry.repeat) toast.info(REOPENED_REPEAT_ONE);
@@ -125,7 +127,7 @@ export async function undoOne(key: number): Promise<void> {
 
 /** Put every currently-queued row back ("Undo all"). */
 export async function undoAll(): Promise<void> {
-  const entries = takeAll();
+  const entries = takeAll().filter(isCurrentSession);
   if (entries.length === 0) return;
   const results = await Promise.all(entries.map(revertEntry));
   const restored = entries.filter((_, i) => results[i]);

@@ -16,14 +16,20 @@
 // beside the other mutations, which also keeps the dependency one-directional —
 // hooks.ts → undoQueue.ts, never back.
 //
-// Divergence from the blueprint, stated once: upstream stamps every row with an OWNER
-// and filters by it, because a BroadcastChannel token adoption there can swap the
-// signed-in user inside one tab with no reload. CakeCRM has no in-tab identity swap —
-// signing out drops the session and the whole SPA re-renders through /login, and the
-// public /todo/{token} surface has no user at all — so the owner scoping collapses to
-// "whoever is signed in" and is not ported. The rule that survives is the one that
-// still has a producer: at most ONE row per todo id, replaced on re-queue.
+// Rows are stamped with the SESSION they were queued under — the bearer token, read the
+// way the API client reads it — and a row from another session is neither shown nor
+// reverted. The blueprint does the same with an owner email, for the reason that applies
+// here too: `AuthContext` adopts a token another tab broadcasts, with no reload, so a
+// second account signing in elsewhere in this browser swaps the seat under a still-open
+// block. Its rows would then show the previous seat's titles and, clicked, re-issue the
+// PUT with the new seat's token — which members may do on shared records — so one seat
+// could undo another's action. A token rather than a user id because it needs no auth
+// context (the no-login /todo/{token} app has none: every row stamps `null` there and
+// matches), and because a token that changed for any reason — a re-login, a password
+// change — describes a different session whose pending rows are safely forgotten. At most
+// ONE row per todo id, replaced on re-queue.
 import { useSyncExternalStore } from 'react';
+import { getToken } from '../../core/auth/tokenUtils';
 import type { Todo } from './types';
 
 /** How long a row stays offering its undo. Per-row and independent: a completion added
@@ -60,6 +66,13 @@ export interface UndoEntry {
    *  the repeat in one save must stamp the new rule. Only ever consulted for kind
    *  'done' — a filing spawns nothing. */
   repeat: string;
+  /** The session this row was queued under (see the header). */
+  session: string | null;
+}
+
+/** Does this row belong to the session that is signed in NOW? */
+export function isCurrentSession(entry: UndoEntry): boolean {
+  return entry.session === getToken();
 }
 
 let nextKey = 1;
@@ -95,6 +108,7 @@ export function queueUndo(
       ? { status: todo.status, context: todo.context }
       : { status: todo.status },
     repeat: todo.repeat,
+    session: getToken(),
   };
   // At most ONE row per todo, whatever the kinds. A todo cannot be completed twice
   // without being un-done in between (which calls `dropUndo`), so a second queue for

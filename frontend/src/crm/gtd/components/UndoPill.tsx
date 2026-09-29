@@ -23,7 +23,7 @@
 // successor toast while the block is still showing.
 import { useLayoutEffect, useRef } from 'react';
 import { undoAll, undoOne } from '../hooks';
-import { useUndoQueue, type UndoKind } from '../undoQueue';
+import { isCurrentSession, useUndoQueue, type UndoKind } from '../undoQueue';
 
 /** The resting `bottom` of both the toast stack and this block — `ToastViewport`'s own
  *  number (24 + the 52px launcher + 12 clearance), which is `crm/styles.ts`'s
@@ -66,7 +66,11 @@ const ACTION =
   'hover:bg-sand focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand';
 
 export function UndoPill() {
-  const entries = useUndoQueue();
+  // Only this session's rows: a seat swapped in by another tab must not see — or be
+  // offered to revert — the previous seat's actions (see undoQueue.ts). Filtering at
+  // render rather than clearing on the swap, because the swap reaches this tree through
+  // no prop or context this component reads; the revert path re-checks regardless.
+  const entries = useUndoQueue().filter(isCurrentSession);
   const box = useRef<HTMLDivElement>(null);
 
   // Publish the block's height to the toast stack. A layout effect keyed on the row

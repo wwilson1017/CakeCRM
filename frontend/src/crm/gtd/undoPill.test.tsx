@@ -50,7 +50,7 @@ import { ReviewPage } from './ReviewPage';
 import { TriageCard } from './components/TriageCard';
 import { TodoEditSheet } from './components/TodoEditSheet';
 import { UndoPill } from './components/UndoPill';
-import { resetInboxFocus, useInboxFocus, useRowActions, useTodosChanged } from './hooks';
+import { resetInboxFocus, undoOne, useInboxFocus, useRowActions, useTodosChanged } from './hooks';
 import { _resetForTesting as resetToasts, getToasts, subscribeToasts } from '../../shared/toast';
 import type { Todo } from './types';
 import { UNDO_WINDOW_MS, queueUndo, resetUndoQueue } from './undoQueue';
@@ -92,6 +92,7 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   resetUndoQueue();
+  sessionStorage.clear();
   vi.useRealTimers();
 });
 
@@ -867,5 +868,42 @@ describe('review-stage additions (#231)', () => {
     expect(rows()).toHaveLength(1);
     expect(rows()[0].textContent).toContain('Marked done');
     expect(headerCount()).toBe('1 marked done');
+  });
+});
+
+describe('rows belong to the session that queued them (#231, Codex connector)', () => {
+  // `AuthContext` adopts a token another tab broadcasts, with no reload, so the seat can
+  // change under an open block. The previous seat's rows must neither show nor revert —
+  // clicking one would re-issue the PUT with the NEW seat's token.
+  it('hides and refuses to revert a row queued under another session', async () => {
+    sessionStorage.setItem('cakecrm_token', 'seat-a');
+    renderPill();
+    let key = 0;
+    act(() => { key = queueUndo(todo({ id: 141, title: 'seat A did this' })).key; });
+    expect(rows()).toHaveLength(1);
+
+    // Another account signs in from a second tab; this tab adopts its token.
+    sessionStorage.setItem('cakecrm_token', 'seat-b');
+    renderPill();
+    expect(pill()).toBeNull();
+
+    await act(async () => { await undoOne(key); });
+    expect(updateTodoMock).not.toHaveBeenCalled();
+  });
+
+  it('Undo all reverts only the current session\'s rows', async () => {
+    sessionStorage.setItem('cakecrm_token', 'seat-a');
+    renderPill();
+    act(() => { queueUndo(todo({ id: 142, title: 'old seat' })); });
+    sessionStorage.setItem('cakecrm_token', 'seat-b');
+    act(() => {
+      queueUndo(todo({ id: 143, title: 'this seat, one' }));
+      queueUndo(todo({ id: 144, title: 'this seat, two' }));
+    });
+
+    await clickAsync(button('Undo all'));
+
+    expect(updateTodoMock).toHaveBeenCalledTimes(2);
+    expect(updateTodoMock).not.toHaveBeenCalledWith(142, expect.anything());
   });
 });

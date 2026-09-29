@@ -179,6 +179,10 @@
   detail, Review) subscribe with `useTodosChanged`; everything on `useTodos` gets it
   free. **A new GTD list page that does not go through `useTodos` must call
   `useTodosChanged(reload)`**, or an undo clicked while standing on it leaves it stale.
+  Rows are stamped with the session token they were queued under and a row from another
+  session is neither shown nor reverted, because `AuthContext` adopts a token another tab
+  broadcasts with no reload. The flow is described to users in the
+  `backend/help/content/todos/gtd.md` topic.
   Undoing a repeating todo leaves its spawned successor in place and says so. There is
   no undo endpoint: the revert is the ordinary PUT, so the no-login `/todo/{token}` app
   gets the feature too.
