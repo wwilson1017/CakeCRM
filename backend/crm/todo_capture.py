@@ -95,6 +95,8 @@ _CAPTURE_HTML = """<!doctype html>
 <body>
 <main>
   <h1>Capture<span>straight to your inbox</span></h1>
+  <!-- `autofocus` is the first focus attempt and the only one a desktop tab needs;
+       the retry ladder in the script below is layered ON TOP of it. Keep both. -->
   <textarea id="t" autofocus placeholder="What's on your mind?"></textarea>
   <button id="b">Send</button>
   <div id="msg"></div>
@@ -133,6 +135,59 @@ _CAPTURE_HTML = """<!doctype html>
   t.addEventListener('keydown', function (e) {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') send();
   });
+
+  // Focus on open (#233, port of the blueprint's capture-page fix). `autofocus` is ONE
+  // focus() at parse time and never repeats, and a resumed home-screen app is not
+  // re-navigated, so switching back to it left the caret nowhere and the keyboard down.
+  // Two rules: the resume re-attempt is GATED to a standalone launch, so a browser tab
+  // never has its caret grabbed when the user switches back to it; and no attempt ever
+  // takes focus from an element the user is already in (after a resume that could be
+  // the Send button). Known ceiling, same as upstream: iOS raises the keyboard only
+  // under user activation, so a cold launch lands with the caret placed and the
+  // keyboard down. No tap-to-start overlay — ruled out upstream.
+  function media(q) {
+    try { return !!(window.matchMedia && window.matchMedia(q).matches); } catch (e) { return false; }
+  }
+  // Two signals because neither covers both platforms: `navigator.standalone` is WebKit's
+  // non-standard flag (the only one on older iOS); the media query is the standard one.
+  function isStandalone() {
+    return navigator.standalone === true || media('(display-mode: standalone)');
+  }
+  function focusAttempt() {
+    var active = document.activeElement;
+    if (active !== t) {
+      if (active && active !== document.body) return;
+      t.focus();
+      if (document.activeElement !== t) return;
+    }
+    // Touch-primary only; Chromium's VirtualKeyboard API is the one lever that can raise
+    // the keyboard for a control the script focused. Best-effort: WebKit lacks it, and
+    // Chromium may refuse it without activation — the textarea is the tap fallback.
+    if (media('(pointer: coarse)')) {
+      try {
+        if (navigator.virtualKeyboard && navigator.virtualKeyboard.show) navigator.virtualKeyboard.show();
+      } catch (e) {}
+    }
+  }
+  var focusRaf = 0;
+  function focusRetry() {
+    focusAttempt();
+    if (window.requestAnimationFrame) {
+      cancelAnimationFrame(focusRaf);
+      focusRaf = requestAnimationFrame(focusAttempt);
+    }
+  }
+  focusRetry();
+  // Load only: the short ladder covers the frames where the page is still settling.
+  setTimeout(focusAttempt, 150);
+  setTimeout(focusAttempt, 400);
+  function onResume() {
+    if (document.visibilityState === 'hidden') return;
+    if (!isStandalone()) return;
+    focusRetry();
+  }
+  window.addEventListener('pageshow', onResume);
+  document.addEventListener('visibilitychange', onResume);
 </script>
 </body>
 </html>"""
