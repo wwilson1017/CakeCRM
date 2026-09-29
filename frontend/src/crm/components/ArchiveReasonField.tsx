@@ -2,7 +2,7 @@
  * The required "why archive?" field (#239), shown by the contact and company edit forms only
  * while the status is being moved INTO archived. Inline in the form rather than a second
  * dialog stacked on the form's own modal: the reason rides the same PUT as the status, which
- * the server records as an "Archived — <reason>" note with your name.
+ * the server records as an "Archived — <reason>" note authored by the saving seat.
  */
 
 import { labelStyle, inputStyle, INK_DIM } from '../../shared/styles';
@@ -26,7 +26,7 @@ export function ArchiveReasonField({ id, value, onChange }: {
         style={{ ...inputStyle, resize: 'none' }}
       />
       <div style={{ fontSize: 12, color: INK_DIM, marginTop: 4 }}>
-        Recorded in the notes with your name.
+        Saved to the notes, along with who archived it.
       </div>
     </div>
   );
