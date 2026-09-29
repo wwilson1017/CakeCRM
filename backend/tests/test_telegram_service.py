@@ -138,7 +138,7 @@ def _install(monkeypatch, h: Harness, *, chat_scripts=None, consume=None, provid
 
     def fake_registry(*, user=None, background=False):
         h.registry_users.append(user)
-        return object()
+        return types.SimpleNamespace(deal_refs={})  # the real registry's per-turn map (#238)
 
     monkeypatch.setattr(service, "engine", fake_engine)
     monkeypatch.setattr(service, "store", fake_store)
@@ -279,7 +279,9 @@ async def test_callback_approve_resolves_and_continues(monkeypatch):
     # The approver is a real seat: the write records who approved it, and
     # resolve_confirmation can prove the conversation belongs to them.
     assert h.resolve_users == [MEMBER] and h.chat_users == [MEMBER]
-    assert h.registry_users == [MEMBER, MEMBER]
+    # ONE registry resolves the write and drives the continuation, so the reply can link
+    # a deal the approved write returned (#238).
+    assert h.registry_users == [MEMBER]
 
 
 async def test_batch_is_consumed_against_the_pressing_seats_link(monkeypatch):

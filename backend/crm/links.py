@@ -40,6 +40,8 @@ into it and nothing here imports back up.
 
 from __future__ import annotations
 
+import re
+
 #: The canonical deal deep-link shape. A module constant rather than an inline literal
 #: so the cross-language pin has exactly one thing to assert against.
 DEAL_PATH_TEMPLATE = "/crm/pipeline?deal={id}"
@@ -109,3 +111,93 @@ def with_deal_url(deal: dict | None) -> dict | None:
     if isinstance(deal, dict) and type(deal.get("id")) is int:
         deal["url"] = deal_url(deal["id"])
     return deal
+
+
+# ── Bare deal ids in outbound text (issue #238, port of the blueprint's #3175) ──────
+#
+# Baker's tool results carry a `url` for every deal (#145), but its prose still says
+# "deal #14" — fine in the drawer, useless in a Telegram message or a push notification
+# whose reader cannot click an id. So the outbound seams rewrite a bare id to
+# ``Title (url)``, from the title and url a tool returned for that deal THIS turn.
+#
+# Only ids the turn actually read are touched. An id the model made up (or a PO number
+# that happens to collide with a deal id) is left exactly as written: rewriting it would
+# lend a hallucinated reference a real deal's title.
+
+# "deal #14", "deals 14", "Deal#14" or a bare "#14". The bare form must not follow a word
+# character or a URL/anchor character, so "PO#14" and "?deal=14" are never references.
+_DEAL_REF_RE = re.compile(r"\bdeals?\s*#?\s*(\d+)\b|(?<![\w#/=&])#(\d+)\b", re.IGNORECASE)
+
+# A bare "#14" right after one of these labels names that thing, not a deal
+# ("PO #14", "invoice #14"), even when the number collides with a deal id.
+# simplification: a fixed label list; widen it when a new collision shows up.
+_OTHER_REF_LABEL_RE = re.compile(
+    r"\b(?:po|purchase order|so|sales order|order|invoice|bill|issue|pr|ticket|todo"
+    r"|contact|company|item|case|check|step)\s*$",
+    re.IGNORECASE,
+)
+
+
+def remember_deal_refs(result, deal_refs: dict[int, tuple[str, str]] | None) -> None:
+    """Record every deal record in a tool ``result`` into ``deal_refs`` (``{id: (title, url)}``).
+
+    A deal record is any dict whose ``url`` is exactly ``deal_url`` of its own ``id``
+    (or ``deal_id``, the ``crm_get_deal_health`` shape) and that carries a non-blank
+    ``title`` — so a contact row (which has an ``id`` and sometimes a job ``title``) or a
+    todo never counts, because only ``with_deal_url`` ever produces that url. Nested
+    dicts and lists are walked, since deal rows ride inside contact/company rollups,
+    ``top_deals`` and the like.
+    """
+    if deal_refs is None:
+        return
+
+    def _walk(node) -> None:
+        if isinstance(node, dict):
+            deal_id = node.get("id", node.get("deal_id"))
+            title, url = node.get("title"), node.get("url")
+            if (
+                type(deal_id) is int
+                and isinstance(title, str)
+                and title.strip()
+                and isinstance(url, str)
+                and url == deal_url(deal_id)
+            ):
+                deal_refs[deal_id] = (title.strip(), url)
+            for value in node.values():
+                _walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                _walk(value)
+
+    _walk(result)
+
+
+def link_deal_refs(text: str, deal_refs: dict[int, tuple[str, str]] | None) -> str:
+    """Rewrite bare deal ids in outbound ``text`` to ``Title (url)``.
+
+    Only ids present in ``deal_refs`` — deals a tool returned this turn — are rewritten;
+    every other number is left exactly as written. When the deal's url is already in the
+    text, or the deal was already linked earlier in the same text, the id becomes the
+    title alone so the link is never doubled. A relative ``deal_url`` stays relative:
+    this never invents a host.
+    """
+    if not text or not deal_refs:
+        return text
+
+    linked: set[int] = set()
+
+    def _sub(m: re.Match) -> str:
+        if m.group(2) and _OTHER_REF_LABEL_RE.search(text, 0, m.start()):
+            return m.group(0)
+        deal_id = int(m.group(1) or m.group(2))
+        hit = deal_refs.get(deal_id)
+        if not hit:
+            return m.group(0)
+        title, url = hit
+        # Digit-bounded, not a bare `in`: deal 1's url is a prefix of deal 14's.
+        if deal_id in linked or re.search(re.escape(url) + r"(?!\d)", text):
+            return title
+        linked.add(deal_id)
+        return f"{title} ({url})"
+
+    return _DEAL_REF_RE.sub(_sub, text)

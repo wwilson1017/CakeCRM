@@ -34,6 +34,7 @@ from assistant import engine
 from assistant.history import list_pending_tool_uses
 from assistant.registry import ToolRegistry
 from crm import gtd_common, gtd_service
+from crm.links import link_deal_refs
 from providers import get_ai_provider
 from users.service import display_name
 
@@ -308,12 +309,16 @@ async def _handle_callback(cb: dict) -> None:
         store.try_consume_batch, link["id"], pending_msg_id
     )
     if should_continue:
-        await _run_turn(link, token, user_text=None)
+        # Hand the continuation the registry that ran the approved write, so a deal it
+        # returned can still be linked in the reply that narrates it (#238).
+        await _run_turn(link, token, user_text=None, registry=registry)
 
 
 # ── Turn driver ─────────────────────────────────────────────────────────────
 
-async def _run_turn(link: dict, token: str, user_text: str | None) -> None:
+async def _run_turn(
+    link: dict, token: str, user_text: str | None, registry: ToolRegistry | None = None,
+) -> None:
     """Drive one assistant turn (or a continuation when ``user_text`` is None).
 
     ``link`` is the row ``find_link`` resolved for this update — it carries the chat to
@@ -345,7 +350,8 @@ async def _run_turn(link: dict, token: str, user_text: str | None) -> None:
 
     conv = await asyncio.to_thread(store.get_or_create_conversation, link)
 
-    registry = ToolRegistry(user=user)
+    if registry is None:
+        registry = ToolRegistry(user=user)
     messages = [] if user_text is None else [{"role": "user", "content": user_text}]
 
     buffer = ""
@@ -361,18 +367,18 @@ async def _run_turn(link: dict, token: str, user_text: str | None) -> None:
             if etype == "text":
                 buffer += evt.get("text", "")
             elif etype == "confirm":
-                buffer = await _flush(chat_id, buffer, token)
+                buffer = await _flush(chat_id, buffer, token, registry.deal_refs)
                 await _send_confirm(link, chat_id, token, evt)
             elif etype == "error":
-                buffer = await _flush(chat_id, buffer, token)
+                buffer = await _flush(chat_id, buffer, token, registry.deal_refs)
                 await _send_text(chat_id, "⚠️ " + str(evt.get("error") or "The assistant hit an error."), token)
                 return
             elif etype == "done":
-                await _flush(chat_id, buffer, token)
+                await _flush(chat_id, buffer, token, registry.deal_refs)
                 return
             # tool_start / tool_args / tool_end / conversation_id / usage → ignored
         # Generator ended without an explicit done — flush whatever we have.
-        await _flush(chat_id, buffer, token)
+        await _flush(chat_id, buffer, token, registry.deal_refs)
     except Exception:
         logger.exception("telegram _run_turn crashed")
         await _send_text(chat_id, "⚠️ The assistant hit an unexpected error and stopped.", token)
@@ -390,9 +396,13 @@ async def _auto_deny_batch(conv: str, msg_id: str, user: dict) -> None:
 
 # ── Send helpers (all offloaded; never raise to the loop) ────────────────────
 
-async def _flush(chat_id, buffer: str, token: str) -> str:
+async def _flush(chat_id, buffer: str, token: str, deal_refs: dict | None = None) -> str:
     if buffer.strip():
-        await _send_html(chat_id, buffer, token)
+        # A Telegram reader cannot click "deal #14" — rewrite ids this turn's tools
+        # returned to "Title (url)" (#238). History keeps the model's own wording: the
+        # rewrite is for the reader of THIS message, and the drawer streams deltas it
+        # could not take back anyway.
+        await _send_html(chat_id, link_deal_refs(buffer, deal_refs), token)
     return ""
 
 
