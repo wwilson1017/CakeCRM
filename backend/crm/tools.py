@@ -31,6 +31,7 @@ from collections.abc import Callable
 import psycopg2
 
 from assistant.confirm_tier import ROUTINE
+from core.postgres import pg_fetchall
 from crm import (
     analytics_service,
     chatter_service,
@@ -1288,6 +1289,111 @@ def _record_provenance(entity_type: str, entity_id: int, provided: dict, result:
                        exc_info=True)
 
 
+# ── Write targets (issue #236) ────────────────────────────────────────────────
+# Every write tool's SUCCESS result names the record it actually wrote, under `target`:
+# `{entity_type, id, title, owner_id}` plus `url` for deals. The blueprint's audit found
+# notes logged against hallucinated deal ids — one of them another rep's deal — while the
+# results (`{"ok": true, "note": …}`) never said WHICH record was touched, so the model
+# narrated success against the deal the user had named and no transcript reader could see
+# the miss. `title` is a deal/todo `title` or a contact/company `name` under one key.
+# Error dicts carry no target. SALES_GUIDE tells the model to read it.
+
+# entity_type -> (table, identifying column). Every table here but `todo_projects` has
+# an `owner_id`; a project has no owner, so its block carries `owner_id: None`.
+_TARGET_TABLES = {
+    "deal": ("deals", "title"),
+    "contact": ("contacts", "name"),
+    "company": ("companies", "name"),
+    "todo": ("todos", "title"),
+    "project": ("todo_projects", "name"),
+}
+_UNOWNED_TARGETS = frozenset({"project"})
+
+
+def _target_from_record(entity_type: str | None, record: dict | None,
+                        entity_id: int | None = None) -> dict:
+    """Shape one `target` block from a row the service returned (or `_target_rows` read)."""
+    record = record if isinstance(record, dict) else {}
+    title_col = _TARGET_TABLES.get(entity_type, (None, None))[1]
+    target = {
+        "entity_type": entity_type,
+        "id": record.get("id") or entity_id,
+        "title": record.get(title_col) if title_col else None,
+        "owner_id": record.get("owner_id"),
+    }
+    if entity_type == "deal":
+        with_deal_url(target)  # the same int-not-bool guard, kept in one place
+    return target
+
+
+def _target_rows(entity_type: str, ids: list) -> tuple[list[dict], bool]:
+    """ONE lean SELECT for the identifying columns of the records a write touched.
+
+    Returns ``(targets, failed)``. A lookup failure never fails the write it describes:
+    by the time this runs the write has usually COMMITTED, and an error dict would tell
+    the model it did not happen — its natural next move is a retry and a duplicate note.
+    So the failure is logged, and the callers keep the id flagged ``lookup_failed``.
+    """
+    table, title_col = _TARGET_TABLES[entity_type]
+    ids = [i for i in dict.fromkeys(ids or []) if type(i) is int]
+    if not ids:
+        return [], False
+    owner_col = "NULL AS owner_id" if entity_type in _UNOWNED_TARGETS else "owner_id"
+    try:
+        rows = pg_fetchall(
+            f"SELECT id, {title_col}, {owner_col} FROM {table} WHERE id = ANY(%s) ORDER BY id",
+            (ids,),
+        )
+    except Exception:
+        logger.warning("CRM write target lookup failed for %s %s", entity_type, ids,
+                       exc_info=True)
+        return [], True
+    return [_target_from_record(entity_type, r) for r in rows], False
+
+
+def _lookup_target(entity_type: str, entity_id: int) -> dict:
+    """One record's `target` read from the database; the id survives a failed read."""
+    rows, failed = _target_rows(entity_type, [entity_id])
+    target = rows[0] if rows else _target_from_record(entity_type, None, entity_id)
+    if failed:
+        target["lookup_failed"] = True
+    return target
+
+
+def _with_target(result: dict, entity_type: str | None, entity_id: int | None,
+                 record: dict | None = None) -> dict:
+    """Attach `target` — the record this write ACTUALLY wrote — to a success result.
+
+    Pass ``record`` when the service already returned the row (create/update/mark/merge/
+    archive), so no second query is spent; otherwise one lean SELECT reads it. With no
+    entity at all (an activity logged against nothing) the block is still present, every
+    field None — "this write names no record" is itself the fact the reader needs.
+    """
+    if entity_type is None:
+        result["target"] = _target_from_record(None, None)
+    elif record is not None:
+        result["target"] = _target_from_record(entity_type, record, entity_id)
+    else:
+        result["target"] = _lookup_target(entity_type, entity_id)
+    return result
+
+
+def _with_targets(result: dict, entity_type: str, ids: list) -> dict:
+    """Bulk twin of `_with_target`: a `targets` list for many-record writes, ONE query.
+
+    `targets` are the requested ids that still exist, so the service's own count can be
+    smaller than `len(targets)` when it skipped one (already in the stage). A failed read
+    keeps every requested id as a `lookup_failed` placeholder, never an empty list.
+    """
+    rows, failed = _target_rows(entity_type, ids)
+    if failed:
+        rows = [{**_target_from_record(entity_type, None, i), "lookup_failed": True}
+                for i in dict.fromkeys(ids or [])]
+        result["targets_lookup_failed"] = True
+    result["targets"] = rows
+    return result
+
+
 # ── Contacts ──────────────────────────────────────────────────────────────────
 
 def _bounded_limit(limit, default: int = 20, high: int = 100) -> int:
@@ -1319,7 +1425,7 @@ def crm_create_contact(name: str, **kwargs) -> dict:
     if not result:
         return {"error": "Contact could not be created"}
     _record_provenance("contact", result.get("id"), {"name": name, **kwargs}, result)
-    return result
+    return _with_target(result, "contact", result.get("id"), record=result)
 
 
 def crm_update_contact(contact_id: int, **kwargs) -> dict:
@@ -1330,7 +1436,7 @@ def crm_update_contact(contact_id: int, **kwargs) -> dict:
     if not result:
         return {"error": f"Contact {contact_id} not found"}
     _record_provenance("contact", contact_id, kwargs, result)
-    return result
+    return _with_target(result, "contact", contact_id, record=result)
 
 
 def crm_get_contact(contact_id: int) -> dict:
@@ -1351,8 +1457,11 @@ def crm_list_contacts(status: str | None = None, limit: int = 50, offset: int = 
 
 
 def crm_delete_contact(contact_id: int) -> dict:
+    # Read BEFORE the delete: afterwards there is no row left to name, and a delete is
+    # the write where naming the wrong record costs the most.
+    target = _lookup_target("contact", contact_id)
     if crm.delete_contact(contact_id):
-        return {"deleted": True, "contact_id": contact_id}
+        return {"deleted": True, "contact_id": contact_id, "target": target}
     return {"error": f"Contact {contact_id} not found"}
 
 
@@ -1454,7 +1563,7 @@ def crm_create_deal(title: str, **kwargs) -> dict:
     if not result:
         return {"error": "Deal could not be created"}
     _record_provenance("deal", result.get("id"), {"title": title, **kwargs}, result)
-    return with_deal_url(result)
+    return _with_target(with_deal_url(result), "deal", result.get("id"), record=result)
 
 
 def crm_update_deal(deal_id: int, **kwargs) -> dict:
@@ -1470,7 +1579,7 @@ def crm_update_deal(deal_id: int, **kwargs) -> dict:
     if not result:
         return {"error": f"Deal {deal_id} not found or invalid stage"}
     _record_provenance("deal", deal_id, kwargs, result)
-    return with_deal_url(result)
+    return _with_target(with_deal_url(result), "deal", deal_id, record=result)
 
 
 def crm_update_deal_stage(deal_id: int, stage: str) -> dict:
@@ -1493,7 +1602,7 @@ def crm_update_deal_stage(deal_id: int, stage: str) -> dict:
     if not deal:
         return {"error": f"Deal not found or invalid stage: {stage}"}
     _record_provenance("deal", deal_id, {"stage": stage}, deal)
-    return with_deal_url(deal)
+    return _with_target(with_deal_url(deal), "deal", deal_id, record=deal)
 
 
 def crm_bulk_move_deals(deal_ids: list | None = None, stage: str = "") -> dict:
@@ -1528,6 +1637,7 @@ def crm_bulk_move_deals(deal_ids: list | None = None, stage: str = "") -> dict:
         # the service's BULK_MOVE_MAX.
         for did in result.get("updated_ids", []):
             _record_provenance("deal", did, {"stage": stage}, {"stage": stage})
+        _with_targets(result, "deal", ids)
     return result
 
 
@@ -1546,7 +1656,7 @@ def crm_mark_deal_won(deal_id: int) -> dict:
     if not deal:
         return {"error": f"Deal {deal_id} not found"}
     _record_provenance("deal", deal_id, {"stage": "won", "probability": 100}, deal)
-    return with_deal_url(deal)
+    return _with_target(with_deal_url(deal), "deal", deal_id, record=deal)
 
 
 def crm_mark_deal_lost(deal_id: int, lost_reason: str = "") -> dict:
@@ -1560,7 +1670,7 @@ def crm_mark_deal_lost(deal_id: int, lost_reason: str = "") -> dict:
         "deal", deal_id,
         {"stage": "lost", "probability": 0, "lost_reason": lost_reason}, deal,
     )
-    return with_deal_url(deal)
+    return _with_target(with_deal_url(deal), "deal", deal_id, record=deal)
 
 
 # Models do send `"false"` where a boolean is asked for, and `bool("false")` is True —
@@ -1595,7 +1705,9 @@ def crm_archive_deal(deal_id: int, archived: bool = True) -> dict:
         return {"error": f"Deal {deal_id} not found"}
     # An archived deal still gets its link: the board carries it under the Archived
     # facet, and reaching it is how the user restores one they archived by mistake.
-    return {"ok": True, "archived": flag, "deal": with_deal_url(deal)}
+    return _with_target(
+        {"ok": True, "archived": flag, "deal": with_deal_url(deal)}, "deal", deal_id, record=deal,
+    )
 
 
 def crm_merge_deals(target_deal_id: int, source_deal_id: int) -> dict:
@@ -1606,7 +1718,11 @@ def crm_merge_deals(target_deal_id: int, source_deal_id: int) -> dict:
     # The merge confirmation is the natural follow-up to crm_find_duplicates, which
     # links both candidates — dropping it here breaks the trail exactly where the user
     # wants to open the surviving deal.
-    return {"ok": True, "merged_from": source_deal_id, "deal": with_deal_url(deal)}
+    # `target` is the SURVIVOR — the record the merge wrote into.
+    return _with_target(
+        {"ok": True, "merged_from": source_deal_id, "deal": with_deal_url(deal)},
+        "deal", target_deal_id, record=deal,
+    )
 
 
 # ── Activities ────────────────────────────────────────────────────────────────
@@ -1618,10 +1734,16 @@ def crm_log_activity(
     # `actor_id` is SERVER-supplied — bound by `_identity_executors`, never advertised to
     # the model and stripped from its arguments, so an activity cannot be credited to
     # someone the model names.
-    return crm.log_activity(
+    result = crm.log_activity(
         activity=activity, note=note, contact_id=contact_id, deal_id=deal_id,
         actor_id=actor_id,
     )
+    # Name the most specific record it hangs off (deal > contact, report_service's
+    # precedence); logged against nothing, `_with_target` still says so with an empty block.
+    for kind, ident in (("deal", deal_id), ("contact", contact_id)):
+        if ident is not None:
+            return _with_target(result, kind, ident)
+    return _with_target(result, None, None)
 
 
 def crm_get_activity_log(contact_id: int | None = None, deal_id: int | None = None, limit: int = 20) -> dict:
@@ -1632,7 +1754,10 @@ def crm_get_activity_log(contact_id: int | None = None, deal_id: int | None = No
 # ── Todos ─────────────────────────────────────────────────────────────────────
 
 def crm_create_todo(title: str, **kwargs) -> dict:
-    return crm.create_todo(title=title, **kwargs)
+    result = crm.create_todo(title=title, **kwargs)
+    if not result:
+        return {"error": "Todo could not be created"}
+    return _with_target(result, "todo", result.get("id"), record=result)
 
 
 def crm_list_todos(
@@ -1652,7 +1777,7 @@ def crm_complete_todo(todo_id: int) -> dict:
     result = crm.complete_todo(todo_id)
     if not result:
         return {"error": f"Todo {todo_id} not found"}
-    return result
+    return _with_target(result, "todo", todo_id, record=result)
 
 
 def crm_update_todo(todo_id: int, **kwargs) -> dict:
@@ -1661,13 +1786,14 @@ def crm_update_todo(todo_id: int, **kwargs) -> dict:
     result = crm.update_todo(todo_id, **kwargs)
     if not result:
         return {"error": f"Todo {todo_id} not found"}
-    return result
+    return _with_target(result, "todo", todo_id, record=result)
 
 
 def crm_delete_todo(todo_id: int) -> dict:
+    target = _lookup_target("todo", todo_id)  # before the row is gone — see crm_delete_contact
     if not crm.delete_todo(todo_id):
         return {"error": f"Todo {todo_id} not found"}
-    return {"ok": True, "deleted": todo_id}
+    return {"ok": True, "deleted": todo_id, "target": target}
 
 
 # ── Companies ─────────────────────────────────────────────────────────────────
@@ -1707,9 +1833,12 @@ def crm_create_company(name: str, **kwargs) -> dict:
     if not name.strip():
         return {"error": "Name is required"}
     try:
-        return crm.create_company(name=name, **kwargs)
+        result = crm.create_company(name=name, **kwargs)
     except psycopg2.errors.UniqueViolation:
         return {"error": "A company with that name already exists"}
+    if not result:
+        return {"error": "Company could not be created"}
+    return _with_target(result, "company", result.get("id"), record=result)
 
 
 def crm_update_company(company_id: int, **kwargs) -> dict:
@@ -1719,7 +1848,7 @@ def crm_update_company(company_id: int, **kwargs) -> dict:
         return {"error": "A company with that name already exists"}
     if not result:
         return {"error": f"Company {company_id} not found"}
-    return result
+    return _with_target(result, "company", company_id, record=result)
 
 
 # ── Install setup status (issue #200) ─────────────────────────────────────────
@@ -1838,7 +1967,7 @@ def crm_add_note(
         note = chatter_service.add_note(entity_type, entity_id, message, author_id=author_id)
     except ValueError as e:
         return {"error": str(e)}
-    return {"ok": True, "note": note}
+    return _with_target({"ok": True, "note": note}, entity_type, entity_id)
 
 
 def crm_get_chatter(
@@ -1940,7 +2069,7 @@ def _set_entity_fields(entity_type: str, entity_id: int, fields: dict) -> dict:
         result["unknown_keys"] = unknown
     if rejected:
         result["rejected"] = rejected
-    return result
+    return _with_target(result, entity_type, entity_id)
 
 
 def crm_get_contact_fields(contact_id: int | None = None) -> dict:
