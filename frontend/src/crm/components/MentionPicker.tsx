@@ -22,10 +22,12 @@ export interface MentionPicker {
   onChange: (el: HTMLTextAreaElement) => void;
   /** The listbox, or null. Render inside a `position: relative` wrapper around the textarea. */
   menu: ReactNode;
-  /** The user IDs to send: people picked whose `@name` is still in the text. */
+  /**
+   * The user IDs to send: people picked whose `@name` is still in the text. Picks are
+   * never cleared — one that no longer has a token simply stops counting, which is also
+   * what keeps a pick made while an earlier post was in flight.
+   */
   mentionIds: () => number[];
-  /** Forget every pick — after a successful post, so the next note starts clean. */
-  reset: () => void;
 }
 
 /**
@@ -164,6 +166,5 @@ export function useMentionPicker(
     onChange: track,
     menu,
     mentionIds: () => keptMentionIds(text, picked),
-    reset: () => setPicked([]),
   };
 }

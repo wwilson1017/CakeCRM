@@ -105,3 +105,25 @@ describe('NoteComposer @ mentions', () => {
     expect(key('Enter').defaultPrevented).toBe(false);
   });
 });
+
+describe('NoteComposer @ mentions across a pending post', () => {
+  it('keeps a pick made while the previous note was still posting', async () => {
+    let release: () => void = () => {};
+    const sent: number[][] = [];
+    const onSubmit = vi.fn((_t: string, _f: File[], m: number[]) => {
+      sent.push(m);
+      return new Promise<void>(res => { release = res; });
+    });
+    await renderComposer(onSubmit);
+    type('first note');
+    await act(async () => { postButton().click(); });
+    // While the first post is in flight, start the next note and pick Ann.
+    type('@an');
+    key('Enter');
+    await act(async () => { release(); });
+    expect(textarea().value).toBe('@Ann ');
+    type('@Ann second');
+    await act(async () => { postButton().click(); });
+    expect(sent).toEqual([[], [2]]);
+  });
+});

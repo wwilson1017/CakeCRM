@@ -168,7 +168,8 @@ export function NoteComposer({
       stagedRef.current = stagedRef.current.filter(item => !submitted.has(item));
       // Same rule for the text: clear only what was actually sent.
       setText(prev => (prev === sentText ? '' : prev));
-      mention.reset();
+      // Mention picks are NOT reset here: a pick made while this post was in flight belongs
+      // to the draft that survives, and a pick only counts while its token is in the text.
       setStaged(prev => prev.filter(item => !submitted.has(item)));
     } catch (err) {
       setErrors([err instanceof Error ? err.message : 'Could not post that note.']);
