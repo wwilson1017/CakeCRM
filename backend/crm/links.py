@@ -138,9 +138,21 @@ _URL_SPAN_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://\S+")
 # "so": it is far more often the English word ("so #14 needs a call") than a label.
 _OTHER_REF_LABEL_RE = re.compile(
     r"\b(?:po|purchase order|sales order|order|invoice|bill|issue|pr|ticket|todo"
-    r"|contact|company|item|case|check|step)\s*$",
+    r"|contact|company|item|case|check|step)[\s:.,\-\u2013\u2014]*$",
     re.IGNORECASE,
 )
+
+
+def _inert_title(title: str) -> str:
+    """A deal title as plain text, whatever it was typed as.
+
+    The rewrite drops a title into Markdown that Telegram renders, so a title typed as
+    ``[Open deal](https://elsewhere.example)`` would otherwise become a live link the
+    reader never asked for. Square brackets become parentheses, which keeps the words and
+    cannot form a Markdown link. Backticks go too, since an unclosed one would swallow
+    the url that follows into a code span.
+    """
+    return title.strip().replace("[", "(").replace("]", ")").replace("`", "'")
 
 
 def remember_deal_refs(result, deal_refs: dict[int, tuple[str, str]] | None) -> None:
@@ -167,7 +179,7 @@ def remember_deal_refs(result, deal_refs: dict[int, tuple[str, str]] | None) -> 
                 and isinstance(url, str)
                 and url == deal_url(deal_id)
             ):
-                deal_refs[deal_id] = (title.strip(), url)
+                deal_refs[deal_id] = (_inert_title(title), url)
             for value in node.values():
                 _walk(value)
         elif isinstance(node, list):

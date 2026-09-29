@@ -88,6 +88,21 @@ def test_a_non_deal_number_is_left_alone_even_when_it_matches_a_deal_id(url):
         assert link_deal_refs(text, refs) == text
 
 
+def test_a_label_followed_by_punctuation_still_keeps_its_number():
+    for text in ("issue: #14 is open", "PO: #14", "ticket \u2014 #14", "order - #14"):
+        assert link_deal_refs(text, _refs()) == text
+
+
+def test_a_title_typed_as_markdown_cannot_become_a_link():
+    from telegram.format import markdown_to_telegram_html
+
+    refs = _refs({"id": 14, "title": "[Open deal](https://elsewhere.example) `x",
+                  "url": deal_url(14)})
+    out = link_deal_refs("See deal #14.", refs)
+    assert out == f"See (Open deal)(https://elsewhere.example) 'x ({deal_url(14)})."
+    assert "<a " not in markdown_to_telegram_html(out)
+
+
 @pytest.mark.parametrize("label", [
     "PO", "purchase order", "sales order", "order", "invoice", "bill", "issue", "PR",
     "ticket", "todo", "contact", "company", "item", "case", "check", "step",
