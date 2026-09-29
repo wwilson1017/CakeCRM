@@ -41,7 +41,8 @@
   and a confirmed write credits the APPROVER. Unattended turns still stamp nobody,
   because there is nobody to stamp; those rows stay "Unattributed", which
   undercounts but never misattributes.
-  The per-rep query excludes `provenance_service.confirm`'s housekeeping notes and
+  The per-rep query excludes the housekeeping notes (provenance confirmations and, since
+  #239, archive/restore audit notes) and
   `merge_deals`' copies (the copies leave the originals on the archived source, so
   both read `archived = 0` and one note would count twice).
   **Bootstrap** (`users/bootstrap.py`, lifespan, after migrations, before

@@ -17,6 +17,8 @@ export const CLOSED_STAGES = STAGE_ORDER.filter(s => !OPEN_STAGES.includes(s));
 // caps input so a long reason is stopped while it is being typed, rather than round-
 // tripping to a 422 after the user has written it.
 export const MAX_LOST_REASON = 500;
+// Mirrors `crm.service.MAX_ARCHIVE_REASON` (#239); the REST boundary rejects past it.
+export const MAX_ARCHIVE_REASON = 500;
 
 // Stage hues live in index.css as `--color-ck-stage-*` tokens so the `.dark` block can
 // lighten them for dark surfaces — the previous hand-tuned hex/rgba table was correct

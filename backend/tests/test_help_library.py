@@ -359,6 +359,7 @@ def test_search_order_does_not_depend_on_the_order_topics_were_read():
     ("connect gmail", "settings/gmail"),
     ("why can't Baker send email", "settings/gmail"),
     ("restore an archived deal", "pipeline/archived-deals"),
+    ("how do I archive a contact", "contacts-and-companies/archiving"),
     ("how do I add an AI key?", "settings/ai-providers"),
     ("change my password", "settings/passwords-and-2fa"),
     ("what is a lead score", "pipeline/deal-health-and-scores"),

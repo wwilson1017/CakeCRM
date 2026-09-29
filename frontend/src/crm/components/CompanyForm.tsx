@@ -6,6 +6,7 @@ import { OwnerSelect } from './OwnerSelect';
 import { labelStyle, inputStyle, CORAL_TEXT, LINE, INK_DIM, mono } from '../../shared/styles';
 import { formModalOverlay, formModalContent, formTitle, btnPrimary, btnSecondary } from '../styles';
 import type { CrmCompany } from '../../core/types';
+import { ArchiveReasonField } from './ArchiveReasonField';
 import { CustomFieldInputs } from './CustomFieldInputs';
 import { useCustomFieldsForm, putCustomFields } from './useCustomFieldsForm';
 
@@ -35,6 +36,9 @@ export function CompanyForm({ company, onClose, onSaved, onWriteUncertain }: Pro
   const [address, setAddress] = useState(company?.address || '');
   const [source, setSource] = useState(company?.source || '');
   const [status, setStatus] = useState(company?.status || 'active');
+  // #239: moving a live company INTO archived needs a reason, sent with the same PUT.
+  const [archiveReason, setArchiveReason] = useState('');
+  const archiving = isEdit && status === 'archived' && company?.status !== 'archived';
   // Owner (issue #60). On an EDIT the record's own owner is used verbatim — `null`
   // means unassigned and must survive, or saving an unrelated field would silently
   // claim someone else's unowned record. On a CREATE the picker shows you as the
@@ -53,10 +57,12 @@ export function CompanyForm({ company, onClose, onSaved, onWriteUncertain }: Pro
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim()) { setError('Name is required'); return; }
+    if (archiving && !archiveReason.trim()) { setError('A reason is required to archive'); return; }
     setSaving(true); setError('');
     const payload: Record<string, unknown> = { name, domain, industry, phone, address, source, status, notes };
     // Omitted on an untouched create so the server assigns the caller.
     if (isEdit || ownerTouched) payload.owner_id = ownerId;
+    if (archiving) payload.archive_reason = archiveReason.trim();
     const body = JSON.stringify(payload);
     try {
       // Both endpoints return the saved row; keep it so the caller can fold it into a
@@ -106,9 +112,13 @@ export function CompanyForm({ company, onClose, onSaved, onWriteUncertain }: Pro
             <label style={labelStyle}>Status</label>
             <select value={status} onChange={e => setStatus(e.target.value)} style={inputStyle}>
               <option value="active">Active</option>
-              <option value="archived">Archived</option>
+              {/* A record cannot be CREATED archived — the server refuses it (#239). */}
+              {isEdit && <option value="archived">Archived</option>}
             </select>
           </div>
+          {archiving && (
+            <ArchiveReasonField id="company-archive-reason" value={archiveReason} onChange={setArchiveReason} />
+          )}
           <div>
             <OwnerSelect
               value={ownerId}

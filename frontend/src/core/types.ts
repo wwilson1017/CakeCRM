@@ -58,6 +58,10 @@ export interface CrmDeal {
   ai_touch_evidence_count?: number | null;
   lost_reason?: string;                 // why a lost deal was lost (issue #22); '' when unset
   archived_at?: string | null;          // soft-archive (issue #22); null = live
+  // Who archived it and why (#239). Set with archived_at, cleared by a restore; either can be
+  // null on an archived deal (archived before #239, by an unattended turn, or a deleted user).
+  archived_by?: number | null;
+  archived_reason?: string | null;
   // Pipeline board only (issue #21): MAX of the deal's activity_log rows + un-archived
   // deal chatter notes; null = no logged activity. Not present on detail-path responses.
   last_activity_at?: string | null;
