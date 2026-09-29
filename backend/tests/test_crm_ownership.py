@@ -319,8 +319,12 @@ def test_reps_are_ranked_on_records_touched_not_raw_count():
 def test_activity_sql_excludes_housekeeping_and_merge_copies():
     """Two chatter writers are not somebody's work: provenance confirmations (which
     insert directly, bypassing add_note) and merge_deals' copies (which leave the
-    originals on the archived source, so both sides read archived = 0)."""
-    assert crm._PROVENANCE_NOTE_PATTERN == "Confirmed AI-populated value for %"
+    originals on the archived source, so both sides read archived = 0). Since #239 the
+    first is the whole housekeeping family — archive and restore audit notes too."""
+    from crm import scoring_service
+    assert crm._ACTIVITY_CHATTER_EXCLUSIONS.startswith(
+        " AND " + scoring_service.not_housekeeping_sql("ch.message")
+    )
     assert crm._MERGE_COPY_PATTERN == "[Merged from deal #%"
 
 
@@ -330,14 +334,15 @@ def test_like_patterns_are_bound_not_inlined(captured_sql):
     exactly once, by booting the app against a real database; this keeps it found.
 
     The assertion is on the STATEMENT: every % in it must belong to a %s
-    placeholder, and the patterns must arrive as parameters instead.
+    placeholder, and the merge-copy pattern must arrive as a parameter instead. The
+    housekeeping family (#239) is rendered with `starts_with`, which carries no `%`.
     """
     crm.get_analytics()
     activity_sql, params = next(
         (sql, p) for sql, p in captured_sql if "records_touched" in sql
     )
     assert "%" not in activity_sql.replace("%s", "")
-    assert crm._PROVENANCE_NOTE_PATTERN in params
+    assert "starts_with(ch.message, 'Confirmed AI-populated value for ')" in activity_sql
     assert crm._MERGE_COPY_PATTERN in params
 
 

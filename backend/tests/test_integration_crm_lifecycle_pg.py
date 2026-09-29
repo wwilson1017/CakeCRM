@@ -197,7 +197,7 @@ def test_archiving_removes_a_deal_from_every_read_at_once(pg_db):
     keep = service.create_deal("Keep", contact_id=contact["id"], value=100, stage="qualified")
     junk = service.create_deal("Junk", contact_id=contact["id"], value=99999, stage="qualified")
 
-    service.archive_deal(junk["id"])
+    service.archive_deal(junk["id"], reason="test")
 
     board = service.get_pipeline()
     assert [d["id"] for d in board["deals"]] == [keep["id"]]
@@ -250,9 +250,69 @@ def test_repeat_archive_keeps_the_original_timestamp(pg_db):
     from crm import service
 
     deal = service.create_deal("Junk")
-    first = service.archive_deal(deal["id"])["archived_at"]
-    again = service.archive_deal(deal["id"])["archived_at"]
+    first = service.archive_deal(deal["id"], reason="test")["archived_at"]
+    again = service.archive_deal(deal["id"], reason="test")["archived_at"]
     assert first == again
+
+
+def test_archive_and_restore_record_who_and_why_without_moving_any_touch_clock(pg_db):
+    """#239 end to end on real SQL: who/why land on the row and in the thread, a
+    restore clears them, and neither audit note moves a staleness or last-contact clock
+    — LAST_TOUCH_SQL (stale deals, Today, Weekly Touches), the contact list's
+    last_contact_at and get_contact_staleness all still exclude them."""
+    from core.postgres import pg_execute, pg_fetchall, pg_fetchone
+    from crm import analytics_service, service
+    from crm.service import LAST_TOUCH_SQL
+
+    uid = pg_fetchone(
+        "INSERT INTO users (email, name, password_hash) VALUES ('rep@x.test', 'Rep', 'x') "
+        "RETURNING id")["id"]
+    contact = service.create_contact("Quiet")
+    deal = service.create_deal("Old", contact_id=contact["id"], stage="lead")
+    pg_execute("UPDATE deals SET updated_at = now() - make_interval(days => 40)")
+
+    def last_touch():
+        return pg_fetchone(f"SELECT {LAST_TOUCH_SQL} AS t FROM deals d WHERE d.id = %s",
+                           (deal["id"],))["t"]
+
+    before = last_touch()
+    archived = service.archive_deal(deal["id"], reason="duplicate of #12", actor_id=uid)
+    assert (archived["archived_by"], archived["archived_reason"]) == (uid, "duplicate of #12")
+    restored = service.archive_deal(deal["id"], archived=False, actor_id=uid)
+    assert (restored["archived_at"], restored["archived_by"], restored["archived_reason"]) \
+        == (None, None, None)
+    notes = pg_fetchall(
+        "SELECT message, author_id FROM crm_chatter WHERE entity_type = 'deal' "
+        "AND entity_id = %s ORDER BY id", (deal["id"],))
+    assert [(n["message"], n["author_id"]) for n in notes] == [
+        ("Archived — duplicate of #12", uid), ("Restored from archive.", uid)]
+    assert last_touch() == before
+    stale = analytics_service.get_stale_deals(stale_days=14)["deals"]
+    assert [d["id"] for d in stale] == [deal["id"]]
+
+    service.update_contact(contact["id"], status="archived", archive_reason="gone quiet",
+                           actor_id=uid)
+    service.update_contact(contact["id"], status="active", actor_id=uid)
+    row = service.list_contacts(sort="id", limit=5)["contacts"][0]
+    assert row["last_contact_at"] is None
+    assert [c["id"] for c in analytics_service.get_contact_staleness(stale_days=1)["contacts"]] \
+        == [contact["id"]]
+    assert [m["message"] for m in pg_fetchall(
+        "SELECT message FROM crm_chatter WHERE entity_type = 'contact' ORDER BY id")] \
+        == ["Archived — gone quiet", "Restored from archive."]
+
+
+def test_a_reasonless_archive_writes_nothing(pg_db):
+    from crm import service
+
+    deal = service.create_deal("Keep")
+    with pytest.raises(ValueError):
+        service.archive_deal(deal["id"], reason=" ")
+    assert service.get_deal(deal["id"])["archived_at"] is None
+    contact = service.create_contact("Ana")
+    with pytest.raises(ValueError):
+        service.update_contact(contact["id"], status="archived")
+    assert service.get_contact(contact["id"])["status"] == "active"
 
 
 # ── merge ─────────────────────────────────────────────────────────────────────
@@ -292,8 +352,12 @@ def test_merge_moves_history_gap_fills_fields_and_archives_the_source(pg_db, mon
     messages = [n["message"] for n in chatter_service.get_chatter("deal", target["id"])]
     assert any(m.startswith(f"[Merged from deal #{source['id']}] source note") for m in messages)
     assert any(f'Merged deal #{source["id"]}' in m for m in messages)
-    # The source keeps its own thread — the merge is restorable.
-    assert [n["message"] for n in chatter_service.get_chatter("deal", source["id"])] == ["source note"]
+    # The source keeps its own thread — the merge is restorable — plus (#239) the audit
+    # note saying why it was archived, which was NOT copied onto the target.
+    assert sorted(n["message"] for n in chatter_service.get_chatter("deal", source["id"])) == [
+        f"Archived — Merged into deal #{target['id']}", "source note"]
+    assert not any(m.startswith("Archived — ") for m in messages)
+    assert service.get_deal(source["id"])["archived_reason"] == f"Merged into deal #{target['id']}"
 
     values = {r["field_key"]: r["value"]
               for r in field_service.get_field_values("deal", target["id"]) if r["value"]}
@@ -389,7 +453,8 @@ def test_contact_staleness_ranks_never_contacted_first(pg_db):
     never = service.create_contact("Never Touched")
     old = service.create_contact("Long Ago")
     recent = service.create_contact("Just Called")
-    archived = service.create_contact("Parked", status="archived")
+    archived = service.create_contact("Parked")
+    service.update_contact(archived["id"], status="archived", archive_reason="test")  # #239
 
     service.log_activity("call", contact_id=old["id"])
     pg_execute("UPDATE activity_log SET created_at = now() - make_interval(days => 90) "
@@ -460,7 +525,7 @@ def test_duplicate_deals_need_the_same_contact_and_ignore_archived(pg_db):
     assert len(groups) == 1
     assert [r["id"] for r in groups[0]["records"]] == [d1["id"], d2["id"]]
 
-    service.archive_deal(d2["id"])
+    service.archive_deal(d2["id"], reason="test")
     assert analytics_service.find_duplicate_deals() == []
 
 
@@ -540,7 +605,7 @@ def test_merge_refuses_an_archived_deal_end_to_end(pg_db):
     contact = service.create_contact("Ana")
     target = service.create_deal("Kept", contact_id=contact["id"])
     source = service.create_deal("Dupe", contact_id=contact["id"])
-    service.archive_deal(target["id"])
+    service.archive_deal(target["id"], reason="test")
 
     with pytest.raises(ValueError, match="archived"):
         service.merge_deals(target["id"], source["id"])
@@ -659,7 +724,7 @@ def test_archived_deals_stop_surfacing_unconfirmed_fields(pg_db):
     provenance_service.record("deal", doomed["id"], "value", str(doomed["value"]), "assistant")
     assert len(analytics_service.scan_gaps()["unverified_fields"]) == 2
 
-    service.archive_deal(doomed["id"])
+    service.archive_deal(doomed["id"], reason="test")
     remaining = analytics_service.scan_gaps()["unverified_fields"]
     assert [r["entity_id"] for r in remaining] == [live["id"]]
 
@@ -723,7 +788,7 @@ def test_archive_restore_keeps_the_deal_stale(pg_db):
                "WHERE id = %s", (deal["id"],))
     assert analytics_service.get_stale_deals(stale_days=14)["count"] == 1
 
-    service.archive_deal(deal["id"])
+    service.archive_deal(deal["id"], reason="test")
     service.archive_deal(deal["id"], archived=False)
     assert [d["id"] for d in analytics_service.get_stale_deals(
         stale_days=14)["deals"]] == [deal["id"]]
@@ -737,7 +802,7 @@ def test_todos_follow_an_archived_deal_out_of_view_but_history_does_not(pg_db):
     standalone = service.create_todo("Unrelated errand")
     service.log_activity("call", note="talked", deal_id=deal["id"])
 
-    service.archive_deal(deal["id"])
+    service.archive_deal(deal["id"], reason="test")
     assert [t["id"] for t in service.list_todos()] == [standalone["id"]]
     # History is still readable — you need it to decide whether to restore.
     assert len(service.get_activity_log(deal_id=deal["id"])) == 1
@@ -748,7 +813,7 @@ def test_a_stage_change_on_an_archived_deal_is_refused_end_to_end(pg_db):
     from crm import service
 
     deal = service.create_deal("Parked", stage="proposal")
-    service.archive_deal(deal["id"])
+    service.archive_deal(deal["id"], reason="test")
     with pytest.raises(ValueError, match="restore it first"):
         service.mark_deal_won(deal["id"])
     # Non-stage edits still work, and restoring re-enables the close.
@@ -762,7 +827,7 @@ def test_search_is_the_way_back_from_an_archive(pg_db):
 
     keep = service.create_deal("Live one")
     gone = service.create_deal("Archived one")
-    service.archive_deal(gone["id"])
+    service.archive_deal(gone["id"], reason="test")
 
     assert [d["id"] for d in service.search_deals(search="one")] == [keep["id"]]
     found = service.search_deals(search="one", include_archived=True)
@@ -802,7 +867,7 @@ def test_every_todo_surface_hides_an_archived_deals_todos(pg_db):
     before = service.get_dashboard_stats()
     assert before["overdue_todos"] == 2 and before["pending_todos"] == 2
 
-    service.archive_deal(deal["id"])
+    service.archive_deal(deal["id"], reason="test")
     after = service.get_dashboard_stats()
     assert after["overdue_todos"] == 1 and after["pending_todos"] == 1
     assert [t["title"] for t in service.list_todos()] == ["Real errand"]
@@ -869,7 +934,7 @@ def test_bulk_move_end_to_end(pg_db):
                                      lost_reason="budget")
     already = service.create_deal("Already there", stage="qualified")
     archived = service.create_deal("Archived", stage="lead")
-    service.archive_deal(archived["id"])
+    service.archive_deal(archived["id"], reason="test")
 
     result = service.bulk_move_deals(
         [fresh["id"], reopened["id"], already["id"], archived["id"], 999_999], "qualified")

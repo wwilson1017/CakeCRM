@@ -45,12 +45,48 @@ class Recorder:
         raise AssertionError(f"no recorded SQL contains {needle!r}")
 
 
+class _RecCursor:
+    """A cursor that records into the same Recorder, so a write that moved inside a
+    `with get_connection()` block (#239: the audited contact/company/deal archive writes)
+    is still visible to `sql_containing`/`params_for`. `fetchone` pops
+    `Recorder.cursor_fetchone_queue`, else answers the locked status pre-read with a live
+    record — the shape every pre-#239 update test assumed."""
+
+    def __init__(self, r: Recorder):
+        self.r = r
+        self._last = ""
+
+    def execute(self, sql, params=()):
+        self._last = sql
+        self.r.calls.append((" ".join(sql.split()), list(params)))
+
+    def fetchone(self):
+        if self.r.cursor_fetchone_queue:
+            return self.r.cursor_fetchone_queue.pop(0)
+        if "SELECT status FROM" in self._last:
+            return ("active",)
+        return None
+
+
 @pytest.fixture
 def rec(monkeypatch):
+    from contextlib import contextmanager
+
     r = Recorder()
+    r.cursor_fetchone_queue = []
+
+    class _Conn:
+        def cursor(self):
+            return _RecCursor(r)
+
+    @contextmanager
+    def _get_connection():
+        yield _Conn()
+
     monkeypatch.setattr(service, "pg_fetchone", r.fetchone)
     monkeypatch.setattr(service, "pg_fetchall", r.fetchall)
     monkeypatch.setattr(service, "pg_execute", r.execute)
+    monkeypatch.setattr(service, "get_connection", _get_connection)
     return r
 
 
@@ -143,19 +179,17 @@ def test_search_contacts_ilike_and_tag_boundary(rec):
     sql = rec.sql_containing("FROM contacts ct")
     # name/email/company/co.name/notes + tag clauses (issue #35 added the join term)
     assert sql.count("ILIKE") >= 5
-    # No case-sensitive LIKE among the SEARCH terms. The #77 last-contact join adds one
-    # deliberate `NOT LIKE`, which is not a search matcher: it excludes provenance
-    # housekeeping notes by an exact prefix our own code writes, so case-sensitivity is
-    # correct there. Stripped by its exact shape, so any OTHER bare LIKE still fails.
-    assert "LIKE %s" not in sql.replace("ILIKE %s", "").replace("NOT LIKE %s", "")
+    # No case-sensitive LIKE among the SEARCH terms. The #77 last-contact join excludes
+    # housekeeping notes with a rendered `starts_with` predicate (#239), not a LIKE.
+    assert "LIKE %s" not in sql.replace("ILIKE %s", "")
+    assert scoring_service.not_housekeeping_sql("ch.message") in sql
     assert "ct.status = %s" in sql
     assert "LEFT JOIN companies co ON ct.company_id = co.id" in sql
     assert "co.name ILIKE %s" in sql  # linked contacts findable by company name
     params = rec.params_for("FROM contacts ct")
-    # The last-contact LATERAL sits in the FROM clause, so its pattern binds ahead of
-    # every WHERE parameter (#77).
-    assert params[0] == scoring_service.HOUSEKEEPING_NOTE_LIKE
-    assert params[1:6] == ["%acme%"] * 5
+    # The last-contact LATERAL carries no placeholder since #239, so the WHERE's
+    # parameters lead.
+    assert params[0:5] == ["%acme%"] * 5
     assert "active" in params
     assert "%,vip,%" in params and "%,lead,%" in params
     assert params[-2:] == [15, 0]  # LIMIT %s OFFSET %s (default offset 0)
@@ -971,8 +1005,9 @@ def test_mark_deal_won_scores_through_the_funnel(monkeypatch, rec, fake_conn, sc
 def test_archive_deal_scores_deal_and_linked_contact(rec, score_spy):
     # Archived deals leave the contact's deal-linkage aggregate (scoring_service
     # carries archived_at IS NULL), so archive/restore must rescore the contact.
-    rec.fetchone_queue = [{"contact_id": 7}, {"id": 1}]  # RETURNING row, get_deal
-    service.archive_deal(1)
+    rec.cursor_fetchone_queue = [(None, 7)]  # locked pre-image: live, contact 7
+    rec.fetchone_queue = [{"id": 1}]  # get_deal
+    service.archive_deal(1, reason="dupe")
     assert score_spy == [{"deal_ids": (1,), "contact_ids": (7,)}]
 
 
@@ -1180,8 +1215,10 @@ def test_contact_list_search_and_detail_all_derive_last_contact_at(rec):
         assert "FROM activity_log a WHERE a.contact_id = ct.id" in sql
         assert "ch.entity_type = 'contact'" in sql
         assert "ch.archived = 0" in sql
-        assert "ch.message NOT LIKE %s" in sql
-        assert rec.params_for("last_contact_at")[0] == scoring_service.HOUSEKEEPING_NOTE_LIKE
+        # The housekeeping family (#239) — provenance, archive and restore notes — is a
+        # rendered predicate, so no pattern param rides along any more.
+        assert scoring_service.not_housekeeping_sql("ch.message") in sql
+        assert "NOT LIKE" not in sql
 
 
 def test_the_contact_count_query_stays_join_free(rec):
@@ -1239,3 +1276,96 @@ def test_top_deals_leave_out_leads_and_rank_by_the_weighted_score(rec):
     assert "d.archived_at IS NULL" in sql
     assert f"ORDER BY {service.TOP_DEAL_SCORE_SQL} DESC, d.updated_at DESC, d.id DESC LIMIT 5" in sql
     assert "ORDER BY d.value" not in sql
+
+
+# ── Archiving a contact or company records who and why (#239) ───────────────
+
+def _writes(conn):
+    return [s for s, _ in conn.executed if s.startswith(("UPDATE", "INSERT"))]
+
+
+@pytest.mark.parametrize("update, table, entity", [
+    (service.update_contact, "contacts", "contact"),
+    (service.update_company, "companies", "company"),
+])
+def test_archiving_needs_a_reason_and_writes_the_note_with_the_update(
+    monkeypatch, rec, fake_conn, update, table, entity,
+):
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("active",)])
+    rec.fetchone_queue = [{"id": 1, "status": "active"}]  # the unlocked peek (contact) / the getter
+    with pytest.raises(ValueError, match="reason is required"):
+        update(1, status="archived", archive_reason="  ")
+    assert _writes(conn) == []
+
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("active",)])
+    rec.fetchone_queue = [{"id": 1}]
+    update(1, status="archived", archive_reason=" went dark ", actor_id=5)
+    stmts = [s for s, _ in conn.executed]
+    assert stmts[0] == f"SELECT status FROM {table} WHERE id = %s FOR UPDATE"
+    note = next(p for s, p in conn.executed if "INSERT INTO crm_chatter" in s)
+    assert note[:3] == (entity, 1, "Archived — went dark") and note[4] == 5
+    assert conn.entries == 1 and len(set(conn.executed_by)) == 1
+
+
+@pytest.mark.parametrize("update", [service.update_contact, service.update_company])
+@pytest.mark.parametrize("old, new, note", [
+    ("archived", "active", scoring_service.RESTORE_NOTE),
+    ("archived", "archived", None),  # re-saving an archived record: no second note
+    ("active", "active", None),
+])
+def test_only_a_move_across_the_archived_line_leaves_a_note(
+    monkeypatch, rec, fake_conn, update, old, new, note,
+):
+    conn = fake_conn(monkeypatch, service, fetchone_results=[(old,)])
+    rec.fetchone_queue = [{"id": 1, "status": old}, {"id": 1}]  # contact's peek, getter
+    update(1, status=new, actor_id=5)
+    notes = [p[2] for s, p in conn.executed if "INSERT INTO crm_chatter" in s]
+    assert notes == ([note] if note else [])
+
+
+def test_a_refused_contact_archive_auto_creates_no_company(monkeypatch, rec, fake_conn):
+    """The peek runs BEFORE company-text resolution, which can INSERT a company."""
+    fake_conn(monkeypatch, service, fetchone_results=[("active",)])
+    rec.fetchone_queue = [{"status": "active"}]
+    with pytest.raises(ValueError):
+        service.update_contact(1, status="archived", company="Brand New Co")
+    assert not any("INSERT INTO companies" in s for s, _ in rec.calls)
+
+
+def test_a_missing_contact_or_company_update_returns_none(monkeypatch, rec, fake_conn):
+    fake_conn(monkeypatch, service, fetchone_results=[None])
+    assert service.update_contact(9, name="x") is None
+    fake_conn(monkeypatch, service, fetchone_results=[None])
+    assert service.update_company(9, name="x") is None
+
+
+@pytest.mark.parametrize("create", [service.create_contact, service.create_company])
+def test_a_record_cannot_be_created_already_archived(rec, create):
+    with pytest.raises(ValueError, match="cannot be created already archived"):
+        create("A", status="archived")
+    assert rec.calls == []
+
+
+# ── The housekeeping family (#239) ──────────────────────────────────────────
+
+def test_every_housekeeping_writer_matches_the_family_and_renders_without_a_percent():
+    """The exclusion must mirror each writer's text, and must carry no `%`: LAST_TOUCH_SQL
+    is interpolated into statements psycopg2 is handed parameters for."""
+    written = [
+        "Confirmed AI-populated value for 'probability'.",  # provenance_service.confirm
+        scoring_service.ARCHIVE_NOTE_PREFIX + "dupe",
+        scoring_service.RESTORE_NOTE,
+    ]
+    assert all(any(w.startswith(p) for p in scoring_service.HOUSEKEEPING_NOTE_PREFIXES)
+               for w in written)
+    rendered = scoring_service.not_housekeeping_sql("ch.message")
+    assert rendered.count("NOT starts_with(ch.message, '") == 3 and "%" not in rendered
+
+
+def test_last_touch_excludes_housekeeping_notes_so_archiving_moves_no_clock():
+    """Today panel, stale deals, the nudges and Weekly Touches (via TOUCH_AT_SQL) all
+    read LAST_TOUCH_SQL, so all of them now agree an audit note is not a touch."""
+    predicate = scoring_service.not_housekeeping_sql("ch.message")
+    assert predicate in service.LAST_TOUCH_SQL
+    assert service.LAST_TOUCH_SQL in service.TOUCH_AT_SQL
+    assert "%" not in service.LAST_TOUCH_SQL

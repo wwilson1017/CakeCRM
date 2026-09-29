@@ -166,10 +166,10 @@ def get_contact_staleness(
     """
     stale_days = _bounded(stale_days, DEFAULT_CONTACT_STALE_DAYS, 1, 365)
     limit = _bounded(limit, DEFAULT_LIMIT)
-    # The housekeeping pattern binds inside the CTE, so it precedes every WHERE param;
-    # the owner filter's own param sits between the staleness window and the limit,
-    # which is where its condition appears in the statement.
-    params: list = [scoring_service.HOUSEKEEPING_NOTE_LIKE, stale_days]
+    # The owner filter's own param sits between the staleness window and the limit,
+    # which is where its condition appears in the statement. The housekeeping exclusion
+    # is a rendered predicate with no placeholder (#239).
+    params: list = [stale_days]
     owner_sql = owner_condition("ct.owner_id", owner_id, params)
     owner_clause = f" AND {owner_sql}" if owner_sql else ""
     params.append(limit)
@@ -185,7 +185,7 @@ def get_contact_staleness(
                 (SELECT MAX(ch.created_at) FROM crm_chatter ch
                   WHERE ch.entity_type = 'contact' AND ch.entity_id = ct.id
                     AND ch.archived = 0
-                    AND ch.message NOT LIKE %s)
+                    AND {scoring_service.not_housekeeping_sql('ch.message')})
             ) AS touched_at
               FROM contacts ct
         )
