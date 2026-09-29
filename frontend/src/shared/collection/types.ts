@@ -617,4 +617,12 @@ export interface CollectionViewProps<T, C = unknown, P extends DragPolicy = 'ind
    */
   searchResetNonce?: number;
   loading?: CollectionLoadingProps;
+  /**
+   * Render the saved-views menu (#181). Default ON. Pass `false` only on a surface with no
+   * authenticated session behind it — the no-login `/todo/{token}` app (#234). The menu talks
+   * to `/api/saved-views` through `core/api/client`'s `api()`, which answers a 401 by sending
+   * the tab to `/login`, and saved views are team data an anonymous link must neither read nor
+   * write. This is the one switch, so no public page has to know how the menu fetches.
+   */
+  savedViews?: boolean;
 }

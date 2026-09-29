@@ -60,6 +60,7 @@ export default function CollectionView<T, C = unknown, P extends DragPolicy = 'i
   searchPlaceholder,
   searchResetNonce,
   loading,
+  savedViews: showSavedViews = true,
 }: CollectionViewProps<T, C, P>) {
   const facets = useMemo(() => config.facets ?? [], [config]);
   const noun = config.itemNoun?.plural ?? 'items';
@@ -68,13 +69,13 @@ export default function CollectionView<T, C = unknown, P extends DragPolicy = 'i
   // pending 250 ms debounce re-applies whatever was typed. Both terms only ever increase,
   // which is `resetNonce`'s contract.
   const [applyNonce, setApplyNonce] = useState(0);
-  const savedViews = (
+  const savedViews = showSavedViews ? (
     <SavedViewsMenu
       storage={config.storage}
       state={state}
       onApplied={() => setApplyNonce(n => n + 1)}
     />
-  );
+  ) : null;
 
   // Option derivation scans the whole set per multi facet — memoized on the data, unlike the
   // group closures below, which are cheap and close over live state on purpose.
@@ -303,7 +304,7 @@ export default function CollectionView<T, C = unknown, P extends DragPolicy = 'i
     // that vanishes with the data is a control nobody can reach to fix that.
     return (
       <div>
-        <div className="mb-4 flex justify-end">{savedViews}</div>
+        {savedViews && <div className="mb-4 flex justify-end">{savedViews}</div>}
         <EmptyState message={config.emptyState?.message ?? `No ${noun} yet.`} />
         {detailBlock}
       </div>
