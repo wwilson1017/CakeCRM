@@ -25,6 +25,11 @@ There is **no archive button in the interface**. Ask Baker, which uses `crm_arch
 That is deliberate — archiving is rare and destructive-looking, and the recovery path below
 matters more than the shortcut.
 
+Archiving always needs a **reason**. If you do not give one, Baker asks. The reason and your
+name are saved on the deal and written into its notes as "Archived — <reason>", so whoever
+finds it later knows who put it away and why. Merging two deals archives the source with the
+reason "Merged into deal #N".
+
 ## Where an archived deal goes
 
 Out of sight nearly everywhere: the board, the dashboard, analytics, the deal lists, and the
@@ -40,16 +45,19 @@ bring it back.
    There is also a link in the page header that flips between showing live and archived
    deals, which still works when the board is empty.
 2. Archived cards render dimmed and inert — no checkbox, no dragging — but they still open.
-3. Open the deal. A banner across the top says it is archived and offers **Restore**.
+3. Open the deal. A banner across the top says when it was archived, by whom and why, and
+   offers **Restore**. Deals archived before this was recorded show the date only.
 
-Restoring puts it straight back on the board.
+Restoring puts it straight back on the board and leaves a "Restored from archive." note with
+your name. Neither note counts as contact with the customer, so archiving and restoring a
+deal does not reset how long it has gone untouched.
 
 ## Rules while a deal is archived
 
 - Its stage cannot be changed. A deal that was both won and archived would book revenue no
   report could see.
 - It cannot be selected for a bulk move.
-- Archiving twice keeps the original archive date.
+- Archiving twice keeps the original date, person and reason.
 
 ## Restoring a merged deal is not an undo
 

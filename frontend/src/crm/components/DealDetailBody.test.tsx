@@ -31,6 +31,7 @@ vi.mock('../../shared/toast', () => ({ toast }));
 
 const { DealDetailBody } = await import('./DealDetailBody');
 const { ActiveRecordProvider, useActiveRecord } = await import('../RecordContext');
+const { invalidateUsers } = await import('../useUsers');
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────────────────────
 
@@ -676,6 +677,43 @@ function routeDetail(detail: CrmDeal, over: (path: string) => unknown = () => un
 }
 
 describe('archived deals', () => {
+  // #239: the banner answers the question the restore decision needs — who put it here, and why.
+  function bannerText(): string {
+    const m = /ARCHIVED(.*?)Restore/.exec(container.textContent ?? '');
+    return m ? m[1].replace(/\s+/g, ' ').trim() : '';
+  }
+
+  it('says who archived the deal and why', async () => {
+    routeDetail(
+      detailResponse({ archived_at: '2026-08-20T12:00:00+00:00', archived_by: 5, archived_reason: 'dupe of #12' }),
+      path => (path.startsWith('/api/users')
+        ? { users: [{ id: 5, name: 'Ana Ruiz', email: 'ana@x.test', role: 'member', is_active: true }] }
+        : undefined),
+    );
+    invalidateUsers();  // the users cache is module-wide; refetch it through THIS mock
+    render({ deal: makeDeal({ archived_at: '2026-08-20T12:00:00+00:00' }) });
+    await settle();
+    expect(bannerText()).toMatch(/^Archived .+ by Ana Ruiz — dupe of #12 — excluded from pipeline totals/);
+    routeDetail(detailResponse());
+    invalidateUsers();  // leave the cache empty again for the tests after this one
+    await settle();
+  });
+
+  it('keeps the reason when nobody is recorded as the archiver', async () => {
+    routeDetail(detailResponse({ archived_at: '2026-08-20T12:00:00+00:00', archived_by: null, archived_reason: 'test record' }));
+    render({ deal: makeDeal({ archived_at: '2026-08-20T12:00:00+00:00' }) });
+    await settle();
+    expect(bannerText()).toContain('— test record —');
+    expect(bannerText()).not.toContain(' by ');
+  });
+
+  it('reads as before for a deal archived before who/why was recorded', async () => {
+    routeDetail(detailResponse({ archived_at: '2026-08-20T12:00:00+00:00' }));
+    render({ deal: makeDeal({ archived_at: '2026-08-20T12:00:00+00:00' }) });
+    await settle();
+    expect(bannerText()).toMatch(/^Archived \S+ — excluded from pipeline totals and deal rollups\.$/);
+  });
+
   it('shows no banner on a live deal and keeps the close-out actions', async () => {
     routeDetail(detailResponse());
     render({ deal: makeDeal() });

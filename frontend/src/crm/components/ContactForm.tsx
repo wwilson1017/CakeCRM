@@ -6,6 +6,7 @@ import { OwnerSelect } from './OwnerSelect';
 import { labelStyle, inputStyle, ACCENT_TEXT, CORAL_TEXT, LINE, INK_DIM, mono } from '../../shared/styles';
 import { formModalOverlay, formModalContent, formTitle, btnPrimary, btnSecondary } from '../styles';
 import type { CrmContact, CrmCompany } from '../../core/types';
+import { ArchiveReasonField } from './ArchiveReasonField';
 import { CustomFieldInputs } from './CustomFieldInputs';
 import { useCustomFieldsForm, putCustomFields } from './useCustomFieldsForm';
 import { RecordCombobox } from './RecordCombobox';
@@ -78,6 +79,9 @@ export function ContactForm({ contact, onClose, onSaved, onWriteUncertain }: Pro
   const [title, setTitle] = useState(contact?.title || '');
   const [source, setSource] = useState(contact?.source || '');
   const [status, setStatus] = useState(contact?.status || 'active');
+  // #239: moving a live contact INTO archived needs a reason, sent with the same PUT.
+  const [archiveReason, setArchiveReason] = useState('');
+  const archiving = isEdit && status === 'archived' && contact?.status !== 'archived';
   const [tags, setTags] = useState(contact?.tags || '');
   const [notes, setNotes] = useState(contact?.notes || '');
   const [companyId, setCompanyId] = useState<number | null>(contact?.company_id ?? null);
@@ -143,6 +147,7 @@ export function ContactForm({ contact, onClose, onSaved, onWriteUncertain }: Pro
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim()) { setError('Name is required'); return; }
+    if (archiving && !archiveReason.trim()) { setError('A reason is required to archive'); return; }
     if (companyBusy) { setError('Still creating the company — one moment.'); return; }
     setSaving(true); setError('');
     const payload: Record<string, unknown> = { name, email, phone, title, source, status, tags, notes };
@@ -171,6 +176,7 @@ export function ContactForm({ contact, onClose, onSaved, onWriteUncertain }: Pro
     }
     // Omitted on an untouched create so the server assigns the caller.
     if (isEdit || ownerTouched) payload.owner_id = ownerId;
+    if (archiving) payload.archive_reason = archiveReason.trim();
     const body = JSON.stringify(payload);
     try {
       // Both endpoints return the saved row; keep it so the caller can fold it into a
@@ -283,9 +289,13 @@ export function ContactForm({ contact, onClose, onSaved, onWriteUncertain }: Pro
             <select value={status} onChange={e => setStatus(e.target.value)} style={inputStyle}>
               <option value="active">Active</option>
               <option value="inactive">Inactive</option>
-              <option value="archived">Archived</option>
+              {/* A record cannot be CREATED archived — the server refuses it (#239). */}
+              {isEdit && <option value="archived">Archived</option>}
             </select>
           </div>
+          {archiving && (
+            <ArchiveReasonField id="contact-archive-reason" value={archiveReason} onChange={setArchiveReason} />
+          )}
           <div>
             <OwnerSelect
               value={ownerId}

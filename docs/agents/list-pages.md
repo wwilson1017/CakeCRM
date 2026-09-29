@@ -64,8 +64,9 @@
   integration test pins that they return the same `last_activity_at`. `NotesThread` gained an
   optional `onChanged` so a note added on the detail page reaches the list's column.
   Both surfaces now exclude `provenance_service.confirm`'s housekeeping notes via
-  `scoring_service.HOUSEKEEPING_NOTE_LIKE` (public since #77) — the assistant confirming an
-  AI-populated field was silently resetting a contact's staleness clock.
+  the shared housekeeping predicate (public since #77; since #239 it is
+  `scoring_service.not_housekeeping_sql`, covering archive/restore audit notes too) — the
+  assistant confirming an AI-populated field was silently resetting a contact's staleness clock.
   **Contacts and Companies keep ROUTED detail pages**, which is a deliberate refusal of the
   issue's "detail in the `CollectionDetail` shell" — though only one of its two reasons still
   holds. The Z-ORDER objection does NOT: `DetailModal` was `z-50` against a `z-40` launcher, but

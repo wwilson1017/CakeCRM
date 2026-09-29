@@ -230,6 +230,32 @@
   merge UI, no archived-deals page. Note restoring a **merge source** is not an undo: the
   merge already repointed activity/todos, copied notes and gap-filled custom fields onto the
   target; restore only makes the source visible again.
+  **Archiving records who and why (#239).** Every archive path — `archive_deal`
+  (`crm_archive_deal`), `merge_deals`' source, and a contact/company `status` move INTO
+  `archived` through `update_contact`/`update_company` (REST PUT, the two update tools) —
+  requires a non-blank reason at the SERVICE (a `ValueError`: 400 on REST, an error dict on a
+  tool, so Baker asks why) and writes an `Archived — <reason>` chatter note by the actor in
+  the SAME transaction as the state change, via a direct INSERT (no touch recompute, the
+  `provenance_service.confirm` precedent). The check runs on the locked pre-image, so a
+  repeat archive stays a no-op and writes no second note. Deals also carry
+  `archived_by`/`archived_reason` for the banner; a restore clears them and every restore
+  writes `Restored from archive.`. Either column can still be NULL on an archived deal
+  (pre-#239 archives, unattended turns, deleted users). A deal archive/restore still never
+  bumps `updated_at`; a contact/company status write keeps its normal bump, since no contact
+  or company staleness read uses it. `update_contact` peeks the current status BEFORE the
+  #35 company-text resolution, so a refused archive auto-creates no company. A record cannot
+  be CREATED archived (refused — the forms offer Archived on edit only). The actor is bound
+  server-side (`_identity_executors`, the #190 rule) into `crm_archive_deal`,
+  `crm_merge_deals`, `crm_update_contact` and `crm_update_company`; REST passes
+  `user["id"]`. **The audit notes must never count as touches**, so
+  `scoring_service.HOUSEKEEPING_NOTE_LIKE` became a prefix FAMILY
+  (`HOUSEKEEPING_NOTE_PREFIXES`: provenance, archive, restore) rendered by
+  `not_housekeeping_sql()` as `%`-free `starts_with` literals — which is what lets it sit
+  inside the param-less `LAST_TOUCH_SQL`. That was a behaviour change on purpose: before
+  #239 `LAST_TOUCH_SQL` excluded no housekeeping note at all, so a provenance confirmation
+  on a DEAL reset its staleness clock (the deal-side twin of the contact bug #77 fixed).
+  Stale deals, the Today panel, the nudges and Weekly Touches now agree with the contact
+  side. A new housekeeping writer must build its text from those constants.
   **The desktop board is bounded to the window** (#129) and is therefore ONE scroll region on
   both axes: `shared/dnd/useBoardScroller` writes its height so the bottom edge lands on the
   bottom of the visible area, the per-column `max-h-[70vh]` scrollport is gone (desktop only —
