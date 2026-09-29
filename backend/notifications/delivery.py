@@ -17,6 +17,13 @@ unclaimed legacy endpoint receives broadcasts and only broadcasts.
 
 Telegram is routed too since #193 — targeted to that seat's link, broadcast to all.
 
+**Links (issue #235).** The optional keyword-only ``link`` is an in-app path the
+notification points at (a chatter @-mention links to the record). It is stored on the
+row for the bell, becomes the Web Push click-through ``url``, and is appended to the
+Telegram text. Only a same-origin path survives ``_clean_link`` — anything else is
+dropped and the notification still sends. ``notify_user`` does not take one, so an
+assistant turn can never mint a link.
+
 There is no channel base class — adding/deferring a channel is adding/omitting one
 ``_send_*`` branch (Telegram is lazy-imported so its module stays optional). WhatsApp is
 NOT ported (per issue #6). pywebpush is imported lazily.
@@ -37,7 +44,24 @@ _PUSH_TIMEOUT_SECONDS = 10
 _MAX_ENDPOINT_LEN = 2000
 
 
-def deliver_notification(title: str, message: str, *, user_id: int | None = None) -> dict:
+_LINK_MAX = 500
+
+
+def _clean_link(link: str | None) -> str | None:
+    """An in-app path, or None. ``/crm/...`` passes; ``//host``, a scheme, a backslash
+    (browsers read ``/\\host`` as protocol-relative) and any whitespace or control
+    character do not."""
+    if not isinstance(link, str) or not link or len(link) > _LINK_MAX:
+        return None
+    if not link.startswith("/") or link.startswith("//") or "\\" in link:
+        return None
+    if any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in link):
+        return None
+    return link
+
+
+def deliver_notification(title: str, message: str, *, user_id: int | None = None,
+                         link: str | None = None) -> dict:
     """Deliver a notification to all channels and log it. NEVER raises.
 
     Callers (notify_user, the proactive digest, heartbeat-failure alerts) rely on this
@@ -45,17 +69,18 @@ def deliver_notification(title: str, message: str, *, user_id: int | None = None
     abort a digest send or a scheduler tick.
 
     ``user_id`` is the recipient seat; ``None`` (the default) broadcasts to the whole
-    install.
+    install. ``link`` is an optional in-app path (see the module docstring).
     """
     title = (title or "").strip() or "Notification"
     message = (message or "").strip()
+    link = _clean_link(link)
 
     # Persist the in-app row FIRST (the guaranteed audit record). If even that
     # fails, fall through with a local id so push can still be attempted.
     notification_id = None
     logged = False
     try:
-        notification_id = service.create_notification(title, message, [], user_id=user_id)
+        notification_id = service.create_notification(title, message, [], user_id=user_id, link=link)
         logged = True
     except Exception:
         logger.warning("failed to create notification row", exc_info=True)
@@ -65,13 +90,13 @@ def deliver_notification(title: str, message: str, *, user_id: int | None = None
     channels_sent: list[str] = []
     web_push_ok = False
     try:
-        web_push_ok = _send_web_push(title, message, notification_id, user_id)
+        web_push_ok = _send_web_push(title, message, notification_id, user_id, link)
     except Exception:
         logger.warning("web push channel errored", exc_info=True)
     if web_push_ok:
         channels_sent.append("web_push")
     try:
-        if _send_telegram(title, message, user_id):
+        if _send_telegram(title, message, user_id, link):
             channels_sent.append("telegram")
     except Exception:
         logger.debug("telegram channel errored", exc_info=True)
@@ -113,9 +138,11 @@ def is_safe_push_endpoint(endpoint: str) -> bool:
                 or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
 
 
-def _build_payload(title: str, message: str, notification_id: str) -> str:
+def _build_payload(title: str, message: str, notification_id: str,
+                   link: str | None = None) -> str:
     body = message or title
-    payload = {"title": title, "body": body, "url": "/crm", "notification_id": notification_id}
+    payload = {"title": title, "body": body, "url": link or "/crm",
+               "notification_id": notification_id}
     data = json.dumps(payload)
     if len(data.encode()) > _PAYLOAD_MAX_BYTES:
         # Trim the body until the whole payload fits.
@@ -125,7 +152,7 @@ def _build_payload(title: str, message: str, notification_id: str) -> str:
 
 
 def _send_web_push(title: str, message: str, notification_id: str,
-                   user_id: int | None = None) -> bool:
+                   user_id: int | None = None, link: str | None = None) -> bool:
     """Send to the recipient's subscriptions. Returns True if ≥1 device accepted it.
 
     ``user_id=None`` is a broadcast and reaches every stored subscription, unclaimed
@@ -169,7 +196,7 @@ def _send_web_push(title: str, message: str, notification_id: str,
     except Exception:
         logger.debug("failed to resolve VAPID alert", exc_info=True)
 
-    data = _build_payload(title, message, notification_id)
+    data = _build_payload(title, message, notification_id, link)
     sent = 0
     for sub in subs:
         endpoint = sub.get("endpoint") or ""
@@ -201,7 +228,8 @@ def _send_web_push(title: str, message: str, notification_id: str,
     return sent > 0
 
 
-def _send_telegram(title: str, message: str, user_id: int | None = None) -> bool:
+def _send_telegram(title: str, message: str, user_id: int | None = None,
+                   link: str | None = None) -> bool:
     """Telegram delivery — targeted to one seat's link, or broadcast to every link.
 
     Calls ``telegram.service.notify_user_telegram(user_id, text)`` or
@@ -221,6 +249,12 @@ def _send_telegram(title: str, message: str, user_id: int | None = None) -> bool
     except ImportError:
         return False
     text = f"{title}\n{message}"
+    if link:
+        # Absolute when FRONTEND_URL (or a Railway domain) is set, relative otherwise —
+        # the same known limit crm.links.deal_url documents: a relative path is not
+        # clickable in Telegram, and a guessed localhost host is worse.
+        from crm.links import app_url
+        text = f"{text}\n{app_url(link)}"
     try:
         if user_id is None:
             return bool(broadcast_telegram(text))

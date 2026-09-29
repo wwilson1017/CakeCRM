@@ -47,14 +47,15 @@ _MINE_OR_BROADCAST = "(user_id = %s OR user_id IS NULL)"
 
 def create_notification(title: str, message: str, channels_sent: list | None = None,
                        notification_id: str | None = None,
-                       user_id: int | None = None) -> str:
-    """Insert a notification row and return its id. ``user_id=None`` = broadcast."""
+                       user_id: int | None = None, link: str | None = None) -> str:
+    """Insert a notification row and return its id. ``user_id=None`` = broadcast.
+    ``link`` is an in-app path already validated by ``delivery._clean_link`` (#235)."""
     nid = notification_id or str(uuid.uuid4())
     pg_execute(
-        """INSERT INTO notifications (id, title, message, channels_sent, user_id)
-           VALUES (%s, %s, %s, %s, %s)""",
+        """INSERT INTO notifications (id, title, message, channels_sent, user_id, link)
+           VALUES (%s, %s, %s, %s, %s, %s)""",
         (nid, (title or "")[:_TITLE_MAX], (message or "")[:_MESSAGE_MAX],
-         Json(channels_sent or []), user_id),
+         Json(channels_sent or []), user_id, link),
     )
     return nid
 

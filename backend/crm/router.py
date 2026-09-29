@@ -99,6 +99,7 @@ from urllib.parse import quote
 import psycopg2
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Depends,
     File,
     Header,
@@ -116,6 +117,7 @@ from crm import (
     chatter_service,
     field_service,
     gtd_common,
+    mention_notify,
     provenance_service,
     report_service,
     scoring_service,
@@ -298,10 +300,16 @@ class ActivityUpdate(BaseModel):
 
 class ChatterNoteBody(BaseModel):
     message: str
+    # #235: seats picked in the composer's @ menu. StrictInt so JSON `true` or "3" is a
+    # 422 rather than a coerced user id; the service validates range, dedupe and cap.
+    mentions: list[StrictInt] | None = None
 
 
 class ChatterNoteUpdate(BaseModel):
     message: str
+    # #235, tri-state: omitted (or null) keeps the note's stored mentions; a list —
+    # including [] — becomes the new set, and only newly added seats are notified.
+    mentions: list[StrictInt] | None = None
 
 
 class ClearAllBody(BaseModel):
@@ -1442,26 +1450,40 @@ async def get_chatter(
     return {"notes": notes, "count": len(notes)}
 
 
+# #235: a mention is delivered by a BackgroundTask — after the response, i.e. strictly
+# post-commit, and in the threadpool (notify_mentions is a sync def), so push/Telegram
+# network I/O never runs on the event loop or inside the note's transaction.
 @router.post("/chatter/{entity_type}/{entity_id}/note")
 async def add_chatter_note(
-    entity_type: str, entity_id: int, body: ChatterNoteBody, user=Depends(get_current_user),
+    entity_type: str, entity_id: int, body: ChatterNoteBody, background: BackgroundTasks,
+    user=Depends(get_current_user),
 ):
     try:
-        return chatter_service.add_note(
-            entity_type, entity_id, body.message, author_id=user["id"]
+        note, recipients = chatter_service.post_note(
+            entity_type, entity_id, body.message, author_id=user["id"], mentions=body.mentions,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
+    if recipients:
+        background.add_task(mention_notify.notify_mentions, note, recipients, user)
+    return note
 
 
 @router.patch("/chatter/note/{note_id}")
-async def update_chatter_note(note_id: int, body: ChatterNoteUpdate, user=Depends(get_current_user)):
+async def update_chatter_note(
+    note_id: int, body: ChatterNoteUpdate, background: BackgroundTasks,
+    user=Depends(get_current_user),
+):
     try:
-        result = chatter_service.update_note(note_id, body.message)
+        result, recipients = chatter_service.edit_note(
+            note_id, body.message, mentions=body.mentions, actor_id=user["id"],
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
     if not result:
         raise HTTPException(status_code=404, detail="Note not found")
+    if recipients:
+        background.add_task(mention_notify.notify_mentions, result, recipients, user)
     return result
 
 
