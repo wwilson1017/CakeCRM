@@ -350,3 +350,17 @@ def test_record_path():
     assert links.record_path("company", 3) == "/crm/companies/3"
     with pytest.raises(KeyError):
         links.record_path("invoice", 3)
+
+
+def test_the_frontend_mention_cap_agrees_with_the_server():
+    """The composer caps what it sends at its own MAX_MENTIONS; the server refuses more
+    than chatter_service.MAX_MENTIONS. Read the TypeScript source rather than restating
+    the number, the test_crm_deal_links precedent — two hardcoded copies prove nothing."""
+    import re
+    from pathlib import Path
+
+    ts = (Path(__file__).resolve().parents[2] / "frontend" / "src" / "crm"
+          / "chatterMentions.ts").read_text(encoding="utf-8")
+    match = re.search(r"export const MAX_MENTIONS = (\d+);", ts)
+    assert match, "MAX_MENTIONS not found in chatterMentions.ts"
+    assert int(match.group(1)) == chatter_service.MAX_MENTIONS
