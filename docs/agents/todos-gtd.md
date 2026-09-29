@@ -159,3 +159,15 @@
   makes flipping every existing install acceptable.
   Neither no-login surface consults `todo_mode` (they gate on `todo_capture_token` /
   `todo_web_enabled`), so this flip does not widen them.
+- **A project's name and notes are click-to-edit on its detail page** (#232), through the same
+  `InlineTitle` the triage card uses, whose `body` variant serves the notes (Enter is a
+  newline; blur and Escape are the only exits; clearing notes is a real save; text is kept
+  verbatim unless wholly blank). Notes always render, so a blank field shows an "Add notes…"
+  placeholder — before #232 they could never be ADDED after creation. Each save PUTs only
+  the field that changed (never `status`), an unchanged value sends nothing, and the page
+  merges back only that field, since both editors can have a PUT in flight at once. A refusal
+  (blank name, refused client-side; duplicate name, the server's `detail` verbatim) keeps the
+  editor open with the typed text under ONE `role="alert"` line that is TAGGED with its field —
+  the name's focus recovery blurs an open notes editor, and an untagged line would be cleared
+  by that close. Success calls `refreshMeta()`, which carries a rename to the Projects list,
+  the todo rows and `TodoEditSheet`'s project picker.
