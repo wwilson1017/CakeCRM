@@ -49,6 +49,10 @@ Change the owner on the record. The dropdown offers Unassigned plus every active
 the current owner has since been deactivated they still appear, labelled as such, so opening
 a form does not silently reassign them.
 
+Baker can set a company's owner too, when it creates or updates one: ask it to assign the
+company to you, to a teammate by email, or to nobody. A company Baker creates for you is yours
+unless you say otherwise. It cannot yet reassign a contact or a deal — do that on the record.
+
 ## Admin versus member
 
 An admin sees no more *records* than a member. The role difference is about install settings,

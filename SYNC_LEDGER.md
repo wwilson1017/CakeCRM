@@ -83,3 +83,4 @@ Populated by port PRs from here on.
 | Weekly Touches grouped per sales rep, plus a per-rep page listing that rep's touched open deals in full | `backend/apps/crm/dashboard_service.py` + `frontend/src/apps/crm/components/{WeeklyTouchesCard,WeeklyTouchesDetailPage}.tsx` @ `8e4d202f9` (cake_os #602) | #146 | 2026-09-04 |
 | Reports tab — single-page company rollup with a merged notes+activity timeline | `backend/apps/crm/report_service.py` + `frontend/src/apps/crm/{companyRollup.ts,components/{ReportsTab,CompanyRollupReport,CompanyTimeline}.tsx}` @ `74f902684` | #144 | — |
 | Per-deal deep links (link-shape module + `url` on deal tool results) | PR #1542 (`732678bd2`) | #145 | 2026-09-04 |
+| Assistant company tools take an owner (`owner` word on `crm_create_company`/`crm_update_company`) | PR #3184 (`150982d02`) | #237 | — |
