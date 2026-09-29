@@ -1381,9 +1381,9 @@ def _with_target(result: dict, entity_type: str | None, entity_id: int | None,
 def _with_targets(result: dict, entity_type: str, ids: list) -> dict:
     """Bulk twin of `_with_target`: a `targets` list for many-record writes, ONE query.
 
-    `targets` are the requested ids that still exist, so the service's own count can be
-    smaller than `len(targets)` when it skipped one (already in the stage). A failed read
-    keeps every requested id as a `lookup_failed` placeholder, never an empty list.
+    Callers pass the ids the write actually touched (never the requested ones), so a
+    refused or skipped record is absent. A failed read keeps every id as a
+    `lookup_failed` placeholder, never an empty list.
     """
     rows, failed = _target_rows(entity_type, ids)
     if failed:
@@ -1637,7 +1637,9 @@ def crm_bulk_move_deals(deal_ids: list | None = None, stage: str = "") -> dict:
         # the service's BULK_MOVE_MAX.
         for did in result.get("updated_ids", []):
             _record_provenance("deal", did, {"stage": stage}, {"stage": stage})
-        _with_targets(result, "deal", ids)
+        # Only the deals this call actually MOVED — a refused or already-in-stage deal
+        # was not written, and naming it would tell the model it was.
+        _with_targets(result, "deal", result.get("updated_ids", []))
     return result
 
 
