@@ -149,8 +149,9 @@ _GUARD = Path(__file__).resolve().relative_to(ROOT).as_posix()
 # file for a whole token class would repeat a mistake this repo has already written down
 # once: AGENTS.md's own gitleaks guidance rejects an allowlist keyed on file alone
 # because "the latter exempts every finding in that file in that commit, including a
-# real one". AGENTS.md is also the most-edited file here — every landed feature appends
-# a paragraph — so an unbounded exemption on it would be the likeliest hole of all.
+# real one". AGENTS.md is also always-loaded agent context that every rule change edits
+# (its docs/agents/ topic docs grow with every landed feature) — so an unbounded exemption
+# on it would be the likeliest hole of all.
 #
 # Every entry so far is a place the repo must talk ABOUT the denylist, which is the one
 # thing a denylist cannot express about itself. Scrub the file instead whenever scrubbing

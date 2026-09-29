@@ -13,7 +13,7 @@ asserted.
 
 | Column | Contents |
 |---|---|
-| `Feature` | Short name of the capability. Prose detail lives in `AGENTS.md`'s Source Map, not here. |
+| `Feature` | Short name of the capability. Prose detail lives in the Source Map (`docs/agents/source-map.md`), not here. |
 | `Source` | Where it came from upstream. For live rows: `PR #<n> (<short sha>)`. |
 | `CakeCRM PR / issue` | The `#N` that landed it here. |
 | `Date` | Merge date (`YYYY-MM-DD`), or `—` where it was never recorded. |
@@ -27,7 +27,7 @@ asserted.
 
 ## Pre-ledger (seeded — before the sync bot existed)
 
-Reconstructed from `AGENTS.md`'s Source Map at the time issue #23 landed. These predate
+Reconstructed from the Source Map (then in `AGENTS.md`, now `docs/agents/source-map.md`) at the time issue #23 landed. These predate
 any SHA-level tracking, so `Date` is `—` throughout: the merge SHAs were never recorded
 and guessing them would be worse than leaving them blank.
 

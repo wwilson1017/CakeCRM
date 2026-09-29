@@ -647,7 +647,7 @@ describe('boot split (#149) — the public todo download', () => {
 
     // Within shared/, the heavy sub-layers stay out: they are CRM interaction substrate, and
     // `shared/collection` alone pulls @dnd-kit through KanbanView. If the todo surface ever
-    // adopts the collection layer (the ProjectsPage follow-up noted in AGENTS.md), remove the
+    // adopts the collection layer (the ProjectsPage follow-up noted in docs/agents/frontend-boot-split.md), remove the
     // entry HERE with the measured size delta in that PR — that is the deliberate act.
     const heavy = [...modules].filter((m) =>
       ['./shared/collection/', './shared/dnd/', './shared/listview/', './shared/overlay/'].some((p) => m.startsWith(p)),
