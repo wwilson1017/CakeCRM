@@ -1414,3 +1414,21 @@ def test_top_deals_break_score_ties_by_recency_then_id(pg_db):
 
     top = service.get_dashboard_stats()["top_deals"]
     assert [d["id"] for d in top] == [a["id"], c["id"], b["id"]]
+
+
+def test_top_deals_floor_a_negative_value_or_probability(pg_db):
+    """Neither column carries a CHECK, and the REST value field has no lower bound, so the
+    score clamps both from below. Unclamped, 100K@-50% (10K) would sink under 50K@0% (20K),
+    and a -$1M deal would sort under a $0 one instead of tying with it at zero."""
+    from core.postgres import pg_execute
+    from crm import service
+
+    neg_prob = service.create_deal("NegProb", value=100_000, probability=0, stage="qualified")
+    pg_execute("UPDATE deals SET probability = -50 WHERE id = %s", (neg_prob["id"],))
+    floor = service.create_deal("Floor", value=50_000, probability=0, stage="qualified")
+    zero = service.create_deal("Zero", value=0, probability=0, stage="qualified")
+    neg_val = service.create_deal("NegVal", value=-1_000_000, probability=100, stage="qualified")
+    pg_execute("UPDATE deals SET updated_at = now() - interval '1 day' WHERE id = %s", (zero["id"],))
+
+    top = service.get_dashboard_stats()["top_deals"]
+    assert [d["id"] for d in top] == [neg_prob["id"], floor["id"], neg_val["id"], zero["id"]]
