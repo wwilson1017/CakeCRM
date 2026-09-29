@@ -95,6 +95,17 @@ describe('capture page focus (#233)', () => {
     expect(document.activeElement).toBe(t);
   });
 
+  it('keeps retrying past the first frame: each settle timeout re-focuses on its own', () => {
+    const { t } = loadPage();
+    vi.advanceTimersByTime(100); // the rAF rung is spent
+    t.blur();
+    vi.advanceTimersByTime(60); // 160 ms: only the 150 ms rung can have fired
+    expect(document.activeElement).toBe(t);
+    t.blur();
+    vi.advanceTimersByTime(250); // 410 ms: only the 400 ms rung can have fired
+    expect(document.activeElement).toBe(t);
+  });
+
   it('re-focuses on a standalone resume, which is not a fresh load', () => {
     setIosStandalone(true);
     const { t } = loadPage();
@@ -121,6 +132,21 @@ describe('capture page focus (#233)', () => {
     document.dispatchEvent(new Event('visibilitychange'));
     vi.advanceTimersByTime(50);
     expect(document.activeElement).not.toBe(t);
+  });
+
+  it('does nothing while a standalone app is going hidden', () => {
+    setIosStandalone(true);
+    const { t } = loadPage();
+    runLadder();
+    t.blur();
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    try {
+      document.dispatchEvent(new Event('visibilitychange'));
+      vi.advanceTimersByTime(50);
+      expect(document.activeElement).not.toBe(t);
+    } finally {
+      Reflect.deleteProperty(document, 'visibilityState');
+    }
   });
 
   it('never takes focus from an element the user is already in', () => {
