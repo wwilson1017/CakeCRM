@@ -239,6 +239,16 @@ describe('the pages on the collection layer, in public mode (#234)', () => {
     expect(savedViewsMenu()).toBeNull();
   }, BOOT_TIMEOUT_MS);
 
+  it('Done renders through CollectionView and offers no saved views', async () => {
+    visit(`${TOKEN_BASE}/done`, TOKEN_BASE);
+    await seed();
+    await bootApp();
+    await settle(TODO.title);
+    expect(host.querySelector('input[placeholder="Search finished todos…"]'), 'the layer\'s search bar').not.toBeNull();
+    expect(host.querySelector('table'), 'the layer\'s list view').not.toBeNull();
+    expect(savedViewsMenu()).toBeNull();
+  }, BOOT_TIMEOUT_MS);
+
   it('a project card keeps its button OUT of its link, and the link inside the token base', async () => {
     visit(`${TOKEN_BASE}/projects`, TOKEN_BASE);
     await seed();
