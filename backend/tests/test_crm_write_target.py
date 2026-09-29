@@ -19,8 +19,10 @@ The guards are derived, never hand-listed (the `test_crm_deal_links.py` rule):
 Hermetic: services are stubbed and `crm.tools.pg_fetchall` is monkeypatched.
 """
 
+import ast
 import inspect
 import re
+import textwrap
 
 import pytest
 from conftest import fake_admin
@@ -44,7 +46,7 @@ WAIVED = {
     "notify_user": "delivers a message; writes no record",
 }
 
-_HELPERS = ("_with_target(", "_with_targets(", "_lookup_target(")
+_HELPERS = frozenset({"_with_target", "_with_targets", "_lookup_target"})
 
 
 def _write_names(defs) -> set[str]:
@@ -67,16 +69,31 @@ def _executor_function(name: str):
     return getattr(gtd_tools, f"_{name}")
 
 
+def _called_names(fn) -> set[str]:
+    """Names this function actually CALLS, read from its AST — never from raw text, so a
+    comment or docstring that mentions a helper cannot satisfy the guard."""
+    tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name):
+                names.add(func.id)
+            elif isinstance(func, ast.Attribute):
+                names.add(func.attr)
+    return names
+
+
 def _reaches_helper(fn, module=tools) -> bool:
-    """True when `fn`'s source — or a module-private helper it calls, one hop — attaches
-    a target. One hop is what `crm_set_*_fields` needs (they delegate to
+    """True when `fn` — or a module-private helper it calls, one hop — calls a target
+    helper. One hop is what `crm_set_*_fields` needs (they delegate to
     `_set_entity_fields`)."""
-    src = inspect.getsource(fn)
-    if any(h in src for h in _HELPERS):
+    called = _called_names(fn)
+    if called & _HELPERS:
         return True
-    for callee in set(re.findall(r"\b(_[a-z]\w*)\(", src)):
+    for callee in called:
         helper = getattr(module, callee, None)
-        if inspect.isfunction(helper) and any(h in inspect.getsource(helper) for h in _HELPERS):
+        if callee.startswith("_") and inspect.isfunction(helper) and _called_names(helper) & _HELPERS:
             return True
     return False
 
@@ -126,7 +143,13 @@ def test_the_detector_flags_a_bare_write_and_passes_a_wrapped_one():
     def wrapped(deal_id):
         return tools._with_target({"ok": True}, "deal", deal_id)
 
+    def only_mentions(deal_id):
+        """Wrapped by _with_target(...) once — but not any more."""
+        # return _with_target({"ok": True}, "deal", deal_id)
+        return {"ok": True, "text": "_with_target(", "deal_id": deal_id}
+
     assert not _reaches_helper(bare)
+    assert not _reaches_helper(only_mentions), "a comment or string must not count as a call"
     assert _reaches_helper(wrapped)
     # The one-hop path, on the real delegate.
     assert _reaches_helper(tools.crm_set_deal_fields)
@@ -242,6 +265,16 @@ def test_a_bulk_move_lists_every_target_in_one_query(monkeypatch, lookups):
     assert [t["title"] for t in result["targets"]] == ["One", "Two"]
     assert all(t["url"] for t in result["targets"])
     assert len(calls) == 1
+
+
+def test_a_row_gone_before_the_confirmation_read_stays_flagged(monkeypatch, lookups):
+    _, rows = lookups
+    rows["todos"] = [{"id": 1, "title": "One", "owner_id": None}]  # todo 2 deleted meanwhile
+    monkeypatch.setattr(gtd_service, "bulk_update", lambda ids, fields: {"updated": [1, 2], "not_found": []})
+    result = gtd_tools.GTD_TOOL_EXECUTORS["todo_bulk_update"](ids=[1, 2], fields={"star": True})
+    assert [t["id"] for t in result["targets"]] == [1, 2]
+    assert "lookup_failed" not in result["targets"][0]
+    assert result["targets"][1]["lookup_failed"] is True
 
 
 def test_a_failed_bulk_lookup_keeps_every_requested_id(monkeypatch, lookups):

@@ -1348,7 +1348,13 @@ def _target_rows(entity_type: str, ids: list) -> tuple[list[dict], bool]:
         logger.warning("CRM write target lookup failed for %s %s", entity_type, ids,
                        exc_info=True)
         return [], True
-    return [_target_from_record(entity_type, r) for r in rows], False
+    # Reconcile against EVERY requested id, in request order: a row deleted between the
+    # write and this read must not silently vanish from the answer — it stays, flagged.
+    found = {r["id"]: _target_from_record(entity_type, r) for r in rows}
+    return [
+        found.get(i) or {**_target_from_record(entity_type, None, i), "lookup_failed": True}
+        for i in ids
+    ], False
 
 
 def _lookup_target(entity_type: str, entity_id: int) -> dict:

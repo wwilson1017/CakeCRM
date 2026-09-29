@@ -730,7 +730,7 @@
   for the deletes, which have no row left afterwards. `crm_log_activity` names deal >
   contact, and an activity on nothing carries an all-None block. A failed confirmation
   read never fails the committed write (an error would invite a retry and a duplicate
-  note): the id survives flagged `lookup_failed`. The GTD `todo_*` writes carry it too,
+  note): the id survives flagged `lookup_failed`, and so does a row deleted between the write and the read — every requested id is reconciled. The GTD `todo_*` writes carry it too,
   since GTD is the default mode. The behavioural half is one SALES_GUIDE paragraph
   ("Check what you wrote"). `tests/test_crm_write_target.py` derives the write set from
   every def list the registry composes and pins a reasoned waiver list in both
