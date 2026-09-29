@@ -12,7 +12,7 @@ user notices an archived deal inflating their pipeline value.
 
 import pytest
 
-from crm import chatter_service, service
+from crm import chatter_service, scoring_service, service
 from tests.test_crm_service import Recorder
 
 
@@ -318,25 +318,75 @@ def test_lost_reason_is_length_bounded(monkeypatch, rec, fake_conn):
     assert any(isinstance(v, str) and len(v) == service.MAX_LOST_REASON for v in params)
 
 
-# ── archive / restore ────────────────────────────────────────────────────────
+# ── archive / restore (who and why: #239) ───────────────────────────────────
 
-def test_archive_deal_preserves_the_first_archive_timestamp(rec):
-    rec.fetchone_queue = [{"contact_id": None}, {"id": 1}]  # RETURNING row, get_deal
+_LIVE = (None, 7)                               # locked pre-image: archived_at, contact_id
+_ARCHIVED = ("2026-02-01T00:00:00+00:00", 7)
+
+
+def _stmts(conn):
+    return [s for s, _ in conn.executed]
+
+
+def test_archiving_a_live_deal_records_who_and_why_in_one_transaction(monkeypatch, rec, fake_conn):
+    conn = fake_conn(monkeypatch, service, fetchone_results=[_LIVE])
+    rec.fetchone_queue = [{"id": 1}]  # get_deal
+    service.archive_deal(1, reason="  duplicate of #12  ", actor_id=5)
+    stmts = _stmts(conn)
+    assert stmts[0] == "SELECT archived_at, contact_id FROM deals WHERE id = %s FOR UPDATE"
+    update = next(p for s, p in conn.executed if s.startswith("UPDATE deals SET"))
+    assert update[1:] == (5, "duplicate of #12", 1)  # trimmed reason, actor, id
+    note_sql, note = next((s, p) for s, p in conn.executed if "INSERT INTO crm_chatter" in s)
+    assert "author_id" in note_sql
+    assert note[:3] == ("deal", 1, "Archived — duplicate of #12") and note[4] == 5
+    # The state change and its audit note ride ONE cursor in ONE transaction.
+    assert conn.entries == 1 and len(set(conn.executed_by)) == 1
+
+
+def test_archiving_needs_a_reason_and_writes_nothing_without_one(monkeypatch, rec, fake_conn):
+    conn = fake_conn(monkeypatch, service, fetchone_results=[_LIVE])
+    with pytest.raises(ValueError, match="reason is required"):
+        service.archive_deal(1, reason="   ")
+    assert not any(s.startswith(("UPDATE", "INSERT")) for s in _stmts(conn))
+
+
+def test_re_archiving_is_a_no_op_even_without_a_reason(monkeypatch, rec, fake_conn):
+    """Idempotent on the locked pre-image: the first actor/reason/date survive and no
+    second note is written."""
+    conn = fake_conn(monkeypatch, service, fetchone_results=[_ARCHIVED])
+    rec.fetchone_queue = [{"id": 1}]
     service.archive_deal(1)
-    sql = rec.sql_containing("UPDATE deals SET archived_at")
-    assert "COALESCE(archived_at, %s)" in sql
+    assert not any(s.startswith(("UPDATE", "INSERT")) for s in _stmts(conn))
 
 
-def test_restore_deal_nulls_archived_at(rec):
-    rec.fetchone_queue = [{"contact_id": None}, {"id": 1}]
+def test_restore_clears_who_and_why_and_writes_a_restored_note(monkeypatch, rec, fake_conn):
+    conn = fake_conn(monkeypatch, service, fetchone_results=[_ARCHIVED])
+    rec.fetchone_queue = [{"id": 1}]
+    service.archive_deal(1, archived=False, actor_id=5)
+    assert ("UPDATE deals SET archived_at = NULL, archived_by = NULL, archived_reason = NULL "
+            "WHERE id = %s") in _stmts(conn)
+    note = next(p for s, p in conn.executed if "INSERT INTO crm_chatter" in s)
+    assert note[2] == scoring_service.RESTORE_NOTE and note[4] == 5
+
+
+def test_restoring_a_live_deal_writes_nothing(monkeypatch, rec, fake_conn):
+    conn = fake_conn(monkeypatch, service, fetchone_results=[_LIVE])
+    rec.fetchone_queue = [{"id": 1}]
     service.archive_deal(1, archived=False)
-    sql = rec.sql_containing("UPDATE deals SET archived_at")
-    assert "archived_at = NULL" in sql
+    assert not any(s.startswith(("UPDATE", "INSERT")) for s in _stmts(conn))
 
 
-def test_archive_missing_deal_returns_none(rec):
-    rec.fetchone_queue = [None]
-    assert service.archive_deal(999) is None
+def test_archive_reason_is_length_bounded(monkeypatch, rec, fake_conn):
+    conn = fake_conn(monkeypatch, service, fetchone_results=[_LIVE])
+    rec.fetchone_queue = [{"id": 1}]
+    service.archive_deal(1, reason="x" * 5000)
+    update = next(p for s, p in conn.executed if s.startswith("UPDATE deals SET"))
+    assert len(update[2]) == service.MAX_ARCHIVE_REASON
+
+
+def test_archive_missing_deal_returns_none(monkeypatch, rec, fake_conn):
+    fake_conn(monkeypatch, service, fetchone_results=[None])
+    assert service.archive_deal(999, reason="x") is None
 
 
 # ── merge ────────────────────────────────────────────────────────────────────
@@ -375,8 +425,9 @@ def test_merge_repoints_moves_copies_and_archives_the_source(monkeypatch, rec, f
     upsert = next(s for s in stmts if "INSERT INTO crm_field_values" in s)
     assert "DO UPDATE SET value = EXCLUDED.value" in upsert
     assert "WHERE crm_field_values.value IS NULL OR crm_field_values.value = ''" in upsert
-    # Source is archived, never deleted.
-    assert any("UPDATE deals SET archived_at = COALESCE(archived_at, %s)" in s for s in stmts)
+    # Source is archived, never deleted — and records why (#239).
+    src = next(p for s, p in conn.executed if s.startswith("UPDATE deals SET archived_at"))
+    assert src[2] == "Merged into deal #1"
     assert not any("DELETE FROM deals" in s for s in stmts)
     assert scheduled == [(1, True)]
     assert out == {"id": 1}
@@ -392,8 +443,31 @@ def test_merge_never_touches_the_targets_own_columns(monkeypatch, rec, fake_conn
     service.merge_deals(1, 2)
     deal_updates = [s for s, _ in conn.executed if s.startswith("UPDATE deals SET")]
     assert deal_updates == [
-        "UPDATE deals SET archived_at = COALESCE(archived_at, %s), updated_at = %s WHERE id = %s"
+        "UPDATE deals SET archived_at = %s, archived_by = %s, archived_reason = %s, "
+        "updated_at = %s WHERE id = %s"
     ]
+
+
+def test_merge_records_the_actor_and_keeps_the_source_note_off_the_target(
+    monkeypatch, rec, fake_conn,
+):
+    """#239: the source says why it vanished, by whom — and that audit note is written
+    AFTER the note-copy step, so it stays on the source instead of being copied across."""
+    conn = fake_conn(monkeypatch, service, fetchall_results=[[(1, "Kept", None, None), (2, "Dupe", None, None)]])
+    rec.fetchone_queue = [{"id": 1}]
+    monkeypatch.setattr(service.touch_count_service, "schedule_recompute", lambda *a, **k: None)
+    service.merge_deals(1, 2, actor_id=5)
+    stmts = _stmts(conn)
+    copy_at = next(i for i, s in enumerate(stmts) if "left(%s || message, %s)" in s)
+    notes = [(i, p) for i, (s, p) in enumerate(conn.executed)
+             if s.startswith("INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, author_id)")]
+    target_note = next(p for _, p in notes if p[0] == 1)
+    assert target_note[-1] == 5  # the "Merged deal #2" note credits the actor
+    src_at, src_note = next((i, p) for i, p in notes if p[1] == 2)
+    assert src_at > copy_at
+    assert src_note[2] == "Archived — Merged into deal #1" and src_note[4] == 5
+    src_update = next(p for s, p in conn.executed if s.startswith("UPDATE deals SET archived_at"))
+    assert src_update[1] == 5
 
 
 # ── search_deals ─────────────────────────────────────────────────────────────
@@ -614,13 +688,15 @@ def test_editing_probability_on_an_already_closed_deal_is_respected(monkeypatch,
     assert 55 in params and 100 not in params
 
 
-def test_archiving_does_not_reset_the_staleness_clock(rec):
+def test_archiving_does_not_reset_the_staleness_clock(monkeypatch, rec, fake_conn):
     """LAST_TOUCH_SQL treats updated_at as a touch, so bumping it here would make an
     archive→restore round-trip silently drop the deal out of get_stale_deals and the
     heartbeat's nudges."""
-    rec.fetchone_queue = [{"contact_id": None}, {"id": 1}]
-    service.archive_deal(1)
-    assert "updated_at" not in rec.sql_containing("UPDATE deals SET archived_at")
+    conn = fake_conn(monkeypatch, service, fetchone_results=[(None, None), ("x", None)])
+    rec.fetchone_queue = [{"id": 1}, {"id": 1}]
+    service.archive_deal(1, reason="junk")
+    service.archive_deal(1, archived=False)
+    assert not any("updated_at" in s for s in _stmts(conn))
 
 
 def test_a_stage_change_on_an_archived_deal_is_refused(monkeypatch, rec, fake_conn):

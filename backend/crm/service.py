@@ -266,14 +266,15 @@ _TAGS_NORMALIZED_SQL = "(',' || REPLACE(REPLACE(tags, ', ', ','), ' ,', ',') || 
 # the page returns — which it does, index-driven, via idx_activity_contact and
 # idx_crm_chatter_entity.
 #
-# Carries ONE %s (the housekeeping pattern). Every caller must pass it in the right position.
-_CONTACT_LAST_TOUCH_JOIN = """
+# Carries no placeholder: the housekeeping exclusion is a rendered, `%`-free predicate (#239).
+_CONTACT_LAST_TOUCH_JOIN = f"""
     LEFT JOIN LATERAL (
         SELECT GREATEST(
             (SELECT MAX(a.created_at) FROM activity_log a WHERE a.contact_id = ct.id),
             (SELECT MAX(ch.created_at) FROM crm_chatter ch
               WHERE ch.entity_type = 'contact' AND ch.entity_id = ct.id
-                AND ch.archived = 0 AND ch.message NOT LIKE %s)
+                AND ch.archived = 0
+                AND {scoring_service.not_housekeeping_sql('ch.message')})
         ) AS last_at
     ) lt ON TRUE
 """
@@ -304,6 +305,12 @@ def create_contact(
     tags: str = "", notes: str = "", company_id: int | None = None,
     owner_id: int | None = None,
 ) -> dict:
+    if status == "archived":
+        # #239: archiving records who and why, and a record born archived has no one to
+        # ask — create it, then archive it with a reason.
+        raise ValueError(
+            "A contact cannot be created already archived — create it, then archive it with a reason."
+        )
     if status not in CONTACT_STATUSES:
         status = "active"  # unknown status would hide the contact from every status tab
     # Ongoing-ingestion coherence (issue #35): with no explicit link, resolve the
@@ -413,9 +420,7 @@ def search_contacts(
         f"""SELECT {_CONTACT_LIST_SELECT}
             FROM contacts ct {_CONTACT_JOINS}
             WHERE {where} ORDER BY {_contact_order_by(sort)} LIMIT %s OFFSET %s""",
-        # The LATERAL's placeholder sits in the FROM clause, so it binds BEFORE every
-        # WHERE parameter.
-        [scoring_service.HOUSEKEEPING_NOTE_LIKE] + params + [limit, offset],
+        params + [limit, offset],
     )
 
 
@@ -488,10 +493,8 @@ def list_contacts(
         f"""SELECT {_CONTACT_LIST_SELECT}
             FROM contacts ct {_CONTACT_JOINS}
             {row_where} ORDER BY {order_by} LIMIT %s OFFSET %s""",
-        # The joins' placeholder sits in the FROM clause, so it binds before every WHERE
-        # parameter; the cursor's binds last because its condition was appended last.
-        [scoring_service.HOUSEKEEPING_NOTE_LIKE] + params
-        + ([after_id] if after_id is not None else []) + [limit, offset],
+        # The cursor's bind comes last because its condition was appended last.
+        params + ([after_id] if after_id is not None else []) + [limit, offset],
     )
     return {"contacts": rows, "total": total, "limit": limit, "offset": offset}
 
@@ -508,7 +511,55 @@ def list_distinct_tags() -> list[str]:
     return sorted(seen, key=str.lower)
 
 
-def update_contact(contact_id: int, **fields) -> dict | None:
+def _write_status_audited(
+    table: str, entity_type: str, entity_id: int, filtered: dict,
+    archive_reason: str | None, actor_id: int | None,
+) -> bool:
+    """Write a contact/company column update, auditing a status move across the
+    ``archived`` boundary (#239). False when the row does not exist.
+
+    One transaction under a row lock: a move INTO archived needs a non-blank reason and
+    appends an "Archived — <reason>" note by ``actor_id``; a move OUT appends "Restored
+    from archive."; any other write (including archived→archived) appends nothing. The
+    lock also serializes against chatter_service.add_note and the deletes, which lock
+    the same row. ``updated_at`` keeps its normal bump — unlike a deal's, no contact or
+    company staleness read uses it, and the note itself is excluded from every one."""
+    set_clause = ", ".join(f"{k} = %s" for k in filtered)
+    now = _now()
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(f"SELECT status FROM {table} WHERE id = %s FOR UPDATE", (entity_id,))
+        row = cur.fetchone()
+        if row is None:
+            return False
+        old, new = row[0], filtered.get("status")
+        archiving = new == "archived" and old != "archived"
+        restoring = old == "archived" and new is not None and new != "archived"
+        # Raising here rolls back before anything is written.
+        text = _archive_reason(archive_reason, f"a {entity_type}") if archiving else ""
+        cur.execute(
+            f"UPDATE {table} SET {set_clause}, updated_at = %s WHERE id = %s",
+            list(filtered.values()) + [now, entity_id],
+        )
+        if archiving:
+            _insert_housekeeping_note_cur(
+                cur, entity_type, entity_id, scoring_service.ARCHIVE_NOTE_PREFIX + text,
+                actor_id, now,
+            )
+        elif restoring:
+            _insert_housekeeping_note_cur(
+                cur, entity_type, entity_id, scoring_service.RESTORE_NOTE, actor_id, now
+            )
+    return True
+
+
+def update_contact(
+    contact_id: int, *, archive_reason: str | None = None, actor_id: int | None = None,
+    **fields,
+) -> dict | None:
+    """Update a contact. Setting ``status='archived'`` on a live contact needs a
+    non-blank ``archive_reason`` and records it with ``actor_id`` (#239) — see
+    _write_status_audited."""
     allowed = {"name", "email", "phone", "company", "title", "source", "status", "tags", "notes",
                "company_id", "owner_id"}
     filtered = {k: v for k, v in fields.items() if k in allowed}
@@ -516,6 +567,13 @@ def update_contact(contact_id: int, **fields) -> dict | None:
         filtered["tags"] = _normalize_tags(filtered["tags"] or "")
     if "status" in filtered and filtered["status"] not in CONTACT_STATUSES:
         filtered["status"] = "active"
+    # #239: refuse a reasonless archive BEFORE the company-text resolution below, which
+    # can auto-create a company — a refused write must leave nothing behind. An unlocked
+    # peek; the locked re-check in _write_status_audited stays authoritative.
+    if filtered.get("status") == "archived" and not (archive_reason or "").strip():
+        current = pg_fetchone("SELECT status FROM contacts WHERE id = %s", (contact_id,))
+        if current and current["status"] != "archived":
+            _archive_reason(None, "a contact")
     # Issue #35: a company-text write with NO explicit company_id derives the link
     # from the text — non-blank resolves/auto-creates, blank unlinks (the link is
     # what the UI displays, so clearing the text has to clear the display too).
@@ -530,11 +588,10 @@ def update_contact(contact_id: int, **fields) -> dict | None:
         )
     if not filtered:
         return get_contact(contact_id)
-    set_clause = ", ".join(f"{k} = %s" for k in filtered)
-    values = list(filtered.values()) + [_now(), contact_id]
-    pg_execute(
-        f"UPDATE contacts SET {set_clause}, updated_at = %s WHERE id = %s", values
-    )
+    if not _write_status_audited(
+        "contacts", "contact", contact_id, filtered, archive_reason, actor_id
+    ):
+        return None
     scoring_service.score_on_event(contact_ids=(contact_id,))  # #18: status/company edits shift the score
     return get_contact(contact_id)
 
@@ -607,7 +664,7 @@ def get_contact_detail(contact_id: int) -> dict | None:
         # last_contact_at is carried here too, so that after the detail page logs an
         # activity or adds a note its reload hands the list an updated value (#77) — the
         # list patches its row from exactly this body.
-        (scoring_service.HOUSEKEEPING_NOTE_LIKE, contact_id),
+        (contact_id,),
     )
     if not contact:
         return None
@@ -642,6 +699,10 @@ def create_company(
     address: str = "", notes: str = "", source: str = "", status: str = "active",
     owner_id: int | None = None,
 ) -> dict:
+    if status == "archived":  # #239 — see create_contact
+        raise ValueError(
+            "A company cannot be created already archived — create it, then archive it with a reason."
+        )
     if status not in COMPANY_STATUSES:
         status = "active"
     row = pg_fetchone(
@@ -816,7 +877,13 @@ def list_companies(
     return {"companies": rows, "total": total, "limit": limit, "offset": offset}
 
 
-def update_company(company_id: int, **fields) -> dict | None:
+def update_company(
+    company_id: int, *, archive_reason: str | None = None, actor_id: int | None = None,
+    **fields,
+) -> dict | None:
+    """Update a company. Setting ``status='archived'`` on a live company needs a
+    non-blank ``archive_reason`` and records it with ``actor_id`` (#239) — see
+    _write_status_audited."""
     allowed = {"name", "domain", "industry", "phone", "address", "notes", "source", "status"}
     # Drop None values: every one of those columns is NOT NULL, and a tool call
     # sending an explicit null (the HTTP route already filters these out) would
@@ -841,11 +908,10 @@ def update_company(company_id: int, **fields) -> dict | None:
         filtered["status"] = "active"
     if not filtered:
         return get_company(company_id)
-    set_clause = ", ".join(f"{k} = %s" for k in filtered)
-    values = list(filtered.values()) + [_now(), company_id]
-    pg_execute(
-        f"UPDATE companies SET {set_clause}, updated_at = %s WHERE id = %s", values
-    )
+    if not _write_status_audited(
+        "companies", "company", company_id, filtered, archive_reason, actor_id
+    ):
+        return None
     return get_company(company_id)
 
 
@@ -1776,6 +1842,9 @@ def bulk_move_deals(deal_ids: list[int], stage: str) -> dict:
 # ── Deal lifecycle: won / lost / archive / merge (issue #22) ──────────────────
 
 MAX_LOST_REASON = 500
+# #239: an archive reason is short prose, capped like a lost reason (the REST models
+# reject past it; the service truncates on the tool path).
+MAX_ARCHIVE_REASON = 500
 
 
 def mark_deal_won(deal_id: int) -> dict | None:
@@ -1819,35 +1888,97 @@ def mark_deal_lost(
     return get_deal(deal_id)
 
 
-def archive_deal(deal_id: int, archived: bool = True) -> dict | None:
+def _insert_housekeeping_note_cur(
+    cur, entity_type: str, entity_id: int, message: str, author_id: int | None, now
+) -> None:
+    """Append an archive/restore audit note on the CALLER's cursor (#239), so it commits
+    with the state change or not at all.
+
+    A direct INSERT rather than chatter_service.add_note, following provenance_service
+    .confirm: the parent row is already locked here, and a housekeeping row must not
+    schedule a touch recompute. The text is built from scoring_service's housekeeping
+    constants, which every touch/staleness read excludes."""
+    cur.execute(
+        "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, author_id) "
+        "VALUES (%s, %s, %s, %s, %s)",
+        (entity_type, entity_id, message, now, author_id),
+    )
+
+
+def _archive_reason(reason: str | None, what: str) -> str:
+    """The trimmed, capped reason for an archive transition; ValueError when blank."""
+    text = (reason or "").strip()[:MAX_ARCHIVE_REASON]
+    if not text:
+        raise ValueError(
+            f"A reason is required to archive {what} — ask why, then try again with one."
+        )
+    return text
+
+
+def archive_deal(
+    deal_id: int, archived: bool = True, *, reason: str | None = None,
+    actor_id: int | None = None,
+) -> dict | None:
     """Soft-archive (or restore) a deal. Nothing is deleted — archived_at is set,
     and every list/board/rollup/aggregate stops counting the deal (LIVE_PREDICATE).
 
-    Idempotent: archiving an already-archived deal keeps the original timestamp, so
-    "when was this archived" survives a repeat call.
+    Archiving records WHO and WHY (#239): a non-blank ``reason`` is required, and the
+    reason plus ``actor_id`` land on the row (``archived_by``/``archived_reason``, which
+    the deal sheet's banner reads) AND in the notes thread as an "Archived — <reason>"
+    note, in ONE transaction. Restoring needs no reason; it clears all three columns and
+    writes a "Restored from archive." note. ``archived_by`` may still be NULL on an
+    archived row — an archive from before #239, a deleted user, or an unattended turn.
+
+    Idempotent on the locked pre-image: archiving an already-archived deal (reason or
+    not) keeps the original timestamp, actor and reason and writes no second note, and
+    restoring a live deal writes nothing.
     """
     # updated_at is deliberately NOT bumped. LAST_TOUCH_SQL treats updated_at as a
     # touch, so an archive→restore round-trip would silently reset the deal's staleness
     # clock and drop it out of get_stale_deals and the heartbeat's nudges until someone
     # logged a real interaction. archived_at IS the state change; nothing else moved.
-    # COALESCE keeps the FIRST archive timestamp on a repeat call; restore just NULLs it.
-    archived_at_sql = "COALESCE(archived_at, %s)" if archived else "NULL"
-    params = (_now(), deal_id) if archived else (deal_id,)
-    row = pg_fetchone(
-        f"UPDATE deals SET archived_at = {archived_at_sql} WHERE id = %s "
-        "RETURNING contact_id",
-        params,
-    )
-    if not row:
-        return None
+    # The audit note is excluded from LAST_TOUCH_SQL for the same reason.
+    now = _now()
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT archived_at, contact_id FROM deals WHERE id = %s FOR UPDATE", (deal_id,)
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        was_archived, contact_id = row[0] is not None, row[1]
+        if archived and not was_archived:
+            # Checked only on a real transition, so a repeat archive stays a no-op.
+            # Raising here rolls the transaction back before anything is written.
+            text = _archive_reason(reason, "a deal")
+            cur.execute(
+                "UPDATE deals SET archived_at = %s, archived_by = %s, archived_reason = %s "
+                "WHERE id = %s",
+                (now, actor_id, text, deal_id),
+            )
+            _insert_housekeeping_note_cur(
+                cur, "deal", deal_id, scoring_service.ARCHIVE_NOTE_PREFIX + text, actor_id, now
+            )
+        elif not archived and was_archived:
+            cur.execute(
+                "UPDATE deals SET archived_at = NULL, archived_by = NULL, "
+                "archived_reason = NULL WHERE id = %s",
+                (deal_id,),
+            )
+            _insert_housekeeping_note_cur(
+                cur, "deal", deal_id, scoring_service.RESTORE_NOTE, actor_id, now
+            )
     # #18: an archived deal leaves the contact's deal-linkage aggregate (and a restore
     # puts it back), so the linked contact's score inputs just changed; the deal's own
     # stored score also refreshes so a restore doesn't resurface a stale number.
-    scoring_service.score_on_event(deal_ids=(deal_id,), contact_ids=(row["contact_id"],))
+    scoring_service.score_on_event(deal_ids=(deal_id,), contact_ids=(contact_id,))
     return get_deal(deal_id)
 
 
-def merge_deals(target_deal_id: int, source_deal_id: int) -> dict:
+def merge_deals(
+    target_deal_id: int, source_deal_id: int, *, actor_id: int | None = None
+) -> dict:
     """Fold ``source`` into ``target`` and archive the source. Raises ValueError on
     a self-merge or a missing deal.
 
@@ -1868,6 +1999,11 @@ def merge_deals(target_deal_id: int, source_deal_id: int) -> dict:
 
     Deliberately NOT touched: the target's standard columns (title/value/stage/…).
     A merge is a consolidation of *history*, not a silent edit of the surviving deal.
+
+    Who and why (#239): the source records ``actor_id`` and "Merged into deal #T" as its
+    archive actor/reason and gets an "Archived — Merged into deal #T" note; the target's
+    "Merged deal #N" note carries the actor as its author. The merge IS the reason, so
+    none is asked for. The source is always live here (an archived one is refused above).
     """
     if target_deal_id == source_deal_id:
         raise ValueError("Cannot merge a deal into itself")
@@ -1942,16 +2078,23 @@ def merge_deals(target_deal_id: int, source_deal_id: int) -> dict:
             (target_deal_id, source_deal_id),
         )
         cur.execute(
-            "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at) "
-            "VALUES ('deal', %s, %s, %s)",
+            "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, author_id) "
+            "VALUES ('deal', %s, %s, %s, %s)",
             (target_deal_id,
              f'Merged deal #{source_deal_id} ("{titles[source_deal_id]}") into this deal.',
-             now),
+             now, actor_id),
         )
+        merge_reason = f"Merged into deal #{target_deal_id}"
         cur.execute(
-            "UPDATE deals SET archived_at = COALESCE(archived_at, %s), updated_at = %s "
-            "WHERE id = %s",
-            (now, now, source_deal_id),
+            "UPDATE deals SET archived_at = %s, archived_by = %s, archived_reason = %s, "
+            "updated_at = %s WHERE id = %s",
+            (now, actor_id, merge_reason, now, source_deal_id),
+        )
+        # AFTER the note-copy statement above, so this audit note stays on the source and
+        # is not copied onto the target.
+        _insert_housekeeping_note_cur(
+            cur, "deal", source_deal_id,
+            scoring_service.ARCHIVE_NOTE_PREFIX + merge_reason, actor_id, now,
         )
     # The target just absorbed the source's evidence, so its touch count is stale —
     # force_write because the merged-in notes can move the watermark either way.
@@ -3018,13 +3161,21 @@ OPEN_PREDICATE_D = "d.stage NOT IN ('won', 'lost')"
 # Shared by get_analytics (below) and analytics_service.get_stale_deals (issue #22), so
 # the dashboard's stale count and the assistant's stale-deal list can never disagree
 # about what "touched" means. Change it here and both move together.
-LAST_TOUCH_SQL = """GREATEST(
+#
+# Housekeeping notes are not touches (#239): the archive/restore audit notes and the
+# provenance confirmations are state changes, so an archive→restore round trip must leave
+# the clock where it was. The predicate is scoring_service's shared family, rendered with
+# no `%` because this fragment is interpolated into parameterized statements. Excluding
+# provenance confirmations here too is deliberate — the contact side (#77) already does,
+# and one definition of "housekeeping" is the point.
+LAST_TOUCH_SQL = f"""GREATEST(
     d.updated_at,
     COALESCE((SELECT MAX(a.created_at) FROM activity_log a
                WHERE a.deal_id = d.id), d.updated_at),
     COALESCE((SELECT MAX(ch.created_at) FROM crm_chatter ch
                WHERE ch.entity_type = 'deal' AND ch.entity_id = d.id
-                 AND ch.archived = 0), d.updated_at)
+                 AND ch.archived = 0
+                 AND {scoring_service.not_housekeeping_sql('ch.message')}), d.updated_at)
 )"""
 
 # "When did this deal earn its accountability touch" (issue #179). The rule, stated once:
@@ -3192,19 +3343,17 @@ def _shape_activity_types(rows: list[dict]) -> list[dict]:
 # Both are identified by their marker prefix, which is the only thing that
 # distinguishes them; `[` has no special meaning in SQL LIKE, only % and _.
 #
-# The patterns are bound as PARAMETERS rather than inlined. psycopg2 interpolates
-# `%` in any statement it is given parameters for, so a literal `'... for %'` in the
-# SQL raises "IndexError: tuple index out of range" at execute time — which is a
-# runtime 500, not a syntax error anything catches earlier. Escaping to `%%` would
-# work and would be one careless edit away from breaking again.
+# Housekeeping notes (provenance confirmations and, since #239, archive/restore audit
+# notes) are excluded through scoring_service's shared, `%`-free predicate — the SAME
+# family the #77 last-contact join and the engagement reads exclude, so no fourth copy
+# can drift from the writers. The merge-copy marker is still a bound PARAMETER rather
+# than inlined: psycopg2 interpolates `%` in any statement it is given parameters for,
+# so a literal `'[Merged from deal #%'` in the SQL raises "IndexError: tuple index out
+# of range" at execute time — a runtime 500, not a syntax error anything catches
+# earlier.
 _ACTIVITY_CHATTER_EXCLUSIONS = (
-    " AND ch.message NOT LIKE %s AND ch.message NOT LIKE %s"
+    f" AND {scoring_service.not_housekeeping_sql('ch.message')} AND ch.message NOT LIKE %s"
 )
-# The SAME literal scoring_service excludes from engagement and the #77 last-contact
-# join excludes from recency — imported rather than retyped, because a fourth copy of
-# a pattern that must mirror provenance_service.confirm's writer is exactly the drift
-# making it public was meant to end.
-_PROVENANCE_NOTE_PATTERN = scoring_service.HOUSEKEEPING_NOTE_LIKE
 _MERGE_COPY_PATTERN = "[Merged from deal #%"
 
 
@@ -3401,7 +3550,7 @@ def get_analytics(days: int = 30, stale_days: int = 14, stale_limit: int = 8) ->
         GROUP BY acts.actor, u.name, u.email
         """,
         (start_dt, end_dt, start_dt, end_dt,
-         _PROVENANCE_NOTE_PATTERN, _MERGE_COPY_PATTERN),
+         _MERGE_COPY_PATTERN),
     )
 
     daily = _fill_activity_daily(daily_rows, days, today=today)

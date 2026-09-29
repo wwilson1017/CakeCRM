@@ -395,6 +395,7 @@ def test_merging_a_deal_copies_note_text_without_duplicating_attachments(pg_db):
     assert pg_fetchone("SELECT COUNT(*) AS n FROM crm_chatter_attachments")["n"] == 1
 
     # And it is still reachable through the archived source deal's original note.
-    original = chatter_service.get_chatter("deal", source)
-    assert [a["id"] for a in original[0]["attachments"]] == [attachment["id"]]
+    # Picked by id: since #239 the source also carries the merge's "Archived — …" note.
+    original = next(n for n in chatter_service.get_chatter("deal", source) if n["id"] == note_id)
+    assert [a["id"] for a in original["attachments"]] == [attachment["id"]]
     assert svc.get_file(attachment["id"])["data"]

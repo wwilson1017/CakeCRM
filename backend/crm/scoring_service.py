@@ -78,7 +78,31 @@ _REFRESH_BATCH = 100
 # analytics_service.get_contact_staleness both answer the question "when did we last talk to
 # this person?", and all three have to exclude the same rows or they contradict each other —
 # the assistant would call a contact stale while the list showed it touched today.
-HOUSEKEEPING_NOTE_LIKE = "Confirmed AI-populated value for %"
+#
+# Since #239 this is a FAMILY, not one pattern: the archive/restore audit notes that
+# archive_deal, merge_deals and update_contact/update_company write are state changes, not
+# touches, so archiving a record must not reset its staleness clock either. Every writer
+# builds its text from these constants, so the exclusion cannot drift from the writer.
+#
+# Rendered as `starts_with(...)` literals rather than bound LIKE params, because the one
+# consumer that needs it most — service.LAST_TOUCH_SQL — is a param-less fragment
+# interpolated into other parameterized statements, where a literal `%` raises at execute
+# time. `starts_with` carries no `%`, and the assert below keeps it that way. Accepted
+# residual, the same one the provenance prefix always had: a human note that happens to
+# start with one of these prefixes is excluded too.
+PROVENANCE_NOTE_PREFIX = "Confirmed AI-populated value for "
+ARCHIVE_NOTE_PREFIX = "Archived — "
+RESTORE_NOTE = "Restored from archive."
+HOUSEKEEPING_NOTE_PREFIXES = (PROVENANCE_NOTE_PREFIX, ARCHIVE_NOTE_PREFIX, RESTORE_NOTE)
+assert all("%" not in p and "'" not in p for p in HOUSEKEEPING_NOTE_PREFIXES)
+
+
+def not_housekeeping_sql(column: str) -> str:
+    """An AND-able predicate excluding every housekeeping note. No `%` and no bind
+    parameter, on purpose — see HOUSEKEEPING_NOTE_PREFIXES."""
+    return " AND ".join(f"NOT starts_with({column}, '{p}')" for p in HOUSEKEEPING_NOTE_PREFIXES)
+
+
 # Safety valve for a MANUAL backfill("all") of a huge dataset (runs off-thread via the
 # endpoint/tool, never in the tick): bound + log rather than run unboundedly.
 _REFRESH_MAX_ROWS = 20000
@@ -394,8 +418,9 @@ def _read_deal_score(deal_id: int, q1, now: datetime) -> dict | None:
         return None
     chat = q1(
         "SELECT COUNT(*) AS cnt, MAX(created_at) AS newest FROM crm_chatter "
-        "WHERE entity_type = 'deal' AND entity_id = %s AND archived = 0 AND message NOT LIKE %s",
-        (deal_id, HOUSEKEEPING_NOTE_LIKE),
+        "WHERE entity_type = 'deal' AND entity_id = %s AND archived = 0 AND "
+        + not_housekeeping_sql("message"),
+        (deal_id,),
     ) or {}
     # Engagement counts BOTH notes and logged activities (symmetric with contact scoring) —
     # activity_log is the CRM's primary touch surface, so a deal worked only via logged calls
@@ -411,8 +436,9 @@ def _read_contact_score(contact_id: int, q1, qall, now: datetime) -> dict | None
         return None
     chat = q1(
         "SELECT COUNT(*) AS cnt, MAX(created_at) AS newest FROM crm_chatter "
-        "WHERE entity_type = 'contact' AND entity_id = %s AND archived = 0 AND message NOT LIKE %s",
-        (contact_id, HOUSEKEEPING_NOTE_LIKE),
+        "WHERE entity_type = 'contact' AND entity_id = %s AND archived = 0 AND "
+        + not_housekeeping_sql("message"),
+        (contact_id,),
     ) or {}
     act = q1(
         "SELECT COUNT(*) AS cnt, MAX(created_at) AS newest FROM activity_log WHERE contact_id = %s",
