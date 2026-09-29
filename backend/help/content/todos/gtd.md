@@ -44,8 +44,8 @@ next action and clears it out of the inbox — so agree the context before writi
   least one next action. On a project's own page, click its name to rename it or its notes
   ("Add notes…" when there are none) to edit them. A name saves on Enter or when you click
   away; notes take Enter as a new line and save when you click away. Escape discards the edit.
-  A blank name or one another project already uses is refused, and the editor stays open with
-  what you typed so you can fix it.
+  A blank name is refused and the previous name is kept. A name another project already uses
+  is refused too, and the editor stays open with what you typed so you can fix it.
 - **Links** — a todo can point at a contact and a deal.
 
 ## The nine tabs
