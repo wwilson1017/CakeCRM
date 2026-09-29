@@ -42,6 +42,14 @@ from . import client, store
 
 logger = logging.getLogger(__name__)
 
+# Deals read so far in a turn that paused for Approve/Deny, keyed by link id (#238). A
+# pause spans several registries — the one that ran the turn up to the confirm card, and
+# one per button press — while the continuation that narrates the outcome gets yet
+# another, so the map carries every deal the paused turn saw into that continuation's
+# reply. Bounded by the number of links; a new message clears its entry. In-process is
+# enough: the deploy runs one worker and the poller is a single task.
+_paused_deal_refs: dict[int, dict[int, tuple[str, str]]] = {}
+
 _LINK_HELP = (
     "I don't recognize this account yet. To connect me, open CakeCRM → Settings → "
     "Personal → Link my Telegram and tap “Open Telegram to link” (or copy the link code "
@@ -305,20 +313,18 @@ async def _handle_callback(cb: dict) -> None:
     await _strip_keyboard(msg_chat_id, message_id, token)
 
     # Continue the assistant turn only once EVERY write in this batch is resolved.
+    # This press's write may have returned a deal the continuation's reply names (#238).
+    _paused_deal_refs.setdefault(link["id"], {}).update(registry.deal_refs)
     should_continue = await asyncio.to_thread(
         store.try_consume_batch, link["id"], pending_msg_id
     )
     if should_continue:
-        # Hand the continuation the registry that ran the approved write, so a deal it
-        # returned can still be linked in the reply that narrates it (#238).
-        await _run_turn(link, token, user_text=None, registry=registry)
+        await _run_turn(link, token, user_text=None)
 
 
 # ── Turn driver ─────────────────────────────────────────────────────────────
 
-async def _run_turn(
-    link: dict, token: str, user_text: str | None, registry: ToolRegistry | None = None,
-) -> None:
+async def _run_turn(link: dict, token: str, user_text: str | None) -> None:
     """Drive one assistant turn (or a continuation when ``user_text`` is None).
 
     ``link`` is the row ``find_link`` resolved for this update — it carries the chat to
@@ -350,8 +356,11 @@ async def _run_turn(
 
     conv = await asyncio.to_thread(store.get_or_create_conversation, link)
 
-    if registry is None:
-        registry = ToolRegistry(user=user)
+    registry = ToolRegistry(user=user)
+    # A continuation inherits every deal the paused turn read; a new message starts over.
+    carried = _paused_deal_refs.pop(link["id"], None)
+    if user_text is None and carried:
+        registry.deal_refs.update(carried)
     messages = [] if user_text is None else [{"role": "user", "content": user_text}]
 
     buffer = ""
@@ -368,6 +377,7 @@ async def _run_turn(
                 buffer += evt.get("text", "")
             elif etype == "confirm":
                 buffer = await _flush(chat_id, buffer, token, registry.deal_refs)
+                _paused_deal_refs.setdefault(link["id"], {}).update(registry.deal_refs)
                 await _send_confirm(link, chat_id, token, evt)
             elif etype == "error":
                 buffer = await _flush(chat_id, buffer, token, registry.deal_refs)

@@ -130,9 +130,10 @@ _DEAL_REF_RE = re.compile(r"\bdeals?\s*#?\s*(\d+)\b|(?<![\w#/=&])#(\d+)\b", re.I
 
 # A bare "#14" right after one of these labels names that thing, not a deal
 # ("PO #14", "invoice #14"), even when the number collides with a deal id.
-# simplification: a fixed label list; widen it when a new collision shows up.
+# simplification: a fixed label list; widen it when a new collision shows up. No bare
+# "so": it is far more often the English word ("so #14 needs a call") than a label.
 _OTHER_REF_LABEL_RE = re.compile(
-    r"\b(?:po|purchase order|so|sales order|order|invoice|bill|issue|pr|ticket|todo"
+    r"\b(?:po|purchase order|sales order|order|invoice|bill|issue|pr|ticket|todo"
     r"|contact|company|item|case|check|step)\s*$",
     re.IGNORECASE,
 )

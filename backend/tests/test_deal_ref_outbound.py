@@ -31,6 +31,13 @@ def url():
     return deal_url(14)
 
 
+@pytest.fixture(autouse=True)
+def _no_paused_refs_between_tests():
+    service._paused_deal_refs.clear()
+    yield
+    service._paused_deal_refs.clear()
+
+
 def _refs(result=SEARCH_RESULT):
     refs: dict = {}
     remember_deal_refs(result, refs)
@@ -78,6 +85,19 @@ def test_a_non_deal_number_is_left_alone_even_when_it_matches_a_deal_id(url):
                  "Invoice #14 is paid", f"see {url}", "invoice 14", "14 units",
                  "/crm/pipeline?deal=14"):
         assert link_deal_refs(text, refs) == text
+
+
+@pytest.mark.parametrize("label", [
+    "PO", "purchase order", "sales order", "order", "invoice", "bill", "issue", "PR",
+    "ticket", "todo", "contact", "company", "item", "case", "check", "step",
+])
+def test_every_other_label_keeps_its_bare_number(label):
+    text = f"See {label} #14 today."
+    assert link_deal_refs(text, _refs()) == text
+
+
+def test_so_is_read_as_the_english_word_not_a_label(url):
+    assert link_deal_refs("so #14 needs a call", _refs()) == f"so Harbor Supply renewal ({url}) needs a call"
 
 
 def test_the_link_is_relative_without_a_configured_address_and_absolute_with_one(monkeypatch):
@@ -184,9 +204,13 @@ def _telegram(monkeypatch, scripts, *, consume=None):
             else:
                 yield f"data: {json.dumps(step)}\n\n"
 
+    # Each approved write returns its own deal: tu1 → deal 10, anything else → deal 14.
     def fake_resolve(registry, conv, tuid, decision, msg_id=None, *, user):
-        remember_deal_refs({"id": 14, "title": "Harbor Supply renewal", "url": deal_url(14)},
-                           registry.deal_refs)
+        if decision == "approve":
+            deal = ({"id": 10, "title": "Lakeside expansion", "url": deal_url(10)}
+                    if tuid == "tu1" else
+                    {"id": 14, "title": "Harbor Supply renewal", "url": deal_url(14)})
+            remember_deal_refs(deal, registry.deal_refs)
         return {"tool": "crm_update_deal", "decision": decision, "result": {"ok": True}}
 
     monkeypatch.setattr(service, "ToolRegistry", fake_registry)
@@ -214,16 +238,66 @@ async def test_telegram_reply_is_untouched_without_a_deal_read(monkeypatch):
     assert [b for (k, _c, b, _m) in h.sent if k == "html"] == ["Deal #14 is fine."]
 
 
-async def test_the_continuation_after_an_approval_can_link_the_deal_it_wrote(monkeypatch, url):
+def _html(h):
+    return [b for (k, _c, b, _m) in h.sent if k == "html"]
+
+
+async def test_the_continuation_links_every_deal_a_multi_write_batch_returned(monkeypatch, url):
+    """Each button press runs on its own registry; the continuation is a third. Only the
+    batch-completing press's deals reaching the reply would leave the first bare."""
     h, registries = _telegram(
         monkeypatch,
-        [[{"type": "text", "text": "Updated deal #14."}, {"type": "done"}]],
-        consume=[True],
+        [[{"type": "text", "text": "Updated deal #10 and deal #14."}, {"type": "done"}]],
+        consume=[False, True],
     )
     h.link["pending_msg_id"] = "abcd1234"
     await service.handle_update(_callback("a:abcd1234:tu1"))
-    # ONE registry ran the approved write AND drove the reply narrating it.
-    assert len(registries) == 1
-    assert [b for (k, _c, b, _m) in h.sent if k == "html"] == [
-        f"Updated Harbor Supply renewal ({url})."
+    await service.handle_update(_callback("a:abcd1234:tu2"))
+    assert len(registries) == 3
+    assert _html(h) == [
+        f"Updated Lakeside expansion ({deal_url(10)}) and Harbor Supply renewal ({url})."
     ]
+    assert service._paused_deal_refs == {}  # consumed by the continuation
+
+
+async def test_narration_before_a_confirm_card_is_linked_and_carried_forward(monkeypatch, url):
+    """The turn reads deal 14, narrates the write it is about to make and pauses; after the
+    approval (which returns deal 10) the continuation still links the deal read before."""
+    h, _ = _telegram(monkeypatch, [
+        [{"tool_result": SEARCH_RESULT},
+         {"type": "text", "text": "I'll close deal #14 — approve?"},
+         {"type": "confirm", "tool": "crm_mark_deal_won", "args": {}, "tool_use_id": "tu1",
+          "msg_id": "abcd1234", "description": "Mark won"}],
+        [{"type": "text", "text": "Closed deal #14; see deal #10 next."}, {"type": "done"}],
+    ], consume=[True])
+    await service.handle_update(_msg("close it"))
+    await service.handle_update(_callback("a:abcd1234:tu1"))
+    assert _html(h) == [
+        f"I'll close Harbor Supply renewal ({url}) — approve?",
+        f"Closed Harbor Supply renewal ({url}); see Lakeside expansion ({deal_url(10)}) next.",
+    ]
+
+
+async def test_an_error_mid_turn_still_links_what_was_said(monkeypatch, url):
+    h, _ = _telegram(monkeypatch, [[
+        {"tool_result": SEARCH_RESULT},
+        {"type": "text", "text": "Deal #14 first."},
+        {"type": "error", "error": "provider down"},
+    ]])
+    await service.handle_update(_msg("go"))
+    assert _html(h) == [f"Harbor Supply renewal ({url}) first."]
+
+
+async def test_a_turn_that_ends_without_done_still_links(monkeypatch, url):
+    h, _ = _telegram(monkeypatch, [[{"tool_result": SEARCH_RESULT},
+                                    {"type": "text", "text": "Deal #14."}]])
+    await service.handle_update(_msg("go"))
+    assert _html(h) == [f"Harbor Supply renewal ({url})."]
+
+
+async def test_a_new_message_does_not_inherit_an_abandoned_pause(monkeypatch):
+    h, _ = _telegram(monkeypatch, [[{"type": "text", "text": "Deal #14?"}, {"type": "done"}]])
+    service._paused_deal_refs[h.link["id"]] = _refs()
+    await service.handle_update(_msg("something else"))
+    assert _html(h) == ["Deal #14?"]
+    assert service._paused_deal_refs == {}

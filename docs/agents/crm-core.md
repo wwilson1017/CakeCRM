@@ -729,8 +729,10 @@
   a tool returned this turn are rewritten**, so a hallucinated id is never lent a real
   title, and a bare `#N` after a label (`PO #14`, `todo #14`) is left alone. The
   "already linked" test is digit-bounded, because deal 1's relative url is a prefix of deal
-  14's. Telegram's approve-then-continue path reuses the callback's registry so the reply
-  can link the deal the approved write returned. **The drawer and history are deliberately
+  14's. A Telegram turn that pauses for Approve/Deny spans several registries (the turn up
+  to the card, one per button press, the continuation), so `telegram.service._paused_deal_refs`
+  carries every deal the paused turn saw into the continuation's reply, keyed by link and
+  cleared by a new message; a bare "so" is not a label, since it is usually the English word. **The drawer and history are deliberately
   untouched**: the drawer streams deltas it cannot take back, and the persisted row keeps
   the model's own wording. A relative `deal_url` stays relative — the rewrite never invents
   a host. Pinned by `tests/test_deal_ref_outbound.py`. **AI touch counts +

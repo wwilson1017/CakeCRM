@@ -279,9 +279,7 @@ async def test_callback_approve_resolves_and_continues(monkeypatch):
     # The approver is a real seat: the write records who approved it, and
     # resolve_confirmation can prove the conversation belongs to them.
     assert h.resolve_users == [MEMBER] and h.chat_users == [MEMBER]
-    # ONE registry resolves the write and drives the continuation, so the reply can link
-    # a deal the approved write returned (#238).
-    assert h.registry_users == [MEMBER]
+    assert h.registry_users == [MEMBER, MEMBER]
 
 
 async def test_batch_is_consumed_against_the_pressing_seats_link(monkeypatch):
