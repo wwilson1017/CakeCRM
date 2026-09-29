@@ -53,7 +53,11 @@ function key(k: string): KeyboardEvent {
   return e;
 }
 
-async function renderComposer(onSubmit = vi.fn(async () => {})) {
+type OnSubmit = (text: string, files: File[], mentions: number[]) => Promise<void>;
+
+async function renderComposer(
+  onSubmit: OnSubmit & { mock?: unknown } = vi.fn<OnSubmit>(async () => {}),
+) {
   await act(async () => { root.render(<NoteComposer onSubmit={onSubmit} />); });
   await act(async () => { await Promise.resolve(); });  // let the roster land
   return onSubmit;
@@ -110,7 +114,7 @@ describe('NoteComposer @ mentions across a pending post', () => {
   it('keeps a pick made while the previous note was still posting', async () => {
     let release: () => void = () => {};
     const sent: number[][] = [];
-    const onSubmit = vi.fn((_t: string, _f: File[], m: number[]) => {
+    const onSubmit = vi.fn<OnSubmit>((_t, _f, m) => {
       sent.push(m);
       return new Promise<void>(res => { release = res; });
     });
