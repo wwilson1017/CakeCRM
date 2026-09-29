@@ -130,6 +130,10 @@ _DEAL_REF_RE = re.compile(r"\bdeals?\s*#?\s*(\d+)\b|(?<![\w#/=&])#(\d+)\b", re.I
 
 # A bare "#14" right after one of these labels names that thing, not a deal
 # ("PO #14", "invoice #14"), even when the number collides with a deal id.
+# Any scheme://… run. A "deal#14" inside someone else's URL is part of that URL, and
+# rewriting it would corrupt the link the reader was handed.
+_URL_SPAN_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://\S+")
+
 # simplification: a fixed label list; widen it when a new collision shows up. No bare
 # "so": it is far more often the English word ("so #14 needs a call") than a label.
 _OTHER_REF_LABEL_RE = re.compile(
@@ -186,8 +190,11 @@ def link_deal_refs(text: str, deal_refs: dict[int, tuple[str, str]] | None) -> s
         return text
 
     linked: set[int] = set()
+    url_spans = [u.span() for u in _URL_SPAN_RE.finditer(text)]
 
     def _sub(m: re.Match) -> str:
+        if any(start <= m.start() < end for start, end in url_spans):
+            return m.group(0)
         if m.group(2) and _OTHER_REF_LABEL_RE.search(text, 0, m.start()):
             return m.group(0)
         deal_id = int(m.group(1) or m.group(2))

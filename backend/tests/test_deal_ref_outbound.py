@@ -83,7 +83,8 @@ def test_a_non_deal_number_is_left_alone_even_when_it_matches_a_deal_id(url):
     refs = _refs()
     for text in ("PO#14 is open", "PO #14 is open", "issue #14 shipped", "todo #14 is done",
                  "Invoice #14 is paid", f"see {url}", "invoice 14", "14 units",
-                 "/crm/pipeline?deal=14"):
+                 "/crm/pipeline?deal=14", "https://vendor.example/deal#14",
+                 "[board](https://vendor.example/deals/deal-14#14)"):
         assert link_deal_refs(text, refs) == text
 
 
