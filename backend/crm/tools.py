@@ -1742,10 +1742,15 @@ def crm_log_activity(
     # `actor_id` is SERVER-supplied — bound by `_identity_executors`, never advertised to
     # the model and stripped from its arguments, so an activity cannot be credited to
     # someone the model names.
-    result = crm.log_activity(
-        activity=activity, note=note, contact_id=contact_id, deal_id=deal_id,
-        actor_id=actor_id,
-    )
+    try:
+        result = crm.log_activity(
+            activity=activity, note=note, contact_id=contact_id, deal_id=deal_id,
+            actor_id=actor_id,
+        )
+    except psycopg2.errors.ForeignKeyViolation:
+        # A hallucinated id is exactly the case #236 exists for: name the refusal rather
+        # than letting the registry answer with its generic "failed, please try again".
+        return {"error": "Referenced contact or deal does not exist"}
     # Name the most specific record it hangs off (deal > contact, report_service's
     # precedence); logged against nothing, `_with_target` still says so with an empty block.
     for kind, ident in (("deal", deal_id), ("contact", contact_id)):

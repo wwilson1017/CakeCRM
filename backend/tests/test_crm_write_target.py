@@ -297,6 +297,17 @@ def test_a_delete_reads_its_target_before_the_row_is_gone(monkeypatch, lookups):
     assert tools.crm_delete_contact(4)["target"]["title"] == "Ana"
 
 
+def test_an_activity_on_a_missing_record_is_a_named_refusal(monkeypatch, lookups):
+    import psycopg2
+
+    def fk(**kw):
+        raise psycopg2.errors.ForeignKeyViolation("activity_log_deal_id_fkey")
+
+    monkeypatch.setattr(crm, "log_activity", fk)
+    result = tools.crm_log_activity(activity="call", deal_id=999)
+    assert result == {"error": "Referenced contact or deal does not exist"}
+
+
 def test_errors_carry_no_target(monkeypatch, lookups):
     monkeypatch.setattr(crm, "update_deal", lambda did, **kw: None)
     result = tools.crm_update_deal(5, title="x")
