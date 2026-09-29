@@ -62,6 +62,14 @@ describe('the context facet', () => {
     expect(matchesContexts('@Calls', ['@calls'])).toBe(true);
   });
 
+  it('offers ONE option per context regardless of case — two would share a React key', () => {
+    // Contexts are free text, so the server can list `@home` and `@Home` side by side.
+    expect(contextOptions(['@home', '@Home', '@Calls'])).toEqual([
+      { value: '@home', label: '@home' },
+      { value: '@calls', label: '@Calls' },
+    ]);
+  });
+
   it('maps a blank context to null, never to a nameless empty-string chip', () => {
     expect(contextFacetOf(makeSomedayConfig(SOMEDAY_ACTIONS, [])).getValue(todo({ context: '' }))).toBeNull();
   });
