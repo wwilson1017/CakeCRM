@@ -1,11 +1,11 @@
 # Todos and GTD mode
 
-> Topic doc split out of `AGENTS.md` (Product Rules). `AGENTS.md` keeps the enforceable
+> Topic doc split out of `AGENTS.md` (former Product Rules). `AGENTS.md` keeps the enforceable
 > invariants; this file is the full implementation record, moved verbatim. Add new
 > implementation notes ("landed #N as …", design reasoning, divergences) HERE, not in
 > `AGENTS.md`. Phrases like "the CRM bullet above" or "see the X bullet" refer to the
-> matching Product Rules bullet — find its topic doc through the index at the top of
-> `AGENTS.md`.
+> rule bullets this file opens with, or to the topic doc that holds that rule; find
+> other areas' docs through the Topic docs table in `AGENTS.md`.
 
 - **Todos have two modes over ONE store** (#70), and **GTD is the default** (#102).
   `crm_meta.todo_mode` is `normal` or `gtd`; GTD is a presentation + tool surface over the *same* `todos` rows, never a
@@ -159,3 +159,32 @@
   makes flipping every existing install acceptable.
   Neither no-login surface consults `todo_mode` (they gate on `todo_capture_token` /
   `todo_web_enabled`), so this flip does not widen them.
+
+- **The two no-login todo surfaces are asymmetric, and only ONE of them is opt-in** (#70,
+  ported from chatty — the heading used to say both were, which the body below has always
+  contradicted). Neither consults `todo_mode`, so #102's default flip leaves both exactly
+  as they were. `/capture[/{token}]` is **write-only** (creates one inbox row, returns only
+  its id — no read endpoint exists on it) and is reachable while no token is set;
+  `/todo[/{token}]` serves the **whole todo app read+write** and is **off** until
+  `todo_web_enabled`, which mints a token in the same action rather than publishing
+  the list at a guessable address. Both mount ONLY `gtd_router.build_router` — the
+  token reaches todos and nothing else — and both carry `core/ratelimit.IPRateLimiter`
+  (a separate strict budget burned only by WRONG tokens), 404-never-401,
+  `hmac.compare_digest` on **bytes** (a non-ASCII probe must be a 404, not a 500),
+  `no-store` + `noindex` on every response *including* the unbuilt-frontend 503, and a
+  body-size check BEFORE JSON parsing. All four routers mount before the SPA catch-all
+  in `main.py` or the catch-all swallows them. Tokens are clamped to `[A-Za-z0-9_-]`
+  and rejected if they equal a page slug (`RESERVED_TODO_WEB_SLUGS`) — `todos` is
+  reserved because `/api/todo-web/todos/…` would otherwise shadow the API mount.
+  Documented in SECURITY.md.
+
+- **The follow-up feature is Todos in every layer** (#169), and "task" is not a synonym
+  for it anywhere: tables `todos`/`todo_projects`, column `crm_meta.todo_mode`, REST
+  `/api/crm/todos*` + `/api/crm/todo-mode`, SPA `/crm/todos*`, `crm_*_todo(s)` tools in
+  normal mode and `todo_*` in GTD mode. In this tree the word "task" is reserved for
+  asyncio/queue/scheduler machinery, the `memory_facts.memory_type` taxonomy value,
+  frozen migrations and plain English — so reintroducing it for the feature re-splits the
+  vocabulary the rename closed. The ONE deliberate survivor is
+  `<Route path="tasks/*">` in `App.tsx` (`crm/legacyTodoRedirect.tsx`), which redirects
+  every pre-rename URL; there is no REST or tool-name compatibility shim, by decision,
+  because the frontend is the only consumer of both.

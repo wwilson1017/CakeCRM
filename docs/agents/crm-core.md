@@ -1,11 +1,11 @@
 # CRM core: records, deals, pipeline, chatter, theme
 
-> Topic doc split out of `AGENTS.md` (Product Rules). `AGENTS.md` keeps the enforceable
+> Topic doc split out of `AGENTS.md` (former Product Rules). `AGENTS.md` keeps the enforceable
 > invariants; this file is the full implementation record, moved verbatim. Add new
 > implementation notes ("landed #N as …", design reasoning, divergences) HERE, not in
 > `AGENTS.md`. Phrases like "the CRM bullet above" or "see the X bullet" refer to the
-> matching Product Rules bullet — find its topic doc through the index at the top of
-> `AGENTS.md`.
+> rule bullets this file opens with, or to the topic doc that holds that rule; find
+> other areas' docs through the Topic docs table in `AGENTS.md`.
 
 - **The CRM is first-class core** (`backend/crm/`, mounted at `/api/crm`; frontend
   `frontend/src/crm/` + `frontend/src/shared/`) — always-on, no enable flag. Ported
@@ -1025,3 +1025,23 @@
   beside `LAST_TOUCH_SQL`, and rendering this component read-only (no `onCycle`) in the panel's
   badge slot, because that panel is a list of what needs you rather than a place to re-triage
   the pipeline.
+
+- **Never build a `Date` from a TIMESTAMPTZ with the bare constructor** — use
+  `crm/gtd/util.parseUTC` (#125). Two reasons, and the one this was originally filed under is
+  **false**, recorded here so nobody re-derives it: every such column is written from
+  `datetime.now(timezone.utc).isoformat()` and so carries **six** fractional digits where
+  ECMA-262 defines three, and the claim was that JavaScriptCore rejects the extra ones, leaving
+  a column showing "—" in Safari. Measured against WebKit 26.5 and the system `jsc` during #125's
+  evidence run, it does not — the bare constructor parses that string correctly, and no column
+  was ever broken there. What survives is that more than three digits is implementation-DEFINED
+  rather than guaranteed, so the bare constructor bets on behaviour the spec does not require;
+  and that a zone-LESS timestamp is read as LOCAL by the constructor and as UTC by `parseUTC`,
+  a real divergence on every engine. The rule also covers SORTING, where the reason is
+  engine-independent: a TIMESTAMPTZ is not lexicographically ordered, because the zone may be
+  spelled `Z` or `+00:00` and `Z` sorts after `+`, so one instant written two ways compares
+  unequal — sort on the parsed instant, with unparseable input yielding `null` so it sinks under
+  the null convention rather than poisoning comparisons with NaN. A date-ONLY `YYYY-MM-DD` is
+  the exception and keeps the local-parts constructor: it is a calendar date, and reading it as
+  UTC midnight renders a day early west of Greenwich. **A test here must pin the zone-LESS case
+  to be falsifiable at all** — every engine parses a microsecond string either way, so the
+  obvious test passes against the code it is meant to reject.

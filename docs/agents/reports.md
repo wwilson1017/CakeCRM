@@ -1,11 +1,11 @@
 # Reports: the company rollup
 
-> Topic doc split out of `AGENTS.md` (Product Rules). `AGENTS.md` keeps the enforceable
+> Topic doc split out of `AGENTS.md` (former Product Rules). `AGENTS.md` keeps the enforceable
 > invariants; this file is the full implementation record, moved verbatim. Add new
 > implementation notes ("landed #N as …", design reasoning, divergences) HERE, not in
 > `AGENTS.md`. Phrases like "the CRM bullet above" or "see the X bullet" refer to the
-> matching Product Rules bullet — find its topic doc through the index at the top of
-> `AGENTS.md`.
+> rule bullets this file opens with, or to the topic doc that holds that rule; find
+> other areas' docs through the Topic docs table in `AGENTS.md`.
 
 - **Reports is a top-level surface with one report: the company rollup** (#144,
   `backend/crm/report_service.py` + `frontend/src/crm/{ReportsPage.tsx,companyRollup.ts,

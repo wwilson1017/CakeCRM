@@ -4,8 +4,8 @@
 > invariants; this file is the full implementation record, moved verbatim. Add new
 > implementation notes ("landed #N as …", design reasoning, divergences) HERE, not in
 > `AGENTS.md`. Phrases like "the CRM bullet above" or "see the X bullet" refer to the
-> matching Product Rules bullet — find its topic doc through the index at the top of
-> `AGENTS.md`.
+> rule bullets this file opens with, or to the topic doc that holds that rule; find
+> other areas' docs through the Topic docs table in `AGENTS.md`.
 
 - **The explainer site lives in `website/` and is part of the open-source repo** (#163).
   One static `index.html` + `style.css`, no build step, no framework — copied from the
