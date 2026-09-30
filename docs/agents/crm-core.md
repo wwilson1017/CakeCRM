@@ -632,7 +632,13 @@
   `crm_search_companies`, `crm_list_todos`, `crm_get_stale_deals`,
   `crm_get_contact_staleness`, plus `todo_list`) take an `owner` WORD — `me`,
   `unassigned`, or an email — never an id, so the model cannot address a seat by guessing
-  a number; `crm.service.owner_condition` + the `UNASSIGNED` sentinel are how that reaches
+  a number. **The two company writes take the same word as an ASSIGNMENT** (#237, port of
+  cake_os #3184): `bind_owner_assignment` resolves it through the same `_resolve_owner`
+  (with `require_active=True`, since the UI's owner dropdown offers only active seats too),
+  drops a model-supplied `owner_id`, defaults a create to the asking seat, and on an update
+  sends NO `owner_id` key when the word is omitted — `update_company` reads key presence as
+  "set", and None there means unassigned. Contact and deal updates still take no owner.
+  `crm.service.owner_condition` + the `UNASSIGNED` sentinel are how the read filter reaches
   the shared WHERE builders, which is what keeps a filter from landing on a page query
   without also landing on its COUNT. Binding a user never changes which tools exist or
   their `writes` flags — the background allowlist is derived from that map, and a test

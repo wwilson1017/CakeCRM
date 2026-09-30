@@ -67,6 +67,20 @@ def owner_filter_property() -> dict:
     """A fresh copy of the shared `owner` schema property, so no two defs alias one dict."""
     return {"type": "string", "description": _OWNER_FILTER_DESCRIPTION}
 
+
+# The `owner` a company WRITE takes (#237) — the same three words as the filter above,
+# resolved by the same `_resolve_owner`, but meaning "assign to" rather than "filter by".
+_OWNER_ASSIGN_DESCRIPTION = (
+    "Who owns it: 'me' for the person you are talking with, 'unassigned' for nobody, or "
+    "an active teammate's email address. On create, omit it and it is owned by the person "
+    "you are talking with; on update, omit it to leave the owner unchanged."
+)
+
+
+def owner_assign_property() -> dict:
+    """A fresh copy of the `owner` property for a write that assigns a record."""
+    return {"type": "string", "description": _OWNER_ASSIGN_DESCRIPTION}
+
 # Appended to every contact-READ tool description. The link is authoritative for
 # display and search (issue #35), but the legacy free-text column deliberately
 # stays and is never propagated to — so after a company rename it holds the old
@@ -935,6 +949,7 @@ CRM_TOOL_DEFS = [
                 "notes": {"type": "string", "default": ""},
                 "source": {"type": "string", "default": ""},
                 "status": {"type": "string", "description": "active or archived", "default": "active"},
+                "owner": owner_assign_property(),
             },
             "required": ["name"],
         },
@@ -961,6 +976,7 @@ CRM_TOOL_DEFS = [
                 "notes": {"type": "string"},
                 "source": {"type": "string"},
                 "status": {"type": "string", "description": "active or archived"},
+                "owner": owner_assign_property(),
             },
             "required": ["company_id"],
         },
@@ -2092,7 +2108,9 @@ _TODO_TOOL_NAMES = frozenset({
 # established this closure-factory shape; this is the same one.
 
 
-def _resolve_owner(owner, user: dict | None) -> tuple[int | str | None, dict | None]:
+def _resolve_owner(
+    owner, user: dict | None, *, require_active: bool = False,
+) -> tuple[int | str | None, dict | None]:
     """Turn the model's `owner` word into an owner_id for the service layer.
 
     Returns ``(owner_id, error)``; exactly one is meaningful. ``owner_id`` is a user id,
@@ -2105,6 +2123,8 @@ def _resolve_owner(owner, user: dict | None) -> tuple[int | str | None, dict | N
     returns the password hash, which must not travel further than this function).
     A DEACTIVATED teammate still resolves, deliberately: their records outlive their seat,
     and "what was Ana working on before she left" is the question this filter is for.
+    ``require_active`` turns that off for an ASSIGNMENT (#237): handing a record to
+    someone who can no longer sign in is what the UI's owner dropdown refuses too.
     """
     value = str(owner or "").strip()
     lowered = value.lower()
@@ -2124,6 +2144,11 @@ def _resolve_owner(owner, user: dict | None) -> tuple[int | str | None, dict | N
         return None, {"error": (
             f"No user matches owner '{value}'. Use 'me', 'unassigned', or a "
             f"teammate's email address."
+        )}
+    if require_active and not row.get("is_active"):
+        return None, {"error": (
+            f"'{value}' is deactivated, so records cannot be assigned to them. Use 'me', "
+            f"'unassigned', or an active teammate's email address."
         )}
     return row["id"], None
 
@@ -2157,6 +2182,37 @@ def bind_owner_filter(fn: Callable[..., dict], user: dict | None) -> Callable[..
     return _run
 
 
+def bind_owner_assignment(
+    fn: Callable[..., dict], user: dict | None, *, default_to_user: bool,
+) -> Callable[..., dict]:
+    """Wrap a write so the model's `owner` word decides who the record is ASSIGNED to (#237).
+
+    Same trust rule as ``bind_owner_filter``: a model-supplied ``owner_id`` is dropped, so
+    ``_resolve_owner`` is the only path from a word to an id. An omitted (or blank) owner
+    means the default — the asking seat on a create (None on an unattended turn, exactly
+    what ``bind_server_args`` stamped before), and "leave it alone" on an update, which is
+    why the update passes no ``owner_id`` key at all: ``update_company`` reads key PRESENCE
+    as "set this", and None there means unassigned.
+    """
+    def _run(owner=None, **kwargs) -> dict:
+        kwargs.pop("owner_id", None)
+        if not str(owner or "").strip():
+            if default_to_user:
+                return fn(owner_id=(user or {}).get("id"), **kwargs)
+            return fn(**kwargs)
+        owner_id, error = _resolve_owner(owner, user, require_active=True)
+        if error is not None:
+            return error
+        if owner_id is None:
+            # 'all'/'everyone' filter a read; nobody can be assigned "everyone".
+            return {"error": (
+                f"owner '{owner}' is not a person. Use 'me', 'unassigned', or an active "
+                f"teammate's email address."
+            )}
+        return fn(owner_id=None if owner_id == crm.UNASSIGNED else owner_id, **kwargs)
+    return _run
+
+
 def _identity_executors(user: dict | None) -> dict[str, Callable[..., dict]]:
     """``TOOL_EXECUTORS`` with the identity-bearing tools bound to ``user``.
 
@@ -2175,7 +2231,9 @@ def _identity_executors(user: dict | None) -> dict[str, Callable[..., dict]]:
         # fabricating — which is why the unattended path, having nobody to record, still
         # stamps nothing and leaves the row unassigned.
         "crm_create_contact": bind_server_args(crm_create_contact, owner_id=user_id),
-        "crm_create_company": bind_server_args(crm_create_company, owner_id=user_id),
+        # A company names its owner as a WORD (#237); omitted, it is the asking seat's.
+        "crm_create_company": bind_owner_assignment(crm_create_company, user, default_to_user=True),
+        "crm_update_company": bind_owner_assignment(crm_update_company, user, default_to_user=False),
         "crm_create_deal": bind_server_args(crm_create_deal, owner_id=user_id),
         "crm_create_todo": bind_server_args(crm_create_todo, owner_id=user_id),
         # Which seat is ASKING. A read, and the only per-person fact in its payload is
