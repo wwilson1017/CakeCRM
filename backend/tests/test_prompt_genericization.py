@@ -1,5 +1,5 @@
-"""THE enforcement test for the genericization rule (issue #22, AGENTS.md "Don't Do
-This"): CakeCRM's sales prompting and tool descriptions are ported from the CAKE OS
+"""THE enforcement test for the genericization rule (issue #22, AGENTS.md "Hard
+lines"): CakeCRM's sales prompting and tool descriptions are ported from the CAKE OS
 sales agent, whose text is saturated with one company's customers, staff, products,
 and industry jargon. This repo goes public and its history is permanent, so a single
 leaked token is unfixable after the fact.
@@ -147,7 +147,7 @@ _GUARD = Path(__file__).resolve().relative_to(ROOT).as_posix()
 #
 # The allowance is per PATTERN and is a CEILING, not an on/off switch. Exempting a whole
 # file for a whole token class would repeat a mistake this repo has already written down
-# once: AGENTS.md's own gitleaks guidance rejects an allowlist keyed on file alone
+# once: docs/agents/testing.md's gitleaks guidance rejects an allowlist keyed on file alone
 # because "the latter exempts every finding in that file in that commit, including a
 # real one". AGENTS.md is also always-loaded agent context that every rule change edits
 # (its docs/agents/ topic docs grow with every landed feature) — so an unbounded exemption
@@ -168,7 +168,7 @@ _GUARD = Path(__file__).resolve().relative_to(ROOT).as_posix()
 _REPO_ALLOW = {
     "AGENTS.md": (
         {r"tn[\s_.-]+cheesecake": 1, _L + r"tnc" + _R: 1, r"cheesecake": 1},
-        "the 'Don't Do This' rule has to name what it forbids — one bullet, one mention each",
+        "the 'Hard lines' rule has to name what it forbids — one bullet, one mention each",
     ),
     "frontend/src/crm/stageCriteria.test.ts": (
         {r"cheesecake": 1},

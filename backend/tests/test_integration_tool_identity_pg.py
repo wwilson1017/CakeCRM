@@ -128,6 +128,26 @@ def test_interactive_creates_land_the_requesting_seat(seats, tool, kwargs, table
     assert stored["owner_id"] == seats["rep"]["id"]
 
 
+def test_company_tools_assign_reassign_and_clear_the_owner(seats):
+    # #237: the owner word reaches the real column on create AND update, 'unassigned'
+    # stores NULL, and an update that names no owner leaves it where it was.
+    from core.postgres import pg_fetchone
+
+    ex = _tools(seats["rep"])
+    company = ex["crm_create_company"](name="Assigned Co", owner="boss@example.com")
+
+    def owner():
+        return pg_fetchone("SELECT owner_id FROM companies WHERE id = %s", (company["id"],))["owner_id"]
+
+    assert owner() == seats["boss"]["id"]
+    ex["crm_update_company"](company_id=company["id"], industry="Retail")
+    assert owner() == seats["boss"]["id"]
+    ex["crm_update_company"](company_id=company["id"], owner="me")
+    assert owner() == seats["rep"]["id"]
+    ex["crm_update_company"](company_id=company["id"], owner="unassigned")
+    assert owner() is None
+
+
 # ── The owner predicate is valid SQL and selects the right rows ────────────────
 
 @pytest.fixture

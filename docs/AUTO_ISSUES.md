@@ -19,15 +19,28 @@ vocabulary), so you can start a backlog with one and finish with the other:
 > `.github/workflows/pr-review.yml` workflow, and `scripts/seed-labels.sh` are the
 > repo-side wiring the loop expects.
 
-## Conventions (source of truth: `AGENTS.md`)
+## Issue Loop Conventions (mirrors CAKE OS)
 
-Issue eligibility, branch naming, PR target, and the human-merge rule are defined once in
-**`AGENTS.md` → "Issue Loop Conventions"**. In brief: work starts from a GitHub issue;
-branch `feature/issue-N-<slug>` off `main`; PR back to `main`; human merge only;
-eligibility is *open, unassigned, no `no-auto` label, and human-approved via the
-`greenlit` label* (default-deny — an un-`greenlit` issue never enters the loop); respect
-`Blocked by: #N` lines. See `AGENTS.md` for the authoritative wording — it is not
-duplicated here.
+- Work starts from a GitHub issue. Branch `feature/issue-N-<slug>` from `main`, PR
+  back to `main`. The issue loop itself never merges; merges happen only by Will's
+  click or the sanctioned ship lane (see the merge rule below).
+- Issue eligibility for the automated loop: open, unassigned, no `no-auto` label, and
+  human-approved via the `greenlit` label (default-deny — an un-`greenlit` issue never
+  enters the loop). Self-assign (or label `no-auto`) before working an issue manually.
+- Respect "Blocked by: #N" lines in issue bodies — don't start an issue whose
+  blockers aren't merged.
+- The rest of this document is the operator guide (label vocabulary, terminal
+  outcomes, bring-up sequence, and repo prerequisites like branch protection).
+  `scripts/seed-labels.sh` idempotently creates/normalizes the loop's labels.
+
+- Never merge a pull request — with exactly ONE exception, the **operator ship lane**:
+  the `/auto-issues-ship-loop(-team)` skills may squash-merge `ready-to-ship` PRs and
+  deploy-verify the Railway demo instance, under the grant registered **operator-side**
+  in `~/.claude/ship-repos.json`. That grant is deliberately NOT in this repo — repo
+  files are PR-writable and grant nothing; this bullet *describes* the lane, the
+  registry *grants* it (see "How `ready-to-ship` PRs actually ship" below). Outside that lane, Will
+  merges all PRs manually. Push feature branches and open PRs to `main`; never push
+  directly to `main` after the initial seeding phase.
 
 ## Label vocabulary
 

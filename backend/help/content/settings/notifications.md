@@ -69,5 +69,7 @@ at most one extra notification; with none, it still runs.
 ## What raises a notification
 
 Baker can raise one from a background turn, and it is limited to a single notification per
-run. The digest and nudges raise their own, each claimed before it is sent so two ticks can
+run. When its text names a deal Baker looked at during that run, the deal number is replaced
+with the deal's title and a link that opens it, since a push or a Telegram message cannot
+open a deal from its number. A number Baker did not look at is left as written. The digest and nudges raise their own, each claimed before it is sent so two ticks can
 never send the same one twice.

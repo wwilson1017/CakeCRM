@@ -234,13 +234,17 @@ def test_owner_property_is_advertised_on_every_owner_filterable_read(todo_mode):
     advertised = {
         d["name"] for d in reg.tool_defs if "owner" in d["input_schema"]["properties"]
     }
-    assert advertised == {
+    reads = {
         "crm_find_contact", "crm_search_companies", "crm_list_todos",
         "crm_get_stale_deals", "crm_get_contact_staleness",
     }
+    # The two company writes take `owner` as an ASSIGNMENT (#237), wrapped by
+    # bind_owner_assignment rather than bind_owner_filter.
+    assigns = {"crm_create_company", "crm_update_company"}
+    assert advertised == reads | assigns
     for d in reg.tool_defs:
         if "owner" in d["input_schema"]["properties"]:
-            assert d["writes"] is False, d["name"]
+            assert d["writes"] is (d["name"] in assigns), d["name"]
             assert "owner" not in d["input_schema"].get("required", [])
 
 

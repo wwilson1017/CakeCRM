@@ -238,7 +238,14 @@ def test_chatter_executors_happy_path_shapes(monkeypatch):
         lambda t, i, m, author_id=None: {"id": 1, "message": m},
     )
     monkeypatch.setattr(chatter_service, "get_chatter", lambda *a, **k: [{"id": 1}, {"id": 2}])
-    assert tools.crm_add_note("deal", 3, "hi") == {"ok": True, "note": {"id": 1, "message": "hi"}}
+    monkeypatch.setattr(
+        tools, "pg_fetchall", lambda *a, **k: [{"id": 3, "title": "Acme", "owner_id": None}],
+    )
+    result = tools.crm_add_note("deal", 3, "hi")
+    # Since #236 the result also names the deal the note landed on.
+    target = result.pop("target")
+    assert result == {"ok": True, "note": {"id": 1, "message": "hi"}}
+    assert (target["entity_type"], target["id"], target["title"]) == ("deal", 3, "Acme")
     assert tools.crm_get_chatter("deal", 3) == {"notes": [{"id": 1}, {"id": 2}], "count": 2}
 
 
