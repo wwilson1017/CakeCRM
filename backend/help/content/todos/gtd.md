@@ -41,7 +41,11 @@ next action and clears it out of the inbox — so agree the context before writi
 - **Repeat** — daily, weekdays, weekly, monthly, yearly, or every N days. Completing a
   repeating todo creates its next occurrence.
 - **Project** — an outcome needing more than one action. Every active project should have at
-  least one next action.
+  least one next action. On a project's own page, click its name to rename it or its notes
+  ("Add notes…" when there are none) to edit them. A name saves on Enter or when you click
+  away; notes take Enter as a new line and save when you click away. Escape discards the edit.
+  A blank name is refused and the previous name is kept. A name another project already uses
+  is refused too, and the editor stays open with what you typed so you can fix it.
 - **Links** — a todo can point at a contact and a deal.
 
 ## The nine tabs
@@ -49,6 +53,20 @@ next action and clears it out of the inbox — so agree the context before writi
 Today, Inbox (with a live count), To Do, Projects, Waiting, Someday, Done, Review, and a
 search page across contexts. Each tab has its own filters; the shell carries a search box and
 a quick-add composer.
+
+## Undoing a completion or a filing
+
+Marking a todo done, or setting the context that files an inbox item, shows a small undo
+block in the bottom-right corner for seven seconds. Each change gets its own row with an
+**Undo?** button, and **Undo all** appears once there is more than one. Undo puts the todo
+back exactly as it was: its previous status, and for a filing its previous context too. An
+item put back in the inbox returns as the item being triaged. The block follows you across
+tabs, so you can complete something on Today and still undo it from the Inbox. After seven
+seconds the row disappears and the change stands; from then on, reopen the todo from the
+Done tab or edit it by hand.
+
+Undoing a completed **repeating** todo keeps the next occurrence its completion already
+created, so both copies are open afterwards, and the app says so.
 
 ## The weekly review
 

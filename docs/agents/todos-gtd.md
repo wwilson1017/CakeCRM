@@ -1,11 +1,11 @@
 # Todos and GTD mode
 
-> Topic doc split out of `AGENTS.md` (Product Rules). `AGENTS.md` keeps the enforceable
+> Topic doc split out of `AGENTS.md` (former Product Rules). `AGENTS.md` keeps the enforceable
 > invariants; this file is the full implementation record, moved verbatim. Add new
 > implementation notes ("landed #N as …", design reasoning, divergences) HERE, not in
 > `AGENTS.md`. Phrases like "the CRM bullet above" or "see the X bullet" refer to the
-> matching Product Rules bullet — find its topic doc through the index at the top of
-> `AGENTS.md`.
+> rule bullets this file opens with, or to the topic doc that holds that rule; find
+> other areas' docs through the Topic docs table in `AGENTS.md`.
 
 - **Todos have two modes over ONE store** (#70), and **GTD is the default** (#102).
   `crm_meta.todo_mode` is `normal` or `gtd`; GTD is a presentation + tool surface over the *same* `todos` rows, never a
@@ -159,3 +159,88 @@
   makes flipping every existing install acceptable.
   Neither no-login surface consults `todo_mode` (they gate on `todo_capture_token` /
   `todo_web_enabled`), so this flip does not widen them.
+- **A project's name and notes are click-to-edit on its detail page** (#232), through the same
+  `InlineTitle` the triage card uses, whose `body` variant serves the notes (Enter is a
+  newline; blur and Escape are the only exits; clearing notes is a real save; text is kept
+  verbatim unless wholly blank). Notes always render, so a blank field shows an "Add notes…"
+  placeholder — before #232 they could never be ADDED after creation. Each save PUTs only
+  the field that changed (never `status`), an unchanged value sends nothing, and the page
+  merges back only that field, since both editors can have a PUT in flight at once. A blank
+  name is refused client-side: the editor closes on the previous name, since there is no typed
+  text to keep, and a failure line says so. A server refusal (a duplicate name, its `detail`
+  shown verbatim) keeps the editor open with the typed text. Either way there is ONE
+  `role="alert"` line, TAGGED with its field, because both editors can be open at once and an
+  untagged line would be cleared when the notes editor closes unchanged. Success calls `refreshMeta()`, which carries a rename to the Projects list,
+  the todo rows and `TodoEditSheet`'s project picker.
+- **Marking a todo done and filing an inbox item are undoable for 7 seconds** (#231).
+  `crm/gtd/undoQueue.ts` is a module-level store (the `shared/toast` shape), because
+  `TodoShell` unmounts on every tab switch and component state could not survive the
+  navigation; `UndoPill` reads it through `useSyncExternalStore` so a row whose timer
+  lapses during a remount can never be served stale. Every write path that marks done
+  queues a row carrying the PRE-write status (`useRowActions.toggleDone`,
+  `TriageCard`'s `patch`, `TodoEditSheet.save`), and every later write that moves the
+  todo off where the queued write put it calls `dropUndo` — un-checking, `setStatus`,
+  a sheet save that changes the status, a sheet re-file under another context while a
+  FILING is pending, and delete. That last rule is what stops the pill offering to redo
+  a decision the user has since made themselves. A filing restores status AND context
+  (an item that arrived as "@errands" from Quick Add goes back to "@errands"), and the
+  revert asks the Inbox, via `notifyTodosChanged(focusInboxId)`, to promote it to the
+  current triage card — clearing the filter bar, and re-keying the card with `focusSeq`
+  so a spent card is never reused. A completion made from triage restores `inbox` too,
+  so it gets the same promotion — the focus keys on where the revert lands, not on the
+  kind. Pages that own their own fetch (Search, Projects, Project
+  detail, Review) subscribe with `useTodosChanged`; everything on `useTodos` gets it
+  free. **A new GTD list page that does not go through `useTodos` must call
+  `useTodosChanged(reload)`**, or an undo clicked while standing on it leaves it stale.
+  Rows are stamped with the session token they were queued under and a row from another
+  session is neither shown nor reverted, because `AuthContext` adopts a token another tab
+  broadcasts with no reload. The flow is described to users in the
+  `backend/help/content/todos/gtd.md` topic.
+  Undoing a repeating todo leaves its spawned successor in place and says so. There is
+  no undo endpoint: the revert is the ordinary PUT, so the no-login `/todo/{token}` app
+  gets the feature too.
+- **The capture page puts the caret in the box on open AND on resume** (#233, port of
+  cake_os #3049). `autofocus` is one attempt at parse and never repeats, and a resumed
+  home-screen app is not re-navigated, so the inline script in `crm/todo_capture._CAPTURE_HTML`
+  retries `focus()` over the next frames (now, next rAF, 150 ms, 400 ms) and re-attempts on
+  `pageshow`/`visibilitychange` **only under a standalone launch** (`navigator.standalone` or
+  `(display-mode: standalone)`), so a browser tab never has its caret grabbed when the user
+  switches back. No attempt takes focus from an element the user is already in (after a resume
+  that could be Send). On a coarse pointer it also calls `navigator.virtualKeyboard.show()` —
+  including when the textarea ALREADY has focus, since a resumed app usually does with the
+  keyboard dismissed, so "focused" and "keyboard up" are separate questions. Best effort: WebKit
+  lacks the API and iOS raises the keyboard only under user activation, so a cold iOS launch
+  still lands with the caret placed and the keyboard down; a tap-to-start overlay is ruled out.
+  **Tested by running the page's real script**: `vitest.config.ts` defines
+  `__CAPTURE_PAGE_PY__` from the Python source (the `__INDEX_CSS__` pattern) and
+  `frontend/src/crm/capturePageFocus.test.ts` executes the extracted `<script>` in jsdom — the
+  repo's only JS runner — so the rules are pinned by behaviour rather than by source text.
+
+- **The two no-login todo surfaces are asymmetric, and only ONE of them is opt-in** (#70,
+  ported from chatty — the heading used to say both were, which the body below has always
+  contradicted). Neither consults `todo_mode`, so #102's default flip leaves both exactly
+  as they were. `/capture[/{token}]` is **write-only** (creates one inbox row, returns only
+  its id — no read endpoint exists on it) and is reachable while no token is set;
+  `/todo[/{token}]` serves the **whole todo app read+write** and is **off** until
+  `todo_web_enabled`, which mints a token in the same action rather than publishing
+  the list at a guessable address. Both mount ONLY `gtd_router.build_router` — the
+  token reaches todos and nothing else — and both carry `core/ratelimit.IPRateLimiter`
+  (a separate strict budget burned only by WRONG tokens), 404-never-401,
+  `hmac.compare_digest` on **bytes** (a non-ASCII probe must be a 404, not a 500),
+  `no-store` + `noindex` on every response *including* the unbuilt-frontend 503, and a
+  body-size check BEFORE JSON parsing. All four routers mount before the SPA catch-all
+  in `main.py` or the catch-all swallows them. Tokens are clamped to `[A-Za-z0-9_-]`
+  and rejected if they equal a page slug (`RESERVED_TODO_WEB_SLUGS`) — `todos` is
+  reserved because `/api/todo-web/todos/…` would otherwise shadow the API mount.
+  Documented in SECURITY.md.
+
+- **The follow-up feature is Todos in every layer** (#169), and "task" is not a synonym
+  for it anywhere: tables `todos`/`todo_projects`, column `crm_meta.todo_mode`, REST
+  `/api/crm/todos*` + `/api/crm/todo-mode`, SPA `/crm/todos*`, `crm_*_todo(s)` tools in
+  normal mode and `todo_*` in GTD mode. In this tree the word "task" is reserved for
+  asyncio/queue/scheduler machinery, the `memory_facts.memory_type` taxonomy value,
+  frozen migrations and plain English — so reintroducing it for the feature re-splits the
+  vocabulary the rename closed. The ONE deliberate survivor is
+  `<Route path="tasks/*">` in `App.tsx` (`crm/legacyTodoRedirect.tsx`), which redirects
+  every pre-rename URL; there is no REST or tool-name compatibility shim, by decision,
+  because the frontend is the only consumer of both.

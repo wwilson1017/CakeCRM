@@ -65,6 +65,7 @@ from collections.abc import Callable
 from assistant.confirm_tier import ROUTINE
 from context_files.tools import get_context_file_tools
 from crm.gtd_tools import get_gtd_tools
+from crm.links import remember_deal_refs
 from crm.tools import get_crm_tools
 from gmail.tools import get_gmail_tools
 from help.tools import get_help_tools
@@ -81,6 +82,12 @@ class ToolRegistry:
     def __init__(self, *, background: bool = False, user: dict | None = None) -> None:
         # Per-run flag for the one-notification-per-run guard (see notify_user).
         self._notify_user_called = False
+
+        # ``{deal_id: (title, url)}`` for every deal record a tool returned through this
+        # registry (#238). A registry is built per turn, so the map never outlives the
+        # turn that read the deals. The outbound seams (Telegram, ``notify_user``) read it
+        # to rewrite a bare "deal #14" into ``Title (url)`` — see ``crm.links``.
+        self.deal_refs: dict[int, tuple[str, str]] = {}
 
         # The seat this registry serves (the get_current_user row), or None for an
         # unattended turn. Read by the sources below; kept on the instance so a later
@@ -184,13 +191,18 @@ class ToolRegistry:
         if fn is None:
             return {"error": f"Unknown tool: {name}"}
         try:
-            return fn(**(args or {}))
+            result = fn(**(args or {}))
         except TypeError as e:  # LLM passed bad/unexpected arguments
             logger.warning("assistant tool %s bad args: %s", name, e)
             return {"error": f"The tool '{name}' could not run with those arguments."}
         except Exception:  # DB / service failure — log detail, return a generic message
             logger.exception("assistant tool %s failed", name)
             return {"error": f"The tool '{name}' failed. Please try again."}
+        try:
+            remember_deal_refs(result, self.deal_refs)
+        except Exception:  # bookkeeping must never cost a tool (a write!) its result
+            logger.exception("assistant: could not record deal refs from %s", name)
+        return result
 
     async def execute_tool(self, name: str, args: dict | None) -> dict:
         return await asyncio.to_thread(self.execute_tool_sync, name, args)

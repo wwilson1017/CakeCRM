@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { createTodo, deleteTodo, updateTodo } from '../api';
 import { REPEAT_OPTIONS, STATUS_META, TODO_STATUS_ORDER } from '../constants';
+import { dropUndo, hasPendingFiling, queueUndo } from '../undoQueue';
 import { isTodoPublicMode } from '../publicMode';
 import type { Todo, TodoProject, TodoStatus } from '../types';
 import { parseTags } from '../util';
@@ -119,6 +120,43 @@ export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onS
     try {
       if (todo) {
         await updateTodo(todo.id, fields);
+        // The 7s undo row (#231) — edits only. Creating a todo that is already done has no
+        // prior status to restore, so there is nothing to undo. `effectiveRepeat`, not
+        // `todo.repeat`: the backend spawns the successor from the POST-update row, so a
+        // save that sets done AND edits the repeat rule completed under the NEW rule, and
+        // stamping the old one makes undo's duplicate-occurrence warning wrong in both
+        // directions.
+        if (status === 'done' && todo.status !== 'done') {
+          queueUndo({ ...todo, repeat: effectiveRepeat });
+        }
+        // This sheet FILES an inbox item too. `TriageCard`'s Edit button opens it on the
+        // very item being triaged, so picking a context and a destination here sends the
+        // same write step 3 sends, with the same mis-click behind it; withholding the row
+        // on one of the two routes out of the inbox makes the affordance silently
+        // conditional. `todo` still holds the pre-write status and context, which is what
+        // undo restores.
+        else if (todo.status === 'inbox' && status !== 'inbox' && context.trim()) {
+          queueUndo(todo, 'filed');
+        }
+        // A pending row is invalidated by a write that MOVES the todo off where the queued
+        // write put it — the sheet is reachable inside the 7s window (Search keeps
+        // completed rows on screen), and undoing afterwards would overwrite a decision the
+        // user has since deliberately made.
+        //
+        // WHICH field moved it depends on what is pending, which is why this is neither
+        // `status !== 'done'` nor simply `status !== todo.status`. The first is an accurate
+        // proxy only while `done` is the one queued kind: a filing row sits at a NON-done
+        // status, so that proxy matches every unrelated save and adding a due date inside
+        // the window silently cancels an undo still on screen. The second misses the other
+        // half — a filing restores the CONTEXT too, so re-filing the item under a different
+        // context here is a later decision that must retire the offer, where the very same
+        // edit leaves a mark-done row (which puts back only the status) perfectly valid.
+        else if (
+          status !== todo.status
+          || (hasPendingFiling(todo.id) && context.trim() !== todo.context)
+        ) {
+          dropUndo(todo.id);
+        }
       } else {
         await createTodo(fields as Parameters<typeof createTodo>[0]);
       }
@@ -135,6 +173,10 @@ export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onS
     setBusy(true);
     try {
       await deleteTodo(todo.id);
+      // A completed todo is still openable from Search inside the 7s window, and a row
+      // whose todo no longer exists offers a PUT that 404s and then claims it is "still
+      // marked done" (#231).
+      dropUndo(todo.id);
       onSaved();
       onClose();
     } catch (e) {

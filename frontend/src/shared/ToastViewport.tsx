@@ -37,6 +37,14 @@ const SEVERITY_TAG: Record<ToastSeverity, string> = {
   info: 'Notice',
 };
 
+// The stack's resting offset is 88px (see the header), but another fixed surface can sit
+// in this corner between the launcher and the toasts: the Todo GTD undo block
+// (`crm/gtd/components/UndoPill.tsx`) publishes `--ck-toast-bottom` on <html> while it is
+// mounted, carrying 88px plus its own height, and removes the property when it leaves.
+// Reading it through `var()` with the 88px fallback is what lets that block push the
+// toasts up without this shared module importing anything from the GTD chunk.
+const TOAST_BOTTOM = 'var(--ck-toast-bottom, 88px)';
+
 // getServerSnapshot must return a stable reference, or React warns about
 // an infinite loop of new snapshots.
 const EMPTY: ToastItem[] = [];
@@ -56,8 +64,8 @@ export function ToastViewport() {
         flexDirection: 'column',
         gap: 8,
         ...(isMobile
-          ? { left: 12, right: 12, bottom: 88 }
-          : { right: 20, bottom: 88, width: 360 }),
+          ? { left: 12, right: 12, bottom: TOAST_BOTTOM }
+          : { right: 20, bottom: TOAST_BOTTOM, width: 360 }),
       }}
     >
       {items.map(item => (
