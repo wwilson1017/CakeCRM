@@ -508,7 +508,7 @@ def test_dashboard_excludes_archived(rec):
     rec.fetchall_queue = [[], [], [], []]
     service.get_dashboard_stats()
     assert "archived_at IS NULL" in rec.sql_containing("GROUP BY stage")
-    assert "d.archived_at IS NULL" in rec.sql_containing("ORDER BY d.value DESC")
+    assert "d.archived_at IS NULL" in rec.sql_containing(service.TOP_DEAL_SCORE_SQL)
 
 
 def test_analytics_excludes_archived(rec):

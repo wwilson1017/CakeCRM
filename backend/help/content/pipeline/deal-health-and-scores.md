@@ -1,7 +1,7 @@
 ---
 title: Deal health, scores and temperature
 description: What the number on a deal card means, where it comes from, and what health flags exist.
-aliases: lead score, deal score, deal health, scoring, scored, temperature, hot, warm, cold, touch count, stale, funnel
+aliases: lead score, deal score, deal health, scoring, scored, temperature, hot, warm, cold, touch count, stale, top deals
 admin: false
 ---
 ## The lead score
@@ -48,6 +48,16 @@ the same as cold and it does not push the score down.
 Click the icon on a card or in the detail panel to cycle it: not set, hot, warm, cold, back
 to not set. Each state has its own shape as well as its own colour. Hot deals that have also
 gone quiet get their own slot in the dashboard's Today panel.
+
+## How the dashboard picks its Top deals
+
+The dashboard's Top deals list shows five open deals, and it leaves leads out: a deal has to
+be qualified or further along to appear. They are ranked by size first, with the win
+probability tipping the order: a deal counts at 40% of its value at 0% probability, rising
+to its full value at 100%. So a large deal that is reasonably likely still beats a small one
+that is nearly certain, and a deal worth nothing sorts behind every deal that has a value.
+This ranking is separate from the lead score above. If the list is empty while the pipeline
+is not, every open deal is still a lead.
 
 ## The touch-count pill
 

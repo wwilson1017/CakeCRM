@@ -194,8 +194,8 @@ def test_archiving_removes_a_deal_from_every_read_at_once(pg_db):
     from crm import analytics_service, service
 
     contact = service.create_contact("Ana")
-    keep = service.create_deal("Keep", contact_id=contact["id"], value=100, stage="lead")
-    junk = service.create_deal("Junk", contact_id=contact["id"], value=99999, stage="lead")
+    keep = service.create_deal("Keep", contact_id=contact["id"], value=100, stage="qualified")
+    junk = service.create_deal("Junk", contact_id=contact["id"], value=99999, stage="qualified")
 
     service.archive_deal(junk["id"])
 
@@ -234,11 +234,11 @@ def test_archiving_removes_a_deal_from_every_read_at_once(pg_db):
     assert widened["total_pipeline_value"] == live["total_pipeline_value"] == 100
     by_stage = {s["stage"]: (s["count"], s["total_value"]) for s in widened["stage_summary"]}
     assert by_stage == {s["stage"]: (s["count"], s["total_value"]) for s in live["stage_summary"]}
-    assert by_stage["lead"] == (1, 100)  # the 99999 archived deal is invisible to money
+    assert by_stage["qualified"] == (1, 100)  # the 99999 archived deal is invisible to money
 
     # The stage filter still binds once the predicate is dropped from the WHERE.
     assert sorted(d["id"] for d in
-                  service.get_pipeline(stage="lead", include_archived=True)["deals"]) \
+                  service.get_pipeline(stage="qualified", include_archived=True)["deals"]) \
         == sorted([keep["id"], junk["id"]])
 
     restored = service.archive_deal(junk["id"], archived=False)
@@ -1372,3 +1372,63 @@ def test_get_touch_evidence_round_trip_and_reconciliation(pg_db):
     after = tcs.get_touch_evidence(deal_id)
     assert after["verdict_state"] == "superseded"
     assert ("note", note["id"]) not in {(e["source"], e["source_id"]) for e in after["events"]}
+
+
+# ── Top deals ranking (issue #240) ────────────────────────────────────────────
+
+def test_top_deals_rank_qualified_deals_by_the_weighted_score(pg_db):
+    """Leads are left out, and the order is max(value,0) × (0.4 + 0.6 × p): value-dominant,
+    so $500K@20% (260K) beats $150K@99% (148.5K) where plain value × probability would not,
+    yet a LOWER value can still win on probability — $600K@99% (596.4K) over $1M@20% (520K)
+    — which is why the ranking must run before the LIMIT rather than on a value prefix."""
+    from core.postgres import pg_execute
+    from crm import service
+
+    service.create_deal("Moonshot lead", value=5_000_000, probability=99, stage="lead")
+    big = service.create_deal("Big", value=1_000_000, probability=20, stage="qualified")
+    likely = service.create_deal("Likely", value=600_000, probability=99, stage="negotiation")
+    mid = service.create_deal("Mid", value=500_000, probability=20, stage="proposal")
+    small = service.create_deal("Small", value=150_000, probability=99, stage="proposal")
+    # create_deal clamps probability; a row written elsewhere may not, so the SCORE clamps
+    # too — unclamped, 120K@150% would score 156K and jump Small's 148.5K.
+    over = service.create_deal("Over", value=120_000, probability=100, stage="proposal")
+    pg_execute("UPDATE deals SET probability = 150 WHERE id = %s", (over["id"],))
+    service.create_deal("Zero", value=0, probability=100, stage="negotiation")
+    service.create_deal("Won", value=9_000_000, probability=100, stage="won")
+
+    top = service.get_dashboard_stats()["top_deals"]
+    assert [d["id"] for d in top] == [likely["id"], big["id"], mid["id"], small["id"], over["id"]]
+    # Same wire shape: full rows with both link labels (#123).
+    assert {"contact_name", "company_name", "stage", "value"} <= set(top[0])
+
+
+def test_top_deals_break_score_ties_by_recency_then_id(pg_db):
+    from core.postgres import pg_execute
+    from crm import service
+
+    a = service.create_deal("A", value=1000, probability=50, stage="qualified")
+    b = service.create_deal("B", value=1000, probability=50, stage="qualified")
+    c = service.create_deal("C", value=1000, probability=50, stage="qualified")
+    pg_execute("UPDATE deals SET updated_at = now() - interval '1 day'")
+    pg_execute("UPDATE deals SET updated_at = now() WHERE id = %s", (a["id"],))
+
+    top = service.get_dashboard_stats()["top_deals"]
+    assert [d["id"] for d in top] == [a["id"], c["id"], b["id"]]
+
+
+def test_top_deals_floor_a_negative_value_or_probability(pg_db):
+    """Neither column carries a CHECK, and the REST value field has no lower bound, so the
+    score clamps both from below. Unclamped, 100K@-50% (10K) would sink under 50K@0% (20K),
+    and a -$1M deal would sort under a $0 one instead of tying with it at zero."""
+    from core.postgres import pg_execute
+    from crm import service
+
+    neg_prob = service.create_deal("NegProb", value=100_000, probability=0, stage="qualified")
+    pg_execute("UPDATE deals SET probability = -50 WHERE id = %s", (neg_prob["id"],))
+    floor = service.create_deal("Floor", value=50_000, probability=0, stage="qualified")
+    zero = service.create_deal("Zero", value=0, probability=0, stage="qualified")
+    neg_val = service.create_deal("NegVal", value=-1_000_000, probability=100, stage="qualified")
+    pg_execute("UPDATE deals SET updated_at = now() - interval '1 day' WHERE id = %s", (zero["id"],))
+
+    top = service.get_dashboard_stats()["top_deals"]
+    assert [d["id"] for d in top] == [neg_prob["id"], floor["id"], neg_val["id"], zero["id"]]

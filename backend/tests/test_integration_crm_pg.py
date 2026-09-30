@@ -309,11 +309,11 @@ def test_seed_idempotent_and_sequences_advance(pg_db):
     out = service.load_sample_data()
     assert out == {"ok": True, "seeded": True}
     assert pg_fetchone("SELECT COUNT(*) AS c FROM companies")["c"] == 6
-    assert pg_fetchone("SELECT COUNT(*) AS c FROM contacts")["c"] == 8
-    assert pg_fetchone("SELECT COUNT(*) AS c FROM deals")["c"] == 7
-    assert pg_fetchone("SELECT COUNT(*) AS c FROM todos")["c"] == 8
-    assert pg_fetchone("SELECT COUNT(*) AS c FROM activity_log")["c"] == 11
-    assert pg_fetchone("SELECT COUNT(*) AS c FROM crm_chatter")["c"] == 4
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM contacts")["c"] == 11
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM deals")["c"] == 17
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM todos")["c"] == 16
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM activity_log")["c"] == 16
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM crm_chatter")["c"] == 6
     assert service.get_crm_meta()["sample_data_loaded"] is True
 
     # seeded contacts/deals are linked to their companies (rollup demos on day one)
@@ -328,7 +328,7 @@ def test_seed_idempotent_and_sequences_advance(pg_db):
     assert service.load_sample_data() == {"ok": True, "seeded": False}
 
     # the next real inserts get fresh ids — sequences advanced past the fixed demo ids
-    assert service.create_contact("New Person")["id"] == 9
+    assert service.create_contact("New Person")["id"] == 12
     assert service.create_company("New Company")["id"] == 7
 
 
