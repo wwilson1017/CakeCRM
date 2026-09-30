@@ -723,7 +723,25 @@
   emits a relative path, which is correct in-app but not clickable in Telegram or a push
   notification. That is the least-wrong output (an absolute `http://localhost:5173/...` is
   wrong for every reader who is not at that machine), and the fix is to set `FRONTEND_URL`
-  on any install whose assistant messages leave the app. **AI touch counts +
+  on any install whose assistant messages leave the app.
+  **Bare deal ids in outbound text become `Title (url)`** (#238, port of the blueprint's
+  #3175). `ToolRegistry.execute_tool_sync` feeds every result to
+  `crm.links.remember_deal_refs`, which records `{id: (title, url)}` on the registry's
+  `deal_refs` for any dict whose `url` equals `deal_url` of its own `id`/`deal_id` and that
+  has a title — only `with_deal_url` produces that url, so contacts and todos never count.
+  A registry is built per turn, so the map is per turn. `link_deal_refs` then rewrites
+  "deal #14" / "deal 14" / "#14" at the two seams whose reader cannot click an id:
+  `notify_user` (title and body, each linked on its own) and Telegram's `_flush`. **Only ids
+  a tool returned this turn are rewritten**, so a hallucinated id is never lent a real
+  title, and a bare `#N` after a label (`PO #14`, `todo #14`) is left alone. The
+  "already linked" test is digit-bounded, because deal 1's relative url is a prefix of deal
+  14's. A Telegram turn that pauses for Approve/Deny spans several registries (the turn up
+  to the card, one per button press, the continuation), so `telegram.service._paused_deal_refs`
+  carries every deal the paused turn saw into the continuation's reply, keyed by link and
+  cleared by a new message; a bare "so" is not a label, since it is usually the English word. **The drawer and history are deliberately
+  untouched**: the drawer streams deltas it cannot take back, and the persisted row keeps
+  the model's own wording. A relative `deal_url` stays relative — the rewrite never invents
+  a host. Pinned by `tests/test_deal_ref_outbound.py`. **AI touch counts +
   field provenance** (#16) are the two zero-keys-degrading AI reads: an in-process
   daemon worker (`crm/touch_count_service.py`, event-driven off note/activity writes,
   light tier via `get_ai_provider(agent_model_tier="light")`, prompt-injection-hardened,
