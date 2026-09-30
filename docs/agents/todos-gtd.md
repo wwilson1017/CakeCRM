@@ -159,6 +159,19 @@
   makes flipping every existing install acceptable.
   Neither no-login surface consults `todo_mode` (they gate on `todo_capture_token` /
   `todo_web_enabled`), so this flip does not widen them.
+- **A project's name and notes are click-to-edit on its detail page** (#232), through the same
+  `InlineTitle` the triage card uses, whose `body` variant serves the notes (Enter is a
+  newline; blur and Escape are the only exits; clearing notes is a real save; text is kept
+  verbatim unless wholly blank). Notes always render, so a blank field shows an "Add notes…"
+  placeholder — before #232 they could never be ADDED after creation. Each save PUTs only
+  the field that changed (never `status`), an unchanged value sends nothing, and the page
+  merges back only that field, since both editors can have a PUT in flight at once. A blank
+  name is refused client-side: the editor closes on the previous name, since there is no typed
+  text to keep, and a failure line says so. A server refusal (a duplicate name, its `detail`
+  shown verbatim) keeps the editor open with the typed text. Either way there is ONE
+  `role="alert"` line, TAGGED with its field, because both editors can be open at once and an
+  untagged line would be cleared when the notes editor closes unchanged. Success calls `refreshMeta()`, which carries a rename to the Projects list,
+  the todo rows and `TodoEditSheet`'s project picker.
 - **Marking a todo done and filing an inbox item are undoable for 7 seconds** (#231).
   `crm/gtd/undoQueue.ts` is a module-level store (the `shared/toast` shape), because
   `TodoShell` unmounts on every tab switch and component state could not survive the
