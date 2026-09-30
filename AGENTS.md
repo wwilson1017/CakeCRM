@@ -419,7 +419,8 @@ paths on purpose — never turn them into `@` imports, which load eagerly.
 - The mark is `frontend/public/logo-mark.svg`. Its byte-identical copies (favicon,
   `docs/brand/`, `website/`) and the PNG exports in `docs/brand/` are NOT built — re-copy and
   regenerate them with any edit. It sits LEFT of the "CakeCRM" wordmark, never above it and
-  never on a badge, and is never named after the dessert (a denylisted word, filenames
+  never on a badge — with ONE exception by Will's decision: the mycakecrm.com hero, where the
+  animated slice stacks above a spaced "CAKECRM" wordmark, and is never named after the dessert (a denylisted word, filenames
   included). Full detail: `docs/agents/brand-mark.md`.
 
 ## Website (mycakecrm.com)
@@ -428,7 +429,10 @@ paths on purpose — never turn them into `@` imports, which load eagerly.
   whose third-party action stays **pinned to a commit SHA**, never a tag. Screenshots come only
   from the demo instance after a reset to the fictional sample data; marketing copy about safety
   must match `frontend/src/assistant/` and `backend/assistant/{engine,confirm_tier}.py`; a new
-  font family ships its notice in `website/fonts/OFL.txt`. Full detail: `docs/agents/website.md`.
+  font family ships its notice in `website/fonts/OFL.txt`. The todo and Baker demos on the page
+  are browser-only fakes (`website/js/`): the Baker one is scripted, labelled "Scripted, not AI",
+  and its Read/Ask/Auto behaviour is a safety claim held to the same code. Full detail:
+  `docs/agents/website.md`.
 
 ## CI & Contributing
 
