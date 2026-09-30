@@ -11,6 +11,7 @@ each background turn).
 import logging
 from collections.abc import Callable
 
+from crm.links import link_deal_refs
 from notifications import delivery
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,10 @@ def get_notification_tools(registry) -> tuple[list[dict], dict[str, Callable[...
         if getattr(registry, "_notify_user_called", False):
             return {"error": "notify_user already called this run — only one per run."}
         registry._notify_user_called = True
+        # A push or Telegram reader cannot click "deal #14": rewrite ids this run read to
+        # "Title (url)" (#238). Only ids a tool returned this run are touched.
+        refs = getattr(registry, "deal_refs", None)
+        title, message = link_deal_refs(title, refs), link_deal_refs(message, refs)
         result = delivery.deliver_notification(title, message)
         channels = result.get("channels_sent", [])
         return {

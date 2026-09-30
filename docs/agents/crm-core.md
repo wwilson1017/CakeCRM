@@ -632,7 +632,13 @@
   `crm_search_companies`, `crm_list_todos`, `crm_get_stale_deals`,
   `crm_get_contact_staleness`, plus `todo_list`) take an `owner` WORD — `me`,
   `unassigned`, or an email — never an id, so the model cannot address a seat by guessing
-  a number; `crm.service.owner_condition` + the `UNASSIGNED` sentinel are how that reaches
+  a number. **The two company writes take the same word as an ASSIGNMENT** (#237, port of
+  cake_os #3184): `bind_owner_assignment` resolves it through the same `_resolve_owner`
+  (with `require_active=True`, since the UI's owner dropdown offers only active seats too),
+  drops a model-supplied `owner_id`, defaults a create to the asking seat, and on an update
+  sends NO `owner_id` key when the word is omitted — `update_company` reads key presence as
+  "set", and None there means unassigned. Contact and deal updates still take no owner.
+  `crm.service.owner_condition` + the `UNASSIGNED` sentinel are how the read filter reaches
   the shared WHERE builders, which is what keeps a filter from landing on a page query
   without also landing on its COUNT. Binding a user never changes which tools exist or
   their `writes` flags — the background allowlist is derived from that map, and a test
@@ -718,6 +724,7 @@
   notification. That is the least-wrong output (an absolute `http://localhost:5173/...` is
   wrong for every reader who is not at that machine), and the fix is to set `FRONTEND_URL`
   on any install whose assistant messages leave the app.
+<<<<<<< HEAD
   **Every write tool's success result names the record it actually wrote** (#236, port
   of the blueprint's #3052): `target` = `{entity_type, id, title, owner_id}` plus `url`
   for a deal, attached by `crm.tools._with_target` (bulk twin `_with_targets` → a
@@ -737,6 +744,26 @@
   directions (memory, context files, the Gmail draft, `notify_user`,
   `crm_recompute_lead_scores`), and checks a real registry in both todo modes carries no
   write it never saw. **AI touch counts +
+=======
+  **Bare deal ids in outbound text become `Title (url)`** (#238, port of the blueprint's
+  #3175). `ToolRegistry.execute_tool_sync` feeds every result to
+  `crm.links.remember_deal_refs`, which records `{id: (title, url)}` on the registry's
+  `deal_refs` for any dict whose `url` equals `deal_url` of its own `id`/`deal_id` and that
+  has a title — only `with_deal_url` produces that url, so contacts and todos never count.
+  A registry is built per turn, so the map is per turn. `link_deal_refs` then rewrites
+  "deal #14" / "deal 14" / "#14" at the two seams whose reader cannot click an id:
+  `notify_user` (title and body, each linked on its own) and Telegram's `_flush`. **Only ids
+  a tool returned this turn are rewritten**, so a hallucinated id is never lent a real
+  title, and a bare `#N` after a label (`PO #14`, `todo #14`) is left alone. The
+  "already linked" test is digit-bounded, because deal 1's relative url is a prefix of deal
+  14's. A Telegram turn that pauses for Approve/Deny spans several registries (the turn up
+  to the card, one per button press, the continuation), so `telegram.service._paused_deal_refs`
+  carries every deal the paused turn saw into the continuation's reply, keyed by link and
+  cleared by a new message; a bare "so" is not a label, since it is usually the English word. **The drawer and history are deliberately
+  untouched**: the drawer streams deltas it cannot take back, and the persisted row keeps
+  the model's own wording. A relative `deal_url` stays relative — the rewrite never invents
+  a host. Pinned by `tests/test_deal_ref_outbound.py`. **AI touch counts +
+>>>>>>> origin/main
   field provenance** (#16) are the two zero-keys-degrading AI reads: an in-process
   daemon worker (`crm/touch_count_service.py`, event-driven off note/activity writes,
   light tier via `get_ai_provider(agent_model_tier="light")`, prompt-injection-hardened,
