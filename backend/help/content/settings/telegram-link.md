@@ -37,6 +37,12 @@ you had done it here.
 When it wants to make a change, the message arrives with two inline buttons, Approve and
 Deny. Only your linked account can press yours.
 
+A Telegram message cannot open a deal from its number, so when a reply names a deal the
+assistant looked at during that same exchange, the number is replaced with the deal's title
+and a link that opens it on the pipeline board. A number the assistant did not look at is
+left exactly as written. The link is a full web address only when the workspace's public
+address is configured; otherwise it is a path within the app.
+
 In GTD todo mode, a message beginning with `capture ` (or `/capture `) creates an inbox todo
 directly, without the model running at all — so it is instant and works even when the
 workspace has no AI provider configured.

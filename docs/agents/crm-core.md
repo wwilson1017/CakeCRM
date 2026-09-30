@@ -1,11 +1,11 @@
 # CRM core: records, deals, pipeline, chatter, theme
 
-> Topic doc split out of `AGENTS.md` (Product Rules). `AGENTS.md` keeps the enforceable
+> Topic doc split out of `AGENTS.md` (former Product Rules). `AGENTS.md` keeps the enforceable
 > invariants; this file is the full implementation record, moved verbatim. Add new
 > implementation notes ("landed #N as …", design reasoning, divergences) HERE, not in
 > `AGENTS.md`. Phrases like "the CRM bullet above" or "see the X bullet" refer to the
-> matching Product Rules bullet — find its topic doc through the index at the top of
-> `AGENTS.md`.
+> rule bullets this file opens with, or to the topic doc that holds that rule; find
+> other areas' docs through the Topic docs table in `AGENTS.md`.
 
 - **The CRM is first-class core** (`backend/crm/`, mounted at `/api/crm`; frontend
   `frontend/src/crm/` + `frontend/src/shared/`) — always-on, no enable flag. Ported
@@ -632,7 +632,13 @@
   `crm_search_companies`, `crm_list_todos`, `crm_get_stale_deals`,
   `crm_get_contact_staleness`, plus `todo_list`) take an `owner` WORD — `me`,
   `unassigned`, or an email — never an id, so the model cannot address a seat by guessing
-  a number; `crm.service.owner_condition` + the `UNASSIGNED` sentinel are how that reaches
+  a number. **The two company writes take the same word as an ASSIGNMENT** (#237, port of
+  cake_os #3184): `bind_owner_assignment` resolves it through the same `_resolve_owner`
+  (with `require_active=True`, since the UI's owner dropdown offers only active seats too),
+  drops a model-supplied `owner_id`, defaults a create to the asking seat, and on an update
+  sends NO `owner_id` key when the word is omitted — `update_company` reads key presence as
+  "set", and None there means unassigned. Contact and deal updates still take no owner.
+  `crm.service.owner_condition` + the `UNASSIGNED` sentinel are how the read filter reaches
   the shared WHERE builders, which is what keeps a filter from landing on a page query
   without also landing on its COUNT. Binding a user never changes which tools exist or
   their `writes` flags — the background allowlist is derived from that map, and a test
@@ -717,7 +723,44 @@
   emits a relative path, which is correct in-app but not clickable in Telegram or a push
   notification. That is the least-wrong output (an absolute `http://localhost:5173/...` is
   wrong for every reader who is not at that machine), and the fix is to set `FRONTEND_URL`
-  on any install whose assistant messages leave the app. **AI touch counts +
+  on any install whose assistant messages leave the app.
+  **Every write tool's success result names the record it actually wrote** (#236, port
+  of the blueprint's #3052): `target` = `{entity_type, id, title, owner_id}` plus `url`
+  for a deal, attached by `crm.tools._with_target` (bulk twin `_with_targets` → a
+  `targets` list of the ids actually written, ONE query). The blueprint's audit found notes logged against
+  hallucinated deal ids while the result said only `{"ok": true}`, so the model narrated
+  success against the deal the user had named. `title` is a deal/todo `title` or a
+  contact/company/project `name` under one key; `todo_projects` has no owner column, so
+  a project's `owner_id` is always None. Tools holding the row pass it as `record=` and
+  spend no query; the rest issue one lean three-column SELECT after the write — BEFORE it
+  for the deletes, which have no row left afterwards. `crm_log_activity` names deal >
+  contact, and an activity on nothing carries an all-None block. A failed confirmation
+  read never fails the committed write (an error would invite a retry and a duplicate
+  note): the id survives flagged `lookup_failed`, and so does a row deleted between the write and the read — every requested id is reconciled. The GTD `todo_*` writes carry it too,
+  since GTD is the default mode. The behavioural half is one SALES_GUIDE paragraph
+  ("Check what you wrote"). `tests/test_crm_write_target.py` derives the write set from
+  every def list the registry composes and pins a reasoned waiver list in both
+  directions (memory, context files, the Gmail draft, `notify_user`,
+  `crm_recompute_lead_scores`), and checks a real registry in both todo modes carries no
+  write it never saw.
+  **Bare deal ids in outbound text become `Title (url)`** (#238, port of the blueprint's
+  #3175). `ToolRegistry.execute_tool_sync` feeds every result to
+  `crm.links.remember_deal_refs`, which records `{id: (title, url)}` on the registry's
+  `deal_refs` for any dict whose `url` equals `deal_url` of its own `id`/`deal_id` and that
+  has a title — only `with_deal_url` produces that url, so contacts and todos never count.
+  A registry is built per turn, so the map is per turn. `link_deal_refs` then rewrites
+  "deal #14" / "deal 14" / "#14" at the two seams whose reader cannot click an id:
+  `notify_user` (title and body, each linked on its own) and Telegram's `_flush`. **Only ids
+  a tool returned this turn are rewritten**, so a hallucinated id is never lent a real
+  title, and a bare `#N` after a label (`PO #14`, `todo #14`) is left alone. The
+  "already linked" test is digit-bounded, because deal 1's relative url is a prefix of deal
+  14's. A Telegram turn that pauses for Approve/Deny spans several registries (the turn up
+  to the card, one per button press, the continuation), so `telegram.service._paused_deal_refs`
+  carries every deal the paused turn saw into the continuation's reply, keyed by link and
+  cleared by a new message; a bare "so" is not a label, since it is usually the English word. **The drawer and history are deliberately
+  untouched**: the drawer streams deltas it cannot take back, and the persisted row keeps
+  the model's own wording. A relative `deal_url` stays relative — the rewrite never invents
+  a host. Pinned by `tests/test_deal_ref_outbound.py`. **AI touch counts +
   field provenance** (#16) are the two zero-keys-degrading AI reads: an in-process
   daemon worker (`crm/touch_count_service.py`, event-driven off note/activity writes,
   light tier via `get_ai_provider(agent_model_tier="light")`, prompt-injection-hardened,
@@ -1007,3 +1050,23 @@
   beside `LAST_TOUCH_SQL`, and rendering this component read-only (no `onCycle`) in the panel's
   badge slot, because that panel is a list of what needs you rather than a place to re-triage
   the pipeline.
+
+- **Never build a `Date` from a TIMESTAMPTZ with the bare constructor** — use
+  `crm/gtd/util.parseUTC` (#125). Two reasons, and the one this was originally filed under is
+  **false**, recorded here so nobody re-derives it: every such column is written from
+  `datetime.now(timezone.utc).isoformat()` and so carries **six** fractional digits where
+  ECMA-262 defines three, and the claim was that JavaScriptCore rejects the extra ones, leaving
+  a column showing "—" in Safari. Measured against WebKit 26.5 and the system `jsc` during #125's
+  evidence run, it does not — the bare constructor parses that string correctly, and no column
+  was ever broken there. What survives is that more than three digits is implementation-DEFINED
+  rather than guaranteed, so the bare constructor bets on behaviour the spec does not require;
+  and that a zone-LESS timestamp is read as LOCAL by the constructor and as UTC by `parseUTC`,
+  a real divergence on every engine. The rule also covers SORTING, where the reason is
+  engine-independent: a TIMESTAMPTZ is not lexicographically ordered, because the zone may be
+  spelled `Z` or `+00:00` and `Z` sorts after `+`, so one instant written two ways compares
+  unequal — sort on the parsed instant, with unparseable input yielding `null` so it sinks under
+  the null convention rather than poisoning comparisons with NaN. A date-ONLY `YYYY-MM-DD` is
+  the exception and keeps the local-parts constructor: it is a calendar date, and reading it as
+  UTC midnight renders a day early west of Greenwich. **A test here must pin the zone-LESS case
+  to be falsifiable at all** — every engine parses a microsecond string either way, so the
+  obvious test passes against the code it is meant to reject.

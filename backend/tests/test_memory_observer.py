@@ -149,6 +149,9 @@ def wired(monkeypatch):
         prov = FakeProvider(events if events is not None else _reply()) if provider else None
         claims = []
 
+        # The fixtures stamp rows relative to TODAY; pin the observer's clock to it so the
+        # 14-day age cut does not start dropping them once the real calendar moves on.
+        monkeypatch.setattr(observer, "today_local", lambda: TODAY)
         monkeypatch.setattr(observer.settings, "heartbeat_enabled", enabled, raising=False)
         monkeypatch.setattr(observer, "history", hist)
         monkeypatch.setattr(observer, "service", facts)

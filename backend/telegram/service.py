@@ -34,12 +34,21 @@ from assistant import engine
 from assistant.history import list_pending_tool_uses
 from assistant.registry import ToolRegistry
 from crm import gtd_common, gtd_service
+from crm.links import link_deal_refs
 from providers import get_ai_provider
 from users.service import display_name
 
 from . import client, store
 
 logger = logging.getLogger(__name__)
+
+# Deals read so far in a turn that paused for Approve/Deny, keyed by link id (#238). A
+# pause spans several registries — the one that ran the turn up to the confirm card, and
+# one per button press — while the continuation that narrates the outcome gets yet
+# another, so the map carries every deal the paused turn saw into that continuation's
+# reply. Bounded by the number of links; a new message clears its entry. In-process is
+# enough: the deploy runs one worker and the poller is a single task.
+_paused_deal_refs: dict[int, dict[int, tuple[str, str]]] = {}
 
 _LINK_HELP = (
     "I don't recognize this account yet. To connect me, open CakeCRM → Settings → "
@@ -304,6 +313,8 @@ async def _handle_callback(cb: dict) -> None:
     await _strip_keyboard(msg_chat_id, message_id, token)
 
     # Continue the assistant turn only once EVERY write in this batch is resolved.
+    # This press's write may have returned a deal the continuation's reply names (#238).
+    _paused_deal_refs.setdefault(link["id"], {}).update(registry.deal_refs)
     should_continue = await asyncio.to_thread(
         store.try_consume_batch, link["id"], pending_msg_id
     )
@@ -346,6 +357,10 @@ async def _run_turn(link: dict, token: str, user_text: str | None) -> None:
     conv = await asyncio.to_thread(store.get_or_create_conversation, link)
 
     registry = ToolRegistry(user=user)
+    # A continuation inherits every deal the paused turn read; a new message starts over.
+    carried = _paused_deal_refs.pop(link["id"], None)
+    if user_text is None and carried:
+        registry.deal_refs.update(carried)
     messages = [] if user_text is None else [{"role": "user", "content": user_text}]
 
     buffer = ""
@@ -361,18 +376,19 @@ async def _run_turn(link: dict, token: str, user_text: str | None) -> None:
             if etype == "text":
                 buffer += evt.get("text", "")
             elif etype == "confirm":
-                buffer = await _flush(chat_id, buffer, token)
+                buffer = await _flush(chat_id, buffer, token, registry.deal_refs)
+                _paused_deal_refs.setdefault(link["id"], {}).update(registry.deal_refs)
                 await _send_confirm(link, chat_id, token, evt)
             elif etype == "error":
-                buffer = await _flush(chat_id, buffer, token)
+                buffer = await _flush(chat_id, buffer, token, registry.deal_refs)
                 await _send_text(chat_id, "⚠️ " + str(evt.get("error") or "The assistant hit an error."), token)
                 return
             elif etype == "done":
-                await _flush(chat_id, buffer, token)
+                await _flush(chat_id, buffer, token, registry.deal_refs)
                 return
             # tool_start / tool_args / tool_end / conversation_id / usage → ignored
         # Generator ended without an explicit done — flush whatever we have.
-        await _flush(chat_id, buffer, token)
+        await _flush(chat_id, buffer, token, registry.deal_refs)
     except Exception:
         logger.exception("telegram _run_turn crashed")
         await _send_text(chat_id, "⚠️ The assistant hit an unexpected error and stopped.", token)
@@ -390,9 +406,13 @@ async def _auto_deny_batch(conv: str, msg_id: str, user: dict) -> None:
 
 # ── Send helpers (all offloaded; never raise to the loop) ────────────────────
 
-async def _flush(chat_id, buffer: str, token: str) -> str:
+async def _flush(chat_id, buffer: str, token: str, deal_refs: dict | None = None) -> str:
     if buffer.strip():
-        await _send_html(chat_id, buffer, token)
+        # A Telegram reader cannot click "deal #14" — rewrite ids this turn's tools
+        # returned to "Title (url)" (#238). History keeps the model's own wording: the
+        # rewrite is for the reader of THIS message, and the drawer streams deltas it
+        # could not take back anyway.
+        await _send_html(chat_id, link_deal_refs(buffer, deal_refs), token)
     return ""
 
 

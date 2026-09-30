@@ -84,3 +84,5 @@ Populated by port PRs from here on.
 | Reports tab — single-page company rollup with a merged notes+activity timeline | `backend/apps/crm/report_service.py` + `frontend/src/apps/crm/{companyRollup.ts,components/{ReportsTab,CompanyRollupReport,CompanyTimeline}.tsx}` @ `74f902684` | #144 | — |
 | Per-deal deep links (link-shape module + `url` on deal tool results) | PR #1542 (`732678bd2`) | #145 | 2026-09-04 |
 | Capture page retries focus on open and re-attempts on resume, gated to a standalone (PWA) launch — inline script in the backend-rendered `_CAPTURE_HTML`, not the blueprint's React effect | PR #3051 (`d49442c6e`) | #233 | 2026-09-29 |
+| Bare deal ids in outbound assistant text rewritten to `Title (url)` (Telegram replies + `notify_user`) | PR #3175 (`173693bd2`) | #238 | — |
+| Assistant company tools take an owner (`owner` word on `crm_create_company`/`crm_update_company`) | PR #3184 (`150982d02`) | #237 | — |
