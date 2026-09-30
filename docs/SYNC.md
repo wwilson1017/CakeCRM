@@ -406,3 +406,10 @@ Never retry blindly, and never fall back to sending more data than the contract 
   ```
 
   Firing the same SHA twice is the dedupe test.
+
+- **`sync-intake` issues are ordinary issues.** The cake_os sync bot (#23,
+  `docs/SYNC.md`) files them when upstream CRM code changes, un-`greenlit` like
+  everything else — default-deny holds, and the bot never marks its own work
+  eligible. There is **no special case anywhere in the loop**: a greenlit intake
+  runs the normal pipeline, and the port worker reads cake_os from the local clone
+  at `~/ai/cake_os`, never from the issue body. Ports add a `SYNC_LEDGER.md` row.

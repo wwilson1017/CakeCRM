@@ -1,11 +1,11 @@
 # Database, secrets and the login credential
 
-> Topic doc split out of `AGENTS.md` (Product Rules). `AGENTS.md` keeps the enforceable
+> Topic doc split out of `AGENTS.md` (former Product Rules). `AGENTS.md` keeps the enforceable
 > invariants; this file is the full implementation record, moved verbatim. Add new
 > implementation notes ("landed #N as …", design reasoning, divergences) HERE, not in
 > `AGENTS.md`. Phrases like "the CRM bullet above" or "see the X bullet" refer to the
-> matching Product Rules bullet — find its topic doc through the index at the top of
-> `AGENTS.md`.
+> rule bullets this file opens with, or to the topic doc that holds that rule; find
+> other areas' docs through the Topic docs table in `AGENTS.md`.
 
 - **One database: PostgreSQL, and it's mandatory** — the backend refuses to start
   without `DATABASE_URL` (decided 2026-07-18; single engine, ready for multi-user
@@ -84,3 +84,28 @@
   `YYYYMMDDHHMMSS_<name>.sql` (use `date +%Y%m%d%H%M%S`), never sequential
   prefixes. Access Postgres through `core/postgres.py` helpers
   (`pg_fetchall`/`pg_fetchone`/`pg_execute`/`get_connection`/`row_to_dict`).
+
+- **Never cap a reader whose `ORDER BY` isn't a TOTAL order** (#58). A `LIMIT`/`OFFSET`
+  over a non-unique sort key has no defined result — Postgres may break the tie
+  differently on each execution, so a row shows up on two pages or on none. End every
+  such `ORDER BY` on a unique term: `id` (matching the preceding key's direction, so
+  the tiebreak reads the way the sort does), or a column that is already UNIQUE
+  (`assistant_context_files.filename`, `assistant_messages.seq` within one
+  conversation), or — for a grouped reader — the rest of the GROUP BY key
+  (`find_duplicate_deals` orders by `title` **and** `contact_id`, because the group is
+  the pair). Ties are the normal case, not an edge: `created_at`/`updated_at` default
+  to `now()`, which is **transaction-start** time, so every row written in one
+  transaction is byte-identical — a CSV import, `seed_data`, `merge_deals`' note
+  copies. Uncapped readers carry the term too, so adding a `LIMIT` later can't quietly
+  reintroduce the bug — which is why #59, server-side pipeline pagination, was
+  `Blocked by: #58`, and #59 has since cashed that promise in: `get_pipeline`'s keyset
+  page is a real capped reader now, and its **default** read stays uncapped and stays in
+  `test_hardened_uncapped_readers_keep_their_tiebreaker`.
+  Enforced by `backend/tests/test_query_determinism.py`, which AST-scans every non-test
+  backend module (it reads f-strings and implicitly-concatenated literals). An ORDER BY
+  assembled at RUNTIME is reported as `unknown`, never waved through: the exact set is
+  pinned in `UNDECIDABLE_SITES`, keyed by enclosing function, and each entry owes a
+  behavioral test on the SQL that reader really emits — so a reader cannot opt out of
+  the guard by moving its ordering into a variable. Expect to edit that registry when a
+  reader starts or stops interpolating its ORDER BY (#59 and #77 both touch such
+  readers); the failure message says which way it moved and what to do.

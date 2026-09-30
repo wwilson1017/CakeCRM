@@ -306,7 +306,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           # Model is overridable via the AI_REVIEW_MODEL repo variable; the `||` default
           # resolves in the Actions expression engine, then reaches jq via --arg.
-          AI_REVIEW_MODEL: ${{ vars.AI_REVIEW_MODEL || 'claude-opus-4-8' }}
+          AI_REVIEW_MODEL: ${{ vars.AI_REVIEW_MODEL || 'claude-sonnet-5-5' }}
         run: |
           ANTHROPIC_API_KEY=$(printf '%s' "$ANTHROPIC_API_KEY" | tr -d '[:space:]')
 
