@@ -1,11 +1,11 @@
 # List pages on the collection layer
 
-> Topic doc split out of `AGENTS.md` (Product Rules). `AGENTS.md` keeps the enforceable
+> Topic doc split out of `AGENTS.md` (former Product Rules). `AGENTS.md` keeps the enforceable
 > invariants; this file is the full implementation record, moved verbatim. Add new
 > implementation notes ("landed #N as …", design reasoning, divergences) HERE, not in
 > `AGENTS.md`. Phrases like "the CRM bullet above" or "see the X bullet" refer to the
-> matching Product Rules bullet — find its topic doc through the index at the top of
-> `AGENTS.md`.
+> rule bullets this file opens with, or to the topic doc that holds that rule; find
+> other areas' docs through the Topic docs table in `AGENTS.md`.
 
 - **The three list pages run on the #73 collection layer** (#77 — Contacts, Companies,
   Todos; the pipeline board keeps #21's own bar). The layer filters an **in-memory** array
@@ -97,3 +97,14 @@
   way the old tab bar never did. `OwnerScopeToggle` is
   **deleted** — an Owner facet with an Unassigned bucket replaces it and can select any
   owner, hiding itself on a single-seat install the same way.
+
+- Never page a full-corpus sweep on a mutable order. `sort=id` is the assembly key on
+  every list endpoint, `after_id` is refused with any other sort, and `hasMore` comes from
+  an extra row rather than a `total` computed in a separate transaction (#77). A new list
+  endpoint needs all three before a page assembles it. **#59 put the pipeline board on the
+  same three rules**, and added the fourth that a *board* needs: a swept corpus is
+  delivered in the server's PRESENTATION order, not the cursor order it arrived in —
+  `PipelinePage` sorts columns by `lead_score` with a STABLE sort and relies on recency
+  surviving beneath equal scores, which is the common case because `lead_score` is NULL
+  until something recomputes it. Handing back `id ASC` would silently flip most columns to
+  oldest-first, so `sweepPipelineDeals` re-sorts before it resolves.

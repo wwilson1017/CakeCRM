@@ -4,8 +4,8 @@
 > invariants; this file is the full implementation record, moved verbatim. Add new
 > implementation notes ("landed #N as …", design reasoning, divergences) HERE, not in
 > `AGENTS.md`. Phrases like "the CRM bullet above" or "see the X bullet" refer to the
-> matching Product Rules bullet — find its topic doc through the index at the top of
-> `AGENTS.md`.
+> rule bullets this file opens with, or to the topic doc that holds that rule; find
+> other areas' docs through the Topic docs table in `AGENTS.md`.
 
 - **The brand mark is a flat vector slice, `frontend/public/logo-mark.svg`** (a 100×100
   viewBox wedge seen three-quarter-on: card/raised faces, the two gold tokens as the top
