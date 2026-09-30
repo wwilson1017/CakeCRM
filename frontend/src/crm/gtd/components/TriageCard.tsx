@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { toast } from '../../../shared/toast';
 import { createProject, deleteTodo, updateTodo } from '../api';
 import type { Todo, TodoProject, TodoStatus } from '../types';
+import { dropUndo, queueUndo } from '../undoQueue';
 import { InlineTitle } from './InlineTitle';
 import { RecordChip } from './RecordChip';
 
@@ -389,7 +390,26 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
       // thing that keeps them current for `payload()` — without it the Edit sheet can open
       // on the pre-write values once `busy` clears but before the refetch lands, and its
       // full-row save reverts them.
+      //
+      // `before` is this card's view of the row as it stood BEFORE this write — read off
+      // the ref, not the `todo` prop, which lags the inline title rename. Captured ahead
+      // of the await, because the adoption below moves the row on to the post-write state
+      // and the undo row has to carry the pre-write one.
+      const before = stateRef.current.row;
       apply({ type: 'adopt', row: await updateTodo(todo.id, fields) });
+      // The 7s undo row (#231), guarded HERE rather than on the Done button so any future
+      // completing write from this card is covered by construction. The same row for the
+      // OTHER write that ends an item's time in the inbox: `fileUnder` is the only caller
+      // that sends a context, and it sends the destination status with it, so
+      // `fields.context !== undefined` on an inbox row is the filing write and nothing
+      // else. Queued from `before`, which still holds the status AND context the row had
+      // — both are restored, because an item that arrived carrying "@errands" from Quick
+      // Add must go back to '@errands' and not to empty. The Drop button (if one is ever
+      // added) and any other status write fall through to `dropUndo`: a later write that
+      // moves the todo retires an offer that no longer describes a pending change.
+      if (fields.status === 'done' && before.status !== 'done') queueUndo(before);
+      else if (fields.context !== undefined && before.status === 'inbox') queueUndo(before, 'filed');
+      else if (fields.status !== undefined) dropUndo(todo.id);
       if (resolves) {
         // Deliberately STAYS busy — this card is spent. The parent's reload is async
         // and keeps rendering the just-filed todo until it lands; re-enabling in that

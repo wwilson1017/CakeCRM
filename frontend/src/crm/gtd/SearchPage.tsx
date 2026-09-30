@@ -4,7 +4,7 @@ import { listTodos } from './api';
 import { TodoEditSheet } from './components/TodoEditSheet';
 import { TodoRow } from './components/TodoRow';
 import { STATUS_META, TODO_STATUS_ORDER } from './constants';
-import { useRowActions } from './hooks';
+import { useRowActions, useTodosChanged } from './hooks';
 import { EmptyState, LoadFailed, LoadingRows, TodoShell } from './TodoShell';
 import type { Todo, TodoStatus } from './types';
 import { useTodoMeta } from './useTodoMeta';
@@ -30,6 +30,9 @@ export function SearchPage() {
 
   const [loadSeq, setLoadSeq] = useState(0);
   const reload = useCallback(() => { setLoadSeq(s => s + 1); }, []);
+  // This page fetches its own list rather than going through `useTodos`, so it subscribes
+  // to the undo broadcast itself (#231).
+  useTodosChanged(reload);
 
   useEffect(() => {
     let cancelled = false;

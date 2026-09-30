@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { QuickAdd } from './components/QuickAdd';
+import { UndoPill } from './components/UndoPill';
 import { isTodoPublicMode, todoPath } from './publicMode';
 import { useTodoMeta } from './useTodoMeta';
 
@@ -118,6 +119,13 @@ export function TodoShell({ active, hideQuickAdd, onAdded, children }: Props) {
       )}
 
       <div className="mt-5">{children}</div>
+
+      {/* The undo block (#231). Mounted here, once per page, and fed by module state in
+          `undoQueue.ts`, so a completion survives the shell's remount on every tab switch.
+          It positions itself (fixed, bottom-right, above the launcher and under the app's
+          toasts — see the component for the stacking contract), so it can sit anywhere in
+          this tree and renders nothing while the queue is empty. */}
+      <UndoPill />
     </>
   );
 

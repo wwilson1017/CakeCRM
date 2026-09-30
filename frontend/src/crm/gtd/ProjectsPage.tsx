@@ -4,6 +4,7 @@ import { createProject, listProjects, listTodos } from './api';
 import { PROJECT_STATUSES, PROJECT_STATUS_META } from './constants';
 import { updateProjectStatus } from './projectActions';
 import { todoPath } from './publicMode';
+import { useTodosChanged } from './hooks';
 import { EmptyState, LoadFailed, LoadingRows, TodoShell } from './TodoShell';
 import type { TodoProject, TodoProjectStatus } from './types';
 import { refreshMeta } from './useTodoMeta';
@@ -48,6 +49,9 @@ export function ProjectsPage() {
       .catch(() => setFailed(true));
   };
   useEffect(() => { load(status); }, [status]);
+  // The stalled-project warning reads next actions, so an undo that reopens (or
+  // re-completes) one has to refetch here too (#231) — this page owns its own fetch.
+  useTodosChanged(() => load(status));
 
   const add = async () => {
     if (!name.trim()) return;

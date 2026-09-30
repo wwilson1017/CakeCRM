@@ -159,6 +159,33 @@
   makes flipping every existing install acceptable.
   Neither no-login surface consults `todo_mode` (they gate on `todo_capture_token` /
   `todo_web_enabled`), so this flip does not widen them.
+- **Marking a todo done and filing an inbox item are undoable for 7 seconds** (#231).
+  `crm/gtd/undoQueue.ts` is a module-level store (the `shared/toast` shape), because
+  `TodoShell` unmounts on every tab switch and component state could not survive the
+  navigation; `UndoPill` reads it through `useSyncExternalStore` so a row whose timer
+  lapses during a remount can never be served stale. Every write path that marks done
+  queues a row carrying the PRE-write status (`useRowActions.toggleDone`,
+  `TriageCard`'s `patch`, `TodoEditSheet.save`), and every later write that moves the
+  todo off where the queued write put it calls `dropUndo` — un-checking, `setStatus`,
+  a sheet save that changes the status, a sheet re-file under another context while a
+  FILING is pending, and delete. That last rule is what stops the pill offering to redo
+  a decision the user has since made themselves. A filing restores status AND context
+  (an item that arrived as "@errands" from Quick Add goes back to "@errands"), and the
+  revert asks the Inbox, via `notifyTodosChanged(focusInboxId)`, to promote it to the
+  current triage card — clearing the filter bar, and re-keying the card with `focusSeq`
+  so a spent card is never reused. A completion made from triage restores `inbox` too,
+  so it gets the same promotion — the focus keys on where the revert lands, not on the
+  kind. Pages that own their own fetch (Search, Projects, Project
+  detail, Review) subscribe with `useTodosChanged`; everything on `useTodos` gets it
+  free. **A new GTD list page that does not go through `useTodos` must call
+  `useTodosChanged(reload)`**, or an undo clicked while standing on it leaves it stale.
+  Rows are stamped with the session token they were queued under and a row from another
+  session is neither shown nor reverted, because `AuthContext` adopts a token another tab
+  broadcasts with no reload. The flow is described to users in the
+  `backend/help/content/todos/gtd.md` topic.
+  Undoing a repeating todo leaves its spawned successor in place and says so. There is
+  no undo endpoint: the revert is the ordinary PUT, so the no-login `/todo/{token}` app
+  gets the feature too.
 - **The capture page puts the caret in the box on open AND on resume** (#233, port of
   cake_os #3049). `autofocus` is one attempt at parse and never repeats, and a resumed
   home-screen app is not re-navigated, so the inline script in `crm/todo_capture._CAPTURE_HTML`
