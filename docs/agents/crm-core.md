@@ -724,6 +724,25 @@
   notification. That is the least-wrong output (an absolute `http://localhost:5173/...` is
   wrong for every reader who is not at that machine), and the fix is to set `FRONTEND_URL`
   on any install whose assistant messages leave the app.
+  **Every write tool's success result names the record it actually wrote** (#236, port
+  of the blueprint's #3052): `target` = `{entity_type, id, title, owner_id}` plus `url`
+  for a deal, attached by `crm.tools._with_target` (bulk twin `_with_targets` → a
+  `targets` list of the ids actually written, ONE query). The blueprint's audit found notes logged against
+  hallucinated deal ids while the result said only `{"ok": true}`, so the model narrated
+  success against the deal the user had named. `title` is a deal/todo `title` or a
+  contact/company/project `name` under one key; `todo_projects` has no owner column, so
+  a project's `owner_id` is always None. Tools holding the row pass it as `record=` and
+  spend no query; the rest issue one lean three-column SELECT after the write — BEFORE it
+  for the deletes, which have no row left afterwards. `crm_log_activity` names deal >
+  contact, and an activity on nothing carries an all-None block. A failed confirmation
+  read never fails the committed write (an error would invite a retry and a duplicate
+  note): the id survives flagged `lookup_failed`, and so does a row deleted between the write and the read — every requested id is reconciled. The GTD `todo_*` writes carry it too,
+  since GTD is the default mode. The behavioural half is one SALES_GUIDE paragraph
+  ("Check what you wrote"). `tests/test_crm_write_target.py` derives the write set from
+  every def list the registry composes and pins a reasoned waiver list in both
+  directions (memory, context files, the Gmail draft, `notify_user`,
+  `crm_recompute_lead_scores`), and checks a real registry in both todo modes carries no
+  write it never saw.
   **Bare deal ids in outbound text become `Title (url)`** (#238, port of the blueprint's
   #3175). `ToolRegistry.execute_tool_sync` feeds every result to
   `crm.links.remember_deal_refs`, which records `{id: (title, url)}` on the registry's

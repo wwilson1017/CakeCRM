@@ -50,7 +50,14 @@ from crm.gtd_common import (
 
 # ONE implementation of "who is asking" for the whole tool layer (#190). `crm.tools` does
 # not import this module, so this adds no cycle.
-from crm.tools import bind_owner_filter, bind_server_args, owner_filter_property
+from crm.tools import (
+    _lookup_target,
+    _with_target,
+    _with_targets,
+    bind_owner_filter,
+    bind_server_args,
+    owner_filter_property,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +90,11 @@ def _wrap(fn: Callable[..., dict]) -> Callable[..., dict]:
 # ── Executors ─────────────────────────────────────────────────────────────────
 
 def _todo_create(title: str, **kwargs) -> dict:
-    return gtd_service.create_todo(title, source="agent", **kwargs)
+    todo = gtd_service.create_todo(title, source="agent", **kwargs)
+    if not todo:
+        return {"error": "Todo could not be created"}
+    # Every write names the record it wrote (#236) — see crm.tools._with_target.
+    return _with_target(todo, "todo", todo.get("id"), record=todo)
 
 
 def _todo_list(**kwargs) -> dict:
@@ -102,17 +113,19 @@ def _todo_update(todo_id: int, **fields) -> dict:
     todo = gtd_service.update_todo(todo_id, fields)
     if not todo:
         return {"error": f"Todo {todo_id} not found"}
-    return todo
+    return _with_target(todo, "todo", todo_id, record=todo)
 
 
 def _todo_bulk_update(ids: list[int], fields: dict) -> dict:
-    return gtd_service.bulk_update(ids, fields)
+    result = gtd_service.bulk_update(ids, fields)
+    return _with_targets(result, "todo", result.get("updated", []))
 
 
 def _todo_delete(todo_id: int) -> dict:
+    target = _lookup_target("todo", todo_id)  # before the row is gone
     if not gtd_service.delete_todo(todo_id):
         return {"error": f"Todo {todo_id} not found"}
-    return {"ok": True, "deleted": todo_id}
+    return {"ok": True, "deleted": todo_id, "target": target}
 
 
 def _todo_list_projects(status: str | None = None) -> dict:
@@ -121,20 +134,24 @@ def _todo_list_projects(status: str | None = None) -> dict:
 
 
 def _todo_create_project(name: str, notes: str = "", status: str = "active") -> dict:
-    return gtd_service.create_project(name, notes=notes, status=status)
+    project = gtd_service.create_project(name, notes=notes, status=status)
+    if not project:
+        return {"error": "Project could not be created"}
+    return _with_target(project, "project", project.get("id"), record=project)
 
 
 def _todo_update_project(project_id: int, **fields) -> dict:
     project = gtd_service.update_project(project_id, fields)
     if not project:
         return {"error": f"Project {project_id} not found"}
-    return project
+    return _with_target(project, "project", project_id, record=project)
 
 
 def _todo_delete_project(project_id: int) -> dict:
+    target = _lookup_target("project", project_id)  # before the row is gone
     if not gtd_service.delete_project(project_id):
         return {"error": f"Project {project_id} not found"}
-    return {"ok": True, "deleted": project_id}
+    return {"ok": True, "deleted": project_id, "target": target}
 
 
 GTD_TOOL_DEFS: list[dict] = [
