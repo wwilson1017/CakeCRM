@@ -81,6 +81,16 @@ def test_capture_page_renders_and_is_never_cached_or_indexed(client):
     assert "noindex" in r.headers["x-robots-tag"]
 
 
+def test_capture_page_keeps_autofocus_under_the_focus_retry_script(client):
+    """#233: `autofocus` is the first focus attempt and the script's retry ladder is layered on
+    top of it. The ladder's behaviour (standalone-only resume, never stealing focus, the
+    touch-only keyboard nudge) is exercised in jsdom by
+    `frontend/src/crm/capturePageFocus.test.ts`, which runs this page's real script."""
+    body = client.get("/capture").text
+    assert '<textarea id="t" autofocus' in body
+    assert "function onResume()" in body
+
+
 # ── Capture: token mode ───────────────────────────────────────────────────────
 
 def test_setting_a_token_takes_the_bare_paths_dark(client, surfaces, captured):

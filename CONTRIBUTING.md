@@ -85,7 +85,7 @@ locally before you push:
 **Backend** (from `backend/`, with the virtualenv active):
 
 ```bash
-ruff check .          # lint + import order (config in ruff.toml)
+ruff check --config ruff.toml . ../scripts   # lint + import order, exactly as CI runs it
 python -m pytest -q   # tests (run from backend/ so `import main` resolves)
 ```
 

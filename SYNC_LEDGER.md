@@ -74,6 +74,7 @@ Populated by port PRs from here on.
 
 | Feature | Source | CakeCRM PR / issue | Date |
 |---|---|---|---|
+| Todo-GTD undo pill — a 7s undo block for marking a todo done anywhere and for filing an inbox item under a context | PR #2904 (`77a3337ff`), PR #2939 (`3b262b0d0`) | #231 | — |
 | Todo-GTD copy buttons + long-title wrapping | `e00e05cde` | #151 | — |
 | Pipeline board bounded to the window (its scrollbars stay on screen), the first corpus sweep gated on tab visibility, and a last-contact line on Won cards | PR #1956 (`e605b49c4`) for the bounding — the half #147 deferred; PR #1828 (`029983b4f`) and PR #1872 (`25d45eb9a`) consulted and diverged from, see the Source Map | #129 | — |
 | Todo GTD triage & edit-sheet parity (due-date cue, inline Notes, real Context picker, legible step headings) | PR #2424 (`e3c06bba`), PR #2539 (`b936ac29`) | #150 | 2026-09-04 |
@@ -84,3 +85,6 @@ Populated by port PRs from here on.
 | Reports tab — single-page company rollup with a merged notes+activity timeline | `backend/apps/crm/report_service.py` + `frontend/src/apps/crm/{companyRollup.ts,components/{ReportsTab,CompanyRollupReport,CompanyTimeline}.tsx}` @ `74f902684` | #144 | — |
 | Per-deal deep links (link-shape module + `url` on deal tool results) | PR #1542 (`732678bd2`) | #145 | 2026-09-04 |
 | Todo GTD project name + notes click-to-edit on the detail page; `InlineTitle` `body` variant + `onCancel(reason)` | PR #3201 (`6270fa963`, cake_os #3198) | #232 | — |
+| Capture page retries focus on open and re-attempts on resume, gated to a standalone (PWA) launch — inline script in the backend-rendered `_CAPTURE_HTML`, not the blueprint's React effect | PR #3051 (`d49442c6e`) | #233 | 2026-09-29 |
+| Bare deal ids in outbound assistant text rewritten to `Title (url)` (Telegram replies + `notify_user`) | PR #3175 (`173693bd2`) | #238 | — |
+| Assistant company tools take an owner (`owner` word on `crm_create_company`/`crm_update_company`) | PR #3184 (`150982d02`) | #237 | — |

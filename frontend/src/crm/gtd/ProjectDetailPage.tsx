@@ -6,7 +6,7 @@ import { InlineTitle } from './components/InlineTitle';
 import { TodoEditSheet } from './components/TodoEditSheet';
 import { TodoRow } from './components/TodoRow';
 import { PROJECT_STATUSES, PROJECT_STATUS_META } from './constants';
-import { useRowActions } from './hooks';
+import { useRowActions, useTodosChanged } from './hooks';
 import { updateProjectStatus } from './projectActions';
 import { todoPath } from './publicMode';
 import { LoadFailed, LoadingRows, TodoShell } from './TodoShell';
@@ -48,6 +48,9 @@ export function ProjectDetailPage() {
 
   const [loadSeq, setLoadSeq] = useState(0);
   const reload = useCallback(() => { setLoadSeq(s => s + 1); }, []);
+  // This page fetches its own project + todos rather than going through `useTodos`, so it
+  // subscribes to the undo broadcast itself (#231).
+  useTodosChanged(reload);
 
   useEffect(() => {
     let cancelled = false;

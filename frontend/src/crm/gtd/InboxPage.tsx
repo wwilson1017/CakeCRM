@@ -5,7 +5,7 @@ import { QuickAdd } from './components/QuickAdd';
 import { TodoEditSheet } from './components/TodoEditSheet';
 import { TriageCard } from './components/TriageCard';
 import { contextGroup, matchesContexts } from './contextFacet';
-import { useTodos } from './hooks';
+import { useInboxFocus, useTodos } from './hooks';
 import { EmptyState, FilterEmptyState, LoadFailed, LoadingRows, TodoShell } from './TodoShell';
 import type { Todo } from './types';
 import { refreshMeta, useTodoMeta } from './useTodoMeta';
@@ -28,6 +28,33 @@ export function InboxPage() {
   const [editTodo, setEditTodo] = useState<Todo | null>(null);
   const [search, setSearch] = useState('');
   const [contexts, setContexts] = useState<(string | number)[]>([]);
+  // Bumped only by an undo (below), and part of the card's key — so the restored item
+  // always gets a FRESH card. A resolving write leaves `TriageCard` busy on purpose,
+  // spent, counting on the reload to swap in a different head item and remount it; but
+  // `useTodos` cancels a superseded fetch, so an undo clicked before the filing refetch
+  // lands cancels that refetch, the list never drops the item, and the same
+  // permanently-disabled card would still be mounted under the same id.
+  const [focusSeq, setFocusSeq] = useState(0);
+
+  // #231 — an undone filing puts the item back in the inbox, and it must come back as the
+  // CURRENT triage card rather than be corrected silently somewhere down the queue.
+  // Without this the item returns to the list but the card shows whatever `items[0]`
+  // happens to be, so the user has no way to see the correction take effect.
+  //
+  // The filter bar is CLEARED with it, and that is the implementation of "show me this
+  // item" rather than a side effect of it: `items` is filtered before `head` is picked,
+  // so a restored item the bar excludes falls straight through to `items[0]` and the undo
+  // looks like it did nothing. Reachable because `TodoEditSheet` files too, and THAT write
+  // carries the title, notes and project — rename an item while filing it under a search
+  // and undo puts it back wearing a title the search no longer matches. The user's last
+  // action was Undo on a row they picked by name, so showing that row is what they asked
+  // for; the query is one keystroke to retype and the item is on screen either way.
+  useInboxFocus(id => {
+    setSelectedId(id);
+    setSearch('');
+    setContexts([]);
+    setFocusSeq(n => n + 1);
+  });
 
   const items = (todos ?? []).filter(
     t => matchesContexts(t.context, contexts) && matchesFilter(t, search),
@@ -83,9 +110,11 @@ export function InboxPage() {
       {head && (
         <div className="space-y-4">
           {/* Keyed by id: the card holds the chosen destination in local state until
-              it is filed, and that choice belongs to ONE item. */}
+              it is filed, and that choice belongs to ONE item. The undo counter rides
+              along so a restored item never reuses the spent card it was filed from
+              (see `focusSeq`). */}
           <TriageCard
-            key={head.id}
+            key={`${head.id}:${focusSeq}`}
             todo={head}
             projects={projects}
             contexts={filters?.contexts ?? []}

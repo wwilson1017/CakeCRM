@@ -54,6 +54,20 @@ Today, Inbox (with a live count), To Do, Projects, Waiting, Someday, Done, Revie
 search page across contexts. Each tab has its own filters; the shell carries a search box and
 a quick-add composer.
 
+## Undoing a completion or a filing
+
+Marking a todo done, or setting the context that files an inbox item, shows a small undo
+block in the bottom-right corner for seven seconds. Each change gets its own row with an
+**Undo?** button, and **Undo all** appears once there is more than one. Undo puts the todo
+back exactly as it was: its previous status, and for a filing its previous context too. An
+item put back in the inbox returns as the item being triaged. The block follows you across
+tabs, so you can complete something on Today and still undo it from the Inbox. After seven
+seconds the row disappears and the change stands; from then on, reopen the todo from the
+Done tab or edit it by hand.
+
+Undoing a completed **repeating** todo keeps the next occurrence its completion already
+created, so both copies are open afterwards, and the app says so.
+
 ## The weekly review
 
 The Review tab is read-only and shows three things: counts per status, a **stale** list of

@@ -138,7 +138,7 @@ def _install(monkeypatch, h: Harness, *, chat_scripts=None, consume=None, provid
 
     def fake_registry(*, user=None, background=False):
         h.registry_users.append(user)
-        return object()
+        return types.SimpleNamespace(deal_refs={})  # the real registry's per-turn map (#238)
 
     monkeypatch.setattr(service, "engine", fake_engine)
     monkeypatch.setattr(service, "store", fake_store)
