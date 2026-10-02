@@ -11,7 +11,7 @@ interface Pending {
 
 export interface ChatterPost {
   /** Pass straight to `<NoteComposer onSubmit>`. Rejects to keep the user's text staged. */
-  post: (text: string, files: File[]) => Promise<void>;
+  post: (text: string, files: File[], mentions?: number[]) => Promise<void>;
   retryFiles: File[] | undefined;
   retry: () => void;
   discardRetry: () => void;
@@ -41,7 +41,7 @@ const defaultUpload: UploadFn = (path, file) => {
  */
 export function useChatterPost(
   entityKey: string,
-  createNote: (message: string) => Promise<{ id: number }>,
+  createNote: (message: string, mentions: number[]) => Promise<{ id: number }>,
   onPosted: () => void | Promise<void>,
   upload: UploadFn = defaultUpload,
 ): ChatterPost {
@@ -67,12 +67,12 @@ export function useChatterPost(
   }
 
   const post = useCallback(
-    async (text: string, files: File[]) => {
+    async (text: string, files: File[], mentions: number[] = []) => {
       const calledFor = currentEntity.current;
       // Deliberately NOT caught: a failure to create the note must reject so the composer
       // keeps the text the user typed.
       const { noteId, failures } = await postNoteWithAttachments({
-        text, files, createNote, uploadPath, upload,
+        text, files, mentions, createNote, uploadPath, upload,
       });
       // The note and its files landed on `calledFor`. If the panel has moved on, that is
       // all still true — it just isn't this screen's business any more.

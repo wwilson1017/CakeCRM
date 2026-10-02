@@ -215,6 +215,37 @@
   `__CAPTURE_PAGE_PY__` from the Python source (the `__INDEX_CSS__` pattern) and
   `frontend/src/crm/capturePageFocus.test.ts` executes the extracted `<script>` in jsdom — the
   repo's only JS runner — so the rules are pinned by behaviour rather than by source text.
+- **Three GTD list pages run on the shared collection layer, and three deliberately do not**
+  (#234, port of cake_os #1840's GTD half). **Someday** and **Done** are flat record lists
+  rendered through `CollectionView` with ONE list column whose cell is the existing `TodoRow`
+  (Someday's cell adds its `→ Next` button), so the checkbox, star and click-to-edit are
+  unchanged; **Projects** is the layer's `cards` view with the page's own
+  `components/ProjectCard.tsx` supplied through `renderCard`. **Inbox, Next Actions and Waiting
+  stay bespoke** on `shared/search`'s `SearchFilterBar` (page-owns-state, `contextFacet.ts`):
+  each depends on SECTIONS — Inbox is a triage instrument with one promoted card, Next Actions'
+  context batching is the page's purpose, Waiting is two fixed sections from two fetches — and
+  the layer's list view is a flat table with no sections primitive. That split is not a to-do;
+  if the layer ever gains list sections, those three become ordinary adoptions. The configs
+  live in `crm/gtd/collectionConfig.ts` and follow the layer's rules: no `sort` (no page ever
+  had a sort control, and Done's newest-finished-first order is the SERVER's under a LIMIT),
+  no `detail` (rows open `TodoEditSheet` themselves, a card is a real `<Link>`), and a context
+  facet whose getter and options are both lower-cased through the ONE `contextOptions`
+  mapping the bespoke pages use. Storage keys (`todo_someday`, `todo_done`, `todo_projects`)
+  are constant rather than owner-scoped as upstream's are, because this store is install-wide:
+  every seat and every `/todo` link reads the same list. Done's done|dropped toggle and
+  Projects' status tabs stay page-owned FETCH keys, never facets. Each page still renders its
+  own GTD `EmptyState` for a genuinely empty list and mounts `CollectionView` only when there
+  is something to filter, so the layer's `emptyState` message only ever means "your filter
+  hid everything". **The project card is a stretched link**: before #234 the card WAS the
+  `<Link>` with its Complete button inside it, held back by `preventDefault` — interactive
+  content inside an `<a>` is invalid and announces the button as part of the link. Now the
+  link is an absolute overlay and only the button opts back into pointer events.
+  **The no-login `/todo` app passes `savedViews={false}`** (a new optional `CollectionViewProps`
+  switch, default on): the saved-views menu calls `/api/saved-views` through `api()`, whose 401
+  sends the tab to `/login`, and saved views are team data an anonymous link must not touch.
+  Signed in, the three surfaces get team saved views like every other collection surface. The
+  public app's download grew by the layer and `@dnd-kit` — the measured delta is in
+  `docs/agents/frontend-boot-split.md`.
 
 - **The two no-login todo surfaces are asymmetric, and only ONE of them is opt-in** (#70,
   ported from chatty — the heading used to say both were, which the body below has always

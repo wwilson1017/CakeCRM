@@ -81,6 +81,7 @@ function Page({
   onSelect = () => {},
   noSelect = false,
   unselectableIds,
+  savedViews,
 }: {
   config: CollectionConfig<Row, DragPolicy>;
   data?: readonly Row[];
@@ -91,6 +92,8 @@ function Page({
   noSelect?: boolean;
   /** Rows the page declares ineligible for selection (the CRM's archived deals). */
   unselectableIds?: readonly number[];
+  /** The no-login surface's opt-out (#234). */
+  savedViews?: boolean;
 }) {
   const state = useCollectionState(config, data);
   const [selected, setSelected] = useState<ReadonlySet<string | number>>(new Set());
@@ -104,6 +107,7 @@ function Page({
       items={data}
       onSelect={noSelect ? undefined : onSelect}
       loading={loading}
+      savedViews={savedViews}
       selection={
         withSelection
           ? {
@@ -532,6 +536,18 @@ describe('saved views (#181)', () => {
     renderPage({ config: makeConfig('sv_empty'), data: [] });
     expect(document.body.textContent).toContain('No deals yet.');
     expect(menu()).not.toBeNull();
+  });
+
+  it('is absent — and never fetches — when the surface opts out (#234, the no-login /todo app)', () => {
+    // The menu reaches `/api/saved-views` through `api()`, whose 401 sends the tab to /login;
+    // an anonymous surface must not render a control that can do that, populated or empty.
+    renderPage({ config: makeConfig('sv_off'), savedViews: false });
+    expect(document.querySelector('tbody tr')).not.toBeNull();
+    expect(menu()).toBeNull();
+    renderPage({ config: makeConfig('sv_off_empty'), data: [], savedViews: false });
+    expect(document.body.textContent).toContain('No deals yet.');
+    expect(menu()).toBeNull();
+    expect(apiMock).not.toHaveBeenCalled();
   });
 
   it('is absent while the surface is still loading', () => {

@@ -645,16 +645,17 @@ describe('boot split (#149) — the public todo download', () => {
     );
     expect(stray).toEqual([]);
 
-    // Within shared/, the heavy sub-layers stay out: they are CRM interaction substrate, and
-    // `shared/collection` alone pulls @dnd-kit through KanbanView. If the todo surface ever
-    // adopts the collection layer (the ProjectsPage follow-up noted in docs/agents/frontend-boot-split.md), remove the
-    // entry HERE with the measured size delta in that PR — that is the deliberate act.
-    const heavy = [...modules].filter((m) =>
-      ['./shared/collection/', './shared/dnd/', './shared/listview/', './shared/overlay/'].some((p) => m.startsWith(p)),
-    );
-    expect(heavy).toEqual([]);
+    // The shared collection layer IS in this download since #234, deliberately: Someday, Done
+    // and Projects render through `CollectionView`, and the layer reaches @dnd-kit through
+    // KanbanView. Measured on the built /todo cold load (entry chunk + PublicTodoApp + every
+    // static import): 320.6 → 417.0 kB raw, 101.4 → 132.2 kB gzip. Pinned as a sentinel so the
+    // cost stays a known, recorded fact rather than an accident this sweep would miss if the
+    // pages moved off the layer again (and so the package list below keeps its meaning).
+    expect(modules).toContain('./shared/collection/CollectionView.tsx');
 
-    expect([...packages].sort()).toEqual(['react', 'react-router-dom']);
+    expect([...packages].sort()).toEqual([
+      '@dnd-kit/core', '@dnd-kit/sortable', '@dnd-kit/utilities', 'react', 'react-router-dom',
+    ]);
 
     // The two ways CRM code can enter this download without any ImportDeclaration naming it,
     // both of which the static walk above would call clean:

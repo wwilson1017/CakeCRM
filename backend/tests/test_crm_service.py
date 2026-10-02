@@ -357,8 +357,8 @@ def test_clear_demo_data_truncates_when_sample_loaded(monkeypatch, fake_conn):
     # every CRM reset raise.
     assert any(
         "TRUNCATE companies, contacts, deals, activity_log, todos, todo_projects, "
-        "crm_chatter, crm_chatter_attachments, crm_field_values, crm_field_provenance, "
-        "deal_stage_events, proactive_nudges, deal_ai_touch_evidence RESTART IDENTITY"
+        "crm_chatter, crm_chatter_attachments, crm_chatter_mentions, crm_field_values, "
+        "crm_field_provenance, deal_stage_events, proactive_nudges, deal_ai_touch_evidence RESTART IDENTITY"
         in s for s in stmts
     )
     assert not any("crm_field_definitions" in s for s in stmts)
@@ -394,8 +394,8 @@ def test_clear_all_truncates_and_resets_flag(monkeypatch, fake_conn):
     # defs→values); crm_field_provenance trails both.
     assert any(
         "TRUNCATE companies, contacts, deals, activity_log, todos, todo_projects, "
-        "crm_chatter, crm_chatter_attachments, crm_field_definitions, crm_field_values, "
-        "crm_field_provenance, deal_stage_events, proactive_nudges, "
+        "crm_chatter, crm_chatter_attachments, crm_chatter_mentions, crm_field_definitions, "
+        "crm_field_values, crm_field_provenance, deal_stage_events, proactive_nudges, "
         "deal_ai_touch_evidence RESTART IDENTITY"
         in s for s in stmts
     )

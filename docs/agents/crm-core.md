@@ -569,7 +569,35 @@
   upstream features rather than a port of one. Attachment metadata rides
   `get_chatter`, so `crm_get_chatter` inherits it with no new endpoint — one more
   user-typed-text field in front of a background turn, on #22's terms (the ceiling is still
-  one `notify_user`). No agent upload tool: the model has no bytes. **Phase 2** adds the two composing reads:
+  one `notify_user`). No agent upload tool: the model has no bytes.
+  **Chatter notes carry @-mentions** (#235, port of cake_os #2934; `backend/crm/{chatter_service,mention_notify,links}.py`
+  + `frontend/src/crm/{chatterMentions.ts,components/MentionPicker.tsx}`), keyless. The
+  composer's `@` menu lists `useUsers().activeUsers`, a pick inserts `@<label>` and records
+  the ID, and the request carries `mentions: [user_id]` — **the server never parses the
+  text**; the client keeps an ID only while its token is still in the text (word-boundary
+  match, so `@Ann` is not found in `@Annabelle`), so deleting `@Ada` un-mentions Ada. Rows
+  live in `crm_chatter_mentions`, the THIRD CRM table with a real FK to `crm_chatter` (ON
+  DELETE CASCADE, plus `users` ON DELETE CASCADE), so it rides BOTH `_truncate_all`
+  statements and stays out of `is_crm_empty` exactly like attachments. `display_name` is
+  frozen at post time from the SERVER's `COALESCE(NULLIF(btrim(name),''), email)` — the
+  same string `mentionLabel` inserts — so the thread highlights exactly the typed token
+  after a rename (a rename between pick and post costs only the highlight). Only an
+  ACTIVE seat can be newly mentioned (an unknown or deactivated ID is dropped, never a
+  failed note); an already-stored one survives its seat's deactivation, which is why the
+  edit box seeds its picks from the note's stored mentions. `post_note`/`edit_note` return
+  `(note, recipients)` — `add_note`/`update_note` are thin wrappers that keep their shape,
+  and `crm_add_note` stays on `add_note`, which takes NO mentions: **no agent turn,
+  attended or unattended, can fire a mention notification.** PATCH is tri-state: `mentions`
+  omitted (or null) preserves the stored set, a list — `[]` included — becomes the new set
+  under the note's `FOR UPDATE` lock, and only rows actually INSERTed (`ON CONFLICT DO
+  NOTHING RETURNING`) minus the acting seat are told, so a re-save re-notifies nobody.
+  `StrictInt` at the boundary makes `true` or `"7"` a 422. Delivery is a FastAPI
+  `BackgroundTask` (post-commit, threadpool): one `deliver_notification(title, excerpt,
+  user_id=R, link=links.record_path(...))` per recipient, isolated per recipient, never to
+  the author. That needed `notifications.link` — see the notifications note in
+  `docs/agents/accounts-and-ownership.md`. Posted notes render mentions in `ACCENT_TEXT` at
+  weight 600 with NO tinted chip, so nothing new is owed to the contrast guards.
+  **Phase 2** adds the two composing reads:
   `crm_get_deal_health` (one deal — #18's `score_deal()` plus days-in-stage,
   days-since-touch, open/overdue todos and missing links, reduced to a `flags` list;
   it composes and never recomputes the scoring model) and

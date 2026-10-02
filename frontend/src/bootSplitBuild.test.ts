@@ -161,7 +161,7 @@ describe('boot split (#149) — the built chunk graph', () => {
     expect(files).not.toContain(ENTRY.fileName);
   });
 
-  it('the /todo PWA downloads no CRM page, no assistant and no collection layer', () => {
+  it('the /todo PWA downloads no CRM page and no assistant', () => {
     // The issue itself, expressed as an assertion about bytes rather than import statements.
     const modules = modulesDownloadedBy([ENTRY, chunkFor('src/crm/gtd/PublicTodoApp.tsx')]);
 
@@ -169,9 +169,13 @@ describe('boot split (#149) — the built chunk graph', () => {
     expect(modules).toContain('src/crm/gtd/pages.ts');
     expect(modules).toContain('src/crm/gtd/TodayPage.tsx');
     expect(modules).toContain('src/crm/gtd/TodoShell.tsx');
+    // The collection layer (and @dnd-kit through KanbanView) is IN this download since #234:
+    // Someday, Done and Projects render through `CollectionView`. That was the deliberate act the
+    // deny entry here asked for, and its measured cost is recorded in docs/agents/frontend-boot-split.md.
+    expect(modules).toContain('src/shared/collection/CollectionView.tsx');
 
     forbid('/todo', modules, [
-      ASSISTANT, MARKDOWN, DND, COLLECTION, CRM_PAGES,
+      ASSISTANT, MARKDOWN, CRM_PAGES,
       ['the CRM shell', /^src\/App\.tsx$/],
       ['the CRM layout', /^src\/crm\/CrmLayout\.tsx$/],
       ['the login page', /^src\/login\//],

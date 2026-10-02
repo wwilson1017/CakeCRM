@@ -176,6 +176,14 @@ export interface CrmNote {
   // Optional because a note returned by the create/edit endpoints carries no attachments
   // yet — only the list read (`get_chatter`) embeds them.
   attachments?: CrmAttachment[];
+  // @-mentions (#235): the seats this note mentioned, with the name frozen at post time
+  // (the same text the composer inserted as `@<name>`). Optional for the same reason.
+  mentions?: CrmNoteMention[];
+}
+
+export interface CrmNoteMention {
+  user_id: number;
+  name: string;
 }
 
 // Custom fields (issue #19). A definition is the user-authored schema; a value row
