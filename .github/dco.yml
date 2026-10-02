@@ -1,0 +1,5 @@
+# DCO app config: let an author add a sign-off to already-pushed commits with a
+# remediation commit instead of rewriting history (force-push is refused on main
+# and discouraged on feature branches).
+allowRemediationCommits:
+  individual: true
