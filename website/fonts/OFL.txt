@@ -1,10 +1,11 @@
-The five WOFF2 files in this directory are redistributed under the SIL Open
+The seven WOFF2 files in this directory are redistributed under the SIL Open
 Font License, Version 1.1. This file is the notice and license that OFL 1.1
 condition 2 requires to travel with them.
 
-They are the latin subsets published by the @fontsource packages the CakeCRM
-app itself uses, copied here unmodified so the page makes no third-party
-request. Each file embeds its copyright in the sfnt `name` table (nameID 0) and
+They are the latin subsets published by @fontsource (Montserrat and Open Sans
+are the ones the CakeCRM app itself uses; Geist and Geist Mono are the site's
+own), copied here unmodified so the page makes no third-party request.
+Each file embeds its copyright in the sfnt `name` table (nameID 0) and
 a license URL (nameID 14), but carries no license text and an empty WOFF2
 extended-metadata block -- so this file is the only full notice shipped with
 them. Adding a font family to this directory means adding its notice below in
@@ -17,6 +18,8 @@ Files and their upstream projects:
   montserrat-latin-800-normal.woff2   Montserrat
   open-sans-latin-400-normal.woff2    Open Sans
   open-sans-latin-600-normal.woff2    Open Sans
+  geist-latin-wght-normal.woff2       Geist (variable weight)
+  geist-mono-latin-wght-normal.woff2  Geist Mono (variable weight)
 
 
 ===========================================================================
@@ -29,12 +32,15 @@ Copyright 2011 The Montserrat Project Authors (https://github.com/JulietaUla/Mon
 Open Sans
 Copyright 2020 The Open Sans Project Authors (https://github.com/googlefonts/opensans)
 
+Geist and Geist Mono
+Copyright 2024 The Geist Project Authors (https://github.com/vercel/geist-font)
+
 
 ===========================================================================
 LICENSE
 ===========================================================================
 
-Both families are licensed under the SIL Open Font License, Version 1.1,
+All four families are licensed under the SIL Open Font License, Version 1.1,
 reproduced in full below. It is also available with a FAQ at:
 http://scripts.sil.org/OFL
 

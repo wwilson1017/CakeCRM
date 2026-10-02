@@ -64,3 +64,26 @@
   write in Ask — and a review caught the second after the first was fixed. Any future
   safety sentence owes the same check against `frontend/src/assistant/` (the Ask
   tooltip is the shipped wording) and `backend/assistant/{engine,confirm_tier}.py`.
+
+- **The site was redesigned in the website refresh** (2026-09-30, Will's pick "G" of seven
+  prototypes). It is still static with no build step, but no longer one `index.html` +
+  `style.css`: `style.css` carries the page styles plus both demos' styles, and `js/` holds
+  five small scripts — `todo-demo.js`, `baker-demo.js`, `pop.js` (scroll-linked scale-up of
+  the tour screenshots via a `--p` custom property), `railway.js` (injects Railway's mark,
+  taken from railway.com/button.svg, into every `[data-rw]` link) and `site.js`. The theme is
+  light and deliberately has no purple except the Railway buttons, which use Railway's own
+  gradient so they read as Railway at a glance. Headings are Geist, self-hosted as the
+  variable woff2 from `@fontsource-variable/geist{,-mono}` (notice added to `fonts/OFL.txt`).
+  **The hero slice is the one sanctioned exception to the brand-mark rule**: it assembles
+  itself layer by layer on load and stacks ABOVE a spaced "CAKECRM" wordmark.
+  **The todo demo** is a working, browser-only copy of the GTD todos (quick add with a small
+  subset of `crm/gtd/quickAdd.ts`, three-step Inbox triage matching `TriageCard`, Today,
+  To Do, Waiting, Done); state lives in `localStorage` and never leaves the browser, and its
+  sample todos are the fictional sample-data names dated relative to today.
+  **The Baker demo is not AI** — canned replies, autoplayed once when scrolled into view
+  (typed question, thinking dots, streamed answer, a fake cursor clicking Approve), and any
+  click takes over. Its mode behaviour is a claim about the product and mirrors the code:
+  Read changes nothing; Ask logs a call straight away (a routine write) but shows an Approve
+  card before an email draft; Auto runs both; a draft is never sent. Re-check it against
+  `frontend/src/assistant/AssistantPanelBody.tsx` and `backend/assistant/confirm_tier.py`
+  whenever those change, the same as any other safety sentence on the page.
