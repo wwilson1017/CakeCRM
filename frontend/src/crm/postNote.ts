@@ -33,8 +33,10 @@ export type UploadFn = (path: string, file: File) => Promise<unknown>;
 export interface PostNoteOptions {
   text: string;
   files: File[];
+  /** User IDs picked with the composer's @ menu (#235); rides the create request. */
+  mentions?: number[];
   /** Creates the note through the existing chatter endpoint. */
-  createNote: (message: string) => Promise<{ id: number }>;
+  createNote: (message: string, mentions: number[]) => Promise<{ id: number }>;
   uploadPath: (noteId: number) => string;
   upload: UploadFn;
 }
@@ -67,6 +69,7 @@ export async function uploadAttachments(
 export async function postNoteWithAttachments({
   text,
   files,
+  mentions = [],
   createNote,
   uploadPath,
   upload,
@@ -76,7 +79,7 @@ export async function postNoteWithAttachments({
   const message = typed || attachmentFallbackMessage(files);
   // Deliberately NOT caught: if the note itself fails there is nothing to attach to, and
   // the composer must keep the user's text.
-  const note = await createNote(message);
+  const note = await createNote(message, mentions);
   if (files.length === 0) return { noteId: note.id, failures: [] };
   return { noteId: note.id, failures: await uploadAttachments(note.id, files, uploadPath, upload) };
 }

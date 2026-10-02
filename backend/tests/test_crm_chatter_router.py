@@ -55,11 +55,11 @@ def test_get_chatter_passes_include_archived(client, monkeypatch):
 def test_add_note_returns_created(client, monkeypatch):
     captured = {}
 
-    def _add(t, i, m, author_id=None):
+    def _add(t, i, m, author_id=None, mentions=None):
         captured.update(entity_type=t, entity_id=i, author_id=author_id)
-        return {"id": 7, "message": m}
+        return {"id": 7, "message": m}, []
 
-    monkeypatch.setattr(chatter_service, "add_note", _add)
+    monkeypatch.setattr(chatter_service, "post_note", _add)
     r = client.post("/api/crm/chatter/deal/3/note", json={"message": "hello"})
     assert r.status_code == 200
     assert r.json() == {"id": 7, "message": "hello"}
@@ -87,14 +87,16 @@ def test_company_is_a_valid_chatter_entity_type(client, monkeypatch):
 # ── PATCH /chatter/note/{id} ────────────────────────────────────────────────────
 
 def test_update_note_ok(client, monkeypatch):
-    monkeypatch.setattr(chatter_service, "update_note", lambda nid, m: {"id": nid, "message": m})
+    monkeypatch.setattr(chatter_service, "edit_note",
+                        lambda nid, m, mentions=None, actor_id=None: ({"id": nid, "message": m}, []))
     r = client.patch("/api/crm/chatter/note/5", json={"message": "edited"})
     assert r.status_code == 200
     assert r.json()["message"] == "edited"
 
 
 def test_update_note_missing_404(client, monkeypatch):
-    monkeypatch.setattr(chatter_service, "update_note", lambda nid, m: None)
+    monkeypatch.setattr(chatter_service, "edit_note",
+                        lambda nid, m, mentions=None, actor_id=None: (None, []))
     assert client.patch("/api/crm/chatter/note/999", json={"message": "x"}).status_code == 404
 
 

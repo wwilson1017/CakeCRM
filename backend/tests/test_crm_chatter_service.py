@@ -65,7 +65,7 @@ def test_add_note_locks_target_then_inserts_in_one_txn(monkeypatch, fake_conn):
     assert "%s" in insert_sql and "?" not in insert_sql
     insert_params = next(p for s, p in conn.executed if "INSERT INTO crm_chatter" in s)
     assert insert_params[0] == "deal" and insert_params[1] == 3 and insert_params[2] == "hi"  # trimmed
-    assert result == {"id": 5, "message": "hi"}
+    assert result == {"id": 5, "message": "hi", "mentions": []}
 
 
 def test_add_note_contact_locks_contacts_table(monkeypatch, fake_conn):
@@ -196,18 +196,25 @@ def test_bounded_limit_and_offset_edges():
 
 # ── update / archive / unarchive ────────────────────────────────────────────────
 
-def test_update_note_sets_updated_at_returning(rec):
-    rec.fetchone_queue = [{"id": 5, "message": "new", "updated_at": "t"}]
+def test_update_note_sets_updated_at_returning(monkeypatch, fake_conn):
+    # One transaction since #235: lock the note, then UPDATE ... RETURNING *.
+    conn = fake_conn(monkeypatch, chatter_service, fetchone_results=[(1,), (5, "new", "t")])
+    conn.description = ["id", "message", "updated_at"]
     result = chatter_service.update_note(5, " new ")
-    sql = rec.sql_containing("UPDATE crm_chatter SET message")
+    stmts = [s for s, _ in conn.executed]
+    assert stmts[0] == "SELECT 1 FROM crm_chatter WHERE id = %s FOR UPDATE"
+    sql = next(s for s in stmts if "UPDATE crm_chatter SET message" in s)
     assert "updated_at = %s" in sql and "RETURNING *" in sql
-    params = rec.params_for("UPDATE crm_chatter SET message")
+    params = next(p for s, p in conn.executed if "UPDATE crm_chatter SET message" in s)
     assert params[0] == "new" and params[-1] == 5
     assert result["message"] == "new"
+    # Mentions omitted → the stored set is only READ, never written.
+    assert not any("DELETE FROM crm_chatter_mentions" in s or "INSERT INTO crm_chatter_mentions" in s
+                   for s in stmts)
 
 
-def test_update_note_missing_returns_none(rec):
-    rec.fetchone_queue = [None]
+def test_update_note_missing_returns_none(monkeypatch, fake_conn):
+    fake_conn(monkeypatch, chatter_service, fetchone_results=[None])
     assert chatter_service.update_note(999, "x") is None
 
 

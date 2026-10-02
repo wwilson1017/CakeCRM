@@ -29,10 +29,10 @@ Python expectation in one commit is a natural, self-consistent change that leave
 suites green while the two producers emit different shapes. Reading the other
 language's source is what makes the pin real.
 
-There are no contact or company templates here. Upstream has them because its global
-search page builds those paths server-side; nothing in CakeCRM does, so adding them
-would ship two untested constants with no producer and no parser. They belong with
-whatever first needs them.
+Contact and company paths joined in #235: a chatter @-mention notification links to the
+record the note is on, and a note can be on any of the three. They are the plain
+react-router detail routes (``contacts/:id?`` / ``companies/:id?`` in ``App.tsx``), so
+there is no query-param parser to pin them against.
 
 Leaf module: stdlib plus a lazy ``core.config``, so ``crm.tools`` imports *downward*
 into it and nothing here imports back up.
@@ -50,6 +50,32 @@ DEAL_PATH_TEMPLATE = "/crm/pipeline?deal={id}"
 def deal_path(deal_id: int) -> str:
     """Relative in-app path that opens the pipeline board on ``deal_id``."""
     return DEAL_PATH_TEMPLATE.format(id=deal_id)
+
+
+#: The in-app detail route for each chatter entity type (#235). A deal has no detail
+#: route of its own — it opens on the board via ``DEAL_PATH_TEMPLATE``.
+_RECORD_PATHS = {
+    "contact": "/crm/contacts/{id}",
+    "company": "/crm/companies/{id}",
+}
+
+
+def record_path(entity_type: str, entity_id: int) -> str:
+    """Relative in-app path that opens a deal, contact or company. Raises ``KeyError``
+    on any other type — a link to a page that does not exist is worse than none."""
+    if entity_type == "deal":
+        return deal_path(entity_id)
+    return _RECORD_PATHS[entity_type].format(id=int(entity_id))
+
+
+def app_url(path: str) -> str:
+    """``path`` made absolute when the install's public address is known, else left
+    relative — the rule ``deal_url`` documents below, shared rather than restated."""
+    from core.config import settings
+
+    if settings.frontend_url_is_default:
+        return path
+    return f"{settings.frontend_url.rstrip('/')}{path}"
 
 
 def deal_url(deal_id: int) -> str:
@@ -80,11 +106,7 @@ def deal_url(deal_id: int) -> str:
     ``core.config`` is imported lazily so this module stays cheap for callers that only
     ever want the relative path.
     """
-    from core.config import settings
-
-    if settings.frontend_url_is_default:
-        return deal_path(deal_id)
-    return f"{settings.frontend_url.rstrip('/')}{deal_path(deal_id)}"
+    return app_url(deal_path(deal_id))
 
 
 def with_deal_url(deal: dict | None) -> dict | None:

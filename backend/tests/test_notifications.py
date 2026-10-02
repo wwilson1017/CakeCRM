@@ -41,8 +41,9 @@ def wiring(monkeypatch):
     created = {}
 
     def create_notification(title, message, channels_sent=None, notification_id=None,
-                            user_id=None):
+                            user_id=None, link=None):
         order.append("create")
+        created["link"] = link
         created["id"] = "nid-1"
         created["channels_at_create"] = list(channels_sent or [])
         created["user_id"] = user_id

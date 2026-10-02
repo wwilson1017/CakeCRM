@@ -3486,7 +3486,8 @@ def summarize_analytics(analytics: dict) -> dict:
 # could never change an answer.
 _CRM_TABLES = (
     "companies", "contacts", "deals", "todos", "todo_projects", "activity_log",
-    "crm_chatter", "crm_chatter_attachments", "crm_field_values", "crm_field_provenance",
+    "crm_chatter", "crm_chatter_attachments", "crm_chatter_mentions", "crm_field_values",
+    "crm_field_provenance",
 )
 
 
@@ -3748,18 +3749,23 @@ def _truncate_all(cur, include_definitions: bool = False) -> None:
     # todo_projects rule). Position matches its writers — create_attachment and
     # delete_attachment both lock the crm_chatter row FIRST and then touch this table, so
     # a chatter-before-attachments TRUNCATE order can't invert against either.
+    # crm_chatter_mentions (#235) follows it for the same reason: a real FK to crm_chatter
+    # (ON DELETE CASCADE), so it must share the statement, and its writers (post_note /
+    # edit_note) lock the entity or note row before touching it. Like attachments it is
+    # absent from is_crm_empty — the cascade makes "mentions without notes" impossible.
     if include_definitions:
         cur.execute(
             "TRUNCATE companies, contacts, deals, activity_log, todos, todo_projects, "
-            "crm_chatter, crm_chatter_attachments, crm_field_definitions, crm_field_values, "
+            "crm_chatter, crm_chatter_attachments, crm_chatter_mentions, crm_field_definitions, "
+            "crm_field_values, "
             "crm_field_provenance, deal_stage_events, proactive_nudges, "
             "deal_ai_touch_evidence RESTART IDENTITY"
         )
     else:
         cur.execute(
             "TRUNCATE companies, contacts, deals, activity_log, todos, todo_projects, "
-            "crm_chatter, crm_chatter_attachments, crm_field_values, crm_field_provenance, "
-            "deal_stage_events, proactive_nudges, deal_ai_touch_evidence RESTART IDENTITY"
+            "crm_chatter, crm_chatter_attachments, crm_chatter_mentions, crm_field_values, "
+            "crm_field_provenance, deal_stage_events, proactive_nudges, deal_ai_touch_evidence RESTART IDENTITY"
         )
 
 

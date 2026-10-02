@@ -146,6 +146,14 @@
   **Telegram is per-seat since #193** (Phase B/B4), which deleted the
   `earliest_admin_id()` stopgap `telegram/store` carried for exactly that issue — each
   link now mints its conversation with its own owner. See the Telegram bullet below.
+  **A notification can carry a LINK since #235**: nullable `notifications.link`, set only
+  through `deliver_notification(..., link=)`, which keeps it only if it is a same-origin path
+  (`/…`, not `//`, no backslash, no whitespace or control character) and otherwise drops the
+  link while still sending. It is the bell row's title link, the Web Push click-through `url`
+  (previously always `/crm`), and a trailing line on the Telegram text via
+  `crm.links.app_url` — absolute only when `FRONTEND_URL`/a Railway domain is set, the same
+  known limit `deal_url` documents. `notify_user` does not take one, so an assistant turn
+  cannot mint a link. The first sender is the chatter @-mention (`docs/agents/crm-core.md`).
   **Still install-wide after Phase B, deliberately:** memory facts, context files, the
   Gmail CONNECTION, alerts and the AI provider keys. That list is what is left, not a
   to-do: conversations (#191), notifications (#192) and Telegram links (#193) are

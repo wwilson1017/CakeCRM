@@ -136,7 +136,8 @@ def test_create_stores_the_recipient(monkeypatch):
     monkeypatch.setattr(service, "pg_execute", c.execute)
     service.create_notification("t", "m", [], notification_id="nid", user_id=ME)
     assert "user_id" in c.sql
-    assert c.params[-1] == ME
+    assert c.params[-2] == ME
+    assert c.params[-1] is None  # link (#235) — absent for every pre-existing sender
 
 
 def test_create_defaults_to_broadcast(monkeypatch):
@@ -145,7 +146,7 @@ def test_create_defaults_to_broadcast(monkeypatch):
     c = _Calls()
     monkeypatch.setattr(service, "pg_execute", c.execute)
     service.create_notification("t", "m", [])
-    assert c.params[-1] is None
+    assert c.params[-2] is None
 
 
 # ── 2 + 3. push subscriptions: stamping, self-heal, targeted fan-out ─────────
@@ -212,7 +213,7 @@ def delivered(monkeypatch):
     """Capture the recipient the row was written with and the one push fanned out to."""
     seen: dict = {"push_target": "unset"}
     monkeypatch.setattr(delivery.service, "create_notification",
-                        lambda t, m, ch=None, notification_id=None, user_id=None:
+                        lambda t, m, ch=None, notification_id=None, user_id=None, link=None:
                         seen.update(row_user_id=user_id) or "nid-1")
     monkeypatch.setattr(delivery.service, "update_channels", lambda *a, **k: None)
     monkeypatch.setattr(vapid, "get_vapid_keys", lambda: ("pub", "priv"))
