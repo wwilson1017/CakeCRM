@@ -84,6 +84,13 @@
   import, and a Vite/Rolldown upgrade merging the branches, since the whole topology is
   automatic (`vite.config.ts` declares no `manualChunks` on purpose). It asserts on SOURCE
   MODULES rather than chunk filenames: an earlier revision matched chunks by name and a
-  content hash happened to contain the letters `dnd`. If the todo surface ever adopts the
-  collection layer (the `ProjectsPage` follow-up), that PR removes the deny entry and records
-  the measured size delta — a deliberate act, which is the point.
+  content hash happened to contain the letters `dnd`. **#234 adopted the collection layer on
+  the todo surface and retired both guards' deny entries for it**, deliberately: Someday, Done
+  and Projects render through `CollectionView`, which reaches `@dnd-kit` through `KanbanView`.
+  Both guards now pin `shared/collection/CollectionView.tsx` as a POSITIVE sentinel instead, and
+  the source guard pins the package set (`@dnd-kit/{core,sortable,utilities}` beside `react` and
+  `react-router-dom`), so the cost stays a recorded fact rather than drifting. Measured on the
+  built `/todo` cold load (entry chunk + `PublicTodoApp` + every static import, JS only): **320.6
+  → 417.0 kB raw, 101.4 → 132.2 kB gzip** (+96.4 kB / +30.8 kB). The entry chunk every visitor
+  downloads is unchanged at 188.7 kB. Lazy-loading `KanbanView` inside the layer would win most
+  of that back for every non-board surface, and is a shared-layer change for its own issue.

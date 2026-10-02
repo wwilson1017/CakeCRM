@@ -54,6 +54,14 @@ Today, Inbox (with a live count), To Do, Projects, Waiting, Someday, Done, Revie
 search page across contexts. Each tab has its own filters; the shell carries a search box and
 a quick-add composer.
 
+Someday, Done and Projects use the same filter bar as the Contacts, Companies and Todos lists:
+a search box that matches every word you type, a **Filters** button (Someday and Done filter by
+context), a count of what is showing, and — when you are signed in — **Views**, which saves
+the current search and filters under a name the whole team can apply. The no-login todo link
+has no Views. Done's Done/Dropped switch and the Projects status buttons pick which list is
+loaded, and the filters apply within it. Inbox, To Do and Waiting keep their own bar, because
+each is split into sections the shared list cannot show.
+
 ## Undoing a completion or a filing
 
 Marking a todo done, or setting the context that files an inbox item, shows a small undo

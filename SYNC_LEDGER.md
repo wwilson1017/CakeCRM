@@ -75,6 +75,7 @@ Populated by port PRs from here on.
 | Feature | Source | CakeCRM PR / issue | Date |
 |---|---|---|---|
 | Todo-GTD undo pill — a 7s undo block for marking a todo done anywhere and for filing an inbox item under a context | PR #2904 (`77a3337ff`), PR #2939 (`3b262b0d0`) | #231 | — |
+| Todo GTD Someday, Done and Projects on the shared collection layer (per-page configs, a stretched-link project card, the public todo app's boot-split deny entry retired) | PR #1840 (`2a639f836`), GTD half only | #234 | — |
 | Todo-GTD copy buttons + long-title wrapping | `e00e05cde` | #151 | — |
 | Pipeline board bounded to the window (its scrollbars stay on screen), the first corpus sweep gated on tab visibility, and a last-contact line on Won cards | PR #1956 (`e605b49c4`) for the bounding — the half #147 deferred; PR #1828 (`029983b4f`) and PR #1872 (`25d45eb9a`) consulted and diverged from, see the Source Map | #129 | — |
 | Todo GTD triage & edit-sheet parity (due-date cue, inline Notes, real Context picker, legible step headings) | PR #2424 (`e3c06bba`), PR #2539 (`b936ac29`) | #150 | 2026-09-04 |

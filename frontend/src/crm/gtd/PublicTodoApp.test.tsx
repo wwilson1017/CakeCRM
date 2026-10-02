@@ -204,3 +204,63 @@ describe('the /todo surface boots through Root (#149)', () => {
     expect(host.textContent).not.toContain(TODO_SHELL_MARKER);
   }, BOOT_TIMEOUT_MS);
 });
+
+describe('the pages on the collection layer, in public mode (#234)', () => {
+  const TODO = {
+    id: 1, title: 'Learn the cello', notes: '', project_id: null, project_name: null,
+    context: '@home', tags: [], status: 'someday_maybe', star: false, due_date: '', repeat: '',
+    auto_star_on_due: false, source: 'web', created_at: '2026-09-01T00:00:00Z',
+    updated_at: '2026-09-01T00:00:00Z', completed_at: null, contact_id: null, deal_id: null,
+  };
+  const PROJECT = {
+    id: 7, name: 'Rebuild the shed', notes: 'quote pending', status: 'active', open_count: 2,
+    created_at: '2026-09-01T00:00:00Z', updated_at: '2026-09-01T00:00:00Z',
+  };
+  /** The saved-views trigger — `SavedViewsMenu` is the only popover-dialog button in the bar. */
+  const savedViewsMenu = () => host.querySelector('button[aria-haspopup="dialog"]');
+
+  /** Seed the mocked API with ONE row per list. Imported after `vi.resetModules()` and before
+   *  `bootApp()`, so Root's graph receives this same module instance. */
+  async function seed(): Promise<void> {
+    const api = await import('./api');
+    vi.mocked(api.listTodos).mockResolvedValue([TODO] as never);
+    vi.mocked(api.listProjects).mockResolvedValue([PROJECT] as never);
+  }
+
+  it('Someday renders through CollectionView and offers no saved views', async () => {
+    // Saved views are authenticated team data: the menu's `api()` answers a 401 by sending the
+    // tab to /login, which on this surface is a dead end for someone with only a link.
+    visit(`${TOKEN_BASE}/someday`, TOKEN_BASE);
+    await seed();
+    await bootApp();
+    await settle(TODO.title);
+    expect(host.querySelector('input[placeholder="Filter…"]'), 'the layer\'s search bar').not.toBeNull();
+    expect(host.querySelector('table'), 'the layer\'s list view').not.toBeNull();
+    expect(savedViewsMenu()).toBeNull();
+  }, BOOT_TIMEOUT_MS);
+
+  it('Done renders through CollectionView and offers no saved views', async () => {
+    visit(`${TOKEN_BASE}/done`, TOKEN_BASE);
+    await seed();
+    await bootApp();
+    await settle(TODO.title);
+    expect(host.querySelector('input[placeholder="Search finished todos…"]'), 'the layer\'s search bar').not.toBeNull();
+    expect(host.querySelector('table'), 'the layer\'s list view').not.toBeNull();
+    expect(savedViewsMenu()).toBeNull();
+  }, BOOT_TIMEOUT_MS);
+
+  it('a project card keeps its button OUT of its link, and the link inside the token base', async () => {
+    visit(`${TOKEN_BASE}/projects`, TOKEN_BASE);
+    await seed();
+    await bootApp();
+    await settle(PROJECT.name);
+    expect(savedViewsMenu()).toBeNull();
+    const complete = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Complete');
+    expect(complete, 'the card renders its close-out button').toBeDefined();
+    // An <a> may not contain interactive content; the stretched-link card is what fixed that.
+    expect(complete!.closest('a')).toBeNull();
+    const open = host.querySelector(`a[href="${TOKEN_BASE}/projects/${PROJECT.id}"]`);
+    expect(open?.textContent).toBe(`Open project ${PROJECT.name}`);
+    auditLinks();
+  }, BOOT_TIMEOUT_MS);
+});

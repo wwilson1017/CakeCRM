@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { CollectionView, useCollectionState } from '../../shared/collection';
 import { createProject, listProjects, listTodos } from './api';
+import { projectsCollectionConfig } from './collectionConfig';
+import { ProjectCard } from './components/ProjectCard';
 import { PROJECT_STATUSES, PROJECT_STATUS_META } from './constants';
 import { updateProjectStatus } from './projectActions';
-import { todoPath } from './publicMode';
+import { isTodoPublicMode } from './publicMode';
 import { useTodosChanged } from './hooks';
 import { EmptyState, LoadFailed, LoadingRows, TodoShell } from './TodoShell';
 import type { TodoProject, TodoProjectStatus } from './types';
@@ -11,16 +13,16 @@ import { refreshMeta } from './useTodoMeta';
 
 const inputCls = 'w-full rounded-lg border border-line bg-cream px-3 py-2 text-base sm:text-sm text-charcoal focus:border-brand focus:outline-none';
 const PAGE_LIMIT = 500;
+const NO_PROJECTS: TodoProject[] = [];
 
 /**
  * Projects = outcomes needing more than one action. The GTD rule this page enforces:
  * every ACTIVE project should have at least one next action, and the card warns when
  * it doesn't.
  *
- * Rendered as a plain card grid rather than through `shared/collection`. #73 landed
- * that layer without rewiring any CRM surface — adopting it across the list pages is
- * its own issue (#77) — so this page follows the current house state and joins that
- * migration with the rest.
+ * The grid runs through the shared collection layer's `cards` view (#234), which adds
+ * search over name and notes. The status tabs stay a page-owned FETCH key rather than a
+ * facet, and the cell is the page's own `ProjectCard` (see its docstring for why).
  */
 export function ProjectsPage() {
   const [status, setStatus] = useState<TodoProjectStatus>('active');
@@ -66,16 +68,17 @@ export function ProjectsPage() {
     }
   };
 
-  const closeOut = async (e: React.MouseEvent, p: TodoProject) => {
-    // The card is a Link; the button must not navigate.
-    e.preventDefault();
-    e.stopPropagation();
+  const closeOut = async (p: TodoProject) => {
     const reopening = p.status === 'completed' || p.status === 'dropped';
     if (await updateProjectStatus(p.id, reopening ? 'active' : 'completed')) {
       load(status);
       void refreshMeta();
     }
   };
+
+  const items = projects ?? NO_PROJECTS;
+  // A module-constant config needs no memoization to meet the layer's stability contract.
+  const state = useCollectionState(projectsCollectionConfig, items);
 
   return (
     <TodoShell active="projects" onAdded={() => load(status)}>
@@ -139,49 +142,30 @@ export function ProjectsPage() {
 
       {failed && <LoadFailed retry={() => load(status)} />}
       {!failed && projects === null && <LoadingRows />}
-      {projects !== null && !failed && projects.length === 0 && (
+      {!failed && projects !== null && projects.length === 0 && (
         <EmptyState
           title={`No ${PROJECT_STATUS_META[status].label.toLowerCase()} projects`}
           hint="A project is any outcome that needs more than one action."
         />
       )}
-      <div className="grid gap-3 sm:grid-cols-2">
-        {(projects ?? []).map(p => {
-          const stalled = p.status === 'active' && !projectsWithNext.has(p.id);
-          return (
-            <Link
-              key={p.id}
-              to={todoPath(`/projects/${p.id}`)}
-              className="block rounded-xl border border-line-faint bg-cream p-4 transition hover:border-brand/50"
-            >
-              <div className="flex items-start justify-between gap-2">
-                <p className="min-w-0 break-words font-heading font-semibold text-charcoal">{p.name}</p>
-                <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${PROJECT_STATUS_META[p.status].chip}`}>
-                  {PROJECT_STATUS_META[p.status].label}
-                </span>
-              </div>
-              {p.notes && <p className="mt-1 line-clamp-2 text-sm text-muted">{p.notes}</p>}
-              <div className="mt-3 flex items-center justify-between gap-2">
-                <span className="text-xs text-muted">
-                  {p.open_count} open item{p.open_count === 1 ? '' : 's'}
-                </span>
-                <button
-                  type="button"
-                  onClick={e => void closeOut(e, p)}
-                  className="rounded-lg border border-line px-2.5 py-1 text-xs font-heading text-charcoal hover:bg-sand"
-                >
-                  {p.status === 'completed' || p.status === 'dropped' ? 'Reactivate' : 'Complete'}
-                </button>
-              </div>
-              {stalled && (
-                <p className="mt-2 rounded-lg bg-amber-50 px-2 py-1 text-xs text-amber-700 dark:bg-amber-950/30 dark:text-amber-300">
-                  No next action — decide the very next physical step.
-                </p>
-              )}
-            </Link>
-          );
-        })}
-      </div>
+      {!failed && items.length > 0 && (
+        <CollectionView
+          config={projectsCollectionConfig}
+          state={state}
+          items={items}
+          searchPlaceholder="Search projects…"
+          savedViews={!isTodoPublicMode}
+          cards={{
+            renderCard: p => (
+              <ProjectCard
+                project={p}
+                stalled={p.status === 'active' && !projectsWithNext.has(p.id)}
+                onCloseOut={project => void closeOut(project)}
+              />
+            ),
+          }}
+        />
+      )}
     </TodoShell>
   );
 }
