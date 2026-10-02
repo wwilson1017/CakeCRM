@@ -446,7 +446,7 @@ def test_search_deals_tool_rejects_a_non_map_filter():
 
 
 def test_merge_deals_tool_wraps_validation_errors(monkeypatch):
-    def boom(t, s):
+    def boom(t, s, **kw):
         raise ValueError("Cannot merge a deal into itself")
     monkeypatch.setattr(service, "merge_deals", boom)
     assert tools.crm_merge_deals(1, 1) == {"error": "Cannot merge a deal into itself"}
@@ -455,7 +455,7 @@ def test_merge_deals_tool_wraps_validation_errors(monkeypatch):
 def test_lifecycle_tools_report_a_missing_deal(monkeypatch):
     monkeypatch.setattr(service, "mark_deal_won", lambda d: None)
     monkeypatch.setattr(service, "mark_deal_lost", lambda d, lost_reason="": None)
-    monkeypatch.setattr(service, "archive_deal", lambda d, archived=True: None)
+    monkeypatch.setattr(service, "archive_deal", lambda d, archived=True, **kw: None)
     assert "error" in tools.crm_mark_deal_won(9)
     assert "error" in tools.crm_mark_deal_lost(9)
     assert "error" in tools.crm_archive_deal(9)
@@ -579,7 +579,7 @@ def test_archive_tool_parses_booleans_strictly(monkeypatch):
     is True, so a naive cast would do the destructive thing on a restore request."""
     seen = []
     monkeypatch.setattr(service, "archive_deal",
-                        lambda d, archived=True: seen.append(archived) or {"id": d})
+                        lambda d, archived=True, **kw: seen.append(archived) or {"id": d})
     tools.crm_archive_deal(1, archived="false")
     tools.crm_archive_deal(1, archived="true")
     tools.crm_archive_deal(1, archived=False)
@@ -590,10 +590,57 @@ def test_archive_tool_parses_booleans_strictly(monkeypatch):
     assert len(seen) == 4  # the service was never reached for the bad value
 
 
+def test_archive_tool_forwards_the_reason_and_turns_a_refusal_into_an_error(monkeypatch):
+    """#239: the reason rides to the service, and the service's blank-reason refusal
+    comes back as an error dict so the assistant asks why instead of tracebacking."""
+    seen = []
+
+    def archive(d, archived=True, reason=None, actor_id=None):
+        seen.append((reason, actor_id))
+        if archived and not (reason or "").strip():
+            raise ValueError("A reason is required to archive a deal — ask why")
+        return {"id": d}
+
+    monkeypatch.setattr(service, "archive_deal", archive)
+    out = tools.crm_archive_deal(1)
+    assert "reason is required" in out["error"]
+    assert tools.crm_archive_deal(1, reason="dupe", actor_id=5)["archived"] is True
+    assert seen[-1] == ("dupe", 5)
+
+
+def test_the_archive_def_takes_a_reason_but_restore_needs_none():
+    d = next(t for t in tools.CRM_TOOL_DEFS if t["name"] == "crm_archive_deal")
+    assert "reason" in d["input_schema"]["properties"]
+    assert d["input_schema"]["required"] == ["deal_id"]
+    for name in ("crm_update_contact", "crm_update_company"):
+        d = next(t for t in tools.CRM_TOOL_DEFS if t["name"] == name)
+        assert "archive_reason" in d["input_schema"]["properties"]
+
+
+def test_archive_tools_bind_the_asking_seat_as_the_actor(monkeypatch):
+    """The actor is server-supplied: a model-sent actor_id is dropped (#190's rule)."""
+    seen = {}
+    monkeypatch.setattr(service, "archive_deal",
+                        lambda d, archived=True, reason=None, actor_id=None:
+                        seen.update(deal=actor_id) or {"id": d})
+    monkeypatch.setattr(service, "update_contact",
+                        lambda cid, actor_id=None, **kw: seen.update(contact=actor_id) or {"id": cid})
+    monkeypatch.setattr(service, "update_company",
+                        lambda cid, actor_id=None, **kw: seen.update(company=actor_id) or {"id": cid})
+    monkeypatch.setattr(service, "merge_deals",
+                        lambda t, s, actor_id=None: seen.update(merge=actor_id) or {"id": t})
+    ex = tools._identity_executors({"id": 3, "role": "admin"})
+    ex["crm_archive_deal"](deal_id=1, reason="dupe", actor_id=99)
+    ex["crm_update_contact"](contact_id=1, status="archived", archive_reason="x", actor_id=99)
+    ex["crm_update_company"](company_id=1, status="archived", archive_reason="x", actor_id=99)
+    ex["crm_merge_deals"](target_deal_id=1, source_deal_id=2, actor_id=99)
+    assert seen == {"deal": 3, "contact": 3, "company": 3, "merge": 3}
+
+
 def test_archive_tool_rejects_ambiguous_integers(monkeypatch):
     """0/1 are unambiguous; 2 or -1 are not, and this flag decides whether a deal
     disappears from every view."""
-    monkeypatch.setattr(service, "archive_deal", lambda d, archived=True: {"id": d})
+    monkeypatch.setattr(service, "archive_deal", lambda d, archived=True, **kw: {"id": d})
     assert tools.crm_archive_deal(1, archived=1)["archived"] is True
     assert tools.crm_archive_deal(1, archived=0)["archived"] is False
     assert "error" in tools.crm_archive_deal(1, archived=2)

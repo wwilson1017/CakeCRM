@@ -534,7 +534,7 @@ def test_contact_update_unlink_company_explicit_null(client, monkeypatch):
     resp = client.put("/api/crm/contacts/1", json={"company_id": None})
     assert resp.status_code == 200
     # explicit null survives the exclude_unset filter → unlinks
-    assert seen == {"company_id": None}
+    assert seen == {"company_id": None, "actor_id": 1}  # #239: who, if it archives
 
 
 def test_deal_update_unlink_company_explicit_null(client, monkeypatch):
@@ -552,7 +552,7 @@ def test_contact_update_omitted_company_id_not_sent(client, monkeypatch):
                         lambda cid, **kw: seen.update(kw) or {"id": cid})
     client.put("/api/crm/contacts/1", json={"name": "Ana"})
     # omission != explicit null: company_id is absent when the client didn't send it
-    assert "company_id" not in seen and seen == {"name": "Ana"}
+    assert "company_id" not in seen and seen == {"name": "Ana", "actor_id": 1}
 
 
 def test_deal_update_omitted_company_id_not_sent(client, monkeypatch):
@@ -808,7 +808,7 @@ def test_restore_deal_unarchives_and_returns_the_fresh_row(client, monkeypatch):
     r = client.post("/api/crm/deals/7/restore")
     assert r.status_code == 200
     # The route must un-archive, never archive — the flag is the whole contract.
-    assert seen == {"deal_id": 7, "archived": False}
+    assert seen == {"deal_id": 7, "archived": False, "actor_id": 1}
     # The board patches this row in place instead of trusting a refetch that can fail.
     assert r.json() == {"id": 7, "archived_at": None}
 
@@ -1166,3 +1166,40 @@ def test_timeline_route_refuses_an_out_of_range_page(client, monkeypatch):
     ).status_code == 422
     assert client.get("/api/crm/companies/7/timeline?offset=-1").status_code == 422
     assert called == []
+
+
+# ── Archiving records who and why (#239) ────────────────────────────────────
+
+@pytest.mark.parametrize("path, fn", [
+    ("/api/crm/contacts/1", "update_contact"), ("/api/crm/companies/1", "update_company"),
+])
+def test_archive_reason_reaches_the_service_with_the_actor(client, monkeypatch, path, fn):
+    seen = {}
+    monkeypatch.setattr(service, fn, lambda cid, **kw: seen.update(kw) or {"id": cid})
+    r = client.put(path, json={"status": "archived", "archive_reason": "went dark"})
+    assert r.status_code == 200
+    assert seen == {"status": "archived", "archive_reason": "went dark", "actor_id": 1}
+
+
+@pytest.mark.parametrize("path, fn", [
+    ("/api/crm/contacts/1", "update_contact"), ("/api/crm/companies/1", "update_company"),
+])
+def test_a_reasonless_archive_is_a_400_with_the_services_sentence(client, monkeypatch, path, fn):
+    def refuse(cid, **kw):
+        raise ValueError("A reason is required to archive a contact — ask why")
+    monkeypatch.setattr(service, fn, refuse)
+    r = client.put(path, json={"status": "archived"})
+    assert r.status_code == 400 and "reason is required" in r.json()["detail"]
+
+
+def test_an_overlong_archive_reason_is_rejected_not_truncated(client, monkeypatch):
+    monkeypatch.setattr(service, "update_contact", lambda cid, **kw: {"id": cid})
+    r = client.put("/api/crm/contacts/1", json={
+        "status": "archived", "archive_reason": "x" * (service.MAX_ARCHIVE_REASON + 1)})
+    assert r.status_code == 422
+
+
+@pytest.mark.parametrize("path", ["/api/crm/contacts", "/api/crm/companies"])
+def test_creating_an_archived_record_is_a_400(client, path):
+    r = client.post(path, json={"name": "A", "status": "archived"})
+    assert r.status_code == 400 and "already archived" in r.json()["detail"]

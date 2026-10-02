@@ -136,7 +136,7 @@ CRM_TOOL_DEFS = [
                 "company": {"type": "string", "description": "Company name (free text). It is automatically linked to the matching company, or a new company is created if the name is new — no need to call crm_create_company first. Pass company_id instead to link an exact existing company.", "default": ""},
                 "title": {"type": "string", "description": "Job title", "default": ""},
                 "source": {"type": "string", "description": "How they found you: referral, website, cold_call, social, event, other", "default": ""},
-                "status": {"type": "string", "description": "active, inactive, or archived", "default": "active"},
+                "status": {"type": "string", "description": "active or inactive (a contact cannot be created archived — archive it afterwards with a reason)", "default": "active"},
                 "tags": {"type": "string", "description": "Comma-separated tags", "default": ""},
                 "notes": {"type": "string", "default": ""},
                 "company_id": {"type": "integer", "description": "ID of a linked company (optional). Set to link this contact to a company."},
@@ -163,10 +163,11 @@ CRM_TOOL_DEFS = [
                 "company": {"type": "string", "description": "Company name (free text). Setting it re-links the contact to that company, creating it if the name is new; setting it to an empty string unlinks. Ignored for linking if company_id is passed in the same call."},
                 "title": {"type": "string"},
                 "source": {"type": "string"},
-                "status": {"type": "string", "description": "active, inactive, or archived"},
+                "status": {"type": "string", "description": "active, inactive, or archived (archived needs archive_reason)"},
                 "tags": {"type": "string"},
                 "notes": {"type": "string"},
                 "company_id": {"type": ["integer", "null"], "description": "ID of a linked company; pass null to unlink this contact from its company."},
+                "archive_reason": {"type": "string", "description": "Why it is being archived — REQUIRED whenever status is set to 'archived' (ask the user if they have not said). Recorded as a note with who did it."},
             },
             "required": ["contact_id"],
         },
@@ -481,12 +482,13 @@ CRM_TOOL_DEFS = [
             "the pipeline, dashboards, analytics and searches WITHOUT deleting anything "
             "— use it for junk, test, or abandoned deals that shouldn't skew the "
             "numbers. Do NOT use it to close a real deal: that's crm_mark_deal_won or "
-            "crm_mark_deal_lost."
+            "crm_mark_deal_lost. Archiving needs a reason and records who did it."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "deal_id": {"type": "integer", "description": "Deal ID"},
+                "reason": {"type": "string", "description": "Why the deal is being archived — REQUIRED when archiving (ask the user if they have not said). Recorded on the deal and in its notes with who did it. Not needed to restore."},
                 "archived": {
                     "type": "boolean",
                     "description": "true to archive (default), false to restore",
@@ -950,7 +952,7 @@ CRM_TOOL_DEFS = [
                 "address": {"type": "string", "default": ""},
                 "notes": {"type": "string", "default": ""},
                 "source": {"type": "string", "default": ""},
-                "status": {"type": "string", "description": "active or archived", "default": "active"},
+                "status": {"type": "string", "description": "active (a company cannot be created archived — archive it afterwards with a reason)", "default": "active"},
                 "owner": owner_assign_property(),
             },
             "required": ["name"],
@@ -963,8 +965,9 @@ CRM_TOOL_DEFS = [
         "confirm_tier": ROUTINE,
         "description": (
             "Update an existing company's details — name, domain, industry, phone, address, notes, "
-            "or status. Archive a company by setting status to 'archived' (agent-initiated hard "
-            "deletes are intentionally not exposed as a tool — archive instead)."
+            "or status. Archive a company by setting status to 'archived' with an archive_reason "
+            "(agent-initiated hard deletes are intentionally not exposed as a tool — archive "
+            "instead)."
         ),
         "input_schema": {
             "type": "object",
@@ -977,7 +980,8 @@ CRM_TOOL_DEFS = [
                 "address": {"type": "string"},
                 "notes": {"type": "string"},
                 "source": {"type": "string"},
-                "status": {"type": "string", "description": "active or archived"},
+                "status": {"type": "string", "description": "active or archived (archived needs archive_reason)"},
+                "archive_reason": {"type": "string", "description": "Why it is being archived — REQUIRED whenever status is set to 'archived' (ask the user if they have not said). Recorded as a note with who did it."},
                 "owner": owner_assign_property(),
             },
             "required": ["company_id"],
@@ -1445,17 +1449,22 @@ def crm_create_contact(name: str, **kwargs) -> dict:
         result = crm.create_contact(name=name, **kwargs)
     except psycopg2.errors.ForeignKeyViolation:
         return {"error": "Referenced company does not exist"}
+    except ValueError as e:  # #239: a contact cannot be created already archived
+        return {"error": str(e)}
     if not result:
         return {"error": "Contact could not be created"}
     _record_provenance("contact", result.get("id"), {"name": name, **kwargs}, result)
     return _with_target(result, "contact", result.get("id"), record=result)
 
 
-def crm_update_contact(contact_id: int, **kwargs) -> dict:
+def crm_update_contact(contact_id: int, actor_id: int | None = None, **kwargs) -> dict:
+    # actor_id is bound server-side (_identity_executors): who archived/restored it, #239.
     try:
-        result = crm.update_contact(contact_id, **kwargs)
+        result = crm.update_contact(contact_id, actor_id=actor_id, **kwargs)
     except psycopg2.errors.ForeignKeyViolation:
         return {"error": "Referenced company does not exist"}
+    except ValueError as e:  # #239: archiving without archive_reason — Baker asks why
+        return {"error": str(e)}
     if not result:
         return {"error": f"Contact {contact_id} not found"}
     _record_provenance("contact", contact_id, kwargs, result)
@@ -1721,11 +1730,20 @@ def _as_bool(value) -> bool | None:
     return None
 
 
-def crm_archive_deal(deal_id: int, archived: bool = True) -> dict:
+def crm_archive_deal(
+    deal_id: int, archived: bool = True, reason: str = "", actor_id: int | None = None,
+) -> dict:
     flag = _as_bool(archived)
     if flag is None:
         return {"error": "archived must be true or false"}
-    deal = crm.archive_deal(deal_id, archived=flag)
+    # The reason rule lives in the service (it applies only to a real archive transition,
+    # so a repeat archive stays a no-op); a blank one comes back as an error dict so the
+    # assistant asks the user why instead of seeing a traceback (#239). actor_id is bound
+    # server-side by _identity_executors.
+    try:
+        deal = crm.archive_deal(deal_id, archived=flag, reason=reason, actor_id=actor_id)
+    except ValueError as e:
+        return {"error": str(e)}
     if not deal:
         return {"error": f"Deal {deal_id} not found"}
     # An archived deal still gets its link: the board carries it under the Archived
@@ -1735,9 +1753,11 @@ def crm_archive_deal(deal_id: int, archived: bool = True) -> dict:
     )
 
 
-def crm_merge_deals(target_deal_id: int, source_deal_id: int) -> dict:
+def crm_merge_deals(
+    target_deal_id: int, source_deal_id: int, actor_id: int | None = None,
+) -> dict:
     try:
-        deal = crm.merge_deals(target_deal_id, source_deal_id)
+        deal = crm.merge_deals(target_deal_id, source_deal_id, actor_id=actor_id)
     except ValueError as e:
         return {"error": str(e)}
     # The merge confirmation is the natural follow-up to crm_find_duplicates, which
@@ -1866,16 +1886,21 @@ def crm_create_company(name: str, **kwargs) -> dict:
         result = crm.create_company(name=name, **kwargs)
     except psycopg2.errors.UniqueViolation:
         return {"error": "A company with that name already exists"}
+    except ValueError as e:  # #239: a company cannot be created already archived
+        return {"error": str(e)}
     if not result:
         return {"error": "Company could not be created"}
     return _with_target(result, "company", result.get("id"), record=result)
 
 
-def crm_update_company(company_id: int, **kwargs) -> dict:
+def crm_update_company(company_id: int, actor_id: int | None = None, **kwargs) -> dict:
+    # actor_id is bound server-side (_identity_executors): who archived/restored it, #239.
     try:
-        result = crm.update_company(company_id, **kwargs)
+        result = crm.update_company(company_id, actor_id=actor_id, **kwargs)
     except psycopg2.errors.UniqueViolation:
         return {"error": "A company with that name already exists"}
+    except ValueError as e:  # #239: archiving without archive_reason — Baker asks why
+        return {"error": str(e)}
     if not result:
         return {"error": f"Company {company_id} not found"}
     return _with_target(result, "company", company_id, record=result)
@@ -2370,13 +2395,21 @@ def _identity_executors(user: dict | None) -> dict[str, Callable[..., dict]]:
         "crm_log_activity": bind_server_args(crm_log_activity, actor_id=user_id),
         "crm_log_note": bind_server_args(crm_log_activity, actor_id=user_id),  # legacy alias
         "crm_add_note": bind_server_args(crm_add_note, author_id=user_id),
+        # Who archived or restored it (#239) — recorded on the audit note, and for a deal
+        # on the row the archived banner reads.
+        "crm_archive_deal": bind_server_args(crm_archive_deal, actor_id=user_id),
+        "crm_merge_deals": bind_server_args(crm_merge_deals, actor_id=user_id),
+        "crm_update_contact": bind_server_args(crm_update_contact, actor_id=user_id),
         # Who ASKED for it. Stamping the seat that requested a record is RECORDING, not
         # fabricating — which is why the unattended path, having nobody to record, still
         # stamps nothing and leaves the row unassigned.
         "crm_create_contact": bind_server_args(crm_create_contact, owner_id=user_id),
         # A company names its owner as a WORD (#237); omitted, it is the asking seat's.
         "crm_create_company": bind_owner_assignment(crm_create_company, user, default_to_user=True),
-        "crm_update_company": bind_owner_assignment(crm_update_company, user, default_to_user=False),
+        "crm_update_company": bind_server_args(  # + who archived/restored it (#239)
+            bind_owner_assignment(crm_update_company, user, default_to_user=False),
+            actor_id=user_id,
+        ),
         "crm_create_deal": bind_server_args(crm_create_deal, owner_id=user_id),
         "crm_create_todo": bind_server_args(crm_create_todo, owner_id=user_id),
         # Which seat is ASKING. A read, and the only per-person fact in its payload is

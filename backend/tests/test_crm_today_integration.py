@@ -129,7 +129,7 @@ def _deal(title, *, temperature=None, idle_days=0, owner=None, stage="lead",
     pg_execute("UPDATE deals SET updated_at = now() - make_interval(days => %s) WHERE id = %s",
                (idle_days, deal_id))
     if archived:
-        service.archive_deal(deal_id, archived=True)
+        service.archive_deal(deal_id, archived=True, reason="test")
         # archive_deal writes the row, so the idle age has to be re-applied after it.
         pg_execute("UPDATE deals SET updated_at = now() - make_interval(days => %s) WHERE id = %s",
                    (idle_days, deal_id))
@@ -184,7 +184,7 @@ def test_sweeps_exclude_what_they_claim_to(today):
     from crm import service, today_service
 
     deal = service.create_deal(title="Archived deal", value=10)["id"]
-    service.archive_deal(deal, archived=True)
+    service.archive_deal(deal, archived=True, reason="test")
 
     _todo("Visible", due=today)
     _todo("Dropped", due=today, status="dropped")
@@ -228,7 +228,7 @@ def test_todo_membership_matches_the_gtd_today_view_exactly(today):
     from crm import gtd_service, service, today_service
 
     deal = service.create_deal(title="Archived", value=1)["id"]
-    service.archive_deal(deal, archived=True)
+    service.archive_deal(deal, archived=True, reason="test")
 
     for title, kwargs in [
         ("Starred undated", {"star": True}),

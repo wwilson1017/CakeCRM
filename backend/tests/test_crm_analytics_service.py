@@ -118,9 +118,10 @@ def test_contact_staleness_ignores_provenance_housekeeping_notes(rec):
     rec.fetchall_queue = [[]]
     az.get_contact_staleness()
     sql = rec.sql_containing("FROM contacts ct")
-    assert "ch.message NOT LIKE %s" in sql
-    # Bound inside the CTE, so it precedes stale_days and limit.
-    assert rec.params_for("FROM contacts ct")[0] == scoring_service.HOUSEKEEPING_NOTE_LIKE
+    # The shared housekeeping family (#239: archive/restore notes too), rendered — so
+    # no pattern param leads stale_days any more.
+    assert scoring_service.not_housekeeping_sql("ch.message") in sql
+    assert rec.params_for("FROM contacts ct")[0] == az.DEFAULT_CONTACT_STALE_DAYS
 
 
 def test_contact_staleness_open_deal_count_ignores_archived(rec):

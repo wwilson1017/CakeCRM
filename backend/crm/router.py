@@ -182,6 +182,10 @@ class ContactUpdate(BaseModel):
     notes: str | None = None
     company_id: int | None = None
     owner_id: int | None = None
+    # #239: required by the service when `status` moves INTO archived. Capped here and
+    # REJECTED past the cap (the DealMarkLost reasoning: silently truncating typed prose
+    # is data loss); the service truncates on the tool path.
+    archive_reason: str | None = Field(None, max_length=crm.MAX_ARCHIVE_REASON)
 
 
 class DealCreate(BaseModel):
@@ -263,6 +267,7 @@ class CompanyUpdate(BaseModel):
     source: str | None = None
     status: str | None = None
     owner_id: int | None = None
+    archive_reason: str | None = Field(None, max_length=crm.MAX_ARCHIVE_REASON)  # #239, see ContactUpdate
 
 
 class TodoCreate(BaseModel):
@@ -439,6 +444,8 @@ async def create_contact(body: ContactCreate, user=Depends(get_current_user)):
         return crm.create_contact(**_create_payload(body, user))
     except psycopg2.errors.ForeignKeyViolation:
         raise HTTPException(status_code=400, detail="Referenced company does not exist") from None
+    except ValueError as e:  # #239: a contact cannot be created already archived
+        raise HTTPException(status_code=400, detail=str(e)) from None
 
 
 @router.put("/contacts/{contact_id}")
@@ -453,9 +460,12 @@ async def update_contact(contact_id: int, body: ContactUpdate, user=Depends(get_
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
     try:
-        result = crm.update_contact(contact_id, **updates)
+        # actor_id: who archived/restored it, if this write crosses that line (#239).
+        result = crm.update_contact(contact_id, actor_id=user["id"], **updates)
     except psycopg2.errors.ForeignKeyViolation:
         raise HTTPException(status_code=400, detail="Referenced company does not exist") from None
+    except ValueError as e:  # #239: archiving without a reason
+        raise HTTPException(status_code=400, detail=str(e)) from None
     if not result:
         raise HTTPException(status_code=404, detail="Contact not found")
     return result
@@ -617,7 +627,8 @@ async def bulk_move_deals(body: BulkDealMove, user=Depends(get_current_user)):
 # gap-filled custom fields onto the target; restore only makes the source visible again.
 @router.post("/deals/{deal_id}/restore")
 def restore_deal(deal_id: int, user=Depends(get_current_user)):
-    result = crm.archive_deal(deal_id, archived=False)
+    # actor_id: the "Restored from archive." note credits whoever pressed Restore (#239).
+    result = crm.archive_deal(deal_id, archived=False, actor_id=user["id"])
     if not result:
         raise HTTPException(status_code=404, detail="Deal not found")
     return result
@@ -1625,6 +1636,8 @@ async def create_company(body: CompanyCreate, user=Depends(get_current_user)):
         return crm.create_company(**_create_payload(body, user))
     except psycopg2.errors.UniqueViolation:
         raise HTTPException(status_code=400, detail="A company with that name already exists") from None
+    except ValueError as e:  # #239: a company cannot be created already archived
+        raise HTTPException(status_code=400, detail=str(e)) from None
 
 
 @router.post("/companies/resolve")
@@ -1679,9 +1692,11 @@ async def update_company(company_id: int, body: CompanyUpdate, user=Depends(get_
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
     try:
-        result = crm.update_company(company_id, **updates)
+        result = crm.update_company(company_id, actor_id=user["id"], **updates)  # #239
     except psycopg2.errors.UniqueViolation:
         raise HTTPException(status_code=400, detail="A company with that name already exists") from None
+    except ValueError as e:  # #239: archiving without a reason
+        raise HTTPException(status_code=400, detail=str(e)) from None
     if not result:
         raise HTTPException(status_code=404, detail="Company not found")
     return result

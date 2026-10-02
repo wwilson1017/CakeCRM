@@ -80,6 +80,7 @@ import {
 import { btnDanger, btnPrimary, btnSecondary } from '../styles';
 import { usePublishActiveRecord } from '../RecordContext';
 import { useProvenance } from '../useProvenance';
+import { useUsers } from '../useUsers';
 import { ActivityTimeline } from './ActivityTimeline';
 import { AiTouchDetail } from './AiTouchDetail';
 import { ScorePill } from './badges';
@@ -530,6 +531,10 @@ export function DealDetailBody({
   // reopened — the same trade `DealDetailSheet` made, stated rather than inherited silently.
   // A `??` chain would be wrong in the other direction: `null` is the value a restore WRITES.
   const archivedAt = fetched ? fetched.archived_at : deal.archived_at;
+  // Who/why ride the same row as archived_at (#239), so they are read from the same source.
+  const archivedBy = fetched ? fetched.archived_by : deal.archived_by;
+  const archivedReason = fetched ? fetched.archived_reason : deal.archived_reason;
+  const { nameFor } = useUsers();
   const closeStage = fetched ? fetched.stage : deal.stage;
 
   // The record this body RENDERS and snapshots into its edit form: `view`, with those two
@@ -915,8 +920,10 @@ export function DealDetailBody({
         }}>
           <span style={{ ...mono(10), color: INK_DIM }}>ARCHIVED</span>
           <span style={{ fontSize: 13, color: INK_MUTE, flex: 1, lineHeight: 1.5 }}>
-            Archived {new Date(archivedAt).toLocaleDateString()} — excluded from pipeline
-            totals and deal rollups.
+            Archived {new Date(archivedAt).toLocaleDateString()}
+            {archivedBy != null && <> by {nameFor(archivedBy)}</>}
+            {archivedReason && <> — {archivedReason}</>}
+            {' '}— excluded from pipeline totals and deal rollups.
           </span>
           <button
             type="button"

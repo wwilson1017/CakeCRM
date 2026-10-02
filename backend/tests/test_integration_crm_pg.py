@@ -1482,7 +1482,7 @@ def test_last_contact_at_ignores_archived_and_housekeeping_notes(pg_db):
         "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at) VALUES "
         "('contact', %s, %s, '2026-05-01T10:00:00Z')",
         (housekeeping_only,
-         scoring_service.HOUSEKEEPING_NOTE_LIKE.replace("%", "'title'.")),
+         scoring_service.PROVENANCE_NOTE_PREFIX + "'title'."),
     )
 
     rows = {r["id"]: r for r in service.list_contacts(sort="id", limit=50)["contacts"]}
@@ -1517,7 +1517,7 @@ def test_get_contact_staleness_agrees_with_the_list(pg_db):
     pg_execute(
         "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at) VALUES "
         "('contact', %s, %s, now())",
-        (cid, scoring_service.HOUSEKEEPING_NOTE_LIKE.replace("%", "'phone'.")),
+        (cid, scoring_service.PROVENANCE_NOTE_PREFIX + "'phone'."),
     )
     listed = service.list_contacts(sort="id", limit=50)["contacts"][0]
     stale = analytics_service.get_contact_staleness(stale_days=1)["contacts"]
@@ -1654,7 +1654,7 @@ def test_pipeline_pages_and_window_match_the_unbounded_board(pg_db):
     assert roomy["deals_truncated"] is False
 
     # 4. The archived sweep is a different corpus, and pages carry the flag.
-    service.archive_deal(ids[0])
+    service.archive_deal(ids[0], reason="test")
     live_swept, cursor = [], None
     while True:
         page = service.get_pipeline(limit=3, after_id=cursor)
@@ -1695,7 +1695,7 @@ def test_report_rollup_attributes_a_multi_parent_activity_exactly_once(pg_db):
                          contact_id=contact["id"], deal_id=live["id"])
     service.log_activity("call", note="on the old deal",
                          contact_id=contact["id"], deal_id=archived["id"])
-    service.archive_deal(archived["id"])
+    service.archive_deal(archived["id"], reason="test")
 
     rollup = report_service.get_company_rollup(co["id"])
     assert [d["title"] for d in rollup["deals"]] == ["Live"]
@@ -1834,9 +1834,10 @@ def test_report_summary_is_unmoved_by_the_archived_toggle(pg_db):
     service.create_deal("Open one", company_id=co["id"], stage="proposal", value=1000)
     service.create_deal("Won", company_id=co["id"], stage="won", value=5000)
     gone = service.create_deal("Archived", company_id=co["id"], stage="lead", value=9000)
-    service.archive_deal(gone["id"])
+    service.archive_deal(gone["id"], reason="test")
     service.create_contact("Ada", company_id=co["id"])
-    service.create_contact("Bob", company_id=co["id"], status="archived")
+    bob = service.create_contact("Bob", company_id=co["id"])
+    service.update_contact(bob["id"], status="archived", archive_reason="test")  # #239
     # The third status. "Active contacts" must exclude it too, or the chip's label is a lie
     # — `status <> 'archived'` and `status = 'active'` differ by exactly this row.
     service.create_contact("Cy", company_id=co["id"], status="inactive")
