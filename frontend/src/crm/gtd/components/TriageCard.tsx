@@ -252,6 +252,9 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
 
   const { row, notesDraft, pendingDue, pendingTitle } = state;
   const dest = DESTINATIONS.find(d => d.status === destination) ?? DESTINATIONS[0];
+  // Looked up in the shared list so a purpose edited on the project page shows here on the
+  // next meta refresh; a project missing from the list (just created) simply shows nothing.
+  const pickedProject = row.project_id == null ? undefined : projects.find(p => p.id === row.project_id);
   const dueValue = pendingDue ?? row.due_date;
 
   // What the Edit sheet is handed: this card's best view of the record, never the lagging
@@ -711,6 +714,26 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
             Delete
           </button>
         </div>
+        {/* The picked project's purpose and outcome (#262), read-only: filing an item under a
+            project is the moment to check it belongs there. Edited on the project's own page,
+            not here — this card's writes are all to the todo. Hidden while a new project is
+            being named (it has neither yet) and when the project has neither. */}
+        {newProject === null && pickedProject && (pickedProject.purpose || pickedProject.outcome) && (
+          <dl className="mt-2 space-y-0.5 text-sm" data-project-purpose>
+            {pickedProject.purpose && (
+              <div className="flex gap-2">
+                <dt className="shrink-0 text-muted">Purpose</dt>
+                <dd className="min-w-0 break-words text-charcoal">{pickedProject.purpose}</dd>
+              </div>
+            )}
+            {pickedProject.outcome && (
+              <div className="flex gap-2">
+                <dt className="shrink-0 text-muted">Outcome</dt>
+                <dd className="min-w-0 break-words text-charcoal">{pickedProject.outcome}</dd>
+              </div>
+            )}
+          </dl>
+        )}
         {/* Notes belong to clarifying, not only to the full editor — jot the link or the
             phone number without leaving triage. Saved on blur, non-resolving, so the item
             stays in the inbox. This replaces the read-only preview that used to sit under

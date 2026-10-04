@@ -104,7 +104,7 @@ describe('surface configs', () => {
 
   it('Projects searches name and notes', () => {
     const p: TodoProject = {
-      id: 7, name: 'Rebuild the shed', notes: 'quote pending', status: 'active', open_count: 2,
+      id: 7, name: 'Rebuild the shed', notes: 'quote pending', purpose: '', outcome: '', status: 'active', open_count: 2,
       created_at: '', updated_at: '',
     };
     expect(projectsCollectionConfig.searchText(p)).toEqual(['Rebuild the shed', 'quote pending']);
