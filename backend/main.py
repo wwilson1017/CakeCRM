@@ -29,7 +29,7 @@ from alerts.router import router as alerts_router
 from assistant.router import router as assistant_router
 from branding.router import MAX_LOGO_BYTES, router as branding_router
 from context_files.router import router as context_files_router
-from core import postgres
+from core import logscrub, postgres
 from core.auth import router as auth_router
 from core.auth_2fa import router as auth_2fa_router
 from core.config import settings
@@ -55,6 +55,9 @@ from users.router import router as users_router
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+# The no-login todo links carry their credential in the path; keep it out of every
+# log line the app writes (#267). After basicConfig, so the root handler exists.
+logscrub.install()
 # httpx logs every request at INFO with the full URL. The Telegram Bot API embeds the
 # bot token in the URL path (/bot<TOKEN>/...), so INFO-level httpx request logs would
 # leak the token into application logs — quiet httpx to WARNING.

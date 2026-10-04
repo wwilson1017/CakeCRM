@@ -323,6 +323,24 @@
   reserved because `/api/todo-web/todos/…` would otherwise shadow the API mount.
   Documented in SECURITY.md.
 
+- **The link tokens never reach a log line the app writes** (#267, ported from todo-gtd's
+  `logscrub.py`). `core/logscrub.ScrubTokens`, installed by `main.py` right after
+  `basicConfig`, replaces the segment after `/todo/`, `/capture/` or `/todo-web/` with
+  `<redacted>` in a record's message, its tuple or dict args and its rendered traceback.
+  It sits on the five server loggers by NAME (`uvicorn.access`/`.error`/`.asgi`, the last being
+  the trace-level ASGI-scope dump, and `gunicorn.access`/`.error` — a logger filter survives
+  gunicorn's UvicornWorker swapping their handlers) and on root's HANDLERS, because a logger filter never sees a record
+  propagating through it, which is how every `getLogger(__name__)` line gets out. Two rules
+  worth knowing: a template that spells the path itself (`"refused /todo/%s"`) is rendered
+  before it is scrubbed, since scrubbing the template alone eats the `%s` and breaks
+  formatting (the blueprint has that bug); and a token logged WITHOUT its path prefix is
+  invisible to it, so never log a bare token. It redacts the segment whether or not it is a
+  token (`/todo/manifest.webmanifest` reads `/todo/<redacted>` too). `tests/test_logscrub.py`
+  serves `main.app` through a real uvicorn server, since a TestClient writes no access line,
+  and attaches its capture straight to the uvicorn loggers without re-running `install()`, so
+  the suite fails if `main` stops installing it. Railway's edge HTTP log is out of its reach;
+  SECURITY.md says what that log keeps and names the cookie redesign as the follow-up.
+
 - **The follow-up feature is Todos in every layer** (#169), and "task" is not a synonym
   for it anywhere: tables `todos`/`todo_projects`, column `crm_meta.todo_mode`, REST
   `/api/crm/todos*` + `/api/crm/todo-mode`, SPA `/crm/todos*`, `crm_*_todo(s)` tools in
