@@ -37,7 +37,7 @@ import { __resetTodoMeta } from './useTodoMeta';
 import type { TodoProject } from './types';
 
 const P = (id: number, name: string, status: TodoProject['status'] = 'active'): TodoProject => ({
-  id, name, notes: '', status, open_count: 0,
+  id, name, notes: '', purpose: '', outcome: '', status, open_count: 0,
   created_at: '2026-09-01T12:00:00Z', updated_at: '2026-09-01T12:00:00Z',
 });
 

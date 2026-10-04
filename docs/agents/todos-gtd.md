@@ -172,6 +172,21 @@
   `role="alert"` line, TAGGED with its field, because both editors can be open at once and an
   untagged line would be cleared when the notes editor closes unchanged. Success calls `refreshMeta()`, which carries a rename to the Projects list,
   the todo rows and `TodoEditSheet`'s project picker.
+- **A project carries a one-line purpose and outcome** (#262, port of todo-gtd `d6948f1`/
+  `162dcb3`): `todo_projects.purpose`/`outcome`, `TEXT NOT NULL DEFAULT ''` like `notes` beside
+  them (the issue said nullable; '' is the one unset state the service and UI already use for
+  notes, so a NULL would be a second spelling of it). Both are in `PROJECT_FIELDS`, validated
+  as ONE-LINE fields by `gtd_common.validate_line` (trimmed, `MAX_SHORT_CHARS`, every
+  whitespace run — a newline included — collapsed to one space, so an API or tool caller cannot
+  store a second line), and clearing either is a real save. They are edited on the project page
+  by two `InlineTitle` editors under the notes in the new `line` variant (an `<input>`: Enter
+  saves like a title, an emptied value saves like a body), through
+  the same per-field `saveField` (which now merges back the server's stored value, since it
+  trims), and shown READ-ONLY on the triage card under Step 2 once a project is picked —
+  unlike the blueprint, which edits them (and an area, which CakeCRM has no table for) inline
+  on the card. Read-only keeps every triage-card write a write to the todo. The assistant sets
+  them through `todo_create_project`/`todo_update_project`, both still ROUTINE (neither field
+  can hide a project), and `GTD_GUIDE` tells it to ask rather than invent them.
 - **The project detail page steps to the previous / next project** (#264, port of todo-gtd
   `382ce21`): ‹ › links beside "All projects", and the Left / Right arrow keys, cycle with
   wrap-around through the projects sharing the viewed project's status. `crm/gtd/projectNav.ts`

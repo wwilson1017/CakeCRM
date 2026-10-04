@@ -320,18 +320,23 @@ def list_projects(status: str | None = None) -> list[dict]:
     return pg_fetchall(sql, params)
 
 
-def create_project(name: str, notes: str = "", status: str = "active") -> dict:
+def create_project(
+    name: str, notes: str = "", status: str = "active", purpose: str = "", outcome: str = "",
+) -> dict:
     name = gtd_common.validate_short(name, "name")
     if not name:
         raise ValidationError("name is required")
     notes = gtd_common.validate_notes(notes)
+    purpose = gtd_common.validate_line(purpose, "purpose")
+    outcome = gtd_common.validate_line(outcome, "outcome")
     gtd_common.validate_project_status(status)
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO todo_projects (name, notes, status) VALUES (%s, %s, %s) "
+            "INSERT INTO todo_projects (name, notes, status, purpose, outcome) "
+            "VALUES (%s, %s, %s, %s, %s) "
             "ON CONFLICT (lower(name)) DO NOTHING RETURNING id",
-            (name, notes, status),
+            (name, notes, status, purpose, outcome),
         )
         row = cur.fetchone()
         if row is None:
@@ -364,6 +369,12 @@ def update_project(project_id: int, fields: dict) -> dict | None:
         if "notes" in fields:
             sets.append("notes = %s")
             params.append(gtd_common.validate_notes(fields["notes"]))
+        # One line each: trimmed, capped, inner whitespace collapsed. Clearing is a real
+        # save: '' is the unset state, never refused like a blank name.
+        for key in ("purpose", "outcome"):
+            if key in fields:
+                sets.append(f"{key} = %s")
+                params.append(gtd_common.validate_line(fields[key], key))
         if "status" in fields:
             gtd_common.validate_project_status(fields["status"])
             sets.append("status = %s")
