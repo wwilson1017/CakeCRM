@@ -190,3 +190,81 @@ describe('InboxPage — undoing a filing (#231)', () => {
     expect(onCard()).toBe('second captured');
   });
 });
+
+describe('InboxPage — the undo block sits inline (#265)', () => {
+  /** Every rendered undo block, floating or inline — they share one accessible name. */
+  const undoBlocks = () =>
+    [...container.querySelectorAll('[aria-label="Recent changes you can undo"]')];
+
+  it('shows ONE undo block after a filing, in the page flow between the card and the queue', async () => {
+    const third: Todo = { ...base, id: 3, title: 'third captured' };
+    listTodosMock.mockResolvedValue([FIRST, SECOND, third]);
+    await render();
+
+    listTodosMock.mockResolvedValue([SECOND, third]); // FIRST is filed and gone
+    await fileFromCard();
+
+    const blocks = undoBlocks();
+    expect(blocks).toHaveLength(1); // the shell's floating copy is suppressed
+    const block = blocks[0];
+    expect(block.getAttribute('role')).toBe('status');
+    expect(block.textContent).toContain('first captured');
+    // Inline, not the fixed corner block, and it publishes no toast offset.
+    expect(block.className).not.toContain('fixed');
+    expect(document.documentElement.style.getPropertyValue('--ck-toast-bottom')).toBe('');
+    // After the card, before the queue.
+    const card = container.querySelector('[role="button"][title="Click to rename"]')!;
+    const queue = container.querySelector('[data-inbox-queue]')!;
+    expect(card.compareDocumentPosition(block) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(block.compareDocumentPosition(queue) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Same keyboard path: a real, named button.
+    const undo = block.querySelector<HTMLButtonElement>('button[aria-label="Undo filing “first captured”"]');
+    expect(undo?.tagName).toBe('BUTTON');
+    expect(undo?.disabled).toBe(false);
+  });
+
+  it('undoing from the inline block restores the row and clears the block', async () => {
+    await render();
+    listTodosMock.mockResolvedValue([SECOND]);
+    await fileFromCard();
+    expect(onCard()).toBe('second captured');
+
+    listTodosMock.mockResolvedValue([FIRST, SECOND]);
+    await clickUndoFiling('first captured');
+    expect(updateTodoMock).toHaveBeenLastCalledWith(1, { status: 'inbox', context: '' });
+    expect(onCard()).toBe('first captured');
+    expect(undoBlocks()).toHaveLength(0);
+  });
+
+  it('still shows the block inline once the last item is filed and the inbox is empty', async () => {
+    listTodosMock.mockResolvedValue([FIRST]);
+    await render();
+    listTodosMock.mockResolvedValue([]);
+    await fileFromCard();
+
+    expect(container.textContent).toContain('Inbox zero');
+    const blocks = undoBlocks();
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].className).not.toContain('fixed');
+  });
+
+  it('hands the block to the floating copy while the edit sheet covers the page', async () => {
+    await render();
+    listTodosMock.mockResolvedValue([SECOND]);
+    await fileFromCard();
+    expect(undoBlocks()).toHaveLength(1);
+
+    const edit = [...container.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Edit');
+    if (!edit) throw new Error('no Edit button on the card');
+    await click(edit);
+
+    // One block, the floating one (it sits above the sheet's z-50 overlay), and its
+    // Undo still works from there.
+    const blocks = undoBlocks();
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].className).toContain('fixed');
+    listTodosMock.mockResolvedValue([FIRST, SECOND]);
+    await clickUndoFiling('first captured');
+    expect(updateTodoMock).toHaveBeenLastCalledWith(1, { status: 'inbox', context: '' });
+  });
+});
