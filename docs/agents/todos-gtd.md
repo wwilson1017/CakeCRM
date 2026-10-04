@@ -172,6 +172,19 @@
   `role="alert"` line, TAGGED with its field, because both editors can be open at once and an
   untagged line would be cleared when the notes editor closes unchanged. Success calls `refreshMeta()`, which carries a rename to the Projects list,
   the todo rows and `TodoEditSheet`'s project picker.
+- **The project detail page steps to the previous / next project** (#264, port of todo-gtd
+  `382ce21`): ‹ › links beside "All projects", and the Left / Right arrow keys, cycle with
+  wrap-around through the projects sharing the viewed project's status. `crm/gtd/projectNav.ts`
+  holds both rules. The order is the shared meta cache's, which is the same `listProjects()`
+  read the Projects page renders with no `sort` declared, so a status filtered out of it IS that
+  tab's order (`lower(name)`, a total order) and nothing re-sorts it; the Projects search box
+  is deliberately not applied, since a stale query would silently shrink the cycle. The key
+  handler ignores chords and any key aimed at an `<input>`, `<textarea>`, `<select>` or
+  contenteditable element (the inline editors, the add box, Quick Add), and stands down while
+  the edit sheet is open. Each link's accessible name names its destination ("Next project:
+  Delta"). The page body is keyed by the route id, because moving between projects keeps the
+  route matched and would otherwise carry the previous project's state, failure line and
+  drafts onto the next until its fetch landed.
 - **Marking a todo done and filing an inbox item are undoable for 7 seconds** (#231).
   `crm/gtd/undoQueue.ts` is a module-level store (the `shared/toast` shape), because
   `TodoShell` unmounts on every tab switch and component state could not survive the

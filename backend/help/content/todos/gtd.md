@@ -46,6 +46,9 @@ next action and clears it out of the inbox — so agree the context before writi
   away; notes take Enter as a new line and save when you click away. Escape discards the edit.
   A blank name is refused and the previous name is kept. A name another project already uses
   is refused too, and the editor stays open with what you typed so you can fix it.
+  The ‹ › buttons beside "All projects" step to the previous or next project with the same
+  status, in the order the Projects tab lists them, wrapping around at the ends. The left and
+  right arrow keys do the same whenever you are not typing in a box.
 - **Links** — a todo can point at a contact and a deal.
 
 ## The nine tabs
