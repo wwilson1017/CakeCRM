@@ -21,9 +21,12 @@ import uvicorn
 from core import logscrub
 from crm import todo_capture, todo_web
 
-WEB_TOKEN = "WebTok3nAbcdefghijklmnopqrstuvwxyz0123456789"
-CAPTURE_TOKEN = "CaptureTok3nZyxwvutsrqponmlkjihgfedcba98765"
-WRONG_TOKEN = "GuessTok3nQwertyuiopasdfghjklzxcvbnm111111"
+# Deliberately low-entropy: the CI secret scanner (gitleaks generic-api-key) flags a
+# random-looking string assigned to a *_TOKEN name, and these only need to be distinct
+# and to survive the token clamp (`[A-Za-z0-9_-]`).
+WEB_TOKEN = "web-link-" + "w" * 32
+CAPTURE_TOKEN = "capture-link-" + "c" * 32
+WRONG_TOKEN = "guessed-link-" + "g" * 32
 ALL_TOKENS = (WEB_TOKEN, CAPTURE_TOKEN, WRONG_TOKEN)
 
 
