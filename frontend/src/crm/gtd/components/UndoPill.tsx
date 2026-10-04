@@ -10,6 +10,8 @@
 // Mounted once by `TodoShell`, fed by the module-level queue in `undoQueue.ts` — so it
 // survives the shell's remount on every tab switch and a completion on Today is still
 // undoable after the user moves to Inbox.
+// The Inbox is the one exception (#265): it suppresses the shell's copy and renders this
+// block `inline`, in the page flow between the triage card and the queue.
 //
 // WHERE it sits is this repo's answer, not the blueprint's. Upstream renders its toasts
 // inside the todo shell and stacks the pill under them in one flex column; here toasts
@@ -65,7 +67,12 @@ const ACTION =
   'px-3 sm:px-2 py-1 text-sm font-heading font-semibold text-ck-accent-text ' +
   'hover:bg-sand focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand';
 
-export function UndoPill() {
+/** `inline` (#265) = sit in the page flow at full width — the Inbox renders it between the
+ *  triage card and the queue, where the eye already is after filing — instead of floating
+ *  in the bottom-right corner. Same queue, same timers, same accessible name and buttons:
+ *  only the placement differs. An inline block publishes no toast offset, because it is
+ *  not in the corner stack the toasts have to clear. */
+export function UndoPill({ inline = false }: { inline?: boolean }) {
   // Only this session's rows: a seat swapped in by another tab must not see — or be
   // offered to revert — the previous seat's actions (see undoQueue.ts). Filtering at
   // render rather than clearing on the swap, because the swap reaches this tree through
@@ -80,6 +87,7 @@ export function UndoPill() {
   // the two. The var is REMOVED, not zeroed, when the block leaves, so `ToastViewport`
   // falls back to its own 88px rather than a stale offset.
   useLayoutEffect(() => {
+    if (inline) return;
     const el = box.current;
     const style = document.documentElement.style;
     if (!el) {
@@ -93,7 +101,7 @@ export function UndoPill() {
       `calc(var(--ck-stack-floor, ${STACK_BOTTOM_PX}px) + ${el.offsetHeight + STACK_GAP_PX}px)`,
     );
     return () => { style.removeProperty(TOAST_BOTTOM_VAR); };
-  }, [entries.length]);
+  }, [entries.length, inline]);
 
   if (entries.length === 0) return null;
 
@@ -116,7 +124,9 @@ export function UndoPill() {
       // and under `ConfirmHost` (150) and the toasts themselves (200). `bottom` is the
       // same 88px floor `ToastViewport` rests on, which is what keeps this off the
       // launcher; the toasts then move up by this block's height (see the effect above).
-      className="fixed inset-x-3 bottom-[var(--ck-stack-floor,88px)] z-[100] overflow-hidden rounded-xl border border-line bg-cream shadow-lg sm:inset-x-auto sm:right-5 sm:w-80"
+      className={inline
+        ? 'mt-4 w-full overflow-hidden rounded-xl border border-line bg-cream'
+        : 'fixed inset-x-3 bottom-[var(--ck-stack-floor,88px)] z-[100] overflow-hidden rounded-xl border border-line bg-cream shadow-lg sm:inset-x-auto sm:right-5 sm:w-80'}
     >
       <div className="flex h-11 items-center justify-between gap-2 border-b border-line-faint px-3">
         <span className="truncate font-heading text-sm font-semibold text-charcoal">

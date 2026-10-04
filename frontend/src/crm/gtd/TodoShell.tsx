@@ -15,6 +15,10 @@ interface Props {
   /** Hide QuickAdd on pages that would fight it with their own form (Review) or that
    * render their own copy lower down the page (Inbox). */
   hideQuickAdd?: boolean;
+  /** The page renders the undo block itself, in its own flow (Inbox, #265), so the
+   *  shell's floating copy is suppressed — one queue, one visible block. The Inbox drops
+   *  it while its edit sheet is open, so the floating copy shows above the sheet. */
+  inlineUndo?: boolean;
   onAdded?: () => void;
   children: React.ReactNode;
 }
@@ -31,7 +35,7 @@ interface Props {
  * module-level stale-while-revalidate cache in useTodoMeta, which is what keeps the
  * inbox badge from flashing on tab switches.
  */
-export function TodoShell({ active, hideQuickAdd, onAdded, children }: Props) {
+export function TodoShell({ active, hideQuickAdd, inlineUndo, onAdded, children }: Props) {
   const { filters, refreshMeta } = useTodoMeta();
   const [query, setQuery] = useState('');
   const navigate = useNavigate();
@@ -113,8 +117,9 @@ export function TodoShell({ active, hideQuickAdd, onAdded, children }: Props) {
           `undoQueue.ts`, so a completion survives the shell's remount on every tab switch.
           It positions itself (fixed, bottom-right, above the launcher and under the app's
           toasts — see the component for the stacking contract), so it can sit anywhere in
-          this tree and renders nothing while the queue is empty. */}
-      <UndoPill />
+          this tree and renders nothing while the queue is empty. A page that renders it
+          inline instead (Inbox, #265) passes `inlineUndo`, and the floating copy stays out. */}
+      {!inlineUndo && <UndoPill />}
 
       {/* Phone bottom tab bar (#266) — public mode only: under CrmLayout it would collide
           with the CRM's own nav and the "Ask Baker" launcher. Hidden from `sm` up. */}

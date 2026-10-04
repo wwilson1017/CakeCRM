@@ -50,6 +50,8 @@ function project(over: Partial<TodoProject> = {}): TodoProject {
     id: 7,
     name: 'Q4 lanch',
     notes: '',
+    purpose: '',
+    outcome: '',
     status: 'active',
     open_count: 0,
     created_at: '2026-09-01T12:00:00Z',
@@ -425,5 +427,76 @@ describe('ProjectDetailPage — inline notes edit (#232)', () => {
 
     expect(updateProjectMock).not.toHaveBeenCalled();
     expect(notesTrigger().textContent).toBe('keep me');
+  });
+});
+
+describe('ProjectDetailPage — purpose and outcome (#262)', () => {
+  // Three triggers share the "Click to edit" tooltip; document order is notes, purpose, outcome.
+  const bodyTrigger = (i: number) =>
+    container.querySelectorAll<HTMLElement>('span[title="Click to edit"]')[i];
+  const editor = (field: 'purpose' | 'outcome') =>
+    container.querySelector<HTMLInputElement>(`input[aria-label="Project ${field}"]`);
+
+  it('shows both fields with a placeholder when empty, so they can be ADDED', async () => {
+    await render();
+    expect(bodyTrigger(1).textContent).toBe('Why does this project exist?');
+    expect(bodyTrigger(2).textContent).toBe('What does done look like?');
+  });
+
+  it('writes ONLY the purpose and shows the value the server stored', async () => {
+    updateProjectMock.mockResolvedValue(project({ purpose: 'Win Acme', updated_at: '2026-09-02T00:00:00Z' }));
+    await render();
+
+    act(() => bodyTrigger(1).click());
+    setValue(editor('purpose')!, '  Win   Acme  ');
+    blur(editor('purpose')!);
+    await settle();
+
+    expect(updateProjectMock).toHaveBeenCalledTimes(1);
+    expect(updateProjectMock).toHaveBeenCalledWith(7, { purpose: 'Win   Acme' });
+    expect(editor('purpose')).toBeNull();
+    // The server collapsed the inner run; the page shows the stored value, not the typed one.
+    expect(bodyTrigger(1).textContent).toBe('Win Acme');
+  });
+
+  it('treats emptying the outcome as a real save that clears it', async () => {
+    listProjectsMock.mockResolvedValue([project({ outcome: 'Signed contract' })]);
+    updateProjectMock.mockResolvedValue(project({ outcome: '' }));
+    await render();
+    expect(bodyTrigger(2).textContent).toBe('Signed contract');
+
+    act(() => bodyTrigger(2).click());
+    setValue(editor('outcome')!, '');
+    blur(editor('outcome')!);
+    await settle();
+
+    expect(updateProjectMock).toHaveBeenCalledWith(7, { outcome: '' });
+    expect(bodyTrigger(2).textContent).toBe('What does done look like?');
+  });
+
+  it('saves on Enter — a one-line field, never a second line', async () => {
+    updateProjectMock.mockResolvedValue(project({ purpose: 'Win Acme' }));
+    await render();
+
+    act(() => bodyTrigger(1).click());
+    setValue(editor('purpose')!, 'Win Acme');
+    press(editor('purpose')!, 'Enter');
+    await settle();
+
+    expect(updateProjectMock).toHaveBeenCalledWith(7, { purpose: 'Win Acme' });
+    expect(editor('purpose')).toBeNull();
+  });
+
+  it('keeps the editor open with the typed text when the save is refused', async () => {
+    updateProjectMock.mockRejectedValue(refusal('purpose too long (max 500 characters)'));
+    await render();
+
+    act(() => bodyTrigger(1).click());
+    setValue(editor('purpose')!, 'x'.repeat(10));
+    blur(editor('purpose')!);
+    await settle();
+
+    expect(alertText()).toBe('purpose too long (max 500 characters)');
+    expect(editor('purpose')?.value).toBe('x'.repeat(10));
   });
 });

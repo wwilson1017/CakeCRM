@@ -14,3 +14,9 @@
 # appears in source. Reformatted to one argument per line in eb2e23d, so only the
 # historical commit still matches.
 aff376cfbbc6002056bbc63b19ae14484a11b5d4:backend/users/router.py:generic-api-key:145
+
+# A test constant, not a credential. backend/tests/test_logscrub.py:26 in 8e049b7 (#267)
+# assigned a made-up, random-looking link token to WRONG_TOKEN so the log-scrub test had
+# something distinct to search the logs for; it never authorized anything. The constants
+# were made low-entropy in the next commit, so only the historical commit still matches.
+8e049b7f719e27560c1cb1df5da112331210363e:backend/tests/test_logscrub.py:generic-api-key:26

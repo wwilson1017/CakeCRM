@@ -90,3 +90,4 @@ Populated by port PRs from here on.
 | Bare deal ids in outbound assistant text rewritten to `Title (url)` (Telegram replies + `notify_user`) | PR #3175 (`173693bd2`) | #238 | — |
 | Assistant company tools take an owner (`owner` word on `crm_create_company`/`crm_update_company`) | PR #3184 (`150982d02`) | #237 | — |
 | Chatter @-mentions that notify the mentioned seat (targeted, linked to the record) | `backend/core/chatter_mentions.py` + `migrations/20260915211213_chatter_mentions.sql` @ `50c395dda` (cake_os #2934/#2942) | #235 | — |
+| Todo GTD undo block inline on the Inbox, between the triage card and the queue; floating block suppressed there (undo-row half only — the project-fields half of that commit is not ported here) | todo-gtd `162dcb3` | #265 | — |

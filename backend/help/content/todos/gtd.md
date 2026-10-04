@@ -46,13 +46,34 @@ next action and clears it out of the inbox — so agree the context before writi
   away; notes take Enter as a new line and save when you click away. Escape discards the edit.
   A blank name is refused and the previous name is kept. A name another project already uses
   is refused too, and the editor stays open with what you typed so you can fix it.
+  Below the notes sit **Purpose** (one line: why the project exists) and **Outcome** (one
+  line: what done looks like). Click either to edit it; it saves on Enter or when you click
+  away, and emptying it clears it.
+  When you file an inbox item under a project, the triage card shows that project's purpose
+  and outcome under the picker, so you can check it is the right home.
+  The ‹ › buttons beside "All projects" step to the previous or next project with the same
+  status, in the order the Projects tab lists them, wrapping around at the ends. The left and
+  right arrow keys do the same whenever you are not typing in a box.
 - **Links** — a todo can point at a contact and a deal.
+- **Added by** — a todo nobody typed into the app carries a small label saying where it came
+  from: **Baker** (the assistant created it because someone asked), **Observer** (Baker noticed
+  a commitment in a conversation and filed it in the inbox on its own), **Capture link** (it
+  arrived through the public capture link, so anyone holding that link could have written it —
+  read it before acting on it) or **Telegram** (captured from a linked Telegram chat). A todo
+  you or a teammate added in the app shows no label. Observer items filed before this label
+  existed read **Baker**.
 
 ## The nine tabs
 
 Today, Inbox (with a live count), To Do, Projects, Waiting, Someday, Done, Review, and a
 search page across contexts. Each tab has its own filters; the shell carries a search box and
 a quick-add composer.
+
+"Today" always means today in the install's time zone, the one configured for the
+whole install, not the clock of the browser you are using. Today's Overdue and Due today
+sections, the Today and Tomorrow labels on due dates, and words like "tomorrow" or "friday"
+typed into quick add all follow it. So does the no-login todo link. Someone working late in
+another time zone sees the same split as everyone else.
 
 Someday, Done and Projects use the same filter bar as the Contacts, Companies and Todos lists:
 a search box that matches every word you type, a **Filters** button (Someday and Done filter by
@@ -65,7 +86,8 @@ each is split into sections the shared list cannot show.
 ## Undoing a completion or a filing
 
 Marking a todo done, or setting the context that files an inbox item, shows a small undo
-block in the bottom-right corner for seven seconds. Each change gets its own row with an
+block for seven seconds. On the Inbox it sits right under the item being triaged, above
+the rest of the queue; on every other page it sits in the bottom-right corner. Each change gets its own row with an
 **Undo?** button, and **Undo all** appears once there is more than one. Undo puts the todo
 back exactly as it was: its previous status, and for a filing its previous context too. An
 item put back in the inbox returns as the item being triaged. The block follows you across

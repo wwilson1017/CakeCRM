@@ -43,7 +43,7 @@ const TODO: Todo = {
 };
 
 const PROJECTS: TodoProject[] = [{
-  id: 3, name: 'House repairs', notes: '', status: 'active',
+  id: 3, name: 'House repairs', notes: '', purpose: '', outcome: '', status: 'active',
   open_count: 2, created_at: '2026-08-01T12:00:00Z', updated_at: '2026-08-01T12:00:00Z',
 }];
 

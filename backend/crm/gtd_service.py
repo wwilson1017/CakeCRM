@@ -18,6 +18,7 @@ Validation errors raise `gtd_common.ValidationError`; the router maps them to 40
 import json
 import logging
 
+from core import localtime
 from core.postgres import get_connection, pg_fetchall, pg_fetchone
 from crm import gtd_common, service
 from crm.gtd_common import (
@@ -320,18 +321,23 @@ def list_projects(status: str | None = None) -> list[dict]:
     return pg_fetchall(sql, params)
 
 
-def create_project(name: str, notes: str = "", status: str = "active") -> dict:
+def create_project(
+    name: str, notes: str = "", status: str = "active", purpose: str = "", outcome: str = "",
+) -> dict:
     name = gtd_common.validate_short(name, "name")
     if not name:
         raise ValidationError("name is required")
     notes = gtd_common.validate_notes(notes)
+    purpose = gtd_common.validate_line(purpose, "purpose")
+    outcome = gtd_common.validate_line(outcome, "outcome")
     gtd_common.validate_project_status(status)
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO todo_projects (name, notes, status) VALUES (%s, %s, %s) "
+            "INSERT INTO todo_projects (name, notes, status, purpose, outcome) "
+            "VALUES (%s, %s, %s, %s, %s) "
             "ON CONFLICT (lower(name)) DO NOTHING RETURNING id",
-            (name, notes, status),
+            (name, notes, status, purpose, outcome),
         )
         row = cur.fetchone()
         if row is None:
@@ -364,6 +370,12 @@ def update_project(project_id: int, fields: dict) -> dict | None:
         if "notes" in fields:
             sets.append("notes = %s")
             params.append(gtd_common.validate_notes(fields["notes"]))
+        # One line each: trimmed, capped, inner whitespace collapsed. Clearing is a real
+        # save: '' is the unset state, never refused like a blank name.
+        for key in ("purpose", "outcome"):
+            if key in fields:
+                sets.append(f"{key} = %s")
+                params.append(gtd_common.validate_line(fields[key], key))
         if "status" in fields:
             gtd_common.validate_project_status(fields["status"])
             sets.append("status = %s")
@@ -388,8 +400,15 @@ def delete_project(project_id: int) -> bool:
 # ── Filters / capture ─────────────────────────────────────────────────────────
 
 def get_filters() -> dict:
-    """Distinct contexts, the tag union, and per-status counts (all statuses, zeros
-    included) — everything the UI's facet bars need in one round trip."""
+    """Distinct contexts, the tag union, per-status counts (all statuses, zeros
+    included), and the install's timezone — everything the UI needs in one round trip.
+
+    ``tz`` is the zone ``today_view`` buckets due dates in (#259). The GTD client derives
+    every "today" from it rather than from the browser's clock, so a page opened from
+    another zone sorts Overdue vs Due today exactly as the server chose the rows — the
+    #130 one-clock rule, applied to GTD. It is ``localtime.tz().key``, so a bogus
+    ``TIMEZONE`` reports the same UTC fallback the server itself uses.
+    """
     contexts = [
         r["context"]
         for r in pg_fetchall(
@@ -406,7 +425,12 @@ def get_filters() -> dict:
     for r in pg_fetchall("SELECT status, COUNT(*) AS n FROM todos GROUP BY status"):
         if r["status"] in counts:
             counts[r["status"]] = r["n"]
-    return {"contexts": contexts, "tags": sorted(tags, key=str.lower), "status_counts": counts}
+    return {
+        "contexts": contexts,
+        "tags": sorted(tags, key=str.lower),
+        "status_counts": counts,
+        "tz": localtime.tz().key,
+    }
 
 
 def capture(text: str, source: str = "capture_web", owner_id: int | None = None) -> dict:

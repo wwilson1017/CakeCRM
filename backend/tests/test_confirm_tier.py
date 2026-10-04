@@ -428,7 +428,7 @@ def test_status_is_the_only_hiding_argument_the_todo_updates_accept():
     from crm import gtd_common, gtd_service
     from crm.gtd_common import ValidationError
 
-    assert gtd_common.PROJECT_FIELDS == {"name", "notes", "status"}
+    assert gtd_common.PROJECT_FIELDS == {"name", "notes", "status", "purpose", "outcome"}
     assert gtd_common.TODO_FIELDS.isdisjoint(
         {"deal_id", "contact_id", "owner_id", "completed", "archived_at"}
     )

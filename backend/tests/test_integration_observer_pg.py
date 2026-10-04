@@ -400,7 +400,7 @@ def test_one_settled_conversation_yields_a_fact_and_an_inbox_todo(pg_db, real_mo
     assert fact["confidence"] == 0.9
 
     todo = pg_fetchone("SELECT title, status, source, owner_id, description, completed FROM todos")
-    assert todo["status"] == "inbox" and todo["source"] == "agent"
+    assert todo["status"] == "inbox" and todo["source"] == "observer"
     assert todo["owner_id"] is None and todo["completed"] == 0
     assert f"conversation:{cid}" in todo["description"]
 
