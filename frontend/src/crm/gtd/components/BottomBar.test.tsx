@@ -7,7 +7,8 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TodoShell, type TodoTab } from '../TodoShell';
+import { TodoShell } from '../TodoShell';
+import type { TodoTab } from '../tabs';
 
 vi.mock('../api', () => ({
   getFilters: vi.fn().mockResolvedValue({ contexts: [], tags: [], status_counts: {} }),

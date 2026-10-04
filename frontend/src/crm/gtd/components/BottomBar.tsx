@@ -14,26 +14,15 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { todoPath } from '../publicMode';
-import type { TodoTab } from '../TodoShell';
+import { TABS, type TabDef, type TodoTab } from '../tabs';
 
-interface BarItem { key: TodoTab; label: string; sub: string }
+const byKey = (keys: TodoTab[]): TabDef[] => keys.map(k => TABS.find(t => t.key === k)!);
 
-/** The four lists a phone works from, in the issue's order. Labels match the top strip. */
-const PRIMARY_TABS: BarItem[] = [
-  { key: 'inbox', label: 'Inbox', sub: '/inbox' },
-  { key: 'today', label: 'Today', sub: '' },
-  { key: 'next', label: 'To Do', sub: '/next' },
-  { key: 'projects', label: 'Projects', sub: '/projects' },
-];
+/** The four lists a phone works from, in the issue's order. */
+const PRIMARY_TABS = byKey(['inbox', 'today', 'next', 'projects']);
 
 /** Everything else, behind More. */
-const MORE_TABS: BarItem[] = [
-  { key: 'search', label: 'Contexts', sub: '/search' },
-  { key: 'waiting', label: 'Waiting', sub: '/waiting' },
-  { key: 'someday', label: 'Someday', sub: '/someday' },
-  { key: 'review', label: 'Review', sub: '/review' },
-  { key: 'done', label: 'Done', sub: '/done' },
-];
+const MORE_TABS = byKey(['search', 'waiting', 'someday', 'review', 'done']);
 
 const FOCUS = 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand';
 
@@ -117,9 +106,12 @@ function MoreMenu({ active }: { active: TodoTab }) {
         More
       </button>
       {open && (
+        // z-[110]: above the undo block (z-[100]), which rests just above the bar for 7s
+        // after every completion — exactly when someone reaches for More next — so it must
+        // never paint over, or take the taps of, the menu's bottom rows.
         <div
           id={panelId}
-          className="fixed inset-x-2 bottom-[calc(var(--ck-bottom-bar,3.5rem)+0.5rem)] z-40 rounded-xl border border-line bg-cream p-1.5 shadow-lg"
+          className="fixed inset-x-2 bottom-[calc(var(--ck-bottom-bar,3.5rem)+0.5rem)] z-[110] rounded-xl border border-line bg-cream p-1.5 shadow-lg"
         >
           {MORE_TABS.map(item => {
             const current = item.key === active;

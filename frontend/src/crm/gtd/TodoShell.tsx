@@ -4,26 +4,11 @@ import { BottomBar } from './components/BottomBar';
 import { QuickAdd } from './components/QuickAdd';
 import { UndoPill } from './components/UndoPill';
 import { isTodoPublicMode, todoPath } from './publicMode';
+import { TABS, type TodoTab } from './tabs';
 import { useTodoMeta } from './useTodoMeta';
 
-export type TodoTab =
-  | 'today' | 'inbox' | 'next' | 'projects' | 'waiting'
-  | 'someday' | 'done' | 'review' | 'search';
-
-// `sub` is the path relative to the todo root ('' = Today); todoPath() resolves it
-// against the active base (the CRM's /crm/todos vs. the public router basename), so
-// the same tabs render in both modes.
-const TABS: { key: TodoTab; label: string; sub: string }[] = [
-  { key: 'today', label: 'Today', sub: '' },
-  { key: 'inbox', label: 'Inbox', sub: '/inbox' },
-  { key: 'next', label: 'To Do', sub: '/next' },
-  { key: 'projects', label: 'Projects', sub: '/projects' },
-  { key: 'waiting', label: 'Waiting', sub: '/waiting' },
-  { key: 'someday', label: 'Someday', sub: '/someday' },
-  { key: 'done', label: 'Done', sub: '/done' },
-  { key: 'review', label: 'Review', sub: '/review' },
-  { key: 'search', label: 'Contexts', sub: '/search' },
-];
+// The tab list lives in ./tabs so the phone bottom bar (#266) reads the same one.
+export type { TodoTab } from './tabs';
 
 interface Props {
   active: TodoTab;
