@@ -8,7 +8,7 @@
 // The blueprint keys this cache by signed-in user because CAKE is multi-user.
 // CakeCRM is single-user (and the public todo surface has no user at all), so there
 // is nothing to key on and the owner machinery is deliberately not ported.
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { getFilters, listProjects } from './api';
 import type { TodoFilters, TodoProject } from './types';
 
@@ -86,4 +86,20 @@ export function useTodoMeta(): TodoMeta & { refreshMeta: () => Promise<void> } {
 
   const refresh = useCallback(() => refreshMeta(), []);
   return { ...meta, refreshMeta: refresh };
+}
+
+function subscribeMeta(onChange: () => void): () => void {
+  const listener = () => onChange();
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+
+/**
+ * The install's timezone from the cached filters payload (#259), for components that
+ * derive "today" but have no reason to hold the whole meta (TodoRow, QuickAdd). It does
+ * not fetch: every GTD page renders inside TodoShell, whose `useTodoMeta` does. Undefined
+ * until the payload lands, which `todayStr`/`zonedNow` treat as the browser's day.
+ */
+export function useListTz(): string | undefined {
+  return useSyncExternalStore(subscribeMeta, () => cache.filters?.tz, () => undefined);
 }

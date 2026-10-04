@@ -17,15 +17,57 @@ export function parseUTC(iso: string): Date {
 }
 
 /**
- * Local YYYY-MM-DD. Due dates carry the user's LOCAL calendar intent, so overdue
- * comparisons must use the local date — `toISOString()` would flip items to overdue
- * during the evening west of Greenwich.
+ * YYYY-MM-DD "today" in the INSTALL's timezone (`tz`, from the filters payload) — the
+ * same day the server's `today_view` buckets due dates in, whatever zone this browser
+ * is in (#259, the #130 one-clock rule applied to GTD). Without `tz` (the payload has
+ * not landed yet, or a zone name this engine does not know) it is the browser's local
+ * date. Never UTC: due dates carry local calendar intent, and `toISOString()` would
+ * flip items to overdue during the evening west of Greenwich.
  */
-export function todayStr(now: Date = new Date()): string {
+export function todayStr(now: Date = new Date(), tz?: string): string {
+  if (tz) {
+    try {
+      // Assembled from parts: a locale string is not a serialization contract.
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+      }).formatToParts(now);
+      const get = (type: string) => parts.find(p => p.type === type)?.value ?? '';
+      return `${get('year')}-${get('month')}-${get('day')}`;
+    } catch {
+      // unknown zone name — fall through to the browser's date
+    }
+  }
   const y = now.getFullYear();
   const m = String(now.getMonth() + 1).padStart(2, '0');
   const d = String(now.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
+}
+
+/**
+ * A Date whose LOCAL calendar fields are the install's today (at noon, clear of any DST
+ * edge) — for date math written against local getters, like the quick-add parser.
+ */
+export function zonedNow(tz?: string, now: Date = new Date()): Date {
+  const [y, m, d] = todayStr(now, tz).split('-').map(Number);
+  return new Date(y, m - 1, d, 12);
+}
+
+/**
+ * A TIMESTAMPTZ rendered as a calendar date in the install's timezone (#259), so the
+ * "Completed" date on a todo is the same day the server counted it under. Falls back to
+ * the browser's zone when `tz` is absent or unknown to this engine (where
+ * `toLocaleDateString` would throw a RangeError rather than render).
+ */
+export function formatDay(isoTimestamp: string, tz?: string): string {
+  const date = parseUTC(isoTimestamp);
+  if (tz) {
+    try {
+      return date.toLocaleDateString(undefined, { timeZone: tz });
+    } catch {
+      // unknown zone name — fall through to the browser's zone
+    }
+  }
+  return date.toLocaleDateString();
 }
 
 export function parseTags(input: string): string[] {
@@ -75,8 +117,9 @@ export function dueLabel(due: string, today: string): { text: string; overdue: b
   // previous day west of Greenwich.
   const date = new Date(y, m - 1, d);
   const [ty, tm, td] = today.split('-').map(Number);
-  const t = new Date(ty, tm - 1, td);
-  if (date.getTime() === t.getTime() + 86_400_000) return { text: 'Tomorrow', overdue: false };
+  // td + 1, not +24h: the day the clocks change is 23 or 25 hours long.
+  const tomorrow = new Date(ty, tm - 1, td + 1);
+  if (date.getTime() === tomorrow.getTime()) return { text: 'Tomorrow', overdue: false };
   const text = date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
   return { text, overdue: due < today };
 }

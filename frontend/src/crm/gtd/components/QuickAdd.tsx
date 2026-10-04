@@ -2,6 +2,8 @@ import { useMemo, useRef, useState } from 'react';
 import { createTodo } from '../api';
 import type { QuickAddChip } from '../quickAdd';
 import { parseQuickAdd } from '../quickAdd';
+import { useListTz } from '../useTodoMeta';
+import { zonedNow } from '../util';
 
 interface Props {
   onAdded: () => void;
@@ -30,9 +32,11 @@ export function QuickAdd({ onAdded }: Props) {
   const [error, setError] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // The install's day, not the browser's: "tomorrow" must agree with Today (#259).
+  const tz = useListTz();
   const parsed = useMemo(
-    () => parseQuickAdd(input, new Date(), ignored),
-    [input, ignored],
+    () => parseQuickAdd(input, zonedNow(tz), ignored),
+    [input, ignored, tz],
   );
 
   const submit = async () => {
