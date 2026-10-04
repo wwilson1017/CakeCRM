@@ -74,6 +74,9 @@ export function whyBadge(item: CrmTodayTodoItem): { label: string; color: string
       return { label: 'STARRED', color: GOLD_TEXT };
     case 'overdue':
       return { label: 'OVERDUE', color: CORAL_TEXT };
+    case 'bring_back':
+      // Never "overdue": a bring-back date is not a deadline (#261).
+      return { label: 'BROUGHT BACK', color: INK_MUTE };
     default:
       return { label: 'DUE TODAY', color: INK_MUTE };
   }

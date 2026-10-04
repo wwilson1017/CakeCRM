@@ -6,11 +6,11 @@ import { useRowActions, useTodos } from './hooks';
 import { EmptyState, LoadFailed, LoadingRows, TodoShell } from './TodoShell';
 import type { Todo } from './types';
 import { useTodoMeta } from './useTodoMeta';
-import { todayStr } from './util';
+import { bringBackState, todayStr } from './util';
 
 /**
  * The daily home screen: overdue first (they need a decision), then due today, then
- * the starred handful.
+ * todos whose bring-back date has arrived (#261), then the starred handful.
  */
 export function TodayPage() {
   const { todos, failed, reload } = useTodos(todayTodos);
@@ -23,7 +23,12 @@ export function TodayPage() {
   const overdue = (todos ?? []).filter(t => t.due_date && t.due_date < today);
   const dueToday = (todos ?? []).filter(t => t.due_date === today);
   // A todo already shown as overdue or due-today must not appear twice.
-  const seen = new Set([...overdue, ...dueToday].map(t => t.id));
+  const dated = new Set([...overdue, ...dueToday].map(t => t.id));
+  // Back on today's list because its bring-back date has arrived (#261). Never "overdue":
+  // only a due date can make a todo overdue, so this is its own section.
+  const broughtBack = (todos ?? []).filter(
+    t => bringBackState(t.bring_back_on, today) === 'back' && !dated.has(t.id));
+  const seen = new Set([...dated, ...broughtBack.map(t => t.id)]);
   const starred = (todos ?? []).filter(t => t.star && !seen.has(t.id));
 
   const section = (title: string, items: Todo[], tone?: string) =>
@@ -46,7 +51,7 @@ export function TodayPage() {
       {failed && <LoadFailed retry={reload} />}
       {!failed && todos === null && <LoadingRows />}
       {todos !== null && !failed && (
-        overdue.length + dueToday.length + starred.length === 0 ? (
+        overdue.length + dueToday.length + broughtBack.length + starred.length === 0 ? (
           <EmptyState
             title="Nothing on today's plate"
             hint="Star a todo or give it a due date and it shows up here."
@@ -55,6 +60,7 @@ export function TodayPage() {
           <div className="space-y-6">
             {section('Overdue', overdue, 'text-ck-accent-text')}
             {section('Due today', dueToday)}
+            {section('Brought back', broughtBack)}
             {section('★ Starred', starred, 'text-ck-amber-text')}
           </div>
         )

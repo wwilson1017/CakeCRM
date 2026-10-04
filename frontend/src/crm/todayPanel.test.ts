@@ -23,6 +23,13 @@ describe('collapseToday', () => {
     expect(collapseToday(items, false)).toEqual({ visible: items, hiddenCount: 0 });
   });
 
+  it('keeps a brought-back todo behind the expander (#261)', () => {
+    const back: CrmTodayTodoItem = { ...todo(9), rank: null, why: 'bring_back' };
+    const items = [todo(1), back];
+    expect(collapseToday(items, false)).toEqual({ visible: [items[0]], hiddenCount: 1 });
+    expect(collapseToday(items, true).visible).toEqual(items);
+  });
+
   it('caps at five and reports the remainder', () => {
     const items = Array.from({ length: 7 }, (_, i) => todo(i));
     const { visible, hiddenCount } = collapseToday(items, false);
@@ -106,6 +113,7 @@ describe('whyBadge', () => {
   it('labels each rung of the ladder distinctly', () => {
     const labels = (['starred', 'overdue', 'due_today'] as const).map(w => whyBadge(todo(1, w)).label);
     expect(labels).toEqual(['STARRED', 'OVERDUE', 'DUE TODAY']);
+    expect(whyBadge({ ...todo(1), rank: null, why: 'bring_back' }).label).toBe('BROUGHT BACK');
   });
 });
 

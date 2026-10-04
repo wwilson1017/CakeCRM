@@ -24,6 +24,10 @@ export interface Todo {
   star: boolean;
   /** YYYY-MM-DD, or '' for no due date (the CRM's TEXT NOT NULL convention). */
   due_date: string;
+  /** Bring-back date (#261), YYYY-MM-DD or null: hidden from the working lists until that
+   * day, then on Today. Not a deadline. Optional only so older fixtures type-check; the
+   * server always sends it. */
+  bring_back_on?: string | null;
   /** '' | daily | weekdays | weekly | monthly | yearly | every:N */
   repeat: string;
   /** Repeating todos only: star the next occurrence when it comes due today. */

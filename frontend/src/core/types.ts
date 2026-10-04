@@ -297,11 +297,13 @@ export interface CrmWeeklyTouchDetail {
 // fills the five visible slots from ranked rows only, so the expander is the one way to
 // them. That is #131's rule, and encoding it as an absent rank rather than a sixth rung is
 // what keeps the browser from carrying a second copy of the ladder's numbering.
+// `bring_back` (#261) is a todo whose bring-back day has arrived with nothing else asking
+// for attention: unranked, like a recently touched hot deal, so it waits behind the expander.
 export interface CrmTodayTodoItem {
   kind: 'todo';
   id: number;
-  rank: 1 | 3 | 4;
-  why: 'starred' | 'overdue' | 'due_today';
+  rank: 1 | 3 | 4 | null;
+  why: 'starred' | 'overdue' | 'due_today' | 'bring_back';
   title: string;
   due_date: string;
   owner_id: number | null;

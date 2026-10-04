@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  daysSince, dueLabel, formatAge, formatDay, parseTags, parseUTC, repeatLabel, todayStr,
+  bringBackState, daysSince, dueLabel, formatAge, formatDay, parseTags, parseUTC, repeatLabel,
+  todayStr,
 } from './util';
 
 // vitest pins TZ=America/Chicago, which is what makes the local-vs-UTC cases below
@@ -113,5 +114,16 @@ describe('install-timezone helpers (#259)', () => {
     expect(formatDay(iso, 'Asia/Tokyo')).not.toBe(formatDay(iso, 'America/Chicago'));
     expect(formatDay(iso, 'Not/AZone')).toBe(at.toLocaleDateString());
     expect(formatDay(iso)).toBe(at.toLocaleDateString());
+  });
+});
+
+describe('bringBackState (#261)', () => {
+  it('is waiting before the day, back on and after it, and null with no date', () => {
+    expect(bringBackState('2026-10-10', '2026-10-09')).toBe('waiting');
+    expect(bringBackState('2026-10-10', '2026-10-10')).toBe('back');
+    expect(bringBackState('2026-10-10', '2026-12-01')).toBe('back');
+    expect(bringBackState(null, '2026-10-10')).toBeNull();
+    expect(bringBackState(undefined, '2026-10-10')).toBeNull();
+    expect(bringBackState('', '2026-10-10')).toBeNull();
   });
 });
