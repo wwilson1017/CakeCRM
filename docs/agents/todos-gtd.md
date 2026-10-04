@@ -247,6 +247,28 @@
   public app's download grew by the layer and `@dnd-kit` — the measured delta is in
   `docs/agents/frontend-boot-split.md`.
 
+- **A todo can carry a bring-back date** (#261, port of todo-gtd `d6948f1`/`60b2d0b`):
+  nullable `todos.bring_back_on DATE`, written ONLY through `service._apply_todo_update_cur`
+  (in `_TODO_UPDATE_FIELDS` and GTD's `TODO_FIELDS`; `gtd_common.validate_bring_back`
+  clears '' to NULL). No create path takes it, and a repeat's next occurrence does not
+  inherit it. `service.brought_back_sql(column, params)` is the one "not waiting on a
+  bring-back date" predicate; it binds `gtd_common.today_local_str()`, the same day #259
+  made the GTD client use. It is applied to the WORKING lists and their counts — GTD
+  `list_todos` (except a search, which is how a deferred todo is reached before its day),
+  normal `list_todos` (open rows), `today_view`, the dashboard's overdue/pending counts, the
+  proactive digest and the Today panel — and deliberately NOT to record views and follow-up
+  checks (contact rollup, company report, deal health / stale-deal `has_open_todo`, a
+  project's open count, the observer's dedupe): a scheduled return is still a follow-up.
+  **Divergence from the blueprint:** upstream only SURFACES a revisit date on Today; here the
+  todo is also hidden until then, per the issue. From its day it stays on Today (the
+  "Brought back" section) until completed or cleared — no sweep job, same as upstream. Only a
+  due date can make a todo overdue. The control is a native date input on the edit sheet
+  (existing todos only, committed with Save) and on the triage card (the #150 blur-commit,
+  its own `useSerialCommit`, flushed by a resolving write, carried in `payload()`); a row
+  shows "Back <day>" while waiting and "Brought back" from its day. A future date is
+  routine-tier through `todo_update` — it hides the todo temporarily, like filing to
+  someday, rather than removing it.
+
 - **The two no-login todo surfaces are asymmetric, and only ONE of them is opt-in** (#70,
   ported from chatty — the heading used to say both were, which the body below has always
   contradicted). Neither consults `todo_mode`, so #102's default flip leaves both exactly
