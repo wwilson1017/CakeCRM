@@ -68,7 +68,13 @@ ROUTINE = "routine"
 #   * 'someday_maybe' / 'someday' is FILING between working lists: GTD renders a page
 #     per status, and both `todo_list` and `todo_list_projects` still return the row.
 #
-# `status` is the only hiding argument these four update tools can reach:
+# Since #261 the two todo update tools have a SECOND hiding argument, `bring_back_on`:
+# setting it takes the todo off every working list until that day (a temporary hide,
+# but one with no upper bound on the date), so a call that SETS it keeps its card.
+# Clearing it ('' or null) only brings a todo back, so that stays routine. See
+# `_HIDING_ARGS` below.
+#
+# Apart from that, `status` is the only hiding argument these four update tools can reach:
 #   * `gtd_service.update_todo` / `update_project` run `_check_fields` FIRST, which
 #     RAISES on any key outside `TODO_FIELDS` / `PROJECT_FIELDS` — a rejecting
 #     allow-list, unlike `service.update_todo`'s silent filter. `deal_id` (the one
@@ -89,6 +95,13 @@ _HIDING_STATUS: dict[str, frozenset[str]] = {
 }
 
 
+# Arguments other than `status` whose non-empty value hides the record (#261).
+_HIDING_ARGS: dict[str, tuple[str, ...]] = {
+    "crm_update_todo": ("bring_back_on",),
+    "todo_update": ("bring_back_on",),
+}
+
+
 def removes_from_view(tool_name: str, args: dict | None) -> bool:
     """True when this specific call would take the record it edits out of the lists.
 
@@ -101,6 +114,11 @@ def removes_from_view(tool_name: str, args: dict | None) -> bool:
         return False
     if not isinstance(args, dict):
         return True
+    for key in _HIDING_ARGS.get(tool_name, ()):
+        value = args.get(key)
+        # Any value other than a clear counts — a non-string fails closed like `status`.
+        if value is not None and not (isinstance(value, str) and not value.strip()):
+            return True
     status = args.get("status")
     if status is None:
         return False

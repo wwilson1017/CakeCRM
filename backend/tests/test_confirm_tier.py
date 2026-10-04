@@ -394,6 +394,14 @@ def test_the_constant_is_accepted(monkeypatch):
     # Fails closed on malformed argument shapes, exactly as the crm_* keys do.
     ("todo_update", None, True),
     ("todo_update", "dropped", True),
+    # #261: setting a bring-back date takes the todo off every working list until then,
+    # so that call keeps its card; clearing one only brings a todo back.
+    ("todo_update", {"bring_back_on": "2027-01-15"}, True),
+    ("crm_update_todo", {"bring_back_on": "2027-01-15"}, True),
+    ("todo_update", {"bring_back_on": ""}, False),
+    ("crm_update_todo", {"bring_back_on": None}, False),
+    ("todo_update", {"bring_back_on": 20270115}, True),
+    ("crm_update_contact", {"bring_back_on": "2027-01-15"}, False),
     ("todo_update_project", {"status": 7}, True),
 ])
 def test_removes_from_view(name, args, expected):

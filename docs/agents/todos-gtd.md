@@ -265,9 +265,10 @@
   due date can make a todo overdue. The control is a native date input on the edit sheet
   (existing todos only, committed with Save) and on the triage card (the #150 blur-commit,
   its own `useSerialCommit`, flushed by a resolving write, carried in `payload()`); a row
-  shows "Back <day>" while waiting and "Brought back" from its day. A future date is
-  routine-tier through `todo_update` — it hides the todo temporarily, like filing to
-  someday, rather than removing it.
+  shows "Back <day>" while waiting and "Brought back" from its day. `todo_update` and
+  `crm_update_todo` stay routine, but a call that SETS a bring-back date keeps its Approve
+  card (`confirm_tier._HIDING_ARGS`, beside `status='dropped'`): it takes the todo off
+  every working list with no upper bound on the date. Clearing one stays routine.
 
 - **The two no-login todo surfaces are asymmetric, and only ONE of them is opt-in** (#70,
   ported from chatty — the heading used to say both were, which the body below has always

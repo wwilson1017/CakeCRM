@@ -289,7 +289,7 @@ def test_todos_query_hides_a_future_bring_back_date(rec, pinned_today):
     today_service.get_today()
     sql = rec.sql_containing("FROM todos")
     assert "(bring_back_on IS NULL OR bring_back_on <= %s)" in sql
-    assert "OR bring_back_on <= %s)" in sql
+    assert "(star OR (due_date != '' AND due_date <= %s) OR bring_back_on <= %s)" in sql
 
 
 def test_empty_inputs_produce_an_empty_list():

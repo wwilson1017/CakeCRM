@@ -18,7 +18,8 @@ this is how the ten came out against it:
   * `todo_create` — ROUTINE. Capture into the inbox, and the very same
     `crm.service.create_todo` that `crm_create_todo` (routine since #180) calls, so
     classifying one and not the other would be incoherent.
-  * `todo_update` — ROUTINE, minus `status='dropped'`. Retitling, filing, starring and
+  * `todo_update` — ROUTINE, minus `status='dropped'` and minus setting a `bring_back_on`
+    date (#261), which hides the todo from every list until then. Retitling, filing, starring and
     completing are ordinary; dropping is this product's delete gesture (`todo_delete`'s
     own description sends the model there), so that one CALL keeps its card.
   * `todo_create_project` — ROUTINE. A new grouping row.
@@ -223,7 +224,8 @@ GTD_TOOL_DEFS: list[dict] = [
     },
     {
         "name": "todo_update",
-        # Routine (#186), EXCEPT status='dropped' — see confirm_tier.removes_from_view().
+        # Routine (#186), EXCEPT status='dropped' or a set bring_back_on (#261) — see
+        # confirm_tier.removes_from_view().
         "writes": True,
         "confirm_tier": ROUTINE,
         "description": (
@@ -326,7 +328,8 @@ GTD_TOOL_DEFS: list[dict] = [
     },
     {
         "name": "todo_update_project",
-        # Routine (#186), EXCEPT status='dropped' — see confirm_tier.removes_from_view().
+        # Routine (#186), EXCEPT status='dropped' or a set bring_back_on (#261) — see
+        # confirm_tier.removes_from_view().
         "writes": True,
         "confirm_tier": ROUTINE,
         "description": "Rename a project, edit its notes, or change its status.",
