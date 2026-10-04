@@ -81,6 +81,20 @@ def test_filter_scrubs_dict_args_and_tracebacks():
     assert not any(t in text for t in ALL_TOKENS)
 
 
+def test_trace_level_scope_dump_is_scrubbed():
+    """`uvicorn --log-level trace` logs the whole ASGI scope on `uvicorn.asgi`: a dict
+    carrying the path as text and as bytes. Its logger must be one install() covers."""
+    assert "uvicorn.asgi" in logscrub._SERVER_LOGGERS
+    scope = {"type": "http", "path": f"/todo/{WEB_TOKEN}", "raw_path": f"/todo/{WEB_TOKEN}".encode()}
+    record = logging.LogRecord(
+        "uvicorn.asgi", 5, __file__, 1, "%s - ASGI [%d] Started scope=%s", ("1.2.3.4:5", 1, scope), None,
+    )
+    logscrub.ScrubTokens().filter(record)
+    text = record.getMessage()
+    assert "/todo/<redacted>" in text
+    assert WEB_TOKEN not in text
+
+
 def test_install_covers_the_root_handlers_our_own_loggers_propagate_to():
     """`logging.getLogger(__name__)` records reach the output through root's handlers,
     and a logger filter never sees a propagated record — so install() filters those

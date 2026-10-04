@@ -78,7 +78,11 @@ _SCRUBBER = ScrubTokens()
 # HANDLERS, which see every record our own `logging.getLogger(__name__)` loggers
 # propagate up. Logger-level filters survive gunicorn's UvicornWorker replacing the
 # uvicorn loggers' handlers.
-_SERVER_LOGGERS = ("uvicorn.access", "uvicorn.error", "gunicorn.access", "gunicorn.error")
+# `uvicorn.asgi` is the trace-level message logger (`--log-level trace`), which prints
+# the whole ASGI scope, `path` and `raw_path` included.
+_SERVER_LOGGERS = (
+    "uvicorn.access", "uvicorn.error", "uvicorn.asgi", "gunicorn.access", "gunicorn.error",
+)
 
 
 def install() -> None:

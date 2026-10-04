@@ -269,9 +269,9 @@
   `logscrub.py`). `core/logscrub.ScrubTokens`, installed by `main.py` right after
   `basicConfig`, replaces the segment after `/todo/`, `/capture/` or `/todo-web/` with
   `<redacted>` in a record's message, its tuple or dict args and its rendered traceback.
-  It sits on the four server loggers by NAME (`uvicorn.access`/`.error`,
-  `gunicorn.access`/`.error` — a logger filter survives gunicorn's UvicornWorker swapping
-  their handlers) and on root's HANDLERS, because a logger filter never sees a record
+  It sits on the five server loggers by NAME (`uvicorn.access`/`.error`/`.asgi`, the last being
+  the trace-level ASGI-scope dump, and `gunicorn.access`/`.error` — a logger filter survives
+  gunicorn's UvicornWorker swapping their handlers) and on root's HANDLERS, because a logger filter never sees a record
   propagating through it, which is how every `getLogger(__name__)` line gets out. Two rules
   worth knowing: a template that spells the path itself (`"refused /todo/%s"`) is rendered
   before it is scrubbed, since scrubbing the template alone eats the `%s` and breaks
