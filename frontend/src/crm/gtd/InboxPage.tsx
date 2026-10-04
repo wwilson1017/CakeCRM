@@ -4,6 +4,7 @@ import { listTodos } from './api';
 import { QuickAdd } from './components/QuickAdd';
 import { TodoEditSheet } from './components/TodoEditSheet';
 import { TriageCard } from './components/TriageCard';
+import { UndoPill } from './components/UndoPill';
 import { contextGroup, matchesContexts } from './contextFacet';
 import { useInboxFocus, useTodos } from './hooks';
 import { EmptyState, FilterEmptyState, LoadFailed, LoadingRows, TodoShell } from './TodoShell';
@@ -77,7 +78,7 @@ export function InboxPage() {
   };
 
   return (
-    <TodoShell active="inbox" hideQuickAdd>
+    <TodoShell active="inbox" hideQuickAdd inlineUndo>
       <SearchFilterBar
         query={search}
         onQueryChange={setSearch}
@@ -108,49 +109,50 @@ export function InboxPage() {
           : <EmptyState title="Inbox zero" hint="Everything is captured and clarified. Mind like water." />
       )}
       {head && (
-        <div className="space-y-4">
-          {/* Keyed by id: the card holds the chosen destination in local state until
-              it is filed, and that choice belongs to ONE item. The undo counter rides
-              along so a restored item never reuses the spent card it was filed from
-              (see `focusSeq`). */}
-          <TriageCard
-            key={`${head.id}:${focusSeq}`}
-            todo={head}
-            projects={projects}
-            contexts={filters?.contexts ?? []}
-            onProcessed={processed}
-            onChanged={changed}
-            onEdit={setEditTodo}
-          />
-          {rest.length > 0 && (
-            <div>
-              <h2 className="mb-2 text-xs font-heading font-bold uppercase tracking-wide text-muted">
-                {rest.length} more in inbox
-              </h2>
-              {/* Promote-only, deliberately. The whole row is one "triage this one
-                  next" target, so its title must never become a click-to-rename
-                  editor the way the card's is — an edit box opening mid-row makes
-                  skipping between items fiddly, and the item is about to land on the
-                  card where renaming belongs.
-                  `data-inbox-queue` is the test's handle on these rows: selecting
-                  them by a utility class would tie a test to a styling decision and
-                  break the moment the titles were made to wrap. */}
-              <div className="space-y-1" data-inbox-queue>
-                {rest.map(t => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    onClick={() => setSelectedId(t.id)}
-                    // Wraps: choosing which capture to triage next is exactly the
-                    // moment you need to read the whole thing.
-                    className="block w-full break-words rounded-lg border border-line-faint bg-cream px-3 py-2 text-left text-sm text-charcoal hover:border-brand/40"
-                  >
-                    {t.title}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
+        /* Keyed by id: the card holds the chosen destination in local state until it is
+           filed, and that choice belongs to ONE item. The undo counter rides along so a
+           restored item never reuses the spent card it was filed from (see `focusSeq`). */
+        <TriageCard
+          key={`${head.id}:${focusSeq}`}
+          todo={head}
+          projects={projects}
+          contexts={filters?.contexts ?? []}
+          onProcessed={processed}
+          onChanged={changed}
+          onEdit={setEditTodo}
+        />
+      )}
+      {/* The undo block (#265), in the page flow: right under the card — or under the
+          empty state once the last item is filed — and above the queue, where the eye
+          already is after filing. The shell's floating copy is off (`inlineUndo`). */}
+      <UndoPill inline />
+      {head && rest.length > 0 && (
+        <div className="mt-4">
+          <h2 className="mb-2 text-xs font-heading font-bold uppercase tracking-wide text-muted">
+            {rest.length} more in inbox
+          </h2>
+          {/* Promote-only, deliberately. The whole row is one "triage this one
+              next" target, so its title must never become a click-to-rename
+              editor the way the card's is — an edit box opening mid-row makes
+              skipping between items fiddly, and the item is about to land on the
+              card where renaming belongs.
+              `data-inbox-queue` is the test's handle on these rows: selecting
+              them by a utility class would tie a test to a styling decision and
+              break the moment the titles were made to wrap. */}
+          <div className="space-y-1" data-inbox-queue>
+            {rest.map(t => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setSelectedId(t.id)}
+                // Wraps: choosing which capture to triage next is exactly the
+                // moment you need to read the whole thing.
+                className="block w-full break-words rounded-lg border border-line-faint bg-cream px-3 py-2 text-left text-sm text-charcoal hover:border-brand/40"
+              >
+                {t.title}
+              </button>
+            ))}
+          </div>
         </div>
       )}
       {editTodo && (
