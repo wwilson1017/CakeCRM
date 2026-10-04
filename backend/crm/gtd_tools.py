@@ -325,8 +325,9 @@ GTD_TOOL_DEFS: list[dict] = [
             "Get the data for a GTD weekly review in one call: whether a review is due, "
             "the inbox, todos due today or overdue, stale next actions, waiting-fors due a "
             "follow-up, old someday items, what was completed this week, and active projects "
-            "with no next action. Each section has a count and up to 25 ids and titles. "
-            "Changes nothing. " + _UNTRUSTED_NOTE
+            "with no next action. Each section has its full count and up to 25 ids and titles; "
+            "when one is truncated, act on those items and call this again — handled items "
+            "leave their section, so the next call shows the rest. Changes nothing. " + _UNTRUSTED_NOTE
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
         "kind": "integration",

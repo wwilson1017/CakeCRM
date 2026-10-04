@@ -17,8 +17,9 @@ Validation errors raise `gtd_common.ValidationError`; the router maps them to 40
 
 import json
 import logging
-from datetime import date
+from datetime import date, datetime, timezone
 
+from core import localtime
 from core.postgres import get_connection, pg_execute, pg_fetchall, pg_fetchone
 from crm import gtd_common, service
 from crm.gtd_common import (
@@ -549,13 +550,24 @@ def _review_section(where: str, params: tuple, days_col: str, order: str,
 
 
 def review_status() -> dict:
-    """When the weekly review was last marked done, and whether one is due."""
-    row = pg_fetchone(
-        f"SELECT {_DAYS_SINCE.format(col='todo_last_review_at')} AS days "
-        "FROM crm_meta WHERE id = 1 AND todo_last_review_at IS NOT NULL"
-    )
-    days = None if not row or row["days"] is None else max(0, int(row["days"]))
-    return {"review_due": days is None or days >= REVIEW_DUE_DAYS, "days_since_review": days}
+    """When the weekly review was last marked done, and whether one is due.
+
+    Counted in CALENDAR days on the configured local day, not elapsed 24-hour periods:
+    the page words it as "today" / "yesterday", and a review marked at 23:50 must read
+    as yesterday ten minutes later. The stored instant is converted with `zoneinfo`,
+    the one timezone authority (AGENTS.md).
+    """
+    row = pg_fetchone("SELECT todo_last_review_at FROM crm_meta WHERE id = 1")
+    stamp = (row or {}).get("todo_last_review_at")
+    if not stamp:
+        return {"review_due": True, "days_since_review": None}
+    if isinstance(stamp, str):  # core.postgres hands timestamps back as ISO strings
+        stamp = datetime.fromisoformat(stamp)
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    reviewed_on = stamp.astimezone(localtime.tz()).date()
+    days = max(0, (date.fromisoformat(gtd_common.today_local_str()) - reviewed_on).days)
+    return {"review_due": days >= REVIEW_DUE_DAYS, "days_since_review": days}
 
 
 def mark_review_done() -> dict:

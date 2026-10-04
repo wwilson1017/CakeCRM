@@ -7,6 +7,7 @@ field that smuggles free text in fails here rather than widening the on-ramp qui
 """
 
 import json
+from datetime import date, timedelta
 
 import pytest
 
@@ -30,7 +31,11 @@ def _fake_db(monkeypatch, *, rows_by_marker: dict[str, list[dict]], last_review_
 
     def fetchone(sql, params=()):
         assert "crm_meta" in sql
-        return None if last_review_days is None else {"days": last_review_days}
+        if last_review_days is None:
+            return {"todo_last_review_at": None}
+        reviewed = date(2026, 10, 4) - timedelta(days=last_review_days)
+        # The ISO string core.postgres hands back for a TIMESTAMPTZ.
+        return {"todo_last_review_at": f"{reviewed.isoformat()}T12:00:00+00:00"}
 
     monkeypatch.setattr(gtd_service, "pg_fetchall", fetchall)
     monkeypatch.setattr(gtd_service, "pg_fetchone", fetchone)
@@ -99,6 +104,16 @@ def test_review_due_after_a_week_or_never(monkeypatch, days, due):
     _fake_db(monkeypatch, rows_by_marker={}, last_review_days=days)
     status = gtd_service.review_status()
     assert status == {"review_due": due, "days_since_review": days}
+
+
+def test_review_age_counts_local_calendar_days_not_elapsed_hours(monkeypatch):
+    """Marked at 23:50 Chicago time on Oct 3 (04:50 UTC Oct 4), read ten minutes after
+    local midnight: elapsed time is 10 minutes, but the page must say "yesterday"."""
+    monkeypatch.setenv("TIMEZONE", "America/Chicago")
+    monkeypatch.setattr(gtd_service, "pg_fetchone",
+                        lambda sql, params=(): {"todo_last_review_at": "2026-10-04T04:50:00+00:00"})
+    monkeypatch.setattr(gtd_service.gtd_common, "today_local_str", lambda: "2026-10-04")
+    assert gtd_service.review_status() == {"review_due": False, "days_since_review": 1}
 
 
 def test_mark_review_done_stamps_the_clock(monkeypatch):

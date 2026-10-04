@@ -13,8 +13,11 @@ every project moving. Open the **Review** tab and ask Baker to start one (the dr
 Baker calls `todo_weekly_review` once for the data, then walks the steps below **one at a
 time**, waiting for your answer before moving on and making the changes you agree to as it
 goes (`todo_create`, `todo_update`, `todo_bulk_update`, `todo_create_project`,
-`todo_update_project`). Every section of the data carries a count and up to 25 todos by id
-and title; when a section holds more, Baker says so and fetches the rest with `todo_list`.
+`todo_update_project`). Every section of the data carries its full count and up to 25 items
+by id and title. When a section holds more, Baker says how many there are, works through the
+ones it has, and calls `todo_weekly_review` again: an item that has been filed, done,
+rewritten or given a next action leaves its section, so the next call shows the ones behind
+it.
 
 ## The nine steps
 
