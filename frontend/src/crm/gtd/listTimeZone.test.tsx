@@ -31,11 +31,12 @@ vi.mock('./api', () => ({
   getFilters: getFiltersMock,
 }));
 
+import { TodoEditSheet } from './components/TodoEditSheet';
 import { TodayPage } from './TodayPage';
 import type { Todo } from './types';
 import { resetUndoQueue } from './undoQueue';
-import { __resetTodoMeta } from './useTodoMeta';
-import { todayStr, zonedNow } from './util';
+import { __resetTodoMeta, refreshMeta } from './useTodoMeta';
+import { formatDay, todayStr, zonedNow } from './util';
 
 const base: Omit<Todo, 'id' | 'title' | 'due_date'> = {
   notes: '', project_id: null, project_name: null, context: '', tags: [],
@@ -167,6 +168,26 @@ describe('an install AHEAD of the browser (Tokyo vs the runner’s Chicago)', ()
     expect(section('Overdue')).toEqual(['due on the 1st']);
     expect(section('Due today')).toEqual(['due on the 2nd']);
     expect(rowText('due on the 2nd')).toContain('Today');
+  });
+
+  it('the edit sheet dates Created/Completed on the install’s calendar day', async () => {
+    await act(async () => { await refreshMeta(); }); // the filters payload (and its tz) lands
+    const created = '2026-08-01T16:00:00Z';  // Aug 1 in both zones
+    const completed = '2026-08-01T20:00:00Z'; // 15:00 Aug 1 in Chicago, 05:00 Aug 2 in Tokyo
+    await act(async () => {
+      root.render(
+        <MemoryRouter>
+          <TodoEditSheet
+            todo={{ ...base, id: 9, title: 'filed', due_date: '', status: 'done',
+              created_at: created, completed_at: completed }}
+            projects={[]} contexts={[]} onClose={() => {}} onSaved={() => {}}
+          />
+        </MemoryRouter>,
+      );
+    });
+    expect(formatDay(completed, 'Asia/Tokyo')).not.toBe(formatDay(completed)); // the premise
+    expect(container.textContent).toContain(`Completed ${formatDay(completed, 'Asia/Tokyo')}`);
+    expect(container.textContent).toContain(`Created ${formatDay(created, 'Asia/Tokyo')}`);
   });
 
   it('quick-add "tomorrow" follows the install', async () => {

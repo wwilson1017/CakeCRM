@@ -61,6 +61,12 @@ Today, Inbox (with a live count), To Do, Projects, Waiting, Someday, Done, Revie
 search page across contexts. Each tab has its own filters; the shell carries a search box and
 a quick-add composer.
 
+"Today" always means today in the install's time zone, the one configured for the
+whole install, not the clock of the browser you are using. Today's Overdue and Due today
+sections, the Today and Tomorrow labels on due dates, and words like "tomorrow" or "friday"
+typed into quick add all follow it. So does the no-login todo link. Someone working late in
+another time zone sees the same split as everyone else.
+
 Someday, Done and Projects use the same filter bar as the Contacts, Companies and Todos lists:
 a search box that matches every word you type, a **Filters** button (Someday and Done filter by
 context), a count of what is showing, and — when you are signed in — **Views**, which saves
