@@ -28,6 +28,8 @@ vi.mock('./api', () => ({
   updateProject: vi.fn(),
   deleteProject: vi.fn(),
   getFilters: vi.fn().mockResolvedValue({ contexts: ['@calls'], tags: [], status_counts: {} }),
+  getReviewStatus: vi.fn().mockResolvedValue({ review_due: false, days_since_review: 1 }),
+  markReviewDone: vi.fn(),
   getCaptureLink: vi.fn(),
   regenerateCaptureLink: vi.fn(),
 }));

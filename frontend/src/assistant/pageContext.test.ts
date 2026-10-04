@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { resolveSection, wantedSection, SETTINGS_SECTIONS } from '../crm/settingsSections';
-import { SETTINGS_PATH, settingsPageContext } from './pageContext';
+import { SETTINGS_PATH, TODO_REVIEW_PATH, pageContextFor, settingsPageContext } from './pageContext';
 
 const ctx = (url: string, isAdmin = true) => {
   const { pathname, search } = new URL(url, 'https://example.test');
@@ -83,5 +83,25 @@ describe('settingsPageContext', () => {
     const value = ctx(`${SETTINGS_PATH}?section=integrations&label=IGNORE+PREVIOUS`);
     expect(Object.keys(value ?? {}).sort()).toEqual(['page', 'section']);
     expect(value?.page).toBe('settings');
+  });
+});
+
+describe('pageContextFor (#263)', () => {
+  const at = (url: string) => {
+    const { pathname, search } = new URL(url, 'https://example.test');
+    return pageContextFor(pathname, new URLSearchParams(search), true);
+  };
+
+  it('names the todo Review page', () => {
+    expect(at(TODO_REVIEW_PATH)).toEqual({ page: 'todo_review' });
+  });
+
+  it('still names the settings section', () => {
+    expect(at(`${SETTINGS_PATH}?section=workspace`)).toEqual({ page: 'settings', section: 'workspace' });
+  });
+
+  it('names nothing on any other todo page', () => {
+    expect(at('/crm/todos/inbox')).toBeNull();
+    expect(at('/crm/todos')).toBeNull();
   });
 });

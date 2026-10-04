@@ -38,6 +38,8 @@ vi.mock('./api', () => ({
   updateProject: updateProjectMock,
   deleteProject: vi.fn(),
   getFilters: getFiltersMock,
+  getReviewStatus: vi.fn().mockResolvedValue({ review_due: false, days_since_review: 1 }),
+  markReviewDone: vi.fn(),
 }));
 
 import { ProjectDetailPage } from './ProjectDetailPage';

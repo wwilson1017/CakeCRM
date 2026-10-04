@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { QuickActions } from './QuickActions';
 import { SETTINGS_SECTIONS, type SettingsSectionId } from '../crm/settingsSections';
-import type { ActiveRecordContext, SettingsPageContext } from './types';
+import type { ActiveRecordContext, PageContext, SettingsPageContext } from './types';
 
 let container: HTMLDivElement;
 let root: Root;
@@ -33,7 +33,7 @@ afterEach(() => {
 
 function render(props: {
   record?: ActiveRecordContext | null;
-  page?: SettingsPageContext | null;
+  page?: PageContext | null;
   onPick?: (p: string) => void;
 }) {
   act(() => {
@@ -113,5 +113,20 @@ describe('what the strip chooses to show', () => {
     });
     expect(chips()).toContain('Summarize this contact');
     expect(chips()).not.toContain('What is set up on this install?');
+  });
+});
+
+describe('the todo Review page chips (#263)', () => {
+  it('offers to start the weekly review', () => {
+    render({ page: { page: 'todo_review' } });
+    expect(heading()).toContain('Weekly review');
+    expect(chips()[0]).toBe('Start my weekly review');
+  });
+
+  it('sends the chip as a normal turn', () => {
+    const onPick = vi.fn();
+    render({ page: { page: 'todo_review' }, onPick });
+    act(() => { (container.querySelector('button') as HTMLButtonElement).click(); });
+    expect(onPick).toHaveBeenCalledWith('Start my weekly review');
   });
 });
