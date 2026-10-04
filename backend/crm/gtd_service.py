@@ -17,8 +17,9 @@ Validation errors raise `gtd_common.ValidationError`; the router maps them to 40
 
 import json
 import logging
+from datetime import date
 
-from core.postgres import get_connection, pg_fetchall, pg_fetchone
+from core.postgres import get_connection, pg_execute, pg_fetchall, pg_fetchone
 from crm import gtd_common, service
 from crm.gtd_common import (
     MAX_BULK_IDS,
@@ -487,3 +488,126 @@ def open_todo_with_title_exists(title: str) -> bool:
         (clean,),
     )
     return bool(row and row["found"])
+
+
+# ── Weekly review (#263) ──────────────────────────────────────────────────────
+
+# A review older than this is due. The Review page's hint and the packet's
+# `review_due` both read it, so they cannot disagree.
+REVIEW_DUE_DAYS = 7
+# Same threshold as the Review page's stale list (frontend `STALE_DAYS`).
+REVIEW_STALE_DAYS = 14
+REVIEW_WAITING_DAYS = 7
+REVIEW_SOMEDAY_DAYS = 30
+# Rows per section. Every section reports its full count beside the capped list.
+REVIEW_ITEM_CAP = 25
+
+# Whole days elapsed since a timestamp column, as an integer.
+_DAYS_SINCE = "FLOOR(EXTRACT(EPOCH FROM (now() - {col})) / 86400)::int"
+
+
+def _days_overdue(due_date: str, today: str) -> int:
+    """Days a TEXT `YYYY-MM-DD` due date is past `today` (0 = due today). Parsed in
+    Python rather than cast in SQL, so a malformed row degrades to 0 instead of
+    failing the whole read — the rest of the CRM never ::date-casts this column."""
+    try:
+        return max(0, (date.fromisoformat(today) - date.fromisoformat(due_date)).days)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _review_section(where: str, params: tuple, days_col: str, order: str,
+                    overdue_vs: str | None = None) -> dict:
+    """One packet section: the full count, whether the list was capped, and up to
+    REVIEW_ITEM_CAP items of ints and titles.
+
+    Each item carries `source` on purpose: it is what lets `delimiters.fence_public_rows`
+    fence the title of a row a stranger typed on the public capture page (#204).
+    """
+    rows = pg_fetchall(
+        "SELECT t.id, t.title, t.source, t.due_date, "
+        f"{_DAYS_SINCE.format(col=days_col)} AS days, COUNT(*) OVER () AS total "
+        "FROM todos t LEFT JOIN deals d ON t.deal_id = d.id "
+        f"WHERE {where} AND (t.deal_id IS NULL OR {service.LIVE_PREDICATE_D}) "
+        f"ORDER BY {order}, t.id ASC LIMIT %s",
+        (*params, REVIEW_ITEM_CAP),
+    )
+    total = int(rows[0]["total"]) if rows else 0
+    return {
+        "count": total,
+        "truncated": total > len(rows),
+        "items": [
+            {"id": int(r["id"]), "title": r["title"] or "", "source": r["source"] or "",
+             "days": (_days_overdue(r["due_date"], overdue_vs) if overdue_vs
+                      else max(0, int(r["days"] or 0)))}
+            for r in rows
+        ],
+    }
+
+
+def review_status() -> dict:
+    """When the weekly review was last marked done, and whether one is due."""
+    row = pg_fetchone(
+        f"SELECT {_DAYS_SINCE.format(col='todo_last_review_at')} AS days "
+        "FROM crm_meta WHERE id = 1 AND todo_last_review_at IS NOT NULL"
+    )
+    days = None if not row or row["days"] is None else max(0, int(row["days"]))
+    return {"review_due": days is None or days >= REVIEW_DUE_DAYS, "days_since_review": days}
+
+
+def mark_review_done() -> dict:
+    """Stamp the weekly review as done now. Returns the fresh `review_status()`."""
+    pg_execute("UPDATE crm_meta SET todo_last_review_at = now() WHERE id = 1")
+    return review_status()
+
+
+def weekly_review() -> dict:
+    """The data a weekly review walks through, one section per step of the
+    `todos/weekly-review` help topic. Read-only, keyless, install-wide.
+
+    Booleans, integers, ids and titles only (plus each row's `source` enum, which the
+    #204 fence needs), so it is safe on the unattended on-ramp. `days` means, per
+    section: inbox and someday — since captured; stale and waiting — since last
+    touched; completed — since finished; due — days overdue (0 = due today).
+    """
+    today = gtd_common.today_local_str()
+    stale = f"now() - interval '{REVIEW_STALE_DAYS} days'"
+    waiting = f"now() - interval '{REVIEW_WAITING_DAYS} days'"
+    someday = f"now() - interval '{REVIEW_SOMEDAY_DAYS} days'"
+    due = _review_section(
+        "t.status NOT IN ('done','dropped') AND t.due_date != '' AND t.due_date <= %s",
+        (today,), "t.created_at", "t.due_date ASC", overdue_vs=today)
+    projects = pg_fetchall(
+        "SELECT p.id, p.name, COUNT(*) OVER () AS total FROM todo_projects p "
+        "WHERE p.status = 'active' AND NOT EXISTS (SELECT 1 FROM todos n "
+        "WHERE n.project_id = p.id AND n.status = 'next_action') "
+        "ORDER BY lower(p.name) ASC, p.id ASC LIMIT %s",
+        (REVIEW_ITEM_CAP,),
+    )
+    project_total = int(projects[0]["total"]) if projects else 0
+    return {
+        **review_status(),
+        "inbox": _review_section("t.status = 'inbox'", (), "t.created_at", "t.created_at ASC"),
+        "due_today_or_overdue": due,
+        "stale_next_actions": _review_section(
+            f"t.status = 'next_action' AND t.updated_at < {stale}", (),
+            "t.updated_at", "t.updated_at ASC"),
+        "waiting_follow_up": _review_section(
+            f"t.status IN ('waiting_for','delegated') AND t.updated_at < {waiting}", (),
+            "t.updated_at", "t.updated_at ASC"),
+        "someday_old": _review_section(
+            f"t.status = 'someday_maybe' AND t.created_at < {someday}", (),
+            "t.created_at", "t.created_at ASC"),
+        "completed_this_week": _review_section(
+            "t.status = 'done' AND t.completed_at >= now() - interval '7 days'", (),
+            "t.completed_at", "t.completed_at DESC"),
+        "projects_without_next_action": {
+            "count": project_total,
+            "truncated": project_total > len(projects),
+            "items": [{"id": int(p["id"]), "name": p["name"] or ""} for p in projects],
+        },
+        "thresholds": {
+            "review_due_days": REVIEW_DUE_DAYS, "stale_days": REVIEW_STALE_DAYS,
+            "waiting_days": REVIEW_WAITING_DAYS, "someday_days": REVIEW_SOMEDAY_DAYS,
+        },
+    }

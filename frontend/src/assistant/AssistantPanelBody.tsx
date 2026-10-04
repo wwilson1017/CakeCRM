@@ -26,7 +26,7 @@ import {
 import { IdentitySettings } from './IdentitySettings';
 import { MessageBubble } from './MessageBubble';
 import { QuickActions } from './QuickActions';
-import type { ActiveRecordContext, SettingsPageContext, ToolMode } from './types';
+import type { ActiveRecordContext, PageContext, ToolMode } from './types';
 import { useAssistantChat } from './useAssistantChat';
 import { useConversations } from './useConversations';
 
@@ -52,7 +52,7 @@ export interface AssistantPanelBodyProps {
   /** CRM record open behind this surface; null/omitted → generic panel. */
   recordContext?: ActiveRecordContext | null;
   /** Settings section open behind this surface (#200); null/omitted off that page. */
-  pageContext?: SettingsPageContext | null;
+  pageContext?: PageContext | null;
 }
 
 export default function AssistantPanelBody({
