@@ -172,6 +172,19 @@
   `role="alert"` line, TAGGED with its field, because both editors can be open at once and an
   untagged line would be cleared when the notes editor closes unchanged. Success calls `refreshMeta()`, which carries a rename to the Projects list,
   the todo rows and `TodoEditSheet`'s project picker.
+- **The project detail page steps to the previous / next project** (#264, port of todo-gtd
+  `382ce21`): ‹ › links beside "All projects", and the Left / Right arrow keys, cycle with
+  wrap-around through the projects sharing the viewed project's status. `crm/gtd/projectNav.ts`
+  holds both rules. The order is the shared meta cache's, which is the same `listProjects()`
+  read the Projects page renders with no `sort` declared, so a status filtered out of it IS that
+  tab's order (`lower(name)`, a total order) and nothing re-sorts it; the Projects search box
+  is deliberately not applied, since a stale query would silently shrink the cycle. The key
+  handler ignores chords and any key aimed at an `<input>`, `<textarea>`, `<select>` or
+  contenteditable element (the inline editors, the add box, Quick Add), and stands down while
+  the edit sheet is open. Each link's accessible name names its destination ("Next project:
+  Delta"). The page body is keyed by the route id, because moving between projects keeps the
+  route matched and would otherwise carry the previous project's state, failure line and
+  drafts onto the next until its fetch landed.
 - **Marking a todo done and filing an inbox item are undoable for 7 seconds** (#231).
   `crm/gtd/undoQueue.ts` is a module-level store (the `shared/toast` shape), because
   `TodoShell` unmounts on every tab switch and component state could not survive the
@@ -199,6 +212,14 @@
   Undoing a repeating todo leaves its spawned successor in place and says so. There is
   no undo endpoint: the revert is the ordinary PUT, so the no-login `/todo/{token}` app
   gets the feature too.
+  **Where the block renders has two answers, from one queue** (#265, port of todo-gtd
+  `162dcb3`): every page gets the floating bottom-right block `TodoShell` mounts, except
+  the Inbox, which passes `inlineUndo` to suppress it and renders `<UndoPill inline />`
+  in its own flow between the triage card (or the empty state) and the queue — where the
+  eye already is after filing. Same rows, timers, accessible name and buttons; an inline
+  block publishes no `--ck-toast-bottom`, since it is not in the corner stack. While the
+  Inbox's edit sheet is open the page hands back to the floating copy, because the sheet's
+  `z-50` overlay would cover an inline row whose 7s window keeps running.
 - **The capture page puts the caret in the box on open AND on resume** (#233, port of
   cake_os #3049). `autofocus` is one attempt at parse and never repeats, and a resumed
   home-screen app is not re-navigated, so the inline script in `crm/todo_capture._CAPTURE_HTML`
