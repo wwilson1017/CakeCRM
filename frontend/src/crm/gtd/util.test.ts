@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { daysSince, dueLabel, formatAge, parseTags, parseUTC, repeatLabel, todayStr } from './util';
+import {
+  daysSince, dueLabel, formatAge, formatDay, parseTags, parseUTC, repeatLabel, todayStr,
+} from './util';
 
 // vitest pins TZ=America/Chicago, which is what makes the local-vs-UTC cases below
 // meaningful rather than accidentally identical.
@@ -94,5 +96,22 @@ describe('repeatLabel', () => {
     ['every:1', 'Daily'],
   ])('renders %s as %s', (value, expected) => {
     expect(repeatLabel(value)).toBe(expected);
+  });
+});
+
+describe('install-timezone helpers (#259)', () => {
+  it('dueLabel calls the day after a DST change "Tomorrow" (a 23-hour day)', () => {
+    // Runner is America/Chicago; clocks spring forward on 2026-03-08.
+    expect(dueLabel('2026-03-09', '2026-03-08').text).toBe('Tomorrow');
+    expect(dueLabel('2026-11-02', '2026-11-01').text).toBe('Tomorrow');
+  });
+
+  it('formatDay renders a timestamp on the install’s calendar day, falling back safely', () => {
+    const iso = '2026-08-02T04:00:00.123456+00:00'; // 23:00 Aug 1 in Chicago, Aug 2 in Tokyo
+    const at = new Date('2026-08-02T04:00:00Z');
+    expect(formatDay(iso, 'Asia/Tokyo')).toBe(at.toLocaleDateString(undefined, { timeZone: 'Asia/Tokyo' }));
+    expect(formatDay(iso, 'Asia/Tokyo')).not.toBe(formatDay(iso, 'America/Chicago'));
+    expect(formatDay(iso, 'Not/AZone')).toBe(at.toLocaleDateString());
+    expect(formatDay(iso)).toBe(at.toLocaleDateString());
   });
 });

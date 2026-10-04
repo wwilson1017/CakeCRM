@@ -2411,7 +2411,9 @@ def _identity_executors(user: dict | None) -> dict[str, Callable[..., dict]]:
             actor_id=user_id,
         ),
         "crm_create_deal": bind_server_args(crm_create_deal, owner_id=user_id),
-        "crm_create_todo": bind_server_args(crm_create_todo, owner_id=user_id),
+        # + Baker made it, so it says so in either todo mode (#260); the binding also
+        # drops a model-supplied `source`, which used to reach the INSERT verbatim.
+        "crm_create_todo": bind_server_args(crm_create_todo, owner_id=user_id, source="agent"),
         # Which seat is ASKING. A read, and the only per-person fact in its payload is
         # whether this seat has a linked Telegram chat (#193) — bound rather than taken
         # as an argument so the model cannot ask about another person's device.

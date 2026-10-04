@@ -29,7 +29,9 @@ PROJECT_STATUSES = ("active", "someday", "completed", "dropped")
 # Where a todo came from. `capture_web` is the ONLY value an unauthenticated caller
 # can produce, which is what makes it useful: it marks rows whose text a stranger
 # may have typed. Never client-supplied — every write site passes its own literal.
-TODO_SOURCES = ("capture_web", "telegram", "agent", "ui")
+# `agent` is Baker acting on a request; `observer` is Baker filing something it noticed
+# in a conversation (#260). The GTD UI labels every value but `ui` (gtd/sourceLabel.ts).
+TODO_SOURCES = ("capture_web", "telegram", "agent", "observer", "ui")
 
 # The two statuses that mean "this is finished, stop showing it as work".
 FINISHED_STATUSES = ("done", "dropped")
@@ -51,7 +53,7 @@ TODO_FIELDS = frozenset(
     {"title", "notes", "project", "project_id", "context", "tags", "status", "star",
      "due_date", "repeat", "auto_star_on_due"}
 )
-PROJECT_FIELDS = frozenset({"name", "notes", "status"})
+PROJECT_FIELDS = frozenset({"name", "notes", "status", "purpose", "outcome"})
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -161,6 +163,13 @@ def validate_short(value, field: str) -> str:
     if len(text) > MAX_SHORT_CHARS:
         raise ValidationError(f"{field} too long (max {MAX_SHORT_CHARS} characters)")
     return text
+
+
+def validate_line(value, field: str) -> str:
+    """A one-line short field (a project's purpose and outcome, #262): every run of
+    whitespace, a newline included, collapses to one space, so an API or tool caller cannot
+    store a second line the UI has no room to show."""
+    return " ".join(validate_short(value, field).split())
 
 
 def validate_title(title) -> str:

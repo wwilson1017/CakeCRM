@@ -90,7 +90,7 @@ def _wrap(fn: Callable[..., dict]) -> Callable[..., dict]:
 # ── Executors ─────────────────────────────────────────────────────────────────
 
 def _todo_create(title: str, **kwargs) -> dict:
-    todo = gtd_service.create_todo(title, source="agent", **kwargs)
+    todo = gtd_service.create_todo(title, **kwargs)
     if not todo:
         return {"error": "Todo could not be created"}
     # Every write names the record it wrote (#236) — see crm.tools._with_target.
@@ -133,8 +133,12 @@ def _todo_list_projects(status: str | None = None) -> dict:
     return {"projects": projects, "count": len(projects), "note": _UNTRUSTED_NOTE}
 
 
-def _todo_create_project(name: str, notes: str = "", status: str = "active") -> dict:
-    project = gtd_service.create_project(name, notes=notes, status=status)
+def _todo_create_project(
+    name: str, notes: str = "", status: str = "active", purpose: str = "", outcome: str = "",
+) -> dict:
+    project = gtd_service.create_project(
+        name, notes=notes, status=status, purpose=purpose, outcome=outcome,
+    )
     if not project:
         return {"error": "Project could not be created"}
     return _with_target(project, "project", project.get("id"), record=project)
@@ -337,13 +341,19 @@ GTD_TOOL_DEFS: list[dict] = [
         # Routine (#186): a new grouping row.
         "writes": True,
         "confirm_tier": ROUTINE,
-        "description": "Create a GTD project — an outcome that needs more than one action.",
+        "description": (
+            "Create a GTD project — an outcome that needs more than one action. Give it a "
+            "one-line purpose (why it exists) and a successful outcome (what done looks "
+            "like) when the user has said them; ask rather than invent them."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "name": {"type": "string", "description": "Project name (unique, case-insensitive)"},
                 "notes": {"type": "string", "default": ""},
                 "status": {"type": "string", "description": f"One of: {_PROJECT_STATUS_LIST}", "default": "active"},
+                "purpose": {"type": "string", "description": "One line: why this project exists", "default": ""},
+                "outcome": {"type": "string", "description": "One line: what done looks like", "default": ""},
             },
             "required": ["name"],
         },
@@ -354,7 +364,10 @@ GTD_TOOL_DEFS: list[dict] = [
         # Routine (#186), EXCEPT status='dropped' — see confirm_tier.removes_from_view().
         "writes": True,
         "confirm_tier": ROUTINE,
-        "description": "Rename a project, edit its notes, or change its status.",
+        "description": (
+            "Rename a project, edit its notes, purpose or outcome, or change its status. "
+            "Pass '' to clear purpose or outcome."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -362,6 +375,8 @@ GTD_TOOL_DEFS: list[dict] = [
                 "name": {"type": "string"},
                 "notes": {"type": "string"},
                 "status": {"type": "string", "description": f"One of: {_PROJECT_STATUS_LIST}"},
+                "purpose": {"type": "string", "description": "One line: why this project exists"},
+                "outcome": {"type": "string", "description": "One line: what done looks like"},
             },
             "required": ["project_id"],
         },
@@ -419,7 +434,10 @@ def get_gtd_tools(user: dict | None = None) -> tuple[list[dict], dict[str, Calla
     user_id = (user or {}).get("id")
     executors = {
         **GTD_TOOL_EXECUTORS,
-        "todo_create": bind_server_args(GTD_TOOL_EXECUTORS["todo_create"], owner_id=user_id),
+        # `source` is the server's to stamp, never the model's (#260).
+        "todo_create": bind_server_args(
+            GTD_TOOL_EXECUTORS["todo_create"], owner_id=user_id, source="agent",
+        ),
         "todo_list": bind_owner_filter(GTD_TOOL_EXECUTORS["todo_list"], user),
     }
     return GTD_TOOL_DEFS, executors

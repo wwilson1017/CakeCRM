@@ -7,6 +7,8 @@ surface exists; parsing the body before the size check hands an unauthenticated
 caller free work; a non-ASCII token turning into a 500 is an oracle.
 """
 
+from pathlib import Path
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -198,6 +200,18 @@ def test_a_wrong_web_token_is_404(client, surfaces, monkeypatch):
     monkeypatch.setattr(todo_web, "_index_html", lambda: "<html><head></head></html>")
     surfaces(todo_web_enabled=True, todo_web_token="webs3cret")
     assert client.get("/todo/nope").status_code == 404
+
+
+def test_the_page_opts_into_the_cover_viewport(monkeypatch):
+    """#266: the bottom bar's safe-area padding is 0 on iOS without `viewport-fit=cover`.
+    Read against the REAL built-shell source, so a reworded meta in index.html fails here
+    rather than silently leaving the inset at 0 on someone's phone."""
+    index = (Path(__file__).resolve().parents[2] / "frontend" / "index.html").read_text()
+    monkeypatch.setattr(todo_web, "_index_html", lambda: index)
+    body = todo_web._page("/todo").body.decode()
+    assert '<meta name="viewport" content="viewport-fit=cover, width=device-width' in body
+    # The CRM's own shell is untouched — it pads no insets, so it must not take cover.
+    assert "viewport-fit" not in index
 
 
 def test_the_page_escapes_its_basename_into_both_contexts(monkeypatch):

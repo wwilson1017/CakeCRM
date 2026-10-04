@@ -45,6 +45,7 @@ vi.mock('./api', () => ({
 vi.mock('./useTodoMeta', () => ({
   refreshMeta: refreshMetaMock,
   useTodoMeta: () => ({ filters: null, projects: [], loaded: false, refreshMeta: refreshMetaMock }),
+  useListTz: () => undefined,
 }));
 
 import { MemoryRouter } from 'react-router-dom';

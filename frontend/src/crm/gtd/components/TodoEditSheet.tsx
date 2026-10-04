@@ -5,7 +5,8 @@ import { REPEAT_OPTIONS, STATUS_META, TODO_STATUS_ORDER } from '../constants';
 import { dropUndo, hasPendingFiling, queueUndo } from '../undoQueue';
 import { isTodoPublicMode } from '../publicMode';
 import type { Todo, TodoProject, TodoStatus } from '../types';
-import { parseTags } from '../util';
+import { useListTz } from '../useTodoMeta';
+import { formatDay, parseTags } from '../util';
 import { nextActionCopyText, todoCopyText } from '../copyText';
 import { CopyButton } from './CopyButton';
 
@@ -35,6 +36,7 @@ const labelCls = `${labelBase} mb-1`;
 
 /** Full-field editor — centered modal on desktop, bottom sheet on mobile. */
 export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onSaved }: Props) {
+  const tz = useListTz();
   const [title, setTitle] = useState(todo?.title ?? '');
   const [notes, setNotes] = useState(todo?.notes ?? '');
   const [status, setStatus] = useState<TodoStatus>(todo?.status ?? defaults?.status ?? 'inbox');
@@ -346,8 +348,8 @@ export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onS
 
         {todo && (
           <p className="mt-3 text-xs text-muted">
-            Source: {todo.source} · Created {new Date(todo.created_at).toLocaleDateString()}
-            {todo.completed_at && ` · Completed ${new Date(todo.completed_at).toLocaleDateString()}`}
+            Source: {todo.source} · Created {formatDay(todo.created_at, tz)}
+            {todo.completed_at && ` · Completed ${formatDay(todo.completed_at, tz)}`}
           </p>
         )}
         {todo && (todo.deal_title || todo.contact_name) && (

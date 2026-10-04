@@ -342,3 +342,14 @@ def test_today_view_shows_starred_due_and_overdue_only(rec):
     sql = rec.sql("FROM todos")
     assert "t.status NOT IN ('done','dropped')" in sql
     assert "t.star OR (t.due_date != '' AND t.due_date <= %s)" in sql
+
+
+def test_filters_carry_the_install_timezone(rec, monkeypatch):
+    # The GTD client buckets Overdue vs Due today in THIS zone (#259), so it must be the
+    # zone today_view uses — including its UTC fallback for a bogus value.
+    monkeypatch.setenv("TIMEZONE", "America/Chicago")
+    assert gtd_service.get_filters()["tz"] == "America/Chicago"
+    monkeypatch.setenv("TIMEZONE", "Not/AZone")
+    assert gtd_service.get_filters()["tz"] == "UTC"
+    monkeypatch.delenv("TIMEZONE")
+    assert gtd_service.get_filters()["tz"] == "UTC"

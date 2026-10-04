@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getReviewStatus, listProjects, listTodos, markReviewDone, type ReviewStatus } from './api';
 import { RecordChip } from './components/RecordChip';
+import { SourceLabel } from './components/SourceLabel';
 import { useTodosChanged } from './hooks';
 import { STALE_DAYS } from './constants';
 import { todoPath } from './publicMode';
@@ -149,6 +150,7 @@ export function ReviewPage() {
                       {(t.deal_title || t.contact_name) && (
                         <span className="ml-1.5 text-xs"><RecordChip todo={t} /></span>
                       )}
+                      <SourceLabel source={t.source} className="ml-1.5 text-xs" />
                     </span>
                     <span className="shrink-0 text-xs text-muted">{formatAge(t.updated_at)}</span>
                   </div>

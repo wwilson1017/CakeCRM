@@ -18,7 +18,8 @@ export function TodayPage() {
   const { projects, filters } = useTodoMeta();
   const [editTodo, setEditTodo] = useState<Todo | null>(null);
 
-  const today = todayStr();
+  // The install's day (#259): today_view chose these rows by it, so the split must too.
+  const today = todayStr(new Date(), filters?.tz);
   const overdue = (todos ?? []).filter(t => t.due_date && t.due_date < today);
   const dueToday = (todos ?? []).filter(t => t.due_date === today);
   // A todo already shown as overdue or due-today must not appear twice.

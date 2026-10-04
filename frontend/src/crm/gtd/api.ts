@@ -87,7 +87,7 @@ export function listProjects(status?: string): Promise<TodoProject[]> {
 }
 
 export function createProject(
-  body: { name: string; notes?: string; status?: string },
+  body: { name: string; notes?: string; status?: string; purpose?: string; outcome?: string },
 ): Promise<TodoProject> {
   return todoFetch<TodoProject>('/projects', { method: 'POST', body: JSON.stringify(body) });
 }
