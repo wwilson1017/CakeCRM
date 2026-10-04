@@ -55,4 +55,6 @@ export interface TodoFilters {
   contexts: string[];
   tags: string[];
   status_counts: Record<TodoStatus, number>;
+  /** The install's IANA timezone (#259) — every client "today" derives from it. */
+  tz?: string;
 }
