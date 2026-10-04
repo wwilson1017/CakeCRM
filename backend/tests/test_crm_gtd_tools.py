@@ -196,3 +196,50 @@ def test_the_registry_composes_without_duplicate_names_in_both_modes(todo_mode):
         registry = ToolRegistry()
         names = [d["name"] for d in registry.tool_defs]
         assert len(names) == len(set(names)), f"duplicate tool names in {value} mode"
+
+
+def test_project_tools_advertise_purpose_and_outcome():
+    """#262: the model can set both fields, and the service allowlist accepts them."""
+    from crm import gtd_common
+
+    by_name = {d["name"]: d for d in GTD_TOOL_DEFS}
+    for name in ("todo_create_project", "todo_update_project"):
+        props = by_name[name]["input_schema"]["properties"]
+        assert {"purpose", "outcome"} <= set(props), name
+    assert {"purpose", "outcome"} <= gtd_common.PROJECT_FIELDS
+
+
+def test_update_project_accepts_purpose_and_outcome_and_still_refuses_strangers(monkeypatch):
+    """`_check_fields` RAISES on unknown keys; the two new ones must get past it."""
+    import pytest
+
+    from crm import gtd_service
+    from crm.gtd_common import ValidationError
+
+    statements: list[tuple[str, tuple]] = []
+
+    class _Cur:
+        def execute(self, sql, params=()):
+            statements.append((sql, tuple(params)))
+
+        def fetchone(self):
+            return (1,)
+
+    class _Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def cursor(self):
+            return _Cur()
+
+    monkeypatch.setattr(gtd_service, "get_connection", lambda: _Conn())
+    monkeypatch.setattr(gtd_service, "get_project", lambda pid: {"id": pid})
+    gtd_service.update_project(1, {"purpose": " why ", "outcome": ""})
+    update_sql, params = statements[-1]
+    assert "purpose = %s" in update_sql and "outcome = %s" in update_sql
+    assert params[:2] == ("why", "")  # trimmed; clearing is a real save
+    with pytest.raises(ValidationError):
+        gtd_service.update_project(1, {"area_id": 3})

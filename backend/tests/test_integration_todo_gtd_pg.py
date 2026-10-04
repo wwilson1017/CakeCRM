@@ -224,6 +224,24 @@ def test_project_delete_orphans_its_todos_rather_than_deleting_them(pg_db):
     assert survivor is not None and survivor["project_id"] is None
 
 
+def test_project_purpose_and_outcome_round_trip(pg_db):
+    """#262: both fields are real columns, written on create, edited and cleared on update."""
+    from crm import gtd_service
+
+    project = gtd_service.create_project(
+        "Purpose roundtrip", purpose="  Win the Acme account  ", outcome="Signed contract",
+    )
+    assert project["purpose"] == "Win the Acme account"  # trimmed: one-line fields
+    assert project["outcome"] == "Signed contract"
+    updated = gtd_service.update_project(project["id"], {"purpose": "Grow revenue"})
+    assert updated["purpose"] == "Grow revenue" and updated["outcome"] == "Signed contract"
+    cleared = gtd_service.update_project(project["id"], {"outcome": ""})
+    assert cleared["outcome"] == ""
+    # A project created without them reads back as the empty string, never NULL.
+    bare = gtd_service.create_project("Purpose bare")
+    assert bare["purpose"] == "" and bare["outcome"] == ""
+
+
 def test_case_insensitive_project_resolution_reuses_one_row(pg_db):
     """#Groceries and #groceries in quick-add must land on ONE project."""
     from core.postgres import pg_fetchone

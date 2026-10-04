@@ -46,6 +46,10 @@ next action and clears it out of the inbox — so agree the context before writi
   away; notes take Enter as a new line and save when you click away. Escape discards the edit.
   A blank name is refused and the previous name is kept. A name another project already uses
   is refused too, and the editor stays open with what you typed so you can fix it.
+  Below the notes sit **Purpose** (one line: why the project exists) and **Outcome** (one
+  line: what done looks like), edited the same way as the notes; empty either to clear it.
+  When you file an inbox item under a project, the triage card shows that project's purpose
+  and outcome under the picker, so you can check it is the right home.
 - **Links** — a todo can point at a contact and a deal.
 
 ## The nine tabs

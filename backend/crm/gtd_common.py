@@ -51,7 +51,7 @@ TODO_FIELDS = frozenset(
     {"title", "notes", "project", "project_id", "context", "tags", "status", "star",
      "due_date", "repeat", "auto_star_on_due"}
 )
-PROJECT_FIELDS = frozenset({"name", "notes", "status"})
+PROJECT_FIELDS = frozenset({"name", "notes", "status", "purpose", "outcome"})
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
