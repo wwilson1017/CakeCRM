@@ -506,7 +506,7 @@ def test_a_commitment_becomes_an_unowned_inbox_todo_with_its_provenance(wired):
     out = _observe(w)
     assert out["todos_added"] == 1
     todo = w.gtd.created[0]
-    assert todo["status"] == "inbox" and todo["source"] == "agent"
+    assert todo["status"] == "inbox" and todo["source"] == "observer"
     assert "owner_id" not in todo                     # unassigned; #98 owns the column
     assert "conversation:conv-1" in todo["notes"]     # the provenance promise
     assert todo["due_date"] == "2026-09-19"

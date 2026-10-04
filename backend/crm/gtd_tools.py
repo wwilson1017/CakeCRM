@@ -90,6 +90,9 @@ def _wrap(fn: Callable[..., dict]) -> Callable[..., dict]:
 # ── Executors ─────────────────────────────────────────────────────────────────
 
 def _todo_create(title: str, **kwargs) -> dict:
+    # Tool arguments are not schema-validated at runtime, so a model-supplied `source`
+    # is dropped: provenance is the server's to stamp, never the caller's (#260).
+    kwargs.pop("source", None)
     todo = gtd_service.create_todo(title, source="agent", **kwargs)
     if not todo:
         return {"error": "Todo could not be created"}

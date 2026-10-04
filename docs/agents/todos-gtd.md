@@ -247,6 +247,26 @@
   public app's download grew by the layer and `@dnd-kit` — the measured delta is in
   `docs/agents/frontend-boot-split.md`.
 
+- **Every row says who added it unless a person did** (#260). `todos.source` already
+  recorded provenance; `crm/gtd/sourceLabel.ts` maps it to a visible word (`agent` →
+  Baker, `observer` → Observer, `capture_web` → Capture link, `telegram` → Telegram) and
+  returns null for `ui` and for any value it does not know, so a row never claims a
+  provenance the server did not record. `components/SourceLabel.tsx` renders it on
+  `TodoRow`'s meta line and on the `TriageCard` line under the title: a plain `<span>`
+  (the row body is a `<button>`, so nothing interactive may nest there), named by a
+  visually hidden "Added by " inside it rather than an `aria-label` (#162's rule), and
+  text-only in `text-muted` with a border — no `tint()` background, so
+  `inkContrast.test.ts` owes nothing. The observer previously stamped `agent`, the same
+  value as Baker's `todo_create`, so a migration widened `todos_source_check` with
+  `observer` and `memory/observer.py` now writes it; there is no backfill, because the
+  only marker on an old observer row is free text in notes a user may have edited, and
+  "Baker" is still true of it. Baker's two create tools (`todo_create`,
+  `crm_create_todo`) now both stamp `agent` themselves and DROP a model-supplied
+  `source` — tool arguments are not schema-validated at runtime, and `crm_create_todo`
+  used to forward one straight into the INSERT (and otherwise stored `ui`, mislabelling
+  Baker's normal-mode todos as a person's). The #204 fence is unaffected: it keys on
+  `source='capture_web'` alone (`delimiters.PUBLIC_CAPTURE_SOURCES`), which no change here
+  writes or widens.
 - **The two no-login todo surfaces are asymmetric, and only ONE of them is opt-in** (#70,
   ported from chatty — the heading used to say both were, which the body below has always
   contradicted). Neither consults `todo_mode`, so #102's default flip leaves both exactly

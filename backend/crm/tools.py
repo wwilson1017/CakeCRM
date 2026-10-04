@@ -1804,7 +1804,10 @@ def crm_get_activity_log(contact_id: int | None = None, deal_id: int | None = No
 # ── Todos ─────────────────────────────────────────────────────────────────────
 
 def crm_create_todo(title: str, **kwargs) -> dict:
-    result = crm.create_todo(title=title, **kwargs)
+    # Baker made it, so it says so in either todo mode (#260) — a model-supplied
+    # `source` is dropped, since tool arguments are not schema-validated at runtime.
+    kwargs.pop("source", None)
+    result = crm.create_todo(title=title, source="agent", **kwargs)
     if not result:
         return {"error": "Todo could not be created"}
     return _with_target(result, "todo", result.get("id"), record=result)
