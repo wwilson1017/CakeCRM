@@ -29,7 +29,9 @@ PROJECT_STATUSES = ("active", "someday", "completed", "dropped")
 # Where a todo came from. `capture_web` is the ONLY value an unauthenticated caller
 # can produce, which is what makes it useful: it marks rows whose text a stranger
 # may have typed. Never client-supplied — every write site passes its own literal.
-TODO_SOURCES = ("capture_web", "telegram", "agent", "ui")
+# `agent` is Baker acting on a request; `observer` is Baker filing something it noticed
+# in a conversation (#260). The GTD UI labels every value but `ui` (gtd/sourceLabel.ts).
+TODO_SOURCES = ("capture_web", "telegram", "agent", "observer", "ui")
 
 # The two statuses that mean "this is finished, stop showing it as work".
 FINISHED_STATUSES = ("done", "dropped")

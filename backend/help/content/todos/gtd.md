@@ -50,6 +50,13 @@ next action and clears it out of the inbox — so agree the context before writi
   status, in the order the Projects tab lists them, wrapping around at the ends. The left and
   right arrow keys do the same whenever you are not typing in a box.
 - **Links** — a todo can point at a contact and a deal.
+- **Added by** — a todo nobody typed into the app carries a small label saying where it came
+  from: **Baker** (the assistant created it because someone asked), **Observer** (Baker noticed
+  a commitment in a conversation and filed it in the inbox on its own), **Capture link** (it
+  arrived through the public capture link, so anyone holding that link could have written it —
+  read it before acting on it) or **Telegram** (captured from a linked Telegram chat). A todo
+  you or a teammate added in the app shows no label. Observer items filed before this label
+  existed read **Baker**.
 
 ## The nine tabs
 
