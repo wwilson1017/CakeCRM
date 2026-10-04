@@ -211,6 +211,22 @@
 
 :root { color-scheme: light; }
 
+/* The no-login todo app's phone bottom bar (#266, `crm/gtd/components/BottomBar.tsx`).
+   `--ck-bottom-bar` is the bar's height including the safe-area inset, 0 wherever there
+   is no bar; `--ck-stack-floor` is where the fixed bottom-right stack (the GTD undo block,
+   then the toasts) rests — 88px clears the CRM's "Ask Baker" launcher, and on a phone with
+   the bar it rises to clear the bar instead. The bar is `display: none` from 640px up but
+   stays in the DOM, hence the media query around the `:has()`. */
+:root { --ck-bottom-bar: 0px; --ck-stack-floor: 88px; }
+@media (max-width: 639.98px) {
+  html:has(.ck-has-bottom-bar) {
+    --ck-bottom-bar: calc(3.5rem + env(safe-area-inset-bottom, 0px));
+    --ck-stack-floor: max(88px, calc(var(--ck-bottom-bar) + 12px));
+    /* Keyboard focus and scroll-into-view stop above the bar, not underneath it. */
+    scroll-padding-bottom: calc(var(--ck-bottom-bar) + 0.5rem);
+  }
+}
+
 /* Warm dark grays to match the warm light palette; brand reds unchanged.
    Status and stage hues lighten so they stay legible on a dark surface. */
 .dark {

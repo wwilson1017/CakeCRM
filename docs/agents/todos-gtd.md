@@ -247,6 +247,26 @@
   public app's download grew by the layer and `@dnd-kit` — the measured delta is in
   `docs/agents/frontend-boot-split.md`.
 
+- **On a phone the no-login `/todo` app gets a fixed bottom tab bar** (#266, port of
+  todo-gtd `614faa2`): Inbox · Today · To Do · Projects · More, with Contexts, Waiting,
+  Someday, Review and Done behind More. **Public mode ONLY** — `TodoShell` mounts
+  `components/BottomBar.tsx` only when `isTodoPublicMode`, because under `CrmLayout` the
+  bottom of the screen already belongs to the CRM's own mobile nav and the "Ask Baker"
+  launcher; the CRM mount keeps its top strip unchanged, pinned by a test in both
+  directions. Below `sm` the bar replaces the strip and from `sm` up it is `display: none`
+  — CSS breakpoints, not a media-query hook, so crossing one never remounts a page. The
+  bar carries `ck-has-bottom-bar`, which `index.css` reads with `html:has()` (phone widths
+  only, since the hidden bar stays in the DOM) to set `--ck-bottom-bar` — its height plus
+  `safe-area-inset-bottom` — and `--ck-stack-floor`, where the fixed bottom-right stack
+  rests: 88px clears the launcher everywhere else, and on a phone with the bar it rises to
+  `max(88px, bar + 12px)`. The undo block and `ToastViewport` both read that floor, which is
+  why neither can land on the bar on a notched phone, and the public page's bottom padding
+  and `scroll-padding-bottom` read `--ck-bottom-bar` so the last row and a keyboard-focused
+  control stay above it. Not ported from the blueprint: its priority-plus top menu and the
+  optional sidebar (`menuLayout`, a Connect > Appearance setting this repo has no page for),
+  and its Contexts tab in the primary row — the issue names four primary lists, and 56px tap
+  targets fit five cells at 390px with room for the inbox badge. Labels match the top strip
+  (`To Do`, not the issue's "Next"), since one list should not carry two names.
 - **The two no-login todo surfaces are asymmetric, and only ONE of them is opt-in** (#70,
   ported from chatty — the heading used to say both were, which the body below has always
   contradicted). Neither consults `todo_mode`, so #102's default flip leaves both exactly

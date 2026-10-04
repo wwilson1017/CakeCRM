@@ -86,7 +86,12 @@ export function UndoPill() {
       style.removeProperty(TOAST_BOTTOM_VAR);
       return;
     }
-    style.setProperty(TOAST_BOTTOM_VAR, `${STACK_BOTTOM_PX + el.offsetHeight + STACK_GAP_PX}px`);
+    // Relative to `--ck-stack-floor` (index.css) rather than a fixed 88px, because on a
+    // phone in the no-login app that floor rises to clear the bottom tab bar (#266).
+    style.setProperty(
+      TOAST_BOTTOM_VAR,
+      `calc(var(--ck-stack-floor, ${STACK_BOTTOM_PX}px) + ${el.offsetHeight + STACK_GAP_PX}px)`,
+    );
     return () => { style.removeProperty(TOAST_BOTTOM_VAR); };
   }, [entries.length]);
 
@@ -111,7 +116,7 @@ export function UndoPill() {
       // and under `ConfirmHost` (150) and the toasts themselves (200). `bottom` is the
       // same 88px floor `ToastViewport` rests on, which is what keeps this off the
       // launcher; the toasts then move up by this block's height (see the effect above).
-      className="fixed inset-x-3 bottom-[88px] z-[100] overflow-hidden rounded-xl border border-line bg-cream shadow-lg sm:inset-x-auto sm:right-5 sm:w-80"
+      className="fixed inset-x-3 bottom-[var(--ck-stack-floor,88px)] z-[100] overflow-hidden rounded-xl border border-line bg-cream shadow-lg sm:inset-x-auto sm:right-5 sm:w-80"
     >
       <div className="flex h-11 items-center justify-between gap-2 border-b border-line-faint px-3">
         <span className="truncate font-heading text-sm font-semibold text-charcoal">

@@ -158,6 +158,10 @@ describe('the /todo surface boots through Root (#149)', () => {
     expect(host.textContent).toContain('Today');
     expect(host.textContent).not.toContain('Sign in');
 
+    // The phone bottom tab bar is part of THIS mount (#266) — and only this one; the CRM
+    // half of that rule is pinned in components/BottomBar.test.tsx.
+    expect(host.querySelector('nav[aria-label="Main lists"]')).not.toBeNull();
+
     // Every in-app link goes through todoPath(); the router basename is what turns those into
     // /todo/{token}/... . A bare /inbox here would mean the basename was lost and a tap would
     // leave the no-login surface for the authed app.

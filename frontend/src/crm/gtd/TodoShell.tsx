@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { BottomBar } from './components/BottomBar';
 import { QuickAdd } from './components/QuickAdd';
 import { UndoPill } from './components/UndoPill';
 import { isTodoPublicMode, todoPath } from './publicMode';
@@ -88,7 +89,10 @@ export function TodoShell({ active, hideQuickAdd, onAdded, children }: Props) {
         </form>
       </div>
 
-      <div className="mt-4 flex gap-1 overflow-x-auto border-b border-line-faint">
+      {/* In the no-login app a phone gets the bottom bar instead of this strip (#266). */}
+      <div
+        className={`mt-4 ${isTodoPublicMode ? 'hidden sm:flex' : 'flex'} gap-1 overflow-x-auto border-b border-line-faint`}
+      >
         {TABS.map(tab => {
           const isActive = tab.key === active;
           return (
@@ -126,13 +130,17 @@ export function TodoShell({ active, hideQuickAdd, onAdded, children }: Props) {
           toasts — see the component for the stacking contract), so it can sit anywhere in
           this tree and renders nothing while the queue is empty. */}
       <UndoPill />
+
+      {/* Phone bottom tab bar (#266) — public mode only: under CrmLayout it would collide
+          with the CRM's own nav and the "Ask Baker" launcher. Hidden from `sm` up. */}
+      {isTodoPublicMode && <BottomBar active={active} inboxCount={inboxCount} />}
     </>
   );
 
   if (isTodoPublicMode) {
     return (
       <div className="min-h-screen bg-sand">
-        <div className="mx-auto max-w-3xl px-4 pb-10 pt-6">{body}</div>
+        <div className="mx-auto max-w-3xl px-4 pb-[calc(var(--ck-bottom-bar,0px)+2.5rem)] pt-6">{body}</div>
       </div>
     );
   }
