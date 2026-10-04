@@ -1,7 +1,7 @@
 ---
 title: The GTD workflow
 description: Statuses, contexts, projects, stars and the weekly review, as this product implements them.
-aliases: gtd, getting things done, inbox, next action, waiting for, someday, projects, contexts, tags, star, repeat, weekly review, bring back, bring-back date, snooze, defer, tickler
+aliases: gtd, getting things done, inbox, next action, waiting for, someday, projects, contexts, tags, star, repeat, weekly review
 admin: false
 ---
 ## The seven statuses
