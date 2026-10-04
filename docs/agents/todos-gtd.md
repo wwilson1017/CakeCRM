@@ -172,6 +172,34 @@
   `role="alert"` line, TAGGED with its field, because both editors can be open at once and an
   untagged line would be cleared when the notes editor closes unchanged. Success calls `refreshMeta()`, which carries a rename to the Projects list,
   the todo rows and `TodoEditSheet`'s project picker.
+- **A project carries a one-line purpose and outcome** (#262, port of todo-gtd `d6948f1`/
+  `162dcb3`): `todo_projects.purpose`/`outcome`, `TEXT NOT NULL DEFAULT ''` like `notes` beside
+  them (the issue said nullable; '' is the one unset state the service and UI already use for
+  notes, so a NULL would be a second spelling of it). Both are in `PROJECT_FIELDS`, validated
+  as ONE-LINE fields by `gtd_common.validate_line` (trimmed, `MAX_SHORT_CHARS`, every
+  whitespace run — a newline included — collapsed to one space, so an API or tool caller cannot
+  store a second line), and clearing either is a real save. They are edited on the project page
+  by two `InlineTitle` editors under the notes in the new `line` variant (an `<input>`: Enter
+  saves like a title, an emptied value saves like a body), through
+  the same per-field `saveField` (which now merges back the server's stored value, since it
+  trims), and shown READ-ONLY on the triage card under Step 2 once a project is picked —
+  unlike the blueprint, which edits them (and an area, which CakeCRM has no table for) inline
+  on the card. Read-only keeps every triage-card write a write to the todo. The assistant sets
+  them through `todo_create_project`/`todo_update_project`, both still ROUTINE (neither field
+  can hide a project), and `GTD_GUIDE` tells it to ask rather than invent them.
+- **The project detail page steps to the previous / next project** (#264, port of todo-gtd
+  `382ce21`): ‹ › links beside "All projects", and the Left / Right arrow keys, cycle with
+  wrap-around through the projects sharing the viewed project's status. `crm/gtd/projectNav.ts`
+  holds both rules. The order is the shared meta cache's, which is the same `listProjects()`
+  read the Projects page renders with no `sort` declared, so a status filtered out of it IS that
+  tab's order (`lower(name)`, a total order) and nothing re-sorts it; the Projects search box
+  is deliberately not applied, since a stale query would silently shrink the cycle. The key
+  handler ignores chords and any key aimed at an `<input>`, `<textarea>`, `<select>` or
+  contenteditable element (the inline editors, the add box, Quick Add), and stands down while
+  the edit sheet is open. Each link's accessible name names its destination ("Next project:
+  Delta"). The page body is keyed by the route id, because moving between projects keeps the
+  route matched and would otherwise carry the previous project's state, failure line and
+  drafts onto the next until its fetch landed.
 - **Marking a todo done and filing an inbox item are undoable for 7 seconds** (#231).
   `crm/gtd/undoQueue.ts` is a module-level store (the `shared/toast` shape), because
   `TodoShell` unmounts on every tab switch and component state could not survive the
@@ -199,6 +227,14 @@
   Undoing a repeating todo leaves its spawned successor in place and says so. There is
   no undo endpoint: the revert is the ordinary PUT, so the no-login `/todo/{token}` app
   gets the feature too.
+  **Where the block renders has two answers, from one queue** (#265, port of todo-gtd
+  `162dcb3`): every page gets the floating bottom-right block `TodoShell` mounts, except
+  the Inbox, which passes `inlineUndo` to suppress it and renders `<UndoPill inline />`
+  in its own flow between the triage card (or the empty state) and the queue — where the
+  eye already is after filing. Same rows, timers, accessible name and buttons; an inline
+  block publishes no `--ck-toast-bottom`, since it is not in the corner stack. While the
+  Inbox's edit sheet is open the page hands back to the floating copy, because the sheet's
+  `z-50` overlay would cover an inline row whose 7s window keeps running.
 - **The capture page puts the caret in the box on open AND on resume** (#233, port of
   cake_os #3049). `autofocus` is one attempt at parse and never repeats, and a resumed
   home-screen app is not re-navigated, so the inline script in `crm/todo_capture._CAPTURE_HTML`
@@ -247,6 +283,28 @@
   public app's download grew by the layer and `@dnd-kit` — the measured delta is in
   `docs/agents/frontend-boot-split.md`.
 
+- **Every row says who added it unless a person did** (#260). `todos.source` already
+  recorded provenance; `crm/gtd/sourceLabel.ts` maps it to a visible word (`agent` →
+  Baker, `observer` → Observer, `capture_web` → Capture link, `telegram` → Telegram) and
+  returns null for `ui` and for any value it does not know, so a row never claims a
+  provenance the server did not record. `components/SourceLabel.tsx` renders it on
+  `TodoRow`'s meta line (so Today, To Do, Search, project pages, Someday and Done), the
+  `TriageCard` line under the title, and the three bespoke rows that do not use `TodoRow`
+  — the inbox's remaining-queue buttons, Waiting's rows and Review's stale list: a plain `<span>`
+  (the row body is a `<button>`, so nothing interactive may nest there), named by a
+  visually hidden "Added by " inside it rather than an `aria-label` (#162's rule), and
+  text-only in `text-muted` with a border — no `tint()` background, so
+  `inkContrast.test.ts` owes nothing. The observer previously stamped `agent`, the same
+  value as Baker's `todo_create`, so a migration widened `todos_source_check` with
+  `observer` and `memory/observer.py` now writes it; there is no backfill, because the
+  only marker on an old observer row is free text in notes a user may have edited, and
+  "Baker" is still true of it. Baker's two create tools (`todo_create`,
+  `crm_create_todo`) now get `source='agent'` from `bind_server_args`, the same binding
+  that already supplies `owner_id`, which DROPS a model-supplied `source` — tool arguments are not schema-validated at runtime, and `crm_create_todo`
+  used to forward one straight into the INSERT (and otherwise stored `ui`, mislabelling
+  Baker's normal-mode todos as a person's). The #204 fence is unaffected: it keys on
+  `source='capture_web'` alone (`delimiters.PUBLIC_CAPTURE_SOURCES`), which no change here
+  writes or widens.
 - **The two no-login todo surfaces are asymmetric, and only ONE of them is opt-in** (#70,
   ported from chatty — the heading used to say both were, which the body below has always
   contradicted). Neither consults `todo_mode`, so #102's default flip leaves both exactly

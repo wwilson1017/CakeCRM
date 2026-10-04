@@ -45,6 +45,10 @@ export interface TodoProject {
   id: number;
   name: string;
   notes: string;
+  /** One line: why the project exists (#262). '' when unset. */
+  purpose: string;
+  /** One line: what done looks like (#262). '' when unset. */
+  outcome: string;
   status: TodoProjectStatus;
   open_count: number;
   created_at: string;

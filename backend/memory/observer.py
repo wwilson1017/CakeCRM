@@ -32,7 +32,7 @@ The only rows it can produce are:
 * a ``memory_facts`` row with ``created_by='observer'``, ``source='conversation:<id>'``
   and confidence <= 0.9, which is itself nonce-fenced DATA when it later reaches a prompt
   and which dreaming archives when it goes unused; and
-* a ``todos`` row with ``status='inbox'``, ``source='agent'``, no owner and no CRM link —
+* a ``todos`` row with ``status='inbox'``, ``source='observer'``, no owner and no CRM link —
   a captured-not-yet-decided item the user processes, which is GTD's own confirmation
   discipline and the honest reading of "normal write-confirmation discipline" for a
   writer that has no human to ask.
@@ -574,7 +574,7 @@ def _record_todo(proposed: dict, conversation_id: str, tracked: dict[str, str]) 
             ),
             status="inbox",
             due_date=proposed["due_date"] or None,
-            source="agent",
+            source="observer",
         )
     except gtd_common.ValidationError as exc:
         logger.info("observer: todo rejected by the store: %s", exc)
