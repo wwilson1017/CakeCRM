@@ -229,9 +229,9 @@ def test_project_purpose_and_outcome_round_trip(pg_db):
     from crm import gtd_service
 
     project = gtd_service.create_project(
-        "Purpose roundtrip", purpose="  Win the Acme account  ", outcome="Signed contract",
+        "Purpose roundtrip", purpose="  Win the Acme\r\naccount  ", outcome="Signed contract",
     )
-    assert project["purpose"] == "Win the Acme account"  # trimmed: one-line fields
+    assert project["purpose"] == "Win the Acme account"  # one line: trimmed, newline collapsed
     assert project["outcome"] == "Signed contract"
     updated = gtd_service.update_project(project["id"], {"purpose": "Grow revenue"})
     assert updated["purpose"] == "Grow revenue" and updated["outcome"] == "Signed contract"

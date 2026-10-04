@@ -176,8 +176,11 @@
   `162dcb3`): `todo_projects.purpose`/`outcome`, `TEXT NOT NULL DEFAULT ''` like `notes` beside
   them (the issue said nullable; '' is the one unset state the service and UI already use for
   notes, so a NULL would be a second spelling of it). Both are in `PROJECT_FIELDS`, validated
-  as SHORT fields (trimmed, `MAX_SHORT_CHARS`), and clearing either is a real save. They are
-  edited on the project page by two more `InlineTitle` `body` editors under the notes, through
+  as ONE-LINE fields by `gtd_common.validate_line` (trimmed, `MAX_SHORT_CHARS`, every
+  whitespace run — a newline included — collapsed to one space, so an API or tool caller cannot
+  store a second line), and clearing either is a real save. They are edited on the project page
+  by two `InlineTitle` editors under the notes in the new `line` variant (an `<input>`: Enter
+  saves like a title, an emptied value saves like a body), through
   the same per-field `saveField` (which now merges back the server's stored value, since it
   trims), and shown READ-ONLY on the triage card under Step 2 once a project is picked —
   unlike the blueprint, which edits them (and an area, which CakeCRM has no table for) inline

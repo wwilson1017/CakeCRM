@@ -176,8 +176,8 @@ export function ProjectDetailPage() {
                 className="-ml-1 mt-1 whitespace-pre-wrap text-sm text-muted"
               />
               {/* Purpose and outcome (#262): one line each, always rendered so an empty one is
-                  still something to click. The `body` variant because clearing is a real
-                  save here — a `title` editor refuses a blank value as a slip. Purpose first:
+                  still something to click. The `line` variant: Enter saves as for a name, and
+                  clearing is a real save, where a `title` refuses a blank as a slip. Purpose first:
                   why before what done looks like, the order the triage card shows them in. */}
               <dl className="mt-2 space-y-1 text-sm">
                 {PROJECT_LINES.map(({ field, label, placeholder }) => (
@@ -189,7 +189,7 @@ export function ProjectDetailPage() {
                       <InlineTitle
                         title={project[field]}
                         label={`Project ${field}`}
-                        variant="body"
+                        variant="line"
                         placeholder={placeholder}
                         onSave={value => saveField(field, value)}
                         onCancel={() => clearErrorFor(field)}

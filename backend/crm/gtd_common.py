@@ -163,6 +163,13 @@ def validate_short(value, field: str) -> str:
     return text
 
 
+def validate_line(value, field: str) -> str:
+    """A one-line short field (a project's purpose and outcome, #262): every run of
+    whitespace, a newline included, collapses to one space, so an API or tool caller cannot
+    store a second line the UI has no room to show."""
+    return " ".join(validate_short(value, field).split())
+
+
 def validate_title(title) -> str:
     if title is not None and not isinstance(title, str):
         raise ValidationError("title must be a string")

@@ -237,9 +237,9 @@ def test_update_project_accepts_purpose_and_outcome_and_still_refuses_strangers(
 
     monkeypatch.setattr(gtd_service, "get_connection", lambda: _Conn())
     monkeypatch.setattr(gtd_service, "get_project", lambda pid: {"id": pid})
-    gtd_service.update_project(1, {"purpose": " why ", "outcome": ""})
+    gtd_service.update_project(1, {"purpose": " why\nnow ", "outcome": ""})
     update_sql, params = statements[-1]
     assert "purpose = %s" in update_sql and "outcome = %s" in update_sql
-    assert params[:2] == ("why", "")  # trimmed; clearing is a real save
+    assert params[:2] == ("why now", "")  # one line; clearing is a real save
     with pytest.raises(ValidationError):
         gtd_service.update_project(1, {"area_id": 3})

@@ -327,8 +327,8 @@ def create_project(
     if not name:
         raise ValidationError("name is required")
     notes = gtd_common.validate_notes(notes)
-    purpose = gtd_common.validate_short(purpose, "purpose")
-    outcome = gtd_common.validate_short(outcome, "outcome")
+    purpose = gtd_common.validate_line(purpose, "purpose")
+    outcome = gtd_common.validate_line(outcome, "outcome")
     gtd_common.validate_project_status(status)
     with get_connection() as conn:
         cur = conn.cursor()
@@ -369,12 +369,12 @@ def update_project(project_id: int, fields: dict) -> dict | None:
         if "notes" in fields:
             sets.append("notes = %s")
             params.append(gtd_common.validate_notes(fields["notes"]))
-        # One line each, so the short-field validator (trimmed, capped). Clearing is a
-        # real save: '' is the unset state, never refused like a blank name.
+        # One line each: trimmed, capped, inner whitespace collapsed. Clearing is a real
+        # save: '' is the unset state, never refused like a blank name.
         for key in ("purpose", "outcome"):
             if key in fields:
                 sets.append(f"{key} = %s")
-                params.append(gtd_common.validate_short(fields[key], key))
+                params.append(gtd_common.validate_line(fields[key], key))
         if "status" in fields:
             gtd_common.validate_project_status(fields["status"])
             sets.append("status = %s")

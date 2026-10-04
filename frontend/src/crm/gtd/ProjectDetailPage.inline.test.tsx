@@ -431,11 +431,11 @@ describe('ProjectDetailPage — inline notes edit (#232)', () => {
 });
 
 describe('ProjectDetailPage — purpose and outcome (#262)', () => {
-  // Three `body` triggers share the tooltip; document order is notes, purpose, outcome.
+  // Three triggers share the "Click to edit" tooltip; document order is notes, purpose, outcome.
   const bodyTrigger = (i: number) =>
     container.querySelectorAll<HTMLElement>('span[title="Click to edit"]')[i];
   const editor = (field: 'purpose' | 'outcome') =>
-    container.querySelector<HTMLTextAreaElement>(`textarea[aria-label="Project ${field}"]`);
+    container.querySelector<HTMLInputElement>(`input[aria-label="Project ${field}"]`);
 
   it('shows both fields with a placeholder when empty, so they can be ADDED', async () => {
     await render();
@@ -448,14 +448,14 @@ describe('ProjectDetailPage — purpose and outcome (#262)', () => {
     await render();
 
     act(() => bodyTrigger(1).click());
-    setValue(editor('purpose')!, '  Win Acme  ');
+    setValue(editor('purpose')!, '  Win   Acme  ');
     blur(editor('purpose')!);
     await settle();
 
     expect(updateProjectMock).toHaveBeenCalledTimes(1);
-    expect(updateProjectMock).toHaveBeenCalledWith(7, { purpose: '  Win Acme  ' });
+    expect(updateProjectMock).toHaveBeenCalledWith(7, { purpose: 'Win   Acme' });
     expect(editor('purpose')).toBeNull();
-    // The server trimmed it; the page shows the stored value, not the typed one.
+    // The server collapsed the inner run; the page shows the stored value, not the typed one.
     expect(bodyTrigger(1).textContent).toBe('Win Acme');
   });
 
@@ -472,6 +472,19 @@ describe('ProjectDetailPage — purpose and outcome (#262)', () => {
 
     expect(updateProjectMock).toHaveBeenCalledWith(7, { outcome: '' });
     expect(bodyTrigger(2).textContent).toBe('What does done look like?');
+  });
+
+  it('saves on Enter — a one-line field, never a second line', async () => {
+    updateProjectMock.mockResolvedValue(project({ purpose: 'Win Acme' }));
+    await render();
+
+    act(() => bodyTrigger(1).click());
+    setValue(editor('purpose')!, 'Win Acme');
+    press(editor('purpose')!, 'Enter');
+    await settle();
+
+    expect(updateProjectMock).toHaveBeenCalledWith(7, { purpose: 'Win Acme' });
+    expect(editor('purpose')).toBeNull();
   });
 
   it('keeps the editor open with the typed text when the save is refused', async () => {
