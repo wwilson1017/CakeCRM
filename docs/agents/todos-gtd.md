@@ -261,8 +261,8 @@
   `observer` and `memory/observer.py` now writes it; there is no backfill, because the
   only marker on an old observer row is free text in notes a user may have edited, and
   "Baker" is still true of it. Baker's two create tools (`todo_create`,
-  `crm_create_todo`) now both stamp `agent` themselves and DROP a model-supplied
-  `source` — tool arguments are not schema-validated at runtime, and `crm_create_todo`
+  `crm_create_todo`) now get `source='agent'` from `bind_server_args`, the same binding
+  that already supplies `owner_id`, which DROPS a model-supplied `source` — tool arguments are not schema-validated at runtime, and `crm_create_todo`
   used to forward one straight into the INSERT (and otherwise stored `ui`, mislabelling
   Baker's normal-mode todos as a person's). The #204 fence is unaffected: it keys on
   `source='capture_web'` alone (`delimiters.PUBLIC_CAPTURE_SOURCES`), which no change here
