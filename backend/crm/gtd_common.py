@@ -49,7 +49,7 @@ _EVERY_RE = re.compile(r"^every:([1-9][0-9]{0,3})$")
 
 TODO_FIELDS = frozenset(
     {"title", "notes", "project", "project_id", "context", "tags", "status", "star",
-     "due_date", "repeat", "auto_star_on_due"}
+     "due_date", "bring_back_on", "repeat", "auto_star_on_due"}
 )
 PROJECT_FIELDS = frozenset({"name", "notes", "status"})
 
@@ -99,7 +99,7 @@ def validate_project_status(status: str) -> str:
     return status
 
 
-def validate_due(due_date) -> str:
+def validate_due(due_date, field: str = "due_date") -> str:
     """Normalize a due date to 'YYYY-MM-DD', or '' for none.
 
     Returns '' rather than None because `todos.due_date` is TEXT NOT NULL DEFAULT ''
@@ -114,14 +114,23 @@ def validate_due(due_date) -> str:
     if not due:
         return ""
     if not _DATE_RE.match(due):
-        raise ValidationError(f"due_date must be YYYY-MM-DD, got '{due_date}'")
+        raise ValidationError(f"{field} must be YYYY-MM-DD, got '{due_date}'")
     try:
         # Shape alone would let '2026-13-40' through to Postgres, where it surfaces
         # as a raw driver error (500) instead of a clean 400.
         datetime.date.fromisoformat(due)
     except ValueError:
-        raise ValidationError(f"due_date is not a real calendar date: '{due_date}'")
+        raise ValidationError(f"{field} is not a real calendar date: '{due_date}'")
     return due
+
+
+def validate_bring_back(value) -> str | None:
+    """A bring-back date (#261): 'YYYY-MM-DD', or None to clear.
+
+    Same shape rules as a due date, but None rather than '' for "no date", because
+    `todos.bring_back_on` is a nullable DATE rather than the TEXT NOT NULL due-date column.
+    """
+    return validate_due(value, "bring_back_on") or None
 
 
 def validate_repeat(repeat) -> str:

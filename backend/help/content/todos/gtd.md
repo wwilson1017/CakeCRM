@@ -1,7 +1,7 @@
 ---
 title: The GTD workflow
 description: Statuses, contexts, projects, stars and the weekly review, as this product implements them.
-aliases: gtd, getting things done, inbox, next action, waiting for, someday, projects, contexts, tags, star, repeat, weekly review
+aliases: gtd, getting things done, inbox, next action, waiting for, someday, projects, contexts, tags, star, repeat, weekly review, bring back, bring-back date, snooze, defer, tickler
 admin: false
 ---
 ## The seven statuses
@@ -38,6 +38,13 @@ next action and clears it out of the inbox — so agree the context before writi
 - **Star** — today's priorities. Keep starred items to a handful. There is also an option to
   star a todo automatically when it comes due.
 - **Due date** — a real deadline only, never an aspiration. Clear it by emptying the field.
+- **Bring back on** — "not until then". Pick a date and the todo leaves every working list
+  (Inbox, To Do, Waiting, Someday, Today) until that day, then shows on Today under
+  **Brought back**. It is not a deadline: a todo whose bring-back date has passed is never
+  marked overdue. Until it returns, the search page still finds it, labelled with the day it
+  comes back. Set it from the inbox triage card or the edit sheet (on an existing todo);
+  clear it by emptying the field. Completing a repeating todo does not carry the date to the
+  next occurrence.
 - **Repeat** — daily, weekdays, weekly, monthly, yearly, or every N days. Completing a
   repeating todo creates its next occurrence.
 - **Project** — an outcome needing more than one action. Every active project should have at

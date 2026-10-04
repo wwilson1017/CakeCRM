@@ -66,6 +66,8 @@ class TodoUpdate(BaseModel):
     status: str | None = Field(default=None, max_length=MAX_SHORT_CHARS)
     star: bool | None = None
     due_date: str | None = Field(default=None, max_length=MAX_SHORT_CHARS)
+    # #261. None (sent explicitly) clears it — exclude_unset keeps "absent" distinct.
+    bring_back_on: str | None = Field(default=None, max_length=MAX_SHORT_CHARS)
     repeat: str | None = Field(default=None, max_length=MAX_SHORT_CHARS)
     auto_star_on_due: bool | None = None
 

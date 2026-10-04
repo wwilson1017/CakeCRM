@@ -268,3 +268,84 @@ def test_a_todo_the_user_created_does_not_taint(pg_db):
     gtd_service.create_todo("Call the dentist", status="inbox", source="ui")
     _, tainted = delimiters.fence_public_rows(gtd_tools.GTD_TOOL_EXECUTORS["todo_list"](status="inbox"))
     assert tainted is False
+
+
+# ── Bring-back dates (#261) ───────────────────────────────────────────────────
+
+def _pin_day(monkeypatch, day: str):
+    """Every bring-back reader takes its day from gtd_common.today_local_str()."""
+    from crm import gtd_common
+    monkeypatch.setattr(gtd_common, "today_local_str", lambda: day)
+
+
+def test_bring_back_on_is_written_through_the_funnel_and_cleared(pg_db):
+    from crm import gtd_common, gtd_service, service
+
+    todo = gtd_service.create_todo("check back after Q1 budget", status="next_action")
+    assert todo["bring_back_on"] is None
+
+    got = gtd_service.update_todo(todo["id"], {"bring_back_on": "2027-01-15"})
+    assert got["bring_back_on"] == "2027-01-15"
+    # Normal mode writes through the same funnel.
+    assert service.update_todo(todo["id"], bring_back_on="2027-02-01")["bring_back_on"] == "2027-02-01"
+    # '' and None both clear it to NULL.
+    assert gtd_service.update_todo(todo["id"], {"bring_back_on": ""})["bring_back_on"] is None
+    gtd_service.update_todo(todo["id"], {"bring_back_on": "2027-02-01"})
+    assert gtd_service.update_todo(todo["id"], {"bring_back_on": None})["bring_back_on"] is None
+    with pytest.raises(gtd_common.ValidationError):
+        gtd_service.update_todo(todo["id"], {"bring_back_on": "2027-02-30"})
+
+
+def test_a_repeat_occurrence_does_not_inherit_the_bring_back_date(pg_db):
+    from core.postgres import pg_fetchall
+    from crm import gtd_service
+
+    todo = gtd_service.create_todo("weekly pipeline sweep", status="next_action",
+                                   due_date="2026-10-01", repeat="weekly")
+    gtd_service.update_todo(todo["id"], {"bring_back_on": "2026-10-01"})
+    gtd_service.update_todo(todo["id"], {"status": "done"})
+    rows = pg_fetchall("SELECT bring_back_on FROM todos "
+                       "WHERE title = 'weekly pipeline sweep' ORDER BY id")
+    assert [r["bring_back_on"] for r in rows] == ["2026-10-01", None]
+
+
+def test_a_deferred_todo_is_hidden_until_its_day_then_shows_on_today(pg_db, monkeypatch):
+    from crm import gtd_service, service, today_service
+
+    todo = gtd_service.create_todo("call Acme after budget", status="next_action")
+    other = gtd_service.create_todo("ordinary work", status="next_action")
+    gtd_service.update_todo(todo["id"], {"bring_back_on": "2026-10-10", "star": True})
+
+    def visible():
+        return {
+            "gtd_list": todo["id"] in {t["id"] for t in gtd_service.list_todos(status="next_action")},
+            "normal_list": todo["id"] in {t["id"] for t in service.list_todos(limit=100)},
+            "today_view": todo["id"] in {t["id"] for t in gtd_service.today_view()},
+            "today_panel": todo["id"] in {i["id"] for i in today_service.get_today()["items"]
+                                          if i["kind"] == "todo"},
+        }
+
+    _pin_day(monkeypatch, "2026-10-04")
+    # Hidden everywhere it is work — even starred — but search still reaches it.
+    assert visible() == dict.fromkeys(("gtd_list", "normal_list", "today_view", "today_panel"), False)
+    assert [t["id"] for t in gtd_service.list_todos(search="Acme")] == [todo["id"]]
+    assert service.get_dashboard_stats()["pending_todos"] == 1
+    assert other["id"] in {t["id"] for t in gtd_service.list_todos(status="next_action")}
+
+    _pin_day(monkeypatch, "2026-10-10")
+    assert visible() == dict.fromkeys(("gtd_list", "normal_list", "today_view", "today_panel"), True)
+    assert service.get_dashboard_stats()["pending_todos"] == 2
+
+
+def test_a_past_bring_back_date_with_no_due_date_is_never_overdue(pg_db, monkeypatch):
+    from crm import gtd_service, service, today_service
+
+    todo = gtd_service.create_todo("revisit pricing", status="next_action")
+    gtd_service.update_todo(todo["id"], {"bring_back_on": "2026-09-01"})
+    _pin_day(monkeypatch, "2026-10-04")
+
+    assert service.get_dashboard_stats()["overdue_todos"] == 0
+    assert todo["id"] in {t["id"] for t in gtd_service.today_view()}
+    [item] = [i for i in today_service.get_today()["items"] if i["kind"] == "todo"]
+    assert item["id"] == todo["id"]
+    assert item["why"] == "bring_back" and item["rank"] is None

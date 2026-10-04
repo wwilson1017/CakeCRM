@@ -244,6 +244,14 @@ GTD_TOOL_DEFS: list[dict] = [
                 "status": {"type": "string", "description": f"One of: {_STATUS_LIST}"},
                 "star": {"type": "boolean"},
                 "due_date": {"type": "string", "description": "YYYY-MM-DD, or '' to clear"},
+                "bring_back_on": {
+                    "type": "string",
+                    "description": (
+                        "Bring-back date (YYYY-MM-DD): the todo leaves every working list "
+                        "until that day, then shows on Today. Not a deadline — it never "
+                        "makes the todo overdue. '' to clear."
+                    ),
+                },
                 "repeat": {"type": "string", "description": f"One of: {_REPEAT_LIST}"},
                 "auto_star_on_due": {"type": "boolean"},
             },

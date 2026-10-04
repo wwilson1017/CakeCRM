@@ -11,7 +11,8 @@ The ladder, as decided on the issue::
     2  hot + stale deals  a deal a human marked hot that has since gone quiet (#131)
     3  overdue todos      most overdue first
     4  todos due today
-    –  every other hot deal  no rank at all: reachable only through the expander
+    –  todos brought back today (#261), then every other hot deal — no rank at all,
+       reachable only through the expander
 
 Rank 2 arrived exactly as #130 promised — an insertion, renumbering nothing. What it did
 NOT need was a rank 6. Issue #131 rules that a hot deal which was touched recently must
@@ -79,7 +80,7 @@ HOT_DEAL_SLOTS = 2
 
 
 def _fetch_today_todos(today: str, owner_id: int | None) -> list[dict]:
-    """Open todos that are starred or due on/before ``today``.
+    """Open todos that are starred, due on/before ``today``, or brought back by ``today``.
 
     Membership mirrors ``gtd_service.today_view()`` so the two surfaces select the same
     rows. ``completed = 0`` excludes 'done' (the #70 CHECK binds the two columns) and
@@ -87,20 +88,23 @@ def _fetch_today_todos(today: str, owner_id: int | None) -> list[dict]:
     ``status NOT IN ('done','dropped')``. Dates compare TEXT-on-TEXT, never ``::date``,
     which cannot cast-error on a malformed row.
     """
+    # A bring-back date (#261) both admits a row (its day has arrived) and hides one (its
+    # day is still ahead) — the same two rules as today_view(), so the two surfaces agree.
     conditions = [
         "completed = 0",
         NOT_DROPPED_TODO,
         LIVE_TODO_PREDICATE,
-        "(star OR (due_date != '' AND due_date <= %s))",
+        "(star OR (due_date != '' AND due_date <= %s) OR bring_back_on <= %s)",
+        "(bring_back_on IS NULL OR bring_back_on <= %s)",
     ]
-    params: list = [today]
+    params: list = [today, today, today]
     if owner_id is not None:
         # Deliberately WIDER than list_todos' strict `owner_id = %s`: the issue rules
         # that unassigned work appears in "my" view, because someone has to catch it.
         conditions.append("(owner_id = %s OR owner_id IS NULL)")
         params.append(owner_id)
     return pg_fetchall(
-        "SELECT id, title, due_date, owner_id, star FROM todos "
+        "SELECT id, title, due_date, owner_id, star, bring_back_on FROM todos "
         f"WHERE {' AND '.join(conditions)} "
         # Ends on the unique id (#58). Uncapped readers carry the term too, so a later
         # LIMIT cannot silently reintroduce a non-deterministic window.
@@ -229,6 +233,7 @@ def build_today_items(
     starred: list[dict] = []
     overdue: list[dict] = []
     due_today: list[dict] = []
+    brought_back: list[dict] = []
 
     for todo in todos:
         due = todo.get("due_date") or ""
@@ -245,6 +250,12 @@ def build_today_items(
             bucket, rank, why = overdue, RANK_OVERDUE, "overdue"
         elif due and due == today:
             bucket, rank, why = due_today, RANK_DUE_TODAY, "due_today"
+        elif (todo.get("bring_back_on") or "") and todo["bring_back_on"] <= today:
+            # Back today (#261), with nothing else asking for attention: the unranked tail,
+            # so a returning todo is one click away and never crowds the user's commitments
+            # out of the collapsed five. A past bring-back date is NOT overdue — only a due
+            # date can make a todo overdue.
+            bucket, rank, why = brought_back, None, "bring_back"
         else:
             continue
         bucket.append({**item, "rank": rank, "why": why})
@@ -256,9 +267,11 @@ def build_today_items(
     overdue.sort(key=lambda i: (i["due_date"], i["id"]))
     # Date-only granularity has no finer "earlier due", so id (creation order) decides.
     due_today.sort(key=lambda i: i["id"])
+    brought_back.sort(key=lambda i: i["id"])
 
     hot_stale, hot_tail = _rank_hot_deals(deals)
-    return starred + hot_stale + overdue + due_today + hot_tail
+    # The user's own returning todos lead the unranked tail, ahead of other people's deals.
+    return starred + hot_stale + overdue + due_today + brought_back + hot_tail
 
 
 def get_today(owner_id: int | None = None) -> dict:
