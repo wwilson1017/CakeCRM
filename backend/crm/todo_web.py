@@ -130,6 +130,14 @@ def _page(base_path: str) -> HTMLResponse:
         '  <meta name="apple-mobile-web-app-capable" content="yes">\n'
         '  <meta name="apple-mobile-web-app-title" content="Todos">'
     )
+    # The phone bottom tab bar (#266) pads itself by `env(safe-area-inset-bottom)`, which
+    # iOS reports as 0 unless the page opts into `viewport-fit=cover` — the capture page
+    # already does. Scoped to THIS surface rather than written into index.html, because
+    # the CRM pads no safe-area insets and would slide under a landscape notch.
+    if "viewport-fit" not in shell:
+        shell = shell.replace(
+            '<meta name="viewport" content="', '<meta name="viewport" content="viewport-fit=cover, ', 1
+        )
     if "</head>" in shell:
         shell = shell.replace("</head>", f"  {inject}\n  </head>", 1)
     else:
