@@ -3,7 +3,7 @@
 The access line is written by uvicorn's HTTP protocol, not by the ASGI app, so a
 TestClient never produces one — the headline test therefore serves `main.app` through
 a REAL uvicorn server on a loopback socket (lifespan off, so no database) and captures
-everything the uvicorn loggers and the root logger write. It goes through `main` on
+everything the two uvicorn loggers write. It goes through `main` on
 purpose: what is pinned is that the app INSTALLS the scrubber, not merely that the
 filter works when someone remembers to attach it.
 """

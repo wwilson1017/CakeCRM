@@ -13,8 +13,10 @@ and a tokenless `/todo/inbox` come out as `/todo/<redacted>` as well. Losing a
 readable client-side route in a log is cheaper than a rule that has to tell a token
 from a route name.
 
-What it cannot catch is a token logged WITHOUT its path prefix (`log.info("%s", token)`),
-so never do that. Scope: the app's own output only. A proxy in front of it (Railway's HTTP log) records
+What it cannot catch is a token logged WITHOUT its path prefix
+(`log.info("%s", token)`), so never do that.
+
+Scope: the app's own output only. A proxy in front of it (Railway's HTTP log) records
 the request line before the app ever sees it — see SECURITY.md. Ported from
 todo-gtd's `backend/logscrub.py`.
 """
