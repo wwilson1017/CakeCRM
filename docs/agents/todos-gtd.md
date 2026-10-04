@@ -267,6 +267,10 @@
   and its Contexts tab in the primary row — the issue names four primary lists, and 56px tap
   targets fit five cells at 390px with room for the inbox badge. Labels match the top strip
   (`To Do`, not the issue's "Next"), since one list should not carry two names.
+  iOS reports every safe-area inset as 0 unless the page opts into `viewport-fit=cover`,
+  so `todo_web._page` adds it to the served shell's viewport meta — for THIS surface only,
+  since the CRM pads no insets and would slide under a landscape notch — and the public
+  wrapper pads `max(1rem, safe-area-inset-left/right)` for the same reason.
 - **The two no-login todo surfaces are asymmetric, and only ONE of them is opt-in** (#70,
   ported from chatty — the heading used to say both were, which the body below has always
   contradicted). Neither consults `todo_mode`, so #102's default flip leaves both exactly

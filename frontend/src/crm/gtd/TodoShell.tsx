@@ -125,7 +125,9 @@ export function TodoShell({ active, hideQuickAdd, onAdded, children }: Props) {
   if (isTodoPublicMode) {
     return (
       <div className="min-h-screen bg-sand">
-        <div className="mx-auto max-w-3xl px-4 pb-[calc(var(--ck-bottom-bar,0px)+2.5rem)] pt-6">{body}</div>
+        {/* Side padding clears a landscape notch: this surface is served with
+            `viewport-fit=cover` (#266), so the browser no longer insets it for us. */}
+        <div className="mx-auto max-w-3xl pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] pb-[calc(var(--ck-bottom-bar,0px)+2.5rem)] pt-6">{body}</div>
       </div>
     );
   }

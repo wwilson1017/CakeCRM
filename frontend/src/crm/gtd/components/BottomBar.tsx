@@ -54,7 +54,7 @@ export function BottomBar({ active, inboxCount }: Props) {
           >
             {item.label}
             {item.key === 'inbox' && inboxCount > 0 && (
-              <span className="ml-1 rounded-full bg-brand px-1.5 py-0.5 text-xs font-bold leading-none text-white">
+              <span className="ml-1 rounded-full bg-brand px-1.5 py-0.5 text-xs font-bold leading-none text-ck-accent-ink">
                 {inboxCount}
               </span>
             )}
