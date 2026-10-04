@@ -333,3 +333,22 @@
   `<Route path="tasks/*">` in `App.tsx` (`crm/legacyTodoRedirect.tsx`), which redirects
   every pre-rename URL; there is no REST or tool-name compatibility shim, by decision,
   because the frontend is the only consumer of both.
+- **Every GTD "today" on the client is the INSTALL's day** (#259, port of todo-gtd's
+  list-timezone fix). `today_view` picks rows by `TIMEZONE`, but the page used to split them
+  into Overdue vs Due today on the BROWSER's date, so an evening user in another zone saw
+  today's todos filed as Overdue; the row chips and Quick Add's "tomorrow" split the same way.
+  `gtd_service.get_filters` now returns `tz` (`localtime.tz().key`, so a bogus `TIMEZONE`
+  reports the same UTC fallback the server uses), and `gtd/util.ts` derives the day from it:
+  `todayStr(now, tz?)` (built from `Intl.DateTimeFormat` parts, browser date when `tz` is
+  absent or unknown to the engine), `zonedNow(tz?)` (a Date whose LOCAL fields are that day,
+  at noon, for date math written against local getters — the quick-add parser), and
+  `formatDay(iso, tz?)` for the edit sheet's Created/Completed dates. Components that need
+  only the zone read it with `useTodoMeta.useListTz()`, a `useSyncExternalStore` over the
+  shared meta cache that never fetches (every GTD page sits inside `TodoShell`, whose
+  `useTodoMeta` does). **The rule: a new client-side day decision in GTD takes
+  `todayStr(new Date(), useListTz())`, never a bare `todayStr()`.** The public `/todo/<token>`
+  app inherits it, since `build_router` serves the same filters route there. `dueLabel`'s
+  "Tomorrow" moved from `+24h` to `day + 1` in the same pass, because the day the clocks
+  change is 23 or 25 hours long. `listTimeZone.test.tsx` pins the issue's acceptance case
+  verbatim (browser zone switched to UTC through `process.env.TZ`, install in Chicago, 23:30)
+  and the opposite direction (install in Tokyo, runner in Chicago).

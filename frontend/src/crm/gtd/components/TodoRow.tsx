@@ -1,5 +1,6 @@
 import { STATUS_META } from '../constants';
 import type { Todo } from '../types';
+import { useListTz } from '../useTodoMeta';
 import { dueLabel, todayStr } from '../util';
 import { todoSourceLabel } from '../sourceLabel';
 import { RecordChip } from './RecordChip';
@@ -16,7 +17,8 @@ interface Props {
 
 export function TodoRow({ todo, onToggleDone, onToggleStar, onEdit, showStatus }: Props) {
   const finished = todo.status === 'done' || todo.status === 'dropped';
-  const due = todo.due_date ? dueLabel(todo.due_date, todayStr()) : null;
+  const tz = useListTz();
+  const due = todo.due_date ? dueLabel(todo.due_date, todayStr(new Date(), tz)) : null;
   const hasMeta = todo.context || todo.project_name || todo.deal_title || todo.contact_name
     || todo.tags.length > 0 || due || showStatus || todoSourceLabel(todo.source);
 

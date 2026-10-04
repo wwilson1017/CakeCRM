@@ -18,6 +18,7 @@ Validation errors raise `gtd_common.ValidationError`; the router maps them to 40
 import json
 import logging
 
+from core import localtime
 from core.postgres import get_connection, pg_fetchall, pg_fetchone
 from crm import gtd_common, service
 from crm.gtd_common import (
@@ -399,8 +400,15 @@ def delete_project(project_id: int) -> bool:
 # ── Filters / capture ─────────────────────────────────────────────────────────
 
 def get_filters() -> dict:
-    """Distinct contexts, the tag union, and per-status counts (all statuses, zeros
-    included) — everything the UI's facet bars need in one round trip."""
+    """Distinct contexts, the tag union, per-status counts (all statuses, zeros
+    included), and the install's timezone — everything the UI needs in one round trip.
+
+    ``tz`` is the zone ``today_view`` buckets due dates in (#259). The GTD client derives
+    every "today" from it rather than from the browser's clock, so a page opened from
+    another zone sorts Overdue vs Due today exactly as the server chose the rows — the
+    #130 one-clock rule, applied to GTD. It is ``localtime.tz().key``, so a bogus
+    ``TIMEZONE`` reports the same UTC fallback the server itself uses.
+    """
     contexts = [
         r["context"]
         for r in pg_fetchall(
@@ -417,7 +425,12 @@ def get_filters() -> dict:
     for r in pg_fetchall("SELECT status, COUNT(*) AS n FROM todos GROUP BY status"):
         if r["status"] in counts:
             counts[r["status"]] = r["n"]
-    return {"contexts": contexts, "tags": sorted(tags, key=str.lower), "status_counts": counts}
+    return {
+        "contexts": contexts,
+        "tags": sorted(tags, key=str.lower),
+        "status_counts": counts,
+        "tz": localtime.tz().key,
+    }
 
 
 def capture(text: str, source: str = "capture_web", owner_id: int | None = None) -> dict:

@@ -36,8 +36,9 @@ def now_local() -> datetime:
 def today_local() -> date:
     """The current calendar date in the configured timezone.
 
-    A due date carries the user's LOCAL calendar intent — the frontend's
-    ``todayStr()`` derives it from local date parts for the same reason.
+    A due date carries the user's LOCAL calendar intent. The GTD frontend's
+    ``todayStr()`` derives the same day from this zone, which ``get_filters`` hands it
+    as ``tz`` (#259), so the browser's own clock never decides it.
     """
     return now_local().date()
 
