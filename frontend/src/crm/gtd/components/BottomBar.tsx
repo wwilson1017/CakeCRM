@@ -41,7 +41,7 @@ export function BottomBar({ active, inboxCount }: Props) {
   return (
     <nav
       aria-label="Main lists"
-      className="ck-has-bottom-bar fixed inset-x-0 bottom-0 z-40 has-[[aria-expanded=true]]:z-[110] flex border-t border-line bg-cream pb-[env(safe-area-inset-bottom)] sm:hidden"
+      className="ck-has-bottom-bar fixed inset-x-0 bottom-0 z-40 has-[[aria-expanded=true]]:z-[210] flex border-t border-line bg-cream pb-[env(safe-area-inset-bottom)] sm:hidden"
     >
       {PRIMARY_TABS.map(item => {
         const current = item.key === active;
@@ -107,10 +107,12 @@ function MoreMenu({ active }: { active: TodoTab }) {
       </button>
       {open && (
         // The fixed nav is this panel's stacking context, so the panel's own z-index cannot
-        // lift it over the undo block (z-[100]) — which rests just above the bar for 7s after
-        // every completion, exactly when someone reaches for More next. The NAV rises to
-        // z-[110] instead while More is open (`has-[[aria-expanded=true]]` above), so the
-        // block never paints over, or takes the taps of, the menu's bottom rows.
+        // lift it over the undo block (z-[100]) or the toasts (z-200) — both rest just above
+        // the bar for seconds after every completion or filing, exactly when someone reaches
+        // for More next. The NAV rises to z-[210] instead while More is open
+        // (`has-[[aria-expanded=true]]` above), so neither paints over, or takes the taps of,
+        // the menu's rows. Nothing that can open while More is open needs to sit higher: any
+        // tap outside the panel closes it first.
         <div
           id={panelId}
           className="fixed inset-x-2 bottom-[calc(var(--ck-bottom-bar,3.5rem)+0.5rem)] rounded-xl border border-line bg-cream p-1.5 shadow-lg"
