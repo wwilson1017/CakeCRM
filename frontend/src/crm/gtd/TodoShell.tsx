@@ -30,7 +30,8 @@ interface Props {
    * render their own copy lower down the page (Inbox). */
   hideQuickAdd?: boolean;
   /** The page renders the undo block itself, in its own flow (Inbox, #265), so the
-   *  shell's floating copy is suppressed — one queue, one visible block. */
+   *  shell's floating copy is suppressed — one queue, one visible block. The Inbox drops
+   *  it while its edit sheet is open, so the floating copy shows above the sheet. */
   inlineUndo?: boolean;
   onAdded?: () => void;
   children: React.ReactNode;

@@ -247,4 +247,24 @@ describe('InboxPage — the undo block sits inline (#265)', () => {
     expect(blocks).toHaveLength(1);
     expect(blocks[0].className).not.toContain('fixed');
   });
+
+  it('hands the block to the floating copy while the edit sheet covers the page', async () => {
+    await render();
+    listTodosMock.mockResolvedValue([SECOND]);
+    await fileFromCard();
+    expect(undoBlocks()).toHaveLength(1);
+
+    const edit = [...container.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Edit');
+    if (!edit) throw new Error('no Edit button on the card');
+    await click(edit);
+
+    // One block, the floating one (it sits above the sheet's z-50 overlay), and its
+    // Undo still works from there.
+    const blocks = undoBlocks();
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].className).toContain('fixed');
+    listTodosMock.mockResolvedValue([FIRST, SECOND]);
+    await clickUndoFiling('first captured');
+    expect(updateTodoMock).toHaveBeenLastCalledWith(1, { status: 'inbox', context: '' });
+  });
 });

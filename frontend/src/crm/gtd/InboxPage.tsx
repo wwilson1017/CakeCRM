@@ -78,7 +78,7 @@ export function InboxPage() {
   };
 
   return (
-    <TodoShell active="inbox" hideQuickAdd inlineUndo>
+    <TodoShell active="inbox" hideQuickAdd inlineUndo={!editTodo}>
       <SearchFilterBar
         query={search}
         onQueryChange={setSearch}
@@ -124,8 +124,11 @@ export function InboxPage() {
       )}
       {/* The undo block (#265), in the page flow: right under the card — or under the
           empty state once the last item is filed — and above the queue, where the eye
-          already is after filing. The shell's floating copy is off (`inlineUndo`). */}
-      <UndoPill inline />
+          already is after filing. The shell's floating copy is off (`inlineUndo`) — except
+          while the edit sheet is open: its `z-50` overlay would cover an inline row whose 7s
+          window keeps running, so the block moves back to the floating copy, which sits
+          above the sheet, and returns here when the sheet closes. */}
+      {!editTodo && <UndoPill inline />}
       {head && rest.length > 0 && (
         <div className="mt-4">
           <h2 className="mb-2 text-xs font-heading font-bold uppercase tracking-wide text-muted">

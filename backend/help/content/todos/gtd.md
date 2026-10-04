@@ -65,7 +65,8 @@ each is split into sections the shared list cannot show.
 ## Undoing a completion or a filing
 
 Marking a todo done, or setting the context that files an inbox item, shows a small undo
-block in the bottom-right corner for seven seconds. Each change gets its own row with an
+block for seven seconds. On the Inbox it sits right under the item being triaged, above
+the rest of the queue; on every other page it sits in the bottom-right corner. Each change gets its own row with an
 **Undo?** button, and **Undo all** appears once there is more than one. Undo puts the todo
 back exactly as it was: its previous status, and for a filing its previous context too. An
 item put back in the inbox returns as the item being triaged. The block follows you across
