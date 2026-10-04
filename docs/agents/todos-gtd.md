@@ -259,6 +259,11 @@
   proactive digest and the Today panel — and deliberately NOT to record views and follow-up
   checks (contact rollup, company report, deal health / stale-deal `has_open_todo`, a
   project's open count, the observer's dedupe): a scheduled return is still a follow-up.
+  The same split reaches the GTD client through `GET /todos?include_deferred=true`: the
+  project page and the stalled-project checks on Projects and Review pass it (a deferred
+  next action still covers its project; Review drops it from the stale list instead), and
+  `get_filters`' open-status counts apply the predicate so the Inbox badge never counts an
+  item the Inbox hides.
   **Divergence from the blueprint:** upstream only SURFACES a revisit date on Today; here the
   todo is also hidden until then, per the issue. From its day it stays on Today (the
   "Brought back" section) until completed or cleared — no sweep job, same as upstream. Only a

@@ -38,11 +38,12 @@ export function ProjectsPage() {
     // Next actions ride along so the stalled warning measures the GTD thing ("no next
     // action"), not open_count — someday/waiting items keep open_count > 0 on a
     // project that is still stalled.
-    Promise.all([listProjects(s), listTodos({ status: 'next_action', limit: PAGE_LIMIT })])
+    Promise.all([listProjects(s), listTodos({ status: 'next_action', limit: PAGE_LIMIT, include_deferred: true })])
       .then(([p, next]) => {
         setProjects(p);
         // A full window can't prove absence — mark every project as having a next
-        // action so no card is falsely flagged stalled.
+        // action so no card is falsely flagged stalled. Deferred next actions count (#261): a
+    // project whose next step is scheduled to come back is not stalled.
         setProjectsWithNext(next.length >= PAGE_LIMIT
           ? new Set(p.map(x => x.id))
           : new Set(next.map(t => t.project_id).filter((id): id is number => id !== null)));

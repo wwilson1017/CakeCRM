@@ -205,7 +205,11 @@ def list_todos(
     search: str | None = None,
     limit: int = 100,
     owner_id: int | str | None = None,
+    include_deferred: bool = False,
 ) -> list[dict]:
+    """``include_deferred`` keeps todos waiting on a bring-back date (#261) in the result.
+    The working lists leave it off; a record view or a project-health check turns it on,
+    because a scheduled return is still that project's next action."""
     where: list[str] = []
     params: list = []
     # Same three values as every other owner filter (#190): an id, None for everyone, or
@@ -257,7 +261,7 @@ def list_todos(
     # A todo on an archived deal follows it out of view, exactly like list_todos —
     # work items follow the deal in both modes.
     where.append(f"(t.deal_id IS NULL OR {service.LIVE_PREDICATE_D})")
-    if not search:
+    if not search and not include_deferred:
         # A todo waiting on a bring-back date (#261) is off every working list until its
         # day. Finished rows are unaffected, and a SEARCH still finds it — search is how a
         # deferred todo is reached (and its date changed) before it comes back.
@@ -429,7 +433,16 @@ def get_filters() -> dict:
         if isinstance(r.get("tag"), str) and r["tag"]:
             tags.add(r["tag"])
     counts = {s: 0 for s in TODO_STATUSES}
-    for r in pg_fetchall("SELECT status, COUNT(*) AS n FROM todos GROUP BY status"):
+    # The open-status counts describe the working lists, so a todo waiting on a bring-back
+    # date (#261) is not counted until its day — otherwise the Inbox badge would count an
+    # item the Inbox does not show. Finished counts are history and keep every row.
+    count_params: list = []
+    deferred = service.brought_back_sql("bring_back_on", count_params)
+    for r in pg_fetchall(
+        "SELECT status, COUNT(*) AS n FROM todos "
+        f"WHERE status IN ('done','dropped') OR {deferred} GROUP BY status",
+        count_params,
+    ):
         if r["status"] in counts:
             counts[r["status"]] = r["n"]
     return {

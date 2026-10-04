@@ -121,11 +121,13 @@ def build_router(guard) -> APIRouter:
         due_after: str | None = None,
         search: str | None = None,
         limit: int = Query(default=200, ge=1, le=500),
+        include_deferred: bool = False,
     ):
         todos = _call(
             gtd_service.list_todos,
             status=status, project=project, context=context, tag=tag, starred=starred,
             due_before=due_before, due_after=due_after, search=search, limit=limit,
+            include_deferred=include_deferred,
         )
         return {"todos": todos}
 

@@ -46,6 +46,9 @@ export interface TodoListParams {
   due_after?: string;
   search?: string;
   limit?: number;
+  /** Keep todos waiting on a bring-back date (#261). Record views and project-health
+   * checks only — the working lists leave them out until their day. */
+  include_deferred?: boolean;
 }
 
 export function listTodos(params: TodoListParams = {}): Promise<Todo[]> {

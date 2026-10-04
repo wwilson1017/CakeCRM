@@ -8,7 +8,7 @@ import { todoPath } from './publicMode';
 import { LoadFailed, LoadingRows, TodoShell } from './TodoShell';
 import type { Todo, TodoProject } from './types';
 import { useTodoMeta } from './useTodoMeta';
-import { daysSince, formatAge, parseUTC } from './util';
+import { bringBackState, daysSince, formatAge, parseUTC, todayStr } from './util';
 
 interface ReviewData {
   stale: Todo[];
@@ -28,7 +28,8 @@ export function ReviewPage() {
 
   const load = () => {
     Promise.all([
-      listTodos({ status: 'next_action', limit: PAGE_LIMIT }),
+      // Deferred next actions included (#261) — they still cover their project.
+      listTodos({ status: 'next_action', limit: PAGE_LIMIT, include_deferred: true }),
       listTodos({ status: 'waiting_for', limit: PAGE_LIMIT }),
       listTodos({ status: 'delegated', limit: PAGE_LIMIT }),
       listProjects('active'),
@@ -58,6 +59,10 @@ export function ReviewPage() {
   // under "no next action" until the page is remounted.
   useTodosChanged(load);
 
+  // A todo parked on a bring-back date (#261) is not stale — it was put away on purpose.
+  // Its next action still covers its project, which is why `load` fetches it at all.
+  const today = todayStr(new Date(), filters?.tz);
+  const stale = (data?.stale ?? []).filter(t => bringBackState(t.bring_back_on, today) !== 'waiting');
   const counts = filters?.status_counts;
   const tiles: { label: string; value: number; to: string }[] = counts ? [
     { label: 'Inbox', value: counts.inbox, to: todoPath('/inbox') },
@@ -94,11 +99,11 @@ export function ReviewPage() {
             <h2 className="mb-2 text-xs font-heading font-bold uppercase tracking-wide text-muted">
               Stale ({STALE_DAYS}+ days untouched)
             </h2>
-            {data.stale.length === 0 ? (
+            {stale.length === 0 ? (
               <p className="text-sm text-muted">Nothing stale. Clean system.</p>
             ) : (
               <div className="space-y-1">
-                {data.stale.map(t => (
+                {stale.map(t => (
                   <div key={t.id}
                        className="flex items-start gap-2 rounded-lg border border-line-faint bg-cream px-3 py-2 text-sm">
                     {/* Wraps rather than truncates: deciding whether a stale item is

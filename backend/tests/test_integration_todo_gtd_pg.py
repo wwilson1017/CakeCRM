@@ -349,3 +349,29 @@ def test_a_past_bring_back_date_with_no_due_date_is_never_overdue(pg_db, monkeyp
     [item] = [i for i in today_service.get_today()["items"] if i["kind"] == "todo"]
     assert item["id"] == todo["id"]
     assert item["why"] == "bring_back" and item["rank"] is None
+
+
+def test_status_counts_and_include_deferred_follow_the_bring_back_date(pg_db, monkeypatch):
+    """The Inbox badge must not count an item the Inbox does not show, while a project's
+    health check and its own page still see a deferred next action (#261)."""
+    from crm import gtd_service
+
+    project = gtd_service.create_project("Acme renewal")
+    todo = gtd_service.create_todo("call Acme after budget", status="inbox")
+    nxt = gtd_service.create_todo("send Acme the deck", status="next_action",
+                                  project_id=project["id"])
+    gtd_service.update_todo(todo["id"], {"bring_back_on": "2026-10-10"})
+    gtd_service.update_todo(nxt["id"], {"bring_back_on": "2026-10-10"})
+    _pin_day(monkeypatch, "2026-10-04")
+
+    counts = gtd_service.get_filters()["status_counts"]
+    assert counts["inbox"] == 0 and counts["next_action"] == 0
+    assert gtd_service.list_todos(status="next_action") == []
+    assert [t["id"] for t in gtd_service.list_todos(
+        status="next_action", include_deferred=True)] == [nxt["id"]]
+    assert [t["id"] for t in gtd_service.list_todos(
+        project=str(project["id"]), include_deferred=True)] == [nxt["id"]]
+
+    _pin_day(monkeypatch, "2026-10-10")
+    counts = gtd_service.get_filters()["status_counts"]
+    assert counts["inbox"] == 1 and counts["next_action"] == 1
