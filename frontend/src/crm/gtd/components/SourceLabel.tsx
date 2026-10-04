@@ -12,12 +12,16 @@ import type { Todo } from '../types';
  * the row button reads "… Added by Capture link". Text-only in an existing ink token,
  * deliberately no tint() background (which would owe inkContrast.test.ts a surface).
  */
-export function SourceLabel({ source }: { source: Todo['source'] }) {
+export function SourceLabel({ source, className = '' }: {
+  source: Todo['source'];
+  /** Placement classes from an inline host (a margin), applied only when a label renders. */
+  className?: string;
+}) {
   const label = todoSourceLabel(source);
   if (!label) return null;
   return (
     <span
-      className="rounded-full border border-line-faint px-2 py-0.5 text-muted"
+      className={`rounded-full border border-line-faint px-2 py-0.5 text-muted ${className}`}
       title={label.title}
       data-todo-source={source}
     >

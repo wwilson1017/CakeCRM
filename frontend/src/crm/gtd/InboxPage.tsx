@@ -4,6 +4,7 @@ import { listTodos } from './api';
 import { QuickAdd } from './components/QuickAdd';
 import { TodoEditSheet } from './components/TodoEditSheet';
 import { TriageCard } from './components/TriageCard';
+import { SourceLabel } from './components/SourceLabel';
 import { contextGroup, matchesContexts } from './contextFacet';
 import { useInboxFocus, useTodos } from './hooks';
 import { EmptyState, FilterEmptyState, LoadFailed, LoadingRows, TodoShell } from './TodoShell';
@@ -146,6 +147,7 @@ export function InboxPage() {
                     className="block w-full break-words rounded-lg border border-line-faint bg-cream px-3 py-2 text-left text-sm text-charcoal hover:border-brand/40"
                   >
                     {t.title}
+                    <SourceLabel source={t.source} className="ml-1.5 text-xs" />
                   </button>
                 ))}
               </div>

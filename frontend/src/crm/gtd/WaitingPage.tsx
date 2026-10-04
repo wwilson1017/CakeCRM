@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react';
 import { SearchFilterBar } from '../../shared/search';
 import { listTodos } from './api';
 import { RecordChip } from './components/RecordChip';
+import { SourceLabel } from './components/SourceLabel';
+import { todoSourceLabel } from './sourceLabel';
 import { TodoEditSheet } from './components/TodoEditSheet';
 import { useRowActions, useTodos } from './hooks';
 import { EmptyState, LoadFailed, LoadingRows, TodoShell } from './TodoShell';
@@ -57,8 +59,11 @@ export function WaitingPage() {
                     is what the age chip beside it is scanned against. */}
                 <p className="text-sm break-words text-charcoal">{t.title}</p>
                 {t.notes && <p className="truncate text-xs text-muted">{t.notes}</p>}
-                {(t.deal_title || t.contact_name) && (
-                  <p className="mt-0.5 text-xs"><RecordChip todo={t} /></p>
+                {(t.deal_title || t.contact_name || todoSourceLabel(t.source)) && (
+                  <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs">
+                    <RecordChip todo={t} />
+                    <SourceLabel source={t.source} />
+                  </p>
                 )}
               </button>
               {t.context && (

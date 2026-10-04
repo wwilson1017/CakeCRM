@@ -252,7 +252,9 @@
   Baker, `observer` → Observer, `capture_web` → Capture link, `telegram` → Telegram) and
   returns null for `ui` and for any value it does not know, so a row never claims a
   provenance the server did not record. `components/SourceLabel.tsx` renders it on
-  `TodoRow`'s meta line and on the `TriageCard` line under the title: a plain `<span>`
+  `TodoRow`'s meta line (so Today, To Do, Search, project pages, Someday and Done), the
+  `TriageCard` line under the title, and the three bespoke rows that do not use `TodoRow`
+  — the inbox's remaining-queue buttons, Waiting's rows and Review's stale list: a plain `<span>`
   (the row body is a `<button>`, so nothing interactive may nest there), named by a
   visually hidden "Added by " inside it rather than an `aria-label` (#162's rule), and
   text-only in `text-muted` with a border — no `tint()` background, so
