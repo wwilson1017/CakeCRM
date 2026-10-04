@@ -1,7 +1,9 @@
 import { STATUS_META } from '../constants';
 import type { Todo } from '../types';
 import { dueLabel, todayStr } from '../util';
+import { todoSourceLabel } from '../sourceLabel';
 import { RecordChip } from './RecordChip';
+import { SourceLabel } from './SourceLabel';
 
 interface Props {
   todo: Todo;
@@ -16,7 +18,7 @@ export function TodoRow({ todo, onToggleDone, onToggleStar, onEdit, showStatus }
   const finished = todo.status === 'done' || todo.status === 'dropped';
   const due = todo.due_date ? dueLabel(todo.due_date, todayStr()) : null;
   const hasMeta = todo.context || todo.project_name || todo.deal_title || todo.contact_name
-    || todo.tags.length > 0 || due || showStatus;
+    || todo.tags.length > 0 || due || showStatus || todoSourceLabel(todo.source);
 
   return (
     <div className="flex items-start gap-3 rounded-xl border border-line-faint bg-cream px-3 py-2.5 hover:border-brand/40 transition-colors">
@@ -66,6 +68,7 @@ export function TodoRow({ todo, onToggleDone, onToggleStar, onEdit, showStatus }
               <span className="rounded-full bg-sand px-2 py-0.5 text-muted">{todo.project_name}</span>
             )}
             <RecordChip todo={todo} />
+            <SourceLabel source={todo.source} />
             {todo.tags.slice(0, 3).map(tag => (
               <span key={tag} className="rounded-full bg-sand px-2 py-0.5 text-muted">#{tag}</span>
             ))}

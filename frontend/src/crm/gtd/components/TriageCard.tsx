@@ -3,8 +3,10 @@ import type { ReactNode } from 'react';
 import { toast } from '../../../shared/toast';
 import { createProject, deleteTodo, updateTodo } from '../api';
 import type { Todo, TodoProject, TodoStatus } from '../types';
+import { todoSourceLabel } from '../sourceLabel';
 import { dropUndo, queueUndo } from '../undoQueue';
 import { InlineTitle } from './InlineTitle';
+import { SourceLabel } from './SourceLabel';
 import { RecordChip } from './RecordChip';
 
 interface Props {
@@ -554,8 +556,11 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
           ★
         </button>
       </div>
-      {(row.deal_title || row.contact_name) && (
-        <p className="mt-1 text-xs"><RecordChip todo={row} /></p>
+      {(row.deal_title || row.contact_name || todoSourceLabel(row.source)) && (
+        <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs">
+          <RecordChip todo={row} />
+          <SourceLabel source={row.source} />
+        </p>
       )}
 
       {/* Step 1 — where it's headed. Selecting is local: the item stays put until

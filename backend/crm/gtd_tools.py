@@ -90,7 +90,7 @@ def _wrap(fn: Callable[..., dict]) -> Callable[..., dict]:
 # ── Executors ─────────────────────────────────────────────────────────────────
 
 def _todo_create(title: str, **kwargs) -> dict:
-    todo = gtd_service.create_todo(title, source="agent", **kwargs)
+    todo = gtd_service.create_todo(title, **kwargs)
     if not todo:
         return {"error": "Todo could not be created"}
     # Every write names the record it wrote (#236) — see crm.tools._with_target.
@@ -400,7 +400,10 @@ def get_gtd_tools(user: dict | None = None) -> tuple[list[dict], dict[str, Calla
     user_id = (user or {}).get("id")
     executors = {
         **GTD_TOOL_EXECUTORS,
-        "todo_create": bind_server_args(GTD_TOOL_EXECUTORS["todo_create"], owner_id=user_id),
+        # `source` is the server's to stamp, never the model's (#260).
+        "todo_create": bind_server_args(
+            GTD_TOOL_EXECUTORS["todo_create"], owner_id=user_id, source="agent",
+        ),
         "todo_list": bind_owner_filter(GTD_TOOL_EXECUTORS["todo_list"], user),
     }
     return GTD_TOOL_DEFS, executors

@@ -8,6 +8,7 @@ import { TodoRow } from './components/TodoRow';
 import { PROJECT_STATUSES, PROJECT_STATUS_META } from './constants';
 import { useRowActions, useTodosChanged } from './hooks';
 import { updateProjectStatus } from './projectActions';
+import { isTypingTarget, projectNeighbours } from './projectNav';
 import { todoPath } from './publicMode';
 import { LoadFailed, LoadingRows, TodoShell } from './TodoShell';
 import type { Todo, TodoProject, TodoProjectStatus } from './types';
@@ -31,9 +32,18 @@ const PROJECT_LINES: { field: 'purpose' | 'outcome'; label: string; placeholder:
 
 const inputCls = 'w-full rounded-lg border border-line bg-cream px-3 py-2 text-base sm:text-sm text-charcoal focus:border-brand focus:outline-none';
 
+/**
+ * Keyed by the route id so the ‹ › arrows (#264) land on a FRESH page. Moving between
+ * projects keeps this route matched, so without the key every piece of page state — the
+ * loaded project, a field's failure line, an open edit sheet, a half-typed next action —
+ * would carry over and describe the previous project until the new fetch landed.
+ */
 export function ProjectDetailPage() {
   const { id } = useParams();
-  const projectId = Number(id);
+  return <ProjectDetail key={id} projectId={Number(id)} />;
+}
+
+function ProjectDetail({ projectId }: { projectId: number }) {
   const navigate = useNavigate();
   const [project, setProject] = useState<TodoProject | null>(null);
   const [todos, setTodos] = useState<Todo[] | null>(null);
@@ -53,6 +63,25 @@ export function ProjectDetailPage() {
   const clearErrorFor = (field: EditableField) =>
     setSaveError(e => (e?.field === field ? null : e));
   const { projects, filters } = useTodoMeta();
+
+  // Previous / next among projects of the same status, in the Projects tab's order (#264).
+  const neighbours = projectNeighbours(projects, projectId);
+  const prevId = neighbours?.prev.id;
+  const nextId = neighbours?.next.id;
+  const sheetOpen = editTodo !== null;
+  useEffect(() => {
+    if (prevId === undefined || nextId === undefined || sheetOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      // Never while typing — the inline name / notes editors, the add box, Quick Add — and
+      // never on a chord, which belongs to the browser or the OS.
+      if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey
+        || isTypingTarget(e.target)) return;
+      navigate(todoPath(`/projects/${e.key === 'ArrowLeft' ? prevId : nextId}`));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [prevId, nextId, sheetOpen, navigate]);
 
   const [loadSeq, setLoadSeq] = useState(0);
   const reload = useCallback(() => { setLoadSeq(s => s + 1); }, []);
@@ -131,9 +160,27 @@ export function ProjectDetailPage() {
 
   return (
     <TodoShell active="projects" onAdded={reload}>
-      <Link to={todoPath('/projects')} className="text-sm text-muted hover:text-charcoal">
-        ← All projects
-      </Link>
+      <div className="flex items-center justify-between gap-3">
+        <Link to={todoPath('/projects')} className="text-sm text-muted hover:text-charcoal">
+          ← All projects
+        </Link>
+        {neighbours && (
+          <div className="flex gap-1">
+            {([['Previous project', '‹', neighbours.prev], ['Next project', '›', neighbours.next]] as const)
+              .map(([label, arrow, to]) => (
+                <Link
+                  key={label}
+                  to={todoPath(`/projects/${to.id}`)}
+                  aria-label={`${label}: ${to.name}`}
+                  title={`${label}: ${to.name}`}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-line bg-cream text-muted hover:bg-sand hover:text-charcoal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
+                >
+                  <span aria-hidden="true">{arrow}</span>
+                </Link>
+              ))}
+          </div>
+        )}
+      </div>
       {failed && <div className="mt-3"><LoadFailed retry={reload} /></div>}
       {!failed && (project === null || todos === null) && <LoadingRows />}
       {project && todos && (
