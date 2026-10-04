@@ -307,6 +307,10 @@ def test_the_weekly_review_packet_sorts_real_rows_into_its_sections(pg_db):
     deal = service.create_deal("Old deal")
     archived_inbox = gtd_service.create_todo("Chase the old deal", status="inbox",
                                              deal_id=deal["id"])
+    # A project whose ONLY next action sits on that deal has no next action in view.
+    hidden = gtd_service.create_project("Old account")
+    gtd_service.create_todo("Send the old quote", status="next_action",
+                            project_id=hidden["id"], deal_id=deal["id"])
     service.archive_deal(deal["id"], reason="Lost touch")
 
     from core.postgres import pg_execute
@@ -324,7 +328,8 @@ def test_the_weekly_review_packet_sorts_real_rows_into_its_sections(pg_db):
     assert ids("due_today_or_overdue") == [overdue["id"]]
     assert packet["due_today_or_overdue"]["items"][0]["days"] > 365
     assert packet["projects_without_next_action"]["items"] == [
-        {"id": stalled["id"], "name": "Kitchen remodel"}]
+        {"id": stalled["id"], "name": "Kitchen remodel"},
+        {"id": hidden["id"], "name": "Old account"}]
     assert packet["waiting_follow_up"]["items"][0]["days"] == 9
     assert today_local_str()  # the configured day the due section compared against
     # Never reviewed → due; marking it done quiets the hint.

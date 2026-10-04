@@ -81,7 +81,11 @@ def test_the_packet_is_typed_and_counts_beyond_the_cap(monkeypatch):
     assert packet["stale_next_actions"] == {"count": 0, "truncated": False, "items": []}
     assert packet["review_due"] is False and packet["days_since_review"] == 3
     # Every capped reader ends its ORDER BY on a unique term (#58).
-    assert all(".id ASC LIMIT" in sql for sql in seen if "LIMIT" in sql)
+    capped = [sql for sql in seen if "LIMIT" in sql]
+    assert capped and all(".id ASC LIMIT" in sql or ".id DESC LIMIT" in sql for sql in capped)
+    # ... and the tiebreak runs the way the sort does: newest-first stays newest-first.
+    done_sql = next(sql for sql in capped if "t.status = 'done'" in sql)
+    assert "t.completed_at DESC, t.id DESC LIMIT" in done_sql
 
 
 def test_a_malformed_due_date_degrades_instead_of_failing(monkeypatch):

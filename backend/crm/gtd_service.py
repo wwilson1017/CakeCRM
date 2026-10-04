@@ -524,12 +524,15 @@ def _review_section(where: str, params: tuple, days_col: str, order: str,
     Each item carries `source` on purpose: it is what lets `delimiters.fence_public_rows`
     fence the title of a row a stranger typed on the public capture page (#204).
     """
+    # The id tiebreak runs the way the sort does (#58), so a DESC section stays newest-first
+    # among rows one transaction stamped with the same instant.
+    id_dir = "DESC" if order.rstrip().upper().endswith("DESC") else "ASC"
     rows = pg_fetchall(
         "SELECT t.id, t.title, t.source, t.due_date, "
         f"{_DAYS_SINCE.format(col=days_col)} AS days, COUNT(*) OVER () AS total "
         "FROM todos t LEFT JOIN deals d ON t.deal_id = d.id "
         f"WHERE {where} AND (t.deal_id IS NULL OR {service.LIVE_PREDICATE_D}) "
-        f"ORDER BY {order}, t.id ASC LIMIT %s",
+        f"ORDER BY {order}, t.id {id_dir} LIMIT %s",
         (*params, REVIEW_ITEM_CAP),
     )
     total = int(rows[0]["total"]) if rows else 0
@@ -577,10 +580,13 @@ def weekly_review() -> dict:
     due = _review_section(
         "t.status NOT IN ('done','dropped') AND t.due_date != '' AND t.due_date <= %s",
         (today,), "t.created_at", "t.due_date ASC", overdue_vs=today)
+    # A next action on an archived deal is out of view everywhere else (list_todos, the
+    # Review page's own stalled list), so it does not count as the project's next action.
     projects = pg_fetchall(
         "SELECT p.id, p.name, COUNT(*) OVER () AS total FROM todo_projects p "
         "WHERE p.status = 'active' AND NOT EXISTS (SELECT 1 FROM todos n "
-        "WHERE n.project_id = p.id AND n.status = 'next_action') "
+        "WHERE n.project_id = p.id AND n.status = 'next_action' AND (n.deal_id IS NULL "
+        f"OR EXISTS (SELECT 1 FROM deals d WHERE d.id = n.deal_id AND {service.LIVE_PREDICATE_D}))) "
         "ORDER BY lower(p.name) ASC, p.id ASC LIMIT %s",
         (REVIEW_ITEM_CAP,),
     )
