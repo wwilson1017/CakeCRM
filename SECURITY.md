@@ -284,6 +284,19 @@ history and may appear in referrer headers or a proxy log. Treat it like a passw
   an enforced boundary, so treat the confirmation gate and the background allowlist as the
   controls that actually hold. Setting a capture token closes the surface to strangers
   outright, and is the right move if the URL has been shared widely.
+- **The app keeps link tokens out of its own logs.** Every line CakeCRM writes — the
+  request log, error tracebacks, the app's own messages — replaces the secret part of a
+  `/todo/…`, `/capture/…` or `/api/todo-web/…` address with `<redacted>`, including on
+  the "wrong token" path. In the Docker image the server writes no request log at all
+  unless you turn gunicorn's access log on, and that is scrubbed too.
+- **A proxy in front of the app keeps its own log, and CakeCRM cannot scrub it.** On
+  Railway, the platform's HTTP log records each request's method, full path and query
+  string, status and client IP before the request reaches CakeCRM, so a full todo link is
+  visible there to anyone with access to your Railway project. The same holds for any
+  reverse proxy, load balancer or CDN you put in front of a self-hosted install. Treat
+  access to those logs like access to the link, and rotate the token if the log has been
+  shared. Moving the secret out of the address, into a cookie set by a one-time landing
+  page, would close this; it is a planned follow-up, not something this release does.
 
 ## The assistant's self-written identity (`soul.md`)
 

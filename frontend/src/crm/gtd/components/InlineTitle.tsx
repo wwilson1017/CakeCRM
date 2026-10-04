@@ -17,11 +17,13 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 're
  * and nothing else:
  *
  *   * `title` — Enter saves, and an emptied value is a slip that never reaches the caller.
+ *   * `line` — a one-line field that may be emptied (a project's purpose and outcome, #262):
+ *     Enter saves like a title, and clearing it is a real save like a body.
  *   * `body` — Enter inserts a newline like any textarea, so blur and Escape are the only
  *     exits, and an emptied value is a legitimate save: clearing a notes field is something a
  *     user means, not a mistake, and a field that cannot be emptied is broken.
  */
-type InlineEditVariant = 'title' | 'body';
+type InlineEditVariant = 'title' | 'line' | 'body';
 
 /** Why the editor closed with nothing written — see `onCancel`. */
 type InlineEditCancelReason = 'escape' | 'blank' | 'unchanged';
@@ -40,7 +42,7 @@ interface Props {
   placeholder?: string;
   /**
    * Persist the edit; resolve false to refuse it. An unchanged value never reaches it, and
-   * neither does a blank one unless `variant="body"`. On a refusal the editor STAYS OPEN with
+   * neither does a blank one for `variant="title"`. On a refusal the editor STAYS OPEN with
    * the typed text, so the caller's failure line has something to explain.
    */
   onSave: (value: string) => Promise<boolean>;
@@ -64,8 +66,8 @@ export function InlineTitle({
   title, label, disabled = false, variant = 'title', placeholder, onSave, onCancel, className = '',
 }: Props) {
   // The two variant-driven behaviours, named once so the branches below read as intent.
-  const commitsOnEnter = variant === 'title';
-  const allowEmpty = variant === 'body';
+  const commitsOnEnter = variant !== 'body';
+  const allowEmpty = variant !== 'title';
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(title);
   const [saving, setSaving] = useState(false);
@@ -212,7 +214,7 @@ export function InlineTitle({
       tabIndex={0}
       // No tooltip while disabled — "Click to rename" on a control that cannot is a lie the
       // user only discovers by trying it.
-      title={disabled ? undefined : commitsOnEnter ? 'Click to rename' : 'Click to edit'}
+      title={disabled ? undefined : variant === 'title' ? 'Click to rename' : 'Click to edit'}
       // The visible text names this control, as it always has. The fallback is for the one
       // case that leaves nothing to read — an empty value with no placeholder. It is NOT
       // applied alongside a placeholder: the name must match the visible words (WCAG 2.5.3).

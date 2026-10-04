@@ -52,7 +52,7 @@ const TODO: Todo = {
 };
 
 const PROJECT: TodoProject = {
-  id: 3, name: 'Kitchen remodel', notes: '', status: 'active', open_count: 2,
+  id: 3, name: 'Kitchen remodel', notes: '', purpose: '', outcome: '', status: 'active', open_count: 2,
   created_at: '2026-08-06T12:00:00Z', updated_at: '2026-08-06T12:00:00Z',
 };
 
@@ -958,5 +958,43 @@ describe('a note is part of the triage decision', () => {
 
     expect(updateTodoMock).toHaveBeenCalledTimes(2);
     expect(updateTodoMock).toHaveBeenNthCalledWith(2, 7, { notes: 'second' });
+  });
+});
+
+describe("step 2 — the picked project's purpose and outcome (#262)", () => {
+  const lines = () => container.querySelector('[data-project-purpose]');
+  const PURPOSED: TodoProject = {
+    ...PROJECT, purpose: 'A kitchen we can cook in', outcome: 'Cabinets installed',
+  };
+
+  it('shows nothing until a project is picked', () => {
+    render({}, undefined, [PURPOSED]);
+    expect(lines()).toBeNull();
+  });
+
+  it("shows the picked project's purpose and outcome, read-only", () => {
+    render({ project_id: 3, project_name: 'Kitchen remodel' }, undefined, [PURPOSED]);
+    expect(lines()?.textContent).toBe('PurposeA kitchen we can cook inOutcomeCabinets installed');
+    expect(lines()?.querySelector('input, textarea, button')).toBeNull();
+  });
+
+  it('shows only the field that is set, and nothing for a project with neither', () => {
+    render({ project_id: 3, project_name: 'Kitchen remodel' }, undefined, [{ ...PROJECT, outcome: 'Done' }]);
+    expect(lines()?.textContent).toBe('OutcomeDone');
+    render({ project_id: 3, project_name: 'Kitchen remodel' }, undefined, [PROJECT]);
+    expect(lines()).toBeNull();
+  });
+
+  it('follows the picker when the project changes', async () => {
+    render({}, undefined, [PURPOSED]);
+    setValue(container.querySelector('select[aria-label="Project"]')!, '3');
+    await settle();
+    expect(lines()?.textContent).toContain('A kitchen we can cook in');
+  });
+
+  it('hides while a new project is being named', () => {
+    render({ project_id: 3, project_name: 'Kitchen remodel' }, undefined, [PURPOSED]);
+    setValue(container.querySelector('select[aria-label="Project"]')!, 'new');
+    expect(lines()).toBeNull();
   });
 });

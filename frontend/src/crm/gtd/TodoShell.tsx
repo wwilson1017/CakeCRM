@@ -1,34 +1,24 @@
 import { useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { BottomBar } from './components/BottomBar';
 import { QuickAdd } from './components/QuickAdd';
 import { UndoPill } from './components/UndoPill';
 import { isTodoPublicMode, todoPath } from './publicMode';
+import { TABS, type TodoTab } from './tabs';
 import { useTodoMeta } from './useTodoMeta';
 
-export type TodoTab =
-  | 'today' | 'inbox' | 'next' | 'projects' | 'waiting'
-  | 'someday' | 'done' | 'review' | 'search';
-
-// `sub` is the path relative to the todo root ('' = Today); todoPath() resolves it
-// against the active base (the CRM's /crm/todos vs. the public router basename), so
-// the same tabs render in both modes.
-const TABS: { key: TodoTab; label: string; sub: string }[] = [
-  { key: 'today', label: 'Today', sub: '' },
-  { key: 'inbox', label: 'Inbox', sub: '/inbox' },
-  { key: 'next', label: 'To Do', sub: '/next' },
-  { key: 'projects', label: 'Projects', sub: '/projects' },
-  { key: 'waiting', label: 'Waiting', sub: '/waiting' },
-  { key: 'someday', label: 'Someday', sub: '/someday' },
-  { key: 'done', label: 'Done', sub: '/done' },
-  { key: 'review', label: 'Review', sub: '/review' },
-  { key: 'search', label: 'Contexts', sub: '/search' },
-];
+// The tab list lives in ./tabs so the phone bottom bar (#266) reads the same one.
+export type { TodoTab } from './tabs';
 
 interface Props {
   active: TodoTab;
   /** Hide QuickAdd on pages that would fight it with their own form (Review) or that
    * render their own copy lower down the page (Inbox). */
   hideQuickAdd?: boolean;
+  /** The page renders the undo block itself, in its own flow (Inbox, #265), so the
+   *  shell's floating copy is suppressed — one queue, one visible block. The Inbox drops
+   *  it while its edit sheet is open, so the floating copy shows above the sheet. */
+  inlineUndo?: boolean;
   onAdded?: () => void;
   children: React.ReactNode;
 }
@@ -45,7 +35,7 @@ interface Props {
  * module-level stale-while-revalidate cache in useTodoMeta, which is what keeps the
  * inbox badge from flashing on tab switches.
  */
-export function TodoShell({ active, hideQuickAdd, onAdded, children }: Props) {
+export function TodoShell({ active, hideQuickAdd, inlineUndo, onAdded, children }: Props) {
   const { filters, refreshMeta } = useTodoMeta();
   const [query, setQuery] = useState('');
   const navigate = useNavigate();
@@ -88,7 +78,10 @@ export function TodoShell({ active, hideQuickAdd, onAdded, children }: Props) {
         </form>
       </div>
 
-      <div className="mt-4 flex gap-1 overflow-x-auto border-b border-line-faint">
+      {/* In the no-login app a phone gets the bottom bar instead of this strip (#266). */}
+      <div
+        className={`mt-4 ${isTodoPublicMode ? 'hidden sm:flex' : 'flex'} gap-1 overflow-x-auto border-b border-line-faint`}
+      >
         {TABS.map(tab => {
           const isActive = tab.key === active;
           return (
@@ -124,15 +117,22 @@ export function TodoShell({ active, hideQuickAdd, onAdded, children }: Props) {
           `undoQueue.ts`, so a completion survives the shell's remount on every tab switch.
           It positions itself (fixed, bottom-right, above the launcher and under the app's
           toasts — see the component for the stacking contract), so it can sit anywhere in
-          this tree and renders nothing while the queue is empty. */}
-      <UndoPill />
+          this tree and renders nothing while the queue is empty. A page that renders it
+          inline instead (Inbox, #265) passes `inlineUndo`, and the floating copy stays out. */}
+      {!inlineUndo && <UndoPill />}
+
+      {/* Phone bottom tab bar (#266) — public mode only: under CrmLayout it would collide
+          with the CRM's own nav and the "Ask Baker" launcher. Hidden from `sm` up. */}
+      {isTodoPublicMode && <BottomBar active={active} inboxCount={inboxCount} />}
     </>
   );
 
   if (isTodoPublicMode) {
     return (
       <div className="min-h-screen bg-sand">
-        <div className="mx-auto max-w-3xl px-4 pb-10 pt-6">{body}</div>
+        {/* Side padding clears a landscape notch: this surface is served with
+            `viewport-fit=cover` (#266), so the browser no longer insets it for us. */}
+        <div className="mx-auto max-w-3xl pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] pb-[calc(var(--ck-bottom-bar,0px)+2.5rem)] pt-6">{body}</div>
       </div>
     );
   }

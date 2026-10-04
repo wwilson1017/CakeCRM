@@ -81,12 +81,16 @@ class ProjectCreate(BaseModel):
     name: str = Field(max_length=MAX_SHORT_CHARS)
     notes: str = Field(default="", max_length=MAX_TEXT_CHARS)
     status: str = Field(default="active", max_length=MAX_SHORT_CHARS)
+    purpose: str = Field(default="", max_length=MAX_SHORT_CHARS)
+    outcome: str = Field(default="", max_length=MAX_SHORT_CHARS)
 
 
 class ProjectUpdate(BaseModel):
     name: str | None = Field(default=None, max_length=MAX_SHORT_CHARS)
     notes: str | None = Field(default=None, max_length=MAX_TEXT_CHARS)
     status: str | None = Field(default=None, max_length=MAX_SHORT_CHARS)
+    purpose: str | None = Field(default=None, max_length=MAX_SHORT_CHARS)
+    outcome: str | None = Field(default=None, max_length=MAX_SHORT_CHARS)
 
 
 def _call(fn, *args, **kwargs):
@@ -180,7 +184,10 @@ def build_router(guard) -> APIRouter:
 
     @r.post("/projects")
     def create_project(body: ProjectCreate):
-        return _call(gtd_service.create_project, body.name, notes=body.notes, status=body.status)
+        return _call(
+            gtd_service.create_project, body.name, notes=body.notes, status=body.status,
+            purpose=body.purpose, outcome=body.outcome,
+        )
 
     @r.put("/projects/{project_id}")
     def update_project(project_id: int, body: ProjectUpdate):

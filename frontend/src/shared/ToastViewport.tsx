@@ -43,7 +43,9 @@ const SEVERITY_TAG: Record<ToastSeverity, string> = {
 // mounted, carrying 88px plus its own height, and removes the property when it leaves.
 // Reading it through `var()` with the 88px fallback is what lets that block push the
 // toasts up without this shared module importing anything from the GTD chunk.
-const TOAST_BOTTOM = 'var(--ck-toast-bottom, 88px)';
+// The fallback is `--ck-stack-floor` (index.css): 88px, raised on a phone to clear the
+// no-login todo app's bottom bar (#266).
+const TOAST_BOTTOM = 'var(--ck-toast-bottom, var(--ck-stack-floor, 88px))';
 
 // getServerSnapshot must return a stable reference, or React warns about
 // an infinite loop of new snapshots.

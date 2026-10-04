@@ -2,7 +2,9 @@ import { STATUS_META } from '../constants';
 import type { Todo } from '../types';
 import { useListTz } from '../useTodoMeta';
 import { bringBackState, dueLabel, todayStr } from '../util';
+import { todoSourceLabel } from '../sourceLabel';
 import { RecordChip } from './RecordChip';
+import { SourceLabel } from './SourceLabel';
 
 interface Props {
   todo: Todo;
@@ -22,7 +24,7 @@ export function TodoRow({ todo, onToggleDone, onToggleStar, onEdit, showStatus }
   // is reachable only through search, so it says when it comes back.
   const back = finished ? null : bringBackState(todo.bring_back_on, today);
   const hasMeta = todo.context || todo.project_name || todo.deal_title || todo.contact_name
-    || todo.tags.length > 0 || due || back || showStatus;
+    || todo.tags.length > 0 || due || back || showStatus || todoSourceLabel(todo.source);
 
   return (
     <div className="flex items-start gap-3 rounded-xl border border-line-faint bg-cream px-3 py-2.5 hover:border-brand/40 transition-colors">
@@ -79,6 +81,7 @@ export function TodoRow({ todo, onToggleDone, onToggleStar, onEdit, showStatus }
               <span className="rounded-full bg-sand px-2 py-0.5 text-muted">{todo.project_name}</span>
             )}
             <RecordChip todo={todo} />
+            <SourceLabel source={todo.source} />
             {todo.tags.slice(0, 3).map(tag => (
               <span key={tag} className="rounded-full bg-sand px-2 py-0.5 text-muted">#{tag}</span>
             ))}

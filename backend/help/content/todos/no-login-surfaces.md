@@ -18,6 +18,14 @@ nothing more: no contacts, no deals, no Settings, no assistant.
 
 Neither one cares which todo mode is active.
 
+## Getting around the todo app on a phone
+
+On a phone-width screen the todo app puts its lists in a bar along the bottom: **Inbox**,
+**Today**, **To Do**, **Projects** and **More**. More opens the rest — Contexts, Waiting,
+Someday, Review and Done. On a wider screen the same lists sit in a row of tabs at the top
+instead. Inside the CRM the todo pages always use the top tabs, since the bottom of the
+screen there belongs to the CRM's own navigation and the assistant button.
+
 ## Turning them on
 
 **Admin only**, in Settings, Assistant, Todo mode. That card is the only place the tokens are
