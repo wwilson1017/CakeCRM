@@ -42,7 +42,7 @@ import {
 } from '../../shared/styles';
 import { useAuth } from '../../core/auth/AuthContext';
 import { useActiveRecord } from '../RecordContext';
-import { settingsPageContext } from '../../assistant/pageContext';
+import { pageContextFor } from '../../assistant/pageContext';
 
 // The chat surface is the heaviest thing in the CRM (react-markdown + highlight.js), and it
 // is only ever needed once a provider is configured — so it is lazy (#149), imported by its
@@ -68,7 +68,7 @@ export function AssistantLauncher({ aiReady }: { aiReady: boolean | null }) {
   // live in `assistant/pageContext` — see that module for why this is derived from the
   // URL rather than published the way the record context is.
   const pageContext = useMemo(
-    () => settingsPageContext(pathname, searchParams, isAdmin),
+    () => pageContextFor(pathname, searchParams, isAdmin),
     [pathname, searchParams, isAdmin],
   );
   const [open, setOpen] = useState(false);

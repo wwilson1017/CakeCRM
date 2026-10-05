@@ -132,6 +132,10 @@ describe('the settings section behind the drawer (#200)', () => {
       .toEqual({ page: 'settings', section: 'personal' });
   });
 
+  it('hands it the todo Review page (#263)', async () => {
+    expect((await panel('/crm/todos/review', true)).pageContext).toEqual({ page: 'todo_review' });
+  });
+
   it('hands it nothing off the Settings page', async () => {
     expect((await panel('/crm/pipeline', true)).pageContext).toBeNull();
   });

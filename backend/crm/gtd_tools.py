@@ -7,7 +7,7 @@ is no reason to let the model print one into a chat transcript. They live in
 Settings instead.
 
 Every mutating def carries `writes: True`, which is the single source of truth for
-the assistant's confirmation gate. The three reads are `writes: False` and are
+the assistant's confirmation gate. The four reads are `writes: False` and are
 therefore inside the background-turn allowlist, so the heartbeat can consult the
 todo list — see the note on untrusted text below.
 
@@ -26,8 +26,8 @@ this is how the ten came out against it:
     `completed` is completion, not removal, exactly as `'done'` is on a todo.
   * `todo_bulk_update` — NOT routine. Rule 4: bulk by construction (up to 500 ids).
   * `todo_delete` / `todo_delete_project` — NOT routine. Rule 3: a hard DELETE.
-  * `todo_list` / `todo_get` / `todo_list_projects` — not eligible; the tier is
-    write-only and `ToolRegistry` fails loud on one declared on a read.
+  * `todo_list` / `todo_get` / `todo_list_projects` / `todo_weekly_review` — not
+    eligible; the tier is write-only and `ToolRegistry` fails loud on one declared on a read.
 
 Absence of the key is the deny state, so a todo tool added later confirms until somebody
 classifies it. `tests/test_confirm_tier.py` pins this list by name.
@@ -156,6 +156,25 @@ def _todo_delete_project(project_id: int) -> dict:
     if not gtd_service.delete_project(project_id):
         return {"error": f"Project {project_id} not found"}
     return {"ok": True, "deleted": project_id, "target": target}
+
+
+def _todo_weekly_review() -> dict:
+    # Changes nothing — not even the review clock: marking a review done is the user's
+    # button on the Review page, so a heartbeat calling this cannot quiet the hint.
+    return {
+        **gtd_service.weekly_review(),
+        "script": _REVIEW_SCRIPT_POINTER,
+        "note": _UNTRUSTED_NOTE,
+    }
+
+
+# The nine-step script is a help topic (#263), not prompt text and not this payload:
+# content Baker MAY read, versioned with the code, out of every turn's prompt.
+_REVIEW_SCRIPT_POINTER = (
+    "Read the help topic todos/weekly-review (help_read_topic) and walk its steps one "
+    "at a time, using the sections below. When the user is done, tell them to press "
+    "Mark review done on the Review page."
+)
 
 
 GTD_TOOL_DEFS: list[dict] = [
@@ -304,6 +323,20 @@ GTD_TOOL_DEFS: list[dict] = [
         "kind": "integration",
     },
     {
+        "name": "todo_weekly_review",
+        "writes": False,
+        "description": (
+            "Get the data for a GTD weekly review in one call: whether a review is due, "
+            "the inbox, todos due today or overdue, stale next actions, waiting-fors due a "
+            "follow-up, old someday items, what was completed this week, and active projects "
+            "with no next action. Each section has its full count and up to 25 ids and titles; "
+            "when one is truncated, act on those items and call this again — handled items "
+            "leave their section, so the next call shows the rest. Changes nothing. " + _UNTRUSTED_NOTE
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+        "kind": "integration",
+    },
+    {
         "name": "todo_create_project",
         # Routine (#186): a new grouping row.
         "writes": True,
@@ -372,6 +405,7 @@ GTD_TOOL_EXECUTORS: dict[str, Callable[..., dict]] = {
     "todo_bulk_update": _wrap(_todo_bulk_update),
     "todo_delete": _wrap(_todo_delete),
     "todo_list_projects": _wrap(_todo_list_projects),
+    "todo_weekly_review": _wrap(_todo_weekly_review),
     "todo_create_project": _wrap(_todo_create_project),
     "todo_update_project": _wrap(_todo_update_project),
     "todo_delete_project": _wrap(_todo_delete_project),

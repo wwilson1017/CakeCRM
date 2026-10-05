@@ -16,7 +16,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useAssistantChat } from './useAssistantChat';
-import type { SettingsPageContext } from './types';
+import type { PageContext } from './types';
 
 type Chat = ReturnType<typeof useAssistantChat>;
 
@@ -40,13 +40,13 @@ function sse(events: Record<string, unknown>[]): Response {
 /** Publishes the hook's value after every commit. The write is in an effect rather than
  *  the render body because a render must stay side-effect free (the repo's react-hooks
  *  ruleset is `configs.recommended`), and `act` flushes effects before it resolves. */
-function Probe({ page }: { page: SettingsPageContext | null }) {
+function Probe({ page }: { page: PageContext | null }) {
   const value = useAssistantChat(null, page);
   useEffect(() => { chat = value; });
   return null;
 }
 
-function render(page: SettingsPageContext | null) {
+function render(page: PageContext | null) {
   act(() => { root.render(createElement(Probe, { page })); });
 }
 
@@ -76,6 +76,13 @@ afterEach(() => {
 });
 
 describe('the settings page context on the wire', () => {
+  it('sends the todo Review page as its id alone (#263)', async () => {
+    render({ page: 'todo_review' });
+    await act(async () => { chat.sendMessage('Start my weekly review'); });
+
+    expect(jsonBodies()[0].page).toEqual({ page: 'todo_review' });
+  });
+
   it('rides the JSON chat payload', async () => {
     render({ page: 'settings', section: 'integrations' });
     await act(async () => { chat.sendMessage('how do I connect Gmail?'); });

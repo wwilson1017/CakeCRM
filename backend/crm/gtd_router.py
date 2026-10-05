@@ -206,6 +206,19 @@ def build_router(guard) -> APIRouter:
     def get_filters():
         return gtd_service.get_filters()
 
+    # ── Weekly review (#263) ──────────────────────────────────────────────────
+    # The same packet Baker's `todo_weekly_review` returns, plus the one write that
+    # quiets the "review due" hint. Both are todo-store state, so the no-login web
+    # app (which serves the Review page too) gets them as well.
+
+    @r.get("/review")
+    def weekly_review():
+        return gtd_service.weekly_review()
+
+    @r.post("/review/done")
+    def mark_review_done():
+        return gtd_service.mark_review_done()
+
     return r
 
 

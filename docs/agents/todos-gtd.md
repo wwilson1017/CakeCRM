@@ -329,6 +329,30 @@
   so `todo_web._page` adds it to the served shell's viewport meta — for THIS surface only,
   since the CRM pads no insets and would slide under a landscape notch — and the public
   wrapper pads `max(1rem, safe-area-inset-left/right)` for the same reason.
+- **Baker can run the weekly review** (#263, port of todo-gtd `mcp_server.py`'s
+  `todo_weekly_review`). Three pieces, each in the layer the issue assigned it. The DATA is
+  `todo_weekly_review`, a GTD-only `writes:False` read over `gtd_service.weekly_review()`:
+  inbox, due today or overdue, stale next actions (14 days untouched, the Review page's
+  `STALE_DAYS`), waiting-fors due a follow-up (7), someday items older than 30 days,
+  completed in the last 7 days, and active projects with no next action — each a full
+  `count`, a `truncated` flag and up to 25 `{id, title, source, days}` items. The payload is
+  pinned BY TYPE in `tests/test_crm_weekly_review.py`, because the tool is
+  background-callable. Each item keeps `source` on purpose: it is what lets #204's
+  `fence_public_rows` find a capture-page title, and it is why the tool must NOT join
+  `UNTRUSTED_SOURCE_TOOLS` (that set is the background exclusion list). The SCRIPT is the
+  help topic `todos/weekly-review` — content Baker may read, never static prompt — and
+  `GTD_GUIDE`'s weekly-review paragraph became a one-sentence pointer to it. The HABIT is
+  `crm_meta.todo_last_review_at`: the Review page shows "Review due" when it is NULL or a
+  week old, and **Mark review done** (`POST …/review/done`) stamps it. Baker reads the clock
+  but cannot stamp it — unlike the blueprint, where starting a review quiets the hint —
+  because a read that writes would let a heartbeat turn mark a review nobody did. The
+  "Start my weekly review" chip rides the existing page seam rather than a second
+  publisher: `PageContext` is now a discriminated union of `SettingsPageContext` and
+  `TodoReviewPageContext` (`page: "todo_review"`), derived from the URL in
+  `assistant/pageContext.pageContextFor`, with a fixed `identity.TODO_REVIEW_PAGE_NOTE` in
+  the volatile half naming the tool and the topic. The chip is gated on `ai_ready` for free:
+  it lives in the drawer, which only exists when AI is ready.
+
 - **The two no-login todo surfaces are asymmetric, and only ONE of them is opt-in** (#70,
   ported from chatty — the heading used to say both were, which the body below has always
   contradicted). Neither consults `todo_mode`, so #102's default flip leaves both exactly

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { listProjects, listTodos } from './api';
+import { getReviewStatus, listProjects, listTodos, markReviewDone, type ReviewStatus } from './api';
 import { RecordChip } from './components/RecordChip';
 import { SourceLabel } from './components/SourceLabel';
 import { useTodosChanged } from './hooks';
@@ -18,6 +18,11 @@ interface ReviewData {
 
 const PAGE_LIMIT = 500;
 
+function daysAgo(n: number): string {
+  if (n === 0) return 'today';
+  return n === 1 ? 'yesterday' : `${n} days ago`;
+}
+
 /**
  * Weekly review, read-only: the numbers, the stale corners, and the projects quietly
  * going nowhere.
@@ -26,6 +31,21 @@ export function ReviewPage() {
   const { filters } = useTodoMeta();
   const [data, setData] = useState<ReviewData | null>(null);
   const [failed, setFailed] = useState(false);
+  // The "review due" clock (#263). Loaded on its own so a failure here never hides the
+  // lists below; null while loading or after a failed read, which renders nothing.
+  const [review, setReview] = useState<ReviewStatus | null>(null);
+  const [marking, setMarking] = useState(false);
+  const [markFailed, setMarkFailed] = useState(false);
+  useEffect(() => { getReviewStatus().then(setReview).catch(() => setReview(null)); }, []);
+
+  const markDone = () => {
+    setMarking(true);
+    setMarkFailed(false);
+    markReviewDone()
+      .then(setReview)
+      .catch(() => setMarkFailed(true))
+      .finally(() => setMarking(false));
+  };
 
   const load = () => {
     Promise.all([
@@ -74,6 +94,27 @@ export function ReviewPage() {
         The weekly review: empty the inbox, give every active project a next action,
         follow up on stale waiting-fors, prune someday/maybe — and look at that Done count.
       </p>
+
+      {review && (
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          {review.review_due ? (
+            <span role="status" className="rounded-full border border-amber-300 bg-amber-50 dark:bg-amber-950/30 px-3 py-1 text-sm font-semibold text-charcoal">
+              Review due{review.days_since_review === null
+                ? ' — none recorded yet'
+                : ` — last one ${daysAgo(review.days_since_review)}`}
+            </span>
+          ) : (
+            <span className="text-sm text-muted">
+              Last review {daysAgo(review.days_since_review ?? 0)}.
+            </span>
+          )}
+          <button type="button" onClick={markDone} disabled={marking}
+                  className="rounded-lg border border-line-faint bg-cream px-3 py-1 text-sm text-charcoal transition hover:border-brand/50 disabled:opacity-60">
+            {marking ? 'Saving…' : 'Mark review done'}
+          </button>
+          {markFailed && <span role="alert" className="text-sm text-charcoal">Could not save. Try again.</span>}
+        </div>
+      )}
 
       {counts && (
         <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-5">

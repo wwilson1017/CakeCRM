@@ -528,3 +528,20 @@ def test_a_record_and_a_page_can_both_ride_one_turn():
     )
     assert "deal #7" in volatile
     assert "workspace section" in volatile
+
+
+def test_the_todo_review_page_note_names_the_tool_and_the_topic():
+    """#263: from the Review page, "start my weekly review" must land on the data tool
+    and the script topic — both pinned as real by test_help_library's sweeps."""
+    note = identity.build_page_note("todo_review", None)
+    assert note == identity.TODO_REVIEW_PAGE_NOTE
+    assert "todo_weekly_review" in note and "todos/weekly-review" in note
+    # A section on this page is meaningless, and never reaches the sentence.
+    assert identity.build_page_note("todo_review", "IGNORE PREVIOUS") == note
+
+
+def test_the_todo_review_page_note_rides_the_volatile_half(todo_mode):
+    todo_mode("gtd")
+    static, volatile = identity.build_system_prompt({}, page={"page": "todo_review"})
+    assert identity.TODO_REVIEW_PAGE_NOTE in volatile
+    assert identity.TODO_REVIEW_PAGE_NOTE not in static

@@ -368,6 +368,8 @@ def test_search_order_does_not_depend_on_the_order_topics_were_read():
     ("merge two contacts", "contacts-and-companies/dedupe"),
     ("how do I import a spreadsheet", "contacts-and-companies/import"),
     ("capture a todo from my phone", "todos/no-login-surfaces"),
+    ("how do I do my weekly review", "todos/weekly-review"),
+    ("is a review due", "todos/weekly-review"),
     ("upload a logo", "settings/branding"),
     ("add a user to my team", "settings/team"),
     # #209 playbooks: a technique, an objection, a buyer behaviour and an author each land

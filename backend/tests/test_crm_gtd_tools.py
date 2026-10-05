@@ -11,7 +11,7 @@ _TODO_TOOLS = {"crm_create_todo", "crm_list_todos", "crm_complete_todo",
                "crm_update_todo", "crm_delete_todo"}
 _GTD_WRITE_TOOLS = {"todo_create", "todo_update", "todo_bulk_update", "todo_delete",
                     "todo_create_project", "todo_update_project", "todo_delete_project"}
-_GTD_READ_TOOLS = {"todo_list", "todo_get", "todo_list_projects"}
+_GTD_READ_TOOLS = {"todo_list", "todo_get", "todo_list_projects", "todo_weekly_review"}
 # The four writes #186 classified ROUTINE. Spelled out, not derived: this is the pin.
 _GTD_ROUTINE_TOOLS = {"todo_create", "todo_update",
                       "todo_create_project", "todo_update_project"}
