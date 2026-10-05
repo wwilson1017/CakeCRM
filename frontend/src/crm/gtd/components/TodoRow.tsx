@@ -1,7 +1,7 @@
 import { STATUS_META } from '../constants';
 import type { Todo } from '../types';
 import { useListTz } from '../useTodoMeta';
-import { dueLabel, todayStr } from '../util';
+import { bringBackState, dueLabel, todayStr } from '../util';
 import { todoSourceLabel } from '../sourceLabel';
 import { RecordChip } from './RecordChip';
 import { SourceLabel } from './SourceLabel';
@@ -18,9 +18,13 @@ interface Props {
 export function TodoRow({ todo, onToggleDone, onToggleStar, onEdit, showStatus }: Props) {
   const finished = todo.status === 'done' || todo.status === 'dropped';
   const tz = useListTz();
-  const due = todo.due_date ? dueLabel(todo.due_date, todayStr(new Date(), tz)) : null;
+  const today = todayStr(new Date(), tz);
+  const due = todo.due_date ? dueLabel(todo.due_date, today) : null;
+  // A bring-back date (#261) only matters while the todo is open. Before its day the row
+  // is reachable only through search, so it says when it comes back.
+  const back = finished ? null : bringBackState(todo.bring_back_on, today);
   const hasMeta = todo.context || todo.project_name || todo.deal_title || todo.contact_name
-    || todo.tags.length > 0 || due || showStatus || todoSourceLabel(todo.source);
+    || todo.tags.length > 0 || due || back || showStatus || todoSourceLabel(todo.source);
 
   return (
     <div className="flex items-start gap-3 rounded-xl border border-line-faint bg-cream px-3 py-2.5 hover:border-brand/40 transition-colors">
@@ -61,6 +65,13 @@ export function TodoRow({ todo, onToggleDone, onToggleStar, onEdit, showStatus }
                 ? 'font-bold text-ck-accent-text'
                 : 'text-muted'}>
                 {due.text}
+              </span>
+            )}
+            {back && todo.bring_back_on && (
+              <span className="text-muted" data-bring-back={back}>
+                {back === 'waiting'
+                  ? `Back ${dueLabel(todo.bring_back_on, today).text}`
+                  : 'Brought back'}
               </span>
             )}
             {todo.context && (

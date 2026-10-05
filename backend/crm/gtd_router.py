@@ -66,6 +66,8 @@ class TodoUpdate(BaseModel):
     status: str | None = Field(default=None, max_length=MAX_SHORT_CHARS)
     star: bool | None = None
     due_date: str | None = Field(default=None, max_length=MAX_SHORT_CHARS)
+    # #261. None (sent explicitly) clears it — exclude_unset keeps "absent" distinct.
+    bring_back_on: str | None = Field(default=None, max_length=MAX_SHORT_CHARS)
     repeat: str | None = Field(default=None, max_length=MAX_SHORT_CHARS)
     auto_star_on_due: bool | None = None
 
@@ -123,11 +125,13 @@ def build_router(guard) -> APIRouter:
         due_after: str | None = None,
         search: str | None = None,
         limit: int = Query(default=200, ge=1, le=500),
+        include_deferred: bool = False,
     ):
         todos = _call(
             gtd_service.list_todos,
             status=status, project=project, context=context, tag=tag, starred=starred,
             due_before=due_before, due_after=due_after, search=search, limit=limit,
+            include_deferred=include_deferred,
         )
         return {"todos": todos}
 

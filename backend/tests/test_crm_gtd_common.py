@@ -31,6 +31,15 @@ def test_validate_due_rejects_a_wrong_shape():
         c.validate_due("21/08/2026")
 
 
+def test_validate_bring_back_clears_to_none_and_names_its_field():
+    """#261: the column is a nullable DATE, so "no date" is None, never ''."""
+    assert c.validate_bring_back("2026-10-10") == "2026-10-10"
+    assert c.validate_bring_back("") is None
+    assert c.validate_bring_back(None) is None
+    with pytest.raises(c.ValidationError, match="bring_back_on is not a real calendar date"):
+        c.validate_bring_back("2026-02-30")
+
+
 @pytest.mark.parametrize("value", ["", "daily", "weekdays", "weekly", "monthly", "yearly",
                                    "every:1", "every:9999", "NONE", "none"])
 def test_validate_repeat_accepts_the_vocabulary(value):

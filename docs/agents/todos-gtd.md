@@ -352,6 +352,33 @@
   `assistant/pageContext.pageContextFor`, with a fixed `identity.TODO_REVIEW_PAGE_NOTE` in
   the volatile half naming the tool and the topic. The chip is gated on `ai_ready` for free:
   it lives in the drawer, which only exists when AI is ready.
+- **A todo can carry a bring-back date** (#261, port of todo-gtd `d6948f1`/`60b2d0b`):
+  nullable `todos.bring_back_on DATE`, written ONLY through `service._apply_todo_update_cur`
+  (in `_TODO_UPDATE_FIELDS` and GTD's `TODO_FIELDS`; `gtd_common.validate_bring_back`
+  clears '' to NULL). No create path takes it, and a repeat's next occurrence does not
+  inherit it. `service.brought_back_sql(column, params)` is the one "not waiting on a
+  bring-back date" predicate; it binds `gtd_common.today_local_str()`, the same day #259
+  made the GTD client use. It is applied to the WORKING lists and their counts — GTD
+  `list_todos` (except a search, which is how a deferred todo is reached before its day),
+  normal `list_todos` (open rows), `today_view`, the dashboard's overdue/pending counts, the
+  proactive digest and the Today panel — and deliberately NOT to record views and follow-up
+  checks (contact rollup, company report, deal health / stale-deal `has_open_todo`, a
+  project's open count, the observer's dedupe): a scheduled return is still a follow-up.
+  The same split reaches the GTD client through `GET /todos?include_deferred=true`: the
+  project page and the stalled-project checks on Projects and Review pass it (a deferred
+  next action still covers its project; Review drops it from the stale list instead), and
+  `get_filters`' open-status counts apply the predicate so the Inbox badge never counts an
+  item the Inbox hides.
+  **Divergence from the blueprint:** upstream only SURFACES a revisit date on Today; here the
+  todo is also hidden until then, per the issue. From its day it stays on Today (the
+  "Brought back" section) until completed or cleared — no sweep job, same as upstream. Only a
+  due date can make a todo overdue. The control is a native date input on the edit sheet
+  (existing todos only, committed with Save) and on the triage card (the #150 blur-commit,
+  its own `useSerialCommit`, flushed by a resolving write, carried in `payload()`); a row
+  shows "Back <day>" while waiting and "Brought back" from its day. `todo_update` and
+  `crm_update_todo` stay routine, but a call that SETS a bring-back date keeps its Approve
+  card (`confirm_tier._HIDING_ARGS`, beside `status='dropped'`): it takes the todo off
+  every working list with no upper bound on the date. Clearing one stays routine.
 
 - **The two no-login todo surfaces are asymmetric, and only ONE of them is opt-in** (#70,
   ported from chatty — the heading used to say both were, which the body below has always

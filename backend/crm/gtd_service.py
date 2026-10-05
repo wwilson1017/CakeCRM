@@ -206,7 +206,11 @@ def list_todos(
     search: str | None = None,
     limit: int = 100,
     owner_id: int | str | None = None,
+    include_deferred: bool = False,
 ) -> list[dict]:
+    """``include_deferred`` keeps todos waiting on a bring-back date (#261) in the result.
+    The working lists leave it off; a record view or a project-health check turns it on,
+    because a scheduled return is still that project's next action."""
     where: list[str] = []
     params: list = []
     # Same three values as every other owner filter (#190): an id, None for everyone, or
@@ -258,6 +262,14 @@ def list_todos(
     # A todo on an archived deal follows it out of view, exactly like list_todos —
     # work items follow the deal in both modes.
     where.append(f"(t.deal_id IS NULL OR {service.LIVE_PREDICATE_D})")
+    if not search and not include_deferred:
+        # A todo waiting on a bring-back date (#261) is off every working list until its
+        # day. Finished rows are unaffected, and a SEARCH still finds it — search is how a
+        # deferred todo is reached (and its date changed) before it comes back.
+        where.append(
+            "(t.status IN ('done','dropped') OR "
+            f"{service.brought_back_sql('t.bring_back_on', params)})"
+        )
     sql = _SELECT_TODO + " WHERE " + " AND ".join(where)
     if status in gtd_common.FINISHED_STATUSES:
         # Finished lists grow forever — newest-finished first, or the LIMIT window
@@ -277,22 +289,32 @@ def list_todos(
 
 
 def today_view() -> list[dict]:
-    """The daily home screen: open todos that are starred, due today, or overdue.
+    """The daily home screen: open todos that are starred, due today, overdue, or whose
+    bring-back date has arrived (#261).
 
-    One query; the frontend groups it into sections. Date comparison is TEXT-on-TEXT
+    One query; the frontend groups it into sections. Due dates compare TEXT-on-TEXT
     against the configured-timezone date rather than a ::date cast, matching the rest
-    of the CRM — it can never cast-error on a malformed row.
+    of the CRM — it can never cast-error on a malformed row. A row whose bring-back date
+    is still ahead is hidden even when starred or due: "bring it back on X" means not
+    before X.
+
+    # simplification: an arrived bring-back date keeps the todo on Today until it is
+    # completed or the date is cleared; there is no sweep job that clears it.
     """
-    today = gtd_common.today_local_str()
+    params: list = []
+    hidden = service.brought_back_sql("t.bring_back_on", params)
+    today = params[0]
     return [
         _todo_dict(r)
         for r in pg_fetchall(
             _SELECT_TODO
             + " WHERE t.status NOT IN ('done','dropped')"
-            "   AND (t.star OR (t.due_date != '' AND t.due_date <= %s))"
+            "   AND (t.star OR (t.due_date != '' AND t.due_date <= %s)"
+            "        OR t.bring_back_on <= %s)"
+            f"  AND {hidden}"
             f"  AND (t.deal_id IS NULL OR {service.LIVE_PREDICATE_D})"
             " ORDER BY (t.due_date = '') ASC, t.due_date ASC, t.created_at ASC, t.id ASC",
-            (today,),
+            (today, today, today),
         )
     ]
 
@@ -423,7 +445,16 @@ def get_filters() -> dict:
         if isinstance(r.get("tag"), str) and r["tag"]:
             tags.add(r["tag"])
     counts = {s: 0 for s in TODO_STATUSES}
-    for r in pg_fetchall("SELECT status, COUNT(*) AS n FROM todos GROUP BY status"):
+    # The open-status counts describe the working lists, so a todo waiting on a bring-back
+    # date (#261) is not counted until its day — otherwise the Inbox badge would count an
+    # item the Inbox does not show. Finished counts are history and keep every row.
+    count_params: list = []
+    deferred = service.brought_back_sql("bring_back_on", count_params)
+    for r in pg_fetchall(
+        "SELECT status, COUNT(*) AS n FROM todos "
+        f"WHERE status IN ('done','dropped') OR {deferred} GROUP BY status",
+        count_params,
+    ):
         if r["status"] in counts:
             counts[r["status"]] = r["n"]
     return {

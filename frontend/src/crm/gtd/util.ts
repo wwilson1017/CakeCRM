@@ -124,6 +124,19 @@ export function dueLabel(due: string, today: string): { text: string; overdue: b
   return { text, overdue: due < today };
 }
 
+/**
+ * Where a todo stands against its bring-back date (#261), on the install's day: `waiting`
+ * before it (the server keeps the todo off every working list), `back` from that day on
+ * (it shows on Today), null with no date. Both are plain YYYY-MM-DD, so the comparison is
+ * a string compare — never a Date, which would read the date as UTC midnight.
+ */
+export function bringBackState(
+  bringBackOn: string | null | undefined, today: string,
+): 'waiting' | 'back' | null {
+  if (!bringBackOn) return null;
+  return bringBackOn > today ? 'waiting' : 'back';
+}
+
 /** Human label for a repeat value, including the `every:N` form. */
 export function repeatLabel(repeat: string): string {
   if (!repeat) return '';

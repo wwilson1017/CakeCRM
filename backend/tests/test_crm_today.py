@@ -79,8 +79,9 @@ def pinned_today(monkeypatch):
     return TODAY
 
 
-def todo(id, *, due="", star=False, owner=None, title="t"):
-    return {"id": id, "title": title, "due_date": due, "owner_id": owner, "star": star}
+def todo(id, *, due="", star=False, owner=None, title="t", back=None):
+    return {"id": id, "title": title, "due_date": due, "owner_id": owner, "star": star,
+            "bring_back_on": back}
 
 
 def deal(id, *, idle_days=0.0, stale=False, value=0.0, owner=None, title=None):
@@ -258,6 +259,39 @@ def test_future_or_undated_unstarred_todo_is_dropped():
     ) == []
 
 
+def test_a_brought_back_todo_joins_the_unranked_tail_ahead_of_hot_deals():
+    """#261: a todo whose bring-back day has arrived, and nothing else, is one click away
+    — never ranked, so it cannot push the user's commitments out of the collapsed five."""
+    items = today_service.build_today_items(
+        [todo(5, back="2026-05-01"), todo(1, due=TODAY), todo(4, back=TODAY)],
+        TODAY,
+        deals=[deal(9, idle_days=1)],
+    )
+    assert [(i["id"], i["rank"], i["why"]) for i in items] == [
+        (1, 4, "due_today"), (4, None, "bring_back"), (5, None, "bring_back"), (9, None, "hot"),
+    ]
+
+
+def test_a_past_bring_back_date_is_never_overdue_and_a_due_date_still_wins():
+    """Only a due date makes a todo overdue. A brought-back todo that IS overdue ranks as
+    overdue, once."""
+    items = today_service.build_today_items(
+        [todo(1, back="2026-01-01"), todo(2, due="2026-06-01", back="2026-06-02")], TODAY,
+    )
+    assert [(i["id"], i["why"]) for i in items] == [(2, "overdue"), (1, "bring_back")]
+
+
+def test_a_future_bring_back_date_alone_is_dropped():
+    assert today_service.build_today_items([todo(1, back="2026-12-31")], TODAY) == []
+
+
+def test_todos_query_hides_a_future_bring_back_date(rec, pinned_today):
+    today_service.get_today()
+    sql = rec.sql_containing("FROM todos")
+    assert "(bring_back_on IS NULL OR bring_back_on <= %s)" in sql
+    assert "(star OR (due_date != '' AND due_date <= %s) OR bring_back_on <= %s)" in sql
+
+
 def test_empty_inputs_produce_an_empty_list():
     assert today_service.build_today_items([], TODAY) == []
 
@@ -369,13 +403,13 @@ def test_owner_scope_includes_unassigned_todos(rec, pinned_today):
     today_service.get_today(owner_id=7)
     sql = rec.sql_containing("FROM todos")
     assert "(owner_id = %s OR owner_id IS NULL)" in sql
-    assert rec.params_for("FROM todos") == [TODAY, 7]
+    assert rec.params_for("FROM todos") == [TODAY, TODAY, TODAY, 7]
 
 
 def test_absent_owner_id_filters_nothing(rec, pinned_today):
     today_service.get_today()
     assert "owner_id = %s" not in rec.sql_containing("FROM todos")
-    assert rec.params_for("FROM todos") == [TODAY]
+    assert rec.params_for("FROM todos") == [TODAY, TODAY, TODAY]
 
 
 def test_one_clock_bounds_the_todos_read_and_the_refresh_boundary(rec, pinned_today, monkeypatch):
@@ -385,7 +419,7 @@ def test_one_clock_bounds_the_todos_read_and_the_refresh_boundary(rec, pinned_to
     monkeypatch.setenv("TIMEZONE", "America/Chicago")
     out = today_service.get_today()
     assert out["date"] == TODAY
-    assert rec.params_for("FROM todos") == [TODAY]
+    assert rec.params_for("FROM todos") == [TODAY, TODAY, TODAY]
     assert out["next_refresh_at"] == "2026-06-06T00:00:00-05:00"
 
 
@@ -432,7 +466,8 @@ def test_dashboard_overdue_uses_the_configured_timezone_day(monkeypatch, pinned_
     monkeypatch.setattr(service, "pg_fetchall", r.fetchall)
     monkeypatch.setattr(service, "get_activity_log", lambda limit=10: [])
     service.get_dashboard_stats()
-    assert r.params_for("due_date < %s") == [TODAY]
+    # The second is #261's bring-back day, read from the same configured-timezone clock.
+    assert r.params_for("due_date < %s") == [TODAY, TODAY]
 
 
 def test_deal_health_overdue_uses_the_configured_timezone_day(monkeypatch, pinned_today):
@@ -460,4 +495,5 @@ def test_digest_counts_use_the_configured_timezone_day(monkeypatch, pinned_today
     monkeypatch.setattr(analytics_service, "get_stale_deals",
                         lambda limit=5: {"total_stale": 0, "stale_days": 14})
     proactive_service.collect_digest()
-    assert r.params_for("FILTER (WHERE due_date = %s)") == [TODAY, TODAY]
+    # The third is #261's bring-back day, read from the same configured-timezone clock.
+    assert r.params_for("FILTER (WHERE due_date = %s)") == [TODAY, TODAY, TODAY]

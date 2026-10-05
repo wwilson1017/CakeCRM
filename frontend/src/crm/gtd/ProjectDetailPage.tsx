@@ -93,7 +93,9 @@ function ProjectDetail({ projectId }: { projectId: number }) {
     let cancelled = false;
     Promise.all([
       listProjects(),
-      listTodos({ project: String(projectId), limit: 500 }),
+      // A project's own page shows its deferred todos too (#261), each saying when it
+      // comes back — this is a record view, not a working list.
+      listTodos({ project: String(projectId), limit: 500, include_deferred: true }),
     ]).then(([allProjects, items]) => {
       if (cancelled) return;
       const p = allProjects.find(x => x.id === projectId) ?? null;

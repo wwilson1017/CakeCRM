@@ -212,7 +212,9 @@ notifications, memory facts, and any write to `soul.md` or `MEMORY.md` all
 keep their Approve card. Bulk todo updates and both todo deletes are in that group too.
 Five of the twenty can take a record out of your lists by setting its `status` —
 archiving a contact or a company, or dropping a todo or a project; that
-particular call keeps its card even though the tool is routine. Finishing something is
+particular call keeps its card even though the tool is routine. Giving a todo a
+bring-back date hides it from every list until that day, so a call that sets one keeps
+its card too; clearing one does not. Finishing something is
 not the same as removing it, so marking a todo done or a project completed runs without
 asking, and so does filing either one to someday.
 

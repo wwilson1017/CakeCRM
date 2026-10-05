@@ -49,6 +49,7 @@ export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onS
   const [addingContext, setAddingContext] = useState(false);
   const [tags, setTags] = useState((todo?.tags ?? []).join(', '));
   const [due, setDue] = useState(todo?.due_date ?? '');
+  const [bringBack, setBringBack] = useState(todo?.bring_back_on ?? '');
   const [repeat, setRepeat] = useState(todo?.repeat ?? '');
   const [everyN, setEveryN] = useState(
     todo?.repeat?.startsWith('every:') ? todo.repeat.slice(6) : '3',
@@ -121,6 +122,9 @@ export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onS
     }
     try {
       if (todo) {
+        // Edit only (#261): the date is written through the update path alone, and a todo
+        // being created has nothing to bring back yet.
+        fields.bring_back_on = bringBack || null;
         await updateTodo(todo.id, fields);
         // The 7s undo row (#231) — edits only. Creating a todo that is already done has no
         // prior status to restore, so there is nothing to undo. `effectiveRepeat`, not
@@ -266,6 +270,17 @@ export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onS
               <input id="gtd-due" type="date" className={inputCls} value={due}
                      onChange={e => setDue(e.target.value)} />
             </div>
+            {todo && (
+              <div>
+                <label className={labelCls} htmlFor="gtd-bring-back">Bring back on</label>
+                <input id="gtd-bring-back" type="date" className={inputCls} value={bringBack}
+                       onChange={e => setBringBack(e.target.value)}
+                       aria-describedby="gtd-bring-back-hint" />
+                <p id="gtd-bring-back-hint" className="mt-1 text-xs text-muted">
+                  Hidden from your lists until then, then on Today. Not a deadline.
+                </p>
+              </div>
+            )}
             <div>
               <label className={labelCls} htmlFor="gtd-project">Project</label>
               <select id="gtd-project" className={inputCls} value={projectSel}

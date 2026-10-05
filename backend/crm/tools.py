@@ -640,6 +640,13 @@ CRM_TOOL_DEFS = [
                 "title": {"type": "string", "description": "New title"},
                 "description": {"type": "string"},
                 "due_date": {"type": "string", "description": "New due date (YYYY-MM-DD), or '' to clear"},
+                "bring_back_on": {
+                    "type": "string",
+                    "description": (
+                        "Bring-back date (YYYY-MM-DD): hide the todo from the todo list "
+                        "until that day. Not a deadline — never makes it overdue. '' to clear."
+                    ),
+                },
                 "contact_id": {"type": "integer", "description": "Re-link to this contact"},
                 "deal_id": {"type": "integer", "description": "Re-link to this deal"},
                 "priority": {"type": "string", "description": "low, medium, or high"},

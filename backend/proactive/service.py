@@ -135,6 +135,7 @@ def collect_digest() -> dict:
         NOT_DROPPED_TODO,
         OPEN_PREDICATE,
         OPEN_PREDICATE_D,
+        brought_back_sql,
     )
 
     # The CONFIGURED-TIMEZONE day since #130, not the UTC one. This digest answers
@@ -145,12 +146,15 @@ def collect_digest() -> dict:
         f"""SELECT COUNT(*) AS open_deals, COALESCE(SUM(value), 0) AS open_value
               FROM deals WHERE {OPEN_PREDICATE} AND {LIVE_PREDICATE}"""
     ) or {}
+    # A todo waiting on a bring-back date (#261) is not counted until its day.
+    todo_params: list = [today, today]
     todos = pg_fetchone(
         f"""SELECT COUNT(*) FILTER (WHERE due_date != '' AND due_date < %s) AS overdue,
                    COUNT(*) FILTER (WHERE due_date = %s)                    AS due_today
               FROM todos WHERE completed = 0 AND {LIVE_TODO_PREDICATE}
-                                            AND {NOT_DROPPED_TODO}""",
-        (today, today),
+                                            AND {NOT_DROPPED_TODO}
+                                            AND {brought_back_sql('bring_back_on', todo_params)}""",
+        todo_params,
     ) or {}
     # Top open deals by #18's lead score, falling back to value so a CRM whose scores
     # have not been computed yet still produces a sensible list rather than an empty one.

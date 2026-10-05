@@ -17,6 +17,11 @@
   every rank below it. **#188** then removed reminders, which had held rung 4, and
   renumbered due-today into it — the numbers are a wire contract, so the client's
   `CrmTodayTodoItem.rank` union moved with them.
+  **#261 adds brought-back todos to the unranked tail** (`why: 'bring_back'`, `rank: null`),
+  ahead of the hot-deal tail: a todo whose bring-back date has arrived and that is not
+  starred, overdue or due today. Membership mirrors `today_view` — admitted on
+  `bring_back_on <= today`, hidden while it is still ahead — so a starred todo waiting on a
+  future date is off the panel too. It is never "overdue"; `whyBadge` labels it BROUGHT BACK.
   **#131's rows are the panel's third source, and the one rule worth stating is that its
   second bucket carries NO rank at all.** Eligibility is one human-set column — #125's
   `deals.deal_temperature = 'hot'`, so a never-triaged deal is never hot and there is no

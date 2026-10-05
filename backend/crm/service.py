@@ -138,6 +138,21 @@ LIVE_TODO_PREDICATE = (
 NOT_DROPPED_TODO = "todos.status != 'dropped'"
 NOT_DROPPED_TODO_T = "t.status != 'dropped'"
 
+
+def brought_back_sql(column: str, params: list) -> str:
+    """SQL for "this todo is not waiting on a bring-back date" (#261), binding today.
+
+    A todo with a future ``bring_back_on`` is hidden from the WORKING lists (the GTD
+    lists, the normal Todos list, Today, the dashboard's todo counts, the digest) until
+    that day, then reappears. Appends the configured-timezone day to ``params`` — the
+    caller must call this at the point in its SQL where the placeholder sits, because
+    psycopg2 binds in text order. Record views and follow-up checks (contact rollup,
+    company report, deal health, a project's open count, the observer's dedupe)
+    deliberately do NOT apply it: a scheduled return is still a follow-up.
+    """
+    params.append(gtd_common.today_local_str())
+    return f"({column} IS NULL OR {column} <= %s)"
+
 # Contact list ORDER BY fragments (allowlisted — the param is NEVER interpolated). Every
 # fragment ends with `ct.id DESC` so limit/offset pagination is deterministic (no dupes/
 # skips on tied sort keys). The lead_score fragment is `DESC NULLS LAST` so unscored rows
@@ -2221,6 +2236,8 @@ def list_todos(
     # swept the same way — see get_activity_log.
     conditions.append(f"(t.deal_id IS NULL OR {LIVE_PREDICATE_D})")  # see LIVE_TODO_PREDICATE
     conditions.append(NOT_DROPPED_TODO_T)  # see NOT_DROPPED_TODO
+    # An open todo waiting on a bring-back date (#261) stays out of the list until its day.
+    conditions.append(f"(t.completed = 1 OR {brought_back_sql('t.bring_back_on', params)})")
     # Window, not filter — see list_contacts. This list has no COUNT to disagree with.
     if after_id is not None:
         conditions.append("t.id > %s")
@@ -2274,7 +2291,7 @@ _TODO_UPDATE_FIELDS = {
     "title", "description", "due_date", "contact_id", "deal_id", "priority", "completed",
     "owner_id",
     "status", "star", "context", "tags", "repeat", "auto_star_on_due", "project_id",
-    "project",
+    "project", "bring_back_on",
 }
 
 
@@ -2356,6 +2373,11 @@ def _apply_todo_update_cur(cur, todo_id: int, fields: dict) -> bool:
     if "repeat" in fields:
         sets.append("repeat = %s")
         params.append(gtd_common.validate_repeat(fields["repeat"]))
+    if "bring_back_on" in fields:
+        # Nullable DATE (#261): None or '' clears it. Not copied to a repeat's next
+        # occurrence — the spawn INSERT below does not name the column.
+        sets.append("bring_back_on = %s")
+        params.append(gtd_common.validate_bring_back(fields["bring_back_on"]))
     if "auto_star_on_due" in fields:
         sets.append("auto_star_on_due = %s")
         params.append(bool(fields["auto_star_on_due"]))
@@ -2591,16 +2613,21 @@ def get_dashboard_stats() -> dict:
     # hours early every evening west of Greenwich — and this number renders inches from
     # the Today panel, which reads the local day. One screen cannot hold two todays.
     today = gtd_common.today_local_str()
+    # A todo waiting on a bring-back date (#261) is out of both counts until its day.
+    overdue_params: list = [today]
     overdue_row = pg_fetchone(
         "SELECT COUNT(*) AS cnt FROM todos WHERE completed = 0 AND due_date != '' "
-        f"AND due_date < %s AND {LIVE_TODO_PREDICATE} AND {NOT_DROPPED_TODO}",
-        (today,),
+        f"AND due_date < %s AND {LIVE_TODO_PREDICATE} AND {NOT_DROPPED_TODO} "
+        f"AND {brought_back_sql('bring_back_on', overdue_params)}",
+        overdue_params,
     )
     overdue_todos = overdue_row["cnt"] if overdue_row else 0
 
+    pending_params: list = []
     pending_row = pg_fetchone(
         f"SELECT COUNT(*) AS cnt FROM todos WHERE completed = 0 AND {LIVE_TODO_PREDICATE} "
-        f"AND {NOT_DROPPED_TODO}"
+        f"AND {NOT_DROPPED_TODO} AND {brought_back_sql('bring_back_on', pending_params)}",
+        pending_params,
     )
     pending_todos = pending_row["cnt"] if pending_row else 0
 

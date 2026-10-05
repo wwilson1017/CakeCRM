@@ -420,6 +420,49 @@ describe('step 2 — the due-date cue', () => {
   });
 });
 
+describe('the bring-back date (#261)', () => {
+  const backInput = () =>
+    container.querySelector<HTMLInputElement>('input[aria-label="Bring back on"]')!;
+
+  it('commits on blur, not on every keystroke', async () => {
+    render();
+    setValue(backInput(), '2026-11-02');
+    expect(updateTodoMock).not.toHaveBeenCalled();
+    unfocus(backInput());
+    await settle();
+    expect(updateTodoMock).toHaveBeenCalledWith(7, { bring_back_on: '2026-11-02' });
+    expect(onChanged).toHaveBeenCalled();
+    expect(onProcessed).not.toHaveBeenCalled();
+  });
+
+  it('clears to null, the column\'s "no date"', async () => {
+    render({ bring_back_on: '2026-11-02' });
+    expect(backInput().value).toBe('2026-11-02');
+    setValue(backInput(), '');
+    unfocus(backInput());
+    await settle();
+    expect(updateTodoMock).toHaveBeenCalledWith(7, { bring_back_on: null });
+  });
+
+  it('is carried into the write that files the item', async () => {
+    render();
+    setValue(backInput(), '2026-11-02');
+    setValue(contextPicker(), '0'); // '@calls'
+    await settle();
+    expect(updateTodoMock).toHaveBeenNthCalledWith(1, 7, { bring_back_on: '2026-11-02' });
+    expect(updateTodoMock).toHaveBeenNthCalledWith(2, 7, { context: '@calls', status: 'next_action' });
+  });
+
+  it('hands the Edit sheet the date on screen, so its full save cannot revert it', async () => {
+    render();
+    setValue(backInput(), '2026-11-02');
+    await settle();
+    click(button('Edit'));
+    await settle();
+    expect(onEdit.mock.calls[0][0].bring_back_on).toBe('2026-11-02');
+  });
+});
+
 describe('the inline title is optimistic too', () => {
   // `pendingTitle` predates this port and had the same defect the date override was fixed
   // for: set on a successful rename and never released, so the card would pin the name it

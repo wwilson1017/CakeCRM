@@ -158,6 +158,8 @@ interface CardState {
   notesDraft: string;
   /** Optimistic values, shadowing the row until it catches up. null = not overriding. */
   pendingDue: string | null;
+  /** The bring-back date (#261), same rules as `pendingDue`; '' means "clear it". */
+  pendingBack: string | null;
   pendingTitle: string | null;
 }
 
@@ -166,6 +168,7 @@ type CardAction =
   | { type: 'adopt'; row: Todo }
   | { type: 'notes-draft'; value: string }
   | { type: 'due'; value: string | null }
+  | { type: 'back'; value: string | null }
   | { type: 'title'; value: string | null };
 
 /**
@@ -200,6 +203,8 @@ function reduce(s: CardState, a: CardAction): CardState {
       return s.notesDraft === a.value ? s : { ...s, notesDraft: a.value };
     case 'due':
       return s.pendingDue === a.value ? s : { ...s, pendingDue: a.value };
+    case 'back':
+      return s.pendingBack === a.value ? s : { ...s, pendingBack: a.value };
     case 'title':
       return s.pendingTitle === a.value ? s : { ...s, pendingTitle: a.value };
   }
@@ -209,6 +214,7 @@ const initState = (todo: Todo): CardState => ({
   row: todo,
   notesDraft: todo.notes,
   pendingDue: null,
+  pendingBack: null,
   pendingTitle: null,
 });
 
@@ -228,6 +234,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
   // that has to know when the field has focus — otherwise it would sit on top of the
   // native editor while a date is being picked.
   const [dueFocused, setDueFocused] = useState(false);
+  const [backFocused, setBackFocused] = useState(false);
   // Opening the sheet waits on the notes flush, which is a round trip on a slow link.
   const [editPending, setEditPending] = useState(false);
   // Everything a write can move, in one reducer — see `CardState` for why a reducer and not
@@ -252,12 +259,13 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
   // elsewhere (the Edit sheet, most often) gets in.
   useLayoutEffect(() => { apply({ type: 'adopt', row: todo }); }, [todo, apply]);
 
-  const { row, notesDraft, pendingDue, pendingTitle } = state;
+  const { row, notesDraft, pendingDue, pendingBack, pendingTitle } = state;
   const dest = DESTINATIONS.find(d => d.status === destination) ?? DESTINATIONS[0];
   // Looked up in the shared list so a purpose edited on the project page shows here on the
   // next meta refresh; a project missing from the list (just created) simply shows nothing.
   const pickedProject = row.project_id == null ? undefined : projects.find(p => p.id === row.project_id);
   const dueValue = pendingDue ?? row.due_date;
+  const backValue = pendingBack ?? (row.bring_back_on ?? '');
 
   // What the Edit sheet is handed: this card's best view of the record, never the lagging
   // prop. Built from `stateRef` at the moment it is needed rather than captured at click
@@ -272,6 +280,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
       title: live.pendingTitle ?? live.row.title,
       notes: live.notesDraft,
       due_date: live.pendingDue ?? live.row.due_date,
+      bring_back_on: live.pendingBack === null ? live.row.bring_back_on : (live.pendingBack || null),
     };
   };
 
@@ -358,6 +367,27 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
     }
   });
 
+  /**
+   * Commit the bring-back date (#261) — on blur, through its own write, for exactly the
+   * reasons `commitDue` gives. Setting a future date takes the item out of the inbox on the
+   * parent's next refetch (the server hides it until that day), which is the point.
+   */
+  const commitBack = useSerialCommit(async (): Promise<void> => {
+    const { pendingBack: pending, row: live } = stateRef.current;
+    if (pending === null || pending === (live.bring_back_on ?? '')) return;
+    setError('');
+    try {
+      apply({ type: 'adopt', row: await updateTodo(live.id, { bring_back_on: pending || null }) });
+      onChanged();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Update failed';
+      setError(msg);
+      toast.error(msg); // same unmount reasoning as the notes save
+    } finally {
+      apply({ type: 'back', value: null });
+    }
+  });
+
   // An inbox item can already carry a context (quick-add parses "@ctx" while keeping
   // status: inbox), and the shared meta can still be empty while it loads — offer the
   // item's own context either way, so the card always has a way out that isn't
@@ -389,6 +419,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
       // The date too, so filing an item carries a date just picked. Not gated on its result
       // for the same reason the note is not: filing is this card's one exit.
       if (resolves) await commitDue();
+      if (resolves) await commitBack();
       if (notesOk) setError('');
       // Adopt the response for the same reason the notes save does. Star and project are
       // written straight through here and never rendered optimistically, so this is the ONLY
@@ -682,6 +713,29 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
                 className="pointer-events-none absolute inset-px flex items-center whitespace-nowrap rounded-lg bg-cream pl-2 text-sm text-muted"
               >
                 Add due date
+              </span>
+            )}
+          </span>
+          {/* Bring back on (#261): the due-date control's twin — same blur commit, same
+              opaque cue over a native date input that ignores `placeholder`. */}
+          <span className="relative inline-flex">
+            <input
+              type="date"
+              value={backValue}
+              disabled={busy}
+              onFocus={() => setBackFocused(true)}
+              onBlur={() => { setBackFocused(false); void commitBack(); }}
+              onChange={e => apply({ type: 'back', value: e.target.value })}
+              className={`${inputCls} min-w-40`}
+              aria-label="Bring back on"
+              title="Hidden from your lists until this day, then on Today. Not a deadline."
+            />
+            {!backValue && !backFocused && (
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-px flex items-center whitespace-nowrap rounded-lg bg-cream pl-2 text-sm text-muted"
+              >
+                Bring back on…
               </span>
             )}
           </span>
