@@ -13,7 +13,7 @@
 // default, and that is the section reported.
 
 import { resolveSection, wantedSection } from '../crm/settingsSections';
-import type { SettingsPageContext } from './types';
+import type { PageContext, SettingsPageContext } from './types';
 
 /** The Settings route. The only page with a context of this shape today. */
 export const SETTINGS_PATH = '/crm/settings';
@@ -25,4 +25,18 @@ export function settingsPageContext(
 ): SettingsPageContext | null {
   if (pathname !== SETTINGS_PATH) return null;
   return { page: 'settings', section: resolveSection(wantedSection(params), isAdmin) };
+}
+
+/** The GTD Review route (#263). Only mounted in GTD mode, so no mode check is needed. */
+export const TODO_REVIEW_PATH = '/crm/todos/review';
+
+/** Which page the drawer should describe, if any — Settings (#200) or the todo Review
+ *  page (#263). Derived from the URL for the same no-second-publisher reason. */
+export function pageContextFor(
+  pathname: string,
+  params: URLSearchParams,
+  isAdmin: boolean,
+): PageContext | null {
+  if (pathname === TODO_REVIEW_PATH) return { page: 'todo_review' };
+  return settingsPageContext(pathname, params, isAdmin);
 }

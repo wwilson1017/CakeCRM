@@ -34,7 +34,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 from assistant import engine, history, identity, uploads
 from assistant.registry import ToolRegistry
@@ -94,12 +94,24 @@ class SettingsPageContext(BaseModel):
     section: Literal["personal", "assistant", "workspace", "integrations"]
 
 
+class TodoReviewPageContext(BaseModel):
+    """The GTD weekly Review page (#263). It has no sections, so the page id is the
+    whole closed set; the note it buys is built by ``identity.build_page_note``."""
+    page: Literal["todo_review"]
+
+
+# The pages the drawer may describe, discriminated on ``page`` so an unknown page is one
+# clean 422 rather than a guess at which model it was meant for.
+PageContext = Annotated[SettingsPageContext | TodoReviewPageContext, Field(discriminator="page")]
+_PAGE_CONTEXT = TypeAdapter(PageContext)
+
+
 class ChatRequest(BaseModel):
     messages: list[dict] = []
     conversation_id: str | None = None
     tool_mode: str = "normal"
     context: ChatContext | None = None
-    page: SettingsPageContext | None = None
+    page: PageContext | None = None
 
 
 class ConfirmRequest(BaseModel):
@@ -198,7 +210,7 @@ async def chat_upload(
     raw_page = data.get("page")
     if raw_page is not None:
         try:
-            page = SettingsPageContext.model_validate(raw_page).model_dump()
+            page = _PAGE_CONTEXT.validate_python(raw_page).model_dump()
         except ValidationError:
             raise HTTPException(status_code=400, detail="Invalid page.")
 

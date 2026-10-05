@@ -264,20 +264,20 @@ def test_only_the_four_classified_todo_tools_are_routine(todo_mode):
     """#186's answer for the whole family, asserted in BOTH directions.
 
     The six that still deny are the reason this is not "every todo write is routine":
-    `todo_bulk_update` is bulk, the two deletes remove a record, and the three reads
+    `todo_bulk_update` is bulk, the two deletes remove a record, and the four reads
     cannot carry a tier at all.
     """
     todo_mode("gtd")
     reg = ToolRegistry()
     todos = [n for n in reg.writes_map if n.startswith("todo_")]
-    assert len(todos) == 10, todos  # vacuity guard
+    assert len(todos) == 11, todos  # vacuity guard
     for name in todos:
         expected = name in ROUTINE_TODO_TOOLS
         assert reg.is_routine_write(name) is expected, name
     for name in ("todo_bulk_update", "todo_delete", "todo_delete_project"):
         assert reg.is_write(name) is True, name  # vacuity: they really are writes
         assert reg.is_routine_write(name) is False, name
-    for name in ("todo_list", "todo_get", "todo_list_projects"):
+    for name in ("todo_list", "todo_get", "todo_list_projects", "todo_weekly_review"):
         assert reg.is_write(name) is False, name
         assert reg.is_routine_write(name) is False, name
 

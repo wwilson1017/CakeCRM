@@ -7,7 +7,7 @@
 
 import { ACCENT_TEXT, ACCENT_SOFT, INK_DIM, LINE } from '../shared/styles';
 import { SETTINGS_SECTIONS, type SettingsSectionId } from '../crm/settingsSections';
-import type { ActiveRecordContext, ActiveRecordType, SettingsPageContext } from './types';
+import type { ActiveRecordContext, ActiveRecordType, PageContext } from './types';
 
 // Sales-oriented starters (issue #22). Each maps to a working practice the assistant
 // is instructed to follow in identity.SALES_GUIDE — recap before an interaction, always
@@ -81,6 +81,13 @@ const SETTINGS_STARTERS: Record<SettingsSectionId, string[]> = {
   ],
 };
 
+// The GTD Review page (#263). The first chip starts the review the todos/weekly-review
+// help topic scripts; the page note tells the model which tool and topic that means.
+const TODO_REVIEW_STARTERS = [
+  'Start my weekly review',
+  'What needs my attention this week?',
+];
+
 const SECTION_LABELS: Record<string, string> = Object.fromEntries(
   SETTINGS_SECTIONS.map((s) => [s.id, s.label]),
 );
@@ -89,7 +96,7 @@ interface QuickActionsProps {
   /** CRM record open behind the drawer. */
   record?: ActiveRecordContext | null;
   /** Settings section open behind the drawer (#200). */
-  page?: SettingsPageContext | null;
+  page?: PageContext | null;
   onPick: (prompt: string) => void;
   disabled?: boolean;
 }
@@ -98,13 +105,16 @@ interface QuickActionsProps {
  *  A record wins over a page when both are somehow present: it is the more specific
  *  thing to be looking at, and the record starters are about the work rather than
  *  about the product. */
-function starters(record?: ActiveRecordContext | null, page?: SettingsPageContext | null):
+function starters(record?: ActiveRecordContext | null, page?: PageContext | null):
   { heading: string; prompts: string[] } | null {
   if (record) {
     return {
       heading: `Viewing: ${record.label || `${record.recordType} #${record.recordId}`}`,
       prompts: STARTERS[record.recordType],
     };
+  }
+  if (page?.page === 'todo_review') {
+    return { heading: 'Todos — Weekly review', prompts: TODO_REVIEW_STARTERS };
   }
   if (page) {
     return {

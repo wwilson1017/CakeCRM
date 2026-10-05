@@ -107,16 +107,18 @@ created, so both copies are open afterwards, and the app says so.
 
 ## The weekly review
 
-The Review tab is read-only and shows three things: counts per status, a **stale** list of
-next actions, waiting-for and delegated items nothing has touched in a while, oldest first,
-and **active projects with no next action**.
+The Review tab shows counts per status, a **stale** list of next actions, waiting-for and
+delegated items nothing has touched in a while, oldest first, and **active projects with no
+next action**. It also says **Review due** when no review has been marked done in a week,
+and carries the **Mark review done** button.
 
-Walk it: empty the inbox, confirm every active project has a next action, chase waiting-for
-and delegated items, prune someday-maybe, and note what got done.
+Baker can run the review with you, step by step: see the weekly review topic
+(todos/weekly-review) for the nine steps and the data each one uses.
 
 ## Baker's todo tools
 
-Reads: `todo_list`, `todo_get`, `todo_list_projects`. Writes: `todo_create`, `todo_update`,
+Reads: `todo_list`, `todo_get`, `todo_list_projects`, `todo_weekly_review` (everything a
+weekly review needs, in one call). Writes: `todo_create`, `todo_update`,
 `todo_bulk_update` (up to 500 at once — one confirmation instead of many when filing several
 inbox items the same way), `todo_delete`, `todo_create_project`, `todo_update_project`,
 `todo_delete_project`.

@@ -336,9 +336,9 @@ GTD_GUIDE = (
     "**Bring-back dates.** For \"not until then\" (\"check back after their Q1 budget\"), set "
     "`bring_back_on`, not a due date: the todo leaves every working list until that day, "
     "then shows on Today, and it never reads as overdue. Search still finds it meanwhile.\n\n"
-    "**Weekly review.** When asked — or when things look stale — walk it through: empty "
-    "the inbox, confirm every active project has a next action, review waiting_for and "
-    "delegated items for follow-ups, prune someday_maybe, and note what got done.\n\n"
+    "**Weekly review.** When asked — or when todo_weekly_review says one is due — read "
+    "the help topic todos/weekly-review and walk its steps with todo_weekly_review's "
+    "data.\n\n"
     "**Use bulk updates.** When filing several inbox items the same way, todo_bulk_update "
     "is one confirmation instead of many."
 )
@@ -434,6 +434,17 @@ _SETTINGS_SECTION_HELP: dict[str, tuple[str, tuple[str, ...]]] = {
 }
 
 
+# The GTD Review page (#263). Fixed text: the page has no sections, so nothing client-side
+# reaches it. It names the two things a review needs — the data tool and the script topic —
+# so "start my weekly review" from this page lands on them rather than on folklore.
+TODO_REVIEW_PAGE_NOTE = (
+    "The user is on the todos Review page, where the GTD weekly review lives. To run a "
+    "review with them, call todo_weekly_review for the data and read the help topic "
+    "todos/weekly-review with help_read_topic for the steps, then walk the steps one at "
+    "a time."
+)
+
+
 def build_page_note(page, section) -> str | None:
     """Server-constructed volatile sentence for the settings section the user has open (#200).
 
@@ -448,6 +459,8 @@ def build_page_note(page, section) -> str | None:
     through chat history, and a wrong settings write is install-wide where a wrong record
     write is one record. Saying so in the note is what keeps the model from proposing one.
     """
+    if page == "todo_review":
+        return TODO_REVIEW_PAGE_NOTE
     if not isinstance(page, str) or page != "settings":
         return None
     if not isinstance(section, str) or section not in _SETTINGS_SECTION_HELP:

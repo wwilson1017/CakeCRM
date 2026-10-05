@@ -75,6 +75,15 @@ export interface SettingsPageContext {
   section: SettingsSectionId;
 }
 
+/** The GTD weekly Review page (#263). No sections — the page id is the whole context. */
+export interface TodoReviewPageContext {
+  page: 'todo_review';
+}
+
+/** Every page the drawer may describe. The backend restates this as a discriminated
+ *  union of Literals, so an unknown page is refused at the seam. */
+export type PageContext = SettingsPageContext | TodoReviewPageContext;
+
 // Raw server shapes (SSE events + history rows) ------------------------------
 
 export interface ServerToolCall {

@@ -106,3 +106,18 @@ export function deleteProject(id: number): Promise<void> {
 export function getFilters(): Promise<TodoFilters> {
   return todoFetch<TodoFilters>('/filters');
 }
+
+/** Whether a weekly review is due (#263). The full review packet rides the same
+ *  response; the Review page reads only these two fields. */
+export interface ReviewStatus {
+  review_due: boolean;
+  days_since_review: number | null;
+}
+
+export function getReviewStatus(): Promise<ReviewStatus> {
+  return todoFetch<ReviewStatus>('/review');
+}
+
+export function markReviewDone(): Promise<ReviewStatus> {
+  return todoFetch<ReviewStatus>('/review/done', { method: 'POST' });
+}

@@ -16,7 +16,7 @@ import type {
   ChatMessage,
   ContextUsage,
   ServerMessage,
-  SettingsPageContext,
+  PageContext,
   ToolCallInfo,
   ToolMode,
 } from './types';
@@ -29,7 +29,7 @@ const API = '/api/assistant';
  *  Either half may be absent; `undefined` for a key means "send no such field". */
 interface TurnContext {
   context?: { record_type: string; record_id: number };
-  page?: SettingsPageContext;
+  page?: PageContext;
 }
 
 type SSEEvent = Record<string, unknown>;
@@ -109,7 +109,7 @@ function addConfirm(m: ChatMessage, evt: SSEEvent): ChatMessage {
 
 export function useAssistantChat(
   recordContext?: ActiveRecordContext | null,
-  pageContext?: SettingsPageContext | null,
+  pageContext?: PageContext | null,
 ) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -136,7 +136,7 @@ export function useAssistantChat(
   // The settings section open behind the drawer (issue #200), mirrored in the commit
   // phase for exactly the same reason as the record above: a chip click must read the
   // section currently on screen, not the one a passive effect had not caught up to.
-  const pageCtxRef = useRef<SettingsPageContext | null>(null);
+  const pageCtxRef = useRef<PageContext | null>(null);
   useLayoutEffect(() => { pageCtxRef.current = pageContext ?? null; }, [pageContext]);
 
   // Per-assistant-message context snapshot, keyed by the client message id. A
@@ -158,9 +158,12 @@ export function useAssistantChat(
     const page = pageCtxRef.current;
     return {
       context: ctx ? { record_type: ctx.recordType, record_id: ctx.recordId } : undefined,
-      // The section id is re-sent as-is because it is already a closed set on both
-      // sides; the backend re-validates it as a Literal regardless.
-      page: page ? { page: page.page, section: page.section } : undefined,
+      // Ids are re-sent as-is because they are already closed sets on both sides; the
+      // backend re-validates them as Literals regardless. Rebuilt field by field so no
+      // stray key ever rides along.
+      page: !page ? undefined
+        : page.page === 'settings' ? { page: page.page, section: page.section }
+          : { page: page.page },
     };
   }, []);
 

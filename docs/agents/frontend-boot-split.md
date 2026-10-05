@@ -94,3 +94,13 @@
   → 417.0 kB raw, 101.4 → 132.2 kB gzip** (+96.4 kB / +30.8 kB). The entry chunk every visitor
   downloads is unchanged at 188.7 kB. Lazy-loading `KanbanView` inside the layer would win most
   of that back for every non-board surface, and is a shared-layer change for its own issue.
+  **The `/todo` budget was re-based on 2026-10-04 (#278)** because that growth was recorded but
+  the guard's ceiling was not moved with it: `bootSplitBuild.test.ts` capped the `/todo` cold load
+  at 431,000 bytes (~421 kB, 312.3 kB measured at #149 plus ~35% headroom), #249 landed at 417 kB
+  under it by chance, #275's phone bottom bar added 2.5 kB, and the two remaining GTD PRs (#276
+  weekly review, #277 bring-back date) measured 421.2 and 422.1 kB and failed CI by about one
+  kilobyte each. The budget is now 583,000 bytes — the measured 422.1 kB with the same ~35%
+  headroom — and the comment beside it names which PRs consumed the old margin. **The rule this
+  makes explicit:** a PR that deliberately grows a guarded chunk records the measured delta AND
+  moves the budget line in the same change, so the next unrelated PR is never the one that trips
+  it. The entry-chunk and CRM-shell budgets were not touched and keep their original margins.

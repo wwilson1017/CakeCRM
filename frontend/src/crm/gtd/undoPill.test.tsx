@@ -37,6 +37,8 @@ vi.mock('./api', () => ({
   createProject: vi.fn(),
   listTodos: listTodosMock,
   listProjects: listProjectsMock,
+  getReviewStatus: vi.fn().mockResolvedValue({ review_due: false, days_since_review: 1 }),
+  markReviewDone: vi.fn(),
 }));
 // No owner scoping here (see undoQueue.ts): CakeCRM has no in-tab identity swap, so the
 // blueprint's `useTodoOwner` and its owner test have nothing to port.
