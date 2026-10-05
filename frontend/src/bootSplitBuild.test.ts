@@ -273,8 +273,11 @@ describe('boot split (#149) — the built chunk graph', () => {
     const budgets: Array<[string, number, Chunk[]]> = [
       // measured 196.6 kB (entry chunk + the JSX runtime)
       ['the entry chunk every visitor downloads', 272_000, [ENTRY]],
-      // measured 312.3 kB — the number this issue exists to hold down
-      ['the /todo PWA cold load', 431_000, [ENTRY, chunkFor('src/crm/gtd/PublicTodoApp.tsx')]],
+      // measured 422.1 kB on 2026-10-04 (was 312.3 kB at #149): #249 put Someday/Done/Projects on
+      // the shared collection layer (+96.4 kB, recorded in its PR body), #275 added the phone
+      // bottom bar (+2.5 kB), #276/#277 added the weekly review and bring-back date. Re-based with
+      // the same ~35% headroom; the next deliberate growth re-measures and moves this line again.
+      ['the /todo PWA cold load', 583_000, [ENTRY, chunkFor('src/crm/gtd/PublicTodoApp.tsx')]],
       // measured 259.6 kB
       ['the CRM shell', 358_000, [ENTRY, chunkFor('src/App.tsx')]],
     ];
