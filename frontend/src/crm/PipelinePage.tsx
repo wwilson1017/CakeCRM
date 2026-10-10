@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useContext, useMemo, useRef } from 'react';
 import type { PointerEvent as ReactPointerEvent, MouseEvent as ReactMouseEvent, KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import { api, ApiError } from '../core/api/client';
@@ -42,6 +42,10 @@ import {
   DEAL_DEEP_LINK_PARAM, deepLinkVerdict, parseDealDeepLinkId,
 } from './dealDeepLink';
 import { sweepPipelineDeals } from './pipelineAssembly';
+import { readWarm, writeWarm, WarmViewerContext } from './warmCache';
+import { warmEpoch } from './warmStore';
+import { claimWarmTab } from './warmQueue';
+import { WarmStatus } from './components/WarmStatus';
 import { classifyBulkMove, describeBulkMove, type BulkMoveResponse, type BulkNotice } from './bulkOutcome';
 
 // The /api/crm/deals payload also carries server-computed `stage_summary` and
@@ -221,7 +225,11 @@ export function PipelinePage() {
     : (data?.deals ?? []).find(d => d.id === deepLink.dealId) ?? null;
   const deepLinkState = deepLinkVerdict({
     dealId: deepLink.dealId,
-    boardLoaded: data !== null,
+    // #281: a board seeded from the warm cache may OPEN a deal it holds, but it cannot vouch for
+    // an absence — the cache can be days old. Until a real load has applied, a link to a deal the
+    // cached board lacks stays `idle`, and the mount load in flight is what settles it (so it
+    // never fires a second sweep through the `refresh` verdict either).
+    boardLoaded: data !== null && (boardLoads.applied > 0 || deepLinkedDeal !== null),
     dealOnBoard: deepLinkedDeal !== null,
     boardRefreshedSinceLink: boardLoads.applied > deepLink.loadsAtArrival,
   });
@@ -321,6 +329,19 @@ export function PipelinePage() {
   //     screen, once per retry click;
   //   • the return-to-tab staleness bound (issue #129), which needs the age, not the fact.
   const appliedAt = useRef(0);
+  // The warm cache (#281). `warmBoard` is non-null only while the board on screen came from the
+  // cache and no load has applied yet: its save time, and whether the refresh behind it failed.
+  // The email and the epoch are FROZEN at mount, as in `useCrmCorpus`: a sweep that started as one
+  // user, or before a sign-out, is never saved afterwards.
+  const viewerEmail = useContext(WarmViewerContext);
+  const [warmEmail] = useState(viewerEmail);
+  const [warmEpochAtMount] = useState(warmEpoch);
+  const viewerEmailRef = useRef(viewerEmail);
+  useEffect(() => { viewerEmailRef.current = viewerEmail; }, [viewerEmail]);
+  const [warmBoard, setWarmBoard] = useState<{ savedAt: number; failed: boolean } | null>(null);
+  // Whether the newest load failed — read by the seed, whose cache read can resolve AFTER the
+  // mount load has already failed, and must then say so rather than "Refreshing…" forever.
+  const lastLoadFailed = useRef(false);
   // Set when the FIRST load was skipped because the tab was hidden — a route can be opened into a
   // background tab (a Cmd-click, a session restore), and sweeping the whole deal corpus for a
   // board nobody is looking at is work with no reader. The visibility listener below fires it on
@@ -438,6 +459,10 @@ export function PipelinePage() {
     // had already painted the board. Newest-non-silent-wins is the only rule correct in both.
     const mySpinner = isSilent ? 0 : ++spinnerGen.current;
     if (!isSilent) setLoading(true);
+    // Only a live-only sweep may refresh the warm cache — it is the content set the cache seeds.
+    const liveOnly = !includeArchivedRef.current;
+    lastLoadFailed.current = false;
+    setWarmBoard(w => (w?.failed ? { ...w, failed: false } : w));
     try {
       // Read the facet from the ref, never from a closure: `load` is stable, and the
       // deferred refreshes that `moveDealStage`/`applyBulkMove` fire when their writes
@@ -478,6 +503,12 @@ export function PipelinePage() {
       // answer arrived (issue #145). `Math.max` because loads can settle out of order.
       setBoardLoads(b => (myLoad > b.applied ? { ...b, applied: myLoad } : b));
       appliedAt.current = Date.now();
+      // Every applied load is a COMPLETE sweep, so each live-only one replaces the warm cache
+      // wholesale (#281); a failed, deferred or superseded load never reaches this line.
+      setWarmBoard(null);
+      if (liveOnly && warmEmail !== null && viewerEmailRef.current === warmEmail) {
+        void writeWarm(warmEmail, 'pipeline', d.deals, appliedAt.current, warmEpochAtMount);
+      }
       dealConfirmedStage.current = new Map(d.deals.map(deal => [deal.id, deal.stage]));
       // Intersect the selection with the deals this payload says are LIVE. Masking an archived
       // deal in the bulk payload and on its card is not enough: the id stays in the Set, so once
@@ -513,12 +544,17 @@ export function PipelinePage() {
       }
       // A NARROWING load that failed still has to honour the facet the user just cleared.
       if (loadGen.current === myLoad) pruneArchivedFromBoard();
+      // Cached rows stay up; the status line says the refresh behind them failed.
+      if (loadGen.current === myLoad) {
+        lastLoadFailed.current = true;
+        setWarmBoard(w => (w ? { ...w, failed: true } : w));
+      }
     }
     finally { if (!isSilent && spinnerGen.current === mySpinner) setLoading(false); }
     return false;
     // `replayDeferredLoad`/`pruneArchivedFromBoard` are stable useCallbacks, so naming them here
     // costs nothing and keeps `load`'s identity stable — which the effects below depend on.
-  }, [replayDeferredLoad, pruneArchivedFromBoard]);
+  }, [replayDeferredLoad, pruneArchivedFromBoard, warmEmail, warmEpochAtMount]);
 
   useEffect(() => { loadRef.current = load; }, [load]);
 
@@ -933,6 +969,25 @@ export function PipelinePage() {
     }
     queueMicrotask(load);
   }, [includeArchived, load]);
+
+  // Seed the board from the warm cache (#281) so it opens on the last complete sweep while the
+  // mount load runs behind it, and take the board out of the background warm-up queue — this
+  // page sweeps it itself. The seed is dropped once any load has applied (newer rows), or when
+  // the Archived facet has widened the content set (the cache holds live deals only).
+  //
+  // It leaves `boardLoads` alone on purpose: a cached board is not a load, so it can never be
+  // what lets the deep-link verdict call a deal absent (see `boardLoaded` above).
+  useEffect(() => {
+    claimWarmTab('pipeline');
+    let live = true;
+    void readWarm<CrmDeal[]>(warmEmail, 'pipeline').then(hit => {
+      if (!live || !hit || appliedAt.current !== 0 || includeArchivedRef.current) return;
+      setData({ deals: hit.data });
+      setLoading(false);
+      setWarmBoard({ savedAt: hit.savedAt, failed: lastLoadFailed.current });
+    });
+    return () => { live = false; };
+  }, [warmEmail]);
 
   // Returning to a backgrounded tab: run the deferred first load, or re-sweep a corpus that has
   // gone stale (issue #129).
@@ -1460,6 +1515,8 @@ export function PipelinePage() {
           <IconPlus size={13} strokeWidth={2.25} /> {isMobile ? 'Add' : 'Add Deal'}
         </button>
       </div>
+
+      <WarmStatus savedAt={warmBoard?.savedAt ?? null} failed={warmBoard?.failed ?? false} onRetry={() => void load(true)} />
 
       {deadDeepLinkDealId !== null && (
         <div style={{

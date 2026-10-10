@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useContext, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../core/api/client';
 import type { CrmDashboard, CrmDeal, CrmAnalytics } from '../core/types';
@@ -22,6 +22,8 @@ import {
 } from '../shared/styles';
 import { sectionHeading, btnSecondary } from './styles';
 import { useUsers } from './useUsers';
+import { WarmViewerContext } from './warmCache';
+import { startWarmUp } from './warmQueue';
 
 const repCell: React.CSSProperties = { padding: '7px 8px', fontWeight: 400, whiteSpace: 'nowrap' };
 const repNum: React.CSSProperties = { ...repCell, textAlign: 'right' };
@@ -142,6 +144,14 @@ export function CrmDashboardPage() {
   }
 
   useEffect(() => { loadDashboard(); loadAnalytics(); }, []);
+
+  // #281: once this page's own read has settled (data OR failure), warm Pipeline, Contacts and
+  // Companies in the background, one at a time, so the Dashboard never competes with a
+  // whole-corpus sweep. `startWarmUp` runs once per signed-in session; see `warmQueue.ts`.
+  const viewerEmail = useContext(WarmViewerContext);
+  useEffect(() => {
+    if (!loading) void startWarmUp(viewerEmail);
+  }, [loading, viewerEmail]);
 
   if (loading) {
     return (

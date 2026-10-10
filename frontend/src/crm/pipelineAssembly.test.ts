@@ -142,4 +142,18 @@ describe('sweepPipelineDeals', () => {
 
     await expect(sweepPipelineDeals(false)).rejects.toThrow('Failed to fetch');
   });
+
+  it('cancels the page in flight when the caller aborts (#281 warm-up claim)', async () => {
+    let seen: AbortSignal | undefined;
+    apiMock.mockImplementationOnce((_path: string, init?: RequestInit) => new Promise((_, reject) => {
+      seen = init?.signal ?? undefined;
+      seen?.addEventListener('abort', () => reject(new Error('aborted')));
+    }));
+    const outer = new AbortController();
+    const sweep = sweepPipelineDeals(false, () => !outer.signal.aborted, outer.signal);
+    outer.abort();
+    await expect(sweep).rejects.toThrow('aborted');
+    expect(seen?.aborted).toBe(true);
+  });
 });
+

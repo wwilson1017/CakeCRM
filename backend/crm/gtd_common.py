@@ -71,6 +71,10 @@ class NotFoundError(Exception):
     """Row absent — maps to HTTP 404."""
 
 
+class ConflictError(Exception):
+    """The write needs the caller's confirmation first — maps to HTTP 409."""
+
+
 def parse_capture(text: str) -> str | None:
     """Return the capture payload, '' when the command carries no payload, or None
     when `text` is not a capture command at all (the caller's normal path continues).

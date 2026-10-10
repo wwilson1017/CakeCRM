@@ -174,6 +174,7 @@ def pg_execute(sql: str, params: tuple | list | dict = ()) -> int:
 #   pg_advisory_xact_lock(1801, id)   — per-deal lead-score recompute (crm/scoring_service.py)
 #   pg_advisory_xact_lock(1802, id)   — per-contact lead-score recompute (crm/scoring_service.py)
 #   pg_advisory_xact_lock(1901)       — first-admin bootstrap (users/bootstrap.py)
+#   pg_advisory_xact_lock(2801)       — todo context rename (crm/gtd_service.rename_context)
 
 
 def run_migrations() -> None:

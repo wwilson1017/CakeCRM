@@ -380,6 +380,30 @@
   card (`confirm_tier._HIDING_ARGS`, beside `status='dropped'`): it takes the todo off
   every working list with no upper bound on the date. Clearing one stays routine.
 
+- **A context can be renamed across every todo** (#280, port of cake_os #3569 `dcc7d9c90`).
+  `POST /api/crm/gtd/contexts/rename {old, new, merge}` lives on the module-level authed
+  `router` in `crm/gtd_router.py`, NOT in `build_router` — that factory is also the no-login
+  web app, and both the route and the control (`components/ContextRename.tsx`, hidden under
+  `isTodoPublicMode`) were scoped out of it; `test_crm_gtd_context_rename.py` pins both mounts.
+  `gtd_service.rename_context` is ONE transaction: `pg_advisory_xact_lock(2801)` (two renames
+  of different contexts onto the same unused name would otherwise each see no destination and
+  merge unconfirmed — an unused name has no row to lock), then `SELECT id … WHERE context = old
+  ORDER BY id FOR UPDATE`, then a context-only `UPDATE … WHERE id = ANY(ids)`. That UPDATE is
+  a deliberate sibling of `_apply_todo_update_cur`, not a call through it: the funnel always
+  bumps `updated_at`, and a rename must NOT (Review's stale list and Waiting's age read it as
+  "when I last touched this"); it never writes `status`/`completed`, so the CHECK that binds
+  them cannot drift, and no repeat can spawn. Exact string match, every status included.
+  When `new` is already a context it raises `gtd_common.ConflictError` → 409 and writes
+  nothing; the control shows that sentence with a **Merge** button that resends
+  `merge: true`, armed only while the box still reads the name it was answered for.
+  **Divergence:** no `context_renamed` audit event (there is no event chain here); the
+  response is `{count, todo_ids, merged}` so the caller can see what moved. The control sits
+  on each context group heading on BOTH pages that group by context — Next Actions (named by
+  the issue) and the Contexts tab (`SearchPage`, upstream's only placement) — and beside each
+  page's context filter when the chosen context has no group there (Next Actions: one facet
+  chosen whose next actions are all starred or absent; Contexts: only finished todos carry
+  it, or a search is showing). Baker's todo tools are unchanged.
+
 - **The two no-login todo surfaces are asymmetric, and only ONE of them is opt-in** (#70,
   ported from chatty — the heading used to say both were, which the body below has always
   contradicted). Neither consults `todo_mode`, so #102's default flip leaves both exactly

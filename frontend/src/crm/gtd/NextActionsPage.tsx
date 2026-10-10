@@ -1,10 +1,13 @@
 import { useMemo, useState } from 'react';
 import { SearchFilterBar, toggleValue } from '../../shared/search';
+import { toast } from '../../shared/toast';
 import { listTodos } from './api';
+import { ContextRename } from './components/ContextRename';
 import { TodoEditSheet } from './components/TodoEditSheet';
 import { TodoRow } from './components/TodoRow';
 import { contextGroup, matchesContexts } from './contextFacet';
 import { useRowActions, useTodos } from './hooks';
+import { isTodoPublicMode } from './publicMode';
 import { EmptyState, LoadFailed, LoadingRows, TodoShell } from './TodoShell';
 import type { Todo } from './types';
 import { useTodoMeta } from './useTodoMeta';
@@ -24,7 +27,7 @@ const NO_CONTEXT = 'No context';
 export function NextActionsPage() {
   const { todos, failed, reload } = useTodos(() => listTodos({ status: 'next_action', limit: 500 }));
   const { toggleDone, toggleStar, after } = useRowActions(reload);
-  const { projects, filters } = useTodoMeta();
+  const { projects, filters, refreshMeta } = useTodoMeta();
   const [search, setSearch] = useState('');
   const [contexts, setContexts] = useState<(string | number)[]>([]);
   const [editTodo, setEditTodo] = useState<Todo | null>(null);
@@ -50,6 +53,22 @@ export function NextActionsPage() {
       return a.localeCompare(b);
     });
   }, [visible]);
+
+  // Rename a context across every todo (#280). The no-login web app has no rename
+  // route, so the control never renders there. Facet values are lower-cased, so the
+  // selection follows the new name rather than going empty.
+  const renamed = (from: string, to: string) => {
+    setContexts(prev => prev.map(v => (v === from.toLowerCase() ? to.toLowerCase() : v)));
+    toast.success(`Renamed "${from}" to "${to}".`);
+    reload();
+    void refreshMeta();
+  };
+  // A context chosen in the filter that has no group here (its next actions are all
+  // starred, or only other lists carry it) gets the control beside the filter instead.
+  const chosen = contexts.length === 1
+    ? (filters?.contexts ?? []).find(c => c.toLowerCase() === contexts[0])
+    : undefined;
+  const renameBesideFilter = !isTodoPublicMode && !!chosen && !groups.some(([key]) => key === chosen);
 
   const rows = (items: Todo[]) => (
     <div className="space-y-2">
@@ -90,6 +109,12 @@ export function NextActionsPage() {
         activeFacetCount={contexts.length}
         onClear={() => { setSearch(''); setContexts([]); }}
       />
+      {renameBesideFilter && chosen && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-sm text-muted">
+          <span>{chosen}</span>
+          <ContextRename key={chosen} context={chosen} onRenamed={to => renamed(chosen, to)} />
+        </div>
+      )}
       {failed && <LoadFailed retry={reload} />}
       {!failed && todos === null && <LoadingRows />}
       {todos !== null && !failed && visible.length === 0 && (
@@ -106,9 +131,14 @@ export function NextActionsPage() {
         )}
         {groups.map(([context, items]) => (
           <section key={context}>
-            <h2 className="mb-2 text-xs font-heading font-bold uppercase tracking-wide text-muted">
-              {context}
-            </h2>
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <h2 className="text-xs font-heading font-bold uppercase tracking-wide text-muted">
+                {context}
+              </h2>
+              {!isTodoPublicMode && context !== NO_CONTEXT && (
+                <ContextRename context={context} onRenamed={to => renamed(context, to)} />
+              )}
+            </div>
             {rows(items)}
           </section>
         ))}

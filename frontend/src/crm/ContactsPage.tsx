@@ -17,9 +17,8 @@
  * `/crm/contacts/:id`, which a modal has no way to be. The cost of staying routed is the
  * shell's ‹ › record navigation; that is the trade.
  */
-import { useCallback, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { api } from '../core/api/client';
 import type { CrmContact } from '../core/types';
 import { ContactDetailPage } from './ContactDetailPage';
 import { ContactForm } from './components/ContactForm';
@@ -36,6 +35,8 @@ import { buildContactColumns } from './listColumns';
 import { useCrmCorpus, type CrmCorpus } from './usePatchableAssembly';
 import { useLocalDay } from './useLocalDay';
 import { RefreshButton } from './components/RefreshButton';
+import { WarmStatus } from './components/WarmStatus';
+import { fetchContactRows } from './warmQueue';
 
 // Module scope: the columns take no runtime deps, and the config they feed must be
 // referentially stable or the layer re-derives every search doc on each keystroke.
@@ -50,13 +51,12 @@ export function ContactsPage() {
   const { options: owners, loading: usersLoading } = useOwnerOptions();
 
   const corpus = useCrmCorpus<CrmContact>(
-    useCallback(async (params, signal) => {
-      const res = await api<{ contacts: CrmContact[] }>(`/api/crm/contacts?${params}`, { signal });
-      return res.contacts;
-    }, []),
+    fetchContactRows,
     // Gate: a cold deep link to /crm/contacts/42 must not pull the whole corpus. The gate
     // latches, so open → back never re-sweeps.
     id === undefined,
+    // #281: the last complete sweep is cached per user, so the page opens on rows.
+    'contacts',
   );
   const { upsert, remove, retry } = corpus;
 
@@ -82,6 +82,7 @@ export function ContactsPage() {
       {/* The roster decides whether an Owner facet exists at all, and the layer persists
           facet selections by config identity — so mount the collection only once it is
           known, rather than letting the facet appear a beat later. */}
+      <WarmStatus savedAt={corpus.savedAt} failed={corpus.refreshFailed} onRetry={retry} />
       {usersLoading
         ? <p style={{ ...mono(12), color: INK_DIM }}>Loading…</p>
         : <ContactsCollection corpus={corpus} owners={owners} />}

@@ -5,6 +5,7 @@ import { useAuth } from '../core/auth/AuthContext';
 import { useBranding } from '../core/branding/BrandingContext';
 import BootFallback from '../core/components/BootFallback';
 import ChunkErrorBoundary from '../core/components/ChunkErrorBoundary';
+import { purgeForeignWarm, WarmViewerContext } from './warmCache';
 import { useIsMobile } from '../shared/useIsMobile';
 import { MobileMenuDrawer } from '../shared/MobileMenuDrawer';
 import { confirmDialog } from '../shared/confirm';
@@ -220,6 +221,15 @@ export function CrmLayout() {
     void resyncPushSubscription();
   }, [currentUserId]);
 
+  // #281: whoever used this browser before, their warm-cached CRM rows go the moment someone
+  // else opens the CRM — the backstop for a user switch that never passed through sign-out.
+  // Only once the account is KNOWN: `currentUser` is briefly null after a login, and purging
+  // then would throw away the arriving user's own cache.
+  const viewerEmail = currentUser?.email ?? null;
+  useEffect(() => {
+    if (viewerEmail) void purgeForeignWarm(viewerEmail);
+  }, [viewerEmail]);
+
   // #102: the Settings card switches the mode, but this layout owns it for the whole
   // CRM and does not refetch on navigation — so the card pushes the new value up here
   // instead of keeping its own copy. Without this, switching mode in Settings left
@@ -417,6 +427,8 @@ export function CrmLayout() {
             field on a SUCCESSFUL response means a backend that predates #70 and has no
             GTD endpoints at all, where normal is the only mode that renders a working
             page — 'gtd' would render a shell whose every request 404s. */}
+        {/* The signed-in email, for the list pages' warm cache (#281). */}
+        <WarmViewerContext.Provider value={viewerEmail}>
         <TodoModeContext.Provider value={status ? (status.todo_mode ?? 'normal') : null}>
           <TodoModeSetterContext.Provider value={handleSetTodoMode}>
             {/* Route chunks load here (#149), INSIDE the chrome: a page's first visit — or the
@@ -438,6 +450,7 @@ export function CrmLayout() {
             </ChunkErrorBoundary>
           </TodoModeSetterContext.Provider>
         </TodoModeContext.Provider>
+        </WarmViewerContext.Provider>
       </div>
 
       {/* Persistent assistant affordance — always present, degrades gracefully. */}

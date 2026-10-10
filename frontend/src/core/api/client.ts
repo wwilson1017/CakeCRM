@@ -15,6 +15,17 @@ import { getToken, TOKEN_KEY } from '../auth/tokenUtils';
  *
  * Extends Error, so every existing `catch` that treats it as one keeps working.
  */
+/**
+ * A dead session takes the CRM warm cache (#281) with it: rows cached in this browser must not
+ * outlive the session that fetched them, and an expired session never passes through `logout`.
+ * Inlined rather than calling `crm/warmStore.wipeWarm`: this module also rides in the /todo
+ * PWA, which must reach no CRM module (`bootSplit.test.ts`). The page navigates away right
+ * after, so no in-flight sweep survives to write back. Keep the name in step with `DB_NAME` there.
+ */
+function dropWarmCache(): void {
+  try { indexedDB.deleteDatabase('cakecrm-warm'); } catch { /* no IndexedDB: nothing cached */ }
+}
+
 export class ApiError extends Error {
   // Declared explicitly rather than as constructor parameter properties: this project
   // compiles with `erasableSyntaxOnly`, which bans that shorthand.
@@ -50,6 +61,7 @@ export async function api<T = unknown>(
 
   if (res.status === 401) {
     sessionStorage.removeItem(TOKEN_KEY);
+    dropWarmCache();
     window.location.href = '/login';
     // Never settle: the page is navigating away. Throwing here would run
     // every caller's catch block and flash false "Failed to ..." toasts
@@ -100,6 +112,7 @@ export async function apiBlob(path: string, signal?: AbortSignal): Promise<Blob>
 
   if (res.status === 401) {
     sessionStorage.removeItem(TOKEN_KEY);
+    dropWarmCache();
     window.location.href = '/login';
     return new Promise<never>(() => {});
   }
