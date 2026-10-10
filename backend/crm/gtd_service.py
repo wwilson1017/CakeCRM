@@ -28,6 +28,8 @@ from crm.gtd_common import (
     PROJECT_FIELDS,
     TODO_FIELDS,
     TODO_STATUSES,
+    ConflictError,
+    NotFoundError,
     ValidationError,
 )
 
@@ -463,6 +465,51 @@ def get_filters() -> dict:
         "status_counts": counts,
         "tz": localtime.tz().key,
     }
+
+
+def rename_context(old: str, new: str, *, merge: bool = False) -> dict:
+    """Rename a context on every todo carrying it (#280, port of cake_os #3569).
+
+    A context is a string on each todo, not a record, so this rewrites the rows that
+    hold exactly ``old`` — every status, finished included, or the old name would
+    linger in the filter list. When ``new`` is already a context the two groups would
+    MERGE, which cannot be told apart afterwards, so that raises ConflictError (409)
+    and writes nothing until the caller repeats it with ``merge=True``.
+
+    A context-only sibling of ``service._apply_todo_update_cur``: it never touches
+    ``status``/``completed`` (so the CHECK that binds them cannot drift) and it does
+    NOT bump ``updated_at`` — Review's stale list and Waiting's age read that column
+    as "when I last touched this", and a rename changes no todo's substance.
+    """
+    old = gtd_common.validate_short(old, "context")
+    new = gtd_common.validate_short(new, "new name")
+    if not old:
+        raise ValidationError("context is required")
+    if not new:
+        raise ValidationError("new name cannot be empty")
+    if old == new:
+        raise ValidationError(f'The context is already named "{new}"')
+    with get_connection() as conn:
+        cur = conn.cursor()
+        # One rename at a time. The row locks below cover only the SOURCE rows, so two
+        # renames of different contexts onto the same unused name would each see no
+        # destination and merge without confirmation; an unused name has no row to lock.
+        cur.execute("SELECT pg_advisory_xact_lock(2801)")
+        cur.execute(
+            "SELECT id FROM todos WHERE context = %s ORDER BY id FOR UPDATE", (old,)
+        )
+        ids = [r[0] for r in cur.fetchall()]
+        if not ids:
+            raise NotFoundError()
+        cur.execute("SELECT EXISTS (SELECT 1 FROM todos WHERE context = %s)", (new,))
+        merged = bool(cur.fetchone()[0])
+        if merged and not merge:
+            raise ConflictError(
+                f'You already have a context named "{new}". '
+                f'Merging moves every "{old}" todo into it.'
+            )
+        cur.execute("UPDATE todos SET context = %s WHERE id = ANY(%s)", (new, ids))
+    return {"count": len(ids), "todo_ids": ids, "merged": merged}
 
 
 def capture(text: str, source: str = "capture_web", owner_id: int | None = None) -> dict:

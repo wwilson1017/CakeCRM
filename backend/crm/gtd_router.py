@@ -27,6 +27,7 @@ from crm.gtd_common import (
     MAX_BULK_IDS,
     MAX_SHORT_CHARS,
     MAX_TEXT_CHARS,
+    ConflictError,
     NotFoundError,
     ValidationError,
 )
@@ -77,6 +78,12 @@ class TodoBulkUpdate(BaseModel):
     fields: dict
 
 
+class ContextRename(BaseModel):
+    old: str = Field(max_length=MAX_SHORT_CHARS)
+    new: str = Field(max_length=MAX_SHORT_CHARS)
+    merge: bool = False
+
+
 class ProjectCreate(BaseModel):
     name: str = Field(max_length=MAX_SHORT_CHARS)
     notes: str = Field(default="", max_length=MAX_TEXT_CHARS)
@@ -101,6 +108,8 @@ def _call(fn, *args, **kwargs):
         raise HTTPException(status_code=400, detail=str(e))
     except NotFoundError:
         raise HTTPException(status_code=404, detail="Not found")
+    except ConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 def build_router(guard) -> APIRouter:
@@ -228,3 +237,11 @@ def build_router(guard) -> APIRouter:
 
 # The authenticated mount. `main.py` includes this at /api/crm/gtd.
 router = build_router(get_current_user)
+
+
+@router.post("/contexts/rename")
+def rename_context(body: ContextRename):
+    """Rename a context across every todo (#280). On the authenticated mount ONLY, never
+    in `build_router`: the no-login web app was scoped out, and so is its control.
+    409 = the new name already exists; resend with `merge: true` to fold them together."""
+    return _call(gtd_service.rename_context, body.old, body.new, merge=body.merge)

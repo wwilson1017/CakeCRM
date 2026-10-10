@@ -34,6 +34,7 @@ next action and clears it out of the inbox — so agree the context before writi
 - **Context** — where or how it can be done, free text by convention written with a leading
   at-sign: calls, office, errands, computer. The existing contexts are offered in a picker,
   with a hatch for a new one.
+  To rename one on every todo at once, see the renaming topic (todos/rename-context).
 - **Tags** — anything else. Up to 50.
 - **Star** — today's priorities. Keep starred items to a handful. There is also an option to
   star a todo automatically when it comes due.

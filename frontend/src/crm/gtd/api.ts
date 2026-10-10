@@ -107,6 +107,17 @@ export function getFilters(): Promise<TodoFilters> {
   return todoFetch<TodoFilters>('/filters');
 }
 
+/** Rename a context on every todo carrying it (#280). 409 = `next` already exists;
+ *  resend with `merge` once the user has confirmed. Authed CRM only: the route is not on
+ *  the no-login web mount, so this never goes through the public raw-fetch path. */
+export function renameContext(
+  old: string, next: string, merge = false,
+): Promise<{ count: number; todo_ids: number[]; merged: boolean }> {
+  return api(`${TODO_API_BASE}/contexts/rename`, {
+    method: 'POST', body: JSON.stringify({ old, new: next, merge }),
+  });
+}
+
 /** Whether a weekly review is due (#263). The full review packet rides the same
  *  response; the Review page reads only these two fields. */
 export interface ReviewStatus {

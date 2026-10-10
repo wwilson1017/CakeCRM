@@ -500,3 +500,53 @@ def test_the_review_routes_answer_on_the_authenticated_mount(pg_db):
     assert got.status_code == 200 and got.json()["review_due"] is True
     done = client.post("/api/crm/gtd/review/done")
     assert done.json() == {"review_due": False, "days_since_review": 0}
+
+
+# ── Renaming a context (#280) ─────────────────────────────────────────────────
+
+def _context_rows():
+    from core.postgres import pg_fetchall
+    return {
+        r["id"]: (r["context"], r["status"], r["completed"], r["updated_at"])
+        for r in pg_fetchall(
+            "SELECT id, context, status, completed, updated_at FROM todos ORDER BY id"
+        )
+    }
+
+
+def test_renaming_a_context_rewrites_every_status_and_keeps_updated_at(pg_db):
+    from crm import gtd_service
+
+    open_ = gtd_service.create_todo("call the plumber", status="next_action", context="@phone")
+    done = gtd_service.create_todo("called mum", status="done", context="@phone")
+    other = gtd_service.create_todo("buy milk", status="next_action", context="@errands")
+    before = _context_rows()
+
+    result = gtd_service.rename_context("@phone", "@calls")
+
+    assert result == {"count": 2, "todo_ids": sorted([open_["id"], done["id"]]), "merged": False}
+    after = _context_rows()
+    for tid in (open_["id"], done["id"]):
+        assert after[tid][0] == "@calls"
+        assert after[tid][1:] == before[tid][1:]  # status, completed, updated_at untouched
+    assert after[other["id"]] == before[other["id"]]
+    assert gtd_service.get_filters()["contexts"] == ["@calls", "@errands"]
+
+
+def test_a_rename_onto_an_existing_context_writes_nothing_until_merge(pg_db):
+    from crm import gtd_service
+    from crm.gtd_common import ConflictError
+
+    a = gtd_service.create_todo("call the plumber", status="next_action", context="@phone")
+    b = gtd_service.create_todo("ring the bank", status="waiting_for", context="@calls")
+    before = _context_rows()
+
+    with pytest.raises(ConflictError):
+        gtd_service.rename_context("@phone", "@calls")
+    assert _context_rows() == before
+
+    result = gtd_service.rename_context("@phone", "@calls", merge=True)
+    assert result == {"count": 1, "todo_ids": [a["id"]], "merged": True}
+    after = _context_rows()
+    assert after[a["id"]][0] == after[b["id"]][0] == "@calls"
+    assert after[a["id"]][3] == before[a["id"]][3]
