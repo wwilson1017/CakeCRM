@@ -12,6 +12,7 @@
  * quota error, an aborted transaction — each resolves as "no value" / "not written". A cache that
  * cannot be used is simply no cache; it must never break the page it was meant to speed up.
  */
+// `core/api/client.ts` deletes this database by name on a 401 — rename both together.
 const DB_NAME = 'cakecrm-warm';
 const STORE = 'lists';
 

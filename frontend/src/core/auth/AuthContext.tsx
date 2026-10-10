@@ -108,6 +108,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (result === 'invalid') {
           // Definitively dead — this is the only case that discards the token.
           sessionStorage.removeItem(TOKEN_KEY);
+          // ...and the CRM rows cached under it (#281).
+          void wipeWarm();
           setIsLoggedIn(false);
         } else if (result === 'unknown') {
           // Backend unreachable or erroring. Keep the token so the session survives

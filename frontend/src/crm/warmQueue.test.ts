@@ -17,6 +17,9 @@ vi.mock('./warmStore', () => ({
   idbKeys: async () => [...store.keys()],
 }));
 
+const api = vi.hoisted(() => vi.fn());
+vi.mock('../core/api/client', () => ({ api }));
+
 const ANA = 'ana@example.com';
 
 /** Sweepers that each wait for the test to release them, recording order and overlap. */
@@ -41,6 +44,7 @@ function controlled() {
 let q: typeof import('./warmQueue');
 beforeEach(async () => {
   store.clear();
+  api.mockReset();
   epoch.value = 0;
   vi.resetModules();
   q = await import('./warmQueue');
@@ -125,5 +129,54 @@ describe('warm-up queue (#281)', () => {
     await done;
     expect(c.log).toEqual(['start:pipeline']);
     expect(store.size).toBe(0);
+  });
+
+  it('caches a list whose sweep resolves even after a page claimed it mid-flight — never', async () => {
+    let finish!: (v: unknown) => void;
+    const sweepers: WarmSweepers = {
+      // Ignores its abort signal and resolves anyway, as `sweepPipelineDeals` can with a page in flight.
+      pipeline: () => new Promise(r => { finish = r; }),
+      contacts: async () => ['c'],
+      companies: async () => ['co'],
+    };
+    const done = q.startWarmUp(ANA, sweepers);
+    await new Promise(r => setTimeout(r, 0));
+    q.claimWarmTab('pipeline');
+    finish(['stale']);
+    await done;
+    expect(store.has(`${ANA}|pipeline`)).toBe(false);
+    expect(store.has(`${ANA}|companies`)).toBe(true);
+  });
+
+  describe('the real list sweeps', () => {
+    const SIZE = 500;   // CRM_LIST_PAGE_SIZE; the sweep asks for SIZE + 1
+    const rows = (from: number, n: number) => Array.from({ length: n }, (_, i) => ({ id: from + i }));
+
+    it('walks the keyset pages and caches the complete corpus', async () => {
+      api.mockImplementation(async (url: string) => {
+        const after = new URL(url, 'http://x').searchParams.get('after_id');
+        if (url.startsWith('/api/crm/deals')) return { deals: [] };
+        const key = url.startsWith('/api/crm/contacts') ? 'contacts' : 'companies';
+        return { [key]: after === null ? rows(1, SIZE + 1) : rows(SIZE + 1, 2) };
+      });
+      await q.startWarmUp(ANA);
+      const entry = store.get(`${ANA}|contacts`) as { data: { id: number }[] };
+      expect(entry.data.length).toBe(SIZE + 2);
+      expect(new Set(entry.data.map(r => r.id)).size).toBe(SIZE + 2);
+    });
+
+    it('caches nothing for a list whose second page fails, and moves on to the next', async () => {
+      api.mockImplementation(async (url: string) => {
+        if (url.startsWith('/api/crm/deals')) return { deals: [] };
+        if (url.startsWith('/api/crm/contacts')) {
+          if (url.includes('after_id=')) throw new Error('offline');
+          return { contacts: rows(1, SIZE + 1) };
+        }
+        return { companies: rows(1, 3) };
+      });
+      await q.startWarmUp(ANA);
+      expect(store.has(`${ANA}|contacts`)).toBe(false);
+      expect(store.has(`${ANA}|companies`)).toBe(true);
+    });
   });
 });
