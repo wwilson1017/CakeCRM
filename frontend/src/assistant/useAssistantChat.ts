@@ -205,6 +205,16 @@ interface ActiveTurn {
   wake: (() => void) | null;
 }
 
+/** A v4 UUID. `crypto.randomUUID` exists only in a secure context, and the app is also
+ *  served over plain HTTP on a LAN address; `getRandomValues` works in both. */
+function mintTurnId(): string {
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const h = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
 function newTurn(turnId: string, asstId: string): ActiveTurn {
   return {
     turnId, asstId, lastSeq: -1, sawTerminal: false, sawTurnStart: false, reconcile: false,
@@ -616,7 +626,7 @@ export function useAssistantChat(
 
   const startAssistant = useCallback((extra: ChatMessage[]) => {
     const asstId = newId();
-    const turn = newTurn(crypto.randomUUID(), asstId);
+    const turn = newTurn(mintTurnId(), asstId);
     activeTurnRef.current = turn;
     textBufRef.current[asstId] = '';
     commit([...messagesRef.current, ...extra, { id: asstId, role: 'assistant', content: '', streaming: true }]);

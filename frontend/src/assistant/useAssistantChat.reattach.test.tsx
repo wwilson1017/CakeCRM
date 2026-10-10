@@ -109,6 +109,13 @@ describe('sending a turn (#282)', () => {
     expect(turnId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   });
 
+  it('mints the id without randomUUID, which a plain-HTTP LAN origin does not have', async () => {
+    vi.stubGlobal('crypto', { getRandomValues: crypto.getRandomValues.bind(crypto) });
+    const chat = mountChat(root);
+    await startTurn(chat);
+    expect(turnId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+
   it('sends it as its own form field on an upload', async () => {
     const chat = mountChat(root);
     await startTurn(chat, [new File(['x'], 'a.txt')]);
