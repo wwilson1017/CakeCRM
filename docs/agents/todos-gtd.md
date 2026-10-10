@@ -170,7 +170,7 @@
   `TODO_FIELDS` minus `bring_back_on`; `owner_id`/`source` are server-bound and refused
   inside an item. A `done` item is inserted completed and spawns no repeat (an insert is not
   a transition). `GTD_GUIDE` gains one paragraph at its end (no block reorder) telling Baker
-  to map onto existing projects, show the plan, then make ONE call; `todos/import` is the help
+  to map onto existing projects, show the plan, then make ONE call per 500 items; `todos/import` is the help
   topic, and `.json` joined the upload allow-list. Deliberately not built: a quick-add paste,
   a bulk HTTP route, an import screen, MCP wiring. Zero-key installs have no import path.
 - **A project's name and notes are click-to-edit on its detail page** (#232), through the same

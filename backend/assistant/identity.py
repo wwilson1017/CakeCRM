@@ -346,7 +346,8 @@ GTD_GUIDE = (
     "todo_list_projects and map the items onto existing projects and contexts rather "
     "than near-duplicates; anything unclear goes to the inbox as written. Show the plan "
     "(how many items, which projects and contexts), and after a yes create everything "
-    "with ONE todo_bulk_create call — never a loop of todo_create. Never invent items."
+    "with ONE todo_bulk_create call per batch of up to 500 — never a loop of todo_create. "
+    "Never invent items."
 )
 
 # Static (cacheable) explanation of the assistant's long-term memory (issue #5). The

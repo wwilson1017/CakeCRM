@@ -1,7 +1,7 @@
 ---
 title: Importing todos from another app
 description: Bring a list or an export from another todo app into your todos by handing it to the assistant.
-aliases: import todos, import tasks, migrate todos, export from another app, bring in my list, paste a list, todoist, things, csv import
+aliases: import todos, migrate todos, export from another app, bring in my list, paste a list, todoist, things, csv import
 admin: false
 ---
 ## Importing a list
