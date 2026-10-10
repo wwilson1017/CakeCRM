@@ -75,7 +75,7 @@ export type WarmSweepers = Record<WarmTab, (signal: AbortSignal) => Promise<unkn
 
 const SWEEPERS: WarmSweepers = {
   // Live deals only — the board's default content set, and the only one it seeds from cache.
-  pipeline: signal => sweepPipelineDeals(false, () => !signal.aborted) as Promise<CrmDeal[]>,
+  pipeline: signal => sweepPipelineDeals(false, () => !signal.aborted, signal) as Promise<CrmDeal[]>,
   contacts: signal => sweepList(fetchContactRows, signal),
   companies: signal => sweepList(fetchCompanyRows, signal),
 };
