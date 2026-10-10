@@ -43,6 +43,13 @@ export default defineConfig({
     __CAPTURE_PAGE_PY__: JSON.stringify(
       readFileSync(new URL('../backend/crm/todo_capture.py', import.meta.url), 'utf8'),
     ),
+    // The standard stage criteria, for `crm/stageCriteria.test.ts` (#289). Their one home is the
+    // backend, which merges them with an install's own. Read HERE rather than imported by the
+    // test, because `tsc -b` type-checks tests too, and the Docker image builds the frontend
+    // from a copy of `frontend/` alone, where a `../../../backend/…` import does not exist.
+    __STAGE_CRITERIA_STANDARD__: JSON.stringify(
+      readFileSync(new URL('../backend/crm/stage_criteria_standard.json', import.meta.url), 'utf8'),
+    ),
   },
   test: {
     // `node` is the default because most targets are pure functions, and node-env tests are
