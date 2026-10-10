@@ -398,9 +398,11 @@
   `merge: true`, armed only while the box still reads the name it was answered for.
   **Divergence:** no `context_renamed` audit event (there is no event chain here); the
   response is `{count, todo_ids, merged}` so the caller can see what moved. The control sits
-  on each context group heading on Next Actions (upstream: its Contexts tab), and beside the
-  facet bar when exactly one chosen context has no group there (its next actions are all
-  starred, or only other lists carry it). Baker's todo tools are unchanged.
+  on each context group heading on BOTH pages that group by context — Next Actions (named by
+  the issue) and the Contexts tab (`SearchPage`, upstream's only placement) — and beside each
+  page's context filter when the chosen context has no group there (Next Actions: one facet
+  chosen whose next actions are all starred or absent; Contexts: only finished todos carry
+  it, or a search is showing). Baker's todo tools are unchanged.
 
 - **The two no-login todo surfaces are asymmetric, and only ONE of them is opt-in** (#70,
   ported from chatty — the heading used to say both were, which the body below has always

@@ -34,8 +34,8 @@ next action and clears it out of the inbox — so agree the context before writi
 - **Context** — where or how it can be done, free text by convention written with a leading
   at-sign: calls, office, errands, computer. The existing contexts are offered in a picker,
   with a hatch for a new one. To rename a context everywhere at once, use **Rename** beside
-  its heading on the To Do list (or beside the context filter when you have picked a context
-  that has no group there). Every todo carrying it changes, finished ones included, and
+  its heading on the To Do list or the Contexts tab (or beside the context filter when you
+  have picked a context that has no group there, such as one only finished todos carry). Every todo carrying it changes, finished ones included, and
   none of them counts as freshly edited. If the new name is already a context, you are asked
   first and **Merge** folds the two into one; that cannot be split apart again afterwards.
   Renaming is not offered on the no-login todo link.
