@@ -23,6 +23,14 @@ def test_plain_text_wrapped_with_matched_nonce():
     assert f'</untrusted_file_content id="{open_id}">' in out
 
 
+@pytest.mark.parametrize("name", ["export.json", "export.csv", "list.md", "list.txt"])
+def test_todo_app_exports_are_accepted_as_fenced_text(name):
+    """#284: an export from another todo app is attached to Baker, so the common export
+    formats must pass the allow-list and arrive as fenced text."""
+    out = extract_upload(name, b'[{"title": "Call the vet"}]')
+    assert "Call the vet" in out and "<untrusted_file_content" in out
+
+
 def test_latin1_fallback():
     out = extract_upload("n.txt", "café".encode("latin-1"))
     assert "caf" in out  # decoded, not crashed

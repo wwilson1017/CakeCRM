@@ -16,6 +16,8 @@ import {
   LINE,
   SAGE_TEXT,
 } from '../shared/styles';
+import { BulkItemList } from './BulkItemList';
+import { bulkItems } from './bulkItems';
 import { MarkdownContent } from './MarkdownContent';
 import type { ChatMessage, PendingConfirmation, ToolCallInfo, WorkingState } from './types';
 import { WorkingIndicator } from './WorkingIndicator';
@@ -81,6 +83,7 @@ function ConfirmationCard({
   onDeny: () => void;
 }) {
   const args = Object.entries(confirm.args ?? {});
+  const items = bulkItems(confirm.args);
   if (confirm.status !== 'pending') {
     const approved = confirm.status === 'approved';
     const failed = confirm.status === 'failed';
@@ -113,10 +116,11 @@ function ConfirmationCard({
       </div>
       <div style={{ fontSize: 12, color: INK_MUTE, marginBottom: 10 }}>
         <code>{confirm.tool}</code>
-        {args.length > 0 && (
+        {!items && args.length > 0 && (
           <span> · {args.map(([k, v]) => `${k}: ${summarize(v)}`).join(', ')}</span>
         )}
       </div>
+      {items && <BulkItemList items={items} />}
       <div style={{ display: 'flex', gap: 8 }}>
         <button
           onClick={onApprove}

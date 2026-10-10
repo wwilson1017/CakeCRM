@@ -2277,6 +2277,23 @@ def create_todo(
     title: str, description: str = "", due_date: str = "",
     contact_id: int | None = None, deal_id: int | None = None,
     priority: str = "medium", owner_id: int | None = None,
+    **gtd_fields,
+) -> dict:
+    """Create one todo in its own transaction; `gtd_fields` are `_create_todo_cur`'s
+    keyword-only GTD fields."""
+    with get_connection() as conn:
+        new_id = _create_todo_cur(
+            conn.cursor(), title, description, due_date, contact_id, deal_id,
+            priority, owner_id, **gtd_fields,
+        )
+    return get_todo(new_id)
+
+
+def _create_todo_cur(
+    cur,
+    title: str, description: str = "", due_date: str = "",
+    contact_id: int | None = None, deal_id: int | None = None,
+    priority: str = "medium", owner_id: int | None = None,
     *,
     status: str = "next_action",
     star: bool = False,
@@ -2286,9 +2303,11 @@ def create_todo(
     auto_star_on_due: bool = False,
     project_id: int | None = None,
     source: str = "ui",
-) -> dict:
-    """Create a todo. The GTD keyword-only fields (#70) default to the normal-mode
-    shape, so every existing caller is unchanged.
+) -> int:
+    """Validate and INSERT one todo inside the caller's transaction; returns its id.
+    The ONE todo insert: `create_todo` and the GTD bulk import (#284) both call it, so
+    single and bulk creation cannot drift. The GTD keyword-only fields (#70) default to
+    the normal-mode shape, so every existing caller is unchanged.
 
     `status` defaults to 'next_action', NOT 'inbox': a todo created from the CRM form
     or by crm_create_todo is already clarified work. Only a GTD *capture* means "I
@@ -2305,7 +2324,7 @@ def create_todo(
         raise gtd_common.ValidationError(
             f"Invalid source '{source}'. Valid: {', '.join(gtd_common.TODO_SOURCES)}"
         )
-    row = pg_fetchone(
+    cur.execute(
         """INSERT INTO todos (title, description, due_date, contact_id, deal_id, priority,
                               owner_id, status, star, context, tags, repeat, auto_star_on_due,
                               project_id, source, completed, completed_at)
@@ -2331,7 +2350,7 @@ def create_todo(
             status,
         ),
     )
-    return get_todo(row["id"])
+    return cur.fetchone()[0]
 
 
 def get_todo(todo_id: int) -> dict | None:

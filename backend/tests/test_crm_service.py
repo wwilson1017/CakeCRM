@@ -481,7 +481,8 @@ def test_update_contact_coerces_unknown_status(rec):
 
 
 def test_create_todo_coerces_unknown_priority(rec):
-    rec.fetchone_queue = [{"id": 1}, {"id": 1}]
+    rec.cursor_fetchone_queue = [(1,)]  # the INSERT's RETURNING id, read on the cursor
+    rec.fetchone_queue = [{"id": 1}]
     service.create_todo("T", priority="urgent")  # not a real priority
     assert "medium" in rec.params_for("INSERT INTO todos")
     assert "urgent" not in rec.params_for("INSERT INTO todos")

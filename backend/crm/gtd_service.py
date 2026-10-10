@@ -71,7 +71,8 @@ def _todo_dict(d: dict) -> dict:
 
 # ── Todos ─────────────────────────────────────────────────────────────────────
 
-def create_todo(
+def _create_in(
+    cur,
     title: str,
     *,
     notes: str = "",
@@ -88,44 +89,87 @@ def create_todo(
     deal_id: int | None = None,
     source: str = "agent",
     owner_id: int | None = None,
-) -> dict:
-    """Create a todo. Defaults to the inbox — the GTD capture-first rule.
+) -> int:
+    """Validate and insert one todo inside the caller's transaction; returns its id.
 
-    A free-text `project` name resolves to (or creates) a project; an explicit
-    `project_id` wins over it.
+    Defaults to the inbox — the GTD capture-first rule. A free-text `project` name
+    resolves to (or creates) a project; an explicit `project_id` wins over it. The
+    INSERT itself is the STORE layer's `service._create_todo_cur`, the ONE place that
+    derives `completed` from `status` (the pairing the CHECK constraint enforces), so a
+    `done` item is stamped completed and, being an insert rather than a transition,
+    spawns no repeat.
     """
+    if project_id is not None:
+        pid = service._check_todo_project_id_cur(cur, project_id)
+    elif project and str(project).strip():
+        pid = service._resolve_todo_project_id_cur(
+            cur, gtd_common.validate_short(project, "project")
+        )
+    else:
+        pid = None
+    return service._create_todo_cur(
+        cur,
+        title,
+        description=notes,
+        due_date=due_date or "",
+        contact_id=contact_id,
+        deal_id=deal_id,
+        status=status,
+        star=star,
+        context=context,
+        tags=tags,
+        repeat=repeat,
+        auto_star_on_due=auto_star_on_due,
+        project_id=pid,
+        source=source,
+        owner_id=owner_id,
+    )
+
+
+def create_todo(title: str, **fields) -> dict:
+    """Create one todo; `fields` are `_create_in`'s keyword arguments. One transaction,
+    so a refused item no longer leaves behind the project its name created."""
+    with get_connection() as conn:
+        new_id = _create_in(conn.cursor(), title, **fields)
+    return get_todo(new_id)
+
+
+# What one bulk-create item may carry: the GTD todo vocabulary minus `bring_back_on`,
+# which creation does not take (a later `todo_update` sets it). `owner_id`/`source` are
+# deliberately absent — the server stamps both, so an item naming either is refused.
+BULK_CREATE_FIELDS = TODO_FIELDS - {"bring_back_on"}
+
+
+def bulk_create(todos: list[dict], *, source: str = "agent",
+                owner_id: int | None = None) -> dict:
+    """Create many todos in ONE transaction (#284, port of todo-gtd `293e263`), each
+    exactly as `create_todo` would. All or nothing: the first bad item rolls the whole
+    batch back and is named by position (`todos[3]: …`). Capped at MAX_BULK_IDS, the
+    ceiling `bulk_update` already uses, so one import is one Approve card."""
+    if not isinstance(todos, list) or not todos:
+        raise ValidationError("todos is required")
+    if len(todos) > MAX_BULK_IDS:
+        raise ValidationError(f"too many todos (max {MAX_BULK_IDS} per call)")
+    ids: list[int] = []
     with get_connection() as conn:
         cur = conn.cursor()
-        if project_id is not None:
-            pid = service._check_todo_project_id_cur(cur, project_id)
-        elif project and str(project).strip():
-            pid = service._resolve_todo_project_id_cur(
-                cur, gtd_common.validate_short(project, "project")
-            )
-        else:
-            pid = None
-    # The STORE layer's `service.create_todo` owns the INSERT so there is ONE place that
-    # derives `completed` from `status` — the pairing the CHECK constraint enforces. This
-    # module's own `create_todo` is the GTD-vocabulary wrapper over it; since #169 the two
-    # share a name, and every call here is module-qualified so the pair stays unambiguous.
-    return _todo_dict(
-        service.create_todo(
-            title,
-            description=notes,
-            due_date=due_date or "",
-            contact_id=contact_id,
-            deal_id=deal_id,
-            status=status,
-            star=star,
-            context=context,
-            tags=tags,
-            repeat=repeat,
-            auto_star_on_due=auto_star_on_due,
-            project_id=pid,
-            source=source,
-            owner_id=owner_id,
-        )
-    )
+        for i, item in enumerate(todos):
+            try:
+                if not isinstance(item, dict):
+                    raise ValidationError("must be an object with a title")
+                # An omitted field and a null one mean the same: the default.
+                fields = {k: v for k, v in item.items() if v is not None}
+                unknown = set(fields) - BULK_CREATE_FIELDS
+                if unknown:
+                    raise ValidationError(
+                        f"Unknown fields: {', '.join(sorted(unknown))}. "
+                        f"Valid: {', '.join(sorted(BULK_CREATE_FIELDS))}"
+                    )
+                ids.append(_create_in(cur, fields.pop("title", ""), **fields,
+                                      source=source, owner_id=owner_id))
+            except ValidationError as e:
+                raise ValidationError(f"todos[{i}]: {e} (nothing in this batch was created)")
+    return {"created": len(ids), "ids": ids}
 
 
 def get_todo(todo_id: int) -> dict | None:

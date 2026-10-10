@@ -46,7 +46,8 @@ ROUTINE_CRM_TOOLS = frozenset({
     "crm_create_todo", "crm_update_todo", "crm_complete_todo",
     "crm_set_contact_fields", "crm_set_company_fields", "crm_set_deal_fields",
 })
-# #186. The other six todo tools stay unclassified: `todo_bulk_update` (rule 4, bulk),
+# #186. The other seven todo tools stay unclassified: `todo_bulk_update` and #284's
+# `todo_bulk_create` (rule 4, bulk),
 # `todo_delete` / `todo_delete_project` (rule 3, a hard DELETE), and the three reads.
 ROUTINE_TODO_TOOLS = frozenset({
     "todo_create", "todo_update", "todo_create_project", "todo_update_project",
@@ -263,18 +264,18 @@ def test_notify_user_is_never_routine(todo_mode):
 def test_only_the_four_classified_todo_tools_are_routine(todo_mode):
     """#186's answer for the whole family, asserted in BOTH directions.
 
-    The six that still deny are the reason this is not "every todo write is routine":
-    `todo_bulk_update` is bulk, the two deletes remove a record, and the four reads
-    cannot carry a tier at all.
+    The eight that still deny are the reason this is not "every todo write is routine":
+    `todo_bulk_update` and `todo_bulk_create` (#284, an import) are bulk, the two deletes
+    remove a record, and the four reads cannot carry a tier at all.
     """
     todo_mode("gtd")
     reg = ToolRegistry()
     todos = [n for n in reg.writes_map if n.startswith("todo_")]
-    assert len(todos) == 11, todos  # vacuity guard
+    assert len(todos) == 12, todos  # vacuity guard
     for name in todos:
         expected = name in ROUTINE_TODO_TOOLS
         assert reg.is_routine_write(name) is expected, name
-    for name in ("todo_bulk_update", "todo_delete", "todo_delete_project"):
+    for name in ("todo_bulk_update", "todo_bulk_create", "todo_delete", "todo_delete_project"):
         assert reg.is_write(name) is True, name  # vacuity: they really are writes
         assert reg.is_routine_write(name) is False, name
     for name in ("todo_list", "todo_get", "todo_list_projects", "todo_weekly_review"):
