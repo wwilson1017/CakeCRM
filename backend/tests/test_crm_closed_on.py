@@ -250,3 +250,16 @@ def test_only_mark_won_advertises_closed_on():
     assert "closed_on" in defs["crm_mark_deal_won"]["input_schema"]["properties"]
     for name in ("crm_update_deal_stage", "crm_bulk_move_deals"):  # they refuse Won (#99)
         assert "closed_on" not in defs[name]["input_schema"]["properties"]
+
+
+def test_an_assistant_written_closed_on_is_badged(monkeypatch):
+    """crm_mark_deal_won's explicit day reaches provenance, so the deal panel can badge it."""
+    from crm import provenance_service
+    recorded = {}
+    monkeypatch.setattr(service, "mark_deal_won",
+                        lambda d, **kw: {"id": d, "stage": "won", "probability": 100,
+                                         "closed_on": kw.get("closed_on")})
+    monkeypatch.setattr(provenance_service, "record_fields",
+                        lambda et, eid, fields, **kw: recorded.update(fields))
+    tools.crm_mark_deal_won(4, closed_on="2026-10-01")
+    assert recorded.get("closed_on") == "2026-10-01"
