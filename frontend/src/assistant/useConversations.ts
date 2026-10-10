@@ -4,7 +4,9 @@ import { useCallback, useState } from 'react';
 
 import { api } from '../core/api/client';
 import { toast } from '../shared/toast';
-import type { Conversation, ServerMessage } from './types';
+import type { Conversation, RunningTurn, ServerMessage } from './types';
+
+type OpenedConversation = { id: string; messages: ServerMessage[]; running_turn?: RunningTurn | null };
 
 const API = '/api/assistant';
 
@@ -25,9 +27,10 @@ export function useConversations() {
   }, []);
 
   const openConversation = useCallback(
-    async (id: string): Promise<{ id: string; messages: ServerMessage[] } | null> => {
+    async (id: string): Promise<OpenedConversation | null> => {
       try {
-        return await api<{ id: string; messages: ServerMessage[] }>(`${API}/conversations/${id}`);
+        // `running_turn` (#282) is absent on an older backend.
+        return await api<OpenedConversation>(`${API}/conversations/${id}`);
       } catch {
         toast.error('Could not open that conversation.');
         return null;
