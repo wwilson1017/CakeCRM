@@ -218,6 +218,11 @@ class DealUpdate(BaseModel):
     company_id: int | None = None
     owner_id: int | None = None
     deal_temperature: str | None = None  # issue #125; explicit null clears it (see below)
+    # #279: the day a Won deal actually closed, YYYY-MM-DD. With stage='won' it is the day
+    # that move records (default today); on an already-won deal it edits the date. Null
+    # or blank never clears it (only leaving won does); a future day or a non-Won deal is
+    # the service's ValueError -> 400.
+    closed_on: str | None = None
 
 
 class DealMarkLost(BaseModel):
@@ -236,6 +241,9 @@ class BulkDealMove(BaseModel):
     # Positivity is checked in the service instead, so every caller gets it.
     deal_ids: list[StrictInt]
     stage: str
+    # #279: one day for every deal this batch moves INTO won (default today); ignored on
+    # any other stage. A future or malformed day is the usual {ok: false, errors} refusal.
+    closed_on: str | None = None
     # Deliberately no Pydantic max_length on deal_ids: the service's BULK_MOVE_MAX is
     # the single definition of the cap, shared with the agent-tool path, and its
     # refusal is a renderable sentence where a Pydantic 422 detail array is not.
@@ -576,7 +584,7 @@ async def update_deal(deal_id: int, body: DealUpdate, user=Depends(get_current_u
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
     try:
-        result = crm.update_deal(deal_id, **updates)
+        result = crm.update_deal(deal_id, actor_id=user["id"], **updates)
     except psycopg2.errors.ForeignKeyViolation:
         raise HTTPException(status_code=400, detail="Referenced contact or company does not exist") from None
     except ValueError as e:
@@ -604,7 +612,10 @@ async def bulk_move_deals(body: BulkDealMove, user=Depends(get_current_user)):
     Off the event loop because the post-commit rescore recomputes one lead score per
     updated deal and linked contact, bounded by BULK_MOVE_MAX.
     """
-    return await run_in_threadpool(crm.bulk_move_deals, body.deal_ids, body.stage)
+    return await run_in_threadpool(
+        crm.bulk_move_deals, body.deal_ids, body.stage,
+        closed_on=body.closed_on, actor_id=user["id"],
+    )
 
 
 # Restore is the recoverability half of issue #83: archiving a deal was reachable only

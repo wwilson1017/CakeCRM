@@ -9,10 +9,14 @@ that the rules come from ``_classify_deal_update`` (the shared classifier) rathe
 second copy, and that the stage-event INSERT rides the same cursor as the deal UPDATEs.
 """
 
+from datetime import date
+
 import psycopg2
 import pytest
 
 from crm import scoring_service, service
+
+TODAY = date(2026, 10, 10)  # #279: the one clock read the classifier is handed
 
 
 @pytest.fixture
@@ -27,8 +31,9 @@ def no_scoring(monkeypatch):
 
 
 def _rows(*specs):
-    """One fetchall payload of (id, stage, archived_at, contact_id) tuples."""
-    return [list(specs)]
+    """One fetchall payload of (id, stage, archived_at, contact_id[, closed_on]) tuples;
+    an omitted closed_on (#279) is None."""
+    return [[tuple(s) + (None,) * (5 - len(s)) for s in specs]]
 
 
 def _updates(conn):
@@ -272,7 +277,8 @@ def test_a_batch_that_moves_nothing_still_answers_ok(monkeypatch, fake_conn, no_
     ("lost", None, {"stage": "lead"}, {"stage": "lead", "lost_reason": ""}, ("lost", "lead")),
     ("lost", None, {"stage": "lead", "lost_reason": "keep"},
      {"stage": "lead", "lost_reason": "keep"}, ("lost", "lead")),
-    ("lead", None, {"stage": "won"}, {"stage": "won", "probability": 100}, ("lead", "won")),
+    ("lead", None, {"stage": "won"},
+     {"stage": "won", "probability": 100, "closed_on": TODAY}, ("lead", "won")),
     ("lead", None, {"stage": "lost"}, {"stage": "lost", "probability": 0}, ("lead", "lost")),
     # Already closed: editing probability on a decided deal stays the caller's call.
     ("won", None, {"probability": 30}, {"probability": 30}, None),
@@ -280,7 +286,7 @@ def test_a_batch_that_moves_nothing_still_answers_ok(monkeypatch, fake_conn, no_
     ("lead", "2026-01-01T00:00:00", {"value": 5}, {"value": 5}, None),
 ])
 def test_classifier_table(old_stage, archived_at, filtered, expect_fields, expect_event):
-    fields, event = service._classify_deal_update(1, old_stage, archived_at, filtered)
+    fields, event = service._classify_deal_update(1, old_stage, archived_at, filtered, today=TODAY)
     assert fields == expect_fields
     assert event == expect_event
 

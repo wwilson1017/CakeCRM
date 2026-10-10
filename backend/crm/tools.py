@@ -312,7 +312,7 @@ CRM_TOOL_DEFS = [
                 "stage": {"type": "string", "description": "Pipeline stage (default: lead)", "default": "lead"},
                 "value": {"type": "number", "description": "Deal value in dollars", "default": 0},
                 "notes": {"type": "string", "default": ""},
-                "expected_close_date": {"type": "string", "description": "Expected close date (YYYY-MM-DD)", "default": ""},
+                "expected_close_date": {"type": "string", "description": "Forecasted close date (YYYY-MM-DD) — the rep's guess, not the day it closed", "default": ""},
                 "probability": {"type": "integer", "description": "Win probability 0-100%", "default": 0},
                 "currency": {"type": "string", "default": "USD"},
                 "company_id": {"type": "integer", "description": "ID of a linked company (optional)."},
@@ -336,7 +336,7 @@ CRM_TOOL_DEFS = [
         "writes": True,
         "confirm_tier": ROUTINE,
         "description": (
-            "Update a deal's details — value, stage, close date, probability, notes, etc."
+            "Update a deal's details — value, stage, forecasted close date, probability, notes, etc."
         ),
         "input_schema": {
             "type": "object",
@@ -346,7 +346,7 @@ CRM_TOOL_DEFS = [
                 "stage": {"type": "string", "description": "lead, qualified, proposal, negotiation, won, lost"},
                 "value": {"type": "number"},
                 "notes": {"type": "string"},
-                "expected_close_date": {"type": "string", "description": "YYYY-MM-DD"},
+                "expected_close_date": {"type": "string", "description": "Forecasted close date, YYYY-MM-DD"},
                 "probability": {"type": "integer", "description": "0-100"},
                 "currency": {"type": "string"},
                 "contact_id": {"type": "integer"},
@@ -439,13 +439,22 @@ CRM_TOOL_DEFS = [
         "writes": True,
         "confirm_tier": ROUTINE,
         "description": (
-            "Close a deal as WON: moves it to the 'won' stage and sets probability to "
-            "100%. Use when the user says a deal closed, was signed, or came through."
+            "Close a deal as WON: moves it to the 'won' stage, sets probability to "
+            "100% and records the day it closed (closed_on, default today). Use when the "
+            "user says a deal closed, was signed, or came through. On a deal that is "
+            "already won, passing closed_on corrects its close date."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "deal_id": {"type": "integer", "description": "Deal ID to mark won"},
+                "closed_on": {
+                    "type": "string",
+                    "description": (
+                        "The day the deal actually closed, YYYY-MM-DD. Defaults to today. "
+                        "Past days are fine (wins are often logged late); a future day is refused."
+                    ),
+                },
             },
             "required": ["deal_id"],
         },
@@ -1513,7 +1522,7 @@ def crm_delete_contact(contact_id: int) -> dict:
 # payloads are untouched.
 _DEAL_SUMMARY_FIELDS = (
     "id", "title", "stage", "value", "currency", "probability",
-    "expected_close_date", "contact_id", "contact_name", "company_id",
+    "expected_close_date", "closed_on", "contact_id", "contact_name", "company_id",
     "company_name", "last_activity_at", "archived_at",
     # lost_reason is THE field a quarter review reads (SALES_GUIDE says so), and
     # updated_at is the only recency signal a search row carries — last_activity_at
@@ -1605,12 +1614,12 @@ def crm_create_deal(title: str, **kwargs) -> dict:
     return _with_target(with_deal_url(result), "deal", result.get("id"), record=result)
 
 
-def crm_update_deal(deal_id: int, **kwargs) -> dict:
+def crm_update_deal(deal_id: int, actor_id: int | None = None, **kwargs) -> dict:
     # ValueError is a refusal the model can act on ("restore it first"); letting it
     # escape would hit registry.execute_tool_sync's generic "failed, please try again"
     # and send the model into a retry loop on a permanent condition.
     try:
-        result = crm.update_deal(deal_id, **kwargs)
+        result = crm.update_deal(deal_id, actor_id=actor_id, **kwargs)
     except psycopg2.errors.ForeignKeyViolation:
         return {"error": "Referenced contact or company does not exist"}
     except ValueError as e:
@@ -1621,7 +1630,7 @@ def crm_update_deal(deal_id: int, **kwargs) -> dict:
     return _with_target(with_deal_url(result), "deal", deal_id, record=result)
 
 
-def crm_update_deal_stage(deal_id: int, stage: str) -> dict:
+def crm_update_deal_stage(deal_id: int, stage: str, actor_id: int | None = None) -> dict:
     # Keep this tool's own open-stage-only promise (#99). The schema enum above only
     # steers — nothing validates tool arguments server-side — so the executor is the
     # enforcement point, exactly like the deal_ids guard in crm_bulk_move_deals below.
@@ -1635,7 +1644,7 @@ def crm_update_deal_stage(deal_id: int, stage: str) -> dict:
             f"the lost reason, which a stage move cannot."
         )}
     try:
-        deal = crm.update_deal_stage(deal_id, stage)
+        deal = crm.update_deal_stage(deal_id, stage, actor_id=actor_id)
     except ValueError as e:
         return {"error": str(e)}
     if not deal:
@@ -1644,7 +1653,9 @@ def crm_update_deal_stage(deal_id: int, stage: str) -> dict:
     return _with_target(with_deal_url(deal), "deal", deal_id, record=deal)
 
 
-def crm_bulk_move_deals(deal_ids: list | None = None, stage: str = "") -> dict:
+def crm_bulk_move_deals(
+    deal_ids: list | None = None, stage: str = "", actor_id: int | None = None,
+) -> dict:
     ids = list(dict.fromkeys(deal_ids or []))
     if not ids:
         return {"error": "No deal IDs provided"}
@@ -1667,7 +1678,7 @@ def crm_bulk_move_deals(deal_ids: list | None = None, stage: str = "") -> dict:
             f"crm_mark_deal_won or crm_mark_deal_lost for each one; crm_mark_deal_lost "
             f"can record the lost reason, which a bulk move cannot."
         )}
-    result = crm.bulk_move_deals(ids, stage)
+    result = crm.bulk_move_deals(ids, stage, actor_id=actor_id)
     if result.get("ok"):
         # Badge every deal this call actually moved, mirroring crm_update_deal_stage —
         # otherwise the "an AI wrote this" audit silently misses bulk moves, which is
@@ -1689,14 +1700,20 @@ def crm_get_deal(deal_id: int) -> dict:
     return with_deal_url(result)
 
 
-def crm_mark_deal_won(deal_id: int) -> dict:
+def crm_mark_deal_won(
+    deal_id: int, closed_on: str | None = None, actor_id: int | None = None,
+) -> dict:
     try:
-        deal = crm.mark_deal_won(deal_id)
+        deal = crm.mark_deal_won(deal_id, closed_on=closed_on, actor_id=actor_id)
     except ValueError as e:
         return {"error": str(e)}
     if not deal:
         return {"error": f"Deal {deal_id} not found"}
-    _record_provenance("deal", deal_id, {"stage": "won", "probability": 100}, deal)
+    _record_provenance(
+        "deal", deal_id,
+        {"stage": "won", "probability": 100, **({"closed_on": closed_on} if closed_on else {})},
+        deal,
+    )
     return _with_target(with_deal_url(deal), "deal", deal_id, record=deal)
 
 
@@ -2407,6 +2424,12 @@ def _identity_executors(user: dict | None) -> dict[str, Callable[..., dict]]:
         "crm_archive_deal": bind_server_args(crm_archive_deal, actor_id=user_id),
         "crm_merge_deals": bind_server_args(crm_merge_deals, actor_id=user_id),
         "crm_update_contact": bind_server_args(crm_update_contact, actor_id=user_id),
+        # Who set, moved or cleared a deal's Closed on date (#279) — the author of its
+        # "Closed on: …" note. Each of these can move a deal into or out of won.
+        "crm_mark_deal_won": bind_server_args(crm_mark_deal_won, actor_id=user_id),
+        "crm_update_deal": bind_server_args(crm_update_deal, actor_id=user_id),
+        "crm_update_deal_stage": bind_server_args(crm_update_deal_stage, actor_id=user_id),
+        "crm_bulk_move_deals": bind_server_args(crm_bulk_move_deals, actor_id=user_id),
         # Who ASKED for it. Stamping the seat that requested a record is RECORDING, not
         # fabricating — which is why the unattended path, having nobody to record, still
         # stamps nothing and leaves the row unassigned.

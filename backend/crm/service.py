@@ -12,7 +12,7 @@ Ported from chatty's SQLite ``crm_lite/client.py`` and translated to Postgres:
 import json
 import logging
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import psycopg2
 
@@ -1025,6 +1025,7 @@ def create_deal(
     value: float = 0, notes: str = "", expected_close_date: str = "",
     probability: int = 0, currency: str = "USD", company_id: int | None = None,
     owner_id: int | None = None, deal_temperature: str | None = None,
+    closed_on: str | None = None,
 ) -> dict:
     # Coerce an unknown stage to 'lead' (mirrors update_deal's validation): a
     # deal with a stage outside DEAL_STAGES would be summed into the pipeline
@@ -1042,12 +1043,18 @@ def create_deal(
     # this signature, so a temperature the model learned from `crm_update_deal`'s schema
     # would otherwise be a TypeError. Raises on a bad tier, like update_deal. Issue #125.
     deal_temperature = normalize_deal_temperature(deal_temperature)
+    # #279: a deal born Won entered won now, so it is dated (today unless told otherwise).
+    # No Closed on note: the deal's creation is the record and there is no prior value.
+    closed_on_day = (
+        resolve_closed_on(closed_on, today_local())
+        if closed_on_transition(None, stage, None) == "set" else None
+    )
     # company_id appended last (see create_contact); a bad FK -> ForeignKeyViolation.
     row = pg_fetchone(
-        """INSERT INTO deals (title, contact_id, stage, value, notes, expected_close_date, probability, currency, company_id, owner_id, deal_temperature)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+        """INSERT INTO deals (title, contact_id, stage, value, notes, expected_close_date, probability, currency, company_id, owner_id, deal_temperature, closed_on)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
         (title, contact_id, stage, value, notes, expected_close_date, probability, currency,
-         company_id, owner_id, deal_temperature),
+         company_id, owner_id, deal_temperature, closed_on_day),
     )
     scoring_service.score_on_event(deal_ids=(row["id"],), contact_ids=(contact_id,))  # #18
     return get_deal(row["id"])
@@ -1363,7 +1370,7 @@ def list_deals(stage: str | None = None, contact_id: int | None = None, limit: i
 _DEAL_COLUMN_TYPES = {
     "title": "text", "stage": "text", "notes": "text", "currency": "text",
     "expected_close_date": "text", "lost_reason": "text", "deal_temperature": "text",
-    "value": "float8",
+    "value": "float8", "closed_on": "date",
     "probability": "int", "contact_id": "int", "company_id": "int", "owner_id": "int",
 }
 
@@ -1380,11 +1387,73 @@ _DEAL_USER_WRITABLE = frozenset({
     # instruction) says how a deal feels, and #18's scoring reads it. `lead_score` itself
     # stays absent from this set, as it must.
     "deal_temperature",
+    # `closed_on` (#279) is deliberately ABSENT: it is written only by a stage transition
+    # into/out of won, or by `update_deal`'s explicit Won-only edit. An allowlist entry
+    # would let a PUT or crm_update_deal date an open deal, or blank a won one.
 })
 
 
+def closed_on_transition(old_stage: str | None, new_stage: str | None, old_closed_on) -> str | None:
+    """``'set'`` when a deal ENTERS won, ``'clear'`` when it LEAVES won holding a date,
+    else ``None`` — the ONE rule for ``deals.closed_on`` (#279).
+
+    Keyed on the transition, never on membership: won->won and open->open touch nothing,
+    so an already-won deal re-marked won keeps its date. Archiving never passes through
+    here and an archived deal cannot change stage, so the date survives an archive by
+    construction. ``create_deal`` passes ``old_stage=None``.
+    """
+    if new_stage is None or new_stage == old_stage:
+        return None
+    if new_stage == "won":
+        return "set"
+    if old_stage == "won" and old_closed_on:
+        return "clear"
+    return None
+
+
+_ISO_DAY_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def resolve_closed_on(explicit, today: date) -> date:
+    """The day a won transition (or a Won-only edit) records: ``explicit`` or ``today``.
+
+    Strict: None/"" -> today; a ``date`` (not a ``datetime``); or a string that is WHOLLY
+    ``YYYY-MM-DD`` (``date.fromisoformat`` alone also takes ``20261001`` and week dates).
+    A future day or anything else raises ValueError (a 400 / a tool error). No earlier
+    bound: backdating a win is the point.
+    """
+    if explicit is None or explicit == "":
+        return today
+    if isinstance(explicit, date) and not isinstance(explicit, datetime):
+        day = explicit
+    else:
+        try:
+            if not isinstance(explicit, str) or not _ISO_DAY_RE.fullmatch(explicit):
+                raise ValueError
+            day = date.fromisoformat(explicit)
+        except ValueError:
+            raise ValueError(f"Closed on must be a YYYY-MM-DD date, got {explicit!r}") from None
+    if day > today:
+        raise ValueError(f"Closed on cannot be in the future (today is {today.isoformat()})")
+    return day
+
+
+def _iso_day(value) -> str | None:
+    """``closed_on`` as ``YYYY-MM-DD`` or None. A raw cursor returns a ``date``;
+    ``pg_fetch*`` already stringifies."""
+    return value.isoformat() if isinstance(value, date) else (value or None)
+
+
+def _closed_on_note(old, new) -> str:
+    """The housekeeping note recording a Closed on set/clear/edit (#279). A note, not a
+    touch: its prefix is in ``HOUSEKEEPING_NOTE_PREFIXES``, so no staleness read counts it."""
+    return (f"{scoring_service.CLOSED_ON_NOTE_PREFIX}"
+            f"{_iso_day(old) or 'none'} → {_iso_day(new) or 'none'}")
+
+
 def _classify_deal_update(
-    deal_id: int, old_stage: str, archived_at, filtered: dict,
+    deal_id: int, old_stage: str, archived_at, filtered: dict, *,
+    old_closed_on=None, closed_on_day: date | None = None, today: date | None = None,
 ) -> tuple[dict, tuple[str, str] | None]:
     """Given a deal's locked pre-image and a validated column map, resolve the final
     column map plus the stage transition it implies (or None).
@@ -1398,6 +1467,12 @@ def _classify_deal_update(
 
     Never mutates ``filtered`` (copies, as the single-deal path always did). Raises
     ValueError for a stage change on an archived deal.
+
+    ``closed_on`` (#279) follows ``closed_on_transition``: a move into won records
+    ``closed_on_day`` (the caller's RESOLVED explicit day) or ``today``; a move out of won
+    clears it. An explicit day with no transition is an EDIT, allowed only on a deal that
+    is and stays won. Explicitness is what stops a re-marked won deal being re-dated:
+    ``today`` is only ever the default for a transition.
     """
     new_stage = filtered.get("stage", old_stage)
     # An archived deal is out of every list, board and aggregate — so closing one
@@ -1419,6 +1494,18 @@ def _classify_deal_update(
     # caller's call.
     if new_stage != old_stage and new_stage in ("won", "lost"):
         filtered = {**filtered, "probability": 100 if new_stage == "won" else 0}
+    transition = closed_on_transition(old_stage, new_stage, old_closed_on)
+    if transition == "set":
+        day = closed_on_day or today
+        if day is None:
+            raise ValueError("_classify_deal_update: a move into won needs today or a closed_on")
+        filtered = {**filtered, "closed_on": day}
+    elif transition == "clear":
+        filtered = {**filtered, "closed_on": None}
+    elif closed_on_day is not None:
+        if new_stage != "won":
+            raise ValueError("Closed on can only be set on a Won deal")
+        filtered = {**filtered, "closed_on": closed_on_day}
     # Copy unconditionally: when neither branch above fires, `filtered` is still the
     # caller's own dict, and bulk_move_deals then stamps `updated_at` into what it gets
     # back. That is safe today only because bulk builds a fresh literal per iteration —
@@ -1426,7 +1513,9 @@ def _classify_deal_update(
     return dict(filtered), (old_stage, new_stage) if new_stage != old_stage else None
 
 
-def _write_deal_update(deal_id: int, filtered: dict) -> bool:
+def _write_deal_update(
+    deal_id: int, filtered: dict, *, closed_on=None, actor_id: int | None = None,
+) -> bool:
     """Apply a validated column map to one deal in a single transaction.
 
     Every deal COLUMN update funnels through here (create_deal and archive_deal are
@@ -1459,6 +1548,12 @@ def _write_deal_update(deal_id: int, filtered: dict) -> bool:
        dropped it out of ``get_stale_deals`` and the heartbeat's nudges for a whole
        window with nothing changed. ``bulk_move_deals`` and ``archive_deal`` already
        guarded against exactly this; this path was the outlier.
+    6. **Closed on** (#279) — the classifier sets/clears ``closed_on`` from the locked
+       pre-image; when the stored day actually changes, a "Closed on: old → new"
+       housekeeping note (author ``actor_id``) is written on the SAME cursor, because
+       after a clear it is the only place the old date survives. ``closed_on`` is the
+       caller's explicit day (None/"" = not supplied), resolved — and a future day
+       refused — before the lock is taken.
 
     Rules 1 and 2 — and the archived-deal refusal and probability settling — are
     resolved by ``_classify_deal_update``, shared with ``bulk_move_deals`` (#55) so the
@@ -1476,20 +1571,24 @@ def _write_deal_update(deal_id: int, filtered: dict) -> bool:
     false). No caller can reach that today; the guard is here so a future one can't
     either.
     """
-    if not filtered:
+    explicit_closed_on = closed_on not in (None, "")
+    if not filtered and not explicit_closed_on:
         raise ValueError("_write_deal_update requires at least one column to set")
+    today = today_local()
+    closed_on_day = resolve_closed_on(closed_on, today) if explicit_closed_on else None
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
-            "SELECT stage, archived_at, contact_id FROM deals WHERE id = %s FOR UPDATE",
+            "SELECT stage, archived_at, contact_id, closed_on FROM deals WHERE id = %s FOR UPDATE",
             (deal_id,),
         )
         row = cur.fetchone()
         if row is None:
             return False
-        old_stage, archived_at, old_contact_id = row[0], row[1], row[2]
+        old_stage, archived_at, old_contact_id, old_closed_on = row[0], row[1], row[2], row[3]
         filtered, stage_event = _classify_deal_update(
-            deal_id, old_stage, archived_at, filtered
+            deal_id, old_stage, archived_at, filtered,
+            old_closed_on=old_closed_on, closed_on_day=closed_on_day, today=today,
         )
         # Rule 5. Postgres decides whether anything would actually change, not Python:
         # the row is already locked, so `IS DISTINCT FROM` over the very columns being SET
@@ -1517,10 +1616,11 @@ def _write_deal_update(deal_id: int, filtered: dict) -> bool:
             f"{k} IS DISTINCT FROM %s::{_DEAL_COLUMN_TYPES[k]}" for k in filtered
         )
         values = list(filtered.values())
+        now = _now()
         cur.execute(
             f"UPDATE deals SET {set_clause}, updated_at = %s "
             f"WHERE id = %s AND ({distinct_clause})",
-            values + [_now(), deal_id] + values,
+            values + [now, deal_id] + values,
         )
         # 0 means "the row exists (we hold its lock) and no column would change".
         changed = cur.rowcount > 0
@@ -1532,6 +1632,14 @@ def _write_deal_update(deal_id: int, filtered: dict) -> bool:
                 "INSERT INTO deal_stage_events (deal_id, old_stage, new_stage) "
                 "VALUES (%s, %s, %s)",
                 (deal_id, stage_event[0], stage_event[1]),
+            )
+        # Rule 6: only when the stored day really changed (an edit to the same day writes
+        # nothing; an undated won deal leaving won never had a closed_on to change).
+        if (changed and "closed_on" in filtered
+                and _iso_day(filtered["closed_on"]) != _iso_day(old_closed_on)):
+            _insert_housekeeping_note_cur(
+                cur, "deal", deal_id, _closed_on_note(old_closed_on, filtered["closed_on"]),
+                actor_id, now,
             )
     # After commit, on purpose: a scoring read inside the transaction would see (and
     # lengthen) the FOR UPDATE window. Dedup/None-filtering is score_on_event's job.
@@ -1654,7 +1762,12 @@ def search_deals(
     return _embed_custom_fields(rows)
 
 
-def update_deal(deal_id: int, **fields) -> dict | None:
+def update_deal(deal_id: int, *, actor_id: int | None = None, **fields) -> dict | None:
+    # closed_on (#279) is outside _DEAL_USER_WRITABLE: it rides to _write_deal_update as an
+    # explicit kwarg, so its Won-only gate holds for PUT and crm_update_deal alike. A
+    # None/"" means "not supplied", so it can never be blanked here — only leaving won
+    # clears it.
+    closed_on = fields.pop("closed_on", None)
     # lost_reason is deliberately absent from _DEAL_USER_WRITABLE: mark_deal_lost is its
     # single writer, so a reason always arrives with the close (and its timeline note) and
     # can never be set on a deal that isn't lost.
@@ -1669,17 +1782,17 @@ def update_deal(deal_id: int, **fields) -> dict | None:
     # 404 saying the deal does not exist. Issue #125.
     if "deal_temperature" in filtered:
         filtered["deal_temperature"] = normalize_deal_temperature(filtered["deal_temperature"])
-    if not filtered:
+    if not filtered and closed_on in (None, ""):
         return get_deal(deal_id)
-    if not _write_deal_update(deal_id, filtered):
+    if not _write_deal_update(deal_id, filtered, closed_on=closed_on, actor_id=actor_id):
         return None
     return get_deal(deal_id)
 
 
-def update_deal_stage(deal_id: int, stage: str) -> dict | None:
+def update_deal_stage(deal_id: int, stage: str, *, actor_id: int | None = None) -> dict | None:
     if stage not in DEAL_STAGES:
         return None
-    if not _write_deal_update(deal_id, {"stage": stage}):
+    if not _write_deal_update(deal_id, {"stage": stage}, actor_id=actor_id):
         return None
     return get_deal(deal_id)
 
@@ -1696,7 +1809,9 @@ def update_deal_stage(deal_id: int, stage: str) -> dict | None:
 BULK_MOVE_MAX = 200
 
 
-def bulk_move_deals(deal_ids: list[int], stage: str) -> dict:
+def bulk_move_deals(
+    deal_ids: list[int], stage: str, *, closed_on=None, actor_id: int | None = None,
+) -> dict:
     """Move many deals to one stage in a single transaction, set-based.
 
     Returns ``{ok, updated, updated_ids, errors}``. Whole-request problems (bad stage,
@@ -1744,6 +1859,11 @@ def bulk_move_deals(deal_ids: list[int], stage: str) -> dict:
     the connection opens, so there is no cross-type comparison to get wrong. The
     single-deal path writes an arbitrary column map from unvalidated tool arguments and
     must let Postgres judge.
+
+    ``closed_on`` (#279) is one day for every deal this batch moves INTO won (default
+    today); it is ignored on any other stage, and already-won deals are skipped as above,
+    so bulk never edits a date. Sets and clears get their Closed on notes in one
+    multi-row INSERT on the same cursor, authored by ``actor_id``.
     """
     if stage not in DEAL_STAGES:
         return {"ok": False, "updated": 0, "updated_ids": [], "errors": [f"Invalid stage: {stage}"]}
@@ -1763,8 +1883,16 @@ def bulk_move_deals(deal_ids: list[int], stage: str) -> dict:
     if len(ids) > BULK_MOVE_MAX:
         return {"ok": False, "updated": 0, "updated_ids": [],
                 "errors": [f"Too many deals ({len(ids)}); max {BULK_MOVE_MAX} per bulk move"]}
+    today = today_local()
+    closed_on_day = None
+    if stage == "won" and closed_on not in (None, ""):
+        try:
+            closed_on_day = resolve_closed_on(closed_on, today)
+        except ValueError as e:
+            return {"ok": False, "updated": 0, "updated_ids": [], "errors": [str(e)]}
 
     errors: list[str] = []
+    closed_on_notes: list[tuple[int, str]] = []
     write_plan: dict[int, dict] = {}
     stage_events: list[tuple[int, str, str]] = []
     contact_ids: list[int] = []
@@ -1784,30 +1912,35 @@ def bulk_move_deals(deal_ids: list[int], stage: str) -> dict:
             cur.execute("SET LOCAL lock_timeout = '10s'")
             cur.execute("SET LOCAL statement_timeout = '30s'")
             cur.execute(
-                "SELECT id, stage, archived_at, contact_id FROM deals WHERE id = ANY(%s) "
-                "ORDER BY id FOR UPDATE",
+                "SELECT id, stage, archived_at, contact_id, closed_on FROM deals "
+                "WHERE id = ANY(%s) ORDER BY id FOR UPDATE",
                 (ids,),
             )
             # Positional access, matching _write_deal_update: the raw cursor returns tuples.
             # Converted BEFORE the next execute() — cursor.description is per-statement, so
             # deferring this would read the wrong column metadata.
-            rows_by_id = {r[0]: (r[1], r[2], r[3]) for r in cur.fetchall()}
+            rows_by_id = {r[0]: (r[1], r[2], r[3], r[4]) for r in cur.fetchall()}
 
             for did in ids:
                 row = rows_by_id.get(did)
                 if row is None:
                     errors.append(f"Deal {did} not found")
                     continue
-                old_stage, archived_at, contact_id = row
+                old_stage, archived_at, contact_id, old_closed_on = row
                 if old_stage == stage:
                     continue  # already there — see the docstring on why this writes nothing
                 try:
                     fields, stage_event = _classify_deal_update(
-                        did, old_stage, archived_at, {"stage": stage}
+                        did, old_stage, archived_at, {"stage": stage},
+                        old_closed_on=old_closed_on, closed_on_day=closed_on_day, today=today,
                     )
                 except ValueError as e:
                     errors.append(str(e))
                     continue
+                if ("closed_on" in fields
+                        and _iso_day(fields["closed_on"]) != _iso_day(old_closed_on)):
+                    closed_on_notes.append(
+                        (did, _closed_on_note(old_closed_on, fields["closed_on"])))
                 fields["updated_at"] = now
                 write_plan[did] = fields
                 if stage_event:
@@ -1820,7 +1953,7 @@ def bulk_move_deals(deal_ids: list[int], stage: str) -> dict:
             # batch size (the realistic worst case is three groups — plain movers, movers
             # leaving 'lost', and movers closing). Column names come from
             # _classify_deal_update and are fixed literals (stage, lost_reason, probability,
-            # updated_at), so the f-string interpolates only safe identifiers; values stay bound.
+            # closed_on, updated_at), so the f-string interpolates only safe identifiers; values stay bound.
             groups: dict[tuple, list[int]] = {}
             for did, fields in write_plan.items():
                 groups.setdefault(tuple(sorted(fields.items())), []).append(did)
@@ -1836,6 +1969,15 @@ def bulk_move_deals(deal_ids: list[int], stage: str) -> dict:
                     "SELECT * FROM unnest(%s::int[], %s::text[], %s::text[])",
                     ([e[0] for e in stage_events], [e[1] for e in stage_events],
                      [e[2] for e in stage_events]),
+                )
+            if closed_on_notes:
+                # Same cursor, same transaction as the writes they record (#279).
+                cur.execute(
+                    "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, author_id) "
+                    "SELECT 'deal', t.id, t.msg, %s, %s "
+                    "FROM unnest(%s::int[], %s::text[]) AS t(id, msg)",
+                    (now, actor_id, [n[0] for n in closed_on_notes],
+                     [n[1] for n in closed_on_notes]),
                 )
     except (psycopg2.errors.LockNotAvailable, psycopg2.errors.QueryCanceled):
         # Either timeout fired, so the transaction rolled back and NOTHING was written.
@@ -1862,12 +2004,18 @@ MAX_LOST_REASON = 500
 MAX_ARCHIVE_REASON = 500
 
 
-def mark_deal_won(deal_id: int) -> dict | None:
-    """Close a deal as won: stage='won', probability=100.
+def mark_deal_won(
+    deal_id: int, *, closed_on=None, actor_id: int | None = None,
+) -> dict | None:
+    """Close a deal as won: stage='won', probability=100, closed_on = the day it closed
+    (``closed_on``, default today — #279).
 
-    Any lost_reason from an earlier close is cleared by _write_deal_update.
+    Any lost_reason from an earlier close is cleared by _write_deal_update. An already-won
+    deal keeps its date unless ``closed_on`` is given, which then EDITS it.
     """
-    if not _write_deal_update(deal_id, {"stage": "won", "probability": 100}):
+    if not _write_deal_update(
+        deal_id, {"stage": "won", "probability": 100}, closed_on=closed_on, actor_id=actor_id,
+    ):
         return None
     return get_deal(deal_id)
 
@@ -1890,7 +2038,7 @@ def mark_deal_lost(
     """
     reason = (lost_reason or "").strip()[:MAX_LOST_REASON]
     if not _write_deal_update(
-        deal_id, {"stage": "lost", "probability": 0, "lost_reason": reason}
+        deal_id, {"stage": "lost", "probability": 0, "lost_reason": reason}, actor_id=author_id,
     ):
         return None
     if reason:

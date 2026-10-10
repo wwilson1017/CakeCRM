@@ -288,7 +288,7 @@ def test_tool_provenance_failure_does_not_break_the_write(monkeypatch):
 
 def test_update_deal_stage_tool_records_stage(monkeypatch):
     calls = []
-    monkeypatch.setattr(crm_service, "update_deal_stage", lambda did, stage: {"id": did, "stage": stage})
+    monkeypatch.setattr(crm_service, "update_deal_stage", lambda did, stage, **kw: {"id": did, "stage": stage})
     monkeypatch.setattr(prov, "record_fields", lambda et, eid, f: calls.append((et, eid, f)))
     tools.crm_update_deal_stage(7, "negotiation")
     assert calls == [("deal", 7, {"stage": "negotiation"})]

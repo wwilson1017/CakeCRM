@@ -20,6 +20,7 @@ archived deal is not "going stale", it is put away.
 
 import logging
 
+from core.localtime import tz
 from core.postgres import pg_fetchall, pg_fetchone
 from crm import gtd_common, provenance_service, scoring_service
 from crm.service import (
@@ -635,6 +636,10 @@ def get_pipeline_analytics(window_days: int = DEFAULT_ANALYTICS_WINDOW_DAYS) -> 
     "convert", it was put away.
     """
     window_days = _bounded(window_days, DEFAULT_ANALYTICS_WINDOW_DAYS, 7, 365)
+    # #279: a won deal is dated by its Closed on day when someone recorded one (reps
+    # backdate wins), else by its move into won. The DATE becomes an instant at local
+    # midnight; zoneinfo names the zone, Postgres only applies it.
+    zone = tz().key
 
     # Completed stage intervals: how long a deal sat in a stage before leaving it.
     # LEAD() over the deal's own event chain gives the exit time; a NULL next event
@@ -667,32 +672,37 @@ def get_pipeline_analytics(window_days: int = DEFAULT_ANALYTICS_WINDOW_DAYS) -> 
           FROM deal_stage_events e
           JOIN deals d ON d.id = e.deal_id
          WHERE {LIVE_PREDICATE_D}
-           AND e.changed_at >= now() - make_interval(days => %s)
+           AND COALESCE(
+                 CASE WHEN e.new_stage = 'won' THEN d.closed_on::timestamp AT TIME ZONE %s END,
+                 e.changed_at) >= now() - make_interval(days => %s)
          ORDER BY e.deal_id, e.new_stage, e.changed_at, e.id
         """,
-        (window_days,),
+        (zone, window_days),
     )
 
     # Velocity: deals won inside the window, and how long they took from their first
     # recorded stage event. Deals that predate the log have no first event, so they
-    # are simply absent — never counted with a fabricated start date.
+    # are simply absent — never counted with a fabricated start date. A Closed on day
+    # earlier than the first event (a same-day win, or a backdate) counts as 0 days.
     velocity_row = pg_fetchone(
         f"""
         SELECT COUNT(*) AS won_count,
-               AVG(EXTRACT(EPOCH FROM (won_at - first_at)) / 86400.0) AS avg_days_to_won
+               AVG(GREATEST(EXTRACT(EPOCH FROM (won_at - first_at)), 0) / 86400.0)
+                   AS avg_days_to_won
           FROM (
             SELECT e.deal_id,
                    MIN(e.changed_at) AS first_at,
-                   MAX(e.changed_at) FILTER (WHERE e.new_stage = 'won') AS won_at
+                   COALESCE(d.closed_on::timestamp AT TIME ZONE %s,
+                            MAX(e.changed_at) FILTER (WHERE e.new_stage = 'won')) AS won_at
               FROM deal_stage_events e
               JOIN deals d ON d.id = e.deal_id
              WHERE {LIVE_PREDICATE_D}
-             GROUP BY e.deal_id
+             GROUP BY e.deal_id, d.closed_on
           ) s
          WHERE won_at IS NOT NULL
            AND won_at >= now() - make_interval(days => %s)
         """,
-        (window_days,),
+        (zone, window_days),
     )
 
     history_row = pg_fetchone(
